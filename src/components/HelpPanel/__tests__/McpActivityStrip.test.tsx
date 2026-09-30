@@ -616,6 +616,28 @@ describe("McpActivityStrip live activity", () => {
     expect(liveText()).not.toBe("");
   });
 
+  it("names the trigger with every word it shows, in every live state", () => {
+    const states = [
+      makeActivity({ turnId: "t1" }),
+      makeActivity({ turnId: "t1", callCount: 3 }),
+      makeActivity({ turnId: "t1", danger: true }),
+    ];
+    for (const activity of states) {
+      for (const compact of [false, true]) {
+        const { unmount } = render(
+          <McpActivityStrip sessionId="session-a" activity={activity} compact={compact} />
+        );
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        const trigger = screen.getByRole("button", { name: /recent tool calls/i });
+        const shown = (trigger.textContent ?? "").trim();
+        expect(trigger.getAttribute("aria-label")).toContain(shown);
+        unmount();
+      }
+    }
+  });
+
   it("labels a coalesced same-turn burst with its call count", () => {
     render(
       <McpActivityStrip

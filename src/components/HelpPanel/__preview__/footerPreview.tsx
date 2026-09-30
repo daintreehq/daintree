@@ -6,7 +6,7 @@ import { getAgentConfig } from "@/config/agents";
 import type { McpToolActivityState } from "@/controllers/HelpSessionController";
 import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import type { TurnOutcomeAlertClass } from "@shared/types/ipc/mcpServer";
-import type { PaneNotifyState } from "@shared/types/terminalNotify";
+import type { PaneNotifyState, TerminalNotifyDelivery } from "@shared/types/terminalNotify";
 import { installPreviewShims } from "./previewShims";
 import { HelpPanelFooter } from "../HelpPanelFooter";
 import "@/index.css";
@@ -34,6 +34,9 @@ interface Fixture {
   diverged: boolean;
   /** Terminals the lane is waiting to hear about; drives the notice chip. */
   watching: number;
+  /** Fired notices still waiting to be typed in. */
+  ready?: number;
+  delivery?: TerminalNotifyDelivery;
 }
 
 const SAME_NAME: PinnedActionContextSnapshot = {
@@ -113,6 +116,17 @@ const FIXTURES = {
     diverged: true,
     watching: 2,
   },
+  watch: { ...BASE, watching: 3 },
+  // The real app's usual look: an agent mid-turn, so the notice is held back
+  // and the item takes the warning tone.
+  "watch-blocked": {
+    ...BASE,
+    outcome: "reasoning-loop",
+    watching: 2,
+    delivery: { status: "blocked", reason: "approval" },
+  },
+  "watch-ready": { ...BASE, watching: 0, ready: 1 },
+  "watch-many": { ...BASE, agentId: "daintree-assistant", model: "Opus", watching: 12 },
   "busy-confirm": {
     ...BASE,
     agentId: "daintree-assistant",
@@ -143,16 +157,16 @@ const fixtureName: FixtureName = isFixtureName(fixtureParam) ? fixtureParam : "r
 const width = Number(params.get("width")) || 380;
 const fixture: Fixture = FIXTURES[fixtureName];
 
-const notifyState: PaneNotifyState | null =
-  fixture.watching > 0
-    ? {
-        terminalId: "t-1",
-        pendingCount: fixture.watching,
-        readyCount: 0,
-        delivery: { status: "idle" },
-        revision: 1,
-      }
-    : null;
+const watched = fixture.watching > 0 || (fixture.ready ?? 0) > 0;
+const notifyState: PaneNotifyState | null = watched
+  ? {
+      terminalId: "t-1",
+      pendingCount: fixture.watching,
+      readyCount: fixture.ready ?? 0,
+      delivery: fixture.delivery ?? { status: "idle" },
+      revision: 1,
+    }
+  : null;
 
 installPreviewShims({
   mcpServer: new Proxy(
@@ -200,7 +214,7 @@ function App() {
           activity={fixture.activity}
           outcomeAlert={fixture.outcome}
           onDismissOutcome={() => {}}
-          terminalId={fixture.watching > 0 ? "t-1" : null}
+          terminalId={watched ? "t-1" : null}
           pinnedContext={fixture.pinned}
           isPinnedWorktreeDiverged={fixture.diverged}
           onReturnToPinnedWorktree={() => {}}

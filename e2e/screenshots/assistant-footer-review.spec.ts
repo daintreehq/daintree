@@ -47,12 +47,23 @@ const FIXTURES = [
   "outcome-loop",
   "outcome-stuck",
   "diverged",
+  "watch",
+  "watch-blocked",
+  "watch-ready",
+  "watch-many",
   "busy",
   "busy-confirm",
 ] as const;
 
 /** The states that pressure the row's width, captured again at the resizer minimum. */
-const NARROW_FIXTURES = ["rest-assistant", "outcome-loop", "busy", "busy-confirm"] as const;
+const NARROW_FIXTURES = [
+  "rest-assistant",
+  "outcome-loop",
+  "watch-blocked",
+  "watch-many",
+  "busy",
+  "busy-confirm",
+] as const;
 
 test.use({ deviceScaleFactor: 2 });
 
