@@ -2624,7 +2624,10 @@ export interface PluginMultiSelectProps extends PluginPickerBaseProps {
   onValueChange?: (value: string[]) => void;
   /** At most this many; the rest of the list is disabled once it is reached. */
   max?: number;
-  /** Chips on the trigger before the rest collapse into "+N". Defaults to 3. */
+  /**
+   * At most this many chips on the trigger before the rest collapse into "+N";
+   * fewer when the trigger is too narrow to hold them. Defaults to 3.
+   */
   maxChips?: number;
 }
 

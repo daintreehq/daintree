@@ -2,6 +2,7 @@ import {
   isValidElement,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type ClipboardEvent,
@@ -29,7 +30,7 @@ import { Button } from "@/components/ui/button";
 import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { useFieldControl } from "@/components/ui/field";
-import { Input, inputVariants } from "@/components/ui/input";
+import { inputVariants } from "@/components/ui/input";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
@@ -223,6 +224,13 @@ export function parseNumberText(text: string, unit?: string): number | null | un
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+// The frame round the value, unit and buttons paints the field's one ring via
+// has-[input:focus-visible]. The text keeps room for six digits before the
+// unit (a min-width floor set per density): it gives way last.
+const NUMBER_VALUE_CLASS =
+  // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the frame draws the ring; a second one inside it would double it
+  "w-0 flex-1 bg-transparent tabular-nums text-text-primary outline-hidden placeholder:text-text-placeholder disabled:cursor-not-allowed";
+
 function KitNumberInput(props: PluginNumberInputProps) {
   const {
     value,
@@ -264,6 +272,7 @@ function KitNumberInput(props: PluginNumberInputProps) {
   const current = controlled ? (finite(value) ?? null) : own;
   // The text while it is being edited; `null` shows the committed value.
   const [draft, setDraft] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const format = (n: number | null) =>
     n === null ? "" : places !== undefined ? n.toFixed(places) : String(n);
   const parsed = draft === null ? current : parseNumberText(draft, suffix);
@@ -362,17 +371,51 @@ function KitNumberInput(props: PluginNumberInputProps) {
     </Button>
   );
 
-  // Room at the field's end for the unit and the buttons drawn over it.
-  const trailing = suffix !== undefined || withStepper;
-  const buttonsRem = withStepper ? (compact ? 2.625 : 3.125) : 0;
-  const trailingPad = trailing
-    ? `calc(${0.75 + buttonsRem}rem + ${suffix ? `${suffix.length}ch` : "0px"})`
-    : undefined;
+  // The spoken value is the number in the field: a valid edit is announced as
+  // typed, and text that is empty or not (yet) a number has no value to speak.
+  const spokenValue = typeof parsed === "number" ? parsed : undefined;
+  const spokenText =
+    spokenValue === undefined
+      ? ""
+      : suffix
+        ? `${draft === null ? format(spokenValue) : String(spokenValue)} ${suffix}`
+        : undefined;
+  const { invalid: shownInvalid, controlProps } = useKitFieldControl(
+    props,
+    parsed === undefined || invalid === true ? true : undefined
+  );
+  // A read-only value cannot be stepped, so it shows no buttons rather than a
+  // pair that look pressable and do nothing; disabled keeps them, dimmed with
+  // the rest of the field, as every disabled control does.
+  const showStepper = withStepper && readOnly !== true;
 
+  // The value, the unit and the buttons are laid side by side in the frame, so
+  // the text keeps its own room and never runs under the unit. The frame draws
+  // the Input's border, fill and ring; the input's own padding and the buttons
+  // give it the Input's height at either density.
   return (
-    <div className={cn("relative w-full min-w-0", str(className))}>
-      <Input
+    <div
+      data-number-field=""
+      className={cn(
+        inputVariants({ density: compact ? "compact" : "default", invalid: shownInvalid }),
+        "flex min-w-0 items-center px-0 py-0",
+        "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
+        disabled === true ? "cursor-not-allowed opacity-50" : "cursor-text",
+        showStepper && "pr-1",
+        str(className)
+      )}
+      onPointerDown={(event) => {
+        // A press on the unit or the frame's edge puts the caret in the text.
+        if (event.target instanceof Element && event.target.closest("input, button")) return;
+        if (disabled === true) return;
+        event.preventDefault();
+        inputRef.current?.focus();
+      }}
+    >
+      <input
+        ref={inputRef}
         {...pickRootProps(props, { aria: true })}
+        {...controlProps}
         type="text"
         inputMode="decimal"
         role="spinbutton"
@@ -382,42 +425,40 @@ function KitNumberInput(props: PluginNumberInputProps) {
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commitDraft}
         onKeyDown={onKeyDown}
-        aria-valuenow={current ?? undefined}
+        aria-valuenow={spokenValue}
         aria-valuemin={lo}
         aria-valuemax={hi}
-        aria-valuetext={current !== null && suffix ? `${format(current)} ${suffix}` : undefined}
+        aria-valuetext={spokenText}
         placeholder={str(placeholder)}
         name={str(name)}
         disabled={disabled === true}
         readOnly={readOnly === true}
         required={required === true}
         autoFocus={autoFocus === true}
-        invalid={parsed === undefined || invalid === true ? true : undefined}
-        density={compact ? "compact" : "default"}
-        className="tabular-nums"
-        style={trailingPad ? { paddingRight: trailingPad } : undefined}
+        data-number-value=""
+        className={cn(
+          NUMBER_VALUE_CLASS,
+          compact ? "min-w-[calc(6ch+0.75rem)] py-1 pl-2" : "min-w-[calc(6ch+1rem)] py-1.5 pl-3",
+          suffix !== undefined || showStepper ? "pr-1" : compact ? "pr-2" : "pr-3"
+        )}
       />
-      {trailing ? (
-        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center gap-0.5 pr-1">
-          {suffix ? (
-            <span
-              aria-hidden="true"
-              className={cn(
-                "select-none text-text-secondary",
-                compact ? "text-xs" : "text-sm",
-                withStepper ? "mr-1" : "mr-2"
-              )}
-            >
-              {suffix}
-            </span>
-          ) : null}
-          {withStepper ? (
-            <span className="pointer-events-auto flex items-center gap-0.5">
-              {stepperButton(-1)}
-              {stepperButton(1)}
-            </span>
-          ) : null}
-        </div>
+      {suffix ? (
+        <span
+          aria-hidden="true"
+          data-number-unit=""
+          className={cn(
+            "shrink-0 select-none whitespace-nowrap text-text-secondary",
+            showStepper ? "pr-1" : compact ? "pr-2" : "pr-3"
+          )}
+        >
+          {suffix}
+        </span>
+      ) : null}
+      {showStepper ? (
+        <span data-number-stepper="" className="flex shrink-0 items-center gap-0.5">
+          {stepperButton(-1)}
+          {stepperButton(1)}
+        </span>
       ) : null}
     </div>
   );
@@ -778,6 +819,9 @@ function Picker({
   const estimatePx = Math.min(rows.length * PICKER_ROW_PX + 8, PICKER_LIST_MAX_PX);
   const ariaLabel = str(base["aria-label"]);
   const { controlProps } = useKitFieldControl(base);
+  // A FormField's error (or the plugin's own `aria-invalid`) edges the trigger
+  // in the error ink, as it does every other kit field.
+  const shownInvalid = controlProps["aria-invalid"] === true;
   const emptyMessage = content(base.emptyMessage) ?? "No matches";
 
   return (
@@ -810,6 +854,7 @@ function Picker({
               density: oneOf(base.density, ["default", "compact"] as const),
             }),
             "group min-w-0 text-left data-[placeholder]:text-text-secondary",
+            shownInvalid && "border-status-error",
             str(base.className)
           )}
         >
@@ -964,6 +1009,82 @@ function KitCombobox(props: PluginComboboxProps) {
   );
 }
 
+/**
+ * How many of the chosen values fit on a trigger as chips, given the room the
+ * chip row has, each chip's natural width, the gap between items and the width
+ * of the "+N" badge. At least one chip is always drawn (it truncates when it
+ * has to), at most `limit`, and the badge is reserved whenever some are left
+ * over.
+ */
+export function fitChipCount(
+  available: number,
+  chipWidths: readonly number[],
+  total: number,
+  limit: number,
+  gap: number,
+  badgeWidth: number
+): number {
+  const most = Math.min(limit, chipWidths.length, total);
+  let used = 0;
+  let fit = 0;
+  for (let k = 1; k <= most; k++) {
+    used += (k > 1 ? gap : 0) + (chipWidths[k - 1] ?? 0);
+    const reserve = k < total ? gap + badgeWidth : 0;
+    if (used + reserve > available) break;
+    fit = k;
+  }
+  return total === 0 ? 0 : Math.max(1, fit);
+}
+
+const CHIP_GAP_PX = 4;
+const CHIP_CLASS = "max-w-40";
+
+function inlineSize(entry: ResizeObserverEntry): number {
+  return entry.borderBoxSize?.[0]?.inlineSize ?? entry.contentRect.width;
+}
+
+/**
+ * How many chips the trigger's row has room for. The row and an invisible copy
+ * of the chips at their natural width are watched by one ResizeObserver, whose
+ * entries carry every size, so nothing reads layout; `null` until measured
+ * (and where there is no ResizeObserver), when the plain `maxChips` shows.
+ */
+function useChipFit(values: readonly string[], limit: number) {
+  const [row, setRow] = useState<HTMLSpanElement | null>(null);
+  const [ruler, setRuler] = useState<HTMLSpanElement | null>(null);
+  const [fit, setFit] = useState<number | null>(null);
+  // The ruler's chips are new elements whenever the values change, so they
+  // are observed afresh; the joined key keeps an equal new array from doing so.
+  const key = values.join("\u0000");
+  const total = values.length;
+  useLayoutEffect(() => {
+    if (row === null || ruler === null || typeof ResizeObserver === "undefined") return;
+    const widths = new Map<Element, number>();
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) widths.set(entry.target, inlineSize(entry));
+      const available = widths.get(row) ?? 0;
+      // Not laid out (a hidden tab, a closed disclosure): keep what shows.
+      if (available <= 0) return;
+      const parts = Array.from(ruler.children);
+      const badge = parts.at(-1);
+      const chips = parts.slice(0, -1).map((chip) => widths.get(chip) ?? 0);
+      const next = fitChipCount(
+        available,
+        chips,
+        total,
+        limit,
+        CHIP_GAP_PX,
+        badge ? (widths.get(badge) ?? 0) : 0
+      );
+      setFit((previous) => (previous === next ? previous : next));
+    });
+    observer.observe(row);
+    for (const part of Array.from(ruler.children)) observer.observe(part);
+    return () => observer.disconnect();
+  }, [row, ruler, key, total, limit]);
+  return { fit, setRow, setRuler };
+}
+
 function KitMultiSelect(props: PluginMultiSelectProps) {
   const { value, defaultValue, onValueChange, options, placeholder, max, maxChips, name } = props;
   const controlled = Object.hasOwn(props, "value");
@@ -977,7 +1098,9 @@ function KitMultiSelect(props: PluginMultiSelectProps) {
   const entries = normalizeSelectOptions(options);
   const byValue = new Map(allOptions(entries).map((option) => [option.value, option]));
   const labelOf = (v: string) => byValue.get(v)?.label ?? labels.get(v) ?? v;
-  const shown = current.slice(0, chipLimit);
+  const { fit, setRow, setRuler } = useChipFit(current, chipLimit);
+  const candidates = current.slice(0, chipLimit);
+  const shown = current.slice(0, Math.min(fit ?? chipLimit, chipLimit));
   const overflow = current.length - shown.length;
   return (
     <>
@@ -993,16 +1116,51 @@ function KitMultiSelect(props: PluginMultiSelectProps) {
         hasValue={current.length > 0}
         triggerContent={
           current.length > 0 ? (
-            <span className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+            <span
+              ref={setRow}
+              data-chip-row=""
+              className="relative flex min-w-0 flex-1 items-center gap-1 overflow-hidden"
+            >
               {/* The chips are drawn; the names are read once, whole. */}
               <span className="sr-only">{current.map(labelOf).join(", ")}</span>
+              {/* What each chip would take at full width, and the widest "+N",
+                  measured off-screen so the row can decide how many it holds. */}
+              <span
+                ref={setRuler}
+                aria-hidden="true"
+                data-chip-ruler=""
+                className="pointer-events-none invisible absolute top-0 left-0 flex w-max gap-1"
+              >
+                {candidates.map((v) => (
+                  <Badge key={v} size="sm" className={CHIP_CLASS}>
+                    <span className="truncate">{labelOf(v)}</span>
+                  </Badge>
+                ))}
+                <Badge size="sm" tone="outline" className="tabular-nums">
+                  +{current.length}
+                </Badge>
+              </span>
               {shown.map((v) => (
-                <Badge key={v} aria-hidden="true" size="sm" className="min-w-0 max-w-40">
+                <Badge
+                  key={v}
+                  aria-hidden="true"
+                  size="sm"
+                  data-chip=""
+                  // A chip gives way (truncating) before the "+N" and the
+                  // chevron do, so the count is never the thing clipped.
+                  className={cn(CHIP_CLASS, "min-w-0 shrink")}
+                >
                   <span className="truncate">{labelOf(v)}</span>
                 </Badge>
               ))}
               {overflow > 0 ? (
-                <Badge aria-hidden="true" size="sm" tone="outline" className="tabular-nums">
+                <Badge
+                  aria-hidden="true"
+                  size="sm"
+                  tone="outline"
+                  data-chip-overflow=""
+                  className="shrink-0 tabular-nums"
+                >
                   +{overflow}
                 </Badge>
               ) : null}

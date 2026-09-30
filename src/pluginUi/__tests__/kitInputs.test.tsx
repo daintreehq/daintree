@@ -42,6 +42,7 @@ vi.mock("frimousse", () => {
 import * as kit from "@daintreehq/plugin-ui";
 import {
   fileMatchesAccept,
+  fitChipCount,
   parseNumberText,
   pickerRows,
   snapToStep,
@@ -299,6 +300,98 @@ describe("NumberInput", () => {
       })
     );
     expect(screen.getByRole("spinbutton", { name: "Port" })).toBeTruthy();
+  });
+
+  it("lays the value, unit and buttons side by side, the value keeping room for six digits", () => {
+    render(
+      createElement(kit.NumberInput, {
+        "aria-label": "Seats",
+        defaultValue: 240000,
+        unit: "seats",
+      })
+    );
+    const value = screen.getByRole("spinbutton", { name: "Seats" });
+    const frame = value.parentElement!;
+    const unit = frame.querySelector("[data-number-unit]")!;
+    const stepper = frame.querySelector("[data-number-stepper]")!;
+    // One flex row in the frame, in reading order; nothing is drawn over the text.
+    expect(frame.className.split(" ")).toContain("flex");
+    expect(Array.from(frame.children)).toEqual([value, unit, stepper]);
+    for (const part of [value, unit, stepper]) {
+      expect(part.className).not.toMatch(/\babsolute\b/);
+      expect(part.getAttribute("style")).toBeNull();
+    }
+    // The text takes the room left over but never gives up its six-digit floor;
+    // the unit and the buttons never shrink into it.
+    expect(value.className.split(" ")).toContain("flex-1");
+    expect(value.className).toMatch(/min-w-\[calc\(6ch\+/);
+    expect(unit.className.split(" ")).toContain("shrink-0");
+    expect(stepper.className.split(" ")).toContain("shrink-0");
+  });
+
+  it("keeps the Input's height at both densities", () => {
+    for (const density of ["default", "compact"] as const) {
+      render(
+        createElement(
+          "div",
+          null,
+          createElement(kit.Input, { "aria-label": "Plain", density }),
+          createElement(kit.NumberInput, { "aria-label": "Number", unit: "ms", density })
+        )
+      );
+      const plain = screen.getByRole("textbox", { name: "Plain" });
+      const value = screen.getByRole("spinbutton", { name: "Number" });
+      const frame = value.parentElement!;
+      const py = (el: Element) => el.className.split(" ").filter((c) => /^py-/.test(c));
+      // The frame draws the same border with no padding of its own, and the text
+      // carries the Input's vertical padding and type size, so the two stand as tall.
+      expect(py(frame)).toEqual(["py-0"]);
+      expect(py(value)).toEqual(py(plain));
+      const size = (el: Element) => el.className.split(" ").filter((c) => /^text-(xs|sm)$/.test(c));
+      expect(size(frame)).toEqual(size(plain));
+      // The buttons sit inside that line box: no taller than the text with its padding.
+      const button = screen.getByRole("button", { name: "Increase" });
+      expect(button.className).toMatch(density === "compact" ? /\bh-5\b/ : /\bh-6\b/);
+      cleanup();
+    }
+  });
+
+  it("shows no stepper when read-only, and a dimmed one when disabled", () => {
+    render(
+      createElement(
+        "div",
+        null,
+        createElement(kit.NumberInput, { "aria-label": "Fixed", value: 240, readOnly: true }),
+        createElement(kit.NumberInput, { "aria-label": "Off", value: 58, disabled: true })
+      )
+    );
+    const fixed = screen.getByRole("spinbutton", { name: "Fixed" });
+    expect(fixed.parentElement!.querySelector("button")).toBeNull();
+    const off = screen.getByRole("spinbutton", { name: "Off" });
+    const buttons = Array.from(off.parentElement!.querySelectorAll("button"));
+    expect(buttons).toHaveLength(2);
+    expect(buttons.every((button) => button.disabled)).toBe(true);
+  });
+
+  it("speaks the number in the field while it is edited, and none while there is none", () => {
+    render(createElement(kit.NumberInput, { "aria-label": "Retries", defaultValue: 3, unit: "x" }));
+    const field = screen.getByRole("spinbutton", { name: "Retries" });
+    expect(field.getAttribute("aria-valuenow")).toBe("3");
+    expect(field.getAttribute("aria-valuetext")).toBe("3 x");
+    fireEvent.change(field, { target: { value: "1,200" } });
+    expect(field.getAttribute("aria-valuenow")).toBe("1200");
+    expect(field.getAttribute("aria-valuetext")).toBe("1200 x");
+    fireEvent.change(field, { target: { value: "" } });
+    expect(field.hasAttribute("aria-valuenow")).toBe(false);
+    expect(field.getAttribute("aria-valuetext")).toBe("");
+    fireEvent.change(field, { target: { value: "12a" } });
+    expect(field.hasAttribute("aria-valuenow")).toBe(false);
+    expect(field.getAttribute("aria-valuetext")).toBe("");
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    // Committing garbage still reverts to the last value, and speaks it again.
+    fireEvent.blur(field);
+    expect(field.getAttribute("aria-valuenow")).toBe("3");
+    expect(field.getAttribute("aria-invalid")).toBeNull();
   });
 
   it("degrades bad props rather than throwing", () => {
@@ -674,6 +767,121 @@ describe("MultiSelect", () => {
     await openPicker("Reviewers");
     expect(screen.getByRole("option", { name: "perf" }).getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByRole("option", { name: "bug" }).getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("fits as many chips as the trigger holds, keeping room for the +N", () => {
+    // Room for all three: no badge.
+    expect(fitChipCount(300, [60, 60, 60], 3, 3, 4, 24)).toBe(3);
+    // Five values, room for two chips and the badge but not a third chip.
+    expect(fitChipCount(160, [60, 60, 60], 5, 3, 4, 24)).toBe(2);
+    // The badge's room is kept: two chips would fit alone, not beside "+N".
+    expect(fitChipCount(124, [60, 60, 60], 3, 3, 4, 24)).toBe(1);
+    // Never more than maxChips, however wide.
+    expect(fitChipCount(1000, [60, 60, 60, 60], 4, 2, 4, 24)).toBe(2);
+    // Too narrow for even one chip at full width: one is still drawn, to truncate.
+    expect(fitChipCount(40, [120, 60], 2, 3, 4, 24)).toBe(1);
+    expect(fitChipCount(40, [], 0, 3, 4, 24)).toBe(0);
+  });
+
+  it("lets chips truncate before the +N or the chevron gives way", () => {
+    render(
+      createElement(kit.MultiSelect, {
+        "aria-label": "Owners",
+        options,
+        value: ["bug", "docs", "perf", "ui"],
+      })
+    );
+    const trigger = screen.getByRole("combobox", { name: "Owners" });
+    const row = trigger.querySelector("[data-chip-row]")!;
+    expect(row.className.split(" ")).toEqual(expect.arrayContaining(["min-w-0", "flex-1"]));
+    const chips = Array.from(row.querySelectorAll("[data-chip]"));
+    expect(chips).toHaveLength(3);
+    for (const chip of chips) {
+      const classes = chip.className.split(" ");
+      expect(classes).toEqual(expect.arrayContaining(["min-w-0", "shrink"]));
+      expect(classes).not.toContain("shrink-0");
+      expect(chip.firstElementChild!.className.split(" ")).toContain("truncate");
+    }
+    const badge = row.querySelector("[data-chip-overflow]")!;
+    expect(badge.textContent).toBe("+1");
+    expect(badge.className.split(" ")).toContain("shrink-0");
+    expect(trigger.querySelector("svg")!.getAttribute("class")).toContain("shrink-0");
+  });
+
+  it("recounts the chips and the +N from the trigger's measured room", () => {
+    type Entry = { target: Element; borderBoxSize: { inlineSize: number; blockSize: number }[] };
+    let report: ((entries: Entry[]) => void) | undefined;
+    const observed: Element[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: (entries: Entry[]) => void) {
+          report = callback;
+        }
+        observe(target: Element) {
+          observed.push(target);
+        }
+        disconnect() {}
+        unobserve() {}
+      }
+    );
+    try {
+      render(
+        createElement(kit.MultiSelect, {
+          "aria-label": "Owners",
+          options,
+          value: ["bug", "docs", "perf", "ui", "ci"],
+        })
+      );
+      const trigger = screen.getByRole("combobox", { name: "Owners" });
+      const row = trigger.querySelector("[data-chip-row]")!;
+      const ruler = trigger.querySelector("[data-chip-ruler]")!;
+      expect(observed).toContain(row);
+      const size = (target: Element, inlineSize: number): Entry => ({
+        target,
+        borderBoxSize: [{ inlineSize, blockSize: 20 }],
+      });
+      const [a, b, c, plus] = Array.from(ruler.children);
+      act(() => {
+        report!([size(row, 150), size(a!, 60), size(b!, 60), size(c!, 60), size(plus!, 24)]);
+      });
+      expect(row.querySelectorAll("[data-chip]")).toHaveLength(1);
+      expect(row.querySelector("[data-chip-overflow]")!.textContent).toBe("+4");
+      act(() => {
+        report!([size(row, 400)]);
+      });
+      expect(row.querySelectorAll("[data-chip]")).toHaveLength(3);
+      expect(row.querySelector("[data-chip-overflow]")!.textContent).toBe("+2");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("edges the trigger in the error ink inside a FormField with an error", () => {
+    const pickers = [
+      () => createElement(kit.Combobox, { options }),
+      () => createElement(kit.MultiSelect, { options }),
+    ];
+    for (const picker of pickers) {
+      render(
+        createElement(
+          "div",
+          null,
+          createElement(kit.FormField, {
+            label: "Owner",
+            error: "Pick someone",
+            children: picker(),
+          }),
+          createElement(kit.FormField, { label: "Backup", children: picker() })
+        )
+      );
+      const owner = screen.getByRole("combobox", { name: "Owner" });
+      expect(owner.getAttribute("aria-invalid")).toBe("true");
+      expect(owner.className.split(" ")).toContain("border-status-error");
+      const backup = screen.getByRole("combobox", { name: "Backup" });
+      expect(backup.className.split(" ")).not.toContain("border-status-error");
+      cleanup();
+    }
   });
 });
 
