@@ -33,6 +33,10 @@ Radix also focuses a **row** on mouse hover, and Chromium rings that script focu
 
 It decorates the row's own `focus` for the length of the pointer event rather than focusing the row itself. That is not fussiness: Radix deliberately skips its focus when the pointer is crossing a sibling into an open submenu's grace area, and pre-empting it there closes the submenu. Re-focusing afterwards is inert — Blink bails out early once the element is already `activeElement`, which is also what keeps a keyboard ring alive when the mouse drifts over the focused row.
 
+## The press half
+
+React bubbles a portalled item's `pointerdown` to every React ancestor of the trigger, so an ancestor that pulls focus on press (a list container keeping its arrow keys, an editor reclaiming the caret) moves focus out of the open layer mid-click, and Radix closes a submenu or any non-modal layer before the click lands — the file browser's row Copy items silently did nothing that way. `ContextMenu` and `DropdownMenu` content and sub-content, and `PopoverContent`, use `useLayerPressFocusGuard` (`src/components/ui/layer-press-focus-guard.ts`): while a press the layer owns is held (in its DOM, or in a layer nested under it in the React tree), a focus-outside does not dismiss it; a press on a sibling or parent still does, and focus still stranded outside when the press ends without closing the layer is handed back. Again **no per-site wiring**; pinned by `layer-press-focus-guard.test.tsx`. An ancestor handler that acts on a press should still check `event.currentTarget.contains(event.target)` — the guard keeps the menu alive, not the ancestor's side effect honest.
+
 ## The tooltip half
 
 Element-scoped, in `src/lib/tooltipFocusSuppression.ts`: the close arms a one-shot **capture** `focusin` listener, marks whichever element focus lands on, and `Tooltip` refuses a focus-driven open for its own trigger while that mark stands. A genuine `pointerenter` clears it. React listens on the root container, below `document`, so the capture listener always wins the race.

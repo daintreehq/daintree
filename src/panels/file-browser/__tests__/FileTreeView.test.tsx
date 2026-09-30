@@ -434,6 +434,45 @@ describe("FileTreeView context-menu interactions", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it("does not pull focus to the tree for a press inside an open row menu", async () => {
+    // Same bubbling, pointer side. Focus pulled out of an open submenu closes
+    // it on pointerdown, before the item's click can select it — every Copy
+    // item on these rows died that way.
+    const { getByRole, findByRole } = render(
+      <FileTreeView
+        rows={ROWS}
+        cursorPath="README.md"
+        onSelect={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        rowContextMenu={(clicked) => <ContextMenuItem>Act on {clicked.name}</ContextMenuItem>}
+        basePath={BASE_PATH}
+        label="Files"
+      />
+    );
+    const tree = getByRole("tree");
+
+    fireEvent.contextMenu(getByRole("treeitem", { name: "src" }));
+    const item = await findByRole("menuitem", { name: "Act on src" });
+    const focusSpy = vi.spyOn(tree, "focus");
+
+    fireEvent.pointerDown(item, { pointerType: "mouse", button: 0 });
+
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
+
+  it("still pulls focus to the tree when a row is pressed", () => {
+    const { getByRole } = renderTree();
+    const tree = getByRole("tree");
+    const focusSpy = vi.spyOn(tree, "focus");
+
+    fireEvent.pointerDown(getByRole("treeitem", { name: "README.md" }), {
+      pointerType: "mouse",
+      button: 0,
+    });
+
+    expect(focusSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("advertises the shortcut only while it would do something", () => {
     const { getByRole, rerender } = render(
       <FileTreeView

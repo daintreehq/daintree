@@ -114,12 +114,12 @@ export interface FileTreeViewProps {
 }
 
 /**
- * Did this key actually happen in the tree, rather than in a portalled
+ * Did this event actually happen in the tree, rather than in a portalled
  * descendant? React bubbles a portal's events through the component tree, so a
- * Radix row menu's keystrokes reach the container's handler even though its DOM
- * lives under `document.body`.
+ * Radix row menu's keystrokes and presses reach the container's handlers even
+ * though its DOM lives under `document.body`.
  */
-function isEventInsideTree(event: React.KeyboardEvent, container: HTMLElement | null): boolean {
+function isEventInsideTree(event: React.SyntheticEvent, container: HTMLElement | null): boolean {
   if (container === null) return false;
   const target = event.target;
   return target instanceof Node && container.contains(target);
@@ -361,8 +361,11 @@ export function FileTreeView({
 
   // Clicking a row selects it but can't focus it — rows are not focusable, by
   // design, because virtualization unmounts them. Pull focus to the container
-  // so the arrow keys keep working after a click.
-  const handlePointerDown = useCallback(() => {
+  // so the arrow keys keep working after a click. Never for a press inside a
+  // row's menu: focus pulled out of an open submenu closes it before the
+  // item's click lands, which is how every Copy item stopped working.
+  const handlePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isEventInsideTree(event, containerRef.current)) return;
     containerRef.current?.focus({ preventScroll: true });
   }, []);
 

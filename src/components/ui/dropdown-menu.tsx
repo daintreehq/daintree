@@ -10,6 +10,7 @@ import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { MenuActionSourceContext, useMenuActionSource } from "./menu-source";
 import { menuRowPointerMove } from "./menu-row-hover-focus";
+import { useLayerPressFocusGuard } from "./layer-press-focus-guard";
 import {
   OverlayFocusRestoreContext,
   useOverlayFocusRestore,
@@ -294,42 +295,71 @@ type DropdownMenuSubContentProps = React.ComponentPropsWithoutRef<
 const DropdownMenuSubContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitiveType.SubContent>,
   DropdownMenuSubContentProps
->(({ className, sideOffset = 4, collisionPadding = 8, children, style, ...props }, ref) => {
-  const radix = useRadixPrimitives();
-  const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(ref);
-  const isDockPopoverChild = useIsDockPopoverChild();
-  if (!radix) return null;
-  const Portal = radix.DropdownMenuPrimitive.Portal;
-  const SubContent = radix.DropdownMenuPrimitive.SubContent;
-  return (
-    <Portal>
-      <BrandSurfaceReset>
-        <SubContent
-          ref={shadowRef}
-          sideOffset={sideOffset}
-          collisionPadding={collisionPadding}
-          style={{
-            transformOrigin: "var(--radix-dropdown-menu-content-transform-origin)",
-            ...style,
-          }}
-          className={cn(
-            // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
-            "app-no-drag",
-            "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
-            OVERLAY_MOTION_CLASS,
-            className
-          )}
-          {...props}
-          data-dock-popover-child={isDockPopoverChild ? "" : undefined}
-        >
-          {topShadow}
-          {children}
-          {bottomShadow}
-        </SubContent>
-      </BrandSurfaceReset>
-    </Portal>
-  );
-});
+>(
+  (
+    {
+      className,
+      sideOffset = 4,
+      collisionPadding = 8,
+      children,
+      style,
+      onPointerDownCapture,
+      onFocusOutside,
+      ...props
+    },
+    ref
+  ) => {
+    const radix = useRadixPrimitives();
+    // See `layer-press-focus-guard.ts`: an ancestor pulling focus while an item
+    // is pressed would otherwise close the submenu before the item's click.
+    const pressGuard = useLayerPressFocusGuard(ref);
+    const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(pressGuard.ref);
+    const isDockPopoverChild = useIsDockPopoverChild();
+    const handlePointerDownCapture: React.PointerEventHandler<HTMLDivElement> = (event) => {
+      onPointerDownCapture?.(event);
+      pressGuard.onPointerDownCapture();
+    };
+    const handleFocusOutside: NonNullable<DropdownMenuSubContentProps["onFocusOutside"]> = (
+      event
+    ) => {
+      onFocusOutside?.(event);
+      pressGuard.onFocusOutside(event);
+    };
+    if (!radix) return null;
+    const Portal = radix.DropdownMenuPrimitive.Portal;
+    const SubContent = radix.DropdownMenuPrimitive.SubContent;
+    return (
+      <Portal>
+        <BrandSurfaceReset>
+          <SubContent
+            ref={shadowRef}
+            sideOffset={sideOffset}
+            collisionPadding={collisionPadding}
+            style={{
+              transformOrigin: "var(--radix-dropdown-menu-content-transform-origin)",
+              ...style,
+            }}
+            className={cn(
+              // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
+              "app-no-drag",
+              "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
+              OVERLAY_MOTION_CLASS,
+              className
+            )}
+            {...props}
+            onPointerDownCapture={handlePointerDownCapture}
+            onFocusOutside={handleFocusOutside}
+            data-dock-popover-child={isDockPopoverChild ? "" : undefined}
+          >
+            {topShadow}
+            {children}
+            {bottomShadow}
+          </SubContent>
+        </BrandSurfaceReset>
+      </Portal>
+    );
+  }
+);
 DropdownMenuSubContent.displayName = "DropdownMenuSubContent";
 
 type DropdownMenuContentProps = React.ComponentPropsWithoutRef<
@@ -348,8 +378,10 @@ const DropdownMenuContent = React.forwardRef<
       children,
       style,
       onPointerDown,
+      onPointerDownCapture,
       onPointerDownOutside,
       onInteractOutside,
+      onFocusOutside,
       onKeyDown,
       onClick,
       onCloseAutoFocus,
@@ -358,7 +390,8 @@ const DropdownMenuContent = React.forwardRef<
     ref
   ) => {
     const radix = useRadixPrimitives();
-    const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(ref);
+    const pressGuard = useLayerPressFocusGuard(ref);
+    const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(pressGuard.ref);
     const isDockPopoverChild = useIsDockPopoverChild();
     const focusRestore = useOverlayFocusRestore();
 
@@ -380,6 +413,16 @@ const DropdownMenuContent = React.forwardRef<
     ) => {
       onInteractOutside?.(event);
       focusRestore?.onContentInteractOutside(event);
+    };
+    // A modal menu already ignores focus leaving; a non-modal one would close
+    // mid-press (see `layer-press-focus-guard.ts`).
+    const handlePointerDownCapture: React.PointerEventHandler<HTMLDivElement> = (event) => {
+      onPointerDownCapture?.(event);
+      pressGuard.onPointerDownCapture();
+    };
+    const handleFocusOutside: NonNullable<DropdownMenuContentProps["onFocusOutside"]> = (event) => {
+      onFocusOutside?.(event);
+      pressGuard.onFocusOutside(event);
     };
     const handleKeyDown: React.KeyboardEventHandler<HTMLDivElement> = (event) => {
       onKeyDown?.(event);
@@ -422,8 +465,10 @@ const DropdownMenuContent = React.forwardRef<
             )}
             {...props}
             onPointerDown={handlePointerDown}
+            onPointerDownCapture={handlePointerDownCapture}
             onPointerDownOutside={handlePointerDownOutside}
             onInteractOutside={handleInteractOutside}
+            onFocusOutside={handleFocusOutside}
             onKeyDown={handleKeyDown}
             onClick={handleClick}
             onCloseAutoFocus={handleCloseAutoFocus}
