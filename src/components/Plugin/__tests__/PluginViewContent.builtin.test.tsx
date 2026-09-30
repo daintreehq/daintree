@@ -14,7 +14,7 @@ import { PluginStyleScope } from "@/components/PluginKit/kitProps";
 
 /**
  * In-process resolution of built-in plugin panel views (#11244). Uses the real
- * `lazy` and the real registry — no React double — so a view that renders here
+ * load path and the real registry — no React double — so a view that renders here
  * genuinely did not come from a `plugin://` import, which jsdom cannot load.
  */
 
@@ -89,6 +89,9 @@ vi.mock("@/services/plugin/pluginStyleContract", async (importOriginal) => {
     },
   };
 });
+// The kit chunk takes seconds to transform under jsdom; readiness is the kit's
+// own suite's to prove.
+vi.mock("@/pluginUi", () => ({ whenPluginUiReady: () => Promise.resolve() }));
 vi.mock("@/services/plugin/pluginDocumentRuntime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/services/plugin/pluginDocumentRuntime")>();
   const runtime = actual.createPluginDocumentRuntime();
@@ -177,6 +180,27 @@ describe("built-in panel views", () => {
     expect(activateForView).toHaveBeenCalledWith(BUILTIN_KIND);
     expect(stylePrep.calls).toEqual([]);
     expect(documentViews.calls).toEqual([]);
+  });
+
+  it("renders a reopened builtin view in the commit that mounts it", async () => {
+    // Main publishes no runtime status for a builtin with no worker, so an
+    // absent status must not read as "backend unknown" for one — or a builtin
+    // panel would pay an activation round trip on every reopen.
+    function Inspector() {
+      return <div data-testid="builtin-view" />;
+    }
+    registerBuiltinView(BUILTIN_KIND, Inspector, { pluginId: BUILTIN_ID, label: "Site Inspector" });
+    const Content = makePluginViewContent(builtinConfig());
+
+    const first = render(<Content panelId="panel-reopen" worktreeId="wt-1" />);
+    await screen.findByTestId("builtin-view");
+    first.unmount();
+
+    activateForView.mockReturnValue(new Promise<never>(() => {}));
+    render(<Content panelId="panel-reopen" worktreeId="wt-1" />);
+    expect(screen.getByTestId("builtin-view")).toBeTruthy();
+    await act(async () => {});
+    expect(activateForView).toHaveBeenCalledTimes(2);
   });
 
   it("names the view's plugin to kit content it portals out of the view", async () => {

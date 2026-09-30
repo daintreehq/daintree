@@ -4,17 +4,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import type { PluginViewContentConfig } from "../PluginViewContent";
 
-// Stub presentational deps — the content's behavioral contract is the lazy
+// Stub presentational deps — the content's behavioral contract is the view
 // import + AbortController wiring, not the skeleton or fade-in.
 vi.mock("@/components/ui/Skeleton", () => ({
   Skeleton: ({ label }: { label?: string }) => <div data-testid="skeleton">{label}</div>,
   SkeletonHint: () => null,
 }));
+// The kit chunk and the Tailwind runtime are real host code with their own
+// suites; loading them per test would only slow the load path down here.
+vi.mock("@/pluginUi", () => ({ whenPluginUiReady: () => Promise.resolve() }));
+vi.mock("@/services/plugin/pluginStyleContract", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/plugin/pluginStyleContract")>()),
+  preparePluginStyles: () => Promise.resolve(),
+  registerPluginStyleRoot: () => () => {},
+}));
 vi.mock("@/components/ui/ContentFadeIn", () => ({
   ContentFadeIn: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
-// Its own lazy banner must not overwrite the plugin-view factory captured by
-// the React mocks below. Runtime-status behavior has a dedicated suite.
+// Its lazy banner is not what these tests are about. Runtime-status behavior
+// has a dedicated suite.
 vi.mock("@/components/Plugin/PluginViewRuntimeStatus", () => ({
   PluginViewRuntimeStatus: () => null,
 }));
@@ -46,7 +54,10 @@ interface CapturedBoundaryProps {
 // The fake records the props it was handed, so the tests can render the very
 // fallback the content supplied. Asserting only that `fallback` is *a function*
 // would be satisfied by `() => null`.
-const boundaryProps = vi.hoisted(() => ({ last: null as CapturedBoundaryProps | null }));
+const boundaryProps = vi.hoisted(() => ({
+  last: null as CapturedBoundaryProps | null,
+  caught: [] as unknown[],
+}));
 
 // Stub the real ErrorBoundary with a minimal class — exercising the entire
 // reporting pipeline (Sentry, errorStore, notify) is out of scope for these
@@ -66,6 +77,7 @@ vi.mock("@/components/ErrorBoundary", async () => {
     // the error there to decide whether "Try again" needs a fresh module
     // specifier, so a stub that swallowed it would hide that branch (#11728).
     componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
+      boundaryProps.caught.push(error);
       this.props.onError?.(error, errorInfo);
     }
     componentDidUpdate(prev: { resetKeys?: Array<string | number> }): void {
@@ -81,8 +93,8 @@ vi.mock("@/components/ErrorBoundary", async () => {
       boundaryProps.last = this.props;
       if (this.state.hasError) {
         // Deliberately does NOT render `props.fallback`. Tests here reach the
-        // error state incidentally — `#11207` lets the real `lazy` attempt a
-        // `plugin://` import that jsdom cannot resolve — and rendering the
+        // error state incidentally — `#11207` lets the real load attempt a
+        // `plugin://` import no test mocked — and rendering the
         // fallback would paint a diagnostics pane alongside the one those tests
         // render explicitly, so `getByTestId` finds two. The close-action seam,
         // which does need a rendered fallback, lives in
@@ -105,13 +117,21 @@ vi.mock("@/components/ErrorBoundary", async () => {
   return { ErrorBoundary: FakeBoundary };
 });
 
+/**
+ * The view module every test's content imports. Tests stand a view in for it
+ * with `vi.doMock`, which is how the load path's real `import()` resolves to a
+ * test double; an unmocked `plugin://` specifier fails to load, as it would for
+ * a missing bundle.
+ */
+const VIEW_MODULE = "plugin://acme/dashboard.js";
+
 function makeContentConfig(
   overrides: Partial<PluginViewContentConfig> = {}
 ): PluginViewContentConfig {
   return {
     id: "acme.dashboard",
     name: "Dashboard",
-    componentPath: "plugin://acme/dashboard.js",
+    componentPath: VIEW_MODULE,
     extensionId: "acme",
     ...overrides,
   };
@@ -121,6 +141,7 @@ const onPanelKindsChangedMock = vi.fn();
 
 beforeEach(() => {
   boundaryProps.last = null;
+  boundaryProps.caught = [];
   onPanelKindsChangedMock.mockReset();
   onPanelKindsChangedMock.mockReturnValue(() => {});
   vi.stubGlobal("electron", undefined);
@@ -134,7 +155,7 @@ beforeEach(() => {
 afterEach(async () => {
   cleanup();
   // A late dependency import can refill the module cache with the previous
-  // React mock after resetModules, bypassing the next test's lazy factory.
+  // test's view module after resetModules, leaking it into the next test.
   await vi.dynamicImportSettled();
   vi.resetModules();
   vi.unstubAllGlobals();
@@ -145,16 +166,11 @@ describe("makePluginViewContent", () => {
     // The decoupling contract itself: whatever presentation a host chooses, the
     // content layer contributes none of it. A dialog host (#11239) mounting this
     // must not inherit a grid pane's root, chrome, or close control.
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: () =>
-          function StubView() {
-            return <div data-testid="plugin-view" />;
-          },
-      };
-    });
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function StubView() {
+        return <div data-testid="plugin-view" />;
+      },
+    }));
 
     try {
       const { makePluginViewContent } = await import("../PluginViewContent");
@@ -167,23 +183,18 @@ describe("makePluginViewContent", () => {
       expect(container.querySelector("[data-pane-chrome]")).toBeNull();
       expect(screen.queryByTestId("panel-close")).toBeNull();
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 
   it("hands the plugin view its panel id, plugin id, dispose signal, and initial args", async () => {
     const capturedProps: Array<Record<string, unknown>> = [];
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: () =>
-          function CapturingView(props: Record<string, unknown>) {
-            capturedProps.push(props);
-            return <div data-testid="plugin-view" />;
-          },
-      };
-    });
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CapturingView(props: Record<string, unknown>) {
+        capturedProps.push(props);
+        return <div data-testid="plugin-view" />;
+      },
+    }));
 
     try {
       const { makePluginViewContent } = await import("../PluginViewContent");
@@ -204,23 +215,18 @@ describe("makePluginViewContent", () => {
       expect(props.worktreeId).toBe("wt-7");
       expect(props.disposeSignal).toBeInstanceOf(AbortSignal);
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 
   it("freezes initialArgs for the life of a mount even as the prop changes", async () => {
     const capturedProps: Array<Record<string, unknown>> = [];
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: () =>
-          function CapturingView(props: Record<string, unknown>) {
-            capturedProps.push(props);
-            return <div data-testid="plugin-view" />;
-          },
-      };
-    });
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CapturingView(props: Record<string, unknown>) {
+        capturedProps.push(props);
+        return <div data-testid="plugin-view" />;
+      },
+    }));
 
     try {
       const { makePluginViewContent } = await import("../PluginViewContent");
@@ -245,7 +251,7 @@ describe("makePluginViewContent", () => {
       expect(latest.initialArgs).toBe(spawned);
       expect(capturedProps.every((props) => props.initialArgs === spawned)).toBe(true);
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 
@@ -275,17 +281,12 @@ describe("makePluginViewContent", () => {
     });
 
     const signals: AbortSignal[] = [];
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: () =>
-          function CapturingView(props: { disposeSignal: AbortSignal }) {
-            if (!signals.includes(props.disposeSignal)) signals.push(props.disposeSignal);
-            return <div data-testid="plugin-view" />;
-          },
-      };
-    });
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CapturingView(props: { disposeSignal: AbortSignal }) {
+        if (!signals.includes(props.disposeSignal)) signals.push(props.disposeSignal);
+        return <div data-testid="plugin-view" />;
+      },
+    }));
 
     try {
       const { makePluginViewContent } = await import("../PluginViewContent");
@@ -323,37 +324,27 @@ describe("makePluginViewContent", () => {
       expect(() => act(() => emit!({ kinds: [] }))).not.toThrow();
       expect(signal.aborted).toBe(true);
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 
   it("awaits plugin.activateForView with the kind id before importing the view module (#10523)", async () => {
     // Reject activation with a sentinel so we can prove the import is *gated*
     // on activation, not merely fired alongside it: if the `await` were dropped
-    // the factory would reject with the `plugin://` import error (module not
-    // found) instead of this sentinel.
+    // the view module would be imported, and the boundary would see whatever
+    // that produced instead of this sentinel.
     const activateForView = vi.fn().mockRejectedValue(new Error("ACTIVATION_FAILED"));
     Object.defineProperty(window, "electron", {
       configurable: true,
       writable: true,
       value: { plugin: { onPanelKindsChanged: onPanelKindsChangedMock, activateForView } },
     });
-
-    // Capture the lazy factory so we can drive it directly — the real
-    // `plugin://` import rejects in jsdom with an unsupported-scheme error.
-    let capturedFactory: (() => Promise<unknown>) | undefined;
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: (factory: () => Promise<unknown>) => {
-          capturedFactory = factory;
-          return function StubView() {
-            return <div data-testid="plugin-view" />;
-          };
-        },
-      };
-    });
+    const importViewModule = vi.fn(() => ({
+      default: function StubView() {
+        return <div data-testid="plugin-view" />;
+      },
+    }));
+    vi.doMock(VIEW_MODULE, importViewModule);
 
     try {
       const { makePluginViewContent } = await import("../PluginViewContent");
@@ -361,14 +352,15 @@ describe("makePluginViewContent", () => {
 
       render(<Content panelId="panel-act" />);
 
-      await waitFor(() => expect(capturedFactory).toBeDefined());
-      // Activation rejects, so the awaited call short-circuits before `import()`.
-      // Awaiting to settlement also lets the factory's `finally` clear the 10s
-      // timeout rather than leaking an open timer into the next test.
-      await expect(capturedFactory!()).rejects.toThrow("ACTIVATION_FAILED");
+      // Activation rejects, so the load short-circuits before `import()` and
+      // the boundary receives the activation's own error.
+      await waitFor(() => expect(boundaryProps.caught).toHaveLength(1));
+      expect(String(boundaryProps.caught[0])).toMatch("ACTIVATION_FAILED");
       expect(activateForView).toHaveBeenCalledWith("acme.dashboard");
+      expect(importViewModule).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("plugin-view")).toBeNull();
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 
@@ -379,27 +371,12 @@ describe("makePluginViewContent", () => {
     // ErrorBoundary surfaces why activation failed instead of a generic import
     // timeout. (Distinct from the #10523 gating test above, which only proves
     // the await ordering with a sentinel.)
-    const activateForView = vi
-      .fn()
-      .mockRejectedValue(new Error('Plugin failed to activate for view "acme.dashboard": boom'));
+    const activationError = new Error('Plugin failed to activate for view "acme.dashboard": boom');
+    const activateForView = vi.fn().mockRejectedValue(activationError);
     Object.defineProperty(window, "electron", {
       configurable: true,
       writable: true,
       value: { plugin: { onPanelKindsChanged: onPanelKindsChangedMock, activateForView } },
-    });
-
-    let capturedFactory: (() => Promise<unknown>) | undefined;
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: (factory: () => Promise<unknown>) => {
-          capturedFactory = factory;
-          return function StubView() {
-            return <div data-testid="plugin-view" />;
-          };
-        },
-      };
     });
 
     try {
@@ -408,32 +385,25 @@ describe("makePluginViewContent", () => {
 
       render(<Content panelId="panel-act-fail" />);
 
-      await waitFor(() => expect(capturedFactory).toBeDefined());
-      // The factory rejects with the real activation error and never reaches the
-      // `plugin://` import.
-      await expect(capturedFactory!()).rejects.toThrow(/boom/);
+      // The very error main rejected with reaches the boundary — not a wrapper,
+      // and not the `plugin://` import failure the unmocked module would give.
+      await waitFor(() => expect(boundaryProps.caught).toEqual([activationError]));
       expect(activateForView).toHaveBeenCalledWith("acme.dashboard");
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 
   it("tolerates a missing activateForView binding without throwing (#10523)", async () => {
     // beforeEach installs window.electron.plugin without activateForView, so the
-    // optional-chained call must no-op and the import must still proceed.
-    let capturedFactory: (() => Promise<unknown>) | undefined;
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: (factory: () => Promise<unknown>) => {
-          capturedFactory = factory;
-          return function StubView() {
-            return <div data-testid="plugin-view" />;
-          };
-        },
-      };
-    });
+    // optional-chained call must no-op and the import must still proceed. Drop
+    // the `?.` and the load instead dies on "activateForView is not a function"
+    // before reaching `import()`.
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function StubView() {
+        return <div data-testid="plugin-view" />;
+      },
+    }));
 
     try {
       const { makePluginViewContent } = await import("../PluginViewContent");
@@ -441,41 +411,32 @@ describe("makePluginViewContent", () => {
 
       render(<Content panelId="panel-noact" />);
 
-      await waitFor(() => expect(capturedFactory).toBeDefined());
-
-      // The factory still rejects here — jsdom can't resolve a `plugin://` URL —
-      // so "did it reject" proves nothing. What matters is the *cause*: with the
-      // optional chaining intact the missing binding is skipped and the failure
-      // comes from the import. Drop the `?.` and the factory instead dies on
-      // "activateForView is not a function" before reaching `import()`.
-      // Awaiting to settlement also lets the factory's `finally` clear the
-      // import timeout instead of leaking a live timer into the next test.
-      const cause: unknown = await capturedFactory!().then(
-        () => null,
-        (e: unknown) => e
-      );
-      expect(String(cause)).not.toMatch(/is not a function/);
-      // The content still mounted its (stubbed) view rather than crashing.
-      expect(screen.getByTestId("plugin-view")).toBeTruthy();
+      await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+      expect(boundaryProps.caught).toEqual([]);
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 
   it("retries an import failure on a main-minted specifier, and a render failure in place (#11728)", async () => {
     // The bug: a rejected dynamic import is permanent for its specifier — the
     // module map never evicts a failed entry — so the old "Try again", which
-    // minted a fresh `lazy()` around the SAME url, could never recover. Recovery
-    // has to come from main as a new view generation. But it must be requested
-    // only for import failures: a view that threw while rendering, or an
-    // activation that failed, would fail identically on a new specifier, and
-    // minting one per retry would grow the module map without bound.
+    // re-imported the SAME url, could never recover. Recovery has to come from
+    // main as a new view generation. But it must be requested only for import
+    // failures: a view that threw while rendering, or an activation that
+    // failed, would fail identically on a new specifier, and minting one per
+    // retry would grow the module map without bound.
     //
-    // The replacement is a `data:` module so the second attempt genuinely
-    // resolves. That is the assertion: `plugin://acme/dashboard.js` cannot load
-    // here, so a resolved module proves the factory imported the path main
+    // The original specifier is left unmocked, so it genuinely fails to load,
+    // and the replacement is a mocked module on a different specifier. A view
+    // on screen after the retry proves the load imported the path main
     // returned rather than the original.
-    const recoveryPath = "data:text/javascript,export default () => null";
+    const recoveryPath = "plugin://acme/__dtv-2/dashboard.js";
+    vi.doMock(recoveryPath, () => ({
+      default: function RecoveredView() {
+        return <div data-testid="plugin-view" />;
+      },
+    }));
     const activateForView = vi.fn((_kindId: string, recover?: boolean) =>
       Promise.resolve(recover === true ? recoveryPath : undefined)
     );
@@ -485,63 +446,38 @@ describe("makePluginViewContent", () => {
       value: { plugin: { onPanelKindsChanged: onPanelKindsChangedMock, activateForView } },
     });
 
-    // React can run the `useState` initializer more than once on a concurrent
-    // mount, so the newest factory is the live one — indexing from 0 would drive
-    // a discarded generation.
-    const factories: Array<() => Promise<unknown>> = [];
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: (factory: () => Promise<unknown>) => {
-          factories.push(factory);
-          return function StubView() {
-            return <div data-testid="plugin-view" />;
-          };
-        },
-      };
-    });
-
     try {
       const { makePluginViewContent } = await import("../PluginViewContent");
       const Content = makePluginViewContent(makeContentConfig());
 
       render(<Content panelId="panel-recover" />);
-      await waitFor(() => expect(factories).not.toHaveLength(0));
 
       // First attempt: plain activation (no recovery flag), then an import that
-      // cannot resolve in this environment — exactly the shape of the bug.
-      const importError = await factories.at(-1)!().then(
-        () => null,
-        (err: unknown) => err
-      );
-      expect(importError).toBeInstanceOf(Error);
-      expect(activateForView.mock.calls.at(-1)).toEqual(["acme.dashboard"]);
+      // cannot resolve — exactly the shape of the bug.
+      await waitFor(() => expect(boundaryProps.caught).toHaveLength(1));
+      expect(boundaryProps.caught[0]).toBeInstanceOf(Error);
+      expect(activateForView.mock.calls).toEqual([["acme.dashboard"]]);
 
-      // Hand the boundary the real rejection, then click through its "Try again".
-      const countBeforeRetry = factories.length;
-      act(() => boundaryProps.last!.onError!(importError as Error, { componentStack: "" }));
+      // Click through the boundary's "Try again".
       act(() => boundaryProps.last!.onReset!());
-      await waitFor(() => expect(factories.length).toBeGreaterThan(countBeforeRetry));
 
       // The retry asks main for a replacement specifier...
-      const recovered = await factories.at(-1)!();
+      await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
       expect(activateForView.mock.calls.at(-1)).toEqual(["acme.dashboard", true]);
-      // ...and actually imports it: this only resolves via the returned url.
-      expect(recovered).toHaveProperty("default");
 
       // Now the other half of the classification. A view that throws during
       // render is not a poisoned specifier, so its retry must stay on the path
       // it has rather than burning a second namespace.
-      const countBeforeRenderRetry = factories.length;
+      const callsBeforeRenderRetry = activateForView.mock.calls.length;
       act(() => boundaryProps.last!.onError!(new Error("view exploded"), { componentStack: "" }));
       act(() => boundaryProps.last!.onReset!());
-      await waitFor(() => expect(factories.length).toBeGreaterThan(countBeforeRenderRetry));
-
-      await factories.at(-1)!();
+      await waitFor(() =>
+        expect(activateForView.mock.calls.length).toBeGreaterThan(callsBeforeRenderRetry)
+      );
       expect(activateForView.mock.calls.at(-1)).toEqual(["acme.dashboard"]);
+      await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(recoveryPath);
     }
   });
 
@@ -561,51 +497,32 @@ describe("makePluginViewContent", () => {
       value: { plugin: { onPanelKindsChanged: onPanelKindsChangedMock, activateForView } },
     });
 
-    const factories: Array<() => Promise<unknown>> = [];
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: (factory: () => Promise<unknown>) => {
-          factories.push(factory);
-          return function StubView() {
-            return <div data-testid="plugin-view" />;
-          };
-        },
-      };
+    const { makePluginViewContent } = await import("../PluginViewContent");
+    // A real module that throws a bare string on evaluation.
+    const Content = makePluginViewContent(
+      makeContentConfig({ componentPath: 'data:text/javascript,throw "boom"' })
+    );
+
+    render(<Content panelId="panel-primitive" />);
+
+    await waitFor(() => expect(boundaryProps.caught).toHaveLength(1));
+    const thrown = boundaryProps.caught[0];
+    // Wrapped, not passed through raw — a bare string would also render badly
+    // in the diagnostics fallback.
+    if (!(thrown instanceof Error)) throw new Error("the load did not fail with an Error");
+    expect(thrown.cause).toBe("boom");
+
+    act(() => boundaryProps.last!.onReset!());
+
+    // The classification survived the wrap, so recovery is requested, and the
+    // replacement module loads without another failure.
+    await waitFor(() =>
+      expect(activateForView.mock.calls.at(-1)).toEqual(["acme.dashboard", true])
+    );
+    await act(async () => {
+      await vi.dynamicImportSettled();
     });
-
-    try {
-      const { makePluginViewContent } = await import("../PluginViewContent");
-      // A real module that throws a bare string on evaluation.
-      const Content = makePluginViewContent(
-        makeContentConfig({ componentPath: 'data:text/javascript,throw "boom"' })
-      );
-
-      render(<Content panelId="panel-primitive" />);
-      await waitFor(() => expect(factories).not.toHaveLength(0));
-
-      const thrown = await factories.at(-1)!().then(
-        () => null,
-        (err: unknown) => err
-      );
-      // Wrapped, not passed through raw — a bare string would also render badly
-      // in the diagnostics fallback.
-      expect(thrown).toBeInstanceOf(Error);
-      expect((thrown as Error).cause).toBe("boom");
-
-      const countBeforeRetry = factories.length;
-      act(() => boundaryProps.last!.onError!(thrown as Error, { componentStack: "" }));
-      act(() => boundaryProps.last!.onReset!());
-      await waitFor(() => expect(factories.length).toBeGreaterThan(countBeforeRetry));
-
-      // The classification survived the wrap, so recovery is requested.
-      const recovered = await factories.at(-1)!();
-      expect(activateForView.mock.calls.at(-1)).toEqual(["acme.dashboard", true]);
-      expect(recovered).toHaveProperty("default");
-    } finally {
-      vi.doUnmock("react");
-    }
+    expect(boundaryProps.caught).toHaveLength(1);
   });
 
   it("aborts the outgoing signal on retry and the post-retry signal on kind removal", async () => {
@@ -627,24 +544,22 @@ describe("makePluginViewContent", () => {
     // render a given generation more than once, and only the identity of the
     // signal handed to the view is contractual.
     const signals: AbortSignal[] = [];
-    // Count wrapper constructions: each `lazy()` caches its import result on its
-    // own payload, so a retry that reuses the old wrapper replays the cached
-    // *failed* result and never re-imports. Only a fresh construction proves the
-    // reload actually happens (#9501).
-    const lazyCalls = { count: 0 };
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: () => {
-          lazyCalls.count += 1;
-          return function CapturingView(props: { disposeSignal: AbortSignal }) {
-            if (!signals.includes(props.disposeSignal)) signals.push(props.disposeSignal);
-            return <div data-testid="plugin-view" />;
-          };
-        },
-      };
+    // Count loads: each attempt's load is sticky for that attempt, so a retry
+    // that reused the old one would replay its cached *failed* result and never
+    // re-import. Only a fresh load — which activates again — proves the reload
+    // actually happens (#9501).
+    const activateForView = vi.fn(() => Promise.resolve(undefined));
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { plugin: { onPanelKindsChanged: onPanelKindsChangedMock, activateForView } },
     });
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CapturingView(props: { disposeSignal: AbortSignal }) {
+        if (!signals.includes(props.disposeSignal)) signals.push(props.disposeSignal);
+        return <div data-testid="plugin-view" />;
+      },
+    }));
 
     try {
       const { makePluginViewContent } = await import("../PluginViewContent");
@@ -655,7 +570,7 @@ describe("makePluginViewContent", () => {
       await waitFor(() => expect(signals).not.toHaveLength(0));
       const first = signals[0]!;
       expect(first.aborted).toBe(false);
-      const callsBeforeReset = lazyCalls.count;
+      const callsBeforeReset = activateForView.mock.calls.length;
 
       // Drive the very callback the boundary's "Try again" invokes. Going
       // through `onReset` rather than a thrown render keeps this deterministic:
@@ -676,19 +591,19 @@ describe("makePluginViewContent", () => {
       // The discarded view's signal aborted at swap time, not at unmount.
       expect(first.aborted).toBe(true);
       expect(second.aborted).toBe(false);
-      // ...and the module is genuinely re-imported rather than the controller
-      // merely being swapped: a fresh `lazy()` ref. The boundary clears its
-      // error state by being remounted on a new `key` (#12278) rather than
-      // through `resetKeys`, which it no longer takes — a fresh wrapper alone
-      // does not remount a view whose resolved type is unchanged.
-      expect(lazyCalls.count).toBeGreaterThan(callsBeforeReset);
+      // ...and the view is genuinely reloaded rather than the controller
+      // merely being swapped: a fresh attempt with its own load. The boundary
+      // clears its error state by being remounted on a new `key` (#12278)
+      // rather than through `resetKeys`, which it no longer takes — a fresh
+      // attempt alone does not remount a view whose component is unchanged.
+      expect(activateForView.mock.calls.length).toBeGreaterThan(callsBeforeReset);
 
       // Kind removal must abort the CURRENT controller, resolved through the ref
       // at call time rather than the one captured when the effect was set up.
       act(() => emit!({ kinds: [] }));
       expect(second.aborted).toBe(true);
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 
@@ -701,17 +616,12 @@ describe("makePluginViewContent", () => {
     // in the window BEFORE any recovery action, so asserting on the state right
     // after `onError` is the only way to see it.
     const signals: AbortSignal[] = [];
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: () =>
-          function CapturingView(props: { disposeSignal: AbortSignal }) {
-            if (!signals.includes(props.disposeSignal)) signals.push(props.disposeSignal);
-            return <div data-testid="plugin-view" />;
-          },
-      };
-    });
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CapturingView(props: { disposeSignal: AbortSignal }) {
+        if (!signals.includes(props.disposeSignal)) signals.push(props.disposeSignal);
+        return <div data-testid="plugin-view" />;
+      },
+    }));
 
     try {
       const { makePluginViewContent } = await import("../PluginViewContent");
@@ -733,23 +643,18 @@ describe("makePluginViewContent", () => {
       // No retry, no close, no unmount — just the throw.
       expect(signal.aborted).toBe(true);
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 
   it("aborts the dispose signal when the content unmounts", async () => {
     const signals: AbortSignal[] = [];
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: () =>
-          function CapturingView(props: { disposeSignal: AbortSignal }) {
-            signals.push(props.disposeSignal);
-            return <div data-testid="plugin-view" />;
-          },
-      };
-    });
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CapturingView(props: { disposeSignal: AbortSignal }) {
+        signals.push(props.disposeSignal);
+        return <div data-testid="plugin-view" />;
+      },
+    }));
 
     try {
       const { makePluginViewContent } = await import("../PluginViewContent");
@@ -766,7 +671,7 @@ describe("makePluginViewContent", () => {
       await Promise.resolve();
       expect(signal.aborted).toBe(true);
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 
@@ -776,17 +681,12 @@ describe("makePluginViewContent", () => {
       panelRemovedSignal: AbortSignal;
     }
     const captured: LifecycleProps[] = [];
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: () =>
-          function CapturingView(props: LifecycleProps) {
-            captured.push(props);
-            return <div data-testid="plugin-view" />;
-          },
-      };
-    });
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CapturingView(props: LifecycleProps) {
+        captured.push(props);
+        return <div data-testid="plugin-view" />;
+      },
+    }));
 
     try {
       const { makePluginViewContent } = await import("../PluginViewContent");
@@ -807,7 +707,7 @@ describe("makePluginViewContent", () => {
       expect(disposeSignal.aborted).toBe(true);
       expect(panelRemovedSignal.aborted).toBe(false);
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 
@@ -817,17 +717,12 @@ describe("makePluginViewContent", () => {
       panelRemovedSignal: AbortSignal;
     }
     const captured: LifecycleProps[] = [];
-    vi.doMock("react", async () => {
-      const actual = await vi.importActual<typeof import("react")>("react");
-      return {
-        ...actual,
-        lazy: () =>
-          function CapturingView(props: LifecycleProps) {
-            captured.push(props);
-            return <div data-testid="plugin-view" />;
-          },
-      };
-    });
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CapturingView(props: LifecycleProps) {
+        captured.push(props);
+        return <div data-testid="plugin-view" />;
+      },
+    }));
 
     try {
       const { makePluginViewContent } = await import("../PluginViewContent");
@@ -849,7 +744,7 @@ describe("makePluginViewContent", () => {
       expect(second.panelRemovedSignal).toBe(first.panelRemovedSignal);
       expect(second.panelRemovedSignal.aborted).toBe(false);
     } finally {
-      vi.doUnmock("react");
+      vi.doUnmock(VIEW_MODULE);
     }
   });
 

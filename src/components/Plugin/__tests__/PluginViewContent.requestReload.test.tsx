@@ -23,12 +23,18 @@ vi.mock("@/components/ui/tooltip", () => ({
 /**
  * A plugin view asking the host to remount it (#12609).
  *
- * Every view here is ONE component identity across every `lazy()` wrapper the
- * content builds. A double that minted a new component per wrapper would
+ * Every view here is ONE component identity across every attempt the content
+ * builds. A double that minted a new component per attempt would
  * remount on its own and hide a reload that only re-rendered — the boundary's
  * `key` is the thing under test.
  */
 
+vi.mock("@/pluginUi", () => ({ whenPluginUiReady: () => Promise.resolve() }));
+vi.mock("@/services/plugin/pluginStyleContract", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/plugin/pluginStyleContract")>()),
+  preparePluginStyles: () => Promise.resolve(),
+  registerPluginStyleRoot: () => () => {},
+}));
 vi.mock("@/components/ui/Skeleton", () => ({
   Skeleton: ({ label }: { label?: string }) => <div data-testid="skeleton">{label}</div>,
   SkeletonHint: () => null,
@@ -73,9 +79,9 @@ vi.mock("@/components/ErrorBoundary", async () => {
   return { ErrorBoundary: FakeBoundary };
 });
 
-// The status layer lazy-loads its banner, and this suite stubs React's `lazy`
-// wholesale — so mount the real banner directly. It renders nothing unless
-// there is something to report.
+// The status layer lazy-loads its banner; mount the real banner directly so it
+// is there synchronously. It renders nothing unless there is something to
+// report.
 vi.mock("@/components/Plugin/PluginViewRuntimeStatus", async () => {
   const { PluginViewRuntimeBanner } = await import("../PluginViewRuntimeBanner");
   type Props = Parameters<typeof PluginViewRuntimeBanner>[0];
@@ -129,11 +135,13 @@ const reportPanelLifecycle = vi.fn<(events: PluginPanelLifecycleEvent[]) => Prom
   Promise.resolve()
 );
 
+const VIEW_MODULE = "plugin://acme/dashboard.js";
+
 function makeContentConfig(): PluginViewContentConfig {
   return {
     id: "acme.dashboard",
     name: "Dashboard",
-    componentPath: "plugin://acme/dashboard.js",
+    componentPath: VIEW_MODULE,
     extensionId: "acme",
   };
 }
@@ -197,26 +205,22 @@ afterEach(async () => {
   const { _resetPluginRuntimeStatusStoreForTest } =
     await import("@/store/pluginRuntimeStatusStore");
   _resetPluginRuntimeStatusStoreForTest();
+  vi.doUnmock(VIEW_MODULE);
   vi.resetModules();
   Reflect.deleteProperty(window, "electron");
 });
 
 /**
- * Load the content with `lazy` resolving straight to {@link StableView}, plus
- * the lifecycle module instance that content shares — the budget lives there.
+ * Load the content with its view module resolving straight to
+ * {@link StableView}, plus the lifecycle module instance that content shares —
+ * the budget lives there. The module stays mocked until the test ends, since
+ * every attempt imports it.
  */
 async function loadContent() {
-  vi.doMock("react", async () => {
-    const actual = await vi.importActual<typeof import("react")>("react");
-    return { ...actual, lazy: () => StableView };
-  });
-  try {
-    const { makePluginViewContent } = await import("../PluginViewContent");
-    const lifecycle = await import("@/services/plugin/pluginPanelLifecycle");
-    return { Content: makePluginViewContent(makeContentConfig()), lifecycle };
-  } finally {
-    vi.doUnmock("react");
-  }
+  vi.doMock(VIEW_MODULE, () => ({ default: StableView }));
+  const { makePluginViewContent } = await import("../PluginViewContent");
+  const lifecycle = await import("@/services/plugin/pluginPanelLifecycle");
+  return { Content: makePluginViewContent(makeContentConfig()), lifecycle };
 }
 
 async function mountContent(
