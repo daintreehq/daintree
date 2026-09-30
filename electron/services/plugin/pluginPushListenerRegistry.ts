@@ -33,17 +33,29 @@ interface Watcher {
   projectId: string | null;
   channel: string;
   last: boolean;
+  passive: boolean;
   callback: (hasListeners: boolean) => void;
+}
+
+export interface PluginPushListenerWatchOptions {
+  /**
+   * A passive watcher is re-evaluated only on what the registry is told —
+   * reports and renderer teardown — and never keeps the periodic reconcile
+   * running. For observations that back a synchronous read (a worker's
+   * `hasListeners` cache), not for a plugin's own `onDidChangeListeners`.
+   */
+  passive?: boolean;
 }
 
 /** How many destroyed renderer ids are remembered, so a late report cannot resurrect one. */
 const MAX_REMEMBERED_GONE = 4096;
 
 /**
- * How often watchers are re-evaluated while any exist. Reports and renderer
- * teardown re-evaluate them at once; this catches what the registry is not
- * told about — a view registering with (or leaving) a project, which changes
- * which renderers a bound plugin's scope covers.
+ * How often active watchers are re-evaluated while any exist. Reports, renderer
+ * teardown and renderer scope changes (a view registering with or leaving a
+ * project, wired through `reconcile` by the report handler) re-evaluate every
+ * watcher at once; this is a backstop for a scope change that path misses, and
+ * passive watchers go without it.
  */
 const RECONCILE_INTERVAL_MS = 2_000;
 
@@ -56,11 +68,17 @@ const RECONCILE_INTERVAL_MS = 2_000;
  * Each report replaces the previous one for that renderer, so a report that is
  * lost or superseded never leaves a count drifting.
  *
- * Absence of information always means "deliver": a renderer that has not
+ * This is a producer-side signal only (`host.hasListeners`,
+ * `host.onDidChangeListeners`): push delivery never consults it. A report is
+ * always behind the renderer — a subscriber registered after an empty report
+ * would lose any push main filtered on that report, and a generic push has no
+ * replay — so the batcher sends to every renderer in scope. A producer that
+ * pauses on this signal must be able to resync, as a synced collection does
+ * through its snapshot.
+ *
+ * Absence of information always means "listening": a renderer that has not
  * reported yet (just created, or its report was refused as oversized or over
- * budget) is treated as listening to everything, exactly as before this
- * registry existed. Only a renderer that has positively said it has no
- * subscriber for a channel is skipped.
+ * budget) counts as listening to everything, so the answer errs towards true.
  */
 export class PluginPushListenerRegistry {
   /** webContents id → its reported table, or `null` while its state is unknown. */
@@ -68,6 +86,9 @@ export class PluginPushListenerRegistry {
   private readonly watchedSources = new Set<number>();
   private readonly gone = new Set<number>();
   private readonly watchers = new Set<Watcher>();
+
+  /** Watchers that are not passive; the periodic reconcile runs only while there are any. */
+  private activeWatchers = 0;
 
   private reconcileTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -79,7 +100,8 @@ export class PluginPushListenerRegistry {
 
   /**
    * Replace `source`'s reported subscriptions. `null` marks its state unknown
-   * (a report that could not be accepted), which restores full delivery to it.
+   * (a report that could not be accepted), which counts it as listening on
+   * every channel again.
    */
   report(
     source: PluginPushListenerSource,
@@ -118,19 +140,6 @@ export class PluginPushListenerRegistry {
   }
 
   /**
-   * Whether a push on `channel` (targeted at `panelId`, or `null` for a
-   * broadcast) should be handed to renderer `targetId`. True unless that
-   * renderer reported and has no subscriber the preload would dispatch it to:
-   * broadcasts reach only `plugin.on` subscribers, targeted pushes only the
-   * `onPanel` subscribers for that exact panel.
-   */
-  shouldDeliver(targetId: number, channel: string, panelId: string | null): boolean {
-    const table = this.sources.get(targetId);
-    if (table === undefined || table === null) return true;
-    return table.get(channel)?.has(panelId) ?? false;
-  }
-
-  /**
    * Whether any renderer in `projectId`'s scope may be listening on `channel`,
    * broadcast or targeted. A renderer in scope that has not reported counts as
    * listening, so the answer errs towards true.
@@ -147,19 +156,27 @@ export class PluginPushListenerRegistry {
   watch(
     projectId: string | null,
     channel: string,
-    callback: (hasListeners: boolean) => void
+    callback: (hasListeners: boolean) => void,
+    options?: PluginPushListenerWatchOptions
   ): () => void {
+    const passive = options?.passive === true;
     const watcher: Watcher = {
       projectId,
       channel,
       last: this.hasListeners(projectId, channel),
+      passive,
       callback,
     };
     this.watchers.add(watcher);
+    if (!passive) this.activeWatchers++;
     this.armReconcile();
+    let disposed = false;
     return () => {
+      if (disposed) return;
+      disposed = true;
       this.watchers.delete(watcher);
-      if (this.watchers.size === 0) this.disarmReconcile();
+      if (!passive) this.activeWatchers--;
+      if (this.activeWatchers === 0) this.disarmReconcile();
     };
   }
 
@@ -168,18 +185,35 @@ export class PluginPushListenerRegistry {
     return this.sources.get(id) != null;
   }
 
+  /** Test seam: the `(channel, panelId)` pairs a renderer last reported, or `null` while unknown. */
+  reportedListeners(id: number): PluginPushListenerKey[] | null {
+    const table = this.sources.get(id);
+    if (table == null) return null;
+    const keys: PluginPushListenerKey[] = [];
+    for (const [channel, panels] of table) {
+      for (const panelId of panels) keys.push([channel, panelId]);
+    }
+    return keys;
+  }
+
   /** Test seam. */
   watcherCount(): number {
     return this.watchers.size;
   }
 
-  /** Re-evaluate every watcher now. Test seam for the periodic reconcile. */
+  /** Test seam: whether the periodic reconcile is running. */
+  isReconciling(): boolean {
+    return this.reconcileTimer !== null;
+  }
+
+  /** Re-evaluate every watcher now, passive ones included. Called when renderer scope changes. */
   reconcile(): void {
     this.notifyWatchers();
   }
 
   private armReconcile(): void {
     if (this.reconcileTimer !== null || this.reconcileIntervalMs <= 0) return;
+    if (this.activeWatchers === 0) return;
     this.reconcileTimer = setInterval(() => this.notifyWatchers(), this.reconcileIntervalMs);
     this.reconcileTimer.unref?.();
   }
@@ -265,7 +299,7 @@ function isGone(target: PluginPushListenerTarget): boolean {
 
 let sharedRegistry: PluginPushListenerRegistry | null = null;
 
-/** The process-wide registry the push batcher and every plugin host consult. */
+/** The process-wide registry every plugin host consults for its listener signal. */
 export function getPluginPushListenerRegistry(): PluginPushListenerRegistry {
   sharedRegistry ??= new PluginPushListenerRegistry();
   return sharedRegistry;

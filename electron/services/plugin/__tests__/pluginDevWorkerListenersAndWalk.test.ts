@@ -9,6 +9,7 @@ vi.mock("../../../utils/logger.js", () => ({
 import { PluginDevWorkerMainBridge } from "../PluginDevWorkerMainBridge.js";
 import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
 import { parseWorkerToHostMessage } from "../../../schemas/pluginDevWorker.js";
+import { pushListenerObservers } from "../pluginInternalApprovers.js";
 
 const flush = () => new Promise((r) => setImmediate(r));
 
@@ -26,10 +27,16 @@ class FakeWorkerHost extends EventEmitter {
   dispose = vi.fn();
 }
 
-/** A main-side host whose listener state a test flips per channel. */
+/**
+ * A main-side host whose listener state a test flips per channel. `watchers`
+ * are the plugin's own `onDidChangeListeners` registrations (counted by idle
+ * governance); `observers` are the untracked observations behind a worker's
+ * `hasListeners` cache.
+ */
 function makeListenerHost() {
   const state = new Map<string, boolean>();
   const watchers = new Map<string, Set<(has: boolean) => void>>();
+  const observers = new Map<string, Set<(has: boolean) => void>>();
   const host = {
     pluginId: "acme.demo",
     hasListeners: vi.fn((channel: string) => state.get(channel) ?? true),
@@ -43,12 +50,19 @@ function makeListenerHost() {
       walk: vi.fn(async () => ({ entries: [{ path: "a.ts", type: "file" }], truncated: false })),
     },
   };
+  pushListenerObservers.set(host as never, (channel, cb) => {
+    let set = observers.get(channel);
+    if (!set) observers.set(channel, (set = new Set()));
+    set.add(cb);
+    return { current: state.get(channel) ?? true, dispose: () => void set.delete(cb) };
+  });
   const set = (channel: string, has: boolean) => {
     if ((state.get(channel) ?? true) === has) return;
     state.set(channel, has);
-    for (const cb of watchers.get(channel) ?? []) cb(has);
+    for (const cb of [...(watchers.get(channel) ?? [])]) cb(has);
+    for (const cb of [...(observers.get(channel) ?? [])]) cb(has);
   };
-  return { host, set, watchers };
+  return { host, set, watchers, observers };
 }
 
 function connect(host: any) {
@@ -93,22 +107,46 @@ describe("worker host.hasListeners / onDidChangeListeners", () => {
     // The subscribe and main's first answer cross synchronously in this
     // harness; in a real worker the first read can precede the answer.
     expect(proxy.host.hasListeners!("tick")).toBe(false);
-    expect(wire.filter((m) => m.type === "subscribe" && m.kind === "push-listeners")).toEqual([
-      expect.objectContaining({ key: "tick" }),
-    ]);
+    expect(
+      wire.filter((m) => m.type === "subscribe" && m.kind === "push-listeners-observe")
+    ).toEqual([expect.objectContaining({ key: "tick" })]);
     set("tick", true);
     expect(proxy.host.hasListeners!("tick")).toBe(true);
   });
 
-  it("opens one main subscription per channel however often it is read", async () => {
-    const { host } = makeListenerHost();
+  it("backs reads with an untracked observation, never a plugin event subscription", async () => {
+    const { host, observers } = makeListenerHost();
     const { proxy, wire } = connect(host);
     proxy.host.hasListeners!("tick");
     proxy.host.hasListeners!("tick");
-    proxy.host.onDidChangeListeners!("tick", () => {});
+    await flush();
+    expect(wire.filter((m) => m.kind === "push-listeners-observe")).toHaveLength(1);
+    expect(wire.filter((m) => m.kind === "push-listeners")).toHaveLength(0);
+    expect(host.onDidChangeListeners).not.toHaveBeenCalled();
+    expect(observers.get("tick")?.size).toBe(1);
+  });
+
+  it("holds one real subscription while callbacks exist and releases it with the last", async () => {
+    const { host, watchers, observers } = makeListenerHost();
+    const { proxy, wire } = connect(host);
+    const first = proxy.host.onDidChangeListeners!("tick", () => {});
+    const second = proxy.host.onDidChangeListeners!("tick", () => {});
     await flush();
     expect(wire.filter((m) => m.kind === "push-listeners")).toHaveLength(1);
     expect(host.onDidChangeListeners).toHaveBeenCalledTimes(1);
+    expect(watchers.get("tick")?.size).toBe(1);
+    first();
+    first();
+    expect(wire.filter((m) => m.type === "unsubscribe")).toHaveLength(0);
+    second();
+    await flush();
+    expect(wire.filter((m) => m.type === "unsubscribe")).toHaveLength(1);
+    expect(watchers.get("tick")?.size).toBe(0);
+    // The read-side observation stays for the worker's life.
+    expect(observers.get("tick")?.size).toBe(1);
+    proxy.host.onDidChangeListeners!("tick", () => {});
+    await flush();
+    expect(host.onDidChangeListeners).toHaveBeenCalledTimes(2);
   });
 
   it("calls back on each change and stops after dispose", async () => {
@@ -116,10 +154,12 @@ describe("worker host.hasListeners / onDidChangeListeners", () => {
     const { proxy } = connect(host);
     const seen: boolean[] = [];
     const dispose = proxy.host.onDidChangeListeners!("tick", (has) => seen.push(has));
+    await flush();
     set("tick", false);
     set("tick", true);
     dispose();
     set("tick", false);
+    // Both of main's streams carry each change; the callback sees it once.
     expect(seen).toEqual([false, true]);
   });
 
@@ -135,7 +175,7 @@ describe("worker host.hasListeners / onDidChangeListeners", () => {
     const seen: boolean[] = [];
     proxy.host.onDidChangeListeners!("tick", (has) => seen.push(has));
     expect(proxy.host.hasListeners!("tick")).toBe(true);
-    const sub = sent.find((m) => m.kind === "push-listeners");
+    const sub = sent.find((m) => m.kind === "push-listeners-observe");
     proxy.handleMessage({
       type: "subscription-event",
       subscriptionId: sub.subscriptionId,

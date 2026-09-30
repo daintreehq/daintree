@@ -15,6 +15,7 @@
  */
 
 import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "@shared/types/plugin";
+import { PLUGIN_STYLE_OWNER_ATTRIBUTE } from "@/services/plugin/pluginStyleOwner";
 import { logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type {
@@ -31,15 +32,7 @@ export const PLUGIN_STYLE_ROOT_PROPS: Readonly<Record<string, string>> = Object.
   [PLUGIN_STYLE_ROOT_ATTRIBUTE]: "",
 });
 
-/**
- * Names the plugin instance a style root belongs to. The host stamps it on a
- * view's root and hands it to the view inside `styleRootAttributes`, so a
- * portal the view spreads them onto carries it too. That is how diagnostics
- * find a plugin's portalled content (the Styles check) and the UI events
- * dispatched inside it (long-frame attribution), neither of which a panel
- * lookup can reach. Diagnostic only: it grants nothing.
- */
-export const PLUGIN_STYLE_OWNER_ATTRIBUTE = "data-daintree-plugin-owner";
+export { PLUGIN_STYLE_OWNER_ATTRIBUTE };
 
 /** {@link PLUGIN_STYLE_ROOT_PROPS} tagged with the owning plugin instance. */
 export function pluginStyleRootPropsFor(pluginId: string): Readonly<Record<string, string>> {

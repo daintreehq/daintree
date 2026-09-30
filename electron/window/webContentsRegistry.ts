@@ -224,8 +224,37 @@ function notifyFallbackEligibleProjectsChanged(): void {
 // mutation site of windowToAppView / viewToProject invalidates the cache.
 let cachedAllAppWebContents: WebContents[] | null = null;
 
+const rendererScopeListeners = new Set<() => void>();
+let rendererScopeNotifyQueued = false;
+
+/**
+ * Call `listener` after the set of renderers a project-scoped (or unscoped)
+ * broadcast reaches may have changed — the same mutations that invalidate the
+ * `getAllAppWebContents` cache. Coalesced to one call per microtask, so it
+ * never runs inside a registration. Returns an idempotent disposer.
+ */
+export function onRendererScopeChanged(listener: () => void): () => void {
+  const registered = (): void => listener();
+  rendererScopeListeners.add(registered);
+  return () => {
+    rendererScopeListeners.delete(registered);
+  };
+}
+
 function invalidateAllAppWebContentsCache(): void {
   cachedAllAppWebContents = null;
+  if (rendererScopeListeners.size === 0 || rendererScopeNotifyQueued) return;
+  rendererScopeNotifyQueued = true;
+  queueMicrotask(() => {
+    rendererScopeNotifyQueued = false;
+    for (const listener of [...rendererScopeListeners]) {
+      try {
+        listener();
+      } catch (err) {
+        console.error("[webContentsRegistry] renderer scope listener threw:", err);
+      }
+    }
+  });
 }
 
 function removeDestroyedListener(registration: {

@@ -1,6 +1,6 @@
 import { isValidElement, type ReactNode } from "react";
 import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "@shared/types/plugin";
-import { PLUGIN_STYLE_OWNER_ATTRIBUTE } from "@/services/plugin/pluginStyleContract";
+import { PLUGIN_STYLE_OWNER_ATTRIBUTE } from "@/services/plugin/pluginStyleOwner";
 import { usePluginKitOwner } from "./kitScope";
 
 // Every adapter here narrows its props rather than trusting them: a plugin

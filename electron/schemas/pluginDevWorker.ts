@@ -114,6 +114,7 @@ const SUBSCRIPTION_KINDS = {
   "panel-lifecycle": true,
   "system-wake": true,
   "push-listeners": true,
+  "push-listeners-observe": true,
   "process-exit": true,
   "process-crash": true,
   "process-data": true,

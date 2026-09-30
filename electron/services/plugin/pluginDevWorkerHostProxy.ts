@@ -143,6 +143,14 @@ const MAX_WATCHED_PUSH_CHANNELS = 256;
 interface ListenerState {
   value: boolean;
   callbacks: Set<(hasListeners: boolean) => void>;
+  /** Applies a value from either of main's streams for this channel. */
+  update: (payload: unknown) => void;
+  /**
+   * The `push-listeners` subscription held while any `onDidChangeListeners`
+   * callback is registered — a real event subscription main counts against
+   * idle disposal. `null` when only `hasListeners` reads use the channel.
+   */
+  hold: (() => void) | null;
 }
 
 export class PluginDevWorkerHostProxy {
@@ -890,8 +898,16 @@ export class PluginDevWorkerHostProxy {
         if (!state) return () => {};
         const registered = (hasListeners: boolean): void => callback(hasListeners);
         state.callbacks.add(registered);
+        state.hold ??= this.subscribe("push-listeners", state.update, name);
+        let disposed = false;
         return () => {
+          if (disposed) return;
+          disposed = true;
           state.callbacks.delete(registered);
+          if (state.callbacks.size > 0 || !state.hold) return;
+          const release = state.hold;
+          state.hold = null;
+          release();
         };
       },
       getActiveWorktree: () =>
@@ -1458,20 +1474,22 @@ export class PluginDevWorkerHostProxy {
   }
 
   /**
-   * The listener state for `channel`, subscribing to main's reports the first
-   * time. Until main's first report lands the answer is `true`, the same
-   * "assume someone is listening" main gives for a renderer it has not heard
-   * from; a report that differs fires the channel's callbacks.
+   * The listener state for `channel`, opening main's passive observation the
+   * first time (`push-listeners-observe`, which idle governance ignores). Until
+   * main's first value lands the answer is `true`, the same "assume someone is
+   * listening" main gives for a renderer it has not heard from; a value that
+   * differs fires the channel's callbacks. Both of main's streams for a channel
+   * carry the same answer, so a repeat is dropped here.
    */
   private listenerState(channel: string): ListenerState | null {
     const existing = this.listenerStates.get(channel);
     if (existing) return existing;
     if (this.listenerStates.size >= MAX_WATCHED_PUSH_CHANNELS) return null;
-    const state: ListenerState = { value: true, callbacks: new Set() };
-    this.listenerStates.set(channel, state);
-    this.subscribe(
-      "push-listeners",
-      (payload) => {
+    const state: ListenerState = {
+      value: true,
+      callbacks: new Set(),
+      hold: null,
+      update: (payload) => {
         const next = payload === true;
         if (next === state.value) return;
         state.value = next;
@@ -1486,8 +1504,9 @@ export class PluginDevWorkerHostProxy {
           }
         }
       },
-      channel
-    );
+    };
+    this.listenerStates.set(channel, state);
+    this.subscribe("push-listeners-observe", state.update, channel);
     return state;
   }
 

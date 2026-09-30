@@ -1143,16 +1143,18 @@ function _attachPluginPushBatchListener(): void {
   });
 }
 
-// Main skips a plugin push for this renderer when nothing here would receive it
-// (#plugin-perf). What it needs is which `(fullChannel, panelId)` buckets have a
-// subscriber, so that set is reported whole whenever a bucket appears or
-// empties — coalesced to one message per microtask, and never for a second
-// listener joining a bucket that already has one. A whole-set report is
-// idempotent: a lost or reordered one cannot leave main's view drifting.
+// Main tells plugins whether any renderer listens on a push channel
+// (`host.hasListeners`), so a producer can stop computing pushes nobody wants.
+// What it needs is which `(fullChannel, panelId)` buckets have a subscriber,
+// so that set is reported whole whenever a bucket appears or empties —
+// coalesced to one message per microtask, and never for a second listener
+// joining a bucket that already has one. A whole-set report is idempotent: a
+// lost or reordered one cannot leave main's view drifting.
 //
-// The first report goes out at preload load, empty, so a renderer that never
-// shows a plugin view stops receiving plugin broadcasts at all. Until it lands
-// main delivers everything, as before.
+// Delivery never depends on it: a report always trails the subscriber that
+// caused it, so main sends every push to this renderer regardless. The first
+// report goes out at preload load, empty; until it lands main counts this
+// renderer as listening everywhere.
 let _pluginListenersDirty = false;
 let _pluginListenersQueued = false;
 function _markPluginListenersChanged(): void {
@@ -1179,7 +1181,8 @@ _markPluginListenersChanged();
 
 // A plugin invoke from this renderer — a view pulling its snapshot right after
 // subscribing — must not reach main ahead of the subscription it follows, or
-// the worker could answer and push before main knows anyone is listening.
+// the worker could serve it while still told nobody listens, and pause the
+// stream the view is about to rely on.
 function _pluginInvoke(channel: string, ...args: unknown[]): Promise<unknown> {
   _flushPluginListenerReport();
   return _unwrappingInvoke(channel, ...args);

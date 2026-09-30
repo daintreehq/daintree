@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, type Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -14,7 +14,7 @@ import {
 import { checkIgnoredPaths } from "../../../utils/gitCheckIgnore.js";
 
 const realIo: WalkIo = {
-  readdir: (dir) => fs.readdir(dir, { withFileTypes: true }),
+  opendir: (dir) => fs.opendir(dir),
   realpath: (dir) => fs.realpath(dir),
   fileSize: (file) =>
     fs.lstat(file).then(
@@ -34,6 +34,14 @@ async function write(rel: string, contents = "x"): Promise<void> {
 
 function git(...args: string[]): void {
   execFileSync("git", args, { cwd: root, stdio: "ignore" });
+}
+
+function fakeDirent(name: string, type: "file" | "dir"): Dirent {
+  return {
+    name,
+    isFile: () => type === "file",
+    isDirectory: () => type === "dir",
+  } as unknown as Dirent;
 }
 
 const walk = (options?: unknown) =>
@@ -218,6 +226,17 @@ describe("runWalk", () => {
       expect(paths(await walk())).toEqual(["main.ts", "vendor", "vendor/lib"]);
     });
 
+    it("spends no examine budget on a nested repository it will not enter", async () => {
+      for (const name of ["a", "b", "c", "d", "e"]) await write(`vendor/lib/${name}.js`);
+      execFileSync("git", ["init", "-q"], { cwd: path.join(root, "vendor/lib"), stdio: "ignore" });
+      await write("main.ts");
+      const result = await runWalk(root, validateWalkCall("p", root, undefined), realIo, () => {}, {
+        maxVisited: 4,
+      });
+      expect(result.truncated).toBe(false);
+      expect(paths(result)).toEqual(["main.ts", "vendor", "vendor/lib"]);
+    });
+
     it("lists everything with respectGitignore: false", async () => {
       await write(".gitignore", "*.log\n");
       await write("debug.log");
@@ -249,7 +268,122 @@ describe("runWalk cost bounds", () => {
       maxVisited: 3,
     });
     expect(result.truncated).toBe(true);
+    // Which three depends on the filesystem's enumeration order; they still come back sorted.
+    const listed = paths(result);
+    expect(listed).toHaveLength(3);
+    expect(listed).toEqual([...listed].sort());
+    for (const p of listed) expect(["a.txt", "b.txt", "c.txt", "d.txt"]).toContain(p);
+  });
+
+  it("is not truncated when a directory holds exactly the visit budget", async () => {
+    for (const name of ["a", "b", "c"]) await write(`${name}.txt`);
+    const result = await runWalk(root, validateWalkCall("p", root, undefined), realIo, () => {}, {
+      maxVisited: 3,
+    });
+    expect(result.truncated).toBe(false);
     expect(paths(result)).toEqual(["a.txt", "b.txt", "c.txt"]);
+  });
+
+  it("reads a huge flat directory only as far as the budget, and closes it", async () => {
+    let reads = 0;
+    let closed = 0;
+    const io: WalkIo = {
+      ...realIo,
+      realpath: async (dir) => dir,
+      opendir: async () => ({
+        read: async () => {
+          reads++;
+          return fakeDirent(`f${String(1_000_000 - reads).padStart(7, "0")}.txt`, "file");
+        },
+        close: async () => {
+          closed++;
+        },
+      }),
+    };
+    const result = await runWalk(
+      "/huge",
+      validateWalkCall("p", "/huge", { limit: 1, respectGitignore: false }),
+      io,
+      () => {},
+      { maxVisited: 5_000 }
+    );
+    expect(reads).toBe(5_001);
+    expect(closed).toBe(1);
+    expect(result.truncated).toBe(true);
+    expect(result.entries).toHaveLength(1);
+    // The smallest name among those read: sorting still applies to the bounded set.
+    expect(paths(result)).toEqual([`f${String(1_000_000 - 5_000).padStart(7, "0")}.txt`]);
+  });
+
+  it("leaves out a subdirectory whose handle fails to close, and fails on the root", async () => {
+    await write("sub/file.txt");
+    await write("top.txt");
+    const failingClose = (target: string): WalkIo => ({
+      ...realIo,
+      opendir: async (dir) => {
+        const handle = await fs.opendir(dir);
+        return {
+          read: () => handle.read(),
+          close: async () => {
+            await handle.close();
+            if (dir === target) throw new Error("EIO: close failed");
+          },
+        };
+      },
+    });
+    const call = validateWalkCall("p", root, { respectGitignore: false });
+    const sub = await runWalk(root, call, failingClose(path.join(root, "sub")), () => {});
+    expect(paths(sub)).toEqual(["sub", "top.txt"]);
+    await expect(runWalk(root, call, failingClose(root), () => {})).rejects.toThrow(/EIO/);
+  });
+
+  it("sorts a large level correctly across its yielding merge", async () => {
+    const names = Array.from({ length: 7_000 }, (_, i) => `n${(i * 7919) % 7_000}`);
+    const io: WalkIo = {
+      ...realIo,
+      realpath: async (dir) => dir,
+      opendir: async () => {
+        let i = 0;
+        return {
+          read: async () => (i < names.length ? fakeDirent(names[i++]!, "file") : null),
+          close: async () => {},
+        };
+      },
+    };
+    const result = await runWalk(
+      "/big",
+      validateWalkCall("p", "/big", { limit: 50_000, respectGitignore: false }),
+      io,
+      () => {}
+    );
+    expect(result.truncated).toBe(false);
+    expect(paths(result)).toEqual([...names].sort());
+  });
+
+  it("omits a size when the file's directory moved after it was listed", async () => {
+    await write("sub/a.txt", "hello");
+    await write("b.txt", "hi");
+    let listed = false;
+    const io: WalkIo = {
+      ...realIo,
+      fileSize: async (file) => {
+        listed = true;
+        return realIo.fileSize(file);
+      },
+      realpath: async (dir) =>
+        listed && dir.endsWith("sub") ? "/elsewhere/sub" : fs.realpath(dir),
+    };
+    const result = await runWalk(
+      root,
+      validateWalkCall("p", root, { includeSize: true }),
+      io,
+      () => {}
+    );
+    expect(result.entries).toEqual([
+      { path: "b.txt", type: "file", size: 2 },
+      { path: "sub", type: "dir" },
+      { path: "sub/a.txt", type: "file" },
+    ]);
   });
 
   it("truncates when the glob budget is spent", async () => {

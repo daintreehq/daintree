@@ -334,7 +334,10 @@ interface PluginFsWalkEntry {
 /** What a {@link PluginFsApi.walk} call returns. */
 interface PluginFsWalkResult {
     readonly entries: PluginFsWalkEntry[];
-    /** True when the walk stopped at `limit` or the result budget with entries left unlisted. */
+    /**
+     * True when the walk stopped at `limit`, the result budget or one of the
+     * host's cost bounds with entries left unlisted.
+     */
     readonly truncated: boolean;
 }
 /** Options for {@link PluginFsApi.watch}. */
@@ -533,7 +536,14 @@ interface PluginFsApi {
      * the tree; the same tree always truncates the same way. Besides `limit`,
      * the host bounds a walk's cost — at most 200,000 directory entries
      * examined and 1,000,000 glob tests — and a walk that reaches either bound
-     * returns what it had with `truncated: true`.
+     * returns what it had with `truncated: true`. A directory is read only as
+     * far as the examine bound allows, so when one directory alone holds more
+     * entries than the bound has left, the entries kept from it are whichever
+     * the filesystem enumerated first — still sorted, but not necessarily the
+     * first by path, and not guaranteed to repeat.
+     *
+     * With `includeSize`, a size is omitted for a file whose directory no
+     * longer resolves to where the walk listed it when its size is read.
      *
      * With `respectGitignore` (the default), inside a git repository an entry
      * git ignores — and not tracked — is left out and not descended into,

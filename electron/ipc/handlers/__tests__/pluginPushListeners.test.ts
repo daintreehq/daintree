@@ -14,6 +14,13 @@ vi.mock("electron", () => ({
   },
 }));
 vi.mock("../../utils.js", () => ({ getProjectRendererTargets: vi.fn(() => []) }));
+const scopeMock = vi.hoisted(() => ({ listeners: new Set<() => void>() }));
+vi.mock("../../../window/webContentsRegistry.js", () => ({
+  onRendererScopeChanged: vi.fn((listener: () => void) => {
+    scopeMock.listeners.add(listener);
+    return () => scopeMock.listeners.delete(listener);
+  }),
+}));
 
 import { CHANNELS } from "../../channels.js";
 import {
@@ -54,20 +61,37 @@ describe("plugin:report-push-listeners", () => {
   it("records a renderer's reported subscriptions", () => {
     const s = sender(7);
     send(s, [[CH, null]]);
-    expect(registry.shouldDeliver(7, CH, null)).toBe(true);
-    expect(registry.shouldDeliver(7, CH, "panel-a")).toBe(false);
+    expect(registry.reportedListeners(7)).toEqual([[CH, null]]);
     expect(s.once).toHaveBeenCalledWith("destroyed", expect.any(Function));
   });
 
   it("marks a malformed report unknown instead of trusting part of it", () => {
     const s = sender(7);
     send(s, []);
-    expect(registry.shouldDeliver(7, CH, null)).toBe(false);
+    expect(registry.reportedListeners(7)).toEqual([]);
     send(s, [
       [CH, null],
       ["not-a-plugin-channel", null],
     ]);
-    expect(registry.shouldDeliver(7, CH, "anything")).toBe(true);
+    expect(registry.reportedListeners(7)).toBeNull();
+    expect(registry.isReported(7)).toBe(false);
+  });
+
+  it("re-evaluates passive watchers when a reported renderer joins the scope", () => {
+    cleanup();
+    const scope: Array<ReturnType<typeof sender>> = [];
+    registry = new PluginPushListenerRegistry(() => scope);
+    cleanup = registerPluginPushListenerHandlers(registry);
+    const s = sender(7);
+    send(s, [[CH, null]]);
+    const seen: boolean[] = [];
+    registry.watch(null, CH, (has) => seen.push(has), { passive: true });
+    scope.push(s);
+    for (const listener of scopeMock.listeners) listener();
+    expect(seen).toEqual([true]);
+    cleanup();
+    expect(scopeMock.listeners.size).toBe(0);
+    cleanup = () => {};
   });
 
   it("ignores reports from a subframe", () => {
@@ -80,12 +104,12 @@ describe("plugin:report-push-listeners", () => {
     vi.useFakeTimers();
     const s = sender(7);
     for (let i = 0; i < MAX_PUSH_LISTENER_REPORTS_PER_SECOND; i++) send(s, []);
-    expect(registry.shouldDeliver(7, CH, null)).toBe(false);
+    expect(registry.reportedListeners(7)).toEqual([]);
     send(s, [[CH, null]]);
-    expect(registry.shouldDeliver(7, CH, "panel-a")).toBe(true);
+    expect(registry.reportedListeners(7)).toBeNull();
     send(s, []);
     vi.advanceTimersByTime(1_000);
-    expect(registry.shouldDeliver(7, CH, null)).toBe(false);
+    expect(registry.reportedListeners(7)).toEqual([]);
     expect(registry.isReported(7)).toBe(true);
   });
 });
