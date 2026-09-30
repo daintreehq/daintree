@@ -311,6 +311,13 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   // completion being counted twice (e.g. a `.completed` and a `.done` for the
   // same item).
   private completedItemIds = new Set<string>();
+  // Item ids in the order the server acknowledged their commits. Transcription
+  // runs per item, so completions can arrive out of commit order; a completion
+  // whose predecessors are still in flight waits in `heldCompletions` and is
+  // released in commit order, so the renderer can append each final transcript
+  // to the draft without tracking per-segment offsets.
+  private commitOrder: string[] = [];
+  private heldCompletions = new Map<string, string>();
 
   /** Cumulative delta text since the last complete event — used for incremental diffs. */
   private liveText = "";
@@ -871,14 +878,21 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         this.settlePendingStart(mySessionId, { ok: true });
         return;
 
-      case "input_audio_buffer.committed":
+      case "input_audio_buffer.committed": {
         // Server ack that our commit landed. A transcription item
         // (`conversation.item.added` then `.done`) should follow within ~1s; if
         // it never does, the session config or the commit cadence is wrong.
-        logDebug(`${P} ← input_audio_buffer.committed`, {
-          itemId: typeof payload.item_id === "string" ? payload.item_id : undefined,
-        });
+        const itemId = typeof payload.item_id === "string" ? payload.item_id : undefined;
+        logDebug(`${P} ← input_audio_buffer.committed`, { itemId });
+        if (
+          itemId &&
+          !this.completedItemIds.has(itemId) &&
+          !this.commitOrder.includes(itemId)
+        ) {
+          this.commitOrder.push(itemId);
+        }
         return;
+      }
 
       case "input_audio_buffer.speech_started":
       case "input_audio_buffer.speech_stopped":
@@ -890,10 +904,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
       case "conversation.item.input_audio_transcription.delta": {
         const delta = typeof payload.delta === "string" ? payload.delta : "";
+        const itemId = typeof payload.item_id === "string" ? payload.item_id : undefined;
         // Length only — dictated text is user content, kept out of logs.
-        logDebug(`${P} ← transcription.delta`, { length: delta.length });
+        logDebug(`${P} ← transcription.delta`, { itemId, length: delta.length });
         if (!delta) return;
-        this.emit({ type: "delta", text: delta });
+        this.emit({ type: "delta", text: delta, ...(itemId ? { itemId } : {}) });
         this.liveText += delta;
         return;
       }
@@ -1045,11 +1060,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     if (this.pendingCommits > 0) {
       this.pendingCommits--;
     }
-    if (transcript) {
-      logDebug(`${P} Emitting complete transcript to renderer`, { length: transcript.length });
-      this.emit({ type: "complete", text: transcript, confidence: { ...STUB_CONFIDENCE } });
+    if (itemId && this.commitOrder.includes(itemId)) {
+      this.heldCompletions.set(itemId, transcript);
+      this.releaseHeldCompletions(false);
     } else {
-      logDebug(`${P} Completion had an empty transcript — nothing emitted`);
+      this.emitCompletion(transcript, itemId);
     }
     // Each commit yields exactly one completion. Once every committed segment
     // has reported back the drain is genuinely finished — no grace timer, no
@@ -1057,6 +1072,44 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     if (this.isDraining && this.pendingCommits === 0) {
       logDebug(`${P} All committed segments transcribed — settling drain`);
       this.settleDrain("all-segments-transcribed");
+    }
+  }
+
+  /**
+   * Emits held completions in commit order. Normally stops at the first item
+   * still in flight; `force` releases everything held (drain end, connection
+   * loss) so a predecessor that never reports back can't strand later text.
+   */
+  private releaseHeldCompletions(force: boolean): void {
+    for (let itemId = this.commitOrder[0]; itemId !== undefined; itemId = this.commitOrder[0]) {
+      const transcript = this.heldCompletions.get(itemId);
+      if (transcript === undefined && !force) return;
+      this.commitOrder.shift();
+      if (transcript === undefined) continue;
+      this.heldCompletions.delete(itemId);
+      this.emitCompletion(transcript, itemId);
+    }
+  }
+
+  private emitCompletion(transcript: string, itemId?: string): void {
+    if (transcript) {
+      logDebug(`${P} Emitting complete transcript to renderer`, {
+        itemId,
+        length: transcript.length,
+      });
+      this.emit({
+        type: "complete",
+        text: transcript,
+        confidence: { ...STUB_CONFIDENCE },
+        ...(itemId ? { itemId } : {}),
+      });
+    } else if (itemId) {
+      // An identified empty completion still reaches the renderer so it can
+      // drop that item's interim preview.
+      logDebug(`${P} Completion had an empty transcript — retiring item`, { itemId });
+      this.emit({ type: "complete", text: "", confidence: { ...STUB_CONFIDENCE }, itemId });
+    } else {
+      logDebug(`${P} Completion had an empty transcript — nothing emitted`);
     }
   }
 
@@ -1177,6 +1230,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.isAlive = false;
     this.bytesSinceCommit = 0;
     this.pendingCommits = 0;
+    // Item ids are per connection; release what arrived so a reconnect starts a
+    // fresh ordering chain without dropping finished transcripts.
+    this.releaseHeldCompletions(true);
     this.completedItemIds.clear();
   }
 
@@ -1194,6 +1250,8 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.bytesSinceCommit = 0;
     this.pendingCommits = 0;
     this.completedItemIds.clear();
+    this.commitOrder = [];
+    this.heldCompletions.clear();
     this.preConnectBuffer = [];
     this.preConnectBufferBytes = 0;
     this.clearConnectTimeout();
@@ -1417,6 +1475,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   }
 
   private settleDrain(reason: string): void {
+    this.releaseHeldCompletions(true);
     this.clearDrainTimeout();
     this.isDraining = false;
     this.stopPendingReady = false;

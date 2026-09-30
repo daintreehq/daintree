@@ -1417,12 +1417,12 @@ describe("VoiceRecordingService — interim delta handling (#9172)", () => {
 
   it("does not write to the draft store or bump the voice revision on interim deltas", async () => {
     const { electronStub } = setupGlobals();
-    let deltaCallback: ((delta: string) => void) | null = null;
+    let deltaCallback: ((payload: { text: string }) => void) | null = null;
     // Cast through unknown because the stub's vi.fn is initialised with a
-    // zero-arg shape; the real handler takes a (delta:string)=>void.
+    // zero-arg shape; the real handler takes a (payload)=>void.
     (
       electronStub.voiceInput.onTranscriptionDelta as unknown as {
-        mockImplementation: (impl: (cb: (delta: string) => void) => () => void) => void;
+        mockImplementation: (impl: (cb: (payload: { text: string }) => void) => () => void) => void;
       }
     ).mockImplementation((cb) => {
       deltaCallback = cb;
@@ -1441,9 +1441,9 @@ describe("VoiceRecordingService — interim delta handling (#9172)", () => {
     voiceRecordingService.initialize();
 
     expect(deltaCallback).not.toBeNull();
-    deltaCallback!("hello");
-    deltaCallback!(" world");
-    deltaCallback!(" again");
+    deltaCallback!({ text: "hello" });
+    deltaCallback!({ text: " world" });
+    deltaCallback!({ text: " again" });
 
     // The interim path must not mutate the draft store — that's the entire fix.
     expect(inputStore.setDraftInput).not.toHaveBeenCalled();
@@ -1454,11 +1454,11 @@ describe("VoiceRecordingService — interim delta handling (#9172)", () => {
 
   it("commits exactly one draft write per onTranscriptionComplete (one undo step)", async () => {
     const { electronStub } = setupGlobals();
-    let deltaCallback: ((delta: string) => void) | null = null;
+    let deltaCallback: ((payload: { text: string }) => void) | null = null;
     let completeCallback: ((payload: { text: string }) => void) | null = null;
     (
       electronStub.voiceInput.onTranscriptionDelta as unknown as {
-        mockImplementation: (impl: (cb: (delta: string) => void) => () => void) => void;
+        mockImplementation: (impl: (cb: (payload: { text: string }) => void) => () => void) => void;
       }
     ).mockImplementation((cb) => {
       deltaCallback = cb;
@@ -1489,11 +1489,11 @@ describe("VoiceRecordingService — interim delta handling (#9172)", () => {
     voiceRecordingService.initialize();
 
     // Five interim deltas — none should commit to the draft.
-    deltaCallback!("hel");
-    deltaCallback!("lo");
-    deltaCallback!(" wor");
-    deltaCallback!("ld");
-    deltaCallback!("!");
+    deltaCallback!({ text: "hel" });
+    deltaCallback!({ text: "lo" });
+    deltaCallback!({ text: " wor" });
+    deltaCallback!({ text: "ld" });
+    deltaCallback!({ text: "!" });
 
     // Simulate insertPoint being captured by the first delta. The test stub
     // for setInsertPoint is a no-op, so seed the buffer manually.

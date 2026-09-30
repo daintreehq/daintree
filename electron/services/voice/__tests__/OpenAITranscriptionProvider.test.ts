@@ -2558,3 +2558,150 @@ describe("OpenAITranscriptionProvider start timing diagnostics", () => {
     service.stop();
   });
 });
+
+describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", () => {
+  beforeEach(() => {
+    instances.length = 0;
+    throwOnConstruct = false;
+    constructError = null;
+    vadWorkers.length = 0;
+    throwOnVadConstruct = false;
+    logCalls.length = 0;
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    for (const worker of vadWorkers) worker.emitExit(0);
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function done(itemId: string, transcript: string): Record<string, unknown> {
+    return { item: { id: itemId, content: [{ type: "input_audio", transcript }] } };
+  }
+
+  function completions(events: VoiceTranscriptionEvent[]) {
+    return events.flatMap((e) =>
+      e.type === "complete" ? [{ text: e.text, itemId: e.itemId }] : []
+    );
+  }
+
+  it("forwards the item id on deltas", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      item_id: "item-A",
+      delta: "hello",
+    });
+
+    expect(events.find((e) => e.type === "delta")).toEqual({
+      type: "delta",
+      text: "hello",
+      itemId: "item-A",
+    });
+  });
+
+  it("releases completions in commit order when a later item finishes first", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", {
+      item_id: "item-B",
+      previous_item_id: "item-A",
+    });
+
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+    expect(completions(events)).toEqual([]);
+
+    socket.simulateMessage("conversation.item.done", done("item-A", "first"));
+    expect(completions(events)).toEqual([
+      { text: "first", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+    ]);
+  });
+
+  it("emits an in-order completion immediately", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.done", done("item-A", "first"));
+
+    expect(completions(events)).toEqual([{ text: "first", itemId: "item-A" }]);
+  });
+
+  it("emits a completion for an unacknowledged item without waiting", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("conversation.item.done", done("item-X", "orphan"));
+
+    expect(completions(events)).toEqual([{ text: "orphan", itemId: "item-X" }]);
+  });
+
+  it("retires an identified empty completion and unblocks later items", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+    socket.simulateMessage("conversation.item.done", done("item-A", "   "));
+
+    expect(completions(events)).toEqual([
+      { text: "", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+    ]);
+  });
+
+  it("releases held completions when the drain times out on a missing predecessor", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    feedCommittableAudio(service);
+    const drainPromise = service.stopGracefully();
+
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+    expect(completions(events)).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    await drainPromise;
+    expect(completions(events)).toEqual([{ text: "second", itemId: "item-B" }]);
+  });
+
+  it("keeps dictated text out of logs on the ordered path", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      item_id: "item-B",
+      delta: "SECRET-DELTA",
+    });
+    socket.simulateMessage("conversation.item.done", done("item-B", "SECRET-B"));
+    socket.simulateMessage("conversation.item.done", done("item-A", "SECRET-A"));
+
+    expect(loggedText()).not.toContain("SECRET");
+  });
+});

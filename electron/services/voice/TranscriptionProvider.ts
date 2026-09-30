@@ -19,8 +19,11 @@ export interface SegmentConfidence {
 }
 
 export type VoiceTranscriptionEvent =
-  | { type: "delta"; text: string }
-  | { type: "complete"; text: string; confidence?: SegmentConfidence }
+  // `itemId` identifies the committed audio segment a delta/completion belongs
+  // to. Providers without per-segment identity (Deepgram) omit it, and the
+  // renderer falls back to strictly sequential reconciliation.
+  | { type: "delta"; text: string; itemId?: string }
+  | { type: "complete"; text: string; confidence?: SegmentConfidence; itemId?: string }
   | { type: "paragraph_boundary" }
   | { type: "error"; error: VoiceInputError }
   | { type: "status"; status: VoiceInputStatus };

@@ -135,8 +135,33 @@ function mergeVoiceRecordingPersistedWrite({
   return { version: incoming.version, state: { recentTargets } };
 }
 
+interface VoiceLiveItem {
+  itemId: string;
+  text: string;
+}
+
+/**
+ * Joins per-item interim text into the single ghost preview. Items are kept in
+ * first-delta order; a space is inserted only where neither side already
+ * carries whitespace, so a lone item renders exactly as its raw deltas.
+ */
+function joinLiveItems(items: VoiceLiveItem[]): string {
+  let joined = "";
+  for (const { text } of items) {
+    if (!text) continue;
+    joined += joined && !/\s$/.test(joined) && !/^\s/.test(text) ? ` ${text}` : text;
+  }
+  return joined;
+}
+
 interface VoiceTranscriptBuffer {
   liveText: string;
+  /**
+   * Interim text per identified item (OpenAI `item_id`), in first-delta order.
+   * When non-empty, `liveText` is derived from it so one item's completion
+   * retires only its own preview. Unidentified deltas (Deepgram) bypass it.
+   */
+  liveItems: VoiceLiveItem[];
   completedSegments: string[];
   projectId?: string;
   /** Draft length snapshot taken before the first delta of the session. */
@@ -207,10 +232,10 @@ interface VoiceRecordingState {
   setStatus: (status: VoiceInputStatus) => void;
   setLastError: (error: VoiceInputError | null) => void;
   setElapsedSeconds: (seconds: number) => void;
-  appendDelta: (delta: string) => void;
+  appendDelta: (delta: string, itemId?: string) => void;
   setSessionDraftStart: (panelId: string, length: number) => void;
   setDraftLengthAtSegmentStart: (panelId: string, length: number) => void;
-  completeSegment: (text: string) => void;
+  completeSegment: (text: string, itemId?: string) => void;
   setCorrectionRange: (panelId: string, range: { from: number; to: number } | null) => void;
   setActiveParagraphStart: (panelId: string, length: number) => void;
   resetParagraphState: (panelId: string) => void;
@@ -234,6 +259,7 @@ function getBuffer(
   return (
     panelBuffers[panelId] ?? {
       liveText: "",
+      liveItems: [],
       completedSegments: [],
       sessionDraftStart: -1,
       draftLengthAtSegmentStart: -1,
@@ -304,6 +330,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
             [target.panelId]: {
               ...getBuffer(state.panelBuffers, target.panelId),
               liveText: "",
+              liveItems: [],
               completedSegments: [],
               projectId: target.projectId,
               sessionDraftStart: -1,
@@ -320,11 +347,31 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
       setElapsedSeconds: (elapsedSeconds) => set({ elapsedSeconds }),
 
-      appendDelta: (delta) =>
+      appendDelta: (delta, itemId) =>
         set((state) => {
           const panelId = state.activeTarget?.panelId;
           if (!panelId || !delta) return state;
           const buffer = getBuffer(state.panelBuffers, panelId);
+          if (itemId) {
+            const index = buffer.liveItems.findIndex((item) => item.itemId === itemId);
+            const liveItems =
+              index >= 0
+                ? buffer.liveItems.map((item, i) =>
+                    i === index ? { itemId, text: item.text + delta } : item
+                  )
+                : [...buffer.liveItems, { itemId, text: delta }];
+            return {
+              panelBuffers: {
+                ...state.panelBuffers,
+                [panelId]: {
+                  ...buffer,
+                  liveItems,
+                  liveText: joinLiveItems(liveItems),
+                  transcriptPhase: "interim" as VoiceTranscriptPhase,
+                },
+              },
+            };
+          }
           return {
             panelBuffers: {
               ...state.panelBuffers,
@@ -361,12 +408,38 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           };
         }),
 
-      completeSegment: (text) =>
+      completeSegment: (text, itemId) =>
         set((state) => {
           const panelId = state.activeTarget?.panelId;
           if (!panelId) return state;
 
           const buffer = getBuffer(state.panelBuffers, panelId);
+          if (itemId) {
+            // Retire only this item's preview; other items still streaming keep
+            // theirs. The completion text is authoritative — an empty final
+            // never falls back to the item's interim deltas.
+            const liveItems = buffer.liveItems.filter((item) => item.itemId !== itemId);
+            const liveText = joinLiveItems(liveItems);
+            const finalText = text.trim();
+            return {
+              panelBuffers: {
+                ...state.panelBuffers,
+                [panelId]: {
+                  ...buffer,
+                  liveItems,
+                  liveText,
+                  completedSegments: finalText
+                    ? [...buffer.completedSegments, finalText]
+                    : buffer.completedSegments,
+                  transcriptPhase: (liveText
+                    ? "interim"
+                    : finalText
+                      ? "utterance_final"
+                      : "idle") as VoiceTranscriptPhase,
+                },
+              },
+            };
+          }
           const normalized = text.trim() || buffer.liveText.trim();
           if (!normalized) {
             return {
@@ -428,11 +501,15 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               ...state.panelBuffers,
               [panelId]: {
                 ...buffer,
-                liveText: "",
+                // Identified items still streaming belong to later segments —
+                // a paragraph break inside an earlier item must not erase them.
+                liveText: joinLiveItems(buffer.liveItems),
                 completedSegments: [],
                 draftLengthAtSegmentStart: -1,
                 activeParagraphStart: -1,
-                transcriptPhase: "idle" as VoiceTranscriptPhase,
+                transcriptPhase: (buffer.liveItems.some((item) => item.text)
+                  ? "interim"
+                  : "idle") as VoiceTranscriptPhase,
               },
             },
           };
@@ -467,6 +544,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               [panelId]: {
                 ...buffer,
                 liveText: "",
+                liveItems: [],
                 completedSegments,
                 transcriptPhase: "idle" as VoiceTranscriptPhase,
               },

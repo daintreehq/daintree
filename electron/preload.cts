@@ -3138,10 +3138,10 @@ function buildElectronApi(): ElectronAPI {
       flushParagraph: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH),
       sendAudioChunk: (chunk: ArrayBuffer) =>
         ipcRenderer.send(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, chunk),
-      onTranscriptionDelta: (callback: (delta: string) => void) =>
+      onTranscriptionDelta: (callback: (payload: { text: string; itemId?: string }) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, callback),
       onTranscriptionComplete: (
-        callback: (payload: { text: string; willCorrect: boolean }) => void
+        callback: (payload: { text: string; willCorrect: boolean; itemId?: string }) => void
       ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
       onParagraphBoundary: (callback: (payload: { rawText: string | null }) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, callback),

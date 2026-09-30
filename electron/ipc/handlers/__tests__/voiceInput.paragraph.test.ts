@@ -19,6 +19,7 @@ vi.mock("electron", () => ({
 type MockTranscriptionEvent = {
   type: string;
   text?: string;
+  itemId?: string;
   status?: string;
   message?: string;
 };
@@ -404,6 +405,39 @@ describe("voiceInput — spoken-command paragraphing", () => {
     const completes = win.__sent.filter((m) => m.channel === "voice-input:transcription-complete");
     const boundaries = win.__sent.filter((m) => m.channel === "voice-input:paragraph-boundary");
     expect(completes).toHaveLength(0);
+    expect(boundaries).toHaveLength(0);
+  });
+
+  it("forwards deltas as { text, itemId } envelopes", () => {
+    emitTranscriptionEvent({ type: "delta", text: "hel", itemId: "item-A" });
+    emitTranscriptionEvent({ type: "delta", text: "lo" });
+
+    const deltas = win.__sent.filter((m) => m.channel === "voice-input:transcription-delta");
+    expect(deltas.map((m) => m.payload)).toEqual([{ text: "hel", itemId: "item-A" }, { text: "lo" }]);
+  });
+
+  it("tags every split part of an identified completion with its item id", () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "first sentence\n\nsecond sentence",
+      itemId: "item-A",
+    });
+
+    const completes = win.__sent.filter((m) => m.channel === "voice-input:transcription-complete");
+    expect(completes.map((m) => m.payload)).toEqual([
+      { text: "first sentence", willCorrect: false, itemId: "item-A" },
+      { text: "second sentence", willCorrect: false, itemId: "item-A" },
+    ]);
+  });
+
+  it("sends one empty completion for an identified command-only utterance", () => {
+    emitTranscriptionEvent({ type: "complete", text: "new paragraph", itemId: "item-A" });
+
+    const completes = win.__sent.filter((m) => m.channel === "voice-input:transcription-complete");
+    const boundaries = win.__sent.filter((m) => m.channel === "voice-input:paragraph-boundary");
+    expect(completes.map((m) => m.payload)).toEqual([
+      { text: "", willCorrect: false, itemId: "item-A" },
+    ]);
     expect(boundaries).toHaveLength(0);
   });
 
