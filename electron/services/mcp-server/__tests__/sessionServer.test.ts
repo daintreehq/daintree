@@ -11666,3 +11666,332 @@ describe("assistant skip preference (#12874)", () => {
     help.sessionStore.grantCache.dispose();
   });
 });
+
+// #12987 — an api-key client's ownership is held by its MCP session, so it is
+// told as much on a refusal and alongside what it creates.
+describe("session-scoped ownership note for api-key callers (#12987)", () => {
+  const NOTE = "only owns what it creates in the current MCP session";
+  const PANE_HINT = "Hand to orchestrator";
+  const liveStores: RealSessionStore[] = [];
+
+  afterEach(() => {
+    while (liveStores.length > 0) {
+      const store = liveStores.pop()!;
+      store.drain();
+      store.grantCache.dispose();
+    }
+    vi.restoreAllMocks();
+  });
+
+  function manifest(): ActionManifestEntry[] {
+    const owned = (id: string) => ({
+      ...makeManifestEntry(id),
+      kind: "command" as const,
+      danger: "safe" as const,
+    });
+    return [
+      owned("terminal.closeOwned"),
+      owned("terminal.revealOwned"),
+      owned("terminal.interruptOwned"),
+      owned("terminal.sendCommandOwned"),
+      owned("terminal.injectOwned"),
+      owned("terminal.sendKeysOwned"),
+      { ...owned("worktree.deleteOwned"), danger: "confirm" as const },
+      makeManifestEntry("agent.launch"),
+      {
+        ...makeManifestEntry("terminal.list"),
+        outputSchema: { type: "object", properties: { terminals: { type: "array" } } },
+      },
+    ];
+  }
+
+  function launchDispatch() {
+    return vi.fn().mockImplementation((actionId: string, args: unknown) => {
+      if (actionId === "agent.launch") {
+        const agentId = (args as { agentId: string }).agentId;
+        return Promise.resolve({
+          result: {
+            ok: true,
+            result: { launched: true, terminalId: `t-${agentId}`, spawnStatus: null },
+          },
+        });
+      }
+      if (actionId === "terminal.list") {
+        return Promise.resolve({
+          result: { ok: true, result: { terminals: [{ id: "t-claude" }, { id: "t-users" }] } },
+        });
+      }
+      return Promise.resolve({ result: { ok: true, result: null } });
+    });
+  }
+
+  /**
+   * A session on the given origin, bound to `principal` when one is named —
+   * a pane or help bearer — and otherwise session-scoped, as an api key is.
+   */
+  function session(
+    sessionId: string,
+    options: {
+      principal?: string;
+      origin?: string;
+      store?: RealSessionStore;
+      overrides?: Partial<SessionServerDeps>;
+    } = {}
+  ) {
+    const store = options.store ?? new RealSessionStore(() => {});
+    if (options.store === undefined) liveStores.push(store);
+    seedLiveSession(store, sessionId, "full");
+    store.sessionOriginMap.set(sessionId, options.origin ?? "external");
+    if (options.principal !== undefined) {
+      store.resourceOwnership.bindPrincipal(sessionId, options.principal);
+    }
+    const dispatchAction = launchDispatch();
+    const server = createSessionServer(
+      sessionId,
+      fakeDeps({
+        sessionStore: store,
+        dispatchAction,
+        requestManifest: vi.fn().mockResolvedValue(manifest()),
+        getCachedManifest: vi.fn(() => manifest()),
+        handleTerminalReadLastMessageOwned: vi
+          .fn()
+          .mockResolvedValue({ status: "unavailable", reason: "no-message" }),
+        ...options.overrides,
+      })
+    );
+    return { store, server, dispatchAction };
+  }
+
+  type Result = { content: unknown; isError?: boolean; structuredContent?: unknown };
+
+  function texts(result: Result): string[] {
+    return (result.content as Array<{ type: string; text: string }>).map((block) => block.text);
+  }
+
+  function refusal(result: Result) {
+    return JSON.parse(texts(result)[0]!) as { code: string; message: string; details?: unknown };
+  }
+
+  const OWNED_CALLS: Array<[string, Record<string, unknown>]> = [
+    ["terminal.closeOwned", { terminalId: "t-users" }],
+    ["terminal.revealOwned", { terminalId: "t-users" }],
+    ["terminal.interruptOwned", { terminalId: "t-users" }],
+    ["terminal.sendCommandOwned", { terminalId: "t-users", command: "1" }],
+    ["terminal.injectOwned", { terminalId: "t-users" }],
+    ["terminal.sendKeysOwned", { terminalId: "t-users", keys: ["enter"] }],
+    ["terminal.readLastMessageOwned", { terminalId: "t-users" }],
+    ["worktree.deleteOwned", { worktreeId: "/repo/worktrees/users" }],
+  ];
+
+  describe("on a refusal", () => {
+    it.each(OWNED_CALLS)("is appended when %s refuses an api-key caller", async (name, args) => {
+      const { server, dispatchAction } = session("s-api");
+
+      const result = await callTool(server, { name, arguments: args });
+
+      expect(result.isError).toBe(true);
+      const payload = refusal(result);
+      expect(payload.code).toBe("RESOURCE_NOT_OWNED");
+      expect(payload.message).toContain(NOTE);
+      expect(payload.message).toContain("30 minutes without MCP calls");
+      expect(payload.message).not.toContain(PANE_HINT);
+      expect(payload.details).toBeUndefined();
+      expect(texts(result)).toHaveLength(1);
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it.each(OWNED_CALLS)("is not given by %s to a pane bearer", async (name, args) => {
+      const { server } = session("s-pane", { principal: "principal-pane" });
+
+      const payload = refusal(await callTool(server, { name, arguments: args }));
+
+      expect(payload.code).toBe("RESOURCE_NOT_OWNED");
+      expect(payload.message).not.toContain(NOTE);
+    });
+
+    it("leaves a pane's hand-over hint and grant path as they were", async () => {
+      const { server } = session("s-pane", { principal: "principal-pane" });
+
+      const payload = refusal(
+        await callTool(server, {
+          name: "terminal.sendCommandOwned",
+          arguments: { terminalId: "t-users", command: "1" },
+        })
+      );
+
+      expect(payload.message).toContain(PANE_HINT);
+      expect(payload.message).not.toContain(NOTE);
+      expect(payload.details).toEqual({ grantPath: "context-menu:hand-to-orchestrator" });
+    });
+
+    it.each([
+      ["terminal.interruptOwned", { terminalId: "t-users" }],
+      ["terminal.readLastMessageOwned", { terminalId: "t-users" }],
+    ])("is not given by %s to a help session", async (name, args) => {
+      const { server } = session("s-help", { principal: "help\u0000h-1", origin: "help" });
+
+      const result = await callTool(server, { name, arguments: args });
+
+      expect(result.isError).toBe(true);
+      expect(refusal(result).message).not.toContain(NOTE);
+    });
+
+    it("is not given to Daintree's own assistant even when no bearer bound it", async () => {
+      const { server } = session("s-help", { origin: "help" });
+
+      const result = await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: { terminalId: "t-users" },
+      });
+
+      expect(refusal(result).code).toBe("RESOURCE_NOT_OWNED");
+      expect(refusal(result).message).not.toContain(NOTE);
+    });
+
+    it("reads byte-for-byte the same for an unknown id, another session's and an earlier session's", async () => {
+      const store = new RealSessionStore(() => {});
+      liveStores.push(store);
+      const { server } = session("s-api", { store });
+      session("s-other", { store });
+      const refusalFor = async () =>
+        JSON.stringify(
+          (
+            await callTool(server, {
+              name: "terminal.sendCommandOwned",
+              arguments: { terminalId: "t-x", command: "1" },
+            })
+          ).content
+        );
+
+      const unknown = await refusalFor();
+      store.resourceOwnership.record("s-other", [{ kind: "terminal", id: "t-x" }]);
+      const anotherSessions = await refusalFor();
+      session("s-earlier", { store });
+      store.resourceOwnership.record("s-earlier", [{ kind: "terminal", id: "t-x" }]);
+      store.revokeSession("s-earlier");
+      const earlierSessions = await refusalFor();
+
+      expect(anotherSessions).toBe(unknown);
+      expect(earlierSessions).toBe(unknown);
+      expect(unknown).toContain(NOTE);
+    });
+  });
+
+  describe("alongside what it creates", () => {
+    it("follows a launch as its own text block, leaving the result untouched", async () => {
+      const { server } = session("s-api");
+
+      const result = await callTool(server, {
+        name: "agent.launch",
+        arguments: { agentId: "claude", prompt: "go" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      const [first, ...rest] = texts(result);
+      expect(JSON.parse(first!)).toMatchObject({ terminalId: "t-claude" });
+      expect(rest).toHaveLength(1);
+      expect(rest[0]).toContain(NOTE);
+    });
+
+    it("follows a batch launch once, not once per item", async () => {
+      const { server } = session("s-api");
+
+      const result = await callTool(server, {
+        name: "agent.launchMany",
+        arguments: { agentIds: ["claude", "codex"], prompt: "go" },
+      });
+
+      const blocks = texts(result);
+      expect(blocks.filter((text) => text.includes(NOTE))).toHaveLength(1);
+      expect(blocks[blocks.length - 1]).toContain(NOTE);
+      expect(result.structuredContent).toMatchObject({
+        results: [
+          { target: "claude", ok: true, result: { terminalId: "t-claude" } },
+          { target: "codex", ok: true, result: { terminalId: "t-codex" } },
+        ],
+      });
+    });
+
+    it("follows a waited launch after its reply", async () => {
+      const wait = vi.fn(() => ({
+        bind: vi.fn(),
+        cancel: vi.fn(),
+        promise: Promise.resolve({
+          terminalId: "t-claude",
+          outcome: "handback" as const,
+          reply: { text: "Fact: honey", lineCount: 1, truncated: false },
+        }),
+      }));
+      const { server } = session("s-api", { overrides: { replyWaiter: { wait } } });
+
+      const result = await callTool(server, {
+        name: "agent.launch",
+        arguments: { agentId: "claude", prompt: "go", waitForReply: true },
+      });
+
+      const [first, note] = texts(result);
+      expect(JSON.parse(first!)).toMatchObject({ reply: { outcome: "handback" } });
+      expect(note).toContain(NOTE);
+      expect(texts(result)).toHaveLength(2);
+    });
+
+    it("comes back once with a deduplicated launch", async () => {
+      const { server, dispatchAction } = session("s-api");
+      const args = { agentId: "claude", prompt: "go", requestKey: "k-1" };
+
+      const first = await callTool(server, { name: "agent.launch", arguments: args });
+      const again = await callTool(server, { name: "agent.launch", arguments: args });
+
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+      expect(texts(again)).toEqual(texts(first));
+      expect(texts(again).filter((text) => text.includes(NOTE))).toHaveLength(1);
+    });
+
+    it("follows an owned listing, but not an unfiltered one", async () => {
+      const { server } = session("s-api");
+      await callTool(server, { name: "agent.launch", arguments: { agentId: "claude" } });
+
+      const owned = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+      const all = await callTool(server, { name: "terminal.list", arguments: {} });
+
+      expect(texts(owned)).toHaveLength(2);
+      expect(texts(owned)[1]).toContain(NOTE);
+      expect(owned.structuredContent).toEqual({ terminals: [{ id: "t-claude" }] });
+      expect(texts(all)).toHaveLength(1);
+    });
+
+    it("is left off a failed launch", async () => {
+      const { server } = session("s-api", {
+        overrides: {
+          dispatchAction: vi.fn().mockResolvedValue({
+            result: { ok: false, error: { code: "EXECUTION_ERROR", message: "no such agent" } },
+          }),
+        },
+      });
+
+      const result = await callTool(server, {
+        name: "agent.launch",
+        arguments: { agentId: "nope", prompt: "go" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).not.toContain(NOTE);
+    });
+
+    it.each([
+      ["a pane bearer", { principal: "principal-pane" }],
+      ["a help session", { principal: "help\u0000h-1", origin: "help" }],
+    ])("is not given to %s", async (_label, options) => {
+      const { server } = session("s-bound", options);
+
+      const launched = await callTool(server, {
+        name: "agent.launch",
+        arguments: { agentId: "claude", prompt: "go" },
+      });
+      const listed = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      expect(texts(launched)).toHaveLength(1);
+      expect(texts(listed)).toHaveLength(1);
+    });
+  });
+});
