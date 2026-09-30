@@ -468,6 +468,7 @@ export const details = createElement(ui.DescriptionList, { items: rows, layout: 
 export const detailChildren = createElement(ui.DescriptionList, {}, createElement(ui.DescriptionListItem, { label: "Path", value: "/tmp" }));
 // @ts-expect-error description layouts are a closed set
 export const badDetails = createElement(ui.DescriptionList, { items: rows, layout: "grid" });
+
 // Radio groups, numbers, sliders, pickers, tags, file drops and emoji.
 const radioOptions: ui.RadioOption[] = [{ value: "merge", label: "Merge", description: "Keeps history" }];
 export const radios = createElement(ui.RadioGroup, { options: radioOptions, value: null, onValueChange: (v: string) => void v, orientation: "horizontal", variant: "plain", "aria-label": "Method" });

@@ -376,6 +376,8 @@ export const DescriptionList: ComponentType<PluginDescriptionListProps> = fromKi
 export const DescriptionListItem: ComponentType<PluginDescriptionListItemProps> = fromKit(
   "DescriptionListItem",
   (kit) => kit.DescriptionListItem
+);
+
 // Radio groups, numbers, sliders, pickers, tags, file drops and emoji.
 
 export const RadioGroup: ComponentType<PluginRadioGroupProps> = fromKit(
