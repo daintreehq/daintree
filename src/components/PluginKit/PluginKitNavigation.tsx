@@ -4,6 +4,7 @@ import {
   useDeferredValue,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -259,6 +260,18 @@ export function groupPaletteResults(
     .map(({ result }) => result);
 }
 
+/**
+ * Ranked matches with the disabled ones after the enabled, each side keeping
+ * its rank: a better score does not put a row that cannot be chosen above
+ * ones that can. Exported for tests.
+ */
+export function demoteDisabled(results: readonly PaletteResult[]): PaletteResult[] {
+  return [
+    ...results.filter((result) => !result.item.disabled),
+    ...results.filter((result) => result.item.disabled),
+  ];
+}
+
 /** The enabled index nearest `from` going `dir`, wrapping; -1 when none is. */
 function stepEnabled(results: readonly PaletteResult[], from: number, dir: 1 | -1): number {
   const count = results.length;
@@ -367,7 +380,9 @@ function KitCommandPalette({
     const needle = filterQuery.trim();
     const ranked: PaletteResult[] =
       filtering && needle
-        ? fuse.search(needle).map((hit) => ({ item: hit.item, matches: hit.matches }))
+        ? demoteDisabled(
+            fuse.search(needle).map((hit) => ({ item: hit.item, matches: hit.matches }))
+          )
         : normalized.map((item) => ({ item, matches: undefined }));
     return groupPaletteResults(ranked, normalized);
   }, [filtering, filterQuery, fuse, normalized]);
@@ -611,9 +626,120 @@ function CrumbBody({ crumb }: { crumb: Crumb }) {
   return (
     <>
       {sizedIcon(crumb.icon, "h-3.5 w-3.5 shrink-0")}
-      <span className="truncate">{crumb.label}</span>
+      <span data-crumb-label="" className="truncate">
+        {crumb.label}
+      </span>
     </>
   );
+}
+
+// The trail's fixed parts, in px: the chevron, the gap-0.5 between a li's
+// parts and between lis, and the fold menu's icon-xs button. An ancestor
+// truncates to its floor before any folds; the current crumb has its own
+// floor for when even a fully folded trail is too narrow.
+const CRUMB_SEPARATOR_PX = 12;
+const CRUMB_GAP_PX = 2;
+const CRUMB_MENU_PX = 24;
+const CRUMB_ANCESTOR_MIN_PX = 64;
+const CRUMB_CURRENT_MIN_PX = 48;
+
+/** The crumbs folded into the menu, as the half-open index range [start, end); empty when equal. */
+export interface CrumbFold {
+  start: number;
+  end: number;
+}
+
+/**
+ * The first `folded` ancestors in fold order: the middle ones from the root's
+ * side first, the parent with them, and the root last. The current crumb never folds.
+ */
+function foldRange(count: number, folded: number): CrumbFold {
+  if (folded <= 0) return { start: 0, end: 0 };
+  if (folded >= count - 1) return { start: 0, end: count - 1 };
+  return { start: 1, end: 1 + folded };
+}
+
+/** What sits before a visible crumb in its li: the separator, and the fold menu with its own. */
+function crumbLeadPx(position: number, menuHere: boolean): number {
+  return (
+    (position > 0 ? CRUMB_SEPARATOR_PX + CRUMB_GAP_PX : 0) +
+    (menuHere ? CRUMB_MENU_PX + CRUMB_SEPARATOR_PX + 2 * CRUMB_GAP_PX : 0)
+  );
+}
+
+/** The visible crumbs of a trail under `fold`, each with what leads it and the fold menu's place. */
+function visibleCrumbs(count: number, fold: CrumbFold) {
+  const out: { index: number; lead: number; menuHere: boolean }[] = [];
+  for (let index = 0; index < count; index++) {
+    if (index >= fold.start && index < fold.end) continue;
+    const menuHere = fold.end > fold.start && index === fold.end;
+    out.push({ index, lead: crumbLeadPx(out.length, menuHere), menuHere });
+  }
+  return out;
+}
+
+export interface CrumbPlan {
+  fold: CrumbFold;
+  /** Whether the current crumb keeps its full width; false only when even the fullest fold is too narrow. */
+  currentFits: boolean;
+}
+
+/**
+ * How a trail of `widths.length` crumbs (each at its natural width) lays out
+ * in `available` px: past `maxItems` the middle folds regardless; beyond that,
+ * ancestors truncate to their floor, then fold one at a time until the row
+ * holds with the current crumb whole. Unmeasured (0) keeps the `maxItems`
+ * fold alone. Exported for tests.
+ */
+export function planCrumbs(
+  available: number,
+  widths: readonly (number | undefined)[],
+  maxItems: number
+): CrumbPlan {
+  const count = widths.length;
+  const least = count > maxItems ? count - maxItems : 0;
+  if (!(available > 0) || count === 0) return { fold: foldRange(count, least), currentFits: true };
+  const last = count - 1;
+  for (let folded = least; folded <= Math.max(least, last); folded++) {
+    const fold = foldRange(count, folded);
+    const shown = visibleCrumbs(count, fold);
+    let row = (shown.length - 1) * CRUMB_GAP_PX;
+    for (const { index, lead } of shown) {
+      const natural = widths[index] ?? CRUMB_ANCESTOR_MIN_PX;
+      row += lead + (index === last ? natural : Math.min(natural, CRUMB_ANCESTOR_MIN_PX));
+    }
+    // A px of slack per crumb absorbs rounding in the measured widths, so a
+    // trail sized to its own content never reads as too narrow for itself.
+    if (row <= available + shown.length) return { fold, currentFits: true };
+  }
+  return { fold: foldRange(count, last), currentFits: false };
+}
+
+interface MeasuredTrail {
+  key: string;
+  widths: readonly (number | undefined)[];
+  plan: CrumbPlan;
+}
+
+/** The trail after a resize: widths read now, else the last ones known for this trail. */
+function nextMeasuredTrail(
+  previous: MeasuredTrail | null,
+  key: string,
+  available: number,
+  read: readonly (number | undefined)[],
+  maxItems: number
+): MeasuredTrail {
+  const kept = previous !== null && previous.key === key ? previous.widths : [];
+  const widths = read.map((width, index) => width ?? kept[index]);
+  const plan = planCrumbs(available, widths, maxItems);
+  const same =
+    previous !== null &&
+    previous.key === key &&
+    previous.plan.fold.start === plan.fold.start &&
+    previous.plan.fold.end === plan.fold.end &&
+    previous.plan.currentFits === plan.currentFits &&
+    widths.every((width, index) => width === previous.widths[index]);
+  return same ? previous : { key, widths, plan };
 }
 
 function KitBreadcrumbs({
@@ -630,33 +756,77 @@ function KitBreadcrumbs({
     typeof maxItems === "number" && Number.isFinite(maxItems)
       ? Math.max(2, Math.floor(maxItems))
       : 4;
-  // The first crumb and the last `max - 1` stay; the ones between fold away.
-  const folded = crumbs.length > max ? crumbs.slice(1, crumbs.length - (max - 1)) : [];
-  const shown =
-    folded.length > 0 ? [crumbs[0]!, ...crumbs.slice(crumbs.length - (max - 1))] : crumbs;
-  const last = shown.length - 1;
+  const count = crumbs.length;
+  const last = count - 1;
+
+  // Each crumb's natural width, read in place whenever the trail is resized:
+  // a crumb folded by width was on screen before it folded, so its width is
+  // still known when there is room to bring it back. A new trail starts
+  // unfolded and is measured again. Folding never changes the nav's own
+  // width, so a resize settles in one update.
+  const trailKey = `${max}\u0000${crumbs.map((crumb) => crumb.label).join("\u0000")}`;
+  const [nav, setNav] = useState<HTMLElement | null>(null);
+  const [measured, setMeasured] = useState<MeasuredTrail | null>(null);
+  useLayoutEffect(() => {
+    if (nav === null || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const available = entries[0]?.contentRect.width ?? 0;
+      const read: (number | undefined)[] = new Array<undefined>(count);
+      for (const crumb of nav.querySelectorAll<HTMLElement>("[data-crumb]")) {
+        const index = Number(crumb.dataset.crumb);
+        const label = crumb.querySelector<HTMLElement>("[data-crumb-label]");
+        if (!Number.isInteger(index) || index >= count || label === null) continue;
+        read[index] = crumb.getBoundingClientRect().width - label.clientWidth + label.scrollWidth;
+      }
+      setMeasured((previous) => nextMeasuredTrail(previous, trailKey, available, read, max));
+    });
+    observer.observe(nav);
+    return () => observer.disconnect();
+  }, [nav, trailKey, count, max]);
+  const known = measured !== null && measured.key === trailKey ? measured : null;
+  const { fold, currentFits } = known?.plan ?? planCrumbs(0, new Array<undefined>(count), max);
+  const folded = crumbs.slice(fold.start, fold.end);
+
   return (
     <nav
       {...pickRootProps(rest)}
+      ref={setNav}
       aria-label={nonEmpty(ariaLabel) ?? "Breadcrumb"}
       className={cn("min-w-0", str(className))}
     >
       <ol className="flex min-w-0 items-center gap-0.5 text-xs">
-        {shown.map((crumb, index) => {
+        {visibleCrumbs(count, fold).map(({ index, lead, menuHere }, position) => {
+          const crumb = crumbs[index]!;
           const current = index === last;
+          const natural = known?.widths[index];
+          // Ancestors give way first, down to their floor; the current crumb
+          // keeps its whole width unless even the fullest fold cannot hold it.
+          const floor =
+            natural === undefined
+              ? undefined
+              : current
+                ? currentFits
+                  ? undefined
+                  : lead + Math.min(natural, CRUMB_CURRENT_MIN_PX)
+                : lead + Math.min(natural, CRUMB_ANCESTOR_MIN_PX);
           return (
             <li
               key={`${index}-${crumb.label}`}
-              className={cn("flex items-center gap-0.5", current ? "min-w-0" : "shrink-0")}
+              style={floor === undefined ? undefined : { minWidth: floor }}
+              className={cn(
+                "flex items-center gap-0.5",
+                current && currentFits ? "shrink-0" : "min-w-0"
+              )}
             >
-              {index > 0 ? <CrumbSeparator /> : null}
-              {index === 1 && folded.length > 0 ? (
+              {position > 0 ? <CrumbSeparator /> : null}
+              {menuHere ? (
                 <>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button
                         variant="ghost"
                         size="icon-xs"
+                        className="shrink-0"
                         aria-label={`Show ${folded.length} more`}
                       >
                         <MoreHorizontal aria-hidden="true" />
@@ -679,17 +849,26 @@ function KitBreadcrumbs({
               ) : null}
               {current ? (
                 <span
+                  data-crumb={index}
                   aria-current="page"
                   className={cn(CRUMB_CLASS, "font-medium text-text-primary")}
                 >
                   <CrumbBody crumb={crumb} />
                 </span>
               ) : crumb.onSelect ? (
-                <button type="button" onClick={crumb.onSelect} className={CRUMB_LINK_CLASS}>
+                <button
+                  type="button"
+                  data-crumb={index}
+                  onClick={crumb.onSelect}
+                  className={CRUMB_LINK_CLASS}
+                >
                   <CrumbBody crumb={crumb} />
                 </button>
               ) : (
-                <span className={cn(CRUMB_CLASS, "max-w-48 text-text-secondary")}>
+                <span
+                  data-crumb={index}
+                  className={cn(CRUMB_CLASS, "max-w-48 text-text-secondary")}
+                >
                   <CrumbBody crumb={crumb} />
                 </span>
               )}
@@ -921,8 +1100,8 @@ function StepMarker({ state, number }: { state: PluginStepState; number: number 
       className={cn(
         "flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-2xs font-medium tabular-nums",
         state === "current" && "bg-text-primary text-text-inverse",
-        state === "complete" && "border border-border-strong text-text-primary",
-        state === "upcoming" && "border border-border-default text-text-secondary"
+        state === "complete" && "border border-border-interactive text-text-primary",
+        state === "upcoming" && "border border-border-strong text-text-secondary"
       )}
     >
       {state === "complete" ? <Check className="h-3 w-3" /> : number}
@@ -930,22 +1109,75 @@ function StepMarker({ state, number }: { state: PluginStepState; number: number 
   );
 }
 
-function StepText({ step, vertical }: { step: StepView; vertical: boolean }) {
+// The horizontal row's fixed parts, in px: each step's marker and the gap
+// after it, and between steps a gap, the connector at its narrowest and the
+// gap before the next li.
+const STEP_MARKER_PX = 20;
+const STEP_GAP_PX = 8;
+const STEP_CONNECTOR_MIN_PX = 16;
+
+/**
+ * Whether a horizontal stepper `available` px wide holds every step's label at
+ * its full width. Unmeasured (0) counts as fitting. Exported for tests.
+ */
+export function stepperLabelsFit(available: number, labelWidths: readonly number[]): boolean {
+  if (!(available > 0)) return true;
+  const steps = labelWidths.length;
+  const labels = labelWidths.reduce((sum, width) => sum + width, 0);
+  const needed =
+    labels +
+    steps * (STEP_MARKER_PX + STEP_GAP_PX) +
+    Math.max(0, steps - 1) * (STEP_CONNECTOR_MIN_PX + 2 * STEP_GAP_PX);
+  return needed <= available;
+}
+
+/** The step a compact stepper names: the current one, else the one that needs attention, else the next to do. */
+export function focalStepIndex(views: readonly { state: PluginStepState }[]): number {
+  for (const state of ["current", "error", "upcoming"] as const) {
+    const at = views.findIndex((step) => step.state === state);
+    if (at >= 0) return at;
+  }
+  return views.length - 1;
+}
+
+type StepLabelMode = "full" | "focal" | "hidden";
+
+function StepText({
+  step,
+  vertical,
+  mode,
+  position,
+}: {
+  step: StepView;
+  vertical: boolean;
+  mode: StepLabelMode;
+  position: string;
+}) {
+  const label = (
+    <span
+      data-step-label=""
+      className={cn(
+        mode === "hidden" ? "sr-only" : "truncate",
+        "text-sm group-hover:underline group-hover:underline-offset-2",
+        step.state === "current" && "font-medium",
+        step.state === "upcoming" ? "text-text-secondary" : "text-text-primary"
+      )}
+    >
+      {step.label}
+      {STEP_SPOKEN[step.state] ? <span className="sr-only">{STEP_SPOKEN[step.state]}</span> : null}
+    </span>
+  );
+  // A marker-only step keeps its name for assistive tech and for measuring.
+  if (mode === "hidden") return label;
   return (
-    <span className="flex min-w-0 flex-col">
-      <span
-        className={cn(
-          "truncate text-sm group-hover:underline group-hover:underline-offset-2",
-          step.state === "current" && "font-medium",
-          step.state === "upcoming" ? "text-text-secondary" : "text-text-primary"
-        )}
-      >
-        {step.label}
-        {STEP_SPOKEN[step.state] ? (
-          <span className="sr-only">{STEP_SPOKEN[step.state]}</span>
-        ) : null}
-      </span>
-      {step.description ? (
+    <span className={cn("flex flex-col", mode === "focal" ? "min-w-12" : "min-w-0")}>
+      {label}
+      {mode === "focal" ? (
+        // The list already tells assistive tech where the step sits.
+        <span aria-hidden="true" className="truncate text-xs text-text-secondary">
+          {position}
+        </span>
+      ) : step.description ? (
         <span className={cn("text-xs text-text-secondary", !vertical && "truncate")}>
           {step.description}
         </span>
@@ -967,22 +1199,62 @@ function KitStepper({
   const vertical = orientation === "vertical";
   const selectStep = fn(onStepSelect);
   const last = views.length - 1;
+
+  // A horizontal row too narrow for every label keeps every marker and
+  // connector and names only the focal step, with its place in the run. The
+  // labels stay in the DOM either way, so their full widths can be read on
+  // each resize without a second render; switching form never changes the
+  // row's width, so it settles in one update.
+  const [list, setList] = useState<HTMLOListElement | null>(null);
+  const [narrow, setNarrow] = useState(false);
+  const labelKey = views.map((step) => step.label).join("\u0000");
+  useLayoutEffect(() => {
+    if (vertical || list === null || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? 0;
+      const labels = [...list.querySelectorAll<HTMLElement>("[data-step-label]")].map(
+        (label) => label.scrollWidth
+      );
+      const next = !stepperLabelsFit(width, labels);
+      setNarrow((previous) => (previous === next ? previous : next));
+    });
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [list, vertical, labelKey]);
+  const compact = !vertical && narrow;
+  const focal = compact ? focalStepIndex(views) : -1;
+
   return (
     <ol
       {...pickRootProps(rest)}
+      ref={setList}
       aria-label={nonEmpty(ariaLabel) ?? "Progress"}
+      data-compact={compact ? "" : undefined}
       className={cn(vertical ? "flex flex-col" : "flex min-w-0 items-center gap-2", str(className))}
     >
       {views.map((step, index) => {
         const selectable =
           selectStep !== undefined && (step.state === "complete" || step.state === "error");
+        const mode: StepLabelMode = !compact ? "full" : index === focal ? "focal" : "hidden";
         const body = (
           <>
             <StepMarker state={step.state} number={index + 1} />
-            <StepText step={step} vertical={vertical} />
+            <StepText
+              step={step}
+              vertical={vertical}
+              mode={mode}
+              position={`Step ${index + 1} of ${views.length}`}
+            />
           </>
         );
-        const bodyClass = cn("flex min-w-0 gap-2", vertical ? "items-start" : "items-center");
+        // Compact, nothing shrinks below its content: the focal label keeps its
+        // floor and truncates inside it, and marker-only steps keep their size.
+        const bodyClass = cn(
+          "flex",
+          !compact && "min-w-0",
+          mode !== "hidden" && "gap-2",
+          vertical ? "items-start" : "items-center"
+        );
         const content = selectable ? (
           <button
             type="button"
@@ -1010,7 +1282,7 @@ function KitStepper({
                 // From under this marker to the next one, through the text's height.
                 <span
                   aria-hidden="true"
-                  className="absolute top-6 bottom-1 left-2.5 w-px -translate-x-1/2 bg-border-default"
+                  className="absolute top-6 bottom-1 left-2.5 w-px -translate-x-1/2 bg-border-strong"
                 />
               ) : null}
             </li>
@@ -1020,11 +1292,15 @@ function KitStepper({
           <li
             key={step.id}
             aria-current={step.state === "current" ? "step" : undefined}
-            className={cn("flex min-w-0 items-center gap-2", index < last && "flex-1")}
+            className={cn(
+              "flex items-center gap-2",
+              !compact && "min-w-0",
+              index < last && "flex-1"
+            )}
           >
             {content}
             {index < last ? (
-              <span aria-hidden="true" className="h-px min-w-4 flex-1 bg-border-default" />
+              <span aria-hidden="true" className="h-px min-w-4 flex-1 bg-border-strong" />
             ) : null}
           </li>
         );
