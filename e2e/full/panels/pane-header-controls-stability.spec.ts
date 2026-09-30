@@ -29,7 +29,7 @@ import {
 } from "../../helpers/panels";
 import { runTerminalCommand, waitForTerminalText } from "../../helpers/terminal";
 import { SEL } from "../../helpers/selectors";
-import { T_LONG, T_MEDIUM, T_SETTLE, T_SHORT } from "../../helpers/timeouts";
+import { T_LONG, T_MEDIUM, T_SHORT } from "../../helpers/timeouts";
 
 type Box = { x: number; y: number; width: number; height: number };
 type Controls = { close: Box; maximize: Box };
@@ -58,9 +58,12 @@ const LONG_TITLE = `unbroken-${"x".repeat(180)}-title`;
 // The grid's column floor is 380px; go below it so the title, metadata and
 // status all compete for space.
 const NARROW_PANE_WIDTH = "360px";
-// Comfortably past the resize observer's debounce and the frame after it, so a
-// status change that did resize the pane has had time to reach the grid.
-const RESIZE_GRACE_MS = 250;
+// The element XtermAdapter's ResizeObserver watches. Only a change to its box
+// can schedule a refit, and a refit runs 50ms (debounce) plus a frame after the
+// change, so the box is sampled every frame for longer than that: an unchanged
+// box across the whole window proves no refit was scheduled.
+const XTERM_HOST = ".xterm:visible >> xpath=..";
+const HOST_DWELL_MS = 150;
 
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
@@ -171,16 +174,51 @@ async function waitForConvergedGeometry(page: Page, terminalId: string): Promise
   return geometry;
 }
 
+interface GeometryBaseline {
+  grid: TerminalGeometry;
+  host: Box;
+}
+
+async function captureGeometry(
+  page: Page,
+  panel: Locator,
+  terminalId: string
+): Promise<GeometryBaseline> {
+  const grid = await waitForConvergedGeometry(page, terminalId);
+  return { grid, host: await boxOf(panel.locator(XTERM_HOST).first(), "Terminal host") };
+}
+
 async function expectGeometryUnchanged(
   page: Page,
+  panel: Locator,
   terminalId: string,
-  baseline: TerminalGeometry,
+  baseline: GeometryBaseline,
   label: string
 ): Promise<void> {
-  await page.waitForTimeout(RESIZE_GRACE_MS);
-  await waitForFrames(page);
+  const samples = await panel
+    .locator(XTERM_HOST)
+    .first()
+    .evaluate(
+      (el, dwellMs) =>
+        new Promise<Box[]>((resolve) => {
+          const seen: Box[] = [];
+          const start = performance.now();
+          const tick = () => {
+            const r = el.getBoundingClientRect();
+            seen.push({ x: r.x, y: r.y, width: r.width, height: r.height });
+            if (performance.now() - start >= dwellMs) resolve(seen);
+            else requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        }),
+      HOST_DWELL_MS
+    );
+  expect(samples.length, `terminal host samples after ${label}`).toBeGreaterThan(1);
+  for (const sample of samples) {
+    expectSameBox(sample, baseline.host, `terminal host after ${label}`);
+  }
   expect(await getTerminalGeometry(page, terminalId), `terminal grid after ${label}`).toEqual(
-    baseline
+    baseline.grid
   );
 }
 
@@ -269,7 +307,7 @@ const STATUS_STEPS: StatusStep[] = [
 ];
 
 async function runStatusSteps(page: Page, panel: Locator, terminalId: string): Promise<void> {
-  const geometry = await waitForConvergedGeometry(page, terminalId);
+  const geometry = await captureGeometry(page, panel, terminalId);
   const baseline = await measureControls(panel);
   const slot = await boxOf(panel.locator(STATUS_SLOT), "Status slot");
   await expect(panel.locator(AGENT_SLOT), "plain shell has no agent slot").toHaveCount(0);
@@ -291,7 +329,7 @@ async function runStatusSteps(page: Page, panel: Locator, terminalId: string): P
       `status slot after ${step.label}`
     );
     await expect(panel.locator(AGENT_SLOT), `agent slot after ${step.label}`).toHaveCount(0);
-    await expectGeometryUnchanged(page, terminalId, geometry, step.label);
+    await expectGeometryUnchanged(page, panel, terminalId, geometry, step.label);
   }
 }
 
@@ -310,7 +348,6 @@ async function openReadyTerminal(page: Page, marker: string): Promise<string> {
   await expect(panel).toBeVisible({ timeout: T_LONG });
   await runTerminalCommand(page, panel, `echo ${marker}`, { readyTimeout: T_LONG });
   await waitForTerminalText(panel, marker, T_LONG);
-  await page.waitForTimeout(T_SETTLE);
   return id;
 }
 
@@ -341,7 +378,7 @@ test.describe.serial("Pane header: window controls hold still while status chang
   test("the CPU and memory readout arriving, sparkline included, leaves the controls in place", async () => {
     const page = ctx.window;
     const panel = getPanelById(page, panelId);
-    const geometry = await waitForConvergedGeometry(page, panelId);
+    const geometry = await captureGeometry(page, panel, panelId);
     const baseline = await measureControls(panel);
 
     await openSettings(page);
@@ -362,7 +399,13 @@ test.describe.serial("Pane header: window controls hold still while status chang
       timeout: T_LONG * 2,
     });
     await expectControlsUnmoved(page, panel, baseline, "the resource readout and sparkline");
-    await expectGeometryUnchanged(page, panelId, geometry, "the resource readout and sparkline");
+    await expectGeometryUnchanged(
+      page,
+      panel,
+      panelId,
+      geometry,
+      "the resource readout and sparkline"
+    );
   });
 
   test("a long title in a narrow pane keeps the controls on screen and in place", async () => {
@@ -381,11 +424,15 @@ test.describe.serial("Pane header: window controls hold still while status chang
 
     // The window's minimum width stops a real window from getting this narrow,
     // so cap the pane's own box as well.
+    const wideViewport = await page.evaluate(() => window.innerWidth);
     await setWindowSize(640, 720);
     await panel.evaluate((el, width) => {
       el.style.maxWidth = width;
     }, NARROW_PANE_WIDTH);
-    await page.waitForTimeout(T_SETTLE);
+    await expect
+      .poll(() => page.evaluate(() => window.innerWidth), { timeout: T_MEDIUM })
+      .toBeLessThan(wideViewport);
+    await waitForConvergedGeometry(page, panelId);
     await waitForFrames(page);
 
     const header = await boxOf(panel.locator(HEADER), "Header");

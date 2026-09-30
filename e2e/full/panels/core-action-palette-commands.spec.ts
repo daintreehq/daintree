@@ -5,7 +5,7 @@ import { openAndOnboardProject } from "../../helpers/project";
 import { getGridPanelCount, openTerminal } from "../../helpers/panels";
 import { ensureWindowFocused, expectPaletteFocused } from "../../helpers/focus";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 
@@ -33,7 +33,9 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
     test.afterAll(async () => {
       try {
         await ctx.window.keyboard.press("Escape");
-        await ctx.window.waitForTimeout(T_SETTLE);
+        await expect(ctx.window.locator(SEL.actionPalette.dialog)).toHaveCount(0, {
+          timeout: T_SHORT,
+        });
       } catch {
         // Best-effort cleanup
       }
@@ -63,18 +65,21 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
         // that list is empty. Type a broad query to populate the list, then
         // narrow it.
         await searchInput.fill("panel");
-        await window.waitForTimeout(T_SETTLE);
         await expect(options.first()).toBeVisible({ timeout: T_MEDIUM });
         unfilteredCount = await options.count();
       });
 
       await test.step("Narrow query and verify result count drops", async () => {
         await searchInput.fill("toggle sidebar");
-        await window.waitForTimeout(T_SETTLE);
+        await expect
+          .poll(() => options.count(), { timeout: T_MEDIUM })
+          .toBeLessThan(unfilteredCount);
 
         const filteredCount = await options.count();
         expect(filteredCount).toBeGreaterThanOrEqual(1);
-        expect(filteredCount).toBeLessThan(unfilteredCount);
+        await expect(options.filter({ hasText: "Toggle sidebar" }).first()).toBeVisible({
+          timeout: T_SHORT,
+        });
       });
     });
 
@@ -89,11 +94,9 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
         // (an empty query would only show recently-used, which is empty
         // on a fresh project).
         await searchInput.fill("panel");
-        await window.waitForTimeout(T_SETTLE);
 
         await expect(options.first()).toBeVisible({ timeout: T_MEDIUM });
-        const count = await options.count();
-        expect(count).toBeGreaterThanOrEqual(2);
+        await expect.poll(() => options.count(), { timeout: T_MEDIUM }).toBeGreaterThanOrEqual(2);
 
         initialDescendant = await searchInput.getAttribute("aria-activedescendant");
       });
@@ -129,10 +132,19 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
   // ── Quick Switcher (4 tests) ──────────────────────────────
 
   test.describe.serial("Quick Switcher", () => {
+    test.beforeAll(async () => {
+      await openTerminal(ctx.window);
+      await expect(ctx.window.locator(SEL.panel.gridPanel).first()).toBeVisible({
+        timeout: T_LONG,
+      });
+    });
+
     test.afterAll(async () => {
       try {
         await ctx.window.keyboard.press("Escape");
-        await ctx.window.waitForTimeout(T_SETTLE);
+        await expect(ctx.window.locator(SEL.quickSwitcher.dialog)).toHaveCount(0, {
+          timeout: T_SHORT,
+        });
         // Close any terminal panels opened during tests
         let count = await getGridPanelCount(ctx.window);
         while (count > 0) {
@@ -146,13 +158,6 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
       } catch {
         // Best-effort cleanup
       }
-    });
-
-    test("open a terminal panel as prerequisite", async () => {
-      const { window } = ctx;
-      await openTerminal(window);
-      const panel = window.locator(SEL.panel.gridPanel).first();
-      await expect(panel).toBeVisible({ timeout: T_LONG });
     });
 
     test("opens via keyboard shortcut", async () => {
@@ -183,10 +188,7 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
 
       await test.step("Type nonsense query and verify zero results", async () => {
         await searchInput.fill("nonexistent-query-xyz");
-        await window.waitForTimeout(T_SETTLE);
-
-        const filteredCount = await options.count();
-        expect(filteredCount).toBe(0);
+        await expect(options).toHaveCount(0, { timeout: T_MEDIUM });
       });
 
       await test.step("Clear query and press Escape to close dialog", async () => {
@@ -208,7 +210,9 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
     test.afterAll(async () => {
       try {
         await ctx.window.keyboard.press("Escape");
-        await ctx.window.waitForTimeout(T_SETTLE);
+        await expect(ctx.window.locator(SEL.commandPicker.dialog)).toHaveCount(0, {
+          timeout: T_SHORT,
+        });
         let count = await getGridPanelCount(ctx.window);
         while (count > 0) {
           const panel = ctx.window.locator(SEL.panel.gridPanel).first();
@@ -235,7 +239,6 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
           }
 
           await startBtn.click();
-          await window.waitForTimeout(T_SETTLE);
           return false;
         });
       if (skipped) {
@@ -252,7 +255,10 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
       const pickerMissing =
         await test.step("Wait for command picker open button to appear", async () => {
           // HybridInputBar's command picker button only renders on agent panels
-          return !(await openPickerBtn.isVisible({ timeout: T_LONG }).catch(() => false));
+          return !(await openPickerBtn
+            .waitFor({ state: "visible", timeout: T_LONG })
+            .then(() => true)
+            .catch(() => false));
         });
       if (pickerMissing) {
         test.info().annotations.push({
@@ -298,7 +304,7 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
 
       await test.step("Filter by 'git' and verify result count narrows", async () => {
         await searchInput.fill("git");
-        await window.waitForTimeout(T_SETTLE);
+        await expect.poll(() => options.count(), { timeout: T_MEDIUM }).toBeGreaterThanOrEqual(1);
 
         const filteredCount = await options.count();
         expect(filteredCount).toBeGreaterThanOrEqual(1);

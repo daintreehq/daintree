@@ -7,9 +7,10 @@
  *  - merge conflict: abort (cancel keeps the conflict, confirm discards it),
  *  - rebase conflict: progress chip + sequence rail, resolve, then abort.
  *
- * Each describe block owns a fresh fixture + app instance so the in-progress
- * git state is isolated. All conflicts are deterministic (two branches edit
- * the same line).
+ * One app hosts every fixture, each opened as its own project: a merge
+ * resolved via "Take theirs", a second merge that is aborted while its
+ * conflict is still unresolved, and a rebase. All conflicts are deterministic
+ * (two branches edit the same line).
  *
  * Note: these specs exercise resolution and abort, not the "continue the
  * operation" path. Driving `git merge/rebase --continue` from the headless CI
@@ -22,6 +23,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createConflictFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
+import { addAndSwitchToProject } from "../../helpers/workflows";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
@@ -70,21 +72,41 @@ async function openTheirsAction(ctx: AppContext, source: "incoming changes" | "i
   });
 }
 
-test.describe("Core: Review Hub Conflict Resolution", () => {
-  test.describe.serial("Merge conflict — panel and resolution", () => {
-    let ctx: AppContext;
-    let fixtureCleanup: (() => void) | undefined;
+// The first group onboards from the welcome screen; later groups add their
+// fixture as another project. A group that runs on a relaunched worker (after a
+// failure elsewhere) finds no project and onboards instead. The previous
+// group's hub is a modal over the toolbar, so close it before switching.
+async function openFixtureProject(ctx: AppContext, dir: string, name: string) {
+  const hasProject = await ctx.window.evaluate(
+    async () => (await globalThis.window.electron.project.getCurrent()) != null
+  );
+  if (!hasProject) return openAndOnboardProject(ctx.app, ctx.window, dir, name);
+  const hub = ctx.window.locator(SEL.reviewHub.container);
+  if (await hub.isVisible()) {
+    await ctx.window.locator(SEL.reviewHub.close).click();
+    await expect(hub).toBeHidden({ timeout: T_SHORT });
+  }
+  return addAndSwitchToProject(ctx.app, ctx.window, dir, name);
+}
 
+let ctx: AppContext;
+const fixtureCleanups: Array<() => void> = [];
+
+test.describe("Core: Review Hub Conflict Resolution", () => {
+  test.beforeAll(async () => {
+    ctx = await launchApp();
+  });
+
+  test.afterAll(async () => {
+    if (ctx?.app) await closeApp(ctx.app);
+    for (const cleanup of fixtureCleanups.splice(0)) cleanup();
+  });
+
+  test.describe.serial("Merge conflict — panel and resolution", () => {
     test.beforeAll(async () => {
       const fixture = createConflictFixtureRepo("merge");
-      fixtureCleanup = fixture.cleanup;
-      ctx = await launchApp();
-      ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture.dir, "Merge Conflict");
-    });
-
-    test.afterAll(async () => {
-      if (ctx?.app) await closeApp(ctx.app);
-      fixtureCleanup?.();
+      fixtureCleanups.push(fixture.cleanup);
+      ctx.window = await openFixtureProject(ctx, fixture.dir, "Merge Conflict");
     });
 
     test("conflict panel lists the conflicted file", async () => {
@@ -118,24 +140,16 @@ test.describe("Core: Review Hub Conflict Resolution", () => {
   });
 
   test.describe.serial("Merge conflict — abort", () => {
-    let ctx: AppContext;
-    let fixtureCleanup: (() => void) | undefined;
-
     test.beforeAll(async () => {
       const fixture = createConflictFixtureRepo("merge");
-      fixtureCleanup = fixture.cleanup;
-      ctx = await launchApp();
-      ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture.dir, "Merge Abort");
-    });
-
-    test.afterAll(async () => {
-      if (ctx?.app) await closeApp(ctx.app);
-      fixtureCleanup?.();
+      fixtureCleanups.push(fixture.cleanup);
+      ctx.window = await openFixtureProject(ctx, fixture.dir, "Merge Conflict Abort");
+      await openConflictReviewHub(ctx);
     });
 
     test("cancelling the abort dialog keeps the conflict", async () => {
-      const hub = await openConflictReviewHub(ctx);
       const { window } = ctx;
+      const hub = window.locator(SEL.reviewHub.container);
 
       await hub.locator(SEL.reviewHub.conflictAbort).click();
       const abortDialog = window.getByRole("alertdialog").filter({ hasText: "Abort" });
@@ -162,19 +176,10 @@ test.describe("Core: Review Hub Conflict Resolution", () => {
   });
 
   test.describe.serial("Rebase conflict — progress, resolution, abort", () => {
-    let ctx: AppContext;
-    let fixtureCleanup: (() => void) | undefined;
-
     test.beforeAll(async () => {
       const fixture = createConflictFixtureRepo("rebase");
-      fixtureCleanup = fixture.cleanup;
-      ctx = await launchApp();
-      ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture.dir, "Rebase Conflict");
-    });
-
-    test.afterAll(async () => {
-      if (ctx?.app) await closeApp(ctx.app);
-      fixtureCleanup?.();
+      fixtureCleanups.push(fixture.cleanup);
+      ctx.window = await openFixtureProject(ctx, fixture.dir, "Rebase Conflict");
     });
 
     test("rebase conflict shows progress chip and sequence rail", async () => {
