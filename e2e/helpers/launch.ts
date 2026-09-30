@@ -674,7 +674,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
 
       // Set a minimum window size so toolbar overflow doesn't hide buttons.
       // Skip for restart tests to preserve persisted window state.
-      if (!options.userDataDir) {
+      if (!options.userDataDir || options.windowSize) {
         const explicitSize = options.windowSize;
         await app.evaluate(({ BrowserWindow, screen }, payload) => {
           const win = BrowserWindow.getAllWindows()[0];

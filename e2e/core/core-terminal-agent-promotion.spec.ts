@@ -249,7 +249,9 @@ function buildProcessCommand(): string {
   // through `npm run build` makes the expected badge timing-dependent: shell
   // evidence first reports npm, then the process tree correctly promotes its
   // higher-priority Node child. npm fallback has dedicated badge coverage.
-  return `node -e ${JSON.stringify(fakeBuildProcess)}`;
+  const scriptPath = path.join(fixtureDir, "fake-build-process.cjs");
+  const quote = process.platform === "win32" ? powershellQuote : shellQuote;
+  return `node ${quote(scriptPath)}`;
 }
 
 function expectedBuildProcessId(): string {
@@ -509,6 +511,7 @@ function prepareFixture(): void {
       2
     ) + "\n"
   );
+  writeFileSync(path.join(fixtureDir, "fake-build-process.cjs"), fakeBuildProcess + "\n");
   execSync("git add -A && git commit -m identity-fixture", { cwd: fixtureDir, stdio: "ignore" });
 }
 
@@ -574,7 +577,10 @@ test.describe.serial("Core: terminal runtime agent promotion", () => {
       // Regression guard: shell-command evidence expires (30 s in product,
       // shortened for this launch). A live agent must not demote to plain
       // terminal when that timer elapses.
-      await waitForShellEvidenceExpiry(toolbarPanelId);
+      // PowerShell launcher commands do not provide the shell-command evidence
+      // tracked by the POSIX expiry timer. The post-expiry dwell still guards
+      // against a visible demotion on Windows.
+      if (process.platform !== "win32") await waitForShellEvidenceExpiry(toolbarPanelId);
       await expectAgentHeldThroughDwell(panel, toolbarPanelId);
       await expectNoDemotionSincePromotion(window, toolbarPanelId);
       await expect(panel).toHaveAttribute("data-detected-agent-id", "claude");
@@ -656,7 +662,9 @@ test.describe.serial("Core: terminal runtime agent promotion", () => {
       await expectPanelHasAgentState(panel);
       await expectWorktreeTracksAgent(window, plainPanelId, "claude");
 
-      await waitForShellEvidenceExpiry(plainPanelId);
+      // On Windows the process tree can promote the typed CLI before shell
+      // fallback injects evidence, so there is no expiry marker to await.
+      if (process.platform !== "win32") await waitForShellEvidenceExpiry(plainPanelId);
       await expectAgentHeldThroughDwell(panel, plainPanelId);
       await expectNoDemotionSincePromotion(window, plainPanelId);
       await expect(panel).toHaveAttribute("data-detected-agent-id", "claude");

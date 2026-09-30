@@ -446,10 +446,21 @@ test.describe.serial("Core: Dock", () => {
 
     // Drag the handle upward with the real pointer — the dock is at the bottom
     // so up means taller.
-    const box = await handle.boundingBox();
-    if (!box) throw new Error("resize handle has no box");
-    const x = box.x + box.width / 2;
-    const startY = box.y + box.height / 2;
+    const point = await handle.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      for (const yFraction of [0.25, 0.5, 0.75]) {
+        for (const xFraction of [0.5, 0.25, 0.75]) {
+          const x = box.left + box.width * xFraction;
+          const y = box.top + box.height * yFraction;
+          const hit = document.elementFromPoint(x, y);
+          if (hit === element || element.contains(hit)) return { x, y };
+        }
+      }
+      throw new Error(
+        `resize handle is covered by ${document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)?.outerHTML.slice(0, 300)}`
+      );
+    });
+    const { x, y: startY } = point;
     await window.mouse.move(x, startY);
     await window.mouse.down();
     await expect

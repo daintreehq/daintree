@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { mkdtempSync, realpathSync, writeFileSync } from "fs";
+import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import {
@@ -23,6 +23,7 @@ import {
   type FakeAgentLaunchRecord,
 } from "../../helpers/fakeAgent";
 import { getGridPanelIds, getPanelById } from "../../helpers/panels";
+import { sameFilesystemEntry } from "../../helpers/resource-lifecycle";
 import { switchWorktree } from "../../helpers/workflows";
 import { dismissBlockingPalette } from "../../helpers/overlays";
 import { getDescendantPids } from "../../helpers/stress";
@@ -45,14 +46,6 @@ let codexBin: string;
 let fixtureDir: string;
 let fixtureCleanup: (() => void) | undefined;
 let ctx: AppContext | null = null;
-
-function realPath(p: string): string {
-  try {
-    return realpathSync(p);
-  } catch {
-    return p;
-  }
-}
 
 async function newPanelId(page: Page, previous: Set<string>): Promise<string> {
   let id: string | undefined;
@@ -116,7 +109,10 @@ test.describe.serial("Codex agent: identity, state and resume", () => {
     test.setTimeout(300_000);
 
     // ── Session 1 ──
-    ctx = await launchApp({ userDataDir, env: fakeAgentEnv(codexBin) });
+    ctx = await launchApp({
+      userDataDir,
+      env: fakeAgentEnv(codexBin),
+    });
     let w = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, PROJECT_NAME);
 
     const wtPath = await w.evaluate(
@@ -156,7 +152,7 @@ test.describe.serial("Codex agent: identity, state and resume", () => {
     const firstDetail = `launches=${JSON.stringify(firstLaunches)}`;
     expect(firstLaunch, firstDetail).toBeDefined();
     expect(firstLaunch!.identity, firstDetail).toBe("codex");
-    expect(realPath(firstLaunch!.cwd), firstDetail).toBe(realPath(wtPath));
+    expect(sameFilesystemEntry(firstLaunch!.cwd, wtPath), firstDetail).toBe(true);
     expect(firstLaunch!.argv, firstDetail).not.toContain("resume");
 
     // Working and waiting come only from what the fake paints: Codex's
@@ -214,7 +210,10 @@ test.describe.serial("Codex agent: identity, state and resume", () => {
     writeFileSync(path.join(codexBin, "control.in"), "");
 
     // ── Session 2: cold restart on the same userData ──
-    ctx = await launchApp({ userDataDir, env: fakeAgentEnv(codexBin) });
+    ctx = await launchApp({
+      userDataDir,
+      env: fakeAgentEnv(codexBin),
+    });
     w = await waitForActiveProject(ctx.app, ctx.window, path.basename(fixtureDir));
 
     const relaunches = (): FakeAgentLaunchRecord[] =>
@@ -234,7 +233,7 @@ test.describe.serial("Codex agent: identity, state and resume", () => {
     const resumeAt = relaunch.argv.indexOf("resume");
     expect(resumeAt, detail).toBeGreaterThanOrEqual(0);
     expect(relaunch.argv.slice(resumeAt, resumeAt + 2), detail).toEqual(["resume", "--last"]);
-    expect(realPath(relaunch.cwd), detail).toBe(realPath(wtPath));
+    expect(sameFilesystemEntry(relaunch.cwd, wtPath), detail).toBe(true);
 
     await switchWorktree(w, BRANCH);
     const restored = getPanelById(w, panelId);

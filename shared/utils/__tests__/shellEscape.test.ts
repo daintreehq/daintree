@@ -389,6 +389,9 @@ describe("shellEscape", () => {
       expect(quoteCommandArg("C:\\Users\\O'Brien\\config.json", "pwsh.exe")).toBe(
         "'C:\\Users\\O''Brien\\config.json'"
       );
+      expect(quoteCommandArg('mcp_servers.daintree.url="http://127.0.0.1/mcp"', "pwsh.exe")).toBe(
+        "'mcp_servers.daintree.url=\\\"http://127.0.0.1/mcp\\\"'"
+      );
     });
 
     it("uses PowerShell single-quote escaping on Windows + powershell.exe", () => {
@@ -399,6 +402,9 @@ describe("shellEscape", () => {
           "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
         )
       ).toBe("'hello world'");
+      expect(
+        quoteCommandArg('mcp_servers.daintree.url="http://127.0.0.1/mcp"', "powershell.exe")
+      ).toBe("'mcp_servers.daintree.url=\\\"http://127.0.0.1/mcp\\\"'");
     });
 
     it("uses cmd double-quote escaping on Windows + cmd.exe", () => {

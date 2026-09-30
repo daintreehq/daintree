@@ -208,6 +208,7 @@ export function BrowserPane({
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
   // Track the last URL we set on the webview to detect in-webview navigation
   const lastSetUrlRef = useRef<string>(history.present);
+  const pendingNavigationRef = useRef<string | null>(null);
   // Seed value for the webview `src` attribute, captured once at mount. We never
   // re-bind `src` to navigation-driven state: Electron's SrcAttribute observer
   // treats any same-or-different value write as a fresh loadURL, turning guest
@@ -419,6 +420,13 @@ export function BrowserPane({
     onRenderProcessGone: handleRenderProcessGone,
   });
 
+  useEffect(() => {
+    if (!isWebviewReady || !webviewElement || !pendingNavigationRef.current) return;
+    const url = pendingNavigationRef.current;
+    pendingNavigationRef.current = null;
+    loadWebviewUrl(webviewElement, url);
+  }, [isWebviewReady, webviewElement]);
+
   const commitNavigation = useCallback(
     (url: string) => {
       isInitialRestoredLoadRef.current = false;
@@ -431,7 +439,10 @@ export function BrowserPane({
 
       const webview = webviewRef.current;
       if (webview && isWebviewReady) {
+        pendingNavigationRef.current = null;
         loadWebviewUrl(webview, url);
+      } else {
+        pendingNavigationRef.current = url;
       }
     },
     [isWebviewReady]

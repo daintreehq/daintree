@@ -32,9 +32,11 @@ type MockWebviewElement = HTMLElement & {
   setMockLoading: (value: boolean) => void;
 };
 
+let webviewInitiallyLoading = false;
+
 function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   let currentUrl = element.getAttribute("src") ?? "http://localhost:5173/";
-  let loading = false;
+  let loading = webviewInitiallyLoading;
   const webview = element as MockWebviewElement;
 
   const syncUrlFromAttribute = () => {
@@ -230,6 +232,7 @@ describe("BrowserPane webview lifecycle regression", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    webviewInitiallyLoading = false;
     // dispatch() resolves an ActionDispatchResult union and never rejects;
     // callers branch on `.ok`, so the mock must honour that shape.
     actionDispatchMock.mockResolvedValue({ ok: true, result: undefined });
@@ -2256,6 +2259,28 @@ describe("BrowserPane webview lifecycle regression", () => {
       const { container } = render(<BrowserPane {...baseProps} />);
       const webview = getWebviewElement(container);
       expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("loads the latest navigation requested before the guest is ready", () => {
+      webviewInitiallyLoading = true;
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        for (const url of ["http://localhost:5173/first", "http://localhost:5173/latest"]) {
+          window.dispatchEvent(
+            new CustomEvent("daintree:browser-navigate", {
+              detail: { id: "browser-panel-1", url },
+            })
+          );
+        }
+      });
+      expect(webview.loadURL).not.toHaveBeenCalled();
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+      expect(webview.loadURL).toHaveBeenCalledExactlyOnceWith("http://localhost:5173/latest");
     });
 
     it("does not re-bind src or re-load after an in-page guest navigation", () => {

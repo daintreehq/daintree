@@ -105,7 +105,7 @@ describe("TopologyWatcher metadata sentinel", () => {
     expect(parcelSubscriptions).toHaveLength(0);
   });
 
-  it("hands off to the real watcher and schedules a reconcile when the dir appears", async () => {
+  it("starts the real watcher and keeps the parent sentinel when the dir appears", async () => {
     const reconcileSpy = vi.spyOn(watcher, "scheduleReconcile").mockImplementation(() => {});
     await watcher.startWatcher();
     expect((watcher as any).metadataSentinel).not.toBeNull();
@@ -119,10 +119,10 @@ describe("TopologyWatcher metadata sentinel", () => {
       expect(parcelSubscriptions).toHaveLength(1);
     });
     expect(normalize(parcelSubscriptions[0]!.dir)).toBe(normalize(metadataDir));
-    expect((watcher as any).metadataSentinel).toBeNull();
+    expect((watcher as any).metadataSentinel).not.toBeNull();
   });
 
-  it("subscribes directly (no sentinel) when the dir already exists", async () => {
+  it("subscribes and keeps the parent sentinel when the dir already exists", async () => {
     mkdirSync(metadataDir);
 
     await watcher.startWatcher();
@@ -130,8 +130,22 @@ describe("TopologyWatcher metadata sentinel", () => {
       expect((watcher as any).subscription.value).toBeDefined();
     });
 
-    expect((watcher as any).metadataSentinel).toBeNull();
+    expect((watcher as any).metadataSentinel).not.toBeNull();
     expect(parcelSubscriptions).toHaveLength(1);
+  });
+
+  it("replaces a subscription when the metadata root is recreated", async () => {
+    mkdirSync(metadataDir);
+    await watcher.startWatcher();
+    await vi.waitFor(() => expect(parcelSubscriptions).toHaveLength(1));
+
+    rmSync(metadataDir, { recursive: true });
+    mkdirSync(metadataDir);
+    metadataWatchCallbacks[0]!("rename", "worktrees");
+
+    await vi.waitFor(() => expect(parcelSubscriptions).toHaveLength(2));
+    expect(parcelSubscriptions[0]!.unsubscribed).toBe(true);
+    expect((watcher as any).metadataSentinel).not.toBeNull();
   });
 
   it("stop disarms a live sentinel", async () => {

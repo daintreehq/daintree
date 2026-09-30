@@ -64,18 +64,14 @@ async function sendAgentInput(
   input: string,
   options: { submit?: boolean } = {}
 ): Promise<void> {
-  if (process.platform === "win32") {
-    await writeTerminalInput(page, agentPanel, options.submit ? `${input}\r` : input);
-    return;
-  }
-
   if (await tryFocusHybridEditor(page, agentPanel)) {
     await page.keyboard.type(input, { delay: 30 });
     if (options.submit) await page.keyboard.press("Enter");
     return;
   }
 
-  await writeTerminalInput(page, agentPanel, options.submit ? `${input}\r` : input);
+  await writeTerminalInput(page, agentPanel, input);
+  if (options.submit) await writeTerminalInput(page, agentPanel, "\r");
 }
 
 async function pressAgentKey(

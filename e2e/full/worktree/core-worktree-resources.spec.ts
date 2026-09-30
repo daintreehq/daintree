@@ -242,7 +242,7 @@ test.describe.serial("Full: Worktree Resources", () => {
     const wtConfigPath = path.join(worktreePath, ".daintree", "config.json");
     const markerFile = path.join(worktreePath, ".daintree", "provision-marker.txt");
     const mainDaintreeDir = path.join(fixtureDir, ".daintree");
-    const originalConfig = fs.readFileSync(path.join(mainDaintreeDir, "config.json"), "utf-8");
+    const originalConfig = fs.readFileSync(wtConfigPath, "utf-8");
     const config = JSON.parse(originalConfig);
     config.resource.provision = [
       ...config.resource.provision,
@@ -302,7 +302,7 @@ test.describe.serial("Full: Worktree Resources", () => {
     const markerFile = path.join(worktreePath, ".daintree", "env-marker.txt");
 
     const mainDaintreeDir = path.join(fixtureDir, ".daintree");
-    const originalConfig = fs.readFileSync(path.join(mainDaintreeDir, "config.json"), "utf-8");
+    const originalConfig = fs.readFileSync(wtConfigPath, "utf-8");
     const config = JSON.parse(originalConfig);
 
     config.resource.status = nodeScriptCommand(path.join(mainDaintreeDir, "resource-action.cjs"), [
@@ -340,14 +340,14 @@ test.describe.serial("Full: Worktree Resources", () => {
 
     const wtConfigPath = path.join(worktreePath, ".daintree", "config.json");
     const mainDaintreeDir = path.join(fixtureDir, ".daintree");
-    const originalConfig = fs.readFileSync(path.join(mainDaintreeDir, "config.json"), "utf-8");
+    const originalConfig = fs.readFileSync(wtConfigPath, "utf-8");
     const config = JSON.parse(originalConfig);
 
     config.resource.connect = nodeScriptCommand(path.join(mainDaintreeDir, "resource-action.cjs"), [
       commandArg("connect"),
       // One space-free argument: xterm trims trailing spaces from each row,
       // so a space landing on a wrap boundary could not be recovered.
-      "@@BRANCH={{branch}}@@PATH={{worktree_path}}@@PROJECT={{project_root}}@@END_OF_CONNECT",
+      "CONNECT@@BRANCH={{branch}}@@PATH={{worktree_path}}@@PROJECT={{project_root}}@@END_OF_CONNECT",
     ]);
     fs.writeFileSync(wtConfigPath, JSON.stringify(config, null, 2));
     await approveWorktreeCommands(window, BRANCH);

@@ -665,13 +665,19 @@ test.describe("Core: Terminal pane", () => {
       await waitForTerminalText(panel, "item3_found", T_LONG);
     });
 
-    test("Cmd+F opens find, reports matches and misses, and Escape closes it", async () => {
+    test("find shortcut opens search, reports matches and misses, and Escape closes it", async () => {
       const { window } = ctx;
       const input = panel.locator(SEL.terminal.searchInput);
       const status = panel.locator(SEL.terminal.searchStatus);
 
       await focusXterm(window, panel);
-      await window.keyboard.press(process.platform === "darwin" ? "Meta+F" : "Control+F");
+      // Ctrl+F belongs to readline/TUIs while xterm has focus on Linux and
+      // Windows. Move focus to the same panel's controls to exercise the app
+      // shortcut there; Cmd+F can be pressed directly in xterm on macOS.
+      if (process.platform !== "darwin") {
+        await panel.getByTestId("panel-header-controls").getByRole("button").first().focus();
+      }
+      await window.keyboard.press("ControlOrMeta+F");
       await expect(input).toBeVisible({ timeout: T_MEDIUM });
 
       await input.fill("SEARCH_SENTINEL_XYZ");

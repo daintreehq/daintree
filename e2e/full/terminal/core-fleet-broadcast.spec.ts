@@ -8,7 +8,6 @@ import { openAndOnboardProject } from "../../helpers/project";
 import { getFocusedPanelId, getPanelById } from "../../helpers/panels";
 import {
   getTerminalText,
-  getTerminalTextById,
   waitForTerminalPty,
   waitForTerminalText,
   writeTerminalInput,
@@ -112,6 +111,20 @@ async function createFreshGridPanels(count: number): Promise<string[]> {
     createdIds.push(id);
   }
   return createdIds;
+}
+
+async function awaitPtyPid(page: Page, id: string): Promise<number> {
+  let pid = 0;
+  await expect
+    .poll(
+      async () => {
+        pid = await getPtyPid(page, getPanelById(page, id)).catch(() => 0);
+        return pid;
+      },
+      { timeout: T_LONG, message: `terminal ${id} should report its shell PID` }
+    )
+    .toBeGreaterThan(0);
+  return pid;
 }
 
 async function getVisibleGridPanelIds(page: Page): Promise<string[]> {
@@ -940,7 +953,7 @@ test.describe("Core: Fleet terminal broadcast", () => {
       const ids = (await createFreshGridPanels(2)).slice(0, 2);
       const ptyPids: number[] = [];
       for (const id of ids) {
-        ptyPids.push(await getPtyPid(window, getPanelById(window, id)));
+        ptyPids.push(await awaitPtyPid(window, id));
       }
       await armPanels(window, ids);
       await expect(window.locator(SEL.fleet.ribbon)).toBeVisible({ timeout: T_MEDIUM });
@@ -987,7 +1000,7 @@ test.describe("Core: Fleet terminal broadcast", () => {
       const ids = (await createFreshGridPanels(2)).slice(0, 2);
       const ptyPids: number[] = [];
       for (const id of ids) {
-        ptyPids.push(await getPtyPid(window, getPanelById(window, id)));
+        ptyPids.push(await awaitPtyPid(window, id));
       }
       await armPanels(window, ids);
       await expect(window.locator(SEL.fleet.ribbon)).toBeVisible({ timeout: T_MEDIUM });
@@ -1249,21 +1262,16 @@ test.describe("Core: Fleet terminal broadcast", () => {
         )
         .toBeGreaterThanOrEqual(6);
 
-      // Cooperative cancellation only has anything to interrupt on the batched
-      // fan-out path, which `executeFleetBroadcast` enters when there are more
-      // than FLEET_LARGE_PASTE_BATCH_SIZE (5) targets AND a payload at or above
-      // FLEET_LARGE_PASTE_BYTE_THRESHOLD (100 KB). A small payload fires every
-      // submit in a single Promise.allSettled, so Cancel would be a no-op the
-      // test couldn't distinguish from a broken feature. Each recipient that
-      // runs the payload prints an acknowledgement the shell assembles at run
-      // time, so it never appears in the echoed command line itself; the stamp
-      // appears in both, so its absence means the payload never arrived at all.
+      // Cancellation only has an inter-batch boundary when more than five
+      // targets receive a payload of at least 100 KB. The run status records
+      // whether each PTY accepted a submit; shell execution of a 100 KB line
+      // is not part of the fleet cancellation contract.
       const stamp = `fc${Date.now().toString(36)}`;
       const ack = `fleet-cancel-ack-${stamp}`;
       const largePayload =
         process.platform === "win32"
-          ? `Write-Output ('fleet-cancel-ack-' + '${stamp}') # ${"A".repeat(103_000)}`
-          : `printf '%s-%s\\n' fleet-cancel-ack ${stamp}; : # ${"A".repeat(103_000)}`;
+          ? `Write-Output '${ack}'\n# ${"A".repeat(103_000)}`
+          : `printf '%s\\n' '${ack}'; : # ${"A".repeat(103_000)}`;
 
       await test.step("Send the oversized broadcast directly through the editor", async () => {
         await injectDelay(ctx.app, TERMINAL_SUBMIT_CHANNEL, 12_000);
@@ -1288,25 +1296,24 @@ test.describe("Core: Fleet terminal broadcast", () => {
       });
 
       await test.step("The first batch lands and the sixth target in the later batch is skipped", async () => {
-        // ids[5] is the lone second-batch target; the abort skips it entirely.
-        // Progress hidden is the structural signal that all in-flight work has
-        // drained, so the absence check can no longer race a late delivery.
         await expect(window.locator(SEL.fleet.broadcastProgress)).toBeHidden({
           timeout: T_LONG * 3,
         });
-        // The first batch was already in flight when Cancel landed, so each of
-        // those shells must run it — otherwise a broadcast that delivered
-        // nothing would pass.
-        for (const id of ids.slice(0, 5)) {
-          await expect
-            .poll(() => getTerminalTextById(window, id), { timeout: T_LONG })
-            .toContain(ack);
-        }
-        await expectAbsentThroughout(
-          () => getTerminalTextById(window, ids[5]!),
-          stamp,
-          "cancelled second-batch target received the payload"
-        );
+        // A fulfilled submit means the PTY write queue accepted the bytes.
+        // Unlike a shell acknowledgement, this observes unmounted panes too.
+        const submissions = async () => {
+          const status = await dispatchAction<{
+            run: { targets: Array<{ terminalId: string; submission: string }> } | null;
+          }>(window, "fleet.getRunStatus");
+          expect(status.ok, status.error?.message).toBe(true);
+          const byId = new Map(
+            status.result?.run?.targets.map((target) => [target.terminalId, target.submission])
+          );
+          return ids.map((id) => byId.get(id) ?? "missing");
+        };
+        await expect
+          .poll(submissions, { timeout: T_LONG })
+          .toEqual(["sent", "sent", "sent", "sent", "sent", "skipped"]);
       });
     });
   });

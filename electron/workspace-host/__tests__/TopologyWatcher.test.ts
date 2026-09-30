@@ -1,10 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 
-const { parcelWatcherCallbacks, mockGetGitCommonDir, mockParcelSubscribe } = vi.hoisted(() => {
+const {
+  parcelWatcherCallbacks,
+  fsWatchCallbacks,
+  metadataRootState,
+  mockGetGitCommonDir,
+  mockParcelSubscribe,
+} = vi.hoisted(() => {
   const callbacks: Array<(err: Error | null, events: unknown[]) => void> = [];
   return {
     parcelWatcherCallbacks: callbacks,
+    fsWatchCallbacks: [] as Array<(eventType: string, name: string) => void>,
+    metadataRootState: { exists: true, inode: 1 },
     mockGetGitCommonDir: vi.fn<(arg: string) => string | null>().mockReturnValue(null),
     mockParcelSubscribe: vi.fn(
       (
@@ -34,9 +42,22 @@ vi.mock("fs", async () => {
   return {
     ...actual,
     existsSync: vi.fn((p: unknown) => {
-      if (typeof p === "string" && p.endsWith("/worktrees")) return true;
+      if (typeof p === "string" && p.endsWith("/worktrees")) return metadataRootState.exists;
       return (actual.existsSync as (p: unknown) => boolean)(p);
     }),
+    statSync: vi.fn((p: unknown) => {
+      if (typeof p === "string" && p.endsWith("/worktrees")) {
+        if (!metadataRootState.exists) throw new Error("metadata root absent");
+        return { dev: 1, ino: metadataRootState.inode };
+      }
+      return (actual.statSync as (p: unknown) => unknown)(p);
+    }),
+    watch: vi.fn(
+      (_path: string, _options: unknown, callback: (eventType: string, name: string) => void) => {
+        fsWatchCallbacks.push(callback);
+        return { on: vi.fn(), close: vi.fn() };
+      }
+    ),
   };
 });
 
@@ -82,6 +103,9 @@ describe("TopologyWatcher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     parcelWatcherCallbacks.length = 0;
+    fsWatchCallbacks.length = 0;
+    metadataRootState.exists = true;
+    metadataRootState.inode = 1;
     mockGetGitCommonDir.mockReturnValue("/test/root/.git");
     host = makeHost();
     watcher = makeWatcher(host);
@@ -104,6 +128,42 @@ describe("TopologyWatcher", () => {
       watcher.startWatcher();
       await new Promise((r) => setTimeout(r, 10));
       expect(mockParcelSubscribe).toHaveBeenCalledTimes(1);
+    });
+
+    it("rearms after the worktrees directory is deleted and recreated", async () => {
+      await watcher.startWatcher();
+      await vi.waitFor(() => expect(mockParcelSubscribe).toHaveBeenCalledTimes(1));
+      expect(fsWatchCallbacks).toHaveLength(1);
+
+      metadataRootState.exists = false;
+      fsWatchCallbacks[0]!("rename", "worktrees");
+      expect((watcher as any).subscription.value).toBeUndefined();
+
+      metadataRootState.exists = true;
+      metadataRootState.inode = 2;
+      fsWatchCallbacks[0]!("rename", "worktrees");
+      await vi.waitFor(() => expect(mockParcelSubscribe).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(host.discoverAndSyncWorktrees).toHaveBeenCalled());
+      watcher.stop();
+    });
+
+    it("rearms when removal and recreation coalesce into one rename event", async () => {
+      await watcher.startWatcher();
+      await vi.waitFor(() => expect(mockParcelSubscribe).toHaveBeenCalledTimes(1));
+
+      metadataRootState.inode = 2;
+      fsWatchCallbacks[0]!("rename", "worktrees");
+      await vi.waitFor(() => expect(mockParcelSubscribe).toHaveBeenCalledTimes(2));
+      watcher.stop();
+    });
+
+    it("ignores parent notifications while the metadata root inode is unchanged", async () => {
+      await watcher.startWatcher();
+      await vi.waitFor(() => expect(mockParcelSubscribe).toHaveBeenCalledTimes(1));
+
+      fsWatchCallbacks[0]!("rename", "worktrees");
+      expect(mockParcelSubscribe).toHaveBeenCalledTimes(1);
+      watcher.stop();
     });
 
     it("skips watcher start when metadata dir is absent", async () => {

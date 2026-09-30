@@ -190,38 +190,25 @@ async function viewTerminalText(wcId: number, panelId: string): Promise<string> 
   ).catch(() => "");
 }
 
-/** Click a pane and type a command with real input events, like typedShellPid. */
+/** Focus a recovered pane and type a command with real input events. */
 async function viewTypedShellPid(wcId: number, panelId: string): Promise<number> {
   const tag = `P19S${++seq}X${Date.now().toString(36).toUpperCase()}`;
   const pattern = new RegExp(`${tag}_PPID_(\\d+)`);
   const command = `node -e "console.log('${tag}' + '_PPID_' + process.ppid)"`;
-  const sel = JSON.stringify(`[data-panel-id="${panelId}"] .xterm-screen`);
   const helper = JSON.stringify(`[data-panel-id="${panelId}"] .xterm-helper-textarea`);
 
+  // Playwright's Page remains attached to the crashed target. Linux does not
+  // reliably route synthetic mouse coordinates into its reloaded WebContents,
+  // so focus the recovered xterm textarea through that WebContents instead.
+  await ctx.app.evaluate(({ webContents }, id) => webContents.fromId(id)?.focus(), wcId);
   await expect
     .poll(
-      async () => {
-        const rect = await viewEval<{ x: number; y: number } | null>(
+      () =>
+        viewEval<boolean>(
           wcId,
-          `(() => { const r = document.querySelector(${sel})?.getBoundingClientRect(); return r && r.width > 0 ? { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) } : null; })()`
-        );
-        if (!rect) return false;
-        await ctx.app.evaluate(
-          ({ webContents }, { id, x, y }) => {
-            const wc = webContents.fromId(id)!;
-            // sendInputEvent only lands in a focused view.
-            wc.focus();
-            wc.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
-            wc.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
-          },
-          { id: wcId, ...rect }
-        );
-        return viewEval<boolean>(
-          wcId,
-          `document.activeElement === document.querySelector(${helper})`
-        );
-      },
-      { timeout: T_MEDIUM, message: `a click should give ${panelId}'s xterm keyboard focus` }
+          `(() => { const input = document.querySelector(${helper}); if (!(input instanceof HTMLTextAreaElement)) return false; input.focus(); return document.activeElement === input; })()`
+        ),
+      { timeout: T_MEDIUM, message: `${panelId}'s recovered xterm should accept keyboard focus` }
     )
     .toBe(true);
 
@@ -351,6 +338,8 @@ test.describe.serial("Resilience: real pty-host death and renderer crash", () =>
         expect(viewport?.text ?? "", `${pane.id} shows the notice on screen`).toContain(
           RECONNECTED_LINE
         );
+        const text = await getTerminalTextById(page, pane.id);
+        expect(text.split(RECONNECTED_LINE).length - 1, `${pane.id} reconnect notices`).toBe(1);
       }
     });
 
@@ -398,11 +387,8 @@ test.describe.serial("Resilience: real pty-host death and renderer crash", () =>
       });
       await expect(page.getByText(RECOVERING_BANNER)).toBeHidden({ timeout: T_MEDIUM });
       await expect(page.getByRole("button", { name: "Restart service" })).toHaveCount(0);
-      // Read after the typed commands above, which spans several seconds of dwell.
-      for (const pane of before) {
-        const text = await getTerminalTextById(page, pane.id);
-        expect(text.split(RECONNECTED_LINE).length - 1, `${pane.id} reconnect notices`).toBe(1);
-      }
+      // ConPTY may clear old scrollback after subsequent commands; the notice
+      // was counted while visible immediately after reconnection above.
       expect(await hookHostPid()).toBe(newHostPid);
       expect(await ptyHostPidsFromMetrics()).toEqual([newHostPid]);
     });

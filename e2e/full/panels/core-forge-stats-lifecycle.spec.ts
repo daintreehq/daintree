@@ -126,7 +126,11 @@ test.describe.serial("Panels: Forge stats pill lifecycle", () => {
   });
 
   test("pill appears after onboarding a GitHub-remote project", async () => {
-    ctx = await launchApp({ userDataDir, env: FAULT_MODE_ENV });
+    ctx = await launchApp({
+      userDataDir,
+      env: FAULT_MODE_ENV,
+      windowSize: { width: 1920, height: 1080 },
+    });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Forge Stats");
 
     await expectForgeSegmentRegistered(ctx.window.locator(SEL.github.statPillIssues), /issues/i);
@@ -168,7 +172,11 @@ test.describe.serial("Panels: Forge stats pill lifecycle", () => {
     await closeApp(ctx!.app);
     if (pid) await waitForProcessExit(pid).catch(() => {});
 
-    ctx = await launchApp({ userDataDir, env: FAULT_MODE_ENV });
+    ctx = await launchApp({
+      userDataDir,
+      env: FAULT_MODE_ENV,
+      windowSize: { width: 1920, height: 1080 },
+    });
     const window = ctx.window;
 
     await expect(window.locator(SEL.toolbar.projectSwitcherTrigger)).toContainText("forge-stats", {

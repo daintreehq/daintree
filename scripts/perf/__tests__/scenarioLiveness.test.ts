@@ -344,6 +344,7 @@ function explain(result: DriverResult): string {
 
 /** The driver's JSON line. Everything it reports is judged below, not there. */
 interface DriverReport {
+  notes?: string;
   missingCorrectness?: string[];
   /** Declared workload floors naming a metric the scenario never emitted. */
   missingWorkload?: string[];
@@ -404,7 +405,10 @@ function verdicts(id: string, report: DriverReport): string[] {
   );
   if (nonZero.length > 0) {
     const detail = nonZero.map(([key, value]) => `${key}=${value}`).join(", ");
-    problems.push(`${id} reported misses: ${detail} — a healthy run reads 0 on every one`);
+    problems.push(
+      `${id} reported misses: ${detail} — a healthy run reads 0 on every one` +
+        (report.notes ? `; ${report.notes}` : "")
+    );
   }
 
   // A floor naming a metric the scenario never emits is a broken declaration,

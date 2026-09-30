@@ -568,10 +568,40 @@ describe("IdentityWatcher", () => {
       const watcher = new IdentityWatcher(delegate);
 
       watcher.onShellSubmit('node -e "..."');
+      watcher.observeOutput("PS C:\\repo> ");
       await vi.advanceTimersByTimeAsync(2_000);
 
       expect(inject).not.toHaveBeenCalled();
       expect(watcher.isFallbackCommitted).toBe(false);
+      watcher.dispose();
+    });
+
+    it("keeps an uncommitted process badge when only an older PowerShell prompt is visible", async () => {
+      const inject = vi.fn();
+      const clear = vi.fn();
+      const fakeDetector = {
+        injectShellCommandEvidence: inject,
+        clearShellCommandEvidence: clear,
+      } as unknown as ProcessDetector;
+      const { delegate } = createFakeDelegate({
+        processDetector: fakeDetector,
+        visibleLines: ["PS C:\\repo> "],
+        cursorLine: "PS C:\\repo> ",
+        ptyDescendantCount: 0,
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("node 'C:\\repo\\fake-build-process.cjs'");
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(inject).toHaveBeenCalledTimes(1);
+      expect(inject.mock.calls[0]?.[0]).toMatchObject({ processIconId: "node" });
+      expect(watcher.isFallbackCommitted).toBe(true);
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+
+      watcher.observeOutput("PS C:\\repo> ");
+      await vi.advanceTimersByTimeAsync(600);
+      expect(clear).toHaveBeenCalledWith("prompt-return");
       watcher.dispose();
     });
 
@@ -955,6 +985,47 @@ describe("IdentityWatcher", () => {
 
       expect(clear).not.toHaveBeenCalledWith("prompt-return");
       expect(state.detectionCalls).toHaveLength(0);
+    });
+
+    it("keeps Codex identity while its prompt remains visible during a missed Windows census", async () => {
+      const inject = vi.fn();
+      const clear = vi.fn();
+      const fakeDetector = {
+        injectShellCommandEvidence: inject,
+        clearShellCommandEvidence: clear,
+      } as unknown as ProcessDetector;
+      const { delegate, state } = createFakeDelegate({
+        processDetector: fakeDetector,
+        visibleLines: [
+          "& 'C:\\npm\\prefix\\codex.cmd'",
+          "OpenAI Codex",
+          "model: gpt-6-sol",
+          "directory: C:\\project",
+          "FAKE_CLAUDE_READY",
+          "›",
+          "100% context left",
+        ],
+        cursorLine: "100% context left",
+        ptyDescendantCount: 2,
+        foreground: null,
+      });
+      // Mirror the production viewport reader: the recent scan excludes the
+      // banner once the model, directory, ready line and context row appear.
+      delegate.getLastNLines = (n) => state.visibleLines.slice(-n);
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("& 'C:\\npm\\prefix\\codex.cmd'");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+
+      state.ptyDescendantCount = 0;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+
+      state.visibleLines.push("PS C:\\Users\\runneradmin\\project>");
+      state.cursorLine = "PS C:\\Users\\runneradmin\\project>";
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(clear).toHaveBeenCalledWith("prompt-return");
     });
 
     it("clears agent evidence when a current PowerShell prompt follows stale Claude welcome text", async () => {

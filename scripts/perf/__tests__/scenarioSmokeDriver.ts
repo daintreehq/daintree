@@ -108,6 +108,7 @@ async function main(): Promise<void> {
       metricCount: Object.keys(metrics).length,
       missingCorrectness,
       correctness,
+      notes: sample.notes,
       missingWorkload,
       workloadShortfalls,
     })}\n`

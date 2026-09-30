@@ -33,19 +33,15 @@ async function expectGuestLoaded(pathFragment: string): Promise<void> {
   await expect
     .poll(
       () =>
-        ctx.app.evaluate(
-          ({ webContents }, fragment) =>
-            webContents
-              .getAllWebContents()
-              .some(
-                (wc) =>
-                  wc.getType() === "webview" && wc.getURL().includes(fragment) && !wc.isLoading()
-              ),
-          pathFragment
+        ctx.app.evaluate(({ webContents }) =>
+          webContents
+            .getAllWebContents()
+            .filter((wc) => wc.getType() === "webview")
+            .map((wc) => ({ url: wc.getURL(), loading: wc.isLoading() }))
         ),
       { timeout: T_LONG, message: `a webview guest finished loading ${pathFragment}` }
     )
-    .toBe(true);
+    .toContainEqual({ url: expect.stringContaining(pathFragment), loading: false });
 }
 
 test.describe.serial("Core: Browser Panel", () => {
