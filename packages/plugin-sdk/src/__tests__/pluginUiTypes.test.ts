@@ -579,6 +579,27 @@ export const donut = createElement(ui.DonutChart, {
 // @ts-expect-error a donut needs its value key
 export const noValueKey = createElement(ui.DonutChart, { data: [], x: "lang", "aria-label": "Files" });
 
+// Drag and drop.
+interface Todo { id: string; title: string; done: boolean }
+const todos: Todo[] = [{ id: "a", title: "Ship", done: false }];
+export const sortable = createElement(ui.SortableList<Todo>, { items: todos, getId: (todo: Todo) => todo.id, renderItem: (todo: Todo, state: ui.SortableItemState) => \`\${todo.title} \${state.index}\`, onReorder: (from: number, to: number) => void [from, to], onChange: (next: Todo[]) => void next, "aria-label": "Todos", orientation: "horizontal", handle: true, isItemDisabled: (todo: Todo) => todo.done, getItemLabel: (todo: Todo) => todo.title });
+// @ts-expect-error a sortable list needs an aria-label
+export const unnamedSortable = createElement(ui.SortableList<Todo>, { items: todos, renderItem: (todo: Todo) => todo.title });
+// @ts-expect-error orientations are a closed set
+export const diagonalSortable = createElement(ui.SortableList<Todo>, { items: todos, renderItem: () => null, "aria-label": "x", orientation: "diagonal" });
+const kanbanColumns: ui.KanbanColumn[] = [{ id: "todo", title: "To do", limit: 3, empty: "Nothing yet" }];
+export const kanban = createElement(ui.Kanban<Todo>, { columns: kanbanColumns, cards: { todo: todos }, getCardId: (todo: Todo) => todo.id, renderCard: (todo: Todo, state: ui.KanbanCardState) => \`\${todo.title} in \${state.columnId}\`, onMove: (move: ui.KanbanMove) => void move.toColumn, "aria-label": "Board", collapsible: true, defaultCollapsedColumns: ["todo"], onCollapsedColumnsChange: (ids: string[]) => void ids, columnActions: (column: ui.KanbanColumn) => column.title, columnWidth: 300 });
+// @ts-expect-error a column id is a string
+export const numericColumn = createElement(ui.Kanban<Todo>, { columns: [{ id: 1, title: "x" }], cards: {}, renderCard: () => null, "aria-label": "x" });
+export const provider = createElement(ui.DragDropProvider, { onDragEnd: (event: ui.DragEvent) => void event.overId, renderOverlay: (id: ui.DragId) => String(id), getLabel: (id: ui.DragId) => String(id) });
+export function DraggableRow() {
+  const drag: ui.DraggableState = ui.useDraggable({ id: 1 });
+  const drop: ui.DroppableState = ui.useDroppable({ id: "bin", disabled: false });
+  // @ts-expect-error a drag id is a string or number
+  ui.useDraggable({ id: {} });
+  return createElement("div", { ref: drag.ref, style: drag.style }, createElement("span", drag.handleProps), String(drop.isOver));
+}
+
 // Root attributes: \`id\` and \`data-*\` everywhere, \`aria-*\` where the root is the control.
 export const selectId = createElement(ui.Select, { options: [], "aria-label": "Pick", "data-testid": "pick" });
 export const segmentedId = createElement(ui.SegmentedControl, { options: [], value: "", onValueChange: () => {}, "aria-label": "Mode", "data-testid": "mode", "aria-describedby": "hint" });

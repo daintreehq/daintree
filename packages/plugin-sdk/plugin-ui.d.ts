@@ -177,6 +177,20 @@ declare module "@daintreehq/plugin-ui" {
     PluginVirtualListCountProps,
     PluginVirtualListItemsProps,
     PluginVirtualListProps,
+    PluginDragDropProviderProps,
+    PluginDragEvent,
+    PluginDragHandleProps,
+    PluginDragId,
+    PluginDraggableState,
+    PluginDroppableState,
+    PluginKanbanCardState,
+    PluginKanbanColumn,
+    PluginKanbanMove,
+    PluginKanbanProps,
+    PluginSortableItemState,
+    PluginSortableListProps,
+    PluginUseDraggableOptions,
+    PluginUseDroppableOptions,
     UseListNavigationOptions as PluginUseListNavigationOptions,
     UseListNavigationResult as PluginUseListNavigationResult,
   } from "@daintreehq/plugin-sdk/react";
@@ -322,6 +336,20 @@ declare module "@daintreehq/plugin-ui" {
   export type BarChartProps = PluginBarChartProps;
   export type LineChartProps = PluginLineChartProps;
   export type DonutChartProps = PluginDonutChartProps;
+  export type DragId = PluginDragId;
+  export type DragEvent = PluginDragEvent;
+  export type DragDropProviderProps = PluginDragDropProviderProps;
+  export type UseDraggableOptions = PluginUseDraggableOptions;
+  export type DragHandleProps = PluginDragHandleProps;
+  export type DraggableState = PluginDraggableState;
+  export type UseDroppableOptions = PluginUseDroppableOptions;
+  export type DroppableState = PluginDroppableState;
+  export type SortableItemState = PluginSortableItemState;
+  export type SortableListProps<T = unknown> = PluginSortableListProps<T>;
+  export type KanbanColumn = PluginKanbanColumn;
+  export type KanbanMove = PluginKanbanMove;
+  export type KanbanCardState = PluginKanbanCardState;
+  export type KanbanProps<T = unknown> = PluginKanbanProps<T>;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -559,6 +587,25 @@ declare module "@daintreehq/plugin-ui" {
   export const LineChart: ComponentType<LineChartProps>;
   /** Parts of a whole around a centre figure, with a legend of every value and share. */
   export const DonutChart: ComponentType<DonutChartProps>;
+
+  /**
+   * The scope for `useDraggable` and `useDroppable`: pointer and keyboard
+   * drags with screen-reader announcements, kept inside the view. Its content
+   * renders without drag until the kit loads.
+   */
+  export const DragDropProvider: ComponentType<DragDropProviderProps>;
+  /**
+   * Makes an element draggable inside the nearest `DragDropProvider`. Spread
+   * `handleProps` on what the user grabs and put `ref` and `style` on the item.
+   * Inert outside a provider, and until the provider's kit has loaded.
+   */
+  export function useDraggable(options: UseDraggableOptions): DraggableState;
+  /** Makes an element a drop target inside the nearest `DragDropProvider`. Inert outside one. */
+  export function useDroppable(options: UseDroppableOptions): DroppableState;
+  /** A list reordered by pointer or keyboard, with a placeholder, a drop line and edge auto-scroll. */
+  export const SortableList: <T>(props: SortableListProps<T>) => ReactNode;
+  /** Columns of cards moved between and within columns, with counts, WIP limits and folding. */
+  export const Kanban: <T>(props: KanbanProps<T>) => ReactNode;
 
   /**
    * The keyboard model of a list: one tab stop, Up/Down/Home/End move the

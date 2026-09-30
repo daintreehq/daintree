@@ -178,6 +178,7 @@ Consistency rules:
 | `native-title-tooltip` | warn | A native `title=` tooltip, which ignores the theme and the keyboard |
 | `inline-svg-icon` | warn | An inline 24×24 SVG icon; use `Icon` |
 | `lucide-react-import` | warn | `lucide-react` bundled into a view; the kit's `Icon` is served at no bundle cost |
+| `dnd-library-import` | warn | A drag-and-drop library (`@dnd-kit/*`, `react-beautiful-dnd`, `sortablejs`, …) bundled into a view; the kit's `SortableList`, `Kanban` and `DragDropProvider` cover reordering and boards |
 | `native-dialog-in-view` | warn | `alert`, `confirm` or `prompt` in a view; use `ConfirmDialog` or `Dialog` |
 | `self-container-query` | warn | A container-query variant on the container itself |
 | `class-compiles-to-nothing` | warn | The offline style report: classes Tailwind generates no CSS for against the design contract — usually a typo or a utility from another Tailwind version. One finding per file; stock colours are left to `stock-palette-colour` and classes your own stylesheets define are not reported |

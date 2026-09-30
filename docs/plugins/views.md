@@ -318,6 +318,7 @@ export default function Notes({ pluginId, disposeSignal }) {
 | Pane chrome | `PaneHeader`, `Toolbar`, `ToolbarButton`, `Tabs` |
 | Navigation | `NavList` (an app's left rail), `Breadcrumbs`, `Stepper` (a wizard's progress), `CommandPalette` (a quick switcher or "jump to…") |
 | Layout | `Card` (header, body and footer; clickable with `onClick`), `Divider`, `SectionLabel`, `ResizableSplit` (two panes with a draggable divider), `Accordion`, `Disclosure`, `DescriptionList` (a record's label and value rows) |
+| Drag and drop | `SortableList` (a list reordered by pointer or keyboard), `Kanban` (columns of cards moved between and within columns, with counts and WIP limits), and `DragDropProvider` with `useDraggable` and `useDroppable` for anything else |
 | States and status | `PaneState` (a whole pane's `loading`, `empty` or `error`), `EmptyState`, `Callout` (an inline message; `severity="error"` with a Retry `action` is the error banner, `variant="strip"` the pane-wide band), `Badge`, `Spinner`, `SpinningIcon`, `ProgressBar`, `Skeleton`, `SkeletonBone`, `SkeletonText`, `SkeletonHint`, `SeverityIcon` |
 | Overlays | `Dialog`, `ConfirmDialog` (including the destructive typed-name gate), `Sheet` (a record's detail or edit form against the window's edge), `Popover`, `PopoverSearchField`, `EmojiPicker`, `Tooltip`, `TruncatedTooltip` |
 | Settings views | `SettingsSection`, `SettingsGroup`, `SettingsRow`, `SettingsActions` — the host's section → group → row grammar |
@@ -439,6 +440,8 @@ import { setAgentContextDragData } from "@daintreehq/plugin-sdk";
 
 onDragStart={(event) => setAgentContextDragData(event.dataTransfer, { v: 1, title, text })}
 ```
+
+Kit drags (`SortableList`, `Kanban`, `DragDropProvider`) never carry this payload: they move with pointer events and stay inside the view, so a card on a kit board is reordered, not handed off. To offer both, keep the handoff on a separate element that sets `draggable` and the payload itself — a "Drag to an agent" grip beside the kit's — or offer **Send to agent…** instead.
 
 What lands is the same block `host.sendToAgent` drafts: one fenced block tagged `daintree-context`, holding your `source.label` and `title` as a heading (`Kanban: Fix login redirect`) and then the text, appended after whatever the user already typed and kept literal on submit — `@diff` and the other tokens inside it are never expanded. Control characters other than tab and newline are stripped. The drop selects the pane and puts the caret in its input bar, exactly like dropping a file there. Only an agent pane whose input bar can take a draft shows the drop affordance; a plain shell, an exited, docked, locked or restarting agent, one in an armed fleet, or any pane while the input bar is switched off refuses the drag outright, and nothing is ever typed into a terminal. The payload is data, not instructions — anything can start a drag carrying this type, so the host validates it in full at the drop and drops anything malformed: a wrong `v`, blank or oversized text, an over-long `title` or label, or a non-string where a string belongs. Unknown extra keys are ignored.
 

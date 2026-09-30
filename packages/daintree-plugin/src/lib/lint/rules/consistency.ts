@@ -315,6 +315,23 @@ const lucideImport: LintRule = {
   },
 };
 
+// The drag-and-drop libraries a view reaches for to reorder a list or build a
+// board, all of which the kit now covers.
+const DND_LIBRARY_IMPORT =
+  /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\(\s*|\bimport\s+)["'](?:@dnd-kit\/[\w-]+|react-beautiful-dnd|@hello-pangea\/dnd|react-dnd(?:-[\w-]+)?|sortablejs|react-sortablejs|@atlaskit\/pragmatic-drag-and-drop[\w-]*)(?:\/[^"']*)?["']/;
+
+const dndLibraryImport: LintRule = {
+  id: "dnd-library-import",
+  severity: "warn",
+  appliesTo: "view",
+  message: "a drag-and-drop library is bundled into the view",
+  hint: "prefer `SortableList`, `Kanban` or `DragDropProvider` from @daintreehq/plugin-ui: keyboard dragging, announcements and the app's lift, and drags that stay inside the view",
+  check(file) {
+    const match = DND_LIBRARY_IMPORT.exec(file.code);
+    return match ? [{ offset: match.index }] : [];
+  },
+};
+
 /** `@container`, `@container/name` — the element declares itself a query container. */
 const CONTAINER_DECLARATION = /^@container(?:\/([\w-]+))?$/;
 /** `@md`, `@max-lg`, `@min-[400px]`, `@sm/name` — a container-query variant, with its container name. */
@@ -436,6 +453,7 @@ export const CONSISTENCY_RULES: LintRule[] = [
   nativeTitle,
   inlineSvgIcon,
   lucideImport,
+  dndLibraryImport,
   selfContainerQuery,
   nativeDialogInView,
 ];
