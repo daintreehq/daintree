@@ -3069,8 +3069,6 @@ export interface PluginUndoToastOptions {
   message: string;
   /** Puts it back. Runs at most once, and only while the toast is up. */
   onUndo: () => void;
-  /** Defaults to the app's Undo window, 5 seconds. */
-  durationMs?: number;
 }
 
 /** A toast `useToast` put up. */

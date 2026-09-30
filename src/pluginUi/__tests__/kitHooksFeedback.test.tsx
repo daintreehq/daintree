@@ -283,7 +283,12 @@ describe("useToast", () => {
   it("shows the app's Undo toast and calls back once", () => {
     const { result } = renderHook(() => kit.useToast(), { wrapper: owned });
     const onUndo = vi.fn();
-    act(() => void result.current.showUndo({ message: "3 snippets deleted", onUndo }));
+    // A duration from untyped JS is ignored: the Undo window is the app's one.
+    const loose = {
+      ...JSON.parse('{"message": "3 snippets deleted", "durationMs": 60000}'),
+      onUndo,
+    };
+    act(() => void result.current.showUndo(loose));
     const sent = payload();
     expect(sent.type).toBe("success");
     expect(sent.transient).toBe(true);
