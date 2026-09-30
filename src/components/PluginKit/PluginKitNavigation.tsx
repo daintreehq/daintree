@@ -29,14 +29,7 @@ import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
-  ContextMenuCheckboxItem,
   ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuLabel,
-  ContextMenuRadioGroup,
-  ContextMenuRadioItem,
-  ContextMenuSeparator,
-  ContextMenuShortcut,
   ContextMenuTrigger,
   stopContextMenuPropagation,
 } from "@/components/ui/context-menu";
@@ -59,7 +52,7 @@ import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { useListNavigation } from "@/pluginUi/listNavigation";
 import { KitDialogFrame } from "./kitDialog";
-import { renderMenuEntries, stopReactPropagation, type KitMenuParts } from "./kitMenu";
+import { CONTEXT_MENU_PARTS, isMenuKey, renderMenuEntries, stopReactPropagation } from "./kitMenu";
 import {
   field,
   fn,
@@ -73,23 +66,6 @@ import {
 } from "./kitProps";
 import { PluginKitLayerContext, useKitOverlayZClass } from "./kitScope";
 import { sizedIcon } from "./PluginKitPatterns";
-
-const CONTEXT_MENU_PARTS: KitMenuParts = {
-  Item: ContextMenuItem,
-  CheckboxItem: ContextMenuCheckboxItem,
-  RadioGroup: ContextMenuRadioGroup,
-  RadioItem: ContextMenuRadioItem,
-  Label: ContextMenuLabel,
-  Separator: ContextMenuSeparator,
-  Shortcut: ContextMenuShortcut,
-};
-
-function isMenuKey(event: KeyboardEvent): boolean {
-  return (
-    event.key === "ContextMenu" ||
-    (event.key === "F10" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey)
-  );
-}
 
 /**
  * Shift+F10 and the Menu key, replayed as a `contextmenu` on the surface at

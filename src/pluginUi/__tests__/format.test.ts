@@ -96,3 +96,60 @@ describe("@daintreehq/plugin-ui formatters", () => {
     }
   });
 });
+
+describe("@daintreehq/plugin-ui ISO day helpers", () => {
+  const utcLabel = (iso: string, options: Intl.DateTimeFormatOptions) =>
+    new Intl.DateTimeFormat(undefined, { ...options, timeZone: "UTC" }).format(
+      new Date(`${iso}T00:00:00Z`)
+    );
+
+  it("names the local wall-clock day of an instant", () => {
+    const lateEvening = new Date(2026, 8, 30, 23, 30);
+    expect(kit.isoFromDate(lateEvening)).toBe("2026-09-30");
+    expect(kit.isoFromDate(lateEvening.getTime())).toBe("2026-09-30");
+    expect(kit.isoFromDate(new Date(2026, 0, 1, 0, 5))).toBe("2026-01-01");
+    expect(kit.isoToday(lateEvening.getTime())).toBe("2026-09-30");
+    expect(kit.isoToday()).toBe(kit.isoFromDate(new Date()));
+  });
+
+  it("moves by whole days across months, leap days and clock changes", () => {
+    expect(kit.isoAddDays("2026-09-30", 1)).toBe("2026-10-01");
+    expect(kit.isoAddDays("2026-01-01", -1)).toBe("2025-12-31");
+    expect(kit.isoAddDays("2024-02-28", 1)).toBe("2024-02-29");
+    expect(kit.isoAddDays("2026-03-08", 1)).toBe("2026-03-09");
+    expect(kit.isoAddDays("2026-11-01", 1)).toBe("2026-11-02");
+    expect(kit.isoAddDays("2026-09-30", -90)).toBe("2026-07-02");
+    expect(kit.isoAddDays("2026-09-30", 1.9)).toBe("2026-10-01");
+    expect(kit.isoAddDays("9999-12-30", 5)).toBe("9999-12-31");
+  });
+
+  it("formats a day the way the kit's date fields show it", () => {
+    expect(kit.formatIsoDate("2026-09-30")).toBe(
+      utcLabel("2026-09-30", { year: "numeric", month: "short", day: "numeric" })
+    );
+    expect(kit.formatIsoDate("2026-09-30", "long")).toBe(
+      utcLabel("2026-09-30", { year: "numeric", month: "long", day: "numeric" })
+    );
+    expect(kit.formatIsoDate("2026-09-30", "full")).toBe(
+      utcLabel("2026-09-30", { dateStyle: "full" })
+    );
+  });
+
+  it("returns null or Unknown for junk from untyped JS instead of throwing", () => {
+    const loose: string[] = JSON.parse('[null, {}, [], "2026-02-30", "30/09/2026", ""]');
+    for (const value of loose) {
+      expect(kit.isoAddDays(value, 1)).toBeNull();
+      expect(kit.formatIsoDate(value)).toBe("Unknown");
+    }
+    const days: number[] = JSON.parse('[null, "3", {}]');
+    for (const value of [...days, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(kit.isoAddDays("2026-09-30", value)).toBeNull();
+    }
+    const instants: Date[] = JSON.parse('[null, "2026-09-30", {}]');
+    for (const value of [...instants, new Date(Number.NaN), Number.NaN]) {
+      expect(kit.isoFromDate(value)).toBeNull();
+    }
+    const style: "long" = JSON.parse('"medium"');
+    expect(kit.formatIsoDate("2026-09-30", style)).toBe(kit.formatIsoDate("2026-09-30"));
+  });
+});

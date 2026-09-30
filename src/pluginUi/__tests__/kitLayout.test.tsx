@@ -407,6 +407,30 @@ describe("Accordion and Disclosure", () => {
     expect(screen.queryAllByRole("region")).toHaveLength(0);
   });
 
+  it("puts Accordion and Disclosure chevrons and bodies on the same edge", () => {
+    render(
+      createElement(
+        "div",
+        null,
+        createElement(kit.Accordion, { items, defaultValue: ["a"] }),
+        createElement(kit.Disclosure, { title: "Details", defaultOpen: true }, "Detail body")
+      )
+    );
+    // jsdom lays nothing out, so the horizontal box classes stand in for position.
+    const horizontal = (element: Element | null) =>
+      (element?.className ?? "")
+        .split(/\s+/)
+        .filter((name) => /^-?(m|p|w)[xlr]?-|^w-/.test(name))
+        .sort();
+    const accordion = screen.getByRole("button", { name: "General" });
+    const disclosure = screen.getByRole("button", { name: "Details" });
+    expect(horizontal(accordion)).toEqual(horizontal(disclosure));
+    expect(horizontal(accordion)).toContain("-mx-1.5");
+    expect(horizontal(screen.getByRole("region", { name: "General" }))).toEqual(
+      horizontal(screen.getByRole("region", { name: "Details" }))
+    );
+  });
+
   it("shows at most one open section in single mode, whatever it is handed", () => {
     const onValueChange = vi.fn();
     render(createElement(kit.Accordion, { items, defaultValue: ["zz", "b", "a"], onValueChange }));

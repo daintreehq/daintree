@@ -286,6 +286,11 @@ export function formatFieldDate(iso: string): string {
   return formatter("field", { year: "numeric", month: "short", day: "numeric" }).format(utcOf(iso));
 }
 
+/** "September 30, 2026". */
+export function formatLongDate(iso: string): string {
+  return formatter("long", { year: "numeric", month: "long", day: "numeric" }).format(utcOf(iso));
+}
+
 export function formatDayNumber(iso: string): string {
   return formatter("day", { day: "numeric" }).format(utcOf(iso));
 }

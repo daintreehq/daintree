@@ -177,6 +177,9 @@ declare module "@daintreehq/plugin-ui" {
     PluginToolbarProps,
     PluginTooltipProps,
     PluginTruncatedTooltipProps,
+    PluginVirtualListComponent,
+    PluginVirtualListCountProps,
+    PluginVirtualListItemsProps,
     PluginVirtualListProps,
     UseListNavigationOptions as PluginUseListNavigationOptions,
     UseListNavigationResult as PluginUseListNavigationResult,
@@ -220,6 +223,8 @@ declare module "@daintreehq/plugin-ui" {
   export type ThemeTokenKey = PluginThemeTokenKey;
   export type ThemeTokens = PluginThemeTokens;
   export type VirtualListProps<T = unknown> = PluginVirtualListProps<T>;
+  export type VirtualListItemsProps<T = unknown> = PluginVirtualListItemsProps<T>;
+  export type VirtualListCountProps = PluginVirtualListCountProps;
   export type DataTableProps<T = unknown> = PluginDataTableProps<T>;
   export type DataTableColumn<T = unknown> = PluginDataTableColumn<T>;
   export type DataTableRowKey<T = unknown> = PluginDataTableRowKey<T>;
@@ -404,7 +409,7 @@ declare module "@daintreehq/plugin-ui" {
    * list, spread `useListNavigation().containerProps` onto it, pass its
    * `activeIndex`, and render each row as a `ListRow` with `getRowProps(index)`.
    */
-  export const VirtualList: <T>(props: VirtualListProps<T>) => ReactNode;
+  export const VirtualList: PluginVirtualListComponent;
   /**
    * A table with a sticky header and an always-virtualised body. Sorting is
    * controlled: the table reports `onSortChange` and you sort `rows`. With
@@ -576,6 +581,22 @@ declare module "@daintreehq/plugin-ui" {
   export function formatCount(count: number): string;
   /** An elapsed time in ms: "45s", "12m", "3h 5m", "2d 4h". */
   export function formatDuration(ms: number): string;
+
+  /** The user's wall-clock day as "YYYY-MM-DD", the kit's date value. `now` fixes the clock. */
+  export function isoToday(now?: number): string;
+  /** The local "YYYY-MM-DD" day an instant falls on; null for an invalid date. */
+  export function isoFromDate(date: Date | number): string | null;
+  /**
+   * The "YYYY-MM-DD" day `days` away (negative for earlier), free of
+   * daylight-saving shifts; null when `day` is not a real date.
+   */
+  export function isoAddDays(day: string, days: number): string | null;
+  /**
+   * A "YYYY-MM-DD" day as the kit's date fields show it: "Sep 30, 2026"
+   * (`short`, the default), "September 30, 2026" (`long`) or "Wednesday,
+   * September 30, 2026" (`full`). "Unknown" when it is not a real date.
+   */
+  export function formatIsoDate(day: string, style?: "short" | "long" | "full"): string;
 
   /**
    * The active theme: `colorMode`, `themeId`, and resolved sRGB `tokens` for

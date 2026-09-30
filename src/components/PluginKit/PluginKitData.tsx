@@ -6,6 +6,7 @@ import type {
 } from "@shared/types/plugin-sdk-react";
 import { cn } from "@/lib/utils";
 import {
+  fn,
   hasContent,
   node,
   nonEmpty,
@@ -38,20 +39,31 @@ const TONE_WORD: Record<Exclude<PluginSeverity, "neutral">, string> = {
 // as a dash in a tabular column.
 const MINUS = "−";
 
-function signed(delta: number): string {
-  if (delta > 0) return `+${delta.toLocaleString()}`;
-  if (delta < 0) return `${MINUS}${Math.abs(delta).toLocaleString()}`;
-  return "0";
+// The plugin's `formatDelta` words the magnitude ("12.5%", "3 min"); the sign
+// and the arrow stay the card's, so they read the same on every card.
+function signed(delta: number, format: ((magnitude: number) => unknown) | undefined): string {
+  const magnitude = Math.abs(delta);
+  const custom = format?.(magnitude);
+  const text = typeof custom === "string" ? custom : magnitude.toLocaleString();
+  if (delta > 0) return `+${text}`;
+  if (delta < 0) return `${MINUS}${text}`;
+  return format ? text : "0";
 }
 
-function DeltaView({ delta }: { delta: unknown }) {
+function DeltaView({
+  delta,
+  format,
+}: {
+  delta: unknown;
+  format: ((magnitude: number) => unknown) | undefined;
+}) {
   if (typeof delta === "number") {
     if (!Number.isFinite(delta)) return null;
     const Arrow = delta > 0 ? ArrowUp : delta < 0 ? ArrowDown : null;
     return (
       <span className="inline-flex shrink-0 items-center gap-0.5 text-xs tabular-nums text-text-secondary">
         {Arrow ? <Arrow className="h-3 w-3" aria-hidden="true" /> : null}
-        {signed(delta)}
+        {signed(delta, format)}
       </span>
     );
   }
@@ -69,6 +81,7 @@ function KitStatCard({
   label,
   value,
   delta,
+  formatDelta,
   tone,
   hint,
   children,
@@ -96,7 +109,7 @@ function KitStatCard({
         <span className="min-w-0 truncate text-xl font-semibold tabular-nums text-text-primary">
           {node(value)}
         </span>
-        <DeltaView delta={delta} />
+        <DeltaView delta={delta} format={fn(formatDelta)} />
       </div>
       {hasContent(hint) ? (
         <p className="min-w-0 truncate text-xs text-text-secondary">{node(hint)}</p>

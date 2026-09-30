@@ -58,8 +58,15 @@ import {
   formatBytes,
   formatCount,
   formatDuration,
+  formatIsoDate,
+  isoAddDays,
+  isoFromDate,
+  isoToday,
   type DataTableColumn,
   type DataTableSort,
+  type VirtualListProps,
+  type VirtualListItemsProps,
+  type VirtualListCountProps,
   type LogEntry,
   type Severity,
 } from "@daintreehq/plugin-ui";
@@ -128,6 +135,30 @@ export const list = createElement(VirtualList<Issue>, {
 export const unnamedList = createElement(VirtualList, { count: 3, renderItem: () => null });
 // @ts-expect-error rows are typed through the generic
 export const badRow = createElement(VirtualList<Issue>, { items: issues, "aria-label": "x", renderItem: (_i, issue) => issue?.missing });
+// With \`items\` a row is handed its item, never \`undefined\`.
+export const itemsList = createElement(VirtualList<Issue>, {
+  items: issues,
+  "aria-label": "Issues",
+  itemKey: (_index, issue) => issue.id,
+  renderItem: (_index, issue) => issue.title,
+});
+// A \`count\` list reads its rows by index.
+export const countList = createElement(VirtualList, {
+  count: 3,
+  "aria-label": "Rows",
+  renderItem: (index) => index,
+});
+export const countProps: VirtualListCountProps = {
+  count: 3,
+  "aria-label": "Rows",
+  renderItem: (_index, item) => {
+    const none: undefined = item;
+    return none;
+  },
+};
+// A wrapper forwarding the general props still compiles.
+export const forwarded = (props: VirtualListProps<Issue>) => createElement(VirtualList, props);
+export const narrowed = (props: VirtualListItemsProps<Issue>) => createElement(VirtualList<Issue>, props);
 
 const columns: DataTableColumn<Issue>[] = [
   { id: "title", header: "Title", sortable: true, render: (issue) => issue.title },
@@ -203,6 +234,13 @@ export const labels: string[] = [
   formatCount(12_345),
   formatDuration(90_000),
 ];
+const today: string = isoToday();
+export const days: (string | null)[] = [isoAddDays(today, -29), isoFromDate(new Date()), isoFromDate(0)];
+export const dayLabels: string[] = [formatIsoDate(today), formatIsoDate(today, "full")];
+// @ts-expect-error a shifted day can be null for a bad input
+export const unchecked: string = isoAddDays(today, 1);
+// @ts-expect-error the styles are short, long and full
+export const badStyle = formatIsoDate(today, "medium");
 
 // Avatars, popovers and hints.
 import * as ui from "@daintreehq/plugin-ui";
@@ -296,6 +334,7 @@ export const unnamedTree = createElement(ui.FileTree, { entries: walked });
 // @ts-expect-error sort orders are a closed set
 export const badSort = createElement(ui.FileTree, { entries: walked, "aria-label": "Files", sort: "size" });
 export const stat = createElement(ui.StatCard, { label: "Changed files", value: 43, delta: -2, tone: "warning", hint: "2 worktrees" });
+export const percentStat = createElement(ui.StatCard, { label: "MRR", value: "$25,901", delta: 12.5, formatDelta: (n) => n.toFixed(1) + "%" });
 // @ts-expect-error a stat needs a value
 export const noValue = createElement(ui.StatCard, { label: "Changed files" });
 export const spark = createElement(ui.Sparkline, { values: [1, 2, 3], "aria-label": "Events", height: 32, tone: "info", min: 0 });

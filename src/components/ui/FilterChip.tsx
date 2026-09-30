@@ -1,4 +1,5 @@
 import * as React from "react";
+import { formatCountExact } from "@/lib/formatCount";
 import { cn } from "@/lib/utils";
 
 /**
@@ -62,11 +63,12 @@ export const FilterChip = React.forwardRef<HTMLButtonElement, FilterChipProps>(
       >
         {children}
         {/* The space is for the accessible name ("Dirty (3)"); the flex gap
-            already spaces the pixels, so it renders nothing. */}
+            already spaces the pixels, so it renders nothing. Exact and
+            grouped, "(2,172)": the count answers how many a filter keeps. */}
         {count !== undefined && (
           <>
             {" "}
-            <span className="tabular-nums">({count})</span>
+            <span className="tabular-nums">({formatCountExact(count)})</span>
           </>
         )}
       </button>

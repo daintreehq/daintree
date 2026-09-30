@@ -44,7 +44,7 @@ import {
   weekday,
   weekdayNames,
   type DateRange,
-} from "./kitDateMath";
+} from "@/pluginUi/dateMath";
 import { fn, nonEmpty, pickRootProps, str, useKitOwnerAttributes } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
 

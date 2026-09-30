@@ -16,6 +16,16 @@ describe("FilterChip", () => {
     ).toBe("Dirty (3)");
   });
 
+  it("groups the digits of a large count", () => {
+    expect(
+      chip(
+        <FilterChip selected count={2172}>
+          Active
+        </FilterChip>
+      ).textContent
+    ).toBe("Active (2,172)");
+  });
+
   it("tells unavailable from available only when a zero count is unselected", () => {
     const classes = (selected: boolean, count?: number) =>
       chip(

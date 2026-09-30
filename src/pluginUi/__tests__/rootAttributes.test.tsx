@@ -185,3 +185,29 @@ describe("VirtualList test ids", () => {
     expect(hit.getAttribute("data-extra")).toBe("3");
   });
 });
+
+describe("fields that put their attributes on the input", () => {
+  it("gives SearchField and NumberInput test ids to the input a test types into", () => {
+    mount(
+      createElement(
+        "div",
+        null,
+        createElement(kit.SearchField, {
+          value: "",
+          "aria-label": "Search",
+          "data-testid": "search",
+        }),
+        createElement(kit.NumberInput, {
+          defaultValue: 3,
+          "aria-label": "Seats",
+          "data-testid": "seats",
+          id: "seats-input",
+        })
+      )
+    );
+    expect(screen.getByTestId("search")).toBe(screen.getByRole("textbox", { name: "Search" }));
+    const seats = screen.getByTestId("seats");
+    expect(seats).toBe(screen.getByRole("spinbutton", { name: "Seats" }));
+    expect(seats.id).toBe("seats-input");
+  });
+});

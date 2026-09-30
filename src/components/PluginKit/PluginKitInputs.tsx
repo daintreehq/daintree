@@ -1268,7 +1268,10 @@ function KitFileDropzone({
       }}
       className={cn(
         "flex flex-col items-center justify-center gap-2 rounded-[var(--radius-md)] border border-dashed px-4 py-6 text-center transition-colors duration-150 ease-out",
-        over ? "border-border-strong bg-overlay-soft" : "border-border-default",
+        // `border-default` all but vanishes on a dialog's surface in dark, so
+        // the zone rests on the strong edge; a drag lifts it to the chip-edge
+        // ink and a fill, a step the eye can see without the accent.
+        over ? "border-text-secondary bg-overlay-soft" : "border-border-strong",
         inert ? "cursor-not-allowed opacity-50" : "cursor-pointer",
         str(className)
       )}

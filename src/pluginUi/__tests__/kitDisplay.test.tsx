@@ -48,6 +48,11 @@ describe("FilterChip", () => {
     expect(chip.getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("groups the digits of a large count", () => {
+    render(createElement(kit.FilterChip, { count: 2172 }, "Active"));
+    expect(screen.getByRole("button", { name: "Active (2,172)" })).toBeTruthy();
+  });
+
   it("follows `selected` when controlled", () => {
     function Controlled() {
       const [on, setOn] = useState(true);

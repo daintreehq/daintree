@@ -785,10 +785,16 @@ describe("FileDropzone", () => {
     const zone = screen.getByTestId("zone");
     const files = [file("a.md"), file("b.png"), file("c.md")];
     const dataTransfer = { types: ["Files"], files, dropEffect: "none" };
+    // A visible edge at rest, and a stronger edge plus a fill under a drag.
+    expect(zone.className).toContain("border-border-strong");
     fireEvent.dragEnter(zone, { dataTransfer });
     expect(zone.hasAttribute("data-drag-over")).toBe(true);
+    expect(zone.className).toContain("border-text-secondary");
+    expect(zone.className).toContain("bg-overlay-soft");
+    expect(zone.className).not.toContain("accent");
     fireEvent.drop(zone, { dataTransfer });
     expect(zone.hasAttribute("data-drag-over")).toBe(false);
+    expect(zone.className).toContain("border-border-strong");
     expect(onFiles.mock.calls[0]![0].map((f: File) => f.name)).toEqual(["a.md", "c.md"]);
     expect(onReject.mock.calls[0]![0].map((f: File) => f.name)).toEqual(["b.png"]);
   });

@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
   type Ref,
 } from "react";
@@ -15,6 +16,7 @@ import {
   type ListProps,
   type ListRange,
   type ScrollerProps,
+  type TableBodyProps,
   type TableProps,
   type TableVirtuosoHandle,
   type VirtuosoHandle,
@@ -25,7 +27,17 @@ import type {
   PluginLogViewProps,
   PluginVirtualListProps,
 } from "@shared/types/plugin-sdk-react";
-import { LIST_ROW_HOVER_CLASS, PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+  stopContextMenuPropagation,
+} from "@/components/ui/context-menu";
+import {
+  LIST_ROW_HOVER_CLASS,
+  PALETTE_ROW_CLASS,
+  ROW_MENU_TARGET_CLASS,
+} from "@/components/ui/paletteRowStyles";
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { cn } from "@/lib/utils";
 import {
@@ -38,7 +50,10 @@ import {
   pickRootProps,
   positive,
   str,
+  useKitOwnerAttributes,
 } from "./kitProps";
+import { CONTEXT_MENU_PARTS, isMenuKey, renderMenuEntries } from "./kitMenu";
+import { useKitOverlayZClass } from "./kitScope";
 import { severityGlyph } from "./PluginKitPatterns";
 
 const DEFAULT_ROW_PX = 28;
@@ -314,6 +329,10 @@ interface TableContext {
   rowId: (index: number) => string;
   tableProps: Record<string, unknown>;
   activate: (index: number) => void;
+  /** The row whose `rowMenu` is open, else -1. */
+  menuIndex: number;
+  /** Set when the table has a `rowMenu`: the body is then the menu's trigger. */
+  openRowMenu: ((event: MouseEvent<HTMLElement>) => void) | undefined;
 }
 
 function TableScroller({
@@ -336,6 +355,21 @@ function TableElement({ context, style, children }: TableProps & { context: Tabl
   );
 }
 
+// The body, not the table, is the row menu's trigger: a right-click on the
+// header or the empty space under the rows is left to whatever encloses it.
+function TableBody({
+  context,
+  ref,
+  ...props
+}: TableBodyProps & { context: TableContext; ref?: Ref<HTMLTableSectionElement> }) {
+  if (!context.openRowMenu) return <tbody {...props} ref={ref} />;
+  return (
+    <ContextMenuTrigger asChild onContextMenu={context.openRowMenu}>
+      <tbody {...props} ref={ref} />
+    </ContextMenuTrigger>
+  );
+}
+
 function TableRow({ context, item, ...props }: ItemProps<unknown> & { context: TableContext }) {
   const index = props["data-index"];
   const key = context.keyOf(item, index);
@@ -350,13 +384,19 @@ function TableRow({ context, item, ...props }: ItemProps<unknown> & { context: T
       aria-selected={interactive ? selected : undefined}
       data-selected={!interactive && selected ? "true" : undefined}
       data-active={interactive && index === context.activeIndex ? "true" : undefined}
+      // The same marker Radix writes on a row that is its own menu trigger.
+      data-state={index === context.menuIndex ? "open" : undefined}
       onClick={interactive ? () => context.activate(index) : undefined}
-      className={cn(PALETTE_ROW_CLASS, interactive && [LIST_ROW_HOVER_CLASS, "cursor-pointer"])}
+      className={cn(
+        PALETTE_ROW_CLASS,
+        interactive && [LIST_ROW_HOVER_CLASS, "cursor-pointer"],
+        context.openRowMenu && ROW_MENU_TARGET_CLASS
+      )}
     />
   );
 }
 
-const TABLE_COMPONENTS = { Scroller: TableScroller, Table: TableElement, TableRow };
+const TABLE_COMPONENTS = { Scroller: TableScroller, Table: TableElement, TableBody, TableRow };
 
 function readSort(sort: unknown): PluginDataTableSort | null {
   if (typeof sort !== "object" || sort === null) return null;
@@ -378,6 +418,7 @@ function KitDataTable({
   sort,
   onSortChange,
   onRowClick,
+  rowMenu,
   selectedRowKey,
   empty,
   estimatedRowSize,
@@ -393,8 +434,12 @@ function KitDataTable({
   const current = readSort(sort);
   const handleSort = fn(onSortChange);
   const rowClick = fn(onRowClick);
+  const menuFor = fn(rowMenu);
   const endReached = fn(onEndReached);
-  const interactive = rowClick !== undefined;
+  // A row menu needs a row the keyboard can stand on, so it makes the table a grid.
+  const interactive = rowClick !== undefined || menuFor !== undefined;
+  const overlayZ = useKitOverlayZClass();
+  const owner = useKitOwnerAttributes();
   const rowPx = positive(estimatedRowSize, 10_000) ?? DEFAULT_ROW_PX;
   const keyField = typeof rowKey === "string" ? rowKey : undefined;
   const keyFn = typeof rowKey === "function" ? rowKey : undefined;
@@ -428,6 +473,32 @@ function KitDataTable({
 
   const [range, setRange] = useState<ListRange | null>(null);
 
+  // The entries outlive the close so the menu does not empty while it animates out.
+  const [menu, setMenu] = useState<{ index: number; items: readonly unknown[]; open: boolean }>({
+    index: -1,
+    items: [],
+    open: false,
+  });
+  const openRowMenu = (event: MouseEvent<HTMLElement>) => {
+    const target = event.target instanceof Element ? event.target.closest("tr[data-index]") : null;
+    const index =
+      target !== null && target.parentElement === event.currentTarget
+        ? Number(target.getAttribute("data-index"))
+        : -1;
+    const items =
+      Number.isInteger(index) && index >= 0 && index < data.length
+        ? menuFor?.(data[index], index)
+        : undefined;
+    // No entries is no menu: preventing the event stands Radix's own open down.
+    if (!Array.isArray(items) || items.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    stopContextMenuPropagation(event);
+    setCursor(index);
+    setMenu({ index, items, open: true });
+  };
+
   const [scroller, setScroller] = useState<HTMLElement | null>(null);
   const [available, setAvailable] = useState<number | null>(null);
   useEffect(() => {
@@ -443,6 +514,24 @@ function KitDataTable({
   const onKeyDown = (event: KeyboardEvent<HTMLTableElement>) => {
     // Keys on a header's sort button are the button's, not the grid cursor's.
     if (event.target !== event.currentTarget) return;
+    // Shift+F10 and the Menu key open the cursor row's menu, replayed as a
+    // `contextmenu` on the row: Radix's context menu has no imperative open.
+    if (menuFor && isMenuKey(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      const row = activeIndex >= 0 ? document.getElementById(rowId(activeIndex)) : null;
+      if (row === null) return;
+      const rect = row.getBoundingClientRect();
+      row.dispatchEvent(
+        new globalThis.MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: rect.left + 8,
+          clientY: rect.top + rect.height / 2,
+        })
+      );
+      return;
+    }
     if (event.metaKey || event.ctrlKey || event.altKey || data.length === 0) return;
     const last = data.length - 1;
     const from = activeIndex;
@@ -471,6 +560,8 @@ function KitDataTable({
         "aria-rowcount": data.length + 1,
         tabIndex: 0,
         "aria-activedescendant": activeMounted(activeIndex, range) ? rowId(activeIndex) : undefined,
+        // Tells the global Shift+F10 handler to stand down for the grid's own menu.
+        ...(menuFor ? { "data-row-menu": "" } : {}),
         onKeyDown,
         // The first arrow press should not be the one that finds the cursor.
         // The cursor row is the grid's focus indicator, so focus arriving
@@ -494,6 +585,8 @@ function KitDataTable({
     rowId,
     tableProps,
     activate,
+    menuIndex: menu.open ? menu.index : -1,
+    openRowMenu: menuFor ? openRowMenu : undefined,
   };
 
   if (data.length === 0 && empty !== undefined && empty !== null) {
@@ -559,7 +652,7 @@ function KitDataTable({
     </tr>
   );
 
-  return (
+  const table = (
     <TableVirtuoso
       {...rootAttributes}
       ref={handle}
@@ -590,6 +683,19 @@ function KitDataTable({
       ]}
       endReached={endReached ? (index) => endReached(index) : undefined}
     />
+  );
+  if (!menuFor) return table;
+  return (
+    <ContextMenu
+      onOpenChange={(open) => {
+        if (!open) setMenu((current) => ({ ...current, open: false }));
+      }}
+    >
+      {table}
+      <ContextMenuContent {...owner} className={overlayZ}>
+        {renderMenuEntries(CONTEXT_MENU_PARTS, menu.items)}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

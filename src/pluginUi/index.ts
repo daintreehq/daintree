@@ -92,7 +92,7 @@ import type {
   PluginToolbarProps,
   PluginTooltipProps,
   PluginTruncatedTooltipProps,
-  PluginVirtualListProps,
+  PluginVirtualListComponent,
 } from "@shared/types/plugin-sdk-react";
 import { fromKit } from "./kit";
 
@@ -108,6 +108,7 @@ export {
   formatRelativeTime,
   formatTimeAgo,
 } from "./format";
+export { formatIsoDate, isoAddDays, isoFromDate, isoToday } from "./dates";
 
 /** The kit's contract version: additive minors, no prop removed within a major. */
 export const PLUGIN_UI_VERSION = "1.0.0";
@@ -205,7 +206,7 @@ export const Icon: ComponentType<PluginIconProps> = fromKit("Icon", (kit) => kit
 
 // The list components are generic over the row type in the public types; the
 // runtime is the same adapter whatever the rows are.
-export const VirtualList: <T>(props: PluginVirtualListProps<T>) => ReactNode = fromKit(
+export const VirtualList: PluginVirtualListComponent = fromKit(
   "VirtualList",
   (kit) => kit.VirtualList
 );
@@ -469,6 +470,8 @@ export type {
   PluginThemeTokenKey as ThemeTokenKey,
   PluginThemeTokens as ThemeTokens,
   PluginVirtualListProps as VirtualListProps,
+  PluginVirtualListItemsProps as VirtualListItemsProps,
+  PluginVirtualListCountProps as VirtualListCountProps,
   PluginDataTableProps as DataTableProps,
   PluginDataTableColumn as DataTableColumn,
   PluginDataTableSort as DataTableSort,
