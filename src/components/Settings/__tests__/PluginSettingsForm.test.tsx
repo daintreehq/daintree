@@ -756,6 +756,8 @@ describe("PluginSettingsForm", () => {
     const input = (await screen.findByLabelText("Storage folder")) as HTMLInputElement;
     await waitFor(() => expect(input.value).toBe("/Users/x/notes"));
     expect(input.readOnly).toBe(true);
+    // Its smaller mono face must not shrink it below the group's other inputs.
+    expect(input.className.split(/\s+/)).toEqual(expect.arrayContaining(["text-xs", "leading-5"]));
     expect(screen.getByRole("button", { name: "Browse" })).toBeTruthy();
   });
 

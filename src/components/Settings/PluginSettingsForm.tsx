@@ -807,7 +807,9 @@ function SettingField({
               invalid={invalid}
               placeholder={type === "file" ? "No file selected" : "No folder selected"}
               // The value is a path, so mono; the placeholder is a sentence, so not.
-              className="min-w-0 flex-1 font-mono text-xs placeholder:font-sans"
+              // The smaller face keeps the text-sm line box, so the field stays
+              // the height of the other inputs in its group.
+              className="min-w-0 flex-1 font-mono text-xs leading-5 placeholder:font-sans"
             />
             <Button
               type="button"

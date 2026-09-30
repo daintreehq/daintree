@@ -304,7 +304,10 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       .list()
       .then((list) => {
         if (cancelled) return;
-        setPlugins(sortPlugins(list));
+        // `plugin:list` also carries loaded project plugins, which the manager
+        // lists from the project inventory instead; kept here they showed as a
+        // second, installed-looking row whose toggle targets the global id.
+        setPlugins(sortPlugins(list.filter((plugin) => plugin.origin !== "project")));
         setError(null);
       })
       .catch((err) => {

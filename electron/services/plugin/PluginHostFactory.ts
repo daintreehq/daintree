@@ -1187,8 +1187,11 @@ export function createHost(
       // reject it loudly rather than coercing to broadcast.
       if (panelId !== undefined && panelId !== null) {
         if (typeof panelId !== "string" || panelId.length === 0) {
-          throw new Error(
-            `Plugin "${pluginId}" postToPanel: panelId must be a non-empty string, null, or undefined: ${String(panelId)}`
+          // Rejects like the channel check (#10617).
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" postToPanel: panelId must be a non-empty string, null, or undefined: ${String(panelId)}`
+            )
           );
         }
       }

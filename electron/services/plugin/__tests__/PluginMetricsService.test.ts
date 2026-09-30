@@ -253,6 +253,34 @@ describe("PluginMetricsService", () => {
     expect(fx.sampleProcessMemory).toHaveBeenCalledTimes(2);
   });
 
+  it("samples a worker that started inside the throttle window on the next read", () => {
+    expect(fx.service.getSnapshot("acme.demo")!.workerMemory).toBeNull();
+    fx.pids.set("acme.demo", 42);
+    fx.memory.push({ pid: 42, rssBytes: 80 * 1024 * 1024 });
+    vi.advanceTimersByTime(500);
+    expect(fx.service.getSnapshot("acme.demo")!.workerMemory?.rssBytes).toBe(80 * 1024 * 1024);
+  });
+
+  it("re-sweeps fresh when the cached sweep predates the worker, at most every couple of seconds", () => {
+    fx.pids.set("acme.demo", 42);
+    // The shared sweep is cached: only a fresh one (max age 0) sees pid 42.
+    fx.sampleProcessMemory.mockImplementation((maxAgeMs: number) =>
+      maxAgeMs === 0 ? [{ pid: 42, rssBytes: 1024 }] : []
+    );
+    expect(fx.service.getSnapshot("acme.demo")!.workerMemory?.rssBytes).toBe(1024);
+    expect(fx.sampleProcessMemory.mock.calls).toEqual([[ON_DEMAND_SAMPLE_MIN_INTERVAL_MS], [0]]);
+
+    // A pid no sweep finds cannot defeat the throttle.
+    fx.sampleProcessMemory.mockClear();
+    fx.sampleProcessMemory.mockImplementation(() => []);
+    fx.pids.set("acme.demo", 43);
+    vi.advanceTimersByTime(100);
+    fx.service.getSnapshot("acme.demo");
+    vi.advanceTimersByTime(100);
+    fx.service.getSnapshot("acme.demo");
+    expect(fx.sampleProcessMemory.mock.calls).toEqual([[ON_DEMAND_SAMPLE_MIN_INTERVAL_MS]]);
+  });
+
   it("does not flag budgets with no measurement", () => {
     expect(fx.service.getSnapshot("acme.demo")!.overBudget).toEqual([]);
     fx.service.recordActivation("acme.demo", 1);

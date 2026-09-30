@@ -189,6 +189,37 @@ describe("PluginPerformanceSection", () => {
     expect(row("Last view load").querySelector("dd")?.textContent).toContain("95ms");
   });
 
+  it("keeps the cold load visible beside a warm re-open", () => {
+    const load = makeSnapshot().viewLoads[0]!;
+    const cold = { ...load, importMs: 30, stylesMs: 60, loadMs: 91, firstPaintMs: 120 };
+    const warm = { ...load, importMs: 0, stylesMs: 0, loadMs: 9.1, firstPaintMs: 14 };
+    render(
+      <PluginPerformanceSection
+        snapshot={makeSnapshot({ viewLoads: [cold, warm], overBudget: [] })}
+        developmentBuild={false}
+      />
+    );
+    expect(row("Last view load").querySelector("dd")?.textContent).toContain("9.1ms");
+    const slowest = row("Slowest view load");
+    expect(slowest.querySelector("dd")?.textContent).toContain("91ms");
+    expect(slowest.textContent).toContain("Slowest of the last 2 loads");
+    expect(slowest.textContent).toContain("styles 60ms");
+    expect(slowest.textContent).toContain("first frame 120ms");
+    // Budgets are main's verdict on the latest load; this row carries none.
+    expect(slowest.textContent).not.toContain("Budget");
+  });
+
+  it("shows no separate slowest load when the latest is the slowest", () => {
+    const load = makeSnapshot().viewLoads[0]!;
+    render(
+      <PluginPerformanceSection
+        snapshot={makeSnapshot({ viewLoads: [{ ...load, loadMs: 20 }, load] })}
+        developmentBuild={false}
+      />
+    );
+    expect(screen.queryByText("Slowest view load")).toBeNull();
+  });
+
   it("keeps prompt waits out of the call timings and says so", () => {
     render(
       <PluginPerformanceSection

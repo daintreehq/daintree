@@ -932,7 +932,12 @@ describe("PluginDevWorkerHostProxy host.postToPanel (#10618)", () => {
   it("rejects an empty-string panelId before posting", async () => {
     const { proxy, post } = makeProxy();
 
-    expect(() => proxy.host.postToPanel("tick", { n: 1 }, "")).toThrow(/postToPanel: panelId/);
+    // Rejected, not thrown, so a non-awaited call's `.catch()` sees it (#10617).
+    let result: Promise<void> | undefined;
+    expect(() => {
+      result = proxy.host.postToPanel("tick", { n: 1 }, "");
+    }).not.toThrow();
+    await expect(result).rejects.toThrow(/postToPanel: panelId/);
     expect(post).not.toHaveBeenCalled();
   });
 });

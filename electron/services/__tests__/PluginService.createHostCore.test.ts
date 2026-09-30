@@ -437,7 +437,12 @@ describe("createHost (plugin activation API)", () => {
     broadcastToRendererMock.mockClear();
     // An empty string would silently match no subscriber — surface it loudly
     // rather than coercing to a broadcast.
-    expect(() => host.postToPanel("tick", { n: 1 }, "")).toThrow(/postToPanel: panelId/);
+    // Rejected, not thrown, so a non-awaited call's `.catch()` sees it (#10617).
+    let result: Promise<void> | undefined;
+    expect(() => {
+      result = host.postToPanel("tick", { n: 1 }, "");
+    }).not.toThrow();
+    await expect(result).rejects.toThrow(/postToPanel: panelId/);
     flushPushes();
     expect(broadcastToRendererMock).not.toHaveBeenCalled();
     // null is an explicit broadcast and must NOT throw.
