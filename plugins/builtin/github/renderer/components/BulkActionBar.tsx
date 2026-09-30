@@ -1,7 +1,5 @@
 import { useCallback } from "react";
-import { X } from "lucide-react";
-import { FolderGit2 } from "@/components/icons";
-import { Button } from "@/components/ui/button";
+import { Button, IconButton } from "@daintreehq/plugin-ui";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { Issue, PR } from "@shared/types/forge";
 
@@ -86,19 +84,19 @@ export function BulkActionBar({
         onClick={handleOpenDialog}
         className="gap-1.5"
         data-testid="bulk-action-create-worktrees-button"
+        icon="worktree"
       >
-        <FolderGit2 className="w-3.5 h-3.5" />
         {count === 1 ? "Create worktree" : "Create worktrees"}
       </Button>
-      <Button
+      <IconButton
         variant="ghost"
-        size="icon-sm"
+        size="sm"
+        icon="x"
         onClick={onClear}
         aria-label="Clear selection"
+        tooltip={false}
         className="text-text-secondary hover:text-text-primary"
-      >
-        <X className="w-3.5 h-3.5" />
-      </Button>
+      />
     </div>
   );
 }

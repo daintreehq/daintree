@@ -1,7 +1,8 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { primePluginKit } from "./primePluginKit";
 import { render, screen, cleanup, act, fireEvent, within } from "@testing-library/react";
 import React from "react";
 import type { Issue, PR } from "@shared/types/forge";
@@ -44,7 +45,8 @@ const mockSystemGetTmpDir = vi.fn();
 const mockGetAgentConfig = vi.fn();
 const mockGenerateAgentCommand = vi.fn();
 
-vi.mock("@/clients", () => ({
+vi.mock("@/clients", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/clients")>()),
   worktreeClient: {
     create: (...args: unknown[]) => mockWorktreeCreate(...args),
     getAvailableBranch: (...args: unknown[]) => mockGetAvailableBranch(...args),
@@ -64,7 +66,8 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("@/config/agents", () => ({
+vi.mock("@/config/agents", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/config/agents")>()),
   getAgentConfig: (...args: unknown[]) => mockGetAgentConfig(...args),
 }));
 
@@ -359,6 +362,8 @@ const makePR = (n: number, title?: string, headRef?: string): PR => ({
   updatedAt: 0,
   rawData: null,
 });
+
+beforeAll(primePluginKit, 30_000);
 
 beforeEach(() => {
   vi.clearAllMocks();

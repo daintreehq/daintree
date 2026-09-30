@@ -1,7 +1,8 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { primePluginKit } from "./primePluginKit";
 import { render, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { CommitList } from "../components/CommitList";
@@ -57,6 +58,8 @@ const page = (items: GitCommit[], hasMore = false): GitCommitListResponse => ({
 });
 
 const rowOf = (commit: GitCommit) => document.getElementById(`local-commit-row-${commit.hash}`);
+
+beforeAll(primePluginKit, 30_000);
 
 beforeEach(() => {
   dispatchMock.mockReset();

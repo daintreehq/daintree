@@ -8,12 +8,8 @@ import {
   useState,
 } from "react";
 import PQueue from "p-queue";
-import { Check, AlertTriangle, UserPlus, RefreshCw, CheckCircle2, XCircle } from "lucide-react";
-import { Spinner } from "@/components/ui/Spinner";
-import { FolderGit2 } from "@/components/icons";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
+import { UserPlus } from "lucide-react";
+import { Badge, Button, Checkbox, Icon, ProgressBar, Spinner } from "@daintreehq/plugin-ui";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { cn } from "@/lib/utils";
@@ -1141,14 +1137,14 @@ export function BulkCreateWorktreeDialog({
               <Spinner size="lg" className="text-activity-working" />
             ) : isDone ? (
               succeededCount === 0 && failedCount > 0 ? (
-                <XCircle className="w-5 h-5 text-status-error" />
+                <Icon name="circle-x" className="w-5 h-5 text-status-error" />
               ) : failedCount > 0 ? (
-                <AlertTriangle className="w-5 h-5 text-status-warning" />
+                <Icon name="alert-triangle" className="w-5 h-5 text-status-warning" />
               ) : (
-                <CheckCircle2 className="w-5 h-5 text-status-success" />
+                <Icon name="circle-check" className="w-5 h-5 text-status-success" />
               )
             ) : (
-              <FolderGit2 className="w-5 h-5 text-text-muted" />
+              <Icon name="worktree" className="w-5 h-5 text-text-muted" />
             )
           }
         >
@@ -1182,7 +1178,7 @@ export function BulkCreateWorktreeDialog({
                     <Checkbox
                       id="bulk-assign-to-self"
                       checked={assignWorktreeToSelf && !assignUnavailable}
-                      onCheckedChange={(checked) => setAssignWorktreeToSelf(checked === true)}
+                      onCheckedChange={setAssignWorktreeToSelf}
                       disabled={assignUnavailable}
                     />
                     {currentUser ? (
@@ -1247,7 +1243,10 @@ export function BulkCreateWorktreeDialog({
                       </div>
                       {!item.skipped && (
                         <div className="flex items-center gap-1.5 mt-0.5">
-                          <FolderGit2 className="w-3 h-3 text-daintree-text/40 shrink-0" />
+                          <Icon
+                            name="worktree"
+                            className="w-3 h-3 text-daintree-text/40 shrink-0"
+                          />
                           <span className="text-xs text-text-secondary font-mono truncate">
                             {item.branchName}
                           </span>
@@ -1287,9 +1286,9 @@ export function BulkCreateWorktreeDialog({
                         {isInProgress ? (
                           <Spinner size="md" className="text-activity-working" />
                         ) : itemStatus?.stage === "succeeded" ? (
-                          <CheckCircle2 className="w-4 h-4 text-status-success" />
+                          <Icon name="circle-check" className="w-4 h-4 text-status-success" />
                         ) : itemStatus?.stage === "failed" ? (
-                          <XCircle className="w-4 h-4 text-status-error" />
+                          <Icon name="circle-x" className="w-4 h-4 text-status-error" />
                         ) : (
                           <div className="w-4 h-4 rounded-full border border-border-default" />
                         )}
@@ -1322,21 +1321,11 @@ export function BulkCreateWorktreeDialog({
 
             {/* Progress bar + summary */}
             <div className="space-y-2">
-              <div
-                role="progressbar"
-                aria-label="Creating worktrees"
-                aria-valuemin={0}
-                aria-valuemax={progress.items.size}
-                aria-valuenow={processedCount}
-                className="h-2 rounded-full bg-overlay-soft overflow-hidden"
-              >
-                <div
-                  className="h-full rounded-full bg-text-secondary transition-[width] duration-300"
-                  style={{
-                    width: `${progress.items.size > 0 ? (processedCount / progress.items.size) * 100 : 0}%`,
-                  }}
-                />
-              </div>
+              <ProgressBar
+                label="Creating worktrees"
+                value={progress.items.size > 0 ? processedCount / progress.items.size : 0}
+                valueText={`${processedCount} of ${progress.items.size}`}
+              />
               <div className="flex items-center justify-center gap-1.5 text-sm tabular-nums text-text-secondary">
                 <span>
                   {succeededCount} of {progress.items.size} created
@@ -1363,13 +1352,17 @@ export function BulkCreateWorktreeDialog({
                   variant="ghost"
                   onClick={handleRetryFailed}
                   data-testid="bulk-create-retry-button"
+                  icon="refresh"
                 >
-                  <RefreshCw />
                   Retry failed
                 </Button>
               )}
-              <Button variant="contrast" onClick={handleDone} data-testid="bulk-create-done-button">
-                <Check />
+              <Button
+                variant="contrast"
+                onClick={handleDone}
+                data-testid="bulk-create-done-button"
+                icon="check"
+              >
                 Done
               </Button>
             </>
@@ -1390,8 +1383,8 @@ export function BulkCreateWorktreeDialog({
                   (isExecuting || creatableCount === 0) && ARIA_DISABLED_CLASSES
                 )}
                 data-testid="bulk-create-confirm-button"
+                icon="check"
               >
-                <Check />
                 Create {creatableCount} worktree{creatableCount !== 1 ? "s" : ""}
               </Button>
             </>

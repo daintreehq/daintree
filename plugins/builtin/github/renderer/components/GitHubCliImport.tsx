@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { Icon } from "@daintreehq/plugin-ui";
 import { systemClient } from "@/clients";
 import type { ForgeCredentialImportFailureReason } from "@shared/types";
 import { GITHUB_REQUIRED_SCOPES } from "../../shared/credentialScopes.js";
@@ -104,7 +104,7 @@ export function GitHubCliImportDetails({
       )}
       {missingScopes.length > 0 && (
         <p className="flex items-start gap-1 text-status-warning">
-          <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" aria-hidden="true" />
+          <Icon name="alert-triangle" className="w-3 h-3 shrink-0 mt-0.5" />
           <span>
             Missing <ScopeList scopes={missingScopes} /> — some GitHub features won't work until the
             token has {missingScopes.length === 1 ? "it" : "them"}.

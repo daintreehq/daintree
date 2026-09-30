@@ -1,19 +1,6 @@
-import { useState, useRef, useEffect } from "react";
-import {
-  CircleDot,
-  CheckCircle2,
-  GitPullRequest,
-  MoreHorizontal,
-  ExternalLink,
-  Check,
-  Copy,
-  MessageSquare,
-  CircleAlert,
-  CircleCheck,
-  ListChecks,
-} from "lucide-react";
-import { Checkbox } from "@/components/ui/checkbox";
-import { FolderGit2 } from "@/components/icons";
+import { useState, useRef, useEffect, type ReactNode } from "react";
+import { CircleAlert } from "lucide-react";
+import { Checkbox, Icon, Tooltip } from "@daintreehq/plugin-ui";
 import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
 import { cn } from "@/lib/utils";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
@@ -21,7 +8,6 @@ import { formatTimeAgo } from "@/utils/timeAgo";
 import { actionService } from "@/services/ActionService";
 import type { ForgeLabel, Issue, PR } from "@shared/types/forge";
 import type { Worktree } from "@shared/types/worktree";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getPRStatusVisual, getPRStatusTooltip } from "../utils/prCIStatus";
 import {
   DropdownMenu,
@@ -77,13 +63,22 @@ interface GitHubListItemProps {
   onToggleSelect?: (e: { shiftKey: boolean }) => void;
 }
 
-function getStateIcon(state: string, type: "issue" | "pr", isDraft?: boolean) {
+function StateGlyph({
+  state,
+  type,
+  isDraft,
+}: {
+  state: string;
+  type: "issue" | "pr";
+  isDraft?: boolean;
+}) {
   if (type === "issue") {
-    return state === "open" ? CircleDot : CheckCircle2;
+    return <Icon name={state === "open" ? "circle-dot" : "circle-check"} className="h-4 w-4" />;
   }
   // The PR half of this map now lives in `@/lib/prStateGlyph`, because the two
   // PR badges in `src/` were each carrying their own colour-only version of it.
-  return getPrStateGlyph(state, isDraft);
+  const PrGlyph = getPrStateGlyph(state, isDraft);
+  return <PrGlyph className="h-4 w-4" />;
 }
 
 const getStateColor = getPrStateColor;
@@ -126,7 +121,6 @@ export function GitHubListItem({
   onToggleSelect,
 }: GitHubListItemProps) {
   const isItemPR = isPR(item);
-  const StateIcon = getStateIcon(item.state, type, isItemPR && item.isDraft);
   const stateColor = getStateColor(item.state, isItemPR && item.isDraft);
   const stateLabel = getStateLabel(item.state, type, isItemPR && item.isDraft);
 
@@ -264,11 +258,19 @@ export function GitHubListItem({
    * a decision is not.
    */
   const reviewDecision = isItemPR ? item.reviewDecision : undefined;
-  const reviewVisual =
+  const reviewVisual: { glyph: ReactNode; label: string; colorClass: string } | null =
     reviewDecision === "CHANGES_REQUESTED"
-      ? { Icon: CircleAlert, label: "Changes requested", colorClass: "text-status-warning" }
+      ? {
+          glyph: <CircleAlert className="w-3 h-3" aria-hidden="true" />,
+          label: "Changes requested",
+          colorClass: "text-status-warning",
+        }
       : reviewDecision === "APPROVED"
-        ? { Icon: CircleCheck, label: "Approved", colorClass: "text-status-success" }
+        ? {
+            glyph: <Icon name="circle-check" className="w-3 h-3" />,
+            label: "Approved",
+            colorClass: "text-status-success",
+          }
         : null;
 
   const timestamp = timeField === "created" ? item.createdAt : item.updatedAt;
@@ -339,7 +341,7 @@ export function GitHubListItem({
               role="img"
               aria-label={stateLabel}
             >
-              <StateIcon className="h-4 w-4" />
+              <StateGlyph state={item.state} type={type} isDraft={isItemPR && item.isDraft} />
             </span>
             {/* Checkbox: hidden by default, visible on hover or when selection active.
                 Pointer convenience only — the same command is a named item in the
@@ -372,50 +374,47 @@ export function GitHubListItem({
             role="img"
             aria-label={stateLabel}
           >
-            <StateIcon className="h-4 w-4" />
+            <StateGlyph state={item.state} type={type} isDraft={isItemPR && item.isDraft} />
           </span>
         )}
 
         <div className="flex-1 min-w-0">
           {/* Title line: the title owns the width; status and actions sit in the rail. */}
           <div className="flex items-center gap-2">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                {/* The title is the resource's own name, so it goes where the
-                    resource lives. The row around it is about running the work
-                    locally; the text itself is the link out to the forge. */}
-                <button
-                  type="button"
-                  tabIndex={-1}
-                  // Chromium focuses a native button on pointer press even at
-                  // tabIndex -1. This grid keeps DOM focus in the search input
-                  // and points `aria-activedescendant` at the row, so letting
-                  // that default through would move focus onto the title and
-                  // leave the arrow keys — bound to the input — doing nothing.
-                  // It shows on the selection branch, which keeps the dropdown
-                  // open after the click rather than navigating away from it.
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (isSelectionActive && onToggleSelect) {
-                      onToggleSelect(e);
-                      return;
-                    }
-                    handleOpenExternal();
-                  }}
-                  className={cn(
-                    "flex-1 min-w-0 text-sm font-medium text-foreground truncate text-left",
-                    "cursor-pointer rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                    !isSelectionActive && "hover:underline"
-                  )}
-                >
-                  {item.title}
-                </button>
-              </TooltipTrigger>
-              {/* At 450px most titles truncate. The elaborate tooltips used to
-                  be on the trivia while the one line you actually need to read
-                  had none. */}
-              <TooltipContent side="bottom">{item.title}</TooltipContent>
+            {/* At 450px most titles truncate. The elaborate tooltips used to
+                be on the trivia while the one line you actually need to read
+                had none. */}
+            <Tooltip content={item.title} side="bottom">
+              {/* The title is the resource's own name, so it goes where the
+                  resource lives. The row around it is about running the work
+                  locally; the text itself is the link out to the forge. */}
+              <button
+                type="button"
+                tabIndex={-1}
+                // Chromium focuses a native button on pointer press even at
+                // tabIndex -1. This grid keeps DOM focus in the search input
+                // and points `aria-activedescendant` at the row, so letting
+                // that default through would move focus onto the title and
+                // leave the arrow keys — bound to the input — doing nothing.
+                // It shows on the selection branch, which keeps the dropdown
+                // open after the click rather than navigating away from it.
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (isSelectionActive && onToggleSelect) {
+                    onToggleSelect(e);
+                    return;
+                  }
+                  handleOpenExternal();
+                }}
+                className={cn(
+                  "flex-1 min-w-0 text-sm font-medium text-foreground truncate text-left",
+                  "cursor-pointer rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                  !isSelectionActive && "hover:underline"
+                )}
+              >
+                {item.title}
+              </button>
             </Tooltip>
 
             {/* Trailing rail — every slot is persistent ink, no hover-only reveals.
@@ -442,48 +441,45 @@ export function GitHubListItem({
                   const ciTooltip = getPRStatusTooltip(item.ciStatus, item.mergeState);
                   if (!ciVisual || !ciTooltip) return null;
                   return (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span
-                          data-rail-slot="ci"
-                          className={cn(RAIL_SLOT, RESOURCE_RAIL_SLOT.ci.box)}
-                          role="img"
-                          aria-label={ciTooltip}
-                        >
-                          {ciVisual.kind === "icon" ? (
-                            <ciVisual.Icon className={cn("w-3.5 h-3.5", ciVisual.colorClass)} />
-                          ) : (
-                            <span
-                              className={cn(
-                                "status-mark block w-2 h-2 rounded-full",
-                                ciVisual.colorClass
-                              )}
-                            />
-                          )}
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">{ciTooltip}</TooltipContent>
+                    <Tooltip content={ciTooltip} side="bottom">
+                      <span
+                        data-rail-slot="ci"
+                        className={cn(RAIL_SLOT, RESOURCE_RAIL_SLOT.ci.box)}
+                        role="img"
+                        aria-label={ciTooltip}
+                      >
+                        {ciVisual.kind === "icon" ? (
+                          <Icon
+                            name={ciVisual.icon}
+                            className={cn("w-3.5 h-3.5", ciVisual.colorClass)}
+                          />
+                        ) : (
+                          <span
+                            className={cn(
+                              "status-mark block w-2 h-2 rounded-full",
+                              ciVisual.colorClass
+                            )}
+                          />
+                        )}
+                      </span>
                     </Tooltip>
                   );
                 })()}
 
               {firstAssignee && assigneeLabel && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span
-                      data-rail-slot="assignee"
-                      className={cn(RAIL_SLOT, RESOURCE_RAIL_SLOT.assignee.box)}
-                      role="img"
-                      aria-label={assigneeLabel}
-                    >
-                      <Avatar
-                        src={avatarUrlAtSize(firstAssignee.avatarUrl, 32)}
-                        alt=""
-                        className="w-4 h-4"
-                      />
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">{assigneeLabel}</TooltipContent>
+                <Tooltip content={assigneeLabel} side="bottom">
+                  <span
+                    data-rail-slot="assignee"
+                    className={cn(RAIL_SLOT, RESOURCE_RAIL_SLOT.assignee.box)}
+                    role="img"
+                    aria-label={assigneeLabel}
+                  >
+                    <Avatar
+                      src={avatarUrlAtSize(firstAssignee.avatarUrl, 32)}
+                      alt=""
+                      className="w-4 h-4"
+                    />
+                  </span>
                 </Tooltip>
               )}
 
@@ -513,7 +509,7 @@ export function GitHubListItem({
                     )}
                     aria-label={`Actions for #${item.number}`}
                   >
-                    <MoreHorizontal className="h-3.5 w-3.5" />
+                    <Icon name="more-horizontal" className="h-3.5 w-3.5" />
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
@@ -545,21 +541,21 @@ export function GitHubListItem({
                       the row actually does when you activate it. */}
                   {primaryAction.kind === "switch" && onSwitchToWorktree && !isActiveWorktree && (
                     <DropdownMenuItem onSelect={() => onSwitchToWorktree(primaryAction.worktreeId)}>
-                      <FolderGit2 className="h-3.5 w-3.5 mr-2" />
+                      <Icon name="worktree" className="h-3.5 w-3.5 mr-2" />
                       Switch to worktree
                       <DropdownMenuShortcut shortcut="Enter" />
                     </DropdownMenuItem>
                   )}
                   {primaryAction.kind === "create" && onCreateWorktree && (
                     <DropdownMenuItem onSelect={() => onCreateWorktree(item)}>
-                      <FolderGit2 className="h-3.5 w-3.5 mr-2" />
+                      <Icon name="worktree" className="h-3.5 w-3.5 mr-2" />
                       Create worktree
                       <DropdownMenuShortcut shortcut="Enter" />
                     </DropdownMenuItem>
                   )}
 
                   <DropdownMenuItem onSelect={() => handleOpenExternal()}>
-                    <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                    <Icon name="external-link" className="h-3.5 w-3.5 mr-2" />
                     Open on GitHub
                     {/* The keys the search field answers to for this row, so the
                         menu teaches them. Enter opens the forge only when the
@@ -569,12 +565,12 @@ export function GitHubListItem({
                     />
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => void handleCopyNumber()}>
-                    <Copy className="h-3.5 w-3.5 mr-2" />
+                    <Icon name="copy" className="h-3.5 w-3.5 mr-2" />
                     Copy number
                   </DropdownMenuItem>
                   {linkedPR && (
                     <DropdownMenuItem onSelect={() => handleOpenLinkedPR()}>
-                      <GitPullRequest className="h-3.5 w-3.5 mr-2" />
+                      <Icon name="git-pull-request" className="h-3.5 w-3.5 mr-2" />
                       Open pull request #{linkedPR.number}
                     </DropdownMenuItem>
                   )}
@@ -586,7 +582,7 @@ export function GitHubListItem({
                     <>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem onSelect={() => onToggleSelect({ shiftKey: false })}>
-                        <ListChecks className="h-3.5 w-3.5 mr-2" />
+                        <Icon name="list-checks" className="h-3.5 w-3.5 mr-2" />
                         {isSelected ? "Deselect" : "Select"}
                         <DropdownMenuShortcut shortcut="Shift+Space" />
                       </DropdownMenuItem>
@@ -602,47 +598,43 @@ export function GitHubListItem({
               what activating the row does, so it must not be the thing that
               falls off the clipped end. */}
           <div className="flex items-center gap-1.5 mt-1 text-xs text-text-secondary flex-nowrap overflow-x-clip">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  tabIndex={-1}
-                  // Same reason as the title: a pressed native button takes
-                  // focus even at tabIndex -1, and the grid's keys live on the
-                  // search input.
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void handleCopyNumber();
-                  }}
-                  className={cn(
-                    // A 24px-tall hit area without growing the 16px metadata
-                    // line, whose height the fixed row depends on.
-                    "relative after:absolute after:-inset-y-1 after:inset-x-0 after:content-['']",
-                    "shrink-0 inline-flex items-center tabular-nums rounded-lg cursor-pointer",
-                    "hover:text-text-primary transition-colors duration-150 ease-out",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
-                    copied && "text-text-primary"
-                  )}
-                  aria-label={`Copy number ${item.number}`}
-                >
-                  {/* No gap between the sigil and the digits — the old
+            <Tooltip content={copied ? "Copied" : "Copy number"} side="bottom">
+              <button
+                type="button"
+                tabIndex={-1}
+                // Same reason as the title: a pressed native button takes
+                // focus even at tabIndex -1, and the grid's keys live on the
+                // search input.
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleCopyNumber();
+                }}
+                className={cn(
+                  // A 24px-tall hit area without growing the 16px metadata
+                  // line, whose height the fixed row depends on.
+                  "relative after:absolute after:-inset-y-1 after:inset-x-0 after:content-['']",
+                  "shrink-0 inline-flex items-center tabular-nums rounded-lg cursor-pointer",
+                  "hover:text-text-primary transition-colors duration-150 ease-out",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
+                  copied && "text-text-primary"
+                )}
+                aria-label={`Copy number ${item.number}`}
+              >
+                {/* No gap between the sigil and the digits — the old
                       `gap-0.5` rendered every row as "# 11958". */}
-                  {copied ? (
-                    <Check className="w-3 h-3 me-0.5" aria-hidden="true" />
-                  ) : (
-                    <span aria-hidden="true">#</span>
-                  )}
-                  <span>{item.number}</span>
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{copied ? "Copied" : "Copy number"}</TooltipContent>
+                {copied ? (
+                  <Icon name="check" className="w-3 h-3 me-0.5" />
+                ) : (
+                  <span aria-hidden="true">#</span>
+                )}
+                <span>{item.number}</span>
+              </button>
             </Tooltip>
 
             {worktree && worktreeDescription && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  {/* A word, not a 14px glyph wedged in the rail. This is the
+              <Tooltip content={worktreeDescription} side="bottom">
+                {/* A word, not a 14px glyph wedged in the rail. This is the
                       one fact on the row that changes what activation does, and
                       in an IDE for running work in worktrees it is the most
                       decision-relevant thing the row knows.
@@ -651,26 +643,24 @@ export function GitHubListItem({
                       resource number, so the local branch can legitimately
                       differ from the PR's head ref. The tooltip and the
                       accessible name carry the real name and branch. */}
-                  <span
-                    className={cn(
-                      "shrink-0 inline-flex items-center gap-1",
-                      isActiveWorktree
-                        ? // The one place a status colour is load-bearing in this
-                          // row: this is the worktree you are standing in.
-                          // Forced-colors strips the hue, so the distinction moves
-                          // to `Highlight`, the one system colour that survives it.
-                          "text-status-info forced-colors:text-[color:Highlight]"
-                        : "text-text-secondary"
-                    )}
-                    role="img"
-                    aria-label={worktreeDescription}
-                  >
-                    <span aria-hidden="true">&middot;</span>
-                    <FolderGit2 className="w-3 h-3" aria-hidden="true" />
-                    <span>{isActiveWorktree ? "Current" : "Worktree"}</span>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{worktreeDescription}</TooltipContent>
+                <span
+                  className={cn(
+                    "shrink-0 inline-flex items-center gap-1",
+                    isActiveWorktree
+                      ? // The one place a status colour is load-bearing in this
+                        // row: this is the worktree you are standing in.
+                        // Forced-colors strips the hue, so the distinction moves
+                        // to `Highlight`, the one system colour that survives it.
+                        "text-status-info forced-colors:text-[color:Highlight]"
+                      : "text-text-secondary"
+                  )}
+                  role="img"
+                  aria-label={worktreeDescription}
+                >
+                  <span aria-hidden="true">&middot;</span>
+                  <Icon name="worktree" className="w-3 h-3" />
+                  <span>{isActiveWorktree ? "Current" : "Worktree"}</span>
+                </span>
               </Tooltip>
             )}
 
@@ -683,7 +673,7 @@ export function GitHubListItem({
                 <span aria-hidden="true" className="text-text-secondary">
                   &middot;
                 </span>
-                <reviewVisual.Icon className="w-3 h-3" aria-hidden="true" />
+                {reviewVisual.glyph}
                 <span>{reviewVisual.label}</span>
               </span>
             )}
@@ -699,27 +689,21 @@ export function GitHubListItem({
               <span className="shrink-0" aria-hidden="true">
                 &middot;
               </span>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="truncate">{item.author?.login ?? "unknown"}</span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{item.author?.login ?? "unknown"}</TooltipContent>
+              <Tooltip content={item.author?.login ?? "unknown"} side="bottom">
+                <span className="truncate">{item.author?.login ?? "unknown"}</span>
               </Tooltip>
             </span>
 
             <span className="shrink-0" aria-hidden="true">
               &middot;
             </span>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="whitespace-nowrap shrink-0" role="img" aria-label={timeLabel}>
-                  {formatTimeAgo(timestamp)}
-                </span>
-              </TooltipTrigger>
-              {/* Which timestamp this is depends on the panel's sort order —
-                  showing "updated" under a "Newest" sort made the ages read out
-                  of order against the list they were sorting. */}
-              <TooltipContent side="bottom">{timeLabel}</TooltipContent>
+            {/* Which timestamp this is depends on the panel's sort order —
+                showing "updated" under a "Newest" sort made the ages read out
+                of order against the list they were sorting. */}
+            <Tooltip content={timeLabel} side="bottom">
+              <span className="whitespace-nowrap shrink-0" role="img" aria-label={timeLabel}>
+                {formatTimeAgo(timestamp)}
+              </span>
             </Tooltip>
 
             {(item.commentCount ?? 0) >= 1 && (
@@ -727,45 +711,45 @@ export function GitHubListItem({
                 <span className="shrink-0" aria-hidden="true">
                   &middot;
                 </span>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span
-                      className="inline-flex items-center gap-0.5 shrink-0 tabular-nums"
-                      role="img"
-                      aria-label={
-                        item.commentCount === 1 ? "1 comment" : `${item.commentCount} comments`
-                      }
-                    >
-                      <MessageSquare className="w-3 h-3" aria-hidden="true" />
-                      <span aria-hidden="true">{item.commentCount}</span>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {item.commentCount === 1 ? "1 comment" : `${item.commentCount} comments`}
-                  </TooltipContent>
+                <Tooltip
+                  content={item.commentCount === 1 ? "1 comment" : `${item.commentCount} comments`}
+                  side="bottom"
+                >
+                  <span
+                    className="inline-flex items-center gap-0.5 shrink-0 tabular-nums"
+                    role="img"
+                    aria-label={
+                      item.commentCount === 1 ? "1 comment" : `${item.commentCount} comments`
+                    }
+                  >
+                    <Icon name="message-square" className="w-3 h-3" />
+                    <span aria-hidden="true">{item.commentCount}</span>
+                  </span>
                 </Tooltip>
               </>
             )}
 
             {isItemPR && item.headRef && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span
-                    className="inline-flex items-center gap-1.5 min-w-0"
-                    role="img"
-                    aria-label={`Merges ${item.headRef} into ${item.baseRef}`}
-                  >
-                    <span className="shrink-0" aria-hidden="true">
-                      &middot;
-                    </span>
-                    <span className="truncate max-w-[150px]" aria-hidden="true">
-                      {item.headRef}
-                    </span>
+              <Tooltip
+                content={
+                  <>
+                    {item.headRef} &rarr; {item.baseRef}
+                  </>
+                }
+                side="bottom"
+              >
+                <span
+                  className="inline-flex items-center gap-1.5 min-w-0"
+                  role="img"
+                  aria-label={`Merges ${item.headRef} into ${item.baseRef}`}
+                >
+                  <span className="shrink-0" aria-hidden="true">
+                    &middot;
                   </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {item.headRef} &rarr; {item.baseRef}
-                </TooltipContent>
+                  <span className="truncate max-w-[150px]" aria-hidden="true">
+                    {item.headRef}
+                  </span>
+                </span>
               </Tooltip>
             )}
 
@@ -774,94 +758,91 @@ export function GitHubListItem({
                 <span className="shrink-0" aria-hidden="true">
                   &middot;
                 </span>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      tabIndex={-1}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleOpenLinkedPR();
-                      }}
-                      className={cn(
-                        "shrink-0 inline-flex items-center gap-0.5 tabular-nums rounded-lg cursor-pointer",
-                        "hover:text-text-primary transition-colors duration-150 ease-out",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
-                      )}
-                      aria-label={
-                        // The linked PR's own state and checks arrive with the
-                        // issue and used to be thrown away: a merged linkage and
-                        // one with failing checks rendered identically.
-                        `Open linked pull request #${linkedPR.number} (${linkedPR.state}${
-                          linkedPRCIVisual ? `, ${linkedPRCIVisual.ariaLabel}` : ""
-                        })`
-                      }
-                    >
-                      <GitPullRequest
-                        className={cn("w-3 h-3", getStateColor(linkedPR.state))}
-                        aria-hidden="true"
-                      />
-                      <span>{linkedPR.number}</span>
-                      {linkedPRCIVisual &&
-                        (linkedPRCIVisual.kind === "icon" ? (
-                          <linkedPRCIVisual.Icon
-                            className={cn("w-3 h-3 ms-0.5", linkedPRCIVisual.colorClass)}
-                            aria-hidden="true"
-                          />
-                        ) : (
-                          <span
-                            className={cn(
-                              "status-mark block w-1.5 h-1.5 rounded-full ms-0.5",
-                              linkedPRCIVisual.colorClass
-                            )}
-                            aria-hidden="true"
-                          />
-                        ))}
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    Pull request #{linkedPR.number} &middot; {linkedPR.state}
-                    {linkedPRCIVisual ? ` · ${linkedPRCIVisual.ariaLabel}` : ""}
-                  </TooltipContent>
+                <Tooltip
+                  content={
+                    <>
+                      Pull request #{linkedPR.number} &middot; {linkedPR.state}
+                      {linkedPRCIVisual ? ` · ${linkedPRCIVisual.ariaLabel}` : ""}
+                    </>
+                  }
+                  side="bottom"
+                >
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleOpenLinkedPR();
+                    }}
+                    className={cn(
+                      "shrink-0 inline-flex items-center gap-0.5 tabular-nums rounded-lg cursor-pointer",
+                      "hover:text-text-primary transition-colors duration-150 ease-out",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                    )}
+                    aria-label={
+                      // The linked PR's own state and checks arrive with the
+                      // issue and used to be thrown away: a merged linkage and
+                      // one with failing checks rendered identically.
+                      `Open linked pull request #${linkedPR.number} (${linkedPR.state}${
+                        linkedPRCIVisual ? `, ${linkedPRCIVisual.ariaLabel}` : ""
+                      })`
+                    }
+                  >
+                    <Icon
+                      name="git-pull-request"
+                      className={cn("w-3 h-3", getStateColor(linkedPR.state))}
+                    />
+                    <span>{linkedPR.number}</span>
+                    {linkedPRCIVisual &&
+                      (linkedPRCIVisual.kind === "icon" ? (
+                        <Icon
+                          name={linkedPRCIVisual.icon}
+                          className={cn("w-3 h-3 ms-0.5", linkedPRCIVisual.colorClass)}
+                        />
+                      ) : (
+                        <span
+                          className={cn(
+                            "status-mark block w-1.5 h-1.5 rounded-full ms-0.5",
+                            linkedPRCIVisual.colorClass
+                          )}
+                          aria-hidden="true"
+                        />
+                      ))}
+                  </button>
                 </Tooltip>
               </>
             )}
 
             {firstLabel && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  {/* One complete label plus a count. A label clipped to
+              <Tooltip content={issueLabels.map((l) => l.name).join(", ")} side="bottom">
+                {/* One complete label plus a count. A label clipped to
                       "enhanceme…" reads as broken data, and the labels past
                       the second used to vanish with nothing to say so. */}
-                  <span
-                    className="inline-flex items-center gap-1 min-w-0"
-                    role="img"
-                    aria-label={`Labels: ${issueLabels.map((l) => l.name).join(", ")}`}
-                  >
-                    <span className="shrink-0" aria-hidden="true">
-                      &middot;
-                    </span>
-                    {firstLabel.color ? (
-                      <span
-                        className="w-2 h-2 rounded-full shrink-0"
-                        style={{ backgroundColor: `#${firstLabel.color}` }}
-                        aria-hidden="true"
-                      />
-                    ) : null}
-                    <span className="truncate max-w-[130px]" aria-hidden="true">
-                      {firstLabel.name}
-                    </span>
-                    {restLabels.length > 0 && (
-                      <span className="shrink-0 tabular-nums" aria-hidden="true">
-                        +{restLabels.length}
-                      </span>
-                    )}
+                <span
+                  className="inline-flex items-center gap-1 min-w-0"
+                  role="img"
+                  aria-label={`Labels: ${issueLabels.map((l) => l.name).join(", ")}`}
+                >
+                  <span className="shrink-0" aria-hidden="true">
+                    &middot;
                   </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {issueLabels.map((l) => l.name).join(", ")}
-                </TooltipContent>
+                  {firstLabel.color ? (
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: `#${firstLabel.color}` }}
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  <span className="truncate max-w-[130px]" aria-hidden="true">
+                    {firstLabel.name}
+                  </span>
+                  {restLabels.length > 0 && (
+                    <span className="shrink-0 tabular-nums" aria-hidden="true">
+                      +{restLabels.length}
+                    </span>
+                  )}
+                </span>
               </Tooltip>
             )}
           </div>

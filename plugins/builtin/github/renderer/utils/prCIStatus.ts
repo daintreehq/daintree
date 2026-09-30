@@ -1,11 +1,10 @@
-import { Check, X } from "lucide-react";
+import type { IconName } from "@daintreehq/plugin-ui";
 import type { CIStatusState, PRMergeState } from "@shared/types/forge";
-import { GitMergeConflict } from "@/components/icons";
 import type { GitHubPRCIStatus, GitHubPRCISummary } from "../../shared/types.js";
 import { toGitHubCIStatus } from "./forgeRowAdapters.js";
 
 export type PRCIStatusVisual =
-  | { kind: "icon"; Icon: typeof Check; colorClass: string; shortLabel: string; ariaLabel: string }
+  | { kind: "icon"; icon: IconName; colorClass: string; shortLabel: string; ariaLabel: string }
   | { kind: "dot"; colorClass: string; shortLabel: string; ariaLabel: string };
 
 export function getPRCIStatusVisual(status: GitHubPRCIStatus | undefined): PRCIStatusVisual | null {
@@ -13,7 +12,7 @@ export function getPRCIStatusVisual(status: GitHubPRCIStatus | undefined): PRCIS
     case "SUCCESS":
       return {
         kind: "icon",
-        Icon: Check,
+        icon: "check",
         colorClass: "text-status-success",
         shortLabel: "passing",
         ariaLabel: "CI passing",
@@ -22,7 +21,7 @@ export function getPRCIStatusVisual(status: GitHubPRCIStatus | undefined): PRCIS
     case "ERROR":
       return {
         kind: "icon",
-        Icon: X,
+        icon: "x",
         colorClass: "text-status-error",
         shortLabel: "failing",
         ariaLabel: "CI failing",
@@ -69,7 +68,7 @@ export function getPRCIStatusTooltip(
 
 const MERGE_CONFLICT_VISUAL: PRCIStatusVisual = {
   kind: "icon",
-  Icon: GitMergeConflict,
+  icon: "git-merge-conflict",
   colorClass: "text-status-warning",
   shortLabel: "conflicts",
   ariaLabel: "Merge conflicts",
