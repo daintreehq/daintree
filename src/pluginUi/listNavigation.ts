@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import type {
   PluginListNavigationRowProps,
   UseListNavigationOptions,
@@ -50,6 +50,14 @@ function stepIndex(
   }
 }
 
+/** Shift+F10 or the Menu key: the keyboard's right-click. */
+function isMenuKey(event: KeyboardEvent<HTMLElement>): boolean {
+  return (
+    event.key === "ContextMenu" ||
+    (event.key === "F10" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey)
+  );
+}
+
 function nearestEnabled(index: number, count: number, blocked: (index: number) => boolean) {
   if (index < 0 || !blocked(index)) return index;
   for (let at = index + 1; at < count; at++) if (!blocked(at)) return at;
@@ -73,6 +81,8 @@ export function useListNavigation(options: UseListNavigationOptions): UseListNav
   const loop = options.loop === true;
   const onSelect = typeof options.onSelect === "function" ? options.onSelect : undefined;
   const getLabel = typeof options.getLabel === "function" ? options.getLabel : undefined;
+  const onActiveIndexChange =
+    typeof options.onActiveIndexChange === "function" ? options.onActiveIndexChange : undefined;
   const isDisabledOption =
     typeof options.isDisabled === "function" ? options.isDisabled : undefined;
   const isDisabled = (index: number): boolean => {
@@ -111,9 +121,10 @@ export function useListNavigation(options: UseListNavigationOptions): UseListNav
     });
   }, [baseId, revealIndex]);
 
-  const moveTo = (index: number) => {
+  const moveTo = (index: number, event?: KeyboardEvent<HTMLElement>) => {
     setCursor(index);
     setRevealIndex(index);
+    if (event) onActiveIndexChange?.(index, event);
   };
 
   const findByPrefix = (prefix: string): number => {
@@ -128,13 +139,34 @@ export function useListNavigation(options: UseListNavigationOptions): UseListNav
     return -1;
   };
 
+  const hasRowMenus = options.hasRowMenus === true;
+
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.nativeEvent.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.nativeEvent.isComposing) return;
+    // Shift+F10 or the Menu key open the cursor row's own menu. Focus stays on
+    // the list, so the key never reaches the row's trigger by itself: hand the
+    // row the right-click the key stands for, at the row.
+    if (hasRowMenus && isMenuKey(event)) {
+      const row = activeIndex >= 0 ? document.getElementById(rowId(activeIndex)) : null;
+      if (!row) return;
+      event.preventDefault();
+      const rect = row.getBoundingClientRect();
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: rect.left + 8,
+          clientY: rect.top + rect.height / 2,
+        })
+      );
+      return;
+    }
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
     if (count === 0) return;
     const next = stepIndex(event.key, activeIndex, count, loop, isDisabled);
     if (next !== null) {
       event.preventDefault();
-      moveTo(next);
+      moveTo(next, event);
       return;
     }
     if (event.key === "Enter" || event.key === " ") {
@@ -148,7 +180,7 @@ export function useListNavigation(options: UseListNavigationOptions): UseListNav
         }
       }
       event.preventDefault();
-      if (activeIndex >= 0 && !isDisabled(activeIndex)) onSelect?.(activeIndex);
+      if (activeIndex >= 0 && !isDisabled(activeIndex)) onSelect?.(activeIndex, event);
       return;
     }
     if (getLabel && event.key.length === 1) {
@@ -164,7 +196,7 @@ export function useListNavigation(options: UseListNavigationOptions): UseListNav
       const match = findByPrefix(repeated ? first : text);
       if (match >= 0) {
         event.preventDefault();
-        moveTo(match);
+        moveTo(match, event);
       }
     }
   };
@@ -176,10 +208,10 @@ export function useListNavigation(options: UseListNavigationOptions): UseListNav
       role: "option",
       "aria-selected": index === activeIndex,
       ...(disabled ? { "aria-disabled": true as const } : {}),
-      onClick: () => {
+      onClick: (event?: MouseEvent<HTMLElement>) => {
         if (isDisabled(index)) return;
         setCursor(index);
-        onSelect?.(index);
+        onSelect?.(index, event);
       },
       onPointerMove: () => {
         if (index !== activeIndex && !isDisabled(index)) setCursor(index);
@@ -197,6 +229,8 @@ export function useListNavigation(options: UseListNavigationOptions): UseListNav
       tabIndex: 0,
       "aria-activedescendant": activeIndex >= 0 ? rowId(activeIndex) : undefined,
       onKeyDown,
+      // Tells the app's own Shift+F10 handler to leave the key to the row menus.
+      ...(hasRowMenus ? { "data-row-menu": "" as const } : {}),
     },
     getRowProps,
   };

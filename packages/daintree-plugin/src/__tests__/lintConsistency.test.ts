@@ -46,6 +46,10 @@ const CLASS_CASES: Record<string, [string, string]> = {
     `<span className="bg-status-error/10 text-status-error" />`,
     `<span className="bg-status-error text-text-inverse" />`,
   ],
+  "viewport-breakpoint": [
+    `<div className={cn("grid grid-cols-1", on && "md:grid-cols-3 max-sm:hidden")} />`,
+    `<div className="@container"><div className="grid-cols-1 @md:grid-cols-3 hover:bg-overlay-soft" /></div>`,
+  ],
 };
 
 describe("class-string rules", () => {
@@ -266,6 +270,64 @@ describe("dnd-library-import", () => {
   });
 });
 
+describe("raw-portal", () => {
+  it("flags createPortal in a view and passes the kit's Portal", async () => {
+    const flagged = await lintFor(
+      "raw-portal",
+      view(
+        `<div>{createPortal(<span />, document.body)}</div>`,
+        `import { createPortal } from "react-dom";\n`
+      )
+    );
+    expect(flagged).toHaveLength(1);
+    expect(
+      await lintFor(
+        "raw-portal",
+        view(`<Portal><div /></Portal>`, `import { Portal } from "@daintreehq/plugin-ui";\n`)
+      )
+    ).toEqual([]);
+  });
+
+  it("follows a namespace or an aliased import", async () => {
+    expect(
+      await lintFor(
+        "raw-portal",
+        view(
+          `<div>{ReactDOM.createPortal(<span />, document.body)}</div>`,
+          `import * as ReactDOM from "react-dom";\n`
+        )
+      )
+    ).toHaveLength(1);
+    expect(
+      await lintFor(
+        "raw-portal",
+        view(
+          `<div>{portal(<span />, document.body)}</div>`,
+          `import { createPortal as portal } from "react-dom";\n`
+        )
+      )
+    ).toHaveLength(1);
+  });
+
+  it("ignores an unrelated createPortal where react-dom is not imported", async () => {
+    expect(await lintFor("raw-portal", view(`<div>{layers.createPortal("toast")}</div>`))).toEqual(
+      []
+    );
+  });
+
+  it("ignores the name inside a string or comment", async () => {
+    expect(
+      await lintFor(
+        "raw-portal",
+        view(
+          `<p>{"createPortal(x)"}</p>`,
+          `import { flushSync } from "react-dom";\n// createPortal(x)\n`
+        )
+      )
+    ).toEqual([]);
+  });
+});
+
 describe("self-container-query", () => {
   it("flags a container-query variant on the element that declares the container", async () => {
     const flagged = await lintFor(
@@ -302,6 +364,24 @@ describe("self-container-query", () => {
       "src/styles.ts": `export const cardStyles = { root: "@container p-2", grid: "grid-cols-2 @md:grid-cols-4" };\n`,
     });
     expect(clean).toEqual([]);
+  });
+});
+
+describe("viewport-breakpoint", () => {
+  it("flags each viewport variant, stacked or arbitrary, and nothing container-scoped", async () => {
+    const flagged = await lintFor(
+      "viewport-breakpoint",
+      view(
+        `<div className="md:grid-cols-3 max-sm:hidden hover:lg:p-4 min-[600px]:flex max-[900px]:block @md:grid-cols-2 supports-[display:grid]:grid data-[open]:flex" />`
+      )
+    );
+    expect(flagged.map((finding) => /"([^"]+)"/.exec(finding.message)?.[1])).toEqual([
+      "md:grid-cols-3",
+      "max-sm:hidden",
+      "hover:lg:p-4",
+      "min-[600px]:flex",
+      "max-[900px]:block",
+    ]);
   });
 });
 
@@ -451,5 +531,88 @@ describe("zero-build views written with createElement", () => {
         );
       }
     }
+  });
+});
+
+describe("view-web-storage", () => {
+  it("flags localStorage and sessionStorage in a view, bare or qualified", async () => {
+    const flagged = await lintFor("view-web-storage", {
+      "src/panel.tsx": `export default function Panel() {
+  const tab = localStorage.getItem("tab");
+  window.sessionStorage.setItem("split", "240");
+  return <div>{tab}</div>;
+}
+`,
+    });
+    expect(flagged.map((f) => f.line)).toEqual([2, 3]);
+    expect(flagged[0]!.message).toMatch(/usePersistentViewState/);
+  });
+
+  it("accepts a local binding, an object key, a string, and worker code", async () => {
+    const clean = await lintFor("view-web-storage", {
+      "src/panel.tsx": `import { localStorage } from "./memoryStore";
+const config = { sessionStorage: false };
+export default function Panel() {
+  // localStorage would be wrong here
+  return <div title="localStorage">{localStorage.get("tab")}</div>;
+}
+`,
+      "src/index.ts": `export function activate() {
+  return globalThis.localStorage;
+}
+`,
+    });
+    expect(clean).toEqual([]);
+  });
+});
+
+describe("view-web-storage receivers and imports", () => {
+  it("ignores another object's property and an aliased import, but not the global behind a local name", async () => {
+    const flagged = await lintFor("view-web-storage", {
+      "src/panel.tsx": `import { localStorage as memory } from "./memoryStore";
+const localStorage = memory;
+export default function Panel({ settings }) {
+  const cached = settings.localStorage;
+  const real = window.localStorage.getItem("tab");
+  return <div>{cached}{real}{localStorage.get("x")}</div>;
+}
+`,
+    });
+    expect(flagged.map((f) => f.line)).toEqual([5]);
+  });
+});
+
+describe("global-key-listener", () => {
+  it("flags a keydown or keyup listener on the document or window in a view", async () => {
+    const flagged = await lintFor("global-key-listener", {
+      "src/panel.tsx": `import { useEffect } from "react";
+export default function Panel() {
+  useEffect(() => {
+    const onKey = () => {};
+    document.addEventListener("keydown", onKey);
+    window.addEventListener('keyup', onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+  return <div />;
+}
+`,
+    });
+    expect(flagged.map((f) => f.line)).toEqual([5, 6]);
+    expect(flagged[0]!.message).toMatch(/useHotkeys/);
+  });
+
+  it("accepts element listeners, other events, comments and strings", async () => {
+    const clean = await lintFor("global-key-listener", {
+      "src/panel.tsx": `export default function Panel({ node, frame }) {
+  node.addEventListener("keydown", () => {});
+  frame.document.addEventListener("keydown", () => {});
+  document.addEventListener("pointerdown", () => {});
+  // document.addEventListener("keydown", onKey);
+  const hint = 'document.addEventListener("keydown")';
+  return <div title={hint} />;
+}
+`,
+    });
+    expect(clean).toEqual([]);
   });
 });

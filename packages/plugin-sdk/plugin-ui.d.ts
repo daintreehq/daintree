@@ -193,6 +193,67 @@ declare module "@daintreehq/plugin-ui" {
     PluginUseDroppableOptions,
     UseListNavigationOptions as PluginUseListNavigationOptions,
     UseListNavigationResult as PluginUseListNavigationResult,
+    PluginConfirmPopoverProps,
+    PluginDebouncedCallback,
+    PluginHotkey,
+    PluginSelectionGesture,
+    PluginSelectionItemProps,
+    PluginSelectionKey,
+    PluginToastHandle,
+    PluginToastTone,
+    PluginUndoRedoPushOptions,
+    PluginUndoToastOptions,
+    PluginViewToastOptions,
+    UseDebouncedCallbackOptions as PluginUseDebouncedCallbackOptions,
+    UseDisclosureOptions as PluginUseDisclosureOptions,
+    UseDisclosureResult as PluginUseDisclosureResult,
+    UseHotkeysOptions as PluginUseHotkeysOptions,
+    UseSelectionOptions as PluginUseSelectionOptions,
+    UseSelectionResult as PluginUseSelectionResult,
+    UseToastResult as PluginUseToastResult,
+    UseUndoRedoOptions as PluginUseUndoRedoOptions,
+    UseUndoRedoResult as PluginUseUndoRedoResult,
+  } from "@daintreehq/plugin-sdk/react";
+  import type {
+    PluginAnnounceOptions,
+    PluginCodeBlockProps,
+    PluginColoredLabelProps,
+    PluginCountIndicatorProps,
+    PluginHeadingProps,
+    PluginIndicatorPlacement,
+    PluginInlineCodeProps,
+    PluginLinkProps,
+    PluginLiveRegionProps,
+    PluginPathLabelProps,
+    PluginPortalProps,
+    PluginStateGlyphProps,
+    PluginStatusDotProps,
+    PluginStatusState,
+    PluginTextProps,
+    PluginTextSize,
+    PluginTextTone,
+    PluginUnreadDotProps,
+    PluginVisuallyHiddenProps,
+    PluginAutoGridProps,
+    PluginClusterProps,
+    PluginContainerSize,
+    PluginContainerTarget,
+    PluginGridProps,
+    PluginInlineProps,
+    PluginLayoutAlign,
+    PluginLayoutBaseProps,
+    PluginLayoutElement,
+    PluginLayoutGap,
+    PluginLayoutJustify,
+    PluginOverflowToolbarAction,
+    PluginOverflowToolbarItem,
+    PluginOverflowToolbarProps,
+    PluginOverflowToolbarSeparator,
+    PluginPaneLayoutProps,
+    PluginScrollAreaProps,
+    PluginStackProps,
+    PluginStatusBarProps,
+    PluginStatusBarSlot,
   } from "@daintreehq/plugin-sdk/react";
 
   export type MarkdownProps = PluginMarkdownProps;
@@ -350,6 +411,65 @@ declare module "@daintreehq/plugin-ui" {
   export type KanbanMove = PluginKanbanMove;
   export type KanbanCardState = PluginKanbanCardState;
   export type KanbanProps<T = unknown> = PluginKanbanProps<T>;
+  export type SelectionKey = PluginSelectionKey;
+  export type SelectionGesture = PluginSelectionGesture;
+  export type SelectionItemProps = PluginSelectionItemProps;
+  export type UseSelectionOptions<K extends SelectionKey = string> = PluginUseSelectionOptions<K>;
+  export type UseSelectionResult<K extends SelectionKey = string> = PluginUseSelectionResult<K>;
+  export type Hotkey = PluginHotkey;
+  export type UseHotkeysOptions = PluginUseHotkeysOptions;
+  export type UseUndoRedoOptions = PluginUseUndoRedoOptions;
+  export type UseUndoRedoResult<T> = PluginUseUndoRedoResult<T>;
+  export type UndoRedoPushOptions = PluginUndoRedoPushOptions;
+  export type UseDisclosureOptions = PluginUseDisclosureOptions;
+  export type UseDisclosureResult = PluginUseDisclosureResult;
+  export type UseDebouncedCallbackOptions = PluginUseDebouncedCallbackOptions;
+  export type DebouncedCallback<A extends unknown[]> = PluginDebouncedCallback<A>;
+  export type ToastTone = PluginToastTone;
+  export type ToastOptions = PluginViewToastOptions;
+  export type UndoToastOptions = PluginUndoToastOptions;
+  export type ToastHandle = PluginToastHandle;
+  export type UseToastResult = PluginUseToastResult;
+  export type ConfirmPopoverProps = PluginConfirmPopoverProps;
+  export type TextSize = PluginTextSize;
+  export type TextTone = PluginTextTone;
+  export type TextProps = PluginTextProps;
+  export type HeadingProps = PluginHeadingProps;
+  export type LinkProps = PluginLinkProps;
+  export type InlineCodeProps = PluginInlineCodeProps;
+  export type CodeBlockProps = PluginCodeBlockProps;
+  export type PathLabelProps = PluginPathLabelProps;
+  export type VisuallyHiddenProps = PluginVisuallyHiddenProps;
+  export type LiveRegionProps = PluginLiveRegionProps;
+  export type AnnounceOptions = PluginAnnounceOptions;
+  export type PortalProps = PluginPortalProps;
+  export type StatusState = PluginStatusState;
+  export type StatusDotProps = PluginStatusDotProps;
+  export type StateGlyphProps = PluginStateGlyphProps;
+  export type ColoredLabelProps = PluginColoredLabelProps;
+  export type IndicatorPlacement = PluginIndicatorPlacement;
+  export type UnreadDotProps = PluginUnreadDotProps;
+  export type CountIndicatorProps = PluginCountIndicatorProps;
+  export type LayoutGap = PluginLayoutGap;
+  export type LayoutAlign = PluginLayoutAlign;
+  export type LayoutJustify = PluginLayoutJustify;
+  export type LayoutElement = PluginLayoutElement;
+  export type LayoutBaseProps = PluginLayoutBaseProps;
+  export type StackProps = PluginStackProps;
+  export type InlineProps = PluginInlineProps;
+  export type ClusterProps = PluginClusterProps;
+  export type GridProps = PluginGridProps;
+  export type AutoGridProps = PluginAutoGridProps;
+  export type PaneLayoutProps = PluginPaneLayoutProps;
+  export type StatusBarProps = PluginStatusBarProps;
+  export type StatusBarSlot = PluginStatusBarSlot;
+  export type ScrollAreaProps = PluginScrollAreaProps;
+  export type OverflowToolbarProps = PluginOverflowToolbarProps;
+  export type OverflowToolbarItem = PluginOverflowToolbarItem;
+  export type OverflowToolbarAction = PluginOverflowToolbarAction;
+  export type OverflowToolbarSeparator = PluginOverflowToolbarSeparator;
+  export type ContainerSize = PluginContainerSize;
+  export type ContainerTarget = PluginContainerTarget;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -588,6 +708,62 @@ declare module "@daintreehq/plugin-ui" {
   /** Parts of a whole around a centre figure, with a legend of every value and share. */
   export const DonutChart: ComponentType<DonutChartProps>;
 
+  /** Text on the app's type ramp (`size`) in one of its colour roles (`tone`). */
+  export const Text: ComponentType<TextProps>;
+  /** A heading at one of the app's four heading sizes; `level` also picks `h1`–`h4`. */
+  export const Heading: ComponentType<HeadingProps>;
+  /** An inline link routed like `Markdown`'s: the browser for URLs, the file viewer for paths inside `rootPath`. */
+  export const Link: ComponentType<LinkProps>;
+  /** A code span in running text. */
+  export const InlineCode: ComponentType<InlineCodeProps>;
+  /** A read-only highlighted snippet with a copy button, line numbers and marked lines. */
+  export const CodeBlock: ComponentType<CodeBlockProps>;
+  /** A file path that ellipsises in the directory and keeps the file name, with the full path in a tooltip. */
+  export const PathLabel: ComponentType<PathLabelProps>;
+  /** Content for assistive tech only. */
+  export const VisuallyHidden: ComponentType<VisuallyHiddenProps>;
+  /** A mounted region whose changes assistive tech reads out. */
+  export const LiveRegion: ComponentType<LiveRegionProps>;
+  /** Renders outside the view (the body by default), still inside your plugin's style root. */
+  export const Portal: ComponentType<PortalProps>;
+  /** The app's activity dot for running, idle, waiting, error, success and neutral. */
+  export const StatusDot: ComponentType<StatusDotProps>;
+  /** The app's state glyph for the same states, at icon size. */
+  export const StateGlyph: ComponentType<StateGlyphProps>;
+  /** A tag in a user-chosen hex colour, adjusted to read in the active theme. */
+  export const ColoredLabel: ComponentType<ColoredLabelProps>;
+  /** The neutral unread pip, inline or on the corner of what it wraps. */
+  export const UnreadDot: ComponentType<UnreadDotProps>;
+  /** A count pill capped at `max` ("99+"), inline or on the corner of what it wraps. */
+  export const CountIndicator: ComponentType<CountIndicatorProps>;
+  /**
+   * A stable function that speaks a message through the host's announcer, as
+   * the kit's own controls do. Empty messages are ignored.
+   */
+  export function useAnnounce(): (message: string, options?: AnnounceOptions) => void;
+
+  /** Children in a column on the app's spacing scale (`gap` xs 4 · sm 8 · md 12 · lg 16 · xl 24 px). */
+  export const Stack: ComponentType<StackProps>;
+  /** Children in a row, vertically centred; `wrap` lets it wrap. */
+  export const Inline: ComponentType<InlineProps>;
+  /** A wrapping row for chips, tags and badges. */
+  export const Cluster: ComponentType<ClusterProps>;
+  /** A grid of explicit columns: a count (1 to 12) or a `grid-template-columns` value. */
+  export const Grid: ComponentType<GridProps>;
+  /** As many equal columns as fit, each at least `minColumnWidth` px, reflowing with the pane's width. */
+  export const AutoGrid: ComponentType<AutoGridProps>;
+  /**
+   * A plugin panel's shell: header, toolbar strip, a body that is the only
+   * scroller, footer and status bar, at the host panes' own heights.
+   */
+  export const PaneLayout: ComponentType<PaneLayoutProps>;
+  /** The thin strip along a pane's edge: facts on the left, controls on the right. */
+  export const StatusBar: ComponentType<StatusBarProps>;
+  /** A scroller on either axis or both, fading each edge that has more. */
+  export const ScrollArea: ComponentType<ScrollAreaProps>;
+  /** A toolbar whose controls fold into a "More actions" menu when the strip is too narrow. */
+  export const OverflowToolbar: ComponentType<OverflowToolbarProps>;
+
   /**
    * The scope for `useDraggable` and `useDroppable`: pointer and keyboard
    * drags with screen-reader announcements, kept inside the view. Its content
@@ -613,6 +789,23 @@ declare module "@daintreehq/plugin-ui" {
    * Rows `isDisabled` reports are skipped and never selected.
    */
   export function useListNavigation(options: UseListNavigationOptions): UseListNavigationResult;
+
+  /**
+   * The size of an element (a ref or the element), in CSS px, re-read at most
+   * once a frame while it changes. `{ width: 0, height: 0 }` until measured.
+   * Layout that answers to a panel's width should read this, never the window.
+   */
+  export function useContainerSize(target: ContainerTarget): ContainerSize;
+  /**
+   * The named step of an element's width: the widest breakpoint whose minimum
+   * it reaches, or null while it is narrower than all of them (and before it
+   * is measured). Defaults to `{ sm: 360, md: 640, lg: 960 }`.
+   */
+  export function useBreakpoint(target: ContainerTarget): "sm" | "md" | "lg" | null;
+  export function useBreakpoint<K extends string>(
+    target: ContainerTarget,
+    breakpoints: Readonly<Record<K, number>>
+  ): K | null;
 
   /** "just now", "5m ago", "11d ago", then the date past 30 days. */
   export function formatTimeAgo(value: number | string | Date, now?: number): string;
@@ -672,4 +865,47 @@ declare module "@daintreehq/plugin-ui" {
   export function getDaintreeTheme(): DaintreeTheme;
   /** Calls `listener` after every theme change. Returns a function that stops it. */
   export function onDidChangeDaintreeTheme(listener: (theme: DaintreeTheme) => void): () => void;
+
+  /**
+   * Single, multi and range selection for a list or table, keyed by row id:
+   * plain click replaces, Cmd/Ctrl-click toggles, Shift-click selects from the
+   * anchor. Pair with `useListNavigation` through `handleSelect` (its
+   * `onSelect`) and `handleNavigate` (its `onActiveIndexChange`).
+   */
+  export function useSelection<K extends SelectionKey = string>(
+    options: UseSelectionOptions<K>
+  ): UseSelectionResult<K>;
+  /**
+   * Shortcuts for your view, or for one element of it, in the app's chord
+   * notation (`"Cmd+Shift+Z"`). A key Daintree is bound to stays Daintree's.
+   * Keys typed into a text field are left alone unless `allowInInput`.
+   */
+  export function useHotkeys(hotkeys: readonly Hotkey[], options?: UseHotkeysOptions): void;
+  /** A value with an undo history: `push`, `undo`, `redo`, optional coalescing and a step limit. */
+  export function useUndoRedo<T>(
+    initial: T | (() => T),
+    options?: UseUndoRedoOptions
+  ): UseUndoRedoResult<T>;
+  /** Open/closed state, controlled or not, shaped to spread onto a kit overlay. */
+  export function useDisclosure(options?: UseDisclosureOptions): UseDisclosureResult;
+  /** `value` once it has stopped changing for `delayMs` (300 by default). */
+  export function useDebouncedValue<T>(value: T, delayMs?: number): T;
+  /** `callback`, run once calls stop for `delayMs`, with `cancel`, `flush` and `isPending`. */
+  export function useDebouncedCallback<A extends unknown[]>(
+    callback: (...args: A) => void,
+    delayMs?: number,
+    options?: UseDebouncedCallbackOptions
+  ): DebouncedCallback<A>;
+  /**
+   * `useState` the view remembers across unmounts, reloads and restarts,
+   * stored on the panel through the host. Values must be JSON.
+   */
+  export function usePersistentViewState<T>(
+    key: string,
+    initial: T | (() => T)
+  ): [T, (next: T | ((current: T) => T)) => void];
+  /** Toasts in the app's toaster, named for your plugin, with an optional action or Undo. */
+  export function useToast(): UseToastResult;
+  /** A small confirm anchored to `trigger`, for actions that are cheap to undo. The trigger shows while the kit loads. */
+  export const ConfirmPopover: ComponentType<ConfirmPopoverProps>;
 }

@@ -610,6 +610,40 @@ export const copyId = createElement(ui.CopyButton, { text: "x", "aria-label": "C
 export const labelledCopyId = createElement(ui.CopyButton, { text: "x", label: "Copy path", "data-testid": "copy-path" });
 // @ts-expect-error an EmptyState's root is not the control; it takes no aria-*
 export const emptyAria = createElement(ui.EmptyState, { title: "None", "aria-describedby": "hint" });
+
+// Layout core: stacks, grids, the pane shell, status strips, two-axis scrollers,
+// the folding toolbar and the container hooks.
+export const stack = createElement(ui.Stack, { gap: "lg", align: "stretch", justify: "between", as: "section", role: "group", "data-testid": "s" }, "a");
+// @ts-expect-error gaps are the kit's scale, not px
+export const pxStack = createElement(ui.Stack, { gap: 12 }, "a");
+export const inline = createElement(ui.Inline, { gap: "xs", wrap: true, align: "baseline" }, "a");
+export const cluster = createElement(ui.Cluster, { as: "ul", gap: "sm" }, "a");
+// @ts-expect-error a layout renders as a closed set of elements
+export const scriptStack = createElement(ui.Stack, { as: "script" }, "a");
+export const grid = createElement(ui.Grid, { columns: 3, gap: "md" }, "a");
+export const templateGrid = createElement(ui.Grid, { columns: "200px 1fr" }, "a");
+export const autoGrid = createElement(ui.AutoGrid, { minColumnWidth: 180, maxColumns: 4, stretch: true }, "a");
+export const pane = createElement(ui.PaneLayout, { header: "h", toolbar: "t", footer: "f", statusBar: "s", scroll: "none", padding: "md", bodyLabel: "Body", bodyRef: { current: null } }, "body");
+// @ts-expect-error scroll modes are a closed set
+export const badPane = createElement(ui.PaneLayout, { scroll: "auto" }, "body");
+export const status = createElement(ui.StatusBar, { left: ["12 lines", "3 KB"], center: "x", right: "Saved", density: "comfortable", placement: "top", "aria-label": "File status" });
+const overflowItems: ui.OverflowToolbarItem[] = [
+  { id: "refresh", label: "Refresh", icon: "refresh", onSelect: () => {}, priority: 2, shortcut: "Cmd+R" },
+  { type: "separator" },
+  { id: "pin", label: "Pin", icon: "pin", pressed: true, showLabel: true, tooltip: false },
+];
+export const overflow = createElement(ui.OverflowToolbar, { items: overflowItems, "aria-label": "Actions", variant: "bar", leading: "x", trailing: "y", overflowLabel: "More" });
+// @ts-expect-error two toolbars must be told apart
+export const unnamedOverflow = createElement(ui.OverflowToolbar, { items: overflowItems });
+export const scrollArea = createElement(ui.ScrollArea, { orientation: "both", compact: true, "aria-label": "Cards", tabIndex: 0 }, "x");
+// @ts-expect-error orientations are a closed set
+export const diagonal = createElement(ui.ScrollArea, { orientation: "diagonal" }, "x");
+export function useLayoutHooks(el: HTMLElement | null) {
+  const size: ui.ContainerSize = ui.useContainerSize({ current: el });
+  const step: "sm" | "md" | "lg" | null = ui.useBreakpoint(el);
+  const custom: "narrow" | "wide" | null = ui.useBreakpoint(el, { narrow: 0, wide: 640 });
+  return [size.width, step, custom];
+}
 `;
 
 let consumerDir: string;
