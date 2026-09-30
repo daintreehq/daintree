@@ -12,6 +12,7 @@ import { timeAgoTick } from "@/components/PluginKit/PluginKitDates";
 import {
   addDays,
   addMonths,
+  fitMonthsToMax,
   monthWeeks,
   parseDateText,
   parseRangeText,
@@ -478,6 +479,40 @@ describe("DateRangePicker", () => {
       fireEvent.click(screen.getByRole("button", { name: "Allowed" }));
     });
     expect(onValueChange).toHaveBeenLastCalledWith({ start: "2026-09-07", end: "2026-09-13" });
+  });
+
+  it("shows the month a range ends in when the next one is wholly past max", async () => {
+    renderLoose(kit.DateRangePicker, {
+      defaultValue: { start: "2026-09-01", end: "2026-09-30" },
+      max: "2026-09-30",
+      "aria-label": "Period",
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Choose dates" }));
+    });
+    await screen.findByRole("dialog", { name: "Choose dates" });
+    expect(captions()).toEqual(["August 2026", "September 2026"]);
+  });
+});
+
+describe("fitMonthsToMax", () => {
+  it("moves a two-month view back only as far as max and min allow", () => {
+    expect(fitMonthsToMax("2026-09", 2, null, "2026-09-30")).toBe("2026-08");
+    expect(fitMonthsToMax("2026-09", 2, null, "2026-10-01")).toBe("2026-09");
+    expect(fitMonthsToMax("2026-09", 2, null, null)).toBe("2026-09");
+    expect(fitMonthsToMax("2026-09", 1, null, "2026-09-30")).toBe("2026-09");
+    expect(fitMonthsToMax("2026-09", 2, "2026-09-10", "2026-09-30")).toBe("2026-09");
+    expect(fitMonthsToMax("2027-01", 2, null, "2027-01-15")).toBe("2026-12");
+  });
+
+  it("keeps a month the plugin named with defaultMonth", () => {
+    renderLoose(kit.Calendar, {
+      mode: "range",
+      defaultMonth: "2026-09",
+      numberOfMonths: 2,
+      max: "2026-09-30",
+    });
+    expect(captions()).toEqual(["September 2026", "October 2026"]);
   });
 });
 

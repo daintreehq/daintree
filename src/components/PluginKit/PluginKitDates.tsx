@@ -27,6 +27,7 @@ import {
   formatFieldDate,
   formatFieldRange,
   formatFullDate,
+  fitMonthsToMax,
   formatMonthLabel,
   LAST_ISO,
   localeWeekStart,
@@ -96,6 +97,8 @@ interface CalendarViewProps {
   /** Controlled first month; omitted, the view keeps its own from `initialMonth`. */
   month?: string;
   initialMonth: string | null;
+  /** `initialMonth` was asked for by name, so show it first even past `max`. */
+  pinInitialMonth?: boolean;
   onMonthChange?: (month: string) => void;
   numberOfMonths: 1 | 2;
   weekStart: number;
@@ -123,6 +126,7 @@ function CalendarView({
   isDateDisabled,
   month: controlledMonth,
   initialMonth,
+  pinInitialMonth = false,
   onMonthChange,
   numberOfMonths,
   weekStart,
@@ -132,9 +136,10 @@ function CalendarView({
 }: CalendarViewProps) {
   const today = useToday();
   const baseId = useId();
-  const [ownMonth, setOwnMonth] = useState(
-    () => initialMonth ?? monthOf(clampIso(today, min, max))
-  );
+  const [ownMonth, setOwnMonth] = useState(() => {
+    const first = initialMonth ?? monthOf(clampIso(today, min, max));
+    return pinInitialMonth ? first : fitMonthsToMax(first, numberOfMonths, min, max);
+  });
   const month = controlledMonth ?? ownMonth;
   const lastMonth = shiftMonth(month, numberOfMonths - 1);
   const [focused, setFocused] = useState<string | null>(null);
@@ -402,6 +407,7 @@ function KitCalendar(props: PluginCalendarProps) {
         toIsoMonth(defaultMonth) ??
         (selected !== null ? monthOf(selected) : range ? monthOf(range.start) : null)
       }
+      pinInitialMonth={toIsoMonth(defaultMonth) !== null}
       onMonthChange={fn(onMonthChange)}
       numberOfMonths={numberOfMonths === 2 ? 2 : 1}
       weekStart={readWeekStart(weekStartsOn)}
