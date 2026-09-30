@@ -11833,19 +11833,41 @@ describe("session-scoped ownership note for api-key callers (#12987)", () => {
       const result = await callTool(server, { name, arguments: args });
 
       expect(result.isError).toBe(true);
+      expect(refusal(result).code).toBe("RESOURCE_NOT_OWNED");
       expect(refusal(result).message).not.toContain(NOTE);
     });
 
-    it("is not given to Daintree's own assistant even when no bearer bound it", async () => {
-      const { server } = session("s-help", { origin: "help" });
+    it.each(["help", "assistant-pane"])(
+      "is given to a %s session no bearer bound, whose records are session-scoped too",
+      async (origin) => {
+        const { server } = session("s-unbound", { origin });
 
-      const result = await callTool(server, {
-        name: "terminal.interruptOwned",
-        arguments: { terminalId: "t-users" },
-      });
+        const payload = refusal(
+          await callTool(server, {
+            name: "terminal.interruptOwned",
+            arguments: { terminalId: "t-users" },
+          })
+        );
 
-      expect(refusal(result).code).toBe("RESOURCE_NOT_OWNED");
-      expect(refusal(result).message).not.toContain(NOTE);
+        expect(payload.code).toBe("RESOURCE_NOT_OWNED");
+        expect(payload.message).toContain(NOTE);
+        expect(payload.details).toBeUndefined();
+      }
+    );
+
+    it("is not given on the assistant's view-scoped read, which is not a ledger miss", async () => {
+      const { server } = session("s-unbound", { origin: "help" });
+
+      const payload = refusal(
+        await callTool(server, {
+          name: "terminal.readLastMessageOwned",
+          arguments: { terminalId: "t-users" },
+        })
+      );
+
+      expect(payload.code).toBe("RESOURCE_NOT_OWNED");
+      expect(payload.message).toContain("is in the project this assistant is open in");
+      expect(payload.message).not.toContain(NOTE);
     });
 
     it("reads byte-for-byte the same for an unknown id, another session's and an earlier session's", async () => {
@@ -11947,6 +11969,33 @@ describe("session-scoped ownership note for api-key callers (#12987)", () => {
       expect(texts(again).filter((text) => text.includes(NOTE))).toHaveLength(1);
     });
 
+    it("comes once to a duplicate sharing the launch still in flight", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const dispatchAction = vi.fn().mockImplementation(async () => {
+        await gate;
+        return {
+          result: {
+            ok: true,
+            result: { launched: true, terminalId: "t-claude", spawnStatus: null },
+          },
+        };
+      });
+      const { server } = session("s-api", { overrides: { dispatchAction } });
+      const args = { agentId: "claude", prompt: "go", requestKey: "k-2" };
+
+      const first = callTool(server, { name: "agent.launch", arguments: args });
+      const shared = callTool(server, { name: "agent.launch", arguments: args });
+      release();
+      const [a, b] = await Promise.all([first, shared]);
+
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+      expect(texts(b)).toEqual(texts(a));
+      expect(texts(b).filter((text) => text.includes(NOTE))).toHaveLength(1);
+    });
+
     it("follows an owned listing, but not an unfiltered one", async () => {
       const { server } = session("s-api");
       await callTool(server, { name: "agent.launch", arguments: { agentId: "claude" } });
@@ -11975,6 +12024,7 @@ describe("session-scoped ownership note for api-key callers (#12987)", () => {
       });
 
       expect(result.isError).toBe(true);
+      expect(refusal(result).message).toContain("no such agent");
       expect(JSON.stringify(result.content)).not.toContain(NOTE);
     });
 
@@ -11990,6 +12040,10 @@ describe("session-scoped ownership note for api-key callers (#12987)", () => {
       });
       const listed = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
 
+      expect(launched.isError).toBeUndefined();
+      expect(JSON.parse(texts(launched)[0]!)).toMatchObject({ terminalId: "t-claude" });
+      expect(listed.isError).toBeUndefined();
+      expect(listed.structuredContent).toEqual({ terminals: [{ id: "t-claude" }] });
       expect(texts(launched)).toHaveLength(1);
       expect(texts(listed)).toHaveLength(1);
     });

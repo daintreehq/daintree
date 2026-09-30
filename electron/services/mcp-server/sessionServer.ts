@@ -1437,10 +1437,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // call was authorized under, where the pane's next session finds it.
     const ownershipOwner = sessionStore.resourceOwnership.ownerOf(sessionId);
     // An api-key client (#12987): no bearer bound it, so its records are held
-    // by the session and die with it. Daintree's own assistant is excluded even
-    // unbound — the way out the note names is not one it can take.
-    const sessionScopedOwner =
-      !sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner) && !rendererOwnedOrigin;
+    // by the session and die with it. Asked of the owner, not the origin — a
+    // pane's session has an `external` origin too.
+    const sessionScopedOwner = !sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner);
     const boundWorkspaceId = sessionStore.sessionWorkspaceMap.get(sessionId);
     /**
      * The record that gives this call authority over a resource it created,
