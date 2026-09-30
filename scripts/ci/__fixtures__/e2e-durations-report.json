@@ -1,0 +1,85 @@
+{
+  "config": { "metadata": { "actualWorkers": 1 } },
+  "suites": [
+    {
+      "title": "full/terminal/b.spec.ts",
+      "file": "full/terminal/b.spec.ts",
+      "specs": [],
+      "suites": [
+        {
+          "title": "describe block",
+          "file": "full/terminal/b.spec.ts",
+          "specs": [
+            {
+              "title": "flaky test",
+              "file": "full/terminal/b.spec.ts",
+              "tests": [
+                {
+                  "projectName": "full-terminal",
+                  "status": "flaky",
+                  "results": [
+                    { "status": "failed", "duration": 5000 },
+                    { "status": "passed", "duration": 1200 }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "failing test",
+              "file": "full/terminal/b.spec.ts",
+              "tests": [
+                {
+                  "projectName": "full-terminal",
+                  "status": "unexpected",
+                  "results": [
+                    { "status": "timedOut", "duration": 30000 },
+                    { "status": "timedOut", "duration": 30000 }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "core/a.spec.ts",
+      "file": "core/a.spec.ts",
+      "specs": [
+        {
+          "title": "passes",
+          "file": "core/a.spec.ts",
+          "tests": [
+            {
+              "projectName": "core",
+              "status": "expected",
+              "results": [{ "status": "passed", "duration": 800 }]
+            }
+          ]
+        },
+        {
+          "title": "skipped on this platform",
+          "file": "core/a.spec.ts",
+          "tests": [
+            {
+              "projectName": "core",
+              "status": "skipped",
+              "results": [{ "status": "skipped", "duration": 0 }]
+            }
+          ]
+        },
+        {
+          "title": "passes again",
+          "file": "core/a.spec.ts",
+          "tests": [
+            {
+              "projectName": "core",
+              "status": "expected",
+              "results": [{ "status": "passed", "duration": 200 }]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

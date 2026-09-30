@@ -1,0 +1,420 @@
+{
+  "totals": {
+    "waitForTimeout": 505,
+    "isVisibleTimeout": 86
+  },
+  "files": {
+    "e2e/core/core-first-run-onboarding.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/core/core-persistence.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/core/core-terminal-agent-promotion.spec.ts": {
+      "waitForTimeout": 4
+    },
+    "e2e/full/panels/core-action-palette-commands.spec.ts": {
+      "waitForTimeout": 9,
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/panels/core-browser-panel.spec.ts": {
+      "waitForTimeout": 12
+    },
+    "e2e/full/panels/core-diagnostics-auto-open.spec.ts": {
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/panels/core-dock-launcher-search.spec.ts": {
+      "waitForTimeout": 5
+    },
+    "e2e/full/panels/core-dock-popover-dismissal.spec.ts": {
+      "waitForTimeout": 7,
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/panels/core-drag-drop.spec.ts": {
+      "waitForTimeout": 3
+    },
+    "e2e/full/panels/core-event-inspector.spec.ts": {
+      "waitForTimeout": 1,
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/panels/core-palette-specialized.spec.ts": {
+      "waitForTimeout": 6,
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/panels/core-panel-layout-undo-redo.spec.ts": {
+      "waitForTimeout": 3
+    },
+    "e2e/full/panels/core-panel-tab-groups.spec.ts": {
+      "waitForTimeout": 3
+    },
+    "e2e/full/panels/core-portal-panel.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/panels/core-portal.spec.ts": {
+      "waitForTimeout": 8
+    },
+    "e2e/full/panels/core-toolbar-launcher-shared.spec.ts": {
+      "waitForTimeout": 2,
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/panels/core-toolbar-overflow.spec.ts": {
+      "waitForTimeout": 2,
+      "isVisibleTimeout": 4
+    },
+    "e2e/full/panels/dev-preview-promote-to-portal.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/panels/notification-toasts.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/panels/pane-header-controls-stability.spec.ts": {
+      "waitForTimeout": 3
+    },
+    "e2e/full/panels/store-fanout-perf.spec.ts": {
+      "waitForTimeout": 29
+    },
+    "e2e/full/platform/core-accessibility.spec.ts": {
+      "waitForTimeout": 3
+    },
+    "e2e/full/platform/core-advanced.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/platform/core-focus-management.spec.ts": {
+      "waitForTimeout": 4,
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/platform/core-global-env-inheritance.spec.ts": {
+      "waitForTimeout": 3
+    },
+    "e2e/full/platform/core-hybrid-input-bar.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/platform/core-keyboard-navigation-advanced.spec.ts": {
+      "waitForTimeout": 15
+    },
+    "e2e/full/platform/core-keyboard-shortcuts.spec.ts": {
+      "waitForTimeout": 4
+    },
+    "e2e/full/platform/core-multi-window.spec.ts": {
+      "waitForTimeout": 3
+    },
+    "e2e/full/platform/core-palette-accessibility.spec.ts": {
+      "waitForTimeout": 6
+    },
+    "e2e/full/platform/core-persistence-advanced.spec.ts": {
+      "waitForTimeout": 7
+    },
+    "e2e/full/platform/core-plugin-host-contract.spec.ts": {
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/platform/core-resource-settings-persistence.spec.ts": {
+      "waitForTimeout": 6,
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/platform/core-settings-advanced.spec.ts": {
+      "waitForTimeout": 13,
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/platform/core-settings-load.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/platform/core-settings-tabs.spec.ts": {
+      "waitForTimeout": 13
+    },
+    "e2e/full/platform/core-shell-settings.spec.ts": {
+      "waitForTimeout": 3
+    },
+    "e2e/full/platform/core-v030-features.spec.ts": {
+      "waitForTimeout": 6
+    },
+    "e2e/full/platform/oauth-loopback-flow.spec.ts": {
+      "waitForTimeout": 2,
+      "isVisibleTimeout": 3
+    },
+    "e2e/full/plugins/core-plugin-contributions.spec.ts": {
+      "waitForTimeout": 1,
+      "isVisibleTimeout": 4
+    },
+    "e2e/full/presets/preset-context-menu.spec.ts": {
+      "waitForTimeout": 5
+    },
+    "e2e/full/presets/preset-custom-add.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/presets/preset-custom-delete.spec.ts": {
+      "waitForTimeout": 15,
+      "isVisibleTimeout": 2
+    },
+    "e2e/full/presets/preset-custom-duplicate.spec.ts": {
+      "waitForTimeout": 5,
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/presets/preset-custom-edit.spec.ts": {
+      "waitForTimeout": 8,
+      "isVisibleTimeout": 4
+    },
+    "e2e/full/presets/preset-default-selection.spec.ts": {
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/presets/preset-edge-cases.spec.ts": {
+      "waitForTimeout": 2,
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/presets/preset-launcher-default.spec.ts": {
+      "waitForTimeout": 6,
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/presets/preset-onboarding-wizard.spec.ts": {
+      "waitForTimeout": 4,
+      "isVisibleTimeout": 10
+    },
+    "e2e/full/presets/preset-stale-handling.spec.ts": {
+      "waitForTimeout": 9
+    },
+    "e2e/full/presets/recipe-e2e-coverage.spec.ts": {
+      "waitForTimeout": 5
+    },
+    "e2e/full/resilience/adversarial-system.spec.ts": {
+      "isVisibleTimeout": 3
+    },
+    "e2e/full/resilience/agent-lifecycle-ledger.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/resilience/background-terminal-bulk-output.spec.ts": {
+      "waitForTimeout": 5
+    },
+    "e2e/full/resilience/core-boot-ipc-overlap.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/resilience/core-concurrent-operations.spec.ts": {
+      "waitForTimeout": 8
+    },
+    "e2e/full/resilience/core-error-buffering.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/resilience/core-error-recovery.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/resilience/core-ipc-cleanup.spec.ts": {
+      "waitForTimeout": 6
+    },
+    "e2e/full/resilience/core-ipc-error-propagation.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/resilience/core-perf-list-mount-budget.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/resilience/core-process-cleanup.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/resilience/core-race-conditions.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/resilience/core-rate-limiting.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/resilience/core-sab-fallback.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/resilience/interaction-latency-perf.spec.ts": {
+      "waitForTimeout": 22
+    },
+    "e2e/full/resilience/memory-growth-perf.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/resilience/memory-kitchen-sink.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/resilience/memory-pressure-responsiveness-perf.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/resilience/project-switch-perf.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/resilience/project-switch-stress.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/terminal/agent-launch-perf.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/terminal/core-fleet-broadcast.spec.ts": {
+      "waitForTimeout": 5,
+      "isVisibleTimeout": 3
+    },
+    "e2e/full/terminal/core-output-flood.spec.ts": {
+      "waitForTimeout": 3
+    },
+    "e2e/full/terminal/core-pty-resilience.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/terminal/core-rapid-terminal.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/terminal/core-terminal-clear-replay-anchor.spec.ts": {
+      "waitForTimeout": 3
+    },
+    "e2e/full/terminal/core-terminal-context-menu.spec.ts": {
+      "isVisibleTimeout": 2
+    },
+    "e2e/full/terminal/core-terminal-divider-resize.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/terminal/core-terminal-isolation.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/terminal/core-terminal-layout-operations.spec.ts": {
+      "waitForTimeout": 8
+    },
+    "e2e/full/terminal/core-terminal-lifecycle-advanced.spec.ts": {
+      "waitForTimeout": 5
+    },
+    "e2e/full/terminal/core-terminal-links.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/terminal/core-terminal-panels.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/terminal/core-terminal-recipes.spec.ts": {
+      "waitForTimeout": 4
+    },
+    "e2e/full/terminal/core-terminal-rows-resize-pin.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/terminal/core-terminal-scroll-indicator.spec.ts": {
+      "waitForTimeout": 4
+    },
+    "e2e/full/terminal/core-terminal-scrollback.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/terminal/core-terminal-search.spec.ts": {
+      "waitForTimeout": 14
+    },
+    "e2e/full/terminal/fleet-broadcast-confirm-paths.spec.ts": {
+      "waitForTimeout": 2,
+      "isVisibleTimeout": 5
+    },
+    "e2e/full/terminal/fleet-broadcast-failure-paths.spec.ts": {
+      "waitForTimeout": 2,
+      "isVisibleTimeout": 3
+    },
+    "e2e/full/terminal/font-preload.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/terminal/interactivity-perf.spec.ts": {
+      "waitForTimeout": 3
+    },
+    "e2e/full/terminal/scroll-perf.spec.ts": {
+      "waitForTimeout": 11
+    },
+    "e2e/full/terminal/terminal-agent-state-latency.spec.ts": {
+      "waitForTimeout": 8
+    },
+    "e2e/full/terminal/terminal-agent-state-status.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/terminal/terminal-scratchpad.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/worktree/core-cross-project-workflows.spec.ts": {
+      "waitForTimeout": 7
+    },
+    "e2e/full/worktree/core-external-git-detection.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/worktree/core-project-deletion-cleanup.spec.ts": {
+      "isVisibleTimeout": 2
+    },
+    "e2e/full/worktree/core-project-lifecycle.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/worktree/core-project-management-advanced.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/worktree/core-project-switch-race.spec.ts": {
+      "waitForTimeout": 7
+    },
+    "e2e/full/worktree/core-worktree-cards.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/worktree/core-worktree-cross-boundary.spec.ts": {
+      "waitForTimeout": 7
+    },
+    "e2e/full/worktree/core-worktree-external.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/worktree/core-worktree-port-rebind.spec.ts": {
+      "waitForTimeout": 7
+    },
+    "e2e/full/worktree/core-worktree-resource-lifecycle.spec.ts": {
+      "isVisibleTimeout": 2
+    },
+    "e2e/full/worktree/core-worktree-session-bulk.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/worktree/new-worktree-dialog.spec.ts": {
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/worktree/recipe-fanout-perf.spec.ts": {
+      "waitForTimeout": 3
+    },
+    "e2e/full/worktree/startup-agent-worktree-restore.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/worktree/worktree-agent-ready-perf.spec.ts": {
+      "waitForTimeout": 3
+    },
+    "e2e/helpers/claudeAuth.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/helpers/dragDrop.ts": {
+      "waitForTimeout": 4
+    },
+    "e2e/helpers/launch.ts": {
+      "isVisibleTimeout": 3
+    },
+    "e2e/helpers/overlays.ts": {
+      "isVisibleTimeout": 1
+    },
+    "e2e/helpers/panels.ts": {
+      "waitForTimeout": 1,
+      "isVisibleTimeout": 8
+    },
+    "e2e/helpers/presets.ts": {
+      "waitForTimeout": 3,
+      "isVisibleTimeout": 10
+    },
+    "e2e/helpers/stress.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/helpers/switchFixture.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/helpers/terminal.ts": {
+      "waitForTimeout": 4,
+      "isVisibleTimeout": 1
+    },
+    "e2e/helpers/workflows.ts": {
+      "waitForTimeout": 3,
+      "isVisibleTimeout": 1
+    },
+    "e2e/nightly/nightly-memory-leaks.spec.ts": {
+      "waitForTimeout": 10
+    },
+    "e2e/nightly/nightly-pty-process-leak.spec.ts": {
+      "waitForTimeout": 4
+    },
+    "e2e/nightly/nightly-worker-governance-memory.spec.ts": {
+      "waitForTimeout": 5
+    },
+    "e2e/online/claude-online.spec.ts": {
+      "waitForTimeout": 4
+    },
+    "e2e/online/opencode-online.spec.ts": {
+      "waitForTimeout": 5
+    },
+    "e2e/online/terminal-identity-transitions.spec.ts": {
+      "waitForTimeout": 5
+    }
+  },
+  "updatedAt": "2026-09-30T05:20:21.957Z"
+}
