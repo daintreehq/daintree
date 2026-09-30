@@ -45,7 +45,7 @@ export const CHOICE_SELECTED =
   "border-border-strong bg-overlay-selected outline outline-2 outline-transparent";
 
 export const CHOICE_UNSELECTED =
-  "border-border-default hover:bg-overlay-soft hover:border-daintree-text/30";
+  "border-border-default hover:bg-overlay-soft hover:border-border-strong";
 
 /** Control (~13px) + `gap-3`, so a nested control lines up with the label column. */
 export const CHOICE_LABEL_INSET = "ml-[25px]";
