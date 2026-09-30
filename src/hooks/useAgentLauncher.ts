@@ -16,7 +16,7 @@ import { logError, logWarn } from "@/utils/logger";
 import { markRendererPerformance } from "@/utils/performance";
 import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
 import { isMac, isWindows } from "@/lib/platform";
-import { isPathInside, pathComparisonKey } from "@shared/utils/path";
+import { isAbsolute, isPathInside, pathComparisonKey } from "@shared/utils/path";
 import { readViewDevServerCommand } from "@/utils/devServerCommand";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
@@ -250,7 +250,8 @@ export interface LaunchAgentIdentity {
   /**
    * Whether `cwd` sits outside `worktreePath` — the pane is filed under a
    * worktree its process does not run in (#13130). Null when either path is
-   * unknown, so there is nothing to compare. Lexical, like `isPathInside`.
+   * unknown or `cwd` is relative (main resolves that against a base the
+   * renderer never sees). Lexical, like `isPathInside`.
    */
   cwdOutsideWorktree: boolean | null;
 }
@@ -288,7 +289,7 @@ export function buildLaunchIdentity(
     branch: targetWorktree?.branch ?? null,
     cwd: reportedCwd,
     cwdOutsideWorktree:
-      worktreePath && reportedCwd
+      worktreePath && reportedCwd && isAbsolute(reportedCwd)
         ? !isPathInside(
             pathComparisonKey(reportedCwd, options),
             pathComparisonKey(worktreePath, options)

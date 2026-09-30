@@ -103,6 +103,19 @@ describe("buildLaunchIdentity", () => {
       expect(outside("C:\\repo\\wt-1\\src", "C:/repo/wt-1", INSENSITIVE)).toBe(false);
     });
 
+    it("reports nothing to compare for a relative cwd", () => {
+      // Main resolves a relative cwd against a base the renderer never sees, so
+      // "." may well land inside the worktree — a lexical guess would misreport.
+      expect(outside(".", "/repo/wt-1")).toBeNull();
+      expect(outside("packages/app", "/repo/wt-1")).toBeNull();
+    });
+
+    it("treats an empty worktree path as unknown", () => {
+      const identity = buildLaunchIdentity("wt", { path: "" }, "/repo", SENSITIVE);
+      expect(identity.worktreePath).toBeNull();
+      expect(identity.cwdOutsideWorktree).toBeNull();
+    });
+
     it("folds letter case only when the platform compares paths case-insensitively", () => {
       expect(outside("/Repo/WT-1/src", "/repo/wt-1", INSENSITIVE)).toBe(false);
       expect(outside("/Repo/WT-1/src", "/repo/wt-1", SENSITIVE)).toBe(true);
