@@ -91,6 +91,19 @@ describe("chart scales and geometry", () => {
     expect(niceTicks(0, 0, 4)).toEqual([0, 1]);
   });
 
+  it("falls back to the ends for a span a double cannot step through", () => {
+    // The step underflows to zero here, which used to loop forever.
+    expect(niceTicks(Number.MIN_VALUE, 2 * Number.MIN_VALUE, 4)).toEqual([
+      Number.MIN_VALUE,
+      2 * Number.MIN_VALUE,
+    ]);
+    // And overflows to Infinity here.
+    const wide = niceTicks(-1e308, 1e308, 4);
+    expect(wide.every(Number.isFinite)).toBe(true);
+    expect(wide[0]).toBeLessThanOrEqual(-1e308);
+    expect(wide[wide.length - 1]).toBeGreaterThanOrEqual(1e308);
+  });
+
   it("ticks time on calendar steps", () => {
     const start = new Date(2026, 8, 1, 0, 0).getTime();
     const hours = timeTicks(start, start + 6 * 3600_000, 4);
@@ -430,6 +443,71 @@ describe("LineChart", () => {
     );
     expect(container.querySelector("thead th")?.textContent).toBe("Time");
     expect(container.querySelector("tbody th")?.textContent).toMatch(/2026/);
+  });
+
+  it("drops a time x no Date can hold instead of throwing", () => {
+    const { container } = render(
+      createElement(kit.LineChart, {
+        data: [
+          { at: Date.UTC(2026, 8, 1), n: 1 },
+          { at: 1e20, n: 5 },
+          { at: Date.UTC(2026, 8, 2), n: 2 },
+        ],
+        x: "at",
+        xType: "time",
+        series: [{ key: "n", label: "Runs" }],
+        "aria-label": "Runs",
+      })
+    );
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(2);
+  });
+
+  it("uses the default label when a plugin formatter throws", () => {
+    const { container } = render(
+      createElement(kit.LineChart, {
+        data: [
+          { at: 1, v: 10 },
+          { at: 2, v: 20 },
+        ],
+        x: "at",
+        series: [{ key: "v", label: "V" }],
+        "aria-label": "Throws",
+        formatValue: () => {
+          throw new Error("plugin bug");
+        },
+        formatX: () => {
+          throw new Error("plugin bug");
+        },
+      })
+    );
+    expect(container.querySelector("tbody")?.textContent).toBe("110220");
+  });
+
+  it("does not rebuild the summary as the cursor moves", () => {
+    const data = Array.from({ length: MAX_TABLE_ROWS + 50 }, (_, index) => ({
+      at: index,
+      v: index,
+    }));
+    const formatValue = vi.fn((value: number) => `${value}`);
+    render(
+      createElement(kit.LineChart, {
+        data,
+        x: "at",
+        series: [{ key: "v", label: "V" }],
+        "aria-label": "Long",
+        formatValue,
+      })
+    );
+    fireEvent.keyDown(plot(), { key: "Home" });
+    const before = formatValue.mock.calls.length;
+    fireEvent.keyDown(plot(), { key: "ArrowRight" });
+    fireEvent.keyDown(plot(), { key: "ArrowRight" });
+    // The summary's high (the last value, on no tick and never under the
+    // cursor) is formatted once, when the data arrives.
+    const high = MAX_TABLE_ROWS + 49;
+    const since = formatValue.mock.calls.slice(before).map(([value]) => value);
+    expect(since).toContain(2);
+    expect(since).not.toContain(high);
   });
 
   it("thins a long series to about two points per pixel", () => {
