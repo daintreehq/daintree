@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { join as pathJoin } from "node:path";
 import { GitError, WorktreeRemovedError } from "../errorTypes.js";
 import { simpleGitMissingBinaryError } from "../../../shared/testing/simpleGitErrorFixtures.js";
 
@@ -936,7 +937,7 @@ describe("getWorktreeChangesWithStats per-file diff cache", () => {
     const result = await getWorktreeChangesWithStats(cwd, true);
 
     const statsOfFile = (fs.stat as ReturnType<typeof vi.fn>).mock.calls.filter(([p]) =>
-      String(p).endsWith("notes/new.md")
+      String(p).endsWith(pathJoin("notes", "new.md"))
     );
     expect(statsOfFile).toHaveLength(1);
     expect(result.changes[0]).toMatchObject({ status: "untracked", mtimeMs: 4242 });

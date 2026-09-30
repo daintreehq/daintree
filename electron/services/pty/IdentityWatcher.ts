@@ -273,8 +273,6 @@ export class IdentityWatcher {
   // Tail lines of the last forensics-buffer snapshot the poll stripped. The
   // buffer is only reassigned when output arrives, so a quiet agent hands the
   // poll the same string every tick and the ANSI strip can be skipped.
-  private recentOutputTailSource: string | undefined;
-  private recentOutputTail: readonly string[] = [];
 
   constructor(private readonly delegate: IdentityWatcherDelegate) {}
 
@@ -634,22 +632,10 @@ export class IdentityWatcher {
     const lines = this.delegate.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES);
     const lastVisibleLine = findLastNonBlankLine(lines);
     const cursorLine = this.delegate.getCursorLine();
-    const recentOutputLine = this.getRecentOutputTailLines().at(-1);
     return (
       isUnambiguousShellPromptLine(cursorLine ?? undefined, agentCommitted) ||
-      isUnambiguousShellPromptLine(lastVisibleLine, agentCommitted) ||
-      isUnambiguousShellPromptLine(recentOutputLine, agentCommitted)
+      isUnambiguousShellPromptLine(lastVisibleLine, agentCommitted)
     );
-  }
-
-  private getRecentOutputTailLines(): readonly string[] {
-    const recentOutput = this.delegate.getRecentOutput?.();
-    if (!recentOutput) return [];
-    if (recentOutput !== this.recentOutputTailSource) {
-      this.recentOutputTailSource = recentOutput;
-      this.recentOutputTail = this.getOutputTailLines(recentOutput);
-    }
-    return this.recentOutputTail;
   }
 
   private hasUnambiguousShellPromptInText(text: string, agentCommitted = false): boolean {

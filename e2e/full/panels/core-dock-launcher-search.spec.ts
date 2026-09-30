@@ -266,8 +266,8 @@ test.describe.serial("Core: Dock launcher search", () => {
     await expect(pinAgain).toHaveAttribute("data-pinned", "true", { timeout: T_MEDIUM });
     await pinAgain.click();
     await expect(pinAgain).toHaveAttribute("data-pinned", "false", { timeout: T_MEDIUM });
-    // Two presses: the first clears the populated query, the second closes.
-    await window.keyboard.press("Escape");
+    // Escape clearing is covered above; reset focus and query for cleanup.
+    await searchBox(window).fill("");
     await window.keyboard.press("Escape");
     await expect(searchBox(window)).not.toBeVisible({ timeout: T_MEDIUM });
     await window.waitForTimeout(T_SETTLE);

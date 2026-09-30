@@ -29,7 +29,11 @@ const IMPORTS = /^import\s[^;]*?from\s*["'][^"']+["'];?$/gm;
 
 const SOURCES = ROOTS.flatMap(collect).map((file) => {
   const text = fs.readFileSync(file, "utf8");
-  return { rel: path.relative(REPO_ROOT, file), text, code: text.replace(IMPORTS, "") };
+  return {
+    rel: path.relative(REPO_ROOT, file).split(path.sep).join("/"),
+    text,
+    code: text.replace(IMPORTS, ""),
+  };
 });
 
 const SIDEBAR_CSS = fs.readFileSync(

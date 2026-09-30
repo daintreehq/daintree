@@ -56,9 +56,13 @@ describe("readCallerLaunchFlags", () => {
 
 describe("appendCallerLaunchFlagsToCommand", () => {
   it("passes options through and quotes values only when needed", () => {
+    const quotedEffort =
+      process.platform === "win32"
+        ? '"model_reasoning_effort=high"'
+        : "'model_reasoning_effort=high'";
     expect(
       appendCallerLaunchFlagsToCommand("codex", ["-c", "model_reasoning_effort=high", "--x"])
-    ).toBe("codex -c 'model_reasoning_effort=high' --x");
+    ).toBe(`codex -c ${quotedEffort} --x`);
     expect(appendCallerLaunchFlagsToCommand("claude", ["--model", "sonnet"])).toBe(
       "claude --model sonnet"
     );

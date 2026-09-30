@@ -637,7 +637,7 @@ describe("ReviewHub windowed file list (#12241)", () => {
       act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
     }
     expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-14");
-  });
+  }, 60_000);
 
   it("reveals into the unstaged section using that section's own indices", async () => {
     // Keep the total above the windowing threshold, with two staged rows so

@@ -1,6 +1,14 @@
 import childProcess, { execFileSync } from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -271,6 +279,10 @@ describe("getFileDiff paging over a real repo", () => {
       get.mockRestore();
     }
     writeFileSync(path.join(repo, "u.txt"), content("final"));
+    // Both versions have the same size. Make the metadata change explicit on
+    // filesystems that coalesce rapid writes into one timestamp tick.
+    const changedAt = new Date(Date.now() + 2_000);
+    utimesSync(path.join(repo, "u.txt"), changedAt, changedAt);
     const third = await page("u.txt", second.nextOffset!, untracked);
     expect(third.diff).toContain("final");
     expect(third.diff).not.toContain("draft");

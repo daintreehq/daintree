@@ -7,6 +7,7 @@ import { REVIEW_HUB_SECTION_BAND } from "@/components/Worktree/ReviewHub/reviewH
 
 const ROOT = path.resolve(__dirname, "../../../..");
 const read = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8");
+const relative = (file: string) => path.relative(ROOT, file).split(path.sep).join("/");
 const tokens = (s: string) => s.split(/\s+/).filter(Boolean);
 
 /**
@@ -64,7 +65,7 @@ describe("surface header contract", () => {
     expect(SURFACE_HEADER_FOCUS_LIFT_CLASS).not.toMatch(/accent/);
     const spelled = sourceFiles(path.join(ROOT, "src"))
       .filter((file) => readFileSync(file, "utf8").includes("bg-[var(--panel-header-focus-bg"))
-      .map((file) => path.relative(ROOT, file));
+      .map(relative);
     expect(spelled).toEqual(["src/components/ui/SurfaceHeader.tsx"]);
   });
 
@@ -118,7 +119,7 @@ describe("review hub inset", () => {
     const handSpelled = files
       .filter((file) => !file.endsWith("reviewHubUtils.ts"))
       .filter((file) => /"[^"]*\bpy-2 bg-overlay-subtle\b[^"]*"/.test(readFileSync(file, "utf8")))
-      .map((file) => path.relative(ROOT, file));
+      .map(relative);
     expect(handSpelled).toEqual([]);
   });
 
@@ -129,7 +130,7 @@ describe("review hub inset", () => {
     ];
     const offenders = files
       .filter((file) => /["\s]px-4[\s"]/.test(readFileSync(file, "utf8")))
-      .map((file) => path.relative(ROOT, file));
+      .map(relative);
     expect(offenders).toEqual([]);
   });
 });

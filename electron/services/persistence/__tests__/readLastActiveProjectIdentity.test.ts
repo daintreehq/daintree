@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import path from "node:path";
 
 // Explicit factories — loading the real better-sqlite3 binding fails on CI.
 const existsSync = vi.fn<(p: string) => boolean>(() => true);
@@ -50,7 +51,9 @@ describe("readLastActiveProjectIdentitySync", () => {
       emoji: "🌲",
       color: undefined,
     });
-    expect(databaseCtor).toHaveBeenCalledWith("/userData/daintree.db", { readonly: true });
+    expect(databaseCtor).toHaveBeenCalledWith(path.join("/userData", "daintree.db"), {
+      readonly: true,
+    });
     expect(throwaway.current.close).toHaveBeenCalledTimes(1);
   });
 

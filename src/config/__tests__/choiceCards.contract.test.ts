@@ -70,7 +70,7 @@ describe("choice cards contract", () => {
   it("marks every hand-spelled press snap for reduced motion", () => {
     const offenders: string[] = [];
     for (const file of walk(SRC)) {
-      const rel = path.relative(SRC, file);
+      const rel = path.relative(SRC, file).split(path.sep).join("/");
       if (PRESS_OWNERS.has(rel)) continue;
       for (const literal of stringLiterals(fs.readFileSync(file, "utf8"))) {
         if (!/active:scale-\[0\./.test(literal)) continue;

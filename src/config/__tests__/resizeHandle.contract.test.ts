@@ -31,7 +31,7 @@ describe("resize handle contract", () => {
   it("renders every separator through the shared ResizeHandle", () => {
     const offenders = ROOTS.flatMap(collect)
       .map((file) => path.relative(REPO_ROOT, file))
-      .filter((rel) => rel !== PRIMITIVE)
+      .filter((rel) => rel !== path.normalize(PRIMITIVE))
       .filter((rel) => SEPARATOR_ROLE.test(fs.readFileSync(path.join(REPO_ROOT, rel), "utf8")));
     expect(
       offenders,

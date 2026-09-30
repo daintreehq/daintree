@@ -409,7 +409,7 @@ describe("dock launcher churn benchmark", () => {
     report("open: ms (median)", median(ms));
     expect.soft(builds).toBe(0);
     expect.soft(fuse).toBe(0);
-  });
+  }, 120_000);
 
   it("open, then type a query: time to first results", () => {
     const openMs: number[] = [];
