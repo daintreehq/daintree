@@ -304,7 +304,7 @@ export default function Notes({ pluginId, disposeSignal }) {
 
 ### What it has
 
-`plugin-ui.d.ts` in `@daintreehq/plugin-sdk` is the full, current list with every prop; these are the groups.
+`plugin-ui.d.ts` in `@daintreehq/plugin-sdk` is the full, current list with every prop, and the [UI kit reference](./ui-kit.md) documents each export; these are the groups.
 
 | For | Components |
 | --- | --- |

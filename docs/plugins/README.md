@@ -47,6 +47,7 @@ The two entry points are at the top of this page. Everything below is reference 
 | [Data helpers](./data-helpers.md) | `@daintreehq/plugin-sdk/data`: YAML frontmatter that edits one key without touching the rest, JSON Lines with per-line errors, and the conflict-checked `editFile` loop — importable from a zero-build worker with no install |
 | [Document packages](./document-packages.md) | Share npm editor adapters once per document, with exact build matching and explicit trust limits |
 | [Views](./views.md) | What a view gets in the DOM: the host's UI kit (`@daintreehq/plugin-ui` — controls, lists, tables, dialogs, states, icons, the theme API), the SDK's React hooks, the tokens to style with, performance and measuring it, settings sections, dragging work to an agent, media, knowing when your project is on screen, and what doesn't work inline |
+| [UI kit reference](./ui-kit.md) | Every `@daintreehq/plugin-ui` export and its props, kit readiness, the theme API and token groups, icons, portals and dialog layers, and the kit's versioning and stability policy |
 | [Development loop](./dev-loop.md) | The `daintree-plugin` CLI — including `lint` and the `dev` metrics table — hot reload, debugging, testing |
 
 **Plugins that belong to a project**
