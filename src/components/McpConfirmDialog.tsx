@@ -25,6 +25,15 @@ import {
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge } from "@/components/ui/badge";
 import { pluralize } from "@/lib/pluralize";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { DAINTREE_CONFIRMATION_OPTIONS } from "@/config/assistantDaintreeConfirmations";
+import {
+  assistantSkipsDaintreeConfirmations,
+  isHelpAssistantDaintreeConfirmations,
+} from "@shared/utils/assistantDaintreeConfirmations";
+import type { HelpAssistantDaintreeConfirmations } from "@shared/types/ipc/api";
+import { logError } from "@/utils/logger";
 
 /**
  * Renderer-side timer that beats main's 30s `pendingDispatches` deadline by
@@ -240,13 +249,24 @@ export function McpConfirmDialog() {
     .map((target) => target.id);
   const selectedCount = approvedTargetIds?.length ?? 0;
 
+  // The Daintree confirmations preference applies to the assistant's own
+  // session only — main consults it for `help` alone, never the retired
+  // `assistant-pane` origin, an agent pane or an api-key client (#13137).
+  const showAssistantPreference =
+    current.sessionOrigin === "help" &&
+    !current.callerInfo &&
+    current.offerSessionApproval !== true;
+
   // `alertdialog` is for a brief, important message; APG reserves it for text
   // the screen reader should read out whole on open. This body carries a
   // scrollable file list, a redacted payload, or an interactive target list, so
   // it is a `dialog` whenever any is present — matching every sibling confirm
   // that shows a preview.
   const hasScrollableContent =
-    previewState !== "none" || hasArgs || selectableTargets !== undefined;
+    previewState !== "none" ||
+    hasArgs ||
+    selectableTargets !== undefined ||
+    showAssistantPreference;
 
   const sharedProps = {
     isOpen: true,
@@ -269,6 +289,9 @@ export function McpConfirmDialog() {
       previewState === "pending" || (selectableTargets !== undefined && selectedCount === 0),
     confirmCooldownMs: isDestructive ? CONFIRM_COOLDOWN_MS : undefined,
     cooldownKey: current.requestId,
+    // The preference control must never be where focus lands: an arrow key
+    // meant for the dialog would otherwise change an app-wide setting.
+    initialFocus: showAssistantPreference ? ("cancel" as const) : undefined,
     hint: (
       <GateHint
         previewState={previewState}
@@ -318,6 +341,8 @@ export function McpConfirmDialog() {
           onCheckedChange={setAllowForSession}
         />
       )}
+
+      {showAssistantPreference && <AssistantConfirmationPreference key={current.requestId} />}
     </div>
   );
 
@@ -472,6 +497,120 @@ function SessionApprovalOption({
           to 30 minutes.
         </span>
       </span>
+    </div>
+  );
+}
+
+/**
+ * The assistant's Daintree confirmations preference, changeable from the prompt
+ * it governs (#13137) — the question "how do I stop this asking" is answered
+ * where it is asked, rather than by a settings row nobody knows exists.
+ *
+ * Saves on change, independent of this request's answer: main reads the
+ * preference per call, so a change applies from the assistant's next call and
+ * the request on screen still needs Cancel or approve. The copy names the
+ * setting and what it resolves to right now, because "Follow global setting"
+ * alone hides whether that means asking or not.
+ *
+ * The section is laid out before the read lands so the footer never moves
+ * under the pointer when it does.
+ */
+function AssistantConfirmationPreference() {
+  const [preference, setPreference] = useState<HelpAssistantDaintreeConfirmations | null>(null);
+  const [status, setStatus] = useState<"loading" | "ready" | "load-failed" | "save-failed">(
+    "loading"
+  );
+  const globalSkipPermissions = useAgentSettingsStore(
+    (state) => state.settings?.globalSkipPermissions === true
+  );
+  const detailId = useId();
+  const mountedRef = useRef(true);
+  const lastPickRef = useRef<HelpAssistantDaintreeConfirmations | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    let cancelled = false;
+    window.electron.helpAssistant
+      .getSettings()
+      .then((settings) => {
+        if (cancelled) return;
+        setPreference(
+          isHelpAssistantDaintreeConfirmations(settings.daintreeConfirmations)
+            ? settings.daintreeConfirmations
+            : "inherit"
+        );
+        setStatus("ready");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setStatus("load-failed");
+        logError("Failed to load Daintree confirmations for the MCP confirm dialog", err);
+      });
+    return () => {
+      cancelled = true;
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const handleChange = (value: string) => {
+    if (!isHelpAssistantDaintreeConfirmations(value) || preference === null) return;
+    const previous = preference;
+    lastPickRef.current = value;
+    setPreference(value);
+    setStatus("ready");
+    window.electron.helpAssistant
+      .setSettings({ daintreeConfirmations: value })
+      .catch((err: unknown) => {
+        logError("Failed to save Daintree confirmations from the MCP confirm dialog", err);
+        // A later pick has already moved the value on; its own save decides.
+        if (!mountedRef.current || lastPickRef.current !== value) return;
+        lastPickRef.current = previous;
+        setPreference(previous);
+        setStatus("save-failed");
+      });
+  };
+
+  let detail: string;
+  if (status === "loading") {
+    detail = "Checking the current setting…";
+  } else if (status === "load-failed" || preference === null) {
+    detail = "Couldn't read the current setting. Change it in Settings > Daintree Assistant.";
+  } else {
+    const asks = !assistantSkipsDaintreeConfirmations(preference, globalSkipPermissions);
+    const current = asks ? "asks" : "doesn't ask";
+    const resolved =
+      preference === "inherit"
+        ? `Right now it ${current}, following Settings > Agents > Skip permission prompts, which is ${globalSkipPermissions ? "on" : "off"}.`
+        : `Right now it ${current}.`;
+    const failed =
+      status === "save-failed" ? "Couldn't save that change, so it's back to what it was. " : "";
+    detail = `${failed}${resolved} A change applies from the assistant's next call; this request still needs your answer.`;
+  }
+
+  return (
+    <div className="space-y-2 border-t border-tint/[0.08] pt-3">
+      <div className="space-y-0.5">
+        <div className={SECTION_LABEL_CLASS}>Daintree confirmations</div>
+        <div className="text-2xs text-text-secondary">
+          Whether Daintree asks before the assistant runs actions like this one. Same as Settings
+          &gt; Daintree Assistant &gt; Daintree confirmations.
+        </div>
+      </div>
+      <SegmentedRadioGroup<string>
+        options={DAINTREE_CONFIRMATION_OPTIONS}
+        value={preference ?? ""}
+        onChange={handleChange}
+        aria-label="Daintree confirmations for the assistant"
+        aria-describedby={detailId}
+        aria-invalid={status === "save-failed"}
+        disabled={preference === null}
+        density="compact"
+        fullWidth
+        testId="mcp-confirm-assistant-preference"
+      />
+      <div id={detailId} aria-live="polite" className="text-2xs text-text-secondary">
+        {detail}
+      </div>
     </div>
   );
 }

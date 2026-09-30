@@ -24,6 +24,16 @@ vi.mock("@/hooks", async (importOriginal) => {
   return { ...actual, useOverlayState: () => {} };
 });
 
+const agentSettingsState = vi.hoisted(() => ({ globalSkipPermissions: false }));
+
+vi.mock("@/store/agentSettingsStore", () => ({
+  useAgentSettingsStore: (selector: (state: unknown) => unknown) =>
+    selector({ settings: { globalSkipPermissions: agentSettingsState.globalSkipPermissions } }),
+}));
+
+const loggerMocks = vi.hoisted(() => ({ logError: vi.fn() }));
+vi.mock("@/utils/logger", () => loggerMocks);
+
 vi.mock("@/hooks/useAnimatedPresence", () => ({
   useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
     isVisible: isOpen,
@@ -120,11 +130,28 @@ async function expectStillPending(promise: Promise<unknown>) {
   expect(await race).toBe(sentinel);
 }
 
+const helpAssistantApi: {
+  getSettings: ReturnType<typeof vi.fn>;
+  setSettings: ReturnType<typeof vi.fn>;
+} = { getSettings: vi.fn(), setSettings: vi.fn() };
+
 describe("McpConfirmDialog", () => {
   beforeEach(() => {
     __resetMcpConfirmStoreForTesting();
     vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockReturnValue({
+        matches: false,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      })
+    );
+    agentSettingsState.globalSkipPermissions = false;
+    loggerMocks.logError.mockReset();
+    helpAssistantApi.getSettings = vi.fn().mockResolvedValue({ daintreeConfirmations: "inherit" });
+    helpAssistantApi.setSettings = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("electron", { helpAssistant: helpAssistantApi });
   });
 
   afterEach(() => {
@@ -1031,5 +1058,147 @@ describe("McpConfirmDialog", () => {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
     }
+  });
+
+  describe("assistant Daintree confirmations preference (#13137)", () => {
+    const PREFERENCE_GROUP = "Daintree confirmations for the assistant";
+
+    async function renderLoaded() {
+      render(<McpConfirmDialog />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+
+    function segment(label: string): HTMLElement {
+      return screen.getByRole("radio", { name: label });
+    }
+
+    it("offers the preference for the assistant's own request and names the setting", async () => {
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      expect(screen.getByRole("radiogroup", { name: PREFERENCE_GROUP })).toBeTruthy();
+      expect(segment("Follow global setting").getAttribute("aria-checked")).toBe("true");
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Settings > Daintree Assistant > Daintree confirmations");
+      expect(text).toContain(
+        "Right now it asks, following Settings > Agents > Skip permission prompts, which is off."
+      );
+      expect(text).toContain("this request still needs your answer");
+    });
+
+    it.each([
+      ["inherit", true, "Right now it doesn't ask, following"],
+      ["always-ask", true, "Right now it asks."],
+      ["never-ask", false, "Right now it doesn't ask."],
+    ] as const)(
+      "states what %s resolves to with the global setting %s",
+      async (preference, globalSkip, expected) => {
+        agentSettingsState.globalSkipPermissions = globalSkip;
+        helpAssistantApi.getSettings.mockResolvedValue({ daintreeConfirmations: preference });
+        void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+        await renderLoaded();
+
+        expect(document.body.textContent ?? "").toContain(expected);
+      }
+    );
+
+    it.each([
+      ["assistant-pane origin", { sessionOrigin: "assistant-pane" as const }],
+      ["external origin", { sessionOrigin: "external" as const }],
+      ["missing origin", {}],
+      [
+        "api-key client",
+        {
+          sessionOrigin: "help" as const,
+          callerInfo: { userAgent: "Claude Code", token4LastChars: "1234" },
+        },
+      ],
+      ["agent pane", { sessionOrigin: "help" as const, offerSessionApproval: true }],
+    ])("is not offered for the %s", async (_label, overrides) => {
+      void enqueue({ actionTitle: "Delete worktree", ...overrides });
+      await renderLoaded();
+
+      expect(screen.queryByRole("radiogroup", { name: PREFERENCE_GROUP })).toBeNull();
+      expect(helpAssistantApi.getSettings).not.toHaveBeenCalled();
+    });
+
+    it("saves the choice without answering the request on screen", async () => {
+      vi.useFakeTimers();
+      try {
+        const p = enqueue({
+          actionTitle: "Close terminal",
+          danger: "safe",
+          sessionOrigin: "help",
+          selectableTargets: BATCH_TARGETS,
+        });
+        render(<McpConfirmDialog />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        act(() => {
+          fireEvent.click(segment("Never ask"));
+        });
+
+        expect(helpAssistantApi.setSettings).toHaveBeenCalledWith({
+          daintreeConfirmations: "never-ask",
+        });
+        expect(segment("Never ask").getAttribute("aria-checked")).toBe("true");
+        // The protected-close checklist keeps its selection through the change.
+        expect(screen.getByText("3 of 3 selected")).toBeTruthy();
+        await expectStillPending(p);
+      } finally {
+        vi.runOnlyPendingTimers();
+        vi.useRealTimers();
+      }
+    });
+
+    it("puts the choice back and says so when the save fails", async () => {
+      helpAssistantApi.setSettings.mockRejectedValue(new Error("disk full"));
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      await act(async () => {
+        fireEvent.click(segment("Never ask"));
+        await Promise.resolve();
+      });
+
+      expect(segment("Follow global setting").getAttribute("aria-checked")).toBe("true");
+      expect(document.body.textContent ?? "").toContain("Couldn't save that change");
+      expect(loggerMocks.logError).toHaveBeenCalled();
+    });
+
+    it("keeps the control disabled and says so when the setting can't be read", async () => {
+      helpAssistantApi.getSettings.mockRejectedValue(new Error("ipc down"));
+      void enqueue({ actionTitle: "Delete worktree", sessionOrigin: "help" });
+      await renderLoaded();
+
+      expect(document.body.textContent ?? "").toContain("Couldn't read the current setting");
+      fireEvent.click(segment("Never ask"));
+      expect(helpAssistantApi.setSettings).not.toHaveBeenCalled();
+    });
+
+    it("lands initial focus on Cancel rather than the preference control", async () => {
+      vi.useFakeTimers();
+      try {
+        void enqueue({
+          actionTitle: "Focus terminal",
+          danger: "safe",
+          sessionOrigin: "help",
+          argsSummary: "",
+        });
+        render(<McpConfirmDialog />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(50);
+        });
+
+        expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+      } finally {
+        vi.runOnlyPendingTimers();
+        vi.useRealTimers();
+      }
+    });
   });
 });

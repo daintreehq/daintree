@@ -50,6 +50,7 @@ import {
 } from "@shared/config/agentRegistry";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { DAINTREE_CONFIRMATION_OPTIONS } from "@/config/assistantDaintreeConfirmations";
 import {
   assistantSkipsDaintreeConfirmations,
   isHelpAssistantDaintreeConfirmations,
@@ -300,14 +301,6 @@ const tierBoundsNewSessions = (tier: HelpAssistantTier, confirmationsSkipped: bo
       ? "Daintree's own confirmations, closing panels included, are skipped as well, as set by Daintree confirmations below."
       : "Actions that need confirmation still open Daintree's own prompt unless an automation grant covers them."
   }`;
-
-// The live value lives in the row's description, where the select's narrow
-// rail cannot clip it.
-const DAINTREE_CONFIRMATION_OPTIONS = [
-  { value: "inherit", label: "Follow global setting" },
-  { value: "always-ask", label: "Always ask" },
-  { value: "never-ask", label: "Never ask" },
-];
 
 /**
  * Per-agent wording for the one stored `bypassPermissions` preference. The
@@ -1269,6 +1262,8 @@ export function DaintreeAssistantSettingsTab() {
             </div>
           )}
 
+          {/* The live value lives in the row's description, where the select's narrow
+              rail cannot clip it. */}
           <SettingsSelect
             id="assistant-daintree-confirmations"
             label="Daintree confirmations"
