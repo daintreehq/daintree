@@ -26,6 +26,18 @@
  */
 export const ESCAPE_BACKSTOP_DIALOG_ATTR = "data-escape-backstop-dialog";
 
+/**
+ * Opts an `aria-modal` popover dialog into counting as an open Radix layer,
+ * so the backstop stays out of the way while the popover closes itself on
+ * Escape (a date picker's calendar inside a Sheet).
+ *
+ * Opt-in rather than matched by the popper wrapper: modal `AppPalettePopover`s
+ * (dock launcher, move-to-worktree picker) are also aria-modal popover
+ * dialogs, and counting them would stop Escape reaching an AppDialog opened
+ * over them by shortcut, since they don't dismiss for foreign overlays.
+ */
+export const ESCAPE_RADIX_LAYER_ATTR = "data-escape-radix-layer";
+
 const stack: Array<() => void> = [];
 
 export function registerDialogEscapeBackstop(handler: () => void): () => void {
@@ -94,16 +106,15 @@ function isAnyRadixLayerOpen(): boolean {
   // Escape handler: Popover, Select, DropdownMenu, ContextMenu, HoverCard,
   // Tooltip. Dialogs are matched separately (`role="dialog"` without
   // `aria-modal`) — modal Dialogs are AppDialog/AppPaletteDialog and live
-  // in the backstop stack, not the Radix-layer category. A popover's dialog
-  // content is still a Radix layer when it declares `aria-modal` (a date
-  // picker's calendar), and only popper content sits in the wrapper.
+  // in the backstop stack, not the Radix-layer category. An aria-modal
+  // popover dialog counts only when it opts in via ESCAPE_RADIX_LAYER_ATTR.
   return (
     document.querySelector(
       '[role="listbox"][data-state="open"], ' +
         '[role="menu"][data-state="open"], ' +
         '[role="tooltip"][data-state="open"], ' +
         '[role="dialog"][data-state="open"]:not([aria-modal="true"]), ' +
-        '[data-radix-popper-content-wrapper] [role="dialog"][data-state="open"]'
+        `[${ESCAPE_RADIX_LAYER_ATTR}][role="dialog"][data-state="open"]`
     ) !== null
   );
 }

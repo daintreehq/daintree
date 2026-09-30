@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useWallClock } from "@/hooks/useWallClock";
+import { ESCAPE_RADIX_LAYER_ATTR } from "@/lib/dialogEscapeBackstop";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
@@ -760,6 +761,8 @@ function DateField({ mode, props }: DateFieldProps) {
         aria-label={`Choose ${noun}`}
         // Radix traps focus and hides the page but leaves the role unqualified.
         aria-modal="true"
+        // Still a popover to the Escape backstop, so a Sheet under it stays open.
+        {...{ [ESCAPE_RADIX_LAYER_ATTR]: "" }}
         className={cn("w-auto max-w-[var(--radix-popover-content-available-width)] p-3", overlayZ)}
         onPointerDownCapture={() => {
           pressedInside.current = true;
