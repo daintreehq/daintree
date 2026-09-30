@@ -490,11 +490,13 @@ test.describe("Third-party plugin on the worker path", () => {
       description: `raw=${raw} coalesced=${coalesced}`,
     });
     // Both saw the whole burst (the lists above), raw one callback per event.
-    // Coalesced must be materially fewer; observed locally at raw=20 coalesced=4,
-    // so the 2x margin is not a timing knife-edge.
+    // Each `git worktree add` can outlast the default window on a slow disk, so
+    // the E2E only requires fewer deliveries; the coalescing ratio itself is
+    // pinned with a controlled clock in pluginSubscriptionCoalescing.test.ts.
+    // Observed locally at raw=20 coalesced=4.
     expect(raw).toBeGreaterThanOrEqual(added);
     expect(coalesced).toBeGreaterThanOrEqual(1);
-    expect(coalesced * 2).toBeLessThanOrEqual(raw);
+    expect(coalesced).toBeLessThan(raw);
   });
 
   test("host.fs.readFiles reads a batch in request order with per-entry errors", async () => {

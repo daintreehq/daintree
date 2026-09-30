@@ -13,7 +13,7 @@ vi.mock("@/hooks/usePluginStyleReport", () => ({
   usePluginStyleReport: () => ({ state: styleState.current, recheck }),
 }));
 
-const { PluginPerformanceSection, PluginStylesSection, formatDurationMs, groupNotGenerated } =
+const { PluginPerformanceSection, PluginStylesSection, groupNotGenerated } =
   await import("../PluginPerformanceTab");
 
 function makeSnapshot(overrides: Partial<PluginPerfSnapshot> = {}): PluginPerfSnapshot {
@@ -64,32 +64,35 @@ beforeEach(() => {
   styleState.current = { status: "checking" };
 });
 
-describe("formatDurationMs", () => {
-  it("scales precision with magnitude", () => {
-    expect(formatDurationMs(3.24)).toBe("3.2 ms");
-    expect(formatDurationMs(812.4)).toBe("812 ms");
-    expect(formatDurationMs(1540)).toBe("1.5 s");
-  });
-});
-
 describe("PluginPerformanceSection", () => {
+  it("renders the measurement window's start as an age with the exact time behind it", () => {
+    const snapshot = makeSnapshot();
+    const { container } = render(
+      <PluginPerformanceSection snapshot={snapshot} developmentBuild={false} />
+    );
+    const since = container.querySelector("p time");
+    expect(since?.textContent).toBe("5 minutes ago");
+    expect(since?.getAttribute("dateTime")).toBe(new Date(snapshot.since).toISOString());
+    expect(since?.getAttribute("title")).toBe(new Date(snapshot.since).toLocaleString());
+  });
+
   it("marks only the measurements main reports above budget, in words", () => {
     render(<PluginPerformanceSection snapshot={makeSnapshot()} developmentBuild={false} />);
-    expect(row("Activation").textContent).toContain("812 ms");
+    expect(row("Activation").textContent).toContain("812ms");
     expect(row("Activation").textContent).toContain("above");
     expect(row("Last view load").textContent).not.toContain("above");
   });
 
   it("reports view load as activation plus the longer of import and styles", () => {
     render(<PluginPerformanceSection snapshot={makeSnapshot()} developmentBuild={false} />);
-    expect(row("Last view load").textContent).toContain("110 ms");
-    expect(row("Last view first paint").textContent).toContain("180 ms");
+    expect(row("Last view load").textContent).toContain("110ms");
+    expect(row("Last view first paint").textContent).toContain("180ms");
   });
 
   it("says render time is development-only instead of showing zero in production", () => {
     render(<PluginPerformanceSection snapshot={makeSnapshot()} developmentBuild={false} />);
     expect(row("View render time").textContent).toContain("Only measured in development builds");
-    expect(row("View render time").textContent).not.toContain("0 ms");
+    expect(row("View render time").textContent).not.toContain("0ms");
   });
 
   it("shows commit percentiles once they exist", () => {
@@ -102,7 +105,7 @@ describe("PluginPerformanceSection", () => {
         developmentBuild
       />
     );
-    expect(row("View render time").textContent).toContain("p95 21 ms");
+    expect(row("View render time").textContent).toContain("p95 21ms");
     expect(row("View render time").textContent).toContain("above");
   });
 
@@ -211,10 +214,12 @@ describe("PluginStylesSection", () => {
     expect(screen.getByText("flx")).toBeTruthy();
   });
 
-  it("says so when every class produced CSS", () => {
+  it("says so when every class matches a plugin utility", () => {
     styleState.current = { status: "ready", report: { generated: ["p-4"], notGenerated: [] } };
     render(<PluginStylesSection pluginId="acme.demo" />);
-    expect(screen.getByText(/Every class in this plugin’s open panels produced CSS/)).toBeTruthy();
+    expect(
+      screen.getByText(/Every class in this plugin’s open panels matches a Daintree plugin utility/)
+    ).toBeTruthy();
   });
 
   it("re-checks on demand but not while a check is running", () => {

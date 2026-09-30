@@ -1,4 +1,20 @@
-export function formatElapsedDuration(ms: number): string {
+export interface FormatElapsedDurationOptions {
+  /**
+   * Keep sub-minute precision for measurements rather than wall-clock spans:
+   * "3.2ms" (one decimal under 10ms), "812ms", then "1.5s" up to a minute.
+   * Past a minute the output is the same as without it.
+   */
+  subSecond?: boolean;
+}
+
+export function formatElapsedDuration(ms: number, options?: FormatElapsedDurationOptions): string {
+  if (options?.subSecond === true && Number.isFinite(ms) && ms >= 0 && ms < 59_950) {
+    // Thresholds sit at the rounding edge so 9.96 never prints "10.0ms".
+    if (ms < 9.95) return `${ms.toFixed(1)}ms`;
+    if (ms < 999.5) return `${Math.round(ms)}ms`;
+    return `${(ms / 1000).toFixed(1)}s`;
+  }
+
   if (!Number.isFinite(ms) || ms <= 0) return "0s";
 
   const seconds = Math.floor(ms / 1000);

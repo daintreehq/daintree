@@ -49,15 +49,24 @@ function reactKey(value: unknown, fallback: number): string | number {
     : fallback;
 }
 
-// The focus ring lives on the scroller, drawn inset, because the element that
-// holds focus (the list or the grid) is as tall as all its rows and its own
-// ring would be clipped to nothing by the scroller.
-const SCROLLER_FOCUS_RING =
-  "has-[[data-kit-focus]:focus-visible]:outline has-[[data-kit-focus]:focus-visible]:outline-2 has-[[data-kit-focus]:focus-visible]:-outline-offset-2 has-[[data-kit-focus]:focus-visible]:outline-accent-primary";
+// A scroller that takes focus fills its pane edge to edge, so the global
+// `*:focus-visible` ring is drawn inset rather than into the pane's clip.
+const SCROLLER_RING_INSET = "focus-visible:-outline-offset-2";
+
+// The grid is as tall as all its rows, so a ring of its own would be clipped
+// away by the scroller. Its focus indicator is the cursor row instead: the one
+// accent in the grid, painted only while the grid itself holds keyboard focus.
+// Selection stays the neutral `aria-selected` fill, so the two never compete.
+const GRID_FOCUS_RING =
+  "outline-hidden focus-visible:[&_tr[data-active=true]]:outline focus-visible:[&_tr[data-active=true]]:outline-2 focus-visible:[&_tr[data-active=true]]:-outline-offset-2 focus-visible:[&_tr[data-active=true]]:outline-accent-primary";
 
 interface ListContext {
   listProps: Record<string, unknown>;
-  /** The keyboard lives on the list element, so the scroller stays out of the tab order. */
+  /**
+   * A focusable list takes the keyboard on the scroller, which is the size of
+   * the viewport, so the global ring frames what the reader can see; the list
+   * element is as tall as all its rows and its own ring would be clipped away.
+   */
   listFocusable: boolean;
   itemRole: "listitem" | "none";
 }
@@ -67,7 +76,9 @@ function ListScroller({
   ref,
   ...props
 }: ScrollerProps & { context: ListContext; ref?: Ref<HTMLDivElement> }) {
-  return <div {...props} ref={ref} tabIndex={context.listFocusable ? -1 : 0} />;
+  if (!context.listFocusable) return <div {...props} ref={ref} tabIndex={0} />;
+  // The virtualiser's own props go last so its scroll wiring and sizing win.
+  return <div {...context.listProps} {...props} ref={ref} />;
 }
 
 function ListElement({
@@ -76,16 +87,11 @@ function ListElement({
   style,
   children,
 }: ListProps & { context: ListContext; ref?: Ref<HTMLDivElement> }) {
-  const focusable = context.listFocusable;
+  // A focusable list's role and keyboard live on the scroller, and this element
+  // is a plain wrapper its options are still owned through.
+  const listProps = context.listFocusable ? undefined : context.listProps;
   return (
-    <div
-      {...context.listProps}
-      ref={ref}
-      style={style}
-      data-kit-focus={focusable ? "" : undefined}
-      // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the scroller draws this element's ring (SCROLLER_FOCUS_RING)
-      className={focusable ? "outline-hidden" : undefined}
-    >
+    <div {...listProps} ref={ref} style={style}>
       {children}
     </div>
   );
@@ -150,7 +156,7 @@ function KitVirtualList(props: PluginVirtualListProps) {
   return (
     <Virtuoso
       ref={handle}
-      className={cn(SCROLLER_FOCUS_RING, str(className))}
+      className={cn(SCROLLER_RING_INSET, str(className))}
       style={{ height: "100%" }}
       context={context}
       components={LIST_COMPONENTS}
@@ -238,9 +244,7 @@ function TableElement({ context, style, children }: TableProps & { context: Tabl
     <table
       {...context.tableProps}
       style={{ ...style, tableLayout: "fixed", width: "100%", borderCollapse: "collapse" }}
-      data-kit-focus={context.interactive ? "" : undefined}
-      // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the scroller draws the grid's ring (SCROLLER_FOCUS_RING)
-      className={cn("group/grid text-xs", context.interactive && "outline-hidden")}
+      className={cn("text-xs", context.interactive && GRID_FOCUS_RING)}
     >
       {children}
     </table>
@@ -262,14 +266,7 @@ function TableRow({ context, item, ...props }: ItemProps<unknown> & { context: T
       data-selected={!interactive && selected ? "true" : undefined}
       data-active={interactive && index === context.activeIndex ? "true" : undefined}
       onClick={interactive ? () => context.activate(index) : undefined}
-      className={cn(
-        PALETTE_ROW_CLASS,
-        interactive && [
-          LIST_ROW_HOVER_CLASS,
-          "cursor-pointer",
-          "group-focus-visible/grid:data-[active=true]:outline group-focus-visible/grid:data-[active=true]:outline-2 group-focus-visible/grid:data-[active=true]:-outline-offset-2 group-focus-visible/grid:data-[active=true]:outline-accent-primary",
-        ]
-      )}
+      className={cn(PALETTE_ROW_CLASS, interactive && [LIST_ROW_HOVER_CLASS, "cursor-pointer"])}
     />
   );
 }
@@ -376,8 +373,14 @@ function KitDataTable({
         "aria-activedescendant": activeMounted(activeIndex, range) ? rowId(activeIndex) : undefined,
         onKeyDown,
         // The first arrow press should not be the one that finds the cursor.
+        // The cursor row is the grid's focus indicator, so focus arriving
+        // must find it on screen: the first row when there is no cursor yet,
+        // else the cursor scrolled back into the mounted window.
         onFocus: () => {
-          if (cursor < 0 && data.length > 0) setCursor(0);
+          if (data.length === 0) return;
+          const at = cursor < 0 ? 0 : activeIndex;
+          if (cursor < 0) setCursor(0);
+          if (!activeMounted(at, range)) handle.current?.scrollIntoView({ index: at });
         },
       }
     : { "aria-label": label, "aria-rowcount": data.length + 1 };
@@ -451,7 +454,7 @@ function KitDataTable({
   return (
     <TableVirtuoso
       ref={handle}
-      className={cn(SCROLLER_FOCUS_RING, str(className))}
+      className={cn(SCROLLER_RING_INSET, str(className))}
       style={{ height: "100%" }}
       data={data}
       context={context}

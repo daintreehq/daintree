@@ -681,19 +681,19 @@ function KitCallout({
   className,
 }: PluginCalloutProps) {
   const tone = oneOf(severity, CALLOUT_SEVERITIES) ?? "neutral";
-  const glyph = tone === "neutral" ? resolvePluginKitIcon(icon) : undefined;
-  return (
-    <Callout
-      severity={tone}
-      title={content(title)}
-      action={content(action)}
-      icon={glyph}
-      size={oneOf(size, ["default", "compact"] as const)}
-      className={str(className)}
-    >
-      {node(children)}
-    </Callout>
-  );
+  const shared = {
+    title: content(title),
+    action: content(action),
+    size: oneOf(size, ["default", "compact"] as const),
+    className: str(className),
+    children: node(children),
+  };
+  // A severity callout always wears its severity's glyph; only a neutral one
+  // may carry a domain glyph of the plugin's choosing.
+  if (tone === "neutral") {
+    return <Callout {...shared} severity="neutral" icon={resolvePluginKitIcon(icon)} />;
+  }
+  return <Callout {...shared} severity={tone} />;
 }
 
 function KitEmptyState({

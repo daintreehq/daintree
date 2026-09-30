@@ -702,7 +702,7 @@ describe("PluginDetailPane performance and styles tabs", () => {
     renderDetail(makePlugin());
     fireEvent.click(await screen.findByRole("tab", { name: "Performance" }));
     expect(screen.getByText("Activation")).toBeTruthy();
-    expect(screen.getByText("120 ms")).toBeTruthy();
+    expect(screen.getByText("120ms")).toBeTruthy();
   });
 
   it("subscribes while the pane is open and unsubscribes when it closes", async () => {
