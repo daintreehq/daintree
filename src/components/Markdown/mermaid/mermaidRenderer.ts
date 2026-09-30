@@ -66,30 +66,44 @@ const SECURE_KEYS = [
 ];
 
 /**
- * Source that would make Mermaid fetch something while it lays the diagram
- * out, before any sanitizer sees the output: image shapes load through
- * `new Image()`, and `classDef`/`style` CSS is live in a temporary node under
+ * Source that could make Mermaid fetch something while it lays the diagram
+ * out, before any sanitizer sees the output. Image shapes and actor icons load
+ * through `new Image()`, some diagrams draw HTML labels straight into the
+ * document, and `classDef`/`style` CSS is live in a temporary node under
  * <body> for the length of the render. Such a diagram shows as source.
+ *
+ * Rather than chase each syntax that can carry a URL, this gates on what any
+ * remote fetch needs: a scheme or a protocol-relative `//`, an HTML element to
+ * hang it on, or CSS that loads. Backslashes go too — they are the only way to
+ * spell one of those past these checks (YAML and JSON string escapes, CSS
+ * escapes, YAML line continuation). Mermaid's own `#nn;` entities are decoded
+ * only in the finished SVG, after layout, so they can't assemble a URL in time.
  */
-const RESOURCE_SYNTAX = /\bimg\s*:|url\s*\(|image-set|@import/i;
-const ESCAPED_STYLE_LINE = /^\s*(?:classDef|style|linkStyle)\b.*\\/im;
+const RESOURCE_SYNTAX = [
+  /[a-z][\w+.-]*:\/\//i,
+  /\/\/\S/,
+  /\\/,
+  // Any tag but a line break. `<<interface>>` is Mermaid's stereotype syntax.
+  /(?<!<)<(?!<)\s*(?!br\s*\/?\s*>)[a-z!?/]/i,
+  /url\s*\(|image-set|@import/i,
+  /\bimg['"]?\s*:/i,
+];
 
 function requestsExternalResources(source: string): boolean {
-  return RESOURCE_SYNTAX.test(source) || ESCAPED_STYLE_LINE.test(source);
+  return RESOURCE_SYNTAX.some((pattern) => pattern.test(source));
 }
+
+const CHUNK_LOAD_MESSAGE =
+  /^(?:Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module)/;
 
 /**
  * A lazy chunk that failed to load — Mermaid imports each diagram type on
  * demand, inside `parse` and `render` — says nothing about the diagram, and a
- * later attempt can succeed.
+ * later attempt can succeed. The loader's own TypeError, matched from the start
+ * of its message, so a syntax error quoting the same words stays a verdict.
  */
 function isChunkLoadError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    /dynamically imported module|Importing a module script failed|error loading dynamically/i.test(
-      error.message
-    )
-  );
+  return error instanceof TypeError && CHUNK_LOAD_MESSAGE.test(error.message);
 }
 
 const TRANSIENT: MermaidRenderResult = { ok: false, transient: true };

@@ -165,16 +165,41 @@ describe("requestMermaidRender", () => {
 
   it.each([
     ["an image shape", 'flowchart TD\n  A@{ img: "https://tracker.example/p.png" }'],
-    ["a classDef url()", "flowchart TD\n  classDef x fill:url(https://tracker.example/p.png)"],
+    ["a quoted image key", 'flowchart TD\n  A@{ "img": "p.png" }'],
+    [
+      "an actor icon URL",
+      'sequenceDiagram\n  properties A: {"icon":"https://tracker.example/i.png"}',
+    ],
+    ["a protocol-relative URL", "flowchart TD\n  A[//tracker.example/p.png]"],
+    ["an HTML image label", "architecture-beta\n  service a \"<img src='x.png'>\"[A]"],
+    ["a classDef url()", "flowchart TD\n  classDef x fill:url(p.png)"],
     ["a style image-set()", "flowchart TD\n  style A background:image-set('x.png' 1x)"],
-    ["an escaped style value", "flowchart TD\n  classDef x fill:u\\72l(https://t.example)"],
+    ["an escape sequence", 'flowchart TD\n  A@{ label: "\\x68ttps" }'],
   ])(
-    "never hands mermaid a source with %s, since it would fetch before sanitizing",
+    "never hands mermaid a source with %s, since it could fetch before sanitizing",
     async (_, source) => {
       expect(await render(source)).toEqual({ ok: false });
       expect(mermaidMock.parse).not.toHaveBeenCalled();
     }
   );
+
+  it.each([
+    ["line breaks", "sequenceDiagram\n  A->>B: one<br/>two<br>three"],
+    ["stereotypes", "classDiagram\n  class Shape\n  <<interface>> Shape"],
+    ["bidirectional arrows", "flowchart LR\n  A <--> B"],
+    ["hex colors", "flowchart TD\n  style A fill:#f9f,stroke:#333;"],
+  ])("still renders ordinary diagrams using %s", async (_, source) => {
+    expect((await render(source)).ok).toBe(true);
+  });
+
+  it("treats a syntax error that quotes the chunk-loader's words as a real failure", async () => {
+    mermaidMock.parse.mockRejectedValue(
+      new Error("Parse error: Failed to fetch dynamically imported module")
+    );
+    expect(await render("flowchart TD\n  A[Failed to fetch dynamically imported module]")).toEqual({
+      ok: false,
+    });
+  });
 
   it("falls back and removes mermaid's scratch nodes when render throws", async () => {
     mermaidMock.render.mockImplementation(async (id) => {

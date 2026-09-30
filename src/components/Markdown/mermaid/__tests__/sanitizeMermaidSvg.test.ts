@@ -136,6 +136,8 @@ describe("sanitizeMermaidSvg", () => {
         "<style>#m1 ~ *{display:none;}" +
           " #m1 + div{display:none;}" +
           " #m1:hover ~ nav{display:none;}" +
+          ' #m1:not([data-x="("]) ~ *{display:none;}' +
+          " #m1:not([data-x='[']) + *{display:none;}" +
           " #m1 .a ~ .b{fill:#010101;}" +
           " #m1{ :is(&, body){opacity:0;} }</style>"
       )

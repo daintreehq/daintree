@@ -66,13 +66,19 @@ function isScopedSelector(selector: string, scope: string): boolean {
   const rest = selector.slice(scope.length);
   if (rest !== "" && !/^[\s.:[>\-_]/.test(rest)) return false;
   let depth = 0;
+  let quote = "";
   let index = 0;
   for (; index < rest.length; index++) {
     const char = rest.charAt(index);
-    if (char === "(" || char === "[") depth++;
+    // Brackets inside a quoted attribute value are text, not nesting.
+    if (quote) {
+      if (char === quote) quote = "";
+    } else if (char === '"' || char === "'") quote = char;
+    else if (char === "(" || char === "[") depth++;
     else if (char === ")" || char === "]") depth--;
     else if (depth === 0 && /[\s>+~]/.test(char)) break;
   }
+  if (quote || depth !== 0) return false;
   const combinator = rest.slice(index).trimStart().charAt(0);
   return combinator !== "+" && combinator !== "~";
 }
