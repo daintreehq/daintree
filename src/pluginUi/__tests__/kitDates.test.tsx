@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { createElement, type ComponentType, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import { renderToString } from "react-dom/server";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("@/services/ActionService", () => ({
@@ -799,6 +800,42 @@ describe("DateRangePicker layout", () => {
       fireEvent.click(screen.getByRole("button", { name: "Last 7 days" }));
     });
     expect(onValueChange).toHaveBeenLastCalledWith({ start: "2026-09-24", end: "2026-09-30" });
+  });
+
+  it("measures the room after rendering, never while rendering", () => {
+    const spy = roomOf(320);
+    renderToString(
+      withTooltips(
+        createElement(kit.DateRangePicker, {
+          open: true,
+          defaultValue: null,
+          "aria-label": "Period",
+          presets: [{ label: "Last 7 days", range: { start: "2026-09-24", end: "2026-09-30" } }],
+        })
+      )
+    );
+    const boundaryReads = spy.mock.contexts.filter(
+      (element) => element instanceof HTMLElement && element.dataset.portalBoundary === "true"
+    );
+    expect(boundaryReads).toHaveLength(0);
+  });
+
+  it("mounts an initially open panel with the months that fit, ending on the latest allowed", async () => {
+    roomOf(320);
+    const today = todayIso(Date.now());
+    renderLoose(kit.DateRangePicker, {
+      open: true,
+      defaultValue: null,
+      max: today,
+      "aria-label": "Period",
+      presets: [{ label: "Last 7 days", range: { start: "2026-09-24", end: "2026-09-30" } }],
+    });
+    await screen.findByRole("dialog", { name: "Choose dates" });
+    expect(captions()).toHaveLength(1);
+    expect(presetsPlacement()).toBe("above");
+    // The one month on show is the current one, not the first of a two-month view.
+    expect(day(today).closest('[role="grid"]')).not.toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(day(today)));
   });
 
   it("measures again as the window resizes while open", async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { CalendarDays, ChevronLeft, ChevronRight, X } from "lucide-react";
 import type {
   PluginCalendarProps,
@@ -552,14 +552,10 @@ function DateField({ mode, props }: DateFieldProps) {
   const controlledOpen = typeof open === "boolean" ? open : undefined;
   const [ownOpen, setOwnOpen] = useState(false);
   const isOpen = controlledOpen ?? ownOpen;
-  // The room the panel has, measured as it opens (however it was opened,
-  // before it mounts) and again as the window resizes under it.
+  // The room the panel has, measured as it opens (however it was opened) and
+  // again as the window resizes under it. The portal mounts the panel from its
+  // own layout effect, so the calendar first renders with this width, before paint.
   const [roomWidth, setRoomWidth] = useState(Number.POSITIVE_INFINITY);
-  const [measuredOpen, setMeasuredOpen] = useState(false);
-  if (isOpen !== measuredOpen) {
-    setMeasuredOpen(isOpen);
-    if (isOpen) setRoomWidth(getPopoverAvailableWidth());
-  }
   const layout = rangePanelLayout(roomWidth, presets.length > 0);
   const handleOpen = fn(onOpenChange);
   const handleValue = reporter(props.onValueChange);
@@ -614,6 +610,10 @@ function DateField({ mode, props }: DateFieldProps) {
     }
     change(parsed);
   };
+
+  useLayoutEffect(() => {
+    if (isOpen) setRoomWidth(getPopoverAvailableWidth());
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
