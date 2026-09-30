@@ -12,6 +12,7 @@ import * as kit from "@daintreehq/plugin-ui";
 import {
   groupOffsets,
   readSplitPanes,
+  taskNews,
   taskSummary,
 } from "@/components/PluginKit/PluginKitLayoutPanes";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -421,7 +422,10 @@ describe("Inspector and PropertyRow", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByText("Bug")).toBeNull();
+    // Folded rows stay mounted but hidden, so the heading always controls something.
+    const body = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+    expect(body.hidden).toBe(true);
+    expect(body.textContent).toContain("Bug");
     expect(onOpenChange).toHaveBeenLastCalledWith(false);
     expect(screen.queryByRole("button", { name: "Fixed" })).toBeNull();
     expect(screen.getByRole("heading", { name: "Fixed" })).toBeTruthy();
@@ -878,6 +882,117 @@ describe("TaskList", () => {
   });
 });
 
+describe("TaskList focus, alignment and announcements", () => {
+  it("gives every row the same trailing cells, so durations share a column", () => {
+    mount(
+      <kit.TaskList
+        aria-label="Jobs"
+        onRetry={() => {}}
+        onCancel={() => {}}
+        tasks={[
+          { id: "1", title: "A", status: "running" },
+          { id: "2", title: "B", status: "done" },
+          { id: "3", title: "C", status: "failed" },
+        ]}
+      />
+    );
+    const shapes = [...document.querySelectorAll("[data-task-id]")].map(
+      (row) => row.children.length
+    );
+    expect(new Set(shapes).size).toBe(1);
+  });
+
+  it("keeps focus on a task's row when its action goes away", () => {
+    function Harness() {
+      const [status, setStatus] = useState<"running" | "done">("running");
+      return (
+        <kit.TaskList
+          aria-label="Jobs"
+          onCancel={() => setStatus("done")}
+          tasks={[{ id: "sync", title: "Sync", status }]}
+        />
+      );
+    }
+    mount(<Harness />);
+    const cancel = screen.getByRole("button", { name: "Cancel Sync" });
+    cancel.focus();
+    fireEvent.click(cancel);
+    expect(screen.queryByRole("button", { name: "Cancel Sync" })).toBeNull();
+    expect((document.activeElement as HTMLElement | null)?.dataset.taskId).toBe("sync");
+  });
+
+  it("announces a task settling, and nothing on the first render or while it runs", () => {
+    const first = taskNews(JSON.stringify([["a", "running", "Sync"]]), null);
+    expect(first.news).toBe("");
+    const still = taskNews(JSON.stringify([["a", "running", "Sync"]]), first.statuses);
+    expect(still.news).toBe("");
+    const failed = taskNews(JSON.stringify([["a", "failed", "Sync"]]), still.statuses);
+    expect(failed.news).toBe("Sync failed");
+    expect(taskNews("{}", null).news).toBe("");
+  });
+});
+
+describe("focus handed back when things go away", () => {
+  it("returns focus from a cleared BulkActionBar to where it came from", () => {
+    function Harness() {
+      const [count, setCount] = useState(2);
+      return (
+        <>
+          <button type="button">Row</button>
+          <kit.BulkActionBar count={count} onClear={() => setCount(0)} />
+        </>
+      );
+    }
+    mount(<Harness />);
+    const row = screen.getByRole("button", { name: "Row" });
+    row.focus();
+    const clear = screen.getByRole("button", { name: "Clear selection" });
+    fireEvent.focus(clear, { relatedTarget: row });
+    clear.focus();
+    fireEvent.click(clear);
+    expect(document.querySelector("[data-bulk-action-bar]")).toBeNull();
+    expect(document.activeElement).toBe(row);
+  });
+
+  it("hands focus to a pane's handle when the pane folds under it", () => {
+    function Harness() {
+      const [collapsed, setCollapsed] = useState<string[]>([]);
+      return (
+        <kit.SplitGroup
+          collapsed={collapsed}
+          panes={[
+            { id: "main", content: "Main" },
+            {
+              id: "side",
+              defaultSize: 200,
+              collapsible: true,
+              content: (
+                <button type="button" onClick={() => setCollapsed(["side"])}>
+                  Fold me
+                </button>
+              ),
+            },
+          ]}
+        />
+      );
+    }
+    mount(<Harness />);
+    const button = screen.getByRole("button", { name: "Fold me" });
+    button.focus();
+    fireEvent.click(button);
+    expect(document.activeElement).toBe(screen.getByRole("separator"));
+  });
+
+  it("says when the source drops and comes back, not when it merely ages", () => {
+    const view = mount(<kit.StaleIndicator updatedAt={Date.now()} />);
+    expect(screen.getByRole("status").textContent).toBe("");
+    view.update(<kit.StaleIndicator updatedAt={Date.now()} disconnected />);
+    expect(screen.getByRole("status").textContent).toBe("Disconnected");
+    view.update(<kit.StaleIndicator updatedAt={Date.now()} />);
+    expect(screen.getByRole("status").textContent).toBe("Reconnected");
+  });
+});
+
 describe("RefreshOverlay", () => {
   it("marks the content busy at once and shows the note only past the gate", () => {
     vi.useFakeTimers();
@@ -887,7 +1002,10 @@ describe("RefreshOverlay", () => {
       </kit.RefreshOverlay>
     );
     const overlay = screen.getByTestId("overlay");
-    expect(overlay.getAttribute("aria-busy")).toBe("true");
+    // Busy is the content, not the live region beside it.
+    const busy = overlay.querySelector("[aria-busy]");
+    expect(busy?.textContent).toBe("Rows");
+    expect(busy?.contains(screen.getByRole("status"))).toBe(false);
     expect(screen.getByRole("status").textContent).toBe("");
     act(() => {
       vi.advanceTimersByTime(400);
@@ -899,7 +1017,7 @@ describe("RefreshOverlay", () => {
       </kit.RefreshOverlay>
     );
     expect(screen.getByTestId("overlay")).toBe(overlay);
-    expect(overlay.getAttribute("aria-busy")).toBeNull();
+    expect(overlay.querySelector("[aria-busy]")).toBeNull();
     expect(screen.getByRole("status").textContent).toBe("");
     expect(screen.getByText("Rows")).toBeTruthy();
   });
@@ -924,7 +1042,7 @@ describe("StaleIndicator", () => {
     expect(screen.getByTestId("s").getAttribute("data-stale-state")).toBe("stale");
     at({ updatedAt: now, stale: true, disconnected: true });
     expect(screen.getByTestId("s").getAttribute("data-stale-state")).toBe("disconnected");
-    expect(screen.getByText("Disconnected")).toBeTruthy();
+    expect(screen.getByTestId("s").textContent).toMatch(/^Disconnected·Updated/);
     at({});
     expect(screen.getByText("Not updated yet")).toBeTruthy();
   });
