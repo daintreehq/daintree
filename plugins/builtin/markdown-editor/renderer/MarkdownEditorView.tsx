@@ -6,14 +6,20 @@ import type { LanguageSupport } from "@codemirror/language";
 import { AlertTriangle, ExternalLink, FileWarning, RefreshCw, XCircle } from "lucide-react";
 import type { FileEditorViewProps } from "@/registry/fileEditorRegistry";
 import { loadMarkdownSupport } from "@/components/FileViewer/codeMirrorLanguages";
-import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
 import { activateMarkdownLink } from "@/components/Markdown/markdownRenderPolicy";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+// The host dialog: the kit ConfirmDialog has neither the `nested` layer nor a
+// `hint` line, and both dialogs below use one of them.
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { EmptyState } from "@/components/ui/EmptyState";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
+import {
+  Button,
+  EmptyState,
+  Input,
+  Skeleton,
+  SkeletonBone,
+  SkeletonText,
+  useDaintreeTheme,
+} from "@daintreehq/plugin-ui";
 import { cn } from "@/lib/utils";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { MarkdownEditorStatusBar } from "./MarkdownEditorStatusBar.js";
@@ -72,7 +78,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
     );
   }, [panelId, filePath, fileName, rootPath, worktreePath, projectId]);
   const record = useDocumentStateStore((state) => state.records[key]);
-  const polarity = useActiveAppScheme().type;
+  const polarity = useDaintreeTheme().colorMode;
 
   useEffect(() => {
     controller?.sync({ changeTick: props.changeTick });
@@ -270,8 +276,12 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
           title="Can't edit this file here"
           description={REFUSAL_COPY[record.refusal ?? "NOT_A_FILE"]}
           action={
-            <Button variant="outline" size="sm" onClick={props.onOpenExternalEditor}>
-              <ExternalLink />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={props.onOpenExternalEditor}
+              icon={<ExternalLink />}
+            >
               Open in editor
             </Button>
           }
@@ -300,8 +310,8 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
                 variant="outline"
                 size="sm"
                 onClick={() => void controller.load({ restoreDraft: true })}
+                icon={<RefreshCw />}
               >
-                <RefreshCw />
                 Retry
               </Button>
               {orphanDraft !== null && (
@@ -474,7 +484,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
         <Input
           density="compact"
           value={saveAsPath ?? ""}
-          onChange={(event) => setSaveAsPath(event.target.value)}
+          onValueChange={setSaveAsPath}
           onKeyDown={(event) => {
             if (!isEnterToSubmit(event)) return;
             event.preventDefault();

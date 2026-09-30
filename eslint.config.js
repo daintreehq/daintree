@@ -1202,6 +1202,64 @@ export default tseslint.config(
     },
   },
 
+  // Builtin plugin renderers draw through the public `@daintreehq/plugin-ui`
+  // kit, the one third-party plugins get, so every gap in it shows up here
+  // first. Only what the kit genuinely covers is listed, and by export, so a
+  // module's other exports stay usable (Callout's tokens, the compact key-cap
+  // class, TooltipProvider, SkeletonBone with its `immediate`). Host modules a
+  // builtin still needs for a recorded kit gap (button's `pill`, CopyButton's
+  // `announcement`, TruncatedTooltip's `isTruncated`, select's item markup,
+  // the dialogs' `nested` layer) are deliberately absent. The ignored file is
+  // in its plugin's eager entry graph, which must not reach the kit (the build
+  // fails if startup code statically imports it). Tests and preview harnesses
+  // are not the plugin's runtime.
+  {
+    files: ["plugins/builtin/*/renderer/**/*.{ts,tsx}"],
+    ignores: [
+      "**/__tests__/**",
+      "**/__preview__/**",
+      "**/*.{test,spec}.{ts,tsx}",
+      "plugins/builtin/sveltekit-builder/renderer/SiteBuilderButton.tsx",
+    ],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            ["@/components/ui/badge", ["Badge"]],
+            ["@/components/ui/Callout", ["Callout"]],
+            ["@/components/ui/checkbox", ["Checkbox"]],
+            ["@/components/ui/DismissButton", ["DismissButton"]],
+            ["@/components/ui/EmptyState", ["EmptyState"]],
+            ["@/components/ui/input", ["Input"]],
+            ["@/components/ui/Kbd", ["Kbd", "KbdChord"]],
+            ["@/components/ui/PaneState", ["PaneState"]],
+            ["@/components/ui/ProgressBar", ["ProgressBar"]],
+            ["@/components/ui/ScrollShadow", ["ScrollShadow"]],
+            ["@/components/ui/SearchField", ["SearchField"]],
+            ["@/components/ui/SegmentedRadioGroup", ["SegmentedRadioGroup"]],
+            ["@/components/ui/Skeleton", ["Skeleton", "SkeletonText"]],
+            ["@/components/ui/Spinner", ["Spinner"]],
+            ["@/components/ui/SpinningIcon", ["SpinningIcon"]],
+            ["@/components/ui/textarea", ["Textarea"]],
+            ["@/components/ui/tooltip", ["Tooltip", "TooltipTrigger", "TooltipContent"]],
+            ["@/components/ui/UnderlineTabs", ["UnderlineTabs"]],
+            [
+              "@/components/Settings/SettingsGroup",
+              ["SettingsGroup", "SettingsRow", "SettingsActions"],
+            ],
+            ["@/components/Settings/SettingsSection", ["SettingsSection"]],
+            ["@/components/Settings/SettingsSwitch", ["SettingsSwitch"]],
+          ].map(([name, importNames]) => ({
+            name,
+            importNames,
+            message: "Use the equivalent from @daintreehq/plugin-ui.",
+          })),
+        },
+      ],
+    },
+  },
+
   // Prettier must be last to override conflicting rules
   prettier,
 
