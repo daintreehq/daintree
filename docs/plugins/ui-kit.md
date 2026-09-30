@@ -164,6 +164,60 @@ createElement(ContextMenu, {
 
 A view is part of Daintree's own window, so `FileDropzone` (or your own `<input type="file">`) hands you standard `File` objects: `name`, `size`, `type`, `lastModified`, and the contents through `file.text()`, `file.arrayBuffer()` or `file.stream()`. A view never gets the file's path on disk, and the host has no file-open dialog that returns paths. To act on the contents in your worker, read them in the view and send them over a channel (an `invoke`'s arguments may be up to 4 MiB); to work with files the user already has in the project, use [`host.fs`](./host-api.md#fs--host-mediated-scope-contained-filesystem) in the worker and a `FileTree` or `Combobox` in the view to pick among them. A drag from Daintree's own file browser carries paths rather than files, so a `FileDropzone` does not take it.
 
+### Text inputs
+
+Richer fields for views that talk to agents, APIs and forges: prompts with mentions and commands, names renamed in place, headers and environment variables, tokens and keyboard shortcuts.
+
+| Export | Props | Notes |
+| --- | --- | --- |
+| `MentionTextarea` | `value?`, `defaultValue?`, `onValueChange?`, `triggers?: (string \| { char, title?, emptyMessage?, atStart? })[]`, `getSuggestions?(trigger, query) => MentionSuggestion[] \| Promise<…>`, `onSuggestionInsert?(suggestion, trigger)`, `onKeyDown?`, `onFocus?`, `onBlur?`, `placeholder?`, `name?`, `disabled?`, `readOnly?`, `autoFocus?`, `spellCheck?`, `maxLength?`, `invalid?`, `minRows?` (1), `maxRows?` (8), `variant?: "default" \| "code"`, `density?`, `ref?` (the textarea), `className?`; `id`, `data-*` and `aria-*` | A `Textarea` that grows with its text up to `maxRows`, then scrolls, and opens the host composer's own autocomplete menu when a trigger is typed at the start of the text or after a space (`atStart` holds a slash command to the very start). Suggestions are `{ id, label, insertText?, description?, badge?, disabled? }`, at most 50 shown. While an async reply is out the last rows stay up, dimmed, and a reply that lands after a newer query is dropped. Focus never leaves the text: Up and Down move the highlighted row (skipping disabled ones), Enter or Tab inserts it, Escape closes the menu (and keeps that trigger closed until you leave it) without reaching the pane. The inserted text is `insertText`, or the trigger and label (`@alice`), followed by one space, with the caret after it. The menu opens above the line unless there is plainly more room below. `onKeyDown` hears every key the menu did not take. |
+| `Composer` | `value?`, `defaultValue?`, `onValueChange?`, `onSubmit?(text)`, `submitOn?: "mod+enter" \| "enter"`, `busy?`, `onStop?`, `disabled?`, `placeholder?`, `triggers?`, `getSuggestions?`, `onSuggestionInsert?`, `attachments?: { id, name, detail?, icon? }[]`, `onRemoveAttachment?(id)`, `onAttach?(files)`, `accept?`, `maxLength?`, `toolbar?: ReactNode`, `submitLabel?` ("Send"), `minRows?` (2), `maxRows?` (10), `autoFocus?`, `ref?` (the textarea), `className?`; `id`, `data-*` and `aria-*` (the text) | The agent composer: a `MentionTextarea` in one field-coloured shell with the field's focus ring, attachment chips above the text and a footer below it with the attach button (only with `onAttach`), your `toolbar`, a character count once the text passes 80% of `maxLength`, and Send, a neutral high-contrast button since the ring already spends the accent. Cmd/Ctrl+Enter sends and Enter is a new line; with `submitOn="enter"`, Enter sends too and Shift+Enter is the new line. Enter while the suggestion menu is up inserts rather than sends, and while its rows are still loading it waits rather than sending the half-typed query. Send is held while the text is empty and there are no attachments. While `busy`, Send becomes Stop (and Escape in the text stops too), sending is held and the text stays editable for the next message. Files dropped on the shell or pasted into the text go to `onAttach`, filtered by `accept`; removing a chip hands focus to the next chip, or the text. Clearing the draft after a send is yours to do. |
+| `InlineEdit` | `value`, `onCommit(value) => void \| Promise<void>`, `"aria-label"`, `validate?(value) => string \| null`, `allowEmpty?`, `placeholder?`, `blurAction?: "commit" \| "cancel"`, `activation?: "click" \| "doubleClick"`, `selectOnEdit?: "all" \| "stem" \| "end"`, `editing?`, `onEditingChange?`, `maxLength?`, `disabled?`, `size?: "sm" \| "md" \| "lg"`, `className?`; `id` and `data-*` | A name you rename in place, drawn and behaving like a pane title's rename: a click (or double-click with `activation`), F2 or Enter turns the text into the host's chrome-free rename field with the text selected (`stem` stops before a file extension). Enter commits the trimmed value and returns focus to the text, Escape cancels without the key reaching the pane, and leaving the field commits unless `blurAction="cancel"`. An unchanged value commits nothing; an emptied one reverts on blur and is refused on Enter, unless `allowEmpty`. A `validate` message keeps the field open with the message under it; a validator that throws refuses too. Escape does nothing while a commit is pending. When `onCommit` returns a promise the field holds read-only with a spinner until it settles; a rejection keeps it open with the error's message. |
+| `KeyValueEditor` | `value?: { id?, key, value, secret? }[]`, `defaultValue?`, `onValueChange?(pairs)`, `"aria-label"`, `onValidityChange?(valid)`, `validateKey?(key) => string \| null`, `caseInsensitiveKeys?`, `allowDuplicateKeys?`, `reorderable?`, `keyLabel?`, `valueLabel?`, `keyPlaceholder?`, `valuePlaceholder?`, `addLabel?` ("Add"), `max?`, `allowSecretToggle?`, `disabled?`, `className?`; `id` and `data-*` | Environment variables, headers, mappings: a row of compact key and value fields per pair, a remove button on each and an Add button that puts focus in the new key. A value marked `secret` is a `SecretInput`; `allowSecretToggle` adds a lock toggle per row. A key that repeats another (ignoring case with `caseInsensitiveKeys`, as HTTP headers want) and a value with no key are marked on their row; a fresh empty row is not an error. `onValidityChange` tells you when that changes, to hold your Save. Pasting `KEY=value`, `export KEY=value` or `Key: value` lines into a key field adds a row per line (quotes and `#` comments dropped). Rows keep an `id`, added when missing, so give it back. `reorderable` draws a grip per row and reorders like `SortableList`. |
+| `ListEditor` | `value?: string[]`, `defaultValue?`, `onValueChange?(items)`, `"aria-label"`, `onValidityChange?`, `validate?(item) => string \| null`, `allowDuplicates?`, `reorderable?`, `placeholder?`, `addLabel?`, `max?`, `variant?: "default" \| "code"`, `disabled?`, `className?`; `id` and `data-*` | `KeyValueEditor` for single values: hosts, globs, scopes. Pasting several lines adds a row per line; a repeated item is marked, and empty rows are ignored rather than refused. `code` sets the fields in the mono face. |
+| `SecretInput` | `value?`, `defaultValue?`, `onValueChange?`, `stored?`, `storedHint?`, `onReplace?`, `onCancelReplace?`, `onClear?`, `onSubmit?(value)`, `allowCopy?`, `revealable?` (true), `placeholder?`, `name?`, `disabled?`, `invalid?`, `autoFocus?`, `density?`, `"aria-label"?`, `"aria-labelledby"?`, `"aria-describedby"?`, `className?`; `id` and `data-*` | A token or API key: a masked mono field with an eye toggle inside it; a press on the toggle leaves focus in the field, so a save-on-blur around it is safe. Turning `revealable` off hides a shown value. Copying, cutting and dragging the value out are blocked unless `allowCopy`. With `stored`, a secret is saved that the view never holds: the field reads "Saved ••••••••" and the last few characters of `storedHint`, beside Replace and, with `onClear`, Clear (confirming is yours to do). Replace empties and focuses the field; Cancel or Escape goes back to the saved state with focus on Replace. The saved state returns, with the typed draft dropped, when `stored` turns from false to true: set it false while a replacement saves and true once it has. Keep the secret in the worker's secret settings, never in view state. |
+| `ShortcutRecorder` | `value?: string \| null`, `defaultValue?`, `onValueChange?(combo \| null)`, `allowChords?`, `requireModifier?` (true), `validate?(combo) => string \| null`, `getConflict?(combo) => string \| null`, `checkHostConflicts?` (true), `placeholder?` ("Not set"), `disabled?`, `"aria-label"?`, `"aria-labelledby"?`, `"aria-describedby"?`, `className?`; `id` and `data-*` | Focus it (or click it) and press a shortcut; it records in the app's combo notation (`"Cmd+Shift+K"`, Cmd being Ctrl off macOS), the notation `KbdChord` takes, and `useHotkeys` for a single-step combo. While it records, Daintree's own shortcuts stand down. Modifiers held so far show as you press them. `allowChords` records a second step pressed within a second ("Cmd+K Cmd+S"), with the host's draining bar under the field. Escape stops recording, Enter or Space starts it again, a plain Backspace or Delete clears, and a plain Tab or Shift+Tab always moves on. A first key that is bare or only Shift+key is refused unless `requireModifier` is false (F-keys pass), so a shortcut never types into a field. AltGr input is ignored, since the host never matches it. A combo Daintree already uses is flagged with the action's name, since Daintree's binding wins; `getConflict` adds your own warnings. |
+
+```tsx
+import { Composer, KeyValueEditor, SecretInput } from "@daintreehq/plugin-ui";
+
+<Composer
+  aria-label="Request for the agent"
+  value={draft}
+  onValueChange={setDraft}
+  onSubmit={(text) => send(text).then(() => setDraft(""))}
+  busy={running}
+  onStop={cancel}
+  triggers={[
+    { char: "@", title: "Files" },
+    { char: "/", title: "Commands", atStart: true },
+  ]}
+  getSuggestions={(trigger, query) => (trigger === "@" ? searchFiles(query) : commands(query))}
+  attachments={attachments}
+  onAttach={addFiles}
+  onRemoveAttachment={removeAttachment}
+/>;
+
+<KeyValueEditor
+  aria-label="Headers"
+  value={headers}
+  onValueChange={setHeaders}
+  caseInsensitiveKeys
+  addLabel="Add header"
+  onValidityChange={setHeadersValid}
+/>;
+
+<SecretInput
+  aria-label="API token"
+  stored={tokenSaved}
+  storedHint={tokenTail}
+  value={token}
+  onValueChange={setToken}
+  onSubmit={saveToken}
+  onClear={confirmClearToken}
+/>;
+```
+
 ### Status and feedback
 
 | Export | Props | Notes |
@@ -530,4 +584,4 @@ A builtin that still needs a covered export gets an exception scoped to one file
 
 ## Checking a view against the kit
 
-`daintree-plugin lint` points at hand-rolled versions of kit controls — `raw-button`, `raw-form-control`, `native-title-tooltip`, `inline-svg-icon`, `lucide-react-import`, `dnd-library-import`, `hand-rolled-spinner`, `hand-rolled-badge`, `native-dialog-in-view`, `raw-portal`, `view-web-storage`, `global-key-listener` — and at classes that compile to nothing against the design contract. The Styles tab in Settings → Plugins runs the same class check against a running view. See [Development loop → Lint](./dev-loop.md#daintree-plugin-lint-dir).
+`daintree-plugin lint` points at hand-rolled versions of kit controls — `raw-button`, `raw-form-control` (a password field points at `SecretInput`), `native-title-tooltip`, `inline-svg-icon`, `lucide-react-import`, `dnd-library-import`, `hand-rolled-spinner`, `hand-rolled-badge`, `native-dialog-in-view`, `raw-portal`, `view-web-storage`, `global-key-listener` — and at classes that compile to nothing against the design contract. The Styles tab in Settings → Plugins runs the same class check against a running view. See [Development loop → Lint](./dev-loop.md#daintree-plugin-lint-dir).

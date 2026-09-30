@@ -442,6 +442,12 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "The preset listbox keeps DOM focus while aria-activedescendant names the active option, which PALETTE_ROW_CLASS draws as the highlight fill — the same one-focus-owner model as the palettes; a ring on the listbox itself would be a second indicator around the whole list",
   },
   {
+    file: "src/components/PluginKit/PluginKitTextInputs.tsx",
+    fragment: 'chrome === "bare" && "outline-hidden"',
+    reason:
+      "The Composer's bare textarea sits in the composer shell with its chips and footer, and the shell paints the one ring via has-[textarea:focus-visible]; a ring on the textarea too would draw a second one inside it",
+  },
+  {
     file: "src/components/Worktree/views/WorktreePathPicker.tsx",
     fragment: "focus:outline-hidden disabled:opacity-50",
     reason:

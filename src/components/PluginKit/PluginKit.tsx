@@ -116,6 +116,7 @@ import { pluginKitCharts } from "./PluginKitCharts";
 import { pluginKitDnd } from "./PluginKitDnd";
 import { pluginKitHooksFeedback } from "./PluginKitHooksFeedback";
 import { pluginKitTypography, pluginKitTypographyFunctions } from "./PluginKitTypography";
+import { pluginKitTextInputs } from "./PluginKitTextInputs";
 import { primeRadix } from "@/components/ui/radix-loader";
 
 export { normalizeSelectOptions, pickDomProps };
@@ -1265,6 +1266,7 @@ export const pluginKit = {
   ...pluginKitHooksFeedback,
   ...pluginKitTypography,
   ...pluginKitTypographyFunctions,
+  ...pluginKitTextInputs,
 };
 
 export type PluginKit = typeof pluginKit;

@@ -147,6 +147,13 @@ describe("element rules", () => {
     ]);
   });
 
+  it("points a password field at SecretInput", async () => {
+    const findings = await lintFor("raw-form-control", view(`<input type="password" />`));
+    expect(findings.map((f) => f.message)).toEqual([
+      expect.stringContaining('type="password">; prefer `SecretInput`'),
+    ]);
+  });
+
   it("suggests Input only for the types the kit Input renders", async () => {
     const findings = await lintFor(
       "raw-form-control",

@@ -26,7 +26,7 @@ The user can reload the panel too, from Reload panel in its menus and dialog hea
 
 ## A settings section
 
-A view with `location: "settings"` is your plugin's custom settings section, for what the generated [settings fields](./contribution-points.md#settings-schema--shipped) can't express — a sign-in, a list editor, a connection test. Declare at most one, with an `id` no panel uses:
+A view with `location: "settings"` is your plugin's custom settings section, for what the generated [settings fields](./contribution-points.md#settings-schema--shipped) can't express — a sign-in, a list or a table of pairs (the kit's `ListEditor` and `KeyValueEditor`), a connection test. Declare at most one, with an `id` no panel uses:
 
 ```json
 { "id": "connection", "componentPath": "dist/settings.js", "location": "settings" }
@@ -74,7 +74,7 @@ host.registerHandler("saveToken", async (_ctx, token) => {
 const { connected } = await window.electron.plugin.invoke(pluginId, "connection");
 ```
 
-Store what the section edits with your worker: credentials as a declared `type: "secret"` setting (`host.settings.set`), everything else in `host.storage` or a `host.db` database (declare it `location: "local"` to keep it on this machine and out of the repository). Never put a credential in `host.storage` or a database.
+Store what the section edits with your worker: credentials as a declared `type: "secret"` setting (`host.settings.set`), everything else in `host.storage` or a `host.db` database (declare it `location: "local"` to keep it on this machine and out of the repository). Never put a credential in `host.storage` or a database. In the section, a kit `SecretInput` with `stored` shows that one is saved, with Replace and Clear, without the view ever holding it.
 
 ## Styling
 

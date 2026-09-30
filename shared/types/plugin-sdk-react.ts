@@ -3845,3 +3845,338 @@ export interface PluginContainerSize {
 
 /** What `useContainerSize` and `useBreakpoint` observe: a ref, or the element itself. */
 export type PluginContainerTarget = RefObject<Element | null> | Element | null | undefined;
+
+// Text inputs: mention autocomplete, the agent composer, inline rename,
+// key/value and list editors, secrets and shortcut recording.
+
+/** One row of a `MentionTextarea` suggestion menu. */
+export interface PluginMentionSuggestion {
+  /** Unique within one list. */
+  id: string;
+  /** The row's text, drawn in the mono face the host's composer uses for tokens. */
+  label: string;
+  /**
+   * What replaces the trigger and the typed query. Defaults to the trigger
+   * followed by `label` (`@alice`). A space follows it unless it already
+   * ends in one.
+   */
+  insertText?: string;
+  /** A quieter second part of the row: a name, a path, what a command does. */
+  description?: string;
+  /** A short neutral tag after the label ("Skill", "Team"). */
+  badge?: string;
+  disabled?: boolean;
+}
+
+/** A character that opens the suggestion menu, and how its menu reads. */
+export interface PluginMentionTrigger {
+  /** One character: `"@"`, `"/"`, `"#"`, `":"`. */
+  char: string;
+  /** The menu's header ("People", "Commands"). Defaults to none. */
+  title?: string;
+  /** What the menu says when nothing matches. Defaults to "No matches". */
+  emptyMessage?: string;
+  /**
+   * Only at the very start of the text, as a slash command is. Otherwise the
+   * trigger counts at the start or after whitespace, so `a@b.c` never opens it.
+   */
+  atStart?: boolean;
+}
+
+/**
+ * Props of `MentionTextarea`: a textarea that grows with its text and opens
+ * the host's autocomplete menu when a trigger character is typed. Up and
+ * Down move through the suggestions, Enter or Tab insert one, Escape closes
+ * the menu and keeps the text. Focus stays in the textarea throughout.
+ */
+export interface PluginMentionTextareaProps extends PluginAriaRootAttributes {
+  value?: string;
+  defaultValue?: string;
+  onValueChange?: (value: string) => void;
+  /** The trigger characters, as `"@"` or with a title and empty message. */
+  triggers?: readonly (string | PluginMentionTrigger)[];
+  /**
+   * The suggestions for `query`, the text typed after `trigger`. May return a
+   * promise; while it is out the last rows stay up, dimmed, and a reply that
+   * arrives after a newer query is dropped. At most 50 rows are shown.
+   */
+  getSuggestions?: (
+    trigger: string,
+    query: string
+  ) => readonly PluginMentionSuggestion[] | Promise<readonly PluginMentionSuggestion[]>;
+  /** Called after a suggestion was inserted. */
+  onSuggestionInsert?: (suggestion: PluginMentionSuggestion, trigger: string) => void;
+  /**
+   * Keys the menu did not take. Call `preventDefault()` to keep the
+   * textarea from acting on one.
+   */
+  onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onBlur?: () => void;
+  onFocus?: () => void;
+  placeholder?: string;
+  name?: string;
+  disabled?: boolean;
+  readOnly?: boolean;
+  autoFocus?: boolean;
+  spellCheck?: boolean;
+  maxLength?: number;
+  invalid?: boolean;
+  /** Rows shown when empty. Defaults to 1. */
+  minRows?: number;
+  /** The height it grows to before it scrolls. Defaults to 8 rows. */
+  maxRows?: number;
+  /** `code` sets it in the mono face, for prompts and commands. */
+  variant?: "default" | "code";
+  density?: "default" | "compact";
+  /** The textarea element. */
+  ref?: Ref<HTMLTextAreaElement>;
+  className?: string;
+}
+
+/** A file or context item attached to a `Composer`, drawn as a removable chip. */
+export interface PluginComposerAttachment {
+  /** Unique within the list. */
+  id: string;
+  /** The chip's text: a file name, "Selection", "Diff". */
+  name: string;
+  /** A quiet detail after the name ("12 KB", "L10–24"). */
+  detail?: string;
+  /** Defaults to `file`. */
+  icon?: PluginIconSource;
+}
+
+/**
+ * Props of `Composer`: the agent composer. A `MentionTextarea` in the host
+ * composer's shell, with attachment chips above the text and a footer that
+ * holds an attach button, your own controls and Send, which turns into Stop
+ * while `busy`. Cmd/Ctrl+Enter sends and Enter is a new line, unless
+ * `submitOn` is `"enter"`. Files dropped or pasted onto it go to `onAttach`.
+ */
+export interface PluginComposerProps extends PluginAriaRootAttributes {
+  value?: string;
+  defaultValue?: string;
+  onValueChange?: (value: string) => void;
+  /** Called with the text when the user sends. Clearing the draft is up to you. */
+  onSubmit?: (value: string) => void;
+  /**
+   * Which key sends. Defaults to `"mod+enter"`, with Enter a new line. With
+   * `"enter"`, Enter sends, Shift+Enter is a new line, and Cmd/Ctrl+Enter
+   * still sends.
+   */
+  submitOn?: "mod+enter" | "enter";
+  /** An agent is working: Send becomes Stop and sending is held, the text stays editable. */
+  busy?: boolean;
+  /** Called by Stop, or Escape in the composer, while `busy`. */
+  onStop?: () => void;
+  disabled?: boolean;
+  placeholder?: string;
+  triggers?: readonly (string | PluginMentionTrigger)[];
+  getSuggestions?: PluginMentionTextareaProps["getSuggestions"];
+  onSuggestionInsert?: PluginMentionTextareaProps["onSuggestionInsert"];
+  attachments?: readonly PluginComposerAttachment[];
+  onRemoveAttachment?: (id: string) => void;
+  /**
+   * Files from the attach button, a drop or a paste. Without it there is no
+   * attach button and files are not taken.
+   */
+  onAttach?: (files: File[]) => void;
+  /** As on `<input type="file">`: extensions and MIME types, comma-separated. */
+  accept?: string;
+  /**
+   * At most this many characters. A count shows once the text passes 80% of
+   * it.
+   */
+  maxLength?: number;
+  /** Your controls in the footer, before Send: an agent picker, a mode toggle. */
+  toolbar?: ReactNode;
+  /** Send's label. Defaults to "Send". */
+  submitLabel?: string;
+  /** Defaults to 2. */
+  minRows?: number;
+  /** Defaults to 10. */
+  maxRows?: number;
+  autoFocus?: boolean;
+  /** The textarea element. */
+  ref?: Ref<HTMLTextAreaElement>;
+  className?: string;
+}
+
+/**
+ * Props of `InlineEdit`: text that turns into a field to rename it, as a
+ * pane title does. A click (or a double-click, with `activation`), F2 or
+ * Enter starts editing; Enter commits, Escape cancels, and leaving the field
+ * commits unless `blurAction` is `"cancel"`. An unchanged value commits nothing.
+ */
+export interface PluginInlineEditProps extends PluginRootAttributes {
+  value: string;
+  /**
+   * Called with the trimmed new value. Return a promise to hold the field,
+   * read-only with a spinner, until it settles; a rejection keeps the field
+   * open with the error's message under it.
+   */
+  onCommit: (value: string) => void | Promise<void>;
+  /**
+   * A message refuses the value; `null` or `undefined` accepts it, and a
+   * validator that throws refuses. Unless `allowEmpty`, Enter on an emptied
+   * field is refused and leaving it puts the value back.
+   */
+  validate?: (value: string) => string | null | undefined;
+  allowEmpty?: boolean;
+  /** Shown in place of an empty value. */
+  placeholder?: string;
+  /** What leaving the field does. Defaults to `"commit"`. */
+  blurAction?: "commit" | "cancel";
+  /** What starts editing with the pointer. Defaults to `"click"`. */
+  activation?: "click" | "doubleClick";
+  /** `stem` selects a file name up to its extension. Defaults to `all`. */
+  selectOnEdit?: "all" | "stem" | "end";
+  /** Editing, controlled. */
+  editing?: boolean;
+  onEditingChange?: (editing: boolean) => void;
+  maxLength?: number;
+  disabled?: boolean;
+  /** The type size: `sm` for rows and headers (the default), `md` and `lg` for titles. */
+  size?: "sm" | "md" | "lg";
+  /** Required: names the field ("Request name"). */
+  "aria-label": string;
+  className?: string;
+}
+
+/** One row of a `KeyValueEditor`. */
+export interface PluginKeyValuePair {
+  /** Keeps a row's identity through edits and reordering. The editor adds one when it is missing. */
+  id?: string;
+  key: string;
+  value: string;
+  /** Draw the value as a `SecretInput`. */
+  secret?: boolean;
+}
+
+/**
+ * Props of `KeyValueEditor`: rows of key and value fields for environment
+ * variables, headers and mappings. A value with no key and a repeated key are
+ * marked on the row; an entirely empty row is not. Pasting `KEY=value` or `Key: value` lines into a key field adds a
+ * row per line.
+ */
+export interface PluginKeyValueEditorProps extends PluginRootAttributes {
+  value?: readonly PluginKeyValuePair[];
+  defaultValue?: readonly PluginKeyValuePair[];
+  onValueChange?: (pairs: PluginKeyValuePair[]) => void;
+  /** Whether every row is valid, called when that changes (and once on mount). */
+  onValidityChange?: (valid: boolean) => void;
+  /** A message refuses a key; `null` or `undefined` accepts it. Runs after the built-in checks. */
+  validateKey?: (key: string) => string | null | undefined;
+  /** Compare keys ignoring case, as HTTP headers do. */
+  caseInsensitiveKeys?: boolean;
+  allowDuplicateKeys?: boolean;
+  /** Rows can be dragged into a new order by a grip, or moved with the keyboard. */
+  reorderable?: boolean;
+  /** Column names over the fields. Default to "Key" and "Value". */
+  keyLabel?: string;
+  valueLabel?: string;
+  keyPlaceholder?: string;
+  valuePlaceholder?: string;
+  /** The add button's label. Defaults to "Add". */
+  addLabel?: string;
+  /** No more rows than this. */
+  max?: number;
+  /** Show a toggle on each row that masks its value. */
+  allowSecretToggle?: boolean;
+  disabled?: boolean;
+  /** Required: names the editor ("Headers"). */
+  "aria-label": string;
+  className?: string;
+}
+
+/**
+ * Props of `ListEditor`: an editable list of single values (hosts, globs,
+ * scopes). Pasting several lines into a field adds a row per line; repeated
+ * values are marked.
+ */
+export interface PluginListEditorProps extends PluginRootAttributes {
+  value?: readonly string[];
+  defaultValue?: readonly string[];
+  onValueChange?: (items: string[]) => void;
+  onValidityChange?: (valid: boolean) => void;
+  /** A message refuses an item; `null` or `undefined` accepts it. Empty rows are ignored, not refused. */
+  validate?: (item: string) => string | null | undefined;
+  allowDuplicates?: boolean;
+  reorderable?: boolean;
+  placeholder?: string;
+  addLabel?: string;
+  max?: number;
+  /** `code` sets the fields in the mono face, for paths and globs. */
+  variant?: "default" | "code";
+  disabled?: boolean;
+  "aria-label": string;
+  className?: string;
+}
+
+/**
+ * Props of `SecretInput`: a masked field for a token or key, with a reveal
+ * toggle. With `stored`, the field shows that a secret is saved without
+ * knowing it, and offers Replace (and Clear, with `onClear`). Copying out of
+ * the field is blocked unless `allowCopy`.
+ */
+export interface PluginSecretInputProps extends PluginAriaRootAttributes {
+  value?: string;
+  defaultValue?: string;
+  onValueChange?: (value: string) => void;
+  /** A secret is saved already; the view does not hold it. */
+  stored?: boolean;
+  /** The last few characters of the saved secret, shown after the dots ("a1b2"). At most 6 are used. */
+  storedHint?: string;
+  /** Called when the user chooses Replace; the field is then empty and focused. */
+  onReplace?: () => void;
+  /** Called when the user backs out of a replace, back to the saved secret. */
+  onCancelReplace?: () => void;
+  /** Shows Clear beside the saved secret. Asking for confirmation is up to you. */
+  onClear?: () => void;
+  /** Enter in the field. */
+  onSubmit?: (value: string) => void;
+  /** Allows copying and cutting the value out of the field. */
+  allowCopy?: boolean;
+  /** Defaults to true. */
+  revealable?: boolean;
+  placeholder?: string;
+  name?: string;
+  disabled?: boolean;
+  invalid?: boolean;
+  autoFocus?: boolean;
+  density?: "default" | "compact";
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  className?: string;
+}
+
+/**
+ * Props of `ShortcutRecorder`: focus it and press a shortcut to record it,
+ * in the app's combo notation (`"Cmd+Shift+K"`; Cmd is Ctrl off macOS).
+ * Escape stops recording, a plain Backspace or Delete clears, a plain Tab
+ * moves on. A shortcut Daintree
+ * already uses is flagged, since Daintree's binding wins over a view's.
+ */
+export interface PluginShortcutRecorderProps extends PluginAriaRootAttributes {
+  /** The combo, controlled; `null` or `""` for none. */
+  value?: string | null;
+  defaultValue?: string | null;
+  onValueChange?: (combo: string | null) => void;
+  /** Record a two-step chord ("Cmd+K Cmd+S"): a second key within a second completes it. */
+  allowChords?: boolean;
+  /** Refuse a first key that is bare or only Shift+key (outside F1–F24). Defaults to true. */
+  requireModifier?: boolean;
+  /** A message refuses the combo; `null` or `undefined` accepts it. */
+  validate?: (combo: string) => string | null | undefined;
+  /** A warning to show for a combo you already use elsewhere; `null` or `undefined` for none. */
+  getConflict?: (combo: string) => string | null | undefined;
+  /** Flag combos Daintree's own shortcuts use. Defaults to true. */
+  checkHostConflicts?: boolean;
+  /** Shown while no shortcut is set. Defaults to "Not set". */
+  placeholder?: string;
+  disabled?: boolean;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  className?: string;
+}

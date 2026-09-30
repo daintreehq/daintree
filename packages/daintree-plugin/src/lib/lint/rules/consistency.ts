@@ -233,6 +233,8 @@ const rawButton = elementRule(
 const KIT_INPUT_TYPES = new Set(["text", "search", "email", "url", "password", "number", "tel"]);
 
 const KIT_FOR_INPUT: Record<string, string> = {
+  // A token or key: masked, with reveal and a saved state, copy blocked.
+  password: "SecretInput",
   checkbox: "Checkbox",
   radio: "RadioGroup",
   range: "Slider",
