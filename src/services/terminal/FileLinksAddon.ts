@@ -153,14 +153,14 @@ interface ScopedDirCandidate extends DirCandidate {
 }
 
 /**
- * Every plausible length of one unquoted spaced path, longest first, awaiting
- * a directory probe. `fallback` holds the space-free links the bare-path pass
- * found inside its span: they stand only if no length checks out.
+ * An unquoted spaced path awaiting its directory probe. `fallback` holds the
+ * space-free links the bare-path pass found inside its span: they stand only
+ * if the probe doesn't confirm it.
  */
 interface PendingSpacedPath {
-  options: SpacedFilePathCandidate[];
+  candidate: SpacedFilePathCandidate;
   local: [number, number];
-  fallback: Array<{ link: ILink; startIndex: number; endIndex: number }>;
+  fallback: ILink[];
 }
 
 /** A wrapped run of buffer rows, rejoined into the line the user sees. */
@@ -645,11 +645,6 @@ export class FileLinksAddon implements ILinkProvider {
 
     this._collectBarePathLinks(logical, rowOffset, rowColumn, lineText, links, claimed, pending);
 
-    // A spaced path's span is off limits to the directory pass whichever way
-    // its probe lands: `/Users/me/Library/Application` is a head fragment of
-    // that path, not a directory the user printed.
-    for (const spaced of pending) claimed.push(spaced.local);
-
     const candidates = this._collectDirCandidates(lineText, claimed);
     if (candidates.length === 0 && pending.length === 0) {
       callback(links.length > 0 ? links : undefined);
@@ -669,25 +664,37 @@ export class FileLinksAddon implements ILinkProvider {
     //
     // Unquoted spaced paths ride the same deferral: their parent directory is
     // probed, and until it answers nobody can say whether the space sits in a
-    // directory name or between two tokens. Each validation fails on its own,
-    // so a directory stat error can't cost a spaced path its link.
-    type Verdicts = { dirs: ScopedDirCandidate[]; spaced: Array<SpacedFilePathCandidate | null> };
-    const unconfirmed: Verdicts = { dirs: [], spaced: pending.map(() => null) };
-    const timeout = new Promise<Verdicts>((resolve) =>
-      setTimeout(() => resolve(unconfirmed), DIR_VALIDATION_TIMEOUT_MS)
-    );
+    // directory name or between two tokens. Each validation lands in
+    // `verdicts` on its own, so one failing or stalling can't cost the other
+    // the links it already confirmed.
+    const verdicts: { dirs: ScopedDirCandidate[]; spaced: boolean[] } = {
+      dirs: [],
+      spaced: pending.map(() => false),
+    };
     const validation = Promise.all([
       candidates.length > 0
-        ? this._validateDirCandidates(candidates).catch(() => [])
-        : Promise.resolve([]),
-      this._validateSpacedPaths(pending).catch(() => unconfirmed.spaced),
-    ]).then(([dirs, spaced]): Verdicts => ({ dirs, spaced }));
+        ? this._validateDirCandidates(candidates).then(
+            (dirs) => {
+              verdicts.dirs = dirs;
+            },
+            () => {}
+          )
+        : undefined,
+      this._validateSpacedPaths(pending).then((spaced) => {
+        verdicts.spaced = spaced;
+      }),
+    ]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, DIR_VALIDATION_TIMEOUT_MS);
+    });
 
     // Both outcomes land in one finalization. The staleness checks are not a
     // success-path nicety: a file link can now span rows, so a reply arriving
     // after the buffer moved would paint coordinates that no longer describe
     // what the user is looking at — whether or not validation succeeded.
-    const finalize = ({ dirs: confirmed, spaced }: Verdicts): void => {
+    const finalize = (): void => {
+      clearTimeout(timer);
       // Disposed while validating (terminal closed): the registration is
       // gone, so a late reply has no linkifier to serve.
       if (this._disposed) return;
@@ -709,24 +716,21 @@ export class FileLinksAddon implements ILinkProvider {
         callback(undefined);
         return;
       }
+      const spacedSpans: Array<[number, number]> = [];
       pending.forEach((group, index) => {
-        const winner = spaced[index];
-        const resolved = winner ? resolveFilePathCandidate(winner.path, this._getCwd()) : null;
-        // The winner may be shorter than the span the group held, so bare
-        // links past its end are still the line's own.
-        for (const held of group.fallback) {
-          const covered =
-            winner &&
-            resolved &&
-            held.startIndex < winner.endIndex &&
-            held.endIndex > winner.startIndex;
-          if (!covered) links.push(held.link);
+        const resolved = verdicts.spaced[index]
+          ? resolveFilePathCandidate(group.candidate.path, this._getCwd())
+          : null;
+        if (!resolved) {
+          links.push(...group.fallback);
+          return;
         }
-        if (!winner || !resolved) return;
+        const { startIndex, endIndex } = group.candidate;
+        spacedSpans.push(group.local);
         links.push(
           new FileLink(
-            rangeFor(logical, winner.startIndex, winner.endIndex),
-            logical.text.slice(winner.startIndex, winner.endIndex),
+            rangeFor(logical, startIndex, endIndex),
+            logical.text.slice(startIndex, endIndex),
             resolved.absolutePath,
             resolved.line,
             resolved.col,
@@ -735,7 +739,11 @@ export class FileLinksAddon implements ILinkProvider {
           )
         );
       });
-      for (const candidate of confirmed) {
+      for (const candidate of verdicts.dirs) {
+        // A confirmed spaced path owns its whole span; a directory inside it
+        // (`/Users/me/Library/Application`) is a head fragment, not a link.
+        const end = candidate.startIndex + candidate.text.length;
+        if (overlapsClaimed(spacedSpans, candidate.startIndex, end)) continue;
         const range: IBufferRange = {
           start: { x: candidate.startIndex + 1, y: bufferLineNumber },
           end: { x: candidate.startIndex + candidate.text.length, y: bufferLineNumber },
@@ -754,7 +762,7 @@ export class FileLinksAddon implements ILinkProvider {
       callback(links.length > 0 ? links : undefined);
     };
 
-    void Promise.race([validation, timeout]).then(finalize, () => finalize(unconfirmed));
+    void Promise.race([validation, timeout]).then(finalize, finalize);
   }
 
   /**
@@ -879,8 +887,7 @@ export class FileLinksAddon implements ILinkProvider {
         this._getCwd(),
         this._onHover
       );
-      if (spaced) spaced.fallback.push({ link, startIndex, endIndex });
-      else links.push(link);
+      (spaced ? spaced.fallback : links).push(link);
     }
   }
 
@@ -909,17 +916,16 @@ export class FileLinksAddon implements ILinkProvider {
       const { startIndex, endIndex } = candidate;
 
       if (candidate.probeDir !== undefined) {
-        // Options for one start arrive longest first, and the longest span
-        // covers every shorter one, so it stands in for the whole group.
-        const group = pending.find((entry) => entry.options[0]!.startIndex === startIndex);
-        if (group) {
-          if (!touchesClippedEdge(logical, startIndex, endIndex)) group.options.push(candidate);
-          continue;
-        }
         const local = projectToRow(rowOffset, rowColumn, lineText.length, startIndex, endIndex);
         if (!local || overlapsClaimed(claimed, local[0], local[1])) continue;
-        if (touchesClippedEdge(logical, startIndex, endIndex)) continue;
-        pending.push({ options: [candidate], local, fallback: [] });
+        // Cut off by the rejoin window, the path can't be probed whole — but
+        // its span is still claimed, or the bare-path pass would link the
+        // fragment after its space against the cwd.
+        if (touchesClippedEdge(logical, startIndex, endIndex)) {
+          claimed.push(local);
+          continue;
+        }
+        pending.push({ candidate, local, fallback: [] });
         continue;
       }
 
@@ -946,43 +952,43 @@ export class FileLinksAddon implements ILinkProvider {
   }
 
   /**
-   * Pick, per pending spaced path, the longest length whose parent directory
-   * exists — or null when none does. Absolute paths anywhere on disk are fair
-   * game: the motivating path lives under `~/Library/Application Support`,
-   * outside every worktree, so the worktree-scoped stat op can't see it.
+   * Whether each pending spaced path's parent directory exists. Absolute
+   * paths anywhere on disk are fair game: the motivating path lives under
+   * `~/Library/Application Support`, outside every worktree, so the
+   * worktree-scoped stat op can't see it. Each probe fails on its own — an
+   * error just leaves that path unconfirmed.
    */
-  private async _validateSpacedPaths(
-    pending: PendingSpacedPath[]
-  ): Promise<Array<SpacedFilePathCandidate | null>> {
+  private async _validateSpacedPaths(pending: PendingSpacedPath[]): Promise<boolean[]> {
     if (pending.length === 0) return [];
 
+    // Snapshot fresh verdicts before awaiting: a probe landing in a full cache
+    // clears it, and must not take this request's cached answers with it.
+    const known = new Map<string, boolean>();
     const toProbe = new Set<string>();
-    for (const group of pending) {
-      for (const option of group.options) {
-        const cached = spacedDirCache.get(option.probeDir!);
-        if (cached === undefined || Date.now() - cached.at >= DIR_KIND_CACHE_TTL_MS) {
-          toProbe.add(option.probeDir!);
-        }
+    for (const { candidate } of pending) {
+      const dir = candidate.probeDir!;
+      const cached = spacedDirCache.get(dir);
+      if (cached !== undefined && Date.now() - cached.at < DIR_KIND_CACHE_TTL_MS) {
+        known.set(dir, cached.exists);
+      } else {
+        toProbe.add(dir);
       }
     }
 
-    const probed = new Map<string, boolean>();
     await Promise.all(
       [...toProbe].slice(0, MAX_SPACED_PROBES).map(async (dir) => {
-        const exists = await systemClient.checkDirectory(dir);
-        probed.set(dir, exists);
-        if (spacedDirCache.size >= DIR_KIND_CACHE_CAP) spacedDirCache.clear();
-        spacedDirCache.set(dir, { exists, at: Date.now() });
+        try {
+          const exists = (await systemClient.checkDirectory(dir)) === true;
+          known.set(dir, exists);
+          if (spacedDirCache.size >= DIR_KIND_CACHE_CAP) spacedDirCache.clear();
+          spacedDirCache.set(dir, { exists, at: Date.now() });
+        } catch {
+          // Transport failure, not a verdict: nothing cached, nothing linked.
+        }
       })
     );
 
-    return pending.map(
-      (group) =>
-        group.options.find((option) => {
-          const dir = option.probeDir!;
-          return probed.get(dir) ?? (toProbe.has(dir) ? false : spacedDirCache.get(dir)?.exists);
-        }) ?? null
-    );
+    return pending.map(({ candidate }) => known.get(candidate.probeDir!) === true);
   }
 
   /**

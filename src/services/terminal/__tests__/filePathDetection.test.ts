@@ -401,10 +401,17 @@ describe("findSpacedFilePathCandidates", () => {
     expect(candidate?.probeDir).toBe("/a b");
   });
 
-  it("offers every plausible length, longest first", () => {
-    const candidates = findSpacedFilePathCandidates("/a b/c.md and d/e.md");
-    expect(candidates.map((c) => c.path)).toEqual(["/a b/c.md and d/e.md", "/a b/c.md"]);
-    expect(candidates.map((c) => c.probeDir)).toEqual(["/a b/c.md and d", "/a b"]);
+  it("spans several spaced directory names", () => {
+    expect(findSpacedFilePathCandidates("/a b/c x/y d/e.md")).toEqual([
+      { startIndex: 0, endIndex: 17, path: "/a b/c x/y d/e.md", probeDir: "/a b/c x/y d" },
+    ]);
+  });
+
+  it("stops growing after a word that ends like a whole file", () => {
+    expect(findSpacedFilePathCandidates("Error at /a/b.ts in foo/bar.ts")).toEqual([]);
+    expect(findSpacedFilePathCandidates("/a b/c.md and d/e.md").map((c) => c.path)).toEqual([
+      "/a b/c.md",
+    ]);
   });
 
   it("keeps a multi-dot filename whole", () => {
@@ -441,7 +448,7 @@ describe("findSpacedFilePathCandidates", () => {
   });
 
   it("accepts single quotes, backticks, and quoted relative paths", () => {
-    expect(findSpacedFilePathCandidates("'my dir/a.md'")[0]?.path).toBe("my dir/a.md");
+    expect(findSpacedFilePathCandidates("'./my dir/a.md'")[0]?.path).toBe("./my dir/a.md");
     expect(findSpacedFilePathCandidates("`/a b/c.ts:4`")[0]?.path).toBe("/a b/c.ts:4");
   });
 
@@ -449,6 +456,11 @@ describe("findSpacedFilePathCandidates", () => {
     expect(findSpacedFilePathCandidates('"src/foo.ts"')).toEqual([]);
     expect(findSpacedFilePathCandidates('"hello world"')).toEqual([]);
     expect(findSpacedFilePathCandidates('"see https://x.y/a b.md"')).toEqual([]);
+    expect(findSpacedFilePathCandidates("Run 'cat src/a.ts' first")).toEqual([]);
+    // Not a quoted path — only the unquoted scanner's probe-gated guess remains.
+    expect(findSpacedFilePathCandidates('"see /a b/c.md"')).toEqual([
+      { startIndex: 5, endIndex: 14, path: "/a b/c.md", probeDir: "/a b" },
+    ]);
   });
 
   it("decodes shell-escaped spaces without a probe", () => {
@@ -474,11 +486,17 @@ describe("resolveSelectedFilePath with spaced paths", () => {
   });
 
   it("resolves a selected quoted path, quotes included in the selection", () => {
-    expect(resolveSelectedFilePath('"my dir/a.md"', "/cwd")?.absolutePath).toBe("/cwd/my dir/a.md");
+    expect(resolveSelectedFilePath('"./my dir/a.md"', "/cwd")?.absolutePath).toBe(
+      "/cwd/my dir/a.md"
+    );
   });
 
   it("resolves a selected shell-escaped path", () => {
     expect(resolveSelectedFilePath("/a\\ b/c.md", "/cwd")?.absolutePath).toBe("/a b/c.md");
+  });
+
+  it("rejects a selection spanning an absolute and a relative path", () => {
+    expect(resolveSelectedFilePath("/a/one.ts b/two.ts", "/cwd")).toBeNull();
   });
 
   it("still rejects a spaced path embedded in prose", () => {

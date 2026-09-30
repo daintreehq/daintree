@@ -432,7 +432,7 @@ describe("FileLinksAddon paths containing spaces", () => {
     expect(systemClient.checkDirectory).toHaveBeenCalledWith(dir);
   });
 
-  it("falls back to the space-free links when no length checks out", async () => {
+  it("falls back to the space-free links when the probe refutes the path", async () => {
     const home = nextHome();
     existingDirs();
 
@@ -440,6 +440,7 @@ describe("FileLinksAddon paths containing spaces", () => {
       new FileLinksAddon(flat([`node ${home}/bin/tool src/a.ts`]), () => "/repo")
     );
 
+    expect(systemClient.checkDirectory).toHaveBeenCalledWith(`${home}/bin/tool src`);
     expect(texts(links)).toEqual(["src/a.ts"]);
     expect(absolutePath(links?.[0])).toBe("/repo/src/a.ts");
   });
@@ -455,7 +456,7 @@ describe("FileLinksAddon paths containing spaces", () => {
     expect(texts(links)).toEqual([`${home}/Application Support/x.md`]);
   });
 
-  it("keeps the longest confirmed length and the bare links past it", async () => {
+  it("links a confirmed spaced path alongside a later bare path", async () => {
     const home = nextHome();
     existingDirs(`${home}/a b`);
 
@@ -484,7 +485,77 @@ describe("FileLinksAddon paths containing spaces", () => {
       new FileLinksAddon(flat([`${home}/Application Support/x.md`]), () => "/repo")
     );
 
+    expect(systemClient.checkDirectory).toHaveBeenCalledTimes(1);
     expect(texts(links)).toEqual(["Support/x.md"]);
+  });
+
+  it("keeps a confirmed path when another probe on the line fails", async () => {
+    const home = nextHome();
+    vi.mocked(systemClient.checkDirectory).mockImplementation(async (dir) => {
+      if (dir === `${home}/a b`) return true;
+      throw new Error("ipc down");
+    });
+
+    const links = await provide(
+      new FileLinksAddon(flat([`${home}/a b/c.md ${home}/d e/f.md`]), () => "/repo")
+    );
+
+    expect(texts(links).sort()).toEqual([`${home}/a b/c.md`, "e/f.md"].sort());
+  });
+
+  it("keeps a directory link inside a spaced path the probe refutes", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    vi.mocked(fileBrowserClient.statPaths).mockResolvedValue(["directory"]);
+    existingDirs();
+
+    const links = await provide(new FileLinksAddon(flat([`${root}/src foo/bar.ts`]), () => root));
+
+    expect(texts(links).sort()).toEqual([`${root}/src`, "foo/bar.ts"].sort());
+  });
+
+  it("delivers the fallback once at the deadline when the probe stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const home = nextHome();
+      let release: (exists: boolean) => void = () => {};
+      vi.mocked(systemClient.checkDirectory).mockReturnValue(
+        new Promise((resolve) => {
+          release = resolve;
+        })
+      );
+      const callback = vi.fn();
+
+      new FileLinksAddon(flat([`${home}/a b/c.md`]), () => "/repo").provideLinks(1, callback);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(callback).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(texts(callback.mock.calls[0]![0])).toEqual(["b/c.md"]);
+
+      release(true);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(callback).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops the reply when the row is rewritten mid-probe", async () => {
+    const home = nextHome();
+    const rows = [`${home}/a b/c.md`];
+    let release: (exists: boolean) => void = () => {};
+    vi.mocked(systemClient.checkDirectory).mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      })
+    );
+
+    const pendingLinks = provide(new FileLinksAddon(flat(rows), () => "/repo"));
+    rows[0] = "something else entirely";
+    release(true);
+
+    expect(await pendingLinks).toBeUndefined();
   });
 
   it("links a quoted path without probing", async () => {
@@ -497,6 +568,15 @@ describe("FileLinksAddon paths containing spaces", () => {
     expect(absolutePath(links?.[0])).toBe(path);
     expect(links![0]!.range.start.x).toBe(8);
     expect(systemClient.checkDirectory).not.toHaveBeenCalled();
+  });
+
+  it("leaves a quoted command's relative path linked on its own", async () => {
+    const links = await provide(
+      new FileLinksAddon(flat(["Run 'cat src/a.ts' first"]), () => "/repo")
+    );
+
+    expect(texts(links)).toEqual(["src/a.ts"]);
+    expect(absolutePath(links?.[0])).toBe("/repo/src/a.ts");
   });
 
   it("links a shell-escaped path without probing and decodes the space", async () => {
@@ -532,8 +612,12 @@ describe("FileLinksAddon paths containing spaces", () => {
 
   it("answers synchronously when a line holds no spaced candidate", () => {
     const callback = vi.fn();
-    new FileLinksAddon(flat(["error in src/a.ts:3"]), () => "/repo").provideLinks(1, callback);
+    new FileLinksAddon(flat(["Error at /a/b.ts in foo/bar.ts"]), () => "/repo").provideLinks(
+      1,
+      callback
+    );
     expect(callback).toHaveBeenCalledTimes(1);
+    expect(texts(callback.mock.calls[0]![0])).toEqual(["/a/b.ts", "foo/bar.ts"]);
     expect(systemClient.checkDirectory).not.toHaveBeenCalled();
   });
 });

@@ -35,9 +35,11 @@ export interface SpacedFilePathCandidate {
 
 // Quoted and shell-escaped forms carry their own boundaries, so they need no
 // filesystem confirmation. Only space-containing spellings are taken here —
-// a space-free quoted path stays the business of FILE_PATH_REGEX.
+// a space-free quoted path stays the business of FILE_PATH_REGEX. A quoted
+// path must open with a root or `./`/`../`: quotes bound text, not paths, and
+// `'cat src/a.ts'` would otherwise swallow the real `src/a.ts` link.
 const QUOTED_PATH_REGEX = /(?:^|[\s(=:])(["'`])([^"'`\s][^"'`]*?)\1/g;
-const QUOTED_PATH_SHAPE = /^(?:[a-zA-Z]:[\\/])?[\w./\\ -]*[\\/][\w./\\ -]*\.\w+(?::\d+(?::\d+)?)?$/;
+const QUOTED_PATH_SHAPE = /^(?:[a-zA-Z]:[\\/]|\.{0,2}[\\/])[\w./\\ -]*\.\w+(?::\d+(?::\d+)?)?$/;
 const ESCAPED_PATH_REGEX = /(?:^|[\s(])((?:[\w./-]|\\ )+\.\w+(?::\d+(?::\d+)?)?)/g;
 
 // Unquoted: anchored on an absolute root and grown word by word, each word
@@ -46,6 +48,7 @@ const SPACED_ANCHOR_REGEX = /(?:^|[\s(])((?:\/|[a-zA-Z]:[\\/])[\w./\\-]*)/g;
 const SPACED_WORD_REGEX = /[\w./\\-]+(?::\d+(?::\d+)?)?/y;
 const SPACED_TAIL_REGEX = /^[\w./\\-]*[\\/][\w./\\-]*\.\w+(?::\d+(?::\d+)?)?/;
 const ABSOLUTE_WORD = /^(?:\/|[a-zA-Z]:[\\/])/;
+const COMPLETE_FILE_WORD = /\.\w+(?::\d+(?::\d+)?)?$/;
 const MAX_SPACED_WORDS = 8;
 
 function stripLocationSuffix(path: string): string {
@@ -55,9 +58,8 @@ function stripLocationSuffix(path: string): string {
 /**
  * Find path tokens that contain spaces: quoted (`"/a b/c.md"`), shell-escaped
  * (`/a\ b/c.md`), and unquoted absolute paths whose space sits in a directory
- * component (`/a b/c.md`). Unquoted candidates carry `probeDir` — the parent
- * directory that must exist — and every plausible length is returned, longest
- * first per start, so the caller can keep the longest one that checks out.
+ * component (`/a b/c.md`). Unquoted candidates carry `probeDir`, the parent
+ * directory that must exist before the candidate is a link.
  */
 export function findSpacedFilePathCandidates(text: string): SpacedFilePathCandidate[] {
   const candidates: SpacedFilePathCandidate[] = [];
@@ -90,33 +92,42 @@ export function findSpacedFilePathCandidates(text: string): SpacedFilePathCandid
 
     const wordEnds: number[] = [];
     let pos = startIndex + first.length;
-    while (wordEnds.length < MAX_SPACED_WORDS - 1 && text[pos] === " ") {
+    let current = first;
+    // A word that already ends like a whole file (`/a/b.ts in foo/bar.ts`)
+    // closes the token: growing past it would hold two real links hostage to
+    // a probe of `/a/b.ts in foo`.
+    while (
+      wordEnds.length < MAX_SPACED_WORDS - 1 &&
+      text[pos] === " " &&
+      !COMPLETE_FILE_WORD.test(current)
+    ) {
       SPACED_WORD_REGEX.lastIndex = pos + 1;
       const word = SPACED_WORD_REGEX.exec(text);
       // A word that starts its own absolute path is the next token, not a
       // continuation of this one.
       if (!word || ABSOLUTE_WORD.test(word[0])) break;
+      current = word[0];
       pos += 1 + word[0].length;
       wordEnds.push(pos);
     }
 
-    for (let i = wordEnds.length - 1; i >= 0; i--) {
-      const lastWordStart = (i === 0 ? startIndex + first.length : wordEnds[i - 1]!) + 1;
-      // The last word has to carry a separator, which puts every space in the
-      // candidate inside a directory component — the one thing a single stat
-      // of the parent directory can then confirm.
-      const tail = SPACED_TAIL_REGEX.exec(text.slice(lastWordStart, wordEnds[i]));
-      if (!tail) continue;
-      const endIndex = lastWordStart + tail[0].length;
-      if (overlaps(explicit, startIndex, endIndex)) continue;
-      const path = text.slice(startIndex, endIndex);
-      candidates.push({
-        startIndex,
-        endIndex,
-        path,
-        probeDir: parentDirectory(stripLocationSuffix(path)),
-      });
-    }
+    // Growth stops after a file-shaped word, so only the last word can end
+    // the path. It has to carry a separator too, which puts every space in the
+    // candidate inside a directory component — the one thing a single stat of
+    // the parent directory can then confirm.
+    if (wordEnds.length === 0) continue;
+    const lastWordStart = pos - current.length;
+    const tail = SPACED_TAIL_REGEX.exec(current);
+    if (!tail) continue;
+    const endIndex = lastWordStart + tail[0].length;
+    if (overlaps(explicit, startIndex, endIndex)) continue;
+    const path = text.slice(startIndex, endIndex);
+    candidates.push({
+      startIndex,
+      endIndex,
+      path,
+      probeDir: parentDirectory(stripLocationSuffix(path)),
+    });
   }
 
   return candidates;
