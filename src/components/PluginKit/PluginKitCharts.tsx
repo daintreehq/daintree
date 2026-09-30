@@ -871,6 +871,22 @@ function ValueGrid({
   );
 }
 
+/**
+ * A tick label centred on its tick unless that would hang past the plot's
+ * edge, where it would crowd the value axis's labels (the first x tick sits
+ * right under "0"): there it lines up with the edge instead.
+ */
+export function edgeAnchor(
+  tick: { at: number; text: string },
+  left: number,
+  right: number
+): "start" | "middle" | "end" {
+  const half = (tick.text.length * AXIS_CHAR_PX) / 2;
+  if (tick.at - half < left) return "start";
+  if (tick.at + half > right) return "end";
+  return "middle";
+}
+
 function linear(d0: number, d1: number, r0: number, r1: number): (value: number) => number {
   const span = d1 - d0;
   return (value) => (span === 0 ? (r0 + r1) / 2 : r0 + ((value - d0) / span) * (r1 - r0));
@@ -1472,9 +1488,10 @@ function KitLineChart({
             {geometry.xTicks.map((tick, index) => (
               <text
                 key={index}
+                data-chart-x-tick=""
                 x={tick.at}
                 y={geometry.top + geometry.plotH + 14}
-                textAnchor="middle"
+                textAnchor={edgeAnchor(tick, geometry.left, geometry.left + geometry.plotW)}
                 fontSize={AXIS_FONT_PX}
                 className="fill-text-secondary tabular-nums"
               >

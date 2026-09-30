@@ -17,6 +17,7 @@ import {
   donutParts,
   monotonePath,
   niceTicks,
+  edgeAnchor,
   resolveSeries,
   timeTicks,
 } from "@/components/PluginKit/PluginKitCharts";
@@ -426,6 +427,24 @@ describe("LineChart", () => {
     expect(tooltip()?.textContent).toBe("t220p5060p95");
     fireEvent.keyDown(plot(), { key: "ArrowRight" });
     expect(tooltip()?.textContent).toBe("t220p5060p95");
+  });
+
+  it("keeps the edge tick labels inside the plot rather than under the value axis", () => {
+    const { container } = render(
+      createElement(kit.LineChart, {
+        data: Array.from({ length: 11 }, (_, index) => ({ at: index * 10, v: index })),
+        x: "at",
+        series: [{ key: "v", label: "Value" }],
+        "aria-label": "Values",
+        formatX: (value: number) => `Sep ${value}`,
+      })
+    );
+    const ticks = [...container.querySelectorAll("[data-chart-x-tick]")];
+    expect(ticks.length).toBeGreaterThan(2);
+    expect(ticks[0]?.getAttribute("text-anchor")).toBe("start");
+    expect(ticks[1]?.getAttribute("text-anchor")).toBe("middle");
+    expect(edgeAnchor({ at: 100, text: "Sep 30" }, 0, 100)).toBe("end");
+    expect(edgeAnchor({ at: 50, text: "Sep 30" }, 0, 100)).toBe("middle");
   });
 
   it("reads dates and ISO strings as time", () => {
