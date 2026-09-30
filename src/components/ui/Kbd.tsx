@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { describeChord, parseChord } from "@/lib/kbdShortcut";
+import type { RootAttributes } from "@/components/ui/rootAttributes";
 
 export const KBD_CLASS =
   "px-1.5 py-0.5 rounded-sm text-xs font-mono tabular-nums leading-none bg-overlay-subtle text-text-secondary border border-border-subtle";
@@ -45,10 +46,16 @@ const MODIFIER_GLYPH = /^[⌘⇧⌥⌃⏎⎋⇥⌫⌦↑↓←→]$/;
 export interface KbdProps {
   children: React.ReactNode;
   className?: string;
+  /** `id`, `data-*` or `aria-*` on the root; the component's own attributes win. */
+  rootAttributes?: RootAttributes;
 }
 
-export function Kbd({ children, className }: KbdProps) {
-  return <kbd className={cn(KBD_CLASS, className)}>{children}</kbd>;
+export function Kbd({ children, className, rootAttributes }: KbdProps) {
+  return (
+    <kbd {...rootAttributes} className={cn(KBD_CLASS, className)}>
+      {children}
+    </kbd>
+  );
 }
 
 export interface KbdChordProps {
@@ -73,6 +80,8 @@ export interface KbdChordProps {
    * key, so a colour on the wrapper cannot reach it.
    */
   foreground?: "secondary" | "primary" | "inverse";
+  /** `id`, `data-*` or `aria-*` on the root; the component's own attributes win. */
+  rootAttributes?: RootAttributes;
 }
 
 /**
@@ -88,6 +97,7 @@ export function KbdChord({
   "aria-label": ariaLabel,
   density = "default",
   foreground = "secondary",
+  rootAttributes,
 }: KbdChordProps) {
   const mac = isMacProp ?? isMac();
   const steps = parseChord(shortcut, mac);
@@ -110,6 +120,7 @@ export function KbdChord({
 
   return (
     <span
+      {...rootAttributes}
       className={cn(
         "inline-flex items-center",
         bare ? "gap-0" : compact ? "gap-0.5" : "gap-1",

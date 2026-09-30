@@ -349,7 +349,7 @@ Tell agents in your data contract to leave the host's `_daintree_meta` table alo
 
 ## Refresh when the user comes back
 
-Switching projects leaves your view mounted, its React state intact, and its page visibility unchanged — nothing in the DOM marks the switch. The signal is main's, on `window.electron.app`, and the pull it drives is the one you already wrote for mount.
+Switching projects leaves your view mounted, its React state intact, and its page visibility unchanged — nothing in the DOM marks the switch. The signal is main's, on `window.electron.app`, and the pull it drives is the one you already wrote for mount. That bridge is the host's own, not part of the plugin API ([Views → Project switches and staleness](./views.md#project-switches-and-staleness)): `@daintreehq/plugin-sdk/view-globals` deliberately leaves it out, a TypeScript view reads it through its own narrow cast, and every call below is optional-chained so a host without it reads as a view that is never cached or revealed. Where the SDK already covers the case — `useNow`, `useAnimationFrame` — use the hook rather than the bridge.
 
 ```js
 // view: subscribe and pull on mount, re-pull when this project is shown again —

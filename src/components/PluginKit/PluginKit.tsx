@@ -96,6 +96,7 @@ import {
   nonEmpty,
   oneOf,
   pickDomProps,
+  pickRootProps,
   PluginStyleScope,
   positive,
   str,
@@ -246,16 +247,23 @@ function KitTruncatedTooltip({
 
 const SPINNER_SIZES = ["xs", "sm", "md", "lg", "xl", "2xl"] as const;
 
-function KitSpinner({ size, className }: PluginSpinnerProps) {
-  return <Spinner size={oneOf(size, SPINNER_SIZES)} className={str(className)} />;
+function KitSpinner({ size, className, ...rest }: PluginSpinnerProps) {
+  return (
+    <Spinner
+      rootAttributes={pickRootProps(rest)}
+      size={oneOf(size, SPINNER_SIZES)}
+      className={str(className)}
+    />
+  );
 }
 
-function KitSpinningIcon({ icon, active, size, className }: PluginSpinningIconProps) {
+function KitSpinningIcon({ icon, active, size, className, ...rest }: PluginSpinningIconProps) {
   const glyph = resolvePluginKitIcon(icon);
   if (!glyph) return null;
   const px = positive(size, 512) ?? 16;
   return (
     <SpinningIcon
+      {...pickRootProps(rest)}
       icon={glyph}
       active={active === true}
       width={px}
@@ -545,10 +553,15 @@ function KitSelect(props: PluginSelectProps) {
   const entries = normalizeSelectOptions(options);
   // Radix's trigger does not read the field context the other controls do, so
   // a Select inside a kit FormField is wired here.
+  const ariaInvalid = props["aria-invalid"];
   const { controlProps } = useFieldControl({
     "aria-label": str(ariaLabel),
     "aria-labelledby": str(ariaLabelledBy),
     "aria-describedby": str(ariaDescribedBy),
+    "aria-invalid":
+      ariaInvalid === true || ariaInvalid === "true"
+        ? true
+        : oneOf(ariaInvalid, ["false", "grammar", "spelling"] as const),
   });
   return (
     <Select
@@ -559,6 +572,7 @@ function KitSelect(props: PluginSelectProps) {
       name={str(name)}
     >
       <SelectTrigger
+        {...pickRootProps(props, { aria: true })}
         id={str(id)}
         aria-label={str(ariaLabel)}
         aria-labelledby={str(ariaLabelledBy)}
@@ -617,10 +631,12 @@ function KitSegmentedControl({
   fullWidth,
   density,
   className,
+  ...rest
 }: PluginSegmentedControlProps) {
   const handleChange = fn(onValueChange);
   return (
     <SegmentedRadioGroup
+      rootAttributes={pickRootProps(rest, { aria: true })}
       options={readSegmentedOptions(options)}
       value={str(value) ?? ""}
       onChange={(next) => handleChange?.(next)}
@@ -634,12 +650,21 @@ function KitSegmentedControl({
   );
 }
 
-function KitKbd({ children, density, className }: PluginKbdProps) {
+function KitKbd({ children, density, className, ...rest }: PluginKbdProps) {
+  const root = pickRootProps(rest);
   if (density === "compact") {
     // The host Kbd has one size; its compact box is the class KbdChord draws with.
-    return <kbd className={cn(KBD_COMPACT_CLASS, str(className))}>{node(children)}</kbd>;
+    return (
+      <kbd {...root} className={cn(KBD_COMPACT_CLASS, str(className))}>
+        {node(children)}
+      </kbd>
+    );
   }
-  return <Kbd className={str(className)}>{node(children)}</Kbd>;
+  return (
+    <Kbd rootAttributes={root} className={str(className)}>
+      {node(children)}
+    </Kbd>
+  );
 }
 
 function KitKbdChord({
@@ -648,11 +673,13 @@ function KitKbdChord({
   foreground,
   "aria-label": ariaLabel,
   className,
+  ...rest
 }: PluginKbdChordProps) {
   const combo = nonEmpty(shortcut);
   if (!combo) return null;
   return (
     <KbdChord
+      rootAttributes={pickRootProps(rest)}
       shortcut={combo}
       density={oneOf(density, ["default", "compact", "bare"] as const)}
       foreground={oneOf(foreground, ["secondary", "primary", "inverse"] as const)}
@@ -667,6 +694,7 @@ function KitCopyButton(props: PluginCopyButtonProps) {
     props;
   const payload = typeof text === "string" || typeof text === "function" ? text : "";
   const shared = {
+    ...pickRootProps(props, { aria: true }),
     text: payload,
     tooltip: content(tooltip),
     tooltipSide: oneOf(tooltipSide, SIDES),
@@ -708,10 +736,12 @@ function KitDismissButton({
   tooltip,
   disabled,
   className,
+  ...rest
 }: PluginDismissButtonProps) {
   const handleClick = fn(onClick);
   return (
     <DismissButton
+      {...pickRootProps(rest, { aria: true })}
       aria-label={nonEmpty(ariaLabel) ?? "Dismiss"}
       onClick={() => handleClick?.()}
       tooltip={content(tooltip)}
@@ -891,7 +921,9 @@ function KitEmptyState({
   icon,
   action,
   className,
+  ...rest
 }: PluginEmptyStateProps) {
+  const rootAttributes = pickRootProps(rest);
   const kind = oneOf(variant, ["zero-data", "filtered-empty", "user-cleared"] as const);
   const size = oneOf(scale, ["canvas", "sidebar", "popover"] as const) ?? "canvas";
   const heading = str(title) ?? "";
@@ -904,6 +936,7 @@ function KitEmptyState({
   if (kind === "user-cleared") {
     return (
       <EmptyState
+        rootAttributes={rootAttributes}
         variant="user-cleared"
         scale={size === "canvas" ? "canvas" : "sidebar"}
         title={heading}
@@ -917,6 +950,7 @@ function KitEmptyState({
     const body = content(description);
     return kind === "filtered-empty" ? (
       <EmptyState
+        rootAttributes={rootAttributes}
         variant="filtered-empty"
         scale="canvas"
         title={heading}
@@ -926,6 +960,7 @@ function KitEmptyState({
       />
     ) : (
       <EmptyState
+        rootAttributes={rootAttributes}
         variant="zero-data"
         scale="canvas"
         title={heading}
@@ -938,6 +973,7 @@ function KitEmptyState({
   }
   return kind === "filtered-empty" ? (
     <EmptyState
+      rootAttributes={rootAttributes}
       variant="filtered-empty"
       scale={size}
       title={heading}
@@ -946,6 +982,7 @@ function KitEmptyState({
     />
   ) : (
     <EmptyState
+      rootAttributes={rootAttributes}
       variant="zero-data"
       scale={size}
       title={heading}
@@ -956,17 +993,24 @@ function KitEmptyState({
   );
 }
 
-function KitSkeleton({ children, label, className }: PluginSkeletonProps) {
+function KitSkeleton({ children, label, className, ...rest }: PluginSkeletonProps) {
   return (
-    <Skeleton label={nonEmpty(label)} className={str(className)}>
+    <Skeleton {...pickRootProps(rest)} label={nonEmpty(label)} className={str(className)}>
       {node(children)}
     </Skeleton>
   );
 }
 
-function KitSkeletonBone({ className, heightPx, shimmer, immediate }: PluginSkeletonBoneProps) {
+function KitSkeletonBone({
+  className,
+  heightPx,
+  shimmer,
+  immediate,
+  ...rest
+}: PluginSkeletonBoneProps) {
   return (
     <SkeletonBone
+      {...pickRootProps(rest)}
       className={str(className)}
       heightPx={positive(heightPx, 10_000)}
       shimmer={shimmer === true}
@@ -975,9 +1019,16 @@ function KitSkeletonBone({ className, heightPx, shimmer, immediate }: PluginSkel
   );
 }
 
-function KitSkeletonText({ lines, shimmer, immediate, className }: PluginSkeletonTextProps) {
+function KitSkeletonText({
+  lines,
+  shimmer,
+  immediate,
+  className,
+  ...rest
+}: PluginSkeletonTextProps) {
   return (
     <SkeletonText
+      {...pickRootProps(rest)}
       lines={typeof lines === "number" && Number.isFinite(lines) ? lines : undefined}
       shimmer={shimmer === true}
       immediate={immediate === true}

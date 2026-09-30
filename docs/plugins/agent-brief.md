@@ -246,8 +246,10 @@ What the no-build path costs, and what it doesn't: the worker cannot import npm 
 | You need | Use |
 | --- | --- |
 | A button, an icon button, a menu | `Button` (no `variant` is the accent primary: one per region; `secondary`, `outline`, `ghost`, `subtle` for the rest), `IconButton`, `DropdownMenu` |
-| A form | `Input` (including `number`, `date`, `time`), `Textarea`, `Select`, `Checkbox`, `Switch`, `SegmentedControl`, `SearchField`, wrapped in `FormField` |
+| A form | `Input` (including `number`, `date`, `time`), `Textarea`, `Select`, `Checkbox`, `Switch`, `SegmentedControl`, `SearchField`, wrapped in `FormField`; `FormFieldGroup` for one label over a set of controls |
 | A list or table of any length | `DataTable`, `VirtualList` with `ListRow`, `LogView` for output |
+| A file tree | `FileTree` (takes `host.fs.walk` entries as they come) |
+| A headline number, a trend | `StatCard`, `Sparkline` |
 | Pane chrome | `PaneHeader`, `Toolbar` with `ToolbarButton`, `Tabs` |
 | Loading, empty, error | `PaneState` for the whole pane, `EmptyState`, `Callout` (`severity="error"` with a Retry `action` is the error banner), `Skeleton`, `Spinner`, `ProgressBar` |
 | A status chip | `Badge` |
@@ -257,7 +259,7 @@ What the no-build path costs, and what it doesn't: the worker cannot import npm 
 | Relative times, sizes, durations | `formatTimeAgo`, `formatBytes`, `formatDuration`, `formatCount` |
 | Colours for a canvas or WebGL | `useDaintreeTheme()` / `onDidChangeDaintreeTheme` |
 
-A settings view builds from `SettingsSection`, `SettingsGroup` and `SettingsRow`. The full list with props is [views.md → Host UI components](./views.md#host-ui-components), and `plugin-ui.d.ts` in `@daintreehq/plugin-sdk` is the authoritative one. Nothing is locked down: for anything the kit has no component for — a chart, a stat card, a file tree — use the token vocabulary below.
+A settings view builds from `SettingsSection`, `SettingsGroup` and `SettingsRow`. The full list with props is [views.md → Host UI components](./views.md#host-ui-components), and `plugin-ui.d.ts` in `@daintreehq/plugin-sdk` is the authoritative one. Nothing is locked down: for anything the kit has no component for — a chart beyond a sparkline, say — use the token vocabulary below.
 
 Things the lab watched agents get wrong, each of which the kit or the host already covers:
 
@@ -267,7 +269,7 @@ Things the lab watched agents get wrong, each of which the kit or the host alrea
 - **A modal with a stock-palette scrim** (`bg-black/40`), which compiles to nothing, so the dialog floats with no dimming. Use `Dialog`.
 - **Native `<select>`, checkboxes and date inputs** beside host-styled text fields. Use `Select`, `Checkbox`, `Input type="date"`.
 
-Kit components load with the kit's one chunk the first time a view in the session imports it, so the very first render can paint a frame late; they validate their props at runtime and ignore a value they don't know. Daintree 0.40 and earlier serve only `Markdown` from the kit and do not serve `@daintreehq/plugin-sdk/react` to zero-build views, so `PLUGIN_UI_VERSION` (`"1.2.0"` today) is the thing to check before relying on the rest.
+Kit components load with the kit's one chunk the first time a view in the session imports it, so the very first render can paint a frame late; they validate their props at runtime and ignore a value they don't know. Daintree 0.40 and earlier serve only `Markdown` from the kit and do not serve `@daintreehq/plugin-sdk/react` to zero-build views, so `PLUGIN_UI_VERSION` (`"1.0.0"` today) is the thing to check before relying on the rest.
 
 ## Fast by default
 
@@ -318,43 +320,43 @@ Prefer container queries (`@container`, `@sm:`) over viewport breakpoints — yo
 
 <!-- BEGIN generated: plugin-style-vocabulary -->
 
-**Surfaces** — `bg-`, `border-`, `text-`
+**Surfaces** — shown with `bg-`; `border-` and `text-` take the same names
 
-`surface-canvas` `surface-sidebar` `surface-toolbar` `surface-panel` `surface-panel-elevated` `surface-dialog` `surface-grid` `surface-input` `surface-inset` `surface-hover` `surface-active` `surface-disabled` `surface-highlight`
+`bg-surface-canvas` `bg-surface-sidebar` `bg-surface-toolbar` `bg-surface-panel` `bg-surface-panel-elevated` `bg-surface-dialog` `bg-surface-grid` `bg-surface-input` `bg-surface-inset` `bg-surface-hover` `bg-surface-active` `bg-surface-disabled` `bg-surface-highlight`
 
-**Text** — `text-`
+**Text**
 
-`text-primary` `text-secondary` `text-muted` `text-placeholder` `text-inverse` `text-link`
+`text-text-primary` `text-text-secondary` `text-text-muted` `text-text-placeholder` `text-text-inverse` `text-text-link`
 
-**Borders** — `border-`, `divide-`, `ring-`
+**Borders** — shown with `border-`; `divide-` and `ring-` take the same names
 
-`border-default` `border-subtle` `border-strong` `border-divider` `border-interactive` `border-input`
+`border-border-default` `border-border-subtle` `border-border-strong` `border-border-divider` `border-border-interactive` `border-border-input`
 
-**Status** — `bg-`, `text-`, `border-`
+**Status** — shown with `bg-`; `text-` and `border-` take the same names
 
-`status-success` `status-warning` `status-danger` `status-info` `status-danger-surface` `status-success-surface` `status-warning-surface` `status-info-surface` `status-error` `status-error-surface`
+`bg-status-success` `bg-status-warning` `bg-status-danger` `bg-status-info` `bg-status-danger-surface` `bg-status-success-surface` `bg-status-warning-surface` `bg-status-info-surface` `bg-status-error` `bg-status-error-surface`
 
-**Accent** — `bg-`, `text-`, `border-`
+**Accent** — shown with `bg-`; `text-` and `border-` take the same names
 
-`accent-primary` `accent-hover` `accent-foreground` `accent-primary-foreground` `accent-soft` `accent-muted` `accent-secondary` `accent-secondary-soft` `accent-secondary-muted`
+`bg-accent-primary` `bg-accent-hover` `bg-accent-foreground` `bg-accent-primary-foreground` `bg-accent-soft` `bg-accent-muted` `bg-accent-secondary` `bg-accent-secondary-soft` `bg-accent-secondary-muted`
 
-**Radii** — `rounded-`
+**Radii**
 
-`xs` `sm` `md` `lg` `xl` `2xl` `3xl` `4xl`
+`rounded-xs` `rounded-sm` `rounded-md` `rounded-lg` `rounded-xl` `rounded-2xl` `rounded-3xl` `rounded-4xl`
 
-**Type scale below Tailwind's floor** — `text-`
+**Type scale below Tailwind's floor**
 
-`2xs` `3xs` `4xs`
+`text-2xs` `text-3xs` `text-4xs`
 
-**Durations** — `duration-`
+**Durations**
 
-`75` `100` `120` `150` `200` `250` `300`
+`duration-75` `duration-100` `duration-120` `duration-150` `duration-200` `duration-250` `duration-300`
 
-**Easings** — `ease-`
+**Easings**
 
-`snappy` `spring-critical` `out-expo` `exit` `panel-minimize`
+`ease-snappy` `ease-spring-critical` `ease-out-expo` `ease-exit` `ease-panel-minimize`
 
-**Category hues** — `bg-`, `text-`, `border-`, as `category-<hue>` plus a variant suffix
+**Category hues** — `bg-`, `text-` or `border-`, then `category-<hue>` and a variant suffix: `bg-category-blue-subtle`, `text-category-teal-text`
 
 hues: `blue` `purple` `cyan` `green` `amber` `orange` `teal` `indigo` `rose` `pink` `violet` `slate`
 

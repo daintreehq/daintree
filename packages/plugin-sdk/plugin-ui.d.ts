@@ -200,19 +200,19 @@ declare module "@daintreehq/plugin-ui" {
   export type SparklineProps = PluginSparklineProps;
   export type FormFieldGroupProps = PluginFormFieldGroupProps;
 
-  /** The kit's contract version (semver): `"1.3.0"` for this release. */
+  /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
 
   /**
    * Resolves once the kit has loaded and every component renders on its first
    * frame, with no placeholder. Await it before measuring kit output, in tests
    * and in code that must not paint a frame late. Rejects when the kit fails to
-   * load; calling it again retries. Added in 1.2.0.
+   * load; calling it again retries.
    */
   export function whenPluginUiReady(): Promise<void>;
   /**
    * Starts loading the kit without waiting for it: call it when a view is
-   * about to open. Every call shares one request. Added in 1.2.0.
+   * about to open. Every call shares one request.
    */
   export function preloadPluginUi(): void;
 
@@ -276,8 +276,6 @@ declare module "@daintreehq/plugin-ui" {
    */
   export const Icon: ComponentType<IconProps>;
 
-  // Added in 1.1.0.
-
   /**
    * A windowed list: only the rows in view are in the DOM, so it stays fast at
    * tens of thousands of rows. It fills its container's height. For a keyboard
@@ -325,7 +323,7 @@ declare module "@daintreehq/plugin-ui" {
   /** The one glyph for each severity. */
   export const SeverityIcon: ComponentType<SeverityIconProps>;
 
-  // Added in 1.2.0.
+  //
 
   /** A person's or bot's picture, with their initials when there is none. */
   export const Avatar: ComponentType<AvatarProps>;
@@ -335,8 +333,6 @@ declare module "@daintreehq/plugin-ui" {
   export const PopoverSearchField: ComponentType<PopoverSearchFieldProps>;
   /** The "Still working…" line beside a `Skeleton` once a load runs long. */
   export const SkeletonHint: ComponentType<SkeletonHintProps>;
-
-  // Added in 1.3.0.
 
   /**
    * Daintree's file tree, virtualised: the host browser's chevron gutter,

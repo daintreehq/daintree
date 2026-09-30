@@ -75,7 +75,7 @@ interface PluginMarkdownProps {
      * `center` (the default) centres the document's reading measure in its
      * container, as Daintree's own document views do. `start` keeps the measure
      * but sets it against the leading edge, in line with the controls above it:
-     * for a preview inside a form or an editor. Added in 1.3.
+     * for a preview inside a form or an editor.
      */
     align?: "center" | "start";
 }
@@ -90,13 +90,29 @@ interface PluginDomProps<T extends Element = HTMLElement> extends AriaAttributes
     ref?: Ref<T>;
 }
 /**
+ * What every other non-portalled kit component forwards to its root element:
+ * an `id` and any `data-*` attribute (`data-testid`, say). The component's own
+ * attributes win where they overlap.
+ */
+interface PluginRootAttributes {
+    id?: string;
+    [dataAttribute: `data-${string}`]: string | number | boolean | undefined;
+}
+/**
+ * {@link PluginRootAttributes} plus any `aria-*` attribute, for a component
+ * whose root is the control itself. An attribute the component sets (its
+ * name, its state) wins over one passed here.
+ */
+interface PluginAriaRootAttributes extends PluginRootAttributes, AriaAttributes {
+}
+/**
  * The icon names `Icon` (and every kit prop that takes an icon) can draw.
  * Lucide-style kebab-case names, plus Daintree concept icons: `worktree`
  * (a git worktree), `daintree` (the app's mark). The set only grows.
  */
 type PluginIconName = "activity" | "alert-octagon" | "alert-triangle" | "arrow-down" | "arrow-left" | "arrow-right" | "arrow-up" | "arrow-up-right" | "at-sign" | "bell" | "bell-dot" | "book-open" | "bookmark" | "bot" | "braces" | "bug" | "calendar" | "chart-column" | "chart-line" | "chart-pie" | "check" | "check-square" | "chevron-down" | "chevron-left" | "chevron-right" | "chevron-up" | "chevrons-up-down" | "circle-check" | "circle-dashed" | "circle-dot" | "circle-slash" | "circle-x" | "clipboard" | "clock" | "cloud" | "cloud-off" | "code" | "copy" | "daintree" | "database" | "download" | "external-link" | "eye" | "eye-off" | "file" | "file-code" | "file-diff" | "file-plus" | "file-text" | "file-warning" | "filter" | "flame" | "flask" | "folder" | "folder-code" | "folder-open" | "folder-search" | "folder-tree" | "folder-x" | "gauge" | "git-branch" | "git-branch-plus" | "git-commit" | "git-compare" | "git-fork" | "git-merge" | "git-merge-conflict" | "git-pull-request" | "git-pull-request-closed" | "git-pull-request-draft" | "globe" | "grip-vertical" | "hash" | "help" | "history" | "home" | "hourglass" | "image" | "import" | "inbox" | "info" | "key" | "layers" | "layout-grid" | "layout-panel-top" | "lightbulb" | "link" | "list" | "list-checks" | "list-todo" | "loader" | "lock" | "mail" | "maximize" | "menu" | "message-square" | "minimize" | "minus" | "monitor" | "monitor-play" | "more-horizontal" | "more-vertical" | "mouse-pointer" | "notebook" | "package" | "panel-left" | "panel-right" | "panel-right-close" | "panel-right-open" | "paperclip" | "pause" | "pencil" | "pin" | "pin-off" | "play" | "plug" | "plus" | "puzzle" | "redo" | "refresh" | "rocket" | "rotate-ccw" | "rotate-cw" | "save" | "search" | "send" | "server" | "settings" | "share" | "shield" | "sliders" | "sort" | "sparkles" | "square" | "square-dashed-mouse-pointer" | "star" | "sticky-note" | "table" | "tag" | "target" | "terminal" | "trash" | "undo" | "unlink" | "unlock" | "unplug" | "upload" | "user" | "user-plus" | "users" | "wifi-off" | "workflow" | "worktree" | "wrench" | "x" | "zap";
 /** Props of `Icon`. */
-interface PluginIconProps {
+interface PluginIconProps extends PluginRootAttributes {
     name: PluginIconName;
     /** Square size in px. Defaults to 16. Inside a kit `Button` the button sizes it. */
     size?: number;
@@ -110,7 +126,7 @@ interface PluginIconProps {
  */
 type PluginIconSource = PluginIconName | ReactElement;
 type PluginButtonVariant = "default" | "secondary" | "outline" | "ghost" | "subtle" | "contrast" | "destructive" | "ghost-danger" | "link"
-/** A rounded, quiet chip-shaped button: a floating toolbar or a status strip's control. Added in 1.2. */
+/** A rounded, quiet chip-shaped button: a floating toolbar or a status strip's control. */
  | "pill";
 /** Props of `Button`. */
 interface PluginButtonProps extends PluginDomProps<HTMLButtonElement> {
@@ -175,18 +191,17 @@ interface PluginTruncatedTooltipProps {
     /**
      * Overrides the overflow check, for text your code shortens itself (a
      * middle-elided path): `true` always offers the tooltip, `false` never does.
-     * Added in 1.2.
      */
     isTruncated?: boolean;
 }
 type PluginSpinnerSize = "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
 /** Props of `Spinner`. Decorative: say what is loading in text beside it. */
-interface PluginSpinnerProps {
+interface PluginSpinnerProps extends PluginRootAttributes {
     size?: PluginSpinnerSize;
     className?: string;
 }
 /** Props of `SpinningIcon`: an icon that finishes its current turn before it stops. */
-interface PluginSpinningIconProps {
+interface PluginSpinningIconProps extends PluginRootAttributes {
     icon: PluginIconName;
     /** True while the operation runs. It always plays at least one full turn. */
     active: boolean;
@@ -227,7 +242,7 @@ interface PluginCheckboxProps extends PluginDomProps<HTMLButtonElement> {
 /** Props of `Input`, a single-line text field. */
 interface PluginInputProps extends PluginDomProps<HTMLInputElement> {
     /**
-     * `date`, `time` and `datetime-local` (added in 1.2) use the platform's
+     * `date`, `time` and `datetime-local` use the platform's
      * picker, drawn in the active theme's light or dark scheme; `value` is the
      * ISO form (`"2026-09-30"`, `"14:05"`, `"2026-09-30T14:05"`).
      */
@@ -281,7 +296,7 @@ interface PluginSelectOption {
     label: string;
     /** A second line under the label (`Select` only). */
     description?: string;
-    /** A leading glyph, shown in the list and on the trigger (`Select` only). Added in 1.2. */
+    /** A leading glyph, shown in the list and on the trigger (`Select` only). */
     icon?: PluginIconName;
     disabled?: boolean;
 }
@@ -291,7 +306,7 @@ interface PluginSelectOptionGroup {
     options: readonly PluginSelectOption[];
 }
 /** Props of `Select`. The list opens in a host overlay, so only the trigger takes classes. */
-interface PluginSelectProps {
+interface PluginSelectProps extends PluginAriaRootAttributes {
     options: readonly (PluginSelectOption | PluginSelectOptionGroup)[];
     /**
      * The chosen value, controlled. Passing the prop at all makes the Select
@@ -325,7 +340,7 @@ interface PluginSegmentedOption {
     tooltip?: ReactNode;
 }
 /** Props of `SegmentedControl`: pick exactly one of a few options. */
-interface PluginSegmentedControlProps {
+interface PluginSegmentedControlProps extends PluginAriaRootAttributes {
     options: readonly PluginSegmentedOption[];
     value: string;
     onValueChange: (value: string) => void;
@@ -339,14 +354,14 @@ interface PluginSegmentedControlProps {
     className?: string;
 }
 /** Props of `Kbd`: one literal key cap. */
-interface PluginKbdProps {
+interface PluginKbdProps extends PluginRootAttributes {
     children: ReactNode;
-    /** `compact` for a dense one-line row, the same box `KbdChord` draws. Added in 1.2. */
+    /** `compact` for a dense one-line row, the same box `KbdChord` draws. */
     density?: "default" | "compact";
     className?: string;
 }
 /** Props of `KbdChord`: a shortcut drawn the platform's way. */
-interface PluginKbdChordProps {
+interface PluginKbdChordProps extends PluginRootAttributes {
     /** The canonical combo, e.g. `"Cmd+Shift+P"` or a two-step `"Cmd+K T"`. */
     shortcut: string;
     /** `compact` for dense rows; `bare` drops the key boxes where every row has a binding. */
@@ -356,7 +371,7 @@ interface PluginKbdChordProps {
     "aria-label"?: string;
     className?: string;
 }
-interface PluginCopyButtonBaseProps {
+interface PluginCopyButtonBaseProps extends PluginAriaRootAttributes {
     /** The text to copy, or a function read at click time. A throw counts as a failed copy. */
     text: string | (() => string | Promise<string>);
     tooltip?: ReactNode;
@@ -364,7 +379,7 @@ interface PluginCopyButtonBaseProps {
     onCopied?: () => void;
     /** Report the failure yourself; the button then stays quiet about it. */
     onCopyError?: (error: unknown) => void;
-    /** Spoken politely after a successful copy ("Path copied"). Defaults to "Copied". Added in 1.2. */
+    /** Spoken politely after a successful copy ("Path copied"). Defaults to "Copied". */
     announcement?: string;
     disabled?: boolean;
     className?: string;
@@ -382,7 +397,7 @@ type PluginCopyButtonProps = (PluginCopyButtonBaseProps & {
     size?: "xs" | "sm" | "default";
 });
 /** Props of `DismissButton`, the X that closes a card, banner or hint. */
-interface PluginDismissButtonProps {
+interface PluginDismissButtonProps extends PluginAriaRootAttributes {
     /** Names what goes away ("Dismiss tip"), not just "Dismiss". */
     "aria-label": string;
     onClick: () => void;
@@ -395,8 +410,8 @@ interface PluginDismissButtonProps {
 type PluginCalloutSeverity = "error" | "warning" | "danger" | "success" | "info" | "neutral";
 /**
  * Props of `Callout`, an inline message box. The glyph follows the severity.
- * DOM props (`id`, `role`, `aria-*`, `data-*`, handlers) land on its root; since
- * 1.2 that includes `role="alert"` or `role="status"` for a message that should
+ * DOM props (`id`, `role`, `aria-*`, `data-*`, handlers) land on its root,
+ * including `role="alert"` or `role="status"` for a message that should
  * be announced.
  */
 interface PluginCalloutProps extends Omit<PluginDomProps<HTMLDivElement>, "title"> {
@@ -407,19 +422,19 @@ interface PluginCalloutProps extends Omit<PluginDomProps<HTMLDivElement>, "title
     action?: ReactNode;
     /**
      * `inline` (the default) puts `action` beside the message; `below` puts it
-     * under the text, for a long message or more than one control. Added in 1.2.
+     * under the text, for a long message or more than one control.
      */
     actionPlacement?: "inline" | "below";
-    /** Draws the dismiss X, which calls this. Added in 1.2. */
+    /** Draws the dismiss X, which calls this. */
     onDismiss?: () => void;
-    /** Names the dismiss X ("Dismiss warning"). Defaults to "Dismiss". Added in 1.2. */
+    /** Names the dismiss X ("Dismiss warning"). Defaults to "Dismiss". */
     dismissLabel?: string;
     /**
      * `box` (the default) sits among content. `strip` is the full-width band
      * across the top of a pane or popover, Daintree's pane banner: `title` is its
      * headline and `children` one line under it. A strip never stands green:
      * `success` draws as a neutral strip with the check glyph. A strip forwards
-     * `role`, `aria-live` and `data-testid` only. Added in 1.2.
+     * `role`, `aria-live` and `data-testid` only.
      */
     variant?: "box" | "strip";
     /** A domain glyph in place of the info mark, for `neutral` only. */
@@ -428,7 +443,7 @@ interface PluginCalloutProps extends Omit<PluginDomProps<HTMLDivElement>, "title
     className?: string;
 }
 /** Props of `EmptyState`. */
-interface PluginEmptyStateProps {
+interface PluginEmptyStateProps extends PluginRootAttributes {
     title: string;
     /**
      * `zero-data`: nothing here yet (invites an action). `filtered-empty`: a
@@ -445,27 +460,27 @@ interface PluginEmptyStateProps {
     className?: string;
 }
 /** Props of `Skeleton`, the accessible loading region that holds skeleton bones. */
-interface PluginSkeletonProps {
+interface PluginSkeletonProps extends PluginRootAttributes {
     children?: ReactNode;
     /** Spoken while loading. Defaults to "Loading". */
     label?: string;
     className?: string;
 }
 /** Props of `SkeletonBone`, one placeholder shape. Appears after a short delay to avoid flicker. */
-interface PluginSkeletonBoneProps {
+interface PluginSkeletonBoneProps extends PluginRootAttributes {
     className?: string;
     /** Fixed height, so nothing shifts when the content arrives. */
     heightPx?: number;
     shimmer?: boolean;
-    /** Skip the anti-flicker delay: for a placeholder that replaces content already on screen. Added in 1.2. */
+    /** Skip the anti-flicker delay: for a placeholder that replaces content already on screen. */
     immediate?: boolean;
 }
 /** Props of `SkeletonText`, ragged placeholder lines. */
-interface PluginSkeletonTextProps {
+interface PluginSkeletonTextProps extends PluginRootAttributes {
     /** Defaults to 3. */
     lines?: number;
     shimmer?: boolean;
-    /** As on `SkeletonBone`. Added in 1.2. */
+    /** As on `SkeletonBone`. */
     immediate?: boolean;
     className?: string;
 }
@@ -473,9 +488,9 @@ interface PluginSkeletonTextProps {
  * Props of `SkeletonHint`, the companion to a `Skeleton` for a long load: it
  * stays invisible for 8 seconds, then says "Still working…", escalates, and
  * offers Cancel and later Retry when you pass them. Place it beside the
- * `Skeleton`, never inside it (both are live regions). Added in 1.2.
+ * `Skeleton`, never inside it (both are live regions).
  */
-interface PluginSkeletonHintProps {
+interface PluginSkeletonHintProps extends PluginRootAttributes {
     /** Your own progress line ("Fetching 3 of 12 files…") in place of the generic copy. */
     message?: string;
     /** Surfaces Cancel with the first hint. */
@@ -492,7 +507,7 @@ interface PluginSkeletonHintProps {
 }
 /**
  * Props of `ScrollShadow`: a vertical scroller with fades that show there is
- * more. Since 1.2 the DOM props (`id`, `role`, `tabIndex`, `aria-*`, `data-*`,
+ * more. The DOM props (`id`, `role`, `tabIndex`, `aria-*`, `data-*`,
  * handlers) land on the scrolling element, so it can be a listbox. For a
  * windowed list, use `VirtualList` with `shadows` instead.
  */
@@ -542,7 +557,7 @@ type PluginDropdownMenuEntry = {
     onCheckedChange: (checked: boolean) => void;
     disabled?: boolean;
 } | {
-    /** One choice from several, each a radio row with a check on the chosen one. Added in 1.2. */
+    /** One choice from several, each a radio row with a check on the chosen one. */
     type: "radio-group";
     value: string;
     onValueChange: (value: string) => void;
@@ -575,14 +590,13 @@ interface PluginDropdownMenuProps {
     /**
      * Runs as the menu closes, before focus returns to the trigger. Call
      * `event.preventDefault()` to keep focus where your handler moved it.
-     * Added in 1.2.
      */
     onCloseAutoFocus?: (event: Event) => void;
     /**
      * Stops clicks, pointer and key events inside the menu from reaching the
      * view's own handlers. React events travel up through the overlay to the
      * trigger's ancestors, so a menu on a clickable row would otherwise also
-     * activate the row. Added in 1.2.
+     * activate the row.
      */
     stopPropagation?: boolean;
 }
@@ -595,12 +609,12 @@ interface PluginDialogAction {
     /**
      * `primaryAction` only: why it is unavailable. Shown as the footer's hint
      * while `disabled` (when the dialog has no `hint` of its own) and read with
-     * the button. Added in 1.2.
+     * the button.
      */
     disabledReason?: ReactNode;
     loading?: boolean;
     intent?: "default" | "destructive";
-    /** A leading glyph. Added in 1.2. */
+    /** A leading glyph. */
     icon?: PluginIconSource;
 }
 /**
@@ -615,7 +629,7 @@ interface PluginDialogProps {
     title: ReactNode;
     /**
      * The title's glyph: a name, or your own element (a kit `Spinner` while it
-     * works, a status-coloured `Icon` when it is done). An element since 1.2.
+     * works, a status-coloured `Icon` when it is done).
      */
     icon?: PluginIconSource;
     description?: ReactNode;
@@ -628,14 +642,13 @@ interface PluginDialogProps {
     /**
      * Your own footer controls in place of `primaryAction`/`secondaryAction`,
      * right-aligned after the `hint`: kit `Button`s, the primary last and
-     * `contrast`. Added in 1.2.
+     * `contrast`.
      */
     footer?: ReactNode;
     /** False blocks Escape, the backdrop and the close button. Defaults to true. */
     dismissible?: boolean;
-    /** Added in 1.2. */
     layer?: PluginDialogLayer;
-    /** On the dialog's root, for tests. Added in 1.2. */
+    /** On the dialog's root, for tests. */
     "data-testid"?: string;
 }
 /** Props of `ConfirmDialog`, the one confirm-or-cancel shape. */
@@ -650,16 +663,15 @@ interface PluginConfirmDialogProps {
     confirmLabel: string;
     cancelLabel?: string;
     variant?: "default" | "destructive" | "info";
-    /** A name, or your own element since 1.2. */
+    /** A name, or your own element. */
     icon?: PluginIconSource;
     /** The confirm is running: spinner on the button, dialog locked. */
     loading?: boolean;
     confirmDisabled?: boolean;
     /** `destructive` only: the user must type this exact text to enable the confirm. */
     typedNameTarget?: string;
-    /** A subdued line beside the buttons: why the confirm is unavailable, say. Added in 1.2. */
+    /** A subdued line beside the buttons: why the confirm is unavailable, say. */
     hint?: ReactNode;
-    /** Added in 1.2. */
     layer?: PluginDialogLayer;
 }
 /**
@@ -692,7 +704,7 @@ interface PluginVirtualListProps<T = unknown> extends PluginDomProps<HTMLDivElem
     /**
      * Edge fades that show there is more above or below, as `ScrollShadow`
      * draws. The list then sits in a positioned wrapper that fills its
-     * container. Added in 1.2.
+     * container.
      */
     shadows?: boolean;
     /** Required: names the list for assistive tech. */
@@ -708,13 +720,13 @@ interface PluginDataTableColumn<T = unknown> {
     /**
      * Fixed width: px as a number, or any CSS length. Columns without one share
      * the rest, up to 480px each; space beyond that is left at the table's
-     * trailing edge rather than stretching one column across it (since 1.3).
+     * trailing edge rather than stretching one column across it.
      */
     width?: number | string;
     /**
      * Takes all the width the other columns leave, with no cap: for the one
      * column that should run to the edge (a message, a path). Give the other
-     * columns widths, or they share the space with it. Added in 1.3.
+     * columns widths, or they share the space with it.
      */
     grow?: boolean;
     align?: "start" | "center" | "end";
@@ -741,7 +753,7 @@ interface PluginDataTableSort {
  * With `onRowClick` the table is a keyboard grid: one tab stop, Up/Down/Home/End
  * move the cursor and Enter activates the row.
  */
-interface PluginDataTableProps<T = unknown> {
+interface PluginDataTableProps<T = unknown> extends PluginRootAttributes {
     columns: readonly PluginDataTableColumn<T>[];
     rows: readonly T[];
     /** A stable key per row: a function, or the name of a string or number field. */
@@ -775,7 +787,7 @@ interface PluginLogEntry {
  * batches (per animation frame, not per line) and drop old lines yourself if
  * you keep them in state; the view bounds the DOM, not your array.
  */
-interface PluginLogViewProps {
+interface PluginLogViewProps extends PluginAriaRootAttributes {
     lines: readonly (string | PluginLogEntry)[];
     /** The newest lines shown. Defaults to 5000; older lines are dropped from the view. */
     maxLines?: number;
@@ -791,7 +803,7 @@ interface PluginLogViewProps {
     className?: string;
 }
 /** Props of `PaneHeader`: a pane's compact title bar. */
-interface PluginPaneHeaderProps {
+interface PluginPaneHeaderProps extends PluginRootAttributes {
     title: ReactNode;
     icon?: PluginIconSource;
     /** One quiet line after the title: a count, a path, a filter in effect. */
@@ -806,7 +818,7 @@ interface PluginPaneHeaderProps {
  * pane's toolbar strip; `inline` (the default) is the bare group, for inside a
  * `PaneHeader`.
  */
-interface PluginToolbarProps {
+interface PluginToolbarProps extends PluginAriaRootAttributes {
     children?: ReactNode;
     /** Required: two toolbars on screen must be told apart. */
     "aria-label": string;
@@ -817,7 +829,7 @@ interface PluginToolbarProps {
  * Props of `ToolbarButton`, the in-pane toolbar control: icon-only (its
  * `aria-label` doubles as the tooltip) or, with `label`, an icon and a word.
  */
-interface PluginToolbarButtonProps {
+interface PluginToolbarButtonProps extends PluginAriaRootAttributes {
     icon?: PluginIconSource;
     /** Visible text. Omitted, the button is icon-only and `aria-label` names it. */
     label?: string;
@@ -840,7 +852,7 @@ interface PluginToolbarButtonProps {
  * when `onRetry` is given. For an error inside content that still renders,
  * use `Callout` with `severity="error"` and a Retry `action` instead.
  */
-interface PluginPaneStateProps {
+interface PluginPaneStateProps extends PluginRootAttributes {
     kind: "loading" | "empty" | "error";
     /** For `loading`, the phase in words ("Loading issues"). */
     title: string;
@@ -872,7 +884,7 @@ interface PluginFormFieldControlProps {
  * a control of your own, pass `children` as a function and spread the props
  * it receives onto the control; `htmlFor` alone links the label only.
  */
-interface PluginFormFieldProps {
+interface PluginFormFieldProps extends PluginRootAttributes {
     label: ReactNode;
     description?: ReactNode;
     /** Shown under the control, and marks the control invalid. */
@@ -913,7 +925,7 @@ interface PluginTabItem {
  * Supply the active pane as `children` (a node, or a function of the value)
  * or as a `content` map by value.
  */
-interface PluginTabsProps {
+interface PluginTabsProps extends PluginRootAttributes {
     items: readonly PluginTabItem[];
     value: string;
     onValueChange: (value: string) => void;
@@ -930,7 +942,7 @@ interface PluginTabsProps {
  * Props of `ProgressBar`. Always neutral: progress is status, not a call to
  * action, so it never takes the accent or a status colour.
  */
-interface PluginProgressBarProps {
+interface PluginProgressBarProps extends PluginAriaRootAttributes {
     /** 0 to 1. Omitted or `null` is indeterminate. */
     value?: number | null;
     /** Forces the indeterminate pulse whatever `value` says. */
@@ -948,7 +960,7 @@ interface PluginProgressBarProps {
  * stack of sections, a section holds `SettingsGroup`s, a group holds
  * `SettingsRow`s. Sentence-case titles, no icons.
  */
-interface PluginSettingsSectionProps {
+interface PluginSettingsSectionProps extends PluginRootAttributes {
     title: string;
     /** What the section is for, when the title does not say it. */
     description?: ReactNode;
@@ -960,7 +972,7 @@ interface PluginSettingsSectionProps {
     children?: ReactNode;
 }
 /** Props of `SettingsGroup`: one surface of related rows split by hairlines. */
-interface PluginSettingsGroupProps {
+interface PluginSettingsGroupProps extends PluginRootAttributes {
     /** A sub-label above the surface, for a section with more than one group. */
     label?: string;
     id?: string;
@@ -974,7 +986,7 @@ interface PluginSettingsRowControlIds {
     disabled: boolean;
 }
 /** Props of `SettingsRow`: one setting, its words on the left and its control on the rail. */
-interface PluginSettingsRowProps {
+interface PluginSettingsRowProps extends PluginRootAttributes {
     label: ReactNode;
     /** Adds information (a consequence, a default); never restates the label. */
     description?: ReactNode;
@@ -997,7 +1009,7 @@ interface PluginSettingsRowProps {
     id?: string;
 }
 /** Props of `SettingsActions`: the last row of a group with an explicit Save. */
-interface PluginSettingsActionsProps {
+interface PluginSettingsActionsProps extends PluginRootAttributes {
     /** The actions, right-aligned: `contrast` Save, `outline` others, all `size="sm"`. */
     children?: ReactNode;
     /** Status on the left ("Saved"), announced politely. */
@@ -1074,7 +1086,7 @@ type PluginSeverity = PluginCalloutSeverity;
  * error ✕-circle, warning triangle, danger octagon, success check, info and
  * neutral `i`. Pass `aria-label` when the glyph is the only statement of it.
  */
-interface PluginSeverityIconProps {
+interface PluginSeverityIconProps extends PluginRootAttributes {
     severity: PluginSeverity;
     /** Square size in px. Defaults to 16. */
     size?: number;
@@ -1085,7 +1097,7 @@ interface PluginSeverityIconProps {
  * Props of `Avatar`: a person's or bot's picture, falling back to their
  * initials when there is no `src` or it fails to load.
  */
-interface PluginAvatarProps {
+interface PluginAvatarProps extends PluginRootAttributes {
     /** The picture's URL. Empty or omitted draws the initials. */
     src?: string;
     /** Who it is. The accessible name, and where the initials come from. */
@@ -1171,7 +1183,7 @@ interface PluginFileTreeItem {
  * Left closes it or steps out to the parent, Enter activates, and typing
  * jumps to a matching name.
  */
-interface PluginFileTreeProps {
+interface PluginFileTreeProps extends PluginAriaRootAttributes {
     entries?: readonly PluginFileTreeEntry[];
     nodes?: readonly PluginFileTreeNode[];
     /** Required: names the tree for assistive tech. */
@@ -1225,7 +1237,7 @@ interface PluginStatCardProps extends PluginDomProps<HTMLDivElement> {
  * colour. It fills its container's width. Fewer than two finite values draw
  * an empty box of the same size; a non-finite value is a gap.
  */
-interface PluginSparklineProps {
+interface PluginSparklineProps extends PluginRootAttributes {
     values: readonly number[];
     /** Required: the trend in words ("Events per second, last 60 s"). Empty hides it from assistive tech. */
     "aria-label": string;
@@ -1247,7 +1259,7 @@ interface PluginSparklineProps {
  * together, such as a row of checkboxes. The label matches a `FormField`'s;
  * each control inside is its own horizontal `FormField`.
  */
-interface PluginFormFieldGroupProps {
+interface PluginFormFieldGroupProps extends PluginRootAttributes {
     label: ReactNode;
     description?: ReactNode;
     /** Shown under the controls. */
@@ -1975,4 +1987,4 @@ interface PluginHostBridge {
     onPanel(pluginId: string, channel: string, panelId: string, callback: (payload: unknown) => void): () => void;
 }
 
-export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAlign, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginButtonProps, type PluginButtonVariant, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCheckboxProps, type PluginConfirmDialogProps, type PluginCopyButtonProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableSort, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDismissButtonProps, type PluginDocumentPackage, type PluginDomProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginHostBridge, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginInputProps, type PluginKbdChordProps, type PluginKbdProps, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginPaneHeaderProps, type PluginPaneStateProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginProgressBarProps, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginStatCardProps, type PluginSwitchProps, type PluginTabItem, type PluginTabsProps, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTruncatedTooltipProps, type PluginVirtualListProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseHostChannelResult, type UseListNavigationOptions, type UseListNavigationResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };
+export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAlign, type PluginAriaRootAttributes, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginButtonProps, type PluginButtonVariant, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCheckboxProps, type PluginConfirmDialogProps, type PluginCopyButtonProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableSort, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDismissButtonProps, type PluginDocumentPackage, type PluginDomProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginHostBridge, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginInputProps, type PluginKbdChordProps, type PluginKbdProps, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginPaneHeaderProps, type PluginPaneStateProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginProgressBarProps, type PluginRootAttributes, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginStatCardProps, type PluginSwitchProps, type PluginTabItem, type PluginTabsProps, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTruncatedTooltipProps, type PluginVirtualListProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseHostChannelResult, type UseListNavigationOptions, type UseListNavigationResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };

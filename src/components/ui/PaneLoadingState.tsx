@@ -2,6 +2,7 @@ import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { SkeletonHint, useLiveRegionReady } from "@/components/ui/Skeleton";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
+import type { RootAttributes } from "@/components/ui/rootAttributes";
 
 interface PaneLoadingStateProps {
   variant: "full" | "overlay";
@@ -9,6 +10,8 @@ interface PaneLoadingStateProps {
   phaseLabel: string;
   onCancel?: () => void;
   className?: string;
+  /** On the full variant's root; see {@link RootAttributes}. */
+  rootAttributes?: RootAttributes;
 }
 
 function FullSkeleton({
@@ -109,13 +112,14 @@ export function PaneLoadingState({
   phaseLabel,
   onCancel,
   className,
+  rootAttributes,
 }: PaneLoadingStateProps) {
   if (variant === "overlay") {
     return <OverlaySkeleton phaseLabel={phaseLabel} isLoading={isLoading} onCancel={onCancel} />;
   }
 
   return (
-    <div className={cn("h-full", className)}>
+    <div {...rootAttributes} className={cn("h-full", className)}>
       <FullSkeleton phaseLabel={phaseLabel} isLoading={isLoading} onCancel={onCancel} />
     </div>
   );

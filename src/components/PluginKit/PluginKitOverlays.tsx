@@ -18,6 +18,7 @@ import {
   nonEmpty,
   oneOf,
   pickDomProps,
+  pickRootProps,
   PluginStyleScope,
   str,
   useKitOwnerAttributes,
@@ -43,13 +44,23 @@ export function avatarInitials(name: string, max: 1 | 2 = 2): string {
   return (first + last).toUpperCase();
 }
 
-function KitAvatar({ src, name, size, shape, tooltip, decorative, className }: PluginAvatarProps) {
+function KitAvatar({
+  src,
+  name,
+  size,
+  shape,
+  tooltip,
+  decorative,
+  className,
+  ...rest
+}: PluginAvatarProps) {
   const label = str(name) ?? "";
   const px = oneOf(size, ["xs", "sm", "md", "lg"] as const) ?? "sm";
   // Two letters only where they fit at a legible size; a 16–20px disc takes one.
   const initials = avatarInitials(label, px === "xs" || px === "sm" ? 1 : 2);
   return (
     <Avatar
+      rootAttributes={pickRootProps(rest)}
       src={str(src) ?? ""}
       alt={decorative === true ? "" : label}
       title={nonEmpty(tooltip)}
@@ -171,9 +182,11 @@ function KitSkeletonHint({
   secondThreshold,
   actionThreshold,
   className,
+  ...rest
 }: PluginSkeletonHintProps) {
   return (
     <SkeletonHint
+      {...pickRootProps(rest)}
       message={nonEmpty(message)}
       onCancel={fn(onCancel)}
       onRetry={fn(onRetry)}

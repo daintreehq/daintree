@@ -111,6 +111,28 @@ export const ALIGNS = ["start", "center", "end"] as const;
  * menu or tooltip trigger, and nothing like `dangerouslySetInnerHTML` or a
  * host-only prop (`asChild`, `variant` spellings) gets through.
  */
+/**
+ * The root attributes a kit component with no full DOM props forwards: scalar
+ * `data-*` and a string `id`, plus scalar `aria-*` when `aria` is set. The
+ * component spreads them first, so an attribute it sets itself wins.
+ */
+export function pickRootProps(
+  props: object,
+  options: { aria?: boolean } = {}
+): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(props)) {
+    if (key === "id") {
+      if (typeof value === "string" && value !== "") out[key] = value;
+    } else if (key.startsWith("data-") || (options.aria === true && key.startsWith("aria-"))) {
+      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+        out[key] = value;
+      }
+    }
+  }
+  return out;
+}
+
 export function pickDomProps(props: object): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(props)) {
