@@ -2345,6 +2345,261 @@ interface PluginEmojiPickerProps {
     "aria-label"?: string;
 }
 /**
+ * Steps of Daintree's type ramp: Tailwind's stock `xs` (12px), `sm` (14px),
+ * `base` (16px) and `lg` (18px), plus the app's own label steps `2xs` (11px)
+ * and `3xs` (10px). `inherit` takes the size of the surrounding text.
+ */
+type PluginTextSize = "3xs" | "2xs" | "xs" | "sm" | "base" | "lg" | "inherit";
+/**
+ * Daintree's text colour roles. `primary` is body text, `secondary` supporting
+ * text and icons, `muted` the quietest (it has no contrast floor on some dark
+ * themes, so never put anything the user must read in it). The status tones
+ * carry an outcome; `accent` is at most one load-bearing signal per region.
+ * `inherit` takes the surrounding colour.
+ */
+type PluginTextTone = "primary" | "secondary" | "muted" | "danger" | "success" | "warning" | "accent" | "inherit";
+/**
+ * Props of `Text`: a run of text on the app's type ramp and in one of its
+ * colour roles, so a view never spells font sizes or colour classes by hand.
+ */
+interface PluginTextProps extends PluginDomProps {
+    children?: ReactNode;
+    /** A step of the type ramp. Defaults to `sm`, the app's reading size. */
+    size?: PluginTextSize;
+    /** A colour role. Defaults to `primary`. */
+    tone?: PluginTextTone;
+    /** The app's monospace face, for paths, hashes and identifiers. */
+    mono?: boolean;
+    /** Omitted, the weight is inherited, so a `strong` keeps its own emphasis. */
+    weight?: "normal" | "medium" | "semibold";
+    /**
+     * One line, cut with an ellipsis. The element becomes a block so it has a
+     * width to cut at; put it in a `TruncatedTooltip` to show the whole text.
+     */
+    truncate?: boolean;
+    /** The element. Defaults to `span`; `p` for a paragraph. */
+    as?: "span" | "p" | "div" | "strong" | "em" | "small";
+    className?: string;
+}
+/**
+ * Props of `Heading`: a heading at one of the app's four heading sizes. The
+ * level picks both the size and the element (`h1`–`h4`) unless `as` says
+ * otherwise, so a view can keep a correct outline while drawing a smaller
+ * size.
+ */
+interface PluginHeadingProps extends PluginDomProps<HTMLHeadingElement> {
+    children?: ReactNode;
+    /** 1: 18px, 2: 16px, 3: 14px, 4: 12px, all semibold. Defaults to 2. */
+    level?: 1 | 2 | 3 | 4;
+    /** The element, when the outline needs a different level than the size. */
+    as?: "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "div";
+    /** Defaults to `primary`. */
+    tone?: "primary" | "secondary";
+    truncate?: boolean;
+    className?: string;
+}
+/**
+ * Props of `Link`: an inline link that routes a click exactly as `Markdown`
+ * does. `http(s)` and `mailto` links open in the browser; a relative or
+ * absolute path opens in Daintree's file viewer while it stays inside
+ * `rootPath`. Nothing navigates the view itself.
+ */
+interface PluginLinkProps extends PluginDomProps<HTMLAnchorElement> {
+    href: string;
+    children?: ReactNode;
+    /**
+     * Absolute path a relative `href` resolves against: a directory, or a
+     * Markdown file whose directory is used, as `Markdown`'s `basePath`.
+     */
+    basePath?: string;
+    /**
+     * Absolute directory a file link must stay inside. Defaults to the
+     * directory `basePath` resolves to. With neither, a path opens nothing.
+     */
+    rootPath?: string;
+    /** Draws a small arrow after an `http(s)` link's text, and names it as opening in the browser. */
+    externalIcon?: boolean;
+    className?: string;
+}
+/** Props of `InlineCode`: a code span in running text. */
+interface PluginInlineCodeProps extends PluginRootAttributes {
+    children?: ReactNode;
+    className?: string;
+}
+/**
+ * Props of `CodeBlock`: a read-only, highlighted snippet with a copy button,
+ * in the same token colours as the app's diffs and Markdown fences.
+ */
+interface PluginCodeBlockProps extends PluginRootAttributes {
+    /** The text shown and copied. A trailing newline is dropped. */
+    code: string;
+    /**
+     * A grammar name or fence alias (`ts`, `tsx`, `json`, `bash`, `python`,
+     * `yaml`, `go`, `rust`, …). Unknown or omitted, the code shows as plain text.
+     */
+    language?: string;
+    /** Draws line numbers in a gutter. They are never copied. */
+    lineNumbers?: boolean;
+    /** Line numbers to mark, as the gutter counts them (from `startLine`). A tint and an edge, never colour alone. */
+    highlightLines?: readonly number[];
+    /** The number the first line counts from. Defaults to 1. */
+    startLine?: number;
+    /** A height in px past which the block scrolls. */
+    maxHeight?: number;
+    /** Wraps long lines instead of scrolling sideways. */
+    wrap?: boolean;
+    /** Shows the copy button. Defaults to true. */
+    copyable?: boolean;
+    /** Names the block for assistive tech ("Install command"). */
+    "aria-label"?: string;
+    className?: string;
+}
+/**
+ * Props of `PathLabel`: a file path on one line that gives way in the middle.
+ * The directory ellipsises from its start while the file name stays whole, so
+ * `…/Settings/AgentSettings.tsx` rather than `src/components/Sett…`. While it is
+ * cut, the full path shows in a tooltip.
+ */
+interface PluginPathLabelProps extends PluginRootAttributes {
+    path: string;
+    /** Draws the path in the monospace face. */
+    mono?: boolean;
+    /** Pass `false` inside a row that already owns the keyboard. Defaults to true. */
+    focusable?: boolean;
+    className?: string;
+}
+/** Props of `VisuallyHidden`: content read by assistive tech and not drawn. */
+interface PluginVisuallyHiddenProps extends PluginRootAttributes {
+    children?: ReactNode;
+    /** Defaults to `span`. */
+    as?: "span" | "div";
+}
+/**
+ * Props of `LiveRegion`: an element whose changes assistive tech reads out.
+ * Keep it mounted and change its children; a region that mounts with its
+ * message already inside is often not read. For one-off messages use
+ * `useAnnounce` instead.
+ */
+interface PluginLiveRegionProps extends PluginRootAttributes {
+    children?: ReactNode;
+    /** `polite` (the default) waits for a pause; `assertive` interrupts, for errors only. */
+    politeness?: "polite" | "assertive";
+    /** Reads the whole region on each change rather than just what changed. Defaults to true. */
+    atomic?: boolean;
+    /** Keeps the region off screen. Defaults to false. */
+    visuallyHidden?: boolean;
+    className?: string;
+}
+/** Options of the function `useAnnounce` returns. */
+interface PluginAnnounceOptions {
+    /** `polite` (the default) waits for a pause; `assertive` interrupts, for errors only. */
+    politeness?: "polite" | "assertive";
+}
+/**
+ * Props of `Portal`: renders its children into a container outside the view,
+ * the document body by default, marked as your plugin's style root so your
+ * classes still apply there. Position what you put in it yourself.
+ */
+interface PluginPortalProps {
+    children?: ReactNode;
+    /** An element to render into instead of the document body. */
+    container?: Element | null;
+}
+/** The states `StatusDot` and `StateGlyph` draw. */
+type PluginStatusState = "running" | "idle" | "waiting" | "error" | "success" | "neutral";
+/**
+ * Props of `StatusDot`: the app's 6px activity dot. `running` and `waiting`
+ * take the agent working and waiting hues, `error` and `success` the status
+ * colours, `neutral` the secondary ink, and `idle` is a hollow ring, so idle
+ * never rests on colour alone.
+ */
+interface PluginStatusDotProps extends PluginRootAttributes {
+    state: PluginStatusState;
+    /** Names the state for assistive tech. Without it the dot is decorative. */
+    label?: string;
+    /** A slow pulse while something is live. Still under reduced motion. */
+    pulse?: boolean;
+    /** `sm` 6px (the default), `md` 8px. */
+    size?: "sm" | "md";
+    className?: string;
+}
+/**
+ * Props of `StateGlyph`: the app's state glyph at icon size. `running` is the
+ * agent working spinner, `waiting` the amber ring, `idle` a plain ring,
+ * `success` and `error` the severity glyphs, `neutral` a ring with a bar.
+ */
+interface PluginStateGlyphProps extends PluginRootAttributes {
+    state: PluginStatusState;
+    /** Names the state for assistive tech. Without it the glyph is decorative. */
+    label?: string;
+    /** In px. Defaults to 16. */
+    size?: number;
+    className?: string;
+}
+/**
+ * Props of `ColoredLabel`: a tag in a colour the user chose, such as a
+ * GitHub or GitLab label. Drawn like a `Badge`, as a tint of the colour with
+ * the text shifted until it reads at 4.5:1 on that tint over the pane, a raised
+ * panel and a hovered row in the active theme, light or dark, and an edge so a pale colour keeps its
+ * shape.
+ */
+interface PluginColoredLabelProps extends PluginDomProps<HTMLSpanElement> {
+    /** `#rgb` or `#rrggbb`, with or without the `#`. Anything else draws a neutral badge. */
+    color: string;
+    children?: ReactNode;
+    /** As `Badge`: `xs`, `sm` (the default), `md`. */
+    size?: "xs" | "sm" | "md";
+    /** As `Badge`. `pill` is fully rounded. */
+    shape?: "default" | "pill";
+    /**
+     * `tint` (the default) colours the whole label. `dot` is the chip Daintree's
+     * own forge labels use: a neutral outline badge with the colour on a dot
+     * before the name, for a dense row where many colours would be loud.
+     */
+    variant?: "tint" | "dot";
+    className?: string;
+}
+/** Where `UnreadDot` and `CountIndicator` sit on the element they wrap. */
+type PluginIndicatorPlacement = "top-right" | "top-left" | "bottom-right" | "bottom-left";
+/**
+ * Props of `UnreadDot`: the app's 6px neutral unread pip. With `children` it
+ * sits on their corner, cut out from them; alone it is an inline dot.
+ */
+interface PluginUnreadDotProps extends PluginRootAttributes {
+    children?: ReactNode;
+    /** Shows the dot. Defaults to true; `false` keeps `children` alone. */
+    visible?: boolean;
+    /**
+     * What the dot means ("Unread replies"). On a single element child it is
+     * attached to that element as its description; otherwise it is read beside it.
+     */
+    label?: string;
+    /** Defaults to `top-right`. */
+    placement?: PluginIndicatorPlacement;
+    className?: string;
+}
+/**
+ * Props of `CountIndicator`: a count in the app's count pill, capped at
+ * `max` ("99+"). With `children` it sits on their corner as a solid bubble;
+ * alone it is the inline count `NavList` and `Tabs` draw.
+ */
+interface PluginCountIndicatorProps extends PluginRootAttributes {
+    count: number;
+    children?: ReactNode;
+    /** Past this the pill reads "99+". Defaults to 99. */
+    max?: number;
+    /** Shows a zero. Defaults to false: zero draws nothing. */
+    showZero?: boolean;
+    /**
+     * What the count means, spoken in place of the numeral ("3 unread"). On a
+     * single element child it is attached to that element as its description.
+     */
+    label?: string;
+    /** Defaults to `top-right`. */
+    placement?: PluginIndicatorPlacement;
+    className?: string;
+}
+/**
  * Keys of {@link PluginThemeTokens}: Daintree's semantic theme tokens, the
  * same names as the `--theme-*` CSS variables without the prefix. The surface,
  * text, border, accent, `focus-ring` and status keys are core and stable within
@@ -3058,4 +3313,4 @@ interface PluginHostBridge {
     onPanel(pluginId: string, channel: string, panelId: string, callback: (payload: unknown) => void): () => void;
 }
 
-export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAccordionItem, type PluginAccordionProps, type PluginAlign, type PluginAriaRootAttributes, type PluginAvatarGroupItem, type PluginAvatarGroupProps, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginBarChartProps, type PluginBreadcrumbItem, type PluginBreadcrumbsProps, type PluginButtonProps, type PluginButtonVariant, type PluginCalendarBaseProps, type PluginCalendarProps, type PluginCalendarRangeProps, type PluginCalendarSingleProps, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCardProps, type PluginChartBaseProps, type PluginChartColor, type PluginChartSeries, type PluginCheckboxProps, type PluginComboboxProps, type PluginCommandPaletteItem, type PluginCommandPaletteProps, type PluginConfirmDialogProps, type PluginContextMenuProps, type PluginCopyButtonProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableSort, type PluginDateFieldBaseProps, type PluginDatePickerProps, type PluginDateRange, type PluginDateRangePickerProps, type PluginDateRangePreset, type PluginDescriptionItem, type PluginDescriptionListItemProps, type PluginDescriptionListProps, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDiffStatProps, type PluginDisclosureProps, type PluginDismissButtonProps, type PluginDividerProps, type PluginDocumentPackage, type PluginDomProps, type PluginDonutChartProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginEmojiPickerProps, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFileDropzoneProps, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFilterChipProps, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginHighlightedTextProps, type PluginHostBridge, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginInputProps, type PluginIsoDate, type PluginKbdChordProps, type PluginKbdProps, type PluginLineChartProps, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginMeterProps, type PluginMeterThresholds, type PluginMultiSelectProps, type PluginNavListItem, type PluginNavListProps, type PluginNavListSection, type PluginNumberInputProps, type PluginPaneHeaderProps, type PluginPaneStateProps, type PluginPickerBaseProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginProgressBarProps, type PluginRadioGroupProps, type PluginRadioOption, type PluginResizableSplitProps, type PluginRootAttributes, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSectionLabelProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSheetProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSliderProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginStatCardProps, type PluginStepState, type PluginStepperProps, type PluginStepperStep, type PluginSwitchProps, type PluginTabItem, type PluginTabsProps, type PluginTagInputProps, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginTimeAgoProps, type PluginTimelineActor, type PluginTimelineItem, type PluginTimelineProps, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTruncatedTooltipProps, type PluginVirtualListBaseProps, type PluginVirtualListComponent, type PluginVirtualListCountProps, type PluginVirtualListItemsProps, type PluginVirtualListProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseHostChannelResult, type UseListNavigationOptions, type UseListNavigationResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };
+export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAccordionItem, type PluginAccordionProps, type PluginAlign, type PluginAnnounceOptions, type PluginAriaRootAttributes, type PluginAvatarGroupItem, type PluginAvatarGroupProps, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginBarChartProps, type PluginBreadcrumbItem, type PluginBreadcrumbsProps, type PluginButtonProps, type PluginButtonVariant, type PluginCalendarBaseProps, type PluginCalendarProps, type PluginCalendarRangeProps, type PluginCalendarSingleProps, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCardProps, type PluginChartBaseProps, type PluginChartColor, type PluginChartSeries, type PluginCheckboxProps, type PluginCodeBlockProps, type PluginColoredLabelProps, type PluginComboboxProps, type PluginCommandPaletteItem, type PluginCommandPaletteProps, type PluginConfirmDialogProps, type PluginContextMenuProps, type PluginCopyButtonProps, type PluginCountIndicatorProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableSort, type PluginDateFieldBaseProps, type PluginDatePickerProps, type PluginDateRange, type PluginDateRangePickerProps, type PluginDateRangePreset, type PluginDescriptionItem, type PluginDescriptionListItemProps, type PluginDescriptionListProps, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDiffStatProps, type PluginDisclosureProps, type PluginDismissButtonProps, type PluginDividerProps, type PluginDocumentPackage, type PluginDomProps, type PluginDonutChartProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginEmojiPickerProps, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFileDropzoneProps, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFilterChipProps, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginHeadingProps, type PluginHighlightedTextProps, type PluginHostBridge, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginIndicatorPlacement, type PluginInlineCodeProps, type PluginInputProps, type PluginIsoDate, type PluginKbdChordProps, type PluginKbdProps, type PluginLineChartProps, type PluginLinkProps, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLiveRegionProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginMeterProps, type PluginMeterThresholds, type PluginMultiSelectProps, type PluginNavListItem, type PluginNavListProps, type PluginNavListSection, type PluginNumberInputProps, type PluginPaneHeaderProps, type PluginPaneStateProps, type PluginPathLabelProps, type PluginPickerBaseProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginPortalProps, type PluginProgressBarProps, type PluginRadioGroupProps, type PluginRadioOption, type PluginResizableSplitProps, type PluginRootAttributes, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSectionLabelProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSheetProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSliderProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginStatCardProps, type PluginStateGlyphProps, type PluginStatusDotProps, type PluginStatusState, type PluginStepState, type PluginStepperProps, type PluginStepperStep, type PluginSwitchProps, type PluginTabItem, type PluginTabsProps, type PluginTagInputProps, type PluginTextProps, type PluginTextSize, type PluginTextTone, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginTimeAgoProps, type PluginTimelineActor, type PluginTimelineItem, type PluginTimelineProps, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTruncatedTooltipProps, type PluginUnreadDotProps, type PluginVirtualListBaseProps, type PluginVirtualListComponent, type PluginVirtualListCountProps, type PluginVirtualListItemsProps, type PluginVirtualListProps, type PluginVisuallyHiddenProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseHostChannelResult, type UseListNavigationOptions, type UseListNavigationResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };

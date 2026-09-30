@@ -238,6 +238,64 @@ describe("lucide-react-import", () => {
   });
 });
 
+describe("raw-portal", () => {
+  it("flags createPortal in a view and passes the kit's Portal", async () => {
+    const flagged = await lintFor(
+      "raw-portal",
+      view(
+        `<div>{createPortal(<span />, document.body)}</div>`,
+        `import { createPortal } from "react-dom";\n`
+      )
+    );
+    expect(flagged).toHaveLength(1);
+    expect(
+      await lintFor(
+        "raw-portal",
+        view(`<Portal><div /></Portal>`, `import { Portal } from "@daintreehq/plugin-ui";\n`)
+      )
+    ).toEqual([]);
+  });
+
+  it("follows a namespace or an aliased import", async () => {
+    expect(
+      await lintFor(
+        "raw-portal",
+        view(
+          `<div>{ReactDOM.createPortal(<span />, document.body)}</div>`,
+          `import * as ReactDOM from "react-dom";\n`
+        )
+      )
+    ).toHaveLength(1);
+    expect(
+      await lintFor(
+        "raw-portal",
+        view(
+          `<div>{portal(<span />, document.body)}</div>`,
+          `import { createPortal as portal } from "react-dom";\n`
+        )
+      )
+    ).toHaveLength(1);
+  });
+
+  it("ignores an unrelated createPortal where react-dom is not imported", async () => {
+    expect(await lintFor("raw-portal", view(`<div>{layers.createPortal("toast")}</div>`))).toEqual(
+      []
+    );
+  });
+
+  it("ignores the name inside a string or comment", async () => {
+    expect(
+      await lintFor(
+        "raw-portal",
+        view(
+          `<p>{"createPortal(x)"}</p>`,
+          `import { flushSync } from "react-dom";\n// createPortal(x)\n`
+        )
+      )
+    ).toEqual([]);
+  });
+});
+
 describe("self-container-query", () => {
   it("flags a container-query variant on the element that declares the container", async () => {
     const flagged = await lintFor(

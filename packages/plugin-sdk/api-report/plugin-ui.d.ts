@@ -184,6 +184,27 @@ declare module "@daintreehq/plugin-ui" {
     UseListNavigationOptions as PluginUseListNavigationOptions,
     UseListNavigationResult as PluginUseListNavigationResult,
   } from "@daintreehq/plugin-sdk/react";
+  import type {
+    PluginAnnounceOptions,
+    PluginCodeBlockProps,
+    PluginColoredLabelProps,
+    PluginCountIndicatorProps,
+    PluginHeadingProps,
+    PluginIndicatorPlacement,
+    PluginInlineCodeProps,
+    PluginLinkProps,
+    PluginLiveRegionProps,
+    PluginPathLabelProps,
+    PluginPortalProps,
+    PluginStateGlyphProps,
+    PluginStatusDotProps,
+    PluginStatusState,
+    PluginTextProps,
+    PluginTextSize,
+    PluginTextTone,
+    PluginUnreadDotProps,
+    PluginVisuallyHiddenProps,
+  } from "@daintreehq/plugin-sdk/react";
 
   export type MarkdownProps = PluginMarkdownProps;
   export type ButtonProps = PluginButtonProps;
@@ -326,6 +347,25 @@ declare module "@daintreehq/plugin-ui" {
   export type BarChartProps = PluginBarChartProps;
   export type LineChartProps = PluginLineChartProps;
   export type DonutChartProps = PluginDonutChartProps;
+  export type TextSize = PluginTextSize;
+  export type TextTone = PluginTextTone;
+  export type TextProps = PluginTextProps;
+  export type HeadingProps = PluginHeadingProps;
+  export type LinkProps = PluginLinkProps;
+  export type InlineCodeProps = PluginInlineCodeProps;
+  export type CodeBlockProps = PluginCodeBlockProps;
+  export type PathLabelProps = PluginPathLabelProps;
+  export type VisuallyHiddenProps = PluginVisuallyHiddenProps;
+  export type LiveRegionProps = PluginLiveRegionProps;
+  export type AnnounceOptions = PluginAnnounceOptions;
+  export type PortalProps = PluginPortalProps;
+  export type StatusState = PluginStatusState;
+  export type StatusDotProps = PluginStatusDotProps;
+  export type StateGlyphProps = PluginStateGlyphProps;
+  export type ColoredLabelProps = PluginColoredLabelProps;
+  export type IndicatorPlacement = PluginIndicatorPlacement;
+  export type UnreadDotProps = PluginUnreadDotProps;
+  export type CountIndicatorProps = PluginCountIndicatorProps;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -563,6 +603,40 @@ declare module "@daintreehq/plugin-ui" {
   export const LineChart: ComponentType<LineChartProps>;
   /** Parts of a whole around a centre figure, with a legend of every value and share. */
   export const DonutChart: ComponentType<DonutChartProps>;
+
+  /** Text on the app's type ramp (`size`) in one of its colour roles (`tone`). */
+  export const Text: ComponentType<TextProps>;
+  /** A heading at one of the app's four heading sizes; `level` also picks `h1`–`h4`. */
+  export const Heading: ComponentType<HeadingProps>;
+  /** An inline link routed like `Markdown`'s: the browser for URLs, the file viewer for paths inside `rootPath`. */
+  export const Link: ComponentType<LinkProps>;
+  /** A code span in running text. */
+  export const InlineCode: ComponentType<InlineCodeProps>;
+  /** A read-only highlighted snippet with a copy button, line numbers and marked lines. */
+  export const CodeBlock: ComponentType<CodeBlockProps>;
+  /** A file path that ellipsises in the directory and keeps the file name, with the full path in a tooltip. */
+  export const PathLabel: ComponentType<PathLabelProps>;
+  /** Content for assistive tech only. */
+  export const VisuallyHidden: ComponentType<VisuallyHiddenProps>;
+  /** A mounted region whose changes assistive tech reads out. */
+  export const LiveRegion: ComponentType<LiveRegionProps>;
+  /** Renders outside the view (the body by default), still inside your plugin's style root. */
+  export const Portal: ComponentType<PortalProps>;
+  /** The app's activity dot for running, idle, waiting, error, success and neutral. */
+  export const StatusDot: ComponentType<StatusDotProps>;
+  /** The app's state glyph for the same states, at icon size. */
+  export const StateGlyph: ComponentType<StateGlyphProps>;
+  /** A tag in a user-chosen hex colour, adjusted to read in the active theme. */
+  export const ColoredLabel: ComponentType<ColoredLabelProps>;
+  /** The neutral unread pip, inline or on the corner of what it wraps. */
+  export const UnreadDot: ComponentType<UnreadDotProps>;
+  /** A count pill capped at `max` ("99+"), inline or on the corner of what it wraps. */
+  export const CountIndicator: ComponentType<CountIndicatorProps>;
+  /**
+   * A stable function that speaks a message through the host's announcer, as
+   * the kit's own controls do. Empty messages are ignored.
+   */
+  export function useAnnounce(): (message: string, options?: AnnounceOptions) => void;
 
   /**
    * The keyboard model of a list: one tab stop, Up/Down/Home/End move the

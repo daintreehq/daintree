@@ -40,6 +40,19 @@ export function whenPluginUiReady(): Promise<void> {
     .then((module) => module.preparePluginKit());
 }
 
+/**
+ * Runs `run` with the kit: at once when it is in, else once it loads. For kit
+ * functions (not components) the facade calls, like `useAnnounce`'s. A chunk
+ * that fails to load drops the call; the next one retries.
+ */
+export function withPluginKit(run: (kit: PluginKit) => void): void {
+  if (loaded) {
+    run(loaded);
+    return;
+  }
+  loadKit().then(run, () => {});
+}
+
 // Started as soon as a view imports the kit, so the chunk is usually in by the
 // time the view first renders and nothing waits.
 preloadPluginUi();
