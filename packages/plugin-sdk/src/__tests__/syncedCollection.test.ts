@@ -379,6 +379,114 @@ describe("useSyncedCollection", () => {
   });
 });
 
+describe("synced edit latency", () => {
+  // `performance` too, so the commit throttle reads the same clock the timers advance.
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "performance",
+      ],
+    });
+  });
+
+  const opened: Array<{ unmount: () => void }> = [];
+  afterEach(() => {
+    for (const view of opened.splice(0)) view.unmount();
+  });
+
+  async function openView() {
+    const h = fakeHost();
+    const worker = await createSyncedCollection<Row>(h.host, "rows", {
+      key,
+      initial: [{ id: "a", v: 0 }],
+    });
+    const b = fakeBridge();
+    b.invoke.mockImplementation(async () => h.snapshot("rows"));
+    const renders = { count: 0 };
+    const view = renderHook(() => {
+      renders.count++;
+      return useSyncedCollection<Row>("acme", "rows");
+    });
+    opened.push(view);
+    // Past the commit throttle's gap, so the edit below arrives after a quiet spell.
+    await act(async () => void (await vi.advanceTimersByTimeAsync(100)));
+    // The host hands a renderer every push of one flush in one batch, synchronously.
+    const deliver = () => {
+      for (const { channel, payload } of h.posts.splice(0)) b.push(channel, payload);
+    };
+    return { h, b, worker, view, renders, deliver };
+  }
+
+  const microtasks = () => act(async () => {});
+
+  it("an edit the worker flushes shows after microtasks alone: no timer, no frame", async () => {
+    const { worker, view, deliver, b } = await openView();
+    const start = performance.now();
+    worker.upsert({ id: "a", v: 1 });
+    await worker.flush();
+    deliver();
+    await microtasks();
+    expect(ids(view.result.current.items)).toEqual(["a1"]);
+    // No fake time passed, so no rAF or timer was needed to commit.
+    expect(performance.now() - start).toBe(0);
+    expect(b.invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("the first snapshot commits as soon as it lands, not a throttle gap later", async () => {
+    const h = fakeHost();
+    await createSyncedCollection<Row>(h.host, "rows", { key, initial: [{ id: "a", v: 0 }] });
+    const b = fakeBridge();
+    b.invoke.mockImplementation(async () => h.snapshot("rows"));
+    const view = renderHook(() => useSyncedCollection<Row>("acme", "rows"));
+    opened.push(view);
+    await microtasks();
+    expect(ids(view.result.current.items)).toEqual(["a0"]);
+    expect(view.result.current.loading).toBe(false);
+  });
+
+  it("an edit left to the flush window shows after flushMs (16 ms), not a frame later", async () => {
+    const { worker, view, deliver, h } = await openView();
+    worker.upsert({ id: "a", v: 2 });
+    await act(async () => void (await vi.advanceTimersByTimeAsync(15)));
+    expect(h.posts).toHaveLength(0);
+    await act(async () => void (await vi.advanceTimersByTimeAsync(1)));
+    deliver();
+    await microtasks();
+    expect(ids(view.result.current.items)).toEqual(["a2"]);
+  });
+
+  it("commits while requestAnimationFrame is throttled", async () => {
+    const { worker, view, deliver } = await openView();
+    const raf = vi.spyOn(globalThis, "requestAnimationFrame");
+    worker.upsert({ id: "b", v: 1 });
+    await worker.flush();
+    deliver();
+    await microtasks();
+    expect(ids(view.result.current.items)).toEqual(["a0", "b1"]);
+    expect(raf).not.toHaveBeenCalled();
+  });
+
+  it("a burst of deltas in separate tasks commits at most once per 16 ms", async () => {
+    const { worker, view, deliver, renders, b } = await openView();
+    const before = renders.count;
+    for (let i = 1; i <= 64; i++) {
+      worker.upsert({ id: "a", v: i });
+      await worker.flush();
+      deliver();
+      await act(async () => void (await vi.advanceTimersByTimeAsync(1)));
+    }
+    await settle();
+    expect(ids(view.result.current.items)).toEqual(["a64"]);
+    // 64 ms of deltas: a leading commit, then one per 16 ms gap.
+    expect(renders.count - before).toBeLessThanOrEqual(6);
+    expect(b.invoke).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("createSyncedCollection delivery", () => {
   it("retries the newest delta when its push fails, so views are not left stale", async () => {
     const h = fakeHost();

@@ -5610,6 +5610,10 @@ declare function syncedCollectionSnapshotChannel(channel: string): string;
  * only then. Apart from one empty delta announcing this instance (so a view
  * left over from a previous worker resyncs), nothing is pushed until a view
  * has pulled a snapshot: a plugin whose panel was never opened sends no deltas.
+ * Once one has, deltas are broadcast for the rest of the collection's life,
+ * even after every view has closed, because nothing tells a worker that a
+ * broadcast has no subscriber; the host dropping such a push before IPC is
+ * the fix, and belongs on the host side.
  */
 declare function createSyncedCollection<T>(host: SyncedCollectionHost, channel: string, options: SyncedCollectionOptions<T>): Promise<SyncedCollection<T>>;
 

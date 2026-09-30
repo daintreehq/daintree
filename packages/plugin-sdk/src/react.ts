@@ -48,6 +48,7 @@ export {
   type AnimationFrameCallback,
   type AnimationFrameOptions,
 } from "./react/useAnimationFrame.js";
+export { useNow, type NowOptions } from "./react/useNow.js";
 export {
   useStreamBuffer,
   type StreamBufferOptions,
