@@ -2429,6 +2429,7 @@ interface PluginDroppableState {
 }
 /** Handed to `SortableList`'s `renderItem`. */
 interface PluginSortableItemState {
+    /** Its position as drawn: while an item is held by keyboard, the position it would land at. */
     index: number;
     /** This item is picked up: it is the faded placeholder, or lifted in place while moved by keyboard. */
     isDragging: boolean;
@@ -2442,8 +2443,9 @@ interface PluginSortableItemState {
  * drops, Escape puts it back). The list is one tab stop; the arrow keys move
  * between items. While a pointer drag is held the item's slot stays behind as
  * a faded placeholder and a line marks where it will land; a scrolling
- * ancestor scrolls when the pointer nears its edge. The list does not
- * reorder itself: apply `onReorder` or `onChange` to `items`.
+ * ancestor scrolls when the pointer nears its edge. Each item's context menu
+ * (right-click, or Shift+F10) offers the same moves without a drag. The list
+ * does not reorder itself: apply `onReorder` or `onChange` to `items`.
  */
 interface PluginSortableListProps<T = unknown> extends PluginRootAttributes {
     items: readonly T[];
@@ -2493,13 +2495,16 @@ interface PluginKanbanMove {
 }
 /** Handed to `Kanban`'s `renderCard`. */
 interface PluginKanbanCardState extends PluginSortableItemState {
+    /** The column it is drawn in: while held by keyboard, the column it would land in. */
     columnId: string;
 }
 /**
  * Props of `Kanban`: columns of cards the user moves between columns and
  * reorders within one, by pointer or keyboard (Space picks the focused card
  * up, Up/Down move it in its column, Left/Right move it to the next column,
- * Space drops, Escape puts it back). The board scrolls sideways when its
+ * Space drops, Escape puts it back), or from a card's context menu
+ * (right-click, or Shift+F10), which also moves it to another column. The
+ * board scrolls sideways when its
  * columns overflow and each column scrolls on its own, so give the board a
  * height (`h-full` in a sized pane). It does not move cards itself: apply
  * `onMove` to `cards`.

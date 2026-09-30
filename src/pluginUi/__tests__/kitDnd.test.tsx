@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { createElement, useState, type ReactNode } from "react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 vi.mock("@/services/ActionService", () => ({
@@ -9,6 +9,7 @@ vi.mock("@/services/ActionService", () => ({
 
 import * as kit from "@daintreehq/plugin-ui";
 import { DndContext } from "@dnd-kit/core";
+import { besideCursor, edgeScroll } from "@/components/PluginKit/PluginKitDnd";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 beforeAll(async () => {
@@ -730,5 +731,240 @@ describe("DragDropProvider, useDraggable and useDroppable", () => {
     }
     render(untyped("DragDropProvider", { className: 3 }, createElement(Loose)));
     expect(screen.getByRole("button").getAttribute("aria-disabled")).toBe("true");
+  });
+});
+
+describe("drag presentation rules", () => {
+  it("puts the lifted copy beside the pointer, never over it", () => {
+    const rect = { left: 100, top: 100, width: 200, height: 40 };
+    const view = document.createElement("div");
+    vi.spyOn(view, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: 0, width: 1000, height: 800 })
+    );
+    const room = besideCursor({ x: 300, y: 400 }, rect, view)!;
+    expect(rect.left + room.x).toBeGreaterThan(300);
+    // No room to the right: it flips left of the pointer instead.
+    const edge = besideCursor({ x: 900, y: 400 }, rect, view)!;
+    expect(rect.left + edge.x + rect.width).toBeLessThan(900);
+    // And it never leaves the view.
+    const corner = besideCursor({ x: 990, y: 790 }, rect, view)!;
+    expect(rect.left + corner.x + rect.width).toBeLessThanOrEqual(1000);
+    expect(rect.top + corner.y + rect.height).toBeLessThanOrEqual(800);
+  });
+
+  it("auto-scrolls a scroller only while the pointer holds near its edge", () => {
+    const scroller = document.createElement("div");
+    scroller.style.overflowY = "auto";
+    scroller.style.overflowX = "auto";
+    Object.defineProperty(scroller, "scrollHeight", { value: 2000 });
+    Object.defineProperty(scroller, "clientHeight", { value: 400 });
+    Object.defineProperty(scroller, "scrollWidth", { value: 2000 });
+    Object.defineProperty(scroller, "clientWidth", { value: 400 });
+    vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: 0, width: 400, height: 400 })
+    );
+    document.body.append(scroller);
+    Object.defineProperty(document, "elementsFromPoint", {
+      configurable: true,
+      value: () => [scroller],
+    });
+    try {
+      edgeScroll({ x: 200, y: 200 }, false);
+      expect(scroller.scrollTop).toBe(0);
+      expect(scroller.scrollLeft).toBe(0);
+      edgeScroll({ x: 200, y: 395 }, false);
+      expect(scroller.scrollTop).toBeGreaterThan(0);
+      expect(scroller.scrollLeft).toBe(0);
+      edgeScroll({ x: 395, y: 200 }, false);
+      expect(scroller.scrollLeft).toBeGreaterThan(0);
+    } finally {
+      Reflect.deleteProperty(document, "elementsFromPoint");
+      scroller.remove();
+    }
+  });
+
+  it("draws the lifted copy with no hover state", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement
+    ) {
+      const row = this.closest("[role=listitem]");
+      const list = this.closest("[role=list]");
+      if (row && list) {
+        const index = [...list.children].indexOf(row);
+        return DOMRect.fromRect({ x: 0, y: index * 20, width: 200, height: 20 });
+      }
+      return DOMRect.fromRect({ x: 0, y: 0, width: 200, height: 60 });
+    });
+    render(
+      createElement(kit.SortableList<Task>, {
+        items: TASKS,
+        "aria-label": "Priorities",
+        renderItem: (item) => item.title,
+      })
+    );
+    const alpha = handles()[0]!;
+    fireEvent.mouseDown(alpha, { button: 0, clientX: 10, clientY: 10 });
+    fireEvent.mouseMove(document, { clientX: 10, clientY: 25 });
+    const copy = element(document.querySelector("[data-kit-drag-overlay]"));
+    const classes = [copy, ...copy.querySelectorAll("*")].flatMap((el) =>
+      (el.getAttribute("class") ?? "").split(/\s+/)
+    );
+    expect(classes.filter((name) => name.startsWith("hover:"))).toEqual([]);
+    act(() => {
+      fireEvent.mouseUp(document);
+    });
+    await act(() => new Promise((resolve) => setTimeout(resolve, CLICK_GUARD_LAPSE_MS)));
+  });
+});
+
+describe("moves without dragging", () => {
+  beforeEach(() => {
+    // Radix menus measure their content; jsdom has no ResizeObserver.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function openMenu(target: HTMLElement) {
+    fireEvent.contextMenu(target, { button: 2, clientX: 5, clientY: 5 });
+  }
+
+  it("reorders a list row from its context menu", () => {
+    const onReorder = vi.fn();
+    render(
+      withTooltips(
+        createElement(kit.SortableList<Task>, {
+          items: TASKS,
+          "aria-label": "Priorities",
+          renderItem: (item) => item.title,
+          onReorder,
+        })
+      )
+    );
+    openMenu(handles()[0]!);
+    expect(screen.getByRole("menuitem", { name: "Move up" }).getAttribute("aria-disabled")).toBe(
+      "true"
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move down" }));
+    expect(onReorder).toHaveBeenCalledWith(0, 1);
+    expect(liveText()).toContain("Moved Alpha to position 2 of 3");
+  });
+
+  it("moves a card to another column from its context menu", () => {
+    const onMove = vi.fn();
+    render(
+      withTooltips(
+        createElement(kit.Kanban<Card>, {
+          columns: COLUMNS,
+          cards: CARDS,
+          "aria-label": "Sprint board",
+          renderCard: (card) => card.title,
+          onMove,
+        })
+      )
+    );
+    openMenu(handles().find((h) => h.textContent === "Rate limits")!);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Review" }));
+    expect(onMove).toHaveBeenCalledWith({
+      cardId: "t2",
+      fromColumn: "todo",
+      toColumn: "review",
+      fromIndex: 1,
+      index: 0,
+    });
+  });
+});
+
+describe("keyboard previews", () => {
+  it("hands renderItem the index the held item is drawn at", () => {
+    render(
+      createElement(kit.SortableList<Task>, {
+        items: TASKS,
+        "aria-label": "Priorities",
+        renderItem: (item, { index }) => `${index + 1}. ${item.title}`,
+      })
+    );
+    const list = screen.getByRole("list", { name: "Priorities" });
+    const alpha = handles()[0]!;
+    alpha.focus();
+    fireEvent.keyDown(alpha, { key: " " });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(rowTexts(list)).toEqual(["1. Bravo", "2. Alpha", "3. Charlie"]);
+  });
+
+  it("counts a column's cards as drawn while one is held over it", () => {
+    render(
+      withTooltips(
+        createElement(kit.Kanban<Card>, {
+          columns: COLUMNS,
+          cards: CARDS,
+          "aria-label": "Sprint board",
+          renderCard: (card) => card.title,
+        })
+      )
+    );
+    const count = (title: string) =>
+      element(
+        screen
+          .getByRole("heading", { name: title })
+          .closest("section")
+          ?.querySelector("[data-kit-column-count] span[aria-hidden]")
+      ).textContent;
+    const card = handles().find((h) => h.textContent === "Rate limits")!;
+    card.focus();
+    fireEvent.keyDown(card, { key: " " });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+    expect(count("Backlog")).toBe("1");
+    expect(count("In progress")).toBe("3/1");
+  });
+});
+
+describe("empty column as a drop target", () => {
+  it("arms the whole column and draws no insertion line", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement
+    ) {
+      const section = this.closest("section");
+      const columns = [...document.querySelectorAll("section")];
+      const at = section ? columns.indexOf(section) : 0;
+      const row = this.closest("[role=listitem]");
+      if (row) {
+        const index = [...(row.parentElement?.children ?? [])].indexOf(row);
+        return DOMRect.fromRect({ x: at * 300, y: 40 + index * 50, width: 280, height: 44 });
+      }
+      return DOMRect.fromRect({ x: at * 300, y: 0, width: 280, height: 600 });
+    });
+    render(
+      withTooltips(
+        createElement(kit.Kanban<Card>, {
+          columns: COLUMNS,
+          cards: CARDS,
+          "aria-label": "Sprint board",
+          renderCard: (card) => card.title,
+        })
+      )
+    );
+    const card = handles().find((h) => h.textContent === "Rate limits")!;
+    fireEvent.mouseDown(card, { button: 0, clientX: 20, clientY: 100 });
+    fireEvent.mouseMove(document, { clientX: 40, clientY: 110 });
+    act(() => {
+      fireEvent.mouseMove(window, { clientX: 700, clientY: 300 });
+    });
+    const review = element(screen.getByRole("heading", { name: "Review" }).closest("section"));
+    expect(review.getAttribute("data-drop-target")).toBe("true");
+    expect(review.querySelector("[data-kit-drop-indicator]")).toBeNull();
+    act(() => {
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+      fireEvent.mouseUp(document);
+    });
+    await act(() => new Promise((resolve) => setTimeout(resolve, CLICK_GUARD_LAPSE_MS)));
   });
 });
