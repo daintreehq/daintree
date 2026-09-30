@@ -46,6 +46,7 @@ import {
   parseNumberText,
   pickerRows,
   snapToStep,
+  stepperRoom,
 } from "@/components/PluginKit/PluginKitInputs";
 import { normalizeSelectOptions } from "@/components/PluginKit/kitOptions";
 
@@ -333,6 +334,92 @@ describe("NumberInput", () => {
     expect(classes(stepper)).toContain("shrink-0");
   });
 
+  it("hides both steppers once they no longer fit, and brings them back only when the room they need returns", () => {
+    // Shown and fitting: stays shown.
+    expect(stepperRoom(200, 150, null)).toBeNull();
+    // Subpixel rounding is not an overflow.
+    expect(stepperRoom(200, 200.4, null)).toBeNull();
+    // Shown and overflowing: hidden, remembering the width the parts needed.
+    expect(stepperRoom(120, 150, null)).toBe(150);
+    // Hidden, the frame's freed room never flips it straight back: only the
+    // remembered width does, whatever the parts measure now.
+    expect(stepperRoom(149, 90, 150)).toBe(150);
+    expect(stepperRoom(150, 90, 150)).toBeNull();
+    expect(stepperRoom(400, 90, 150)).toBeNull();
+  });
+
+  it("drops both stepper buttons in a column too narrow for them, keeps stepping from the keys, and restores them with room", () => {
+    type Box = { inlineSize: number; blockSize: number };
+    type Entry = { target: Element; borderBoxSize: Box[]; contentBoxSize: Box[] };
+    let report: ((entries: Entry[]) => void) | undefined;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: (entries: Entry[]) => void) {
+          report = callback;
+        }
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+      }
+    );
+    try {
+      const onValueChange = vi.fn();
+      render(
+        createElement(kit.NumberInput, {
+          "aria-label": "Seats",
+          defaultValue: 240,
+          unit: "seats",
+          onValueChange,
+        })
+      );
+      const value = screen.getByRole("spinbutton", { name: "Seats" });
+      const frame = value.parentElement!;
+      const box = (target: Element, outer: number, inner = outer): Entry => ({
+        target,
+        borderBoxSize: [{ inlineSize: outer, blockSize: 32 }],
+        contentBoxSize: [{ inlineSize: inner, blockSize: 30 }],
+      });
+      const buttons = () => frame.querySelectorAll("button");
+      const layout = (frameWidth: number, valueWidth: number, unitWidth: number) => {
+        const [input, unit, stepper] = Array.from(frame.children);
+        act(() => {
+          report!([
+            box(frame, frameWidth, frameWidth - 6),
+            box(input!, valueWidth),
+            box(unit!, unitWidth),
+            box(stepper!, 50),
+          ]);
+        });
+      };
+      // Room for everything: both buttons show.
+      layout(200, 100, 44);
+      expect(buttons()).toHaveLength(2);
+      // The value at its floor, the unit down to its padding, and the pair
+      // need 6 + 48 + 4 + 50 = 108 in a 90px frame: both go, together.
+      layout(90, 48, 4);
+      expect(buttons()).toHaveLength(0);
+      expect(frame.querySelector("[data-number-stepper]")).toBeNull();
+      // The keys still step with the buttons gone.
+      fireEvent.keyDown(value, { key: "ArrowUp" });
+      expect(onValueChange).toHaveBeenLastCalledWith(241);
+      fireEvent.keyDown(value, { key: "PageDown" });
+      expect(onValueChange).toHaveBeenLastCalledWith(231);
+      // Wider, but short of what the pair needed: still hidden, no flicker.
+      act(() => {
+        report!([box(frame, 107, 101)]);
+      });
+      expect(buttons()).toHaveLength(0);
+      // The room they needed is back: both return.
+      act(() => {
+        report!([box(frame, 108, 102)]);
+      });
+      expect(buttons()).toHaveLength(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps the Input's height at both densities", () => {
     for (const density of ["default", "compact"] as const) {
       render(
@@ -435,8 +522,36 @@ describe("Slider", () => {
     expect(screen.getByText("70%").getAttribute("aria-hidden")).toBe("true");
     fireEvent.pointerUp(slider);
     expect(onValueCommit).toHaveBeenCalledWith(70);
-    // The track stays neutral: the primary ink, never the accent.
-    expect(slider.className).toContain("accent-[var(--color-text-primary)]");
+  });
+
+  it("draws the thumb with a boundary of its own against the fill and the empty track, in neutral inks", () => {
+    render(createElement(kit.Slider, { "aria-label": "Mix", min: 0, max: 200, defaultValue: 50 }));
+    const slider = screen.getByRole("slider", { name: "Mix" }) as HTMLInputElement;
+    const classes = slider.className.split(" ");
+    const thumb = classes.filter((c) => c.startsWith("[&::-webkit-slider-thumb]:"));
+    const track = classes.filter((c) => c.startsWith("[&::-webkit-slider-runnable-track]:"));
+    // The platform thumb is replaced, so it can be drawn.
+    expect(classes).toContain("appearance-none");
+    expect(thumb).toContain("[&::-webkit-slider-thumb]:appearance-none");
+    // The thumb is a surface-coloured disc with a ring: its fill is not the
+    // ink the track fills with, so it never melts into the filled part.
+    const thumbFill = thumb.find((c) => /:bg-/.test(c));
+    expect(thumbFill).toMatch(/:bg-surface-/);
+    expect(thumb).toContain("[&::-webkit-slider-thumb]:border-2");
+    expect(thumb.some((c) => /:border-(text-primary|border-strong)$/.test(c))).toBe(true);
+    const trackFill = track.find((c) => /:bg-\[/.test(c))!;
+    expect(trackFill).toContain("var(--color-text-primary)");
+    expect(trackFill).toContain("var(--kit-slider-fill");
+    expect(trackFill).not.toContain(thumbFill!.split(":bg-")[1]!);
+    // Neutral throughout: the focus ring is the only accent on it.
+    expect(slider.className.replace(/focus-visible:outline-accent-primary/g, "")).not.toMatch(
+      /accent/
+    );
+    // The fill follows the value as a fraction of the range.
+    const fill = () => Number(slider.style.getPropertyValue("--kit-slider-fill"));
+    expect(fill()).toBe(0.25);
+    fireEvent.change(slider, { target: { value: "150" } });
+    expect(fill()).toBe(0.75);
   });
 
   it("snaps to the step the way the native range does", () => {

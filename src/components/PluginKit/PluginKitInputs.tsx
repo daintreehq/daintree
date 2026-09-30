@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type ClipboardEvent,
+  type CSSProperties,
   type DragEvent,
   type KeyboardEvent,
   type ReactNode,
@@ -232,6 +233,62 @@ const NUMBER_VALUE_CLASS =
   // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the frame draws the ring; a second one inside it would double it
   "w-0 flex-1 text-ellipsis bg-transparent tabular-nums text-text-primary outline-hidden placeholder:text-text-placeholder disabled:cursor-not-allowed";
 
+/**
+ * Whether a NumberInput's stepper buttons are hidden, as the width the frame
+ * must reach before they show again, or `null` while they show. Shown, they
+ * hide together once the frame's parts (the value at its floor, the unit, the
+ * buttons and the frame's own padding and border) need more than the frame
+ * has, and that need is remembered: hidden, they come back only when the frame
+ * is at least that wide again, so hiding them (which frees room) never flips
+ * the decision straight back.
+ */
+export function stepperRoom(
+  frameWidth: number,
+  partsWidth: number,
+  hiddenUntil: number | null
+): number | null {
+  if (hiddenUntil !== null) return frameWidth >= hiddenUntil ? null : hiddenUntil;
+  // Half a pixel of slack absorbs subpixel rounding in the parts' sum.
+  return partsWidth > frameWidth + 0.5 ? partsWidth : null;
+}
+
+/**
+ * Hides a NumberInput's steppers when they no longer fit beside the value.
+ * One ResizeObserver watches the frame and its parts and reads every size from
+ * its entries, so nothing reads layout; state changes only when the decision
+ * flips.
+ */
+function useStepperRoom(enabled: boolean, partsKey: string) {
+  const [frame, setFrame] = useState<HTMLDivElement | null>(null);
+  const [hiddenUntil, setHiddenUntil] = useState<number | null>(null);
+  const hidden = enabled && hiddenUntil !== null;
+  useLayoutEffect(() => {
+    if (!enabled || frame === null || typeof ResizeObserver === "undefined") return;
+    const widths = new Map<Element, number>();
+    let chrome = 0;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const outer = inlineSize(entry);
+        widths.set(entry.target, outer);
+        if (entry.target === frame) {
+          const inner = entry.contentBoxSize?.[0]?.inlineSize ?? entry.contentRect.width;
+          chrome = outer - inner;
+        }
+      }
+      const width = widths.get(frame) ?? 0;
+      // Not laid out (a hidden tab, a closed disclosure): keep what shows.
+      if (width <= 0) return;
+      let parts = chrome;
+      for (const part of Array.from(frame.children)) parts += widths.get(part) ?? 0;
+      setHiddenUntil((previous) => stepperRoom(width, parts, previous));
+    });
+    observer.observe(frame);
+    for (const part of Array.from(frame.children)) observer.observe(part);
+    return () => observer.disconnect();
+  }, [enabled, frame, hidden, partsKey]);
+  return { hidden, setFrame };
+}
+
 function KitNumberInput(props: PluginNumberInputProps) {
   const {
     value,
@@ -388,7 +445,11 @@ function KitNumberInput(props: PluginNumberInputProps) {
   // A read-only value cannot be stepped, so it shows no buttons rather than a
   // pair that look pressable and do nothing; disabled keeps them, dimmed with
   // the rest of the field, as every disabled control does.
-  const showStepper = withStepper && readOnly !== true;
+  const allowStepper = withStepper && readOnly !== true;
+  // In a column too narrow for the value's floor and both buttons, the pair
+  // hides together rather than one being clipped; the keys still step.
+  const stepperRoomState = useStepperRoom(allowStepper, suffix ?? "");
+  const showStepper = allowStepper && !stepperRoomState.hidden;
 
   // The value, the unit and the buttons are laid side by side in the frame, so
   // the text keeps its own room and never runs under the unit. The frame draws
@@ -396,6 +457,7 @@ function KitNumberInput(props: PluginNumberInputProps) {
   // give it the Input's height at either density.
   return (
     <div
+      ref={stepperRoomState.setFrame}
       data-number-field=""
       className={cn(
         inputVariants({ density: compact ? "compact" : "default", invalid: shownInvalid }),
@@ -476,11 +538,21 @@ const SLIDER_KEYS = new Set([
   "End",
 ]);
 
-// The host's range: the platform control, tinted with the primary ink rather
-// than the accent, so the track and thumb stay neutral and the focus ring is
-// the one accent on it.
-const SLIDER_CLASS =
-  "h-5 min-w-0 flex-1 cursor-pointer rounded-full accent-[var(--color-text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary disabled:cursor-not-allowed disabled:opacity-50";
+// The host's range, drawn by the kit rather than the platform so the thumb has
+// its own boundary. The track fills with the primary ink up to the thumb's
+// centre (`--kit-slider-fill`, the value's fraction of the range) and is the
+// input-edge ink past it; the thumb is a field-coloured disc ringed in the
+// primary ink, so it stands apart from the fill it sits on and from the empty
+// track, in either theme. No accent: the focus ring is the one on it.
+const SLIDER_TRACK_CLASS =
+  "[&::-webkit-slider-runnable-track]:h-1 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-[linear-gradient(to_right,var(--color-text-primary)_calc(0.5rem_+_(100%_-_1rem)_*_var(--kit-slider-fill,0)),var(--color-border-input)_0)]";
+const SLIDER_THUMB_CLASS =
+  "[&::-webkit-slider-thumb]:-mt-1.5 [&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:box-border [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-solid [&::-webkit-slider-thumb]:border-text-primary [&::-webkit-slider-thumb]:bg-surface-input";
+const SLIDER_CLASS = [
+  "h-5 min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-transparent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary disabled:cursor-not-allowed disabled:opacity-50",
+  SLIDER_TRACK_CLASS,
+  SLIDER_THUMB_CLASS,
+].join(" ");
 
 /**
  * A value as the native range holds it: in bounds and on a step from `lo`,
@@ -523,6 +595,9 @@ function KitSlider(props: PluginSliderProps) {
   const formatter = fn(formatValue);
   const words = formatter ? nonEmpty(formatter(current)) : undefined;
   const { controlProps } = useKitFieldControl(props);
+  const fillStyle: CSSProperties & Record<"--kit-slider-fill", string> = {
+    "--kit-slider-fill": String((current - lo) / (hi - lo)),
+  };
   return (
     <div className={cn("flex w-full min-w-0 items-center gap-3", str(className))}>
       <input
@@ -547,6 +622,7 @@ function KitSlider(props: PluginSliderProps) {
           if (SLIDER_KEYS.has(event.key)) onCommit?.(Number(event.currentTarget.value));
         }}
         className={SLIDER_CLASS}
+        style={fillStyle}
       />
       {showValue === true ? (
         <span
