@@ -83,6 +83,17 @@ function isScopedSelector(selector: string, scope: string): boolean {
   return combinator !== "+" && combinator !== "~";
 }
 
+function hasNestedRules(rule: CSSRule): boolean {
+  const nested: unknown = Reflect.get(rule, "cssRules");
+  return (
+    typeof nested === "object" &&
+    nested !== null &&
+    "length" in nested &&
+    typeof nested.length === "number" &&
+    nested.length > 0
+  );
+}
+
 function parseStyleSheet(css: string): CSSStyleSheet | null {
   // A constructed sheet is parsed but never applied to any document, and
   // `replaceSync` does not fetch `@import`s.
@@ -112,7 +123,7 @@ function scopeStyleSheet(css: string, rootId: string): string {
     if (!("selectorText" in rule) || typeof rule.selectorText !== "string") continue;
     // A nested rule (`#id { :is(&, body) {} }`) picks its own targets; Mermaid
     // never emits one.
-    if ("cssRules" in rule && rule.cssRules.length > 0) continue;
+    if (hasNestedRules(rule)) continue;
     const selectors = rule.selectorText.split(",").map((selector) => selector.trim());
     if (selectors.every((selector) => isScopedSelector(selector, scope))) kept.push(text);
   }
