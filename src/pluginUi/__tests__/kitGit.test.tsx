@@ -537,7 +537,8 @@ describe("IssueRow and PullRequestRow", () => {
     expect(row.textContent).toContain("#412");
     expect(row.textContent).toContain("grace");
     expect(screen.getByRole("img", { name: "3 comments" })).toBeTruthy();
-    expect(screen.getByRole("img", { name: "Labels: bug, p1, ui" }).textContent).toContain("+1");
+    // The github row's run: the first label, then a count for the rest.
+    expect(screen.getByRole("img", { name: "Labels: bug, p1, ui" }).textContent).toBe("bug+2");
     expect(row.textContent).toContain("Crash when a worktree is deleted");
   });
 
@@ -658,9 +659,21 @@ describe("ChecksList", () => {
     expect(groups).toEqual(["CI", "Deploy"]);
     const ci = screen.getByRole("list", { name: "CI" });
     const order = [...ci.querySelectorAll("li")].map((li) => li.getAttribute("data-check-status"));
-    expect(order).toEqual(["failure", "failure", "running", "success"]);
+    // While something needs a look, the passes wait behind a count.
+    expect(order).toEqual(["failure", "failure", "running"]);
     expect(ci.textContent).toContain("Failed · Required");
-    expect(ci.textContent).toContain("42s");
+    const fold = screen.getByRole("button", { name: "Show 1 passing" });
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(fold);
+    const opened = [...screen.getByRole("list", { name: "CI" }).querySelectorAll("li")];
+    expect(opened.map((li) => li.getAttribute("data-check-status"))).toEqual([
+      "failure",
+      "failure",
+      "running",
+      "success",
+    ]);
+    expect(opened[3]?.textContent).toContain("42s");
+    expect(screen.getByRole("button", { name: "Hide 1 passing" })).toBeTruthy();
   });
 
   it("tells repeated names apart on the details buttons and opens the details url", () => {
@@ -872,7 +885,9 @@ describe("review regressions", () => {
       )
     );
     expect(screen.getByRole("list", { name: "Commits" }).querySelectorAll("li")).toHaveLength(3);
-    expect(document.querySelectorAll("[data-check-status]")).toHaveLength(4);
+    // Two failures, and the two passes folded behind their count.
+    expect(document.querySelectorAll("[data-check-status]")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Show 2 passing" })).toBeTruthy();
     const keyWarnings = errors.mock.calls.filter((call) => String(call[0]).includes("same key"));
     expect(keyWarnings).toEqual([]);
     errors.mockRestore();
@@ -1004,5 +1019,83 @@ describe("review regressions", () => {
     expect(logError).toHaveBeenCalledWith("[plugin-kit] browser.openUrl failed", {
       message: "nope",
     });
+  });
+});
+
+describe("round 1 design fixes", () => {
+  it("shows every check when nothing needs a look", () => {
+    render(
+      withTooltips(
+        createElement(kit.ChecksList, {
+          checks: [
+            { name: "a", status: "success" },
+            { name: "b", status: "skipped" },
+          ],
+        })
+      )
+    );
+    expect(document.querySelectorAll("[data-check-status]")).toHaveLength(2);
+    expect(document.querySelector("[data-kit-checks-fold]")).toBeNull();
+  });
+
+  it("gives a commit list one tab stop and moves it with the arrows", () => {
+    render(
+      withTooltips(
+        createElement(kit.CommitList, {
+          commits: COMMITS,
+          onActivate: () => {},
+          "aria-label": "Commits",
+        })
+      )
+    );
+    const list = screen.getByRole("list", { name: "Commits" });
+    const stops = [...list.querySelectorAll<HTMLElement>("button")].filter((b) => b.tabIndex === 0);
+    expect(stops).toHaveLength(1);
+    const first = screen.getByRole("button", { name: "Add native git components" });
+    expect(stops[0]).toBe(first);
+    first.focus();
+    fireEvent.keyDown(first, { key: "ArrowRight" });
+    const sha = screen.getByRole("button", { name: "Copy hash 0123456" });
+    expect(document.activeElement).toBe(sha);
+    fireEvent.keyDown(sha, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Copy hash fedcba9" }));
+    expect(
+      [...list.querySelectorAll<HTMLElement>("button")].filter((b) => b.tabIndex === 0)
+    ).toEqual([document.activeElement]);
+    fireEvent.keyDown(document.activeElement!, { key: "Home" });
+    expect(document.activeElement).toBe(first);
+  });
+
+  it("shows an absolute path inside the root relative to it", () => {
+    render(
+      withTooltips(
+        createElement(kit.FileLink, {
+          path: "/repo/src/a.ts",
+          rootPath: "/repo",
+          "data-testid": "link",
+        })
+      )
+    );
+    expect(screen.getByTestId("link").textContent).toBe("src/a.ts");
+  });
+
+  it("marks the selected row current, and draws one assignee with a count", () => {
+    render(
+      withTooltips(
+        createElement(kit.IssueRow, {
+          number: 3,
+          title: "Current one",
+          state: "open",
+          onOpen: () => {},
+          selected: true,
+          assignees: [{ name: "ada" }, { name: "grace" }, { name: "linus" }],
+        })
+      )
+    );
+    expect(screen.getByRole("button", { name: "Current one" }).getAttribute("aria-current")).toBe(
+      "true"
+    );
+    const slot = screen.getByRole("img", { name: "Assigned to ada, grace, linus" });
+    expect(slot.textContent).toContain("+2");
   });
 });

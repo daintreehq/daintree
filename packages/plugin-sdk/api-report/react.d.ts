@@ -4761,14 +4761,14 @@ interface PluginForgeRowBaseProps extends PluginRootAttributes {
     author?: PluginForgePerson;
     assignees?: readonly PluginForgePerson[];
     labels?: readonly PluginForgeLabel[];
-    /** Labels drawn before the rest fold into "+N", from 1 to 20. Defaults to 2. */
+    /** Labels drawn before the rest fold into "+N", from 1 to 20. Defaults to 1, as the host's own rows draw them. */
     maxLabels?: number;
     commentCount?: number;
     /** The age shown: epoch ms, an ISO string or a `Date`. */
     updatedAt?: number | string | Date;
     /** Words before the age. Defaults to "" (just "3h ago"). */
     timePrefix?: string;
-    /** Marks the row as the list's current one. */
+    /** Marks the row as the list's current one: the highlighted fill, and `aria-current` on its title. */
     selected?: boolean;
     /** Your controls at the end of the title line (a `DropdownMenu` trigger). */
     actions?: ReactNode;
