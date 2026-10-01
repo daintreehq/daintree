@@ -603,7 +603,7 @@ function CellEditor({
           }
         }}
         onBlur={(event) => settle(() => onCommit(event.currentTarget.value, null))}
-        className="h-6 w-full min-w-0 px-1.5 focus-visible:outline-offset-0"
+        className="h-6 w-full min-w-0 px-1.5 focus-visible:-outline-offset-2"
       />
     );
   // One structure whether or not there is an error, so the field is never

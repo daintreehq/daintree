@@ -819,10 +819,9 @@ function KitTreeView(props: PluginTreeViewProps) {
         // the selected row (FileTreeView). A multi-select tree can hold its
         // cursor on an unselected row, so there the cursor row carries the
         // ring instead, as the worktree overview grid's does.
-        multiple && [
-          cursorPath !== null && "outline-hidden",
-          "focus-visible:[&_[data-cursor=true]]:outline focus-visible:[&_[data-cursor=true]]:outline-2 focus-visible:[&_[data-cursor=true]]:-outline-offset-2 focus-visible:[&_[data-cursor=true]]:outline-accent-primary",
-        ],
+        multiple &&
+          cursorPath !== null &&
+          "outline-hidden focus-visible:[&_[data-cursor=true]]:outline focus-visible:[&_[data-cursor=true]]:outline-2 focus-visible:[&_[data-cursor=true]]:-outline-offset-2 focus-visible:[&_[data-cursor=true]]:outline-accent-primary",
         str(className)
       )}
     >
