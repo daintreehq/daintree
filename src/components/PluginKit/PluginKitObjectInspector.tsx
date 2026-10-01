@@ -258,6 +258,8 @@ function KitObjectInspector(props: PluginObjectInspectorProps) {
 
   const toggle = (row: InspectorRow, open: boolean) => {
     if (!row.isDirectory || row.isExpanded === open) return;
+    // Closing a branch the cursor is inside moves the cursor up to it.
+    if (!open && cursorPath !== null && cursorPath.startsWith(`${row.path}/`)) setCursor(row.path);
     setOverrides((current) => new Map(current).set(row.path, open));
   };
   const showMore = (row: InspectorRow) => {
