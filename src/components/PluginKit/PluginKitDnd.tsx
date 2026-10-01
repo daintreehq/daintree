@@ -82,6 +82,7 @@ import {
 import { useKitOverlayZClass } from "./kitScope";
 import { pluginKitNavigation } from "./PluginKitNavigation";
 import { isDragId, KitDragScopeContext } from "@/pluginUi/dnd";
+import { guardCallbacks } from "./kitDiagnostics";
 
 // Kit drags run on the host's own @dnd-kit, in a DndContext per kit component,
 // so a view's drag never reaches the panel grid's context and the host's never
@@ -92,18 +93,8 @@ import { isDragId, KitDragScopeContext } from "@/pluginUi/dnd";
 
 type DragKey = PluginDragId;
 
-/**
- * Runs a plugin callback. One that throws is reported and treated as having
- * returned `fallback`: a bad callback costs its own output, never the view.
- */
-function attempt<T>(run: () => T, fallback: T): T {
-  try {
-    return run();
-  } catch (error) {
-    globalThis.reportError?.(error);
-    return fallback;
-  }
-}
+// A bad callback costs its own output, never the view.
+const attempt = guardCallbacks("drag and drop");
 
 /** React keys for drag ids, which keep `1` and `"1"` apart. */
 function reactKey(key: DragKey): string {
@@ -1608,7 +1599,7 @@ function FoldButton({
   folded: boolean;
   onToggle(): void;
 }) {
-  const zClass = useKitOverlayZClass();
+  const overlayZ = useKitOverlayZClass();
   const label = folded ? `Expand ${title}` : `Collapse ${title}`;
   const Glyph = folded ? ChevronsLeftRight : ChevronsRightLeft;
   return (
@@ -1624,7 +1615,7 @@ function FoldButton({
           <Glyph aria-hidden="true" />
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="bottom" className={zClass}>
+      <TooltipContent side="bottom" className={overlayZ}>
         {label}
       </TooltipContent>
     </Tooltip>

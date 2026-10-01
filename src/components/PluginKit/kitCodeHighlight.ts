@@ -9,7 +9,8 @@ import {
   isLanguageFailed,
   isLanguageRegistered,
 } from "@/components/Worktree/diffRefractor";
-import "./kitCodeBlock.css";
+import "@/styles/components/syntax-tokens.css";
+import { reportPluginFault } from "./kitDiagnostics";
 
 // The kit CodeBlock's highlighter, loaded on the first block a view renders so
 // refractor and its grammars stay out of the kit chunk. The same grammars and
@@ -70,7 +71,7 @@ export function highlightCodeLines(code: string, language: string): ReactNode[] 
       toJsxRuntime({ type: "root", children }, { Fragment, jsx, jsxs })
     );
   } catch (error) {
-    console.warn("[PluginKit] CodeBlock highlight failed", error);
+    reportPluginFault("CodeBlock highlight failed", error);
     return null;
   }
   if (key.length <= CACHE_MAX_CHARS) {

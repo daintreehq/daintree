@@ -103,7 +103,6 @@ import {
 } from "@/panels/file-browser/fileTypeIcons";
 import { actionService } from "@/services/ActionService";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
-import { logError } from "@/utils/logger";
 import { useNow } from "../../../packages/plugin-sdk/src/react/useNow";
 import {
   content,
@@ -124,6 +123,7 @@ import { useDaintreeTheme } from "@/pluginUi/theme";
 import { pluginKitDates } from "./PluginKitDates";
 import { pluginKitOverlays } from "./PluginKitOverlays";
 import { pluginKitTypography } from "./PluginKitTypography";
+import { reportPluginFault } from "./kitDiagnostics";
 
 const KitAvatar = pluginKitOverlays.Avatar;
 const KitTimeAgo = pluginKitDates.TimeAgo;
@@ -155,9 +155,9 @@ function toTimestamp(value: unknown): number {
 function dispatchFromKit(actionId: string, args: Record<string, unknown>): void {
   actionService.dispatch(actionId, args, { source: "user" }).then(
     (result) => {
-      if (!result.ok) logError(`[plugin-kit] ${actionId} failed`, result.error);
+      if (!result.ok) reportPluginFault(`${actionId} failed`, result.error);
     },
-    (error: unknown) => logError(`[plugin-kit] ${actionId} failed`, error)
+    (error: unknown) => reportPluginFault(`${actionId} failed`, error)
   );
 }
 

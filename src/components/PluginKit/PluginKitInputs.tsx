@@ -30,7 +30,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
-import { useFieldControl } from "@/components/ui/field";
 import { inputVariants } from "@/components/ui/input";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -59,33 +58,12 @@ import {
   positive,
   str,
   useKitOwnerAttributes,
+  wholeLimit,
+  rowCount,
 } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
-
-interface AriaInput {
-  "aria-label"?: unknown;
-  "aria-labelledby"?: unknown;
-  "aria-describedby"?: unknown;
-  "aria-invalid"?: unknown;
-}
-
-/** The enclosing `FormField`'s ids, merged with whatever ARIA the plugin passed. */
-function useKitFieldControl(props: AriaInput, invalid?: boolean, labelable = true) {
-  const ariaInvalid = props["aria-invalid"];
-  return useFieldControl(
-    {
-      "aria-label": str(props["aria-label"]),
-      "aria-labelledby": str(props["aria-labelledby"]),
-      "aria-describedby": str(props["aria-describedby"]),
-      "aria-invalid":
-        ariaInvalid === true || ariaInvalid === "true"
-          ? true
-          : oneOf(ariaInvalid, ["false", "grammar", "spelling"] as const),
-    },
-    invalid,
-    { labelable }
-  );
-}
+import { safeFormat } from "./kitDiagnostics";
+import { invalidProp, useKitFieldControl } from "./kitField";
 
 function finite(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -106,11 +84,6 @@ function readStrings(value: unknown): string[] {
     if (typeof entry === "string" && entry !== "" && !out.includes(entry)) out.push(entry);
   }
   return out;
-}
-
-function count(value: unknown): number | undefined {
-  const n = positive(value, 100_000);
-  return n === undefined ? undefined : Math.floor(n);
 }
 
 function readRadioOptions(options: unknown): PluginRadioOption[] {
@@ -439,7 +412,7 @@ function KitNumberInput(props: PluginNumberInputProps) {
         : undefined;
   const { invalid: shownInvalid, controlProps } = useKitFieldControl(
     props,
-    parsed === undefined || invalid === true ? true : undefined
+    parsed === undefined ? true : invalidProp(invalid)
   );
   // A read-only value cannot be stepped, so it shows no buttons rather than a
   // pair that look pressable and do nothing; disabled keeps them, dimmed with
@@ -592,7 +565,7 @@ function KitSlider(props: PluginSliderProps) {
   const onChange = fn(onValueChange);
   const onCommit = fn(onValueCommit);
   const formatter = fn(formatValue);
-  const words = formatter ? nonEmpty(formatter(current)) : undefined;
+  const words = formatter ? nonEmpty(safeFormat(formatter, current, String)) : undefined;
   const { controlProps } = useKitFieldControl(props);
   const fillStyle: CSSProperties & Record<"--kit-slider-fill", string> = {
     "--kit-slider-fill": String((current - lo) / (hi - lo)),
@@ -1169,8 +1142,8 @@ function KitMultiSelect(props: PluginMultiSelectProps) {
   // A Map, not an object: values are the plugin's strings, `__proto__` included.
   const [labels, setLabels] = useState<ReadonlyMap<string, string>>(() => new Map());
   const onChange = fn(onValueChange);
-  const limit = count(max);
-  const chipLimit = count(maxChips) ?? 3;
+  const limit = wholeLimit(max, 100_000);
+  const chipLimit = rowCount(maxChips, 100_000) ?? 3;
   const entries = normalizeSelectOptions(options);
   const byValue = new Map(allOptions(entries).map((option) => [option.value, option]));
   const labelOf = (v: string) => byValue.get(v)?.label ?? labels.get(v) ?? v;
@@ -1282,11 +1255,11 @@ function KitTagInput(props: PluginTagInputProps) {
   const boxRef = useRef<HTMLDivElement>(null);
   const onChange = fn(onValueChange);
   const check = fn(validate);
-  const limit = count(max);
+  const limit = wholeLimit(max, 100_000);
   const inert = disabled === true;
   const { invalid: shownInvalid, controlProps } = useKitFieldControl(
     props,
-    refused || invalid === true ? true : undefined
+    refused ? true : invalidProp(invalid)
   );
 
   const update = (next: string[]) => {
@@ -1453,7 +1426,7 @@ function KitFileDropzone({
   const acceptText = nonEmpty(accept);
   const deliver = fn(onFiles);
   const reject = fn(onReject);
-  const { controlProps } = useFieldControl({}, undefined, { labelable: false });
+  const { controlProps } = useKitFieldControl({}, undefined, false);
   const fieldLabel = str(field(controlProps, "aria-labelledby"));
   const over = depth > 0 && !inert;
 

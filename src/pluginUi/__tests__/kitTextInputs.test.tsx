@@ -989,6 +989,26 @@ describe("SecretInput", () => {
     fireEvent.keyDown(screen.getByLabelText("Key"), { key: "Enter" });
     expect(onSubmit).toHaveBeenCalledWith("s3cret");
   });
+
+  it("tracks a first save's promise as it does a replacement's", async () => {
+    let reject: (error: Error) => void = () => {};
+    const onSubmit = vi.fn(
+      () =>
+        new Promise<void>((_resolve, fail) => {
+          reject = fail;
+        })
+    );
+    render(<kit.SecretInput aria-label="Key" defaultValue="s3cret" onSubmit={onSubmit} />);
+    const input = screen.getByLabelText("Key") as HTMLInputElement;
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(input.readOnly).toBe(true);
+    reject(new Error("keychain locked"));
+    await flush();
+    expect(input.readOnly).toBe(false);
+    expect(input.value).toBe("s3cret");
+  });
 });
 
 describe("ShortcutRecorder", () => {

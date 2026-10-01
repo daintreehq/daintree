@@ -32,6 +32,7 @@ import {
   pickRootProps,
   positive,
   str,
+  PluginStyleScope,
 } from "./kitProps";
 import { renderIconSource } from "./PluginKitIcons";
 import { pluginKitOverlays } from "./PluginKitOverlays";
@@ -127,7 +128,11 @@ function KitFilterChip({
     <Tooltip open={isTruncated || hint ? undefined : false} autoDismiss={!isTruncated}>
       <TooltipTrigger asChild>{chip}</TooltipTrigger>
       <TooltipContent side="bottom" className={overlayZ}>
-        {isTruncated ? <div className="break-words">{label}</div> : null}
+        {isTruncated ? (
+          <PluginStyleScope block className="break-words">
+            {label}
+          </PluginStyleScope>
+        ) : null}
         {hint ? (
           <div className={isTruncated ? "text-text-secondary" : undefined}>{hint}</div>
         ) : null}

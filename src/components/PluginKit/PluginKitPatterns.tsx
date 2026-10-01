@@ -1,4 +1,13 @@
-import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type KeyboardEventHandler,
+  type MouseEventHandler,
+  type PointerEventHandler,
+  type ReactNode,
+} from "react";
 import { RefreshCw } from "lucide-react";
 import type {
   PluginFormFieldControlProps,
@@ -162,20 +171,39 @@ function KitToolbarButton({
   const name = str(ariaLabel);
   const handleClick = fn(onClick);
   const inert = disabled === true;
-  const isToggle = typeof pressed === "boolean";
+  // Everything a trigger hands its child (ref, pointer, key and focus
+  // handlers, its state) is forwarded, so a menu or popover can open from
+  // here as it does from a Button.
+  const dom = pickDomProps(rest);
+  // One role per button: a disclosure, ours or a trigger's, is never also a
+  // toggle.
+  const injected = dom["aria-expanded"];
+  const disclosure =
+    typeof expanded === "boolean"
+      ? expanded
+      : injected === true || injected === "true"
+        ? true
+        : injected === false || injected === "false"
+          ? false
+          : undefined;
+  const isToggle = typeof pressed === "boolean" && disclosure === undefined;
   const button = (
     <button
-      {...pickRootProps(rest, { aria: true })}
+      {...dom}
       type="button"
       aria-label={text ? name : (name ?? "")}
       aria-pressed={isToggle ? pressed : undefined}
-      // One role per button: a toggle is never also a disclosure.
-      aria-expanded={!isToggle && typeof expanded === "boolean" ? expanded : undefined}
+      aria-expanded={disclosure}
       // aria-disabled, not disabled, so the control keeps its place in the
-      // toolbar's arrow-key order (the APG toolbar pattern).
+      // toolbar's arrow-key order (the APG toolbar pattern). The trigger's
+      // handlers are held back too, so an unavailable control opens nothing.
       aria-disabled={inert || undefined}
-      onClick={() => {
-        if (!inert) handleClick?.();
+      onPointerDown={inert ? undefined : (dom.onPointerDown as PointerEventHandler | undefined)}
+      onKeyDown={inert ? undefined : (dom.onKeyDown as KeyboardEventHandler | undefined)}
+      onContextMenu={inert ? undefined : (dom.onContextMenu as MouseEventHandler | undefined)}
+      onClick={(event) => {
+        if (inert) return;
+        handleClick?.(event);
       }}
       className={text ? PANE_TOOLBAR_TEXT_BUTTON_CLASS : PANE_TOOLBAR_ICON_BUTTON_CLASS}
     >
@@ -702,8 +730,12 @@ function KitListRow({
 }: PluginListRowProps) {
   const dom = pickDomProps(rest);
   const inert = disabled === true;
+  // `aria-disabled` arrives from useListNavigation's `isDisabled`. One flag
+  // gates every mutating path, the membership mark's included: its click
+  // stops propagation, so the row's own guard never sees it.
+  const unavailable = inert || dom["aria-disabled"] === true || dom["aria-disabled"] === "true";
   const select = fn(onSelect);
-  const toggle = fn(onToggle);
+  const toggle = unavailable ? undefined : fn(onToggle);
   const cursor = active === true;
   // A row in a multi-select list takes the app's membership mark: the shared
   // checkbox glyph in the icon's slot, as the worktree overview grid draws it.
@@ -769,8 +801,6 @@ function KitListRow({
   // A listbox option (from useListNavigation): the pointer moves the one
   // cursor, so it takes the highlight alone and never a second hover fill.
   if (typeof dom.role === "string") {
-    // `aria-disabled` arrives from useListNavigation's `isDisabled`.
-    const unavailable = inert || dom["aria-disabled"] === true || dom["aria-disabled"] === "true";
     return (
       <div
         {...dom}
@@ -802,7 +832,12 @@ function KitListRow({
       </div>
     );
   }
-  const rowClass = cn(LIST_DETAIL_ROW_CLASS, LIST_ROW_BOX, inert && "opacity-50", str(className));
+  const rowClass = cn(
+    LIST_DETAIL_ROW_CLASS,
+    LIST_ROW_BOX,
+    unavailable && "opacity-50",
+    str(className)
+  );
   const marked = selected === true ? "true" : undefined;
   if (select) {
     return (
@@ -814,7 +849,7 @@ function KitListRow({
         disabled={inert}
         onClick={(event) => {
           if (typeof dom.onClick === "function") dom.onClick(event);
-          select();
+          if (!event.defaultPrevented && !unavailable) select();
         }}
         className={cn(rowClass, PALETTE_ROW_FOCUS_CLASS)}
       >

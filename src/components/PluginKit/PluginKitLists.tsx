@@ -39,6 +39,7 @@ import {
   ROW_MENU_TARGET_CLASS,
 } from "@/components/ui/paletteRowStyles";
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
+import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
 import {
   field,
@@ -51,6 +52,7 @@ import {
   positive,
   str,
   useKitOwnerAttributes,
+  rowCount,
 } from "./kitProps";
 import { CONTEXT_MENU_PARTS, isMenuKey, renderMenuEntries } from "./kitMenu";
 import { useKitOverlayZClass } from "./kitScope";
@@ -735,6 +737,18 @@ function LogLine({
   );
 }
 
+/** Above the kept lines, as TerminalOutput says it: the view is not the whole log. */
+function LogDroppedNote({ context }: { context: { dropped: number } }) {
+  if (context.dropped === 0) return null;
+  return (
+    <div data-log-dropped="" className="px-3 pb-1 text-xs tabular-nums text-text-secondary">
+      {`${pluralize(context.dropped, "earlier line")} not kept`}
+    </div>
+  );
+}
+
+const LOG_COMPONENTS = { Header: LogDroppedNote };
+
 function KitLogView({
   lines,
   maxLines,
@@ -746,8 +760,7 @@ function KitLogView({
   ...rest
 }: PluginLogViewProps) {
   const all: readonly unknown[] = Array.isArray(lines) ? lines : [];
-  const max =
-    Math.floor(positive(maxLines, MAX_LINES_CEILING) ?? DEFAULT_MAX_LINES) || DEFAULT_MAX_LINES;
+  const max = rowCount(maxLines, MAX_LINES_CEILING) ?? DEFAULT_MAX_LINES;
   const dropped = all.length > max ? all.length - max : 0;
   const visible = dropped > 0 ? all.slice(dropped) : all;
   const following = follow !== false;
@@ -768,6 +781,8 @@ function KitLogView({
       )}
       style={{ height: "100%" }}
       data={visible}
+      context={{ dropped }}
+      components={LOG_COMPONENTS}
       // Keyed by line number in `lines`, so a line keeps its row as older ones drop.
       computeItemKey={(index) => dropped + index}
       defaultItemHeight={20}

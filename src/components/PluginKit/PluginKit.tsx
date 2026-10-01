@@ -83,7 +83,6 @@ import { PluginKitIcon, renderIconSource, resolvePluginKitIcon } from "./PluginK
 import {
   ALIGNS,
   SIDES,
-  asNode,
   content,
   field,
   fn,
@@ -97,6 +96,10 @@ import {
   positive,
   str,
   useKitOwnerAttributes,
+  scopedContent,
+  durationMs,
+  wholeLimit,
+  rowCount,
 } from "./kitProps";
 import { PluginKitLayerContext, useKitOverlayZClass } from "./kitScope";
 import { renderMenuEntries, stopReactPropagation, type KitMenuParts } from "./kitMenu";
@@ -126,6 +129,7 @@ import { pluginKitRichDisplay } from "./PluginKitRichDisplay";
 import { pluginKitNativeAgents } from "./PluginKitNativeAgents";
 import { pluginKitGit } from "./PluginKitGit";
 import { primeRadix } from "@/components/ui/radix-loader";
+import { invalidProp } from "./kitField";
 
 export { normalizeSelectOptions, pickDomProps };
 
@@ -229,7 +233,7 @@ function KitTooltip({
   if (!isValidElement(children)) return null;
   if (disabled === true || !hasContent(content)) return children;
   return (
-    <Tooltip delayDuration={positive(delayDuration, 10_000)}>
+    <Tooltip delayDuration={durationMs(delayDuration, 10_000)}>
       <TooltipTrigger asChild>{children}</TooltipTrigger>
       <TooltipContent side={oneOf(side, SIDES)} align={oneOf(align, ALIGNS)} className={overlayZ}>
         <PluginStyleScope>{node(content)}</PluginStyleScope>
@@ -341,7 +345,7 @@ function KitCheckbox({
       defaultChecked={typeof defaultChecked === "boolean" ? defaultChecked : undefined}
       onCheckedChange={onChange ? (next) => onChange(next === true) : undefined}
       disabled={disabled === true}
-      invalid={typeof invalid === "boolean" ? invalid : undefined}
+      invalid={invalidProp(invalid)}
       required={required === true}
       name={str(name)}
       value={str(value)}
@@ -417,11 +421,11 @@ function KitInput({
       autoFocus={autoFocus === true}
       autoComplete={str(autoComplete)}
       spellCheck={typeof spellCheck === "boolean" ? spellCheck : undefined}
-      maxLength={positive(maxLength, Number.MAX_SAFE_INTEGER)}
+      maxLength={wholeLimit(maxLength, Number.MAX_SAFE_INTEGER)}
       min={numberOrString(min)}
       max={numberOrString(max)}
       step={numberOrString(step)}
-      invalid={typeof invalid === "boolean" ? invalid : undefined}
+      invalid={invalidProp(invalid)}
       density={oneOf(density, ["default", "compact"] as const)}
       className={str(className)}
     />
@@ -462,14 +466,14 @@ function KitTextarea({
       }}
       placeholder={str(placeholder)}
       name={str(name)}
-      rows={positive(rows, 1000)}
+      rows={rowCount(rows, 1000)}
       disabled={disabled === true}
       readOnly={readOnly === true}
       required={required === true}
       autoFocus={autoFocus === true}
       spellCheck={typeof spellCheck === "boolean" ? spellCheck : undefined}
-      maxLength={positive(maxLength, Number.MAX_SAFE_INTEGER)}
-      invalid={typeof invalid === "boolean" ? invalid : undefined}
+      maxLength={wholeLimit(maxLength, Number.MAX_SAFE_INTEGER)}
+      invalid={invalidProp(invalid)}
       density={oneOf(density, ["default", "compact"] as const)}
       variant={oneOf(variant, ["default", "code"] as const)}
       resize={oneOf(resize, ["vertical", "none"] as const)}
@@ -581,13 +585,12 @@ function readSegmentedOptions(options: unknown): SegmentedRadioOption<string>[] 
     const label = str(field(entry, "label"));
     if (optionValue === undefined || label === undefined || seen.has(optionValue)) continue;
     seen.add(optionValue);
-    const tooltip = asNode(field(entry, "tooltip"));
     out.push({
       value: optionValue,
       label,
       disabled: field(entry, "disabled") === true,
       ariaLabel: str(field(entry, "aria-label")),
-      tooltip: content(tooltip),
+      tooltip: content(field(entry, "tooltip")),
     });
   }
   return out;
@@ -773,6 +776,7 @@ function KitCallout({
         role={oneOf(rest.role, ["alert", "status"] as const)}
         ariaLive={oneOf(rest["aria-live"], ["off", "polite", "assertive"] as const)}
         testId={str(rest["data-testid"])}
+        rootAttributes={pickRootProps(rest, { aria: true })}
         className={str(className)}
       />
     );
@@ -828,6 +832,7 @@ function KitCalloutStrip({
   role,
   ariaLive,
   testId,
+  rootAttributes,
   className,
 }: {
   tone: (typeof CALLOUT_SEVERITIES)[number];
@@ -841,6 +846,7 @@ function KitCalloutStrip({
   role: "alert" | "status" | undefined;
   ariaLive: "off" | "polite" | "assertive" | undefined;
   testId: string | undefined;
+  rootAttributes: Record<string, string | number | boolean>;
   className: string | undefined;
 }) {
   // Without a title the body is the headline, so the band is still one line.
@@ -866,6 +872,7 @@ function KitCalloutStrip({
     onClose: onDismiss,
     className,
     "data-testid": testId,
+    rootAttributes,
   };
   // `danger` is a caution about a destructive consequence: the banner has no
   // separate tier for it, so it takes the error band with the octagon glyph.
@@ -1073,7 +1080,7 @@ function KitSearchField({
       size={oneOf(size, ["compact", "dense", "palette"] as const)}
       autoFocus={autoFocus === true}
       disabled={disabled === true}
-      invalid={invalid === true}
+      invalid={invalidProp(invalid)}
       fieldClassName={str(className)}
     />
   );
@@ -1195,9 +1202,9 @@ function KitConfirmDialog({
     isOpen: open === true,
     onClose: fn(onClose) ?? noop,
     onConfirm: () => confirm?.(),
-    title: node(title),
+    title: scopedContent(title),
     titleIcon: iconNode(icon),
-    description: content(description),
+    description: scopedContent(description),
     children: hasContent(children) ? (
       <PluginStyleScope block>{node(children)}</PluginStyleScope>
     ) : undefined,
@@ -1205,7 +1212,7 @@ function KitConfirmDialog({
     cancelLabel: nonEmpty(cancelLabel),
     isConfirmLoading: loading === true,
     confirmDisabled: confirmDisabled === true,
-    hint: content(hint),
+    hint: scopedContent(hint),
     zIndex: zIndexOf(layer),
   };
   const tone = oneOf(variant, ["default", "destructive", "info"] as const) ?? "default";
@@ -1226,12 +1233,7 @@ function KitConfirmDialog({
   );
 }
 
-/**
- * The adapters `@daintreehq/plugin-ui` serves, keyed by their public names.
- * Loaded on first use (src/pluginUi/kit.tsx), so none of the host components
- * behind them enters the facade chunk.
- */
-export const pluginKit = {
+const pluginKitBasics = {
   Button: KitButton,
   IconButton: KitIconButton,
   Tooltip: KitTooltip,
@@ -1259,6 +1261,47 @@ export const pluginKit = {
   Dialog: KitDialog,
   ConfirmDialog: KitConfirmDialog,
   Icon: PluginKitIcon,
+};
+
+/**
+ * Every family, in the order `pluginKit` merges them, for the registry test:
+ * a name two families both define is an override it must approve.
+ */
+export const pluginKitFamilies = [
+  pluginKitBasics,
+  pluginKitPatterns,
+  pluginKitLists,
+  pluginKitOverlays,
+  pluginKitData,
+  pluginKitDisplay,
+  pluginKitFileTree,
+  pluginKitDates,
+  pluginKitNavigation,
+  pluginKitLayout,
+  pluginKitLayoutCore,
+  pluginKitInputs,
+  pluginKitCharts,
+  pluginKitDnd,
+  pluginKitHooksFeedback,
+  pluginKitLayoutPanes,
+  pluginKitTypography,
+  pluginKitTypographyFunctions,
+  pluginKitEditors,
+  pluginKitPickersForms,
+  pluginKitTextInputs,
+  pluginKitRichDisplay,
+  pluginKitNativeAgents,
+  pluginKitGit,
+  pluginKitDataTables,
+];
+
+/**
+ * The adapters `@daintreehq/plugin-ui` serves, keyed by their public names.
+ * Loaded on first use (src/pluginUi/kit.tsx), so none of the host components
+ * behind them enters the facade chunk.
+ */
+export const pluginKit = {
+  ...pluginKitBasics,
   ...pluginKitPatterns,
   ...pluginKitLists,
   ...pluginKitOverlays,

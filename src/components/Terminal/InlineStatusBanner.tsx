@@ -129,6 +129,11 @@ interface BaseInlineStatusBannerProps {
    */
   descriptionExtras?: React.ReactNode;
   "data-testid"?: string;
+  /**
+   * Identity and ARIA attributes (`id`, `aria-*`, `data-*`) for the root, from
+   * an adapter that forwards its caller's. The banner's own attributes win.
+   */
+  rootAttributes?: Record<string, string | number | boolean>;
 }
 
 /**
@@ -314,6 +319,7 @@ export function InlineStatusBanner({
   descriptionExtras,
   autoDismissAfter,
   "data-testid": testId,
+  rootAttributes,
 }: InlineStatusBannerProps) {
   // Non-null only in the global banner host, where this banner owns the
   // window's title-bar band: it has to supply the drag region and top-edge
@@ -625,6 +631,7 @@ export function InlineStatusBanner({
 
   return (
     <div
+      {...rootAttributes}
       ref={rootRef}
       className={cn(
         stacked

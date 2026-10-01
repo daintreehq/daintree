@@ -32,7 +32,8 @@ import {
   type MarkdownEdit,
   type MarkdownFormat,
 } from "./kitMarkdownFormat";
-import { fn, node, nonEmpty, oneOf, pickRootProps, positive, str } from "./kitProps";
+import { fn, node, nonEmpty, oneOf, pickRootProps, positive, str, rowCount } from "./kitProps";
+import { invalidProp } from "./kitField";
 
 // The editing surfaces: CodeEditor and DiffView are the host's own CodeMirror
 // editor and diff viewer behind a lazy chunk each (neither may load with the
@@ -329,8 +330,8 @@ function KitMarkdownEditor({
   const inert = disabled === true;
   const locked = readOnly === true;
   const showToolbar = toolbar !== false && !inert && !locked;
-  const rowsMin = Math.round(positive(minRows, 200) ?? 3);
-  const rowsMax = Math.max(rowsMin, Math.round(positive(maxRows, 1000) ?? 16));
+  const rowsMin = rowCount(minRows, 200) ?? 3;
+  const rowsMax = Math.max(rowsMin, rowCount(maxRows, 1000) ?? 16);
   const layoutMode = oneOf(layout, ["tabs", "split", "auto"] as const) ?? "tabs";
 
   const [wide, setWide] = useState(false);
@@ -461,7 +462,7 @@ function KitMarkdownEditor({
       disabled={inert}
       readOnly={locked}
       autoFocus={autoFocus === true}
-      invalid={invalid === true}
+      invalid={invalidProp(invalid)}
       resize="none"
       spellCheck
       onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setText(event.target.value)}

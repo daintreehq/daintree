@@ -95,6 +95,14 @@ describe("DataTable, rich", () => {
     expect(usesRichDataTable({ columns: [{ id: "a", editable: () => true }] })).toBe(true);
   });
 
+  it("keeps the rich table when a sizing or visibility prop is emptied", () => {
+    expect(usesRichDataTable({ hiddenColumns: [] })).toBe(true);
+    expect(usesRichDataTable({ hiddenColumns: ["name"] })).toBe(true);
+    expect(usesRichDataTable({ columnWidths: {} })).toBe(true);
+    expect(usesRichDataTable({ defaultHiddenColumns: [] })).toBe(true);
+    expect(usesRichDataTable({ hiddenColumns: undefined })).toBe(false);
+  });
+
   it("multi-selects through checkboxes, ranges and the header box", () => {
     const changes: (string | number)[][] = [];
     function Probe() {

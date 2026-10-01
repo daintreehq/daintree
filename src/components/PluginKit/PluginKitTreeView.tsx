@@ -3,7 +3,6 @@ import {
   useId,
   useRef,
   useState,
-  useSyncExternalStore,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -36,12 +35,10 @@ import { renderIconSource } from "./PluginKitIcons";
 import { KitDragOverlay, KitMouseSensor, KitTouchSensor, LIFTED_SURFACE } from "./PluginKitDnd";
 import { severityGlyph } from "./PluginKitPatterns";
 import {
-  createLazyScope,
   forgetLazyChildren,
-  lazyChildrenVersion,
   peekLazyChildren,
   readLazyChildren,
-  subscribeLazyChildren,
+  useLazyScope,
 } from "./kitLazyChildren";
 import {
   ancestorsOf,
@@ -73,15 +70,9 @@ import {
   TreeGutter,
   treeRowPadding,
 } from "./kitTreeRow";
+import { guardCallbacks } from "./kitDiagnostics";
 
-function attempt<T>(run: () => T, fallback: T): T {
-  try {
-    return run();
-  } catch (error) {
-    console.warn("[PluginKit] TreeView callback threw", error);
-    return fallback;
-  }
-}
+const attempt = guardCallbacks("TreeView");
 
 function idList(value: unknown): TreeId[] | undefined {
   return Array.isArray(value) ? value.filter(isTreeId) : undefined;
@@ -356,13 +347,8 @@ function KitTreeView(props: PluginTreeViewProps) {
       : typeof value === "object" && value !== null
         ? field(value, "children")
         : undefined;
-  const [lazyScope] = useState(createLazyScope);
-  // Re-reads the lazy cache when a load settles anywhere.
-  const lazyRevision = useSyncExternalStore(
-    subscribeLazyChildren,
-    lazyChildrenVersion,
-    lazyChildrenVersion
-  );
+  // Re-reads the lazy cache when one of this instance's loads settles.
+  const { scope: lazyScope, revision: lazyRevision } = useLazyScope();
   const childrenOf = (value: unknown, open: boolean): KnownChildren => {
     const declared = hasFn ? attempt(() => hasFn(value) === true, false) : undefined;
     if (declared === false) return { kind: "leaf" };

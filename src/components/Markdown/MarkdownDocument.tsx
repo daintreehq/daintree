@@ -6,6 +6,7 @@ import { useScopedSelectAll, type SelectAllScope } from "@/hooks/useScopedSelect
 import { cn } from "@/lib/utils";
 import type { MarkdownFontSize } from "@/store/preferencesStore";
 import "./MarkdownDocument.css";
+import "@/styles/components/syntax-tokens.css";
 
 /**
  * Each reading rung resolved to the shared type scale — the same stock Tailwind

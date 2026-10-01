@@ -7,7 +7,16 @@ import {
   type DialogSize,
 } from "@/components/ui/AppDialog";
 import { renderIconSource } from "./PluginKitIcons";
-import { content, fn, hasContent, node, nonEmpty, oneOf, PluginStyleScope } from "./kitProps";
+import {
+  content,
+  fn,
+  hasContent,
+  node,
+  nonEmpty,
+  oneOf,
+  PluginStyleScope,
+  scopedContent,
+} from "./kitProps";
 import { PluginKitLayerContext, type PluginKitLayer } from "./kitScope";
 
 function readDialogAction(action: PluginDialogAction | undefined): DialogAction | undefined {
@@ -31,7 +40,7 @@ function readDialogAction(action: PluginDialogAction | undefined): DialogAction 
  */
 function disabledReasonOf(action: PluginDialogAction | undefined): ReactNode {
   if (typeof action !== "object" || action === null || action.disabled !== true) return undefined;
-  return content(action.disabledReason);
+  return scopedContent(action.disabledReason);
 }
 
 export function iconNode(source: unknown): ReactNode {
@@ -93,7 +102,7 @@ export function KitDialogFrame({
   const secondary = readDialogAction(secondaryAction);
   const custom = content(footer);
   const footerHint =
-    content(hint) ?? (custom === undefined ? disabledReasonOf(primaryAction) : undefined);
+    scopedContent(hint) ?? (custom === undefined ? disabledReasonOf(primaryAction) : undefined);
   return (
     // Context reaches through the dialog's portal, so kit overlays opened
     // inside it can stack above a nested dialog.
@@ -108,7 +117,7 @@ export function KitDialogFrame({
         data-testid={nonEmpty(testId)}
       >
         <AppDialog.Header>
-          <AppDialog.Title icon={iconNode(icon)}>{node(title)}</AppDialog.Title>
+          <AppDialog.Title icon={iconNode(icon)}>{scopedContent(title)}</AppDialog.Title>
           <AppDialog.CloseButton />
         </AppDialog.Header>
         <AppDialog.Body>

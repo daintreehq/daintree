@@ -76,7 +76,6 @@ import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { formatTimeAgo } from "@/utils/timeAgo";
-import { logError } from "@/utils/logger";
 import { useNow } from "../../../packages/plugin-sdk/src/react/useNow";
 import { timeAgoTick } from "./PluginKitDates";
 import { showPluginViewToast } from "./PluginKitHooksFeedback";
@@ -95,6 +94,7 @@ import {
   useKitOwnerAttributes,
 } from "./kitProps";
 import { useKitOverlayZClass, usePluginKitOwner } from "./kitScope";
+import { reportPluginFault, runPluginAction } from "./kitDiagnostics";
 
 // Components that speak Daintree's own concepts. Each reads only what a plugin
 // view may already reach: the action catalogue and dispatch (`host.actions` and
@@ -219,12 +219,7 @@ export async function dispatchActionFromView(
 
 /** Calls a plugin callback; a throw is the plugin's bug, logged rather than let loose. */
 function callPlugin<A extends unknown[]>(callback: ((...args: A) => void) | undefined, ...args: A) {
-  if (!callback) return;
-  try {
-    callback(...args);
-  } catch (error) {
-    logError("[plugin-ui] a callback threw", error);
-  }
+  if (callback) runPluginAction("a callback", () => callback(...args));
 }
 
 /**
@@ -1256,7 +1251,7 @@ function KitSendToAgentButton(props: PluginSendToAgentButtonProps) {
         }
         setPending(true);
         void run()
-          .catch((error: unknown) => logError("[plugin-ui] send to agent failed", error))
+          .catch((error: unknown) => reportPluginFault("send to agent failed", error))
           .finally(() => {
             if (mounted.current) setPending(false);
           });

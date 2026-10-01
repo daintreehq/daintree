@@ -54,7 +54,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { FieldBoundary, InlineError, useFieldControl } from "@/components/ui/field";
+import { FieldBoundary, InlineError } from "@/components/ui/field";
 import { inputVariants } from "@/components/ui/input";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -91,7 +91,7 @@ import {
   str,
   useKitOwnerAttributes,
 } from "./kitProps";
-import { useKitOverlayZClass } from "./kitScope";
+import { useKitOverlayZClass, KitFocusScopeContext } from "./kitScope";
 import "./kitColorArea.css";
 import { pluginKitDates } from "./PluginKitDates";
 import { renderIconSource } from "./PluginKitIcons";
@@ -108,31 +108,14 @@ import {
   timeListOptions,
   timeZoneLabel,
 } from "./kitTime";
-
-interface AriaInput {
-  "aria-label"?: unknown;
-  "aria-labelledby"?: unknown;
-  "aria-describedby"?: unknown;
-  "aria-invalid"?: unknown;
-}
-
-/** The enclosing `FormField`'s ids, merged with whatever ARIA the plugin passed. */
-function useKitFieldControl(props: AriaInput, invalid?: boolean, labelable = true) {
-  const ariaInvalid = props["aria-invalid"];
-  return useFieldControl(
-    {
-      "aria-label": str(props["aria-label"]),
-      "aria-labelledby": str(props["aria-labelledby"]),
-      "aria-describedby": str(props["aria-describedby"]),
-      "aria-invalid":
-        ariaInvalid === true || ariaInvalid === "true"
-          ? true
-          : oneOf(ariaInvalid, ["false", "grammar", "spelling"] as const),
-    },
-    invalid,
-    { labelable }
-  );
-}
+import { safeFormat, warnPluginAuthor } from "./kitDiagnostics";
+import {
+  invalidProp,
+  type KitAriaInput,
+  useKitFieldControl,
+  focusLeft,
+  useKitFocusScope,
+} from "./kitField";
 
 function finite(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -140,19 +123,6 @@ function finite(value: unknown): number | undefined {
 
 function clamp(value: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, value));
-}
-
-/**
- * Whether focus left a composite control: to somewhere outside it, and not
- * into one of the kit overlays it opens (they portal out of it).
- */
-function focusLeft(event: ReactFocusEvent<HTMLElement>): boolean {
-  const next = event.relatedTarget;
-  if (!(next instanceof Element)) return true;
-  return (
-    !event.currentTarget.contains(next) &&
-    next.closest("[data-radix-popper-content-wrapper]") === null
-  );
 }
 
 // ── Colour ───────────────────────────────────────────────────────────────
@@ -527,8 +497,9 @@ function KitColorPicker(props: PluginColorPickerProps) {
   const isOpen = (controlledOpen ?? ownOpen) && !inert;
   const onChange = fn(onValueChange);
   const onOpen = fn(onOpenChange);
-  const { controlProps } = useKitFieldControl(props, invalid === true ? true : undefined);
+  const { controlProps } = useKitFieldControl(props, invalidProp(invalid));
   const shownInvalid = controlProps["aria-invalid"] === true;
+  const focusScope = useKitFocusScope();
 
   const setOpen = (next: boolean) => {
     if (controlledOpen === undefined) setOwnOpen(next);
@@ -537,7 +508,7 @@ function KitColorPicker(props: PluginColorPickerProps) {
     if (!next) onBlur?.();
   };
   const onTriggerBlur = (event: ReactFocusEvent<HTMLElement>) => {
-    if (!isOpen && focusLeft(event)) onBlur?.();
+    if (!isOpen && focusLeft(event, focusScope.id)) onBlur?.();
   };
   const change = (hex: string) => {
     if (hex === current) return;
@@ -612,6 +583,7 @@ function KitColorPicker(props: PluginColorPickerProps) {
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
         {...owner}
+        {...focusScope.attributes}
         side={oneOf(side, SIDES)}
         align={oneOf(align, ALIGNS) ?? "start"}
         aria-label="Choose a colour"
@@ -806,12 +778,13 @@ interface TimeFieldProps {
   clearable: boolean;
   required: boolean;
   disabled: boolean;
-  invalid: boolean;
+  /** The plugin's verdict; `undefined` defers to the FormField. */
+  invalid: boolean | undefined;
   density: "default" | "compact";
   open: boolean | undefined;
   onOpenChange: ((open: boolean) => void) | undefined;
   name: string | undefined;
-  ariaProps: AriaInput & { id?: unknown };
+  ariaProps: KitAriaInput & { id?: unknown };
   rootAttributes: Record<string, string | number | boolean>;
   className: string | undefined;
   onBlur: (() => void) | undefined;
@@ -842,6 +815,7 @@ function TimeField({
 }: TimeFieldProps) {
   const overlayZ = useKitOverlayZClass();
   const owner = useKitOwnerAttributes();
+  const focusScope = useKitFocusScope();
   // A draft belongs to the value it was edited from: a new value from outside
   // replaces it, rather than a half-typed edit of the old one outliving it.
   const [held, setHeld] = useState<{ parts: TimeDraft; source: number | null } | null>(null);
@@ -872,7 +846,7 @@ function TimeField({
   const segments: SegmentKind[] = cycle === 12 ? ["hour", "minute", "period"] : ["hour", "minute"];
   const { invalid: showInvalid, controlProps } = useKitFieldControl(
     ariaProps,
-    invalid || typedInvalid ? true : undefined,
+    typedInvalid ? true : invalid,
     false
   );
 
@@ -1034,7 +1008,7 @@ function TimeField({
           {...rootAttributes}
           data-slot="time-picker"
           onBlur={(event) => {
-            if (!isOpen && focusLeft(event)) onBlur?.();
+            if (!isOpen && focusLeft(event, focusScope.id)) onBlur?.();
           }}
           className={cn(
             TIME_FIELD,
@@ -1141,6 +1115,7 @@ function TimeField({
       </PopoverAnchor>
       <PopoverContent
         {...owner}
+        {...focusScope.attributes}
         align="start"
         // As wide as the field, it unrolls from it, as the host's lists do.
         motion="drop"
@@ -1215,7 +1190,7 @@ function KitTimePicker(props: PluginTimePickerProps) {
       clearable={props.clearable !== false}
       required={props.required === true}
       disabled={props.disabled === true}
-      invalid={props.invalid === true}
+      invalid={invalidProp(props.invalid)}
       density={props.density === "compact" ? "compact" : "default"}
       open={typeof props.open === "boolean" ? props.open : undefined}
       onOpenChange={fn(props.onOpenChange)}
@@ -1282,7 +1257,9 @@ function KitDateTimePicker(props: PluginDateTimePickerProps) {
   const zone = nonEmpty(timeZone);
   const zoneId = resolvedTimeZone(zone);
   const [now] = useState(() => Date.now());
-  const { controlProps } = useKitFieldControl(props, invalid === true ? true : undefined, false);
+  const { controlProps } = useKitFieldControl(props, invalidProp(invalid), false);
+  const focusScope = useKitFocusScope();
+  const overlayZ = useKitOverlayZClass();
   const compact = density === "compact";
   const { id: _id, ...rootAttributes } = pickRootProps(props);
 
@@ -1318,74 +1295,78 @@ function KitDateTimePicker(props: PluginDateTimePickerProps) {
       id={nonEmpty(props.id) ?? controlProps.id}
       data-slot="date-time-picker"
       onBlur={(event) => {
-        if (focusLeft(event)) onBlur?.();
+        if (focusLeft(event, focusScope.id)) onBlur?.();
       }}
       className={cn("flex w-full min-w-0 flex-wrap items-center gap-2", str(className))}
     >
-      <FieldBoundary>
-        <DatePickerPart
-          aria-label="Date"
-          className="min-w-36 flex-[3]"
-          value={date}
-          onValueChange={(nextDate) => {
-            if (nextDate === null) {
-              setPendingDate(null);
-              emit(null);
-              return;
-            }
-            // The time kept from before, or the day's earliest, held to the new day's bounds.
-            setPendingDate(null);
-            emit({ date: nextDate, minutes: fitTime(nextDate, value?.minutes ?? 0) });
-          }}
-          min={lo?.date}
-          max={hi?.date}
-          isDateDisabled={isDateDisabled}
-          weekStartsOn={weekStartsOn}
-          clearable={clearable}
-          disabled={disabled}
-          required={required}
-          invalid={invalid}
-          density={density}
-        />
-        <div className="min-w-28 flex-[2]">
-          <TimeField
-            value={value?.minutes ?? null}
-            onChange={(minutes) => {
-              if (minutes === null) {
-                if (value !== null) setPendingDate(value.date);
+      {/* The two parts' popovers are this field's own: focus moving into one
+          is not leaving it. */}
+      <KitFocusScopeContext.Provider value={focusScope.scopes}>
+        <FieldBoundary>
+          <DatePickerPart
+            aria-label="Date"
+            className="min-w-36 flex-[3]"
+            value={date}
+            onValueChange={(nextDate) => {
+              if (nextDate === null) {
+                setPendingDate(null);
                 emit(null);
                 return;
               }
-              // No day yet: today, held to the allowed days. A day the plugin
-              // rules out is not filled in behind the user's back.
-              let day = date ?? todayIso(Date.now());
-              if (date === null) {
-                if (lo !== null && day < lo.date) day = lo.date;
-                if (hi !== null && day > hi.date) day = hi.date;
-                if (dayDisabled(isDateDisabled, day)) return;
-              }
+              // The time kept from before, or the day's earliest, held to the new day's bounds.
               setPendingDate(null);
-              emit({ date: day, minutes: fitTime(day, minutes) });
+              emit({ date: nextDate, minutes: fitTime(nextDate, value?.minutes ?? 0) });
             }}
-            min={timeMin}
-            max={timeMax}
-            step={readStep(step)}
-            cycle={readCycle(hourCycle)}
-            clearable={clearable !== false}
-            required={required === true}
-            disabled={disabled === true}
-            invalid={invalid === true}
-            density={compact ? "compact" : "default"}
-            open={undefined}
-            onOpenChange={undefined}
-            name={undefined}
-            ariaProps={{ "aria-label": "Time" }}
-            rootAttributes={{}}
-            className={undefined}
-            onBlur={undefined}
+            min={lo?.date}
+            max={hi?.date}
+            isDateDisabled={isDateDisabled}
+            weekStartsOn={weekStartsOn}
+            clearable={clearable}
+            disabled={disabled}
+            required={required}
+            invalid={invalid}
+            density={density}
           />
-        </div>
-      </FieldBoundary>
+          <div className="min-w-28 flex-[2]">
+            <TimeField
+              value={value?.minutes ?? null}
+              onChange={(minutes) => {
+                if (minutes === null) {
+                  if (value !== null) setPendingDate(value.date);
+                  emit(null);
+                  return;
+                }
+                // No day yet: today, held to the allowed days. A day the plugin
+                // rules out is not filled in behind the user's back.
+                let day = date ?? todayIso(Date.now());
+                if (date === null) {
+                  if (lo !== null && day < lo.date) day = lo.date;
+                  if (hi !== null && day > hi.date) day = hi.date;
+                  if (dayDisabled(isDateDisabled, day)) return;
+                }
+                setPendingDate(null);
+                emit({ date: day, minutes: fitTime(day, minutes) });
+              }}
+              min={timeMin}
+              max={timeMax}
+              step={readStep(step)}
+              cycle={readCycle(hourCycle)}
+              clearable={clearable !== false}
+              required={required === true}
+              disabled={disabled === true}
+              invalid={invalidProp(invalid)}
+              density={compact ? "compact" : "default"}
+              open={undefined}
+              onOpenChange={undefined}
+              name={undefined}
+              ariaProps={{ "aria-label": "Time" }}
+              rootAttributes={{}}
+              className={undefined}
+              onBlur={undefined}
+            />
+          </div>
+        </FieldBoundary>
+      </KitFocusScopeContext.Provider>
       {zoneName ? (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -1397,7 +1378,9 @@ function KitDateTimePicker(props: PluginDateTimePickerProps) {
               {zoneName}
             </span>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{zoneId ?? zoneName}</TooltipContent>
+          <TooltipContent side="bottom" className={overlayZ}>
+            {zoneId ?? zoneName}
+          </TooltipContent>
         </Tooltip>
       ) : null}
       {nonEmpty(name) ? (
@@ -1486,12 +1469,7 @@ export function normalizeRange(
 
 /** A plugin's formatter, made safe: a throw or a non-string reads as the number. */
 function formatSafely(formatter: ((value: number) => string) | undefined, value: number): string {
-  if (!formatter) return String(value);
-  try {
-    return nonEmpty(formatter(value)) ?? String(value);
-  } catch {
-    return String(value);
-  }
+  return safeFormat(formatter, value, String) || String(value);
 }
 
 function readPair(value: unknown): [number, number] | undefined {
@@ -1599,9 +1577,10 @@ function KitRangeSlider(props: PluginRangeSliderProps) {
   const proposed = useRef<[number, number] | null>(null);
   const { invalid: shownInvalid, controlProps } = useKitFieldControl(
     props,
-    invalid === true ? true : undefined,
+    invalidProp(invalid),
     false
   );
+  const focusScope = useKitFocusScope();
   const tickList = readMarks(marks, lo, hi);
   const labelled = tickList.some((mark) => mark.label !== undefined);
 
@@ -1708,7 +1687,7 @@ function KitRangeSlider(props: PluginRangeSliderProps) {
       aria-disabled={inert || undefined}
       data-slot="range-slider"
       onBlur={(event) => {
-        if (focusLeft(event)) onBlur?.();
+        if (focusLeft(event, focusScope.id)) onBlur?.();
       }}
       className={cn(
         "flex w-full min-w-0 items-center gap-3",
@@ -1903,6 +1882,8 @@ function KitToggleGroup(props: PluginToggleGroupProps) {
   const inert = disabled === true;
   const sizes = TOGGLE_SIZE[density === "compact" ? "compact" : "default"];
   const groupRef = useRef<HTMLDivElement>(null);
+  const focusScope = useKitFocusScope();
+  const overlayZ = useKitOverlayZClass();
   const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [cursor, setCursor] = useState<number | null>(null);
 
@@ -1966,7 +1947,7 @@ function KitToggleGroup(props: PluginToggleGroupProps) {
       aria-invalid={invalid === true || undefined}
       onKeyDown={onKeyDown}
       onBlur={(event) => {
-        if (focusLeft(event)) onBlur?.();
+        if (focusLeft(event, focusScope.id)) onBlur?.();
       }}
       data-slot="toggle-group"
       className={cn("inline-flex shrink-0 flex-wrap items-center gap-2", str(className))}
@@ -2000,7 +1981,7 @@ function KitToggleGroup(props: PluginToggleGroupProps) {
         return (
           <Tooltip key={entry.value}>
             <TooltipTrigger asChild>{button}</TooltipTrigger>
-            <TooltipContent side="bottom">
+            <TooltipContent side="bottom" className={overlayZ}>
               <PluginStyleScope>{node(tip)}</PluginStyleScope>
             </TooltipContent>
           </Tooltip>
@@ -2316,7 +2297,7 @@ function warnSchemaKeyword(where: string, keyword: string): void {
   const key = `${where}:${keyword}`;
   if (warnedSchemaKeywords.has(key)) return;
   warnedSchemaKeywords.add(key);
-  console.warn(`[plugin-ui] SchemaForm: "${keyword}" on ${where} is not supported; it is ignored.`);
+  warnPluginAuthor(`SchemaForm: "${keyword}" on ${where} is not supported; it is ignored.`);
 }
 
 export interface SchemaField {

@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { renderIconSource } from "./PluginKitIcons";
 import { hasContent, node } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
+import { reportPluginFault } from "./kitDiagnostics";
 
 // The kit DiffView's half that carries the host diff viewer, in its own chunk:
 // react-diff-view, the tokenizer client and the viewer's stylesheet load on the
@@ -279,7 +280,7 @@ export default function KitDiffViewImpl({
             typeof hunkActions === "function" ? hunkActions(plugin) : hunkActions
           );
         } catch (error) {
-          console.warn("[PluginKit] DiffView hunkActions threw", error);
+          reportPluginFault("DiffView hunkActions threw", error);
         }
         let custom: ReactNode = null;
         try {
@@ -287,7 +288,7 @@ export default function KitDiffViewImpl({
           // React's reconciliation, outside this catch.
           custom = node(renderHunkActions?.(plugin));
         } catch (error) {
-          console.warn("[PluginKit] DiffView renderHunkActions threw", error);
+          reportPluginFault("DiffView renderHunkActions threw", error);
         }
         if (actions.length === 0 && !hasContent(custom)) return null;
         return (

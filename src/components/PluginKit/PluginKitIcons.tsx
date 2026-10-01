@@ -160,6 +160,7 @@ import type { LucideIcon, LucideProps } from "lucide-react";
 import type { PluginIconName, PluginIconProps } from "@shared/types/plugin-sdk-react";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { pickRootProps } from "./kitProps";
+import { warnPluginAuthor } from "./kitDiagnostics";
 
 export type PluginKitGlyph = LucideIcon;
 
@@ -356,7 +357,7 @@ function warnUnknownIcon(name: unknown): void {
   const key = String(name);
   if (warnedNames.has(key)) return;
   warnedNames.add(key);
-  console.warn(`[plugin-ui] Unknown icon name ${JSON.stringify(key)}; rendering nothing.`);
+  warnPluginAuthor(`Unknown icon name ${JSON.stringify(key)}; rendering nothing.`);
 }
 
 /**

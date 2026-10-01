@@ -7,7 +7,6 @@ import type {
   PluginTimeAgoProps,
 } from "@shared/types/plugin-sdk-react";
 import { Button } from "@/components/ui/button";
-import { useFieldControl } from "@/components/ui/field";
 import {
   getPopoverAvailableWidth,
   Popover,
@@ -55,6 +54,7 @@ import {
 } from "@/pluginUi/dateMath";
 import { fn, nonEmpty, pickRootProps, str, useKitOwnerAttributes } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
+import { invalidProp, useKitFieldControl } from "./kitField";
 
 type Mode = "single" | "range";
 
@@ -642,13 +642,13 @@ function DateField({ mode, props }: DateFieldProps) {
     }
   };
 
-  const { invalid: showInvalid, controlProps } = useFieldControl(
+  const { invalid: showInvalid, controlProps } = useKitFieldControl(
     {
-      "aria-label": str(ariaLabel),
-      "aria-labelledby": str(ariaLabelledBy),
-      "aria-describedby": str(ariaDescribedBy),
+      "aria-label": ariaLabel,
+      "aria-labelledby": ariaLabelledBy,
+      "aria-describedby": ariaDescribedBy,
     },
-    invalid === true || typedInvalid ? true : undefined
+    typedInvalid ? true : invalidProp(invalid)
   );
 
   const noun = mode === "range" ? "dates" : "date";
@@ -887,6 +887,7 @@ function toTimestamp(value: unknown): number {
 }
 
 function KitTimeAgo({ value, verbose, prefix, tooltip, className, ...rest }: PluginTimeAgoProps) {
+  const overlayZ = useKitOverlayZClass();
   const timestamp = toTimestamp(value);
   const valid = !Number.isNaN(timestamp);
   const spelled = verbose === true;
@@ -929,7 +930,9 @@ function KitTimeAgo({ value, verbose, prefix, tooltip, className, ...rest }: Plu
   return (
     <Tooltip>
       <TooltipTrigger asChild>{element}</TooltipTrigger>
-      <TooltipContent side="bottom">{full}</TooltipContent>
+      <TooltipContent side="bottom" className={overlayZ}>
+        {full}
+      </TooltipContent>
     </Tooltip>
   );
 }

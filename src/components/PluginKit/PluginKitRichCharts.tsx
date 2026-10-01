@@ -13,6 +13,7 @@ import {
   AxisChartFrame,
   ChartEmpty,
   ChartLoading,
+  limitNote,
   COLORS,
   COMPACT,
   DATE_POINT_FORMAT,
@@ -222,6 +223,8 @@ function categoryKey(value: unknown): string | null {
 interface Categories {
   keys: string[];
   raws: unknown[];
+  /** Every distinct category, the ones past the cap included. */
+  total: number;
 }
 
 function categoriesOf(
@@ -235,14 +238,15 @@ function categoriesOf(
   const seen = new Set<string>();
   const add = (raw: unknown) => {
     const k = categoryKey(raw);
-    if (k === null || seen.has(k) || keys.length >= cap) return;
+    if (k === null || seen.has(k)) return;
     seen.add(k);
+    if (keys.length >= cap) return;
     keys.push(k);
     raws.push(raw);
   };
   if (Array.isArray(given)) for (const raw of given) add(raw);
   else for (const row of rows) add(field(row, key));
-  return { keys, raws };
+  return { keys, raws, total: seen.size };
 }
 
 export const MAX_HEATMAP_COLUMNS = 200;
@@ -370,6 +374,10 @@ function KitHeatmap({
       summary: tooBig
         ? `${rowCount} rows by ${cols} columns, values from ${formats.full(model.low)} to ${formats.full(model.high)}.`
         : "",
+      limit:
+        [limitNote(cols, model.xs.total, "columns"), limitNote(rowCount, model.ys.total, "rows")]
+          .filter((part) => part !== undefined)
+          .join(". ") || undefined,
     };
   }, [xNames, yNames, model, rowCount, cols, yLabel, formats]);
 

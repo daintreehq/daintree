@@ -1016,7 +1016,7 @@ describe("review regressions", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("link", { name: /localhost:5173/ }));
     });
-    expect(logError).toHaveBeenCalledWith("[plugin-kit] browser.openUrl failed", {
+    expect(logError).toHaveBeenCalledWith("[plugin-ui] browser.openUrl failed", {
       message: "nope",
     });
   });

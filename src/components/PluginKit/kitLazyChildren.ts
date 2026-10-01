@@ -3,45 +3,58 @@
 // load rather than starting another. Each component instance owns its own
 // scope, so two trees sharing a node never share a loader's result; within a
 // scope a result is keyed by the parent itself, so a plugin that rebuilds a
-// node gets its children loaded afresh. Settling bumps one version that the
-// kit's lazy components subscribe to, so whichever one is waiting re-renders.
+// node gets its children loaded afresh. Settling bumps the scope's own
+// version, so only the component that owns it re-renders.
+
+import { useState, useSyncExternalStore } from "react";
 
 export type LazyEntry<T> =
   | { status: "loading" }
   | { status: "done"; items: readonly T[] }
   | { status: "error"; message: string };
 
-/** One component instance's cache. Create it once per instance (`useState`). */
+/** One component instance's cache and its change signal: see {@link useLazyScope}. */
 export interface LazyScope {
   readonly byObject: WeakMap<object, LazyEntry<unknown>>;
   // A primitive parent (a string id used as the node) cannot key a WeakMap; a
   // bounded map keeps those from growing without end.
   readonly byPrimitive: Map<unknown, LazyEntry<unknown>>;
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly getVersion: () => number;
+  readonly bump: () => void;
 }
 
 const PRIMITIVE_CAP = 2000;
 
 export function createLazyScope(): LazyScope {
-  return { byObject: new WeakMap(), byPrimitive: new Map() };
-}
-
-let version = 0;
-const listeners = new Set<() => void>();
-
-function bump(): void {
-  version += 1;
-  for (const listener of listeners) listener();
-}
-
-export function subscribeLazyChildren(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
+  let version = 0;
+  const listeners = new Set<() => void>();
+  return {
+    byObject: new WeakMap(),
+    byPrimitive: new Map(),
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    getVersion: () => version,
+    bump: () => {
+      version += 1;
+      for (const listener of listeners) listener();
+    },
   };
 }
 
-export function lazyChildrenVersion(): number {
-  return version;
+/**
+ * A scope for this component instance, and a revision that changes when one
+ * of its loads settles or is forgotten. Another instance's loads never
+ * re-render it.
+ */
+export function useLazyScope(): { scope: LazyScope; revision: number } {
+  const [scope] = useState(createLazyScope);
+  const revision = useSyncExternalStore(scope.subscribe, scope.getVersion, scope.getVersion);
+  return { scope, revision };
 }
 
 function readEntry(scope: LazyScope, parent: unknown): LazyEntry<unknown> | undefined {
@@ -99,8 +112,10 @@ export function peekLazyChildren<T>(scope: LazyScope, parent: unknown): LazyEntr
 }
 
 /**
- * The children `load` gives for `parent`: at once for an array, else the
- * state of the one load started for it. `load` runs again only after `forget`.
+ * The children `load` gives for `parent`. An array comes back as is and is
+ * not held, so a live getter is read afresh each time. A promise's state is
+ * held, and its `load` runs again only after `forget`; one that settles
+ * during the call comes back settled.
  */
 export function readLazyChildren<T>(
   scope: LazyScope,
@@ -129,25 +144,26 @@ export function readLazyChildren<T>(
       (items: unknown) => {
         if (readEntry(scope, parent) !== loading) return;
         writeEntry(scope, parent, { status: "done", items: listOf(items) });
-        bump();
+        scope.bump();
       },
       (error: unknown) => {
         if (readEntry(scope, parent) !== loading) return;
         writeEntry(scope, parent, { status: "error", message: errorMessage(error) });
-        bump();
+        scope.bump();
       }
     );
   } catch (error) {
-    const failed: LazyEntry<T> = { status: "error", message: errorMessage(error) };
-    writeEntry(scope, parent, failed);
-    return failed;
+    // A `then` that settled before it threw keeps what it settled with.
+    if (readEntry(scope, parent) === loading) {
+      writeEntry(scope, parent, { status: "error", message: errorMessage(error) });
+    }
   }
-  return { status: "loading" };
+  return peekLazyChildren<T>(scope, parent) ?? { status: "loading" };
 }
 
 /** Drops what is held for `parent`, so the next read loads it again (Retry). */
 export function forgetLazyChildren(scope: LazyScope, parent: unknown): void {
   if (typeof parent === "object" && parent !== null) scope.byObject.delete(parent);
   else scope.byPrimitive.delete(parent);
-  bump();
+  scope.bump();
 }

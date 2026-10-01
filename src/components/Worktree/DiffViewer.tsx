@@ -43,6 +43,7 @@ import type {
 import "react-diff-view/style/index.css";
 // Our overrides — must come after the library stylesheet it overrides.
 import "./DiffViewer.css";
+import "@/styles/components/syntax-tokens.css";
 import {
   ChevronRight,
   ChevronsDown,

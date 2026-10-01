@@ -8,6 +8,15 @@ import { createContext, useContext } from "react";
  */
 export const PluginKitOwnerContext = createContext<string | null>(null);
 
+/**
+ * The composite controls (a picker, a slider pair) the content sits inside,
+ * as space-separated scope ids. Their portalled surfaces carry it, so focus
+ * moving into a control's own popover is not mistaken for leaving it.
+ */
+export const KitFocusScopeContext = createContext("");
+
+export const KIT_FOCUS_SCOPE_ATTRIBUTE = "data-kit-focus-scope";
+
 export type PluginKitLayer = "modal" | "nested";
 
 /**

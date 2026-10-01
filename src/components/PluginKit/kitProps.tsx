@@ -1,7 +1,8 @@
-import { isValidElement, type ReactNode } from "react";
+import { isValidElement, useContext, type ReactNode } from "react";
 import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "@shared/types/plugin";
 import { PLUGIN_STYLE_OWNER_ATTRIBUTE } from "@/services/plugin/pluginStyleOwner";
-import { usePluginKitOwner } from "./kitScope";
+import { KIT_FOCUS_SCOPE_ATTRIBUTE, KitFocusScopeContext, usePluginKitOwner } from "./kitScope";
+import { warnPluginAuthor } from "./kitDiagnostics";
 
 // Every adapter here narrows its props rather than trusting them: a plugin
 // view is as often hand-written JavaScript as TypeScript, and the public props
@@ -25,51 +26,104 @@ export function field(value: object, key: string): unknown {
   return Reflect.get(value, key);
 }
 
-/** A node from untyped JS that React can render: text or an element. */
-export function asNode(value: unknown): ReactNode {
-  if (typeof value === "string" || typeof value === "number" || isValidElement(value)) {
-    return value;
-  }
-  return undefined;
-}
-
 export function fn<T extends (...args: never[]) => unknown>(value: T | undefined): T | undefined {
   return typeof value === "function" ? value : undefined;
 }
 
+// Numbers from untyped JS, by what the prop means. Anything that is not a
+// finite number in range is unset, and the component's default applies.
+
+/** A strictly positive amount: a dimension, a step. */
 export function positive(value: unknown, max: number): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= max
     ? value
     : undefined;
 }
 
-/**
- * A node prop from untyped JS, narrowed to what React renders without
- * throwing: text, numbers, elements and arrays of them. A plain object (the
- * usual JS slip) is dropped rather than crashing the view.
- */
-export function node(value: unknown): ReactNode {
-  if (value === undefined || value === null || typeof value === "boolean") return null;
+/** A duration in ms, where zero means at once. */
+export function durationMs(value: unknown, max: number): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= max
+    ? value
+    : undefined;
+}
+
+/** A limit on how many (characters, items): whole, and zero allows none. */
+export function wholeLimit(value: unknown, max: number): number | undefined {
+  const n = durationMs(value, max);
+  return n === undefined ? undefined : Math.floor(n);
+}
+
+/** How many rows or items to show: whole, and never fewer than one. */
+export function rowCount(value: unknown, max: number): number | undefined {
+  const n = positive(value, max);
+  return n === undefined ? undefined : Math.max(1, Math.round(n));
+}
+
+// Deep enough for any real fragment list. An array inside itself is dropped
+// at once, and the budget bounds the work an array shared many times over can
+// make, so malformed content never stalls a render.
+const MAX_NODE_DEPTH = 32;
+const NODE_VISIT_BUDGET = 100_000;
+let warnedPlainObject = false;
+
+interface NodeWalk {
+  path: Set<unknown[]>;
+  visits: number;
+}
+
+function normalizeNode(value: unknown, depth: number, walk: NodeWalk): ReactNode {
+  if (value === undefined || value === null || typeof value === "boolean" || value === "") {
+    return null;
+  }
   if (typeof value === "string" || typeof value === "number" || isValidElement(value)) {
     return value;
   }
-  if (Array.isArray(value)) return value.map(node);
+  if (Array.isArray(value)) {
+    if (depth >= MAX_NODE_DEPTH || walk.path.has(value)) return null;
+    walk.visits += value.length;
+    if (walk.visits > NODE_VISIT_BUDGET) return null;
+    walk.path.add(value);
+    const out = value.map((entry) => normalizeNode(entry, depth + 1, walk));
+    walk.path.delete(value);
+    return out.some((entry) => entry !== null) ? out : null;
+  }
+  if (!warnedPlainObject) {
+    warnedPlainObject = true;
+    warnPluginAuthor("A plain object was passed where content goes; it renders nothing.");
+  }
   return null;
+}
+
+/**
+ * A node prop from untyped JS, narrowed to what React renders without
+ * throwing: text, numbers, elements and arrays of them. A plain object (the
+ * usual JS slip) is dropped rather than crashing the view. Nothing to show
+ * (`false`, `""`, `[]`, `[null]`) comes back as `null`, so presence and
+ * rendering never disagree: see {@link hasContent}. An element is opaque; one
+ * whose component renders null still counts.
+ */
+export function node(value: unknown): ReactNode {
+  return normalizeNode(value, 0, { path: new Set(), visits: 0 });
 }
 
 /** {@link node}, or `undefined` when there is nothing to show. */
 export function content(value: unknown): ReactNode {
-  return hasContent(value) ? node(value) : undefined;
+  const out = node(value);
+  return out === null ? undefined : out;
 }
 
 /**
  * The owner stamp for an element a kit overlay portals out of the view, so
- * diagnostics attribute what happens inside it to the plugin. Empty outside a
- * plugin view.
+ * diagnostics attribute what happens inside it to the plugin (empty outside a
+ * plugin view), and the composite controls it belongs to, for their blur.
  */
 export function useKitOwnerAttributes(): Record<string, string> {
   const owner = usePluginKitOwner();
-  return owner ? { [PLUGIN_STYLE_OWNER_ATTRIBUTE]: owner } : {};
+  const focusScope = useContext(KitFocusScopeContext);
+  return {
+    ...(owner ? { [PLUGIN_STYLE_OWNER_ATTRIBUTE]: owner } : {}),
+    ...(focusScope ? { [KIT_FOCUS_SCOPE_ATTRIBUTE]: focusScope } : {}),
+  };
 }
 
 /**
@@ -97,8 +151,21 @@ export function PluginStyleScope({
   );
 }
 
-export function hasContent(node: unknown): boolean {
-  return node !== undefined && node !== null && node !== false && node !== true && node !== "";
+/** Whether {@link node} would draw anything: `0` does, `[]` and `[null]` do not. */
+/**
+ * {@link content} for an inline slot the host renders outside the view (a
+ * dialog title or hint, a tooltip): markup is wrapped in a
+ * {@link PluginStyleScope} so the plugin's classes still apply; text needs no
+ * wrapper.
+ */
+export function scopedContent(value: unknown): ReactNode {
+  const out = content(value);
+  if (out === undefined || typeof out === "string" || typeof out === "number") return out;
+  return <PluginStyleScope>{out}</PluginStyleScope>;
+}
+
+export function hasContent(value: unknown): boolean {
+  return node(value) !== null;
 }
 
 export const SIDES = ["top", "right", "bottom", "left"] as const;

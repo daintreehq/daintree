@@ -4,13 +4,13 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
-import { logError } from "@/utils/logger";
 import { UNDO_ACTION_LABEL, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { combosFieldsEqual, keybindingService } from "@/services/KeybindingService";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { useNotificationStore } from "@/store/notificationStore";
 import { ALIGNS, SIDES, field, fn, nonEmpty, oneOf, useKitOwnerAttributes } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
+import { runPluginAction } from "./kitDiagnostics";
 
 // View toasts go through the same `notify()` the worker's `host.showToast`
 // reaches over IPC, held to the same rules: a message of at most 2000
@@ -46,16 +46,12 @@ function readMessage(value: unknown): string | undefined {
   return trimmed === "" ? undefined : trimmed.slice(0, MESSAGE_MAX);
 }
 
-function once(run: () => void): () => void {
+function once(run: () => unknown): () => void {
   let done = false;
   return () => {
     if (done) return;
     done = true;
-    try {
-      run();
-    } catch (error) {
-      logError("[plugin-ui] toast action threw", error);
-    }
+    runPluginAction("toast action", run);
   };
 }
 
@@ -77,9 +73,7 @@ export function showPluginViewToast(owner: string | null, options: unknown): str
     if (label !== undefined && typeof onClick === "function") {
       action = {
         label: label.slice(0, ACTION_LABEL_MAX),
-        onClick: once(() => {
-          Reflect.apply(onClick, undefined, []);
-        }),
+        onClick: once(() => Reflect.apply(onClick, undefined, [])),
       };
     }
   }
@@ -270,12 +264,10 @@ function KitConfirmPopover({
             size="sm"
             data-confirm-role="confirm"
             onClick={() => {
+              // Fire and forget: the popover closes at once, and a failure
+              // is the plugin's to show, though never left unhandled.
               setOpen(false);
-              try {
-                confirm?.();
-              } catch (error) {
-                logError("[plugin-ui] ConfirmPopover onConfirm threw", error);
-              }
+              if (confirm) runPluginAction("ConfirmPopover onConfirm", confirm);
             }}
           >
             {nonEmpty(confirmLabel) ?? "Confirm"}

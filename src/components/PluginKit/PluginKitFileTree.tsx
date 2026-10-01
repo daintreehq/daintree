@@ -26,6 +26,7 @@ import {
 import { cn } from "@/lib/utils";
 import { field, fn, hasContent, node, nonEmpty, pickRootProps, str } from "./kitProps";
 import {
+  idPart,
   TREE_ROW_CLASS,
   TREE_ROW_HEIGHT_PX,
   TreeChevron,
@@ -282,7 +283,7 @@ function KitFileTree(props: PluginFileTreeProps) {
     : undefined;
 
   const baseId = useId();
-  const rowId = (path: string) => `${baseId}ft-${encodeURIComponent(path)}`;
+  const rowId = (path: string) => `${baseId}ft-${idPart(path)}`;
   const virtuoso = useRef<VirtuosoHandle>(null);
   const container = useRef<HTMLDivElement>(null);
   const typeahead = useRef({ buffer: "", at: 0 });

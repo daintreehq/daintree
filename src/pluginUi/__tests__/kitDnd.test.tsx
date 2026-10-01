@@ -289,8 +289,7 @@ describe("SortableList", () => {
   });
 
   it("survives a renderItem that throws and a sparse items array", () => {
-    const reportError = vi.fn();
-    vi.stubGlobal("reportError", reportError);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const sparse: (Task | undefined)[] = [TASKS[0]];
     sparse[2] = TASKS[1];
     render(
@@ -307,10 +306,13 @@ describe("SortableList", () => {
         },
       })
     );
-    vi.unstubAllGlobals();
     const list = screen.getByRole("list", { name: "Rows" });
     expect(rowTexts(list)).toEqual(["Alpha", "blank", ""]);
-    expect(reportError).toHaveBeenCalled();
+    expect(logged).toHaveBeenCalledWith(
+      expect.stringContaining("[plugin-ui] drag and drop callback threw"),
+      expect.anything()
+    );
+    logged.mockRestore();
   });
 
   it("keeps ids distinct from positional keys and numbers from strings", () => {

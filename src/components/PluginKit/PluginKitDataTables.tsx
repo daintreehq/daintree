@@ -3,7 +3,6 @@ import {
   useId,
   useRef,
   useState,
-  useSyncExternalStore,
   type CSSProperties,
   type FocusEvent,
   type KeyboardEvent,
@@ -102,31 +101,23 @@ import {
   type SubRows,
 } from "./kitDataTableModel";
 import {
-  createLazyScope,
   errorMessage,
   forgetLazyChildren,
-  lazyChildrenVersion,
   peekLazyChildren,
   readLazyChildren,
-  subscribeLazyChildren,
+  useLazyScope,
 } from "./kitLazyChildren";
 import { GatedLoading, GatedSpinner, TREE_INDENT_PX, TreeChevron, TreeGutter } from "./kitTreeRow";
 import { severityGlyph } from "./PluginKitPatterns";
 import { pluginKitTreeView } from "./PluginKitTreeView";
 import { pluginKitObjectInspector } from "./PluginKitObjectInspector";
 import "./kitDataTable.css";
+import { guardCallbacks, isThenable } from "./kitDiagnostics";
 
 const BasicDataTable = pluginKitLists.DataTable;
 
 // A plugin callback that throws must not take the table down with it.
-function attempt<T>(run: () => T, fallback: T): T {
-  try {
-    return run();
-  } catch (error) {
-    console.warn("[PluginKit] DataTable callback threw", error);
-    return fallback;
-  }
-}
+const attempt = guardCallbacks("DataTable");
 
 function isRowKey(value: unknown): value is RowKey {
   return typeof value === "string" || (typeof value === "number" && Number.isFinite(value));
@@ -144,6 +135,10 @@ function omitKey<V>(record: Record<string, V>, key: string): Record<string, V> {
   const out = { ...record };
   delete out[key];
   return out;
+}
+
+function isRecord(value: unknown): value is object {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function widthRecord(value: unknown): Record<string, number> | undefined {
@@ -265,16 +260,12 @@ function startValue(column: RichColumn, row: unknown): string {
   return typeof value === "string" || typeof value === "number" ? String(value) : "";
 }
 
-function isThenable(value: unknown): value is PromiseLike<unknown> {
-  if (typeof value !== "object" || value === null) return false;
-  try {
-    return typeof Reflect.get(value, "then") === "function";
-  } catch {
-    return false;
-  }
-}
-
-/** Whether a table needs anything past the basic DataTable. Exported for tests. */
+/**
+ * Whether a table needs anything past the basic DataTable. Exported for tests.
+ * A sizing or visibility prop counts once it is given, empty or not: clearing
+ * `hiddenColumns` must not swap the table for the basic one and lose its focus
+ * and scroll mid-update.
+ */
 export function usesRichDataTable(props: object): boolean {
   const read = (name: string): unknown => {
     try {
@@ -293,10 +284,10 @@ export function usesRichDataTable(props: object): boolean {
     isFn("groupBy") ||
     isFn("getSubRows") ||
     (isFn("hasSubRows") && isFn("loadSubRows")) ||
-    hasWidth(read("columnWidths")) ||
-    hasWidth(read("defaultColumnWidths")) ||
-    hasString(read("hiddenColumns")) ||
-    hasString(read("defaultHiddenColumns")) ||
+    isRecord(read("columnWidths")) ||
+    isRecord(read("defaultColumnWidths")) ||
+    Array.isArray(read("hiddenColumns")) ||
+    Array.isArray(read("defaultHiddenColumns")) ||
     read("columnsMenu") === true ||
     nonEmpty(read("viewStateKey")) !== undefined ||
     read("stickyFirstColumn") === true
@@ -315,18 +306,6 @@ export function usesRichDataTable(props: object): boolean {
           typeof field(column, "editable") === "function")
     )
   );
-}
-
-function hasWidth(value: unknown): boolean {
-  try {
-    return Object.keys(widthRecord(value) ?? {}).length > 0;
-  } catch {
-    return false;
-  }
-}
-
-function hasString(value: unknown): boolean {
-  return (stringList(value)?.length ?? 0) > 0;
 }
 
 interface CellEdit {
@@ -512,6 +491,8 @@ function CellEditor({
   onCommit: (draft: string, move: CellMove) => boolean;
   onCancel: () => void;
 }) {
+  const overlayZ = useKitOverlayZClass();
+  const owner = useKitOwnerAttributes();
   // Enter, Tab and Escape settle the edit themselves; the blur that follows
   // as focus goes back to the grid must not commit it a second time.
   const settled = useRef(false);
@@ -563,6 +544,8 @@ function CellEditor({
           <SelectValue />
         </SelectTrigger>
         <SelectContent
+          {...owner}
+          className={overlayZ}
           onKeyDown={(event) => {
             // The list holds focus while open; Tab still moves to the next cell.
             if (event.key !== "Tab") return;
@@ -612,7 +595,7 @@ function CellEditor({
     <>
       <Tooltip open={invalid}>
         <TooltipTrigger asChild>{control}</TooltipTrigger>
-        <TooltipContent side="bottom" align="start">
+        <TooltipContent side="bottom" align="start" className={overlayZ}>
           {edit.error}
         </TooltipContent>
       </Tooltip>
@@ -829,13 +812,8 @@ function RichDataTable(props: PluginDataTableProps) {
   const hasSubFn = fn(hasSubRows);
   const loadFn = fn(loadSubRows);
   const tree = subRowsFn !== undefined || (hasSubFn !== undefined && loadFn !== undefined);
-  const [lazyScope] = useState(createLazyScope);
-  // Re-reads the lazy cache when a load settles anywhere.
-  const lazyRevision = useSyncExternalStore(
-    subscribeLazyChildren,
-    lazyChildrenVersion,
-    lazyChildrenVersion
-  );
+  // Re-reads the lazy cache when one of this instance's loads settles.
+  const { scope: lazyScope, revision: lazyRevision } = useLazyScope();
   const subRowsOf = tree
     ? (row: unknown, open: boolean): SubRows => {
         const given = subRowsFn ? attempt(() => subRowsFn(row), null) : null;
@@ -1634,7 +1612,7 @@ function RichDataTable(props: PluginDataTableProps) {
                 {severityGlyph("error", "h-3 w-3")}
               </span>
             </TooltipTrigger>
-            <TooltipContent side="bottom" align="start">
+            <TooltipContent side="bottom" align="start" className={overlayZ}>
               {failure.error}
             </TooltipContent>
           </Tooltip>
@@ -1861,12 +1839,13 @@ function PersistedDataTable(props: PluginDataTableProps & { viewStateKey: string
 /**
  * The kit's DataTable: the basic table until a plugin asks for selection,
  * groups, sub-rows, column sizing or editing, then the rich one, drawn from
- * the same rows, header and cells.
+ * the same rows, header and cells. A `viewStateKey` names the saved view, so
+ * a different key is a different table and starts from that key's state.
  */
 function KitDataTable(props: PluginDataTableProps) {
   if (!usesRichDataTable(props)) return <BasicDataTable {...props} />;
   const key = nonEmpty(props.viewStateKey);
-  if (key) return <PersistedDataTable {...props} viewStateKey={key} />;
+  if (key) return <PersistedDataTable key={key} {...props} viewStateKey={key} />;
   return <RichDataTable {...props} />;
 }
 

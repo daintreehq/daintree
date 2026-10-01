@@ -27,6 +27,7 @@ import {
   positive,
   str,
 } from "./kitProps";
+import { safeFormat, warnPluginAuthor } from "./kitDiagnostics";
 
 // The categorical order was chosen with the dataviz palette validator against
 // the default dark and light `category-*` values and both colour-vision
@@ -138,8 +139,8 @@ export function chartSeries(value: unknown): { drawn: ResolvedSeries[]; omitted:
   }
   if (valid.length > MAX_SERIES && import.meta.env.DEV && !warnedSeriesCap) {
     warnedSeriesCap = true;
-    console.warn(
-      `[plugin-ui] A chart draws at most ${MAX_SERIES} series; fold the rest into an "Other" series.`
+    warnPluginAuthor(
+      `A chart draws at most ${MAX_SERIES} series; fold the rest into an "Other" series.`
     );
   }
   const kept = valid.slice(0, MAX_SERIES);
@@ -344,15 +345,7 @@ export type Format<T> = (value: T) => string;
 export function userFormat<T>(user: Format<T> | undefined, fallback: Format<T>): Format<T> {
   const format = fn(user);
   if (!format) return fallback;
-  return (value) => {
-    let out: unknown;
-    try {
-      out = format(value);
-    } catch {
-      return fallback(value);
-    }
-    return typeof out === "string" ? out : fallback(value);
-  };
+  return (value) => safeFormat(format, value, fallback);
 }
 
 /** The axis and readout formatters, the plugin's own when given. */
@@ -832,6 +825,15 @@ export interface TableModel {
   /** `null` past {@link MAX_TABLE_ROWS}: the summary stands in. */
   rows: { key: string; x: string; values: string[] }[] | null;
   summary: string;
+  /** Said, and shown under the plot, when the chart drew only part of the data: {@link limitNote}. */
+  limit?: string;
+}
+
+/** The note for a chart that drew only the first `shown` of `total` (categories, rows). */
+export function limitNote(shown: number, total: number, noun: string): string | undefined {
+  return total > shown
+    ? `Showing the first ${shown.toLocaleString()} of ${total.toLocaleString()} ${noun}`
+    : undefined;
 }
 
 /** The chart's numbers for assistive tech: a table when it is small enough to walk, a summary otherwise. */
@@ -844,7 +846,9 @@ export function DataFallback({
   label: string;
   table: TableModel;
 }) {
-  const note = omittedNote(table.omitted, table.cap ?? MAX_SERIES);
+  const note = [omittedNote(table.omitted, table.cap ?? MAX_SERIES), table.limit ?? ""]
+    .filter((part) => part !== "")
+    .join(". ");
   if (table.rows === null) {
     return (
       <p id={id} className="sr-only">
@@ -1003,6 +1007,11 @@ export function AxisChartFrame({
         </div>
         {readout ? <PointTooltip readout={readout} width={width} /> : null}
       </div>
+      {table.limit ? (
+        <p data-chart-limit="" aria-hidden="true" className="text-xs text-text-secondary">
+          {table.limit}
+        </p>
+      ) : null}
       <DataFallback id={describedBy} label={label} table={table} />
       <div className="sr-only" aria-live="polite">
         {cursor.keyboard && readout ? readoutText(readout) : ""}
@@ -1169,7 +1178,8 @@ function KitBarChart({
   const across = oneOf(orientation, ["vertical", "horizontal"] as const) === "horizontal";
   const [measure, width] = useWidth();
   const { drawn: resolved, omitted } = useMemo(() => chartSeries(series), [series]);
-  const rows = useMemo(() => rowsOf(data).slice(0, MAX_BAR_CATEGORIES), [data]);
+  const allRows = useMemo(() => rowsOf(data), [data]);
+  const rows = useMemo(() => allRows.slice(0, MAX_BAR_CATEGORIES), [allRows]);
   const formats = useMemo(() => valueFormats(formatValue), [formatValue]);
   const categories = useMemo(() => {
     const xKey = str(x) ?? "";
@@ -1369,8 +1379,9 @@ function KitBarChart({
               formats.full
             )
           : "",
+      limit: limitNote(rows.length, allRows.length, "categories"),
     };
-  }, [xLabel, resolved, omitted, rows, categories, values, formats]);
+  }, [xLabel, resolved, omitted, rows, allRows, categories, values, formats]);
 
   if (loading === true) return <ChartLoading height={px} className={classes} root={root} />;
   if (

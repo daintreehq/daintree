@@ -45,7 +45,7 @@ import {
 } from "@/components/Panel/inlineRenameField";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { InlineError, useFieldControl } from "@/components/ui/field";
+import { InlineError } from "@/components/ui/field";
 import { inputVariants } from "@/components/ui/input";
 import { KbdChord } from "@/components/ui/Kbd";
 import { Spinner } from "@/components/ui/Spinner";
@@ -60,7 +60,6 @@ import {
   keybindingService,
   normalizeKeyForBinding,
 } from "@/services/KeybindingService";
-import { logError } from "@/utils/logger";
 import { renderIconSource } from "./PluginKitIcons";
 import { fileMatchesAccept } from "./PluginKitInputs";
 import { pluginKitDnd } from "./PluginKitDnd";
@@ -71,34 +70,16 @@ import {
   nonEmpty,
   oneOf,
   pickRootProps,
-  positive,
   str,
   useKitOwnerAttributes,
+  wholeLimit,
+  rowCount,
 } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
+import { isThenable, reportPluginFault, settleThenable, runPluginAction } from "./kitDiagnostics";
+import { invalidProp, useKitFieldControl } from "./kitField";
 
 const SortableList = pluginKitDnd.SortableList;
-
-interface AriaInput {
-  "aria-label"?: unknown;
-  "aria-labelledby"?: unknown;
-  "aria-describedby"?: unknown;
-  "aria-invalid"?: unknown;
-}
-
-/** The enclosing `FormField`'s ids, merged with whatever ARIA the plugin passed. */
-function useKitFieldControl(props: AriaInput, invalid?: boolean) {
-  const ariaInvalid = props["aria-invalid"];
-  return useFieldControl(
-    {
-      "aria-label": str(props["aria-label"]),
-      "aria-labelledby": str(props["aria-labelledby"]),
-      "aria-describedby": str(props["aria-describedby"]),
-      "aria-invalid": ariaInvalid === true || ariaInvalid === "true" ? true : undefined,
-    },
-    invalid
-  );
-}
 
 /** Only the `aria-*` attributes, for a control inside a root that takes the rest. */
 function pickAria(props: object): Record<string, string | number | boolean> {
@@ -115,11 +96,6 @@ function joinIds(ids: readonly (string | undefined)[]): string | undefined {
   return joined === "" ? undefined : joined;
 }
 
-function wholeCount(value: unknown, max: number): number | undefined {
-  const n = positive(value, max);
-  return n === undefined ? undefined : Math.floor(n);
-}
-
 /** Hands `element` to a ref the plugin passed, whichever kind it is. */
 /**
  * Hands `element` to a ref the plugin passed, whichever kind it is. Runs in
@@ -133,45 +109,17 @@ function assignRef<T>(ref: Ref<T> | undefined, element: T | null): void {
       (ref as { current: T | null }).current = element;
     }
   } catch (error) {
-    logError("[plugin-ui] ref threw", error);
+    reportPluginFault("ref threw", error);
   }
 }
 
-/** Calls a plugin callback, logging a throw instead of letting it reach React. */
+/** Calls a plugin callback, reporting a throw or rejection instead of letting it reach React. */
 function safely<A extends unknown[]>(
   label: string,
   callback: ((...args: A) => unknown) | undefined,
   ...args: A
 ): void {
-  if (!callback) return;
-  try {
-    callback(...args);
-  } catch (error) {
-    logError(`[plugin-ui] ${label} threw`, error);
-  }
-}
-
-function isThenable(value: unknown): value is PromiseLike<unknown> {
-  try {
-    return (
-      typeof value === "object" &&
-      value !== null &&
-      typeof (value as { then?: unknown }).then === "function"
-    );
-  } catch {
-    return false;
-  }
-}
-
-/** A plugin's thenable as a real promise; a `then` that throws becomes a rejection. */
-function settleThenable(value: PromiseLike<unknown>): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    try {
-      value.then(resolve, reject);
-    } catch (error) {
-      reject(error);
-    }
-  });
+  if (callback) runPluginAction(label, () => callback(...args));
 }
 
 type Outcome = { ok: true; value: unknown } | { ok: false; error: unknown };
@@ -204,7 +152,7 @@ function verdict(
   if (!check) return null;
   const outcome = attempt(() => check(value));
   if (!outcome.ok) {
-    logError("[plugin-ui] validator threw", outcome.error);
+    reportPluginFault("validator threw", outcome.error);
     return onThrow;
   }
   return nonEmpty(outcome.value)?.trim() || null;
@@ -553,15 +501,12 @@ function MentionField(props: MentionFieldProps) {
   const handleKeyDown = fn(onKeyDown);
   const handleBlur = fn(onBlur);
   const handleFocus = fn(onFocus);
-  const limit = wholeCount(maxLength, Number.MAX_SAFE_INTEGER);
+  const limit = wholeLimit(maxLength, Number.MAX_SAFE_INTEGER);
   // At least one row: a fraction such as 0.5 floors to nothing.
-  const rowsMin = Math.max(1, wholeCount(minRows, 100) ?? defaultMinRows);
-  const rowsMax = Math.max(rowsMin, wholeCount(maxRows, 100) ?? defaultMaxRows);
+  const rowsMin = rowCount(minRows, 100) ?? defaultMinRows;
+  const rowsMax = Math.max(rowsMin, rowCount(maxRows, 100) ?? defaultMaxRows);
   const inert = disabled === true || readOnly === true;
-  const { invalid: shownInvalid, controlProps } = useKitFieldControl(
-    props,
-    invalid === true ? true : undefined
-  );
+  const { invalid: shownInvalid, controlProps } = useKitFieldControl(props, invalidProp(invalid));
 
   const trigger = session ? triggerList.find((entry) => entry.char === session.char) : undefined;
   const fresh = session !== null && itemsKey === sessionKey(session);
@@ -636,14 +581,14 @@ function MentionField(props: MentionFieldProps) {
     if (!load) return;
     const outcome = attempt(() => load(next.char, next.query));
     if (!outcome.ok) {
-      logError("[plugin-ui] MentionTextarea getSuggestions threw", outcome.error);
+      reportPluginFault("MentionTextarea getSuggestions threw", outcome.error);
       settle([]);
       return;
     }
     if (isThenable(outcome.value)) {
       setLoading(true);
       settleThenable(outcome.value).then(settle, (error: unknown) => {
-        logError("[plugin-ui] MentionTextarea getSuggestions rejected", error);
+        reportPluginFault("MentionTextarea getSuggestions rejected", error);
         settle([]);
       });
       return;
@@ -948,6 +893,7 @@ function KitComposer(props: PluginComposerProps) {
     ref,
     className,
   } = props;
+  const overlayZ = useKitOverlayZClass();
   const controlled = Object.hasOwn(props, "value");
   const [own, setOwn] = useState(() => str(defaultValue) ?? "");
   const text = controlled ? (str(value) ?? "") : own;
@@ -966,7 +912,7 @@ function KitComposer(props: PluginComposerProps) {
   const working = busy === true;
   const acceptText = nonEmpty(accept);
   const chips = readAttachments(attachments);
-  const limit = wholeCount(maxLength, Number.MAX_SAFE_INTEGER);
+  const limit = wholeLimit(maxLength, Number.MAX_SAFE_INTEGER);
   const sendOnEnter = oneOf(submitOn, ["mod+enter", "enter"] as const) === "enter";
   const canSend = !inert && !working && (text.trim() !== "" || chips.length > 0);
   const dragging = dragDepth > 0 && attach !== undefined && !inert;
@@ -1134,7 +1080,9 @@ function KitComposer(props: PluginComposerProps) {
                   <Paperclip aria-hidden="true" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="top">Attach files</TooltipContent>
+              <TooltipContent side="top" className={overlayZ}>
+                Attach files
+              </TooltipContent>
             </Tooltip>
             <input
               ref={fileRef}
@@ -1188,7 +1136,7 @@ function KitComposer(props: PluginComposerProps) {
               {working ? "Stop" : label}
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="top">
+          <TooltipContent side="top" className={overlayZ}>
             <span className="inline-flex items-center gap-2">
               {working ? "Stop" : label}
               <KbdChord shortcut={working ? "Escape" : sendCombo} density="compact" />
@@ -1272,7 +1220,7 @@ function KitInlineEdit(props: PluginInlineEditProps) {
   const mode = oneOf(selectOnEdit, ["all", "stem", "end"] as const) ?? "all";
   const onDouble = activation === "doubleClick";
   const cancelOnBlur = blurAction === "cancel";
-  const limit = wholeCount(maxLength, 10_000);
+  const limit = wholeLimit(maxLength, 10_000);
 
   // A controlled edit that starts from outside still begins from the value.
   if (wasEditing !== isEditing) {
@@ -1391,7 +1339,10 @@ function KitInlineEdit(props: PluginInlineEditProps) {
         onClick={onDouble ? undefined : begin}
         onDoubleClick={onDouble ? begin : undefined}
         onKeyDown={(event) => {
-          if (event.key === "F2" || event.key === "Enter") {
+          // A button's keys (Enter, Space) plus F2, the rename key. Space is
+          // taken on keydown so it neither scrolls the pane nor types itself
+          // into the field it opens.
+          if (event.key === "F2" || event.key === "Enter" || event.key === " ") {
             event.preventDefault();
             begin();
           }
@@ -1527,6 +1478,14 @@ function KitSecretInput(props: PluginSecretInputProps) {
   // The save in flight, if any: the session it belongs to. Only that save
   // may end the pending state or close the field.
   const savingRef = useRef<{ session: number } | null>(null);
+  // A save that settles once the field is gone changes nothing, and calls no
+  // plugin callback.
+  useEffect(
+    () => () => {
+      savingRef.current = null;
+    },
+    []
+  );
   const [saving, setSaving] = useState(false);
   // A save under 400ms shows nothing, per the app's loading gate.
   const showSaving = useDohertyGate(saving);
@@ -1543,10 +1502,7 @@ function KitSecretInput(props: PluginSecretInputProps) {
   // Turning `revealable` off hides a value that was showing.
   const revealed = canReveal && shown;
   const label = str(props["aria-label"]);
-  const { invalid: shownInvalid, controlProps } = useKitFieldControl(
-    props,
-    invalid === true ? true : undefined
-  );
+  const { invalid: shownInvalid, controlProps } = useKitFieldControl(props, invalidProp(invalid));
 
   // A secret saved while the field was open (the save went through) shows as
   // saved again.
@@ -1571,20 +1527,22 @@ function KitSecretInput(props: PluginSecretInputProps) {
     if (!controlled) setOwn(next);
     safely("SecretInput onValueChange", handleValue, next);
   };
-  // A replacement saved while `stored` stays true (the usual case: a token
-  // swapped for a new one) goes back to the saved state once `onSubmit`
-  // returns, or once its promise resolves. A throw or a rejection keeps the
-  // typed value in the field to try again.
+  // Every save is tracked the same way, first or replacement: a promise holds
+  // the field read-only until it settles, and a throw or a rejection keeps
+  // the typed value to try again. Only a replacement saved while `stored`
+  // stays true (the usual case: a token swapped for a new one) then goes back
+  // to the saved state on its own.
   const submitDraft = () => {
     // One save at a time: a second Enter while one is out does nothing.
     if (savingRef.current) return;
     const outcome = attempt(() => submit?.(text));
     if (!outcome.ok) {
-      logError("[plugin-ui] SecretInput onSubmit threw", outcome.error);
+      reportPluginFault("SecretInput onSubmit threw", outcome.error);
       return;
     }
-    if (!replacing || stored !== true) return;
+    const replacingStored = replacing && stored === true;
     const close = () => {
+      if (!replacingStored) return;
       // Focus follows to Replace only if the user is still in the field;
       // someone who moved on while it saved keeps their place.
       const input = inputRef.current;
@@ -1923,7 +1881,7 @@ function KitKeyValueEditor(props: PluginKeyValueEditorProps) {
   const baseId = useId();
   const handleValue = fn(onValueChange);
   const inert = disabled === true;
-  const limit = wholeCount(max, 10_000);
+  const limit = wholeLimit(max, 10_000);
   const full = limit !== undefined && rows.length >= limit;
   const ariaLabel = nonEmpty(props["aria-label"]) ?? "Entries";
   // One 24px action, or two with the gap between them.
@@ -2173,7 +2131,7 @@ function KitListEditor(props: PluginListEditorProps) {
   const baseId = useId();
   const handleValue = fn(onValueChange);
   const inert = disabled === true;
-  const limit = wholeCount(max, 10_000);
+  const limit = wholeLimit(max, 10_000);
   const full = limit !== undefined && items.length >= limit;
   const code = variant === "code";
   const ariaLabel = nonEmpty(props["aria-label"]) ?? "Items";
@@ -2367,7 +2325,7 @@ function findHostConflicts(combo: string): ReturnType<typeof keybindingService.f
   try {
     return keybindingService.findConflicts(combo);
   } catch (error) {
-    logError("[plugin-ui] ShortcutRecorder conflict lookup failed", error);
+    reportPluginFault("ShortcutRecorder conflict lookup failed", error);
     return [];
   }
 }
@@ -2419,15 +2377,7 @@ function KitShortcutRecorder(props: PluginShortcutRecorderProps) {
   const mac = isMac();
   // A div, which a `<label htmlFor>` cannot name: a vertical FormField names
   // it through `aria-labelledby` instead.
-  const { controlProps } = useFieldControl(
-    {
-      "aria-label": str(props["aria-label"]),
-      "aria-labelledby": str(props["aria-labelledby"]),
-      "aria-describedby": str(props["aria-describedby"]),
-    },
-    error ? true : undefined,
-    { labelable: false }
-  );
+  const { controlProps } = useKitFieldControl(props, error ? true : undefined, false);
 
   // Disabled mid-recording: the recording, and any chord half-pressed, end.
   if (inert && (recording || firstStep !== null)) {

@@ -17,6 +17,7 @@ import {
   str,
 } from "./kitProps";
 import { severityGlyph } from "./PluginKitPatterns";
+import { safeFormat } from "./kitDiagnostics";
 
 const TONES = [
   "error",
@@ -43,8 +44,7 @@ const MINUS = "−";
 // and the arrow stay the card's, so they read the same on every card.
 function signed(delta: number, format: ((magnitude: number) => unknown) | undefined): string {
   const magnitude = Math.abs(delta);
-  const custom = format?.(magnitude);
-  const text = typeof custom === "string" ? custom : magnitude.toLocaleString();
+  const text = safeFormat(format, magnitude, (n) => n.toLocaleString());
   if (delta > 0) return `+${text}`;
   if (delta < 0) return `${MINUS}${text}`;
   return format ? text : "0";
@@ -148,10 +148,20 @@ export function sparklineRuns(
   min?: number,
   max?: number
 ): string[][] {
-  const known = values.filter(finite);
-  if (known.length < 2) return [];
-  const low = finite(min) ? min : Math.min(...known);
-  const high = finite(max) ? max : Math.max(...known);
+  // A loop, not `Math.min(...known)`: spreading a long series overflows the
+  // engine's argument limit.
+  let count = 0;
+  let lowest = Infinity;
+  let highest = -Infinity;
+  for (const value of values) {
+    if (!finite(value)) continue;
+    count += 1;
+    if (value < lowest) lowest = value;
+    if (value > highest) highest = value;
+  }
+  if (count < 2) return [];
+  const low = finite(min) ? min : lowest;
+  const high = finite(max) ? max : highest;
   const span = high - low;
   // Half the dot above and below, so neither the stroke at the floor nor the
   // dot at the ceiling is clipped by the box.

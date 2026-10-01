@@ -343,6 +343,13 @@ describe("StatCard and Sparkline", () => {
     expect(sparklineRuns([7], 24)).toEqual([]);
   });
 
+  it("scales a series too long to spread into Math.min", () => {
+    const values = Array.from({ length: 300_000 }, (_, index) => index % 100);
+    const runs = sparklineRuns(values, 24);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toHaveLength(300_000);
+  });
+
   it("draws the newest-value dot only when the final sample is present", () => {
     const { container } = render(
       createElement(kit.Sparkline, { values: [1, 2, Number.NaN], "aria-label": "Gap" })
