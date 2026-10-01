@@ -5436,7 +5436,7 @@ export interface PluginGaugeProps extends PluginRootAttributes {
   color?: PluginChartColor;
   /** Formats the figure and the spoken value. Defaults to a whole number, or a percent when the range is 0–100. */
   formatValue?: (value: number) => string;
-  /** The gauge's width in px, at least 48; its height is a little over half of it. Defaults to 160. */
+  /** The gauge's width in px, at least 96; its height is a little over half of it. Defaults to 160. */
   size?: number;
   loading?: boolean;
   className?: string;
