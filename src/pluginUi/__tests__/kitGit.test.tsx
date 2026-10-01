@@ -1188,3 +1188,39 @@ describe("round 3 design fixes", () => {
     expect(meta.querySelector("[data-kit-commit-sha]")).toBeNull();
   });
 });
+
+describe("round 4 design fixes", () => {
+  it("keeps a press from taking focus when the list owns it, and only then", () => {
+    render(
+      withTooltips(
+        createElement(
+          "div",
+          null,
+          createElement(kit.IssueRow, {
+            number: 1,
+            title: "Owned",
+            state: "open",
+            onOpen: () => {},
+            titleTabIndex: -1,
+          }),
+          createElement(kit.IssueRow, {
+            number: 2,
+            title: "Free",
+            state: "open",
+            onOpen: () => {},
+          }),
+          createElement(kit.FileLink, {
+            path: "a.ts",
+            rootPath: "/repo",
+            tabIndex: -1,
+            "data-testid": "link",
+          })
+        )
+      )
+    );
+    const press = (el: HTMLElement) => !fireEvent.mouseDown(el);
+    expect(press(screen.getByRole("button", { name: "Owned" }))).toBe(true);
+    expect(press(screen.getByTestId("link"))).toBe(true);
+    expect(press(screen.getByRole("button", { name: "Free" }))).toBe(false);
+  });
+});
