@@ -949,6 +949,9 @@ function RichDataTable(props: PluginDataTableProps) {
 
   const leading = canSelect ? CHECK_COLUMN_PX : 0;
   const trailing = columnsMenu === true ? MENU_COLUMN_PX : 0;
+  // The Columns rail is the last column of the grid, counted like the others,
+  // so every row has the same cells in the same numbered positions.
+  const railIndex = columnsMenu === true ? allColumns.length + (canSelect ? 2 : 1) : undefined;
   const sized = visible.map((column) => ({ width: widthOf(column), grow: column.grow }));
   const layout = layoutColumns(sized, available === null ? null : available - leading - trailing);
   const minTableWidth =
@@ -1297,7 +1300,7 @@ function RichDataTable(props: PluginDataTableProps) {
         role,
         "aria-label": label,
         "aria-rowcount": items.length + 1,
-        "aria-colcount": allColumns.length + (canSelect ? 1 : 0),
+        "aria-colcount": railIndex ?? allColumns.length + (canSelect ? 1 : 0),
         "aria-multiselectable": canSelect ? true : undefined,
         tabIndex: 0,
         "aria-activedescendant": activeMounted(activeIndex, range) ? rowId(activeIndex) : undefined,
@@ -1310,7 +1313,11 @@ function RichDataTable(props: PluginDataTableProps) {
           if (!activeMounted(at, range)) handle.current?.scrollIntoView({ index: at });
         },
       }
-    : { "aria-label": label, "aria-rowcount": items.length + 1 };
+    : {
+        "aria-label": label,
+        "aria-rowcount": items.length + 1,
+        "aria-colcount": railIndex ?? allColumns.length + (canSelect ? 1 : 0),
+      };
 
   const context: RichContext = {
     items,
@@ -1466,6 +1473,7 @@ function RichDataTable(props: PluginDataTableProps) {
       {columnsMenu === true ? (
         <th
           scope="col"
+          aria-colindex={railIndex}
           style={{ width: MENU_COLUMN_PX, right: 0 }}
           className="kit-dt-sticky border-b border-divider bg-surface-canvas p-0"
         >
@@ -1730,7 +1738,7 @@ function RichDataTable(props: PluginDataTableProps) {
         ? [
             <td
               key={"\u0000menu"}
-              aria-hidden="true"
+              aria-colindex={railIndex}
               style={{ right: 0 }}
               className="kit-dt-sticky p-0"
             />,

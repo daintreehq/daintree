@@ -305,6 +305,12 @@ describe("DataTable, rich", () => {
       )
     );
     expect(screen.queryByRole("columnheader", { name: "Environment" })).toBeNull();
+    // The rail is the last numbered column, in the header and every row.
+    const grid = screen.getByRole("table", { name: "Cols" });
+    expect(grid.getAttribute("aria-colcount")).toBe("4");
+    const rail = screen.getByRole("button", { name: "Columns" }).closest("th");
+    expect(rail?.getAttribute("aria-colindex")).toBe("4");
+    expect(rowNamed("web").lastElementChild?.getAttribute("aria-colindex")).toBe("4");
     const trigger = screen.getByRole("button", { name: "Columns" });
     await act(async () => {
       fireEvent.keyDown(trigger, { key: "Enter" });
