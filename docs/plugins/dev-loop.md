@@ -12,11 +12,15 @@ npm install --save-dev daintree-plugin
 npx daintree-plugin <command>
 ```
 
+The CLI needs Node.js 22.13 or newer (`engines.node` is `>=22.13` in every published package).
+
+> **What the npm release has.** `daintree-plugin` 0.1.0 is the version on npm today, and parts of this page describe the CLI in this repository, which is ahead of it: [`lint`](#daintree-plugin-lint-dir), [`skill add`](#daintree-plugin-skill-add-name), the [`tour`](#daintree-plugin-tour) commands, the optional `[dir]` on `validate`, `dev`'s metrics table and `--no-metrics`, and `doctor`'s lint pass and `--no-lint`. Each is marked where it appears. The 0.1.0 CLI also embeds an older manifest schema, so its `validate`, `doctor` and `package` refuse a manifest that declares `databases`, `tours` or a `location: "settings"` view; use a CLI built from this repository for those. The same goes for the SDK: `@daintreehq/plugin-sdk` 0.1.0 exports `.`, `./files`, `./react` and `./testing`, but not `./data`, `./plugin-ui` or `./view-globals`, and its `/react` has only `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent` and `loadDocumentPackage`.
+
 ## Commands
 
-### `daintree-plugin new <name>`
+### `daintree-plugin new [name]`
 
-Scaffolds a new plugin project. Interactive — prompts for publisher, display name, template.
+Scaffolds a new plugin project. Interactive — prompts for the plugin name when it is omitted (it doubles as the directory name), then publisher, display name and template.
 
 ```bash
 npx daintree-plugin new my-plugin [--publisher acme] [--template command|view|mcp|full] [--project] [--yes]
@@ -24,20 +28,24 @@ npx daintree-plugin new my-plugin [--publisher acme] [--template command|view|mc
 
 `--publisher` and `--template` pre-fill their prompts and skip them; the display name has no flag and is only ever asked for interactively. For an unattended run, `--yes` skips every prompt: it requires a positional name and `--publisher`, defaults the template to `command`, and derives the display name from the plugin name (`issue-helper` → `Issue Helper`). That is the form to use from CI or from an agent.
 
+Interactively, an invalid name, publisher or `--template` value (or an `mcp`/`full` template with `--project`) cancels the prompt and exits 0 without writing anything. Under `--yes` the same mistakes, and a missing name or `--publisher`, exit 1. Either way an existing target directory is an error (exit 1), never overwritten.
+
 Creates `./my-plugin/` with:
 
-- `plugin.json` — starter manifest
-- `package.json` — npm dev deps (`@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite`, `daintree-plugin`, Vite, TypeScript), each pinned to a caret range of the version the CLI was released with
-- `vite.config.ts` — pre-configured for plugin builds
-- `tsconfig.json` — for a template with a view, `compilerOptions.types` lists `@daintreehq/plugin-sdk/view-globals` and `@daintreehq/plugin-sdk/plugin-ui`, so `window.electron.plugin` and the [UI kit](./ui-kit.md) typecheck
+- `plugin.json` — starter manifest, with a `$schema` pointing at the generated JSON Schema so an editor flags a misspelled field (see [`schema`](#daintree-plugin-schema))
+- `package.json` — `build`, `validate` and `package` scripts, and dev dependencies on `@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite` and `daintree-plugin` (each the hard-coded range `^0.1.0`), `typescript` `^6.0.0` and `vite` `^8.0.0`. The `view` and `full` templates add `react`, `react-dom`, `@types/react` and `@types/react-dom` (`^19.0.0`); `mcp` and `full` add the runtime dependency `@modelcontextprotocol/sdk` `^1.12.0`, because the spawned server imports it
+- `vite.config.ts` — pre-configured for plugin builds; `mcp` and `full` also get `vite.config.server.ts`, a second, Node-target config for the MCP server entry
+- `tsconfig.json` — for a template with a view, `compilerOptions.types` lists `@daintreehq/plugin-sdk/view-globals` and `@daintreehq/plugin-sdk/plugin-ui`, so `window.electron.plugin` and the [UI kit](./ui-kit.md) typecheck. Not in the 0.1.0 release on npm; it ships in the next one — the 0.1.0 scaffold writes no `types`, and SDK 0.1.0 has neither entry
 - `src/` — starter code based on template choice
-- `.gitignore` — excludes `dist/`, `.dntr` files, `node_modules/`
+- `.gitignore` — excludes `node_modules/`, `dist/`, `*.dntr`, `.dev-marker` and `.tour-preview/`
+- `.dntrignore` — commented-out examples of files to keep out of the packaged archive (see [Distribution → Packaging](./distribution.md#packaging))
+- `.claude/skills/daintree-tour/` — the tour-authoring Claude Code skill (`SKILL.md` plus its reference files), so a Claude Code session in the plugin can build a [tour](./tours.md) without a Daintree checkout. Not written under `--project`, since project plugins cannot contribute tours. Not in the 0.1.0 release on npm; it ships in the next one — [`skill add`](#daintree-plugin-skill-add-name) adds it to an existing plugin
 
 Templates:
 
-- **`command`** — single command plugin. `src/index.ts` exports `activate(host)` and registers the command imperatively via `host.registerAction(...)`. (The filesystem-convention handler — compiled `src/{id}.js` auto-bound on first dispatch — is also supported by the host; the scaffold just shows the imperative path.)
+- **`command`** — single command plugin. `src/index.ts` exports `activate(host)` and registers the command imperatively via `host.registerAction(...)`: id `run`, titled `<Display name>: Run`, showing a toast. (The filesystem-convention handler — compiled `src/{id}.js` auto-bound on first dispatch — is also supported by the host; the scaffold just shows the imperative path.)
 - **`view`** — panel view + React component (`src/index.ts` + `src/panel.tsx`)
-- **`mcp`** — skeleton MCP server plus manifest wiring (`src/index.ts` + `src/server.ts`)
+- **`mcp`** — skeleton MCP server plus manifest wiring (`src/index.ts` + `src/server.ts`, built by `vite.config.server.ts`)
 - **`full`** — command + view + MCP example (largest, for experimenting)
 
 #### `--project` — scaffold into a project
@@ -54,6 +62,7 @@ Alongside the usual template files it emits:
 - a watcher recipe in `<projectRoot>/.daintree/recipes/`, so Daintree can bring the build up with the rest of the project environment
 - a `.gitignore` that force-includes `dist/`, and a `README.md` explaining why
 - no `.dntrignore` and no `package` script — a project plugin is distributed by being committed, not as a `.dntr`
+- no `.claude/skills/daintree-tour/`, and an `@types/node` dev dependency, because the project `vite.config.ts` imports `node:path`
 
 **`dist/` is the load contract.** Daintree reads `plugin.json` and `dist/`. It never compiles a project plugin, never reads `src/`, and never runs its `package.json` — a project opening must not run a build. So `dist/` is committed, and the generated `.gitignore` force-includes it with `!dist/` and `!dist/**`: most repositories ignore `dist/` at the root, and that pattern would otherwise swallow the plugin's build output, leaving a plugin that silently fails to load on every other checkout. Both negations are needed — `!dist/` re-includes the directory so git descends into it at all, `!dist/**` re-includes the files against a parent rule that matches contents (`dist/*`, `**/dist/**`). Rebuild and commit `dist/` in the same commit as the source change.
 
@@ -67,8 +76,10 @@ For a live hot-reload loop, use [`daintree-plugin dev`](#daintree-plugin-dev) be
 cd my-plugin
 # edit src/...
 npx daintree-plugin package
-npx daintree-plugin install ./my-plugin-0.1.0.dntr
+npx daintree-plugin install ./acme.my-plugin-0.1.0.dntr
 ```
+
+The archive is named after the manifest, `{name}-{version}.dntr`, not after the directory.
 
 Each `install` replaces the previously installed copy. Daintree unloads the old version — cleaning up all registered handlers, panels, and MCP subprocesses — before loading the new one, so you don't accumulate stale registrations between iterations.
 
@@ -110,13 +121,13 @@ npx daintree-plugin dev [--skip-build] [--no-metrics]
 
 What it does, in order:
 
-1. Validates the manifest (the same check as `daintree-plugin validate`); a manifest error aborts before anything is linked.
-2. Builds the plugin once (`vite build`) so `dist/<main>` exists before Daintree loads it. `--skip-build` skips this initial build — the watcher in step 5 still rebuilds on every save.
-3. Symlinks the plugin directory into `~/.daintree/plugins/{pluginId}` and writes a `.dev-marker` file at the link root. The marker's presence is what makes Daintree treat the directory as a dev plugin — watched for rebuilds and badged **DEV** — rather than as a normally installed one. Either way the plugin runs in a `utilityProcess` worker, exactly as an installed plugin does; only Daintree's built-in plugins load in-process. (A real directory already at that path is treated as an installed plugin and left untouched.)
-4. Asks the running Daintree to load and activate the plugin (the `plugin.dev.start` IPC).
-5. Starts `vite build --watch`. Daintree watches the plugin **root** — `plugin.json`, `dist/` and the `.dev-marker` count as the artifact; `src/` is ignored, because a source write says nothing about whether a loadable build exists yet. Once a rebuild settles (a ~200 ms trailing debounce, then a short quiet period the bytes must survive unchanged, so a half-written `dist/` is never imported), the whole plugin is reconciled against what is on disk: the manifest is re-read, contributions are re-registered, views are republished under a fresh generation, and the backend worker is replaced. A save therefore reloads manifest, views and backend together as one artifact generation — not just the worker. A `plugin.json` you are midway through editing is reported rather than acted on, and leaves the running version up until the next save. Dev plugins carry a **DEV** badge on their entry in Preferences so you can tell at a glance which installed plugins are pinned to a local dev folder.
+1. Validates the manifest (the same check as `daintree-plugin validate`); a manifest error aborts before anything is linked. A manifest with no `main` is refused too — the dev loop needs a built entry point.
+2. Builds the plugin once so `dist/<main>` exists before Daintree loads it — the same Vite passes as `package` (see [How the CLI builds](#how-the-cli-builds)). `--skip-build` skips this initial build — the watcher in step 5 still rebuilds on every save.
+3. Symlinks the plugin directory into `~/.daintree/plugins/{pluginId}` and writes a `.dev-marker` file at the link root. The marker's presence is what makes Daintree treat the directory as a dev plugin — watched for rebuilds and badged **Dev** — rather than as a normally installed one. Either way the plugin runs in a `utilityProcess` worker, exactly as an installed plugin does; only Daintree's built-in plugins load in-process. A real directory already at that path — an installed copy of the same plugin — is never touched: `dev` aborts with `Can't dev-link "<id>": <path> already exists and isn't a symlink. Remove it (or uninstall the plugin) and try again.` A symlink there that points at a different directory is replaced; one that already points at this plugin is reused and left in place on exit.
+4. Asks the running Daintree to load and activate the plugin (the `plugin.dev.start` CLI method). This fails for a plugin you have disabled in the plugin manager — the dev loop does not override that — and the link and marker are removed again.
+5. Starts `vite build --watch`. Daintree watches the plugin **root** — `plugin.json`, `dist/` and the `.dev-marker` count as the artifact; `src/` is ignored, because a source write says nothing about whether a loadable build exists yet. Once a rebuild settles (a ~200 ms trailing debounce, then a short quiet period the bytes must survive unchanged, so a half-written `dist/` is never imported), the whole plugin is reconciled against what is on disk: the manifest is re-read, contributions are re-registered, views are republished under a fresh generation, and the backend worker is replaced. A save therefore reloads manifest, views and backend together as one artifact generation — not just the worker. A `plugin.json` you are midway through editing is reported rather than acted on, and leaves the running version up until the next save. Dev plugins carry a **Dev** badge in the plugin manager (Settings → Plugins → Plugin manager) so you can tell at a glance which installed plugins are pinned to a local dev folder.
 
-6. Polls the running Daintree every 2 seconds for the plugin's performance measurements (the `plugin.dev.metrics` CLI method) and prints them beside their budgets whenever what the table would show changes. `--no-metrics` turns it off. A Daintree too old to report metrics says so once and polling stops; a failed poll while Daintree restarts or a rebuild swaps in just waits for the next one.
+6. Polls the running Daintree every 2 seconds for the plugin's performance measurements (the `plugin.dev.metrics` CLI method) and prints them beside their budgets only when what the table would show changes. `--no-metrics` turns it off. Not in the 0.1.0 release on npm; it ships in the next one — the 0.1.0 `dev` prints no table and rejects `--no-metrics`. A Daintree too old to report metrics says so once and polling stops; a failed poll while Daintree restarts or a rebuild swaps in just waits for the next one.
 
 ```
 Performance — acme.builds (worker)
@@ -138,13 +149,15 @@ One host method is a no-op for `dev`-loaded plugins: `registerForgeProvider`. Fo
 
 ### `daintree-plugin lint [dir]`
 
+> Not in the 0.1.0 release on npm; it ships in the next one. Until then, skip this step.
+
 Checks the plugin's source for performance traps and for drift from the host's design contract, then compiles the view's classes against that contract the way the running host does and lists the ones that generate no CSS. `validate` stays manifest-only; `lint` is the command that reads your code.
 
 ```bash
 npx daintree-plugin lint [dir] [--json] [--strict]
 ```
 
-`dir` defaults to the current directory. It reads the plugin's own `.ts`, `.tsx`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.mts`, `.cts` and `.css` files, skipping `node_modules`, build output, tests, previews, fixtures, declaration files, tooling config and any file over 2,097,152 characters (read as a bundle); the only build output it reads is the built view, for `bundled-react`. Each file is classified as view, worker, shared or style — by what the manifest names, then by what it imports (`react`, `react-dom`, `@daintreehq/plugin-ui` make a view; an exported `activate` a worker), then by its directory — and rules that only make sense in a view or a worker run only there. Views written with JSX, `createElement` or a `h()` alias are all read. Output groups findings by file with the rule id, the message and a one-line fix; `--json` prints the whole result (`findings`, `errorCount`, `warningCount`, `notes`, `ok`). It exits 1 on any error, and with `--strict` on any warning too.
+`dir` defaults to the current directory. It reads the plugin's own `.ts`, `.tsx`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.mts`, `.cts` and `.css` files, skipping `node_modules`, build output, tests, previews, fixtures, declaration files, tooling config and any source file over 2 MB on disk (read as a bundle, and listed in `notes`); the only build output it reads is the built view, for `bundled-react`. Each file is classified as view, worker, shared or style — by what the manifest names, then by what it imports (`react`, `react-dom`, `@daintreehq/plugin-ui` make a view; an exported `activate` a worker), then by its directory — and rules that only make sense in a view or a worker run only there. Views written with JSX, `createElement` or a `h()` alias are all read. Output groups findings by file with the rule id, the message and a one-line fix; `--json` prints the whole result (`dir`, `files`, `findings`, `errorCount`, `warningCount`, `notes`, `ok`). It exits 1 on any error, and with `--strict` on any warning too.
 
 The rules are heuristics over source, not proofs, and every finding names a fix. Performance rules:
 
@@ -203,7 +216,15 @@ Runs the manifest through Daintree's Zod schema and reports any errors. It valid
 npx daintree-plugin validate [dir] [--env]
 ```
 
-`--env` additionally resolves `${settings:…}` tokens against a `.daintree-plugin-env` file, so you can confirm an MCP server's `command` / `args` / `env` substitute the way you expect before spawning it for real.
+`dir` defaults to the current directory. Not in the 0.1.0 release on npm; it ships in the next one — the 0.1.0 `validate` takes no argument, so run it from the plugin directory. It exits 1 when the manifest fails.
+
+`--env` additionally resolves `${settings:…}` tokens against a `.daintree-plugin-env` file, so you can confirm an MCP server's `command` / `args` / `env` substitute the way you expect before spawning it for real. The file sits beside `plugin.json` and holds one `KEY=VALUE` per line; blank lines and lines starting with `#` are skipped, keys and values are trimmed, and one pair of matching surrounding quotes (`"…"` or `'…'`) is stripped from a value. Only keys matching `[a-zA-Z0-9._-]+` are resolved, the same grammar the host substitutes. A referenced key with no line in the file is an error, as is a missing file when the manifest references any key.
+
+```
+# .daintree-plugin-env
+LINEAR_API_KEY="lin_api_…"
+team=engineering
+```
 
 Example output:
 
@@ -217,22 +238,30 @@ Runs automatically as part of `package`.
 
 ### `daintree-plugin package`
 
-Produces a distributable `.dntr` file. See [Distribution → Packaging](./distribution.md#packaging).
+Produces a distributable `.dntr` file named `{name}-{version}.dntr` after the manifest, e.g. `acme.my-plugin-0.1.0.dntr`. See [Distribution → Packaging](./distribution.md#packaging). It exits 1 on any failure: an invalid manifest, a failed build, or a manifest-referenced file missing from the archive.
 
 ```bash
 npx daintree-plugin package [--verbose] [--dry-run] [--sourcemaps] [--skip-build]
 ```
 
+`--dry-run` also skips the build, so it lists whatever `dist/` is on disk now; build first if you want to audit fresh output.
+
+#### How the CLI builds
+
+`package` and `dev` both run the plugin's own `node_modules/.bin/vite` directly. They never run `npm run build`, so a custom `build` script in `package.json` is ignored. When the plugin directory also holds a `vite.config.server.{js,mjs,ts,cjs,mts,cts}` (first match in that order), a second pass builds it after the main one — `vite build --config <that file>` — which is how the `mcp` and `full` templates build `dist/server.js`. In `dev`'s watch mode the two watchers share `dist/`, so both get `--no-emptyOutDir`; otherwise each browser rebuild would empty `dist/` and delete the server bundle. A single-config plugin keeps plain `vite build --watch`.
+
+Without Vite installed, both commands fail with `Couldn't find Vite at <path>. Run npm install in the plugin directory, or pass --skip-build.` A plugin built with something other than Vite runs its own build first and packages with `--skip-build`. `dev` cannot be used without Vite: `--skip-build` skips only its initial build, and the watcher it starts is always Vite.
+
 ### `daintree-plugin install <path-or-url>`
 
-Installs a `.dntr` file or URL into the running Daintree. Same effect as doing it through the UI.
+Installs a `.dntr` file or URL into the running Daintree. Same effect as doing it through the UI, with the same URL rules (HTTPS only, no private or loopback hosts — see [Distribution → URL install](./distribution.md#url-install)). It exits 1 when the install fails or is cancelled.
 
 ```bash
-npx daintree-plugin install ./my-plugin-0.1.0.dntr
-npx daintree-plugin install https://github.com/user/plugin/releases/latest/download/plugin.dntr
+npx daintree-plugin install ./acme.my-plugin-0.1.0.dntr
+npx daintree-plugin install https://github.com/acme/my-plugin/releases/latest/download/acme.my-plugin.dntr
 ```
 
-Useful in CI scripts and setup automation.
+The second form needs a release asset with a fixed name; `package` writes a versioned one, so see [CI integration](#ci-integration). Useful in CI scripts and setup automation.
 
 ### `daintree-plugin uninstall <pluginId>`
 
@@ -240,7 +269,7 @@ Useful in CI scripts and setup automation.
 npx daintree-plugin uninstall acme.linear-planner [--delete-settings]
 ```
 
-Equivalent to Preferences → Plugins → Uninstall. User-scope settings are **kept** by default so an API token survives a reinstall; `--delete-settings` removes them. Project-scope settings under a repository's `.daintree/` are never touched either way. TOFU consent pins are always revoked, so a reinstall re-prompts rather than inheriting prior approvals.
+Equivalent to **Uninstall plugin** in the plugin manager (Settings → Plugins → Plugin manager). User-scope settings are **kept** by default so an API token survives a reinstall; `--delete-settings` removes them. Project-scope settings under a repository's `.daintree/` are never touched either way. TOFU consent pins are always revoked, so a reinstall re-prompts rather than inheriting prior approvals.
 
 ### `daintree-plugin doctor <projectRoot>`
 
@@ -248,7 +277,14 @@ Equivalent to Preferences → Plugins → Uninstall. User-scope settings are **k
 npx daintree-plugin doctor . [--offline] [--no-lint]
 ```
 
-`validate` plus the checks that only make sense for a project's committed plugins: walks every directory under `<projectRoot>/.daintree/plugins/`, validates each manifest under the project rules, and confirms that `main` and every view `componentPath` exist in the working tree, parse as ESM, are in the git index (`git ls-files --error-unmatch`), and are not matched by any `.gitignore` rule. These are working-tree and index checks, not a check of committed contents: a staged-but-uncommitted build passes, and a tracked file whose committed copy is stale is not caught, so a clean run catches the common ways a plugin stays local (an ignored or untracked `dist/`) without proving that a fresh clone loads it. It also runs [`lint`](#daintree-plugin-lint-dir) over each plugin and folds its findings into the warnings, as `lint <severity> <file>:<line> [<rule>] <message> — <fix>`. They are advisory there — a heuristic over source cannot prove a plugin won't load, which is the question doctor's exit status answers — so run `lint` itself to gate on them; `--no-lint` skips it. Finally it asks the running Daintree what it has decided about the project (trust state, and each plugin's load state) and prints that as information — host status never affects the result or the exit code. `--offline` skips that query for CI.
+`validate` plus the checks that only make sense for a project's committed plugins: walks every directory under `<projectRoot>/.daintree/plugins/`, validates each manifest under the project rules, and confirms that `main` and every view `componentPath` exist in the working tree, parse as ESM, are in the git index (`git ls-files --error-unmatch`), and are not matched by any `.gitignore` rule (`git check-ignore --no-index`). Per plugin it reports:
+
+- a warning for a caret `engines.daintree` range (`^0.11.0` means `>=0.11.0 <0.12.0` under semver's 0.x rule), mirroring the host, which loads such a plugin with a compatibility warning
+- an error for an entry path that is absolute or contains a backslash, or that resolves outside the plugin directory once symlinks are followed — the host refuses such a path however it is committed
+- an error for an entry that is CommonJS (assigns `module.exports` and exports nothing), since both the worker and the renderer import it as ESM, and a warning for one that exports nothing at all
+- when `<projectRoot>` is not a git repository, a warning that the ignore and tracked checks were skipped, rather than a failure
+
+These are working-tree and index checks, not a check of committed contents: a staged-but-uncommitted build passes, and a tracked file whose committed copy is stale is not caught, so a clean run catches the common ways a plugin stays local (an ignored or untracked `dist/`) without proving that a fresh clone loads it. It also runs [`lint`](#daintree-plugin-lint-dir) over each plugin and folds its findings into the warnings, as `lint <severity> <file>:<line> [<rule>] <message> — <fix>`. They are advisory there — a heuristic over source cannot prove a plugin won't load, which is the question doctor's exit status answers — so run `lint` itself to gate on them; `--no-lint` skips it. Not in the 0.1.0 release on npm; it ships in the next one — the 0.1.0 `doctor` has no lint pass and rejects `--no-lint`, but runs every other check here. Finally it asks the running Daintree what it has decided about the project (trust state, and each plugin's load state) and prints that as information — host status never affects the result or the exit code. `--offline` skips that query for CI. It exits 1 when any plugin has an error.
 
 ### `daintree-plugin schema`
 
@@ -257,6 +293,30 @@ npx daintree-plugin schema [--project] [--out plugin.schema.json]
 ```
 
 Prints the JSON Schema for `plugin.json`, generated from the same Zod schema the host loads with, so an editor can complete and check the manifest against the contract rather than the prose. `--project` emits the project-plugin variant, `--out` writes to a file instead of stdout. It is structural only: the cross-field rules the host enforces at load (a view's id naming a declared panel, the contribution types refused under project scope, the reserved `daintree.*` namespace) are Zod refinements that the generated schema omits, so a manifest that passes the editor can still be refused by `validate`.
+
+### `daintree-plugin skill add [name]`
+
+> Not in the 0.1.0 release on npm; it ships in the next one.
+
+```bash
+npx daintree-plugin skill add [name] [--force]
+```
+
+Copies a Claude Code skill bundled with the CLI into the plugin in the current directory, at `.claude/skills/<name>/`. `name` defaults to `daintree-tour`, the only bundled skill today: the tour-authoring skill `new` writes into every installed-plugin scaffold, so this is how an older plugin gets it, or a newer copy. It must run from a directory holding a `plugin.json`, and it refuses a project plugin (`"scope": "project"`), since Daintree refuses tours from project plugins.
+
+Every destination is checked before anything is written. An identical file is left alone; one that differs — your own edit, or an older copy — stops the command with the list of differing files and nothing written, unless `--force` replaces them with this version's copy. Files in that folder the bundle doesn't ship are kept, and it refuses to write through a symlink.
+
+### `daintree-plugin tour`
+
+> Not in the 0.1.0 release on npm; it ships in the next one. `@daintreehq/tour`, the scene kit tours are built with, is not on npm yet either.
+
+`tour voice`, `tour align` and `tour preview` voice a tour's narration with Inworld text-to-speech, time your own recordings with speech-to-text, and play or capture the tour in a browser. [Tours](./tours.md) documents them: [Voicing](./tours.md#voicing) for `voice` and `align`, [Previewing and testing](./tours.md#previewing-and-testing) for `preview`.
+
+### How the CLI finds Daintree
+
+`install`, `uninstall`, `dev` and `doctor` talk to the running app over a local control socket. On startup Daintree writes `~/.daintree/cli-control.json` (owner-only) with the socket or pipe path and a per-launch token, and the CLI reads it and presents the token on every request. `DAINTREE_CLI_SOCKET` overrides the path; the token still comes from the control file. With no control file the CLI tries the default, `~/.daintree/cli.sock` (`\\.\pipe\daintree-cli` on Windows, where the real pipe name is randomised per launch and only the control file knows it).
+
+Each request times out after 30 seconds. When nothing is listening the error names the path it tried — `Daintree isn't running. Start Daintree and try again. (tried: <socket>)` — and a stale socket left by a crashed instance reads `Couldn't connect to Daintree (stale or unresponsive socket at <socket>)`. `doctor` treats an unreachable Daintree as information and checks everything else.
 
 ## Performance
 
@@ -315,12 +375,16 @@ Daintree logs plugin lifecycle events prefixed with `[PluginService]`:
 
 These appear in the main-process terminal (the one running `npm run dev` for Daintree) and in `daintree.log` inside the app's userData logs directory (in dev: `<cwd>/logs/daintree.log`). See `getLogFilePath()` in `electron/utils/logger.ts` for resolution.
 
-Plugin code's own `console.log`s go to the main-process terminal for code running in main, and the renderer DevTools console for code running in panel views.
+Where your own output goes depends on where it runs:
+
+- **Worker code** (`activate()` and everything it registers). Every user-installed, dev and project plugin runs in its own `utilityProcess` worker. The worker's stdout and stderr are forwarded to the main log line by line as `[plugin-dev:<pluginId>] …` — stdout at info, stderr at warn — so a `console.log` lands in the main-process terminal and in `daintree.log`. Only Daintree's built-in plugins run in the main process itself.
+- **`host.logger`** lines are kept in a per-plugin ring of the most recent ~500 entries, shown on the plugin's **Logs** tab in the plugin manager's detail pane, and mirrored to the main console as `[plugin:<pluginId>] …`. Only `warn` and `error` lines are also written to `daintree.log`; `info` stays in the ring.
+- **View code** logs to the renderer's DevTools console.
 
 ### DevTools
 
-- **Main process:** attach with `--inspect-brk` flag on Daintree. Use Chrome DevTools at `chrome://inspect`.
-- **Renderer:** open Daintree's DevTools from View → Toggle Developer Tools, or run the Toggle DevTools command from the command palette. Your panel view shows up in the Sources panel under `daintree-plugin:{pluginId}/...`.
+- **Worker:** a plugin worker can't be attached to. Launching Daintree with `--inspect` or `--inspect-brk` debugs the main process only — the worker is forked with its own `execArgv`, which carries no inspector flag — so debug worker code through logs, or test it against the [mock host](#testing).
+- **Renderer:** open Daintree's DevTools from View → Toggle Developer Tools, or run the Toggle DevTools command from the command palette. Your view modules load from the `plugin://` scheme under an opaque per-load authority rather than your plugin id, so find them in the Sources panel under `plugin://` by file name.
 - **MCP subprocess:** the spawn command can be prefixed with `node --inspect` (or Python's `debugpy`, etc.) and you attach however you normally would for that runtime.
 
 ### Common issues
@@ -352,7 +416,7 @@ Default timeout is 5 seconds. Causes:
 
 **Changes don't show up after editing**
 
-Which loop are you in? Under [`daintree-plugin dev`](#daintree-plugin-dev) a settled rebuild reconciles the whole plugin, so manifest, view and backend changes all take effect on the next save — open panels remount onto a freshly minted view generation without a disable/enable or a window reload (see [Contribution points → Worker reload vs. view-module replacement](./contribution-points.md#worker-reload-vs-view-module-replacement)). If a save changed nothing, check that the build watcher actually wrote `dist/` — an edit under `src/` alone is not an artifact change — and look at the plugin's row in Preferences for a manifest error the reconcile refused to load. In the manual loop, re-run `package` then `install`; each install mints a fresh generation, so views do refresh.
+Which loop are you in? Under [`daintree-plugin dev`](#daintree-plugin-dev) a settled rebuild reconciles the whole plugin, so manifest, view and backend changes all take effect on the next save — open panels remount onto a freshly minted view generation without a disable/enable or a window reload (see [Contribution points → Worker reload vs. view-module replacement](./contribution-points.md#worker-reload-vs-view-module-replacement)). If a save changed nothing, check that the build watcher actually wrote `dist/` — an edit under `src/` alone is not an artifact change — and look at the plugin's row in the plugin manager (Settings → Plugins → Plugin manager) for a manifest error the reconcile refused to load. In the manual loop, re-run `package` then `install`; each install mints a fresh generation, so views do refresh.
 
 If neither explains it:
 
@@ -367,30 +431,52 @@ If neither explains it:
 
 ## Testing
 
-> `createMockHost` ships as the `@daintreehq/plugin-sdk/testing` entry of the SDK and installs from npm with the rest of it (`npm install --save-dev @daintreehq/plugin-sdk`); inside the Daintree repo the workspace link resolves the same import to the local build. The entry re-exports the mock and its record types. The example below mirrors `plugins/sample/hello-daintree/__tests__/activate.test.ts`.
+> `createMockHost` ships as the `@daintreehq/plugin-sdk/testing` entry of the SDK and installs from npm with the rest of it (`npm install --save-dev @daintreehq/plugin-sdk`), 0.1.0 included, though the 0.1.0 mock has no `databases` option and no agent-pane drivers (`agents`, `simulateSendToAgentPick`): Not in the 0.1.0 release on npm; it ships in the next one; inside the Daintree repo the workspace link resolves the same import to the local build. The entry re-exports the mock and its record types. The example below mirrors `plugins/sample/hello-daintree/__tests__/activate.test.ts`.
+
+Drive the plugin the way the host does: call `activate(host)`, then reach what it registered through the mock's recorders. A command runs through `host.dispatch` with its fully namespaced id, `{pluginId}.{commandId}`, which calls the handler with the args alone; a channel handler on `registeredHandlers` is called context first, payload second.
 
 ```ts
-// src/plan-from-issue.test.ts
+// src/index.test.ts
 import { describe, it, expect } from "vitest";
 import { createMockHost } from "@daintreehq/plugin-sdk/testing";
-import planFromIssue from "./plan-from-issue";
+import { activate } from "./index";
 
-describe("plan-from-issue", () => {
-  it("creates a worktree for the issue", async () => {
+const ctx = {
+  projectId: null,
+  worktreeId: "wt-7",
+  webContentsId: 0,
+  pluginId: "acme.linear-planner",
+};
+
+describe("acme.linear-planner", () => {
+  it("creates a worktree when plan-from-issue runs", async () => {
     const host = createMockHost({ pluginId: "acme.linear-planner" });
-    await planFromIssue({ args: { issueId: "LIN-1" }, host, dispatch: host.dispatch });
+    await activate(host);
+    expect(host.registeredActions.map((a) => a.descriptor.id)).toContain("plan-from-issue");
+
+    const result = await host.dispatch("acme.linear-planner.plan-from-issue", { issueId: "LIN-1" });
+    expect(result.ok).toBe(true);
     expect(host.dispatchedActions).toContainEqual(
       expect.objectContaining({ actionId: "worktree.create" })
     );
   });
+
+  it("answers the status channel", async () => {
+    const host = createMockHost({ pluginId: "acme.linear-planner" });
+    await activate(host);
+    const status = host.registeredHandlers.find((h) => h.channel === "status");
+    await expect(status!.handler(ctx)).resolves.toEqual({ worktreeId: "wt-7" });
+  });
 });
 ```
+
+A filesystem-convention handler (a compiled `src/{id}.js` default export) receives the args only, never `host`, so it can be imported and called directly with an args object.
 
 `createMockHost` implements the `PluginHostApi` surface with in-memory state and records the calls a plugin makes for assertion — dispatched actions land on `host.dispatchedActions` as `{ actionId, args }` (the `DispatchedActionRecord` type), alongside `registeredActions`, `registeredHandlers`, `postToPanelCalls`, `shownToasts`, and the rest. It validates argument shapes the way the real host does (`registerAction` descriptors, toast and badge options, channel names, quick-pick items) and gates the agent APIs (`getAgentState`, `agents.list`, `sendToActiveAgent`, `sendToAgent`) on the `capabilities` you pass in, so a malformed call fails the test rather than the app. `host.db` runs against real SQLite files, `host.fs` against an in-memory tree, and `sendToAgent` against the panes you seed. Good for covering handler logic without spinning up an Electron instance. [Host API → Testing against a mock host](./host-api.md#testing-against-a-mock-host) is the full reference — every option, recorder and `simulate*` driver — and lists what the mock deliberately does not model: consent prompts, filesystem containment, process handles, git, the manifest gates. A test that passes against it is not proof the real host will accept the plugin.
 
 ### Testing a raw-ESM project plugin
 
-A hand-written project plugin has no build and no SDK import at runtime, and the same mock host tests it. Add `@daintreehq/plugin-sdk` and `vitest` as devDependencies — a `package.json` beside the plugin is test tooling only; the host loads `plugin.json` and `dist/` and never reads it — then import `createMockHost` from the SDK's `testing` entry, import your worker entry by file URL, and drive the handlers exactly the way `PluginService` does: context first, payload second. That last part is the point of the test, because it is the convention a first plugin gets wrong.
+A hand-written project plugin has no build and no SDK import at runtime, and the same mock host tests it. Add `@daintreehq/plugin-sdk` and `vitest` as devDependencies — the host loads `plugin.json` and `dist/` and never reads that `package.json`, but an installed SDK is not invisible at runtime: a zero-build worker resolves an installed `@daintreehq/plugin-sdk` (beside it or in an ancestor `node_modules`) before the copy shipped with the app, so if the worker imports newer root helpers such as `createSyncedCollection`, an installed 0.1.0 breaks activation; use a current SDK for those tests — then import `createMockHost` from the SDK's `testing` entry, import your worker entry by file URL, and drive the handlers exactly the way `PluginService` does: context first, payload second. That last part is the point of the test, because it is the convention a first plugin gets wrong.
 
 ```ts
 // test/worker.test.ts
@@ -504,9 +590,11 @@ jobs:
       - run: npm ci
       - run: npx daintree-plugin validate
       - run: npx daintree-plugin package
+      # package writes {name}-{version}.dntr; a stable latest URL needs a fixed name too
+      - run: cp acme.my-plugin-*.dntr acme.my-plugin.dntr
       - uses: softprops/action-gh-release@v2
         with:
           files: "*.dntr"
 ```
 
-Tag the release with `v{version}` matching your `plugin.json` version field. Users install from the `releases/latest/download/...` URL.
+Tag the release with `v{version}` matching your `plugin.json` version field. The packaged archive carries the version in its name, so `releases/latest/download/<name>.dntr` only resolves if every release also has an asset with a fixed name — the `cp` step above uploads both. Users install from `https://github.com/acme/my-plugin/releases/latest/download/acme.my-plugin.dntr`, or pin a version through the versioned asset.

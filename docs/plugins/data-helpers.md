@@ -30,17 +30,18 @@ The types `ParsedFrontmatter`, `ParsedJsonl`, `JsonlError`, `EditFileHost`, `Edi
 
 ## No install needed in a worker
 
-A zero-build plugin (hand-written `dist/index.mjs`, see the [agent brief](./agent-brief.md#the-zero-build-skeleton)) has no `node_modules`, so a bare import would normally fail. The plugin worker resolves `@daintreehq/plugin-sdk`, `@daintreehq/plugin-sdk/files` and `@daintreehq/plugin-sdk/data` to a copy of the SDK that ships with Daintree whenever the plugin has none of its own, for `import` and `require()` alike. The import line above works in `dist/index.mjs` as written.
+A zero-build plugin (hand-written `dist/index.mjs`, see the [agent brief](./agent-brief.md#the-zero-build-skeleton)) has no `node_modules`, so a bare import would normally fail. The plugin worker resolves exactly three specifiers — `@daintreehq/plugin-sdk`, `@daintreehq/plugin-sdk/files` and `@daintreehq/plugin-sdk/data` — to a copy of the SDK that ships with Daintree whenever the plugin has none of its own, for `import` and `require()` alike. Any other `@daintreehq/plugin-sdk/…` subpath fails with `ERR_MODULE_NOT_FOUND`. The import line above works in `dist/index.mjs` as written.
 
 - **Your own copy wins.** If the plugin bundles the SDK or has it installed where Node finds it, that copy is used. The shipped copy is only the fallback when normal resolution fails — including when your installed SDK is too old to export the entry. A broken install (an export naming a file that is not there) is reported as its own error, never papered over with the shipped copy.
 - **The shipped copy tracks the app, not your lockfile.** It is the SDK version Daintree was built with. Pin a version by installing and bundling it instead.
-- **`/data` is newer than the published SDK.** npm 0.1.0 does not have it. An un-bundled worker gets it from the shipped copy (an installed 0.1.0 falls back to it too), but a plugin or view you _bundle_ against `@daintreehq/plugin-sdk@0.1.0` cannot resolve `@daintreehq/plugin-sdk/data` at build time. Bundled code needs the SDK from this repository (the workspace package, or `npm pack` of it) or a release after 0.1.0.
+- **The fallback depends on Node's `module.registerHooks`.** The worker installs the resolver before loading your code; on a runtime where that fails, only the fallback is lost, and a bare SDK import then fails as it would without Daintree. Bundle the SDK if you cannot rely on it.
+- **`/data` is newer than the published SDK.** Not in the 0.1.0 release on npm; it ships in the next one. An un-bundled worker gets it from the shipped copy (an installed 0.1.0 falls back to it too), but a plugin or view you _bundle_ against `@daintreehq/plugin-sdk@0.1.0` cannot resolve `@daintreehq/plugin-sdk/data` at build time. Bundled code needs the SDK from this repository (the workspace package, or `npm pack` of it) or a release after 0.1.0. The workspace package is also versioned 0.1.0, so a lockfile that already pins the registry's 0.1.0 can keep resolving that copy instead of your tarball; check which one `node_modules` holds.
 - **`/react` and `/testing` are not served to the worker.** `@daintreehq/plugin-sdk/react` belongs in a view, which bundles it or, un-bundled, imports it through the host import map; `/testing` is a mock host for unit tests. Importing either from an un-bundled worker fails with `ERR_MODULE_NOT_FOUND` and a message that says why.
 - **Views are not covered.** A hand-written `dist/panel.js` gets the host import map's specifiers (React, `@daintreehq/plugin-ui`, `@daintreehq/plugin-sdk/react` and the tour's) and its own relative modules, not the root SDK, `/files` or `/data`. Everything in this entry also runs in a browser, so a bundled view can use it (with the SDK caveat above); a raw view keeps its data work in the worker and asks for results over a channel.
 
 ## Frontmatter
 
-Frontmatter is a block that opens with `---` on the very first line (a byte order mark before it is allowed) and closes at the next line that is exactly `---`; trailing spaces or tabs on either delimiter are allowed. YAML is read with the 1.2 core schema, so `yes` stays the string `"yes"` and `2026-09-26` stays a string rather than becoming a `Date`.
+Frontmatter is a block that opens with `---` on the very first line (a byte order mark before it is allowed), followed by a line break — a file that is only `---` with nothing after it has no frontmatter — and closes at the next line that is exactly `---`; trailing spaces or tabs on either delimiter are allowed. YAML is read with the 1.2 core schema, so `yes` stays the string `"yes"` and `2026-09-26` stays a string rather than becoming a `Date`.
 
 ### `parseFrontmatter`
 
@@ -48,7 +49,7 @@ Frontmatter is a block that opens with `---` on the very first line (a byte orde
 parseFrontmatter(text: string): { data: Record<string, unknown>; body: string; hasFrontmatter: boolean }
 ```
 
-`data` is the mapping as plain values, `body` is everything after the closing line, byte-for-byte, and `hasFrontmatter` says whether the text opened a block. A document without one has `data: {}` and its whole text as `body`. An empty block reads as `{}`. Invalid YAML (including an alias whose anchor is missing), a block that is opened but never closed, and YAML that is not a mapping throw a [`FrontmatterError`](#frontmattererror).
+`data` is the mapping as plain values, `body` is everything after the closing line, byte-for-byte, and `hasFrontmatter` says whether the text opened a block. A document without one has `data: {}` and its whole text as `body`. An empty block reads as `{}`. Invalid YAML (including an alias whose anchor is missing, or whose expansion passes the YAML library's alias limit), a block that is opened but never closed, and YAML that is not a mapping throw a [`FrontmatterError`](#frontmattererror).
 
 ```js
 const { data, body } = parseFrontmatter(await host.fs.readFile(cardPath));
@@ -108,14 +109,16 @@ class FrontmatterError extends Error {
 }
 ```
 
-Thrown by `parseFrontmatter` and `updateFrontmatter`. `line` and `column` are positions in the whole file, not in the YAML block, and are appended to the message, so a listing can report "card 12: line 4" and carry on with the rest.
+Thrown by `parseFrontmatter` and `updateFrontmatter`. `line` and `column` are positions in the whole file, not in the YAML block, and are appended to the message, so a listing can report "card 12: line 4" and carry on with the rest. Two failures have no better position and report line 1, column 1: a block that is never closed, and an edit to a complex key.
+
+Branch on `err.code === "FRONTMATTER_INVALID"`, not `instanceof FrontmatterError`: two copies of the SDK (a bundled one and the worker's shipped one, say) have two different classes, and `instanceof` fails across them.
 
 ```js
 for (const file of cardFiles) {
   try {
     cards.push(parseFrontmatter(await host.fs.readFile(file)).data);
   } catch (err) {
-    if (!(err instanceof FrontmatterError)) throw err;
+    if (err?.code !== "FRONTMATTER_INVALID") throw err;
     problems.push(`${file}: line ${err.line}, column ${err.column}`);
   }
 }
@@ -172,7 +175,7 @@ await editFile(host, notesPath, (text) => (text ?? "# Notes\n") + `- ${note}\n`)
 ```
 
 1. It reads the file's bytes with `host.fs.readFileBytes` and hashes them for the revision. A missing file (`ENOENT`) is `null`.
-2. It decodes them as UTF-8, keeping a byte order mark so writing the text back reproduces it. A file that is not valid UTF-8 is refused with an error rather than corrupted.
+2. It decodes them as UTF-8, keeping a byte order mark so writing the text back reproduces it. A file that is not valid UTF-8 is refused rather than corrupted, with a plain `Error` that carries no `code` (`editFile: "…" is not valid UTF-8 text, so it cannot be edited`).
 3. It calls `transform(text)`. Return the new text to write it; return the same text, `null` or `undefined` to leave it alone. Anything else throws a `TypeError`.
 4. It writes with `expectedRevision` set to the revision it read — `null` for a missing file, which makes the write a create that fails if the file appears first — so a change already on disk when the write checks is detected and retried rather than overwritten. The check and the rename are separate steps, so a write landing between them is not caught (see [`writeFile`](./host-api.md#fs--host-mediated-scope-contained-filesystem)).
 5. If another writer got there first (`REVISION_MISMATCH`, `TARGET_EXISTS`, `TARGET_UNAVAILABLE`), or the read itself hit `TARGET_UNAVAILABLE`, it starts again from step 1, up to `retries` more times, then throws the last error.

@@ -32,7 +32,9 @@ A view with `location: "settings"` is your plugin's custom settings section, for
 { "id": "connection", "componentPath": "dist/settings.js", "location": "settings" }
 ```
 
-The host mounts it in your settings home, below the generated fields, inside a settings group it draws; the section's heading and spacing are the host's. Render **rows**, not a page: no heading, no card, no Save button — apply each change as it is made, like every other settings row.
+The 0.1.0 CLI on npm accepts only `location: "panel"` views, so its `validate` and `package` refuse this entry: Not in the 0.1.0 release on npm; it ships in the next one.
+
+The host mounts it in your settings home, below the generated fields. The section heading is the home's own, and the host draws one `SettingsGroup` around your view, so the view renders **rows** and nothing else: kit `SettingsRow`s under one root, with no heading, no card, and no `SettingsSection` or `SettingsGroup` of its own. There is no Save either — apply each change as it is made, like every other settings row — so a `SettingsActions` Save row does not belong in a `location: "settings"` view.
 
 **Which home, which scope.** It receives `settingsContext: { scope, projectId }`. An installed plugin's section mounts twice — `{ scope: "user", projectId: null }` in the plugin manager, `{ scope: "project", projectId }` in Project settings — so render the rows for the scope you're given; each mount has its own `panelId`. A project plugin's section mounts only in Project settings, with `scope: "project"`.
 
@@ -45,18 +47,30 @@ The host mounts it in your settings home, below the generated fields, inside a s
 **Fields it owns.** Mark a declared setting `editor: "view"` when this section is where it is edited — a credential behind a sign-in button, a table stored as `json`. The generated form then leaves it out, and a deep link to that key (`host.settings.open(key)`, the setup strip's **Open plugin settings**) lands on your section instead of a field. The setting keeps everything else a declaration gives it: `required` still drives the setup strip, and `host.settings.get` still reads it.
 
 ```jsx
-// One root whose children are rows; the hairlines match the host's own.
+import { Button, SettingsRow } from "@daintreehq/plugin-ui";
+
+// One root whose children are rows. The host's group splits only its own direct
+// children, so the root draws the hairlines between yours, in the group's own ink.
 <div className="divide-y divide-border-subtle">
-  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3">
-    <div className="min-w-0 flex-1">
-      <div className="text-sm font-medium text-text-primary">Connected account</div>
-      <div className="mt-0.5 text-xs text-text-secondary">Signed in as ada@example.com</div>
-    </div>
-    <button className="rounded-md border border-border-default px-3 py-1.5 text-xs hover:bg-surface-hover">
-      Sign out
-    </button>
-  </div>
-</div>
+  <SettingsRow
+    label="Connected account"
+    description="Signed in as ada@example.com"
+    control={
+      <Button variant="outline" size="sm" onClick={signOut}>
+        Sign out
+      </Button>
+    }
+  />
+  <SettingsRow
+    label="Connection"
+    description="Checks the account can reach the bank."
+    control={
+      <Button variant="outline" size="sm" loading={testing} onClick={testConnection}>
+        Test connection
+      </Button>
+    }
+  />
+</div>;
 ```
 
 A view has no `host`, so the section reads and writes through your worker, like any other view:
@@ -184,7 +198,7 @@ A raw `plugin://` view that renders without the kit spreads `styleRootAttributes
 
 Two rules from the design contract that apply to plugins as much as to the host: accent colour is at most one load-bearing signal per region, so in doubt use no accent (a kit `Button` with no `variant` is the accent-filled primary, so give it to one action per region and `secondary`, `outline`, `ghost` or `subtle` to the rest); and a plugin panel that reads as native uses the host's own treatments for rows, chips, section labels and buttons rather than inventing new ones. The kit is those treatments.
 
-**Icons.** Use `Icon` from the kit: `createElement(Icon, { name: "git-branch" })` draws one of Daintree's own icons, sized 16 px by default and coloured by `currentColor`. Every kit prop that takes an icon (`Button`'s `icon`, `ListRow`, `PaneHeader`, `EmptyState`, …) accepts the same names. An inline `<svg>` still works for a glyph the set lacks, and those props accept your own element too; don't copy lucide paths by hand or bundle `lucide-react` (lint: `inline-svg-icon`, `lucide-react-import`). The `iconId` in your manifest covers the panel tab and toolbar, not the inside of your view.
+**Icons.** Use `Icon` from the kit: `createElement(Icon, { name: "git-branch" })` draws one of Daintree's own icons, sized 16 px by default and coloured by `currentColor`. Every kit prop that takes an icon (`Button`'s `icon`, `ListRow`, `PaneHeader`, `EmptyState`, …) accepts the same names. An inline `<svg>` still works for a glyph the set lacks, and most of those props accept your own element too — a few take a name only: `Select` options, `Callout`'s `icon`, `DropdownMenu` and `ContextMenu` entries (`action` entries included), `Tabs` items and `SpinningIcon`; don't copy lucide paths by hand or bundle `lucide-react` (lint: `inline-svg-icon`, `lucide-react-import`). The `iconId` in your manifest covers the panel tab and toolbar, not the inside of your view.
 
 ## Getting data in
 
@@ -241,11 +255,13 @@ The module has to run in both places: relative imports with their file extension
 | `createViewScope` | Releases listeners, timers, observers, workers and WebGL contexts with the mount. See [Resources your view owns](#resources-your-view-owns). |
 | `loadDocumentPackage` | Loads a library the host document keeps across reloads. See [Document packages](./document-packages.md). |
 
-A bundled view can also import `setAgentContextDragData` from the root `@daintreehq/plugin-sdk` entry ([Handing work to an agent by drag](#handing-work-to-an-agent-by-drag)); a zero-build view writes the same JSON by hand. `@daintreehq/plugin-ui` is never bundled: the preset leaves it external and the host serves it.
+A zero-build view gets every hook here from the host. A bundled view gets them from the SDK it installs, and 0.1.0 on npm has only the first row and `loadDocumentPackage`; for everything else in this table: Not in the 0.1.0 release on npm; it ships in the next one.
+
+A bundled view can also import `setAgentContextDragData` from the root `@daintreehq/plugin-sdk` entry ([Handing work to an agent by drag](#handing-work-to-an-agent-by-drag)); a zero-build view writes the same JSON by hand. The helper: Not in the 0.1.0 release on npm; it ships in the next one. `@daintreehq/plugin-ui` is never bundled: the preset leaves it external and the host serves it. That externals rule in the preset: Not in the 0.1.0 release on npm; it ships in the next one.
 
 There are no hooks for worktrees, settings or commands. A view reads its own worktree from the `worktreeId` prop and gets everything else from the worker.
 
-**Types.** A scaffolded plugin's `tsconfig.json` already lists `"types": ["@daintreehq/plugin-sdk/view-globals", "@daintreehq/plugin-sdk/plugin-ui"]`. The first declares `window.electron.plugin` (`invoke`, `on`, `onPanel` — and nothing else on `window.electron`, on purpose); the second declares the kit. Without them a view that calls the bridge fails `tsc` with `Property 'electron' does not exist on type 'Window'` even though Vite builds it. Add both to a hand-made tsconfig.
+**Types.** A scaffolded plugin's `tsconfig.json` already lists `"types": ["@daintreehq/plugin-sdk/view-globals", "@daintreehq/plugin-sdk/plugin-ui"]`. The first declares `window.electron.plugin` (`invoke`, `on`, `onPanel` — and nothing else on `window.electron`, on purpose); the second declares the kit. Without them a view that calls the bridge fails `tsc` with `Property 'electron' does not exist on type 'Window'` even though Vite builds it. Add both to a hand-made tsconfig. The two type entries: Not in the 0.1.0 release on npm; it ships in the next one.
 
 ## Host UI components
 
@@ -313,14 +329,17 @@ export default function Notes({ pluginId, disposeSignal }) {
 | --- | --- |
 | Actions | `Button` (variants `default` — the accent primary, and the default — `secondary`, `outline`, `ghost`, `subtle`, `contrast`, `destructive`, `ghost-danger`, `link`, `pill`), `IconButton`, `SplitButton` (a primary action with a menu of alternatives), `ToggleGroup` (toggle buttons, any number or at most one on), `CopyButton`, `DismissButton`, `DropdownMenu`, `ContextMenu` (the same rows on a right-click or Shift+F10; both nest submenus and take a description line per row) |
 | Forms | `Input` (text, search, email, url, password, number, tel, date, time, datetime-local), `Textarea`, `Select` (an `options` array; `value={null}` shows the placeholder again), `Combobox` (a `Select` with a search, for long or fetched lists), `MultiSelect` (several choices, as chips), `TagInput` (free-text tags), `Checkbox`, `Switch`, `RadioGroup`, `SegmentedControl`, `NumberInput` (steppers, units, clamping), `Slider`, `RangeSlider` (a low and a high value), `ColorPicker` and `ColorSwatch` (label and tag colours), `SearchField`, `FilterChip` (a toggle or removable filter in a filter bar), `FileDropzone` (drop or choose files; you get `File` objects, never paths), `FormField` (label, description and error wired to the control), `FormFieldGroup` (one label over a set of controls), `Form` with `useForm` (dirty tracking, sync and async checks, submit and reset) and `FormStatus`, `SchemaForm` (a settings group generated from a JSON Schema) |
+| Text inputs | `MentionTextarea` (a growing field with `@` and `/` suggestions), `Composer` (the agent composer: text, attachments and Send or Stop), `InlineEdit` (a name renamed in place), `KeyValueEditor` (environment variables, headers), `ListEditor` (hosts, globs, scopes), `SecretInput` (a token or key, saved without the view holding it), `ShortcutRecorder` (a keyboard shortcut in the app's notation) |
 | Lists and tables | `VirtualList`, `DataTable` (with checkbox selection, groups, expandable rows, resizable and hideable columns, a pinned first column and inline editing when you ask for them), `LogView`, `ListRow` with `useListNavigation`, `ScrollShadow`, `FileTree`, `TreeView` (a tree of anything: lazy children, checkboxes, drag to reorder), `ObjectInspector` (an API response or tool result as a collapsible value), `Timeline` (an activity feed or audit log), `HighlightedText` (search matches in a row) |
 | Figures | `StatCard` (a labelled figure with an optional change), `Sparkline`, `Meter` (usage against a limit, with warning and danger thresholds), `DiffStat` ("+12 -3") |
 | Dates | `Calendar` (an inline month grid, one day or a range), `DatePicker` and `DateRangePicker` (typed or picked ISO `"YYYY-MM-DD"` days, range presets), `TimePicker` and `DateTimePicker` (kit-drawn `"HH:mm"` times and `"YYYY-MM-DDTHH:mm"` date-times, with the zone named), `TimeAgo` (an age that keeps itself current) |
 | Charts | `BarChart` (grouped or stacked, upright or across), `LineChart` (numeric or time x, optional area), `DonutChart` (parts of a whole), `StackedAreaChart` (series piled to a total or 100%), `ScatterChart` (points by two numbers), `Histogram` (a distribution), `Heatmap` (a value per pair of categories), `ContributionGrid` (a calendar of daily counts), `Gauge` (one number against its range) — all with a tooltip anchored to the point under the pointer or the arrow keys |
 | Rich display | `TerminalOutput` (CLI output in the terminal's colours, with progress-bar rewrites and OSC 8 links) and `AnsiText` (a short run of it inline), `HoverCard` (a preview of a person, issue or commit), `ImageViewer` (zoom, pan and step through screenshots, in a pane or a lightbox), `TableOfContents` (a long document's sticky, scroll-tracking outline) |
-| Pane chrome | `PaneHeader`, `Toolbar`, `ToolbarButton`, `Tabs` |
+| Type and status marks | `Text` and `Heading` (the type ramp and colour roles), `Link`, `InlineCode`, `CodeBlock` (a highlighted read-only snippet), `PathLabel` (a path that ellipsises in the middle), `VisuallyHidden`, `LiveRegion` and `useAnnounce` (spoken updates), `Portal`, `StatusDot` and `StateGlyph` (running, waiting, idle, error, success), `ColoredLabel` (a label in a colour the user chose), `UnreadDot` and `CountIndicator` (an unread pip or a capped count, alone or on a control's corner) |
+| Pane chrome | `PaneHeader`, `Toolbar`, `ToolbarButton`, `OverflowToolbar` (a toolbar that folds what doesn't fit into a menu), `Tabs`, `StatusBar` (the strip along a pane's edge) |
 | Navigation | `NavList` (an app's left rail), `Breadcrumbs`, `Stepper` (a wizard's progress), `CommandPalette` (a quick switcher or "jump to…") |
-| Layout | `Card` (header, body and footer; clickable with `onClick`), `Divider`, `SectionLabel`, `ResizableSplit` (two panes with a draggable divider), `Accordion`, `Disclosure`, `DescriptionList` (a record's label and value rows) |
+| Page structure | `PaneLayout` (a panel's shell: header, toolbar, one scrolling body, footer and status strip), `Stack`, `Inline`, `Cluster`, `Grid`, `AutoGrid` (as many columns as fit), `ScrollArea` (a scroller on either axis, fading the edges with more) |
+| Layout | `Card` (header, body and footer; clickable with `onClick`), `Divider`, `SectionLabel`, `ResizableSplit` (two panes with a draggable divider), `Accordion`, `Disclosure`, `DescriptionList` with `DescriptionListItem` (a record's label and value rows) |
 | Editors | `CodeEditor` (Daintree's CodeMirror editor, with the file viewer's theme and find bar), `DiffView` (two texts or a patch, unified or split, with your own hunk actions; `revertHunk` undoes one), `MarkdownEditor` (a comment or notes field with a toolbar and Write and Preview) |
 | Panes | `MasterDetail` (a list and its record, one pane when narrow), `SplitGroup` (three or more resizable, collapsible panes), `Inspector` with `InspectorSection` and `PropertyRow` (a compact property panel), `Drawer` and `DrawerToggle` (a panel that slides in within the pane), `GroupedVirtualList` (sticky group headers with counts), `BulkActionBar`, `LoadMoreFooter`, `TaskList` (a queue of jobs), `RefreshOverlay` and `StaleIndicator` (refreshing and old data) |
 | Workflows and agent work | `AttachmentChip` and `AttachmentList`, `EntityChip` (a reference to one of your records, deleted and no-access included), `RepeaterField` (structured items edited in place, keyed), `FormErrorSummary` and `UnsavedChangesBar`, `ConnectionCard` (an outside service and its state), `OperationStatus` (queued through partial and unknown), `ToolCallCard`, `StructuredDiff` and `SuggestedValue` (proposed changes, reviewed before they apply), `SourceCitation` and `SourceList`, `DecisionRequest` (a question a run is waiting on) |
@@ -328,10 +347,10 @@ export default function Notes({ pluginId, disposeSignal }) {
 | Drag and drop | `SortableList` (a list reordered by pointer or keyboard), `Kanban` (columns of cards moved between and within columns, with counts and WIP limits), and `DragDropProvider` with `useDraggable` and `useDroppable` for anything else |
 | States and status | `PaneState` (a whole pane's `loading`, `empty` or `error`), `EmptyState`, `Callout` (an inline message; `severity="error"` with a Retry `action` is the error banner, `variant="strip"` the pane-wide band), `Badge`, `Spinner`, `SpinningIcon`, `ProgressBar`, `Skeleton`, `SkeletonBone`, `SkeletonText`, `SkeletonHint`, `SeverityIcon` |
 | Overlays | `Dialog`, `ConfirmDialog` (including the destructive typed-name gate), `ConfirmPopover` (an inline confirm on its trigger), `Sheet` (a record's detail or edit form against the window's edge), `Popover`, `PopoverSearchField`, `EmojiPicker`, `Tooltip`, `TruncatedTooltip` |
-| Settings views | `SettingsSection`, `SettingsGroup`, `SettingsRow`, `SettingsActions` — the host's section → group → row grammar |
-| Behaviour | Hooks: `useSelection` (single, multi and range selection), `useHotkeys` (view-scoped shortcuts that never shadow the app's), `useUndoRedo`, `useDisclosure`, `useDebouncedValue` and `useDebouncedCallback`, `usePersistentViewState` (a remembered tab or split size, through `persistState`), `useToast` (toasts and Undo toasts from the view), `useForm` (form state for `Form`) |
+| Settings | `SettingsSection`, `SettingsGroup`, `SettingsRow`, `SettingsActions` — the host's section → group → row grammar, for settings drawn inside a panel. A [`location: "settings"` view](#a-settings-section) renders `SettingsRow`s only: the host draws the heading and the group, and there is no Save row |
+| Behaviour | Hooks: `useSelection` (single, multi and range selection), `useHotkeys` (view-scoped shortcuts that never shadow the app's), `useUndoRedo`, `useDisclosure`, `useDebouncedValue` and `useDebouncedCallback`, `usePersistentViewState` (a remembered tab or split size, through `persistState`), `useToast` (toasts and Undo toasts from the view), `useForm` (form state for `Form`), `useContainerSize` and `useBreakpoint` (layout that answers to the pane's width, not the window's) |
 | Daintree-native | `ActionButton` and the menus' `action` entry (run one of Daintree's actions with its own title, binding and availability), `AgentAvatar`, `AgentBadge`, `AgentStateIndicator` (an agent's mark and what was observed on its terminal), `AgentPicker` (the project's agent panes by worktree), `SendToAgentButton` and `ContextDragSource` (hand work to an agent), `TerminalSnapshot` (a still of a terminal's last lines), `ShortcutHint` and `KeyHints` (keys as the app draws them) |
-| Everything else | `Markdown`, `Icon`, `Avatar`, `AvatarGroup`, `Kbd`, `KbdChord`; formatters `formatTimeAgo`, `formatRelativeTime`, `formatDuration`, `formatBytes`, `formatCount`; the theme API below |
+| Everything else | `Markdown`, `Icon`, `Avatar`, `AvatarGroup`, `Kbd`, `KbdChord`; formatters `formatTimeAgo`, `formatRelativeTime`, `formatDuration`, `formatBytes`, `formatCount`; day helpers `formatIsoDate`, `isoToday`, `isoFromDate`, `isoAddDays` for the date fields' `"YYYY-MM-DD"` values; the theme API below (`useDaintreeTheme`, `getDaintreeTheme`, `onDidChangeDaintreeTheme`); `preloadPluginUi` and `whenPluginUiReady` ([Loading and the first frame](#loading-and-the-first-frame)); `PLUGIN_UI_VERSION` ([Versioning](#versioning)) |
 
 One status vocabulary runs through `Badge` `tone`, `Callout` `severity` and `SeverityIcon`: `error` (the same colour as `danger`, which `Badge` also accepts), `warning`, `success`, `info` and `neutral`.
 
@@ -341,7 +360,15 @@ Not in the kit, so draw them with tokens: other chart forms (a graph of nodes, a
 
 ### Loading and the first frame
 
-Nothing of the kit loads at startup. Importing `@daintreehq/plugin-ui` costs a few hundred bytes and starts fetching the kit's one chunk; each component renders nothing (or, for `Tooltip`, `Popover` and `ContextMenu`, just its trigger) until that chunk is in, so the first kit view in a session can paint one frame late. It is a local chunk, requested at import, and normally in before your view first renders. Two calls control it:
+Nothing of the kit loads at startup. Importing `@daintreehq/plugin-ui` costs a few hundred bytes and starts fetching the kit's one chunk; until that chunk is in, most components render nothing, so the first kit view in a session can paint one frame late. Fifteen draw a fallback instead, so what they wrap is there from the first frame and only their own behaviour waits:
+
+- **Their trigger:** `Popover`, `EmojiPicker`, `ConfirmPopover`, `AgentPicker`.
+- **Their child:** `Tooltip`, `TruncatedTooltip`, `HoverCard`, `ContextMenu`.
+- **Their content:** `DragDropProvider`, `Drawer`, `RefreshOverlay`, `ContextDragSource`.
+- **The wrapped child:** `UnreadDot`, `CountIndicator`.
+- **Its fields:** `Form`.
+
+It is a local chunk, requested at import, and normally in before your view first renders. Two calls control it:
 
 - `preloadPluginUi()` starts loading without waiting — for code that knows a view is about to open.
 - `whenPluginUiReady()` resolves once every component renders on its first frame, and rejects if the chunk fails to load (calling again retries). Await it in tests, or before measuring kit output.
@@ -356,7 +383,7 @@ Pass `className` to a kit component to place it — margins, width, flex — and
 
 ### Icons
 
-`Icon` draws one of Daintree's own icons by name: lucide-style kebab-case names (`git-branch`, `folder-open`, `alert-triangle`, `refresh`, …) plus Daintree's concepts (`worktree`, `daintree`). `size` defaults to 16 px, colour follows `currentColor`, and it is decorative unless you pass `aria-label`. An unknown name renders nothing and warns in development. Every kit prop that takes an icon accepts the same names or an element of your own, such as an inline `<svg>` for a glyph the set lacks. The set only grows.
+`Icon` draws one of Daintree's own icons by name: lucide-style kebab-case names (`git-branch`, `folder-open`, `alert-triangle`, `refresh`, …) plus Daintree's concepts (`worktree`, `daintree`). `size` defaults to 16 px, colour follows `currentColor`, and it is decorative unless you pass `aria-label`. An unknown name renders nothing and warns in development. Most kit props that take an icon accept the same names or an element of your own, such as an inline `<svg>` for a glyph the set lacks. A few take a name only (`PluginIconName`): `Select` options, `Callout`'s `icon`, `DropdownMenu` and `ContextMenu` entries (`action` entries included), `Tabs` items and `SpinningIcon`. The set only grows.
 
 ### Theme API for canvas and WebGL
 
@@ -368,11 +395,11 @@ DOM styled with token classes follows a theme switch on its own. Code that paint
 | `getDaintreeTheme()` | The same, outside React. Cheap to call often: the same frozen object until the theme changes |
 | `onDidChangeDaintreeTheme(listener)` | Calls `listener(theme)` after every theme change; returns the unsubscribe |
 
-`tokens` maps each `--theme-*` name without its prefix (`surface-panel`, `text-primary`, `border-subtle`, `accent-primary`, `status-danger`, `category-blue`, `terminal-red`, `syntax-keyword`, …) to a concrete sRGB colour, `#rrggbb` or `rgba(r, g, b, a)`. The core groups — surfaces, text, borders, accent, `focus-ring`, status — are stable within the major version; `terminal-*` (with the ANSI colours), `syntax-*`, `activity-*` and `category-*` are best effort and may be renamed in a minor with a release note, so read those with a fallback. Reading `--theme-*` once with `getComputedStyle` is the bug this replaces. [Patterns → Draw on a canvas](./patterns.md#draw-on-a-canvas) puts it together with `useAnimationFrame`.
+`tokens` maps each key listed in [UI kit → Theme](./ui-kit.md#theme) (`surface-panel`, `text-primary`, `border-subtle`, `accent-primary`, `status-danger`, `category-blue`, `terminal-red`, `syntax-keyword`, …) to a concrete sRGB colour, `#rrggbb` or `rgba(r, g, b, a)`. It is a fixed set, not every `--theme-*` the host defines: tokens that exist only as CSS — `surface-toolbar`, `surface-dialog`, `surface-disabled`, `border-input`, `accent-secondary` and its variants, the `status-*-surface` fills — are not keys and read as absent, so draw with the nearest key instead. The core groups — surfaces, text, borders, accent, `focus-ring`, status — are stable within the major version; `terminal-*` (with the ANSI colours), `syntax-*`, `activity-*` and `category-*` are best effort and may be renamed in a minor with a release note, so read those with a fallback. Reading `--theme-*` once with `getComputedStyle` is the bug this replaces. [Patterns → Draw on a canvas](./patterns.md#draw-on-a-canvas) puts it together with `useAnimationFrame`.
 
 ### Types
 
-For TypeScript, `@daintreehq/plugin-sdk` ships the kit's declaration: `"types": ["@daintreehq/plugin-sdk/plugin-ui"]` in `compilerOptions` (a scaffolded plugin already has it), and every component's props type comes with it (`ButtonProps`, `DataTableProps`, …).
+For TypeScript, `@daintreehq/plugin-sdk` ships the kit's declaration: `"types": ["@daintreehq/plugin-sdk/plugin-ui"]` in `compilerOptions` (a scaffolded plugin already has it), and every component's props type comes with it (`ButtonProps`, `DataTableProps`, …). The `plugin-ui` type entry: Not in the 0.1.0 release on npm; it ships in the next one.
 
 ### `Markdown`
 
@@ -385,6 +412,7 @@ For TypeScript, `@daintreehq/plugin-sdk` ships the kit's declaration: `"types": 
 | `rootPath` | Absolute directory local images and relative links must stay inside. Defaults to the directory `basePath` resolves to. |
 | `className` | Classes for the document's root element. |
 | `fontSize` | A rung of the type scale: `2xs` `xs` `sm` `base` `lg` `xl` `2xl` `3xl`. Omitted, the document renders at Daintree's default Markdown size. |
+| `align` | `"center"` (the default) centres the document's reading measure in its container, as Daintree's own document views do; `"start"` keeps the measure but sets it against the leading edge, in line with the controls above it — for a preview inside a form or an editor. |
 
 Relative images load from disk over `daintree-file://`, contained to `rootPath`; one that climbs out of it is not requested at all. Relative links open in Daintree's file viewer when they stay inside `rootPath` and do nothing otherwise, and the viewer holds its read to `rootPath` on the real path, so a symlinked directory cannot carry a link outside it; `http(s)` and `mailto` links open in the browser. With neither `basePath` nor `rootPath` — or with a relative one, which is ignored rather than resolved against a renderer with no working directory — the text still renders and relative references resolve nowhere. Select All (Cmd/Ctrl+A) selects the block you last clicked or selected in, so several blocks in one view never compete for it. When a note links to images elsewhere in the project, pass the project root as `rootPath`.
 
@@ -566,22 +594,31 @@ Daintree measures every plugin as it runs and shows it in two places:
 
 The budgets: activation 500 ms, view load 300 ms, first paint 500 ms, commit p95 16 ms, invoke p95 250 ms, 60 pushes and 1 MiB per second sustained, worker memory 256 MiB. They are observations for this session, not a verdict: a plugin that was active during a slow frame didn't necessarily cause it, invokes that waited on a consent prompt are left out of the latency, and Daintree never slows or stops a plugin for going over a budget. Use them to find what to look at, then profile it in DevTools.
 
-Before shipping, run **`npx daintree-plugin lint`** in the plugin folder. It reads your view and worker source and flags the patterns above — interval polling in a view, whole-state pushes, a render per event, a subscription never disposed, a bundled copy of React (an error) — and the consistency ones: stock palette colours (an error), `dark:`, raw shadows, radii and text sizes, a hand-rolled button, form control, spinner, badge or icon, a native dialog, a container query on its own container, and classes that compile to nothing. `--strict` fails on warnings too; `daintree-plugin doctor` runs it as part of its checks.
+Before shipping, run **`npx daintree-plugin lint`** in the plugin folder (the command: Not in the 0.1.0 release on npm; it ships in the next one.) It reads your view and worker source and flags the patterns above — interval polling in a view, whole-state pushes, a render per event, a subscription never disposed, a bundled copy of React (an error) — and the consistency ones: stock palette colours (an error), `dark:`, raw shadows, radii and text sizes, a hand-rolled button, form control, spinner, badge or icon, a native dialog, a container query on its own container, and classes that compile to nothing. `--strict` fails on warnings too; `daintree-plugin doctor` runs it as part of its checks.
 
 ## Media and binary files
 
-`host.fs.readFile` returns UTF-8 text and nothing else. For an image, an audio file or anything binary, don't route the bytes through the worker at all: the renderer can fetch the file itself over the `daintree-file://` protocol, which is how Daintree's own audio and video previews work (`useMediaBlobUrl` in the repo).
+`host.fs.readFile` returns UTF-8 text and nothing else. For an image, an audio file or anything binary, don't route the bytes through the worker at all: the renderer reads the file itself over Daintree's file protocols, as the file viewer does. Both take the same query — an absolute `path` and an absolute `root` — and realpath-contain `path` under `root`, answering 404 for anything outside it; the project root is the natural `root` for a project plugin.
+
+**Audio and video: point the element at `daintree-media://`.** It is the scheme Daintree's own audio and video previews play from: media only (a file that isn't audio or video is a 404), served in byte ranges, so the element streams and seeks rather than downloading the whole file first.
 
 ```js
-// In the view. `root` must be a root the protocol may serve from: the project
-// root is the one a project plugin has. The handler realpath-contains `path`
-// under `root` and refuses anything outside it.
-const url = `daintree-file://load?path=${encodeURIComponent(absPath)}&root=${encodeURIComponent(projectRoot)}`;
-const blob = await (await fetch(url, { signal: disposeSignal })).blob();
-const objectUrl = URL.createObjectURL(blob); // <audio src={objectUrl}>; revoke it on cleanup, or use scope.objectURL(blob)
+// In the view: the same URL shape the file viewer builds.
+const src = `daintree-media://load/?path=${encodeURIComponent(absPath)}&root=${encodeURIComponent(projectRoot)}`;
+createElement("video", { src, controls: true });
 ```
 
-Fetch into a blob rather than pointing an element's `src` at the URL directly; the blob path is the one the host has verified against Electron's media pipeline. This works because views are inline; it is not part of the host API, and a future move to an isolated view host would replace it with one.
+The scheme has no `fetch()` surface, only element loads, so a failure shows up as the element's `error` event. To check the file first — that it exists, or its size — send a `HEAD` to the same `path` and `root` on `daintree-file://load?…`, which answers with its `Content-Length` without reading it; the file viewer does exactly that before it mounts a player. A file rewritten in place needs a new URL to play its new bytes, since the element keeps what it has buffered; add a query parameter of your own (`&v=2`), which both schemes ignore.
+
+**Any other binary: fetch from `daintree-file://` into a blob.**
+
+```js
+const url = `daintree-file://load?path=${encodeURIComponent(absPath)}&root=${encodeURIComponent(projectRoot)}`;
+const blob = await (await fetch(url, { signal: disposeSignal })).blob();
+const objectUrl = URL.createObjectURL(blob); // revoke it on cleanup, or use scope.objectURL(blob)
+```
+
+An `<img>` can take the `daintree-file://` URL as its `src` directly. Both schemes work because views are inline in Daintree's own document; they are not part of the host API, and a future move to an isolated view host would replace them with one.
 
 ## Project switches and staleness
 

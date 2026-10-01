@@ -16,7 +16,7 @@ A plugin's life has five phases:
 
 At startup, `PluginService.initialize()` scans `~/.daintree/plugins/` for directories. Each directory is parsed independently — one plugin failing to load doesn't block others.
 
-Plugin directory names must match the plugin's `name` field. A plugin named `acme.linear-planner` must live in `~/.daintree/plugins/acme.linear-planner/`. Mismatched names produce a warning and the plugin is skipped.
+A plugin's identity comes from its manifest `name`, never from its directory name; no root compares the two. The installer names the directory after the id it installs (`PluginInstaller.ts` moves an archive into `~/.daintree/plugins/<manifest.name>/`), so an installed plugin's folder and id agree by construction, but a sideloaded folder can be named anything. Anything that maps directories back to ids has to allow for the difference — `reconcilePluginRecipeMetadata` in `PluginService.ts` unions the scanned directory names with every id the service knows for exactly this reason.
 
 The `plugins` root is configurable for testing via the `PluginService` constructor argument but otherwise fixed.
 
@@ -35,9 +35,19 @@ A built-in plugin is Daintree code that happens to use the plugin contract. It d
 - **Discovery is a build-time glob, not a registry.** `scripts/build-main.mjs` bundles every `plugins/builtin/*/main/index.ts`, and `src/registry/builtinPluginRenderers.ts` eagerly globs every `plugins/builtin/*/renderer/index.{ts,tsx}` for its registration side effects. The renderer glob only survives tree-shaking because `package.json` lists that path under `sideEffects`. Adding a built-in needs no registry edit.
 - **It loads in-process.** Main code runs inside Electron main, not in a worker. That is why built-ins can offer synchronous host methods, and why a built-in must never execute code it did not ship — see [Dependencies a built-in plugin owns](#dependencies-a-built-in-plugin-owns).
 - **The `daintree.*` namespace is reserved to it.** A manifest outside `plugins/builtin/` may not claim that namespace. There is currently no shipping path for a first-party _installed_ plugin, so a plugin Daintree ships is a built-in.
-- **It can be off by default.** `shared/config/pluginDefaults.ts` lists built-ins that need an explicit enable choice before their first activation.
+- **It can be off by default.** `DEFAULT_DISABLED_PLUGIN_IDS` in `shared/config/pluginDefaults.ts` lists built-ins that need an explicit enable choice before their first activation.
+- **It is never uninstalled, but it can be disabled live.** Disabling a built-in runs the same `unloadPlugin` cascade as any other plugin, and enabling it again reloads and activates it (`_applyEnabledToggle` in `PluginService.ts`).
 - **Its renderer lives in the host bundle.** There is no `plugin://` module for it, which changes how its panel views resolve — see [Built-in plugin views](#built-in-plugin-views).
 - **Activation failures are swallowed.** Main reports a built-in's activation as successful even when `activate()` throws, so a built-in's panel can still render against handlers that never registered. Handle missing handlers in the view rather than assuming activation succeeded.
+
+Four built-ins ship today, one directory each under `plugins/builtin/`:
+
+| Plugin                       | Contributes                                 | Default |
+| ---------------------------- | ------------------------------------------- | ------- |
+| `daintree.github`            | `forgeProviders`, `fileDecorationProviders` | On      |
+| `daintree.gitlab`            | `forgeProviders`, `settings`                | On      |
+| `daintree.markdown-editor`   | `fileEditors`, `commands`                   | Off     |
+| `daintree.sveltekit-builder` | `previewTools`, `guestAdapters`, `commands` | Off     |
 
 ### Manifest validation
 
@@ -46,7 +56,7 @@ Validation is strict. The manifest is parsed by `PluginManifestSchema` (Zod) in 
 Validation also runs structural checks across the whole `contributes` block via a `superRefine` pass (#10620), not just per-field shape:
 
 - **Duplicate contribution IDs** within any one array (`panels`, `commands`, `views`, `mcpServers`, `agents`, `settings`, `forgeProviders`, `fileDecorationProviders`, …) are rejected with a `duplicate_contribution_id` error.
-- **Dangling cross-references** are rejected: a `forgeProvider`'s `settingsScopeRef` and `viewRefs[]` must resolve to declared settings/views; every `view.id` must match a declared `panels[].id` (an orphaned view that names no panel is now a hard manifest error, not a load-time warning); and `${settings:settingId}` tokens inside an MCP server's `command`/`args`/`env` must reference a declared setting (unknown tokens fail with `settings_token_unknown` / `settings_token_malformed`).
+- **Dangling cross-references** are rejected: a `forgeProvider`'s `settingsScopeRef` and `viewRefs[]` must resolve to declared settings/views; every `location: "panel"` view's `id` must match a declared `panels[].id` (an orphaned view that names no panel is now a hard manifest error, `view_panel_ref_unknown`, not a load-time warning), while a `location: "settings"` view must _not_ share an id with a panel (`settings_view_panel_id_collision`) and a plugin may declare at most one (`settings_view_duplicate`); and `${settings:settingId}` tokens inside an MCP server's `command`/`args`/`env` must reference a declared setting (unknown tokens fail with `settings_token_unknown` / `settings_token_malformed`).
 
 The schema is built per origin — `getPluginManifestSchema(origin)` — so a handful of rules differ by discovery root. The reserved `daintree.*` namespace is builtin-only, and `scope: "project"` is enforced in both directions: required under the project root (`project_scope_required`), rejected under the user and builtin roots (`project_scope_not_allowed`). A project-scoped manifest additionally may not declare the contribution groups that are still structurally app-wide, or claim `contributes.surfaces` unless it is project-scoped — see [Project-local plugins](#project-local-plugins).
 
@@ -82,9 +92,17 @@ A plugin's `activate(host)` function runs when something first needs the plugin'
 - A forge operation reaches one of the plugin's declared providers (`activatePluginForForgeProvider`, `forgeRpcServer.ts`)
 - A file-decoration pull matches one of the plugin's declared scopes (`activatePluginsForFileDecorationScope`)
 - An agent lists or calls tools on one of the plugin's `agentMcp` endpoints (the plugin route calls `PluginService.activatePlugin`)
-- The plugin lists `"onStartupFinished"` in `activationEvents` — the one eager trigger, fired once startup settles rather than on demand
+- A view's first `plugin:invoke` into one of the plugin's channels (`dispatchHandler` in `PluginService.ts` activates before routing, so handlers registered in `activate()` answer the very first call)
+- The plugin lists `"onStartupFinished"` in `activationEvents` — the one eager trigger in the manifest, fired once startup settles rather than on demand
 
-**User-installed plugins activate out-of-process.** Every sideloaded, `.dntr`/URL-installed, or `dev`-linked plugin runs inside a `utilityProcess.fork` worker (#10526): its `main` executes in a child process with its own module realm, and the host bridges every `host.*` call and registration over a MessagePort. This gives clean teardown (unload kills the worker, reclaiming the whole module realm — no ESM-cache leak, no module-scope state surviving a reload) plus OS-level crash isolation. **Built-in plugins are the exception** — they stay on the in-process `import()` loader because they're trusted, app-bundled, and never unloaded, and because the GitHub built-in's forge provider exposes synchronous host methods (`parseRemote`, URL builders) that can't cross the worker's async port.
+Some host-side events activate a plugin whatever its `activationEvents` say:
+
+- A successful install or update activates the new version immediately (`PluginInstaller.ts`), as does restoring the previous version after a failed swap.
+- Re-enabling a disabled plugin reloads and activates it (`_applyEnabledToggle` in `PluginService.ts`).
+- Linking a plugin with `daintree-plugin dev` loads and activates it, and each settled rebuild does so again.
+- Restarting a stopped or failed backend from a plugin panel (`plugin:restart-worker`, `restartPluginWorker`) retires the worker and activates a fresh one.
+
+**User-installed plugins activate out-of-process.** Every sideloaded, `.dntr`/URL-installed, or `dev`-linked plugin runs inside a `utilityProcess.fork` worker (#10526): its `main` executes in a child process with its own module realm, and the host bridges every `host.*` call and registration over a MessagePort. This gives clean teardown (unload kills the worker, reclaiming the whole module realm — no ESM-cache leak, no module-scope state surviving a reload) plus OS-level crash isolation. **Built-in plugins are the exception** — they stay on the in-process `import()` loader because they're trusted, app-bundled, and never uninstalled (disabling one still unloads it live), and because the GitHub built-in's forge provider exposes synchronous host methods (`parseRemote`, URL builders) that can't cross the worker's async port.
 
 When triggered, Daintree:
 
@@ -93,6 +111,8 @@ When triggered, Daintree:
 3. Calls the exported `activate(host)` function
 4. Stores the cleanup function (if returned)
 5. Enforces a 5-second timeout via `Promise.race` — exceeded activations are marked failed
+
+A built-in's `import()` has a budget of its own, `IMPORT_TIMEOUT_MS` (also 5 seconds, `PluginService.ts`), separate from the `activate()` budget so a module with a hanging top-level `await` cannot pin an activation promise and stall the `Promise.allSettled` fan-outs that wait on it. A worker plugin's import happens inside the worker after its bootstrap handshake, so it counts against the activation deadline described in [Activation failures](#activation-failures).
 
 Handler implementations are bound to the registered action IDs as activation resolves. Users who invoked a command before activation finished see a brief spinner; the handler runs as soon as binding completes.
 
@@ -108,6 +128,22 @@ A worker plugin's `host` is `PluginDevWorkerHostProxy` (`electron/services/plugi
 
 Zero-build workers get the SDK the same way the worker gets everything else: before any plugin code loads, the bootstrap installs a resolve hook that serves `@daintreehq/plugin-sdk`, `/files` and `/data` from a copy shipped with the app when the plugin has none of its own (see [SDK surface](#sdk-surface)).
 
+### Worker crashes and idle disposal
+
+`PluginDevWorkerHost` (`electron/services/plugin/PluginDevWorkerHost.ts`) forks each worker with `--max-old-space-size=256`, so a plugin's main-side heap is capped at 256 MB.
+
+**Crash respawn.** An unintended worker exit — a bootstrap throw, a segfault, an out-of-memory kill — is respawned immediately, and the replacement re-runs `activate()` from a fresh module realm; the bridge retires everything the outgoing generation registered first, so nothing is duplicated. Three unintended exits within 30 minutes (`CRASH_THRESHOLD`, `CRASH_WINDOW_MS`) trip the crash-loop guard: the host stops respawning and `PluginService` publishes the runtime status `failed` with reason `crash-loop`. Nothing restarts it automatically after that; the user restarts it from the panel, re-enables the plugin, or — under `daintree-plugin dev` — saves a fix. A dev rebuild never counts toward the cap: it replaces the whole plugin with a fresh host and an empty crash window rather than respawning the old one. A deliberate dispose is not a crash either.
+
+**Idle disposal.** When the app enters the efficiency resource profile, worker governance asks `PluginService.disposeIdlePluginWorkers()` to dispose workers that have been idle for at least `WORKER_IDLE_DISPOSE_MS` (30 minutes, `shared/utils/workerGovernancePolicy.ts`). Idle is measured from the last `activatePlugin` call, which every lazy trigger and every `plugin:invoke` passes through. Disposal is the narrow `deactivateWorker` teardown: the worker, its bridge and its activate-time registrations go, while the plugin, its manifest contributions and its agent MCP grants stay, and the next trigger forks a fresh worker. It is deliberately conservative, so most plugins are never eligible. `canDisposeIdlePluginWorker` refuses when the plugin:
+
+- is a built-in (it runs in process) or is linked by `daintree-plugin dev`
+- contributes any `panels` or `mcpServers`
+- activates on `onStartupFinished`
+- holds a live event subscription, or registered an action with `host.registerAction` that has no matching manifest command (with no manifest descriptor to re-fork through, it could not come back); an imperative handler for a declared command does not block disposal
+- has an invoke or a host call in flight
+- has a managed process running or a `host.fs` watcher open
+- has no recorded activity, or has an enable/disable transition or an activation in flight
+
 ### Activation failures
 
 Opening a plugin-contributed view activates the owning plugin _before_ the renderer imports the view module. `PluginViewHost` calls `window.electron.plugin.activateForView(kindId)` and awaits it ahead of `import()`, so a failed activation surfaces as the real cause rather than a generic import timeout (#10618). The IPC handler reports every failure mode — manifest collision, an `activate()` throw, the 5-second activation timeout — through one error contract: it throws an `AppError` with code `PLUGIN_ACTIVATION_FAILED` whose `userMessage` carries the specific cause. The awaited rejection propagates to the view's error boundary, which renders the component-variant fallback with a "Try again" button; clicking it starts a fresh load attempt that re-runs the whole sequence — activation and import — under a fresh timeout, on a fresh view generation when it was the import that failed (see [The plugin view load path](#the-plugin-view-load-path)).
@@ -116,30 +152,29 @@ When a built-in plugin's `activate()` throws after partially registering listene
 
 ### Disposal
 
-Disposal is a LIFO cascade, matching VS Code's Disposable pattern. `src/utils/disposable.ts` implements the core:
+`PluginService.unloadPlugin()` (`electron/services/PluginService.ts`) is a fixed forward sequence, not a LIFO stack. Each registry step runs inside its own `runUnloadStep`, which catches and logs a throw, so one failing step never strands the steps after it — a partial unload would otherwise resurface as duplicate-id errors on the next load. `src/utils/disposable.ts` (`DisposableStore`, `toDisposable`) is the renderer's LIFO disposable pattern; the unload cascade does not use it. Its `add()` takes an `IDisposable`, so a plain cleanup function is wrapped first:
 
 ```ts
 const store = new DisposableStore();
-store.add(() => subscription.unsubscribe());
-store.add(someResource);
+store.add(toDisposable(() => subscription.unsubscribe()));
+store.add(someResource); // anything with a dispose() method
 // ... later:
-store.dispose(); // runs cleanups in reverse order
+store.dispose(); // disposes entries in reverse order
 ```
 
-On plugin unload, `PluginService.unloadPlugin()` first revokes every agent MCP credential issued for the instance and only then drops its tool rosters, so no live grant can resolve to an empty endpoint or to the next generation's tools. It then runs these cleanups in order:
+The unload order:
 
-1. Plugin-returned cleanup function (if any)
-2. Worktree event subscriptions registered during activate
-3. IPC handlers registered via `host.registerHandler`
-4. Actions registered via `host.registerAction`
-5. Menu items contributed via manifest
-6. Toolbar buttons contributed via manifest
-7. Panel kinds contributed via manifest
-8. MCP subprocess lifecycle (`PluginMcpSupervisor.shutdown({ pluginId })`, with execa's kill escalation — see [MCP supervisor → Process lifecycle](#process-lifecycle))
+1. **Agent MCP credentials, then rosters.** Every grant for the instance is revoked — or, on a reload, held (see [Agent MCP endpoints](#agent-mcp-endpoints)) — and only then are its tool rosters dropped, so no live grant can resolve to an empty endpoint or to the next generation's tools.
+2. **Activation state and the cleanup entry.** The activation cache is cleared and the instance's `cleanupMap` entry runs. For a worker plugin that entry disposes the worker; for a built-in it is the function `activate()` returned, if any.
+3. **Event cleanups** (`flushPluginEventCleanups`): worktree, agent-state and other host subscriptions, listener watchers, per-provider forge and decoration disposers, in-flight `host.documents.renderPdf` calls (rejected with `RENDER_CANCELLED:`), and a built-in's open `host.db` handles.
+4. **Contributions**, one step each: site-preview guest bindings, IPC handlers, actions, menu items, keybindings, context menu items, `when`-clause tracking, toolbar buttons, panel kinds, panel lifecycle listeners and queued panel reloads, forge providers (descriptors, implementations, then a workspace-host notify), file decoration providers, skills, recipes, tours, agents and process tools (each re-mirrored to the pty-host), settings and storage caches. The registries whose snapshots the renderer holds schedule their broadcasts as they go.
+5. **Host-owned resources**: managed processes are killed, `host.fs` watchers closed, and `PluginMcpSupervisor.shutdown({ pluginId })` stops the plugin's MCP servers with execa's kill escalation (see [MCP supervisor → Process lifecycle](#process-lifecycle)).
+6. **Bookkeeping and UI**: load-error markers, runtime status and the log ring buffer are dropped, open UI prompts resolve as dismissed (`undefined`/`false`, never a throw), the `plugin://` authority is invalidated, the plugin entry, activity record, metrics and host binding are deleted, and the runtime status is emitted as `null` so a renderer holding a settings view retires it.
+7. **Last**: the contribution scope index entry, surface claims, panel badges (cleared in the renderer when there were any) and, when the plugin declared decoration scopes, a `plugin:decorations-changed` push per scope so renderers drop its decorations.
 
-Host-owned resources the plugin acquired through `host` go with it: `host.fs` watches are torn down, open `host.db` handles closed, spawned processes killed, outstanding `renderPdf` calls rejected with `RENDER_CANCELLED:`, badges cleared, and the renderer retires any cached settings view.
+A worker plugin's `host.db` handles are opened inside the worker and die with it.
 
-For a user-installed plugin the disposal cascade is followed by killing its worker, which reclaims the plugin's entire module realm — module-scope state never survives a reload. For a built-in (which runs in-process) the module is merely orphaned: Node's module cache still holds it but no live references point to it, and since built-ins are never uninstalled that residue never accumulates.
+**The worker goes first.** For a user-installed plugin, step 2 disposes the worker before any registry step runs: the host posts `dispose`, the worker calls the cleanup function `activate()` returned (synchronously; a returned promise is not awaited) and exits, and the host kills it if it is still running after `DISPOSE_TIMEOUT_MS` (1 second, `PluginDevWorkerHost.ts`). Exiting reclaims the plugin's entire module realm, so module-scope state never survives a reload. For a built-in (which runs in-process) the module is merely orphaned: Node's module cache still holds it, and re-enabling imports that same cached module and calls `activate()` again — so a built-in's module-scope state does survive a disable and re-enable.
 
 ## Dependencies a built-in plugin owns
 
@@ -191,7 +226,7 @@ Panel kinds are the subtle one, because `PanelKindConfig.id` is persisted inside
 
 Every registration is tagged with a scope and filtered at broadcast and query time (`PluginContributionBroadcaster`). Global mutations broadcast as before; project-scoped mutations go to that project's renderers only, and the cold-start replay (`pushSnapshotTo`) takes the target view's `projectId` and pushes `global ∪ that project`. Getting that replay wrong is invisible until a project view is recreated after LRU eviction and suddenly sees another project's panels, which is why it takes the project explicitly rather than inferring one.
 
-Panels, commands/actions, toolbar buttons, keybindings, context menus and settings scope cleanly. The groups that register into a registry with no project axis at all — `menuItems`, `agents`, `skills`, `recipes`, `fileDecorationProviders`, `processTools`, `mcpServers` — are rejected at manifest validation for `scope: "project"`, each with an error naming its structural obstacle, rather than accepted and silently over-published. `forgeProviders` is rejected for a different reason: its host methods are synchronous and cannot cross the worker's message port. `PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS` in `electron/schemas/plugin.ts` is the enumerated set, so a group that later grows a project axis is removed in one place. `agentMcp` is allowed: its credentials are minted per terminal launch and bound to one project, and the grant registry refuses to pair a project plugin's instance with any project but its own.
+Panels, commands/actions, toolbar buttons, keybindings, context menus and settings scope cleanly. The groups that register into a registry with no project axis at all — `menuItems`, `agents`, `skills`, `recipes`, `fileDecorationProviders`, `processTools`, `mcpServers`, `tours` — are rejected at manifest validation for `scope: "project"`, each with an error (`<group>_project_scope_forbidden`) naming its structural obstacle, rather than accepted and silently over-published. `fileEditors` is in the same list because its slot resolves through the host-bundled builtin view registry, which no project plugin's renderer can register into. `previewTools` and `guestAdapters` never reach this check: they are built-in-only under every scope (`<group>_builtin_only`). `forgeProviders` is rejected for a different reason (`forge_provider_project_scope_forbidden`): its host methods are synchronous and cannot cross the worker's message port. `PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS` in `electron/schemas/plugin.ts` is the enumerated set of nine, so a group that later grows a project axis is removed in one place. `agentMcp` is allowed: its credentials are minted per terminal launch and bound to one project, and the grant registry refuses to pair a project plugin's instance with any project but its own.
 
 ### Host binding
 
@@ -300,9 +335,11 @@ Every attempt records its phases (`activate`, `import`, `styles`, `view-load`, `
 
 In dev, the host can re-evaluate a plugin view's module after the source changes. For installed and builtin plugins there is no production hot-reload path; project-local plugins are the exception, and reload from a watched `dist/` in an ordinary session (see [Hot reload for project plugins](#hot-reload-for-project-plugins)). A `daintree-plugin dev` session reloads views too — a settled rebuild re-enters the ordinary load path and mints a fresh view generation, so it is the same mechanism rather than a view-less worker respawn (#12277). V8 caches ESM module records by URL string and Chromium offers no eviction API (Vite #14438 / Chromium #350426234, unresolved as of 2026). Every cache-busting query string permanently expands the renderer's module map; iterating against a long-lived production renderer would leak memory indefinitely. Treat hot reload as a dev affordance and assume production users reach a clean state by closing and reopening the panel.
 
-### Renderer-first teardown
+### Renderer notification after teardown
 
-The renderer is the first surface to know that a plugin's panel kind has been removed: `PluginService.unloadPlugin` fires `plugin:panel-kinds-changed` before it deletes the in-memory plugin entry, so the broadcast crosses the IPC boundary while host APIs are still live. `PluginViewHost` subscribes to that push and aborts its `disposeSignal` synchronously when its kind disappears from the payload — _before_ React unmounts the subtree. Plugin `useEffect` cleanups that listen on `disposeSignal` (fetch aborts, subscription teardown, MessagePort closes) therefore run while the plugin's IPC handlers and host APIs are still answering, instead of racing against the main-side teardown.
+The renderer is told _last_, after host teardown. `unregisterPluginPanelKinds` only schedules the `plugin:panel-kinds-changed` broadcast, and `PluginContributionBroadcaster` sends it from a microtask — after `unloadPlugin` has returned, which is to say after the plugin's IPC handlers were removed, its worker disposed and its entry deleted. `PluginViewContent` (`src/components/Plugin/PluginViewContent.tsx`) subscribes to that push and aborts the view's `disposeSignal` when its kind disappears from the payload, before React unmounts the subtree.
+
+So a `disposeSignal` listener runs against a plugin that is already gone. Cleanups must tolerate host calls rejecting — an `invoke` to a removed handler, a push channel that will never fire again — and must not depend on a final round trip to the plugin succeeding. Abort fetches, close ports and drop subscriptions locally; if state has to reach the plugin before teardown, send it earlier (on change, or through `persistState`).
 
 ### Error boundaries
 
@@ -310,7 +347,7 @@ Every plugin view is wrapped in an error boundary by the host. A crash renders t
 
 ### Trusted-inline → iframe contract
 
-Today's inline host is the right trade for curated trust. The `PluginViewHost` API surface — the `PanelViewProps` shape (`panelId`, `pluginId`, `disposeSignal`) and the broadcast-driven teardown ordering — is intentionally chosen to survive a future cutover to a trusted iframe model. `componentPath` would resolve to a sandboxed frame URL instead of a direct ESM import; the props would marshal over `postMessage`; `disposeSignal` would still abort on the same `panel-kinds-changed` removal event. No manifest change would be required on the plugin author's side.
+Today's inline host is the right trade for curated trust. The view host's API surface — the `PanelViewProps` shape and the broadcast-driven teardown ordering — is intentionally chosen to survive a future cutover to a trusted iframe model. `PanelViewProps` in `shared/types/plugin.ts` is the authority; today it carries `panelId`, `pluginId`, `disposeSignal`, `panelRemovedSignal`, `styleRootAttributes`, and the optional `initialArgs`, `stateVersion`, `persistState`, `requestReload`, `setHasUnsavedChanges`, `worktreeId` and `settingsContext`. `componentPath` would resolve to a sandboxed frame URL instead of a direct ESM import; the props would marshal over `postMessage`; `disposeSignal` would still abort on the same `panel-kinds-changed` removal event. No manifest change would be required on the plugin author's side.
 
 ### Inline, not iframe
 
@@ -367,11 +404,11 @@ Pending deltas are bounded (512 commit durations, sampled beyond that; 32 view l
 
 ## MCP supervisor
 
-`PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) manages plugin-shipped `mcpServers`. Daintree is the MCP client here: the supervisor spawns each server over stdio and the `pluginMcp` IPC handlers (`electron/ipc/handlers/pluginMcp.ts`) are the only way to reach its tools; the in-app Daintree Assistant is their consumer, and the plugin manager's settings UI starts, restarts and inspects servers. Nothing on this path feeds the MCP server terminal agents connect to (`electron/services/mcp-server/`). The inbound direction is [Agent MCP endpoints](#agent-mcp-endpoints).
+`PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) manages plugin-shipped `mcpServers`. Daintree is the MCP client here: the supervisor spawns each server over stdio and the `pluginMcp` IPC handlers (`electron/ipc/handlers/pluginMcp.ts`) are the only way to reach its tools; the in-app Daintree Assistant is their consumer, and the plugin manager inspects and restarts servers. The `pluginMcp` namespace is exactly `list`, `getStderr`, `restart`, `listTools`, `getFullSchema`, `getConfig`, `setConfig`, `callTool` and `resolveConsent`; there is no separate start operation and no per-server enable switch. Nothing on this path feeds the MCP server terminal agents connect to (`electron/services/mcp-server/`). The inbound direction is [Agent MCP endpoints](#agent-mcp-endpoints).
 
 ### Spawn timing
 
-Servers spawn **on first tool use**, not at plugin activation. The supervisor keeps a registry of available servers (their stdio command + args + env) but spawns one only when something asks for it — a `pluginMcp.listTools` / `pluginMcp.getFullSchema` / `pluginMcp.callTool` for that server, or a start/restart from the plugin manager.
+Servers spawn **on first tool use**, not at plugin activation. The supervisor keeps a registry of available servers (their stdio command + args + env) but spawns one only when something asks for it — a `pluginMcp.listTools` / `pluginMcp.getFullSchema` / `pluginMcp.callTool` for that server, or a `pluginMcp.restart`.
 
 Rationale: a user with 10 installed plugins, each shipping an MCP server, doesn't pay the startup cost of 10 subprocesses unless they actually use them. Many MCP servers are heavy at startup (loading SDKs, validating credentials, fetching schemas).
 
@@ -385,7 +422,7 @@ This matters because tool definitions consume tokens in whatever model ends up r
 
 - Spawn on first use.
 - Keep alive until the plugin unloads or Daintree quits — teardown is keyed by plugin, not by any caller or session.
-- On unexpected exit the supervisor transitions the server to `crashed`, records the error, invalidates the cached tool list, and rejects any pending calls. There is **no** automatic retry, backoff, or "degraded" state — the status enum is `spawning | ready | crashed | stopped`. Recovery is an explicit manual restart (the `pluginMcp.restart` IPC, or re-enabling the server from Preferences → Plugins), which also re-runs the trust-on-first-use tool comparison before any tool is re-injected.
+- On unexpected exit the supervisor transitions the server to `crashed`, records the error, invalidates the cached tool list, and rejects any pending calls. There is **no** automatic retry, backoff, or "degraded" state — the status enum is `spawning | ready | crashed | stopped`. Recovery is explicit: restart the server (the `pluginMcp.restart` IPC, which the plugin manager calls), or disable and re-enable the whole plugin, which unloads it and lets the next tool use spawn the server afresh. A restart also re-runs the trust-on-first-use tool comparison before any tool is re-injected.
 - Teardown on plugin unload and on Daintree quit is execa-managed: `subprocess.kill()` with no explicit signal, so execa's own `forceKillAfterDelay` escalation stays armed (a 3-second grace before the hard kill). Passing a signal would disable that escalation, so the supervisor deliberately doesn't. On Windows it additionally shells out to `taskkill /T /F` after the grace window, because Windows does not cascade a kill to grandchildren.
 - Subprocess `stderr` is captured and logged for debugging but not exposed to agents.
 
@@ -405,18 +442,20 @@ An MCP server can do anything the plugin could do: make network requests, read a
 
 `contributes.agentMcp` is the inbound direction: Daintree hosts a tools-only MCP endpoint for the plugin on the same loopback listener as its own MCP server, and agents in Daintree's terminals are the clients. The code lives in `electron/services/pluginAgentMcp/`; the listener side is documented in [MCP server → Plugin endpoints](../architecture/mcp-server.md#plugin-endpoints).
 
-Four pieces, each keyed by plugin **instance** rather than manifest id, so two projects loading the same project plugin — or a project copy beside an installed one — never share consent, credentials or rosters:
+Six pieces, each keyed by plugin **instance** rather than manifest id, so two projects loading the same project plugin — or a project copy beside an installed one — never share consent, credentials or rosters:
 
 | Piece | File | Holds |
 | --- | --- | --- |
-| Roster registry | `endpointRegistry.ts` | The validated, frozen tool descriptors plus an invoker, per instance and endpoint. Written by `host.mcp.registerTools`, dropped on unload. |
-| Enablement | `projectEnablement.ts`, `projectDefaults.ts` | `projectAgentMcpEnablement` in the user store: `projectId → pluginInstanceId → endpointId → { decidedAt, enabled? }`, the user's answer. Absent an answer, a project plugin's endpoint follows the repository's `.daintree/mcp.json`, cached per project and re-read at every launch and settings read. Default off; switching one off revokes its credentials. |
-| Grants | `grantRegistry.ts` | One credential per endpoint per terminal launch. Only the SHA-256 digest of the bearer is kept; the bearer itself is handed to the launch once, in its config file or its environment. |
+| Roster registry | `endpointRegistry.ts` | The validated, frozen tool descriptors plus an invoker, per instance and endpoint. Written by `host.mcp.registerTools` and by the database endpoint, dropped on unload. |
+| Roster validation | `validateTools.ts`, `schemaValidation.ts` | Every registered tool is checked before it enters the registry — name pattern, reserved names, description and schema byte limits, tools per endpoint — and its input schema (and output schema, when declared) is compiled once, so each call's arguments are validated against it. |
+| Database endpoint | `databaseEndpoint.ts`, `databaseTools.ts`, `databaseQueryProcess.ts`, `databaseQueryWorker.ts` | The host's own read-only roster over a plugin's declared `databases`, on the reserved endpoint id `@databases`. Bound at load, independent of activation, so listing or calling it never runs plugin code and idle worker disposal leaves it in place. Each call runs in its own short-lived `utilityProcess` (at most two at once, eight queued), because `node:sqlite` cannot interrupt a running statement and a process can be killed mid-step. |
+| Enablement | `projectEnablement.ts`, `projectDefaults.ts` | The user's access level per plugin instance: `off`, `read-only` (the database tools) or `read-write` (those and the plugin's own tools). The first source that answers wins: the per-project answer (`projectAgentMcpAccess`, where `access: null` means "follow the default"), then an answer recorded before access levels existed (`projectAgentMcpEnablement`, per endpoint, read only), then — for an installed plugin — the user's answer for every project (`pluginAgentMcpAccess`), or — for a project plugin — the repository's `.daintree/mcp.json`, cached per project and re-read at every launch and settings read. A repository never answers for an installed plugin. Default off; reducing access revokes the affected credentials at once. |
+| Grants | `grantRegistry.ts` | One credential per plugin server per terminal launch, with a tool scope (`{ databases, pluginEndpointId? }`) fixed when it is minted. Only the SHA-256 digest of the bearer is kept; the bearer itself is handed to the launch once, in its config file or its environment. |
 | Declared endpoints | `declaredEndpoints.ts` | Which endpoints of which loaded instances a given project could expose. The launch path reads it; the route instead re-checks the grant, that the instance is loaded, and the project's enablement. |
 
 **The request path.** An agent launch in a project (`electron/ipc/handlers/terminal/lifecycle.ts`) whose registry entry declares `capabilities.launchMcp` resolves the plugins with agent access in that project and loaded here, names each (`serverKeys.ts`), re-checks each immediately before minting its one grant, and has `McpPaneConfigService` render the grants, beside the Daintree orchestration entry when the tier is on, in that agent's dialect (`electron/services/launchMcp/renderLaunchMcp.ts`): a `0600` file under `userData` passed by flag or environment variable, `-c` overrides with bearers in the environment, or inline JSON in the environment. The lifecycle appends the args, shell-quoted, and merges the environment into the spawn. An agent request to `/mcp/plugin/<instance>` is branched off by `HttpLifecycle` before orchestration auth and handled by `pluginMcpRoute.ts`, which authenticates the grant, checks the path, the plugin and that the project's access still covers the grant on every request, and serves a per-session MCP server from `pluginSessionServer.ts` holding the host's database tools and the plugin's own, as the grant allows. A `tools/call` for one of the plugin's own tools activates the plugin if needed, looks the roster up, and invokes the plugin's `execute` — in-process for a builtin, across the worker's message port for everything else, where the result is serialized in the worker before it crosses.
 
-**Lifetimes.** Grants die with the terminal launch (PTY exit, spawn failure, a restart of the same pane), with the plugin instance (disable, uninstall, project close, trust revoke, reload), and with the endpoint's enablement. They survive idle worker disposal and a worker crash-respawn: the instance is still loaded, so its credentials stay valid, in-flight calls are rejected, and the roster returns when the worker re-activates. Nothing about a grant is persisted, so none outlives the app.
+**Lifetimes.** Grants die with the terminal launch (PTY exit, spawn failure, a restart of the same pane), with the plugin instance (disable, uninstall, project close, trust revoke), and with a reduction in the plugin's access. A revoke carries one of four reasons: `terminal-exited`, `plugin-unloaded`, `access-reduced` or `server-stopped` (the listener shutting down). A reload is the exception among unloads: `unloadPlugin(id, { reload: true })` _holds_ the instance's grants (`holdPlugin`) instead of revoking them, because a running agent cannot be handed a new bearer. A held grant still authenticates but reaches no plugin code; when the reload settles, the grants survive if the new generation declares the same agent surface and are revoked as `plugin-unloaded` otherwise, or if no generation comes back. Grants also survive idle worker disposal and a worker crash-respawn: the instance is still loaded, so its credentials stay valid, in-flight calls are rejected, and the roster returns when the worker re-activates. Nothing about a grant is persisted, so none outlives the app.
 
 ## Worktree observability
 
@@ -513,8 +552,8 @@ This classification is host-side UX policy on Daintree's own action system. It d
 
 **Kill-switch — shipped (#10891).** `PluginBlocklistService` (`electron/services/plugin/PluginBlocklistService.ts`) is the cheap, fast precursor to publisher identity: a small remote list of plugins Daintree refuses to load, fetched from `updates.daintree.org/plugins/blocklist.json` (`shared/config/pluginBlocklist.ts`) and cached on disk under `userData` for offline enforcement.
 
-- **Resolved once, before any scan.** `PluginService.initialize()` awaits `getBlocklist()` ahead of the first discovery pass and holds the result for the whole session, so the answer can't change halfway through a scan.
-- **Fails open.** A network error, a timeout (8 s ceiling), or a parse failure returns `null` and every plugin loads. A stale disk cache is still enforced while offline — stale-while-revalidate against a 6-hour TTL, deliberately shorter than the model-catalog TTL so an entry reaches running installs in hours, not a day.
+- **Resolved before any scan, refreshed after.** `PluginService.initialize()` awaits `getStartupBlocklist()` ahead of the first discovery pass, so every load gate in the scan reads one snapshot. That call never waits on the network while a validated list is on disk: a cached list is enforced at once even when stale, and the revalidated list, when it arrives, is adopted through `applyRefreshedBlocklist`, which unloads any loaded plugin it newly blocks and moves a newly blocked disabled plugin to the blocked set. Only a first run with no usable cache waits for the fetch, so it never loads against an empty list a fetch was about to fill. A refresh that fails never drops the list already enforced.
+- **Fails open only without a list.** A network error, a timeout (8 s ceiling), or a parse failure leaves the last validated list (on disk or in memory) enforced; only when no validated list exists does every plugin load. A stale disk cache is still enforced while offline — stale-while-revalidate against a 6-hour TTL, deliberately shorter than the model-catalog TTL so an entry reaches running installs in hours, not a day.
 - **Matched by `{ name, ranges }`.** Entries carry a plugin `name`, one or more semver `ranges`, a machine `reason` code, and an optional human `message`. `jti` is reserved for a future signed-identity model and unused today.
 - **Refused before activation.** A match is checked _before_ the user-disabled gate, so a plugin that is both disabled and blocklisted still reads as blocked — the security signal wins. The plugin never enters `this.plugins` and `activate()` never runs; its name is reserved so a later directory scan can't hijack the namespace, and its manifest is retained so `listPlugins()` can surface the block. The user gets one rate-limited warning toast, and the plugin manager shows a **Blocked** badge with the reason and a disabled enable toggle (`blocklisted` / `blocklistReason` on `LoadedPluginInfo`).
 - **A project plugin never claims the global namespace.** A blocklisted project-local manifest is refused for that project without reserving its id, so one repository can't deny an id to every other project or to the user's own installed plugins.

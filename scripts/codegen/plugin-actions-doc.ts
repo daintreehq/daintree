@@ -1,5 +1,7 @@
 // Generates docs/plugins/actions.md from the live action manifest.
-// Run: npm run codegen:plugin-actions   Verify (CI): npm run check:plugin-actions
+// Run: npm run codegen:plugin-actions   Verify locally: npm run check:plugin-actions
+// CI does not run the check script; the freshness gate is the vitest suite
+// src/services/actions/__tests__/pluginActionsDoc.test.ts.
 //
 // The built-in actions a plugin may dispatch are everything in
 // `BUILT_IN_ACTION_IDS` except `DENY_PLUGIN_DISPATCH_ACTION_IDS`, and the args

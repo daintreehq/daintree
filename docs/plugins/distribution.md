@@ -4,7 +4,9 @@ Plugins can be distributed three ways:
 
 1. **Sideload** — drop a directory into `~/.daintree/plugins/`
 2. **File install** — share a `.dntr` package file
-3. **URL install** — paste a URL pointing to a `.dntr` file
+3. **URL install** — paste a URL pointing to a `.dntr` file, or link to it with a [`daintree://` deep link](#deep-links)
+
+The [`daintree-plugin install`](#from-the-cli) command reaches the file and URL routes from a script.
 
 No marketplace or central registry is involved. Authors host their own plugins on GitHub Releases, their website, or any public URL.
 
@@ -13,11 +15,11 @@ No marketplace or central registry is involved. Authors host their own plugins o
 A `.dntr` file is a zip archive containing a plugin.
 
 ```
-my-plugin-0.1.0.dntr       (zip archive)
+acme.my-plugin-0.1.0.dntr  (zip archive, named {publisher}.{name}-{version}.dntr)
 ├── plugin.json
 ├── dist/
 │   └── index.js
-│   └── index.js.map
+│   └── index.js.map       (only with --sourcemaps)
 ├── skills/
 │   └── tdd-workflow.md
 └── icons/
@@ -30,7 +32,7 @@ my-plugin-0.1.0.dntr       (zip archive)
 - Paths referenced in `plugin.json` (`main`, `componentPath`, `path` in skills, `args` in mcpServers) resolve relative to the archive root after extraction.
 - Archive is standard zip; authors can produce it with any tool, but `daintree-plugin package` is the recommended builder.
 
-The `.dntr` extension is associated with Daintree at OS level after installation. Double-clicking a `.dntr` file opens Daintree's install dialog.
+The `.dntr` extension is associated with Daintree at OS level after installation. Double-clicking a `.dntr` file opens a confirmation in Daintree showing the plugin's identity and declared capabilities, read from the archive before anything is written — see [File install](#file-install).
 
 ## Packaging
 
@@ -38,10 +40,10 @@ The `.dntr` extension is associated with Daintree at OS level after installation
 daintree-plugin package
 ```
 
-Produces `{pluginId}-{version}.dntr` in the project root. Runs through:
+Produces `{pluginId}-{version}.dntr` in the project root, e.g. `acme.my-plugin-0.1.0.dntr`. Runs through:
 
 1. Validates the manifest via the same Zod schema Daintree uses at load.
-2. Builds the plugin with Vite (unless `--skip-build` is passed).
+2. Builds the plugin with the plugin's own Vite (unless `--skip-build` or `--dry-run` is passed) — never `npm run build`; a `vite.config.server.*` gets a second pass. See [Development loop → How the CLI builds](./dev-loop.md#how-the-cli-builds).
 3. Collects the file list. The candidates are every file `.gitignore` does not exclude, **plus** everything under the build-output directories even when they are gitignored — `dist/` always, and the top-level directory of `main` and of every view `componentPath` — because build output is ignored by convention and is exactly what ships. `.dntrignore` (root only, `.gitignore` syntax) then prunes that union, protected directories included, so `dist/docs/**` can be kept out of the archive; it is strictly subtractive and cannot re-include something `.gitignore` dropped. `plugin.json` is always added. Dotfiles never ship.
 4. Applies the normative exclusion list on top: `node_modules/`, `.git/`, source files (`*.ts`/`*.tsx`), source maps (unless `--sourcemaps`), root-level dev metadata (`package.json`, lockfiles, `tsconfig*.json`, `*.config.*`, `.dntrignore` itself) and any `*.dntr`. Then it checks that `main`, every view `componentPath` and every skill `path` survived, and fails naming the missing file rather than writing an archive the installer would reject.
 5. Writes the zip.
@@ -159,9 +161,10 @@ This is the right distribution method for:
 
 A user with a `.dntr` file can install it by:
 
-- **Double-clicking** the file (after first Daintree install, the OS associates the extension)
-- **Dragging** the file into Daintree's window
-- Running **Preferences → Plugins → Install from file…**
+- **Double-clicking** the file (after first Daintree install, the OS associates the extension). The archive arrives through macOS's open-file event, or as a launch argument on Windows and Linux, and goes through a consent preview: Daintree reads `plugin.json` out of the archive without extracting it and shows the plugin's name, id, version and declared capabilities, and nothing is installed until the user confirms. The confirm button stays disabled for a moment after the dialog opens, so a click already in flight can't approve it. Several archives opened at once are previewed one at a time.
+- **Dragging** the file onto the plugin manager (Settings → Plugins → Plugin manager). Elsewhere in the window a dropped `.dntr` is not installed.
+- Choosing **Install plugin → Install from file** in the plugin manager.
+- Running `daintree-plugin install ./acme.my-plugin-0.1.0.dntr` ([From the CLI](#from-the-cli)).
 
 Daintree:
 
@@ -170,53 +173,71 @@ Daintree:
 3. Extracts into a temp dir and atomically swaps into `~/.daintree/plugins/{publisher}.{name}/`.
 4. Loads the plugin.
 
-The file-install path runs without a pre-install confirmation gate enumerating capabilities or publisher. The only interstitial prompts are the plaintext-HTTP warning (URL installs only) and the update-preview confirm when re-fetching an already-installed plugin's URL. Capabilities are surfaced at MCP-tool-call time through the TOFU consent prompt, not at install time — see `docs/plugins/trust-model.md`.
+Only the double-click route shows that preview. Drag-and-drop, **Install from file**, URL installs and `daintree-plugin install` install without a pre-install confirmation enumerating capabilities or publisher; the only other interstitial prompt is the update confirm when re-fetching an already-installed plugin's URL ([Updating a plugin](#updating-a-plugin)). On every route, capabilities are also enforced at use: the gated calls ask through the TOFU consent prompt the first time — see [Trust model](./trust-model.md).
 
-If a plugin with the same `name` is already installed, Daintree replaces it unconditionally: it unloads the old plugin and atomically swaps the new directory into place (`PluginInstaller.ts`). There is no semver comparison between installed and incoming versions, no downgrade confirmation, and no identical-version block — the install always wins. The swap preserves the original `installedAt` and records `updatedAt`. (Version-aware upgrade/downgrade gating is not yet implemented.)
+If a plugin with the same `name` is already installed, Daintree replaces it: it unloads the old plugin and atomically swaps the new directory into place (`electron/services/plugin/PluginInstaller.ts`). There is no semver comparison between installed and incoming versions, no downgrade confirmation, and no identical-version block. The swap preserves the original `installedAt` and records `updatedAt`. (Version-aware upgrade/downgrade gating is not yet implemented.) Two cases are refused or undone:
+
+- An archive whose `name` is a built-in plugin's id is refused before anything is written (`name_collision`) — a built-in can never be replaced by an installed plugin.
+- If the new version is swapped in but then fails to load, an upgrade rolls back to the previous version, which stays installed; the install reports the failure.
 
 ## URL install
 
 ```
-Preferences → Plugins → Install from URL…
+Settings → Plugins → Plugin manager → Install plugin → Install from URL
 ```
 
-The user pastes a URL pointing to a `.dntr` file. Daintree:
+The user pastes an `https://` URL pointing to a `.dntr` file. Daintree:
 
-1. Fetches the URL with a 30 MB size cap and a 30 s timeout (shared with the manual update-check path).
+1. Fetches the URL with a 30 MB size cap and a 30 s timeout (shared with the manual update-check path). The URL must be `https:` — see the security notes below.
 2. Accepts the response when the content-type is one of `application/zip`, `application/x-zip`, `application/x-dntr`, or `application/octet-stream`, or — when none of those match — when the original URL's path ends in `.dntr`.
 3. Runs the same flow as file install from that point.
 
 **Typical URL patterns:**
 
-- GitHub release asset: `https://github.com/gpriday/my-plugin/releases/latest/download/gpriday.my-plugin.dntr`
-- Pinned version: `https://github.com/gpriday/my-plugin/releases/download/v0.2.0/gpriday.my-plugin.dntr`
+- GitHub release asset: `https://github.com/gpriday/my-plugin/releases/latest/download/gpriday.my-plugin.dntr` — `package` writes a versioned name, so a stable `latest` URL needs the release to carry a copy under a fixed name ([Development loop → CI integration](./dev-loop.md#ci-integration))
+- Pinned version: `https://github.com/gpriday/my-plugin/releases/download/v0.2.0/gpriday.my-plugin-0.2.0.dntr`
 - Static host: `https://plugins.example.com/linear-planner.dntr`
 
 **Security considerations:**
 
-- Daintree does not validate signatures on URL-installed plugins, at any install path. Trust is on the user. The one automated backstop is the [remote kill-switch](./architecture.md#signing-and-kill-switch): a plugin matching a Daintree-hosted blocklist entry by name and version refuses to load. It is reactive — it helps only against a compromise someone has already reported, and it fails open on any fetch or parse error.
-- No TLS enforcement beyond what the OS does for HTTPS. Installing from non-HTTPS URLs is allowed but warned (the `pendingHttpUrl` plaintext-HTTP confirm in `usePluginManager.ts`).
+- Daintree does not validate signatures on URL-installed plugins, at any install path. Trust is on the user. The one automated backstop is the [remote kill-switch](./architecture.md#signing-and-kill-switch): a plugin matching a Daintree-hosted blocklist entry by name and version refuses to load. It is reactive — it helps only against a compromise someone has already reported. If fetching or parsing the list fails, Daintree keeps enforcing the last validated cached list, and fails open only when no validated list is available.
+- **HTTPS only.** Every hop of the download, the first included, must be `https:`; an `http://` URL is refused before any request is made (`fetchWithPrivateHostGuard` in `electron/utils/pluginDownloadPolicy.ts`). TLS is whatever the OS and Electron's network stack verify for HTTPS. The plugin manager still shows an "Install over HTTP?" warning for an `http://` URL, but confirming it does not install: the download is refused and the install fails.
 - Redirects are followed **manually**, up to 5 hops (`MAX_REDIRECT_HOPS`), and every hop is independently re-validated: each `Location` must stay `https:` (an `https→http` downgrade is rejected) and its host must clear both the literal SSRF guard and a DNS-resolution check (a public URL that 30x-redirects to a private/loopback/link-local address is rejected before the body is fetched). Acceptance is decided from the final response's content-type; the `.dntr`-suffix fallback is checked against the **original** pasted URL's path, since the resolved URL isn't reliable through Electron's fetch.
-- Private, loopback, and link-local hosts are rejected before the fetch runs (SSRF guard).
-- The plaintext-HTTP warning shows the original URL so the user can spot a non-HTTPS host before committing. Declared capabilities are not enumerated at install time — consent is gathered per-tool-call at runtime (TOFU; see `docs/plugins/trust-model.md`).
+- Private, loopback, and link-local hosts are rejected — a literal private address before the fetch runs, and a hostname that resolves to one at every hop (SSRF guard).
+- A URL carrying credentials (`https://user:pass@host/…`) is rejected outright, so they are never fetched or stored as the plugin's update URL.
+- Declared capabilities are not enumerated at install time on this route — consent is gathered per call at runtime (TOFU; see [Trust model](./trust-model.md)).
 
 Install only from URLs you trust.
 
+## Deep links
+
+A web page or README can hand a plugin to Daintree with a `daintree://` link (`electron/setup/deepLinkInstall.ts`):
+
+- `daintree://plugin/install?url=<url>` opens the plugin manager with the **Install from URL** dialog pre-filled with `<url>` (URL-encoded). It never installs by itself: the user presses install, and the URL goes through every rule above, so it must be `https:`. If an install dialog is already open, the link doesn't replace what the user is typing.
+- `daintree://plugin/open?id=<publisher.name>` opens the plugin manager on that plugin, or says it isn't installed.
+
+Any other `daintree://` link is ignored.
+
+## From the CLI
+
+`daintree-plugin install <path-or-url>` asks the running Daintree to install a local `.dntr` or an `https://` URL, with the same checks as the plugin manager's buttons, and exits non-zero on failure. See [Development loop → `install`](./dev-loop.md#daintree-plugin-install-path-or-url).
+
 ## Updating a plugin
 
-Daintree does not auto-update sideloaded, file-installed, or URL-installed plugins. The user is responsible for re-installing the newer version by the same mechanism.
+An update offered by the update check is installed only after the user confirms it. Sideloaded and file-installed plugins are updated by installing another archive through the same route, and installing an archive whose manifest name matches an installed plugin replaces it without a separate update confirmation. Plugins installed from a URL remember that URL, and Daintree can re-fetch it:
 
-For plugins distributed via URL, this means:
+- **Check for updates** — the refresh button in a plugin's detail pane in the plugin manager re-downloads the original URL and compares its SHA-256 with the installed archive's.
+- **Update all** — the plugin manager's header button checks every URL-installed plugin, then walks through each one that has an update.
+- **Check for plugin updates in the background** — an opt-in setting in Settings → Plugins, off by default. When on, Daintree checks URL-installed plugins about once a day and posts an inbox notification when updates are available. It never installs anything.
 
-- Publishers should use stable "latest" URLs where appropriate (GitHub's `releases/latest/download/` works well).
-- Users can right-click an installed plugin → "Check for update" — Daintree re-fetches from the original URL and shows a diff if the hash changed.
+An available update opens a confirm showing the new version, the new display name if it changed, and the capabilities the new version declares. Confirming re-downloads the URL and installs only if the bytes match the archive that was reviewed; if the publisher replaced the file in between, nothing is installed and the user is asked to check again. Settings are kept.
 
-Auto-updating plugins is a planned feature for a future release, gated behind per-plugin user consent.
+Publishers should use stable "latest" URLs where appropriate (GitHub's `releases/latest/download/`, with a fixed asset name).
 
 ## Uninstalling
 
 ```
-Preferences → Plugins → Installed → {plugin} → Uninstall
+Settings → Plugins → Plugin manager → {plugin} → Uninstall plugin
 ```
 
 Daintree:
@@ -225,7 +246,7 @@ Daintree:
 2. Terminates any MCP subprocesses the plugin had spawned.
 3. Revokes every TOFU consent pin for the plugin (always, regardless of the settings choice) so a reinstall re-prompts rather than inheriting prior approvals.
 4. Deletes `~/.daintree/plugins/{publisher}.{name}/`.
-5. By default, **keeps** the plugin's user-scope settings file (`~/.daintree/plugin-settings/{publisher}.{name}.json`) so an API token survives a reinstall. The CLI's `--delete-settings` flag (or the UI's "also remove stored settings" checkbox) deletes that file instead.
+5. By default, **keeps** the plugin's user-scope settings file (`~/.daintree/plugin-settings/{publisher}.{name}.json`) so an API token survives a reinstall. The CLI's `--delete-settings` flag (or the dialog's "Also delete this plugin's saved settings" checkbox) deletes that file instead.
 
 Secrets are not stored in a separate file — user-scope `type: "secret"` values live in the same user-scope settings file, encrypted at rest through the OS keychain (Electron `safeStorage`: macOS Keychain / Windows DPAPI / Linux libsecret-kwallet) and persisted as a tagged ciphertext envelope. On a host with no keychain backend (typically headless Linux) a secret can't be saved at all, and the settings UI says so. User-scope secrets share the settings file's lifecycle: "keep settings" keeps them too, and `--delete-settings` removes them.
 
@@ -248,8 +269,8 @@ For authors who want to share plugins publicly:
 
 For teams:
 
-- Host `.dntr` files behind your org's auth (VPN-only URL, signed S3 link, internal artifact registry).
-- Users install via "Install from URL…" pasting the authenticated URL. Daintree sends cookies with the request for same-origin URLs.
+- Host `.dntr` files where the URL itself carries the authorization, such as a signed S3 or CDN link with the signature in the query string. Users paste it into **Install from URL**. Daintree sends no cookies or other stored credentials with the request, and rejects `user:pass@` URLs.
+- A URL on a private network won't install: any host that is, or resolves to, a private, loopback or link-local address is refused, which rules out VPN-only and intranet hosts. Share those archives as files instead — download, then **Install from file** or `daintree-plugin install <path>`.
 - For internal auto-rollout, use MDM or a shell script that writes directly to `~/.daintree/plugins/`.
 
 Team-internal distribution is fully supported with no cloud dependency on Daintree.

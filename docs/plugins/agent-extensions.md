@@ -9,7 +9,7 @@ Daintree is an orchestration layer for AI coding agents. Plugins touch MCP in tw
 
 If you want an agent in a Daintree terminal to call your tools, you want `agentMcp`; if you only want it to read your plugin's SQLite data, declaring the database is enough. An `mcpServers` contribution cannot do either, however it is configured.
 
-Skills are a third route: the plugin ships markdown skill files that Daintree's own MCP server serves through its `skills.search` / `skills.load` tools. Skills are pure declarative knowledge — prompt snippets, workflow instructions, rubrics — injected into the agent's context on demand. See [Skills](#skills).
+Skills are a third route: the plugin ships markdown skill files that Daintree's own MCP server serves through its `skills.search` / `skills.load` tools. Skills are pure declarative knowledge — prompt snippets, workflow instructions, rubrics — injected into the agent's context on demand. Those two tools are in the Full tool set of Daintree's server, not the Core one, so far fewer sessions reach them than reach a plugin's agent MCP server; see [Who reaches skills](#who-reaches-skills).
 
 None of the three changes which agent CLI runs. A separate contribution point, `contributes.agents` (requires the `agent:register` capability), goes the other direction: it teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CLI appears as a named, selectable agent rather than a generic shell. See [Contribution points → Agents](./contribution-points.md#agents--shipped-minimal-tier) for that manifest shape.
 
@@ -61,6 +61,11 @@ Daintree spawns MCP servers **on first tool enumeration**, not at plugin activat
 **Tool discovery:** Daintree queries each server's tool list lazily as well. The list is fetched on first spawn and cached (invalidated on crash or restart). Discovery is capped and two-tier, so a server that ships with 40 tools does not hand its IPC caller 40 full schemas at once: tier-1 (`pluginMcp.listTools`) returns terse tool summaries, bounded by the `maxToolsPerSession` cap (`clampMaxTools`), and the full JSON schema for a tool is fetched via tier-2 (`pluginMcp.getFullSchema`) only when the caller asks for that tool.
 
 **Crash handling:** if a server process dies unexpectedly, the supervisor transitions it to status `crashed`, records `lastError`, invalidates its tool cache, and rejects any pending tool calls (`handleSubprocessExit`, `electron/services/PluginMcpSupervisor.ts`). There is **no** automatic retry or backoff, and no "degraded" state — the status enum is `spawning | ready | crashed | stopped`. Recovery is an explicit manual restart through the `pluginMcp.restart` IPC.
+
+**Tool call gating:** every `pluginMcp.callTool` passes two checks before it reaches the server (`electron/ipc/handlers/pluginMcp.ts`):
+
+1. **A rate limit**, checked first so a throttled call never spends a prompt: each server allows a burst of 20 calls, then refills at one call per second (`PluginMcpRateLimiter`). A call over the limit is denied with a retry delay.
+2. **Per-tool consent.** The host derives a danger tier from the tool's annotations — `readOnlyHint: true` is D0, the default is D1, `destructiveHint: true` is D2, and `openWorldHint: true` raises any of those one tier — and caps it by the plugin's declared capabilities: D2 for a plugin that declares a capability that elevates its actions to confirm (`shell:exec`, `git:write`, `fs:project-write` and the rest of `CONFIRM_TRIGGERING_CAPABILITIES`), D1 otherwise (`PluginMcpTierAuth`). A tool whose tier is above the cap is refused outright, never downgraded, so a D3 tool never runs. Any other tool asks the user before its first call, at every tier; the user can approve once or remember the approval, which is pinned to a fingerprint of the tool's description, input schema and hints, so a server that changes any of them asks again.
 
 **Secret rotation:** when a **user-scope** setting changes, every currently running server (status `ready` or `crashed`) that references it via `${settings:settingId}` in its `command`, `args`, or `env` is automatically restarted, so the new value is folded in at the next spawn (`PluginMcpSupervisor.notifySettingChanged`, wired from `PluginService.setSettingValueFromUi`/`deleteSettingValueFromUi`). The restart is debounced ~1s so a burst of edits coalesces into one respawn. Servers that were never lazily started are left stopped — a settings change never eagerly boots a server. Project-scope writes are ignored, since `${settings:*}` resolves against user scope only.
 
@@ -191,12 +196,32 @@ export async function activate(host: PluginHostApi) {
 
 What the host does with the roster:
 
-- **Lazy activation still applies to your tools.** An agent's first `tools/list` or `tools/call` activates the plugin if it has not run yet, and waits briefly for the roster to register. The database tools are host code: listing or calling them never starts your plugin.
-- **Your roster is advertised verbatim.** `tools/list` returns the database tools, if any, and exactly the tools you registered — name, description, `inputSchema`, optional `outputSchema`, and the `annotations` you declared — and nothing else: no resources, no prompts, no server instructions. Registering again replaces the roster and sends `notifications/tools/list_changed`.
+- **Bind the roster during `activate()`.** `registerTools` is revoke-guarded like the other registration methods: called after `activate()` resolves or times out, it throws. Your `execute` functions keep running for the plugin's whole lifetime; only binding the roster is limited to activation. To change the roster, change the code and reload the plugin.
+- **Lazy activation still applies to your tools.** An agent's first `tools/list` or `tools/call` activates the plugin if it has not run yet, and waits up to 5 seconds for the roster to register; one that has not registered by then is listed as no tools. The database tools are host code: listing or calling them never starts your plugin, so a server with only the database tools — a plugin with no endpoint, or one at **Read only** — never activates it.
+- **Your roster is advertised verbatim.** `tools/list` returns the database tools, if any, and exactly the tools you registered — name, description, `inputSchema`, optional `outputSchema`, and the `annotations` you declared — and nothing else: no resources, no prompts, no server instructions. Registering again within the same activation replaces the roster and sends `notifications/tools/list_changed`, as does a reload that re-registers it.
 - **Tools may carry caution hints, never a safety claim.** Set `annotations: { destructiveHint, idempotentHint, openWorldHint }` to state the MCP defaults explicitly (destructive, not idempotent, open-world) for clients that do not assume them; an omitted hint means the default. `destructiveHint` and `openWorldHint` accept only `true`, `idempotentHint` either value, and a plugin cannot declare `readOnlyHint` at all. A roster that says its tool is read-only, non-destructive or closed-world is rejected, because clients such as Codex ask less for tools described that way — see [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose).
 - **Arguments are checked against `inputSchema`.** Each schema is compiled when the roster registers, and a call that does not match it is answered with a tool error naming the failure before your code runs. Arguments that match reach `execute` exactly as the agent sent them — nothing coerced, defaulted or stripped. Checks a schema cannot express, such as path containment or resource ownership, are still yours.
 - **Results are serialized JSON.** Whatever `execute` returns is `JSON.stringify`-ed (`undefined` becomes `null`) and sent as the tool's text content. With an `outputSchema` the result must also be a JSON object matching it, which is sent as `structuredContent`. A thrown error becomes a tool error carrying its message.
 - **Calls are cancellable.** The `signal` aborts on the 60-second timeout, when the agent cancels, when the session closes or the credential is revoked, and when the roster changes under a running call. Pass it on to anything long-running.
+
+### Database tools
+
+The host serves two tools on a plugin's server when the plugin declares any database, both annotated `readOnlyHint: true` (`electron/services/pluginAgentMcp/databaseTools.ts`):
+
+| Tool | Arguments | Returns |
+| --- | --- | --- |
+| `database_schema` | `databaseId?` — omit it to list every declared database | `{ databases, truncated }`: per database its `id`, `location`, `description`, `exists`, and up to 1,000 schema `objects` (`type`, `name`, `tableName`, and the `CREATE` statement as `sql`), with a per-database `truncated` and `error` |
+| `database_query` | `databaseId`, `sql`, `params?`, `rowLimit?` | `{ databaseId, columns, rows, truncated }`, each row an array aligned with `columns` |
+
+What the tools allow:
+
+- **One statement that returns rows.** `sql` is a single `SELECT`, `WITH`, or a row-returning `PRAGMA` such as `table_info`, up to 65,536 characters, run on a read-only connection. A statement that returns no rows fails with `DB_NOT_A_QUERY`, and text after the first statement fails with `DB_MULTIPLE_STATEMENTS`. Attaching another file, loading an extension and the `temp_store_directory` / `data_store_directory` pragmas are refused.
+- **Bound parameters.** `params` is an array for `?` placeholders or an object for `:name` placeholders (keyed `name` or `:name`), at most 128 entries, each a string, number or `null`.
+- **Bounded results.** `rowLimit` defaults to 100 and cannot exceed 1,000. The whole result is kept just under the 256 KiB tool-result limit; rows past either bound are dropped and `truncated` is `true`, so page with `LIMIT`/`OFFSET` or a narrower `WHERE`.
+- **JSON-safe values.** A blob comes back as `{ "blob": "<base64>" }`, and an integer outside JavaScript's safe range (beyond ±2^53) as a decimal string rather than a rounded number.
+- **Nothing is created.** A database your code has not opened yet is reported by `database_schema` with `exists: false`, and `database_query` against it fails with `DB_NOT_FOUND`. The tools never create a file.
+
+Each call runs in a short-lived process separate from Daintree's main process and from your plugin, under the same 60-second call timeout as your own tools.
 
 ### Access: off, read only, read and write
 
@@ -208,7 +233,7 @@ Each plugin has one agent access setting, in **Project settings → Plugins → 
 | **Read only**         | The database tools                    |
 | **Read and write**    | The database tools and your own tools |
 
-Read only is about which tools are offered, not a sandbox: it filters no rows, and an agent that can run `sqlite3` can still open a project database's file. Read and write never makes the database tools writable either; writes happen only through your tools, where your rules apply. A plugin with no database has nothing to offer at Read only, so its choice is Off or Read and write; one with a database and no `agentMcp` endpoint has nothing more at Read and write, so its choice is Off or Read only. For an installed plugin, whose databases are shared by every project, see [Installed plugins and shared data](#installed-plugins-and-shared-data) before relying on the database tools.
+Read only is about which tools are offered, not a sandbox: it filters no rows, and an agent that can run `sqlite3` can still open a project database's file. Read and write never makes the database tools writable either; writes happen only through your tools, where your rules apply. A plugin with no database has nothing to offer at Read only, so its choice is **Off** or **On** — On is stored as read and write, and is what `.daintree/mcp.json` calls `"read-write"`; one with a database and no `agentMcp` endpoint has nothing more at Read and write, so its choice is Off or Read only. For an installed plugin, whose databases are shared by every project, see [Installed plugins and shared data](#installed-plugins-and-shared-data) before relying on the database tools.
 
 The setting belongs to the plugin _instance_: an installed plugin and a project copy of the same manifest id are two settings. For a project plugin, the user's answer beats the repository's [default](#project-defaults-daintreemcpjson), and with neither the plugin is off. An **installed** plugin can also be set once for every project — the right default for data that belongs to the user rather than a project, such as a personal CRM or a notes index — and a project's own setting still overrides that. A repository can never turn an installed plugin on. See [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose).
 
@@ -234,7 +259,13 @@ Declaring a database or an endpoint exposes nothing. A plugin's server reaches a
 | Qwen Code | `--mcp-config <file>` |
 | Mistral Vibe | `VIBE_MCP_SERVERS`, each bearer read from its own environment variable |
 
-Cursor, Grok, Kimi Code, Antigravity, Crush, Kiro and Goose have no launch-time mechanism that adds to the user's servers without replacing them, so they are not handed plugin servers; nor are the in-app Daintree Assistant and help sessions. Gemini CLI starts no MCP server at all in a folder the user has not trusted.
+These eight are the only registry entries that declare `launchMcp`. Cursor, Grok, Kimi Code, Antigravity, Crush, Kiro, Goose, Aider and Open Interpreter have no launch-time mechanism that adds to the user's servers without replacing them, so they are not handed plugin servers; nor are the in-app Daintree Assistant and help sessions, or an agent CLI a plugin contributes through `contributes.agents`, which has no way to declare one. Gemini CLI starts no MCP server at all in a folder the user has not trusted.
+
+Even a CLI from the table is handed no plugin servers when:
+
+- **The terminal is in a scratch workspace** rather than a project. Plugin access is set per project, so a scratch has none.
+- **The launch inherits configuration Daintree must carry forward and cannot read.** An inherited `OPENCODE_CONFIG_CONTENT` or `VIBE_MCP_SERVERS` that does not parse, or a Gemini CLI system-defaults file that cannot be read or parsed, fails the preparation, and the agent launches without any of Daintree's servers rather than with the user's configuration hidden.
+- **Plugins are still loading.** A launch waits up to 5 seconds for the plugin service to finish starting, and launches with no plugin servers if it has not; it then waits up to 5 seconds more for the project's own plugins, and launches with whichever have loaded. This mostly affects panes restored when Daintree starts.
 
 **An agent's servers are fixed when it launches.** None of these CLIs reads a new MCP server after it has started, and Claude Code's `/mcp` only reconnects servers the session already has. Giving a plugin access, or a plugin loading for the first time, reaches agents launched afterwards: relaunch the agent — not Daintree — to pick it up. Plugin code is different: edits to a project plugin hot-reload with no Daintree restart, and running agents keep its tools across the reload as long as it leaves what the plugin declares for agents — its capabilities, scopes, `agentMcp` endpoint, databases and `mcpName` — unchanged; they see the re-registered roster through `notifications/tools/list_changed`. A reload that changes any of those, and any other unload, revokes what running agents were given, and they have to be relaunched.
 
@@ -276,8 +307,9 @@ Claude Code's `/mcp` lists the servers a session has; other CLIs have their own 
 2. **Daintree's MCP server is off.** Settings → MCP server. Every plugin server is served on its listener.
 3. **The plugin isn't loaded.** The plugin manager shows it disabled, blocklisted, **Staged**, **Unreadable**, or for a project plugin, not yet trusted for this project.
 4. **The agent started before access was given, before a reload that changed the plugin's agent surface, or outside Daintree.** Only a launch from a Daintree terminal, after the plugin was given access, is handed its server, and a reload that changes what the plugin declares for agents revokes what running agents were given. Relaunch the agent; `/mcp` reconnecting is not enough, and a CLI started in your own terminal never gets Daintree's servers.
-5. **The CLI has no launch mechanism.** Only the agents in the [table above](#reaching-an-agent) are handed plugin servers. The others work through the fallback in `AGENTS.md`.
-6. **You're looking for the wrong name.** The server is `daintree-<mcpName>`, or `daintree-` and the last segment of the manifest id, with a hash suffix only on a collision. Two copies of one plugin in a launch show up as two servers.
+5. **The CLI has no launch mechanism.** Only the agents in the [table above](#reaching-an-agent) are handed plugin servers; a plugin-contributed agent never is. The others work through the fallback in `AGENTS.md`.
+6. **The launch could not be wired.** A terminal in a scratch workspace, a launch whose inherited `OPENCODE_CONFIG_CONTENT`, `VIBE_MCP_SERVERS` or Gemini CLI system-defaults file cannot be parsed, and a pane launched while plugins were still loading all start without plugin servers; see the list under [Reaching an agent](#reaching-an-agent). Relaunching once plugins have loaded fixes the last.
+7. **You're looking for the wrong name.** The server is `daintree-<mcpName>`, or `daintree-` and the last segment of the manifest id, with a hash suffix only on a collision. Two copies of one plugin in a launch show up as two servers.
 
 When the server is there but tools are missing: at **Read only** your own tools are left off by design; a roster that breaks a limit (a bad schema, a name over 32 characters, a reserved name, an annotation that claims safety) is rejected whole — `registerTools` throws at your call site, and if that escapes `activate()` the plugin manager's detail pane shows the failed activation; and a plugin with no database has no database tools. `database_query` reporting a database missing means your code has not created it yet — the tools read what exists and never create a file.
 
@@ -285,7 +317,7 @@ Because only CLIs with a launch-time mechanism are handed servers, and only once
 
 ## Skills
 
-Skills are markdown files a plugin contributes. Daintree's built-in MCP server exposes them as tools, so any agent running in Daintree — through a terminal, through the orchestrated assistant, anywhere — can invoke them through the standard MCP protocol. (The `.claude/skills` paths in `SlashCommandService` are an unrelated Claude-native slash-command feature.)
+Skills are markdown files a plugin contributes. Daintree's built-in MCP server exposes them through two of its tools, so a session that has those tools can find and read them through the standard MCP protocol. Not every session does: see [Who reaches skills](#who-reaches-skills). (The `.claude/skills` paths in `SlashCommandService` are an unrelated Claude-native slash-command feature.)
 
 This is the right contribution point when the extension is about **knowledge or instructions** rather than **capabilities**. A TDD workflow skill doesn't need to call APIs — it just tells the agent how to think. A Linear integration, by contrast, needs network access and belongs in an agent MCP endpoint.
 
@@ -322,10 +354,6 @@ Skills use a simple frontmatter + markdown body format:
 ```markdown
 ---
 description: Step-by-step test-driven development workflow.
-applies_to:
-  - language: typescript
-  - language: javascript
-  - language: python
 ---
 
 # TDD Workflow
@@ -349,20 +377,21 @@ Clean up the code while keeping the test green. Extract helpers, rename for clar
 One feature = one Red-Green-Refactor cycle. Never skip Red — a test that's never seen a failure state isn't a test.
 ```
 
-**Frontmatter:**
-
-- `description` — one-sentence summary surfaced in skill-discovery results.
-- `applies_to` — optional filter hints. Agents use this to decide relevance.
-- `examples` — optional list of prompt examples that should invoke this skill.
+**Frontmatter:** only `description` is read — the one-sentence summary `skills.search` returns and searches. Other keys, such as the `applies_to` and `examples` older examples showed, are accepted and ignored: nothing filters or ranks on them, so put the words an agent would search for in the manifest's `triggers` instead. A file with no frontmatter, or frontmatter that does not parse as YAML, keeps its skill with no description.
 
 Everything after the frontmatter is the skill body — the text that gets injected into the agent's context when it invokes the skill.
+
+**Limits:**
+
+- At most 50 skills per plugin, and 50 `triggers` per skill; a manifest over either is rejected.
+- Each file is read once, when the plugin loads. A file over 512 KiB, one that is not a regular file, or one that resolves outside the plugin directory is skipped with a warning; the plugin's other skills still load.
 
 ### How agents invoke skills
 
 Daintree's built-in MCP server exposes two tools for skills:
 
-- `skills.search(query)` — searches ids, names, triggers, and descriptions, returning matching skill IDs and summaries. Omit or pass an empty `query` to list all skills.
-- `skills.load(id)` — returns the full markdown body of a specific skill.
+- `skills.search({ query?, limit? })` — searches ids, names, triggers, and descriptions, returning matching skill IDs and summaries. Omit or pass an empty `query` to list skills unfiltered. `limit` defaults to 20 and cannot exceed 50, and the result does not say when more exist.
+- `skills.load({ id })` — returns the full markdown body of a specific skill. An unknown id fails.
 
 Agents use these the same way they'd use any MCP tool. A typical flow:
 
@@ -372,7 +401,21 @@ Agents use these the same way they'd use any MCP tool. A typical flow:
 4. Calls `skills.load("acme.workflows.tdd-workflow")`
 5. Incorporates the markdown body into its plan
 
-This keeps Daintree's skill system compatible with any agent that speaks MCP — no Daintree-specific prompt engineering needed.
+This keeps Daintree's skill system compatible with any agent that speaks MCP and has the two tools — no Daintree-specific prompt engineering needed.
+
+### Who reaches skills
+
+`skills.search` and `skills.load` belong to Daintree's own MCP server — the orchestration server, not a plugin's [agent MCP server](#one-server-per-plugin) — and sit in its Full tool set, not its Core one (`shared/config/helpAssistantTierAllowlists.ts`). Daintree's MCP server must be enabled (Settings → MCP server) for any of these:
+
+| Session | Has the skill tools |
+| --- | --- |
+| A terminal agent in a project whose Daintree MCP tool set (Project settings → General → Agent integrations) is **Full**, launched by a CLI in the [launch table](#reaching-an-agent) | Yes |
+| The same agent in a project set to **Core** | Listed, but a call asks the user for approval unless they have allowed that tool for the session |
+| The same agent in a project set to **Off**, the default for every project | No — the agent is not handed Daintree's server at all |
+| The in-app Daintree Assistant with its tool set at **Full** | Yes; at **Core**, its default, it does not see them |
+| An external MCP client connected with an API key | Yes |
+
+So in a project left at its defaults, no terminal agent has a plugin's skills. Write a skill for the sessions that do, and put anything every agent working on the project must know in its `AGENTS.md` as well.
 
 ## When to use which
 

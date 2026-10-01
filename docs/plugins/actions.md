@@ -2,11 +2,13 @@
 
 # Built-in actions a plugin may dispatch
 
-Every built-in action reachable from a plugin through `host.dispatch(id, args)`, generated from the action manifest itself so it cannot drift from what the host actually accepts.
+Every built-in action a plugin can see through `host.actions` and name in `host.dispatch(id, args)`, generated from the action manifest itself so it cannot drift from what the host actually accepts. Only the `safe` rows run from a plugin; the `confirm` rows are listed so a plugin can recognise them, and the host refuses them.
 
 Two sets are absent by construction. Actions on the plugin-dispatch deny list are refused at the boundary no matter what a plugin declares — they inject input or run commands on the user's behalf, and a plugin that needs one is asking for a capability rather than an action. Actions classed `restricted` are refused for every caller, plugins included.
 
-`danger` is the host's own classification, not advice: a `confirm` action opens a confirmation the user has to accept before it runs, so a plugin cannot complete one silently.
+`danger` is the host's own classification, not advice. A `confirm` action cannot run from `host.dispatch`: plugins have no confirmation path, so the dispatch resolves `{ ok: false }` with a `CONFIRMATION_REQUIRED` error and no dialog is shown to the user. Call `host.actions.canDispatch(id)` first: it resolves `"ok"` for a `safe` action, `"confirm"` for one the dispatch would refuse, and `"restricted"` for an unknown or unavailable id.
+
+`canDispatch` sees only the id, and some `safe` actions are refused for particular arguments. `terminal.new` with `command` or `cwd` is raised to `confirm` for a plugin and refused; without either it opens a plain terminal. `worktree.createWithRecipe` and `workflow.startWorkOnIssue` fail when the arguments carry a `recipeId`, so a plugin cannot start a recipe's terminals through them (and `recipe.run` is `confirm`). `file.showItemInFolder` fails when `allowOutsideRoots` is set. `session.bookmark.promote`, `session.bookmark.rename` and `session.bookmark.delete` fail when the dispatch has no project in scope, and when the session does not belong to that project. Each of these resolves `{ ok: false }` with an error rather than running.
 
 An argument shown as `name?` is optional. Argument names come from each action's schema; the schema is the authority on their types and bounds.
 

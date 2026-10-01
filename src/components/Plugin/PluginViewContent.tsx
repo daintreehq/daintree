@@ -305,10 +305,10 @@ function isPluginViewModule(mod: unknown): mod is { default: ComponentType<Panel
  *     microtask later, so a StrictMode effect replay can call it off), when
  *     "Try again" or an accepted `requestReload` swaps in a fresh attempt, and
  *     when the plugin's kind disappears from a `plugin:panel-kinds-changed`
- *     broadcast (that broadcast fires before the main process tears down plugin
- *     IPC handlers, so signal-driven cleanup runs while host APIs are still
- *     live). A temporary unmount — maximizing a sibling pane, leaving a dock
- *     tab — aborts it too.
+ *     broadcast (main sends that from a microtask after `unloadPlugin` has
+ *     already removed the plugin's IPC handlers and disposed its worker, so
+ *     signal-driven cleanup must tolerate host calls rejecting). A temporary
+ *     unmount — maximizing a sibling pane, leaving a dock tab — aborts it too.
  *   - `panelRemovedSignal` is per panel. It comes from `pluginPanelLifecycle`,
  *     which keys it by `panelId` so every mount of the same panel receives the
  *     same object, and aborts it only when the panel is permanently removed. A

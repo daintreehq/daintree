@@ -52,7 +52,7 @@ This shape suits a small value that is replaced whole — a status, a summary, a
 
 ## Push deltas, not the whole state
 
-For a keyed list the worker owns and changes — tool calls, cards, notes, results — use `createSyncedCollection` in the worker and `useSyncedCollection` in the view. The worker keeps the collection; each change sends one delta (`{ epoch, revision, reset?, removes, upserts }`) instead of the list, a loop of changes within `flushMs` (default 16) goes out as one message, and a change set too big for one push is split across revisions. The view does the ordering work of the previous pattern for you: it subscribes, pulls a revisioned snapshot, holds pushes that race the pull, drops deltas the snapshot already covers, and pulls again on a revision gap or a worker restart.
+For a keyed list the worker owns and changes — tool calls, cards, notes, results — use `createSyncedCollection` in the worker and `useSyncedCollection` in the view. The worker keeps the collection; each change sends one delta (`{ epoch, revision, reset?, resync?, removes, upserts }`, where `removes` holds keys and `upserts` holds `[key, item]` pairs) instead of the list, a loop of changes within `flushMs` (default 16) goes out as one message, and a change set too big for one push is split across revisions. The view does the ordering work of the previous pattern for you: it subscribes, pulls a revisioned snapshot, holds pushes that race the pull, drops deltas the snapshot already covers, and pulls again on a revision gap or a worker restart.
 
 ```js
 // worker (dist/index.mjs) — the root SDK entry is served to a zero-build worker
@@ -94,7 +94,7 @@ export default function Calls({ pluginId, disposeSignal }) {
 }
 ```
 
-Nothing is pushed until a view has pulled, so a plugin whose panel was never opened sends no deltas, and on a host that reports listeners, deltas stop while every view is closed; the next view to open pulls a snapshot that carries them. In the lab, an agent-tools panel that re-sent its whole call log on each tool call pushed 1.1 MB in 200 messages for 100 calls; the synced collection sent 23 KB in 13. `syncedCollectionSnapshotChannel(channel)` names the snapshot channel (`<channel>-snapshot`) if something else needs to call it.
+Apart from one empty delta sent at creation to announce the collection's epoch (so a view left over from a previous worker resyncs), nothing is pushed until a view has pulled, so a plugin whose panel was never opened sends no deltas, and on a host that reports listeners, deltas stop while every view is closed; the next view to open pulls a snapshot that carries them. In the lab, an agent-tools panel that re-sent its whole call log on each tool call pushed 1.1 MB in 200 messages for 100 calls; the synced collection sent 23 KB in 13. `syncedCollectionSnapshotChannel(channel)` names the snapshot channel (`<channel>-snapshot`) if something else needs to call it.
 
 A delta names changed items by key but carries each one whole: `upsert(item)` resends every field of `item`, not the one that changed. In the lab, four status flips on a review queue sent about 1.1 KB, because each delta carried its whole item. Keep collection items to what the list renders — ids, titles, status, counts — and fetch a large field (a body, a diff, a log) with its own `invoke` when the row is opened.
 
@@ -242,7 +242,7 @@ A file browser, a search, an index: the host has calls that do in one round trip
 
 - **`host.fs.walk(root, { include, exclude, maxDepth, limit, respectGitignore, includeSize })`** lists a tree in one call: root-relative `/` paths sorted by path, breadth-first, what git ignores left out by default, symlinks neither followed nor listed, at most `limit` entries (default 10,000, up to 50,000) with `truncated` set when it stopped early.
 - **`host.fs.readFiles(paths, { encoding, maxBytesPerFile })`** reads up to 1,024 files in one call (more rejects the call), 8 MiB of content in total, and answers per path in request order: `{ path, ok: true, content }` or `{ path, ok: false, error: { code, message } }`. One unreadable file never fails the batch; `RESULT_TOO_LARGE` marks entries past the budget, to read in a follow-up call.
-- **`host.fs.readdir(dir, { detail: true })`** is what a tree view wants per directory: size, mtime, symlink target, and Daintree's own order — directories first, then numeric-aware names, so `churn-2.txt` sorts before `churn-10.txt`. `@daintreehq/plugin-sdk/files` is the headless file-tree model Daintree's file browser runs on, fed from it; it is a worker import.
+- **`host.fs.readdir(dir, { detail: true })`** is what a tree view wants per directory: size, mtime, symlink target, and Daintree's own order — directories first, then numeric-aware names, so `churn-2.txt` sorts before `churn-10.txt`. `@daintreehq/plugin-sdk/files` is the headless file-tree model Daintree's file browser runs on, fed from it. It is pure and runs anywhere, but a raw view cannot import it — the host import map does not serve it — so use it in a bundled view, as `plugins/sample/file-tree/` does, or in the worker.
 - **Cache the walk behind a watch** (`fs.watch` with `recursive: true` on the tree you walked) rather than walking again on every keystroke, and cap what you send the view.
 
 Both batch calls are optional in the type, for hand-written fakes; Daintree's host, the worker and `createMockHost` always have them.
@@ -292,10 +292,13 @@ await host.registerHandler("set-stage", async (_ctx, { path, stage }) => {
 When the data is rows you query, total or page through — a ledger, stock movements, time entries — declare a database and open it through `host.db`. Never open the file with `node:sqlite` yourself: the host resolves and contains the path, asks consent before creating a project database, reopens a file `git checkout` replaced underneath you, and tells you when an agent's `sqlite3` session commits.
 
 ```jsonc
-// plugin.json
+// plugin.json — a project plugin; "location" defaults to "project"
+"scope": "project",
 "capabilities": ["fs:project-write"],
 "contributes": { "databases": [{ "id": "ledger", "description": "Household transactions" }] }
 ```
+
+A `"project"` database is a file in the repository, so only a `"scope": "project"` plugin may declare one. An installed plugin declares `"location": "local"` instead, which keeps the file in its data directory and needs no capability.
 
 ```js
 // worker: open lazily and keep the promise — the first open of a project
@@ -345,7 +348,7 @@ When the list is large and changes a row at a time, a synced collection the work
 - **Arithmetic lives in views**, declared in `definitions` (`DROP VIEW IF EXISTS month_totals; CREATE VIEW month_totals AS …`). The panel, a report script and an agent's `sqlite3` query then read the same numbers. `definitions` re-applies only when its text changes, so opening the panel does not dirty a committed database.
 - **A dashboard over agent-written data** opens with `{ readonly: true }`: no consent prompt, nothing created, writes refused with `DB_READONLY`.
 - **Money is integer cents**, and an integer past 2^53 comes back as a `bigint`.
-- **Branch on the `DB_*` code** (`DB_NOT_FOUND`, `DB_SCHEMA_TOO_NEW`, `DB_MIGRATION_FAILED`, …) on `err.code`.
+- **Branch on the `DB_*` code** (`DB_NOT_FOUND`, `DB_SCHEMA_TOO_NEW`, `DB_MIGRATION_FAILED`, …) on `err.code`. `DB_NOT_DECLARED` is the exception: it has no `err.code`, only the `DB_NOT_DECLARED:` message prefix.
 
 Tell agents in your data contract to leave the host's `_daintree_meta` table alone. The full reference is [Host API → db](./host-api.md#db--host-managed-sqlite).
 
@@ -613,7 +616,7 @@ handle.onCrash(() => host.showToast({ message: "Dev server crashed", type: "erro
 
 For a server that speaks JSON-RPC over stdio, `mode: "duplex"` gives you a writable stdin and separate stdout; see [Host API → Modes](./host-api.md#modes).
 
-For a one-shot command whose output is the result (a linter, a script that prints JSON), collect `handle.onData` chunks and read them in `onExit`. In pipe mode the handle waits for stdout and stderr to close before it reports the exit, up to a two-second drain, so the last line is not lost. There is no `host.process.exec()`.
+For a one-shot command whose output is the result (a linter, a script that prints JSON), collect `handle.onData` chunks and read them in `onExit`. In pipe and duplex mode the handle waits for stdout and stderr to close before it reports the exit, up to a two-second drain, so the last line is not lost; a pty reports through its own exit. There is no `host.process.exec()`.
 
 ## Own the canvas, live in the dock
 

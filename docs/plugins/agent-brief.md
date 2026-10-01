@@ -95,7 +95,7 @@ Two more things that are not failures, and get misread as one. A new manifest id
 
 ## The zero-build skeleton
 
-`npx daintree-plugin new --project` scaffolds a project plugin with a Vite build, but neither half of a plugin has to be compiled: the **view** is imported by the renderer as browser ESM, where bare `react` and `@daintreehq/plugin-ui` specifiers resolve through the host's import map, and the **worker entry** is imported by Node in a utility process. Hand-write both and you need no toolchain at all.
+`npx daintree-plugin new <name> --publisher <publisher> --template view --project --yes`, run inside the project, scaffolds a project plugin with a Vite build at `.daintree/plugins/<publisher>.<name>/` without prompting (`--template` is `command` or `view`; `--project` refuses the others). But neither half of a plugin has to be compiled: the **view** is imported by the renderer as browser ESM, where bare `react` and `@daintreehq/plugin-ui` specifiers resolve through the host's import map, and the **worker entry** is imported by Node in a utility process. Hand-write both and you need no toolchain at all.
 
 Treat this as a load probe — the smallest thing that provably activates and renders. Grow it once it works.
 
@@ -237,7 +237,30 @@ export default function Panel({ panelId, pluginId, disposeSignal }) {
 
 Use the `pluginId` prop rather than hardcoding your manifest name — for a project plugin the runtime id is an instance key, not the manifest id. `disposeSignal` stops the hook once the view unmounts; `updatedAt` stays `0` until the first answer lands, which is how the view tells "not loaded yet" from a `null` answer.
 
-What the no-build path costs, and what it doesn't: the worker cannot import npm packages, with one exception — the plugin worker serves `@daintreehq/plugin-sdk`, `/files` and `/data` from a copy that ships with Daintree, so `import { parseFrontmatter, updateFrontmatter, parseJsonl, editFile } from "@daintreehq/plugin-sdk/data";` and `import { createSyncedCollection } from "@daintreehq/plugin-sdk";` work in `dist/index.mjs` with no install. Use them rather than hand-writing a YAML parser, a `writeFile({ expectedRevision })` retry loop or a delta protocol — see [data-helpers.md](./data-helpers.md). The view can import `react`, the host's UI kit from `@daintreehq/plugin-ui`, the SDK's hooks from `@daintreehq/plugin-sdk/react` (served by the host to zero-build views), and its own relative `.js` / `.mjs` modules — but not the SDK's other entries, other bare npm specifiers, TypeScript, JSX, or CSS files. Do data work in the worker and hand the view results over a channel. A pure module with no imports (`dist/core.mjs`: date rules, totals, status order) can be imported by the worker, the view and an agent-facing script alike, so the three never disagree. Rendering Markdown is the case that tempts a hand-rolled parser; don't write one — `createElement(Markdown, { source, basePath })` with `import { Markdown } from "@daintreehq/plugin-ui"` is Daintree's own renderer, raw HTML dropped, styled like the app ([views.md → Host UI components](./views.md#host-ui-components)). If you need more than that — TSX, npm packages, many views — add the toolchain: scaffold with `npx daintree-plugin new --project` (its `tsconfig.json` already lists `@daintreehq/plugin-sdk/view-globals` and `@daintreehq/plugin-sdk/plugin-ui` in `types`, so `window.electron.plugin` and the kit typecheck), or `npm install --save-dev @daintreehq/plugin-sdk @daintreehq/plugin-vite daintree-plugin` and add those two `types` yourself. Build with Vite; a bundled view bundles its own pinned copy of the SDK hooks and never bundles `react` or the kit. [dev-loop.md](./dev-loop.md) covers the watcher.
+**What the no-build path gives you.** A zero-build worker can import `@daintreehq/plugin-sdk`, `/files` and `/data` with no install: Daintree serves them from the copy it ships, so `import { parseFrontmatter, updateFrontmatter, parseJsonl, editFile } from "@daintreehq/plugin-sdk/data";` and `import { createSyncedCollection } from "@daintreehq/plugin-sdk";` work in `dist/index.mjs`. Use them rather than hand-writing a YAML parser, a `writeFile({ expectedRevision })` retry loop or a delta protocol ([data-helpers.md](./data-helpers.md)). A zero-build view can import `react`, the kit from `@daintreehq/plugin-ui`, the SDK's hooks from `@daintreehq/plugin-sdk/react` and its own relative `.js` / `.mjs` modules. Keep data work in the worker and hand the view results over a channel. For Markdown, use the kit's renderer, never a hand-rolled parser: `createElement(Markdown, { source, basePath })` with `import { Markdown } from "@daintreehq/plugin-ui"` ([views.md → Host UI components](./views.md#host-ui-components)).
+
+**What it rules out.** The worker cannot import other npm packages, and the view cannot import the SDK's other entries, other bare specifiers, TypeScript, JSX or CSS files. A pure module with no imports (`dist/core.mjs`: date rules, totals, status order) can be imported by the worker, the view and an agent-facing script alike, so the three never disagree. An installed `@daintreehq/plugin-sdk` beside the plugin or in an ancestor `node_modules` takes precedence over the copy Daintree ships, so a test-only install of an older SDK can break a worker's imports.
+
+### Adding a build
+
+If you need more — TSX, npm packages, many views — add the toolchain: scaffold with `npx daintree-plugin new <name> --publisher <publisher> --template view --project --yes`, or `npm install --save-dev @daintreehq/plugin-sdk @daintreehq/plugin-vite daintree-plugin`, and build with Vite ([dev-loop.md](./dev-loop.md) covers the watcher). A bundled view bundles its own pinned copy of the SDK hooks and never bundles `react` or the kit: the Vite preset keeps the kit external for the host's import map to serve, and the scaffold's `tsconfig.json` lists `@daintreehq/plugin-sdk/view-globals` and `@daintreehq/plugin-sdk/plugin-ui` in `types` so `window.electron.plugin` and the kit typecheck.
+
+That last paragraph describes the packages in this repository. Not in the 0.1.0 release on npm; it ships in the next one. With the 0.1.0 packages — what `npm install` gets today — the scaffold writes no `types`, the SDK has no `./data`, `./plugin-ui` or `./view-globals`, and `@daintreehq/plugin-vite` externalizes only React, so a bundled view that imports `@daintreehq/plugin-ui` fails `vite build` with `Rolldown failed to resolve import`. Until the next release, either stay zero-build (none of this applies), or pass the kit as an extra external and declare the missing types locally:
+
+```ts
+// vite.config.ts
+plugins: [daintreePlugin({ externals: [/^@daintreehq\/plugin-ui($|\/)/] })],
+```
+
+```ts
+// src/daintree-env.d.ts — delete once the SDK ships view-globals and plugin-ui
+declare module "@daintreehq/plugin-ui";
+interface Window {
+  electron: { plugin: any };
+}
+```
+
+These two stopgaps make kit imports build and the bridge typecheck. They do not add what the 0.1.0 SDK lacks: the newer hooks (`useCachedHostChannel` and the rest of the performance hooks), synced collections, the database types and the mock host's database and agent-pane drivers need the next SDK in a bundled plugin.
 
 ## Draw with the kit
 
@@ -430,9 +453,9 @@ Leave `-v` off the first one: it also prints a matching _negation_, so a correct
 
 ## Before you ship
 
-1. **`npx daintree-plugin lint`** in the plugin folder (`doctor` runs it too). It reads the view and worker source and flags what the rules above describe: interval polling in a view, a growing list re-pushed whole, state set on every event of a high-frequency channel, a subscription never disposed, a bundled copy of React; stock palette colours, `dark:`, raw shadows, radii and text sizes, a hand-rolled button, form control, spinner, badge or icon, a native dialog, a container query on its own container, and classes that compile to nothing. Each finding names the fix. Errors fail the command; `--strict` fails on warnings too.
+1. **`npx daintree-plugin lint`** in the plugin folder (`doctor` runs it too). Not in the 0.1.0 release on npm; it ships in the next one — with the 0.1.0 CLI, skip the command and check the code against the rules above by hand. It reads the view and worker source and flags what the rules above describe: interval polling in a view, a growing list re-pushed whole, state set on every event of a high-frequency channel, a subscription never disposed, a bundled copy of React; stock palette colours, `dark:`, raw shadows, radii and text sizes, a hand-rolled button, form control, spinner, badge or icon, a native dialog, a container query on its own container, and classes that compile to nothing. Each finding names the fix. Errors fail the command; `--strict` fails on warnings too.
 2. **Open the panel with real data**, at the size the user will have — ten thousand rows, not ten.
-3. **Read the measurements.** The plugin's **Performance** section in Project settings → Plugins shows its activation, view load and first paint, invoke latency, push rate and worker memory, each against its budget. (For an installed plugin, `daintree-plugin dev` prints the same table every two seconds while it watches.) They are observations, not a verdict, and Daintree never slows or stops a plugin for going over one — but a view over its first-paint budget or a channel over 60 pushes a second is where to look. See [views.md → Measuring your plugin](./views.md#measuring-your-plugin).
+3. **Read the measurements.** The plugin's **Performance** section in Project settings → Plugins shows its activation, view load and first paint, invoke latency, push rate and worker memory, each against its budget. (For an installed plugin, `daintree-plugin dev` polls every two seconds while it watches and prints the same table whenever it changes. Not in the 0.1.0 release on npm; it ships in the next one.) They are observations, not a verdict, and Daintree never slows or stops a plugin for going over one — but a view over its first-paint budget or a channel over 60 pushes a second is where to look. See [views.md → Measuring your plugin](./views.md#measuring-your-plugin).
 
 ## When a button does nothing
 
