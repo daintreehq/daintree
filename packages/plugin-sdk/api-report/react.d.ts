@@ -4854,7 +4854,7 @@ interface PluginTerminalSnapshotProps extends PluginRootAttributes {
     onClick?: () => void;
     /**
      * Marks it as the current one in a set of previews: the host's neutral
-     * selection outline, and `aria-current` for assistive tech.
+     * current-thumbnail ring, and `aria-current` for assistive tech.
      */
     selected?: boolean;
     /** Names it for assistive tech. Defaults to the title. */
