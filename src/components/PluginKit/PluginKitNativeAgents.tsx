@@ -942,7 +942,9 @@ function KitAgentPicker(props: PluginAgentPickerProps) {
           aria-label={label}
           compact
           className="flex-1"
-          scrollClassName="p-1"
+          // The fades are 16px deep; padding the scroll edge by as much keeps
+          // an active row brought into view clear of them.
+          scrollClassName="scroll-py-4 p-1"
         >
           {rows.map((row, index) => {
             const heading = headingAt(rows, index, spans);
@@ -1465,6 +1467,7 @@ function KitTerminalSnapshot({
   rows,
   scale,
   onClick,
+  selected,
   "aria-label": ariaLabel,
   className,
   ...rest
@@ -1539,15 +1542,21 @@ function KitTerminalSnapshot({
     </div>
   );
 
+  const isSelected = selected === true;
   const frame = cn(
     "flex min-w-0 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default text-left",
+    // The host's selection mark: the one ink held to 3:1 against the surface,
+    // never accent, since several previews sit side by side.
+    isSelected && "outline outline-2 -outline-offset-1 outline-selection-outline",
     str(className)
   );
+  const current = isSelected ? { "aria-current": true as const } : {};
   if (activate) {
     return (
       <button
         type="button"
         {...pickRootProps(rest)}
+        {...current}
         aria-label={name}
         onClick={() => activate()}
         className={cn(
@@ -1561,7 +1570,7 @@ function KitTerminalSnapshot({
     );
   }
   return (
-    <figure {...pickRootProps(rest)} aria-label={name} className={cn(frame, "m-0")}>
+    <figure {...pickRootProps(rest)} {...current} aria-label={name} className={cn(frame, "m-0")}>
       {header}
       {screen}
     </figure>

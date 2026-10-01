@@ -363,9 +363,13 @@ describe("action menu entries", () => {
     expect(item.textContent).toContain("Nothing to close");
     expect(screen.getAllByRole("menuitem")).toHaveLength(1);
     // The row's name fades with the refusal; the reason itself stays readable.
-    const faded = (el: Element | null | undefined) =>
-      el?.closest("[class*='opacity-50']") !== null &&
-      item.contains(el?.closest("[class*='opacity-50']") ?? null);
+    // Faded when the element or an ancestor inside the row carries the 50% class itself.
+    const faded = (el: Element | null | undefined) => {
+      for (let at = el ?? null; at && at !== item; at = at.parentElement) {
+        if (at.classList.contains("opacity-50")) return true;
+      }
+      return false;
+    };
     const reason = [...item.querySelectorAll("span")].find(
       (span) => span.textContent === "Nothing to close"
     );
@@ -374,6 +378,16 @@ describe("action menu entries", () => {
     );
     expect(faded(name)).toBe(true);
     expect(faded(reason)).toBe(false);
+    // Reachable by the arrow keys (not the primitive's skipped disabled state),
+    // described by its reason, and choosing it runs nothing.
+    expect(item.hasAttribute("data-disabled")).toBe(false);
+    expect(document.getElementById(item.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
+      "Nothing to close"
+    );
+    fireEvent.click(item);
+    await flush();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu")).toBeTruthy();
   });
 
   it("leaves out a submenu whose action rows would all be hidden", async () => {
@@ -893,6 +907,24 @@ describe("TerminalSnapshot", () => {
     expect(text("a\u001b[1 mz")).toEqual(["az"]);
     expect(text("a\u001b]0;secret\u001b")).toEqual(["a"]);
     expect(text("a\u001b]0;secret\ncontinued\u0007z")).toEqual(["az"]);
+  });
+
+  it("marks the selected preview as current", () => {
+    render(
+      createElement(
+        "div",
+        null,
+        createElement(kit.TerminalSnapshot, {
+          text: "a",
+          title: "One",
+          selected: true,
+          "data-testid": "a",
+        }),
+        createElement(kit.TerminalSnapshot, { text: "b", title: "Two", "data-testid": "b" })
+      )
+    );
+    expect(screen.getByTestId("a").getAttribute("aria-current")).toBe("true");
+    expect(screen.getByTestId("b").hasAttribute("aria-current")).toBe(false);
   });
 
   it("is a named, static figure, and a button only when it has somewhere to go", () => {

@@ -5464,6 +5464,11 @@ export interface PluginTerminalSnapshotProps extends PluginRootAttributes {
   scale?: "xs" | "sm";
   /** Makes the whole snapshot a button, e.g. to focus that terminal. */
   onClick?: () => void;
+  /**
+   * Marks it as the current one in a set of previews: the host's neutral
+   * selection outline, and `aria-current` for assistive tech.
+   */
+  selected?: boolean;
   /** Names it for assistive tech. Defaults to the title. */
   "aria-label"?: string;
   className?: string;
