@@ -400,10 +400,12 @@ describe("PluginSettingsForm", () => {
     fireEvent.change(input, { target: { value: "new-secret" } });
 
     // The toggle only changes masking of what was typed; it never swaps in the stored value.
-    fireEvent.click(screen.getByRole("button", { name: "Reveal Token" }));
+    const toggle = screen.getByRole("button", { name: "Show Token" });
+    fireEvent.click(toggle);
     expect(input.type).toBe("text");
     expect(input.value).toBe("new-secret");
-    fireEvent.click(screen.getByRole("button", { name: "Hide Token" }));
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(toggle);
     expect(input.type).toBe("password");
     expect(input.value).toBe("new-secret");
     expect(pluginApi.revealSecretSetting).not.toHaveBeenCalled();
@@ -422,7 +424,7 @@ describe("PluginSettingsForm", () => {
     expect(input.value).toBe("");
     expect(input.type).toBe("password");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Reveal Token" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show Token" }));
     await waitFor(() => expect(input.value).toBe("sekret"));
     expect(input.type).toBe("text");
 
@@ -756,6 +758,8 @@ describe("PluginSettingsForm", () => {
     const input = (await screen.findByLabelText("Storage folder")) as HTMLInputElement;
     await waitFor(() => expect(input.value).toBe("/Users/x/notes"));
     expect(input.readOnly).toBe(true);
+    // Its smaller mono face must not shrink it below the group's other inputs.
+    expect(input.className.split(/\s+/)).toEqual(expect.arrayContaining(["text-xs", "leading-5"]));
     expect(screen.getByRole("button", { name: "Browse" })).toBeTruthy();
   });
 

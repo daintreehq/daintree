@@ -30,6 +30,7 @@ import {
   projectStoreMock,
   recipientIdsOf,
   resetTwoProjectFixture,
+  setPendingPushFlusher,
   type FakeWebContents,
 } from "./twoProjectHarness.js";
 
@@ -164,6 +165,11 @@ vi.mock("../PluginProcessManager.js", async (importOriginal) => {
 
 import { CHANNELS } from "../../../ipc/channels.js";
 import { createHost, type PluginHostFactoryDeps } from "../PluginHostFactory.js";
+import { getPluginPushBatcher } from "../pluginPushBatcher.js";
+
+// Plugin pushes are batched to the next macrotask; deliver them before any
+// recipient assertion reads the fake renderers.
+setPendingPushFlusher(() => getPluginPushBatcher().flush());
 import { PluginRendererDispatcher } from "../PluginRendererDispatcher.js";
 import { PluginUIPromptDispatcher } from "../PluginUIPromptDispatcher.js";
 import { PluginSettingsManager } from "../PluginSettingsManager.js";

@@ -1,7 +1,8 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import type { Issue, PR } from "@shared/types/forge";
 
@@ -47,6 +48,8 @@ const makePR = (n: number): PR => ({
   updatedAt: 0,
   rawData: null,
 });
+
+beforeAll(() => whenPluginUiReady(), 30_000);
 
 beforeEach(() => {
   openBulkCreateDialog.mockReset();

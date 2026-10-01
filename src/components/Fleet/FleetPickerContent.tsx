@@ -19,6 +19,8 @@ import {
 } from "@/hooks/useFleetPicker";
 import type { AgentState, SemanticSearchMatch } from "@shared/types";
 import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
+import { describeKeyCap } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 
 export interface FleetPickerContentProps {
   /** Result of `useFleetPicker` — owned and called by the consumer. */
@@ -272,8 +274,13 @@ export function FleetPickerFooterHint({
   return (
     <>
       <span className="inline-flex items-center gap-1">
-        <kbd className={KBD_CLASS}>↑</kbd>
-        <kbd className={KBD_CLASS}>↓</kbd>
+        <span className="sr-only">{describeKeyCap("↑↓", isMac())}</span>
+        <kbd aria-hidden="true" className={KBD_CLASS}>
+          ↑
+        </kbd>
+        <kbd aria-hidden="true" className={KBD_CLASS}>
+          ↓
+        </kbd>
         <span>Move</span>
       </span>
       <span className="text-text-secondary">·</span>

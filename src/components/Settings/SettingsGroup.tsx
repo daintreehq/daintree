@@ -4,6 +4,7 @@ import { Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { InlineError } from "@/components/ui/field";
 import { SettingsResetButton } from "./SettingsResetButton";
+import type { RootAttributes } from "@/components/ui/rootAttributes";
 
 /**
  * The settings page grammar: a page is a stack of `SettingsSection`s, a section holds
@@ -39,6 +40,8 @@ interface SettingsGroupProps {
   /** Visible sub-label above the surface, for a section holding more than one group. */
   label?: string;
   id?: string;
+  /** `id`, `data-*` or `aria-*` on the root; the component's own attributes win. */
+  rootAttributes?: RootAttributes;
 }
 
 /**
@@ -46,10 +49,17 @@ interface SettingsGroupProps {
  * back to surface-panel-elevated). Dividers are `border-subtle` so they separate rows
  * without competing with the outer `border-default` edge.
  */
-export function SettingsGroup({ children, className, label, id }: SettingsGroupProps) {
+export function SettingsGroup({
+  children,
+  className,
+  label,
+  id,
+  rootAttributes,
+}: SettingsGroupProps) {
   const labelId = useId();
   const surface = (
     <div
+      {...(label ? undefined : rootAttributes)}
       className={cn(
         // checkbox-neutral: a checked option in a settings list is membership, not the
         // region's one accent — native radios and checkboxes paint neutral here.
@@ -67,7 +77,7 @@ export function SettingsGroup({ children, className, label, id }: SettingsGroupP
   if (!label) return surface;
   return (
     // A 0-min track, so a long unbreakable row label can't widen the group past its column.
-    <div className="grid grid-cols-[minmax(0,1fr)] gap-2" id={id}>
+    <div {...rootAttributes} className="grid grid-cols-[minmax(0,1fr)] gap-2" id={id}>
       <div id={labelId} className="text-xs font-medium text-text-secondary">
         {label}
       </div>
@@ -180,6 +190,8 @@ interface SettingsRowProps {
   onRowClick?: () => void;
   /** Label text for the reset button when `label` is not a plain string. */
   labelText?: string;
+  /** `id`, `data-*` or `aria-*` on the root; the component's own attributes win. */
+  rootAttributes?: RootAttributes;
 }
 
 export function SettingsRow({
@@ -199,6 +211,7 @@ export function SettingsRow({
   className,
   onRowClick,
   labelText,
+  rootAttributes,
 }: SettingsRowProps) {
   const group = use(GroupContext);
   const labelId = useId();
@@ -290,6 +303,7 @@ export function SettingsRow({
 
   return (
     <div
+      {...rootAttributes}
       id={id}
       data-settings-row={layout}
       data-settings-reset-scope=""
@@ -330,6 +344,8 @@ interface SettingsActionsProps {
   children: ReactNode;
   /** Status beside the actions — "Saved", a test result — on the left of the row. */
   status?: ReactNode;
+  /** `id`, `data-*` or `aria-*` on the root; the component's own attributes win. */
+  rootAttributes?: RootAttributes;
 }
 
 /**
@@ -337,10 +353,11 @@ interface SettingsActionsProps {
  * Actions end on the same right rail as every control above them; content-width,
  * never full-width, and the primary one is the neutral `contrast` button.
  */
-export function SettingsActions({ children, status }: SettingsActionsProps) {
+export function SettingsActions({ children, status, rootAttributes }: SettingsActionsProps) {
   const group = use(GroupContext);
   return (
     <div
+      {...rootAttributes}
       className={cn("flex items-center gap-3 py-2.5 pr-4 min-h-12", rowInset(group?.depth ?? 0))}
     >
       <div className="min-w-0 flex-1 text-xs text-text-secondary" aria-live="polite">

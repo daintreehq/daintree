@@ -96,7 +96,14 @@ export type {
   PluginFsDirEntry,
   PluginFsStat,
   PluginFsReadWithRevisionResult,
+  PluginFsReadFilesOptions,
+  PluginFsReadFilesEncoding,
+  PluginFsReadFilesEntry,
+  PluginFsReadFilesErrorCode,
   PluginFsWatchOptions,
+  PluginFsWalkOptions,
+  PluginFsWalkEntry,
+  PluginFsWalkResult,
   PluginGitApi,
   PluginGitStatus,
   PluginGitStatusFile,
@@ -159,6 +166,7 @@ export type {
   PluginIpcHandler,
   PluginChannelSchema,
   PluginTypedIpcHandler,
+  PluginHandlerOptions,
 } from "./plugin.js";
 
 // ── Worktree observability ──────────────────────────────────────────
@@ -166,6 +174,7 @@ export type {
 export type {
   PluginWorktreeSnapshot,
   PluginWorktreesResult,
+  PluginWorktreesChange,
   PluginWorktreesUnavailableReason,
   PluginWorktreeLinked,
   PluginWorktreeLinkedIssue,

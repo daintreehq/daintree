@@ -199,8 +199,12 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
         className={cn(
           // select-none so drag-panning never starts a text/image selection that
           // would paint the selection highlight over the image (#11325).
-          "flex h-full min-h-0 w-full flex-1 select-none items-center justify-center overflow-hidden",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
+          "relative flex h-full min-h-0 w-full flex-1 select-none items-center justify-center overflow-hidden",
+          // The ring is drawn on a layer over the picture: the image's transform
+          // paints it above the stage's own outline, which hid the ring where the
+          // image meets the stage's edges (all of them once zoomed in).
+          "after:pointer-events-none after:absolute after:inset-0 after:z-10 after:content-['']",
+          "focus-visible:outline-hidden focus-visible:after:outline focus-visible:after:outline-2 focus-visible:after:-outline-offset-2 focus-visible:after:outline-accent-primary",
           isZoomed ? "cursor-grab" : "cursor-default"
         )}
       >

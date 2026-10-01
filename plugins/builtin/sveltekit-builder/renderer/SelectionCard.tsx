@@ -1,11 +1,7 @@
 import { ExternalLink } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { CopyButton } from "@/components/ui/CopyButton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { Badge, CopyButton, IconButton, TruncatedTooltip } from "@daintreehq/plugin-ui";
 import { actionService } from "@/services/ActionService";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
 import type { SelectedNode } from "../shared/model.js";
 import { worktreeRelative, type SelectionState } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
@@ -101,35 +97,29 @@ export function SelectionIdentity({
           <>
             <SourcePath file={file} line={line} className="min-w-0 flex-1" />
             <CopyButton
-              size="icon-xs"
+              size="xs"
               text={source}
               aria-label="Copy path"
               announcement="Path copied"
               tooltipSide="bottom"
             />
             {absolute ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    // The glyph, not the hit box, sits on the column edge the
-                    // fields below end at.
-                    className="-mr-1"
-                    aria-label="Open in editor"
-                    onClick={() =>
-                      void actionService.dispatch(
-                        "file.openInEditor",
-                        line === null ? { path: absolute } : { path: absolute, line },
-                        { source: "user" }
-                      )
-                    }
-                  >
-                    <ExternalLink aria-hidden="true" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Open in editor</TooltipContent>
-              </Tooltip>
+              <IconButton
+                icon={<ExternalLink aria-hidden="true" />}
+                size="xs"
+                tooltipSide="bottom"
+                // The glyph, not the hit box, sits on the column edge the
+                // fields below end at.
+                className="-mr-1"
+                aria-label="Open in editor"
+                onClick={() =>
+                  void actionService.dispatch(
+                    "file.openInEditor",
+                    line === null ? { path: absolute } : { path: absolute, line },
+                    { source: "user" }
+                  )
+                }
+              />
             ) : null}
           </>
         ) : (

@@ -43,6 +43,7 @@ import type {
 import "react-diff-view/style/index.css";
 // Our overrides — must come after the library stylesheet it overrides.
 import "./DiffViewer.css";
+import "@/styles/components/syntax-tokens.css";
 import {
   ChevronRight,
   ChevronsDown,
@@ -161,6 +162,26 @@ export interface DiffViewerProps {
    * whose lines can't be handed back to an agent working in a worktree.
    */
   annotations?: DiffViewerAnnotations;
+  /**
+   * A grammar for highlighting in place of the one each file's path implies,
+   * for a diff whose paths carry no extension (the plugin kit's DiffView).
+   */
+  language?: string;
+  /**
+   * Extra controls at the end of each hunk header, after its range and copy
+   * button, given the hunk, its position among the file's rendered hunks and
+   * the file it belongs to.
+   */
+  renderHunkActions?: (hunk: HunkData, index: number, file: DiffViewerHunkFile) => ReactNode;
+  /** Draws the file header's Open button. Defaults to true. */
+  openInEditor?: boolean;
+}
+
+/** The file a hunk handed to `renderHunkActions` belongs to, as the patch names it. */
+export interface DiffViewerHunkFile {
+  oldPath: string;
+  newPath: string;
+  type: string;
 }
 
 export interface DiffViewerAnnotations {
@@ -454,6 +475,9 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
     onToggleCollapse,
     onTokensRendered,
     annotations,
+    language,
+    renderHunkActions,
+    openInEditor = true,
   },
   ref
 ) {
@@ -661,6 +685,9 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           onToggleCollapse={onToggleCollapse}
           onTokensRendered={onTokensRendered}
           annotations={annotations}
+          language={language}
+          renderHunkActions={renderHunkActions}
+          openInEditor={openInEditor}
         />
       ))}
     </div>
@@ -678,6 +705,7 @@ interface HunkHeaderProps {
   gapStart: number;
   hiddenCount: number;
   onExpand: ((start: number, end: number) => void) | null;
+  actions?: ReactNode;
 }
 
 function HunkCopyButton({ hunk }: { hunk: HunkData }) {
@@ -698,7 +726,7 @@ function HunkCopyButton({ hunk }: { hunk: HunkData }) {
   );
 }
 
-function HunkHeader({ hunk, gapStart, hiddenCount, onExpand }: HunkHeaderProps) {
+function HunkHeader({ hunk, gapStart, hiddenCount, onExpand, actions }: HunkHeaderProps) {
   return (
     <div className="diff-hunk-header-inner">
       {hiddenCount > 0 && onExpand && (
@@ -752,6 +780,9 @@ function HunkHeader({ hunk, gapStart, hiddenCount, onExpand }: HunkHeaderProps) 
       )}
       <span className="diff-hunk-header-text">{hunk.content}</span>
       <HunkCopyButton hunk={hunk} />
+      {actions != null && actions !== false && (
+        <span className="diff-hunk-header-actions">{actions}</span>
+      )}
     </div>
   );
 }
@@ -775,6 +806,9 @@ interface FileDiffProps {
   /** Fired after this file's token pass commits */
   onTokensRendered?: () => void;
   annotations?: DiffViewerAnnotations;
+  language?: string;
+  renderHunkActions?: (hunk: HunkData, index: number, file: DiffViewerHunkFile) => ReactNode;
+  openInEditor: boolean;
 }
 
 const EMPTY_NOTES: readonly DiffNote[] = [];
@@ -795,12 +829,15 @@ function FileDiff({
   onToggleCollapse,
   onTokensRendered,
   annotations,
+  language: languageOverride,
+  renderHunkActions,
+  openInEditor,
 }: FileDiffProps) {
   const relPath = getFilePath(file);
   const language = useMemo(() => {
-    const derived = getLanguageForFile(relPath);
+    const derived = languageOverride || getLanguageForFile(relPath);
     return isLanguageFailed(derived) ? "plaintext" : derived;
-  }, [relPath]);
+  }, [relPath, languageOverride]);
   const diffType: DiffType = file.type as DiffType;
 
   const fileBytes = useMemo(() => estimateFileDiffBytes(file), [file]);
@@ -1328,9 +1365,43 @@ function FileDiff({
   // Both of these change the rendered row set, so the effect above issues the
   // `onToggleCollapse` notification — notifying here too would double-fire, and
   // would also fire when an expansion failed and changed nothing.
+  // Expanding re-keys the hunk it grew (its start lines move) and can merge it
+  // with its neighbour, so the header whose button was pressed unmounts and
+  // focus would drop to the body. The hunk is remembered by an old-side line
+  // it holds, and the keyboard handed to the header of whichever hunk holds
+  // that line afterwards.
+  const pendingHeaderLineRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const line = pendingHeaderLineRef.current;
+    if (line === null) return;
+    pendingHeaderLineRef.current = null;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    const region = regionRef.current ?? nativeScrollerRef.current;
+    if (!region) return;
+    let index = visibleHunks.findIndex(
+      (hunk) => hunk.oldStart <= line && line < hunk.oldStart + Math.max(hunk.oldLines, 1)
+    );
+    if (index === -1) index = visibleHunks.findIndex((hunk) => hunk.oldStart >= line);
+    const headers = region.querySelectorAll<HTMLElement>(".diff-hunk-header-inner");
+    const header = index === -1 ? headers[headers.length - 1] : headers[index];
+    const target = header?.querySelector<HTMLElement>("button") ?? region;
+    target.focus({ preventScroll: true });
+  }, [visibleHunks]);
+
   const handleExpandContext = useCallback(
     (start: number, end: number) => {
       if (!oldSource) return;
+      const region = regionRef.current ?? nativeScrollerRef.current;
+      const active = document.activeElement;
+      if (region && active && region.contains(active)) {
+        const headers = Array.from(region.querySelectorAll(".diff-hunk-header-inner"));
+        const index = headers.findIndex((header) => header.contains(active));
+        // A header past the last hunk is the trailing expander: its gap ends
+        // the file, so the last hunk is the one it grows.
+        const hunk = index === -1 ? undefined : (visibleHunks[index] ?? visibleHunks.at(-1));
+        pendingHeaderLineRef.current = hunk ? hunk.oldStart : null;
+      }
       setHunks((prev) => {
         try {
           return expandFromRawCode(prev, oldSource, start, end);
@@ -1339,7 +1410,7 @@ function FileDiff({
         }
       });
     },
-    [oldSource]
+    [oldSource, visibleHunks]
   );
 
   const handleShowMoreHunks = () => {
@@ -1378,6 +1449,11 @@ function FileDiff({
             gapStart={gapStart}
             hiddenCount={hiddenCount}
             onExpand={oldSource ? handleExpandContext : null}
+            actions={renderHunkActions?.(hunk, i, {
+              oldPath: file.oldPath,
+              newPath: file.newPath,
+              type: file.type,
+            })}
           />
         </Decoration>
       );
@@ -1535,7 +1611,7 @@ function FileDiff({
             {rawText && (
               <CopyButton text={rawText} aria-label="Copy file diff" tooltipSide="bottom" />
             )}
-            {absolutePath && (
+            {absolutePath && openInEditor && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button variant="ghost" size="xs" onClick={handleOpenInEditor}>

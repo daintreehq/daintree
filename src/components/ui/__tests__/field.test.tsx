@@ -2,7 +2,7 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { Field, FieldDescription, FieldError, FieldLabel } from "../field";
+import { Field, FieldDescription, FieldError, FieldLabel, useFieldControl } from "../field";
 import { Input } from "../input";
 import { Checkbox } from "../checkbox";
 
@@ -125,6 +125,23 @@ describe("Field ARIA wiring", () => {
     expect(new Set(ids).size).toBe(2);
     expect(describedTexts(screen.getByLabelText("First"))).toEqual(["One"]);
     expect(describedTexts(screen.getByLabelText("Second"))).toEqual(["Two"]);
+  });
+});
+
+function RadioGroupStandIn() {
+  const { controlProps } = useFieldControl({}, undefined, { labelable: false });
+  return <div role="radiogroup" {...controlProps} />;
+}
+
+describe("Field with a control a label cannot name", () => {
+  it("names it through aria-labelledby in a vertical field", () => {
+    render(
+      <Field>
+        <FieldLabel>Merge method</FieldLabel>
+        <RadioGroupStandIn />
+      </Field>
+    );
+    expect(screen.getByRole("radiogroup", { name: "Merge method" })).toBeTruthy();
   });
 });
 

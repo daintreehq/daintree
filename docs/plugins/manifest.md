@@ -31,7 +31,7 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
 
   // Catalog category. Optional enum: "forge" | "ai" | "workspace" | "other".
   // Omit it and Daintree derives one from `contributes` (forge providers ⇒
-  // "forge", agents/MCP servers ⇒ "ai", panels/views ⇒ "workspace",
+  // "forge", agents/MCP servers/skills/agentMcp ⇒ "ai", panels/views ⇒ "workspace",
   // else "other").
   "category": "ai",
 
@@ -50,8 +50,8 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
   "scope": "project",
 
   // Path to the compiled ESM entry, relative to the plugin directory.
-  // Optional — plugins with only static contributions (themes, static MCP
-  // server configs) don't need one.
+  // Optional — plugins with only static contributions (a skills-only or
+  // recipes-only plugin) don't need one.
   "main": "dist/index.js",
 
   // Host version compatibility. Optional but strongly recommended.
@@ -67,7 +67,8 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
   // specific. See `mcpName` below and ./agent-extensions.md#one-server-per-plugin.
   "mcpName": "planner",
 
-  // Declared capabilities, surfaced in the plugin manager after install.
+  // Declared capabilities, listed in the install confirmation for an archive
+  // opened from the OS and in the plugin manager after install.
   // Disclosure-first with host-side policy effects (no Node sandbox).
   // See "Capabilities" below and ./trust-model.md.
   "capabilities": ["fs:project-read", "network:fetch"],
@@ -77,7 +78,7 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
   // wildcards and private/loopback targets. See ./trust-model.md.
   "scopes": {
     "network": { "allowedUrls": ["https://api.acme.com/v1"] },
-    "fs": { "allowedPaths": ["/Users/me/.acme/data"] },
+    "fs": { "allowedPaths": ["${project}/docs"] },
   },
 
   // Activation triggers. Optional. Plugins are lazy by default — omitting this
@@ -130,6 +131,10 @@ Good: `acme.linear-planner`, `gpriday.cost-management`, `foo.bar-baz` Bad: `Line
 
 The publisher segment should identify you (GitHub handle, company name, domain prefix). It prevents naming collisions across the ecosystem.
 
+The `daintree` publisher is reserved for built-in plugins: a manifest named `daintree.*` anywhere else is rejected (`namespace_reserved`), and at startup Daintree shows an error toast naming the plugin rather than only logging it.
+
+Names are unique per root. Built-ins load first, so an installed plugin that reuses a built-in's name is rejected, and of two installed plugins with the same name the second is rejected and logged. A project plugin is the exception: it may share its name with an installed plugin, and both load as separate instances.
+
 ### `version`
 
 Standard semver. `0.1.0`, `1.2.3-beta.1`, etc. Required for update detection.
@@ -163,7 +168,7 @@ A one-line value proposition for the plugin catalog. Optional, trimmed, and capp
 
 ### `authors`
 
-Optional attribution credits, surfaced as a "Contributors" block in the plugin detail pane. An array of up to 10 entries; each entry is an object where `name` is required and `url`, `email`, and `role` are optional. Unknown keys on an entry are rejected. `url` must be `https://` and follows the same discipline as `scopes.network.allowedUrls` — no wildcards, embedded credentials, or private/loopback hosts — because it surfaces as a user-clickable link; `email` must be a valid address; `role` is a free-form label (e.g. `"Maintainer"`, `"Contributor"`). The SDK exports the `PluginAuthor` type for authoring against this shape.
+Optional attribution credits, surfaced as a "Contributors" block in the plugin detail pane. An array of at most 10 entries; each entry is an object where `name` is required and `url`, `email`, and `role` are optional. Unknown keys on an entry are rejected. `name` is trimmed and must be 1–100 characters. `url` must be `https://` and follows the same rules as `scopes.network.allowedUrls` — no wildcards, no embedded credentials, no private or loopback hosts, and a multi-label hostname — because it surfaces as a user-clickable link; `email` must be a valid address; `role` is a free-form label (e.g. `"Maintainer"`, `"Contributor"`), trimmed and 1–50 characters. The SDK exports the `PluginAuthor` type for authoring against this shape.
 
 ```jsonc
 "authors": [
@@ -174,11 +179,11 @@ Optional attribution credits, surfaced as a "Contributors" block in the plugin d
 
 ### `category`
 
-Catalog category for grouping in the plugin manager. Optional enum: `"forge"`, `"ai"`, `"workspace"`, or `"other"`. When omitted, Daintree derives one from what the plugin contributes — forge providers map to `"forge"`, agents or MCP servers to `"ai"`, panels or views to `"workspace"`, and anything else to `"other"`. Declare it explicitly when a multi-contribution plugin would otherwise be misclassified by derivation.
+Catalog category for grouping in the plugin manager. Optional enum: `"forge"`, `"ai"`, `"workspace"`, or `"other"`. When omitted, Daintree derives one from what the plugin contributes — forge providers map to `"forge"`; agents, MCP servers, skills or an `agentMcp` endpoint to `"ai"`; panels or views to `"workspace"`; and anything else to `"other"`, checked in that order. Declare it explicitly when a multi-contribution plugin would otherwise be misclassified by derivation.
 
 ### `main`
 
-Path to the plugin's compiled ESM entry file, relative to the plugin root. The file must export an `activate` function:
+Path to the plugin's compiled ESM entry file, relative to the plugin root. The entry normally exports an `activate` function:
 
 ```ts
 import type { PluginHostApi } from "@daintreehq/plugin-sdk";
@@ -191,7 +196,12 @@ export async function activate(host: PluginHostApi) {
 }
 ```
 
-Plugins with only static contributions (a theme pack, a standalone MCP server config) can omit `main` entirely.
+Plugins with only static contributions (a skills-only or recipes-only plugin, say) can omit `main` entirely.
+
+- **`activate` is optional.** An entry that exports no `activate` function loads as a contributions-only plugin: the module is imported, and nothing else runs.
+- **`activate()` must settle within 5 seconds.** For a plugin running in a worker the budget covers importing the entry as well. A plugin whose activation neither resolves nor rejects in time is recorded as failed and its worker is stopped.
+- **Registration closes when `activate()` settles.** The `host.register*` calls work only during activation; after it resolves, rejects or times out they throw. Callbacks that are not registrations, such as toasts, `dispatch` and `settings`, keep working.
+- **The entry must stay inside the plugin directory.** A `main` path that escapes the directory is ignored with a warning and the plugin loads without it. For a project plugin the path is also resolved through symlinks, so a `dist/index.js` that is a symlink out of the plugin directory is refused the same way.
 
 ### `engines.daintree`
 
@@ -207,6 +217,8 @@ If the running Daintree version doesn't satisfy the range, the plugin still inst
 
 Daintree is pre-1.0. Pin to a current minor during this phase — a plugin that works on Daintree 0.11 may not work on 0.12 without changes.
 
+`engines` is the one manifest object that is not strict: `daintree` is its only recognised key, and any other key (`"node"`, `"vscode"`) is dropped without an error rather than rejected.
+
 ### `scope`
 
 The only accepted value is `"project"`, and it declares that the plugin is a **project-local** plugin — one that lives in a project's own repository at `<projectRoot>/.daintree/plugins/` and loads only while that project is open. Omit the field entirely for a normal, app-wide plugin.
@@ -218,7 +230,7 @@ The manifest gate enforces it in both directions, against the root the manifest 
 
 This is a guardrail against accidental promotion, not a security control — the trust decision is the project folder, not this field. What it prevents is a plugin loading under assumptions its author never made: a project plugin copied into the user directory would go app-wide with project-shaped expectations about its settings tier and its bound project, and a user plugin dropped into `.daintree/plugins/` would load with none of the project-local guarantees. Neither failure is visible at runtime, so both are refused at the gate.
 
-Declaring `"scope": "project"` also changes what the manifest may contribute. `contributes.surfaces` and `"project"` [databases](./contribution-points.md#databases--shipped) become available, and ten contribution groups become unavailable — `menuItems`, `agents`, `skills`, `recipes`, `fileDecorationProviders`, `fileEditors`, `processTools`, `mcpServers`, `tours` and `forgeProviders`, each rejected with an error naming the structural reason it cannot yet be narrowed to one project. `agentMcp` stays available, because its credentials are bound to one project. See [Project-local plugins](./project-local.md) and the per-point status in [Contribution points](./contribution-points.md).
+Declaring `"scope": "project"` also changes what the manifest may contribute. `contributes.surfaces` and `"project"` [databases](./contribution-points.md#databases--shipped) become available, and ten contribution groups become unavailable — `menuItems`, `agents`, `skills`, `recipes`, `fileDecorationProviders`, `fileEditors`, `processTools`, `mcpServers`, `tours` and `forgeProviders`, each rejected with an error naming the structural reason it cannot yet be narrowed to one project. `previewTools` and `guestAdapters` are refused too, as they are for every plugin that is not built in. `agentMcp` stays available, because its credentials are bound to one project. See [Project-local plugins](./project-local.md) and the per-point status in [Contribution points](./contribution-points.md).
 
 ### `capabilities`
 
@@ -226,11 +238,11 @@ Array of capability tokens the plugin wants. The model is **disclosure-first wit
 
 | Token | Intent |
 | --- | --- |
-| `fs:project-read` | Read files in the current project worktree |
-| `fs:project-write` | Modify files in the current project worktree. Required by a `"project"` database |
-| `fs:user-data-read` | Read from `~/.daintree/` or elsewhere in the user's home |
-| `fs:user-data-write` | Write to `~/.daintree/` or elsewhere in the user's home |
-| `network:fetch` | Make outbound HTTP requests |
+| `fs:project-read` | Read project-class paths through `host.fs`, and open or reveal them with `host.system` (see [Filesystem root classes](#filesystem-root-classes)) |
+| `fs:project-write` | Write project-class paths through `host.fs` and `host.documents.renderPdf`. Required by a `"project"` database |
+| `fs:user-data-read` | Read user-data-class paths: the plugin's own data directory and literal `allowedPaths` under the home directory |
+| `fs:user-data-write` | Write user-data-class paths, including the plugin's own data directory |
+| `network:fetch` | Make outbound HTTP requests. Disclosure and danger input only — no host API is gated on it |
 | `agent:invoke` | Drive AI agents from plugin code. Disclosure and confirm elevation only — no host API is gated on it |
 | `agent:read` | Observe agent state (`host.getAgentState`, `host.onDidChangeAgentState`: lifecycle phase, session cost/tokens on completion) and list the project's agent panes (`host.agents.list`) |
 | `agent:register` | Register a launchable agent CLI as a selectable agent |
@@ -240,31 +252,85 @@ Array of capability tokens the plugin wants. The model is **disclosure-first wit
 | `clipboard:read` | Read from the system clipboard |
 | `clipboard:write` | Write to the system clipboard (text, and PNG images via `host.clipboard.writeImage`) |
 | `shell:exec` | Spawn subprocesses (managed via `host.process`) |
-| `socket:connect` | Connect to local Unix-domain sockets or Windows named pipes (e.g. the Docker socket) |
+| `socket:connect` | Connect to local Unix-domain sockets or Windows named pipes (e.g. the Docker socket). Disclosure only — no host API is gated on it, and it takes no part in the danger derivation |
 | `mcp:expose` | Serve `contributes.agentMcp` tools to agents in Daintree's terminals (`host.mcp.registerTools`). Required by `agentMcp`; exposes nothing until the plugin's agent access is turned on for a project |
-| `project:dispatch` | Run actions in a named project with `host.dispatch(actionId, args, { projectId })`. Enables nothing until the user turns on **Allow project targeting** for the plugin ([host API → Targeting a project](./host-api.md#targeting-a-project)) |
+| `project:dispatch` | Run actions in a named project with `host.dispatch(actionId, args, { projectId })`; an installed plugin needs it for any explicit `projectId`, even the focused project's. Enables nothing until the user turns on **Allow project targeting** for the plugin, and there is no first-use prompt: the switch is the whole grant. A project plugin can never target another project, whatever it declares; naming its own project needs no capability ([host API → Targeting a project](./host-api.md#targeting-a-project)) |
 
-Declare honestly. The plugin manager's detail pane lists what you've declared (after install, not as a pre-install consent gate) and users judge plugins by what they ask for; the host also derives policy from the high-risk tokens above. A plugin declaring `shell:exec` for no obvious reason looks suspicious. A plugin that silently executes shells without declaring it damages the ecosystem — and for the most part nothing at runtime stops it, which is exactly why honest declaration matters. The clearest runtime-enforced exception is `host.process.spawn` (see [host API](./host-api.md#process--managed-child-processes)): the managed-process surface rejects unless the plugin declared `shell:exec`. `host.mcp.registerTools` is gated on `mcp:expose` the same way. A plugin can still `require("child_process")` directly to bypass that — the gate is on the managed surface, not a Node sandbox — but the managed surface is the supported, supervised path.
+Declare honestly. A `.dntr` archive opened from the operating system shows a confirmation before anything is installed, listing each declared capability with its severity alongside any contributed recipes; the plugin manager's detail pane lists the same capabilities after install. Installing from the plugin manager itself, from a chosen file or a URL, shows no such list first. Users judge plugins by what they ask for; the host also derives policy from the high-risk tokens above. A plugin declaring `shell:exec` for no obvious reason looks suspicious. A plugin that silently executes shells without declaring it damages the ecosystem — and for the most part nothing at runtime stops it, which is exactly why honest declaration matters. The clearest runtime-enforced exception is `host.process.spawn` (see [host API](./host-api.md#process--managed-child-processes)): the managed-process surface rejects unless the plugin declared `shell:exec`. `host.mcp.registerTools` is gated on `mcp:expose` the same way. A plugin can still `require("child_process")` directly to bypass that — the gate is on the managed surface, not a Node sandbox — but the managed surface is the supported, supervised path. The [trust model](./trust-model.md#host-api-gates) lists every host API a capability gates.
+
+#### Compound danger
+
+Some capabilities are harmless alone and dangerous together, so the host also raises a plugin's actions to confirm when its declared set forms one of two combinations, even if none of the seven high-risk tokens is present:
+
+- **Sensitive read plus an unconstrained sink.** The sensitive reads are `agent:read`, `git:read`, `fs:project-read` and `fs:user-data-read`. Any of them paired with `shell:exec`, or with `network:fetch` when `scopes.network.allowedUrls` is not declared, elevates.
+- **Unconstrained network plus a local mutation.** `network:fetch` without `scopes.network.allowedUrls`, paired with `fs:project-write`, `fs:user-data-write`, `git:write` or `shell:exec`, elevates.
+
+A non-empty `scopes.network.allowedUrls` takes `network:fetch` out of both rules. `clipboard:read`, `clipboard:write` and `socket:connect` take no part in either. A command's [`requires`](./contribution-points.md#commands--shipped) narrows the set both rules consult, as it does for the high-risk tokens. The same derivation also produces a single verdict for the whole plugin, `"safe"` or `"confirm"`, which the plugin manager shows.
 
 ### `scopes`
 
 Per-capability allowlists that declare what a capability intends to reach. Both buckets are schema-validated, but neither is a runtime sandbox — they do not block actual calls or writes. Two buckets, with different runtime weight today:
 
-- `scopes.network.allowedUrls` — outbound request targets the plugin intends to reach under `network:fetch`. Wildcards and private/loopback targets are rejected. **Live but advisory:** a non-empty allowlist suppresses the compound-capability elevation (the host won't force a confirm dialog when `network:fetch` is paired with a sensitive read), proving the fetch is tightly bound rather than a generic exfiltration channel. It does not actually block requests to other URLs.
-- `scopes.fs.allowedPaths` — absolute paths the filesystem capabilities may touch. Entries may also use the dynamic tokens `${project}` or `${worktree}` (optionally with a `/sub/path` suffix, e.g. `"${project}/src"`), which expand at call time to the active project root and active worktree path. Wildcards, relative paths, `..` segments, and unknown tokens are rejected by the manifest schema. **Enforced for the host `fs`/`git` API:** every path argument to `host.fs.*` and `host.git.*` is realpath-resolved and contained to one of these roots (traversal and symlink-escape rejected, mirroring the `plugin://` protocol handler); an out-of-scope path rejects with a `PATH_NOT_ALLOWED:` prefix. It still does not attenuate the compound-capability lattice (fs writes elevate unconditionally). **Honest scope limit:** this enforces the sanctioned, audited `host.fs`/`host.git` path only — a plugin's `main` is un-sandboxed Node code (it runs in the plugin worker with full filesystem privileges) and can still call raw `node:fs` directly, which the host cannot intercept without a real sandbox. `allowedPaths` contains the host-mediated surface; it does not seal the un-mediated one.
+- `scopes.network.allowedUrls` — outbound request targets the plugin intends to reach under `network:fetch`. Each entry must be an `https://` URL with no wildcard, no embedded credentials, and a multi-label public hostname; private and loopback targets are rejected. **Live but advisory:** a non-empty allowlist suppresses the compound-capability elevation (the host won't force a confirm dialog when `network:fetch` is paired with a sensitive read), proving the fetch is tightly bound rather than a generic exfiltration channel. It does not actually block requests to other URLs.
+- `scopes.fs.allowedPaths` — absolute paths the filesystem capabilities may touch. Entries may also use the dynamic tokens `${project}` or `${worktree}` (optionally with a `/sub/path` suffix, e.g. `"${project}/src"`), which expand at call time: `${project}` to the project's main worktree, `${worktree}` to the current worktree. Wildcards, relative paths, `..` segments, and unknown tokens are rejected by the manifest schema. Whether a literal path is absolute is checked with the platform's own rules, so a Windows entry such as `C:\data` fails validation on macOS and Linux. **Enforced for the host-mediated surface:** every path argument to `host.fs.*`, `host.git.*`, `host.system.openPath` / `showItemInFolder` and `host.documents.renderPdf` is realpath-resolved and contained to one of these roots (traversal and symlink-escape rejected, mirroring the `plugin://` protocol handler); an out-of-scope path rejects with a `PATH_NOT_ALLOWED:` prefix. It still does not attenuate the compound-capability lattice (fs writes elevate unconditionally). **Honest scope limit:** this enforces the sanctioned, audited `host.fs`/`host.git` path only — a plugin's `main` is un-sandboxed Node code (it runs in the plugin worker with full filesystem privileges) and can still call raw `node:fs` directly, which the host cannot intercept without a real sandbox. `allowedPaths` contains the host-mediated surface; it does not seal the un-mediated one.
 - `scopes.socket.allowedPaths` — local endpoints the plugin intends to connect to under `socket:connect`: absolute Unix-domain socket paths (`/var/run/docker.sock`) and/or Windows named pipes (`\\.\pipe\docker_engine`). Both forms are accepted on every platform, so a cross-platform manifest parses everywhere it's read. Wildcards, relative paths, and `..` segments are rejected. **Purely advisory:** nothing enforces this, because a plugin's `main` reaches `node:net` directly and the host has no interception point. It exists so the plugin manager can render "connects to `/var/run/docker.sock`" instead of the bare capability — which is the entire value of the disclosure. Optional; declare `socket:connect` without it if the endpoint varies.
 
-A misspelled bucket (e.g. `networking`) is rejected as a manifest error rather than silently dropped. See the [trust model](./trust-model.md) for the full scopes semantics and how they compose with capabilities.
+A misspelled bucket (e.g. `networking`) is rejected as a manifest error rather than silently dropped, and a bucket that is present must list at least one entry. See the [trust model](./trust-model.md) for the full scopes semantics and how they compose with capabilities.
+
+#### Filesystem root classes
+
+The roots a plugin's host-mediated filesystem calls are contained to, and the capability each one needs:
+
+- **The plugin's data directory**, `~/.daintree/plugin-data/<pluginId>/`, is always an allowed root, declared or not. It is user-data class. `host.git` does not treat it as a root.
+- **A project plugin's own project root** is allowed implicitly while `allowedPaths` is absent, as project class. Declaring `allowedPaths` replaces it rather than adding to it, so a project plugin that declares a list and still wants its root lists `${project}`. An installed plugin gets no implicit root.
+- **`${project}` and `${worktree}` entries** are project class. A project plugin's tokens expand only against its own project, never the one in focus. A token with no live worktree to expand to is dropped for that call, so a path that only it would have matched is refused rather than allowed.
+- **Literal paths** are classed by location: under the home directory they are user-data class, anywhere else project class. Most projects live under the home directory, so a literal `/Users/me/proj` needs `fs:user-data-read` or `fs:user-data-write`, not the `fs:project-*` pair; use a token to reach a project as project class.
+
+A read needs the read capability for the class of the root the path resolves into, and a write the write capability for that class. `host.system.openPath` and `showItemInFolder` accept either. A path outside every root rejects with `PATH_NOT_ALLOWED:`, and a missing capability with `PERMISSION_REQUIRED:`.
 
 ### `activationEvents`
 
-Activation triggers. The sole supported value is `"onStartupFinished"`, which activates the plugin once the app finishes starting.
+Activation triggers. The sole supported value is `"onStartupFinished"`, which activates the plugin once the app finishes starting. Any other value, such as a VS Code-style `"onCommand:…"`, is a validation error.
 
-Plugins are lazy by default. Omitting `activationEvents` (or passing an empty array) defers the plugin's `main` module import and `activate()` call until one of its contributions is first used — a contributed command is dispatched, a forge provider or file decoration is queried, or a contributed panel view is opened. List `"onStartupFinished"` to opt a plugin into eager activation when it genuinely needs to run at boot. Either way, contributions (commands, panels, keybindings, …) are registered eagerly from the manifest at startup — only the `main` import and `activate()` call are governed by activation, so a lazy plugin's commands and panels still appear in the palette before any of its code runs.
+Plugins are lazy by default. Omitting `activationEvents` (or passing an empty array) defers the plugin's `main` module import and `activate()` call until something first needs it:
+
+- a contributed command is dispatched;
+- a forge provider or file decoration is queried;
+- a contributed panel view is opened, or the plugin's `location: "settings"` view is mounted;
+- a view calls into one of the plugin's channels with `window.electron.plugin.invoke`;
+- an agent's MCP session reaches the plugin's server.
+
+Some user actions activate a plugin at once whatever it declares: installing or updating it, re-enabling it, and linking it with `daintree-plugin dev`.
+
+List `"onStartupFinished"` to opt a plugin into eager activation when it genuinely needs to run at boot. Either way, contributions (commands, panels, keybindings, …) are registered eagerly from the manifest at startup — only the `main` import and `activate()` call are governed by activation, so a lazy plugin's commands and panels still appear in the palette before any of its code runs.
 
 ### `contributes`
 
-Object containing an array per contribution type (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `tours`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes`, and the built-in-only `fileEditors`, `previewTools`, `guestAdapters`) — plus the non-array `surfaces` object. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests.
+Object containing an array per contribution type (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `tours`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes`, and the built-in-only `fileEditors`, `previewTools`, `guestAdapters`) — plus the non-array `surfaces` object. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests:
+
+| Contribution              | Max entries                 |
+| ------------------------- | --------------------------- |
+| `panels`                  | 50 (each panel's `menu`: 5) |
+| `toolbarButtons`          | 100                         |
+| `menuItems`               | 200                         |
+| `keybindings`             | 200                         |
+| `contextMenus`            | 200                         |
+| `commands`                | 200                         |
+| `views`                   | 50                          |
+| `mcpServers`              | 20                          |
+| `agentMcp`                | 1                           |
+| `databases`               | 16                          |
+| `skills`                  | 50                          |
+| `recipes`                 | 50                          |
+| `tours`                   | 10                          |
+| `forgeProviders`          | 20                          |
+| `fileDecorationProviders` | 50                          |
+| `agents`                  | 50                          |
+| `processTools`            | 100                         |
+| `settings`                | 200                         |
+| `fileEditors`             | 10                          |
+| `previewTools`            | 10                          |
+| `guestAdapters`           | 10                          |
 
 Validation is structural as well as per-field: duplicate ids within one array are rejected (`duplicate_contribution_id`), and cross-references have to resolve — a panel view's `id` must name a declared panel (a settings view must not), a panel `menu` entry, toolbar button, menu item, keybinding or context menu naming an action in your own namespace must match a declared command when you declare any, a tour's `panelKind` must name a declared panel, a forge provider's `settingsScopeRef` / `viewRefs` must name declared settings / views, a `surfaces` slot's `viewId` must name a declared panel view, and a `${settings:…}` token in an MCP server's `command` / `args` / `env` must name a declared setting. Capability rules are checked too: `agents` needs `agent:register`, `agentMcp` needs `mcp:expose`, and a `"project"` database needs `scope: "project"` and `fs:project-write`.
 
@@ -378,14 +444,14 @@ What each part buys:
 - **`settings`** declares a committed `currency` shared by everyone who clones the project, and a `bankToken` secret each collaborator enters on their own machine. Both are `required`, so the panel shows a "Budget needs setup" strip until they are stored; `editor: "view"` leaves the token to the plugin's own settings view rather than a generated field. Every panel gets **Plugin settings…**.
 - **`views`** pairs `dist/panel.js` with the `main` panel, and declares `dist/settings.js` as the custom settings section, which mounts in Project settings → Plugins.
 - **`panels[].menu`** puts **Send uncategorised to agent…** on the panel's ⋯ and right-click menus, dispatched with `{ panelId }`.
-- **`commands`** puts both actions in the palette. `agent:input` and `fs:project-write` are high-risk, so without `requires` every action would ask for confirmation; `"requires": []` keeps **Open budget** one click, while `send-uncategorised` names the capability it actually uses and asks first. Both handlers need the host, so the worker (`main`) registers them with `host.registerAction` in `activate()`, passing the same descriptor, `requires` included — the imperative registration replaces the manifest one. The send handler calls `host.sendToAgent`, which drafts into an agent the user picks and never submits.
+- **`commands`** puts both actions in the palette. `agent:input` and `fs:project-write` are high-risk, so without `requires` every action would ask for confirmation; `"requires": []` keeps **Open budget** one click, while `send-uncategorised` names the capability it actually uses and asks first. A project plugin has no other way to bind a handler — the `src/<id>.js` [file convention](./contribution-points.md#commands--shipped) is not probed for project plugins — so the worker (`main`) registers both with `host.registerAction` in `activate()`, passing the same descriptor, `requires` included — the imperative registration replaces the manifest one. The send handler calls `host.sendToAgent`, which drafts into an agent the user picks and never submits.
 - **`toolbarButtons`** puts a **Budget** button in the plugin tray that runs `acme.budget.open`.
 
 [Building apps](./building-apps.md) walks through writing the worker and views behind a manifest like this.
 
 ## Validation
 
-The manifest is validated by Zod schemas at load time. Violations surface as user-visible toast errors with the specific schema path that failed. Common causes:
+The manifest is validated by Zod schemas at load time. Common causes of a rejection:
 
 - Plugin name missing the period (`acmelinearplanner`)
 - Uppercase in name (`Acme.LinearPlanner`)
@@ -393,10 +459,24 @@ The manifest is validated by Zod schemas at load time. Violations surface as use
 - Capability token not in the allowlist
 - Unknown field at the top level (the manifest uses strict validation; typos are rejected)
 
+Where a rejection shows up depends on how the plugin reached Daintree:
+
+- **Installing an archive** fails with one error per issue, each carrying the path that failed; the plugin manager shows the first.
+- **A project plugin** that fails validation is listed in the plugin manager with a one-line reason.
+- **A `daintree-plugin dev` session** reports the same one-line reason to the CLI.
+- **An installed plugin at startup** is skipped, and the issues go to the console log only. The one exception is a reserved `daintree.*` name, which also shows an error toast and records a load error on the plugin.
+
 Run `npx daintree-plugin validate` in your plugin directory to check the manifest locally before packaging.
+
+### What validation does not catch
+
+A few rules are only known when the plugin loads, so a manifest that passes the schema and `daintree-plugin validate` can still fail there:
+
+- **`fileEditors` outside a built-in.** The schema accepts the group for an installed plugin; the load refuses the whole plugin and records a load error.
+- **A command id that collides with a built-in action.** The colliding command is not registered and the plugin records a load error, as described under [Commands](./contribution-points.md#commands--shipped).
 
 ## Unknown fields
 
-The manifest schema is strict — unknown top-level keys and unknown keys inside `contributes` are rejected. This prevents typos from silently dropping contributions.
+The manifest schema is strict — unknown top-level keys and unknown keys inside `contributes` are rejected. This prevents typos from silently dropping contributions. `engines` is the one exception, as noted [above](#enginesdaintree).
 
-If you see an error like `Unrecognized key "contribute"`, you mistyped a field name. The expected key is `contributes` (plural).
+A mistyped top-level key fails with `Unrecognized key: "contribute"`. Where Daintree reports the reason in one line (a project plugin, a dev session), it adds a suggestion when a known key is close: `Unrecognized key: "contribute" — did you mean "contributes" instead of "contribute"?`. `daintree-plugin validate` prints the message as Zod reports it, prefixed with the path, without the suggestion.

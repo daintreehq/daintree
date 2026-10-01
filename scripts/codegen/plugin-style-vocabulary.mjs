@@ -141,10 +141,19 @@ function renderVocabulary() {
       // Category tokens share the `--color-` root but are rendered separately.
       .filter((name) => !name.startsWith("category-"));
     if (suffixes.length === 0) continue;
+    // Listed as whole classes: a bare token name like `border-divider` reads
+    // as a class but compiles to nothing, where `border-border-divider` works.
+    const [first, ...others] = family.utilities;
+    const alternatives =
+      others.length === 0
+        ? ""
+        : `; ${others.map((u) => `\`${u}\``).join(" and ")} take the same names`;
     lines.push(
-      `**${family.title}** — ${family.utilities.map((u) => `\`${u}\``).join(", ")}`,
+      others.length === 0
+        ? `**${family.title}**`
+        : `**${family.title}** — shown with \`${first}\`${alternatives}`,
       "",
-      inlineList(suffixes),
+      inlineList(suffixes.map((name) => `${first}${name}`)),
       ""
     );
   }
@@ -161,7 +170,7 @@ function renderVocabulary() {
     }
     const suffixes = [...variants].map((v) => (v === "" ? "(bare)" : `-${v}`));
     lines.push(
-      "**Category hues** — `bg-`, `text-`, `border-`, as `category-<hue>` plus a variant suffix",
+      "**Category hues** — `bg-`, `text-` or `border-`, then `category-<hue>` and a variant suffix: `bg-category-blue-subtle`, `text-category-teal-text`",
       "",
       `hues: ${inlineList([...hues])}`,
       "",

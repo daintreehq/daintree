@@ -44,11 +44,27 @@ import {
   type PluginStorageManager,
 } from "./PluginStorageManager.js";
 import { createListenerFailureState, invokeTrackedListener } from "./pluginCallbackUtils.js";
+import {
+  readBoundedFromHandle,
+  runReadFiles,
+  validateReadFilesCall,
+  type ReadOneOutcome,
+} from "./pluginFsReadFiles.js";
+import {
+  MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS,
+  WorktreeChangeTracker,
+  createSubscriptionCoalescer,
+  resolveSubscriptionDebounceMs,
+} from "./pluginSubscriptionCoalescing.js";
 import { isChannelSchema } from "./PluginChannelRegistry.js";
 import { abortErrorFor } from "./pluginAbortError.js";
 import { openPluginDatabase, resolvePluginDatabaseLocation } from "./pluginDatabase.js";
 import type { PluginDatabaseApi } from "../../../shared/types/plugin.js";
-import { databaseBackupApprovers, fsWriteApprovers } from "./pluginInternalApprovers.js";
+import {
+  databaseBackupApprovers,
+  fsWriteApprovers,
+  pushListenerObservers,
+} from "./pluginInternalApprovers.js";
 import { agentMcpEndpointRegistry } from "../pluginAgentMcp/endpointRegistry.js";
 import { validateAgentMcpTools } from "../pluginAgentMcp/validateTools.js";
 import type { AgentMcpToolInvoker } from "../pluginAgentMcp/types.js";
@@ -66,6 +82,13 @@ import {
   scopeMatchesPattern,
 } from "../fileDecorationRegistry.js";
 import { broadcastToRenderer, broadcastToProjectRenderers } from "../../ipc/utils.js";
+import { PLUGIN_PUSH_MAX_PAYLOAD_BYTES } from "../../../shared/config/pluginBudgets.js";
+import { assertPayloadWithinLimit, snapshotPayload } from "./pluginPayloadLimits.js";
+import { resolveInvokeTimeoutMs, runWithInvokeDeadline } from "./pluginInvokeDeadline.js";
+import { flushPluginPushes, routePluginPush, withPushFlushBarrier } from "./pluginPushBatcher.js";
+import { getPluginPushListenerRegistry } from "./pluginPushListenerRegistry.js";
+import { runWalk, validateWalkCall } from "./pluginFsWalk.js";
+import { checkIgnoredPaths, hasTrackedIgnoredPaths } from "../../utils/gitCheckIgnore.js";
 import { isAppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -81,7 +104,11 @@ import {
   type AgentStateChangePayload,
 } from "../../../shared/utils/pluginAgentSnapshot.js";
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
-import type { PluginSendToAgentRequest } from "../../../shared/types/pluginUiPrompt.js";
+import {
+  promptOpensDialog,
+  type PluginSendToAgentRequest,
+  type PluginUiPromptResultValue,
+} from "../../../shared/types/pluginUiPrompt.js";
 import {
   AGENT_CONTEXT_MAX_TEXT_LENGTH,
   AGENT_CONTEXT_MAX_TITLE_LENGTH,
@@ -98,6 +125,8 @@ import type {
   PluginActionContribution,
   PluginActionDescriptor,
   PluginChannelSchema,
+  PluginHandlerOptions,
+  PluginIpcContext,
   PluginTypedIpcHandler,
   ActionHandler,
   PluginQuickPickItem,
@@ -153,20 +182,6 @@ import type {
  * scope-wide invalidation (no `paths`) is the correct fallback anyway.
  */
 const MAX_FILE_DECORATION_PATHS = 1000;
-/**
- * Floor for a plugin-supplied `onDidChangeWorktrees` `debounceMs`. A positive
- * value below this is clamped up so a plugin can't request a near-zero debounce
- * that defeats the coalescing intent while still paying timer overhead; `0` /
- * omitted disables debouncing entirely (fire on every change).
- */
-const MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS = 50;
-/**
- * Bound on how long a debounced `onDidChangeWorktrees` burst may defer its
- * callback, as a multiple of the plugin's `debounceMs`. Multi-agent churn can
- * stream worktree updates with no quiet gap for as long as agents are working,
- * and a pure trailing debounce would withhold the snapshot for that whole time.
- */
-const PLUGIN_SUBSCRIPTION_MAX_WAIT_FACTOR = 4;
 /**
  * Ceiling for a `host.fs.watch` `debounceMs`. Node clamps any timer delay past
  * 2^31-1 ms to 1 ms, so an unbounded value would turn "almost never" into
@@ -509,6 +524,17 @@ export interface PluginHostFactoryDeps {
     input: Parameters<ReturnType<typeof getPluginActionAuditService>["append"]>[0]
   ) => void;
   safeArgsHash: (args: unknown[]) => string;
+  /**
+   * Meter a push refused for size or cloneability. Optional because metering
+   * is best-effort; a missing sink must never change what the plugin sees.
+   */
+  recordPushRejected?: (pluginId: string) => void;
+  /**
+   * Meter a host prompt the user has to answer: called as it opens, and the
+   * returned function as it settles. Optional for the same reason as
+   * `recordPushRejected`.
+   */
+  trackPromptWait?: (pluginId: string) => () => void;
 }
 
 /**
@@ -657,10 +683,90 @@ export function createHost(
    * a window that never routes through ProjectViewManager); in that state there
    * is no other project's view for it to reach.
    */
-  const pushToRenderers: (channel: string, ...args: unknown[]) => void =
+  const sendToScope: (channel: string, ...args: unknown[]) => void =
     boundProjectId === null
       ? broadcastToRenderer
       : (channel, ...args) => broadcastToProjectRenderers(boundProjectId, channel, ...args);
+  // Every direct renderer delivery from this host — badges, decoration
+  // invalidations and toasts here, and dispatches, prompts and panel reloads
+  // through the wrapped collaborators below — first delivers what this plugin
+  // already pushed: a renderer must never see a toast, a prompt or a reload
+  // before the panel update that preceded it.
+  const pushToRenderers = (channel: string, ...args: unknown[]): void => {
+    flushPluginPushes();
+    sendToScope(channel, ...args);
+  };
+  const dispatcher = withPushFlushBarrier(deps.dispatcher);
+  const promptDispatcher = withPromptWaitTracking(
+    withPushFlushBarrier(deps.promptDispatcher),
+    deps.trackPromptWait
+  );
+  const panelReloadDispatcher = withPushFlushBarrier(deps.panelReloadDispatcher);
+
+  /**
+   * The `plugin:{pluginId}:{channel}` transport shared by broadcastToRenderer
+   * and postToPanel. Throws on an oversize payload (each caller surfaces that
+   * the way it surfaces its other validation errors); the worker proxy applies
+   * the same cap before the payload crosses its port, and this re-check covers
+   * builtins and a worker that skipped it. Delivery is batched per renderer and, for a
+   * targeted push, narrowed to the renderer holding the panel.
+   */
+  const pushPluginMessage = (channel: string, panelId: string | null, payload: unknown): void => {
+    const what = `push payload on "${channel}"`;
+    let bytes: number;
+    let snapshot: unknown;
+    try {
+      bytes = assertPayloadWithinLimit(pluginId, what, payload, PLUGIN_PUSH_MAX_PAYLOAD_BYTES);
+      // Delivery is deferred to the next flush, so a builtin that mutates and
+      // re-posts one object must not have both pushes carry its final state.
+      // Cloning here also refuses an uncloneable payload on the call that made
+      // it, instead of failing a whole renderer batch later.
+      snapshot = snapshotPayload(pluginId, what, payload);
+    } catch (err) {
+      // Metered here because a refused push never reaches the batcher's flush
+      // observer, which is where accepted pushes are counted.
+      if (isBound()) deps.recordPushRejected?.(pluginId);
+      throw err;
+    }
+    routePluginPush({
+      pluginId,
+      projectId: boundProjectId,
+      channel: `plugin:${pluginId}:${channel}`,
+      panelId,
+      payload: snapshot,
+      bytes,
+      locatePanel: (target, owner) => deps.panelLifecycleBroker.pushTargetsFor(target, owner),
+    });
+  };
+
+  /** Validate a push channel name and return its `plugin:{pluginId}:{channel}` transport. */
+  const pushListenerChannel = (method: string, channel: unknown): string => {
+    if (typeof channel !== "string" || channel.length === 0 || channel.includes(":")) {
+      throw new Error(
+        `Plugin "${pluginId}" ${method}: channel must be a non-empty string without colons: ${String(channel)}`
+      );
+    }
+    return `plugin:${pluginId}:${channel}`;
+  };
+
+  /**
+   * Wrap a channel handler in its invoke deadline. The wrapper keeps the
+   * handler's declared arity, which the dispatch-time signature hint reads.
+   */
+  const withInvokeDeadline = <
+    THandler extends (ctx: PluginIpcContext, ...args: never[]) => unknown,
+  >(
+    channel: string,
+    timeoutMs: number,
+    handler: THandler
+  ): THandler => {
+    if (timeoutMs === 0) return handler;
+    const call = handler as unknown as (ctx: PluginIpcContext, ...args: unknown[]) => unknown;
+    const wrapped = (ctx: PluginIpcContext, ...args: unknown[]): unknown =>
+      runWithInvokeDeadline(pluginId, channel, timeoutMs, ctx, (scoped) => call(scoped, ...args));
+    Object.defineProperty(wrapped, "length", { value: handler.length });
+    return wrapped as unknown as THandler;
+  };
 
   /**
    * Does a worktree event belong to the bound project? Unbound hosts see every
@@ -987,27 +1093,52 @@ export function createHost(
         | PluginChannelSchema<unknown, unknown>
         | PluginIpcHandler
         | PluginTypedIpcHandler<unknown, unknown>,
-      typedHandler?: PluginTypedIpcHandler<unknown, unknown>
+      typedHandlerOrOptions?: PluginTypedIpcHandler<unknown, unknown> | PluginHandlerOptions,
+      typedOptions?: PluginHandlerOptions
     ) => {
       if (revoked) {
         throw new Error(
           `Plugin "${pluginId}" host revoked: registerHandler called after activate() returned or timed out`
         );
       }
-      if (typedHandler !== undefined) {
-        // A three-argument call is the typed overload by definition; if the
-        // second arg isn't a schema, reject loudly instead of silently
-        // dropping the typed handler and registering the second arg as a
-        // legacy handler — that mismatch would look like a phantom no-op
-        // at first dispatch.
+      // A function in third position is the typed overload by definition. Short
+      // of that, a function in second position is the legacy overload, whose
+      // optional third argument is the options bag.
+      const isLegacy =
+        typeof typedHandlerOrOptions !== "function" && typeof schemaOrHandler === "function";
+      const options = isLegacy
+        ? (typedHandlerOrOptions as PluginHandlerOptions | undefined)
+        : typedOptions;
+      const timeoutMs = resolveInvokeTimeoutMs(pluginId, channel, options?.timeoutMs);
+      if (!isLegacy) {
+        const typedHandler = typedHandlerOrOptions;
+        // The typed overload by definition; if the second arg isn't a schema,
+        // reject loudly instead of silently dropping the typed handler and
+        // registering the second arg as a legacy handler — that mismatch would
+        // look like a phantom no-op at first dispatch.
         if (!isChannelSchema(schemaOrHandler)) {
           throw new Error(
             `Plugin "${pluginId}" registerHandler: second argument must be a channel schema { args, result } when a typed handler is provided`
           );
         }
-        deps.registerHandler(pluginId, channel, schemaOrHandler, typedHandler);
+        deps.registerHandler(
+          pluginId,
+          channel,
+          schemaOrHandler,
+          typeof typedHandler === "function"
+            ? withInvokeDeadline(
+                channel,
+                timeoutMs,
+                typedHandler as PluginTypedIpcHandler<unknown, unknown>
+              )
+            : (typedHandler as PluginTypedIpcHandler<unknown, unknown> | undefined)
+        );
       } else {
-        deps.registerHandler(pluginId, channel, schemaOrHandler as PluginIpcHandler);
+        deps.registerHandler(
+          pluginId,
+          channel,
+          withInvokeDeadline(channel, timeoutMs, schemaOrHandler as PluginIpcHandler)
+        );
       }
       return Promise.resolve();
     }) as PluginHostApi["registerHandler"],
@@ -1027,7 +1158,7 @@ export function createHost(
       // transport — broadcastToRenderer, postToPanel, and the process stream
       // share the `plugin:{pluginId}:{channel}` channel and one `plugin.on`
       // subscriber receives all three.
-      pushToRenderers(`plugin:${pluginId}:${channel}`, { panelId: null, payload });
+      pushPluginMessage(channel, null, payload);
       return Promise.resolve();
     },
     // The post-activation-safe sibling of broadcastToRenderer: same
@@ -1056,14 +1187,55 @@ export function createHost(
       // reject it loudly rather than coercing to broadcast.
       if (panelId !== undefined && panelId !== null) {
         if (typeof panelId !== "string" || panelId.length === 0) {
-          throw new Error(
-            `Plugin "${pluginId}" postToPanel: panelId must be a non-empty string, null, or undefined: ${String(panelId)}`
+          // Rejects like the channel check (#10617).
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" postToPanel: panelId must be a non-empty string, null, or undefined: ${String(panelId)}`
+            )
           );
         }
       }
-      const targetPanelId = panelId ?? null;
-      pushToRenderers(`plugin:${pluginId}:${channel}`, { panelId: targetPanelId, payload });
+      try {
+        pushPluginMessage(channel, panelId ?? null, payload);
+      } catch (err) {
+        // An oversize payload rejects like the channel check above (#10617).
+        return Promise.reject(err);
+      }
       return Promise.resolve();
+    },
+    // Neither is revoke-guarded: a plugin reads them from its own timers and
+    // subscription callbacks, like postToPanel. Liveness is membership.
+    hasListeners: (channel) => {
+      const transport = pushListenerChannel("hasListeners", channel);
+      if (!isBound()) return false;
+      return getPluginPushListenerRegistry().hasListeners(boundProjectId, transport);
+    },
+    onDidChangeListeners: (channel, callback) => {
+      const transport = pushListenerChannel("onDidChangeListeners", channel);
+      if (typeof callback !== "function") {
+        throw new Error(`Plugin "${pluginId}" onDidChangeListeners: callback must be a function`);
+      }
+      if (!isBound()) return () => {};
+      const failures = createListenerFailureState();
+      const unwatch = getPluginPushListenerRegistry().watch(
+        boundProjectId,
+        transport,
+        (hasListeners) => {
+          if (!isBound()) return;
+          invokeTrackedListener(
+            failures,
+            pluginId,
+            "onDidChangeListeners",
+            () => callback(hasListeners),
+            () => dispose()
+          );
+        }
+      );
+      // Tracked like every other host event subscription, so it holds the
+      // worker against idle disposal: a disposed worker could not run the
+      // callback, and nothing re-forks it on a listener change.
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, unwatch);
+      return dispose;
     },
     getActiveWorktree: async () => {
       const result = await getWorktreesResult();
@@ -1168,7 +1340,7 @@ export function createHost(
           );
         }
         try {
-          const agents = await deps.dispatcher.sendAgentsListToRenderer(boundProjectId);
+          const agents = await dispatcher.sendAgentsListToRenderer(boundProjectId);
           return isBound() ? agents : [];
         } catch (err) {
           if (isProjectViewUnavailable(err)) return [];
@@ -1196,7 +1368,7 @@ export function createHost(
         // picker the user answers, and it inherits the bridge's project
         // targeting, unload drain and caller-signal dismissal. With a target it
         // answers as soon as the renderer has drafted.
-        const value = await deps.promptDispatcher.requestPrompt(
+        const value = await promptDispatcher.requestPrompt(
           pluginId,
           {
             kind: "sendToAgent",
@@ -1218,33 +1390,55 @@ export function createHost(
         throw err;
       }
     },
-    onDidChangeActiveWorktree: (callback) => {
+    onDidChangeActiveWorktree: (callback, options) => {
       if (revoked) {
         throw new Error(
           `Plugin "${pluginId}" host revoked: onDidChangeActiveWorktree called after activate() returned or timed out`
         );
       }
+      // One fetch per burst rather than per activation: the snapshot is read
+      // when the window closes, so it is always the worktree active at the end.
+      // Serialised like onDidChangeWorktrees, so a slow read can never land
+      // after a newer activation's and leave the plugin on the older one.
+      let disposed = false;
+      let chain: Promise<void> = Promise.resolve();
+      const coalescer = createSubscriptionCoalescer(
+        resolveSubscriptionDebounceMs(options?.debounceMs),
+        () => {
+          chain = chain.then(async () => {
+            if (!isBound() || disposed) return;
+            try {
+              const snapshots = await fetchWorktreeSnapshots();
+              // Re-check after the async fetch so a racing unload, or a
+              // same-id reload, doesn't fire into the retired closure.
+              if (!isBound() || disposed) return;
+              const active = snapshots.find((s) => s.isCurrent === true);
+              callback(active ? toPluginWorktreeSnapshot(active) : null);
+            } catch (err) {
+              console.error(
+                `[PluginService] onDidChangeActiveWorktree callback for "${pluginId}" failed:`,
+                err
+              );
+            }
+          });
+        }
+      );
       // Subscription wired synchronously (revoke guard already held above);
       // only the disposer return value is wrapped in a resolved promise.
-      const dispose = deps.subscribeWorktreeEvent(pluginId, "worktree-activated", async (event) => {
+      const unsubscribe = deps.subscribeWorktreeEvent(pluginId, "worktree-activated", (event) => {
         // A bound host must not wake on another project activating a worktree:
         // "active" means active within its own project, so a foreign event is
-        // not a change it can observe at all.
+        // not a change it can observe at all — nor may it extend a burst.
         if (!isEventForBoundProject(event)) return;
-        if (!deps.plugins.has(pluginId)) return;
-        try {
-          const snapshots = await fetchWorktreeSnapshots();
-          // Re-check after the async fetch so a racing unloadPlugin()
-          // doesn't fire the callback into a disposed plugin closure.
-          if (!deps.plugins.has(pluginId)) return;
-          const active = snapshots.find((s) => s.isCurrent === true);
-          callback(active ? toPluginWorktreeSnapshot(active) : null);
-        } catch (err) {
-          console.error(
-            `[PluginService] onDidChangeActiveWorktree callback for "${pluginId}" failed:`,
-            err
-          );
-        }
+        if (!isBound()) return;
+        coalescer.push();
+      });
+      // The whole disposer is tracked, not just the event unsubscribe: an
+      // unload or activation rollback must also cancel a queued flush.
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
+        disposed = true;
+        coalescer.dispose();
+        unsubscribe();
       });
       return Promise.resolve(dispose);
     },
@@ -1254,20 +1448,20 @@ export function createHost(
           `Plugin "${pluginId}" host revoked: onDidChangeWorktrees called after activate() returned or timed out`
         );
       }
-      // Opt-in debounce: the host re-emits the worktree set on every git-status
-      // poll, so a UI-updating plugin can coalesce bursts into a single
-      // trailing callback. Values below the floor are clamped up; 0/omitted
-      // fires on every change. See PluginHostSubscriptionOptions.
-      const debounceMs =
-        typeof options?.debounceMs === "number" && options.debounceMs > 0
-          ? Math.max(options.debounceMs, MIN_PLUGIN_SUBSCRIPTION_DEBOUNCE_MS)
-          : 0;
+      // Coalesced by default: the host re-emits the worktree set on every
+      // git-status poll. `debounceMs: 0` restores one callback per event.
+      const tracker = new WorktreeChangeTracker();
+      // Deliveries are serialised: each fetch starts after the previous one
+      // delivered, so raw mode still gets one callback per event, in order,
+      // and the change tracker's base is always the list handed over last.
+      let chain: Promise<void> = Promise.resolve();
       const runEmit = async (): Promise<void> => {
-        if (!deps.plugins.has(pluginId)) return;
+        if (!isBound() || disposed) return;
         try {
           const snapshots = await fetchWorktreeSnapshots();
-          if (!deps.plugins.has(pluginId)) return;
-          callback(snapshots.map(toPluginWorktreeSnapshot));
+          if (!isBound() || disposed) return;
+          const list = snapshots.map(toPluginWorktreeSnapshot);
+          callback(list, tracker.next(list));
         } catch (err) {
           console.error(
             `[PluginService] onDidChangeWorktrees callback for "${pluginId}" failed:`,
@@ -1275,55 +1469,34 @@ export function createHost(
           );
         }
       };
-      let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-      let burstDeadline = 0;
-      // A foreign project's churn is dropped before the debounce timer is even
-      // armed, so a bound host's trailing callback can't be pushed out
-      // indefinitely by worktree traffic in a project it cannot see. Churn in
-      // its own project can't either: each burst fires by its deadline.
-      const emit =
-        debounceMs > 0
-          ? (event?: PluginWorktreeEventPayload): void => {
-              if (!isEventForBoundProject(event)) return;
-              // Monotonic: a wall-clock rollback must not push the deadline out.
-              const now = performance.now();
-              if (debounceTimer) {
-                clearTimeout(debounceTimer);
-              } else {
-                burstDeadline = now + debounceMs * PLUGIN_SUBSCRIPTION_MAX_WAIT_FACTOR;
-              }
-              debounceTimer = setTimeout(
-                () => {
-                  debounceTimer = null;
-                  void runEmit();
-                },
-                Math.max(0, Math.min(debounceMs, burstDeadline - now))
-              );
-            }
-          : (event?: PluginWorktreeEventPayload): void => {
-              if (!isEventForBoundProject(event)) return;
-              void runEmit();
-            };
+      let disposed = false;
+      const coalescer = createSubscriptionCoalescer(
+        resolveSubscriptionDebounceMs(options?.debounceMs),
+        () => {
+          chain = chain.then(runEmit);
+        }
+      );
+      // A foreign project's churn is dropped before the window is even armed,
+      // so a bound host's trailing callback can't be pushed out by worktree
+      // traffic in a project it cannot see. Churn in its own project can't
+      // either: each burst fires by its deadline.
+      const emit = (event?: PluginWorktreeEventPayload): void => {
+        if (!isEventForBoundProject(event)) return;
+        coalescer.push();
+      };
       // Fires on both add/update and remove so plugins' cached lists stay
-      // correct after deletions. Each subscription is tracked separately
-      // so a single disposer stops both. A shared debounce timer coalesces
-      // bursts that span both event kinds.
+      // correct after deletions. One coalescer spans both event kinds.
       const disposeUpdate = deps.subscribeWorktreeEvent(pluginId, "worktree-update", emit);
       const disposeRemove = deps.subscribeWorktreeEvent(pluginId, "worktree-removed", emit);
-      let disposed = false;
-      const dispose = (): void => {
-        if (disposed) return;
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
         disposed = true;
-        if (debounceTimer) {
-          clearTimeout(debounceTimer);
-          debounceTimer = null;
-        }
+        coalescer.dispose();
         disposeUpdate();
         disposeRemove();
-      };
+      });
       return Promise.resolve(dispose);
     },
-    onDidChangeAgentState: (callback) => {
+    onDidChangeAgentState: (callback, options) => {
       if (revoked) {
         throw new Error(
           `Plugin "${pluginId}" host revoked: onDidChangeAgentState called after activate() returned or timed out`
@@ -1336,26 +1509,60 @@ export function createHost(
       }
       // The agent:state-changed bus is a synchronous module-level singleton
       // (unlike WorkspaceClient), so we subscribe directly — no deferred
-      // replay queue is needed. The handler caches the latest snapshot so
-      // getAgentState() can serve it without re-deriving state.
+      // replay queue is needed. The cache behind getAgentState() is updated on
+      // every transition; only delivery to the callback is coalesced.
       const failures = createListenerFailureState();
-      const handler = (payload: AgentStateChangePayload): void => {
-        if (!isAgentEventForBoundProject(payload)) return;
-        if (!deps.plugins.has(pluginId)) return;
+      // Latest transition per terminal within the window. Delete-then-set
+      // keeps the map in the order of each terminal's latest transition.
+      const pending = new Map<string, PluginAgentSnapshot>();
+      let active = true;
+      const deliver = (snapshot: PluginAgentSnapshot): void => {
         invokeTrackedListener(
           failures,
           pluginId,
           "onDidChangeAgentState",
-          () => {
-            const snapshot = toPluginAgentSnapshot(payload);
-            lastAgentSnapshot = snapshot;
-            return callback(snapshot);
-          },
+          () => callback(snapshot),
           () => dispose()
         );
       };
+      const coalescer = createSubscriptionCoalescer(
+        resolveSubscriptionDebounceMs(options?.debounceMs),
+        () => {
+          const batch = [...pending.values()];
+          pending.clear();
+          for (const snapshot of batch) {
+            // A listener quarantined mid-batch disposes the subscription; the
+            // rest of the batch must not reach it.
+            if (!active || !isBound()) return;
+            deliver(snapshot);
+          }
+        }
+      );
+      const handler = (payload: AgentStateChangePayload): void => {
+        if (!isAgentEventForBoundProject(payload)) return;
+        if (!isBound()) return;
+        const snapshot = toPluginAgentSnapshot(payload);
+        lastAgentSnapshot = snapshot;
+        // Keyed by the raw routing ids the projection drops; an event with
+        // neither shares one bucket, so it still ends on its latest value.
+        const raw = payload as { terminalId?: unknown };
+        const key =
+          typeof raw.terminalId === "string" && raw.terminalId.length > 0
+            ? `t:${raw.terminalId}`
+            : payload.agentId !== undefined
+              ? `a:${payload.agentId}`
+              : "unkeyed";
+        pending.delete(key);
+        pending.set(key, snapshot);
+        coalescer.push();
+      };
       const unsub = events.on("agent:state-changed", handler);
-      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => unsub());
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
+        active = false;
+        coalescer.dispose();
+        pending.clear();
+        unsub();
+      });
       return Promise.resolve(dispose);
     },
     onDidChangePanelLifecycle: (callback) => {
@@ -1742,7 +1949,7 @@ export function createHost(
         throw new Error(`Plugin "${pluginId}" reloadPanel: panelId must be a non-empty string`);
       }
       if (!isBound()) return "unavailable";
-      return deps.panelReloadDispatcher.reload(pluginId, panelId, boundProjectId);
+      return panelReloadDispatcher.reload(pluginId, panelId, boundProjectId);
     },
     // NOT revoke-guarded for the same reason as invalidateFileDecorations:
     // plugins fire toasts from post-activation callbacks and timers. Liveness
@@ -1799,7 +2006,7 @@ export function createHost(
         // with PROJECT_VIEW_UNAVAILABLE when that project has no live view;
         // unbound stays ambient, since an app-global plugin's action belongs
         // wherever the user is looking.
-        return deps.dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId);
+        return dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId);
       }
       if (boundProjectId !== null) {
         // The confused-deputy guard: a project-bound plugin may restate its own
@@ -1809,7 +2016,7 @@ export function createHost(
             `PERMISSION_REQUIRED: plugin "${pluginId}" is bound to its own project and cannot dispatch to project "${requestedProjectId}"`
           );
         }
-        return deps.dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId);
+        return dispatcher.sendDispatchToRenderer(actionId, args, boundProjectId);
       }
       // Unbound with an explicit target (#13119): only after the user turned
       // the switch on. No JIT prompt and no built-in bypass — the switch is the
@@ -1839,11 +2046,7 @@ export function createHost(
         });
       };
       try {
-        const result = await deps.dispatcher.sendDispatchToRenderer(
-          actionId,
-          args,
-          requestedProjectId
-        );
+        const result = await dispatcher.sendDispatchToRenderer(actionId, args, requestedProjectId);
         if (result.ok) audit("success", "");
         else audit("error", result.error.code);
         return result;
@@ -1863,7 +2066,7 @@ export function createHost(
       list: async () => {
         if (!deps.plugins.has(pluginId)) return [];
         try {
-          return await deps.dispatcher.sendActionsListToRenderer(boundProjectId);
+          return await dispatcher.sendActionsListToRenderer(boundProjectId);
         } catch (err) {
           // A bound host whose project has no live view is the catalog's
           // documented "no renderer available" case, not an error — this
@@ -1876,7 +2079,7 @@ export function createHost(
       get: async (actionId) => {
         if (!deps.plugins.has(pluginId)) return null;
         try {
-          return await deps.dispatcher.sendActionsGetToRenderer(actionId, boundProjectId);
+          return await dispatcher.sendActionsGetToRenderer(actionId, boundProjectId);
         } catch (err) {
           if (isProjectViewUnavailable(err)) return null;
           throw err;
@@ -1888,7 +2091,7 @@ export function createHost(
       // plugin can warn before dispatch() returns CONFIRMATION_REQUIRED.
       canDispatch: async (actionId) => {
         if (!deps.plugins.has(pluginId)) return "restricted";
-        const entry = await deps.dispatcher
+        const entry = await dispatcher
           .sendActionsGetToRenderer(actionId, boundProjectId)
           .catch((err: unknown) => {
             if (isProjectViewUnavailable(err)) return null;
@@ -1921,7 +2124,7 @@ export function createHost(
       // rejects when that project has no view at all. Unbound is deliberately
       // ambient — an app-global plugin's prompt belongs in front of whoever is
       // looking.
-      const value = await deps.promptDispatcher.requestPrompt(
+      const value = await promptDispatcher.requestPrompt(
         pluginId,
         {
           kind: "quickPick",
@@ -1935,7 +2138,7 @@ export function createHost(
     }) as PluginHostApi["showQuickPick"],
     showInputBox: async (options, callOptions) => {
       if (!deps.plugins.has(pluginId)) return undefined;
-      const value = await deps.promptDispatcher.requestPrompt(
+      const value = await promptDispatcher.requestPrompt(
         pluginId,
         { kind: "inputBox", options: sanitizeInputBoxOptions(options) },
         boundProjectId,
@@ -1948,7 +2151,7 @@ export function createHost(
       if (!options || typeof options !== "object" || typeof options.title !== "string") {
         throw new Error(`Plugin "${pluginId}" showConfirm: options.title must be a string`);
       }
-      const value = await deps.promptDispatcher.requestPrompt(
+      const value = await promptDispatcher.requestPrompt(
         pluginId,
         { kind: "confirm", options: sanitizeConfirmOptions(options) },
         boundProjectId,
@@ -2102,7 +2305,7 @@ export function createHost(
         if (!deps.plugins.has(pluginId)) {
           throw new Error(`Plugin "${pluginId}" settings.open: plugin is no longer loaded`);
         }
-        const result = await deps.dispatcher.sendDispatchToRenderer(
+        const result = await dispatcher.sendDispatchToRenderer(
           "plugin.openSettings",
           key === undefined ? { pluginId } : { pluginId, key },
           boundProjectId
@@ -2204,6 +2407,31 @@ export function createHost(
       },
     },
   };
+  // The worker bridge's backing for its synchronous `hasListeners` cache. Not a
+  // plugin event subscription: untracked in `pluginEventCleanups` (so a read
+  // never holds the worker against idle disposal) and passive in the registry
+  // (so it never keeps the periodic reconcile running). The bridge disposes it
+  // with its other subscriptions on worker teardown; one that outlives its
+  // plugin's binding unwatches itself on the next change.
+  pushListenerObservers.set(host, (channel, callback) => {
+    const transport = pushListenerChannel("hasListeners", channel);
+    // Unbound answers as `hasListeners` does, and never changes.
+    if (!isBound()) return { current: false, dispose: () => {} };
+    const registry = getPluginPushListenerRegistry();
+    const unwatch = registry.watch(
+      boundProjectId,
+      transport,
+      (hasListeners) => {
+        if (!isBound()) {
+          unwatch();
+          return;
+        }
+        callback(hasListeners);
+      },
+      { passive: true }
+    );
+    return { current: registry.hasListeners(boundProjectId, transport), dispose: unwatch };
+  });
   return {
     host,
     revoke: () => {
@@ -2415,6 +2643,40 @@ function hasProjectTargetingGrant(pluginId: string): boolean {
     capability: "project:dispatch",
     scopeKey: "global",
   });
+}
+
+/**
+ * Meter every prompt that puts a dialog in front of the user, so an invoke
+ * whose handler awaited one is not reported as a slow handler. Only
+ * `requestPrompt` is wrapped; it is the one method the host calls.
+ */
+function withPromptWaitTracking(
+  dispatcher: PluginUIPromptDispatcher,
+  track: ((pluginId: string) => () => void) | undefined
+): Pick<PluginUIPromptDispatcher, "requestPrompt"> {
+  // Partial test deps leave the dispatcher unset.
+  if (!track || dispatcher === null || typeof dispatcher !== "object") return dispatcher;
+  return {
+    requestPrompt: (pluginId, params, projectId, signal) => {
+      if (!promptOpensDialog(params)) {
+        return dispatcher.requestPrompt(pluginId, params, projectId, signal);
+      }
+      let end: () => void = () => {};
+      try {
+        end = track(pluginId);
+      } catch {
+        // Metering must never change what the plugin sees.
+      }
+      let pending: Promise<PluginUiPromptResultValue>;
+      try {
+        pending = dispatcher.requestPrompt(pluginId, params, projectId, signal);
+      } catch (err) {
+        end();
+        throw err;
+      }
+      return pending.finally(end);
+    },
+  };
 }
 
 /**
@@ -3030,6 +3292,37 @@ function buildFsApi(
       );
       return { contents: buffer.toString("utf-8"), revision: sha256Hex(buffer) };
     },
+    readFiles: (async (paths: readonly string[], options?: unknown) => {
+      requireLoaded("readFiles");
+      requireAnyReadCap("readFiles");
+      const call = validateReadFilesCall(pluginId, paths, options);
+      return runReadFiles(call, async (filePath, limit) => {
+        // The same gates readFile applies, per path; a refusal becomes that
+        // entry's error rather than failing the batch.
+        const { resolved, rootClass } = await containWithClass(filePath);
+        requireLoaded("readFiles");
+        requireReadCapForClass("readFiles", rootClass);
+        call.signal?.throwIfAborted();
+        // O_NONBLOCK, as in readFileBounded: a FIFO standing at the path must
+        // not leave the open pending with the rest of the batch behind it.
+        return withVerifiedReadHandle(
+          pluginId,
+          "readFiles",
+          resolved,
+          fs.constants.O_NONBLOCK ?? 0,
+          async (handle, opened): Promise<ReadOneOutcome> => {
+            if (!opened.isFile()) return { status: "not-a-file" };
+            const bytes = await readBoundedFromHandle(
+              handle,
+              Number(opened.size),
+              limit,
+              call.signal
+            );
+            return bytes === null ? { status: "too-large" } : { status: "ok", bytes };
+          }
+        );
+      });
+    }) as NonNullable<BuiltinPluginFsApi["readFiles"]>,
     readFileBounded: async (filePath, options) => {
       options?.signal?.throwIfAborted();
       requireLoaded("readFileBounded");
@@ -3316,6 +3609,41 @@ function buildFsApi(
         isFile: e.isFile(),
         isSymbolicLink: e.isSymbolicLink(),
       }));
+    },
+    walk: async (root, options) => {
+      options?.signal?.throwIfAborted();
+      requireLoaded("walk");
+      requireAnyReadCap("walk");
+      const call = validateWalkCall(pluginId, root, options);
+      // The same gate readdir applies, once, on the root: every path the walk
+      // then reads is beneath the realpath containment resolved, reached
+      // without following a link (see runWalk).
+      const { resolved, rootClass } = await containWithClass(root);
+      call.signal?.throwIfAborted();
+      requireLoaded("walk");
+      requireReadCapForClass("walk", rootClass);
+      return runWalk(
+        resolved,
+        call,
+        {
+          opendir: (dir) => fs.opendir(dir, { bufferSize: 128 }),
+          realpath: (dir) => fs.realpath(dir),
+          fileSize: (file) =>
+            fs.lstat(file).then(
+              (stats) => (stats.isFile() ? stats.size : undefined),
+              () => undefined
+            ),
+          checkIgnored: (cwd, paths, signal) =>
+            checkIgnoredPaths(cwd, paths, { signal, timeoutMs: 10_000 }),
+          // Only where git's case-sensitive index lookup can disagree with the
+          // filesystem about a tracked file's spelling (see gitCheckIgnore).
+          ...((process.platform === "darwin" || process.platform === "win32") && {
+            hasTrackedIgnored: (cwd: string, signal: AbortSignal | undefined) =>
+              hasTrackedIgnoredPaths(cwd, { signal, timeoutMs: 10_000 }),
+          }),
+        },
+        () => requireLoaded("walk")
+      );
     },
     stat: async (targetPath, options) => {
       options?.signal?.throwIfAborted();

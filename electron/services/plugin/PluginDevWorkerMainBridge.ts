@@ -60,6 +60,9 @@ import type {
   UnregisterFileDecorationProviderParams,
   UnregisterMcpToolsParams,
   FsPathParams,
+  FsReadFilesParams,
+  FsWalkParams,
+  PluginWorkerWorktreesEvent,
   FsWriteFileParams,
   FsAppendFileParams,
   FsWatchParams,
@@ -76,8 +79,12 @@ import type {
 import type { PluginDevWorkerHost } from "./PluginDevWorkerHost.js";
 import { parseWorkerToHostMessage } from "../../schemas/pluginDevWorker.js";
 import { abortErrorFor } from "./pluginAbortError.js";
+import { invokeSignalFor } from "./pluginInvokeDeadline.js";
 import { serializableErrorFields } from "./pluginHostErrorFields.js";
-import { approvePluginDatabaseBackup } from "./pluginInternalApprovers.js";
+import {
+  approvePluginDatabaseBackup,
+  observePluginPushListeners,
+} from "./pluginInternalApprovers.js";
 
 const logger = createLogger("main:PluginDevWorkerBridge");
 
@@ -180,6 +187,8 @@ export interface PluginDevWorkerMainBridgeDeps {
    * screen — or the plugin is stuck dead with no path back.
    */
   onTerminalFailure?: () => void;
+  /** The worker refused a push before sending it (size cap or clone failure). */
+  onPushRejected?: () => void;
 }
 
 interface PendingInvoke {
@@ -219,6 +228,7 @@ export class PluginDevWorkerMainBridge {
     result: { ok: true } | { ok: false; error: string; stack?: string }
   ) => void;
   private readonly onTerminalFailure?: () => void;
+  private readonly onPushRejected?: () => void;
 
   private disposed = false;
   /**
@@ -304,6 +314,7 @@ export class PluginDevWorkerMainBridge {
     this.clearPriorRegistrations = deps.clearPriorRegistrations;
     this.onActivationResult = deps.onActivationResult;
     this.onTerminalFailure = deps.onTerminalFailure;
+    this.onPushRejected = deps.onPushRejected;
 
     this.activationPromise = new Promise<void>((resolve, reject) => {
       this.activationResolve = resolve;
@@ -499,7 +510,9 @@ export class PluginDevWorkerMainBridge {
    * differ by orders of magnitude — a plugin action that runs a build or a
    * clone is not hung — so a blanket deadline would break working plugins to
    * catch a case the caller can bound better. Callers that DO have a budget
-   * already own one (`DECORATION_PROVIDER_TIMEOUT_MS` in ipc/handlers/plugin.ts).
+   * already own one (`DECORATION_PROVIDER_TIMEOUT_MS` in ipc/handlers/plugin.ts,
+   * and the per-channel `plugin:invoke` deadline the host wraps around every
+   * registered handler, which reaches here as the invoke's signal).
    * What was genuinely unbounded is a dead worker, and that is what this fixes.
    */
   private onWorkerExit = (code: number, expected: boolean): void => {
@@ -883,6 +896,22 @@ export class PluginDevWorkerMainBridge {
         return this.host.fs.readFileBytes((params as FsPathParams).path, { signal });
       case "fs.readFileWithRevision":
         return this.host.fs.readFileWithRevision((params as FsPathParams).path, { signal });
+      case "fs.readFiles": {
+        const p = params as FsReadFilesParams;
+        const fsApi = this.host.fs;
+        if (!fsApi.readFiles) throw new Error("fs.readFiles is not available on this host");
+        // Forwarded as given so the host validates exactly what the worker
+        // sent; the overloads only exist to type a literal `encoding`.
+        const readFiles = fsApi.readFiles as (
+          paths: readonly string[],
+          options: unknown
+        ) => Promise<unknown>;
+        return readFiles.call(fsApi, p.paths, {
+          signal,
+          ...(p.encoding !== undefined && { encoding: p.encoding }),
+          ...(p.maxBytesPerFile !== undefined && { maxBytesPerFile: p.maxBytesPerFile }),
+        });
+      }
       case "fs.mkdir":
         await this.host.fs.mkdir((params as FsPathParams).path);
         return undefined;
@@ -902,6 +931,19 @@ export class PluginDevWorkerMainBridge {
       case "fs.readdir": {
         const p = params as FsPathParams;
         return this.host.fs.readdir(p.path, { signal, ...(p.detail === true && { detail: true }) });
+      }
+      case "fs.walk": {
+        const p = params as FsWalkParams;
+        const fsApi = this.host.fs;
+        if (!fsApi.walk) throw new Error("fs.walk is not available on this host");
+        // Options forwarded as sent so the host validates exactly what the
+        // worker passed; only the bridge's own signal is added.
+        const options: unknown = p.options;
+        if (options === undefined) return fsApi.walk(p.root, { signal });
+        if (options === null || typeof options !== "object") {
+          return fsApi.walk(p.root, options as never);
+        }
+        return fsApi.walk(p.root, { ...options, signal });
       }
       case "fs.stat":
         return this.host.fs.stat((params as FsPathParams).path, { signal });
@@ -1131,9 +1173,15 @@ export class PluginDevWorkerMainBridge {
             );
           }
         }
+        // The deadline wrapper main installs around this handler hands its
+        // signal over beside the context; aborting it cancels the worker invoke.
         const handler = (ctx: PluginIpcContext, ...args: unknown[]) =>
-          this.invoke({ kind: "handler", channel: p.channel, ctx, args });
-        await this.host.registerHandler(p.channel, handler);
+          this.invoke({ kind: "handler", channel: p.channel, ctx, args }, invokeSignalFor(ctx));
+        if (p.timeoutMs !== undefined) {
+          await this.host.registerHandler(p.channel, handler, { timeoutMs: p.timeoutMs });
+        } else {
+          await this.host.registerHandler(p.channel, handler);
+        }
         return;
       }
       case "broadcastToRenderer": {
@@ -1341,6 +1389,11 @@ export class PluginDevWorkerMainBridge {
         handle.resize(p.cols, p.rows);
         return;
       }
+      case "pushRejected": {
+        if (this.disposed) return;
+        this.onPushRejected?.();
+        return;
+      }
       default:
         logger.warn(`[${this.pluginId}] unknown host-notify method "${method}"`);
     }
@@ -1360,18 +1413,55 @@ export class PluginDevWorkerMainBridge {
     };
     try {
       let dispose: () => void;
+      // An absent `debounceMs` is passed through as undefined, which the host
+      // reads as "use the default window" — the same as an in-process plugin.
       if (kind === "active-worktree") {
-        dispose = await this.host.onDidChangeActiveWorktree((snapshot) => push(snapshot));
-      } else if (kind === "worktrees") {
-        dispose = await this.host.onDidChangeWorktrees((snapshots) => push(snapshots), {
+        dispose = await this.host.onDidChangeActiveWorktree((snapshot) => push(snapshot), {
           debounceMs: msg.debounceMs,
         });
+      } else if (kind === "worktrees") {
+        dispose = await this.host.onDidChangeWorktrees(
+          (snapshots, change) => push({ snapshots, change } satisfies PluginWorkerWorktreesEvent),
+          { debounceMs: msg.debounceMs }
+        );
       } else if (kind === "agent-state") {
-        dispose = await this.host.onDidChangeAgentState((snapshot) => push(snapshot));
+        dispose = await this.host.onDidChangeAgentState((snapshot) => push(snapshot), {
+          debounceMs: msg.debounceMs,
+        });
       } else if (kind === "panel-lifecycle") {
         dispose = await this.host.onDidChangePanelLifecycle((event) => push(event));
       } else if (kind === "system-wake") {
         dispose = await this.host.onDidWake((event) => push(event));
+      } else if (kind === "push-listeners") {
+        const channel = msg.key;
+        if (!channel) {
+          logger.warn(`[${this.pluginId}] push-listeners subscribe missing key`);
+          return;
+        }
+        const { hasListeners, onDidChangeListeners } = this.host;
+        if (!hasListeners || !onDidChangeListeners) {
+          push(true);
+          return;
+        }
+        // Watch first, then send the current value, so no change can fall
+        // between the two. The worker ignores a value it already holds.
+        dispose = onDidChangeListeners.call(this.host, channel, (has) => push(has));
+        push(hasListeners.call(this.host, channel));
+      } else if (kind === "push-listeners-observe") {
+        const channel = msg.key;
+        if (!channel) {
+          logger.warn(`[${this.pluginId}] push-listeners-observe subscribe missing key`);
+          return;
+        }
+        // Untracked by idle governance (see `observePluginPushListeners`); this
+        // bridge's own subscription cleanup is what releases it.
+        const observation = observePluginPushListeners(this.host, channel, (has) => push(has));
+        if (!observation) {
+          push(true);
+          return;
+        }
+        dispose = observation.dispose;
+        push(observation.current);
       } else if (kind === "process-exit" || kind === "process-crash" || kind === "process-data") {
         if (!msg.processId) {
           logger.warn(`[${this.pluginId}] ${kind} subscribe missing processId`);

@@ -217,6 +217,7 @@ import { PluginService } from "../PluginService.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
 import { PluginInvokeOwnershipError } from "../plugin/PluginInvokeErrors.js";
+import { PluginInvokeTimeoutError } from "../plugin/pluginInvokeDeadline.js";
 import { type PluginIpcContext, type PluginManifest } from "../../../shared/types/plugin.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
@@ -1210,5 +1211,61 @@ describe("Plugin IPC handler registration", () => {
       );
       expect(legacyResult).toBe("legacy-result");
     });
+  });
+});
+
+describe("per-plugin metrics", () => {
+  let service: PluginService;
+
+  beforeEach(async () => {
+    await writePlugin("test-plugin", { name: "acme.test-plugin", version: "1.0.0" });
+    service = new PluginService(tmpDir);
+    await service.initialize();
+  });
+
+  afterEach(() => {
+    service.dispose();
+  });
+
+  it("records each invoke's duration and failure kind, independent of the audit log", async () => {
+    service.registerHandler("acme.test-plugin", "ok", vi.fn().mockResolvedValue(1));
+    service.registerHandler(
+      "acme.test-plugin",
+      "boom",
+      vi.fn().mockRejectedValue(new Error("nope"))
+    );
+    service.registerHandler(
+      "acme.test-plugin",
+      "slow",
+      vi.fn().mockRejectedValue(new PluginInvokeTimeoutError("acme.test-plugin", "slow", 5))
+    );
+    const ctx = makeCtx("acme.test-plugin");
+    await service.dispatchHandler("acme.test-plugin", "ok", ctx, []);
+    await expect(service.dispatchHandler("acme.test-plugin", "boom", ctx, [])).rejects.toThrow();
+    await expect(service.dispatchHandler("acme.test-plugin", "slow", ctx, [])).rejects.toThrow();
+
+    const invokes = service.metrics.getSnapshot("acme.test-plugin")!.invokes;
+    expect(invokes.count).toBe(3);
+    expect(invokes.errors).toBe(2);
+    expect(invokes.timeouts).toBe(1);
+  });
+
+  it("records nothing for an invoke refused by the ownership guard", async () => {
+    await expect(
+      service.dispatchHandler("acme.unknown-plugin", "x", makeCtx("acme.unknown-plugin"), [])
+    ).rejects.toBeInstanceOf(PluginInvokeOwnershipError);
+    expect(service.metrics.getAll()).toEqual([]);
+  });
+
+  it("records a successful activation once and forgets the plugin on unload", async () => {
+    await service.activatePlugin("acme.test-plugin");
+    await service.activatePlugin("acme.test-plugin");
+    const snap = service.metrics.getSnapshot("acme.test-plugin")!;
+    expect(snap.activation?.count).toBe(1);
+    expect(snap.isolation).toBe("worker");
+
+    service.unloadPlugin("acme.test-plugin");
+    expect(service.metrics.getSnapshot("acme.test-plugin")).toBeNull();
+    expect(service.metrics.getAll()).toEqual([]);
   });
 });

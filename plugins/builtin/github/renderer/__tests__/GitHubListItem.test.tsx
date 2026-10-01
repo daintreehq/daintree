@@ -1,7 +1,8 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import { Activity, type ReactNode } from "react";
 import { GitHubListItem } from "../components/GitHubListItem";
@@ -39,6 +40,22 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
+
+// The row's tooltips come through the plugin kit, whose body sits inside a
+// style-scope wrapper. Rendered inline like the host stub above: trigger, then
+// the tooltip's own text, with no element of its own to join the rail.
+vi.mock("@daintreehq/plugin-ui", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@daintreehq/plugin-ui")>();
+  return {
+    ...actual,
+    Tooltip: ({ children, content }: { children: ReactNode; content: ReactNode }) => (
+      <>
+        {children}
+        {content}
+      </>
+    ),
+  };
+});
 
 const baseIssue: Issue = {
   number: 42,
@@ -80,6 +97,8 @@ const makeWorktree = (overrides: Partial<Worktree>): Worktree => ({
   isCurrent: false,
   ...overrides,
 });
+
+beforeAll(() => whenPluginUiReady(), 30_000);
 
 beforeEach(() => {
   // The dispatch mock lives in a module factory, so `restoreAllMocks` never
@@ -202,6 +221,17 @@ describe("GitHubListItem", () => {
     // Once as the row text, once as its tooltip (rendered inline by the mock).
     expect(screen.getAllByText("testuser").length).toBeGreaterThan(0);
     expect(screen.getByText("time:1001")).toBeTruthy();
+  });
+
+  it("keeps each metadata item's separator inside it, so a dropped item takes its dot", () => {
+    const pr: PR = { ...basePR, commentCount: 3, reviewDecision: "APPROVED" };
+    const { container } = render(<GitHubListItem item={pr} type="pr" />);
+    const meta = container.querySelector("[data-forge-row-meta]")!;
+    const items = [...meta.children];
+    expect(items.length).toBeGreaterThanOrEqual(4);
+    for (const item of items) expect(item.textContent?.trimStart().startsWith("·")).toBe(true);
+    // The copy-number control sits outside the clipped line, keeping its hit area whole.
+    expect(meta.querySelector('[aria-label^="Copy number"]')).toBeNull();
   });
 
   it("renders branch name for PRs", () => {

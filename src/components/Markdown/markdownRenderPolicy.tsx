@@ -22,11 +22,13 @@ import {
   isLanguageFailed,
   isLanguageRegistered,
 } from "@/components/Worktree/diffRefractor";
-import { dirname, isAbsolute, isPathInside, join, normalize } from "@shared/utils/path";
+import { isPathInside } from "@shared/utils/path";
 import { buildDaintreeFileUrl } from "@/components/FileViewer/filePreviewKinds";
-import { actionService } from "@/services/ActionService";
-import { logError } from "@/utils/logger";
 import { MermaidDiagram } from "./mermaid/MermaidDiagram";
+import { canonicalLang } from "./fenceLanguage";
+import { activateMarkdownLink, HTTPish, resolveAgainstFile } from "./markdownLinkPolicy";
+
+export { activateMarkdownLink };
 
 /**
  * Everything that decides how one rendered Markdown document treats untrusted
@@ -47,34 +49,6 @@ import { MermaidDiagram } from "./mermaid/MermaidDiagram";
  * authored: a ```mermaid fence becomes SVG, which goes through
  * `sanitizeMermaidSvg` before it touches the DOM (see `mermaid/`).
  */
-
-/**
- * Fence-info aliases → the grammar keys diffRefractor's loaders know.
- * refractor registers Prism's own aliases (ts, py, …) once the grammar is
- * loaded; this map only bridges the *loader* lookup for grammars that are
- * still cold.
- */
-const FENCE_LANG_ALIASES: Record<string, string> = {
-  ts: "typescript",
-  js: "javascript",
-  py: "python",
-  rb: "ruby",
-  sh: "bash",
-  shell: "bash",
-  zsh: "bash",
-  yml: "yaml",
-  md: "markdown",
-  "c++": "cpp",
-  cs: "csharp",
-  dockerfile: "docker",
-  html: "markup",
-  xml: "markup",
-};
-
-function canonicalLang(lang: string): string {
-  const lower = lang.toLowerCase();
-  return FENCE_LANG_ALIASES[lower] ?? lower;
-}
 
 /**
  * Highlighted fences, shared across instances. The per-instance memo alone
@@ -195,13 +169,6 @@ function mermaidFenceSource(pre: HastElement | undefined): string | null {
   return hastText(code.children).replace(/\n$/, "");
 }
 
-/** Resolve a link/image target against the document's directory. */
-function resolveAgainstFile(filePath: string, target: string): string {
-  return isAbsolute(target) ? normalize(target) : normalize(join(dirname(filePath), target));
-}
-
-const HTTPish = /^(https?|mailto):/i;
-
 export interface MarkdownRenderPolicyOptions {
   /** Absolute path of the document, used to resolve relative links and images. */
   filePath: string;
@@ -243,43 +210,6 @@ function MarkdownImage({ node: _node, src, ...props }: ComponentProps<"img"> & E
 export interface MarkdownRenderPolicy {
   components: Components;
   urlTransform: NonNullable<Options["urlTransform"]>;
-}
-
-/**
- * The host's link policy for Markdown documents, shared by the rendered
- * document and the Markdown editor's Mod+click (#12323). External links open
- * in the browser; repo links resolve against the document and open only when
- * the document's own root contains them. Markdown is untrusted content, so a
- * link must never become a lever for browsing outside the project.
- */
-export function activateMarkdownLink(
-  href: string | undefined,
-  { filePath, rootPath }: { filePath: string; rootPath: string }
-): void {
-  // Same-document anchors: headings carry no ids (no rehype-slug), so
-  // there is nothing to scroll to — swallow instead of navigating.
-  if (!href || href.startsWith("#")) return;
-  if (HTTPish.test(href)) {
-    actionService
-      .dispatch("browser.openExternal", { url: href }, { source: "user" })
-      .catch((err) => logError("[markdownRenderPolicy] openExternal failed", err));
-    return;
-  }
-  // Protocol-relative ("//host/…") and other non-http schemes survive to
-  // here only as untrusted oddities — never treat them as local paths.
-  if (href.startsWith("//")) return;
-  // Repo link — strip any query/fragment, resolve against the document,
-  // and only open files the document's own root contains.
-  const pathPart = href.split(/[?#]/, 1)[0];
-  if (!pathPart) return;
-  const absolute = resolveAgainstFile(filePath, pathPart);
-  if (!isPathInside(absolute, rootPath)) return;
-  // The check above is lexical; a directory symlink inside the root can still
-  // point anywhere. `confineToRoot` makes the viewer hold every read to this
-  // root on the real path.
-  actionService
-    .dispatch("file.view", { path: absolute, rootPath, confineToRoot: true }, { source: "user" })
-    .catch((err) => logError("[markdownRenderPolicy] file.view failed", err));
 }
 
 export function useMarkdownRenderPolicy({

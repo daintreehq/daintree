@@ -204,7 +204,7 @@ jobs:
       - name: Build app
         run: npm run build:e2e
         env:
-          NODE_OPTIONS: --max-old-space-size=4096
+          NODE_OPTIONS: --max-old-space-size=8192
 
       - name: Install Claude Code
         run: node scripts/ci/npm-install-retry.mjs -g @anthropic-ai/claude-code

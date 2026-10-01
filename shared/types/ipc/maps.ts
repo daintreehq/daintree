@@ -1752,6 +1752,10 @@ export interface IpcEventMap {
   // install, not a global broadcast, so it is NOT an event-bus channel.
   "plugin:install-progress": import("../plugin.js").PluginInstallProgressEvent;
 
+  // Per-plugin perf snapshots, pushed only to renderers that subscribed and at
+  // most once a second. Carries every tracked plugin, not just the changed ones.
+  "plugin:perf-snapshots-changed": import("../pluginMetrics.js").PluginPerfSnapshot[];
+
   // System events
   "system:wake": SystemWakePayload;
   // Sustained system memory pressure opened or cleared (window-scoped)

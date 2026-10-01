@@ -1069,6 +1069,17 @@ export const CHANNELS = {
   PLUGIN_REPORT_PANEL_LIFECYCLE: "plugin:report-panel-lifecycle",
   /** Renderer reports its live non-plugin panel ids, so `host.reloadPanel` can refuse them (#12610). */
   PLUGIN_REPORT_PANEL_INVENTORY: "plugin:report-panel-inventory",
+  /** Renderer → main, fire-and-forget: batched plugin view cost observations. */
+  PLUGIN_REPORT_VIEW_METRICS: "plugin:report-view-metrics",
+  /** Renderer → main, fire-and-forget: the plugin push channels this renderer has subscribers for. */
+  PLUGIN_REPORT_PUSH_LISTENERS: "plugin:report-push-listeners",
+  /** Every tracked plugin's `PluginPerfSnapshot`. */
+  PLUGIN_PERF_SNAPSHOTS_GET: "plugin:perf-snapshots-get",
+  /** Renderer → main, fire-and-forget: start receiving `PLUGIN_PERF_SNAPSHOTS_CHANGED`. */
+  PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE: "plugin:perf-snapshots-subscribe",
+  PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE: "plugin:perf-snapshots-unsubscribe",
+  /** Main → subscribed renderers, at most once a second: every tracked plugin's snapshot. */
+  PLUGIN_PERF_SNAPSHOTS_CHANGED: "plugin:perf-snapshots-changed",
   /** Per-instance runtime health snapshot, for a renderer store hydrating after it subscribed. */
   PLUGIN_RUNTIME_STATUSES_GET: "plugin:runtime-statuses-get",
   /** Retire a plugin's backend generation and start a fresh one (panel recovery). */

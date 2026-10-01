@@ -1,0 +1,332 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  syncedCollectionSnapshotChannel,
+  type SyncedCollectionDelta,
+  type SyncedCollectionSnapshot,
+} from "../sync/syncedCollection.js";
+import { getPluginHostBridge } from "./hostBridge.js";
+
+export interface SyncedCollectionViewOptions {
+  /** False unsubscribes and stops pulling; the last items stay until it is re-enabled, which starts over from a fresh snapshot. Default true. */
+  enabled?: boolean;
+  /** The view's `disposeSignal`. Once it aborts nothing more is pulled or applied. */
+  signal?: AbortSignal;
+}
+
+export interface SyncedCollectionViewResult<T> {
+  /** The mirrored items in the worker's order. A new array on each commit; unchanged items keep their identity. */
+  items: readonly T[];
+  /** The revision `items` reflects; 0 before the first snapshot lands. */
+  revision: number;
+  /** True until the first snapshot lands, and while a resync is in flight. */
+  loading: boolean;
+  /** The last failed pull. Deltas are not applied until a pull succeeds; `resync()` retries. */
+  error: Error | null;
+  /** Pull a fresh snapshot, keeping deltas that arrive meanwhile. */
+  resync: () => void;
+}
+
+interface Mirror<T> {
+  epoch: string;
+  revision: number;
+  map: Map<string, T>;
+}
+
+interface ViewState<T> {
+  items: readonly T[];
+  revision: number;
+  loading: boolean;
+  error: Error | null;
+  /** The subscription this state belongs to; null while disabled. */
+  source: string | null;
+}
+
+function subscriptionKey(pluginId: string, channel: string): string {
+  return `${pluginId}\u0000${channel}`;
+}
+
+function loadingState<T>(source: string | null): ViewState<T> {
+  return { items: [], revision: 0, loading: true, error: null, source };
+}
+
+function isDelta(value: unknown): value is SyncedCollectionDelta<unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  const d = value as Partial<SyncedCollectionDelta<unknown>>;
+  return (
+    typeof d.epoch === "string" &&
+    typeof d.revision === "number" &&
+    Array.isArray(d.removes) &&
+    Array.isArray(d.upserts)
+  );
+}
+
+function isSnapshot(value: unknown): value is SyncedCollectionSnapshot<unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  const s = value as Partial<SyncedCollectionSnapshot<unknown>>;
+  return typeof s.epoch === "string" && typeof s.revision === "number" && Array.isArray(s.entries);
+}
+
+function toError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+/** Shortest gap between two commits during a burst of deltas: about one frame. */
+const MIN_COMMIT_GAP_MS = 16;
+
+function clockMs(): number {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
+function microtask(run: () => void): void {
+  if (typeof queueMicrotask === "function") queueMicrotask(run);
+  else void Promise.resolve().then(run);
+}
+
+/**
+ * Leading-edge throttle for the state commit. The first change after a quiet
+ * spell commits on the next microtask, which still gathers every delta the
+ * host delivered in the same batch; changes within `MIN_COMMIT_GAP_MS` of the
+ * last commit wait out the rest of the gap on a timer.
+ *
+ * Deliberately not `requestAnimationFrame`: Chromium throttles frames in a
+ * window that is covered or in the background while leaving it "visible", and
+ * a lab run with that throttling (13 fps, gaps up to 169 ms) put 100–130 ms
+ * between a synced edit arriving and the view showing it.
+ */
+function createCommitScheduler(run: () => void): { schedule: () => void; cancel: () => void } {
+  let pending = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let last = -Infinity;
+  const fire = (): void => {
+    if (!pending) return;
+    pending = false;
+    timer = null;
+    last = clockMs();
+    run();
+  };
+  return {
+    schedule() {
+      if (pending) return;
+      pending = true;
+      const wait = last + MIN_COMMIT_GAP_MS - clockMs();
+      if (wait <= 0) microtask(fire);
+      else timer = setTimeout(fire, wait);
+    },
+    cancel() {
+      pending = false;
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+    },
+  };
+}
+
+/**
+ * The view half of `createSyncedCollection`: mirrors a worker-owned keyed
+ * collection by pulling a snapshot on mount and applying the deltas pushed
+ * after it.
+ *
+ * Pushes reach the view with no ordering guarantee against invoke results, so
+ * a pull-then-subscribe view can miss a change or apply one twice. This hook
+ * subscribes first, then pulls; deltas that arrive while the pull is in flight
+ * are held, and once the snapshot lands every delta at or below its revision
+ * is dropped as already included. A revision that skips a number, or a delta
+ * from a different worker epoch (the worker restarted), means something was
+ * missed, and the hook pulls again.
+ *
+ * A change commits to state on the microtask after it arrives, so a single
+ * edit shows as soon as React renders it; a burst commits at most once per
+ * 16 ms. The commit is not tied to `requestAnimationFrame`, which a covered or
+ * background window throttles.
+ *
+ * ```tsx
+ * const { items: calls, loading } = useSyncedCollection<Call>(pluginId, "calls", {
+ *   signal: disposeSignal,
+ * });
+ * ```
+ */
+export function useSyncedCollection<T>(
+  pluginId: string,
+  channel: string,
+  options: SyncedCollectionViewOptions = {}
+): SyncedCollectionViewResult<T> {
+  const { enabled = true, signal } = options;
+  const active = enabled && !signal?.aborted;
+  const source = active ? subscriptionKey(pluginId, channel) : null;
+  const [state, setState] = useState<ViewState<T>>(() => loadingState(source));
+  // A new subscription (another plugin or channel, or re-enabled) starts from
+  // nothing, so show its loading state in this render rather than the previous
+  // collection until its snapshot lands. Disabling keeps the last items and
+  // only forgets which subscription they came from.
+  if (state.source !== source) {
+    setState(source === null ? { ...state, source: null } : loadingState(source));
+  }
+  const resyncRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    if (!enabled || signal?.aborted) return;
+
+    const key = subscriptionKey(pluginId, channel);
+    let live = true;
+    let mirror: Mirror<T> | null = null;
+    // Epochs a successful pull has moved past: a late delta from a worker that
+    // has since restarted is dropped instead of forcing another pull.
+    const retired = new Set<string>();
+    let pulling = false;
+    let failed = false;
+    let pullSeq = 0;
+    let held: SyncedCollectionDelta<T>[] = [];
+    let lastError: Error | null = null;
+
+    const commit = (): void => {
+      if (!live) return;
+      const m = mirror;
+      setState({
+        items: m ? [...m.map.values()] : [],
+        revision: m?.revision ?? 0,
+        loading: pulling || (m === null && !failed),
+        error: failed ? lastError : null,
+        source: key,
+      });
+    };
+    const commits = createCommitScheduler(commit);
+    const scheduleCommit = commits.schedule;
+
+    const apply = (delta: SyncedCollectionDelta<T>): void => {
+      const m = mirror;
+      if (!m || retired.has(delta.epoch)) return;
+      if (delta.epoch !== m.epoch || delta.revision > m.revision + 1) {
+        // Missed something: a restarted worker, or a gap in the sequence.
+        pull();
+        held.push(delta);
+        return;
+      }
+      if (delta.revision <= m.revision) return;
+      if (delta.resync) {
+        // The worker could not push these changes; the snapshot carries them.
+        pull();
+        held.push(delta);
+        return;
+      }
+      if (delta.reset) m.map.clear();
+      for (const key of delta.removes) m.map.delete(key);
+      for (const [key, item] of delta.upserts) m.map.set(key, item);
+      m.revision = delta.revision;
+      scheduleCommit();
+    };
+
+    const drain = (): void => {
+      const pending = held;
+      held = [];
+      for (const delta of pending) {
+        if (pulling) {
+          held.push(delta);
+          continue;
+        }
+        apply(delta);
+      }
+    };
+
+    const pull = (): void => {
+      if (!live) return;
+      if (pulling) return;
+      pulling = true;
+      const seq = ++pullSeq;
+      // Before the first snapshot the view already shows `loading` (a new
+      // subscription resets to it during render); committing it again would
+      // only spend the throttle's gap the snapshot is about to need.
+      if (mirror !== null || failed) scheduleCommit();
+      Promise.resolve()
+        .then(() =>
+          getPluginHostBridge().invoke(pluginId, syncedCollectionSnapshotChannel(channel))
+        )
+        .then(
+          (result) => {
+            if (!live || seq !== pullSeq) return;
+            pulling = false;
+            if (!isSnapshot(result)) {
+              failed = true;
+              lastError = new Error(
+                `@daintreehq/plugin-sdk/react: "${syncedCollectionSnapshotChannel(channel)}" did not answer a synced-collection snapshot.`
+              );
+              held = [];
+              scheduleCommit();
+              return;
+            }
+            const snapshot = result as SyncedCollectionSnapshot<T>;
+            if (mirror && mirror.epoch !== snapshot.epoch) retired.add(mirror.epoch);
+            retired.delete(snapshot.epoch);
+            mirror = {
+              epoch: snapshot.epoch,
+              revision: snapshot.revision,
+              map: new Map(snapshot.entries),
+            };
+            failed = false;
+            lastError = null;
+            scheduleCommit();
+            drain();
+          },
+          (err: unknown) => {
+            if (!live || seq !== pullSeq) return;
+            pulling = false;
+            failed = true;
+            lastError = toError(err);
+            // Without a base to apply them to, held deltas are meaningless;
+            // the next successful pull includes what they carried.
+            held = [];
+            scheduleCommit();
+          }
+        );
+    };
+
+    let off: (() => void) | null = null;
+    try {
+      off = getPluginHostBridge().on(pluginId, channel, (payload) => {
+        if (!live || !isDelta(payload)) return;
+        const delta = payload as SyncedCollectionDelta<T>;
+        if (pulling || mirror === null) {
+          // Before the first snapshot, or during a resync. After a failed pull
+          // nothing is held: there is no base to apply it to.
+          if (pulling) held.push(delta);
+          return;
+        }
+        if (failed) return;
+        apply(delta);
+      });
+    } catch (err) {
+      failed = true;
+      lastError = toError(err);
+      scheduleCommit();
+      return () => {
+        live = false;
+        commits.cancel();
+      };
+    }
+
+    resyncRef.current = () => {
+      if (!live) return;
+      if (pulling) {
+        // Supersede the pull in flight: its answer may predate the reason for asking.
+        pulling = false;
+      }
+      pull();
+    };
+    pull();
+
+    const stop = (): void => {
+      if (!live) return;
+      live = false;
+      off?.();
+      commits.cancel();
+      resyncRef.current = () => {};
+      signal?.removeEventListener("abort", stop);
+    };
+    signal?.addEventListener("abort", stop, { once: true });
+    return stop;
+  }, [pluginId, channel, enabled, signal]);
+
+  const resync = useCallback(() => resyncRef.current(), []);
+  const { items, revision, loading, error } = state;
+  return { items, revision, loading, error, resync };
+}

@@ -5,6 +5,7 @@ import type { ResultPromise } from "execa";
 import { runValidate } from "./validate.js";
 import { resolveVitePlan, runVitePlanBuild, spawnViteWatch } from "../lib/viteBuild.js";
 import { sendCliRequest } from "../ipc/client.js";
+import { createDevMetricsPoller } from "../lib/devMetrics.js";
 
 // Mirrors the (unexported) DEV_MARKER_FILENAME in
 // electron/services/PluginService.ts — its presence at a plugin dir root routes
@@ -25,6 +26,11 @@ export interface DevOptions {
    * session can be driven programmatically (tests, embedding) without signals.
    */
   keepAliveSignal?: AbortSignal;
+  /**
+   * Poll Daintree for the plugin's performance measurements and print them
+   * against budgets while the session runs. Defaults to on.
+   */
+  metrics?: boolean;
 }
 
 export interface DevLink {
@@ -213,10 +219,21 @@ export async function runDev(opts: DevOptions = {}): Promise<void> {
 
   console.log(`Watching ${pluginId} for changes. Press Ctrl-C to stop.`);
 
+  const metricsPoller =
+    opts.metrics === false
+      ? null
+      : createDevMetricsPoller({
+          pluginId,
+          request: sendCliRequest,
+          print: (text) => console.log(text),
+        });
+  metricsPoller?.start();
+
   let stopping = false;
   const stopOnce = async (exitAfter: boolean): Promise<void> => {
     if (stopping) return;
     stopping = true;
+    metricsPoller?.stop();
     await stopDev(pluginId, link, watchers);
     if (exitAfter) process.exit(0);
   };

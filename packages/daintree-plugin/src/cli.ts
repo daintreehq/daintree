@@ -7,6 +7,7 @@ import { runInstall } from "./commands/install.js";
 import { runUninstall } from "./commands/uninstall.js";
 import { runDev } from "./commands/dev.js";
 import { runDoctor } from "./commands/doctor.js";
+import { formatLintReport, runLint } from "./commands/lint.js";
 import { runSchema } from "./commands/schema.js";
 import { runTourAlign, runTourVoice, type TourCommandResult } from "./commands/tour.js";
 import { runTourPreview } from "./commands/tourPreview.js";
@@ -32,11 +33,12 @@ program.addCommand(newCommand());
 
 program
   .command("validate")
+  .argument("[dir]", "plugin directory (default: current directory)")
   .description("Validate plugin.json against Daintree's manifest schema")
   .option("--env", "resolve ${settings:…} tokens against .daintree-plugin-env")
-  .action(async (opts: { env?: boolean }) => {
+  .action(async (dir: string | undefined, opts: { env?: boolean }) => {
     try {
-      const result = await runValidate({ env: opts.env });
+      const result = await runValidate({ dir, env: opts.env });
       if (result.ok) {
         console.log("✓ plugin.json is valid");
       }
@@ -55,13 +57,36 @@ program
   });
 
 program
+  .command("lint")
+  .argument("[dir]", "plugin directory (default: current directory)")
+  .description(
+    "Check plugin source for performance traps and host design-contract drift, and list classes that compile to nothing"
+  )
+  .option("--json", "print the findings as JSON")
+  .option("--strict", "exit 1 on warnings as well as errors")
+  .action(async (dir: string | undefined, opts: { json?: boolean; strict?: boolean }) => {
+    try {
+      const result = await runLint({ dir, strict: opts.strict });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        for (const line of formatLintReport(result)) console.log(line);
+      }
+      if (!result.ok) process.exit(1);
+    } catch (err) {
+      fail((err as Error).message);
+    }
+  });
+
+program
   .command("doctor")
   .argument("<projectRoot>", "the project whose .daintree/plugins/ to check")
   .description("Check every project plugin the way someone cloning this repository would see it")
   .option("--offline", "skip the query to a running Daintree")
-  .action(async (projectRoot: string, opts: { offline?: boolean }) => {
+  .option("--no-lint", "skip the source lint")
+  .action(async (projectRoot: string, opts: { offline?: boolean; lint?: boolean }) => {
     try {
-      const result = await runDoctor(projectRoot, { offline: opts.offline });
+      const result = await runDoctor(projectRoot, { offline: opts.offline, lint: opts.lint });
       console.log(`Project: ${result.projectRoot}`);
       console.log(`Plugins: ${result.pluginsDir}`);
       console.log(`Daintree: ${result.host.note}`);
@@ -158,9 +183,10 @@ program
   .command("dev")
   .description("Start the hot-reload dev loop for the current plugin")
   .option("--skip-build", "skip the initial Vite build (the watcher still rebuilds on save)")
-  .action(async (opts: { skipBuild?: boolean }) => {
+  .option("--no-metrics", "don't print the plugin's performance measurements against budgets")
+  .action(async (opts: { skipBuild?: boolean; metrics?: boolean }) => {
     try {
-      await runDev({ skipBuild: opts.skipBuild });
+      await runDev({ skipBuild: opts.skipBuild, metrics: opts.metrics });
     } catch (err) {
       fail((err as Error).message);
     }

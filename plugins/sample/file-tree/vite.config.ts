@@ -33,6 +33,10 @@ export default defineConfig({
     emptyOutDir: false,
     // Committed artifact: readable diffs matter more than bytes for a sample.
     minify: false,
+    // No `//#region <path>` comments: their paths follow wherever the SDK
+    // resolves, which in a worktree is the main checkout's symlinked install,
+    // so the same source would build to a different artifact there.
+    rolldownOptions: { experimental: { attachDebugInfo: "none" } },
     lib: {
       entry: "renderer/file-tree-view.tsx",
       formats: ["es"],

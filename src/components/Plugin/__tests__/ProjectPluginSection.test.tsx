@@ -270,4 +270,96 @@ describe("ProjectPluginDetailPane", () => {
     });
     expect(setProjectPluginTrust).toHaveBeenCalledWith("disabled");
   });
+
+  describe("performance and styles", () => {
+    function snapshotFor(pluginId: string, viewLoads: number) {
+      return {
+        pluginId,
+        isolation: "worker" as const,
+        activation: { lastMs: 90, count: 1, at: Date.now() },
+        viewLoads: Array.from({ length: viewLoads }, () => ({
+          kindId: `${pluginId}.main`,
+          activateMs: 80,
+          importMs: 30,
+          stylesMs: 60,
+          loadMs: 95,
+          firstPaintMs: 120,
+          retry: false,
+          at: Date.now(),
+        })),
+        viewCommits: null,
+        invokes: {
+          count: 0,
+          p50Ms: 0,
+          p95Ms: 0,
+          maxMs: 0,
+          lastMs: 0,
+          errors: 0,
+          timeouts: 0,
+          oversized: 0,
+          promptWaits: 0,
+        },
+        pushes: {
+          messages: 0,
+          bytes: 0,
+          perSecond: 0,
+          bytesPerSecond: 0,
+          peakPerSecond: 0,
+          peakBytesPerSecond: 0,
+          oversized: 0,
+        },
+        longFrames: { count: 0, totalBlockingMs: 0, lastAt: null },
+        workerMemory: null,
+        overBudget: [],
+        since: Date.now(),
+      };
+    }
+
+    function withSnapshots(snapshots: unknown[]) {
+      const getPerfSnapshots = vi.fn(async () => snapshots);
+      Object.defineProperty(window, "electron", {
+        configurable: true,
+        value: {
+          plugin: {
+            activateStagedProjectPlugin,
+            setProjectPluginTrust,
+            reloadProjectPlugins,
+            getPerfSnapshots,
+            onPerfSnapshotsChanged: () => () => {},
+          },
+        },
+      });
+      return getPerfSnapshots;
+    }
+
+    const INSTANCE = "project__proj-a__acme.dashboard";
+
+    it("shows the instance's measurements, and a Styles check once a view has loaded", async () => {
+      withSnapshots([snapshotFor("acme.dashboard", 1), snapshotFor(INSTANCE, 1)]);
+      render(
+        <ProjectPluginDetailPane plugin={plugin({ state: "active", instanceId: INSTANCE })} />
+      );
+      await screen.findByText("Performance");
+      expect(screen.getByText("Styles")).toBeTruthy();
+      expect(document.body.textContent).toContain("95ms");
+    });
+
+    it("offers no Styles check before any of its views has loaded", async () => {
+      withSnapshots([snapshotFor(INSTANCE, 0)]);
+      render(
+        <ProjectPluginDetailPane plugin={plugin({ state: "active", instanceId: INSTANCE })} />
+      );
+      await screen.findByText("Performance");
+      expect(screen.queryByText("Styles")).toBeNull();
+    });
+
+    it("shows nothing for a plugin with no instance key, even if the manifest id has numbers", async () => {
+      const read = withSnapshots([snapshotFor("acme.dashboard", 1)]);
+      render(<ProjectPluginDetailPane plugin={plugin({ state: "invalid" })} />);
+      await act(async () => {
+        await read.mock.results[0]?.value;
+      });
+      expect(screen.queryByText("Performance")).toBeNull();
+    });
+  });
 });

@@ -442,6 +442,12 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "The preset listbox keeps DOM focus while aria-activedescendant names the active option, which PALETTE_ROW_CLASS draws as the highlight fill — the same one-focus-owner model as the palettes; a ring on the listbox itself would be a second indicator around the whole list",
   },
   {
+    file: "src/components/PluginKit/PluginKitTextInputs.tsx",
+    fragment: 'chrome === "bare" && "outline-hidden"',
+    reason:
+      "The Composer's bare textarea sits in the composer shell with its chips and footer, and the shell paints the one ring via has-[textarea:focus-visible]; a ring on the textarea too would draw a second one inside it",
+  },
+  {
     file: "src/components/Worktree/views/WorktreePathPicker.tsx",
     fragment: "focus:outline-hidden disabled:opacity-50",
     reason:
@@ -452,6 +458,13 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     fragment: "focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-50",
     reason:
       "The project dialogs' compound fields (location + browse, emoji + name) follow WorktreePathPicker: the ring is painted once on COMPOUND_FIELD via has-[input:focus-visible], switching to the error colour when invalid, so an element-owned ring would draw a second one inside it",
+  },
+  {
+    file: "src/components/PluginKit/PluginKitDates.tsx",
+    fragment:
+      "min-w-0 flex-1 truncate bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
+    reason:
+      "The kit DatePicker's text and its clear and calendar buttons are one compound field, like the project dialogs': the ring is painted once on the box via has-[input:focus-visible], switching to the error colour when invalid, so an element-owned ring would draw a second one inside it",
   },
   {
     file: "src/components/ui/PopoverSearchField.tsx",
@@ -571,6 +584,25 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "w-44 bg-transparent text-xs text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
     reason:
       "Parent shows focus: the diff search bar wrapper has `focus-within:border-accent-primary focus-within:ring-1`",
+  },
+  {
+    file: "src/components/PluginKit/PluginKitEditors.tsx",
+    fragment: "block rounded-none border-0 bg-transparent focus-visible:outline-hidden",
+    reason:
+      "Parent shows focus: the kit MarkdownEditor's frame wraps its Write/Preview strip and this text area as one field and paints the ring once via has-[textarea:focus-visible], as TagInput does",
+  },
+  {
+    file: "src/components/PluginKit/PluginKitInputs.tsx",
+    fragment: "h-6 min-w-24 flex-1 bg-transparent px-1 text-text-primary outline-hidden",
+    reason:
+      "Parent shows focus: the kit TagInput's box wraps the tags and this input as one field and paints the ring once via has-[input:focus-visible], as WorktreePathPicker does",
+  },
+  {
+    file: "src/components/PluginKit/PluginKitInputs.tsx",
+    fragment:
+      "w-0 flex-1 text-ellipsis bg-transparent tabular-nums text-text-primary outline-hidden",
+    reason:
+      "The kit NumberInput's value, unit and steppers are one compound field: the frame paints the ring once via has-[input:focus-visible], switching to the error colour when invalid, so an element-owned ring on the text would draw a second one inside it",
   },
   {
     file: "src/components/Project/QuickRun.tsx",

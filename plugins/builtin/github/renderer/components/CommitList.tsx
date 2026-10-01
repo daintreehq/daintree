@@ -1,5 +1,4 @@
-import { ExternalLink } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@daintreehq/plugin-ui";
 import { LocalCommitsDropdown } from "@/components/Layout/LocalCommitsDropdown";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
@@ -57,8 +56,8 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
           size="sm"
           onMouseDown={(e) => e.preventDefault()}
           onClick={handleViewOnGitHub}
+          icon="external-link"
         >
-          <ExternalLink aria-hidden="true" />
           View on GitHub
         </Button>
       }

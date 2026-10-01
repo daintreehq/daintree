@@ -9,38 +9,20 @@ import {
 } from "react";
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import {
-  XCircle,
-  ExternalLink,
-  RefreshCw,
-  WifiOff,
-  Plus,
-  Settings,
-  ArrowUpDown,
-  Clock,
-} from "lucide-react";
-import { KeyRound, ListChecks } from "@/components/icons";
 import { GitHubIcon } from "@/components/icons/brands";
 import { isTokenRelatedError, isTransientNetworkError } from "@/lib/forgeErrors";
-import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/Spinner";
-import { SpinningIcon } from "@/components/ui/SpinningIcon";
-import { SearchField } from "@/components/ui/SearchField";
 import {
-  SegmentedRadioGroup,
-  type SegmentedRadioOption,
-} from "@/components/ui/SegmentedRadioGroup";
-import { EmptyState } from "@/components/ui/EmptyState";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+  Button,
+  EmptyState,
+  Icon,
+  IconButton,
+  SearchField,
+  SegmentedControl,
+  SkeletonHint,
+  Spinner,
+  SpinningIcon,
+  type SegmentedOption,
+} from "@daintreehq/plugin-ui";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
@@ -71,6 +53,20 @@ import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { LiveRateLimitCountdown } from "@/components/Layout/RateLimitDetails";
 import { useGitHubResourceListSWR } from "../hooks/useGitHubResourceListSWR";
 import { forgeClient } from "@/clients/forgeClient";
+// The host menus: both size their panel (`w-48`, `w-56`), and the kit
+// DropdownMenu takes no width.
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+// The host overlays, because the rows are a Virtuoso list the grid drives
+// through its scroller ref and imperative handle; the kit VirtualList (whose
+// `shadows` would replace these) exposes neither.
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { FixedDropdownVisibleContext } from "@/components/ui/fixed-dropdown";
 import { FORGE_DROPDOWN_PANEL_SIZE } from "@/components/Layout/forgeStatsDropdownContract";
@@ -80,7 +76,6 @@ import {
   UI_SKELETON_FLOOR_MS,
   UI_STILL_WORKING_MS,
 } from "@/lib/animationUtils";
-import { SkeletonHint } from "@/components/ui/Skeleton";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 
 type StateFilter = IssueStateFilter | PRStateFilter;
@@ -191,15 +186,9 @@ function LoadMoreFooter({ context }: { context?: LoadMoreFooterContext }) {
               size="xs"
               onClick={isTokenError ? onOpenSettings : onLoadMore}
               className={cn("mt-1", isLoadMoreActive && "bg-overlay-highlight")}
+              icon={isTokenError ? "settings" : undefined}
             >
-              {isTokenError ? (
-                <>
-                  <Settings aria-hidden="true" />
-                  Open GitHub settings
-                </>
-              ) : (
-                "Retry"
-              )}
+              {isTokenError ? "Open GitHub settings" : "Retry"}
             </Button>
           </div>
         ) : (
@@ -421,7 +410,7 @@ export function GitHubResourceList({
     useIssueSelectionStore.getState().clear(`${type}:${prevProjectPath}`);
   }, [projectPath, type]);
 
-  const stateTabs = useMemo((): SegmentedRadioOption<StateFilter>[] => {
+  const stateTabs = useMemo((): SegmentedOption[] => {
     if (type === "pr") {
       return [
         { value: "open", label: "Open" },
@@ -1072,8 +1061,7 @@ export function GitHubResourceList({
             : "Open a pull request when a branch is ready to review."
         }
         action={
-          <Button variant="outline" size="sm" onClick={handleCreateNew}>
-            <Plus className="h-3.5 w-3.5" />
+          <Button variant="outline" size="sm" onClick={handleCreateNew} icon="plus">
             {type === "issue" ? "New issue" : "New pull request"}
           </Button>
         }
@@ -1095,8 +1083,7 @@ export function GitHubResourceList({
           title="GitHub not connected"
           description="Add a personal access token to browse issues and pull requests for this project."
           action={
-            <Button variant="outline" size="sm" onClick={handleOpenGitHubSettings}>
-              <Settings className="h-3.5 w-3.5" />
+            <Button variant="outline" size="sm" onClick={handleOpenGitHubSettings} icon="settings">
               Add GitHub token
             </Button>
           }
@@ -1114,11 +1101,11 @@ export function GitHubResourceList({
             size="compact"
             // Keeps the dropdown header's 32px, text-sm field rather than the
             // rail's 28px, matching the commits dropdown beside it.
-            fieldClassName="h-8 text-sm flex-1"
-            inputRef={inputRef}
+            className="h-8 text-sm flex-1"
+            ref={inputRef}
             placeholder={`Search ${type === "issue" ? "issues" : "pull requests"}…`}
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onValueChange={setSearchQuery}
             onKeyDown={handleInputKeyDown}
             autoFocus
             role="combobox"
@@ -1135,28 +1122,23 @@ export function GitHubResourceList({
             data-row-menu=""
             onClear={handleClearSearch}
           />
-          <Tooltip>
-            <TooltipTrigger asChild>
-              {/* aria-disabled, not disabled: a disabled button drops keyboard
-                  focus mid-refresh. Busy, not unavailable, so no dim — the
-                  spinner is the whole signal. */}
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleManualRefreshClick}
-                aria-disabled={loading || refreshing || undefined}
-                aria-label={
-                  showSpinner
-                    ? "Refreshing…"
-                    : `Refresh ${type === "issue" ? "issues" : "pull requests"}`
-                }
-                className="shrink-0 aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-disabled:hover:text-text-secondary [&_svg]:size-3.5"
-              >
-                <SpinningIcon icon={RefreshCw} active={showSpinner} aria-hidden="true" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {showSpinner ? (
+          {/* aria-disabled, not disabled: a disabled button drops keyboard
+              focus mid-refresh. Busy, not unavailable, so no dim — the
+              spinner is the whole signal. */}
+          <IconButton
+            variant="ghost"
+            size="default"
+            icon={<SpinningIcon icon="refresh" active={showSpinner} />}
+            onClick={handleManualRefreshClick}
+            aria-disabled={loading || refreshing || undefined}
+            aria-label={
+              showSpinner
+                ? "Refreshing…"
+                : `Refresh ${type === "issue" ? "issues" : "pull requests"}`
+            }
+            tooltipSide="bottom"
+            tooltip={
+              showSpinner ? (
                 "Refreshing…"
               ) : /* When the footer is already stating freshness, the tooltip
                      stays out of it. The banners no longer carry it, so over
@@ -1167,37 +1149,32 @@ export function GitHubResourceList({
                 </>
               ) : (
                 "Refresh"
-              )}
-            </TooltipContent>
-          </Tooltip>
+              )
+            }
+            className="shrink-0 aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-disabled:hover:text-text-secondary [&_svg]:size-3.5"
+          />
           <DropdownMenu open={sortPopoverOpen} onOpenChange={setSortPopoverOpen}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={
-                      sortOrder === "created"
-                        ? `Sort ${type === "issue" ? "issues" : "pull requests"}`
-                        : `Sort ${type === "issue" ? "issues" : "pull requests"}, sorted by recently updated`
-                    }
-                    className={cn(
-                      "shrink-0 [&_svg]:size-3.5",
-                      // A non-default sort is a neutral lifted state, not a badge.
-                      // The old blue dot read as unread activity and said nothing
-                      // about which order was in force.
-                      sortOrder !== "created" && "bg-overlay-soft text-text-primary"
-                    )}
-                  >
-                    <ArrowUpDown />
-                  </Button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {sortOrder === "created" ? "Sort" : "Sort: recently updated"}
-              </TooltipContent>
-            </Tooltip>
+            <DropdownMenuTrigger asChild>
+              <IconButton
+                variant="ghost"
+                size="default"
+                icon="sort"
+                aria-label={
+                  sortOrder === "created"
+                    ? `Sort ${type === "issue" ? "issues" : "pull requests"}`
+                    : `Sort ${type === "issue" ? "issues" : "pull requests"}, sorted by recently updated`
+                }
+                tooltipSide="bottom"
+                tooltip={sortOrder === "created" ? "Sort" : "Sort: recently updated"}
+                className={cn(
+                  "shrink-0 [&_svg]:size-3.5",
+                  // A non-default sort is a neutral lifted state, not a badge.
+                  // The old blue dot read as unread activity and said nothing
+                  // about which order was in force.
+                  sortOrder !== "created" && "bg-overlay-soft text-text-primary"
+                )}
+              />
+            </DropdownMenuTrigger>
             {/* The app's menu, not a hand-built radio popover: the same rows,
                 marks, keys and motion as every other choice-of-one in the app. */}
             <DropdownMenuContent
@@ -1234,25 +1211,21 @@ export function GitHubResourceList({
               keystroke and shoved the list down. A trigger that is always
               present at a fixed size is neither. */}
           <DropdownMenu open={selectionMenuOpen} onOpenChange={setSelectionMenuOpen}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  {/* No lift while a selection is live: the bulk bar already
-                      states the count, and a second membership signal here
-                      would say the same thing twice. */}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    disabled={loading || data.length === 0}
-                    aria-label={`Select ${type === "issue" ? "issues" : "pull requests"}`}
-                    className="shrink-0 [&_svg]:size-3.5"
-                  >
-                    <ListChecks />
-                  </Button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Select</TooltipContent>
-            </Tooltip>
+            <DropdownMenuTrigger asChild>
+              {/* No lift while a selection is live: the bulk bar already
+                  states the count, and a second membership signal here
+                  would say the same thing twice. */}
+              <IconButton
+                variant="ghost"
+                size="default"
+                icon="list-checks"
+                disabled={loading || data.length === 0}
+                aria-label={`Select ${type === "issue" ? "issues" : "pull requests"}`}
+                tooltipSide="bottom"
+                tooltip="Select"
+                className="shrink-0 [&_svg]:size-3.5"
+              />
+            </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
               className="w-56"
@@ -1344,12 +1317,12 @@ export function GitHubResourceList({
           </DropdownMenu>
         </div>
 
-        <SegmentedRadioGroup<StateFilter>
+        <SegmentedControl
           aria-label="Filter by state"
           fullWidth
           options={stateTabs}
           value={filterState}
-          onChange={setFilterState}
+          onValueChange={(value) => setFilterState(value as StateFilter)}
         />
 
         {numberQuery !== null &&
@@ -1467,7 +1440,7 @@ export function GitHubResourceList({
           <div key="github-content" className="flex-1 min-h-0 flex flex-col">
             {isRateLimited && !error && (
               <div role="status" className={STALE_BANNER_CLASS}>
-                <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <Icon name="clock" className="h-3.5 w-3.5 shrink-0" />
                 {/* The sentence that makes the rows below trustworthy is the one
                     part that never truncates — it wraps instead. How old the
                     rows are lives in the refresh tooltip, which says it on
@@ -1486,11 +1459,11 @@ export function GitHubResourceList({
             {error && (
               <div role="alert" className={STALE_BANNER_CLASS}>
                 {isTokenError ? (
-                  <KeyRound className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <Icon name="key" className="h-3.5 w-3.5 shrink-0" />
                 ) : isTransientNetworkError(error) ? (
-                  <WifiOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <Icon name="wifi-off" className="h-3.5 w-3.5 shrink-0" />
                 ) : (
-                  <XCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <Icon name="circle-x" className="h-3.5 w-3.5 shrink-0" />
                 )}
                 <p className="min-w-0 flex-1 text-xs">
                   {isTransientNetworkError(error)
@@ -1503,8 +1476,8 @@ export function GitHubResourceList({
                     size="xs"
                     onClick={handleOpenGitHubSettings}
                     className="ml-auto shrink-0"
+                    icon="settings"
                   >
-                    <Settings aria-hidden="true" />
                     Settings
                   </Button>
                 ) : (
@@ -1513,8 +1486,8 @@ export function GitHubResourceList({
                     size="xs"
                     onClick={handleRetry}
                     className="ml-auto shrink-0"
+                    icon="refresh"
                   >
-                    <RefreshCw aria-hidden="true" />
                     Retry
                   </Button>
                 )}
@@ -1586,7 +1559,7 @@ export function GitHubResourceList({
             <EmptyState
               variant="zero-data"
               scale="canvas"
-              icon={isTransientNetworkError(error) ? <WifiOff /> : <XCircle />}
+              icon={isTransientNetworkError(error) ? "wifi-off" : "circle-x"}
               title={
                 isTransientNetworkError(error)
                   ? "Couldn't reach GitHub"
@@ -1598,8 +1571,7 @@ export function GitHubResourceList({
                   : sanitizeIpcError(error)
               }
               action={
-                <Button variant="ghost" size="sm" onClick={handleRetry}>
-                  <RefreshCw className="h-3.5 w-3.5" />
+                <Button variant="ghost" size="sm" onClick={handleRetry} icon="refresh">
                   Retry
                 </Button>
               }
@@ -1612,12 +1584,16 @@ export function GitHubResourceList({
             <EmptyState
               variant="zero-data"
               scale="canvas"
-              icon={<KeyRound />}
+              icon="key"
               title="GitHub rejected the token"
               description={sanitizeIpcError(error)}
               action={
-                <Button variant="ghost" size="sm" onClick={handleOpenGitHubSettings}>
-                  <Settings className="h-3.5 w-3.5" />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleOpenGitHubSettings}
+                  icon="settings"
+                >
                   Open GitHub settings
                 </Button>
               }
@@ -1633,7 +1609,7 @@ export function GitHubResourceList({
             <EmptyState
               variant="zero-data"
               scale="canvas"
-              icon={<Clock />}
+              icon="clock"
               title="GitHub requests are paused"
               /* One node shape either way: EmptyState keys its fade-through on
                the description, so switching between a string and JSX made the
@@ -1675,8 +1651,8 @@ export function GitHubResourceList({
           size="sm"
           onClick={handleOpenInGitHub}
           className="gap-1.5 justify-self-start"
+          icon="external-link"
         >
-          <ExternalLink className="h-3.5 w-3.5" />
           View on GitHub
         </Button>
         {showStaleFreshness ? (
@@ -1694,8 +1670,8 @@ export function GitHubResourceList({
             size="sm"
             onClick={handleCreateNew}
             className="gap-1.5 justify-self-end"
+            icon="plus"
           >
-            <Plus className="h-3.5 w-3.5" />
             {type === "issue" ? "New issue" : "New pull request"}
           </Button>
         )}

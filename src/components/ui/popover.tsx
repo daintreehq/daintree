@@ -39,6 +39,26 @@ function getPortalBoundary() {
   return boundary;
 }
 
+// PopoverContent's default collisionPadding; the menu-family contract reads that literal.
+const DEFAULT_COLLISION_PADDING = 8;
+
+/**
+ * The width a `PopoverContent` on the default collision boundary can take:
+ * the window less the native panel on the right and the collision padding.
+ * Radix shifts the content along the anchor's axis to stay inside that
+ * boundary, so this is its `--radix-popover-content-available-width` once it
+ * is placed, known before it is. The window, without layout to measure.
+ *
+ * Reads layout and mounts the boundary on first use, so call it from a layout
+ * effect or an event handler, never during render.
+ */
+function getPopoverAvailableWidth(collisionPadding = DEFAULT_COLLISION_PADDING): number {
+  if (typeof window === "undefined") return Number.POSITIVE_INFINITY;
+  const measured = getPortalBoundary()?.getBoundingClientRect().width ?? 0;
+  const width = measured > 0 ? measured : window.innerWidth;
+  return Math.max(0, width - 2 * collisionPadding);
+}
+
 const PopoverIntentContext = React.createContext<((next: boolean) => void) | null>(null);
 
 type PopoverRootProps = React.ComponentProps<typeof PopoverPrimitiveType.Root>;
@@ -375,4 +395,4 @@ const PopoverContent = React.forwardRef<
 );
 PopoverContent.displayName = "PopoverContent";
 
-export { Popover, PopoverTrigger, PopoverContent, PopoverAnchor };
+export { Popover, PopoverTrigger, PopoverContent, PopoverAnchor, getPopoverAvailableWidth };

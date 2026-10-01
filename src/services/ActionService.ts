@@ -347,6 +347,15 @@ export class ActionService {
   }
 
   /**
+   * Whether `dispatch` refuses the action for the `"plugin"` source however it
+   * is called. Renderer-local like `selfNotifiesOnExecutionError`, so a kit
+   * control can draw such an action unavailable before a click is refused.
+   */
+  deniesPluginDispatch(id: ActionId): boolean {
+    return this.registry.get(id)?.denyPluginDispatch === true;
+  }
+
+  /**
    * Whether the action guarantees it has already shown its own error toast for
    * any failure escaping `run()`. Single O(1) registry lookup — the flag is
    * renderer-local and deliberately absent from `ActionManifestEntry`, so the
@@ -752,12 +761,16 @@ export class ActionService {
     return entries;
   }
 
-  get(actionId: ActionId, ctx?: ActionContext): ActionManifestEntry | null {
+  get(
+    actionId: ActionId,
+    ctx?: ActionContext,
+    options?: { includeSchemas?: boolean }
+  ): ActionManifestEntry | null {
     const definition = this.registry.get(actionId);
     if (!definition) return null;
 
     const context = ctx ?? this.getActionContext();
-    return this.toManifestEntry(definition, context);
+    return this.toManifestEntry(definition, context, options?.includeSchemas !== false);
   }
 
   private toManifestEntry(

@@ -37,6 +37,10 @@ import type {
   PluginMcpJsonSchema,
   PluginMcpToolAnnotations,
   PluginSendToAgentOptions,
+  PluginFsReadFilesEncoding,
+  PluginFsWalkOptions,
+  PluginWorktreeSnapshot,
+  PluginWorktreesChange,
 } from "./plugin.js";
 
 /** Async host methods the worker proxy relays to main and awaits a reply for. */
@@ -66,10 +70,12 @@ export type PluginHostCallMethod =
   | "fs.readFile"
   | "fs.readFileBytes"
   | "fs.readFileWithRevision"
+  | "fs.readFiles"
   | "fs.writeFile"
   | "fs.mkdir"
   | "fs.appendFile"
   | "fs.readdir"
+  | "fs.walk"
   | "fs.stat"
   | "fs.watch"
   | "git.status"
@@ -108,7 +114,10 @@ export type PluginHostNotifyMethod =
   // `write`/`resize` are void in the public handle contract, so there is no
   // reply for the worker to await.
   | "process.write"
-  | "process.resize";
+  | "process.resize"
+  // A push the worker refused before it crossed the port (over the size cap,
+  // or not clonable), reported so main's metrics count it. Carries no payload.
+  | "pushRejected";
 
 /**
  * Event subscriptions the worker proxy can open against the host. The
@@ -118,6 +127,13 @@ export type PluginHostNotifyMethod =
  * own panel transitions (#11301) — the host replays each live panel's current
  * phase at subscribe time. `system-wake` streams machine resume pulses
  * (#12175); nothing is replayed for it, since a pulse has no resting state.
+ * `push-listeners-observe` streams whether any renderer in scope listens on
+ * the push channel named by `key` — a boolean, the current value first, then
+ * each change — backing the worker's synchronous `host.hasListeners`. It is an
+ * internal observation: it does not count as a plugin event subscription, so it
+ * never holds the worker against idle disposal. `push-listeners` streams the
+ * same values for a plugin's own `host.onDidChangeListeners` and is a real event
+ * subscription, holding the worker like any other.
  */
 export type PluginWorkerSubscriptionKind =
   | "active-worktree"
@@ -127,6 +143,8 @@ export type PluginWorkerSubscriptionKind =
   | "agent-state"
   | "panel-lifecycle"
   | "system-wake"
+  | "push-listeners"
+  | "push-listeners-observe"
   | "process-exit"
   | "process-crash"
   | "process-data";
@@ -309,8 +327,10 @@ export type PluginWorkerToHostMessage =
       key?: string;
       scope?: PluginSettingsScope | PluginStorageScope;
       /**
-       * Opt-in debounce for the `worktrees` subscription (host-side coalescing).
-       * Ignored for other kinds. Mirrors `PluginHostSubscriptionOptions.debounceMs`.
+       * Coalescing window for the `worktrees`, `active-worktree` and
+       * `agent-state` subscriptions, applied host-side. Absent means the
+       * host's default window, exactly as for an in-process plugin; ignored
+       * for other kinds. Mirrors `PluginHostSubscriptionOptions.debounceMs`.
        */
       debounceMs?: number;
       /** Handle id for `process-exit` / `process-crash` / `process-data` subscriptions. */
@@ -356,6 +376,8 @@ export interface RegisterHandlerParams {
   channel: string;
   hasSchema: boolean;
   requires?: string[];
+  /** The plugin's `options.timeoutMs`, forwarded verbatim; main validates it. */
+  timeoutMs?: number;
 }
 
 /** Params for `broadcastToRenderer` (`host-notify`). */
@@ -549,6 +571,28 @@ export interface FsPathParams {
    * the cheap read, so an existing worker build keeps its current behaviour.
    */
   detail?: boolean;
+}
+
+/** Params for `fs.readFiles` (`host-call`); options are forwarded as given. */
+export interface FsReadFilesParams {
+  paths: readonly string[];
+  encoding?: PluginFsReadFilesEncoding;
+  maxBytesPerFile?: number;
+}
+
+/** Params for `fs.walk` (`host-call`); options are forwarded as given, minus the signal. */
+export interface FsWalkParams {
+  root: string;
+  options?: Omit<PluginFsWalkOptions, "signal">;
+}
+
+/**
+ * Payload of a `worktrees` `subscription-event`: the list and the change set
+ * main computed against the previous delivery on this subscription.
+ */
+export interface PluginWorkerWorktreesEvent {
+  snapshots: PluginWorktreeSnapshot[];
+  change: PluginWorktreesChange;
 }
 
 /** Params for `fs.writeFile` (`host-call`). */

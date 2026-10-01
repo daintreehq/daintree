@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import type { RootAttributes } from "@/components/ui/rootAttributes";
 
 interface ProgressBarProps {
   /** Omit (or pass `null`) while the amount is unknown: the track pulses and `aria-valuenow` is dropped. */
@@ -10,6 +11,8 @@ interface ProgressBarProps {
   /** `thin` (2px) for a bar tucked under a line of text; `default` (4px) otherwise. */
   size?: "default" | "thin";
   className?: string;
+  /** `id`, `data-*` or `aria-*` on the root; the component's own attributes win. */
+  rootAttributes?: RootAttributes;
 }
 
 /**
@@ -28,12 +31,14 @@ export function ProgressBar({
   valueText,
   size = "default",
   className,
+  rootAttributes,
 }: ProgressBarProps) {
   const determinate = value != null && Number.isFinite(value);
   const safeMax = max > 0 ? max : 1;
   const clamped = determinate ? Math.min(safeMax, Math.max(0, value)) : 0;
   return (
     <div
+      {...rootAttributes}
       role="progressbar"
       aria-label={label}
       aria-valuemin={0}

@@ -1,0 +1,58 @@
+/* The refractor token palette every highlighted-code surface shares: the diff
+   viewer, rendered Markdown fences and the plugin kit's CodeBlock, so a
+   snippet reads the same across all three. Imported by each surface's own
+   module, so it ships with whichever lazy chunk draws code first. Unlayered,
+   so it outranks Tailwind's layered utilities whatever their specificity.
+
+   refractor tags tokens with bare class names that collide with Tailwind's
+   display utilities (`table`, `hidden`, `block`, …): the Markdown table
+   grammar puts class="token table …" on every cell token, and Tailwind's
+   `.table { display: table }` would turn a one-line row into stacked table
+   boxes. Syntax tokens are always inline, so they are pinned back. */
+
+/* Specificity as each root had it on its own: the diff viewer's reset is
+   scoped to its code cells. */
+.diff-viewer .diff-code .token,
+:is(.markdown-document, .kit-code-block) .token {
+  display: inline;
+}
+
+:is(.diff-viewer, .markdown-document, .kit-code-block)
+  .token:is(.comment, .prolog, .doctype, .cdata) {
+  color: var(--color-syntax-comment);
+}
+
+:is(.diff-viewer, .markdown-document, .kit-code-block) .token.punctuation {
+  color: var(--color-syntax-punctuation);
+}
+
+:is(.diff-viewer, .markdown-document, .kit-code-block)
+  .token:is(.property, .tag, .boolean, .number, .constant, .symbol) {
+  color: var(--color-syntax-number);
+}
+
+:is(.diff-viewer, .markdown-document, .kit-code-block)
+  .token:is(.selector, .attr-name, .string, .char, .builtin) {
+  color: var(--color-syntax-string);
+}
+
+:is(.diff-viewer, .markdown-document, .kit-code-block) .token:is(.operator, .entity, .url) {
+  color: var(--color-syntax-operator);
+}
+
+/* A string in CSS reads as an operator; one class more specific, as before. */
+:is(.diff-viewer, .markdown-document, .kit-code-block) :is(.language-css, .style) .token.string {
+  color: var(--color-syntax-operator);
+}
+
+:is(.diff-viewer, .markdown-document, .kit-code-block) .token:is(.atrule, .attr-value, .keyword) {
+  color: var(--color-syntax-keyword);
+}
+
+:is(.diff-viewer, .markdown-document, .kit-code-block) .token:is(.function, .class-name) {
+  color: var(--color-syntax-function);
+}
+
+:is(.diff-viewer, .markdown-document, .kit-code-block) .token:is(.regex, .important, .variable) {
+  color: var(--color-syntax-number);
+}

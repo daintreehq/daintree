@@ -46,6 +46,12 @@ export const editorSearchPanelTheme = EditorView.theme({
     borderRadius: "var(--radius-xs)",
     outline: "none",
   },
+  // The outline's replacement: the find field's own focus treatment
+  // (search-field.css), a neutral edge rather than a second accent.
+  ".cm-search .cm-textfield:focus-visible, .cm-dialog .cm-textfield:focus-visible": {
+    borderColor: "var(--theme-selection-outline)",
+    boxShadow: "inset 0 0 0 1px var(--theme-selection-outline)",
+  },
   ".cm-search .cm-button": {
     backgroundImage: "none",
     backgroundColor: "var(--theme-surface-canvas)",

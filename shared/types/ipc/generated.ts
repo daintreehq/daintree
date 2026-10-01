@@ -1308,6 +1308,10 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, targetPath: string];
     result: boolean;
   };
+  "plugin:perf-snapshots-get": {
+    args: [];
+    result: import("../pluginMetrics.js").PluginPerfSnapshot[];
+  };
   "plugin:pick-path": {
     args: [pluginId: string, request: import("../plugin.js").PluginPickPathRequest];
     result: string | null;

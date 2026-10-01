@@ -9,6 +9,8 @@ import { PluginIconTile } from "./pluginIcons";
 import { CapabilityRow } from "./capabilityMeta";
 import { PluginMcpServersSection } from "./PluginMcpServersSection";
 import { PluginLogsSection, usePluginLogs } from "./PluginLogsSection";
+import { PluginPerformanceSection, PluginStylesSection } from "./PluginPerformanceTab";
+import { usePluginPerfSnapshot } from "@/hooks/usePluginPerfSnapshot";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
 import { pluginHasSettings } from "@/services/plugin/pluginSettingsHome";
 import { Button } from "@/components/ui/button";
@@ -375,7 +377,8 @@ function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
   );
 }
 
-type PluginDetailTab = "overview" | "settings" | "capabilities" | "mcp-servers" | "logs";
+type PluginDetailTab =
+  "overview" | "settings" | "capabilities" | "mcp-servers" | "logs" | "performance" | "styles";
 
 interface PluginDetailPaneProps {
   plugin: LoadedPluginInfo;
@@ -458,6 +461,24 @@ export function PluginDetailPane({
   // No owning project to pass: `LoadedPluginInfo` carries only the manifest id.
   // The project-owned pane is `ProjectPluginDetailPane`, and it does scope.
   const logs = usePluginLogs(plugin.manifest.name);
+  // Subscribed for as long as the pane is open, not just while the tab is: the
+  // tab is earned by a snapshot existing, so the pane has to know first. Keyed
+  // by the instance id, which is what main records metrics under.
+  const perfSnapshot = usePluginPerfSnapshot(plugin.instanceId);
+  // Styles are read from the plugin's mounted views, so only a running plugin
+  // with a rendered panel has anything to check: not a terminal panel, and not
+  // one with no matching panel view (that renders the host's missing-view
+  // placeholder). Builtins bind their views in the renderer registry instead
+  // of `contributes.views`.
+  const panelViewIds = new Set(
+    (plugin.manifest.contributes.views ?? [])
+      .filter((view) => view.location !== "settings")
+      .map((view) => view.id)
+  );
+  const hasViewPanels =
+    plugin.disabled !== true &&
+    !blocklisted &&
+    panels.some((panel) => !panel.hasPty && (plugin.isBuiltin || panelViewIds.has(panel.id)));
 
   // URL-installed plugins have an upstream to re-fetch and compare against;
   // file-installed plugins and built-ins don't, so the button stays disabled
@@ -491,6 +512,9 @@ export function PluginDetailPane({
     // Same rule, applied to the log buffer: a plugin that has logged nothing
     // offers no Logs tab rather than an empty one (#12214).
     ...(logs.lines && logs.lines.length > 0 ? [{ id: "logs", label: "Logs" }] : []),
+    // Earned the same way: no tab until main has measured something.
+    ...(perfSnapshot ? [{ id: "performance", label: "Performance" }] : []),
+    ...(hasViewPanels ? [{ id: "styles", label: "Styles" }] : []),
   ];
 
   // Selecting a *different* plugin remounts this subtree (the scroll wrapper is
@@ -825,6 +849,14 @@ export function PluginDetailPane({
         )}
 
         {currentTab === "logs" && <PluginLogsSection {...logs} />}
+
+        {currentTab === "performance" && perfSnapshot && (
+          <PluginPerformanceSection snapshot={perfSnapshot} />
+        )}
+
+        {currentTab === "styles" && hasViewPanels && (
+          <PluginStylesSection pluginId={plugin.instanceId} />
+        )}
       </div>
     </div>
   );

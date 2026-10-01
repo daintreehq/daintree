@@ -3,16 +3,20 @@ import type { ForgeStatsDropdownProps } from "@/components/Layout/forgeStatsDrop
 import { retryableImport } from "@/lib/retryableImport";
 import { GitHubResourceListSkeleton, CommitListSkeleton } from "./GitHubDropdownSkeletons";
 import { useGitHubFilterStore } from "../stores/githubFilterStore";
+import { withPluginUi } from "../withPluginUi";
 
 // The list bodies stay in their own chunks — this wrapper is registered (and
 // therefore bundled) at app start, but the heavy Virtuoso-backed lists load
 // only when the dropdown opens. `retryableImport`, not `lazy`: a lazy component
 // caches its rejection forever, so one missed chunk fetch would disable the
-// dropdown for the whole session with no way back.
+// dropdown for the whole session with no way back. Each waits for the kit too,
+// so a cold open swaps the skeleton for rows whose kit controls are all drawn.
 const loadResourceList = retryableImport(() =>
-  import("./GitHubResourceList").then((m) => m.GitHubResourceList)
+  withPluginUi(() => import("./GitHubResourceList")).then((m) => m.GitHubResourceList)
 );
-const loadCommitList = retryableImport(() => import("./CommitList").then((m) => m.CommitList));
+const loadCommitList = retryableImport(() =>
+  withPluginUi(() => import("./CommitList")).then((m) => m.CommitList)
+);
 
 type ResourceListType = typeof import("./GitHubResourceList").GitHubResourceList;
 type CommitListType = typeof import("./CommitList").CommitList;

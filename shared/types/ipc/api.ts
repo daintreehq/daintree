@@ -2337,6 +2337,29 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onArchiveInstallIntent(
       callback: (intent: import("../plugin.js").PluginArchiveInstallIntent) => void
     ): () => void;
+    /**
+     * Fire-and-forget: hand main a batch of plugin view cost observations
+     * drained from this renderer's `pluginViewMetrics` registry, each tagged
+     * with the plugin load it was observed against. Main validates, clamps and
+     * drops reports for plugins it has not loaded or for a load it has retired.
+     */
+    reportViewMetrics(reports: import("./pluginMetrics.js").PluginRendererMetricsEnvelope[]): void;
+    /**
+     * Subscribe to per-plugin perf snapshots, pushed at most once a second and
+     * only while at least one listener is attached (worker memory is sampled
+     * only then). Each push carries every tracked plugin; read
+     * `getPerfSnapshots()` for the initial state. Returns a cleanup.
+     */
+    onPerfSnapshotsChanged(
+      callback: (snapshots: import("../pluginMetrics.js").PluginPerfSnapshot[]) => void
+    ): () => void;
+    /**
+     * Plugins that had a host push delivered to their listeners in this
+     * renderer with a dispatch overlapping `[start, end]`, both on this page's
+     * `performance.now()` clock. A local read of the last deliveries the
+     * preload recorded, for long-frame attribution; no IPC.
+     */
+    pluginsWithPushDeliveriesDuring(start: number, end: number): string[];
     /** Subscribe to plugin panel kind registry changes. Returns a cleanup. */
     onPanelKindsChanged(
       callback: (payload: {

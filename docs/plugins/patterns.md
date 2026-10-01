@@ -2,25 +2,29 @@
 
 The reference pages document each host call on its own. This page is how they compose into a plugin that does something: the shapes a real project plugin is built from, each with the exact calls. Most examples come from a "Videos" dashboard, the first real project plugin built against this system; the data patterns come from app-shaped plugins — a ledger, a board, a CRM — whose data agents edit as often as the user does. Read the [agent brief](./agent-brief.md) first; the rules there decide whether any of this loads. [Building apps](./building-apps.md) walks through an app end to end.
 
-Throughout, `host` is the object `activate()` receives in the worker, and "the view" is the React component the renderer mounts. The two talk over channels; nothing else crosses the boundary.
+Throughout, `host` is the object `activate()` receives in the worker, and "the view" is the React component the renderer mounts. The two talk over channels; nothing else crosses the boundary. Views draw with `@daintreehq/plugin-ui` and use the hooks in `@daintreehq/plugin-sdk/react`; both resolve in a zero-build `dist/panel.js` as well as a bundled view.
 
-## Pull on mount, then push
+## Subscribe, then pull
 
-The base shape. The view asks for the current state when it mounts, then subscribes for updates. Pushes are not buffered, so a plugin that only pushes will lose everything sent before the view existed.
+The base shape. The view subscribes for updates first, then asks for the current state. Pushes are not buffered, so a plugin that only pushes loses everything sent before the view existed; and a push and an `invoke` result travel separately, with no ordering between them, so a push can land before the pull's answer or after it. Subscribing first means no change is missed while the pull is in flight, and a revision on both says which of the two is newer.
 
 ```js
 // worker (dist/index.mjs)
 export async function activate(host) {
-  let slate = await scanVideos(host); // whatever "current state" means for you
-
+  // Register first and scan after: activate() has a 5-second budget, and a view
+  // that pulls before the first scan lands gets the empty state, then a push.
+  let slate = { revision: 0, videos: [] }; // whatever "current state" means for you
   await host.registerHandler("slate", async () => slate); // the pull
 
   const refresh = async () => {
-    slate = await scanVideos(host);
+    const videos = await scanVideos(host);
+    if (sameVideos(videos, slate.videos)) return; // nothing changed: push nothing
+    slate = { revision: slate.revision + 1, videos };
     await host.postToPanel("slate", slate); // the push, to every open instance
   };
   // Polling belongs here, not in the view: the worker is a separate utility
   // process, so it keeps its cadence while the user is in another project.
+  void refresh(); // the first scan, not awaited
   const timer = setInterval(() => void refresh(), 15_000);
   return () => clearInterval(timer);
 }
@@ -30,8 +34,11 @@ export async function activate(host) {
 // view (dist/panel.js)
 useEffect(() => {
   let live = true;
-  void window.electron.plugin.invoke(pluginId, "slate").then((s) => live && setSlate(s));
-  const off = window.electron.plugin.on(pluginId, "slate", setSlate);
+  // Keep whichever arrives with the higher revision, push or pull.
+  const accept = (next) =>
+    live && setSlate((prev) => (prev && prev.revision >= next.revision ? prev : next));
+  const off = window.electron.plugin.on(pluginId, "slate", accept); // subscribe first
+  void window.electron.plugin.invoke(pluginId, "slate").then(accept); // then pull
   return () => {
     live = false;
     off();
@@ -40,6 +47,56 @@ useEffect(() => {
 ```
 
 Handlers receive `(ctx, ...args)`: the IPC context first, then whatever the view passed to `invoke`. A handler that takes no arguments can ignore both, which is why the bug in an argument-taking one hides behind the ones that work.
+
+This shape suits a small value that is replaced whole — a status, a summary, a handful of rows. Once the state is a list that grows, pushing all of it on every change costs the square of its length over the plugin's life; push only what changed instead ([next](#push-deltas-not-the-whole-state)). And when nothing on screen needs the push, don't produce it: `host.hasListeners?.(channel)` says whether any view may be subscribed, and `host.onDidChangeListeners?.(channel, cb)` tells you when that changes, so a worker ticker can stop while every panel is closed. Skip only what a view recovers by pulling on mount, never a one-off event. The host drops a targeted push to a panel that has closed, but a broadcast nobody listens to still crosses to the renderer, so a ticker that ignores this keeps pushing after the last panel closes.
+
+## Push deltas, not the whole state
+
+For a keyed list the worker owns and changes — tool calls, cards, notes, results — use `createSyncedCollection` in the worker and `useSyncedCollection` in the view. The worker keeps the collection; each change sends one delta (`{ epoch, revision, reset?, resync?, removes, upserts }`, where `removes` holds keys and `upserts` holds `[key, item]` pairs) instead of the list, a loop of changes within `flushMs` (default 16) goes out as one message, and a change set too big for one push is split across revisions. The view does the ordering work of the previous pattern for you: it subscribes, pulls a revisioned snapshot, holds pushes that race the pull, drops deltas the snapshot already covers, and pulls again on a revision gap or a worker restart.
+
+```js
+// worker (dist/index.mjs) — the root SDK entry is served to a zero-build worker
+import { createSyncedCollection } from "@daintreehq/plugin-sdk";
+
+export async function activate(host) {
+  // During activate(): it registers the `calls-snapshot` handler.
+  const calls = await createSyncedCollection(host, "calls", { key: (call) => call.id });
+  // …on every tool call:
+  //   calls.upsert(call);        one delta carrying one item
+  //   calls.remove(id);  calls.replace(all);  calls.clear();
+  return () => calls.dispose();
+}
+```
+
+```js
+// view (dist/panel.js) — `/react` is served to zero-build views too
+import { createElement } from "react";
+import { useSyncedCollection } from "@daintreehq/plugin-sdk/react";
+import { PaneState, VirtualList, ListRow } from "@daintreehq/plugin-ui";
+
+export default function Calls({ pluginId, disposeSignal }) {
+  const { items, loading, error, resync } = useSyncedCollection(pluginId, "calls", {
+    signal: disposeSignal,
+  });
+  if (error)
+    return createElement(PaneState, {
+      kind: "error",
+      title: "Couldn't load calls",
+      onRetry: resync,
+    });
+  if (loading) return createElement(PaneState, { kind: "loading", title: "Loading calls" });
+  return createElement(VirtualList, {
+    items,
+    itemKey: (_i, call) => call.id,
+    renderItem: (_i, call) => createElement(ListRow, { title: call.tool, meta: call.status }),
+    "aria-label": "Tool calls",
+  });
+}
+```
+
+Apart from one empty delta sent at creation to announce the collection's epoch (so a view left over from a previous worker resyncs), nothing is pushed until a view has pulled, so a plugin whose panel was never opened sends no deltas, and on a host that reports listeners, deltas stop while every view is closed; the next view to open pulls a snapshot that carries them. In the lab, an agent-tools panel that re-sent its whole call log on each tool call pushed 1.1 MB in 200 messages for 100 calls; the synced collection sent 23 KB in 13. `syncedCollectionSnapshotChannel(channel)` names the snapshot channel (`<channel>-snapshot`) if something else needs to call it.
+
+A delta names changed items by key but carries each one whole: `upsert(item)` resends every field of `item`, not the one that changed. In the lab, four status flips on a review queue sent about 1.1 KB, because each delta carried its whole item. Keep collection items to what the list renders — ids, titles, status, counts — and fetch a large field (a body, a diff, a log) with its own `invoke` when the row is opened.
 
 ## Per-instance pushes
 
@@ -59,6 +116,69 @@ const off = window.electron.plugin.onPanel(pluginId, "document", panelId, setDoc
 ```
 
 Broadcast and targeted pushes are disjoint: `on` never receives a targeted push and `onPanel` never receives a broadcast. Subscribe to both if a view needs both.
+
+## Stream progress and logs
+
+A job that reports per item — a build, an import, a crawl — must not push per item. In the lab a loop that called `postToPanel` for each of 20,000 items sent 20,000 pushes, and a view that appended each to state (`[...prev, line]`) ended with 20,000 DOM rows and 300 ms frame gaps. The host now batches pushes into one IPC message per task, but every push still reaches your handler and every line still renders. Fix it on both sides:
+
+- **Worker: gather, then push on a timer.** Collect lines in an array and push the batch every 50–100 ms, plus once at the end. The port of that job sent 7 pushes.
+- **View: `useStreamBuffer` for anything appended.** It keeps every item up to `maxItems` (default 1000; older ones are dropped and counted in `dropped`) and commits at most once per frame. Pass `pushMany` (or `push`) straight to the subscription.
+- **Render with `LogView`**, the kit's bounded, virtualised log. It keeps only the newest `maxLines` (default 5000) and mounts only the lines in view. Output from a CLI, escape codes and all, goes to `TerminalOutput` instead: pass the growing text (only its new tail is parsed) and it draws the terminal's colours and collapses progress-bar rewrites.
+- **A value that replaces the last one** — a percentage, the current file — is not a stream: wrap its setter in `useThrottledCallback`, which keeps only the latest arguments per frame, and show it in a `ProgressBar`. Never use it for lines; it drops all but the last.
+
+```js
+// worker
+const pending = [];
+const flush = () => {
+  const batch = pending.splice(0); // take everything gathered so far
+  if (batch.length) void host.postToPanel("log", batch);
+};
+const timer = setInterval(flush, 50);
+for (const item of items) pending.push(await process(item));
+clearInterval(timer);
+flush();
+```
+
+```js
+// view
+import { createElement } from "react";
+import { usePluginEvent, useStreamBuffer } from "@daintreehq/plugin-sdk/react";
+import { LogView } from "@daintreehq/plugin-ui";
+
+export default function Job({ pluginId }) {
+  const log = useStreamBuffer({ maxItems: 5000 });
+  usePluginEvent(pluginId, "log", log.pushMany);
+  return createElement(LogView, { lines: log.items, "aria-label": "Job output" });
+}
+```
+
+## Large lists
+
+A list whose length the user controls — search results, a table of records, a file tree — is a list that will one day have ten thousand rows. The naive `rows.map(...)` table in the lab took 1.5 s to first paint at 10,000 rows, held 130,027 DOM nodes and took 1.6 s to re-sort, while fetching the same 1.5 MB of data took 35 ms: the cost was all rendering. The kit's `DataTable` on the same data held 490 nodes and sorted in 19 ms.
+
+| Rows | Use |
+| --- | --- |
+| A table of records | `DataTable` from `@daintreehq/plugin-ui`: sticky header, always-virtualised body, controlled sort (`sort` + `onSortChange`; you sort `rows`), keyboard grid with `onRowClick`, `empty` for the zero state |
+| A list of any length | `VirtualList` with `ListRow` rows; add `useListNavigation` for a keyboard listbox |
+| Up to a few hundred rows you render yourself | `useProgressiveList(items, { initial, step })` from `@daintreehq/plugin-sdk/react`: the first screenful paints at once, the rest arrives in non-blocking transitions |
+| Thousands of rows in your own markup | `useVirtualList({ count, estimateSize, getScrollElement })`, the headless windowing hook behind a custom layout |
+
+Both kit lists fill their container's height, so give the container one (`flex-1 min-h-0` inside the panel root, or a fixed height). `onEndReached` on either is where the next page loads. Filter and sort in memory or in the worker, but keep the rendered set windowed.
+
+```js
+// DataTable and formatBytes both come from "@daintreehq/plugin-ui"
+createElement(DataTable, {
+  columns: [
+    { id: "name", header: "Name", sortable: true },
+    { id: "size", header: "Size", align: "end", width: 96, render: (row) => formatBytes(row.size) },
+  ],
+  rows: sorted,
+  rowKey: "path",
+  sort,
+  onSortChange: setSort,
+  "aria-label": "Files",
+});
+```
 
 ## Write the data contract down
 
@@ -114,6 +234,39 @@ Your own writes come back through the watch too. Keep the revision each write re
 
 Watchers and badges are both released on unload; `dispose()` the watcher yourself when the panel that needed it is removed (`onDidChangePanelLifecycle`, phase `removed`).
 
+The host's own bursty subscriptions coalesce without being asked: `onDidChangeWorktrees`, `onDidChangeActiveWorktree` and `onDidChangeAgentState` deliver one trailing callback 100 ms after a burst (and at least every four windows while it lasts), always with the latest state; `onDidChangeWorktrees` also hands you `{ added, removed, changed }` ids for the net change. Pass `{ debounceMs: 0 }` only when you need every event, or a larger window when you need fewer. `host.fs.watch` is the exception, with no debounce unless you pass one.
+
+## Build a file UI
+
+A file browser, a search, an index: the host has calls that do in one round trip what a loop of `readdir` and `readFile` does in hundreds. The naive search in the lab walked 2,045 files with one `readdir` per directory and one `readFile` per file, and took 960 ms per search; with batched reads, a parallel cached walk and a result cap it took 335 ms.
+
+- **`host.fs.walk(root, { include, exclude, maxDepth, limit, respectGitignore, includeSize })`** lists a tree in one call: root-relative `/` paths sorted by path, breadth-first, what git ignores left out by default, symlinks neither followed nor listed, at most `limit` entries (default 10,000, up to 50,000) with `truncated` set when it stopped early.
+- **`host.fs.readFiles(paths, { encoding, maxBytesPerFile })`** reads up to 1,024 files in one call (more rejects the call), 8 MiB of content in total, and answers per path in request order: `{ path, ok: true, content }` or `{ path, ok: false, error: { code, message } }`. One unreadable file never fails the batch; `RESULT_TOO_LARGE` marks entries past the budget, to read in a follow-up call.
+- **`host.fs.readdir(dir, { detail: true })`** is what a tree view wants per directory: size, mtime, symlink target, and Daintree's own order — directories first, then numeric-aware names, so `churn-2.txt` sorts before `churn-10.txt`. `@daintreehq/plugin-sdk/files` is the headless file-tree model Daintree's file browser runs on, fed from it. It is pure and runs anywhere, but a raw view cannot import it — the host import map does not serve it — so use it in a bundled view, as `plugins/sample/file-tree/` does, or in the worker.
+- **Cache the walk behind a watch** (`fs.watch` with `recursive: true` on the tree you walked) rather than walking again on every keystroke, and cap what you send the view.
+
+Both batch calls are optional in the type, for hand-written fakes; Daintree's host, the worker and `createMockHost` always have them.
+
+```js
+const { entries } = await host.fs.walk(root, {
+  include: ["**/*.md"],
+  exclude: ["node_modules", "**/dist"],
+});
+const paths = entries.filter((e) => e.type === "file").map((e) => `${root}/${e.path}`);
+const files = [];
+const failed = [];
+let queue = paths;
+while (queue.length > 0) {
+  const batch = await host.fs.readFiles(queue.slice(0, 1024), { maxBytesPerFile: 1024 * 1024 });
+  const deferred = batch.filter((f) => !f.ok && f.error.code === "RESULT_TOO_LARGE");
+  files.push(...batch.filter((f) => f.ok));
+  failed.push(...batch.filter((f) => !f.ok && f.error.code !== "RESULT_TOO_LARGE")); // show these
+  // Entries past the call's 8 MiB budget come back unread: send them again.
+  queue = [...deferred.map((f) => f.path), ...queue.slice(1024)];
+}
+const hits = files.filter((f) => f.content.includes(query)).slice(0, 2000);
+```
+
 ## Edit a file an agent also edits
 
 A panel that reads a card, changes one field and writes the whole file back will, sooner or later, overwrite the line an agent added in between. `editFile` from `@daintreehq/plugin-sdk/data` is the fix, importable from a zero-build worker with no install: it reads the file with its revision, applies your transform, writes only if nothing changed in between, and re-reads and re-applies if something did.
@@ -139,10 +292,13 @@ await host.registerHandler("set-stage", async (_ctx, { path, stage }) => {
 When the data is rows you query, total or page through — a ledger, stock movements, time entries — declare a database and open it through `host.db`. Never open the file with `node:sqlite` yourself: the host resolves and contains the path, asks consent before creating a project database, reopens a file `git checkout` replaced underneath you, and tells you when an agent's `sqlite3` session commits.
 
 ```jsonc
-// plugin.json
+// plugin.json — a project plugin; "location" defaults to "project"
+"scope": "project",
 "capabilities": ["fs:project-write"],
 "contributes": { "databases": [{ "id": "ledger", "description": "Household transactions" }] }
 ```
+
+A `"project"` database is a file in the repository, so only a `"scope": "project"` plugin may declare one. An installed plugin declares `"location": "local"` instead, which keeps the file in its data directory and needs no capability.
 
 ```js
 // worker: open lazily and keep the promise — the first open of a project
@@ -165,31 +321,55 @@ await host.registerHandler("month", async (_ctx, { month }) =>
 );
 ```
 
+The `null` push means "what you showed is stale". Refetch on it with `useCachedHostChannel`'s `invalidateOn` rather than an `invoke` in your own listener: a burst of invalidations costs one refetch after `debounceMs` (default 100) of quiet, shared by every view on the same key, and a push that arrives mid-request queues one follow-up instead of dropping the answer. The cached result also paints first on the next open. `onDidChange` itself already coalesces: changes landing within one 50 ms window arrive as one callback; in the lab 200 sequential creates now produced 4 change pushes rather than 200.
+
+```js
+// view
+import { useCachedHostChannel } from "@daintreehq/plugin-sdk/react";
+
+const {
+  data: rows,
+  error,
+  revalidate,
+} = useCachedHostChannel(
+  pluginId,
+  "month",
+  { month },
+  {
+    invalidateOn: "ledger-changed",
+    signal: disposeSignal,
+  }
+);
+```
+
+When the list is large and changes a row at a time, a synced collection the worker updates from its own writes ([Push deltas](#push-deltas-not-the-whole-state)) avoids the refetch altogether; keep the invalidation for changes the worker didn't make, such as an agent's `sqlite3` session.
+
 - **Rules live in the schema**, because agents write with the `sqlite3` CLI, which does not enforce foreign keys. `CHECK` constraints plus `BEFORE INSERT` / `BEFORE UPDATE` triggers with `RAISE(ABORT, 'category must be one of the rows in categories')` — the agent reads the message and corrects itself. The message must be a string literal, so name the rule rather than the bad value.
 - **Arithmetic lives in views**, declared in `definitions` (`DROP VIEW IF EXISTS month_totals; CREATE VIEW month_totals AS …`). The panel, a report script and an agent's `sqlite3` query then read the same numbers. `definitions` re-applies only when its text changes, so opening the panel does not dirty a committed database.
 - **A dashboard over agent-written data** opens with `{ readonly: true }`: no consent prompt, nothing created, writes refused with `DB_READONLY`.
 - **Money is integer cents**, and an integer past 2^53 comes back as a `bigint`.
-- **Branch on the `DB_*` code** (`DB_NOT_FOUND`, `DB_SCHEMA_TOO_NEW`, `DB_MIGRATION_FAILED`, …) on `err.code`.
+- **Branch on the `DB_*` code** (`DB_NOT_FOUND`, `DB_SCHEMA_TOO_NEW`, `DB_MIGRATION_FAILED`, …) on `err.code`. `DB_NOT_DECLARED` is the exception: it has no `err.code`, only the `DB_NOT_DECLARED:` message prefix.
 
 Tell agents in your data contract to leave the host's `_daintree_meta` table alone. The full reference is [Host API → db](./host-api.md#db--host-managed-sqlite).
 
 ## Refresh when the user comes back
 
-Switching projects leaves your view mounted, its React state intact, and its page visibility unchanged — nothing in the DOM marks the switch. The signal is main's, on `window.electron.app`, and the pull it drives is the one you already wrote for mount.
+Switching projects leaves your view mounted, its React state intact, and its page visibility unchanged — nothing in the DOM marks the switch. The signal is main's, on `window.electron.app`, and the pull it drives is the one you already wrote for mount. That bridge is the host's own, not part of the plugin API ([Views → Project switches and staleness](./views.md#project-switches-and-staleness)): `@daintreehq/plugin-sdk/view-globals` deliberately leaves it out, a TypeScript view reads it through its own narrow cast, and every call below is optional-chained so a host without it reads as a view that is never cached or revealed. Where the SDK already covers the case — `useNow`, `useAnimationFrame` — use the hook rather than the bridge.
 
 ```js
-// view: pull on mount, re-pull when this project is shown again, and keep the
-// push subscription from "Pull on mount, then push" — reveal is an extra
-// trigger for the same load, not a replacement for it.
+// view: subscribe and pull on mount, re-pull when this project is shown again —
+// reveal is an extra trigger for the same load, not a replacement for it.
 useEffect(() => {
   let live = true;
+  const accept = (next) =>
+    live && setSlate((prev) => (prev && prev.revision >= next.revision ? prev : next));
   const load = async () => {
     // `invoke` rejects when the handler throws or the plugin has unloaded.
     const next = await window.electron.plugin.invoke(pluginId, "slate").catch(() => null);
-    if (live && next) setSlate(next);
+    if (next) accept(next);
   };
+  const off = window.electron.plugin.on(pluginId, "slate", accept); // subscribe first
   void load(); // first mount, and the remount after a reclaimed renderer
-  const off = window.electron.plugin.on(pluginId, "slate", setSlate);
   const offRevealed = window.electron?.app?.onViewRevealed?.(() => void load());
   return () => {
     live = false;
@@ -201,7 +381,7 @@ useEffect(() => {
 
 The mount pull is not redundant with the reveal pull: under memory pressure the host destroys a backgrounded project view outright, and the user's next switch back is a cold mount with no reveal to catch. Route both through one function and the two cannot drift.
 
-Periodic work in the view is the other half, and it needs the cache edges rather than the reveal: `onViewRevealed` arrives only for a switch that completes with your project in front. Seed from `isViewCached()` — these are edges, nothing replays, and a mount can land in an already-cached view — and AND it with document visibility, which covers the window being minimised while this project is the active one.
+Periodic work in the view is the other half. For the two common cases the SDK already does it: `useNow` (a clock) and `useAnimationFrame` (a canvas loop) both pause while the project view is cached or the document hidden — see [Clocks](#clocks-and-relative-times) and [Canvas](#draw-on-a-canvas). Anything else needs the cache edges rather than the reveal: `onViewRevealed` arrives only for a switch that completes with your project in front. Seed from `isViewCached()` — these are edges, nothing replays, and a mount can land in an already-cached view — and AND it with document visibility, which covers the window being minimised while this project is the active one.
 
 ```js
 // view: demote while nobody can see this project.
@@ -231,6 +411,68 @@ useEffect(() => {
 ```
 
 [Views → Project switches and staleness](./views.md#project-switches-and-staleness) has why the DOM cannot do this, what each signal means, and the caveat that this bridge is the host's own rather than part of the plugin API.
+
+## Clocks and relative times
+
+"5m ago", "due in 2h", an elapsed timer: text that changes because time passes, not because data did. Don't give each row its own `setInterval` — `daintree-plugin lint` flags a view interval as `interval-polling-in-view` — and don't poll the worker to re-render. `useNow({ intervalMs })` from `@daintreehq/plugin-sdk/react` returns `Date.now()` and re-renders every `intervalMs` (default 60,000, at least 1,000), aligned to whole multiples so every time on screen turns over together. One timer per interval is shared by every component that asks, it pauses while nobody can see the view, and it catches up at once when they can.
+
+```js
+import { useNow } from "@daintreehq/plugin-sdk/react";
+import { formatTimeAgo } from "@daintreehq/plugin-ui";
+
+function Updated({ at }) {
+  const now = useNow(); // once a minute
+  return formatTimeAgo(at, now); // "just now", "5m ago", "11d ago"
+}
+```
+
+The kit's formatters — `formatTimeAgo`, `formatRelativeTime`, `formatDuration`, `formatBytes`, `formatCount` — are the host's own, so a plugin's times and sizes read like the rest of the app.
+
+`formatTimeAgo` is minute-grained: "just now" for the first 60 seconds, then "1m ago". A time that has to move every second — "12s ago" on a feed, the elapsed time of a running job — takes a one-second clock and `formatDuration`, which reads "12s" under a minute, then "3m" and "1h 5m":
+
+```js
+import { useNow } from "@daintreehq/plugin-sdk/react";
+import { formatDuration } from "@daintreehq/plugin-ui";
+
+function Elapsed({ since }) {
+  const now = useNow({ intervalMs: 1000 });
+  return `${formatDuration(now - since)} ago`;
+}
+```
+
+Use the one-second clock only where seconds matter; every component on it re-renders once a second while the view is visible.
+
+## Draw on a canvas
+
+A bar, line or donut chart is the kit's `BarChart`, `LineChart` or `DonutChart`, themed and keyboard-complete with nothing to draw. For anything else — a scatter, a graph of nodes, a simulation — two things go wrong in a hand-rolled canvas view: its `requestAnimationFrame` loop keeps running at full rate in a backgrounded project (the DOM cannot tell it the project was switched away), and the colours it read once from `getComputedStyle` stay wrong after a theme switch — the lab's canvas kept painting a dark background under a light theme.
+
+- **`useAnimationFrame((dt, time) => …, { signal: disposeSignal })`** runs the loop once per frame and pauses while the document is hidden or the project view is cached. `dt` is 0 on the first frame after a resume, so a simulation never jumps by the time it spent paused.
+- **`useDaintreeTheme()`** from `@daintreehq/plugin-ui` returns `{ colorMode, themeId, tokens }`, with every token resolved to a concrete sRGB colour (`#rrggbb`, or `rgba(…)` when translucent), and re-renders on a theme change. Outside React, `getDaintreeTheme()` reads it and `onDidChangeDaintreeTheme(listener)` subscribes, returning the unsubscribe. Token keys are the `--theme-*` names without the prefix (`surface-panel`, `text-primary`, `category-blue`, …).
+
+```js
+import { useRef } from "react";
+import { useAnimationFrame } from "@daintreehq/plugin-sdk/react";
+import { useDaintreeTheme } from "@daintreehq/plugin-ui";
+
+function Chart({ disposeSignal, sim }) {
+  const canvas = useRef(null);
+  const { tokens } = useDaintreeTheme(); // repaints with the new colours on a theme switch
+  useAnimationFrame(
+    (dt) => {
+      const ctx = canvas.current?.getContext("2d");
+      if (!ctx) return;
+      sim.step(dt / 1000);
+      ctx.fillStyle = tokens["surface-panel"];
+      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      sim.draw(ctx, tokens["category-blue"]);
+    },
+    { signal: disposeSignal }
+  );
+  return <canvas ref={canvas} className="h-full w-full" />;
+}
+```
+
+The core token groups — surfaces, text, borders, accent, `focus-ring`, status — are stable within the kit's major version. The extended groups (`terminal-*` and the ANSI colours, `syntax-*`, `activity-*`, `category-*`) are best effort and may be renamed in a minor, so read those with a fallback. A WebGL context still belongs in `createViewScope`'s `webgl()` so it is released with the mount ([Views → Resources your view owns](./views.md#resources-your-view-owns)).
 
 ## Open files the Daintree way
 
@@ -359,7 +601,7 @@ if (missing.length > 0) {
 }
 ```
 
-While a required setting is unset, every panel and surface of the plugin shows a "needs setup" strip that opens the field, so a panel only needs to render an empty state — not its own warning, and never its own settings screen. `host.settings.open(key)` and the panels' **Plugin settings…** entry land on the one home the field lives in. A `default` never satisfies `required`, and a `secret` cannot declare one: it would ship in `plugin.json`.
+While a required setting is unset, every panel and surface of the plugin shows a "needs setup" strip that opens the field, so a panel only needs to render an empty state (`PaneState kind="empty"` or `EmptyState`) — never its own settings screen, and never a second setup banner. `missingRequired()` is right there to call, which is why plugins draw one; with the host's strip already showing, the user then sees the same warning twice. `host.settings.open(key)` and the panels' **Plugin settings…** entry land on the one home the field lives in. A `default` never satisfies `required`, and a `secret` cannot declare one: it would ship in `plugin.json`.
 
 For a value the generated form edits badly — a per-channel table stored as `json`, a list with its own add and remove — declare a `location: "settings"` view and give the fields it owns `editor: "view"`; the form then leaves them out instead of showing a raw box beside your editor ([Views → A settings section](./views.md#a-settings-section)). Choose scopes by where the value belongs: `project` is committed, `local` stays on this machine for this project, and a secret is never committed. Settings are the user's, so keep them out of the data contract agents follow.
 
@@ -374,7 +616,7 @@ handle.onCrash(() => host.showToast({ message: "Dev server crashed", type: "erro
 
 For a server that speaks JSON-RPC over stdio, `mode: "duplex"` gives you a writable stdin and separate stdout; see [Host API → Modes](./host-api.md#modes).
 
-For a one-shot command whose output is the result (a linter, a script that prints JSON), collect `handle.onData` chunks and read them in `onExit`. In pipe mode the handle waits for stdout and stderr to close before it reports the exit, up to a two-second drain, so the last line is not lost. There is no `host.process.exec()`.
+For a one-shot command whose output is the result (a linter, a script that prints JSON), collect `handle.onData` chunks and read them in `onExit`. In pipe and duplex mode the handle waits for stdout and stderr to close before it reports the exit, up to a two-second drain, so the last line is not lost; a pty reports through its own exit. There is no `host.process.exec()`.
 
 ## Own the canvas, live in the dock
 
@@ -413,43 +655,46 @@ await host.registerAction(
 );
 ```
 
-`dispatch` resolves `{ ok: false }` instead of throwing, so a command that ignores the result opens nothing and says nothing. `kind` is the registered kind id. `host.panelKindId` qualifies your bare panel id for whichever origin you load under (`project:{projectId}/{manifestId}/{kindId}` for a project plugin). A `contextMenus` entry at `location: "file"` dispatches your command with `{ path, worktreePath, status }`, which is how "Show in Video Manager" appears on every file row.
+`dispatch` resolves `{ ok: false }` instead of throwing, so a command that ignores the result opens nothing and says nothing. `kind` is the registered kind id.
 
-## Look like the app, with Tailwind
+`reuseExisting` defaults to `true`: if a panel of this kind is already open in the target worktree (`worktreeId`, or the active worktree when you pass none) and not in the trash, the action focuses that panel where it is, grid or dock, and resolves with its `panelId`. It does **not** hand it the new `initialArgs` — the open panel keeps the state it has — so "Show in Video Manager" on a second file only brings the manager forward. To act on the new argument, keep it where the view pulls from — worker state the view reads with an `invoke` on mount — and then push a "changed" notice (`host.postToPanel(channel, payload, panelId)`) so an open view pulls again; a push alone can be lost, because the action returns before a view has necessarily subscribed and pushes are not buffered. Or pass `reuseExisting: false`, which always adds a new panel to the grid with these `initialArgs`. A panel in another worktree is never reused. `host.panelKindId` qualifies your bare panel id for whichever origin you load under (`project:{projectId}/{manifestId}/{kindId}` for a project plugin). A `contextMenus` entry at `location: "file"` dispatches your command with `{ path, worktreePath, status }`, which is how "Show in Video Manager" appears on every file row.
 
-Style views with Tailwind utility classes on Daintree's semantic tokens. The host compiles the classes your view uses at runtime, so this needs no build step and works identically in a raw `dist/panel.js` and a bundled view. The tokens are what make a panel follow theme switches for free; a row from the Videos dashboard:
+## Look like the app: the kit first, Tailwind for the rest
+
+Draw with `@daintreehq/plugin-ui` before writing markup of your own. It is Daintree's own components, served to your view through the import map like `react` — themed with the app, keyboard- and screen-reader-complete, and linted for: `daintree-plugin lint` flags a hand-rolled button, form control, spinner, badge, inline icon or native dialog and names the kit component to use. The Videos dashboard's list, drawn with it:
 
 ```jsx
+import { Badge, ListRow, PaneHeader, VirtualList } from "@daintreehq/plugin-ui";
+
 <div className="flex flex-col flex-1 min-h-0 bg-surface-panel text-text-primary">
-  <div className="flex items-center gap-2 border-b border-border-subtle px-3 py-2">
-    <span className="text-xs font-medium">Slate</span>
-    <span className="rounded-full bg-surface-inset px-2 py-0.5 text-2xs text-text-muted">
-      {videos.length}
-    </span>
+  <PaneHeader icon="monitor-play" title="Slate" subtitle={<Badge>{videos.length}</Badge>} />
+  <div className="flex-1 min-h-0">
+    <VirtualList
+      items={videos}
+      itemKey={(_i, video) => video.path}
+      renderItem={(_i, video) => (
+        <ListRow
+          title={video.title}
+          selected={video.path === selected}
+          onSelect={() => open(video)}
+        />
+      )}
+      aria-label="Videos"
+    />
   </div>
-  <div className="flex-1 min-h-0 overflow-y-auto">
-    {videos.map((video) => (
-      <button
-        key={video.path}
-        onClick={() => open(video)}
-        className={`flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-surface-hover ${
-          video.path === selected ? "bg-surface-active" : ""
-        }`}
-      >
-        …
-      </button>
-    ))}
-  </div>
-</div>
+</div>;
 ```
+
+The example is JSX, so it needs a build; a zero-build `dist/panel.js` writes the same tree with `createElement`, importing the same components. Tailwind utility classes on Daintree's semantic tokens do the rest: the layout around the kit, and anything bespoke the kit has no component for. The host compiles the classes your view uses at runtime, so this needs no build step and works identically in a raw `dist/panel.js` and a bundled view, and the tokens are what make a panel follow theme switches for free. Nothing is locked down — the whole token vocabulary is there for UI of your own.
 
 Three things that trip up a first plugin:
 
 - **The stock palette is gone.** `bg-red-500` generates nothing at all — Daintree's theme deletes Tailwind's own colours so plugin panels cannot drift out of the design system. Use `status-danger` for the alarming thing and a `category-<hue>` for the categorical one.
-- **A conditional class must be a complete string.** The ternary above works because both branches are whole class names. `` `bg-surface-${tone}` `` never compiles, because that name exists in neither your source nor the DOM.
+- **A conditional class must be a complete string.** `selected ? "bg-surface-active" : ""` works because both branches are whole class names. `` `bg-surface-${tone}` `` never compiles, because that name exists in neither your source nor the DOM.
 - **`min-h-0` on every flex ancestor of a scroller.** Without it the panel's own scrollbar takes the overflow instead of your list. This is the single most common reason a plugin panel scrolls wrong.
+- **A container query needs an ancestor container.** `@md:grid-cols-4` answers to the nearest ancestor with `@container`, never to its own element, so `@container @md:grid-cols-4` on one `div` never applies. Put `@container` on the wrapper.
 
-[views.md](./views.md) has the full vocabulary and the portal rule.
+[views.md](./views.md) has the kit's component list, the full vocabulary and the portal rule.
 
 ## Keep commands one click
 

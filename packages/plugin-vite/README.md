@@ -2,7 +2,7 @@
 
 Vite externals preset for Daintree plugins.
 
-Daintree's renderer ships one React 19 instance in a shared `vendor-react` chunk and injects a `<script type="importmap">` that maps each served specifier — `react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, `react-dom/client` — to its own small facade module re-exporting that specifier's public API from the shared chunk. The map deliberately does not point at the chunk itself: a code-split chunk only exports the private interface other chunks import from it, so a bare `import { useState } from "react"` would fail to load. Plugin bundles need to externalize those specifiers so they resolve, at runtime, to the host's single React instance — bundling a second copy produces "Invalid hook call" the first time JSX renders. The map also serves `@daintreehq/tour`, `@daintreehq/tour/react`, `@daintreehq/tour/kit` and `@daintreehq/tour/mock-app` from the host's single tour instance, which the preset leaves external too: a tour scene that bundled its own copy would bind to its own player context and never see the host's cues. It serves `@daintreehq/plugin-ui` as well, the host's own UI components (`Markdown`), which has no package to bundle at all and so stays external. The preset fails the build on any React, tour or plugin-ui subpath the map does not serve (`react-dom/server`, say), so an externalized-but-unmapped import is caught at build time rather than as an unresolved specifier at load.
+Daintree's renderer ships one React 19 instance in a shared `vendor-react` chunk and injects a `<script type="importmap">` that maps each served specifier — `react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, `react-dom/client` — to its own small facade module re-exporting that specifier's public API from the shared chunk. The map deliberately does not point at the chunk itself: a code-split chunk only exports the private interface other chunks import from it, so a bare `import { useState } from "react"` would fail to load. Plugin bundles need to externalize those specifiers so they resolve, at runtime, to the host's single React instance — bundling a second copy produces "Invalid hook call" the first time JSX renders. The map also serves `@daintreehq/tour`, `@daintreehq/tour/react`, `@daintreehq/tour/kit` and `@daintreehq/tour/mock-app` from the host's single tour instance, which the preset leaves external too: a tour scene that bundled its own copy would bind to its own player context and never see the host's cues. It serves `@daintreehq/plugin-ui` as well, the host's own UI kit ([reference](../../docs/plugins/ui-kit.md)), which has no package to bundle at all and so stays external. The preset fails the build on any React, tour or plugin-ui subpath the map does not serve (`react-dom/server`, say), so an externalized-but-unmapped import is caught at build time rather than as an unresolved specifier at load.
 
 ## Usage
 
@@ -19,13 +19,9 @@ export default defineConfig({
 });
 ```
 
-The plugin sets `build.rollupOptions.external` to a function that externalizes:
+The plugin sets `build.rollupOptions.external` to a function that externalizes every `react`, `react-dom`, `@daintreehq/tour` and `@daintreehq/plugin-ui` specifier the host import map serves, and fails the build on any other subpath of those packages. It matches whole package prefixes rather than exact names on purpose — `external: ["react"]` only matches the literal `"react"` and silently bundles `react/jsx-runtime` into plugin output. Externals you pass in `externals`, or already set in `build.rollupOptions.external`, are folded in.
 
-```ts
-[/^react($|\/)/, /^react-dom($|\/)/];
-```
-
-The regex form is load-bearing — `external: ["react"]` only matches the literal `"react"` and silently bundles `react/jsx-runtime` into plugin output.
+The import map also serves `@daintreehq/plugin-sdk/react` to zero-build views, which have no bundler to supply it. The preset deliberately does **not** externalize that specifier: a bundled view keeps bundling the SDK version it pinned, so a Daintree upgrade never swaps its hooks out from under it. `HOST_IMPORTMAP_SPECIFIERS` (the externals contract) and `HOST_IMPORTMAP_RAW_ONLY_SPECIFIERS` in `src/hostImportMap.ts` keep the two lists apart.
 
 ## Document packages
 

@@ -29,6 +29,7 @@ import type {
   PluginQuickPickOptions,
   PluginHostCallOptions,
   PluginTypedIpcHandler,
+  PluginHandlerOptions,
   PluginWorktreeSnapshot,
   PluginWorktreeStatus,
   PluginWorktreesResult,
@@ -40,6 +41,11 @@ import type {
   PluginFsDirEntry,
   PluginFsWriteResult,
   PluginFsReadWithRevisionResult,
+  PluginFsApi,
+  PluginFsReadFilesEntry,
+  PluginFsReadFilesOptions,
+  PluginFsWalkOptions,
+  PluginFsWalkResult,
   PluginRenderPdfResult,
   PluginFsStat,
   PluginGitStatus,
@@ -72,6 +78,16 @@ import type {
 import { withTimeout } from "../../utils/withTimeout.js";
 import { actionHandlerArityHint, appendHandlerHint } from "./pluginHandlerHints.js";
 import { abortErrorFor } from "./pluginAbortError.js";
+import {
+  PLUGIN_INVOKE_MAX_RESULT_BYTES,
+  PLUGIN_PUSH_MAX_PAYLOAD_BYTES,
+} from "../../../shared/config/pluginBudgets.js";
+import {
+  PluginPayloadTooLargeError,
+  assertPayloadWithinLimit,
+  estimatePayloadBytes,
+} from "./pluginPayloadLimits.js";
+import { resolveInvokeTimeoutMs } from "./pluginInvokeDeadline.js";
 import { errorWithFields } from "./pluginHostErrorFields.js";
 import { openPluginDatabase } from "./pluginDatabase.js";
 import { validateAgentMcpTools } from "../pluginAgentMcp/validateTools.js";
@@ -82,6 +98,7 @@ import type {
   PluginWorkerSubscriptionKind,
   PluginWorkerToHostMessage,
   RegisterMcpToolsParams,
+  PluginWorkerWorktreesEvent,
 } from "../../../shared/types/pluginDevWorker.js";
 
 type Post = (message: PluginWorkerToHostMessage) => void;
@@ -120,6 +137,22 @@ interface RegisteredMcpTool {
  */
 const COMMAND_IMPORT_TIMEOUT_MS = 5000;
 
+/** Push channels one worker may watch for listeners; past it `hasListeners` answers `true`. */
+const MAX_WATCHED_PUSH_CHANNELS = 256;
+
+interface ListenerState {
+  value: boolean;
+  callbacks: Set<(hasListeners: boolean) => void>;
+  /** Applies a value from either of main's streams for this channel. */
+  update: (payload: unknown) => void;
+  /**
+   * The `push-listeners` subscription held while any `onDidChangeListeners`
+   * callback is registered — a real event subscription main counts against
+   * idle disposal. `null` when only `hasListeners` reads use the channel.
+   */
+  hold: (() => void) | null;
+}
+
 export class PluginDevWorkerHostProxy {
   readonly host: PluginHostApi;
   private readonly post: Post;
@@ -144,6 +177,12 @@ export class PluginDevWorkerHostProxy {
    * so a main-side `invoke-cancel` reaches the plugin's `execute`. */
   private readonly mcpInvokeAborts = new Map<string, AbortController>();
   /**
+   * Non-MCP invokes still running, and whether main has since cancelled each
+   * (its deadline passed). A cancelled invoke's handler cannot be interrupted,
+   * but its result is no longer awaited, so it is never cloned back to main.
+   */
+  private readonly runningInvokes = new Map<string, { cancelled: boolean }>();
+  /**
    * Manifest command handlers (#12274), keyed by the file URL of the module
    * main resolved. Holds the in-flight IMPORT promise, not the settled handler,
    * so concurrent first dispatches of the same command share one import instead
@@ -153,6 +192,12 @@ export class PluginDevWorkerHostProxy {
    * module's state is the worker exiting, not this map.
    */
   private readonly commandModules = new Map<string, Promise<ActionHandler>>();
+  /**
+   * Per push channel: whether main last said a renderer listens, and the
+   * `onDidChangeListeners` callbacks for it. Opened on first use and kept for
+   * the worker's life, so `hasListeners` stays a synchronous local read.
+   */
+  private readonly listenerStates = new Map<string, ListenerState>();
 
   constructor(pluginId: string, post: Post, identity: PluginIdentity) {
     this.pluginId = pluginId;
@@ -185,9 +230,19 @@ export class PluginDevWorkerHostProxy {
     this.mcpRosters.clear();
     for (const controller of this.mcpInvokeAborts.values()) controller.abort();
     this.mcpInvokeAborts.clear();
+    // Forgotten, not cancelled: an invoke settling after dispose still reports
+    // (a command disposed mid-import answers with that error), but nothing
+    // here keeps it alive.
+    this.runningInvokes.clear();
     this.commandModules.clear();
+    this.listenerStates.clear();
     for (const database of this.databases) void database.close();
     this.databases.clear();
+  }
+
+  /** Test seam: plain invokes whose result is still awaited. */
+  runningInvokeCount(): number {
+    return this.runningInvokes.size;
   }
 
   /** Route a message received from main. Returns true if it was consumed. */
@@ -214,6 +269,13 @@ export class PluginDevWorkerHostProxy {
         const controller = this.mcpInvokeAborts.get(msg.requestId);
         this.mcpInvokeAborts.delete(msg.requestId);
         controller?.abort();
+        // Same for a plain invoke: the entry goes now, and the cancelled mark on
+        // the object its settle closure holds makes a late result a no-op.
+        const running = this.runningInvokes.get(msg.requestId);
+        if (running) {
+          running.cancelled = true;
+          this.runningInvokes.delete(msg.requestId);
+        }
         return true;
       }
       case "subscription-event": {
@@ -307,6 +369,56 @@ export class PluginDevWorkerHostProxy {
   private async handleInvoke(
     msg: Exclude<Extract<PluginHostToWorkerMessage, { type: "invoke" }>, { kind: "mcp-tool" }>
   ): Promise<void> {
+    const running = { cancelled: false };
+    this.runningInvokes.set(msg.requestId, running);
+    // What a plugin:invoke result is named after; decoration results are not
+    // plugin:invoke results and keep their own budget.
+    const capTarget =
+      msg.kind === "handler"
+        ? msg.channel
+        : msg.kind === "file-decoration-method"
+          ? null
+          : msg.namespacedId;
+    const settle = (
+      outcome: { ok: true; result: unknown } | { ok: false; error: string }
+    ): void => {
+      if (this.runningInvokes.get(msg.requestId) === running) {
+        this.runningInvokes.delete(msg.requestId);
+      }
+      if (running.cancelled) return;
+      // Refused here, before the clone across the port, rather than only by
+      // main's re-check after it has already paid for it.
+      const resultBytes =
+        outcome.ok && capTarget !== null
+          ? estimatePayloadBytes(outcome.result, PLUGIN_INVOKE_MAX_RESULT_BYTES)
+          : 0;
+      if (outcome.ok && resultBytes > PLUGIN_INVOKE_MAX_RESULT_BYTES) {
+        outcome = {
+          ok: false,
+          error: new PluginPayloadTooLargeError(
+            this.pluginId,
+            `result of "${capTarget}"`,
+            PLUGIN_INVOKE_MAX_RESULT_BYTES,
+            resultBytes
+          ).message,
+        };
+      }
+      if (outcome.ok) {
+        this.post({
+          type: "invoke-result",
+          requestId: msg.requestId,
+          ok: true,
+          result: outcome.result,
+        });
+      } else {
+        this.post({
+          type: "invoke-result",
+          requestId: msg.requestId,
+          ok: false,
+          error: outcome.error,
+        });
+      }
+    };
     try {
       if (msg.kind === "action") {
         const handler = this.actionHandlers.get(msg.namespacedId);
@@ -314,7 +426,7 @@ export class PluginDevWorkerHostProxy {
           throw new Error(`No action handler registered for "${msg.namespacedId}"`);
         }
         const result = await handler(msg.args);
-        this.post({ type: "invoke-result", requestId: msg.requestId, ok: true, result });
+        settle({ ok: true, result });
         return;
       }
       if (msg.kind === "command") {
@@ -338,7 +450,7 @@ export class PluginDevWorkerHostProxy {
           appendHandlerHint(err, actionHandlerArityHint(handler, err));
           throw err;
         }
-        this.post({ type: "invoke-result", requestId: msg.requestId, ok: true, result });
+        settle({ ok: true, result });
         return;
       }
       if (msg.kind === "file-decoration-method") {
@@ -351,7 +463,7 @@ export class PluginDevWorkerHostProxy {
         }
         const [scope, paths] = msg.args as [string, string[]];
         const result = await impl.provideDecorations(scope, paths);
-        this.post({ type: "invoke-result", requestId: msg.requestId, ok: true, result });
+        settle({ ok: true, result });
         return;
       }
       // kind === "handler"
@@ -360,14 +472,9 @@ export class PluginDevWorkerHostProxy {
         throw new Error(`No handler registered for channel "${msg.channel}"`);
       }
       const result = await this.invokeIpcHandler(entry, msg.ctx, msg.args);
-      this.post({ type: "invoke-result", requestId: msg.requestId, ok: true, result });
+      settle({ ok: true, result });
     } catch (err) {
-      this.post({
-        type: "invoke-result",
-        requestId: msg.requestId,
-        ok: false,
-        error: formatErrorMessage(err, "invocation failed"),
-      });
+      settle({ ok: false, error: formatErrorMessage(err, "invocation failed") });
     }
   }
 
@@ -535,6 +642,50 @@ export class PluginDevWorkerHostProxy {
     });
   }
 
+  /**
+   * Refuse an oversize push before it is cloned across the parent port, so the
+   * plugin sees the failure on the call that caused it rather than as a log
+   * line in main, which applies the same cap again on arrival.
+   */
+  private assertPushWithinLimit(channel: string, payload: unknown): void {
+    try {
+      assertPayloadWithinLimit(
+        this.pluginId,
+        `push payload on "${channel}"`,
+        payload,
+        PLUGIN_PUSH_MAX_PAYLOAD_BYTES
+      );
+    } catch (err) {
+      this.reportPushRejected();
+      throw err;
+    }
+  }
+
+  /**
+   * Send an accepted push. A payload structured clone refuses fails in
+   * `postMessage` itself, so that refusal is reported like an oversize one.
+   */
+  private sendPush(method: "broadcastToRenderer" | "postToPanel", params: unknown): void {
+    try {
+      this.notify(method, params);
+    } catch (err) {
+      if ((err as { name?: unknown } | null)?.name === "DataCloneError") this.reportPushRejected();
+      throw err;
+    }
+  }
+
+  /**
+   * Tell main a push was refused before it crossed the port, so its metrics
+   * see the rejection. Payload-free, and never allowed to mask the refusal.
+   */
+  private reportPushRejected(): void {
+    try {
+      this.notify("pushRejected", {});
+    } catch {
+      // The port is closing; the plugin still gets the original error.
+    }
+  }
+
   private notify(method: PluginHostNotifyMethod, params: unknown, registrationKey?: string): void {
     if (this.disposed) return;
     this.post({ type: "host-notify", method, params, registrationKey });
@@ -630,37 +781,60 @@ export class PluginDevWorkerHostProxy {
           | PluginChannelSchema<unknown, unknown>
           | PluginIpcHandler
           | PluginTypedIpcHandler<unknown, unknown>,
-        typedHandler?: PluginTypedIpcHandler<unknown, unknown>
+        typedHandlerOrOptions?: PluginTypedIpcHandler<unknown, unknown> | PluginHandlerOptions,
+        typedOptions?: PluginHandlerOptions
       ) => {
         this.assertActivationOpen("registerHandler");
         if (typeof channel !== "string" || channel.length === 0) {
           throw new Error(`Plugin "${this.pluginId}" registerHandler: channel must be a string`);
         }
-        if (typedHandler !== undefined) {
+        // A function in third position is the typed overload by definition. Short
+        // of that, a function in second position is the legacy overload, whose
+        // optional third argument is the options bag.
+        const isLegacy =
+          typeof typedHandlerOrOptions !== "function" && typeof schemaOrHandler === "function";
+        const options = isLegacy
+          ? (typedHandlerOrOptions as PluginHandlerOptions | undefined)
+          : typedOptions;
+        const rawTimeoutMs: unknown = options?.timeoutMs;
+        // Validated here too so a bad value throws at the author's call site,
+        // not as a deferred register-error.
+        resolveInvokeTimeoutMs(this.pluginId, channel, rawTimeoutMs);
+        const timeoutMs = rawTimeoutMs as number | undefined;
+        if (!isLegacy) {
+          const typedHandler = typedHandlerOrOptions;
           if (!isChannelSchema(schemaOrHandler)) {
             throw new Error(
               `Plugin "${this.pluginId}" registerHandler: second argument must be a channel schema { args, result } when a typed handler is provided`
             );
           }
+          if (typeof typedHandler !== "function") {
+            throw new Error(
+              `Plugin "${this.pluginId}" registerHandler: handler must be a function`
+            );
+          }
           const schema = schemaOrHandler;
-          this.ipcHandlers.set(channel, { handler: typedHandler, schema });
+          this.ipcHandlers.set(channel, {
+            handler: typedHandler as PluginTypedIpcHandler<unknown, unknown>,
+            schema,
+          });
           this.notify(
             "registerHandler",
             {
               channel,
               hasSchema: true,
               requires: schema.requires ? [...schema.requires] : undefined,
+              ...(timeoutMs !== undefined ? { timeoutMs } : {}),
             },
             `handler:${channel}`
           );
         } else {
-          if (typeof schemaOrHandler !== "function") {
-            throw new Error(
-              `Plugin "${this.pluginId}" registerHandler: handler must be a function`
-            );
-          }
           this.ipcHandlers.set(channel, { handler: schemaOrHandler as PluginIpcHandler });
-          this.notify("registerHandler", { channel, hasSchema: false }, `handler:${channel}`);
+          this.notify(
+            "registerHandler",
+            { channel, hasSchema: false, ...(timeoutMs !== undefined ? { timeoutMs } : {}) },
+            `handler:${channel}`
+          );
         }
         return Promise.resolve();
       }) as PluginHostApi["registerHandler"],
@@ -671,7 +845,8 @@ export class PluginDevWorkerHostProxy {
             `Plugin broadcast channel must be a string without colons: ${String(channel)}`
           );
         }
-        this.notify("broadcastToRenderer", { channel, payload });
+        this.assertPushWithinLimit(channel, payload);
+        this.sendPush("broadcastToRenderer", { channel, payload });
         return Promise.resolve();
       },
       // Post-activation-safe sibling of broadcastToRenderer: no
@@ -691,16 +866,52 @@ export class PluginDevWorkerHostProxy {
         }
         if (panelId !== undefined && panelId !== null) {
           if (typeof panelId !== "string" || panelId.length === 0) {
-            throw new Error(
-              `Plugin "${this.pluginId}" postToPanel: panelId must be a non-empty string, null, or undefined: ${String(panelId)}`
+            // Rejects like the channel check (#10617).
+            return Promise.reject(
+              new Error(
+                `Plugin "${this.pluginId}" postToPanel: panelId must be a non-empty string, null, or undefined: ${String(panelId)}`
+              )
             );
           }
         }
         // Forward panelId verbatim (including `undefined`/`null`) — the real
         // main-side host wraps the envelope and resolves the broadcast-vs-target
         // routing. Structured clone over the parent-port preserves `undefined`.
-        this.notify("postToPanel", { channel, payload, panelId });
+        try {
+          this.assertPushWithinLimit(channel, payload);
+          this.sendPush("postToPanel", { channel, payload, panelId });
+        } catch (err) {
+          return Promise.reject(err);
+        }
         return Promise.resolve();
+      },
+      hasListeners: (channel) => {
+        const name = this.pushListenerChannel("hasListeners", channel);
+        if (this.disposed) return false;
+        return this.listenerState(name)?.value ?? true;
+      },
+      onDidChangeListeners: (channel, callback) => {
+        const name = this.pushListenerChannel("onDidChangeListeners", channel);
+        if (typeof callback !== "function") {
+          throw new Error(
+            `Plugin "${this.pluginId}" onDidChangeListeners: callback must be a function`
+          );
+        }
+        const state = this.disposed ? null : this.listenerState(name);
+        if (!state) return () => {};
+        const registered = (hasListeners: boolean): void => callback(hasListeners);
+        state.callbacks.add(registered);
+        state.hold ??= this.subscribe("push-listeners", state.update, name);
+        let disposed = false;
+        return () => {
+          if (disposed) return;
+          disposed = true;
+          state.callbacks.delete(registered);
+          if (state.callbacks.size > 0 || !state.hold) return;
+          const release = state.hold;
+          state.hold = null;
+          release();
+        };
       },
       getActiveWorktree: () =>
         this.call<PluginWorktreeSnapshot | null>("getActiveWorktree", undefined),
@@ -717,11 +928,17 @@ export class PluginDevWorkerHostProxy {
       getWorktreeStatus: (path, options) =>
         this.call<PluginWorktreeStatus | null>("getWorktreeStatus", path, options?.signal),
       getAgentState: () => this.call<PluginAgentSnapshot | null>("getAgentState", undefined),
-      onDidChangeAgentState: (callback) => {
+      onDidChangeAgentState: (callback, options) => {
         this.assertActivationOpen("onDidChangeAgentState");
-        // Subscription wired synchronously; only the disposer is async.
-        const dispose = this.subscribe("agent-state", (payload) =>
-          callback(payload as PluginAgentSnapshot)
+        // Subscription wired synchronously; only the disposer is async. The
+        // window is applied host-side; an omitted option crosses the port as
+        // absent, so main applies the same default an in-process plugin gets.
+        const dispose = this.subscribe(
+          "agent-state",
+          (payload) => callback(payload as PluginAgentSnapshot),
+          undefined,
+          undefined,
+          options?.debounceMs
         );
         return Promise.resolve(dispose);
       },
@@ -751,21 +968,28 @@ export class PluginDevWorkerHostProxy {
         );
         return Promise.resolve(dispose);
       },
-      onDidChangeActiveWorktree: (callback) => {
+      onDidChangeActiveWorktree: (callback, options) => {
         this.assertActivationOpen("onDidChangeActiveWorktree");
         // Subscription wired synchronously; only the disposer is async.
-        const dispose = this.subscribe("active-worktree", (payload) =>
-          callback(payload as PluginWorktreeSnapshot | null)
+        const dispose = this.subscribe(
+          "active-worktree",
+          (payload) => callback(payload as PluginWorktreeSnapshot | null),
+          undefined,
+          undefined,
+          options?.debounceMs
         );
         return Promise.resolve(dispose);
       },
       onDidChangeWorktrees: (callback, options) => {
         this.assertActivationOpen("onDidChangeWorktrees");
-        // Debounce is applied host-side: the worker forwards `debounceMs` in the
-        // subscribe message and the real host coalesces before pushing events.
+        // Coalescing and the change set are computed host-side: the worker
+        // forwards `debounceMs` and main pushes one event per delivery.
         const dispose = this.subscribe(
           "worktrees",
-          (payload) => callback(payload as PluginWorktreeSnapshot[]),
+          (payload) => {
+            const event = payload as PluginWorkerWorktreesEvent;
+            callback(event.snapshots, event.change);
+          },
           undefined,
           undefined,
           options?.debounceMs
@@ -1074,6 +1298,19 @@ export class PluginDevWorkerHostProxy {
             { path: filePath },
             options?.signal
           ),
+        readFiles: ((paths: readonly string[], options?: PluginFsReadFilesOptions) =>
+          this.call<PluginFsReadFilesEntry<string | Uint8Array>[]>(
+            "fs.readFiles",
+            {
+              paths,
+              // Forwarded as given so the host rejects a malformed value.
+              ...(options?.encoding !== undefined && { encoding: options.encoding }),
+              ...(options?.maxBytesPerFile !== undefined && {
+                maxBytesPerFile: options.maxBytesPerFile,
+              }),
+            },
+            options?.signal
+          )) as NonNullable<PluginFsApi["readFiles"]>,
         mkdir: (dirPath) => this.call<void>("fs.mkdir", { path: dirPath }),
         appendFile: (filePath, contents) =>
           this.call<void>("fs.appendFile", { path: filePath, contents }),
@@ -1089,6 +1326,20 @@ export class PluginDevWorkerHostProxy {
             { path: dirPath, ...(options?.detail === true && { detail: true }) },
             options?.signal
           ),
+        walk: (root: string, options?: PluginFsWalkOptions) => {
+          // Forwarded as given (minus the signal, which cancels the call) so
+          // the host rejects a malformed option rather than it reading as absent.
+          let forwarded: unknown = options;
+          if (options !== null && typeof options === "object") {
+            const { signal: _signal, ...rest } = options;
+            forwarded = rest;
+          }
+          return this.call<PluginFsWalkResult>(
+            "fs.walk",
+            { root, ...(forwarded !== undefined && { options: forwarded }) },
+            options?.signal
+          );
+        },
         stat: (targetPath, options) =>
           this.call<PluginFsStat>("fs.stat", { path: targetPath }, options?.signal),
         watch: async (paths, callback, options) => {
@@ -1218,6 +1469,52 @@ export class PluginDevWorkerHostProxy {
       },
     };
     return host;
+  }
+
+  private pushListenerChannel(method: string, channel: unknown): string {
+    if (typeof channel !== "string" || channel.length === 0 || channel.includes(":")) {
+      throw new Error(
+        `Plugin "${this.pluginId}" ${method}: channel must be a non-empty string without colons: ${String(channel)}`
+      );
+    }
+    return channel;
+  }
+
+  /**
+   * The listener state for `channel`, opening main's passive observation the
+   * first time (`push-listeners-observe`, which idle governance ignores). Until
+   * main's first value lands the answer is `true`, the same "assume someone is
+   * listening" main gives for a renderer it has not heard from; a value that
+   * differs fires the channel's callbacks. Both of main's streams for a channel
+   * carry the same answer, so a repeat is dropped here.
+   */
+  private listenerState(channel: string): ListenerState | null {
+    const existing = this.listenerStates.get(channel);
+    if (existing) return existing;
+    if (this.listenerStates.size >= MAX_WATCHED_PUSH_CHANNELS) return null;
+    const state: ListenerState = {
+      value: true,
+      callbacks: new Set(),
+      hold: null,
+      update: (payload) => {
+        const next = payload === true;
+        if (next === state.value) return;
+        state.value = next;
+        for (const callback of [...state.callbacks]) {
+          try {
+            callback(next);
+          } catch (err) {
+            console.error(
+              `[plugin-dev:${this.pluginId}] onDidChangeListeners callback threw:`,
+              err
+            );
+          }
+        }
+      },
+    };
+    this.listenerStates.set(channel, state);
+    this.subscribe("push-listeners-observe", state.update, channel);
+    return state;
   }
 
   private subscribe(

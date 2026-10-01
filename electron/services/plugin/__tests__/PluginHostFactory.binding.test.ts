@@ -4,6 +4,7 @@ import path from "path";
 const ipcUtilsMock = vi.hoisted(() => ({
   broadcastToRenderer: vi.fn(),
   broadcastToProjectRenderers: vi.fn(),
+  getProjectRendererTargets: vi.fn((_projectId: string | null): unknown[] => []),
 }));
 const serviceRefsMock = vi.hoisted(() => ({
   getPtyClient: vi.fn((): unknown => null),
@@ -18,6 +19,7 @@ vi.mock("electron", () => ({
 vi.mock("../../../ipc/utils.js", () => ({
   broadcastToRenderer: ipcUtilsMock.broadcastToRenderer,
   broadcastToProjectRenderers: ipcUtilsMock.broadcastToProjectRenderers,
+  getProjectRendererTargets: ipcUtilsMock.getProjectRendererTargets,
 }));
 vi.mock("../../../window/serviceRefs.js", () => ({
   getPtyClient: serviceRefsMock.getPtyClient,
@@ -51,6 +53,8 @@ import {
   type PluginWorktreeSnapshotFetchResult,
 } from "../PluginHostFactory.js";
 import { CHANNELS } from "../../../ipc/channels.js";
+import { flushPluginPushes, resetPluginPushBatcherForTests } from "../pluginPushBatcher.js";
+import { PLUGIN_PUSH_MAX_PAYLOAD_BYTES } from "../../../../shared/config/pluginBudgets.js";
 import { events } from "../../events.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { UNBOUND_PLUGIN_HOST_BINDING } from "../../../../shared/types/plugin.js";
@@ -182,11 +186,13 @@ function emit(h: Harness, event: string, payload?: { projectPath?: string }): vo
   for (const handler of h.handlers.get(event) ?? []) handler(payload);
 }
 
-/** Flush the microtask queue so a subscription's async re-fetch settles. */
+/**
+ * Flush the microtask queue so a subscription's async re-fetch settles. The
+ * worktree subscriptions serialise their fetches on a promise chain, which
+ * costs a few more hops than a bare fetch.
+ */
 async function flush(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 50; i++) await Promise.resolve();
 }
 
 beforeEach(() => {
@@ -434,7 +440,7 @@ describe("createHost worktree subscriptions", () => {
     h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a", isCurrent: true })]));
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
     const callback = vi.fn();
-    await host.onDidChangeActiveWorktree(callback);
+    await host.onDidChangeActiveWorktree(callback, { debounceMs: 0 });
 
     emit(h, "worktree-activated", { projectPath: ROOT_B });
     await flush();
@@ -451,7 +457,7 @@ describe("createHost worktree subscriptions", () => {
     h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
     const callback = vi.fn();
-    await host.onDidChangeWorktrees(callback);
+    await host.onDidChangeWorktrees(callback, { debounceMs: 0 });
 
     emit(h, "worktree-update", { projectPath: ROOT_B });
     emit(h, "worktree-removed", { projectPath: ROOT_B });
@@ -468,7 +474,7 @@ describe("createHost worktree subscriptions", () => {
     h.ambientFetch.mockResolvedValue(okFetch([worktree({ id: "wt-focus" })]));
     const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
     const callback = vi.fn();
-    await host.onDidChangeWorktrees(callback);
+    await host.onDidChangeWorktrees(callback, { debounceMs: 0 });
 
     emit(h, "worktree-update", { projectPath: ROOT_B });
     await flush();
@@ -552,6 +558,8 @@ describe("createHost debounced onDidChangeWorktrees", () => {
 });
 
 describe("createHost renderer pushes", () => {
+  beforeEach(() => resetPluginPushBatcherForTests());
+
   it("routes toast, broadcast and panel posts to the bound project's views", async () => {
     const h = makeHarness();
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
@@ -559,13 +567,18 @@ describe("createHost renderer pushes", () => {
     await host.showToast({ message: "hi", type: "info" });
     await host.broadcastToRenderer("ping", { a: 1 });
     await host.postToPanel("stream", { b: 2 }, "panel-1");
+    flushPluginPushes();
 
     expect(ipcUtilsMock.broadcastToRenderer).not.toHaveBeenCalled();
     const targets = ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map((c) => c[0]);
-    expect(targets).toEqual([PROJECT_A, PROJECT_A, PROJECT_A]);
+    expect(targets).toEqual([PROJECT_A]);
     expect(ipcUtilsMock.broadcastToProjectRenderers.mock.calls[0][1]).toBe(
       CHANNELS.NOTIFICATION_SHOW_TOAST
     );
+    // Plugin pushes resolve their renderers through the batcher at flush time,
+    // same scope, once per flush.
+    const pushScopes = ipcUtilsMock.getProjectRendererTargets.mock.calls.map((c) => c[0]);
+    expect(pushScopes).toEqual([PROJECT_A]);
   });
 
   it("still broadcasts app-wide when unbound", async () => {
@@ -574,9 +587,11 @@ describe("createHost renderer pushes", () => {
 
     await host.showToast({ message: "hi", type: "info" });
     await host.broadcastToRenderer("ping", { a: 1 });
+    flushPluginPushes();
 
     expect(ipcUtilsMock.broadcastToProjectRenderers).not.toHaveBeenCalled();
-    expect(ipcUtilsMock.broadcastToRenderer).toHaveBeenCalledTimes(2);
+    expect(ipcUtilsMock.broadcastToRenderer).toHaveBeenCalledTimes(1);
+    expect(ipcUtilsMock.getProjectRendererTargets.mock.calls.map((c) => c[0])).toEqual([null]);
   });
 });
 
@@ -615,6 +630,35 @@ describe("createHost dispatch, catalog and prompts", () => {
       // The binding must survive alongside the new trailing argument.
       expect(call[2]).toBe(PROJECT_A);
     }
+  });
+
+  it("meters each dialog prompt from open to settle, so invokes can leave out user waits", async () => {
+    const h = makeHarness();
+    const events: string[] = [];
+    let answer: (value: unknown) => void = () => {};
+    h.requestPrompt.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          events.push("requested");
+          answer = resolve;
+        })
+    );
+    const trackPromptWait = vi.fn((pluginId: string) => {
+      events.push(`open:${pluginId}`);
+      return () => events.push("closed");
+    });
+    const { host } = createHost({ ...h.deps, trackPromptWait }, PLUGIN_ID, BOUND);
+
+    const pending = host.showConfirm({ title: "sure?" });
+    await flush();
+    expect(events).toEqual([`open:${PLUGIN_ID}`, "requested"]);
+    answer(true);
+    await expect(pending).resolves.toBe(true);
+    expect(events).toEqual([`open:${PLUGIN_ID}`, "requested", "closed"]);
+
+    await host.showQuickPick([{ id: "a", label: "A" }]);
+    await host.showInputBox({ title: "name" });
+    expect(trackPromptWait).toHaveBeenCalledTimes(3);
   });
 
   it("leaves the signal undefined when a plugin passes no call options (#12279)", async () => {
@@ -892,7 +936,7 @@ describe("createHost onDidChangeAgentState", () => {
     installPtyForAgentState({ "term-a": PROJECT_A, "term-b": "project-b" });
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
     const callback = vi.fn();
-    await host.onDidChangeAgentState(callback);
+    await host.onDidChangeAgentState(callback, { debounceMs: 0 });
 
     events.emit("agent:state-changed", {
       terminalId: "term-b",
@@ -918,7 +962,7 @@ describe("createHost onDidChangeAgentState", () => {
     installPtyForAgentState({});
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
     const callback = vi.fn();
-    await host.onDidChangeAgentState(callback);
+    await host.onDidChangeAgentState(callback, { debounceMs: 0 });
 
     events.emit("agent:state-changed", {
       state: "working",
@@ -933,7 +977,7 @@ describe("createHost onDidChangeAgentState", () => {
     installPtyForAgentState({ "term-b": "project-b" });
     const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
     const callback = vi.fn();
-    await host.onDidChangeAgentState(callback);
+    await host.onDidChangeAgentState(callback, { debounceMs: 0 });
 
     events.emit("agent:state-changed", {
       terminalId: "term-b",
@@ -1224,5 +1268,370 @@ describe("createHost settings.open and settings.missingRequired", () => {
 
     await expect(host.settings.missingRequired()).resolves.toEqual(["apiKey"]);
     expect(missingRequiredForHost).toHaveBeenCalledWith(PLUGIN_ID, ROOT_A);
+  });
+});
+
+describe("createHost subscriptions coalesce by default", () => {
+  afterEach(() => {
+    events.removeAllListeners();
+    serviceRefsMock.getPtyClient.mockReset();
+    vi.useRealTimers();
+  });
+
+  it("coalesces onDidChangeWorktrees with no options into one callback per window", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness();
+    h.ambientFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    await host.onDidChangeWorktrees(callback);
+
+    for (let i = 0; i < 20; i++) emit(h, "worktree-update", { projectPath: ROOT_A });
+    await vi.advanceTimersByTimeAsync(99);
+    expect(callback).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(h.ambientFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers every event for an explicit debounceMs: 0", async () => {
+    const h = makeHarness();
+    h.ambientFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    await host.onDidChangeWorktrees(callback, { debounceMs: 0 });
+
+    for (let i = 0; i < 3; i++) emit(h, "worktree-update", { projectPath: ROOT_A });
+    await flush();
+    expect(callback).toHaveBeenCalledTimes(3);
+  });
+
+  it("treats an undefined debounceMs, as the worker bridge forwards it, as the default", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    await host.onDidChangeWorktrees(callback, { debounceMs: undefined });
+    emit(h, "worktree-update", { projectPath: ROOT_A });
+    emit(h, "worktree-update", { projectPath: ROOT_A });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands onDidChangeWorktrees what changed since the previous delivery", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    await host.onDidChangeWorktrees(callback, { debounceMs: 0 });
+
+    h.ambientFetch.mockResolvedValueOnce(
+      okFetch([worktree({ id: "wt-a" }), worktree({ id: "wt-b", branch: "b" })])
+    );
+    emit(h, "worktree-update", { projectPath: ROOT_A });
+    await flush();
+    expect(callback.mock.calls[0][1]).toEqual({
+      added: ["wt-a", "wt-b"],
+      removed: [],
+      changed: [],
+    });
+
+    h.ambientFetch.mockResolvedValueOnce(
+      okFetch([worktree({ id: "wt-b", branch: "b2" }), worktree({ id: "wt-c" })])
+    );
+    emit(h, "worktree-update", { projectPath: ROOT_A });
+    await flush();
+    expect(callback.mock.calls[1][1]).toEqual({
+      added: ["wt-c"],
+      removed: ["wt-a"],
+      changed: ["wt-b"],
+    });
+
+    h.ambientFetch.mockResolvedValueOnce(
+      okFetch([worktree({ id: "wt-b", branch: "b2" }), worktree({ id: "wt-c" })])
+    );
+    emit(h, "worktree-update", { projectPath: ROOT_A });
+    await flush();
+    expect(callback.mock.calls[2][1]).toEqual({ added: [], removed: [], changed: [] });
+  });
+
+  it("describes a coalesced burst by its net change", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    h.ambientFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    await host.onDidChangeWorktrees(callback);
+    emit(h, "worktree-update", { projectPath: ROOT_A });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(callback.mock.calls[0][1]).toEqual({ added: ["wt-a"], removed: [], changed: [] });
+
+    // wt-b comes and goes inside one window: only the end state is compared.
+    h.ambientFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
+    emit(h, "worktree-update", { projectPath: ROOT_A });
+    emit(h, "worktree-removed", { projectPath: ROOT_A });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(callback.mock.calls[1][1]).toEqual({ added: [], removed: [], changed: [] });
+  });
+
+  it("delivers raw events one per event and in order, even when a fetch is slow", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    await host.onDidChangeWorktrees(callback, { debounceMs: 0 });
+    let releaseSlow: (() => void) | undefined;
+    h.ambientFetch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseSlow = () => resolve(okFetch([worktree({ id: "wt-old" })]));
+        })
+    );
+    h.ambientFetch.mockResolvedValueOnce(okFetch([worktree({ id: "wt-new" })]));
+    emit(h, "worktree-update", { projectPath: ROOT_A });
+    emit(h, "worktree-update", { projectPath: ROOT_A });
+    await flush();
+    expect(callback).not.toHaveBeenCalled();
+    releaseSlow?.();
+    await flush();
+    await flush();
+    const ids = callback.mock.calls.map((c) => c[0].map((w: { id: string }) => w.id));
+    expect(ids).toEqual([["wt-old"], ["wt-new"]]);
+    expect(callback.mock.calls[1][1]).toEqual({
+      added: ["wt-new"],
+      removed: ["wt-old"],
+      changed: [],
+    });
+  });
+
+  it("coalesces onDidChangeActiveWorktree and reads the worktree active at the end", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    await host.onDidChangeActiveWorktree(callback);
+
+    emit(h, "worktree-activated", { projectPath: ROOT_A });
+    emit(h, "worktree-activated", { projectPath: ROOT_A });
+    h.ambientFetch.mockResolvedValue(okFetch([worktree({ id: "wt-last", isCurrent: true })]));
+    emit(h, "worktree-activated", { projectPath: ROOT_A });
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(callback.mock.calls[0][0]?.id).toBe("wt-last");
+    expect(h.ambientFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces agent state per terminal and never drops a terminal's final state", async () => {
+    vi.useFakeTimers();
+    serviceRefsMock.getPtyClient.mockReturnValue({ getTerminalProjectId: vi.fn(() => PROJECT_A) });
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const received: Array<{ state: string; agentId?: string }> = [];
+    await host.onDidChangeAgentState((s) => received.push(s));
+
+    const transition = (terminalId: string, state: string, previousState: string, t: number) =>
+      events.emit("agent:state-changed", {
+        terminalId,
+        agentId: `agent-${terminalId}`,
+        state,
+        previousState,
+        timestamp: t,
+      } as never);
+    transition("term-a", "working", "idle", 1);
+    transition("term-b", "working", "idle", 2);
+    transition("term-a", "waiting", "working", 3);
+    transition("term-a", "idle", "waiting", 4);
+
+    // The cache getAgentState reads is never coalesced.
+    expect((await host.getAgentState())?.state).toBe("idle");
+    expect(received).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(100);
+    // One per terminal, latest value, ordered by each terminal's latest transition.
+    expect(received.map((s) => [s.agentId, s.state])).toEqual([
+      ["agent-term-b", "working"],
+      ["agent-term-a", "idle"],
+    ]);
+  });
+
+  it("delivers every agent transition for debounceMs: 0", async () => {
+    serviceRefsMock.getPtyClient.mockReturnValue({ getTerminalProjectId: vi.fn(() => PROJECT_A) });
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const received: string[] = [];
+    await host.onDidChangeAgentState((s) => received.push(s.state), { debounceMs: 0 });
+    for (const [state, previousState] of [
+      ["working", "idle"],
+      ["waiting", "working"],
+      ["idle", "waiting"],
+    ]) {
+      events.emit("agent:state-changed", {
+        terminalId: "term-a",
+        state,
+        previousState,
+        timestamp: 1,
+      } as never);
+    }
+    expect(received).toEqual(["working", "waiting", "idle"]);
+  });
+
+  it("drops a pending agent-state window when the subscription is disposed", async () => {
+    vi.useFakeTimers();
+    serviceRefsMock.getPtyClient.mockReturnValue({ getTerminalProjectId: vi.fn(() => PROJECT_A) });
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    const dispose = await host.onDidChangeAgentState(callback);
+    events.emit("agent:state-changed", {
+      terminalId: "term-a",
+      state: "working",
+      previousState: "idle",
+      timestamp: 1,
+    } as never);
+    dispose();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(callback).not.toHaveBeenCalled();
+  });
+});
+
+describe("coalesced subscriptions and the plugin's own lifetime", () => {
+  afterEach(() => {
+    events.removeAllListeners();
+    serviceRefsMock.getPtyClient.mockReset();
+    vi.useRealTimers();
+  });
+
+  /** What unload and activation rollback do: run the tracked cleanups, never the returned disposers. */
+  function runAutomaticCleanup(h: Harness): void {
+    const list = h.deps.pluginEventCleanups.get(PLUGIN_ID) ?? [];
+    h.deps.pluginEventCleanups.delete(PLUGIN_ID);
+    for (const dispose of [...list]) dispose();
+  }
+
+  function emitAgentTransition(): void {
+    events.emit("agent:state-changed", {
+      terminalId: "term-a",
+      state: "working",
+      previousState: "idle",
+      timestamp: 1,
+    } as never);
+  }
+
+  const subscriptions = [
+    {
+      name: "onDidChangeWorktrees",
+      subscribe: (host: ReturnType<typeof createHost>["host"], callback: () => void) =>
+        host.onDidChangeWorktrees(callback, { debounceMs: 300 }),
+      trigger: (h: Harness) => emit(h, "worktree-update", { projectPath: ROOT_A }),
+    },
+    {
+      name: "onDidChangeActiveWorktree",
+      subscribe: (host: ReturnType<typeof createHost>["host"], callback: () => void) =>
+        host.onDidChangeActiveWorktree(callback, { debounceMs: 300 }),
+      trigger: (h: Harness) => emit(h, "worktree-activated", { projectPath: ROOT_A }),
+    },
+    {
+      name: "onDidChangeAgentState",
+      subscribe: (host: ReturnType<typeof createHost>["host"], callback: () => void) =>
+        host.onDidChangeAgentState(callback, { debounceMs: 300 }),
+      trigger: () => emitAgentTransition(),
+    },
+  ];
+
+  it.each(subscriptions)(
+    "$name: automatic cleanup cancels a queued delivery before a same-id reload",
+    async ({ subscribe, trigger }) => {
+      vi.useFakeTimers();
+      serviceRefsMock.getPtyClient.mockReturnValue({
+        getTerminalProjectId: vi.fn(() => PROJECT_A),
+      });
+      const h = makeHarness();
+      h.ambientFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a", isCurrent: true })]));
+      const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+      const callback = vi.fn();
+      await subscribe(host, callback);
+
+      trigger(h);
+      runAutomaticCleanup(h);
+      // The same id loads again before the window closes.
+      h.plugins.set(PLUGIN_ID, fakePlugin());
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(callback).not.toHaveBeenCalled();
+      expect(h.ambientFetch).not.toHaveBeenCalled();
+      expect(h.deps.pluginEventCleanups.get(PLUGIN_ID)).toBeUndefined();
+    }
+  );
+
+  it.each(subscriptions)(
+    "$name: a queued delivery never reaches a closure a same-id reload replaced",
+    async ({ subscribe, trigger }) => {
+      vi.useFakeTimers();
+      serviceRefsMock.getPtyClient.mockReturnValue({
+        getTerminalProjectId: vi.fn(() => PROJECT_A),
+      });
+      const h = makeHarness();
+      h.ambientFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a", isCurrent: true })]));
+      const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+      const callback = vi.fn();
+      await subscribe(host, callback);
+
+      trigger(h);
+      // No cleanup ran at all: only the instance identity stands in the way.
+      h.plugins.set(PLUGIN_ID, fakePlugin());
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(callback).not.toHaveBeenCalled();
+    }
+  );
+
+  it("drops a worktree delivery whose read resolves after a same-id reload", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    await host.onDidChangeWorktrees(callback, { debounceMs: 0 });
+    let release: (() => void) | undefined;
+    h.ambientFetch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(okFetch([worktree({ id: "wt-a" })]));
+        })
+    );
+    emit(h, "worktree-update", { projectPath: ROOT_A });
+    await flush();
+    h.plugins.set(PLUGIN_ID, fakePlugin());
+    release?.();
+    await flush();
+    expect(callback).not.toHaveBeenCalled();
+  });
+});
+
+describe("createHost push rejections are metered", () => {
+  beforeEach(() => resetPluginPushBatcherForTests());
+
+  it("counts an oversize or uncloneable push at the host boundary, not an accepted one", async () => {
+    const h = makeHarness();
+    const recordPushRejected = vi.fn();
+    const deps = { ...h.deps, recordPushRejected } as PluginHostFactoryDeps;
+    const { host } = createHost(deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    await host.broadcastToRenderer("ok", { a: 1 });
+    expect(recordPushRejected).not.toHaveBeenCalled();
+
+    const huge = { blob: "x".repeat(PLUGIN_PUSH_MAX_PAYLOAD_BYTES + 1) };
+    expect(() => host.broadcastToRenderer("big", huge)).toThrow(/PLUGIN_PAYLOAD_TOO_LARGE/);
+    await expect(host.postToPanel("big", huge, "panel-1")).rejects.toThrow(
+      /PLUGIN_PAYLOAD_TOO_LARGE/
+    );
+    await expect(host.postToPanel("fn", { run: () => 1 }, "panel-1")).rejects.toThrow(
+      /PLUGIN_PAYLOAD_UNCLONEABLE/
+    );
+    expect(recordPushRejected).toHaveBeenCalledTimes(3);
+    expect(recordPushRejected).toHaveBeenCalledWith(PLUGIN_ID);
+
+    // A host a same-id reload replaced does not count against its successor.
+    h.plugins.set(PLUGIN_ID, fakePlugin());
+    expect(() => host.broadcastToRenderer("big", huge)).toThrow(/PLUGIN_PAYLOAD_TOO_LARGE/);
+    expect(recordPushRejected).toHaveBeenCalledTimes(3);
+    flushPluginPushes();
   });
 });

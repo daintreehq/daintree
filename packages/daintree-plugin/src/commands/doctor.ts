@@ -2,13 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execa } from "execa";
 import { runValidate } from "./validate.js";
+import { formatFindingInline, runLint } from "./lint.js";
+import type { LintFinding } from "../lib/lint/index.js";
 import { caretEngineAdvisory } from "../../../../electron/schemas/pluginManifestAdvisories.js";
 import { sendCliRequest, DaintreeUnavailableError } from "../ipc/client.js";
 
 /**
- * `doctor` is `validate` plus the checks that only make sense against a whole
- * project: the ones about git, and the ones about what the running host has
- * actually decided.
+ * `doctor` is `validate` and `lint` plus the checks that only make sense
+ * against a whole project: the ones about git, and the ones about what the
+ * running host has actually decided.
  *
  * The split is deliberate. `validate` answers "is this manifest well-formed",
  * which an author runs constantly and offline. `doctor` answers "would this
@@ -23,6 +25,8 @@ const PROJECT_PLUGINS_SEGMENTS = [".daintree", "plugins"];
 export interface DoctorOptions {
   /** Skip the query to a running Daintree. Used by tests and by CI. */
   offline?: boolean;
+  /** Run `lint` over each plugin and fold its findings in (default: true). */
+  lint?: boolean;
 }
 
 export interface DoctorPluginReport {
@@ -34,6 +38,8 @@ export interface DoctorPluginReport {
   warnings: string[];
   /** What the running host reports for this directory, when one is reachable. */
   hostState: string | null;
+  /** The `lint` findings, also folded into `warnings`. Empty when lint was skipped. */
+  lint: LintFinding[];
 }
 
 export interface DoctorHostReport {
@@ -353,6 +359,17 @@ export async function runDoctor(
       }
     }
 
+    let lint: LintFinding[] = [];
+    if (opts.lint !== false) {
+      const lintResult = await runLint({ dir });
+      lint = lintResult.findings;
+      // Advisory only: a heuristic over source can't prove a plugin won't load,
+      // which is the question doctor's exit status answers. `lint` gates on them.
+      for (const finding of lint) {
+        warnings.push(`lint ${finding.severity} ${formatFindingInline(finding)}`);
+      }
+    }
+
     if (!repoRoot) {
       warnings.push(
         "Not a git repository, so the two checks that decide whether this plugin exists for anyone who clones it were skipped."
@@ -365,6 +382,7 @@ export async function runDoctor(
       errors,
       warnings,
       hostState: hostStates.get(dirName) ?? null,
+      lint,
     });
   }
 

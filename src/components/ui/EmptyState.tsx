@@ -1,9 +1,12 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import type { RootAttributes } from "@/components/ui/rootAttributes";
 
 type EmptyStateCommonProps = {
   title: string;
   className?: string;
+  /** `id`, `data-*` or `aria-*` on the root; the component's own attributes win. */
+  rootAttributes?: RootAttributes;
 };
 
 export type EmptyStateScale = "popover" | "sidebar" | "canvas";
@@ -185,6 +188,7 @@ export function EmptyState(props: EmptyStateProps) {
 
   return (
     <div
+      {...props.rootAttributes}
       aria-describedby={hasDescription ? descriptionId : undefined}
       // `w-full` is load-bearing: the root is an inline-size container, so its
       // content can't size it. Centred by a flex parent without a width, it

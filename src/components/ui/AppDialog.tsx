@@ -54,6 +54,12 @@ type DialogSize = "sm" | "md" | "lg" | "4xl" | "5xl" | "6xl" | "7xl" | "workspac
 type DialogVariant = "default" | "destructive" | "info";
 type DialogZIndex = "modal" | "nested";
 type DialogInitialFocus = "first" | "cancel" | "confirm" | "none";
+/**
+ * Where the surface sits. `center` is the dialog card; `right` and `left` are a
+ * full-height sheet against that edge of the window, for a record's detail or
+ * edit form beside the list it came from.
+ */
+type DialogPlacement = "center" | "right" | "left";
 
 /**
  * A caller-supplied "logical successor" to receive focus when the dialog's
@@ -108,6 +114,7 @@ export interface AppDialogProps {
   className?: string;
   maxHeight?: string;
   zIndex?: DialogZIndex;
+  placement?: DialogPlacement;
   initialFocus?: DialogInitialFocus;
   restoreFocusTo?: RestoreFocusTarget;
   /**
@@ -119,7 +126,14 @@ export interface AppDialogProps {
   "data-testid"?: string;
 }
 
-export type { DialogSize, DialogVariant, DialogZIndex, DialogInitialFocus, RestoreFocusTarget };
+export type {
+  DialogSize,
+  DialogVariant,
+  DialogZIndex,
+  DialogPlacement,
+  DialogInitialFocus,
+  RestoreFocusTarget,
+};
 
 const sizeClasses: Record<DialogSize, string> = {
   sm: "max-w-md",
@@ -131,6 +145,42 @@ const sizeClasses: Record<DialogSize, string> = {
   "7xl": "max-w-[min(96rem,92vw)]",
   // App-scale surfaces (diff review workspace): near-full-window canvas.
   workspace: "max-w-[min(110rem,95vw)]",
+};
+
+const PLACEMENT_BACKDROP_CLASSES: Record<DialogPlacement, string> = {
+  center: "items-center justify-center",
+  right: "items-stretch justify-end",
+  left: "items-stretch justify-start",
+};
+
+// A sheet runs the window's full height against its edge, so only the edge
+// facing the content keeps a border and nothing is rounded.
+const PLACEMENT_SURFACE_CLASSES: Record<Exclude<DialogPlacement, "center">, string> = {
+  right: "h-full border-l",
+  left: "h-full border-r",
+};
+
+// A card rises a step and settles; a sheet slides a step in from its edge.
+// Whole literal strings: the Tailwind scanner only reads the text.
+const PLACEMENT_MOTION: Record<
+  DialogPlacement,
+  { starting: string; shown: string; hidden: string }
+> = {
+  center: {
+    starting: "starting:opacity-0 starting:translate-y-1 starting:scale-[0.98]",
+    shown: "opacity-100 translate-y-0 scale-100",
+    hidden: "opacity-0 translate-y-1 scale-[0.98]",
+  },
+  right: {
+    starting: "starting:opacity-0 starting:translate-x-4",
+    shown: "opacity-100 translate-x-0",
+    hidden: "opacity-0 translate-x-4",
+  },
+  left: {
+    starting: "starting:opacity-0 starting:-translate-x-4",
+    shown: "opacity-100 translate-x-0",
+    hidden: "opacity-0 -translate-x-4",
+  },
 };
 
 export function AppDialog({
@@ -145,6 +195,7 @@ export function AppDialog({
   className,
   maxHeight = "max-h-[80vh]",
   zIndex = "modal",
+  placement = "center",
   initialFocus,
   restoreFocusTo,
   preferRestoreFocusTo = false,
@@ -515,7 +566,8 @@ export function AppDialog({
     >
       <div
         className={cn(
-          "fixed inset-0 flex items-center justify-center bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur)] backdrop-saturate-[var(--theme-material-saturation)]",
+          "fixed inset-0 flex bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur)] backdrop-saturate-[var(--theme-material-saturation)]",
+          PLACEMENT_BACKDROP_CLASSES[placement],
           effectiveZIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
           // Opacity-only, so reduced motion leaves it alone: a scrim fade is not
           // spatial motion. WCAG 2.3.3.
@@ -553,8 +605,10 @@ export function AppDialog({
           ref={dialogRef}
           tabIndex={-1}
           className={cn(
-            "bg-surface-dialog border border-border-default rounded-[var(--radius-xl)] shadow-[var(--theme-shadow-dialog)] mx-4 flex flex-col overflow-hidden",
-            maxHeight,
+            "bg-surface-dialog border-border-default shadow-[var(--theme-shadow-dialog)] flex flex-col overflow-hidden",
+            placement === "center"
+              ? ["border rounded-[var(--radius-xl)] mx-4", maxHeight]
+              : PLACEMENT_SURFACE_CLASSES[placement],
             sizeClasses[size],
             "w-full",
             // Tailwind v4 translate-*/scale-* emit the individual `translate`
@@ -565,11 +619,9 @@ export function AppDialog({
             // is not vestibular, movement is. WCAG 2.3.3.
             "motion-reduce:transition-opacity motion-reduce:translate-none motion-reduce:scale-none",
             // Enter "from" state: rendered visible on the opening commit, so
-            // the rise starts from @starting-style in the first frame.
-            "starting:opacity-0 starting:translate-y-1 starting:scale-[0.98]",
-            isVisible
-              ? "opacity-100 translate-y-0 scale-100"
-              : "opacity-0 translate-y-1 scale-[0.98]",
+            // the motion starts from @starting-style in the first frame.
+            isVisible ? PLACEMENT_MOTION[placement].shown : PLACEMENT_MOTION[placement].hidden,
+            PLACEMENT_MOTION[placement].starting,
             "outline-hidden",
             className
           )}
@@ -774,6 +826,8 @@ export interface DialogAction {
   disabled?: boolean;
   loading?: boolean;
   intent?: "default" | "destructive";
+  /** A leading glyph, sized by the button like any other icon child. */
+  icon?: React.ReactNode;
 }
 
 interface AppDialogFooterProps {
@@ -845,6 +899,7 @@ AppDialog.Footer = function AppDialogFooter({
           className={cn("shrink-0", leadingAction.disabled && ARIA_DISABLED_CLASSES)}
           data-confirm-role="leading"
         >
+          {leadingAction.icon}
           {leadingAction.label}
         </Button>
       )}
@@ -885,6 +940,7 @@ AppDialog.Footer = function AppDialogFooter({
               )}
               data-confirm-role="cancel"
             >
+              {secondaryAction.icon}
               {secondaryAction.label}
             </Button>
           )}
@@ -905,6 +961,7 @@ AppDialog.Footer = function AppDialogFooter({
               className={primaryAction.disabled ? ARIA_DISABLED_CLASSES : undefined}
               data-confirm-role="confirm"
             >
+              {primaryAction.icon}
               {primaryAction.label}
             </Button>
           )}

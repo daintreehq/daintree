@@ -1,6 +1,6 @@
 # Building an app as a plugin
 
-A project plugin can stand in for a small SaaS product: an expense tracker, a CRM, a kanban board, a content calendar. The user asks an agent in a terminal to "track a $42 lunch with a client" or "move K-7 to review", the agent makes the change through the plugin's tools — or edits the data directly when it has none — and a panel shows the result a second later. This guide is how to build one. It assumes you have read the [agent brief](./agent-brief.md), which has the load rules and a zero-build skeleton, and it links to the reference docs rather than repeating them.
+A project plugin can stand in for a small SaaS product: an expense tracker, a CRM, a kanban board, a content calendar. The user asks an agent in a terminal to "track a $42 lunch with a client" or "move K-7 to review", the agent makes the change through the plugin's tools — or edits the data directly when it has none — and a panel shows the result a second later. This guide is how to build one. It assumes you have read the [agent brief](./agent-brief.md), which has the load rules, a zero-build skeleton, and the UI kit and performance defaults, and it links to the reference docs rather than repeating them.
 
 ## The shape
 
@@ -23,7 +23,7 @@ Five parts, all in the project's repository:
 - **The data store** is the source of truth. Agents and the panel read and write the same files or the same SQLite database.
 - **The agent tools** are how agents launched in Daintree reach it: the host's read-only database tools, which a declared database gets with no code, and your own tools for writes that have rules. See [Giving agents tools](#giving-agents-tools).
 - **The data contract** (`AGENTS.md` beside the plugin) is what an agent knows about your data beyond the tools' descriptions, and the whole of it for an agent without them. It is the most important file in the plugin.
-- **The panel** renders the data, refreshes live when an agent changes it, and lets the user edit it without clobbering the agent.
+- **The panel** renders the data with Daintree's UI kit, refreshes live when an agent changes it, and lets the user edit it without clobbering the agent.
 - **The plugin** is a thin worker around the store: handlers the view calls, a watch or change subscription, and the actions behind its commands and menus.
 
 A trimmed manifest for a SQLite-backed app, which is valid as written:
@@ -162,7 +162,12 @@ The project's root `AGENTS.md` names the data, points at the contract by path, a
 
 ## Live refresh
 
-Pull on mount, then push. The view asks the worker for a snapshot when it mounts, and the worker tells it to pull again when the data changes ([Pull on mount, then push](./patterns.md#pull-on-mount-then-push)).
+Subscribe, then pull. The view subscribes to the worker's pushes, then asks for a snapshot; when the data changes the worker either pushes what changed or tells the view to pull again ([Subscribe, then pull](./patterns.md#subscribe-then-pull)). Which one depends on the data:
+
+- **A keyed list the worker changes** — cards, contacts, transactions it records itself — is a synced collection: `createSyncedCollection` in the worker, `useSyncedCollection` in the view. Each change sends a delta, not the list ([Push deltas](./patterns.md#push-deltas-not-the-whole-state)).
+- **A change the worker only hears about** — an agent's `sqlite3` session, a file an editor rewrote — is an invalidation: push a small "changed" message and have the view refetch with `useCachedHostChannel(…, { invalidateOn })`, which costs one refetch per burst however many pushes arrive.
+
+A board or ledger with hundreds of rows renders in the kit's `DataTable` or `VirtualList`, never as a plain `.map` ([Large lists](./patterns.md#large-lists)).
 
 For files, watch the **directory**, not the file. Agents, editors and `host.fs.writeFile` all save by writing a new file and renaming it over the old one, which a watch on the file itself can miss:
 
@@ -175,7 +180,7 @@ const unwatch = await host.fs.watch([boardDir], reload, {
 
 Add `recursive: true` for a nested data tree (keep it on your own data folder, never a whole worktree). Treat every callback as a hint: re-read, compare the revision with what you last loaded, and skip the push if nothing changed. That also absorbs your own writes, whose watch events can arrive before `writeFile` resolves. The limits, including Linux recursive-watch caveats, are in [What `host.fs` does not do](./host-api.md#what-hostfs-does-not-do).
 
-For SQLite, `onDidChange` does it all. It fires for your own commits (`origin: "self"`) and for everything else (`"external"`): an agent's `sqlite3` session, a `git checkout` that replaces the file, a reset script.
+For SQLite, `onDidChange` does it all. It fires for your own commits (`origin: "self"`) and for everything else (`"external"`): an agent's `sqlite3` session, a `git checkout` that replaces the file, a reset script. Changes that land within one 50 ms window arrive as one callback, and the view's `invalidateOn` collapses what is left into one refetch.
 
 ```js
 let opening;
@@ -194,7 +199,7 @@ const db = () =>
 
 Open it from the first handler that needs it, not inside `activate()`: the first open of a project database asks for consent, and an unanswered prompt would overrun activation. Read with plain `query` and `get` calls rather than a `transaction` — a transaction takes the write lock, and an agent's `sqlite3` write during a panel refresh then fails with "database is locked". Tell agents to retry on that message, or to run `sqlite3 -cmd ".timeout 5000" …` so the CLI waits.
 
-Show errors in the panel rather than hiding them. Agents make mistakes: keep the last good state on screen under a banner saying the file is invalid and where, list unreadable records as problem rows, and disable UI edits until the data parses again.
+Show errors in the panel rather than hiding them. Agents make mistakes: keep the last good state on screen under a banner saying the file is invalid and where (a kit `Callout` with `severity="error"`), list unreadable records as problem rows, and disable UI edits until the data parses again.
 
 ## Editing safely alongside agents
 
@@ -209,7 +214,7 @@ import { editFile, updateFrontmatter } from "@daintreehq/plugin-sdk/data";
 await editFile(host, contactPath, (text) => text && updateFrontmatter(text, { stage: "won" }));
 ```
 
-The transform may run more than once, so compute from its argument, never from state it mutates. `updateFrontmatter` rewrites only the keys you name, so an agent's new log line in the body survives a stage change made a moment later. The import works in a zero-build worker with no install ([No install needed in a worker](./data-helpers.md#no-install-needed-in-a-worker)).
+The transform may run more than once, so compute from its argument, never from state it mutates. `updateFrontmatter` rewrites only the keys you name, so an agent's new log line in the body survives a stage change made a moment later. The import works in a zero-build worker with no install ([No install needed in a worker](./data-helpers.md#no-install-needed-in-a-worker)). A bundled worker imports the same entry from the npm SDK, `@daintreehq/plugin-sdk/data`. Not in the 0.1.0 release on npm; it ships in the next one.
 
 **When the edit cannot be re-applied** — the user is editing a note's text in the panel — keep the revision you loaded (`host.fs.readFileWithRevision`), write with `expectedRevision`, and on `REVISION_MISMATCH` stop and show a conflict: "changed on disk — reload, or keep yours". The error's `currentRevision` identifies the version on disk; re-read the file to show its contents. Hand the conflict to the view as a handler result (`{ conflict: true, theirs, yours }`) rather than a thrown error, so the view can offer the choice without parsing an error message. Creating a file uses `expectedRevision: null`, so an agent that created it first wins and you load theirs. Appends to a log go through `host.fs.appendFile`, which adds to the end instead of rewriting the file, so it can't overwrite an agent's lines. It is not a lock: end every record with a newline, and expect a concurrent writer's lines to interleave with yours.
 
@@ -250,18 +255,21 @@ A file store is already backed up by git; the menu items are for getting data ou
 
 Link-only, because [Views](./views.md) is the reference:
 
+- Draw with the [UI kit](./views.md#host-ui-components), `@daintreehq/plugin-ui`: `DataTable` for the ledger, `ListRow`s in a `VirtualList` for the contacts, `PaneHeader` and `Toolbar` for the chrome, `Select`, `Input` and `FormField` for the edit form, `ConfirmDialog` before a delete, `formatTimeAgo` and `useNow` for "edited 5m ago". It is served to a zero-build view with no install and draws exactly like the app's own panels.
 - An app-shaped panel icon (`wallet`, `kanban`, `calendar`, `users`, `chart-line`, `receipt` and more — the list is under [Panels](./contribution-points.md#panels--shipped)) and a `var(--theme-category-*)` colour.
-- Tailwind with Daintree's tokens only ([Styling](./views.md#styling)); stock palette classes compile to nothing.
+- Tailwind with Daintree's tokens for the layout and anything the kit doesn't draw ([Styling](./views.md#styling)); stock palette classes compile to nothing.
 - Render prose with the host's [`Markdown`](./views.md#host-ui-components) from `@daintreehq/plugin-ui` rather than shipping a renderer; pass the file's path as `basePath` so relative images and links work.
-- Design the empty state (no data folder yet — offer to create it), the error state (the last good data plus a banner) and the waiting-for-consent state, not just the happy path.
+- Design the empty state (no data folder yet — offer to create it; `EmptyState` or `PaneState kind="empty"`), the error state (the last good data plus a `Callout`) and the waiting-for-consent state (`PaneState kind="loading"`), not just the happy path. Don't add a setup warning of your own: a missing `required` setting already puts the host's setup strip on every panel.
 
 ## Testing
 
 Test four things: that the plugin loads, that its handlers and tools do the right thing, that an agent in Daintree uses the tools, and that an agent without them can use the data contract.
 
-**It loads.** `npx daintree-plugin validate` in the plugin folder checks the manifest; `npx daintree-plugin doctor <projectRoot>` checks the committed `dist/` and trust state ([Development loop](./dev-loop.md)).
+**It loads.** `npx daintree-plugin validate` in the plugin folder checks the manifest (the 0.1.0 CLI on npm predates `databases` and refuses a manifest that declares them; Not in the 0.1.0 release on npm; it ships in the next one); `npx daintree-plugin doctor <projectRoot>` checks that `main` and every view `componentPath` exist in the working tree, parse as ESM, are in the git index and are not git-ignored, and reports the trust and load state Daintree has recorded ([Development loop](./dev-loop.md#daintree-plugin-doctor-projectroot)). Those are working-tree and index checks, not a check of what was committed: staged-but-uncommitted output passes, and a tracked file whose committed copy is stale is not caught, so commit the rebuilt `dist/` with the source change.
 
-**The handlers work.** Drive `activate()` with the mock host from `@daintreehq/plugin-sdk/testing`, and call handlers exactly as the host does, context first: `handler(ctx, args)`. A zero-build plugin can keep a `package.json` beside it for test tooling only ([Testing a raw-ESM project plugin](./dev-loop.md#testing-a-raw-esm-project-plugin)). Worth covering:
+**It is fast and looks native.** `npx daintree-plugin lint` in the plugin folder reads the view and worker source for the patterns that make a panel slow or foreign — whole-list pushes, per-event renders, polling in the view, hand-rolled controls, stock colours — and names the fix for each. Not in the 0.1.0 release on npm; it ships in the next one. Then open the panel over a realistic amount of data (a year of transactions, not five) and read the plugin's Performance section in Project settings → Plugins ([Measuring your plugin](./views.md#measuring-your-plugin)).
+
+**The handlers work.** Drive `activate()` with the mock host from `@daintreehq/plugin-sdk/testing`, and call handlers exactly as the host does, context first: `handler(ctx, args)`. A zero-build plugin can keep a `package.json` beside it for test tooling, minding that an installed SDK takes precedence over the app's copy at runtime ([Testing a raw-ESM project plugin](./dev-loop.md#testing-a-raw-esm-project-plugin)). The mock's `databases` option and agent-pane drivers are Not in the 0.1.0 release on npm; it ships in the next one. Worth covering:
 
 - Seed files with `host.fs.writeFile`, then fire `simulateFsWatch` and assert a push. With `debounceMs`, use fake timers.
 - Pass `databases: { directory }` and the mock's `host.db` is real SQLite at `<directory>/<id>.db`, running the host's own handle code, so migrations and triggers run for real. Write to that file from the test with `node:sqlite` or the `sqlite3` CLI to stand in for an agent, then wait for the once-a-second change poll and assert the `changed` push.
@@ -301,12 +309,13 @@ In both runs, try each agent you expect people to use, since they read tools and
 - [ ] Arithmetic answers come from a script that shares the panel's code.
 - [ ] The contract says what agents in a linked worktree should do.
 - [ ] For SQLite: rules in `CHECK` constraints and triggers, column comments in `CREATE TABLE`, the database opened lazily, reads outside transactions.
-- [ ] Live refresh: a debounced directory watch with `allowMissing`, or `db.onDidChange`; revision compare to skip no-op pushes.
+- [ ] Live refresh: a debounced directory watch with `allowMissing`, or `db.onDidChange`; revision compare to skip no-op pushes; the view subscribes before it pulls, and gets deltas (`createSyncedCollection`) or one refetch per burst (`invalidateOn`), never the whole list per change.
 - [ ] Every UI write goes through `editFile`, `expectedRevision`, `appendFile` or a transaction; a conflict the panel can't re-apply is shown, not overwritten.
 - [ ] Invalid or partial data shows as an error row or banner with the last good state.
 - [ ] Records can be dragged to an agent and sent with **Send to agent…**; the hand-off is a self-contained brief with no instruction; results are reported honestly.
 - [ ] Settings declared with the right scope; secrets as `type: "secret"`; `required` only for what the whole plugin needs; setup reached through `host.settings.open`; no settings UI in the panel.
 - [ ] Export paths and menu items in place (`menu`, `renderPdf`, `db.backup` as needed).
-- [ ] App-shaped icon, token-only styling, host `Markdown` for prose, designed empty and error states.
+- [ ] App-shaped icon; kit components for controls, lists, tables, dialogs and states; token-only styling for the rest; host `Markdown` for prose; designed empty and error states; any long list virtualised.
+- [ ] `daintree-plugin lint` is clean (not in the 0.1.0 CLI on npm; skip it until the next release), and the Performance section looked at with realistic data.
 - [ ] `open` command opens the panel; commands that don't write declare `"requires": []`.
 - [ ] Handlers and tools tested against the mock host; the tools tested with real agents launched in Daintree after access was on; the contract tested headlessly in a scratch clone; the panel watched updating live in Daintree.

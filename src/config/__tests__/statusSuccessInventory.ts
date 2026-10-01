@@ -501,6 +501,57 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Recorded result of the last CI run",
     },
   ],
+  "src/components/PluginKit/PluginKitTypography.tsx": [
+    {
+      category: "outcome",
+      signature: "text-status-success",
+      anchor: 'success: "text-status-success"',
+      expectedOccurrences: 1,
+      rationale:
+        'Text\'s success tone: the public kit role a plugin states a named result in ("1,204 chunks uploaded"), as Badge and Callout already expose',
+    },
+    {
+      category: "outcome",
+      signature: "bg-status-success",
+      expectedOccurrences: 1,
+      rationale:
+        "StatusDot's success state: the recorded result of a run or check the plugin names in the dot's label",
+    },
+    {
+      category: "outcome",
+      signature: "text-status-success",
+      anchor: "SEVERITY_GLYPH.success",
+      expectedOccurrences: 1,
+      rationale:
+        "StateGlyph's success state: the severity success glyph for a named passed result, the same pairing SeverityIcon draws",
+    },
+  ],
+  "src/components/PluginKit/PluginKitGit.tsx": [
+    {
+      category: "domain",
+      signature: "text-status-success",
+      anchor: "↑{entry.ahead}",
+      expectedOccurrences: 1,
+      rationale:
+        "WorktreeBadge's ahead-arrow count against the upstream, as UpstreamSyncBadge draws it",
+    },
+    {
+      category: "outcome",
+      signature: "text-status-success",
+      anchor: '"Checks passing"',
+      expectedOccurrences: 1,
+      rationale:
+        "PullRequestRow's CI slot: the recorded result of the pull request's checks roll-up",
+    },
+    {
+      category: "outcome",
+      signature: "text-status-success",
+      anchor: '"Approved"',
+      expectedOccurrences: 1,
+      rationale:
+        "PullRequestRow's review verdict: the forge's recorded approval of the pull request",
+    },
+  ],
   "src/components/ui/DiffStat.tsx": [
     {
       category: "domain",
@@ -526,5 +577,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 58;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 60;
+export const EXPECTED_STATUS_SUCCESS_SITES = 64;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 66;

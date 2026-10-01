@@ -1878,17 +1878,46 @@ interface PluginHostCallOptions {
     signal?: AbortSignal;
 }
 /**
- * Options accepted by high-frequency event subscriptions (today
- * {@link PluginActivationApi.onDidChangeWorktrees}). `debounceMs` coalesces a
- * burst of change events into a single trailing callback fired `debounceMs`
- * after the last event — the host re-emits the worktree set on every git-status
- * poll, so a UI-updating plugin can opt into far fewer callbacks. A burst that
- * never goes quiet still fires at least every few `debounceMs`. Values below a
- * small floor (~50ms) are clamped up; `0` / omitted means no debounce (fire on
- * every change). The coalesced callback receives the most recent snapshot list.
+ * Options accepted by the bursty host subscriptions —
+ * {@link PluginActivationApi.onDidChangeWorktrees},
+ * {@link PluginActivationApi.onDidChangeActiveWorktree} and
+ * {@link PluginActivationApi.onDidChangeAgentState}. These coalesce by default:
+ * a burst of events becomes one trailing callback fired `debounceMs` after the
+ * last event (the host re-emits the worktree set on every git-status poll, and
+ * agents change state many times a second). A burst that never goes quiet
+ * still fires at least every `4 × debounceMs`, so a busy project never
+ * withholds its latest state indefinitely.
+ *
+ * - omitted (or not a number) — the default window, 100ms
+ * - `0` (or a negative number) — no coalescing: every event is delivered
+ * - any other value — used as the window, clamped to 50–60000ms
+ *
+ * What a coalesced callback receives is documented on each subscription; the
+ * common rule is that the most recent value is always delivered.
  */
 interface PluginHostSubscriptionOptions {
     debounceMs?: number;
+}
+/**
+ * What changed in the worktree set since the previous
+ * {@link PluginActivationApi.onDidChangeWorktrees} delivery to the same
+ * subscription, as snapshot `id`s. Computed by the host from the list it last
+ * delivered, so a coalesced burst reports the net change across the whole
+ * burst (a worktree added and removed within one window appears in neither
+ * list). The first delivery compares against an empty set: every worktree is
+ * `added`.
+ *
+ * A worktree is `changed` when any field of its {@link PluginWorktreeSnapshot}
+ * differs — branch, current/main flags, ahead/behind counts, mood, activity
+ * and creation times, the linked issue/PR projection, or its status (the
+ * per-state counts and the path + state of every changed file). A delivery
+ * whose three lists are all empty re-sends an unchanged set; a plugin that
+ * only cares about changes can return early on it.
+ */
+interface PluginWorktreesChange {
+    readonly added: readonly string[];
+    readonly removed: readonly string[];
+    readonly changed: readonly string[];
 }
 /**
  * Persistent, plugin-scoped key/value settings exposed on
@@ -2132,8 +2161,16 @@ interface PluginDatabase extends PluginDatabaseStatements {
     transaction<T>(fn: (tx: PluginDatabaseStatements) => Promise<T> | T): Promise<T>;
     /**
      * Fire after the database changes, including commits by other processes —
-     * the usual case being an agent writing with the `sqlite3` CLI. Coalesced:
-     * a burst of external commits delivers one event. Returns a disposer.
+     * the usual case being an agent writing with the `sqlite3` CLI. Returns a
+     * disposer.
+     *
+     * Coalesced: every change within a 50ms window — this handle's own commits
+     * and external ones alike — is delivered as one event at the end of the
+     * window, so 200 inserts awaited one after another cost a handful of
+     * refetches rather than 200. The last change is always delivered, including
+     * one whose window is still open when the handle closes. A window
+     * that saw any external change reports `origin: "external"`; one that saw
+     * only this handle's commits reports `"self"`.
      */
     onDidChange(callback: (event: PluginDatabaseChangeEvent) => void): () => void;
     /**
@@ -2208,6 +2245,18 @@ interface PluginChannelSchema<TArgs, TResult> {
     args: z.ZodType<TArgs>;
     result: z.ZodType<TResult>;
     requires?: readonly BuiltInPluginCapability[];
+}
+/**
+ * Per-channel options for {@link PluginHostApi.registerHandler}.
+ */
+interface PluginHandlerOptions {
+    /**
+     * Deadline, in milliseconds, for one invoke of this channel. When it passes,
+     * the renderer's `invoke` rejects with a `PLUGIN_INVOKE_TIMEOUT:` error and a
+     * worker-hosted handler's invoke is cancelled. Defaults to five minutes;
+     * `0` disables the deadline for handlers that legitimately run longer.
+     */
+    timeoutMs?: number;
 }
 /**
  * Provider-agnostic projection of a worktree's linked forge resources (issue
@@ -2933,6 +2982,99 @@ interface PluginFsReadWithRevisionResult {
      */
     revision: string;
 }
+/**
+ * Options for {@link PluginFsApi.readFiles}. `encoding` picks the content type:
+ * `"utf-8"` (the default) decodes each file as {@link PluginFsApi.readFile}
+ * does, `"bytes"` returns raw bytes as {@link PluginFsApi.readFileBytes} does.
+ */
+interface PluginFsReadFilesOptions<E extends PluginFsReadFilesEncoding = PluginFsReadFilesEncoding> extends PluginHostCallOptions {
+    encoding?: E;
+    /**
+     * Per-file ceiling in bytes. A larger file is not read past the ceiling and
+     * comes back as `{ ok: false, error: { code: "TOO_LARGE" } }`. Must be a
+     * non-negative integer; omitted means only the call's total budget applies.
+     */
+    maxBytesPerFile?: number;
+}
+/** Content type of a {@link PluginFsApi.readFiles} call. */
+type PluginFsReadFilesEncoding = "utf-8" | "bytes";
+/**
+ * Why one path in a {@link PluginFsApi.readFiles} call was not read.
+ *
+ * - `PATH_NOT_ALLOWED` / `PERMISSION_REQUIRED` — the same refusals
+ *   {@link PluginFsApi.readFile} rejects with (outside every allowed root, or
+ *   the root's read capability is not declared)
+ * - `NOT_FOUND` — nothing at the path
+ * - `NOT_A_FILE` — a directory, FIFO, device or other non-regular file
+ * - `TARGET_IS_SYMLINK` / `TARGET_UNAVAILABLE` — the verified-open refusals
+ *   {@link PluginFsApi.readFile} documents
+ * - `TOO_LARGE` — bigger than `maxBytesPerFile`
+ * - `RESULT_TOO_LARGE` — the call's total byte budget was spent on earlier
+ *   entries; read this path in a later call
+ * - `READ_FAILED` — anything else (the `message` says what)
+ */
+type PluginFsReadFilesErrorCode = "PATH_NOT_ALLOWED" | "PERMISSION_REQUIRED" | "NOT_FOUND" | "NOT_A_FILE" | "TARGET_IS_SYMLINK" | "TARGET_UNAVAILABLE" | "TOO_LARGE" | "RESULT_TOO_LARGE" | "READ_FAILED";
+/** One entry of a {@link PluginFsApi.readFiles} result, in request order. */
+type PluginFsReadFilesEntry<C = string> = {
+    readonly path: string;
+    readonly ok: true;
+    readonly content: C;
+} | {
+    readonly path: string;
+    readonly ok: false;
+    readonly error: {
+        readonly code: PluginFsReadFilesErrorCode;
+        readonly message: string;
+    };
+};
+/** Options for {@link PluginFsApi.walk}. */
+interface PluginFsWalkOptions extends PluginHostCallOptions {
+    /**
+     * Globs (the `path.matchesGlob` dialect: `*`, `**`, `?`, `[…]`, `{a,b}`)
+     * matched against each entry's root-relative path. When given, only entries
+     * matching at least one are returned; directories are still walked, so
+     * `["**\/*.ts"]` finds every TypeScript file. At most 64 patterns.
+     */
+    include?: readonly string[];
+    /**
+     * Globs, as for `include`. A matching entry is left out, and a matching
+     * directory is not descended into — `["node_modules", "**\/dist"]` prunes
+     * both. At most 64 patterns.
+     */
+    exclude?: readonly string[];
+    /**
+     * How deep to go: `1` lists `root`'s own children (like {@link PluginFsApi.readdir}),
+     * `2` their children too, and so on. An integer from 1 to 64; omitted means
+     * 64.
+     */
+    maxDepth?: number;
+    /**
+     * Most entries to return, counted after `include` filtering. An integer from
+     * 1 to 50,000; default 10,000. Past it the result is `truncated`.
+     */
+    limit?: number;
+    /** Leave out what git ignores (see {@link PluginFsApi.walk}). Default `true`. */
+    respectGitignore?: boolean;
+    /** Report each file's size in bytes. Default `false`; it costs one stat per file. */
+    includeSize?: boolean;
+}
+/** One entry of a {@link PluginFsApi.walk} result. */
+interface PluginFsWalkEntry {
+    /** Relative to the walk's root, `/`-separated, never starting with `/` or `./`. */
+    readonly path: string;
+    readonly type: "file" | "dir";
+    /** Size in bytes, for a file, when {@link PluginFsWalkOptions.includeSize} was set. */
+    readonly size?: number;
+}
+/** What a {@link PluginFsApi.walk} call returns. */
+interface PluginFsWalkResult {
+    readonly entries: PluginFsWalkEntry[];
+    /**
+     * True when the walk stopped at `limit`, the result budget or one of the
+     * host's cost bounds with entries left unlisted.
+     */
+    readonly truncated: boolean;
+}
 /** Options for {@link PluginFsApi.watch}. */
 interface PluginFsWatchOptions extends PluginHostCallOptions {
     /**
@@ -3024,6 +3166,33 @@ interface PluginFsApi {
      */
     readFileWithRevision(filePath: string, options?: PluginHostCallOptions): Promise<PluginFsReadWithRevisionResult>;
     /**
+     * Read many files in one host round trip — the bulk counterpart to
+     * {@link readFile} for a search, an index build, or a tree of small config
+     * files, where one call per file costs a round trip each.
+     *
+     * Every path gets exactly the checks {@link readFile} applies — containment
+     * against `scopes.fs.allowedPaths`, the root's read capability, and the
+     * verified open — but a refusal fails only that entry: the result has one
+     * {@link PluginFsReadFilesEntry} per path, in request order, each either
+     * `{ ok: true, content }` or `{ ok: false, error: { code, message } }`.
+     *
+     * Bounded so the result always fits one host reply: at most 1024 paths per
+     * call (more rejects the call), and at most 8 MiB of content in total,
+     * measured as returned (decoded UTF-8 text, or bytes) and spent in request
+     * order — entries past the budget come back `RESULT_TOO_LARGE` for a
+     * follow-up call, and the same request always defers the same entries.
+     * The whole call rejects only on a missing read capability for every root,
+     * an unloaded plugin, invalid arguments, or `options.signal` aborting.
+     *
+     * Optional in the type so existing hand-written {@link PluginFsApi} fakes
+     * keep compiling; Daintree's host, the worker host and `createMockHost`
+     * always provide it.
+     */
+    readFiles?: {
+        (paths: readonly string[], options?: PluginFsReadFilesOptions<"utf-8">): Promise<PluginFsReadFilesEntry<string>[]>;
+        (paths: readonly string[], options: PluginFsReadFilesOptions<"bytes">): Promise<PluginFsReadFilesEntry<Uint8Array>[]>;
+    };
+    /**
      * Create a directory and any missing ancestors. Creating a directory that
      * already exists is a no-op; a non-directory at the path rejects. Gated and
      * consented like {@link writeFile}, and both happen before anything is
@@ -3082,6 +3251,48 @@ interface PluginFsApi {
      * browser uses — see {@link PluginFsReaddirOptions.detail}.
      */
     readdir(dirPath: string, options?: PluginFsReaddirOptions): Promise<PluginFsDirEntry[]>;
+    /**
+     * List a directory tree in one host round trip — the recursive counterpart
+     * to {@link readdir} for a file search or an index build, where one
+     * `readdir` per directory costs a round trip each.
+     *
+     * `root` gets exactly the checks {@link readdir} applies (containment
+     * against `scopes.fs.allowedPaths` and the root's read capability), and the
+     * walk stays inside it: symbolic links are neither followed nor listed, and
+     * a directory's listing is dropped unless it still resolves to where it was
+     * reached both before and after it is read. (Like {@link readdir}, reads are
+     * by pathname, so a directory swapped for a link and back between those two
+     * checks is not excluded.)
+     *
+     * Entries carry the path relative to `root`, with `/` separators, and come
+     * back sorted by path, directories before the entries inside them. The walk
+     * is breadth-first, so when `limit` (or the host's result budget) cuts it
+     * short, `truncated` is `true` and what was kept is the shallowest part of
+     * the tree; the same tree always truncates the same way. Besides `limit`,
+     * the host bounds a walk's cost — at most 200,000 directory entries
+     * examined and 1,000,000 glob tests — and a walk that reaches either bound
+     * returns what it had with `truncated: true`. A directory is read only as
+     * far as the examine bound allows, so when one directory alone holds more
+     * entries than the bound has left, the entries kept from it are whichever
+     * the filesystem enumerated first — still sorted, but not necessarily the
+     * first by path, and not guaranteed to repeat.
+     *
+     * With `includeSize`, a size is omitted for a file whose directory no
+     * longer resolves to where the walk listed it when its size is read.
+     *
+     * With `respectGitignore` (the default), inside a git repository an entry
+     * git ignores — and not tracked — is left out and not descended into,
+     * `.git` itself is skipped, and a nested repository or submodule is listed
+     * but not entered. Outside a repository the option has no effect. On macOS
+     * and Windows, a repository that tracks a file matching its own ignore rules
+     * is walked without ignore filtering, since git can misreport such a file
+     * under a different letter case as ignored.
+     *
+     * Optional in the type so hand-written {@link PluginFsApi} fakes keep
+     * compiling; Daintree's host, the worker host and `createMockHost` always
+     * provide it.
+     */
+    walk?(root: string, options?: PluginFsWalkOptions): Promise<PluginFsWalkResult>;
     /** Stat a path. Rejects on a missing read capability or an out-of-scope path. */
     stat(targetPath: string, options?: PluginHostCallOptions): Promise<PluginFsStat>;
     /**
@@ -3407,14 +3618,14 @@ interface PluginActivationApi {
      * @throws {Error} If called after activation resolves or times out — the host
      *   is revoked and registration is rejected.
      */
-    registerHandler<TArgs, TResult>(channel: string, schema: PluginChannelSchema<TArgs, TResult>, handler: PluginTypedIpcHandler<TArgs, TResult>): Promise<void>;
+    registerHandler<TArgs, TResult>(channel: string, schema: PluginChannelSchema<TArgs, TResult>, handler: PluginTypedIpcHandler<TArgs, TResult>, options?: PluginHandlerOptions): Promise<void>;
     /**
      * Legacy untyped overload: a variadic handler with no host-side validation.
      * Retained for plugins that haven't migrated to per-channel schemas. The
      * typed overload above is preferred for new code. Also revoke-guarded — must
      * be called during `activate()`.
      */
-    registerHandler(channel: string, handler: PluginIpcHandler): Promise<void>;
+    registerHandler(channel: string, handler: PluginIpcHandler, options?: PluginHandlerOptions): Promise<void>;
     /**
      * Push a fire-and-forget payload to all renderers listening on `channel`.
      * Intended for the activation window — wiring up the renderer-side view of a
@@ -3465,6 +3676,10 @@ interface PluginActivationApi {
      * calling it more than once is a no-op. All subscriptions are automatically
      * disposed when the plugin is unloaded.
      *
+     * Coalesced by default: a burst of activations becomes one callback with
+     * the worktree active at the end of it. Pass `{ debounceMs: 0 }` to receive
+     * every activation — see {@link PluginHostSubscriptionOptions}.
+     *
      * Subscribing is revoke-guarded — call it during `activate()`. The callback
      * itself fires for the plugin's whole lifetime; only the act of subscribing
      * is restricted to the activation window.
@@ -3472,16 +3687,19 @@ interface PluginActivationApi {
      * @throws {Error} If called after activation resolves or times out — the host
      *   is revoked and the subscription is rejected.
      */
-    onDidChangeActiveWorktree(callback: (snapshot: PluginWorktreeSnapshot | null) => void): Promise<() => void>;
+    onDidChangeActiveWorktree(callback: (snapshot: PluginWorktreeSnapshot | null) => void, options?: PluginHostSubscriptionOptions): Promise<() => void>;
     /**
      * Subscribe to the worktree set changing. The callback fires with the full
-     * current list on any worktree add/update/remove. Resolves to a disposer;
+     * current list on any worktree add/update/remove, and a second argument
+     * naming which worktrees were added, removed or changed since the previous
+     * delivery — see {@link PluginWorktreesChange}. Resolves to a disposer;
      * calling it more than once is a no-op. All subscriptions are automatically
      * disposed when the plugin is unloaded.
      *
-     * Pass `options.debounceMs` to coalesce bursts (the host re-emits on every
-     * git-status poll) into a single trailing callback — see
-     * {@link PluginHostSubscriptionOptions}. Omitted means fire on every change.
+     * Coalesced by default (the host re-emits on every git-status poll): a burst
+     * becomes one trailing callback carrying the latest list, and the change
+     * describes the whole burst. Pass `{ debounceMs: 0 }` to receive every
+     * event — see {@link PluginHostSubscriptionOptions}.
      *
      * Subscribing is revoke-guarded — call it during `activate()`. The callback
      * itself fires for the plugin's whole lifetime; only the act of subscribing
@@ -3490,15 +3708,24 @@ interface PluginActivationApi {
      * @throws {Error} If called after activation resolves or times out — the host
      *   is revoked and the subscription is rejected.
      */
-    onDidChangeWorktrees(callback: (snapshots: PluginWorktreeSnapshot[]) => void, options?: PluginHostSubscriptionOptions): Promise<() => void>;
+    onDidChangeWorktrees(callback: (snapshots: PluginWorktreeSnapshot[], change: PluginWorktreesChange) => void, options?: PluginHostSubscriptionOptions): Promise<() => void>;
     /**
      * Subscribe to agent-session state changes, gated on the `agent:read`
      * capability. The callback fires with a frozen {@link PluginAgentSnapshot}
-     * on every accepted agent state transition across all sessions (unscoped,
+     * for accepted agent state transitions across all sessions (unscoped,
      * like {@link onDidChangeWorktrees} — a plugin filters by `snapshot.agentId`
      * if it cares about one session). Resolves to a disposer; calling it more
      * than once is a no-op. All subscriptions are automatically disposed when the
      * plugin is unloaded.
+     *
+     * Coalesced by default, per terminal: within one window only each
+     * terminal's latest transition is delivered, one callback per terminal, in
+     * the order of those latest transitions. The final state of every terminal
+     * is always delivered; the transitions in between may be skipped, so a
+     * delivered snapshot's `previousState` is the state immediately before that
+     * last transition, not necessarily the state you were last told about. Pass
+     * `{ debounceMs: 0 }` to receive every transition — see
+     * {@link PluginHostSubscriptionOptions}.
      *
      * Observation only — there is no companion method to drive, pause, resume, or
      * inject into a session.
@@ -3511,7 +3738,7 @@ interface PluginActivationApi {
      *   `agent:read` capability, or if called after activation resolves or times
      *   out (the host is revoked).
      */
-    onDidChangeAgentState(callback: (snapshot: PluginAgentSnapshot) => void): Promise<() => void>;
+    onDidChangeAgentState(callback: (snapshot: PluginAgentSnapshot) => void, options?: PluginHostSubscriptionOptions): Promise<() => void>;
     /**
      * Subscribe to panel lifecycle transitions for this plugin's own contributed
      * panels (#11301). No capability is required — a plugin only ever sees events
@@ -3718,6 +3945,44 @@ interface PluginHostApi extends PluginActivationApi {
      * subscriber as before. An empty-string `panelId` throws.
      */
     postToPanel(channel: string, payload: unknown, panelId?: string | null): Promise<void>;
+    /**
+     * Whether any renderer this host pushes to may currently be subscribed to
+     * `channel` — through `window.electron.plugin.on` / `onPanel` or the SDK
+     * hooks built on them. Use it to stop producing pushes nobody will receive.
+     * It is a hint for the producer only: the host delivers every push to every
+     * renderer in scope whatever this answers, because a renderer's report is
+     * always a moment behind its subscribers.
+     *
+     * Errs towards `true`: a renderer that has not reported its subscriptions
+     * yet (one just created) counts as listening, and in a worker the first
+     * call for a channel answers `true` until the host's first report for it
+     * arrives a moment later. `false` once the plugin is unloaded. Synchronous
+     * and cheap — read it on every produce.
+     *
+     * A push you skip because this said `false` is gone for good, and a view
+     * can subscribe the moment after you read it. So only skip work a view can
+     * recover by pulling state when it mounts (as a synced collection's snapshot
+     * does), never a one-off event.
+     *
+     * Optional in the type so hand-written {@link PluginHostApi} fakes keep
+     * compiling; Daintree's host, the worker host and `createMockHost` always
+     * provide it. `channel` is validated like {@link postToPanel}'s.
+     */
+    hasListeners?(channel: string): boolean;
+    /**
+     * Call `callback` whenever {@link hasListeners} for `channel` changes —
+     * with `false` when the last subscriber anywhere in scope goes away, `true`
+     * when one appears. Not called with the current value; read that with
+     * {@link hasListeners}. Returns a disposer; every registration is also
+     * removed when the plugin unloads. Not revoke-guarded — callable any time
+     * after activation, like {@link postToPanel}.
+     *
+     * A live registration is an event subscription like `onDidChangeWorktrees`:
+     * while one exists, an idle worker is not disposed, since a disposed worker
+     * could not be called back. Reading {@link hasListeners} alone never holds
+     * the worker.
+     */
+    onDidChangeListeners?(channel: string, callback: (hasListeners: boolean) => void): () => void;
     /**
      * Returns the currently-active worktree (`isCurrent === true`) of the project
      * this host reads for, as a frozen snapshot, or `null` if none is active.
@@ -4253,6 +4518,12 @@ interface FsWriteRecord {
     path: string;
     contents: string;
 }
+/** A coalesced host subscription, with the window the host resolves for it. */
+interface MockSubscriptionRecord {
+    kind: "worktrees" | "active-worktree" | "agent-state";
+    /** Effective window in ms: the 100ms default, `0` for raw, else clamped to 50–60000. */
+    debounceMs: number;
+}
 /** Captured `host.git.commit(worktreePath, options)` calls. */
 interface GitCommitRecord {
     worktreePath: string;
@@ -4309,6 +4580,14 @@ interface MockHostState {
      */
     readonly documentsRenderPdfCalls: ReadonlyArray<PluginRenderPdfOptions>;
     /**
+     * One entry per `onDidChangeWorktrees` / `onDidChangeActiveWorktree` /
+     * `onDidChangeAgentState` subscription, in order, with the coalescing
+     * window the host would apply — so a test can assert a plugin kept the
+     * default or opted out with `debounceMs: 0`. The mock itself always
+     * delivers synchronously.
+     */
+    readonly subscriptionOptions: ReadonlyArray<MockSubscriptionRecord>;
+    /**
      * Replace the active worktree and notify every `onDidChangeActiveWorktree`
      * subscriber. Helpers are top-level on the {@link MockHostState} side of the
      * intersection so they cannot drift into the production `PluginHostApi`.
@@ -4334,6 +4613,13 @@ interface MockHostState {
      * waiting for a window to regain focus.
      */
     simulateSystemWake(event: PluginSystemWakeEvent): void;
+    /**
+     * Set what `host.hasListeners(channel)` answers and, when that changes it,
+     * call every `onDidChangeListeners(channel, …)` callback. Every channel
+     * starts out listened to — the answer a real host gives before it has heard
+     * from a renderer — so a plugin that never asks is unaffected.
+     */
+    simulateListenersChange(channel: string, hasListeners: boolean): void;
     /**
      * Pre-seed a deterministic `dispatch()` result for one action id. Overrides
      * the default in-memory routing (which resolves the registered handler).

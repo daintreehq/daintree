@@ -1544,16 +1544,20 @@ describe("NotificationCenter — Filter inactive contrast", () => {
     // Comparing whole class strings would not do: these chips also differ by
     // background and weight, so that comparison passes even if both foregrounds
     // collapse to the same role.
-    const unread = screen.getByText("Unread");
+    const unread = screen.getByRole("button", { name: "Unread" });
     expect(textRole(unread.className)).toBeDefined();
-    expect(textRole(unread.className)).not.toBe(textRole(screen.getByText("All").className));
+    expect(textRole(unread.className)).not.toBe(
+      textRole(screen.getByRole("button", { name: "All" }).className)
+    );
     expect(unread.className).toContain("hover:text-text-primary");
 
     fireEvent.click(unread);
 
     // After flipping, the roles swap and the invariant has to hold either way.
-    const all = screen.getByText("All");
-    expect(textRole(all.className)).not.toBe(textRole(screen.getByText("Unread").className));
+    const all = screen.getByRole("button", { name: "All" });
+    expect(textRole(all.className)).not.toBe(
+      textRole(screen.getByRole("button", { name: "Unread" }).className)
+    );
     expect(all.className).toContain("hover:text-text-primary");
   });
 

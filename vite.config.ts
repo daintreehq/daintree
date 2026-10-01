@@ -17,7 +17,12 @@ import { getDaintreeAppDevCSP, getDaintreeAppProdCSP } from "./shared/config/csp
 // the two sides from drifting (the `react-dom/server` "externalized but
 // unresolved" class of bug). Imported from source (not the built dist) the same
 // way this config already imports from `./shared/*`.
-import { HOST_IMPORTMAP_SPECIFIERS } from "./packages/plugin-vite/src/index";
+//
+// The map itself serves the wider HOST_IMPORTMAP_SERVED_SPECIFIERS: the
+// externals contract plus raw-only entries (the SDK's React hooks) that bundled
+// views keep bundling and only zero-build views resolve through the host.
+import { HOST_IMPORTMAP_SERVED_SPECIFIERS } from "./packages/plugin-vite/src/hostImportMap";
+import { PLUGIN_SDK_REACT_RUNTIME_EXPORTS } from "./src/pluginSdkReact/runtimeExports";
 import { getFirstRenderPreloadSeeds } from "./shared/config/panelKindRegistry";
 import { formatErrorMessage } from "./shared/utils/errorMessage";
 import { computeFirstRenderPreloadFiles } from "./scripts/first-render-closure-lib.mjs";
@@ -266,8 +271,8 @@ function renderFanoutProbePlugin(state: ImportMapBuildState): Plugin {
   };
 }
 
-// `HOST_IMPORTMAP_SPECIFIERS` (imported from @daintreehq/plugin-vite above) is
-// the set of specifiers exposed to externalized plugin bundles. Each one gets
+// `HOST_IMPORTMAP_SERVED_SPECIFIERS` (imported from @daintreehq/plugin-vite above) is
+// the set of specifiers exposed to externalized plugin bundles and raw views. Each one gets
 // its OWN facade module re-exporting that specifier's public API; the import
 // map points at the facades, never at `vendor-react` directly. Pointing every
 // specifier at the shared `vendor-react` chunk is what broke the contract in
@@ -284,7 +289,7 @@ function renderFanoutProbePlugin(state: ImportMapBuildState): Plugin {
 
 const HOST_APP_ORIGIN = "app://daintree";
 
-type HostFacadeSpecifier = (typeof HOST_IMPORTMAP_SPECIFIERS)[number];
+type HostFacadeSpecifier = (typeof HOST_IMPORTMAP_SERVED_SPECIFIERS)[number];
 
 // Prefix for the virtual facade modules that re-export host modules. Shared
 // by the production emitter (hostFacadePlugin) and the dev server
@@ -309,6 +314,18 @@ function isPluginUiSourceModule(id: string): boolean {
   return toPosixId(id).includes("/src/pluginUi/");
 }
 
+// The SDK's React hooks, served to zero-build views. Compiled from the SDK's own
+// source (aliased below), never from `src/`, so the served surface is exactly
+// the published `/react` entry. `sync/` is the one sibling the hooks reach.
+function isPluginSdkReactSourceModule(id: string): boolean {
+  const posix = toPosixId(id);
+  return (
+    posix.endsWith("/packages/plugin-sdk/src/react.ts") ||
+    posix.includes("/packages/plugin-sdk/src/react/") ||
+    posix.includes("/packages/plugin-sdk/src/sync/")
+  );
+}
+
 // The codeSplitting group that holds the tour engine. One chunk shared by the
 // host's lazy TourDialog and the tour facades is what makes a plugin scene's
 // `useCue` see the host's `TourPlayerContext`.
@@ -317,6 +334,11 @@ const TOUR_CHUNK_NAME = "tour";
 // The codeSplitting group that holds `src/pluginUi`, so serving it to plugins
 // never folds it into the eager `boot` chunk.
 const PLUGIN_UI_CHUNK_NAME = "plugin-ui";
+
+// The codeSplitting group that holds the SDK's React hooks: one module instance
+// per document, so raw views share `useCachedHostChannel`'s cache and `useNow`'s
+// clocks. Bundled views carry their own pinned copy and never touch it.
+const PLUGIN_SDK_REACT_CHUNK_NAME = "plugin-sdk-react";
 
 // Host modules served to plugins that the host compiles from its own ESM
 // source, as opposed to React's CJS (see renderHostFacade). Each lives in one
@@ -346,6 +368,12 @@ const HOST_SOURCE_MODULES: readonly HostSourceModule[] = [
     chunkName: PLUGIN_UI_CHUNK_NAME,
     serves: (specifier) => specifier === "@daintreehq/plugin-ui",
     isSourceModule: isPluginUiSourceModule,
+    exactExports: true,
+  },
+  {
+    chunkName: PLUGIN_SDK_REACT_CHUNK_NAME,
+    serves: (specifier) => specifier === "@daintreehq/plugin-sdk/react",
+    isSourceModule: isPluginSdkReactSourceModule,
     exactExports: true,
   },
 ];
@@ -418,8 +446,8 @@ function hostReactExportNames(specifier: string): string[] {
 // direct `export { default }`, which would throw for subpaths (e.g.
 // jsx-runtime) that have no own default export.
 //
-// Host source modules (the tour, plugin-ui) take the star form: they are ESM
-// source (aliased into packages/tour/src and src/pluginUi), so their export
+// Host source modules (the tour, plugin-ui, the SDK hooks) take the star form:
+// they are ESM source (aliased into packages/*/src and src/pluginUi), so their export
 // names are statically known and `export *` carries all of them — no
 // config-time require of a package that ships no CJS and whose `dist/` may not
 // be built. Neither has a default export to synthesize.
@@ -447,16 +475,16 @@ function hostFacadeChunkName(specifier: string): string {
 // and a real app chunk that happened to share the prefix would be silently
 // dropped from those gates.
 const HOST_FACADE_CHUNK_NAMES: ReadonlyMap<string, HostFacadeSpecifier> = new Map(
-  HOST_IMPORTMAP_SPECIFIERS.map((specifier) => [hostFacadeChunkName(specifier), specifier])
+  HOST_IMPORTMAP_SERVED_SPECIFIERS.map((specifier) => [hostFacadeChunkName(specifier), specifier])
 );
 
 // Flattening `/` to `-` is not injective, so prove the derived names are
 // distinct. Throwing at module scope fails config load — loud and immediate —
 // rather than letting two specifiers collide onto one chunk.
-if (HOST_FACADE_CHUNK_NAMES.size !== HOST_IMPORTMAP_SPECIFIERS.length) {
+if (HOST_FACADE_CHUNK_NAMES.size !== HOST_IMPORTMAP_SERVED_SPECIFIERS.length) {
   throw new Error(
-    "[host-facade] two HOST_IMPORTMAP_SPECIFIERS entries flatten to the same chunk name: " +
-      HOST_IMPORTMAP_SPECIFIERS.map((s) => `${s} -> ${hostFacadeChunkName(s)}`).join(", ")
+    "[host-facade] two HOST_IMPORTMAP_SERVED_SPECIFIERS entries flatten to the same chunk name: " +
+      HOST_IMPORTMAP_SERVED_SPECIFIERS.map((s) => `${s} -> ${hostFacadeChunkName(s)}`).join(", ")
   );
 }
 
@@ -580,7 +608,241 @@ const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly string[
     "resolveMockState",
     "useMockKit",
   ],
-  "@daintreehq/plugin-ui": ["Markdown"],
+  "@daintreehq/plugin-ui": [
+    "Accordion",
+    "ActionButton",
+    "AgentAvatar",
+    "AgentBadge",
+    "AgentPicker",
+    "AgentStateIndicator",
+    "AnsiText",
+    "AttachmentChip",
+    "AttachmentList",
+    "AutoGrid",
+    "Avatar",
+    "AvatarGroup",
+    "Badge",
+    "BarChart",
+    "BranchBadge",
+    "Breadcrumbs",
+    "BulkActionBar",
+    "Button",
+    "Calendar",
+    "Callout",
+    "Card",
+    "Checkbox",
+    "ChecksList",
+    "Cluster",
+    "CodeBlock",
+    "CodeEditor",
+    "ColorPicker",
+    "ColorSwatch",
+    "ColoredLabel",
+    "Combobox",
+    "CommandPalette",
+    "CommitList",
+    "CommitRow",
+    "Composer",
+    "ConfirmDialog",
+    "ConfirmPopover",
+    "ConnectionCard",
+    "ContextDragSource",
+    "ContextMenu",
+    "ContributionGrid",
+    "CopyButton",
+    "CountIndicator",
+    "DataTable",
+    "DatePicker",
+    "DateRangePicker",
+    "DateTimePicker",
+    "DecisionRequest",
+    "DescriptionList",
+    "DescriptionListItem",
+    "DevServerStatus",
+    "Dialog",
+    "DiffStat",
+    "DiffView",
+    "Disclosure",
+    "DismissButton",
+    "Divider",
+    "DonutChart",
+    "DragDropProvider",
+    "Drawer",
+    "DrawerToggle",
+    "DropdownMenu",
+    "EmojiPicker",
+    "EmptyState",
+    "EntityChip",
+    "FileDropzone",
+    "FileIcon",
+    "FileLink",
+    "FileTree",
+    "FilterChip",
+    "ForgeStateBadge",
+    "Form",
+    "FormErrorSummary",
+    "FormField",
+    "FormFieldGroup",
+    "FormStatus",
+    "Gauge",
+    "GitStatusBadge",
+    "Grid",
+    "GroupedVirtualList",
+    "Heading",
+    "Heatmap",
+    "HighlightedText",
+    "Histogram",
+    "HoverCard",
+    "Icon",
+    "IconButton",
+    "ImageViewer",
+    "Inline",
+    "InlineCode",
+    "InlineEdit",
+    "Input",
+    "Inspector",
+    "InspectorSection",
+    "IssueRow",
+    "Kanban",
+    "Kbd",
+    "KbdChord",
+    "KeyHints",
+    "KeyValueEditor",
+    "LineChart",
+    "Link",
+    "ListEditor",
+    "ListRow",
+    "LiveRegion",
+    "LoadMoreFooter",
+    "LogView",
+    "Markdown",
+    "MarkdownEditor",
+    "MasterDetail",
+    "MentionTextarea",
+    "Meter",
+    "MultiSelect",
+    "NavList",
+    "NumberInput",
+    "ObjectInspector",
+    "OperationStatus",
+    "OverflowToolbar",
+    "PLUGIN_UI_VERSION",
+    "PaneHeader",
+    "PaneLayout",
+    "PaneState",
+    "PathLabel",
+    "Popover",
+    "PopoverSearchField",
+    "PortLink",
+    "Portal",
+    "ProgressBar",
+    "PropertyRow",
+    "PullRequestRow",
+    "RadioGroup",
+    "RangeSlider",
+    "RefreshOverlay",
+    "RepeaterField",
+    "ResizableSplit",
+    "ScatterChart",
+    "SchemaForm",
+    "ScrollArea",
+    "ScrollShadow",
+    "SearchField",
+    "SecretInput",
+    "SectionLabel",
+    "SegmentedControl",
+    "Select",
+    "SendToAgentButton",
+    "SettingsActions",
+    "SettingsGroup",
+    "SettingsRow",
+    "SettingsSection",
+    "SeverityIcon",
+    "Sheet",
+    "ShortcutHint",
+    "ShortcutRecorder",
+    "Skeleton",
+    "SkeletonBone",
+    "SkeletonHint",
+    "SkeletonText",
+    "Slider",
+    "SortableList",
+    "SourceCitation",
+    "SourceList",
+    "Sparkline",
+    "Spinner",
+    "SpinningIcon",
+    "SplitButton",
+    "SplitGroup",
+    "Stack",
+    "StackedAreaChart",
+    "StaleIndicator",
+    "StatCard",
+    "StateGlyph",
+    "StatusBar",
+    "StatusDot",
+    "Stepper",
+    "StructuredDiff",
+    "SuggestedValue",
+    "Switch",
+    "TableOfContents",
+    "Tabs",
+    "TagInput",
+    "TaskList",
+    "TerminalOutput",
+    "TerminalSnapshot",
+    "Text",
+    "Textarea",
+    "TimeAgo",
+    "TimePicker",
+    "Timeline",
+    "ToggleGroup",
+    "ToolCallCard",
+    "Toolbar",
+    "ToolbarButton",
+    "Tooltip",
+    "TreeView",
+    "TruncatedTooltip",
+    "UnreadDot",
+    "UnsavedChangesBar",
+    "VirtualList",
+    "VisuallyHidden",
+    "WorktreeBadge",
+    "WorktreePicker",
+    "formatBytes",
+    "formatCount",
+    "formatDuration",
+    "formatIsoDate",
+    "formatRelativeTime",
+    "formatTimeAgo",
+    "getDaintreeTheme",
+    "isoAddDays",
+    "isoFromDate",
+    "isoToday",
+    "onDidChangeDaintreeTheme",
+    "preloadPluginUi",
+    "revertHunk",
+    "useAnnounce",
+    "useBreakpoint",
+    "useContainerSize",
+    "useDaintreeTheme",
+    "useDebouncedCallback",
+    "useDebouncedValue",
+    "useDisclosure",
+    "useDraggable",
+    "useDroppable",
+    "useForm",
+    "useHotkeys",
+    "useListNavigation",
+    "usePersistentViewState",
+    "useSelection",
+    "useToast",
+    "useUndoRedo",
+    "whenPluginUiReady",
+  ],
+  // Exactly the SDK's `/react` runtime exports, pinned against
+  // packages/plugin-sdk/src/react.ts by src/pluginSdkReact's test.
+  "@daintreehq/plugin-sdk/react": PLUGIN_SDK_REACT_RUNTIME_EXPORTS,
 };
 
 interface FacadeLookupChunk {
@@ -603,7 +865,7 @@ function findHostFacadePaths(bundle: Record<string, FacadeLookupChunk>): Record<
 
   const paths: Record<string, string> = {};
   const missing: string[] = [];
-  for (const specifier of HOST_IMPORTMAP_SPECIFIERS) {
+  for (const specifier of HOST_IMPORTMAP_SERVED_SPECIFIERS) {
     const fileName = byName.get(hostFacadeChunkName(specifier));
     if (fileName) paths[specifier] = fileName;
     else missing.push(specifier);
@@ -760,8 +1022,8 @@ function hostFacadePlugin(): Plugin {
           if (extra.length > 0) {
             problems.push(
               `"${specifier}" (${chunk.fileName}) exports ${extra.join(", ")} beyond its ` +
-                "declared contract. Declare them in HOST_FACADE_REQUIRED_EXPORTS and the SDK's " +
-                "plugin-ui.d.ts, or stop exporting them from src/pluginUi."
+                "declared contract. Declare them in HOST_FACADE_REQUIRED_EXPORTS (and, for " +
+                "plugin-ui, the SDK's plugin-ui.d.ts), or stop exporting them."
             );
           }
         }
@@ -862,7 +1124,7 @@ function hostImportMapPlugin(state: ImportMapBuildState): Plugin {
       // that actually resolves.
       const importMapPayload = {
         imports: Object.fromEntries(
-          HOST_IMPORTMAP_SPECIFIERS.map((specifier) => [
+          HOST_IMPORTMAP_SERVED_SPECIFIERS.map((specifier) => [
             specifier,
             `${HOST_APP_ORIGIN}/${facadePaths[specifier]}`,
           ])
@@ -875,10 +1137,10 @@ function hostImportMapPlugin(state: ImportMapBuildState): Plugin {
       // original shape) would leave valid-but-unused facades and still
       // build clean. This is the assertion that makes that regression loud.
       const targets = Object.values(importMapPayload.imports);
-      if (new Set(targets).size !== HOST_IMPORTMAP_SPECIFIERS.length) {
+      if (new Set(targets).size !== HOST_IMPORTMAP_SERVED_SPECIFIERS.length) {
         throw new Error(
           "[host-import-map] every specifier must map to its own facade; got " +
-            `${new Set(targets).size} distinct target(s) for ${HOST_IMPORTMAP_SPECIFIERS.length} ` +
+            `${new Set(targets).size} distinct target(s) for ${HOST_IMPORTMAP_SERVED_SPECIFIERS.length} ` +
             "specifiers. Mapping several specifiers at one file is #11208: a shared chunk only " +
             "exports the private cross-chunk interface, never React's public API."
         );
@@ -952,7 +1214,7 @@ function hostImportMapDevPlugin(): Plugin {
       if (!ctx.server) return;
       const importMapPayload = {
         imports: Object.fromEntries(
-          HOST_IMPORTMAP_SPECIFIERS.map((specifier) => [
+          HOST_IMPORTMAP_SERVED_SPECIFIERS.map((specifier) => [
             specifier,
             `/@id/${HOST_FACADE_VIRTUAL_PREFIX}${specifier}`,
           ])
@@ -1369,6 +1631,10 @@ export default defineConfig(({ command, mode }) => {
       pluginStyleContract(),
       react(),
       babel({
+        // node_modules is the plugin's default. The SDK's React hooks (served to
+        // raw views through the import map) ship uncompiled from tsup, so the
+        // host serves them uncompiled too — the same code a bundled view runs.
+        exclude: [/[/\\]node_modules[/\\]/, /[/\\]packages[/\\]plugin-sdk[/\\]src[/\\]/],
         presets: [
           reactCompilerPreset({
             compilationMode: "infer",
@@ -1645,6 +1911,7 @@ export default defineConfig(({ command, mode }) => {
                 test: (id: string) => {
                   if (id.includes("\0") || id.includes(".html")) return false;
                   if (isPluginUiSourceModule(id)) return false;
+                  if (isPluginSdkReactSourceModule(id)) return false;
                   return !id.split(path.sep).join("/").endsWith("src/main.tsx");
                 },
                 priority: 1,
@@ -1661,6 +1928,14 @@ export default defineConfig(({ command, mode }) => {
                 // startup chunk ended up importing it.
                 name: PLUGIN_UI_CHUNK_NAME,
                 test: (id: string) => isPluginUiSourceModule(id),
+                priority: 0,
+              },
+              {
+                // Same shape and reason as `plugin-ui`: the SDK hooks facade
+                // is an entry, and `boot` skips these modules so they stay
+                // off the first-render path.
+                name: PLUGIN_SDK_REACT_CHUNK_NAME,
+                test: (id: string) => isPluginSdkReactSourceModule(id),
                 priority: 0,
               },
             ],
@@ -1689,6 +1964,12 @@ export default defineConfig(({ command, mode }) => {
         "@daintreehq/tour": path.resolve(__dirname, "./packages/tour/src/index.ts"),
         // Nothing in the app imports this; the host facade does, for plugins.
         "@daintreehq/plugin-ui": path.resolve(__dirname, "./src/pluginUi/index.ts"),
+        // Likewise only the raw-view facade imports this. Source, not the
+        // package's `dist/`, which is a publish artifact that may be unbuilt.
+        "@daintreehq/plugin-sdk/react": path.resolve(
+          __dirname,
+          "./packages/plugin-sdk/src/react.ts"
+        ),
         // refractor/core eagerly imports parse-entities, whose browser-condition
         // decode-named-character-reference touches `document` at module scope —
         // that crashes the diff-tokenize Web Worker at startup. Pin the package's

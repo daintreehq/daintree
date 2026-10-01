@@ -49,11 +49,15 @@
     },
     "./plugin-ui": {
       "types": "./plugin-ui.d.ts"
+    },
+    "./view-globals": {
+      "types": "./view-globals.d.ts"
     }
   },
   "files": [
     "dist",
-    "plugin-ui.d.ts"
+    "plugin-ui.d.ts",
+    "view-globals.d.ts"
   ],
   "sideEffects": false,
   "engines": {

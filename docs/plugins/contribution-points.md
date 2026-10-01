@@ -101,6 +101,8 @@ Three things it does _not_ do. It grants no access: host APIs still gate on `man
 
 _Filesystem convention (manifest-declared, lazy import):_ a command with id `plan-from-issue` looks for `src/plan-from-issue.{js,mjs}` (probed in that order) under your plugin directory. Its default export is the handler. The module is **not** imported until the command is first dispatched — twenty manifest commands cost zero activation time. It is imported and run inside your plugin's worker, like every other surface you contribute, so a command handler needs no `main` entry to exist: a plugin that declares commands and ships nothing but their handler modules gets a worker on first dispatch. The handler must be shipped as JavaScript: `.ts`/`.tsx` files are not probed (a `.ts` handler appears to work under Node's type-stripping but throws at first dispatch on any non-erasable syntax, and `.tsx` never runs) — author in TypeScript and compile to `src/{id}.js`, or register the command imperatively.
 
+The convention is for installed and dev-linked plugins only. A project plugin's load contract is its committed `dist/`, so the host never probes its `src/` for handler modules: every command a project plugin declares needs a `host.registerAction` registration from its `main`.
+
 ```js
 // src/plan-from-issue.js
 export default async function planFromIssue(args) {
@@ -173,11 +175,11 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 | `iconId` | yes | One of the shared plugin icon IDs listed in `shared/config/pluginIconIds.ts`. An unrecognized ID falls back to the generic terminal glyph on panel surfaces; `daintree-plugin validate` warns about it. |
 | `color` | yes | Any CSS colour, applied raw to the panel's icon on the palette and launcher surfaces — not to the active-tab indicator, which is a fixed accent. The convention for plugin panels is a theme category token, `var(--theme-category-orange)`, so it follows the active theme; every fixture in the repo uses that form. |
 | `hasPty` | no | `false` (default) for a view panel. `true` makes the kind a terminal: it renders through the terminal host, never loads a view, and is refused together with `menu` or `dockable: false`. Not a way to build plugin UI. |
-| `canRestart` | no | Show a "restart" control in the panel header. |
-| `canConvert` | no | Allow conversion between compatible panel kinds. Rarely useful for plugins. |
+| `canRestart` | no | Show a "restart" control in the panel header. Default `false`. |
+| `canConvert` | no | Allow conversion between compatible panel kinds. Rarely useful for plugins. Default `false`. |
 | `showInPalette` | no | Include in the "New Panel…" palette. Default `true`. |
 | `dockable` | no | Dockable by default. Declare `false` to opt the kind out of the dock. Rejected together with `hasPty: true` (`pty_panel_dock_opt_out_unsupported`) — a plugin PTY kind renders as a terminal, which is always dockable, so the opt-out could never be honoured. |
-| `stateVersion` | no | Integer &ge; 1 naming the shape your panel writes through `persistState`. Omit it and the host makes no promises about your saved state; declare it and you get the migration contract below. |
+| `stateVersion` | no | Integer from 1 to 1,000,000 naming the shape your panel writes through `persistState`. Omit it and the host makes no promises about your saved state; declare it and you get the migration contract below. |
 | `menu` | no | Up to five of your own actions to offer in the panel's ⋯ and right-click menus. See [Panel menu](#panel-menu) below. |
 
 **Icon IDs** — one shared set backs every surface that renders a plugin icon (the panel palette, panel headers, tabs, the dock, toolbar buttons, and the toolbar overflow menu), so an ID looks the same everywhere it appears:
@@ -300,7 +302,7 @@ The view schema is strict and carries no `name` or `description`: the matching p
 
 **Component contract:**
 
-> **Mixed availability.** `useHostChannel`, `usePluginEvent`, and `usePluginPanelEvent` (see [Host API → React hooks](./host-api.md#react-hooks--daintreehqplugin-sdkreact)) resolve **only when your view is bundled with `@daintreehq/plugin-vite`** — the preset bundles the SDK into your plugin output, so the hooks ship inside your bundle rather than resolving through the host import map. The import map serves only React, `@daintreehq/tour` and `@daintreehq/plugin-ui` specifiers; a **raw, un-bundled `plugin://` view** that bare-imports `@daintreehq/plugin-sdk/react` fails at runtime with an unresolved specifier. For a hand-authored view without the build preset, subscribe through the `window.electron.plugin.on(pluginId, channel, cb)` / `.invoke(pluginId, channel, …args)` bridge directly — the same bridge the hooks wrap (the raw-ESM example follows the bundled one below). There are no hooks for worktrees, settings or commands: a view reads its own worktree from the `worktreeId` prop, and anything else — settings values, worktree details, data — comes from your worker over a channel.
+> **Both kinds of view get the hooks.** `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent` and the rest of `@daintreehq/plugin-sdk/react` (see [Host API → React hooks](./host-api.md#react-hooks--daintreehqplugin-sdkreact)) work in a view bundled with `@daintreehq/plugin-vite`, which bundles the SDK version you pinned, and in a raw, un-bundled `plugin://` view, where the host import map serves `@daintreehq/plugin-sdk/react` from the host's own copy (a raw-only specifier: the build preset never externalizes it). The import map serves nothing else from the SDK: the root `@daintreehq/plugin-sdk`, `/files` and `/data` are for the worker. The hooks wrap the `window.electron.plugin.on(pluginId, channel, cb)` / `.invoke(pluginId, channel, …args)` bridge, which a hand-authored view can also call directly (the raw-ESM example follows the bundled one below). There are no hooks for worktrees, settings or commands: a view reads its own worktree from the `worktreeId` prop, and anything else — settings values, worktree details, data — comes from your worker over a channel.
 
 ```tsx
 // src/dashboard.tsx
@@ -331,7 +333,7 @@ export default function Dashboard({ panelId, pluginId, disposeSignal }: PanelVie
 }
 ```
 
-The same view as a **raw ESM module** (loaded verbatim by `plugin://`, no `@daintreehq/plugin-vite` bundling) cannot import `usePluginEvent` — subscribe through the host bridge instead. Because nothing transpiles the file, it ships as valid browser ESM: the bare `react` specifier resolves through the host import map, and `createElement` avoids any JSX transform. `window.electron.plugin.on(pluginId, channel, cb)` returns an unsubscribe function; return it from the effect for cleanup.
+The same view as a **raw ESM module** (loaded verbatim by `plugin://`, no `@daintreehq/plugin-vite` bundling). It could import `usePluginEvent` from `@daintreehq/plugin-sdk/react` through the import map just as well; this version subscribes through the host bridge the hook wraps. Because nothing transpiles the file, it ships as valid browser ESM: the bare `react` specifier resolves through the host import map, and `createElement` avoids any JSX transform. `window.electron.plugin.on(pluginId, channel, cb)` returns an unsubscribe function; return it from the effect for cleanup.
 
 ```js
 // src/dashboard.js — raw ESM variant, served as-is over plugin://
@@ -586,17 +588,43 @@ Adds entries to right-click menus on specific UI elements.
       {
         "actionId": "acme.linear-planner.link-issue",
         "location": "worktree",
-        "label": "Link to Linear issue…",
-        "when": "worktree.hasBranch"
+        "label": "Link to Linear issue…"
+      },
+      {
+        "actionId": "acme.linear-planner.attach-log",
+        "location": "terminal",
+        "label": "Attach output to Linear issue…",
+        "when": "panelKind == 'terminal'"
       }
     ]
   }
 }
 ```
 
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `actionId` | yes | Fully-qualified action ID to dispatch. |
+| `location` | yes | `"worktree"`, `"terminal"` or `"file"`. |
+| `label` | yes | Menu entry label. |
+| `when` | no | Context expression gating whether the item appears, in the same syntax as a [keybinding `when`](#keybindings--shipped). See below. |
+
+**`when` context keys.** A context menu's `when` is evaluated in the renderer against keys describing what was right-clicked, not the keybinding keys:
+
+| Location   | Keys                                                            |
+| ---------- | --------------------------------------------------------------- |
+| `worktree` | `worktreeId` — the clicked worktree's id                        |
+| `terminal` | `panelId` — the clicked pane's id; `panelKind` — its panel kind |
+| `file`     | None                                                            |
+
+An identifier that names no key evaluates false, so `"worktree.hasBranch"` hides the item everywhere while `"!worktree.hasBranch"` shows it everywhere; an expression that fails to parse hides the item. Because `file` supplies no keys, a `when` on a `file` item can only be a constant.
+
+**Dispatch arguments.** A `worktree` or `terminal` item is dispatched with no arguments, so its handler cannot tell which worktree or pane was clicked; use it for actions that act on the user's current context. A `file` item is dispatched with the clicked file, as described next.
+
 **Locations:** `worktree`, `terminal`, `file`. More may be added. The `file` location is mounted on every file row Daintree renders — the Review Hub's changed-file rows, the worktree card's changed-files list, the file browser's tree and folder listing, and the diff viewer's file sidebar: a contributed `file` item appears in the right-click menu of a file row on all four surfaces, and its action is dispatched with `{ path, worktreePath, status }` for the clicked file (so your handler receives the file, not `undefined`) — `path` is always absolute, while `worktreePath` and `status` are each omitted when the row has no worktree root or no git status, so an unchanged file in the file browser arrives as `{ path }` alone. Every file row carries the menu whether or not a plugin contributes to it: your items are appended below Daintree's own file actions, so a single `file` contribution reaches all four surfaces without any per-surface work.
 
-Context menus follow the same `actionId` dispatch pattern as menu items, but a `file`-location item additionally receives the clicked file's context as dispatch args. Two built-in actions pair well here: `file.openDiff` opens the side-by-side diff for the dispatched `{ path, worktreePath, status }`, and `panel.openPluginPanel` spawns (or focuses) one of your plugin panels, passing `initialArgs` straight through to the view's `initialArgs` prop — so a context-menu item can open your panel scoped to the file the user clicked.
+Context menus follow the same `actionId` dispatch pattern as menu items; only a `file`-location item receives the clicked subject as dispatch args. Two built-in actions pair well here: `file.openDiff` opens the side-by-side diff for the dispatched `{ path, worktreePath, status }`, and `panel.openPluginPanel` spawns (or focuses) one of your plugin panels, passing `initialArgs` straight through to the view's `initialArgs` prop — so a context-menu item can open your panel scoped to the file the user clicked.
 
 ## MCP servers — _Shipped_
 
@@ -622,11 +650,15 @@ Declares Model Context Protocol servers the plugin ships. The manifest key is `m
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. |
+| `id` | yes | Letters, digits, `.`, `_` and `-`, at most 64 characters. Namespaced at runtime as `{pluginId}.{id}`. |
 | `name` | yes | Display name. |
-| `command` | yes | Executable — `node`, `python`, `npx`, or an absolute path. |
-| `args` | no | Argv after the command. |
+| `command` | yes | Any non-empty string — typically `node`, `python` or `npx`, resolved on `PATH`. |
+| `args` | no | Argv after the command. A relative path here resolves against the plugin directory, the server's working directory. |
 | `env` | no | Environment variables. Values can reference settings with `${settings:settingId}` syntax — the id must name a declared `contributes.settings[].id`, else the manifest is rejected at parse time (`settings_token_unknown`; a malformed token shape is `settings_token_malformed`). The same validation applies to `${settings:*}` tokens in `command` and `args`. |
+
+**The process environment.** The server always runs with the plugin directory as its working directory; the manifest cannot change it. It does not inherit Daintree's environment: it gets a minimal allowlist (including proxy and CA settings, since these servers usually make outbound HTTPS calls) plus the variables `env` declares, so anything else the server needs must be forwarded there.
+
+**What a `${settings:…}` token resolves to.** The token is substituted at spawn time from the plugin's stored **user-scope** value only. A string is used as-is, a number or boolean is converted to its string form, and an object or array is JSON-encoded. An unset value becomes the empty string — the setting's declared `default` is not used — and so does a token naming a `project` or `local` setting, which this path never reads.
 
 Daintree supervises the process: lazy spawn on first tool use, hard kill on Daintree exit, and on an unexpected crash it transitions the server to `crashed` and rejects pending and subsequent tool calls until an explicit manual restart — there is no automatic retry or backoff.
 
@@ -635,6 +667,9 @@ Daintree is the **client** of this server. Its tools are reachable only through 
 **Secret rotation auto-restart:** when a **user-scope** setting changes, every currently running server (status `ready` or `crashed`) that references it via `${settings:settingId}` in its `command`, `args`, or `env` is automatically restarted so the new value is folded in at the next spawn. The restart is debounced ~1s, so a burst of edits coalesces into one respawn. Servers that were never lazily started stay stopped — a settings change never eagerly boots a server.
 
 Tool use is gated by a consent/permission/audit subsystem (`electron/services/plugin-mcp/` — `PluginMcpConsentService`, `PluginMcpTierAuth`, `PluginMcpAuditService`, `PluginMcpConsentStore`): each `pluginMcp.callTool` into the server is checked against per-server permission tiers, prompts for consent when required, and is recorded to an audit log. Discovery is lazy and two-tier — a cheap tool list first, full schemas fetched on demand.
+
+- **Per-tool danger tier.** Each tool's tier comes from its MCP annotations — `readOnlyHint: true` is D0 and takes precedence over the others, otherwise `destructiveHint: true` is D2 and any other tool D1 — and `openWorldHint: true` raises it one step. The tier is capped by the plugin's declared capabilities: D1 for a plugin with none of the high-risk tokens, D2 for one with any. A call whose tier is above the cap is denied rather than downgraded, so a destructive open-world tool (D3) is denied for every plugin. See [Trust model → MCP tool danger-tier cap](./trust-model.md#2-host-side-policy-input-load-bearing).
+- **Rate limit.** Calls into one server share a token bucket: a burst of 20, then one call per second.
 
 **Intentionally excluded:** remote MCP transports (`url`), explicit transport types, per-server working directories, restart policies. These are deferred until use cases concretely require them.
 
@@ -751,12 +786,14 @@ Markdown-defined instruction/knowledge snippets that extend Daintree's built-in 
 
 **Fields:**
 
-| Field      | Required | Notes                                               |
-| ---------- | -------- | --------------------------------------------------- |
-| `id`       | yes      | Namespaced as `{pluginId}.{id}`.                    |
-| `name`     | yes      | Human label.                                        |
-| `path`     | yes      | Markdown file relative to the plugin directory.     |
-| `triggers` | no       | Search terms the agent uses to discover this skill. |
+| Field      | Required | Notes                                                           |
+| ---------- | -------- | --------------------------------------------------------------- |
+| `id`       | yes      | Namespaced as `{pluginId}.{id}`.                                |
+| `name`     | yes      | Human label.                                                    |
+| `path`     | yes      | Markdown file relative to the plugin directory.                 |
+| `triggers` | no       | Search terms the agent uses to discover this skill, at most 50. |
+
+A skill file larger than 512 KiB is skipped with a warning, as is one that cannot be read; the rest of the plugin's skills still register. Of a leading YAML frontmatter block, only `description` is read, and it is shown in search results; the rest of the file after the block is the body.
 
 The markdown file content is returned to the agent when it calls `skills.load`, so it can be incorporated into the current task. See [Agent extensions → Skills](./agent-extensions.md#skills) for the full file format and invocation mechanics.
 
@@ -791,7 +828,7 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | Namespaced as `{pluginId}.{id}`. |
-| `name` | yes | Human label, shown in the recipe manager and in the install confirmation. |
+| `name` | yes | Human label, shown in the recipe manager and in the install confirmation. At most 200 characters. |
 | `terminals` | yes | 1–10 terminal definitions. See the table below. |
 | `showInEmptyState` | no | Default for the empty-state pin. A user pin/unpin overrides it. |
 | `autoAssign` | no | `always` \| `never` \| `prompt` — default issue auto-assign behaviour during quick worktree creation. A user choice overrides it. |
@@ -800,12 +837,12 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `type` | yes | `terminal`, `dev-preview`, a built-in agent id, or an agent id **this same plugin** contributes. Any other value drops that terminal at load. |
-| `title` | no | Custom pane title. |
-| `command` | no | Shell command, for `type: "terminal"`. |
-| `devCommand` | no | Dev-server command, for `type: "dev-preview"`. |
-| `initialPrompt` | no | Sent to an agent terminal after boot. Supports the same `{{issue_number}}` / `{{branch_name}}` variables user recipes do. |
-| `args` | no | Extra CLI flags for an agent terminal. |
+| `type` | yes | `terminal`, `dev-preview`, a built-in agent id, or an agent id **this same plugin** contributes. Any other value drops that terminal at load. At most 64 characters. |
+| `title` | no | Custom pane title. At most 200 characters. |
+| `command` | no | Shell command, for `type: "terminal"`. At most 4096 characters. |
+| `devCommand` | no | Dev-server command, for `type: "dev-preview"`. At most 4096 characters. |
+| `initialPrompt` | no | Sent to an agent terminal after boot. Supports the same `{{issue_number}}` / `{{branch_name}}` variables user recipes do. At most 8192 characters. |
+| `args` | no | Extra CLI flags for an agent terminal, as one string. At most 4096 characters. |
 | `env` | no | Environment variables for the spawned terminal. |
 | `exitBehavior` | no | `keep` \| `trash` \| `remove`. |
 
@@ -865,16 +902,16 @@ A tour without `panelKind` is a **plugin tour**, offered from Help and the comma
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | Unique within `contributes.tours`. |
-| `title` | yes | Shown where the tour is offered. |
+| `title` | yes | Shown where the tour is offered. At most 120 characters. |
 | `componentPath` | yes | Plugin-relative module exporting the chapter scenes, same path rules as a view's. |
 | `panelKind` | no | Makes it a panel tour. Must be the `id` of one of this plugin's own `contributes.panels`. That panel's three-dots and right-click menus offer it with no wiring in your view; if two tours name the same panel, the first wins. |
-| `audioHosts` | no | Bare hostnames remote narration is fetched from. No scheme, port, wildcard, IP literal or private host. |
+| `audioHosts` | no | Bare hostnames remote narration is fetched from, at most 8 and no duplicates. No scheme, port, wildcard, IP literal or private host. |
 | `chapters` | yes | 1–32 chapters, played in order. |
-| `chapters[].id` | yes | Unique within the tour. |
+| `chapters[].id` | yes | Unique within the tour. Letters, digits, `.`, `_` and `-`, at most 64 characters. |
 | `chapters[].duration` | yes | Seconds, up to 600. |
-| `chapters[].cues` | no | Named scene cues in seconds; each must fall within `duration`. |
-| `chapters[].captions` | no | `{ start, end, text }` in seconds; each must end after it starts and within `duration`. |
-| `chapters[].audioUrl` | yes | A plugin-relative audio file, an `https://` URL on a host listed in `audioHosts`, or `null` for a silent chapter. |
+| `chapters[].cues` | no | Named scene cues in seconds; each must fall within `duration`. At most 128 per chapter; a name is letters, digits, `.`, `_` and `-`, at most 64 characters, and `__proto__` is reserved. |
+| `chapters[].captions` | no | `{ start, end, text }` in seconds; each must end after it starts and within `duration`. At most 128 per chapter; `text` is 1–500 characters. |
+| `chapters[].audioUrl` | yes | A plugin-relative audio file, an `https://` URL on a host listed in `audioHosts`, or `null` for a silent chapter. At most 4096 characters, with no leading or trailing whitespace or control characters. |
 | `chapters[].narrationHash` | yes | The 8-character lowercase hex fingerprint of the narration the timing was generated from. |
 
 **Shipping one.** [Tours](./tours.md) is the full guide: the file layout, a minimal tour to copy, writing narration with `[[cue]]` markers, building scenes with `@daintreehq/tour/kit` and the mock Daintree window, the anchor-naming contract, voicing with `daintree-plugin tour voice` or your own recordings with `tour align`, previewing with `tour preview`, and the house style every tour is held to. In short: you write the narration and a scene module that default-exports `{ scenes, chapterTitles?, mockKit? }`, and the CLI writes `chapters` for you. The bundled `daintree-tour` Claude Code skill (`npx daintree-plugin skill add`) walks through the whole path.
@@ -970,12 +1007,16 @@ Registers a forge backend — issues, pull/merge requests, reviews, CI roll-up, 
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}` (the built-in GitHub plugin uses bare `github`). Must match the `descriptor.id` passed to `registerForgeProvider`. |
 | `name` | yes | Display label in Preferences → Forge Integrations. |
 | `matches` | yes | List of exact hostnames. The host extracts the hostname from the project's git remote (HTTPS/SSH/SCP-form URLs handled), lowercases and trims it, then matches for **exact string equality** — no glob, wildcard, or suffix matching. List every distinct hostname your forge serves as a separate entry. First matching provider wins. |
+| `kind` | no | `"network"` (the default) for a provider that talks to a remote forge, or `"local"` for one backed by files or a CLI. Display-only: Preferences uses it to label a provider with no `credentialFields` as deliberately authless; the host never gates auth or routing on it. |
 | `capabilities` | no | Informational hints driving the Preferences "supports: …" display only; the host does not interpret them. Behavior gates on whether the runtime capability field is present. |
-| `credentialFields` | no | Array of `{ id, label, type, placeholder?, helpText? }` declaring the auth fields this provider needs. Drives the generated credential form in Preferences → Forge Integrations. |
+| `credentialFields` | no | Array of `{ id, label, type, placeholder?, helpText? }` declaring the auth fields this provider needs. Drives the generated credential form in Preferences → Forge Integrations. Each `id` is letters, digits, `.`, `_` and `-`, at most 64 characters, and may not be `__proto__`, `constructor` or `prototype`. |
+| `slots` | no | Renderer view ids for the provider's own UI, keyed by slot: `settingsTab`, `icon`, `statsDropdown`, `bulkCreateWorktreeDialog`, `issueSelector`. Checked for non-emptiness only; an id the renderer does not know renders a neutral fallback. |
 | `settingsScopeRef` | no | A declared `contributes.settings[].id`, used to group provider settings. Validated at manifest parse time — a dangling ref is rejected (`forge_settings_scope_ref_unknown`). |
 | `viewRefs` | no | IDs of `views` contributions shown under this provider's panel section. Each must resolve to a declared `contributes.views[].id`, else the manifest is rejected (`forge_view_ref_unknown`). |
 
 The manifest entry is read eagerly so the provider populates Preferences and the remote-routing table before any plugin code runs; the implementation binds lazily in `activate()` via [`registerForgeProvider`](./host-api.md#registerforgeprovider). For the end-to-end walkthrough — implementing `ForgeProviderImpl`, state normalization, capabilities, and tests — see [Implementing a forge provider](./forge-provider.md).
+
+**Built-in only in practice.** `ForgeProviderImpl` has synchronous methods (`parseRemote`, the URL builders) that cannot cross the plugin worker's asynchronous message port, and every plugin that is not built in runs in a worker. An installed plugin's `forgeProviders` entry is accepted and appears in Preferences, but `registerForgeProvider` from its worker only logs a warning and registers nothing, so the provider never becomes routable. A project plugin's entry is rejected at the manifest gate (`forge_provider_project_scope_forbidden`).
 
 ## File decoration providers — _Shipped_
 
@@ -1040,9 +1081,9 @@ Declares a writable **Edit** mode alongside Source and Rendered in the host’s 
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. |
-| `slot` | yes | The builtin view id the plugin's renderer entry registers with `registerBuiltinView`; the `builtinViewRegistrations` test keeps the two halves in step. |
-| `extensions` | yes | Bare lower-case suffixes without the dot, matched case-insensitively against the file name. Extensions the entry omits (`mdx`) are never offered. |
-| `maxBytes` | no | Largest file the editor accepts. Above it the file stays viewable and Edit is not offered. Defaults to 2 MiB; capped at 64 MiB. |
+| `slot` | yes | The builtin view id the plugin's renderer entry registers with `registerBuiltinView`; the `builtinViewRegistrations` test keeps the two halves in step. Letters, digits, `.`, `_` and `-`, at most 128 characters. |
+| `extensions` | yes | Bare lower-case suffixes without the dot (`[a-z0-9]+`, 1–16 characters each, 1–20 entries), matched case-insensitively against the file name. Extensions the entry omits (`mdx`) are never offered. |
+| `maxBytes` | no | Largest file the editor accepts, a positive integer. Above it the file stays viewable and Edit is not offered. Defaults to 2 MiB; capped at 64 MiB. |
 
 **Built-in only.** The slot resolves through the builtin view registry compiled into the host bundle, which an installed plugin's renderer cannot register into, so the host refuses the contribution from any other origin at load with a recorded load error. Opening file editors to installed plugins is a separate decision.
 
@@ -1073,9 +1114,9 @@ The components stay a renderer-side registration — `registerDevPreviewTool` in
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | **Not** namespaced by the host — the renderer entry registers with this same literal, so the manifest declares the qualified form and it must be prefixed with the plugin's own name. |
-| `title` | yes | The tool's name. The registration supplies the rendered label; this states what the plugin ships. |
-| `iconId` | no | Advisory, like `views[].iconId` — the tool's own `Button` owns the rendered glyph. |
+| `id` | yes | **Not** namespaced by the host — the renderer entry registers with this same literal, so the manifest declares the qualified form: the plugin's own name plus exactly one more segment (`daintree.sveltekit-builder.builder`), at most 200 characters. |
+| `title` | yes | The tool's name, trimmed, 1–64 characters. The registration supplies the rendered label; this states what the plugin ships. |
+| `iconId` | no | At most 64 characters. Advisory, like `views[].iconId` — the tool's own `Button` owns the rendered glyph. |
 | `guestAdapter` | no | A [guest adapter](#guest-adapters--shipped-built-in-only) id **this same manifest** declares. A tool naming an adapter nothing declares is a manifest error. |
 
 **Built-in only.** The toolbar button, drawer and session all resolve out of the host bundle, which an installed plugin's renderer cannot register into — the same obstacle as [file editors](#file-editors--shipped-built-in-only). Unlike that one the refusal is in the manifest schema rather than at load, because the schema is built per discovery root, so a sample or project manifest fails `npm run check:plugin-manifests` instead of only at runtime. [The preview-extension boundary is deliberate](#the-preview-extension-boundary-is-deliberate) says why it stands.
@@ -1101,8 +1142,8 @@ Declares a browser bundle the host reads back as text and installs into a previe
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | The literal the page runtime binds with, so it is not namespaced by the host — qualified, and prefixed with the plugin's own name. |
-| `entry` | yes | Plugin-relative POSIX path to the bundle's source. No `..`, absolute or Windows segments, and it must end in `.ts`, `.tsx`, `.js` or `.mjs`. |
+| `id` | yes | The literal the page runtime binds with, so it is not namespaced by the host — the plugin's own name plus exactly one more segment, at most 200 characters. That segment also names the built asset (below). |
+| `entry` | yes | Plugin-relative POSIX path to the bundle's source, at most 256 characters, ending in `.ts`, `.tsx`, `.js` or `.mjs`. No absolute path, backslash, NUL or `:`; no empty, `.` or `..` segment; and it may not start with `guest/` in any case, the directory the build writes the bundle into. |
 
 **The built asset's path is derived, never declared.** `guestAdapterAssetPath` (`electron/services/sitePreview/guestAdapterAssets.ts`) turns the adapter id into `guest/<id suffix>.js` under the plugin's output dir. `scripts/build-main.mjs` bundles `entry` to exactly that path — as a standalone browser IIFE, not a main entry and not part of the renderer bundle — and `registerBuiltinGuestAdapters` reads it back from the same place at startup, so there is no second path for the two to disagree about. A declared adapter whose bundle did not land fails the build.
 
@@ -1139,15 +1180,15 @@ Teaches Daintree about a launchable agent CLI it doesn't ship in-tree, so the CL
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | Bare agent id (alphanumerics, `.`, `-`, `_`; ≤64 chars). Additive for **new** IDs only — a collision with a built-in agent id is rejected at the manifest gate, and built-in entries always shadow plugin entries. Cross-plugin id conflicts resolve first-registered-wins. |
-| `name` | yes | Display label for the agent. |
-| `command` | yes | CLI binary to launch. Same safe-id pattern as `id` (no shell metacharacters). Supports `${settings:settingId}` — see below. |
-| `args` | no | Default launch arguments (≤20 entries; no control characters). Supports `${settings:settingId}` — see below. |
+| `id` | yes | Bare agent id (alphanumerics, `.`, `-`, `_`; ≤64 chars), and not `__proto__`, `constructor` or `prototype`. Additive for **new** IDs only — a collision with a built-in agent id is rejected at the manifest gate, and built-in entries always shadow plugin entries. Cross-plugin id conflicts resolve first-registered-wins. |
+| `name` | yes | Display label for the agent, 1–100 characters. |
+| `command` | yes | At most 256 characters, in one of two forms: a bare binary name resolved on `PATH`, with the same safe-id pattern as `id` (no shell metacharacters), or a `./`-prefixed path to a file inside the plugin, resolved against the plugin directory when the agent registers (`"./bin/agent.mjs"`). Absolute paths, backslashes, NUL, and empty, `.` or `..` segments are rejected. Supports `${settings:settingId}` — see below. |
+| `args` | no | Default launch arguments (≤20 entries, each ≤256 characters, no `\r`, `\n` or NUL). Supports `${settings:settingId}` — see below. |
 | `color` | yes | Brand color as a 6-digit hex (`#rrggbb`). |
-| `iconId` | yes | **A different namespace from panel/toolbar icon IDs** — agents render bundled brand marks, so this must name one of Daintree's built-in agent IDs (`claude`, `codex`, `gemini`, …). A panel icon ID like `terminal` doesn't resolve here; unrecognized values silently fall back to the Claude mark. Shipping a custom icon asset isn't supported yet. |
+| `iconId` | yes | At most 64 characters. **A different namespace from panel/toolbar icon IDs** — agents render bundled brand marks, so this must name one of Daintree's built-in agent IDs (`claude`, `codex`, `gemini`, …). A panel icon ID like `terminal` doesn't resolve here; unrecognized values silently fall back to the Claude mark. Shipping a custom icon asset isn't supported yet. |
 | `supportsContextInjection` | no | Whether copy-tree context injection targets this agent. Defaults to `false`. |
 
-A plugin agent is launchable and selectable as a named entry in the effective registry. It launches as a named terminal. Without a `detection` block it runs as a plain named terminal whose working/waiting state Daintree doesn't track; declare `detection` (below) to wire it into the agent-state UI like a built-in agent.
+A plugin agent is launchable and selectable as a named entry in the effective registry. It launches as a named terminal. Without a `detection` block it runs as a plain named terminal whose working/waiting state Daintree doesn't track; declare `detection` (below) to wire it into the agent-state UI like a built-in agent. A plugin agent has no launch MCP mechanism, so it is never handed Daintree's own MCP servers or any plugin's agent MCP credentials at launch.
 
 `command` and `args` support the same `${settings:settingId}` syntax as MCP servers — e.g. `"args": ["--token", "${settings:apiToken}"]`. Templates resolve at spawn time against the plugin's **user-scope** setting with that ID (project scope is never read). If a referenced setting is unset, the launch fails with a clear error rather than spawning the agent with a literal `${settings:…}` (or a silently blanked value) on its command line — so a missing credential surfaces as a spawn error instead of an opaque auth failure inside the agent. Unlike MCP server tokens, `${settings:*}` tokens in agent `command`/`args` are **not** validated at manifest parse time — an undeclared setting id only surfaces as a spawn-time error, not a load error.
 
@@ -1155,12 +1196,14 @@ A plugin agent is launchable and selectable as a named entry in the effective re
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `primaryPatterns` | yes | Non-empty array of regex strings (each must compile) that mark the agent as working. A `detection` block with no `primaryPatterns` is rejected. |
+| `primaryPatterns` | yes | Non-empty array of regex strings that mark the agent as working. A `detection` block with no `primaryPatterns` is rejected. |
 | `fallbackPatterns` / `bootCompletePatterns` / `promptPatterns` / `promptHintPatterns` / `completionPatterns` | no | Additional regex arrays for the corresponding detection tiers. |
 | `scanLineCount` / `promptScanLineCount` | no | Integer line-window bounds (1–1000) for the matcher. |
 | `debounceMs` / `promptFastPathMinQuietMs` | no | Integer millisecond timings (0–600000). |
 | `primaryConfidence` / `fallbackConfidence` / `promptConfidence` / `completionConfidence` | no | Confidence weights in `[0, 1]` for a matched tier. |
 | `titleStatePatterns` | no | `{ working, waiting }` string arrays (≤50 entries, each ≤256 chars) matched against the terminal title. |
+
+Every pattern array holds at most 50 entries, and each entry is 1–256 characters and must compile as a JavaScript regular expression.
 
 ## Process tools — _Shipped_
 

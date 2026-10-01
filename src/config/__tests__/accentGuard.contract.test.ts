@@ -143,11 +143,30 @@ const DURABLE_ALLOWLIST = new Set([
   // marks cannot be confused with each other (#11989).
   "src/components/Worktree/WorktreeOverviewRow.tsx",
 
+  // Kit Tabs: the selected tab's underline, one per tablist — the single
+  // primary anchor per active focus region (added in 8acb5736fa).
+  // (The file's ListRow cursor outline is an `in-focus-visible:` ring and
+  // passes the focus exclusion on its own.)
+  "src/components/PluginKit/PluginKitPatterns.tsx",
+
   // Settings subject picker: the page's subject drawn as the active tab on a
   // subtab baseline. It replaced a subtab bar on these pages, and the subtab
   // underline is one of the two accents the settings dialog reserves
   // (.claude/rules/settings-pages.md). One underline per page, never more.
   "src/components/Settings/SettingsSubjectPicker.tsx",
+
+  // Plugin kit Text's `accent` tone: the public colour role a plugin draws its
+  // one load-bearing signal in. The kit cannot know the region, so the
+  // restraint is documented on the prop (plugin-sdk-react.ts, ui-kit.md) and
+  // nothing in the kit applies it on its own.
+  "src/components/PluginKit/PluginKitTypography.tsx",
+
+  // Kit CodeEditor and MarkdownEditor: the field's focus ring, drawn on the
+  // frame through `has-[.cm-focused]:` / `has-[textarea:focus-visible]:`
+  // because the focused element (CodeMirror's content, the text area) sits
+  // inside a frame it shares with gutters or a tab strip. It is a focus
+  // ring, which the exclusion above only recognises on `focus-visible:`.
+  "src/components/PluginKit/PluginKitEditors.tsx",
 
   // Document tab family (grid, dock, portal and assistant strips): the selected
   // tab's 2px underline, the documented "Settings Nav Active" / "Document Tab"
