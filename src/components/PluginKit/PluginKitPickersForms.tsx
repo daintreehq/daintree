@@ -1872,10 +1872,11 @@ function readValues(value: unknown): string[] {
   return value.filter((entry): entry is string => typeof entry === "string" && entry !== "");
 }
 
-// The kit Button's one pressed look (`pressed`): the filter chip's selected
-// fill with a secondary-ink edge, which clears 3:1 against the button and the
-// pane in either polarity where the toolbar's armed hairline does not, so a
-// day that is on reads as on without leaning on the fill alone.
+// Drawn as Daintree's own weekday picker (Notification settings) draws its
+// days: subtle buttons, so every choice has an edge whether on or off, with
+// the kit Button's one pressed look (`pressed`) on the ones that are on. Its
+// secondary-ink edge clears 3:1 in either polarity, so "on" never leans on
+// the fill alone.
 const TOGGLE_SIZE = {
   default: { text: "sm", icon: "icon-sm" },
   compact: { text: "xs", icon: "icon-xs" },
@@ -1967,8 +1968,7 @@ function KitToggleGroup(props: PluginToggleGroupProps) {
         if (focusLeft(event)) onBlur?.();
       }}
       data-slot="toggle-group"
-      // A pressed button carries an edge, so neighbours need room to stay apart.
-      className={cn("inline-flex shrink-0 items-center gap-1", str(className))}
+      className={cn("inline-flex shrink-0 flex-wrap items-center gap-2", str(className))}
     >
       {entries.map((entry, index) => {
         const pressed = on.includes(entry.value);
@@ -1981,14 +1981,14 @@ function KitToggleGroup(props: PluginToggleGroupProps) {
               buttonRefs.current[index] = el;
             }}
             type="button"
-            variant="ghost"
+            variant="subtle"
             size={iconOnly ? sizes.icon : sizes.text}
             pressed={pressed}
             aria-label={entry.ariaLabel}
             disabled={inert || entry.disabled}
             onFocus={() => setCursor(index)}
             onClick={() => toggle(entry)}
-            className={cn(!iconOnly && "px-2.5 font-normal", "[&_svg]:size-3.5")}
+            className="[&_svg]:size-3.5"
           >
             {glyph}
             {entry.label}
