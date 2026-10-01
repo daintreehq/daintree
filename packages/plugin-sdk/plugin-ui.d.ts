@@ -967,7 +967,7 @@ declare module "@daintreehq/plugin-ui" {
   export const DateTimePicker: ComponentType<DateTimePickerProps>;
   /** A low and a high value on one track, drawn like `Slider`, each thumb with its own keys. */
   export const RangeSlider: ComponentType<RangeSliderProps>;
-  /** A row of toolbar-style toggle buttons, any number on (`multiple`) or at most one (`single`). */
+  /** A row of toggle buttons, any number on (`multiple`) or at most one (`single`). */
   export const ToggleGroup: ComponentType<ToggleGroupProps>;
   /** A primary action and a chevron opening a `DropdownMenu` of the alternatives. */
   export const SplitButton: ComponentType<SplitButtonProps>;

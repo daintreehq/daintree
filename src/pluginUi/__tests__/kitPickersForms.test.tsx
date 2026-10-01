@@ -488,6 +488,23 @@ describe("DateTimePicker", () => {
     expect(onValueChange).toHaveBeenLastCalledWith("2026-10-01T08:30");
   });
 
+  it("names the zone as it stands on the chosen day, not today", () => {
+    // Midwinter in Sydney: today is GMT+10, the chosen day is after daylight saving starts.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-15T00:00:00Z"));
+    try {
+      renderLoose(kit.DateTimePicker, {
+        value: "2026-10-05T09:00",
+        hourCycle: 24,
+        timeZone: "Australia/Sydney",
+        "aria-label": "Starts",
+      });
+      expect(screen.getByRole("group", { name: "Starts" }).textContent).toContain("GMT+11");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("names the group through a FormField without either part taking its id", () => {
     renderLoose(kit.FormField, {
       label: "Starts",
@@ -633,6 +650,18 @@ describe("ToggleGroup", () => {
     fireEvent.click(monday);
     expect(onValueChange).toHaveBeenLastCalledWith(["mon", "thu"]);
     expect(monday.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("draws an on button with the kit Button's own pressed look", () => {
+    renderLoose(kit.ToggleGroup, { items: days, defaultValue: ["mon"], "aria-label": "Days" });
+    const toggle = screen.getByRole("button", { name: "Monday" });
+    cleanup();
+    render(createElement(kit.Button, { pressed: true, children: "Reference" }));
+    const reference = screen.getByRole("button", { name: "Reference" });
+    const pressedLook = (el: Element) =>
+      [...el.classList].filter((name) => name.startsWith("aria-pressed:")).sort();
+    expect(pressedLook(reference).length).toBeGreaterThan(0);
+    expect(pressedLook(toggle)).toEqual(pressedLook(reference));
   });
 
   it("shows at most one on in single mode, whatever it is handed", () => {

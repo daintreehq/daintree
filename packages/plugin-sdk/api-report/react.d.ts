@@ -3536,8 +3536,8 @@ interface PluginToggleGroupItem {
     disabled?: boolean;
 }
 /**
- * Props of `ToggleGroup`: a row of toggle buttons drawn like the pane toolbar's
- * own toggles. `multiple` (the default) turns any number on, as weekday
+ * Props of `ToggleGroup`: a row of ghost toggle buttons, an "on" one drawn
+ * with the kit `Button`'s pressed look. `multiple` (the default) turns any number on, as weekday
  * choices or text styles; `single` turns at most one on and lets it be turned
  * off again (for exactly one, always, use `SegmentedControl`). One tab stop:
  * arrow keys, Home and End move between the buttons, Space or Enter toggles.
@@ -3557,7 +3557,7 @@ interface PluginToggleGroupProps extends PluginAriaRootAttributes {
     /** Required: the group's name. */
     "aria-label": string;
     disabled?: boolean;
-    /** `compact` (24px) for a 32px strip; `default` is the toolbar's 26px. */
+    /** `compact` (24px) for a 32px strip; `default` (28px) is a small `Button`'s height. */
     density?: "default" | "compact";
     className?: string;
 }

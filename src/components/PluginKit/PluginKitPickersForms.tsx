@@ -60,7 +60,6 @@ import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/compon
 import { selectTriggerVariants } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { PANE_TOOLBAR_ICON_CLASS } from "@/components/ui/paneToolbarStyles";
 import { ESCAPE_RADIX_LAYER_ATTR } from "@/lib/dialogEscapeBackstop";
 import { SEVERITY_VISUAL } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
@@ -680,7 +679,7 @@ function isEmptyDraft(draft: TimeDraft, cycle: 12 | 24): boolean {
 
 const TIME_LIST_ROW = cn(
   PALETTE_ROW_CLASS,
-  "flex cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-xs tabular-nums text-text-primary"
+  "flex h-7 snap-start cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-2 text-xs tabular-nums text-text-primary"
 );
 
 function TimeList({
@@ -707,10 +706,14 @@ function TimeList({
   const [cursor, setActive] = useState(start);
   // Held inside the list, which can shrink while open (new bounds, a new step).
   const active = Math.min(Math.max(cursor, 0), Math.max(options.length - 1, 0));
+  // Opening centres the chosen time, so the times around it show on both
+  // sides; after that the list follows the cursor only as far as it must.
+  const opened = useRef(false);
   useLayoutEffect(() => {
     listRef.current
       ?.querySelector<HTMLElement>(`[data-index="${active}"]`)
-      ?.scrollIntoView({ block: "nearest" });
+      ?.scrollIntoView({ block: opened.current ? "nearest" : "center" });
+    opened.current = true;
   }, [active]);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const last = options.length - 1;
@@ -753,7 +756,8 @@ function TimeList({
       onKeyDown={onKeyDown}
       data-time-list=""
       // The active row's fill is the cursor; the ring says the list has the keys.
-      className="max-h-64 w-36 overflow-y-auto rounded-[var(--radius-md)] p-1 focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+      // Nine whole rows, snapped so a row is never cut through, as wide as the field.
+      className="max-h-[calc(9*1.75rem+0.5rem)] w-[var(--radix-popover-trigger-width)] min-w-36 snap-y snap-mandatory scroll-py-1 overflow-y-auto rounded-[var(--radius-md)] p-1 focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
     >
       {options.map((minutes, index) => (
         <div
@@ -1053,11 +1057,11 @@ function TimeField({
             {segments.map((kind, index) => (
               <span key={kind} className="flex items-center">
                 {kind === "minute" ? (
-                  <span aria-hidden="true" className="text-text-secondary">
+                  // The colon tucks into the segments' own padding, so the
+                  // time reads "9:00" rather than "9 : 00".
+                  <span aria-hidden="true" className="-mx-px text-text-secondary">
                     :
                   </span>
-                ) : kind === "period" ? (
-                  <span aria-hidden="true" className="w-1" />
                 ) : null}
                 <span
                   data-segment={kind}
@@ -1124,6 +1128,8 @@ function TimeField({
       <PopoverContent
         {...owner}
         align="start"
+        // As wide as the field, it unrolls from it, as the host's lists do.
+        motion="drop"
         aria-label={`Choose ${noun}`}
         aria-modal="true"
         {...{ [ESCAPE_RADIX_LAYER_ATTR]: "" }}
@@ -1198,6 +1204,12 @@ function KitTimePicker(props: PluginTimePickerProps) {
 
 const DatePickerPart = pluginKitDates.DatePicker;
 
+/** "2026-10-05" as Date.UTC's year, month index and day. */
+function isoParts(iso: string): [number, number, number] {
+  const [year, month, day] = iso.split("-").map(Number);
+  return [year ?? 1970, (month ?? 1) - 1, day ?? 1];
+}
+
 /** A plugin's `isDateDisabled`, made safe: a throw or a non-boolean leaves the day enabled. */
 function dayDisabled(check: unknown, iso: string): boolean {
   if (typeof check !== "function") return false;
@@ -1244,7 +1256,6 @@ function KitDateTimePicker(props: PluginDateTimePickerProps) {
   const zone = nonEmpty(timeZone);
   const zoneId = resolvedTimeZone(zone);
   const [now] = useState(() => Date.now());
-  const zoneName = showTimeZone === false ? null : timeZoneLabel(zoneId ?? undefined, now);
   const { controlProps } = useKitFieldControl(props, invalid === true ? true : undefined, false);
   const compact = density === "compact";
   const { id: _id, ...rootAttributes } = pickRootProps(props);
@@ -1253,6 +1264,11 @@ function KitDateTimePicker(props: PluginDateTimePickerProps) {
   // outside replaces it, so clearing that later cannot bring it back.
   if (value !== null && pendingDate !== null) setPendingDate(null);
   const date = value?.date ?? pendingDate;
+  // The zone's name on the day chosen, not today: daylight saving can start
+  // between now and then. Noon UTC on that day falls on the same day in every
+  // zone's daytime, well clear of the small-hours switch.
+  const zoneInstant = date === null ? now : Date.UTC(...isoParts(date), 12);
+  const zoneName = showTimeZone === false ? null : timeZoneLabel(zoneId ?? undefined, zoneInstant);
   // The time bounds that hold on a day: min on its first day, max on its last.
   const timeMinOn = (day: string | null) => (lo !== null && day === lo.date ? lo.minutes : null);
   const timeMaxOn = (day: string | null) => (hi !== null && day === hi.date ? hi.minutes : null);
@@ -1675,7 +1691,13 @@ function KitRangeSlider(props: PluginRangeSliderProps) {
       )}
     >
       <div
-        className={cn("relative min-w-0 flex-1", labelled ? "pb-5" : tickList.length ? "pb-2" : "")}
+        className={cn(
+          "relative min-w-0 flex-1",
+          // Room above for the value tooltip, held at rest too so nothing jumps
+          // and the tooltip never covers the row's own words.
+          showTip && "pt-7",
+          labelled ? "pb-5" : tickList.length ? "pb-2" : ""
+        )}
       >
         <div
           ref={trackRef}
@@ -1821,15 +1843,13 @@ function readValues(value: unknown): string[] {
   return value.filter((entry): entry is string => typeof entry === "string" && entry !== "");
 }
 
-// The pane toolbar's own toggle: `toolbar-icon-button` draws the hover and the
-// armed state (a lifted fill and a hairline ring) from aria-pressed.
-const TOGGLE_TEXT =
-  "toolbar-icon-button inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-[var(--radius-md)] px-2 text-xs font-medium text-text-secondary whitespace-nowrap aria-pressed:text-text-primary hover:text-text-primary disabled:cursor-not-allowed";
-const TOGGLE_ICON =
-  "toolbar-icon-button inline-flex shrink-0 cursor-pointer items-center justify-center rounded-[var(--radius-md)] text-text-secondary aria-pressed:text-text-primary hover:text-text-primary disabled:cursor-not-allowed";
-const TOGGLE_DENSITY = {
-  default: { text: "h-6.5", icon: "size-6.5" },
-  compact: { text: "h-6", icon: "size-6" },
+// The kit Button's one pressed look (`pressed`): the filter chip's selected
+// fill with a secondary-ink edge, which clears 3:1 against the button and the
+// pane in either polarity where the toolbar's armed hairline does not, so a
+// day that is on reads as on without leaning on the fill alone.
+const TOGGLE_SIZE = {
+  default: { text: "sm", icon: "icon-sm" },
+  compact: { text: "xs", icon: "icon-xs" },
 } as const;
 
 function inToolbar(group: Element): boolean {
@@ -1850,7 +1870,7 @@ function KitToggleGroup(props: PluginToggleGroupProps) {
   const on = single ? knownOn.slice(0, 1) : knownOn;
   const onChange = fn(onValueChange);
   const inert = disabled === true;
-  const sizes = TOGGLE_DENSITY[density === "compact" ? "compact" : "default"];
+  const sizes = TOGGLE_SIZE[density === "compact" ? "compact" : "default"];
   const groupRef = useRef<HTMLDivElement>(null);
   const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [cursor, setCursor] = useState<number | null>(null);
@@ -1925,28 +1945,24 @@ function KitToggleGroup(props: PluginToggleGroupProps) {
         const glyph = renderIconSource(entry.icon);
         const iconOnly = entry.label === undefined;
         const button = (
-          <button
+          <Button
             key={entry.value}
             ref={(el) => {
               buttonRefs.current[index] = el;
             }}
             type="button"
-            aria-pressed={pressed}
+            variant="ghost"
+            size={iconOnly ? sizes.icon : sizes.text}
+            pressed={pressed}
             aria-label={entry.ariaLabel}
             disabled={inert || entry.disabled}
             onFocus={() => setCursor(index)}
             onClick={() => toggle(entry)}
-            className={cn(
-              iconOnly ? TOGGLE_ICON : TOGGLE_TEXT,
-              iconOnly ? sizes.icon : sizes.text,
-              "[&_svg]:size-3.5 [&_svg]:shrink-0"
-            )}
+            className={cn(!iconOnly && "px-2.5 font-normal", "[&_svg]:size-3.5")}
           >
-            {glyph ? (
-              <span className={cn("contents", PANE_TOOLBAR_ICON_CLASS)}>{glyph}</span>
-            ) : null}
+            {glyph}
             {entry.label}
-          </button>
+          </Button>
         );
         const tip = hasContent(entry.tooltip) ? entry.tooltip : iconOnly ? entry.ariaLabel : null;
         if (!hasContent(tip)) return button;
@@ -1991,14 +2007,16 @@ const SPLIT_VARIANTS = [
 
 type SplitVariant = (typeof SPLIT_VARIANTS)[number];
 
-// The seam between the halves. A filled button draws it in its own label ink,
-// faded, so it reads on any fill; a ringed one lets the two rings meet as one
-// hairline; a ghost one, with no edge of its own, takes the subtle border.
+// The seam between the halves. A filled button draws it in its own label ink
+// at half strength, which keeps it near 3:1 against the fill in either
+// polarity, so the two halves read as two targets; a ringed one lets the two
+// rings meet as one hairline; a ghost one, with no edge of its own, takes the
+// subtle border.
 const SPLIT_SEAM: Record<SplitVariant, string> = {
-  default: "border-l border-l-[color-mix(in_oklab,currentColor_30%,transparent)]",
-  destructive: "border-l border-l-[color-mix(in_oklab,currentColor_30%,transparent)]",
-  contrast: "border-l border-l-[color-mix(in_oklab,currentColor_25%,transparent)]",
-  secondary: "border-l border-l-[color-mix(in_oklab,currentColor_20%,transparent)]",
+  default: "border-l border-l-[color-mix(in_oklab,currentColor_50%,transparent)]",
+  destructive: "border-l border-l-[color-mix(in_oklab,currentColor_50%,transparent)]",
+  contrast: "border-l border-l-[color-mix(in_oklab,currentColor_50%,transparent)]",
+  secondary: "border-l border-l-[color-mix(in_oklab,currentColor_40%,transparent)]",
   outline: "-ml-px",
   subtle: "-ml-px",
   ghost: "border-l border-l-border-subtle",
