@@ -48,6 +48,7 @@ import { transparencyCheckerboardUnderScale } from "@/components/FileViewer/tran
 import { activateMarkdownLink, HTTPish } from "@/components/Markdown/markdownLinkPolicy";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
+import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
 import {
   AnsiParser,
@@ -154,6 +155,11 @@ function AnsiRuns({ line }: { line: AnsiLine }) {
 
 // The terminal's own face at its default 12px, on an 18px line.
 const TERMINAL_TEXT_STYLE: CSSProperties = { fontFamily: DEFAULT_TERMINAL_FONT_FAMILY };
+const TERMINAL_SURFACE_STYLE: CSSProperties = {
+  ...TERMINAL_TEXT_STYLE,
+  backgroundColor: TERMINAL_BACKGROUND,
+  color: TERMINAL_FOREGROUND,
+};
 const TERMINAL_TEXT_CLASS = "text-xs leading-4.5";
 
 function KitAnsiText({ text, display, className, ...rest }: PluginAnsiTextProps) {
@@ -170,12 +176,14 @@ function KitAnsiText({ text, display, className, ...rest }: PluginAnsiTextProps)
       <AnsiRuns line={line} />
     </span>
   ));
+  // ANSI colours are tuned for the terminal's own surface, so the text always
+  // sits on it: a terminal yellow on a light card would all but vanish.
   return block ? (
     <pre
       {...pickRootProps(rest)}
-      style={TERMINAL_TEXT_STYLE}
+      style={TERMINAL_SURFACE_STYLE}
       className={cn(
-        "m-0 whitespace-pre-wrap [overflow-wrap:anywhere]",
+        "m-0 whitespace-pre-wrap rounded-[var(--radius-md)] px-3 py-2 [overflow-wrap:anywhere]",
         TERMINAL_TEXT_CLASS,
         str(className)
       )}
@@ -183,7 +191,15 @@ function KitAnsiText({ text, display, className, ...rest }: PluginAnsiTextProps)
       {runs}
     </pre>
   ) : (
-    <span {...pickRootProps(rest)} className={cn("whitespace-pre-wrap font-mono", str(className))}>
+    <span
+      {...pickRootProps(rest)}
+      style={TERMINAL_SURFACE_STYLE}
+      className={cn(
+        // The inline code chip's shape: wraps keep their edges on both lines.
+        "rounded-[var(--radius-xs)] box-decoration-clone px-1 py-0.5 font-mono whitespace-pre-wrap",
+        str(className)
+      )}
+    >
       {runs}
     </span>
   );
@@ -301,6 +317,15 @@ function KitTerminalOutput({
           <div className="min-w-0 flex-1 truncate text-xs font-medium text-text-secondary">
             {node(title)}
           </div>
+          {dropped > 0 ? (
+            // Copy and the view hold only the kept lines; say how many went.
+            <span
+              data-terminal-dropped=""
+              className="shrink-0 text-xs tabular-nums text-text-secondary"
+            >
+              {`${pluralize(dropped, "earlier line")} not kept`}
+            </span>
+          ) : null}
           <div
             ref={toolbarRef}
             role="toolbar"
@@ -439,11 +464,12 @@ function KitHoverCard({
   const shown = controlled ? open : ownOpen;
   const notify = fn(onOpenChange);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Set while the pointer is outside both the trigger and the card. Leaving
-  // starts the `closeDelay` timer, coming back cancels it, and while it runs
-  // Radix's own pointer close is left to it; Escape and a blur with the
-  // pointer elsewhere close at once.
-  const pointerAway = useRef(false);
+  // Why the card is up. Keyboard focus on the trigger keeps it until focus
+  // leaves or Escape; the pointer keeps it while over the trigger, the card or
+  // Radix's grace area between them, and its leaving waits out `closeDelay`.
+  const focused = useRef(false);
+  const hovering = useRef(false);
+  const escaping = useRef(false);
   useEffect(
     () => () => {
       if (closeTimer.current !== null) clearTimeout(closeTimer.current);
@@ -461,28 +487,56 @@ function KitHoverCard({
     if (!controlled) setOwnOpen(next);
     notify?.(next);
   };
+  const closeNow = () => {
+    cancelClose();
+    commit(false);
+  };
+  const closeSoon = () => {
+    if (focused.current || hovering.current) return;
+    if (lingering === 0) {
+      closeNow();
+      return;
+    }
+    cancelClose();
+    closeTimer.current = setTimeout(() => {
+      closeTimer.current = null;
+      if (!focused.current && !hovering.current) commit(false);
+    }, lingering);
+  };
   const handleOpenChange = (next: boolean) => {
     if (next) {
       cancelClose();
       commit(true);
       return;
     }
-    if (pointerAway.current && lingering > 0) return;
-    cancelClose();
-    commit(false);
+    if (escaping.current) {
+      escaping.current = false;
+      closeNow();
+      return;
+    }
+    // Radix asks to close when the pointer leaves its grace area; focus on the
+    // trigger still holds the card (WCAG 1.4.13, persistent).
+    closeSoon();
   };
   const enter = () => {
-    pointerAway.current = false;
+    hovering.current = true;
     cancelClose();
   };
-  const leave = () => {
-    pointerAway.current = true;
-    if (!shown || lingering === 0) return;
+  const leaveTrigger = () => {
+    // Crossing to the card is Radix's grace area to judge, not a timer's.
+    hovering.current = false;
+  };
+  const leaveCard = () => {
+    hovering.current = false;
+    if (shown) closeSoon();
+  };
+  const focus = () => {
+    focused.current = true;
     cancelClose();
-    closeTimer.current = setTimeout(() => {
-      closeTimer.current = null;
-      commit(false);
-    }, lingering);
+  };
+  const blur = () => {
+    focused.current = false;
+    if (!hovering.current && shown) closeNow();
   };
   const widthKey = oneOf(width, ["sm", "md", "lg"] as const) ?? "md";
   return (
@@ -496,7 +550,13 @@ function KitHoverCard({
       dismissOnDialogTransition={false}
       disableHoverableContent={false}
     >
-      <TooltipTrigger asChild onPointerEnter={enter} onPointerLeave={leave} onFocus={enter}>
+      <TooltipTrigger
+        asChild
+        onPointerEnter={enter}
+        onPointerLeave={leaveTrigger}
+        onFocus={focus}
+        onBlur={blur}
+      >
         {children}
       </TooltipTrigger>
       <TooltipContent
@@ -505,9 +565,9 @@ function KitHoverCard({
         className={cn("p-3", HOVER_CARD_WIDTH[widthKey], overlayZ)}
         aria-label={nonEmpty(ariaLabel)}
         onPointerEnter={enter}
-        onPointerLeave={leave}
+        onPointerLeave={leaveCard}
         onEscapeKeyDown={() => {
-          pointerAway.current = false;
+          escaping.current = true;
         }}
         {...HOVER_CARD_FENCE}
       >
@@ -580,6 +640,7 @@ function ImageStage({
   startAt,
   checkerboard,
   label,
+  claimFocus,
   className,
 }: {
   images: ViewerImage[];
@@ -588,6 +649,8 @@ function ImageStage({
   startAt: Zoom;
   checkerboard: boolean;
   label: string | undefined;
+  /** In the lightbox: take focus on open, without a ring unless the keyboard opened it. */
+  claimFocus?: boolean;
   className?: string;
 }) {
   const image = images[index]!;
@@ -622,6 +685,20 @@ function ImageStage({
     observer.observe(stageElement);
     return () => observer.disconnect();
   }, [stageElement]);
+
+  useEffect(() => trackInputModality(), []);
+  // AppDialog focuses the first tabbable control a frame after it opens, and
+  // its programmatic focus rings whatever it lands on. A pointer opening gets
+  // the stage, focused without a ring, before that frame; a keyboard opening
+  // is left to the dialog, whose ring is then the one the user asked for.
+  useEffect(() => {
+    if (!claimFocus || stageElement === null || lastInputModality === "keyboard") return;
+    const options: FocusOptions & { focusVisible?: boolean } = {
+      preventScroll: true,
+      focusVisible: false,
+    };
+    stageElement.focus(options);
+  }, [claimFocus, stageElement]);
 
   const fit = fitScale(natural, stage);
   const scale = view.zoom === "fit" ? fit : view.zoom;
@@ -751,7 +828,14 @@ function ImageStage({
   };
 
   const step = (to: number) => {
-    if (to >= 0 && to < count && to !== index) onStep(to);
+    if (to < 0 || to >= count || to === index) return;
+    // Stepping swaps the stage's content: focus inside it (a failed image's
+    // Retry) moves to the stage first, or it would fall out of the viewer.
+    const active = document.activeElement;
+    if (stageElement && active !== stageElement && stageElement.contains(active)) {
+      stageElement.focus({ preventScroll: true });
+    }
+    onStep(to);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -832,7 +916,10 @@ function ImageStage({
         }}
         className={cn(
           "relative min-h-0 flex-1 touch-none select-none overflow-hidden bg-overlay-subtle",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
+          // The ring is drawn on a layer over the picture: the transformed image
+          // paints above the stage's own outline and would cut it.
+          "after:pointer-events-none after:absolute after:inset-0 after:z-10 after:content-['']",
+          "focus-visible:outline-hidden focus-visible:after:outline focus-visible:after:outline-2 focus-visible:after:-outline-offset-2 focus-visible:after:outline-accent-primary",
           overflows.x || overflows.y ? "cursor-grab active:cursor-grabbing" : "cursor-default"
         )}
       >
@@ -893,11 +980,7 @@ function ImageStage({
           </Skeleton>
         ) : null}
       </div>
-      {caption !== undefined ? (
-        <div className="shrink-0 border-t border-divider px-3 py-1.5 text-xs text-text-primary">
-          <PluginStyleScope>{caption}</PluginStyleScope>
-        </div>
-      ) : null}
+      {caption !== undefined ? <ViewerCaption>{caption}</ViewerCaption> : null}
       <div
         className={cn(PANE_STATUS_FOOTER_CLASS, "flex-wrap justify-between gap-x-2 gap-y-0.5 py-0")}
       >
@@ -1023,6 +1106,7 @@ function KitImageViewer({
         startAt={startZoom(defaultZoom)}
         checkerboard={checkerboard !== false}
         label={nonEmpty(ariaLabel)}
+        claimFocus={modal}
         className="h-full"
       />
     );
@@ -1070,6 +1154,55 @@ function KitImageViewer({
       </AppDialog>
     </PluginKitLayerContext.Provider>
   );
+}
+
+/**
+ * The caption strip, two lines at most: a longer caption scrolls in place, as
+ * the host's figure lightbox does, so it never takes the stage's height, and
+ * becomes a focusable region only while it has more to show.
+ */
+function ViewerCaption({ children }: { children: ReactNode }) {
+  const [element, setElement] = useState<HTMLDivElement | null>(null);
+  const [overflows, setOverflows] = useState(false);
+  useLayoutEffect(() => {
+    if (element === null) return;
+    const measure = () => setOverflows(element.scrollHeight > element.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element, children]);
+  return (
+    <div
+      ref={setElement}
+      tabIndex={overflows ? 0 : undefined}
+      role={overflows ? "region" : undefined}
+      aria-label={overflows ? "Caption" : undefined}
+      data-image-viewer-caption=""
+      className="max-h-12 shrink-0 overflow-y-auto border-t border-divider px-3 py-1.5 text-xs text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+    >
+      <PluginStyleScope>{children}</PluginStyleScope>
+    </div>
+  );
+}
+
+type InputModality = "keyboard" | "pointer";
+let lastInputModality: InputModality = "pointer";
+let modalityTracked = false;
+
+/** Notes whether the last input was a key or a pointer, for focus that should ring only after keys. */
+function trackInputModality(): void {
+  if (modalityTracked || typeof document === "undefined") return;
+  modalityTracked = true;
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (!event.metaKey && !event.ctrlKey && !event.altKey) lastInputModality = "keyboard";
+    },
+    true
+  );
+  document.addEventListener("pointerdown", () => (lastInputModality = "pointer"), true);
 }
 
 // Table of contents
@@ -1419,6 +1552,10 @@ function KitTableOfContents({
     } else {
       element.scrollIntoView({ block: "start", behavior });
     }
+    // Going to a section takes the reader there, focus included, so the next
+    // Tab continues through that section rather than back in the outline.
+    if (!element.hasAttribute("tabindex")) element.setAttribute("tabindex", "-1");
+    element.focus({ preventScroll: true });
     holdUntil.current = Date.now() + (behavior === "smooth" ? NAVIGATION_HOLD_MS : 0);
     setActive(index);
     fn(onNavigate)?.({ text: entry.text, level: entry.level, id: entry.id }, index);
