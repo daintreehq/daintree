@@ -436,7 +436,7 @@ jobs:
       - name: Build app
         run: npm run build:e2e
         env:
-          NODE_OPTIONS: --max-old-space-size=4096
+          NODE_OPTIONS: --max-old-space-size=8192
 
       # One tarball, not a directory upload: thousands of small files are slow
       # to upload and slower to download on Windows.

@@ -41,7 +41,7 @@
     "dev:electron": "cross-env NODE_ENV=development electron .",
     "build:main": "cross-env NODE_ENV=production node scripts/build-main.mjs",
     "watch:main": "node scripts/build-main.mjs --watch",
-    "build": "cross-env NODE_OPTIONS=--max-old-space-size=4096 npm run build:app",
+    "build": "cross-env NODE_OPTIONS=--max-old-space-size=8192 npm run build:app",
     "build:app": "tsc && vite build && npm run build:main",
     "build:e2e": "tsc && vite build && cross-env NODE_ENV=test node scripts/build-main.mjs",
     "build:e2e:bench": "tsc && cross-env DAINTREE_RENDER_PROBE=1 vite build && cross-env NODE_ENV=test node scripts/build-main.mjs",

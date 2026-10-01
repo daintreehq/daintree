@@ -2046,11 +2046,7 @@ export function createHost(
         });
       };
       try {
-        const result = await dispatcher.sendDispatchToRenderer(
-          actionId,
-          args,
-          requestedProjectId
-        );
+        const result = await dispatcher.sendDispatchToRenderer(actionId, args, requestedProjectId);
         if (result.ok) audit("success", "");
         else audit("error", result.error.code);
         return result;
