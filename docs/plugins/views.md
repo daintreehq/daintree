@@ -327,6 +327,7 @@ export default function Notes({ pluginId, disposeSignal }) {
 | Overlays | `Dialog`, `ConfirmDialog` (including the destructive typed-name gate), `ConfirmPopover` (an inline confirm on its trigger), `Sheet` (a record's detail or edit form against the window's edge), `Popover`, `PopoverSearchField`, `EmojiPicker`, `Tooltip`, `TruncatedTooltip` |
 | Settings views | `SettingsSection`, `SettingsGroup`, `SettingsRow`, `SettingsActions` — the host's section → group → row grammar |
 | Behaviour | Hooks: `useSelection` (single, multi and range selection), `useHotkeys` (view-scoped shortcuts that never shadow the app's), `useUndoRedo`, `useDisclosure`, `useDebouncedValue` and `useDebouncedCallback`, `usePersistentViewState` (a remembered tab or split size, through `persistState`), `useToast` (toasts and Undo toasts from the view), `useForm` (form state for `Form`) |
+| Daintree-native | `ActionButton` and the menus' `action` entry (run one of Daintree's actions with its own title, binding and availability), `AgentAvatar`, `AgentBadge`, `AgentStateIndicator` (an agent's mark and what was observed on its terminal), `AgentPicker` (the project's agent panes by worktree), `SendToAgentButton` and `ContextDragSource` (hand work to an agent), `TerminalSnapshot` (a still of a terminal's last lines), `ShortcutHint` and `KeyHints` (keys as the app draws them) |
 | Everything else | `Markdown`, `Icon`, `Avatar`, `AvatarGroup`, `Kbd`, `KbdChord`; formatters `formatTimeAgo`, `formatRelativeTime`, `formatDuration`, `formatBytes`, `formatCount`; the theme API below |
 
 One status vocabulary runs through `Badge` `tone`, `Callout` `severity` and `SeverityIcon`: `error` (the same colour as `danger`, which `Badge` also accepts), `warning`, `success`, `info` and `neutral`.
@@ -414,13 +415,19 @@ The first `Markdown` in a session renders nothing while the async renderer loads
 
 ## Handing work to an agent by drag
 
-A card, a message or a row in your view can be dragged onto an agent terminal — its input bar or the terminal itself — and it lands in that agent's draft for the user to instruct it about. Nothing is submitted. The drag carries one app-internal type, `application/x-daintree-agent-context`, holding JSON:
+A card, a message or a row in your view can be dragged onto an agent terminal — its input bar or the terminal itself — and it lands in that agent's draft for the user to instruct it about. Nothing is submitted. The kit's [`ContextDragSource`](./ui-kit.md#daintree-native-actions-agents-terminals-and-keys) does all of this for you: wrap the card's grip or a chip in it with the text, and it writes the payload below, checks it as the drop will, and keeps clear of kit drags.
+
+```js
+createElement(ContextDragSource, { text: card.body, title: card.title, sourceLabel: "Kanban" });
+```
+
+Underneath, the drag carries one app-internal type, `application/x-daintree-agent-context`, holding JSON:
 
 ```ts
 { v: 1, text: string, title?: string, source?: { label?: string } }
 ```
 
-`text` is required, non-blank and at most 32,768 characters; `title` at most 120; `source.label` at most 80 (say `"Kanban"`). Set `text/plain` to the same text too, so a drop anywhere else — an editor, another app — still gets something sensible. In a hand-written view, with no build step:
+`text` is required, non-blank and at most 32,768 characters; `title` at most 120; `source.label` at most 80 (say `"Kanban"`). Set `text/plain` to the same text too, so a drop anywhere else — an editor, another app — still gets something sensible. Without the kit, in a hand-written view with no build step:
 
 ```js
 createElement(
@@ -446,18 +453,25 @@ import { setAgentContextDragData } from "@daintreehq/plugin-sdk";
 onDragStart={(event) => setAgentContextDragData(event.dataTransfer, { v: 1, title, text })}
 ```
 
-Kit drags (`SortableList`, `Kanban`, `DragDropProvider`) never carry this payload: they move with pointer events and stay inside the view, so a card on a kit board is reordered, not handed off. To offer both, keep the handoff on a separate element that sets `draggable` and the payload itself — a "Drag to an agent" grip beside the kit's — or offer **Send to agent…** instead.
+Kit drags (`SortableList`, `Kanban`, `DragDropProvider`) never carry this payload: they move with pointer events and stay inside the view, so a card on a kit board is reordered, not handed off. To offer both, keep the handoff on a separate element inside the card — a `ContextDragSource` chip, or your own element that sets `draggable` and the payload — and offer **Send to agent…** beside it for the keyboard.
 
 What lands is the same block `host.sendToAgent` drafts: one fenced block tagged `daintree-context`, holding your `source.label` and `title` as a heading (`Kanban: Fix login redirect`) and then the text, appended after whatever the user already typed and kept literal on submit — `@diff` and the other tokens inside it are never expanded. Control characters other than tab and newline are stripped. The drop selects the pane and puts the caret in its input bar, exactly like dropping a file there. Only an agent pane whose input bar can take a draft shows the drop affordance; a plain shell, an exited, docked, locked or restarting agent, one in an armed fleet, or any pane while the input bar is switched off refuses the drag outright, and nothing is ever typed into a terminal. The payload is data, not instructions — anything can start a drag carrying this type, so the host validates it in full at the drop and drops anything malformed: a wrong `v`, blank or oversized text, an over-long `title` or label, or a non-string where a string belongs. Unknown extra keys are ignored.
 
 ## Sending work to an agent from a view
 
-A drag is one route; a **Send to agent…** button or menu entry is the other, and the one keyboard users get. It goes through [`host.sendToAgent`](./host-api.md#sendtoagent--hand-work-to-an-agents-draft), which only your worker can call — it is gated on `agent:input` and bound to your plugin's identity, which a view cannot assert. So the view asks the worker over a channel:
+A drag is one route; a **Send to agent…** button or menu entry is the other, and the one keyboard users get. It goes through [`host.sendToAgent`](./host-api.md#sendtoagent--hand-work-to-an-agents-draft), which only your worker can call — it is gated on `agent:input` and bound to your plugin's identity, which a view cannot assert. So the view asks the worker over a channel. Register the handler below in the worker, and the kit's [`SendToAgentButton`](./ui-kit.md#daintree-native-actions-agents-terminals-and-keys) is the whole view side — label, busy state and the refusals only you hear about:
+
+```js
+// view
+createElement(SendToAgentButton, { text: card.body, title: card.title, worktreeId });
+```
+
+Written by hand, the same thing is:
 
 ```js
 // worker (activate)
-host.registerHandler("sendToAgent", (_ctx, { text, title, worktreeId }) =>
-  host.sendToAgent(text, { title, worktreeId })
+host.registerHandler("sendToAgent", (_ctx, { text, title, worktreeId, terminalId }) =>
+  host.sendToAgent(text, { title, worktreeId, terminalId })
 );
 
 // view
@@ -474,7 +488,7 @@ if (
 }
 ```
 
-Without a `terminalId` the user picks the agent — or starts one, here or in a new worktree — and the text lands in its draft as the same block a drop makes, headed with your plugin's display name rather than a label you choose, and never submitted. The call resolves `drafted`, `cancelled` or `refused`; the user already sees why their agent refused, so a view only needs to speak up for the three reasons that concern the plugin. Label the control **Send to agent…**: the ellipsis says a picker comes first. To put it on the panel's ⋯ and right-click menus instead, declare an action in the panel's [`menu`](./contribution-points.md#panel-menu) — it is dispatched with `{ panelId }`, so the worker knows which panel asked.
+To pick the agent inside your own view instead of the host's picker, pass the panes your worker reads with `host.agents.list()` (it needs `agent:read`) to the kit's `AgentPicker`, and send the chosen `terminalId` back to the worker. Without a `terminalId` the user picks the agent — or starts one, here or in a new worktree — and the text lands in its draft as the same block a drop makes, headed with your plugin's display name rather than a label you choose, and never submitted. The call resolves `drafted`, `cancelled` or `refused`; the user already sees why their agent refused, so a view only needs to speak up for the three reasons that concern the plugin. Label the control **Send to agent…**: the ellipsis says a picker comes first. To put it on the panel's ⋯ and right-click menus instead, declare an action in the panel's [`menu`](./contribution-points.md#panel-menu) — it is dispatched with `{ panelId }`, so the worker knows which panel asked.
 
 ## Resources your view owns
 

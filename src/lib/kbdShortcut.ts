@@ -61,12 +61,20 @@ const ARROW_GLYPHS: Record<string, string> = {
   arrowright: "→",
 };
 
+/**
+ * A table's own entry. A combo can come from a plugin, and `"__proto__"` or
+ * `"constructor"` would otherwise read an inherited object as a key label.
+ */
+function ownLookup(table: Record<string, string>, key: string): string | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
 function mapToken(rawToken: string, isMac: boolean): string {
   const lower = rawToken.toLowerCase();
-  const arrow = ARROW_GLYPHS[lower];
+  const arrow = ownLookup(ARROW_GLYPHS, lower);
   if (arrow) return arrow;
   const table = isMac ? MAC_GLYPHS : WIN_LABELS;
-  const mapped = table[lower];
+  const mapped = ownLookup(table, lower);
   if (mapped) return mapped;
   // Single-char keys are uppercased ("p" → "P"). Multi-char unknowns keep
   // their original casing so labels like "PageUp" or "NumpadEnter" don't
@@ -249,9 +257,9 @@ const ARIA_KEY_NAMES: Record<string, string> = {
 
 function mapAriaToken(rawToken: string, modifiers: Record<string, string>): string {
   const lower = rawToken.toLowerCase();
-  const modifier = modifiers[lower];
+  const modifier = ownLookup(modifiers, lower);
   if (modifier) return modifier;
-  const named = ARIA_KEY_NAMES[lower];
+  const named = ownLookup(ARIA_KEY_NAMES, lower);
   if (named) return named;
   if (rawToken.length === 1) return rawToken.toUpperCase();
   return rawToken;
@@ -307,7 +315,7 @@ export function normalizeQuery(query: string): string {
   // of unrelated words ("metadata" stays "metadata", not "cmddata").
   return normalized
     .split("+")
-    .map((token) => MODIFIER_SEARCH_MAP[token] ?? token)
+    .map((token) => ownLookup(MODIFIER_SEARCH_MAP, token) ?? token)
     .join("+");
 }
 
@@ -383,7 +391,9 @@ const SPOKEN_KEY_NAMES: Record<string, string> = {
 
 function spokenToken(rawToken: string, isMac: boolean): string {
   const lower = rawToken.toLowerCase();
-  const named = (isMac ? SPOKEN_MAC_NAMES : SPOKEN_WIN_NAMES)[lower] ?? SPOKEN_KEY_NAMES[lower];
+  const named =
+    ownLookup(isMac ? SPOKEN_MAC_NAMES : SPOKEN_WIN_NAMES, lower) ??
+    ownLookup(SPOKEN_KEY_NAMES, lower);
   if (named) return named;
   // A key range such as "1–9" (a collapsed numbered family) reads as a range.
   const range = /^(\w)[–-](\w)$/.exec(rawToken);

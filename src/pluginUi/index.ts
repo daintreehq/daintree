@@ -160,6 +160,18 @@ import type {
   PluginSecretInputProps,
   PluginShortcutRecorderProps,
 } from "@shared/types/plugin-sdk-react";
+import type {
+  PluginActionButtonProps,
+  PluginAgentAvatarProps,
+  PluginAgentBadgeProps,
+  PluginAgentPickerProps,
+  PluginAgentStateIndicatorProps,
+  PluginContextDragSourceProps,
+  PluginKeyHintsProps,
+  PluginSendToAgentButtonProps,
+  PluginShortcutHintProps,
+  PluginTerminalSnapshotProps,
+} from "@shared/types/plugin-sdk-react";
 import { fromKit } from "./kit";
 
 export { preloadPluginUi, whenPluginUiReady } from "./kit";
@@ -1004,6 +1016,78 @@ export type {
   PluginDiffViewProps as DiffViewProps,
   PluginMarkdownEditorMode as MarkdownEditorMode,
   PluginMarkdownEditorProps as MarkdownEditorProps,
+} from "@shared/types/plugin-sdk-react";
+
+// Daintree-native: actions, agents, terminals and keys.
+export const ActionButton: ComponentType<PluginActionButtonProps> = fromKit(
+  "ActionButton",
+  (kit) => kit.ActionButton
+);
+export const AgentAvatar: ComponentType<PluginAgentAvatarProps> = fromKit(
+  "AgentAvatar",
+  (kit) => kit.AgentAvatar
+);
+export const AgentBadge: ComponentType<PluginAgentBadgeProps> = fromKit(
+  "AgentBadge",
+  (kit) => kit.AgentBadge
+);
+export const AgentStateIndicator: ComponentType<PluginAgentStateIndicatorProps> = fromKit(
+  "AgentStateIndicator",
+  (kit) => kit.AgentStateIndicator
+);
+export const AgentPicker: ComponentType<PluginAgentPickerProps> = fromKit(
+  "AgentPicker",
+  (kit) => kit.AgentPicker,
+  // The trigger shows while the kit loads, as a Popover's does.
+  ({ trigger }) => (isValidElement(trigger) ? trigger : null)
+);
+export const SendToAgentButton: ComponentType<PluginSendToAgentButtonProps> = fromKit(
+  "SendToAgentButton",
+  (kit) => kit.SendToAgentButton
+);
+export const ContextDragSource: ComponentType<PluginContextDragSourceProps> = fromKit(
+  "ContextDragSource",
+  (kit) => kit.ContextDragSource,
+  // The content is there from the first frame; only the drag waits. Narrowed
+  // here as the loaded adapter narrows it, so a stray object can't crash it.
+  ({ children }) =>
+    typeof children === "string" || typeof children === "number" || isValidElement(children)
+      ? children
+      : null
+);
+export const TerminalSnapshot: ComponentType<PluginTerminalSnapshotProps> = fromKit(
+  "TerminalSnapshot",
+  (kit) => kit.TerminalSnapshot
+);
+export const ShortcutHint: ComponentType<PluginShortcutHintProps> = fromKit(
+  "ShortcutHint",
+  (kit) => kit.ShortcutHint
+);
+export const KeyHints: ComponentType<PluginKeyHintsProps> = fromKit(
+  "KeyHints",
+  (kit) => kit.KeyHints
+);
+
+export type {
+  PluginActionButtonProps as ActionButtonProps,
+  PluginActionDispatchOutcome as ActionDispatchOutcome,
+  PluginActionMenuItem as ActionMenuItem,
+  PluginAgentState as AgentState,
+  PluginAgentAvatarSize as AgentAvatarSize,
+  PluginAgentAvatarProps as AgentAvatarProps,
+  PluginAgentBadgeProps as AgentBadgeProps,
+  PluginAgentStateIndicatorProps as AgentStateIndicatorProps,
+  PluginAgentPickerPane as AgentPickerPane,
+  PluginAgentPickerChoice as AgentPickerChoice,
+  PluginAgentPickerProps as AgentPickerProps,
+  PluginSendToAgentOutcome as SendToAgentOutcome,
+  PluginSendToAgentRequest as SendToAgentRequest,
+  PluginSendToAgentButtonProps as SendToAgentButtonProps,
+  PluginContextDragSourceProps as ContextDragSourceProps,
+  PluginTerminalSnapshotProps as TerminalSnapshotProps,
+  PluginShortcutHintProps as ShortcutHintProps,
+  PluginKeyHint as KeyHint,
+  PluginKeyHintsProps as KeyHintsProps,
 } from "@shared/types/plugin-sdk-react";
 
 export type {

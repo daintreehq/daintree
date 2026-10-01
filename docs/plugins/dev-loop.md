@@ -179,6 +179,7 @@ Consistency rules:
 | `inline-svg-icon` | warn | An inline 24×24 SVG icon; use `Icon` |
 | `lucide-react-import` | warn | `lucide-react` bundled into a view; the kit's `Icon` is served at no bundle cost |
 | `dnd-library-import` | warn | A drag-and-drop library (`@dnd-kit/*`, `react-beautiful-dnd`, `sortablejs`, …) bundled into a view; the kit's `SortableList`, `Kanban` and `DragDropProvider` cover reordering and boards |
+| `hand-rolled-context-drag` | warn | The agent-context drag written by hand (the `application/x-daintree-agent-context` type, or `setAgentContextDragData`) in a view; the kit's `ContextDragSource` writes and checks the payload, and `SendToAgentButton` is the keyboard route |
 | `editor-library-import` | warn | A code editor or diff library (`@codemirror/*`, `@uiw/react-codemirror`, `react-diff-view`, `diff2html`, …) bundled into a view; the kit's `CodeEditor` and `DiffView` are Daintree's own editor and diff viewer, themed with the app |
 | `raw-portal` | warn | `createPortal` in a view; the kit's `Portal` marks its container as the plugin's style root |
 | `native-dialog-in-view` | warn | `alert`, `confirm` or `prompt` in a view; use `ConfirmDialog` or `Dialog` |

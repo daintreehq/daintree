@@ -322,6 +322,45 @@ describe("dnd-library-import", () => {
   });
 });
 
+describe("hand-rolled-context-drag", () => {
+  it("flags the agent-context drag written by hand and passes the kit's ContextDragSource", async () => {
+    expect(
+      await lintFor(
+        "hand-rolled-context-drag",
+        view(
+          `<div draggable onDragStart={(e) => e.dataTransfer.setData("application/x-daintree-agent-context", json)} />`
+        )
+      )
+    ).toHaveLength(1);
+    expect(
+      await lintFor(
+        "hand-rolled-context-drag",
+        view(
+          `<div draggable onDragStart={(e) => setAgentContextDragData(e.dataTransfer, payload)} />`,
+          `import { setAgentContextDragData } from "@daintreehq/plugin-sdk";\n`
+        )
+      )
+    ).toHaveLength(1);
+    expect(
+      await lintFor(
+        "hand-rolled-context-drag",
+        view(
+          `<div onDrop={(e) => read(e.dataTransfer.getData("application/x-daintree-agent-context"))} />`
+        )
+      )
+    ).toEqual([]);
+    expect(
+      await lintFor(
+        "hand-rolled-context-drag",
+        view(
+          `<ContextDragSource text={body} />`,
+          `import { ContextDragSource } from "@daintreehq/plugin-ui";\n`
+        )
+      )
+    ).toEqual([]);
+  });
+});
+
 describe("raw-portal", () => {
   it("flags createPortal in a view and passes the kit's Portal", async () => {
     const flagged = await lintFor(
