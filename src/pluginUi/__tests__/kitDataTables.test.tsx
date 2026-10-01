@@ -257,6 +257,38 @@ describe("DataTable, rich", () => {
     expect(loadSubRows).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps the cursor on a branch closed over it, and numbers columns logically", () => {
+    render(
+      inViewport(
+        createElement(kit.DataTable<Deploy>, {
+          "aria-label": "Branches",
+          rows: DEPLOYS,
+          rowKey: "id",
+          columns: [...COLUMNS.slice(0, 2), { ...COLUMNS[2]!, editable: (row) => row.id !== "d2" }],
+          selectable: true,
+          defaultHiddenColumns: ["env"],
+          getSubRows: (row) => row.children,
+          defaultExpandedRowKeys: ["d3"],
+        })
+      )
+    );
+    const grid = screen.getByRole("treegrid", { name: "Branches" });
+    expect(grid.getAttribute("aria-colcount")).toBe("4");
+    expect(screen.getByRole("columnheader", { name: "Region" }).getAttribute("aria-colindex")).toBe(
+      "4"
+    );
+    expect(rowNamed("api").querySelectorAll("td")[2]!.getAttribute("aria-readonly")).toBe("true");
+    expect(rowNamed("web").querySelectorAll("td")[2]!.getAttribute("aria-readonly")).toBeNull();
+    act(() => grid.focus());
+    // Onto the sub-row jobs-main, then close its parent from the chevron.
+    const target = bodyRows().findIndex((row) => within(row).queryByText("jobs-main"));
+    for (let step = 0; step < target; step += 1) fireEvent.keyDown(grid, { key: "ArrowDown" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(rowNamed("jobs-main").id);
+    fireEvent.click(rowNamed("jobs").querySelector("[data-tree-chevron]")!);
+    expect(grid.getAttribute("aria-activedescendant")).toBe(rowNamed("jobs").id);
+    expect(rowNamed("jobs").getAttribute("data-active")).toBe("true");
+  });
+
   it("hides columns from the columns menu, never the last one", async () => {
     const onHidden = vi.fn();
     render(

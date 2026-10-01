@@ -49,6 +49,7 @@ import {
   createCheckReader,
   dropPositionAt,
   isTreeId,
+  isWithin,
   MAX_TREE_DEPTH,
   resolveDrop,
   resolveKeyMove,
@@ -505,6 +506,14 @@ function KitTreeView(props: PluginTreeViewProps) {
 
   const toggle = (row: TreeRow, open: boolean) => {
     if (!row.isDirectory || expandedSet.has(row.id) === open) return;
+    // Closing a branch the cursor is inside moves the cursor up to it.
+    const at = cursorPath === null ? undefined : byPath.get(cursorPath);
+    const atId = at?.kind === "node" ? at.id : at?.kind === "status" ? at.parentId : undefined;
+    if (!open && atId !== undefined && atId !== row.id && isWithin(rows, atId, row.id)) {
+      setCursor(row.path);
+    } else if (!open && at?.kind === "status" && at.parentId === row.id) {
+      setCursor(row.path);
+    }
     setExpanded(open ? [...expanded, row.id] : expanded.filter((id) => id !== row.id));
   };
   const goTo = (path: string, gesture?: { shiftKey?: boolean; primary?: boolean }) => {

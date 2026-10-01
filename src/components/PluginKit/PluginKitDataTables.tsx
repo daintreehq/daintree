@@ -425,7 +425,13 @@ function RichTableRow({
   }
   if (item.kind === "status") {
     return (
-      <tr {...common} aria-level={tree ? item.level : undefined} data-status-row={item.status} />
+      <tr
+        {...common}
+        aria-level={tree ? item.level : undefined}
+        aria-posinset={tree ? 1 : undefined}
+        aria-setsize={tree ? 1 : undefined}
+        data-status-row={item.status}
+      />
     );
   }
   const selected = context.isSelected(item);
@@ -455,6 +461,26 @@ const RICH_COMPONENTS = {
   TableBody: RichTableBody,
   TableRow: RichTableRow,
 };
+
+/**
+ * Scrolls the cell being edited out from under the pinned column on the left
+ * and the Columns rail on the right. Native focus scrolling ignores both.
+ */
+function revealEditCell(scroller: HTMLElement, rail: number): void {
+  const cell = scroller.querySelector<HTMLElement>("td[data-edit-cell]");
+  if (!cell) return;
+  const view = scroller.getBoundingClientRect();
+  const box = cell.getBoundingClientRect();
+  let pinned = 0;
+  for (const stuck of scroller.querySelectorAll<HTMLElement>("thead th.kit-dt-sticky")) {
+    const rect = stuck.getBoundingClientRect();
+    if (rect.left < view.left + view.width / 2) pinned = Math.max(pinned, rect.right - view.left);
+  }
+  const left = view.left + pinned;
+  const right = view.right - rail;
+  if (box.left < left) scroller.scrollLeft -= left - box.left;
+  else if (box.right > right) scroller.scrollLeft += Math.min(box.right - right, box.left - left);
+}
 
 function useControllable<T>(
   controlled: T | undefined,
@@ -1047,6 +1073,12 @@ function RichDataTable(props: PluginDataTableProps) {
     );
     return true;
   };
+  // An editor opened (or reached by Tab) under the pinned column or the
+  // Columns rail is scrolled out from under them.
+  const editKey = edit === null ? null : cellId(edit.key, edit.columnId);
+  useEffect(() => {
+    if (editKey !== null && scroller !== null) revealEditCell(scroller, trailing);
+  }, [editKey, scroller, trailing]);
   const cancelEdit = () => {
     setEdit(null);
     focusGrid();
@@ -1062,13 +1094,33 @@ function RichDataTable(props: PluginDataTableProps) {
   };
 
   // Expansion.
+  // Closing a branch the cursor is inside moves the cursor up to it, so the
+  // keyboard never loses its place to a row that just disappeared.
+  const cursorItem = activeIndex >= 0 ? items[activeIndex] : undefined;
+  const cursorUnder = (ancestor: RowKey): boolean => {
+    let parent =
+      cursorItem?.kind === "row" || cursorItem?.kind === "status" ? cursorItem.parentKey : null;
+    for (let guard = 0; parent !== null && guard < 64; guard += 1) {
+      if (parent === ancestor) return true;
+      const above = items.find((item) => item.kind === "row" && item.key === parent);
+      parent = above?.kind === "row" ? above.parentKey : null;
+    }
+    return false;
+  };
   const toggleGroup = (groupKey: string, open: boolean) => {
     const isOpen = !collapsed.includes(groupKey);
     if (isOpen === open) return;
+    if (!open && cursorItem?.kind === "row" && cursorItem.groupKey === groupKey) {
+      setCursorId(`group:${groupKey}`);
+    } else if (!open && cursorItem?.kind === "status") {
+      const owner = items.find((item) => item.kind === "row" && item.key === cursorItem.parentKey);
+      if (owner?.kind === "row" && owner.groupKey === groupKey) setCursorId(`group:${groupKey}`);
+    }
     setCollapsed(open ? collapsed.filter((key) => key !== groupKey) : [...collapsed, groupKey]);
   };
   const toggleRow = (row: DrawnRow, open: boolean) => {
     if (!row.expandable || row.expanded === open) return;
+    if (!open && cursorUnder(row.key)) setCursorId(row.id);
     setExpanded(open ? [...expanded, row.key] : expanded.filter((key) => key !== row.key));
   };
 
@@ -1245,6 +1297,7 @@ function RichDataTable(props: PluginDataTableProps) {
         role,
         "aria-label": label,
         "aria-rowcount": items.length + 1,
+        "aria-colcount": allColumns.length + (canSelect ? 1 : 0),
         "aria-multiselectable": canSelect ? true : undefined,
         tabIndex: 0,
         "aria-activedescendant": activeMounted(activeIndex, range) ? rowId(activeIndex) : undefined,
@@ -1307,11 +1360,18 @@ function RichDataTable(props: PluginDataTableProps) {
         ? true
         : "indeterminate";
 
+  // Logical column positions: hidden columns keep their numbers, so a reader
+  // hears "column 6" for Created whichever columns are shown.
+  const colOffset = canSelect ? 1 : 0;
+  const colIndex = (column: RichColumn) =>
+    allColumns.findIndex((candidate) => candidate.id === column.id) + 1 + colOffset;
+
   const header = () => (
     <tr aria-rowindex={1}>
       {canSelect ? (
         <th
           scope="col"
+          aria-colindex={1}
           style={{ width: CHECK_COLUMN_PX, ...(sticky ? { left: 0 } : null) }}
           className={cn("border-b border-divider bg-surface-canvas p-0", sticky && "kit-dt-sticky")}
         >
@@ -1336,6 +1396,7 @@ function RichDataTable(props: PluginDataTableProps) {
           <th
             key={column.id}
             scope="col"
+            aria-colindex={colIndex(column)}
             // Named by its label alone: the resize handle inside has a name of its own.
             aria-labelledby={column.resizable ? `${baseId}h-${columnIndex}` : undefined}
             aria-sort={
@@ -1586,6 +1647,9 @@ function RichDataTable(props: PluginDataTableProps) {
       <td
         key={column.id}
         {...stickyEdge(column)}
+        aria-colindex={colIndex(column)}
+        aria-readonly={column.editable !== null && !canEditCell ? true : undefined}
+        data-edit-cell={editing ? "" : undefined}
         style={stickyStyle(column)}
         onDoubleClick={
           canEditCell && !editing
@@ -1639,6 +1703,7 @@ function RichDataTable(props: PluginDataTableProps) {
         ? [
             <td
               key={"\u0000check"}
+              aria-colindex={1}
               style={sticky ? { left: 0 } : undefined}
               onClick={(event) => {
                 event.stopPropagation();
