@@ -2,7 +2,7 @@ import * as React from "react";
 import type * as TooltipPrimitiveType from "@radix-ui/react-tooltip";
 import { Slot } from "@radix-ui/react-slot";
 import { cn } from "@/lib/utils";
-import { TOOLTIP_MOTION_CLASS } from "./overlayMotion";
+import { OVERLAY_SIDE_OFFSET, TOOLTIP_MOTION_CLASS } from "./overlayMotion";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { FixedDropdownVisibleContext } from "./fixed-dropdown";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
@@ -351,7 +351,7 @@ const TooltipContent = React.forwardRef<
   (
     {
       className,
-      sideOffset = 4,
+      sideOffset = OVERLAY_SIDE_OFFSET,
       collisionPadding = 8,
       sticky = "partial",
       hideWhenDetached = true,

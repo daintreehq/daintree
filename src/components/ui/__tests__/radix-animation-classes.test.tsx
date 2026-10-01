@@ -112,9 +112,12 @@ describe("Radix overlay animation classes — wrapper source", () => {
     ["context-menu.tsx", "OVERLAY_MOTION_CLASS", 2],
     ["tooltip.tsx", "TOOLTIP_MOTION_CLASS", 1],
   ])("%s applies %s to each of its content components", (file, constant, expected) => {
+    // Imports are stripped whole, so one prettier wraps across lines still
+    // counts as an import rather than as applications.
     const applications = readWrapperSource(file)
+      .replace(/^import[\s\S]*?from\s+["'][^"']+["'];$/gm, "")
       .split("\n")
-      .filter((line) => line.includes(constant) && !line.trimStart().startsWith("import"));
+      .filter((line) => line.includes(constant));
     expect(applications.length, `${constant} must be applied ${expected}x in ${file}`).toBe(
       expected
     );
@@ -317,5 +320,27 @@ describe("lists that drop from a trigger their own width", () => {
     const tokens = content.className.split(/\s+/);
     expect(tokens.includes(OVERLAY_DROP_MOTION_CLASS)).toBe(drops);
     expect(tokens.some((token) => /zoom-in/.test(token))).toBe(!drops);
+  });
+});
+
+describe("overlay side offset", () => {
+  it("every overlay primitive defaults its trigger gap to the shared offset", () => {
+    // A menu, a palette and a toolbar dropdown should hang the same distance
+    // below the control that opened them; FixedDropdown once sat at 8px.
+    const uiDir = path.join(__dirname, "..");
+    const defaults: Array<[string, string]> = [];
+    for (const file of readdirSync(uiDir)) {
+      if (!file.endsWith(".tsx")) continue;
+      const source = readFileSync(path.join(uiDir, file), "utf-8");
+      // Destructured defaults only (`sideOffset = X,`), not JSX `sideOffset={…}`.
+      for (const match of source.matchAll(/^\s*sideOffset\s*=\s*([^,\n]+),\s*$/gm)) {
+        defaults.push([file, match[1]!.trim()]);
+      }
+    }
+    expect(defaults.length).toBeGreaterThan(0);
+    expect(defaults.map(([file]) => file)).toContain("fixed-dropdown.tsx");
+    for (const [file, value] of defaults) {
+      expect(value, file).toBe("OVERLAY_SIDE_OFFSET");
+    }
   });
 });

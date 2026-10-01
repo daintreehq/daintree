@@ -16,6 +16,13 @@
  */
 
 /**
+ * The gap between a trigger and the surface it opens, for every anchored
+ * overlay — Radix's and `FixedDropdown`'s alike — so a menu, a palette and a
+ * toolbar dropdown all hang the same distance below the control that owns them.
+ */
+export const OVERLAY_SIDE_OFFSET = 4;
+
+/**
  * The 4px directional nudge, shared by every surface including the tooltip.
  * Radix sets `data-side` to the side the content was actually placed on after
  * collision handling, so the surface always drifts in from its anchor.

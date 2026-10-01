@@ -3,7 +3,7 @@ import type * as DropdownMenuPrimitiveType from "@radix-ui/react-dropdown-menu";
 import { Slot, Slottable } from "@radix-ui/react-slot";
 import { Check, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { OVERLAY_MOTION_CLASS } from "./overlayMotion";
+import { OVERLAY_MOTION_CLASS, OVERLAY_SIDE_OFFSET } from "./overlayMotion";
 import { BrandSurfaceReset } from "@/components/icons/BrandSurface";
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
@@ -299,7 +299,7 @@ const DropdownMenuSubContent = React.forwardRef<
   (
     {
       className,
-      sideOffset = 4,
+      sideOffset = OVERLAY_SIDE_OFFSET,
       collisionPadding = 8,
       children,
       style,
@@ -373,7 +373,7 @@ const DropdownMenuContent = React.forwardRef<
   (
     {
       className,
-      sideOffset = 4,
+      sideOffset = OVERLAY_SIDE_OFFSET,
       collisionPadding = 8,
       children,
       style,
