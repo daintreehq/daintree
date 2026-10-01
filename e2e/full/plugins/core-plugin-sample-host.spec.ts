@@ -579,9 +579,11 @@ test.describe.serial("plugin settings form", () => {
     // Reported as set; the value itself never rides on getSettingValues.
     await expect.poll(() => userSecretsSet(window)).toContain("apiKey");
 
-    const reveal = window.getByRole("button", { name: "Reveal API key" });
+    const reveal = window.getByRole("button", { name: "Show API key" });
     await expect(reveal).toBeVisible({ timeout: T_MEDIUM });
+    await expect(reveal).toHaveAttribute("aria-pressed", "false");
     await reveal.click();
+    await expect(reveal).toHaveAttribute("aria-pressed", "true");
     await expect(input).toHaveAttribute("type", "text");
     await expect(input).toHaveValue("s3cr3t");
 
