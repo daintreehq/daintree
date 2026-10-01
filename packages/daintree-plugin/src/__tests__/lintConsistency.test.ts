@@ -50,6 +50,10 @@ const CLASS_CASES: Record<string, [string, string]> = {
     `<div className={cn("grid grid-cols-1", on && "md:grid-cols-3 max-sm:hidden")} />`,
     `<div className="@container"><div className="grid-cols-1 @md:grid-cols-3 hover:bg-overlay-soft" /></div>`,
   ],
+  "hand-rolled-drawer": [
+    `<aside className={cn("absolute inset-y-0 right-0 w-80", !open && "translate-x-full")} />`,
+    `<span className="translate-x-1 -translate-y-1/2" />`,
+  ],
 };
 
 describe("class-string rules", () => {
