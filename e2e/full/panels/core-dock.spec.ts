@@ -432,6 +432,29 @@ test.describe.serial("Core: Dock", () => {
     const handle = window.locator(SEL.panel.dockPopoverResizeHandle);
     await handle.waitFor({ state: "visible", timeout: T_MEDIUM });
 
+    // The popover zooms and slides in, and is "visible" from its first frame. A
+    // hit-test on that scaled frame lands below where the 12px handle settles,
+    // so the press hits the tab bar instead. Measure once Radix has placed it
+    // (it holds `animation: none` until then), the entry has ended, and the
+    // handle sits still across two frames.
+    await expect
+      .poll(
+        () =>
+          handle.evaluate(async (el) => {
+            const content = el.closest<HTMLElement>("[data-side]");
+            if (!content || content.style.animation === "none") return false;
+            if (!content.getAnimations().every((a) => a.playState === "finished")) return false;
+            const first = el.getBoundingClientRect();
+            await new Promise((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(resolve))
+            );
+            const second = el.getBoundingClientRect();
+            return first.x === second.x && first.y === second.y && first.height === second.height;
+          }),
+        { timeout: T_SHORT }
+      )
+      .toBe(true);
+
     // offsetParent of the absolutely-positioned handle is the popover container,
     // so its height tracks the rendered popover height.
     const heightOf = () =>
