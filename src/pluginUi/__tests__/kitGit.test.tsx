@@ -1099,3 +1099,45 @@ describe("round 1 design fixes", () => {
     expect(slot.textContent).toContain("+2");
   });
 });
+
+describe("round 2 design fixes", () => {
+  it("keeps each metadata item's separator inside it, so a dropped item takes its dot", () => {
+    render(
+      withTooltips(
+        createElement(kit.PullRequestRow, {
+          number: 7,
+          title: "t",
+          state: "open",
+          author: { name: "ada" },
+          updatedAt: Date.now() - 60_000,
+          commentCount: 2,
+          headRef: "feature/x",
+          labels: [{ name: "bug", color: "#d73a4a" }],
+          review: "approved",
+          "data-testid": "row",
+        })
+      )
+    );
+    const meta = screen.getByTestId("row").querySelector("[data-forge-row-meta]")!;
+    const items = [...meta.children];
+    expect(items.length).toBe(7);
+    expect(items[0]?.textContent).toBe("#7");
+    for (const item of items.slice(1)) expect(item.textContent?.startsWith("·")).toBe(true);
+  });
+
+  it("holds every check's duration in one column when any row has a details button", () => {
+    render(
+      withTooltips(
+        createElement(kit.ChecksList, {
+          checks: [
+            { name: "a", status: "failure", durationMs: 1000, detailsUrl: "https://ci.example/a" },
+            { name: "b", status: "running", durationMs: 2000 },
+          ],
+        })
+      )
+    );
+    const rows = [...document.querySelectorAll("[data-check-status]")];
+    // Same child count: the row without a button keeps an empty slot.
+    expect(rows[0]?.children.length).toBe(rows[1]?.children.length);
+  });
+});
