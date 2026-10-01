@@ -26,11 +26,18 @@ const SEARCH_FIELD_CSS = readFileSync(
   "utf-8"
 );
 
+// The rich DataTable's own sheet, which ships in the kit chunk beside it.
+const KIT_DATA_TABLE_CSS = readFileSync(
+  path.resolve(__dirname, "../../../components/PluginKit/kitDataTable.css"),
+  "utf-8"
+);
+
 // The host's global stylesheet, reduced to the component rules the kit leans
 // on here; the full `index.css` is Tailwind source, not parseable CSS.
 function installHostStyles(): void {
   for (const css of [
     SEARCH_FIELD_CSS,
+    KIT_DATA_TABLE_CSS,
     "@layer components { .toolbar-icon-button { display: inline-flex; } .palette-row { display: flex; } }",
     ".border-divider { border-color: var(--border-divider); }",
     // A host class that styles only inside host chrome; a plugin class of the
@@ -73,6 +80,29 @@ function renderPluginRoot(): Element {
         }),
         createElement(kit.ColorSwatch, { color: "#2f81f7" }),
         createElement(kit.RangeSlider, { "aria-label": "Range", defaultValue: [20, 60] }),
+        createElement(kit.DataTable<{ id: string; name: string; env: string }>, {
+          "aria-label": "Deployments",
+          rows: [{ id: "a", name: "web", env: "prod" }],
+          rowKey: "id",
+          columns: [
+            { id: "name", header: "Name", width: 160, resizable: true, editable: true },
+            { id: "env", header: "Environment" },
+          ],
+          selectable: true,
+          groupBy: "env",
+          columnsMenu: true,
+          stickyFirstColumn: true,
+        }),
+        createElement(kit.TreeView, {
+          "aria-label": "Services",
+          nodes: [{ id: "a", label: "Edge", children: [{ id: "b", label: "CDN" }] }],
+          checkable: true,
+          defaultExpanded: ["a"],
+        }),
+        createElement(kit.ObjectInspector, {
+          "aria-label": "Response",
+          value: { id: "dep", ready: true, tags: ["web"] },
+        }),
         createElement("div", { className: "border-b border-divider plugin-typo-class" }),
         // Lucide's prefix on the author's own element is still checked.
         createElement("span", { className: "lucide-typo" })

@@ -56,12 +56,12 @@ import { CONTEXT_MENU_PARTS, isMenuKey, renderMenuEntries } from "./kitMenu";
 import { useKitOverlayZClass } from "./kitScope";
 import { severityGlyph } from "./PluginKitPatterns";
 
-const DEFAULT_ROW_PX = 28;
-const DEFAULT_OVERSCAN_ROWS = 8;
+export const DEFAULT_ROW_PX = 28;
+export const DEFAULT_OVERSCAN_ROWS = 8;
 
 // A focused list must not point `aria-activedescendant` at a row the reader
 // scrolled out of the mounted window; the next arrow key scrolls it back.
-function activeMounted(index: number, range: ListRange | null): boolean {
+export function activeMounted(index: number, range: ListRange | null): boolean {
   return index >= 0 && (range === null || (index >= range.startIndex && index <= range.endIndex));
 }
 
@@ -69,7 +69,7 @@ function count(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 }
 
-function reactKey(value: unknown, fallback: number): string | number {
+export function reactKey(value: unknown, fallback: number): string | number {
   return typeof value === "string" || (typeof value === "number" && Number.isFinite(value))
     ? value
     : fallback;
@@ -77,13 +77,13 @@ function reactKey(value: unknown, fallback: number): string | number {
 
 // A scroller that takes focus fills its pane edge to edge, so the global
 // `*:focus-visible` ring is drawn inset rather than into the pane's clip.
-const SCROLLER_RING_INSET = "focus-visible:-outline-offset-2";
+export const SCROLLER_RING_INSET = "focus-visible:-outline-offset-2";
 
 // The grid is as tall as all its rows, so a ring of its own would be clipped
 // away by the scroller. Its focus indicator is the cursor row instead: the one
 // accent in the grid, painted only while the grid itself holds keyboard focus.
 // Selection stays the neutral `aria-selected` fill, so the two never compete.
-const GRID_FOCUS_RING =
+export const GRID_FOCUS_RING =
   "outline-hidden focus-visible:[&_tr[data-active=true]]:outline focus-visible:[&_tr[data-active=true]]:outline-2 focus-visible:[&_tr[data-active=true]]:-outline-offset-2 focus-visible:[&_tr[data-active=true]]:outline-accent-primary";
 
 interface ListContext {
@@ -221,7 +221,7 @@ function KitVirtualList(props: PluginVirtualListProps) {
   );
 }
 
-interface TableColumn {
+export interface TableColumn {
   id: string;
   header: ReactNode;
   width: number | string | undefined;
@@ -231,7 +231,7 @@ interface TableColumn {
   render: ((row: unknown, index: number) => unknown) | undefined;
 }
 
-function readColumns(columns: unknown): TableColumn[] {
+export function readColumns(columns: unknown): TableColumn[] {
   if (!Array.isArray(columns)) return [];
   const seen = new Set<string>();
   const out: TableColumn[] = [];
@@ -311,9 +311,9 @@ export function layoutColumns(
   return { widths: widths.map((width) => width ?? FLEX_COLUMN_MAX_PX), filler: true };
 }
 
-const ALIGN_CLASS = { start: "text-start", center: "text-center", end: "text-end" } as const;
+export const ALIGN_CLASS = { start: "text-start", center: "text-center", end: "text-end" } as const;
 
-function cellValue(row: unknown, column: TableColumn, index: number): ReactNode {
+export function cellValue(row: unknown, column: TableColumn, index: number): ReactNode {
   if (column.render) return node(column.render(row, index));
   if (typeof row !== "object" || row === null) return null;
   const value = field(row, column.id);
@@ -398,14 +398,14 @@ function TableRow({ context, item, ...props }: ItemProps<unknown> & { context: T
 
 const TABLE_COMPONENTS = { Scroller: TableScroller, Table: TableElement, TableBody, TableRow };
 
-function readSort(sort: unknown): PluginDataTableSort | null {
+export function readSort(sort: unknown): PluginDataTableSort | null {
   if (typeof sort !== "object" || sort === null) return null;
   const columnId = nonEmpty(field(sort, "columnId"));
   const direction = oneOf(field(sort, "direction"), ["asc", "desc"] as const);
   return columnId && direction ? { columnId, direction } : null;
 }
 
-function SortGlyph({ direction }: { direction: "asc" | "desc" | undefined }) {
+export function SortGlyph({ direction }: { direction: "asc" | "desc" | undefined }) {
   if (!direction) return null;
   const Glyph = direction === "asc" ? ArrowUp : ArrowDown;
   return <Glyph className="h-3 w-3 shrink-0" aria-hidden="true" />;

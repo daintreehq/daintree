@@ -27,8 +27,10 @@ const GLYPH_TOGGLES: Record<string, string> = {
   "src/components/Layout/DockLaunchButton.tsx": "preset disclosure chevron in the icon column",
   "src/components/Worktree/WorktreeOverviewRow.tsx": "selection checkbox in the type-icon slot",
   "src/panels/file-browser/FileTreeView.tsx": "tree disclosure chevron",
-  "src/components/PluginKit/PluginKitFileTree.tsx":
-    "the kit FileTree's disclosure chevron, as the host tree's",
+  "src/components/PluginKit/kitTreeRow.tsx":
+    "the kit trees' disclosure chevron (FileTree, TreeView, ObjectInspector), as the host tree's",
+  "src/components/PluginKit/PluginKitTreeView.tsx":
+    "the kit TreeView's checkbox in its own slot, as the worktree overview grid's",
   "src/components/PluginKit/PluginKitPatterns.tsx":
     "the kit ListRow's selection checkbox in the icon slot, as the worktree overview grid's",
 };

@@ -54,7 +54,28 @@ const CLASS_CASES: Record<string, [string, string]> = {
     `<aside className={cn("absolute inset-y-0 right-0 w-80", !open && "translate-x-full")} />`,
     `<span className="translate-x-1 -translate-y-1/2" />`,
   ],
+  "hand-rolled-forge-state": [
+    `<span className={cn("h-4 w-4 border-l-pr-closed", merged ? "bg-pr-merged/10" : "text-pr-open")} />`,
+    `<span className="text-status-success" />`,
+  ],
 };
+
+describe("hand-rolled-forge-state", () => {
+  it("sees the ink through opacity modifiers and border sides", async () => {
+    for (const cls of [
+      "bg-pr-open/10",
+      "border-l-pr-closed",
+      "fill-pr-merged/50",
+      "hover:text-pr-draft",
+    ]) {
+      const flagged = await lintFor("hand-rolled-forge-state", view(`<span className="${cls}" />`));
+      expect(flagged.length, cls).toBe(1);
+    }
+    expect(
+      await lintFor("hand-rolled-forge-state", view(`<span className="text-pr-opening" />`))
+    ).toEqual([]);
+  });
+});
 
 describe("class-string rules", () => {
   for (const [ruleId, [bad, good]] of Object.entries(CLASS_CASES)) {
@@ -291,6 +312,53 @@ describe("editor-library-import", () => {
         view(`<X />`, `import { X } from "./codemirror-notes";\n// from "@codemirror/view"\n`)
       )
     ).toEqual([]);
+  });
+});
+
+describe("data-view-library-import", () => {
+  it("flags a view bundling a grid, tree or JSON viewer and passes one using the kit", async () => {
+    for (const specifier of [
+      "@tanstack/react-table",
+      "ag-grid-react",
+      "react-arborist",
+      "react-json-view",
+      "@uiw/react-json-view/dark",
+      "react-inspector",
+    ]) {
+      expect(
+        await lintFor(
+          "data-view-library-import",
+          view(`<X />`, `import { X } from "${specifier}";\n`)
+        )
+      ).toHaveLength(1);
+    }
+    expect(
+      await lintFor(
+        "data-view-library-import",
+        view(
+          `<TreeView />`,
+          `import { DataTable, ObjectInspector, TreeView } from "@daintreehq/plugin-ui";\n`
+        )
+      )
+    ).toEqual([]);
+    expect(
+      await lintFor(
+        "data-view-library-import",
+        view(`<X />`, `import { X } from "./react-table-notes";\n`)
+      )
+    ).toEqual([]);
+    expect(
+      await lintFor(
+        "data-view-library-import",
+        view(`<X />`, `import type { ColumnDef } from "@tanstack/react-table";\n`)
+      )
+    ).toEqual([]);
+    expect(
+      await lintFor(
+        "data-view-library-import",
+        view(`<X />`, `const grid = await import("ag-grid-community");\n`)
+      )
+    ).toHaveLength(1);
   });
 });
 
