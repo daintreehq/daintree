@@ -143,7 +143,7 @@ function startsOnNestedControl(event: SyntheticEvent): boolean {
 
 const PRIMARY_BUTTON = 0;
 
-class KitMouseSensor extends MouseSensor {
+export class KitMouseSensor extends MouseSensor {
   static activators: {
     eventName: "onMouseDown";
     handler: (event: ReactMouseEvent, options: MouseSensorOptions) => boolean;
@@ -160,7 +160,7 @@ class KitMouseSensor extends MouseSensor {
   ];
 }
 
-class KitTouchSensor extends TouchSensor {
+export class KitTouchSensor extends TouchSensor {
   static activators: {
     eventName: "onTouchStart";
     handler: (event: ReactTouchEvent, options: TouchSensorOptions) => boolean;
@@ -386,7 +386,13 @@ export function edgeScroll(point: { x: number; y: number }, slow: boolean, view:
  * content`), which would offset the copy from the pointer; re-marked as the
  * view's style root so its classes still apply.
  */
-function KitDragOverlay({ children, modifiers }: { children: ReactNode; modifiers: Modifier[] }) {
+export function KitDragOverlay({
+  children,
+  modifiers,
+}: {
+  children: ReactNode;
+  modifiers: Modifier[];
+}) {
   const owner = useKitOwnerAttributes();
   const skipMotion = useShouldSkipMotion();
   const dropAnimation = useDropAnimation();
@@ -1049,7 +1055,7 @@ function useReorderEngine({
 
 type Engine = ReturnType<typeof useReorderEngine>;
 
-const LIFTED_SURFACE =
+export const LIFTED_SURFACE =
   "border border-border-strong bg-surface-panel-elevated shadow-[var(--theme-shadow-floating)]";
 
 // The grip's 24px box overhangs the row's padding rather than growing it.

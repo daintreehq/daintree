@@ -294,6 +294,53 @@ describe("editor-library-import", () => {
   });
 });
 
+describe("data-view-library-import", () => {
+  it("flags a view bundling a grid, tree or JSON viewer and passes one using the kit", async () => {
+    for (const specifier of [
+      "@tanstack/react-table",
+      "ag-grid-react",
+      "react-arborist",
+      "react-json-view",
+      "@uiw/react-json-view/dark",
+      "react-inspector",
+    ]) {
+      expect(
+        await lintFor(
+          "data-view-library-import",
+          view(`<X />`, `import { X } from "${specifier}";\n`)
+        )
+      ).toHaveLength(1);
+    }
+    expect(
+      await lintFor(
+        "data-view-library-import",
+        view(
+          `<TreeView />`,
+          `import { DataTable, ObjectInspector, TreeView } from "@daintreehq/plugin-ui";\n`
+        )
+      )
+    ).toEqual([]);
+    expect(
+      await lintFor(
+        "data-view-library-import",
+        view(`<X />`, `import { X } from "./react-table-notes";\n`)
+      )
+    ).toEqual([]);
+    expect(
+      await lintFor(
+        "data-view-library-import",
+        view(`<X />`, `import type { ColumnDef } from "@tanstack/react-table";\n`)
+      )
+    ).toEqual([]);
+    expect(
+      await lintFor(
+        "data-view-library-import",
+        view(`<X />`, `const grid = await import("ag-grid-community");\n`)
+      )
+    ).toHaveLength(1);
+  });
+});
+
 describe("dnd-library-import", () => {
   it("flags a view importing a drag-and-drop library and passes one using the kit", async () => {
     for (const specifier of [

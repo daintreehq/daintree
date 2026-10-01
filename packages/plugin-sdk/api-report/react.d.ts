@@ -795,7 +795,39 @@ interface PluginDataTableColumn<T = unknown> {
     sortable?: boolean;
     /** The cell. Defaults to `row[id]` when that is a string or a number. */
     render?(row: T, index: number): ReactNode;
+    /**
+     * Draws a drag edge on the header's trailing side; the edge is also a
+     * keyboard separator (Left/Right step 8px, Shift 32px, Home/End the
+     * limits). Enter, Space or a double-click go back to `width`. Widths report through
+     * `onColumnWidthsChange`.
+     */
+    resizable?: boolean;
+    /** The narrowest a resize may make it, in px. Defaults to 48. */
+    minWidth?: number;
+    /** The widest a resize may make it, in px. Defaults to 1200. */
+    maxWidth?: number;
+    /** `false` keeps the column always shown: its row in the columns menu stays checked and disabled. Defaults to `true`. */
+    hideable?: boolean;
+    /** The column's name in the columns menu, when `header` is not plain text. */
+    menuLabel?: string;
+    /**
+     * Edits the cell in place: double-click it, or Enter/F2 on its row. A
+     * function decides per row. The edit reports through the table's `onCellEdit`.
+     */
+    editable?: boolean | PluginDataTableRowPredicate<T>;
+    /** The editor: `text` (the default), `number`, or `select` over `editOptions`. */
+    editor?: "text" | "number" | "select";
+    /** The choices of a `select` editor. */
+    editOptions?: readonly PluginSelectOption[];
+    /** The text the editor starts from. Defaults to `row[id]` when that is a string or a number. */
+    editValue?(row: T): string;
+    /** Checks a draft before it is committed: return a message to refuse it and keep the editor open. */
+    validate?(value: string, row: T): string | null | undefined;
 }
+/** Decides something per row (selectable, editable). A method, for the same reason as {@link PluginDataTableRowKey}. */
+type PluginDataTableRowPredicate<T> = {
+    bivarianceHack(row: T): boolean;
+}["bivarianceHack"];
 /**
  * A `DataTable` row's stable key. Declared as a method so a table typed for
  * one row shape still fits where any rows are accepted.
@@ -843,7 +875,81 @@ interface PluginDataTableProps<T = unknown> extends PluginRootAttributes {
     "aria-label": string;
     /** Classes for the scrolling element. */
     className?: string;
+    /**
+     * Draws a checkbox column and makes the table multi-select: click a box to
+     * toggle its row, Shift-click for a range, the header box for all. On the
+     * keyboard Space toggles the cursor row, Shift+Up/Down extend, Cmd+A (Ctrl+A)
+     * selects all and Escape clears. A function leaves some rows out. Pair it
+     * with `BulkActionBar`: `count={keys.length}` and `onClear={() => setKeys([])}`.
+     */
+    selectable?: boolean | PluginDataTableRowPredicate<T>;
+    /** The selected rows' keys, controlled. */
+    selectedRowKeys?: readonly (string | number)[];
+    defaultSelectedRowKeys?: readonly (string | number)[];
+    /** The selection changed: the keys in the order the rows are drawn. */
+    onSelectedRowKeysChange?: (keys: (string | number)[]) => void;
+    /**
+     * Groups the rows under a header row with a disclosure and a count: by a
+     * column id or field name, or a function returning the group's key. Groups
+     * keep the order their first row has in `rows`.
+     */
+    groupBy?: string | PluginDataTableGroupAccessor<T>;
+    /** The header's label for a group. Defaults to the key ("None" for an empty one). */
+    groupLabel?(key: string, rows: readonly T[]): ReactNode;
+    /** Folded groups' keys, controlled. */
+    collapsedGroups?: readonly string[];
+    defaultCollapsedGroups?: readonly string[];
+    onCollapsedGroupsChange?: (keys: string[]) => void;
+    /** A row's children, drawn under it indented when it is expanded. */
+    getSubRows?(row: T): readonly T[] | null | undefined;
+    /**
+     * Whether a row has children to load. With `loadSubRows`, a row this
+     * returns `true` for draws a disclosure; expanding it loads the children,
+     * with a loading row under it meanwhile and Retry if the load fails.
+     */
+    hasSubRows?(row: T): boolean;
+    /** Loads a row's children when it is first expanded. Kept while the row is the same object; Retry or a new row object loads them again. */
+    loadSubRows?(row: T): Promise<readonly T[]>;
+    /** Expanded rows' keys, controlled. */
+    expandedRowKeys?: readonly (string | number)[];
+    defaultExpandedRowKeys?: readonly (string | number)[];
+    onExpandedRowKeysChange?: (keys: (string | number)[]) => void;
+    /** Column widths in px by column id, controlled. A column not listed keeps its `width`. */
+    columnWidths?: Readonly<Record<string, number>>;
+    defaultColumnWidths?: Readonly<Record<string, number>>;
+    /** A column was resized: every width set so far. */
+    onColumnWidthsChange?: (widths: Record<string, number>) => void;
+    /** Hidden columns' ids, controlled. */
+    hiddenColumns?: readonly string[];
+    defaultHiddenColumns?: readonly string[];
+    onHiddenColumnsChange?: (ids: string[]) => void;
+    /** Draws a Columns button at the header's end, a menu that shows and hides columns. */
+    columnsMenu?: boolean;
+    /**
+     * Remembers column widths, hidden columns, folded groups and expanded rows
+     * with `usePersistentViewState` under this key, so they survive the view
+     * unmounting, a reload and a restart. Controlled props still win.
+     */
+    viewStateKey?: string;
+    /**
+     * Pins the first column (after the checkboxes) to the start while the table
+     * scrolls sideways. The table scrolls sideways once its columns are wider
+     * than the pane.
+     */
+    stickyFirstColumn?: boolean;
+    /**
+     * An `editable` cell was committed (Enter, Tab or leaving it). Return a
+     * promise to show the cell pending until it settles; a rejection reopens
+     * the editor with the draft and the error's message (while another cell is
+     * being edited the failure is announced instead). Escape cancels an edit.
+     * Tab and Shift+Tab commit and move to the next or previous editable cell.
+     */
+    onCellEdit?(row: T, columnId: string, value: string): void | Promise<void>;
 }
+/** Reads a row's group key for `DataTable`'s `groupBy`. */
+type PluginDataTableGroupAccessor<T> = {
+    bivarianceHack(row: T): string;
+}["bivarianceHack"];
 /** One line of a `LogView` with a severity: its glyph leads the line. */
 interface PluginLogEntry {
     text: string;
@@ -4569,6 +4675,132 @@ interface PluginMarkdownEditorProps extends PluginRootAttributes {
     "aria-label"?: string;
     className?: string;
 }
+/** Identifies a `TreeView` node. Unique across the whole tree. */
+type PluginTreeNodeId = string | number;
+/** Handed to `TreeView`'s `renderNode` and `getIcon`. */
+interface PluginTreeNodeState {
+    depth: number;
+    expanded: boolean;
+    /** Has children, or may have (an unloaded async node). */
+    expandable: boolean;
+    selected: boolean;
+    /** With `checkable`: on, off, or some of its children on. */
+    checked: boolean | "mixed";
+    /** Its children are loading. */
+    loading: boolean;
+}
+/** A node moved by drag or by Alt+arrow keys, reported once on drop. */
+interface PluginTreeMove {
+    id: PluginTreeNodeId;
+    /** Its new parent; `null` for the top level. */
+    parentId: PluginTreeNodeId | null;
+    /** Its index among the new parent's children, counted with it removed from where it was. */
+    index: number;
+    /** Where it was. */
+    fromParentId: PluginTreeNodeId | null;
+    fromIndex: number;
+}
+/**
+ * Props of `TreeView`: a tree of any nodes, drawn like the host's file tree
+ * (the same rows, chevrons and indentation) and virtualised, so a tree of
+ * thousands of nodes stays light. It is one tab stop with the ARIA tree
+ * keyboard: Up/Down move, Right expands or steps in, Left collapses or steps
+ * out, Home/End, Enter activates, typing jumps to a matching label. It fills
+ * its container's height.
+ */
+interface PluginTreeViewProps<T = unknown> extends PluginRootAttributes {
+    /** The top-level nodes. */
+    nodes: readonly T[];
+    /** A node's id. Defaults to its `id` field. */
+    getId?(node: T): PluginTreeNodeId;
+    /** A node's text, read for its row, typeahead and announcements. Defaults to its `label`, `name` or `title`. */
+    getLabel?(node: T): string;
+    /**
+     * A node's children: an array, or a promise for a lazy node, loaded the
+     * first time it is expanded with a loading row under it meanwhile (Retry
+     * if it fails). Defaults to the node's `children` field. Pass `hasChildren`
+     * with lazy nodes, or each one is loaded as it is drawn to learn whether it
+     * has any.
+     */
+    getChildren?(node: T): readonly T[] | Promise<readonly T[]> | null | undefined;
+    /** Whether a node has children, without loading them. */
+    hasChildren?(node: T): boolean;
+    /** The row's content after the chevron and checkbox. Defaults to the icon and the label. */
+    renderNode?(node: T, state: PluginTreeNodeState): ReactNode;
+    /** A glyph before the label, when `renderNode` is not given. */
+    getIcon?(node: T, state: PluginTreeNodeState): PluginIconSource | null | undefined;
+    /** `single` (the default): the cursor is the selection. `multiple`: Cmd-click (Ctrl-click) toggles, Shift-click and Shift+arrows extend. */
+    selectionMode?: "single" | "multiple";
+    /** Selected nodes' ids, controlled. */
+    selected?: readonly PluginTreeNodeId[];
+    defaultSelected?: readonly PluginTreeNodeId[];
+    onSelectedChange?: (ids: PluginTreeNodeId[]) => void;
+    /** Expanded nodes' ids, controlled. */
+    expanded?: readonly PluginTreeNodeId[];
+    defaultExpanded?: readonly PluginTreeNodeId[];
+    onExpandedChange?: (ids: PluginTreeNodeId[]) => void;
+    /**
+     * Draws a checkbox on every row; Space toggles the cursor row's. A parent
+     * is on when all its loaded children are, mixed when some are, and checking
+     * it checks them all.
+     */
+    checkable?: boolean;
+    /** Checked nodes' ids, controlled: parents included when all their children are on. */
+    checked?: readonly PluginTreeNodeId[];
+    defaultChecked?: readonly PluginTreeNodeId[];
+    onCheckedChange?: (ids: PluginTreeNodeId[]) => void;
+    /** Enter or a double-click on a node. */
+    onActivate?(node: T): void;
+    /**
+     * Lets nodes be dragged to reorder or re-parent them: dropped on a row's
+     * upper or lower edge it goes before or after it, on its middle into it.
+     * Alt+Up/Down move the cursor node among its siblings, Alt+Left out to its
+     * parent's level, Alt+Right into the sibling above it. The tree does not
+     * move nodes itself: apply the move to `nodes`.
+     */
+    onMove?(move: PluginTreeMove): void;
+    /** Whether a node may be dropped there. Dropping a node into itself or its own descendants is always refused. */
+    canDrop?(move: PluginTreeMove): boolean;
+    /** Whether a node can be picked up. Defaults to all of them. */
+    canDrag?(node: T): boolean;
+    /** Shown instead of the tree when `nodes` is empty: usually an `EmptyState`. */
+    empty?: ReactNode;
+    /** Required: names the tree for assistive tech. */
+    "aria-label": string;
+    className?: string;
+}
+/**
+ * Props of `ObjectInspector`: a read-only, collapsible view of a JSON-like
+ * value (an API response, a tool result) with type-coloured values in the
+ * same syntax colours as `CodeBlock`. Each row copies its value or its path
+ * from its context menu or the buttons that show on hover; Cmd+C (Ctrl+C)
+ * copies the cursor row's value. Long strings are cut with a "more" toggle,
+ * large arrays are split into ranges, and a value that contains itself is
+ * shown as `[Circular]` rather than followed. It is one tab stop with the
+ * ARIA tree keyboard, virtualised, and fills its container's height.
+ */
+interface PluginObjectInspectorProps extends PluginRootAttributes {
+    value: unknown;
+    /** The root's name, shown as its key and starting every copied path. Defaults to none: paths start at the first key. */
+    name?: string;
+    /** How many levels start open. Defaults to 1; `Infinity` opens everything. */
+    expandDepth?: number;
+    /** Draws a bar with a filter field and Expand all / Collapse all. Defaults to `true`. */
+    toolbar?: boolean;
+    /** Filter text, controlled: rows whose key or value contains it, with their ancestors. */
+    filter?: string;
+    defaultFilter?: string;
+    onFilterChange?: (filter: string) => void;
+    /** Characters of a string shown before it is cut. Defaults to 200. */
+    maxStringLength?: number;
+    /** Items per range in a large array. Defaults to 100. */
+    arrayChunkSize?: number;
+    /** Keys in object order (the default), or sorted. */
+    sortKeys?: boolean;
+    /** Required: names the inspector for assistive tech ("Response body"). */
+    "aria-label": string;
+    className?: string;
+}
 
 /**
  * Typed companion to `host.registerHandler(channel, schema, handler)` for
@@ -5261,4 +5493,4 @@ interface PluginHostBridge {
     onPanel(pluginId: string, channel: string, panelId: string, callback: (payload: unknown) => void): () => void;
 }
 
-export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAccordionItem, type PluginAccordionProps, type PluginAlign, type PluginAnnounceOptions, type PluginAriaRootAttributes, type PluginAutoGridProps, type PluginAvatarGroupItem, type PluginAvatarGroupProps, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginBarChartProps, type PluginBreadcrumbItem, type PluginBreadcrumbsProps, type PluginBulkAction, type PluginBulkActionBarProps, type PluginButtonProps, type PluginButtonVariant, type PluginCalendarBaseProps, type PluginCalendarProps, type PluginCalendarRangeProps, type PluginCalendarSingleProps, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCardProps, type PluginChartBaseProps, type PluginChartColor, type PluginChartSeries, type PluginCheckboxProps, type PluginClusterProps, type PluginCodeBlockProps, type PluginCodeEditorHandle, type PluginCodeEditorProps, type PluginColorPickerProps, type PluginColorSwatch, type PluginColorSwatchProps, type PluginColoredLabelProps, type PluginComboboxProps, type PluginCommandPaletteItem, type PluginCommandPaletteProps, type PluginComposerAttachment, type PluginComposerProps, type PluginConfirmDialogProps, type PluginConfirmPopoverProps, type PluginContainerSize, type PluginContainerTarget, type PluginContextMenuProps, type PluginCopyButtonProps, type PluginCountIndicatorProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableSort, type PluginDateFieldBaseProps, type PluginDatePickerProps, type PluginDateRange, type PluginDateRangePickerProps, type PluginDateRangePreset, type PluginDateTimePickerProps, type PluginDebouncedCallback, type PluginDescriptionItem, type PluginDescriptionListItemProps, type PluginDescriptionListProps, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDiffHunk, type PluginDiffHunkAction, type PluginDiffStatProps, type PluginDiffViewProps, type PluginDisclosureProps, type PluginDismissButtonProps, type PluginDividerProps, type PluginDocumentPackage, type PluginDomProps, type PluginDonutChartProps, type PluginDragDropProviderProps, type PluginDragEvent, type PluginDragHandleProps, type PluginDragId, type PluginDraggableState, type PluginDrawerProps, type PluginDrawerToggleProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginDroppableState, type PluginEmojiPickerProps, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFieldValidator, type PluginFileDropzoneProps, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFilterChipProps, type PluginFormError, type PluginFormFieldBinding, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginFormHandle, type PluginFormProps, type PluginFormStatus, type PluginFormStatusProps, type PluginGridProps, type PluginGroupedVirtualListProps, type PluginHeadingProps, type PluginHighlightedTextProps, type PluginHostBridge, type PluginHotkey, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginIndicatorPlacement, type PluginInlineCodeProps, type PluginInlineEditProps, type PluginInlineProps, type PluginInputProps, type PluginInspectorProps, type PluginInspectorSectionProps, type PluginIsoDate, type PluginIsoDateTime, type PluginIsoTime, type PluginKanbanCardState, type PluginKanbanColumn, type PluginKanbanMove, type PluginKanbanProps, type PluginKbdChordProps, type PluginKbdProps, type PluginKeyValueEditorProps, type PluginKeyValuePair, type PluginLayoutAlign, type PluginLayoutBaseProps, type PluginLayoutElement, type PluginLayoutGap, type PluginLayoutJustify, type PluginLineChartProps, type PluginLinkProps, type PluginListEditorProps, type PluginListGroup, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLiveRegionProps, type PluginLoadMoreFooterProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownEditorMode, type PluginMarkdownEditorProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginMasterDetailProps, type PluginMentionSuggestion, type PluginMentionTextareaProps, type PluginMentionTrigger, type PluginMeterProps, type PluginMeterThresholds, type PluginMultiSelectProps, type PluginNavListItem, type PluginNavListProps, type PluginNavListSection, type PluginNumberInputProps, type PluginOverflowToolbarAction, type PluginOverflowToolbarItem, type PluginOverflowToolbarProps, type PluginOverflowToolbarSeparator, type PluginPaneHeaderProps, type PluginPaneLayoutProps, type PluginPaneStateProps, type PluginPathLabelProps, type PluginPickerBaseProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginPortalProps, type PluginProgressBarProps, type PluginPropertyRowProps, type PluginRadioGroupProps, type PluginRadioOption, type PluginRangeSliderMark, type PluginRangeSliderProps, type PluginRefreshOverlayProps, type PluginResizableSplitProps, type PluginRootAttributes, type PluginSchemaFormProps, type PluginScrollAreaProps, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSecretInputProps, type PluginSectionLabelProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSelectionGesture, type PluginSelectionItemProps, type PluginSelectionKey, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSheetProps, type PluginShortcutRecorderProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSliderProps, type PluginSortableItemState, type PluginSortableListProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginSplitButtonProps, type PluginSplitGroupProps, type PluginSplitLayout, type PluginSplitPane, type PluginStackProps, type PluginStaleIndicatorProps, type PluginStatCardProps, type PluginStateGlyphProps, type PluginStatusBarProps, type PluginStatusBarSlot, type PluginStatusDotProps, type PluginStatusState, type PluginStepState, type PluginStepperProps, type PluginStepperStep, type PluginSwitchProps, type PluginTabItem, type PluginTabsProps, type PluginTagInputProps, type PluginTask, type PluginTaskListProps, type PluginTaskStatus, type PluginTextProps, type PluginTextSize, type PluginTextTone, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginTimeAgoProps, type PluginTimePickerProps, type PluginTimelineActor, type PluginTimelineItem, type PluginTimelineProps, type PluginToastHandle, type PluginToastTone, type PluginToggleGroupItem, type PluginToggleGroupProps, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTruncatedTooltipProps, type PluginUndoRedoPushOptions, type PluginUndoToastOptions, type PluginUnreadDotProps, type PluginUseDraggableOptions, type PluginUseDroppableOptions, type PluginViewToastOptions, type PluginVirtualListBaseProps, type PluginVirtualListComponent, type PluginVirtualListCountProps, type PluginVirtualListItemsProps, type PluginVirtualListProps, type PluginVisuallyHiddenProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseDebouncedCallbackOptions, type UseDisclosureOptions, type UseDisclosureResult, type UseFormOptions, type UseFormResult, type UseHostChannelResult, type UseHotkeysOptions, type UseListNavigationOptions, type UseListNavigationResult, type UseSelectionOptions, type UseSelectionResult, type UseToastResult, type UseUndoRedoOptions, type UseUndoRedoResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };
+export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAccordionItem, type PluginAccordionProps, type PluginAlign, type PluginAnnounceOptions, type PluginAriaRootAttributes, type PluginAutoGridProps, type PluginAvatarGroupItem, type PluginAvatarGroupProps, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginBarChartProps, type PluginBreadcrumbItem, type PluginBreadcrumbsProps, type PluginBulkAction, type PluginBulkActionBarProps, type PluginButtonProps, type PluginButtonVariant, type PluginCalendarBaseProps, type PluginCalendarProps, type PluginCalendarRangeProps, type PluginCalendarSingleProps, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCardProps, type PluginChartBaseProps, type PluginChartColor, type PluginChartSeries, type PluginCheckboxProps, type PluginClusterProps, type PluginCodeBlockProps, type PluginCodeEditorHandle, type PluginCodeEditorProps, type PluginColorPickerProps, type PluginColorSwatch, type PluginColorSwatchProps, type PluginColoredLabelProps, type PluginComboboxProps, type PluginCommandPaletteItem, type PluginCommandPaletteProps, type PluginComposerAttachment, type PluginComposerProps, type PluginConfirmDialogProps, type PluginConfirmPopoverProps, type PluginContainerSize, type PluginContainerTarget, type PluginContextMenuProps, type PluginCopyButtonProps, type PluginCountIndicatorProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableGroupAccessor, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableRowPredicate, type PluginDataTableSort, type PluginDateFieldBaseProps, type PluginDatePickerProps, type PluginDateRange, type PluginDateRangePickerProps, type PluginDateRangePreset, type PluginDateTimePickerProps, type PluginDebouncedCallback, type PluginDescriptionItem, type PluginDescriptionListItemProps, type PluginDescriptionListProps, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDiffHunk, type PluginDiffHunkAction, type PluginDiffStatProps, type PluginDiffViewProps, type PluginDisclosureProps, type PluginDismissButtonProps, type PluginDividerProps, type PluginDocumentPackage, type PluginDomProps, type PluginDonutChartProps, type PluginDragDropProviderProps, type PluginDragEvent, type PluginDragHandleProps, type PluginDragId, type PluginDraggableState, type PluginDrawerProps, type PluginDrawerToggleProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginDroppableState, type PluginEmojiPickerProps, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFieldValidator, type PluginFileDropzoneProps, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFilterChipProps, type PluginFormError, type PluginFormFieldBinding, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginFormHandle, type PluginFormProps, type PluginFormStatus, type PluginFormStatusProps, type PluginGridProps, type PluginGroupedVirtualListProps, type PluginHeadingProps, type PluginHighlightedTextProps, type PluginHostBridge, type PluginHotkey, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginIndicatorPlacement, type PluginInlineCodeProps, type PluginInlineEditProps, type PluginInlineProps, type PluginInputProps, type PluginInspectorProps, type PluginInspectorSectionProps, type PluginIsoDate, type PluginIsoDateTime, type PluginIsoTime, type PluginKanbanCardState, type PluginKanbanColumn, type PluginKanbanMove, type PluginKanbanProps, type PluginKbdChordProps, type PluginKbdProps, type PluginKeyValueEditorProps, type PluginKeyValuePair, type PluginLayoutAlign, type PluginLayoutBaseProps, type PluginLayoutElement, type PluginLayoutGap, type PluginLayoutJustify, type PluginLineChartProps, type PluginLinkProps, type PluginListEditorProps, type PluginListGroup, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLiveRegionProps, type PluginLoadMoreFooterProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownEditorMode, type PluginMarkdownEditorProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginMasterDetailProps, type PluginMentionSuggestion, type PluginMentionTextareaProps, type PluginMentionTrigger, type PluginMeterProps, type PluginMeterThresholds, type PluginMultiSelectProps, type PluginNavListItem, type PluginNavListProps, type PluginNavListSection, type PluginNumberInputProps, type PluginObjectInspectorProps, type PluginOverflowToolbarAction, type PluginOverflowToolbarItem, type PluginOverflowToolbarProps, type PluginOverflowToolbarSeparator, type PluginPaneHeaderProps, type PluginPaneLayoutProps, type PluginPaneStateProps, type PluginPathLabelProps, type PluginPickerBaseProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginPortalProps, type PluginProgressBarProps, type PluginPropertyRowProps, type PluginRadioGroupProps, type PluginRadioOption, type PluginRangeSliderMark, type PluginRangeSliderProps, type PluginRefreshOverlayProps, type PluginResizableSplitProps, type PluginRootAttributes, type PluginSchemaFormProps, type PluginScrollAreaProps, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSecretInputProps, type PluginSectionLabelProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSelectionGesture, type PluginSelectionItemProps, type PluginSelectionKey, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSheetProps, type PluginShortcutRecorderProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSliderProps, type PluginSortableItemState, type PluginSortableListProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginSplitButtonProps, type PluginSplitGroupProps, type PluginSplitLayout, type PluginSplitPane, type PluginStackProps, type PluginStaleIndicatorProps, type PluginStatCardProps, type PluginStateGlyphProps, type PluginStatusBarProps, type PluginStatusBarSlot, type PluginStatusDotProps, type PluginStatusState, type PluginStepState, type PluginStepperProps, type PluginStepperStep, type PluginSwitchProps, type PluginTabItem, type PluginTabsProps, type PluginTagInputProps, type PluginTask, type PluginTaskListProps, type PluginTaskStatus, type PluginTextProps, type PluginTextSize, type PluginTextTone, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginTimeAgoProps, type PluginTimePickerProps, type PluginTimelineActor, type PluginTimelineItem, type PluginTimelineProps, type PluginToastHandle, type PluginToastTone, type PluginToggleGroupItem, type PluginToggleGroupProps, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTreeMove, type PluginTreeNodeId, type PluginTreeNodeState, type PluginTreeViewProps, type PluginTruncatedTooltipProps, type PluginUndoRedoPushOptions, type PluginUndoToastOptions, type PluginUnreadDotProps, type PluginUseDraggableOptions, type PluginUseDroppableOptions, type PluginViewToastOptions, type PluginVirtualListBaseProps, type PluginVirtualListComponent, type PluginVirtualListCountProps, type PluginVirtualListItemsProps, type PluginVirtualListProps, type PluginVisuallyHiddenProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseDebouncedCallbackOptions, type UseDisclosureOptions, type UseDisclosureResult, type UseFormOptions, type UseFormResult, type UseHostChannelResult, type UseHotkeysOptions, type UseListNavigationOptions, type UseListNavigationResult, type UseSelectionOptions, type UseSelectionResult, type UseToastResult, type UseUndoRedoOptions, type UseUndoRedoResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };

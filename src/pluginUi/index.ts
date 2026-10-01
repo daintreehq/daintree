@@ -160,6 +160,10 @@ import type {
   PluginSecretInputProps,
   PluginShortcutRecorderProps,
 } from "@shared/types/plugin-sdk-react";
+import type {
+  PluginObjectInspectorProps,
+  PluginTreeViewProps,
+} from "@shared/types/plugin-sdk-react";
 import { fromKit } from "./kit";
 
 export { preloadPluginUi, whenPluginUiReady } from "./kit";
@@ -1059,4 +1063,25 @@ export type {
   PluginTaskListProps as TaskListProps,
   PluginRefreshOverlayProps as RefreshOverlayProps,
   PluginStaleIndicatorProps as StaleIndicatorProps,
+} from "@shared/types/plugin-sdk-react";
+
+// Trees and value inspectors: a generic TreeView and an ObjectInspector.
+
+export const TreeView: <T>(props: PluginTreeViewProps<T>) => ReactNode = fromKit(
+  "TreeView",
+  (kit) => kit.TreeView
+);
+export const ObjectInspector: ComponentType<PluginObjectInspectorProps> = fromKit(
+  "ObjectInspector",
+  (kit) => kit.ObjectInspector
+);
+
+export type {
+  PluginDataTableRowPredicate as DataTableRowPredicate,
+  PluginDataTableGroupAccessor as DataTableGroupAccessor,
+  PluginTreeNodeId as TreeNodeId,
+  PluginTreeNodeState as TreeNodeState,
+  PluginTreeMove as TreeMove,
+  PluginTreeViewProps as TreeViewProps,
+  PluginObjectInspectorProps as ObjectInspectorProps,
 } from "@shared/types/plugin-sdk-react";
