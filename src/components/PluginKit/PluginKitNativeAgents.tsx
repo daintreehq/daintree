@@ -581,7 +581,7 @@ function KitAgentAvatar({
     decorative === true
       ? undefined
       : (nonEmpty(label) ??
-        (pipTone(observed)
+        (observed && pipTone(observed)
           ? `${agentName(id)}, ${OBSERVATION[observed].bare.toLowerCase()}`
           : agentName(id)));
   return (
