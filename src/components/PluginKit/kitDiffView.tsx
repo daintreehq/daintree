@@ -253,9 +253,11 @@ export default function KitDiffViewImpl({
         // Somewhere else on purpose: leave it there.
         if (active && active !== document.body && active.isConnected) return;
         const same = root.querySelectorAll<HTMLElement>(selector);
+        // The last hunk gone, the diff itself holds the keyboard.
         const target =
           same[Math.min(position, same.length - 1)] ??
-          root.querySelector<HTMLElement>('[role="region"]');
+          root.querySelector<HTMLElement>('[role="region"]') ??
+          root;
         target?.focus({ preventScroll: true });
       });
       observer.observe(root, { childList: true, subtree: true });
@@ -308,12 +310,15 @@ export default function KitDiffViewImpl({
     <div
       {...rootProps}
       ref={rootRef}
+      // Only ever focused by script: the landing place once a Revert has
+      // removed the last hunk, so the keyboard stays in the view.
+      tabIndex={-1}
       role="group"
       aria-label={ariaLabel ?? (path ? `Changes to ${path}` : "Changes")}
       data-kit-diff-view=""
       data-view={view}
       className={cn(
-        "diff-scroll-root min-w-0 overflow-hidden rounded-[var(--radius-lg)] border border-border-default bg-surface-canvas [&_.diff-viewer>div:last-child]:mb-0",
+        "diff-scroll-root min-w-0 overflow-hidden rounded-[var(--radius-lg)] border border-border-default bg-surface-canvas focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary [&_.diff-viewer>div:last-child]:mb-0",
         className
       )}
       style={style}
