@@ -526,6 +526,32 @@ export const STATUS_SUCCESS_INVENTORY = {
         "StateGlyph's success state: the severity success glyph for a named passed result, the same pairing SeverityIcon draws",
     },
   ],
+  "src/components/PluginKit/PluginKitGit.tsx": [
+    {
+      category: "domain",
+      signature: "text-status-success",
+      anchor: "↑{entry.ahead}",
+      expectedOccurrences: 1,
+      rationale:
+        "WorktreeBadge's ahead-arrow count against the upstream, as UpstreamSyncBadge draws it",
+    },
+    {
+      category: "outcome",
+      signature: "text-status-success",
+      anchor: '"Checks passing"',
+      expectedOccurrences: 1,
+      rationale:
+        "PullRequestRow's CI slot: the recorded result of the pull request's checks roll-up",
+    },
+    {
+      category: "outcome",
+      signature: "text-status-success",
+      anchor: '"Approved"',
+      expectedOccurrences: 1,
+      rationale:
+        "PullRequestRow's review verdict: the forge's recorded approval of the pull request",
+    },
+  ],
   "src/components/ui/DiffStat.tsx": [
     {
       category: "domain",
@@ -551,5 +577,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 61;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 63;
+export const EXPECTED_STATUS_SUCCESS_SITES = 64;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 66;

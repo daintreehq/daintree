@@ -1189,4 +1189,94 @@ declare module "@daintreehq/plugin-ui" {
    * long strings cut and big arrays in ranges. Fills its container's height.
    */
   export const ObjectInspector: ComponentType<ObjectInspectorProps>;
+
+  // Git and forge: worktrees, branches, files and their status, commits,
+  // issues, pull requests, CI checks and dev servers, drawn as the host draws
+  // its own. Presentational: the data comes from your worker as props.
+  import type {
+    PluginBranchBadgeProps,
+    PluginCheck,
+    PluginCheckStatus,
+    PluginChecksListProps,
+    PluginCommit,
+    PluginCommitListProps,
+    PluginCommitRef,
+    PluginCommitRowProps,
+    PluginDevServerState,
+    PluginDevServerStatusProps,
+    PluginFileIconProps,
+    PluginFileLinkProps,
+    PluginForgeCiStatus,
+    PluginForgeLabel,
+    PluginForgePerson,
+    PluginForgeReviewDecision,
+    PluginForgeRowBaseProps,
+    PluginForgeState,
+    PluginForgeStateBadgeProps,
+    PluginGitFileStatus,
+    PluginGitStatusBadgeProps,
+    PluginIssueRowProps,
+    PluginPortLinkProps,
+    PluginPullRequestRowProps,
+    PluginWorktreeBadgeProps,
+    PluginWorktreeItem,
+    PluginWorktreePickerProps,
+  } from "@daintreehq/plugin-sdk/react";
+
+  export type GitFileStatus = PluginGitFileStatus;
+  export type WorktreeItem = PluginWorktreeItem;
+  export type BranchBadgeProps = PluginBranchBadgeProps;
+  export type WorktreeBadgeProps = PluginWorktreeBadgeProps;
+  export type WorktreePickerProps = PluginWorktreePickerProps;
+  export type FileIconProps = PluginFileIconProps;
+  export type FileLinkProps = PluginFileLinkProps;
+  export type GitStatusBadgeProps = PluginGitStatusBadgeProps;
+  export type ForgePerson = PluginForgePerson;
+  export type CommitRef = PluginCommitRef;
+  export type Commit = PluginCommit;
+  export type CommitRowProps = PluginCommitRowProps;
+  export type CommitListProps = PluginCommitListProps;
+  export type ForgeState = PluginForgeState;
+  export type ForgeStateBadgeProps = PluginForgeStateBadgeProps;
+  export type ForgeLabel = PluginForgeLabel;
+  export type ForgeRowBaseProps = PluginForgeRowBaseProps;
+  export type IssueRowProps = PluginIssueRowProps;
+  export type ForgeCiStatus = PluginForgeCiStatus;
+  export type ForgeReviewDecision = PluginForgeReviewDecision;
+  export type PullRequestRowProps = PluginPullRequestRowProps;
+  export type CheckStatus = PluginCheckStatus;
+  export type CheckRun = PluginCheck;
+  export type ChecksListProps = PluginChecksListProps;
+  export type DevServerState = PluginDevServerState;
+  export type PortLinkProps = PluginPortLinkProps;
+  export type DevServerStatusProps = PluginDevServerStatusProps;
+
+  /** A branch name as Daintree draws one in its chrome: mono, never uppercased, with its full name in a tooltip when cut. */
+  export const BranchBadge: ComponentType<BranchBadgeProps>;
+  /** A worktree's name and branch, its uncommitted files and how far it is ahead of and behind its upstream. */
+  export const WorktreeBadge: ComponentType<WorktreeBadgeProps>;
+  /** Choose a worktree: a searchable list grouped under headings, the current one marked. Takes `host.getWorktrees()` snapshots as they come. */
+  export const WorktreePicker: ComponentType<WorktreePickerProps>;
+  /** The file-type glyph Daintree's file tree draws for a name, on its own. */
+  export const FileIcon: ComponentType<FileIconProps>;
+  /** A path that opens in Daintree's file viewer, optionally at a line, cut in the middle when it is long. */
+  export const FileLink: ComponentType<FileLinkProps>;
+  /** A file's git state as the host's change lists letter it (M, A, D, R, ?, and ! for a conflict), in its colour. */
+  export const GitStatusBadge: ComponentType<GitStatusBadgeProps>;
+  /** One commit: author, subject, refs, age, churn and a hash that copies; or its loading skeleton. */
+  export const CommitRow: ComponentType<CommitRowProps>;
+  /** Commits in the order given (newest first, as git logs them), Up and Down between rows, with skeleton rows while more load. */
+  export const CommitList: ComponentType<CommitListProps>;
+  /** The host's glyph for an issue's or pull request's state (open, draft, merged, closed), alone or with its word. */
+  export const ForgeStateBadge: ComponentType<ForgeStateBadgeProps>;
+  /** A forge-neutral issue row: state, title, number, author, age, comments, labels and assignees. */
+  export const IssueRow: ComponentType<IssueRowProps>;
+  /** A forge-neutral pull request row: an `IssueRow` plus its checks, review decision and head branch. */
+  export const PullRequestRow: ComponentType<PullRequestRowProps>;
+  /** CI checks grouped by workflow under a "3 failing, 12 passing" summary, failures first, each with its duration and details link. */
+  export const ChecksList: ComponentType<ChecksListProps>;
+  /** A dev server's state (starting, running, crashed, stopped) and, while it runs, its address. */
+  export const DevServerStatus: ComponentType<DevServerStatusProps>;
+  /** A local server's address that opens in a Daintree browser panel, with a copy button. Only loopback URLs link. */
+  export const PortLink: ComponentType<PortLinkProps>;
 }
