@@ -412,7 +412,8 @@ type PluginCalloutSeverity = "error" | "warning" | "danger" | "success" | "info"
  * Props of `Callout`, an inline message box. The glyph follows the severity.
  * DOM props (`id`, `role`, `aria-*`, `data-*`, handlers) land on its root,
  * including `role="alert"` or `role="status"` for a message that should
- * be announced.
+ * be announced. The `strip` variant is the host's pane banner: it keeps `id`,
+ * `role`, `aria-*` and `data-*`, but not handlers, `style` or `ref`.
  */
 interface PluginCalloutProps extends Omit<PluginDomProps<HTMLDivElement>, "title"> {
     severity: PluginCalloutSeverity;
@@ -1005,16 +1006,22 @@ interface PluginToolbarProps extends PluginAriaRootAttributes {
 /**
  * Props of `ToolbarButton`, the in-pane toolbar control: icon-only (its
  * `aria-label` doubles as the tooltip) or, with `label`, an icon and a word.
+ * It forwards refs and DOM handlers like `Button`, so it can be the trigger of
+ * a `DropdownMenu`, `Popover`, `Tooltip` or `ContextMenu`; the state such a
+ * trigger injects (`aria-expanded`) is kept.
  */
-interface PluginToolbarButtonProps extends PluginAriaRootAttributes {
+interface PluginToolbarButtonProps extends Omit<PluginDomProps<HTMLButtonElement>, "aria-label" | "onClick"> {
     icon?: PluginIconSource;
     /** Visible text. Omitted, the button is icon-only and `aria-label` names it. */
     label?: string;
     "aria-label"?: string;
-    onClick?: () => void;
+    onClick?: (event: MouseEvent<HTMLButtonElement>) => void;
     /** A toggle's state (`aria-pressed`). */
     pressed?: boolean;
-    /** A disclosure's state (`aria-expanded`). Never set with `pressed`. */
+    /**
+     * A disclosure's state (`aria-expanded`). Never set with `pressed`: a
+     * disclosure state, this or a trigger's, wins over `pressed`.
+     */
     expanded?: boolean;
     /** Stays in the arrow-key order, announced unavailable, and ignores clicks. */
     disabled?: boolean;

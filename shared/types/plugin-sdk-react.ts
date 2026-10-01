@@ -1279,11 +1279,9 @@ export interface PluginToolbarProps extends PluginAriaRootAttributes {
 /**
  * Props of `ToolbarButton`, the in-pane toolbar control: icon-only (its
  * `aria-label` doubles as the tooltip) or, with `label`, an icon and a word.
- */
-/**
- * Props of `ToolbarButton`. It forwards refs and DOM handlers like `Button`,
- * so it can be the trigger of a `DropdownMenu`, `Popover`, `Tooltip` or
- * `ContextMenu`; the state such a trigger injects (`aria-expanded`) is kept.
+ * It forwards refs and DOM handlers like `Button`, so it can be the trigger of
+ * a `DropdownMenu`, `Popover`, `Tooltip` or `ContextMenu`; the state such a
+ * trigger injects (`aria-expanded`) is kept.
  */
 export interface PluginToolbarButtonProps extends Omit<
   PluginDomProps<HTMLButtonElement>,
