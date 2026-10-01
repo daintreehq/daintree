@@ -1153,4 +1153,68 @@ declare module "@daintreehq/plugin-ui" {
   export const RefreshOverlay: ComponentType<RefreshOverlayProps>;
   /** "Updated 5m ago", stale or disconnected, with a refresh button. */
   export const StaleIndicator: ComponentType<StaleIndicatorProps>;
+
+  // Rich display: ANSI output, hover cards, an image viewer, more chart forms
+  // and a table of contents.
+  import type {
+    PluginAnsiTextProps,
+    PluginContributionGridProps,
+    PluginGaugeProps,
+    PluginGaugeThresholds,
+    PluginHeatmapProps,
+    PluginHistogramProps,
+    PluginHoverCardProps,
+    PluginImageViewerImage,
+    PluginImageViewerProps,
+    PluginScatterChartProps,
+    PluginStackedAreaChartProps,
+    PluginTableOfContentsProps,
+    PluginTerminalOutputProps,
+    PluginTocHeading,
+  } from "@daintreehq/plugin-sdk/react";
+
+  export type AnsiTextProps = PluginAnsiTextProps;
+  export type TerminalOutputProps = PluginTerminalOutputProps;
+  export type HoverCardProps = PluginHoverCardProps;
+  export type ImageViewerImage = PluginImageViewerImage;
+  export type ImageViewerProps = PluginImageViewerProps;
+  export type HeatmapProps = PluginHeatmapProps;
+  export type ContributionGridProps = PluginContributionGridProps;
+  export type ScatterChartProps = PluginScatterChartProps;
+  export type HistogramProps = PluginHistogramProps;
+  export type StackedAreaChartProps = PluginStackedAreaChartProps;
+  export type GaugeThresholds = PluginGaugeThresholds;
+  export type GaugeProps = PluginGaugeProps;
+  export type TocHeading = PluginTocHeading;
+  export type TableOfContentsProps = PluginTableOfContentsProps;
+
+  /** A short run of CLI output with its ANSI colours and styles, inline or as a block. */
+  export const AnsiText: ComponentType<AnsiTextProps>;
+  /**
+   * CLI output in the host terminal's colours: SGR colour and style,
+   * carriage-return rewrites, OSC 8 links. Virtualised, with a wrap toggle,
+   * copy and optional line numbers.
+   */
+  export const TerminalOutput: ComponentType<TerminalOutputProps>;
+  /**
+   * A rich preview of a user, issue or commit over its trigger, on hover or
+   * keyboard focus. The trigger shows while the kit loads.
+   */
+  export const HoverCard: ComponentType<HoverCardProps>;
+  /** Zoom, pan and step through screenshots, in a pane or a modal lightbox. */
+  export const ImageViewer: ComponentType<ImageViewerProps>;
+  /** A value per pair of categories, shaded in one hue. */
+  export const Heatmap: ComponentType<HeatmapProps>;
+  /** A calendar of days a column per week, each shaded by its count. */
+  export const ContributionGrid: ComponentType<ContributionGridProps>;
+  /** Points placed by two numbers, up to three series with their own markers. */
+  export const ScatterChart: ComponentType<ScatterChartProps>;
+  /** How many values fall in each range. */
+  export const Histogram: ComponentType<HistogramProps>;
+  /** Series piled over a number or time axis, to their total or to 100%. */
+  export const StackedAreaChart: ComponentType<StackedAreaChartProps>;
+  /** One number against its range as an arc, announced as a `meter`. */
+  export const Gauge: ComponentType<GaugeProps>;
+  /** A document's headings as a sticky outline that tracks and scrolls to sections. */
+  export const TableOfContents: ComponentType<TableOfContentsProps>;
 }

@@ -294,6 +294,25 @@ describe("editor-library-import", () => {
   });
 });
 
+describe("ansi-library-import", () => {
+  it("flags a view bundling an ANSI-to-HTML library and passes one using the kit", async () => {
+    for (const specifier of ["anser", "ansi_up", "ansi-to-html", "ansi-to-react", "fancy-ansi"]) {
+      expect(
+        await lintFor("ansi-library-import", view(`<X />`, `import X from "${specifier}";\n`))
+      ).toHaveLength(1);
+    }
+    expect(
+      await lintFor(
+        "ansi-library-import",
+        view(`<TerminalOutput />`, `import { TerminalOutput } from "@daintreehq/plugin-ui";\n`)
+      )
+    ).toEqual([]);
+    expect(
+      await lintFor("ansi-library-import", view(`<X />`, `import { X } from "./ansi-notes";\n`))
+    ).toEqual([]);
+  });
+});
+
 describe("dnd-library-import", () => {
   it("flags a view importing a drag-and-drop library and passes one using the kit", async () => {
     for (const specifier of [

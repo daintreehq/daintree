@@ -34,8 +34,8 @@ import {
 // The built-in category hues share one lightness, so a seventh slot cannot be
 // told from its neighbours by colour alone; the cap is the palette's, not a
 // performance limit.
-const SLOTS = ["blue", "amber", "indigo", "orange", "violet", "teal"] as const;
-const COLORS = [...SLOTS, "neutral"] as const satisfies readonly PluginChartColor[];
+export const SLOTS = ["blue", "amber", "indigo", "orange", "violet", "teal"] as const;
+export const COLORS = [...SLOTS, "neutral"] as const satisfies readonly PluginChartColor[];
 export const MAX_SERIES = SLOTS.length;
 
 // Mid-lightness stand-ins that read on light and dark surfaces alike, for a
@@ -59,17 +59,17 @@ export function chartColor(color: PluginChartColor): string {
   return `var(--theme-category-${color}, ${FALLBACK[color]})`;
 }
 
-const DEFAULT_HEIGHT = 200;
-const MAX_HEIGHT = 2000;
+export const DEFAULT_HEIGHT = 200;
+export const MAX_HEIGHT = 2000;
 // jsdom and any host without ResizeObserver still get a drawable width.
 const FALLBACK_WIDTH = 480;
 const BAR_MAX_PX = 24;
-const BAR_RADIUS = 4;
-const GAP_PX = 2;
-const AXIS_CHAR_PX = 6.2;
-const AXIS_FONT_PX = 11;
-const X_AXIS_PX = 20;
-const TOP_PAD = 6;
+export const BAR_RADIUS = 4;
+export const GAP_PX = 2;
+export const AXIS_CHAR_PX = 6.2;
+export const AXIS_FONT_PX = 11;
+export const X_AXIS_PX = 20;
+export const TOP_PAD = 6;
 // Categories a BarChart draws; past this a bar is under a pixel wide at any
 // pane width, and a LineChart is the form.
 export const MAX_BAR_CATEGORIES = 1000;
@@ -93,22 +93,22 @@ export const SERIES_DASHES: readonly (string | undefined)[] = [
   "4 5 0 4 0 5",
 ];
 
-interface NamedSeries {
+export interface NamedSeries {
   key: string;
   label: string;
 }
 
-interface ResolvedSeries extends NamedSeries {
+export interface ResolvedSeries extends NamedSeries {
   color: string;
   /** The stroke signature a line draws with; `undefined` is solid. */
   dash: string | undefined;
 }
 
-function finite(value: unknown): number | null {
+export function finite(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function rowsOf(value: unknown): object[] {
+export function rowsOf(value: unknown): object[] {
   if (!Array.isArray(value)) return [];
   return value.filter((row): row is object => typeof row === "object" && row !== null);
 }
@@ -222,8 +222,8 @@ export function niceTicks(low: number, high: number, count: number): number[] {
   if (
     !(step > 0) ||
     !Number.isFinite(step) ||
-    !Number.isFinite(start) ||
-    !Number.isFinite(end) ||
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
     end - start > 1000
   ) {
     return [lo, hi];
@@ -236,7 +236,7 @@ export function niceTicks(low: number, high: number, count: number): number[] {
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
+export const DAY = 24 * HOUR;
 const CLOCK_STEPS = [
   SECOND,
   5 * SECOND,
@@ -254,7 +254,7 @@ const CLOCK_STEPS = [
 const DAY_STEPS = [1, 2, 7, 14];
 const MONTH_STEPS = [1, 3, 6];
 
-type TimeUnit = "second" | "minute" | "day" | "month" | "year";
+export type TimeUnit = "second" | "minute" | "day" | "month" | "year";
 
 /** Calendar-aligned ticks in local time between two epoch ms, about `count` of them. Exported for tests. */
 export function timeTicks(
@@ -311,7 +311,7 @@ export function timeTicks(
   return { ticks: inRange(ticks), unit: "year" };
 }
 
-const TIME_AXIS_FORMATS: Record<TimeUnit, Intl.DateTimeFormat> = {
+export const TIME_AXIS_FORMATS: Record<TimeUnit, Intl.DateTimeFormat> = {
   second: new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
     minute: "2-digit",
@@ -322,26 +322,26 @@ const TIME_AXIS_FORMATS: Record<TimeUnit, Intl.DateTimeFormat> = {
   month: new Intl.DateTimeFormat(undefined, { month: "short", year: "numeric" }),
   year: new Intl.DateTimeFormat(undefined, { year: "numeric" }),
 };
-const TIME_POINT_FORMAT = new Intl.DateTimeFormat(undefined, {
+export const TIME_POINT_FORMAT = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "numeric",
   hour: "2-digit",
   minute: "2-digit",
 });
-const DATE_POINT_FORMAT = new Intl.DateTimeFormat(undefined, {
+export const DATE_POINT_FORMAT = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
   month: "short",
   day: "numeric",
 });
-const COMPACT = new Intl.NumberFormat(undefined, {
+export const COMPACT = new Intl.NumberFormat(undefined, {
   notation: "compact",
   maximumFractionDigits: 1,
 });
-const FULL = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
+export const FULL = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 
-type Format<T> = (value: T) => string;
+export type Format<T> = (value: T) => string;
 
-function userFormat<T>(user: Format<T> | undefined, fallback: Format<T>): Format<T> {
+export function userFormat<T>(user: Format<T> | undefined, fallback: Format<T>): Format<T> {
   const format = fn(user);
   if (!format) return fallback;
   return (value) => {
@@ -356,7 +356,7 @@ function userFormat<T>(user: Format<T> | undefined, fallback: Format<T>): Format
 }
 
 /** The axis and readout formatters, the plugin's own when given. */
-function valueFormats(formatValue: Format<number> | undefined): {
+export function valueFormats(formatValue: Format<number> | undefined): {
   axis: Format<number>;
   full: Format<number>;
 } {
@@ -410,11 +410,11 @@ export function decimate(points: readonly [number, number][]): [number, number][
   return out;
 }
 
-function fixed(value: number): string {
+export function fixed(value: number): string {
   return value.toFixed(2);
 }
 
-function linearPath(points: readonly [number, number][]): string {
+export function linearPath(points: readonly [number, number][]): string {
   return points
     .map(([x, y], index) => `${index === 0 ? "M" : "L"}${fixed(x)},${fixed(y)}`)
     .join("");
@@ -487,19 +487,19 @@ export function barPath(x: number, y: number, w: number, h: number, end: BarEnd)
   }
 }
 
-function axisWidth(labels: readonly string[], max: number): number {
+export function axisWidth(labels: readonly string[], max: number): number {
   const longest = labels.reduce((most, label) => Math.max(most, label.length), 0);
   return Math.min(max, Math.max(24, Math.ceil(longest * AXIS_CHAR_PX) + 8));
 }
 
-function clip(label: string, px: number): string {
+export function clip(label: string, px: number): string {
   const chars = Math.floor(px / AXIS_CHAR_PX);
   if (label.length <= chars) return label;
   return chars <= 1 ? "" : `${label.slice(0, chars - 1)}…`;
 }
 
 /** The container's content width, from ResizeObserver entries so a resize never forces a layout read. */
-function useWidth(): [(element: HTMLDivElement | null) => void, number] {
+export function useWidth(): [(element: HTMLDivElement | null) => void, number] {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
@@ -518,16 +518,18 @@ function useWidth(): [(element: HTMLDivElement | null) => void, number] {
   return [setElement, width];
 }
 
-interface ReadoutRow {
+export interface ReadoutRow {
   key: string;
   label: string;
   color: string;
   dash?: string | undefined;
+  /** A scatter series' marker, for a `point` swatch. */
+  marker?: MarkerShape | undefined;
   value: string;
 }
 
 /** What the point-anchored tooltip shows, and where, in the plot box's pixels. */
-interface Readout {
+export interface Readout {
   title: string;
   rows: ReadoutRow[];
   /** The anchor column or point the tooltip sits beside. */
@@ -536,10 +538,10 @@ interface Readout {
   y: number;
   /** Half the width of the mark at `x`, so the tooltip sits beside it rather than over it. */
   clear?: number;
-  swatch: "bar" | "line";
+  swatch: SwatchShape;
 }
 
-const TOOLTIP_OFFSET = 12;
+export const TOOLTIP_OFFSET = 12;
 
 /**
  * The tooltip's left edge: to the right of the anchor, clear of its mark, and
@@ -562,7 +564,7 @@ export function tooltipLeft(anchor: number, clear: number, tip: number, width: n
 // a portal: it tracks a point, not an element, and it never takes focus, so
 // none of the overlay focus-restore machinery applies. Its own width decides
 // the flip, measured before paint.
-function PointTooltip({ readout, width }: { readout: Readout; width: number }) {
+export function PointTooltip({ readout, width }: { readout: Readout; width: number }) {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const [tip, setTip] = useState(0);
   useLayoutEffect(() => {
@@ -596,7 +598,7 @@ function PointTooltip({ readout, width }: { readout: Readout; width: number }) {
       {readout.title ? <div className="text-text-secondary">{readout.title}</div> : null}
       {readout.rows.map((row) => (
         <div key={row.key} className="flex items-center gap-2">
-          <Swatch color={row.color} shape={readout.swatch} dash={row.dash} />
+          <Swatch color={row.color} shape={readout.swatch} dash={row.dash} marker={row.marker} />
           <span className="font-semibold tabular-nums">{row.value}</span>
           <span className="min-w-0 truncate text-text-secondary">{row.label}</span>
         </div>
@@ -605,7 +607,7 @@ function PointTooltip({ readout, width }: { readout: Readout; width: number }) {
   );
 }
 
-function readoutText(readout: Readout): string {
+export function readoutText(readout: Readout): string {
   const rows = readout.rows.map((row) => `${row.label} ${row.value}`).join(", ");
   return readout.title ? `${readout.title}: ${rows}` : rows;
 }
@@ -614,7 +616,7 @@ function readoutText(readout: Readout): string {
  * The active point, from the pointer or the arrow keys. Keyboard moves are
  * announced; pointer moves are not, or hovering would flood the reader.
  */
-function useCursor(count: number) {
+export function useCursor(count: number) {
   const [state, setState] = useState<{ index: number; keyboard: boolean } | null>(null);
   const index = state !== null && state.index < count ? state.index : null;
   const keyboard = index !== null && state?.keyboard === true;
@@ -658,20 +660,55 @@ function useCursor(count: number) {
   };
 }
 
-type Cursor = ReturnType<typeof useCursor>;
+export type Cursor = ReturnType<typeof useCursor>;
 
 const LINE_SWATCH_PX = 20;
 
-/** A series key: a square for a bar, a short stroke in the line's own dash for a line. */
-function Swatch({
+export type SwatchShape = "bar" | "line" | "point";
+export type MarkerShape = "circle" | "square" | "triangle";
+
+/** A scatter marker centred on `(x, y)`, about `r` from its centre to its edge. */
+export function markerPath(shape: MarkerShape, x: number, y: number, r: number): string {
+  if (shape === "square") {
+    const half = r * 0.88;
+    return `M${fixed(x - half)},${fixed(y - half)}h${fixed(half * 2)}v${fixed(half * 2)}h${fixed(-half * 2)}Z`;
+  }
+  if (shape === "triangle") {
+    const up = r * 1.15;
+    return `M${fixed(x)},${fixed(y - up)}L${fixed(x + up * 0.95)},${fixed(y + up * 0.6)}L${fixed(x - up * 0.95)},${fixed(y + up * 0.6)}Z`;
+  }
+  return `M${fixed(x - r)},${fixed(y)}a${fixed(r)},${fixed(r)} 0 1 0 ${fixed(r * 2)},0a${fixed(r)},${fixed(r)} 0 1 0 ${fixed(-r * 2)},0Z`;
+}
+
+/**
+ * A series key: a square for a bar, a short stroke in the line's own dash for
+ * a line, the series' own marker for a scatter point.
+ */
+export function Swatch({
   color,
   shape,
   dash,
+  marker,
 }: {
   color: string;
-  shape: "bar" | "line";
+  shape: SwatchShape;
   dash?: string | undefined;
+  marker?: MarkerShape | undefined;
 }) {
+  if (shape === "point") {
+    return (
+      <svg
+        aria-hidden="true"
+        data-chart-swatch="point"
+        width={10}
+        height={10}
+        className="shrink-0"
+        style={{ color }}
+      >
+        <path d={markerPath(marker ?? "circle", 5, 5, 4)} fill="currentColor" />
+      </svg>
+    );
+  }
   if (shape === "line") {
     return (
       <svg
@@ -705,14 +742,14 @@ function Swatch({
   );
 }
 
-function Legend({
+export function Legend({
   series,
   omitted,
   shape,
 }: {
-  series: ResolvedSeries[];
+  series: (ResolvedSeries & { marker?: MarkerShape })[];
   omitted: number;
-  shape: "bar" | "line";
+  shape: SwatchShape;
 }) {
   if (series.length < 2 && omitted === 0) return null;
   return (
@@ -722,7 +759,7 @@ function Legend({
     >
       {series.map((entry) => (
         <li key={entry.key} className="flex min-w-0 items-center gap-1.5">
-          <Swatch color={entry.color} shape={shape} dash={entry.dash} />
+          <Swatch color={entry.color} shape={shape} dash={entry.dash} marker={entry.marker} />
           <span className="min-w-0 truncate">{entry.label}</span>
         </li>
       ))}
@@ -735,7 +772,7 @@ function Legend({
   );
 }
 
-function ChartLoading({
+export function ChartLoading({
   height,
   className,
   root,
@@ -751,7 +788,7 @@ function ChartLoading({
   );
 }
 
-function ChartEmpty({
+export function ChartEmpty({
   label,
   height,
   empty,
@@ -784,20 +821,30 @@ function ChartEmpty({
   );
 }
 
-interface TableModel {
+export interface TableModel {
   xLabel: string;
   /** Every series, the omitted ones after the drawn ones. */
   series: NamedSeries[];
   /** Series in the table the chart does not draw, named in the caption. */
   omitted: NamedSeries[];
+  /** How many series the chart draws, for that caption. Defaults to {@link MAX_SERIES}. */
+  cap?: number;
   /** `null` past {@link MAX_TABLE_ROWS}: the summary stands in. */
   rows: { key: string; x: string; values: string[] }[] | null;
   summary: string;
 }
 
 /** The chart's numbers for assistive tech: a table when it is small enough to walk, a summary otherwise. */
-function DataFallback({ id, label, table }: { id: string; label: string; table: TableModel }) {
-  const note = omittedNote(table.omitted);
+export function DataFallback({
+  id,
+  label,
+  table,
+}: {
+  id: string;
+  label: string;
+  table: TableModel;
+}) {
+  const note = omittedNote(table.omitted, table.cap ?? MAX_SERIES);
   if (table.rows === null) {
     return (
       <p id={id} className="sr-only">
@@ -834,13 +881,13 @@ function DataFallback({ id, label, table }: { id: string; label: string; table: 
   );
 }
 
-function omittedNote(omitted: NamedSeries[]): string {
+function omittedNote(omitted: NamedSeries[], cap: number): string {
   if (omitted.length === 0) return "";
   const names = omitted.map((entry) => entry.label).join(", ");
-  return `The chart draws ${MAX_SERIES} series; not drawn: ${names}`;
+  return `The chart draws ${cap} series; not drawn: ${names}`;
 }
 
-function summarise(
+export function summarise(
   count: number,
   first: string,
   last: string,
@@ -863,16 +910,20 @@ function summarise(
   return parts.join(" ");
 }
 
-const NO_VALUE = "No value";
+export const NO_VALUE = "No value";
 
-function cellTexts(values: (number | null)[][], index: number, format: Format<number>): string[] {
+export function cellTexts(
+  values: (number | null)[][],
+  index: number,
+  format: Format<number>
+): string[] {
   return values.map((column) => {
     const value = column[index] ?? null;
     return value === null ? NO_VALUE : format(value);
   });
 }
 
-function readoutRows(
+export function readoutRows(
   series: ResolvedSeries[],
   values: (number | null)[][],
   index: number,
@@ -889,7 +940,10 @@ function readoutRows(
 }
 
 /** Each of `series`' values per row, for the table's columns past the drawn ones. */
-function columnsOf(rows: readonly object[], series: readonly NamedSeries[]): (number | null)[][] {
+export function columnsOf(
+  rows: readonly object[],
+  series: readonly NamedSeries[]
+): (number | null)[][] {
   return series.map((entry) => rows.map((row) => finite(field(row, entry.key))));
 }
 
@@ -897,7 +951,7 @@ function columnsOf(rows: readonly object[], series: readonly NamedSeries[]): (nu
  * The frame every axis chart shares: legend, a measured plot box that is one
  * keyboard stop, the point tooltip, the live readout and the data fallback.
  */
-function AxisChartFrame({
+export function AxisChartFrame({
   root,
   className,
   label,
@@ -957,7 +1011,7 @@ function AxisChartFrame({
   );
 }
 
-function ValueGrid({
+export function ValueGrid({
   ticks,
   scale,
   orientation,
@@ -1042,12 +1096,12 @@ export function edgeAnchor(
   return "middle";
 }
 
-function linear(d0: number, d1: number, r0: number, r1: number): (value: number) => number {
+export function linear(d0: number, d1: number, r0: number, r1: number): (value: number) => number {
   const span = d1 - d0;
   return (value) => (span === 0 ? (r0 + r1) / 2 : r0 + ((value - d0) / span) * (r1 - r0));
 }
 
-function chartProps(height: unknown, ariaLabel: unknown, className: unknown) {
+export function chartProps(height: unknown, ariaLabel: unknown, className: unknown) {
   return {
     px: Math.round(positive(height, MAX_HEIGHT) ?? DEFAULT_HEIGHT),
     label: str(ariaLabel) ?? "",
@@ -1393,7 +1447,7 @@ function KitBarChart({
 // The widest instant a `Date` can hold, either side of the epoch.
 const MAX_DATE_MS = 8.64e15;
 
-function toX(value: unknown, time: boolean): number | null {
+export function toX(value: unknown, time: boolean): number | null {
   const at =
     value instanceof Date
       ? finite(value.getTime())
@@ -1407,7 +1461,7 @@ function toX(value: unknown, time: boolean): number | null {
 }
 
 /** Index of the point nearest `target` in an ascending list. */
-function nearest(sorted: readonly number[], target: number): number {
+export function nearest(sorted: readonly number[], target: number): number {
   let lo = 0;
   let hi = sorted.length - 1;
   while (lo < hi) {
@@ -1753,11 +1807,11 @@ export function donutParts(
   return out;
 }
 
-function polar(cx: number, cy: number, r: number, angle: number): [number, number] {
+export function polar(cx: number, cy: number, r: number, angle: number): [number, number] {
   return [cx + r * Math.sin(angle), cy - r * Math.cos(angle)];
 }
 
-function arcPath(
+export function arcPath(
   cx: number,
   cy: number,
   outer: number,
