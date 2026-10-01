@@ -1048,7 +1048,40 @@ export interface PluginDataTableColumn<T = unknown> {
   sortable?: boolean;
   /** The cell. Defaults to `row[id]` when that is a string or a number. */
   render?(row: T, index: number): ReactNode;
+  /**
+   * Draws a drag edge on the header's trailing side; the edge is also a
+   * keyboard separator (Left/Right step 8px, Shift 32px, Home/End the
+   * limits). Enter, Space or a double-click go back to `width`. Widths report through
+   * `onColumnWidthsChange`.
+   */
+  resizable?: boolean;
+  /** The narrowest a resize may make it, in px. Defaults to 48. */
+  minWidth?: number;
+  /** The widest a resize may make it, in px. Defaults to 1200. */
+  maxWidth?: number;
+  /** `false` keeps the column always shown: its row in the columns menu stays checked and disabled. Defaults to `true`. */
+  hideable?: boolean;
+  /** The column's name in the columns menu, when `header` is not plain text. */
+  menuLabel?: string;
+  /**
+   * Edits the cell in place: double-click it, or Enter/F2 on its row. A
+   * function decides per row. The edit reports through the table's `onCellEdit`.
+   */
+  editable?: boolean | PluginDataTableRowPredicate<T>;
+  /** The editor: `text` (the default), `number`, or `select` over `editOptions`. */
+  editor?: "text" | "number" | "select";
+  /** The choices of a `select` editor. */
+  editOptions?: readonly PluginSelectOption[];
+  /** The text the editor starts from. Defaults to `row[id]` when that is a string or a number. */
+  editValue?(row: T): string;
+  /** Checks a draft before it is committed: return a message to refuse it and keep the editor open. */
+  validate?(value: string, row: T): string | null | undefined;
 }
+
+/** Decides something per row (selectable, editable). A method, for the same reason as {@link PluginDataTableRowKey}. */
+export type PluginDataTableRowPredicate<T> = {
+  bivarianceHack(row: T): boolean;
+}["bivarianceHack"];
 
 /**
  * A `DataTable` row's stable key. Declared as a method so a table typed for
@@ -1099,7 +1132,92 @@ export interface PluginDataTableProps<T = unknown> extends PluginRootAttributes 
   "aria-label": string;
   /** Classes for the scrolling element. */
   className?: string;
+
+  // Selection. Rows are keyed by `rowKey`.
+  /**
+   * Draws a checkbox column and makes the table multi-select: click a box to
+   * toggle its row, Shift-click for a range, the header box for all. On the
+   * keyboard Space toggles the cursor row, Shift+Up/Down extend, Cmd+A (Ctrl+A)
+   * selects all and Escape clears. A function leaves some rows out. Pair it
+   * with `BulkActionBar`: `count={keys.length}` and `onClear={() => setKeys([])}`.
+   */
+  selectable?: boolean | PluginDataTableRowPredicate<T>;
+  /** The selected rows' keys, controlled. */
+  selectedRowKeys?: readonly (string | number)[];
+  defaultSelectedRowKeys?: readonly (string | number)[];
+  /** The selection changed: the keys in the order the rows are drawn. */
+  onSelectedRowKeysChange?: (keys: (string | number)[]) => void;
+
+  // Groups.
+  /**
+   * Groups the rows under a header row with a disclosure and a count: by a
+   * column id or field name, or a function returning the group's key. Groups
+   * keep the order their first row has in `rows`.
+   */
+  groupBy?: string | PluginDataTableGroupAccessor<T>;
+  /** The header's label for a group. Defaults to the key ("None" for an empty one). */
+  groupLabel?(key: string, rows: readonly T[]): ReactNode;
+  /** Folded groups' keys, controlled. */
+  collapsedGroups?: readonly string[];
+  defaultCollapsedGroups?: readonly string[];
+  onCollapsedGroupsChange?: (keys: string[]) => void;
+
+  // Expandable rows (a tree table). Row keys must be unique across every level.
+  /** A row's children, drawn under it indented when it is expanded. */
+  getSubRows?(row: T): readonly T[] | null | undefined;
+  /**
+   * Whether a row has children to load. With `loadSubRows`, a row this
+   * returns `true` for draws a disclosure; expanding it loads the children,
+   * with a loading row under it meanwhile and Retry if the load fails.
+   */
+  hasSubRows?(row: T): boolean;
+  /** Loads a row's children when it is first expanded. Kept while the row is the same object; Retry or a new row object loads them again. */
+  loadSubRows?(row: T): Promise<readonly T[]>;
+  /** Expanded rows' keys, controlled. */
+  expandedRowKeys?: readonly (string | number)[];
+  defaultExpandedRowKeys?: readonly (string | number)[];
+  onExpandedRowKeysChange?: (keys: (string | number)[]) => void;
+
+  // Columns.
+  /** Column widths in px by column id, controlled. A column not listed keeps its `width`. */
+  columnWidths?: Readonly<Record<string, number>>;
+  defaultColumnWidths?: Readonly<Record<string, number>>;
+  /** A column was resized: every width set so far. */
+  onColumnWidthsChange?: (widths: Record<string, number>) => void;
+  /** Hidden columns' ids, controlled. */
+  hiddenColumns?: readonly string[];
+  defaultHiddenColumns?: readonly string[];
+  onHiddenColumnsChange?: (ids: string[]) => void;
+  /** Draws a Columns button at the header's end, a menu that shows and hides columns. */
+  columnsMenu?: boolean;
+  /**
+   * Remembers column widths, hidden columns, folded groups and expanded rows
+   * with `usePersistentViewState` under this key, so they survive the view
+   * unmounting, a reload and a restart. Controlled props still win.
+   */
+  viewStateKey?: string;
+  /**
+   * Pins the first column (after the checkboxes) to the start while the table
+   * scrolls sideways. The table scrolls sideways once its columns are wider
+   * than the pane.
+   */
+  stickyFirstColumn?: boolean;
+
+  // Editing.
+  /**
+   * An `editable` cell was committed (Enter, Tab or leaving it). Return a
+   * promise to show the cell pending until it settles; a rejection reopens
+   * the editor with the draft and the error's message (while another cell is
+   * being edited the failure is announced instead). Escape cancels an edit.
+   * Tab and Shift+Tab commit and move to the next or previous editable cell.
+   */
+  onCellEdit?(row: T, columnId: string, value: string): void | Promise<void>;
 }
+
+/** Reads a row's group key for `DataTable`'s `groupBy`. */
+export type PluginDataTableGroupAccessor<T> = {
+  bivarianceHack(row: T): string;
+}["bivarianceHack"];
 
 /** One line of a `LogView` with a severity: its glyph leads the line. */
 export interface PluginLogEntry {
@@ -5176,5 +5294,139 @@ export interface PluginMarkdownEditorProps extends PluginRootAttributes {
   rootPath?: string;
   /** Names the text area for assistive tech ("Release notes"). */
   "aria-label"?: string;
+  className?: string;
+}
+
+// Trees and value inspectors: a generic TreeView and an ObjectInspector for
+// API responses and tool results.
+
+/** Identifies a `TreeView` node. Unique across the whole tree. */
+export type PluginTreeNodeId = string | number;
+
+/** Handed to `TreeView`'s `renderNode` and `getIcon`. */
+export interface PluginTreeNodeState {
+  depth: number;
+  expanded: boolean;
+  /** Has children, or may have (an unloaded async node). */
+  expandable: boolean;
+  selected: boolean;
+  /** With `checkable`: on, off, or some of its children on. */
+  checked: boolean | "mixed";
+  /** Its children are loading. */
+  loading: boolean;
+}
+
+/** A node moved by drag or by Alt+arrow keys, reported once on drop. */
+export interface PluginTreeMove {
+  id: PluginTreeNodeId;
+  /** Its new parent; `null` for the top level. */
+  parentId: PluginTreeNodeId | null;
+  /** Its index among the new parent's children, counted with it removed from where it was. */
+  index: number;
+  /** Where it was. */
+  fromParentId: PluginTreeNodeId | null;
+  fromIndex: number;
+}
+
+/**
+ * Props of `TreeView`: a tree of any nodes, drawn like the host's file tree
+ * (the same rows, chevrons and indentation) and virtualised, so a tree of
+ * thousands of nodes stays light. It is one tab stop with the ARIA tree
+ * keyboard: Up/Down move, Right expands or steps in, Left collapses or steps
+ * out, Home/End, Enter activates, typing jumps to a matching label. It fills
+ * its container's height.
+ */
+export interface PluginTreeViewProps<T = unknown> extends PluginRootAttributes {
+  /** The top-level nodes. */
+  nodes: readonly T[];
+  /** A node's id. Defaults to its `id` field. */
+  getId?(node: T): PluginTreeNodeId;
+  /** A node's text, read for its row, typeahead and announcements. Defaults to its `label`, `name` or `title`. */
+  getLabel?(node: T): string;
+  /**
+   * A node's children: an array, or a promise for a lazy node, loaded the
+   * first time it is expanded with a loading row under it meanwhile (Retry
+   * if it fails). Defaults to the node's `children` field. Pass `hasChildren`
+   * with lazy nodes, or each one is loaded as it is drawn to learn whether it
+   * has any.
+   */
+  getChildren?(node: T): readonly T[] | Promise<readonly T[]> | null | undefined;
+  /** Whether a node has children, without loading them. */
+  hasChildren?(node: T): boolean;
+  /** The row's content after the chevron and checkbox. Defaults to the icon and the label. */
+  renderNode?(node: T, state: PluginTreeNodeState): ReactNode;
+  /** A glyph before the label, when `renderNode` is not given. */
+  getIcon?(node: T, state: PluginTreeNodeState): PluginIconSource | null | undefined;
+  /** `single` (the default): the cursor is the selection. `multiple`: Cmd-click (Ctrl-click) toggles, Shift-click and Shift+arrows extend. */
+  selectionMode?: "single" | "multiple";
+  /** Selected nodes' ids, controlled. */
+  selected?: readonly PluginTreeNodeId[];
+  defaultSelected?: readonly PluginTreeNodeId[];
+  onSelectedChange?: (ids: PluginTreeNodeId[]) => void;
+  /** Expanded nodes' ids, controlled. */
+  expanded?: readonly PluginTreeNodeId[];
+  defaultExpanded?: readonly PluginTreeNodeId[];
+  onExpandedChange?: (ids: PluginTreeNodeId[]) => void;
+  /**
+   * Draws a checkbox on every row; Space toggles the cursor row's. A parent
+   * is on when all its loaded children are, mixed when some are, and checking
+   * it checks them all.
+   */
+  checkable?: boolean;
+  /** Checked nodes' ids, controlled: parents included when all their children are on. */
+  checked?: readonly PluginTreeNodeId[];
+  defaultChecked?: readonly PluginTreeNodeId[];
+  onCheckedChange?: (ids: PluginTreeNodeId[]) => void;
+  /** Enter or a double-click on a node. */
+  onActivate?(node: T): void;
+  /**
+   * Lets nodes be dragged to reorder or re-parent them: dropped on a row's
+   * upper or lower edge it goes before or after it, on its middle into it.
+   * Alt+Up/Down move the cursor node among its siblings, Alt+Left out to its
+   * parent's level, Alt+Right into the sibling above it. The tree does not
+   * move nodes itself: apply the move to `nodes`.
+   */
+  onMove?(move: PluginTreeMove): void;
+  /** Whether a node may be dropped there. Dropping a node into itself or its own descendants is always refused. */
+  canDrop?(move: PluginTreeMove): boolean;
+  /** Whether a node can be picked up. Defaults to all of them. */
+  canDrag?(node: T): boolean;
+  /** Shown instead of the tree when `nodes` is empty: usually an `EmptyState`. */
+  empty?: ReactNode;
+  /** Required: names the tree for assistive tech. */
+  "aria-label": string;
+  className?: string;
+}
+
+/**
+ * Props of `ObjectInspector`: a read-only, collapsible view of a JSON-like
+ * value (an API response, a tool result) with type-coloured values in the
+ * same syntax colours as `CodeBlock`. Each row copies its value or its path
+ * from its context menu or the buttons that show on hover; Cmd+C (Ctrl+C)
+ * copies the cursor row's value. Long strings are cut with a "more" toggle,
+ * large arrays are split into ranges, and a value that contains itself is
+ * shown as `[Circular]` rather than followed. It is one tab stop with the
+ * ARIA tree keyboard, virtualised, and fills its container's height.
+ */
+export interface PluginObjectInspectorProps extends PluginRootAttributes {
+  value: unknown;
+  /** The root's name, shown as its key and starting every copied path. Defaults to none: paths start at the first key. */
+  name?: string;
+  /** How many levels start open. Defaults to 1; `Infinity` opens everything. */
+  expandDepth?: number;
+  /** Draws a bar with a filter field and Expand all / Collapse all. Defaults to `true`. */
+  toolbar?: boolean;
+  /** Filter text, controlled: rows whose key or value contains it, with their ancestors. */
+  filter?: string;
+  defaultFilter?: string;
+  onFilterChange?: (filter: string) => void;
+  /** Characters of a string shown before it is cut. Defaults to 200. */
+  maxStringLength?: number;
+  /** Items per range in a large array. Defaults to 100. */
+  arrayChunkSize?: number;
+  /** Keys in object order (the default), or sorted. */
+  sortKeys?: boolean;
+  /** Required: names the inspector for assistive tech ("Response body"). */
+  "aria-label": string;
   className?: string;
 }

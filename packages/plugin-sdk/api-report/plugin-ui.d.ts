@@ -1157,4 +1157,36 @@ declare module "@daintreehq/plugin-ui" {
   export const RefreshOverlay: ComponentType<RefreshOverlayProps>;
   /** "Updated 5m ago", stale or disconnected, with a refresh button. */
   export const StaleIndicator: ComponentType<StaleIndicatorProps>;
+  // Trees and value inspectors: a generic TreeView and an ObjectInspector.
+  import type {
+    PluginDataTableGroupAccessor,
+    PluginDataTableRowPredicate,
+    PluginObjectInspectorProps,
+    PluginTreeMove,
+    PluginTreeNodeId,
+    PluginTreeNodeState,
+    PluginTreeViewProps,
+  } from "@daintreehq/plugin-sdk/react";
+
+  export type DataTableRowPredicate<T = unknown> = PluginDataTableRowPredicate<T>;
+  export type DataTableGroupAccessor<T = unknown> = PluginDataTableGroupAccessor<T>;
+  export type TreeNodeId = PluginTreeNodeId;
+  export type TreeNodeState = PluginTreeNodeState;
+  export type TreeMove = PluginTreeMove;
+  export type TreeViewProps<T = unknown> = PluginTreeViewProps<T>;
+  export type ObjectInspectorProps = PluginObjectInspectorProps;
+
+  /**
+   * A tree of any nodes, drawn like the host's file tree and virtualised:
+   * lazy children with a loading row, single or multiple selection,
+   * tri-state checkboxes, drag (and Alt+arrow) to reorder or re-parent, and
+   * typeahead. Fills its container's height.
+   */
+  export const TreeView: <T>(props: TreeViewProps<T>) => ReactNode;
+  /**
+   * A read-only, collapsible view of a JSON-like value with type-coloured
+   * values, expand to depth, Expand all, a filter, copy value and copy path,
+   * long strings cut and big arrays in ranges. Fills its container's height.
+   */
+  export const ObjectInspector: ComponentType<ObjectInspectorProps>;
 }

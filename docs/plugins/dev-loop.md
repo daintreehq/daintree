@@ -180,6 +180,7 @@ Consistency rules:
 | `lucide-react-import` | warn | `lucide-react` bundled into a view; the kit's `Icon` is served at no bundle cost |
 | `dnd-library-import` | warn | A drag-and-drop library (`@dnd-kit/*`, `react-beautiful-dnd`, `sortablejs`, …) bundled into a view; the kit's `SortableList`, `Kanban` and `DragDropProvider` cover reordering and boards |
 | `editor-library-import` | warn | A code editor or diff library (`@codemirror/*`, `@uiw/react-codemirror`, `react-diff-view`, `diff2html`, …) bundled into a view; the kit's `CodeEditor` and `DiffView` are Daintree's own editor and diff viewer, themed with the app |
+| `data-view-library-import` | warn | A data grid, tree or JSON viewer library (`@tanstack/react-table`, `ag-grid-*`, `react-arborist`, `react-json-view`, `react-inspector`, …) bundled into a view; the kit's `DataTable`, `TreeView` and `ObjectInspector` cover selection, grouping, editing, lazy trees and value inspection in the host's own rows |
 | `raw-portal` | warn | `createPortal` in a view; the kit's `Portal` marks its container as the plugin's style root |
 | `native-dialog-in-view` | warn | `alert`, `confirm` or `prompt` in a view; use `ConfirmDialog` or `Dialog` |
 | `view-web-storage` | warn | `localStorage` or `sessionStorage` in a view; use `usePersistentViewState` for view state, or `host.storage` in the worker |

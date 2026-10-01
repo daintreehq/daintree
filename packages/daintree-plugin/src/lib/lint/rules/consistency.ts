@@ -576,6 +576,30 @@ const editorLibraryImport: LintRule = {
   },
 };
 
+// The table, tree and JSON-viewer libraries a view reaches for to show records
+// or an API response, which the kit's DataTable, TreeView and ObjectInspector
+// now cover in the host's own rows.
+const DATA_VIEW_LIBRARY_IMPORT =
+  /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\(\s*|\bimport\s+)["'](?:@tanstack\/react-table|react-table|ag-grid-[\w-]+|react-data-grid|@mui\/x-data-grid[\w-]*|react-arborist|rc-tree|react-complex-tree|react-json-view|@microlink\/react-json-view|@uiw\/react-json-view|react-json-tree|react-inspector)(?:\/[^"']*)?["']/;
+
+const dataViewLibraryImport: LintRule = {
+  id: "data-view-library-import",
+  severity: "warn",
+  appliesTo: "view",
+  message: "a data grid, tree or JSON viewer library is bundled into the view",
+  hint: "prefer `DataTable`, `TreeView` or `ObjectInspector` from @daintreehq/plugin-ui: selection, groups, editing, lazy trees and value inspection in the host's own rows, served at no bundle cost",
+  check(file) {
+    const pattern = new RegExp(DATA_VIEW_LIBRARY_IMPORT.source, "g");
+    for (const match of file.code.matchAll(pattern)) {
+      // `import type …` and `export type …` bundle nothing.
+      const start = file.code.lastIndexOf("\n", match.index) + 1;
+      if (/^\s*(?:import|export)\s+type\b/.test(file.code.slice(start, match.index))) continue;
+      return [{ offset: match.index }];
+    }
+    return [];
+  },
+};
+
 export const CONSISTENCY_RULES: LintRule[] = [
   stockColour,
   darkVariant,
@@ -601,5 +625,6 @@ export const CONSISTENCY_RULES: LintRule[] = [
   rawPortal,
   viewportBreakpoint,
   editorLibraryImport,
+  dataViewLibraryImport,
   handRolledDrawer,
 ];

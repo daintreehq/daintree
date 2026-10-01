@@ -119,6 +119,7 @@ import { pluginKitLayoutPanes } from "./PluginKitLayoutPanes";
 import { pluginKitTypography, pluginKitTypographyFunctions } from "./PluginKitTypography";
 import { pluginKitEditors } from "./PluginKitEditors";
 import { pluginKitPickersForms } from "./PluginKitPickersForms";
+import { pluginKitDataTables } from "./PluginKitDataTables";
 import { pluginKitTextInputs } from "./PluginKitTextInputs";
 import { primeRadix } from "@/components/ui/radix-loader";
 
@@ -1273,6 +1274,8 @@ export const pluginKit = {
   ...pluginKitEditors,
   ...pluginKitPickersForms,
   ...pluginKitTextInputs,
+  // Last: its DataTable wraps the basic one from pluginKitLists.
+  ...pluginKitDataTables,
 };
 
 export type PluginKit = typeof pluginKit;
