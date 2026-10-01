@@ -171,6 +171,14 @@ function openForgeUrl(url: string | undefined): void {
   if (safe) dispatchOpen("browser.openExternal", safe);
 }
 
+/**
+ * Keeps a press from moving DOM focus: Chromium focuses a pressed button or
+ * link even at tabIndex -1, which would pull focus out of a list's own field.
+ */
+function preventFocusSteal(event: MouseEvent<HTMLElement>): void {
+  event.preventDefault();
+}
+
 /** The middot between a row's metadata, kept inside the item it introduces. */
 function Dot() {
   return (
@@ -304,6 +312,7 @@ function KitFileLink({
   const given = str(path) ?? "";
   const at = validLine(line);
   const absolute = resolveFileLink(path, rootPath);
+  const linkTab = typeof tabIndex === "number" && Number.isInteger(tabIndex) ? tabIndex : undefined;
   // Read against the root, as the host's change lists do: a checkout's
   // absolute prefix is the same on every row and says nothing.
   const shown =
@@ -346,7 +355,8 @@ function KitFileLink({
       {...pickRootProps(rest)}
       data-kit-file-link=""
       href={given}
-      tabIndex={typeof tabIndex === "number" && Number.isInteger(tabIndex) ? tabIndex : undefined}
+      tabIndex={linkTab}
+      onMouseDown={linkTab !== undefined && linkTab < 0 ? preventFocusSteal : undefined}
       aria-label={at !== undefined ? `${shown}, line ${at}` : undefined}
       onClick={(event) => {
         try {
@@ -936,7 +946,7 @@ function CommitRefs({ refs }: { refs: CommitEntry["refs"] }) {
             className={cn(
               "max-w-[140px] shrink font-mono",
               // A tag cut to "v0…" names no version; it keeps room for one.
-              ref.kind === "tag" ? "min-w-[9ch]" : "min-w-0",
+              ref.kind === "tag" ? "min-w-[12ch]" : "min-w-0",
               ref.kind === "head" && "text-text-primary"
             )}
           >
@@ -1528,6 +1538,10 @@ function ForgeRow({ props, extra }: { props: PluginForgeRowBaseProps; extra: For
       ? String(number)
       : (nonEmpty(number) ?? "");
   const heading = str(title) ?? "";
+  const titleTab =
+    typeof titleTabIndex === "number" && Number.isInteger(titleTabIndex)
+      ? titleTabIndex
+      : undefined;
   const open = fn(onOpen);
   const href = safeDetailsUrl(str(url));
   const person = readPerson(author);
@@ -1542,11 +1556,10 @@ function ForgeRow({ props, extra }: { props: PluginForgeRowBaseProps; extra: For
       <button
         type="button"
         data-forge-row-title=""
-        tabIndex={
-          typeof titleTabIndex === "number" && Number.isInteger(titleTabIndex)
-            ? titleTabIndex
-            : undefined
-        }
+        tabIndex={titleTab}
+        // Out of the tab order means the list owns focus: a press must not
+        // take it either, or the list's search field stops hearing the arrows.
+        onMouseDown={titleTab !== undefined && titleTab < 0 ? preventFocusSteal : undefined}
         aria-current={selected === true ? "true" : undefined}
         onClick={(event: MouseEvent<HTMLButtonElement>) => {
           event.stopPropagation();
