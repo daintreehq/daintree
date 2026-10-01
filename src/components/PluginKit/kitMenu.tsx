@@ -12,6 +12,9 @@ import {
   ContextMenuSubContent,
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
+import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
+import { cn } from "@/lib/utils";
 import { resolvePluginKitIcon } from "./PluginKitIcons";
 import { actionMenuRowVisible, useActionMenuRow } from "./PluginKitNativeAgents";
 import { field, fn, nonEmpty, str, useKitOwnerAttributes } from "./kitProps";
@@ -29,6 +32,8 @@ export interface KitMenuParts {
     disabled?: boolean;
     destructive?: boolean;
     textValue?: string;
+    className?: string;
+    "aria-keyshortcuts"?: string;
   }>;
   CheckboxItem: ComponentType<{
     children?: ReactNode;
@@ -156,23 +161,35 @@ function ActionMenuRow({ parts, entry }: { parts: KitMenuParts; entry: PluginAct
   const row = useActionMenuRow(entry);
   if (!row) return null;
   const Glyph = row.icon === undefined ? undefined : resolvePluginKitIcon(row.icon);
+  const refused = row.disabled && row.description !== undefined;
+  // A refused row keeps the host's 50% on its name, glyph and keys, but its
+  // reason is the answer to "why can't I?" and stays readable, in secondary ink.
+  const dim = (node: ReactNode) =>
+    refused ? <span className="inline-flex shrink-0 self-start opacity-50">{node}</span> : node;
   return (
     <parts.Item
       onSelect={row.onSelect}
       disabled={row.disabled}
       destructive={row.destructive}
       textValue={row.label}
+      aria-keyshortcuts={row.shortcut ? comboToAriaKeyshortcuts(row.shortcut, isMac()) : undefined}
+      className={refused ? "data-[disabled]:opacity-100" : undefined}
     >
-      {Glyph ? <MenuRowIcon Glyph={Glyph} top={row.description !== undefined} /> : null}
+      {Glyph ? dim(<MenuRowIcon Glyph={Glyph} top={row.description !== undefined} />) : null}
       {row.description === undefined ? (
         row.label
+      ) : refused ? (
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="truncate opacity-50">{row.label}</span>
+          <span className="text-2xs text-text-secondary">{row.description}</span>
+        </span>
       ) : (
         <MenuRowText label={row.label} description={row.description} />
       )}
       {row.description === undefined ? (
         <parts.Shortcut shortcut={row.shortcut} />
       ) : (
-        <span className="ml-auto flex shrink-0 self-start">
+        <span className={cn("ml-auto flex shrink-0 self-start", refused && "opacity-50")}>
           <parts.Shortcut shortcut={row.shortcut} />
         </span>
       )}

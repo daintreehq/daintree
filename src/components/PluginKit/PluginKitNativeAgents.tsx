@@ -48,15 +48,20 @@ import {
   buildSendToAgentRows,
   filterSendToAgentRows,
 } from "@/components/Plugin/sendToAgentRows";
-import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
+import {
+  STATE_COLORS,
+  STATE_ICONS,
+  agentStateDotColor,
+} from "@/components/Worktree/terminalStateConfig";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { Badge } from "@/components/ui/badge";
 import { DRAG_GRIP_CLASS, DRAG_GRIP_ICON_CLASS } from "@/components/ui/dragGripStyles";
 import { Button } from "@/components/ui/button";
-import { KbdChord, KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
-import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
+import { KbdChord, KBD_CLASS } from "@/components/ui/Kbd";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import {
   TOOLTIP_CARD_PADDING,
   Tooltip,
@@ -466,13 +471,14 @@ export function useActionMenuRow(entry: PluginActionMenuItem): KitActionMenuRowM
 
 const MARK_PX = { xs: 12, sm: 16, md: 20, lg: 24 } as const;
 
-// The hue each live state's glyph wears, as a corner pip. Idle, completed and
-// exited draw none: the pip is for a session that is doing something now.
-const STATE_PIP: Partial<Record<PluginAgentState, string>> = {
-  working: "bg-state-working",
-  waiting: "bg-state-waiting",
-  directing: "bg-category-blue",
-};
+/**
+ * The corner pip's hue, by the host's own attention policy: only the states
+ * that want a human (waiting, and directing — the user's own unsent prompt)
+ * earn one, so a pip on a toolbar of busy agents always means "look here".
+ */
+function pipTone(state: PluginAgentState | undefined): string | null {
+  return state ? agentStateDotColor(state) : null;
+}
 
 const PIP_CUTOUT_CLASS =
   "ring-1 ring-surface-panel forced-colors:outline forced-colors:outline-1 forced-colors:outline-[Canvas]";
@@ -504,7 +510,7 @@ function AgentMark({ agentId, px }: { agentId: string; px: number }) {
 }
 
 function StatePip({ state }: { state: PluginAgentState | undefined }) {
-  const tone = state ? STATE_PIP[state] : undefined;
+  const tone = pipTone(state);
   if (!tone) return null;
   return (
     <span
@@ -536,7 +542,7 @@ function KitAgentAvatar({
     decorative === true
       ? undefined
       : (nonEmpty(label) ??
-        (observed && STATE_PIP[observed]
+        (pipTone(observed)
           ? `${agentName(id)}, ${OBSERVATION[observed].bare.toLowerCase()}`
           : agentName(id)));
   return (
@@ -572,7 +578,7 @@ function KitAgentBadge({ agentId, label, size, state, className, ...rest }: Plug
         <StatePip state={observed} />
       </span>
       <span className="min-w-0 truncate">{nonEmpty(label) ?? agentName(id)}</span>
-      {observed && STATE_PIP[observed] ? (
+      {observed && pipTone(observed) ? (
         <span className="sr-only">, {OBSERVATION[observed].bare.toLowerCase()}</span>
       ) : null}
     </span>
@@ -723,8 +729,6 @@ function readPanes(value: unknown): PluginAgentPane[] {
 type PickerRow =
   | { kind: "agent"; id: string; pane: PluginAgentPane }
   | { kind: "launch"; id: string; agentId: string };
-
-const PICKER_LIST_MAX_PX = 320;
 
 /** The picker badge's wording, as the host's own Send to agent picker draws it. */
 function observedBadgeText(state: PluginAgentState | undefined): string | undefined {
@@ -907,7 +911,13 @@ function KitAgentPicker(props: PluginAgentPickerProps) {
         align={oneOf(align, ALIGNS) ?? "start"}
         sideOffset={4}
         aria-label={label}
-        className={cn("w-80 max-w-[calc(100vw-2rem)] p-0", overlayZ)}
+        // As wide as the host's agent rows need for a task title and its badge,
+        // and never taller than the room the popover has.
+        className={cn(
+          "flex w-96 max-w-[calc(100vw-2rem)] flex-col p-0",
+          "max-h-[min(28rem,var(--radix-popover-content-available-height))]",
+          overlayZ
+        )}
       >
         <PopoverSearchField
           autoFocus
@@ -926,12 +936,13 @@ function KitAgentPicker(props: PluginAgentPickerProps) {
           aria-controls={listId}
           aria-activedescendant={active >= 0 ? optionId(active) : undefined}
         />
-        <div
+        <ScrollShadow
           id={listId}
           role="listbox"
           aria-label={label}
-          className="overflow-y-auto p-1"
-          style={{ maxHeight: PICKER_LIST_MAX_PX }}
+          compact
+          className="flex-1"
+          scrollClassName="p-1"
         >
           {rows.map((row, index) => {
             const heading = headingAt(rows, index, spans);
@@ -952,13 +963,14 @@ function KitAgentPicker(props: PluginAgentPickerProps) {
                 {heading !== null ? (
                   <div
                     aria-hidden="true"
-                    className={cn("px-2 pb-1 pt-2", PALETTE_SECTION_LABEL_CLASS)}
+                    // The host picker's worktree heading: names keep their own case.
+                    className="px-3 pb-1 pt-2 text-xs font-medium text-text-secondary"
                   >
                     {heading}
                   </div>
                 ) : null}
                 {firstLaunch ? (
-                  <div aria-hidden="true" className="mx-2 my-1 border-t border-border-subtle" />
+                  <div aria-hidden="true" className="mx-3 my-1 border-t border-border-subtle" />
                 ) : null}
                 <div
                   id={optionId(index)}
@@ -987,7 +999,7 @@ function KitAgentPicker(props: PluginAgentPickerProps) {
                   onClick={() => choose(row)}
                   className={cn(
                     PALETTE_ROW_CLASS,
-                    "flex w-full items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-1.5 text-left text-text-secondary",
+                    "group flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-left text-text-secondary",
                     enabled ? "cursor-pointer" : "cursor-not-allowed"
                   )}
                 >
@@ -1017,7 +1029,7 @@ function KitAgentPicker(props: PluginAgentPickerProps) {
               </div>
             );
           })}
-        </div>
+        </ScrollShadow>
         {rows.length === 0 ? (
           <div role="status" className="px-3 pb-3 text-xs text-text-secondary">
             <PluginStyleScope>
@@ -1499,7 +1511,7 @@ function KitTerminalSnapshot({
     <div
       data-terminal-snapshot-body=""
       // Static: no caret, no selection handles, nothing that reads as input.
-      className="min-h-0 flex-1 overflow-hidden bg-terminal-background px-2 py-1.5 text-terminal-foreground"
+      className="relative min-h-0 flex-1 overflow-hidden bg-terminal-background px-2 py-1.5 text-terminal-foreground"
       style={{
         fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
         fontSize: fontPx,
@@ -1518,6 +1530,12 @@ function KitTerminalSnapshot({
               ))}
         </div>
       ))}
+      {/* Long lines are cut at the edge, not wrapped: the fade says the line
+          goes on, and the terminal itself is one click away. */}
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-linear-to-l from-terminal-background to-transparent"
+      />
     </div>
   );
 
@@ -1628,22 +1646,69 @@ function readHints(value: unknown, revision: number): KeyHintModel[] {
   return out;
 }
 
-function KeyHintChip({ hint, className }: { hint: KeyHintModel; className?: string }) {
+// Spoken names for the glyph caps a literal `keys` hint draws, as KbdChord
+// speaks its own: "↑↓" is read as "Up Down", never as the symbol names.
+const KEY_GLYPH_NAMES: Record<string, string> = {
+  "↑": "Up",
+  "↓": "Down",
+  "←": "Left",
+  "→": "Right",
+  "⏎": "Enter",
+  "↵": "Enter",
+  "⎋": "Escape",
+  "⇥": "Tab",
+  "⌫": "Delete",
+  "⌘": "Command",
+  "⇧": "Shift",
+  "⌥": "Option",
+  "⌃": "Control",
+};
+
+function spokenKey(key: string): string {
+  return [...key]
+    .map((glyph) => (Object.hasOwn(KEY_GLYPH_NAMES, glyph) ? KEY_GLYPH_NAMES[glyph] : glyph))
+    .join(" ");
+}
+
+/** One hint as the host's palette footer draws it: full-size caps, then the label. */
+function KeyHintChip({
+  hint,
+  className,
+  truncate = false,
+}: {
+  hint: KeyHintModel;
+  className?: string;
+  /** The leading hint gives way with an ellipsis rather than widening the row. */
+  truncate?: boolean;
+}) {
   return (
-    <span className={cn("inline-flex shrink-0 items-center gap-1.5", className)}>
+    <span
+      data-key-hint=""
+      className={cn("inline-flex items-baseline", truncate ? "min-w-0" : "shrink-0", className)}
+    >
       {hint.shortcut ? (
-        <KbdChord shortcut={hint.shortcut} density="compact" />
+        <KbdChord shortcut={hint.shortcut} className="shrink-0" />
       ) : (
-        <span className="inline-flex items-center gap-0.5">
+        <>
+          <span className="sr-only">{hint.keys!.map(spokenKey).join(" ")}</span>
           {hint.keys!.map((key, index) => (
             // Sans, as KbdChord sets its glyph keys: the mono face has no arrows.
-            <kbd key={index} className={cn(KBD_COMPACT_CLASS, /^[^\w]+$/.test(key) && "font-sans")}>
+            <kbd
+              key={index}
+              aria-hidden="true"
+              className={cn(
+                KBD_CLASS,
+                "shrink-0",
+                index > 0 && "ml-1",
+                /^[^\w]+$/.test(key) && "font-sans"
+              )}
+            >
               {key}
             </kbd>
           ))}
-        </span>
+        </>
       )}
-      <span>{hint.label}</span>
+      <span className={cn("ml-1.5", truncate && "min-w-0 truncate")}>{hint.label}</span>
     </span>
   );
 }
@@ -1667,22 +1732,26 @@ function KitKeyHints({
       role="note"
       aria-label={nonEmpty(ariaLabel) ?? "Keyboard shortcuts"}
       className={cn(
-        "@container/key-hints flex w-full min-w-0 items-center gap-3 text-xs text-text-secondary",
+        "@container/key-hints flex w-full min-w-0 items-center justify-between gap-3 text-xs text-text-secondary",
         footer && "border-t border-border-strong bg-surface-panel px-3 py-2",
         str(className)
       )}
     >
-      <KeyHintChip hint={first!} />
-      {others.map((hint, index) => {
-        const fromEnd = others.length - 1 - index;
-        return (
-          <KeyHintChip
-            key={`${index}-${hint.label}`}
-            hint={hint}
-            className={HINT_DROP_CLASSES[Math.min(fromEnd, HINT_DROP_CLASSES.length - 1)]}
-          />
-        );
-      })}
+      <KeyHintChip hint={first!} truncate />
+      {others.length > 0 ? (
+        <span className="flex min-w-0 items-center gap-3">
+          {others.map((hint, index) => {
+            const fromEnd = others.length - 1 - index;
+            return (
+              <KeyHintChip
+                key={`${index}-${hint.label}`}
+                hint={hint}
+                className={HINT_DROP_CLASSES[Math.min(fromEnd, HINT_DROP_CLASSES.length - 1)]}
+              />
+            );
+          })}
+        </span>
+      ) : null}
     </div>
   );
 }

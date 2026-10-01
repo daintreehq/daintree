@@ -4657,8 +4657,9 @@ interface PluginAgentAvatarProps extends PluginRootAttributes {
     agentId: string;
     size?: PluginAgentAvatarSize;
     /**
-     * A pip on the mark's corner for a state that is live: `working`, `waiting`
-     * or `directing`, in the hue of that state's glyph. Other states draw none.
+     * A pip on the mark's corner, by the host toolbar's attention rule: only
+     * `waiting` and `directing` (the states that want a human) draw one, in the
+     * hue of that state's glyph. Other states draw none.
      */
     state?: PluginAgentState;
     /** The accessible name. Defaults to the agent's name; `decorative` drops it. */
@@ -4674,7 +4675,7 @@ interface PluginAgentBadgeProps extends PluginRootAttributes {
     label?: string;
     /** `sm` (12px text, the default) or `md` (14px). */
     size?: "sm" | "md";
-    /** As `AgentAvatar`'s: a pip for a live state. */
+    /** As `AgentAvatar`'s: a pip for a state that wants a human. */
     state?: PluginAgentState;
     className?: string;
 }

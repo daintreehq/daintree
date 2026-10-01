@@ -362,6 +362,18 @@ describe("action menu entries", () => {
     expect(item.getAttribute("aria-disabled")).toBe("true");
     expect(item.textContent).toContain("Nothing to close");
     expect(screen.getAllByRole("menuitem")).toHaveLength(1);
+    // The row's name fades with the refusal; the reason itself stays readable.
+    const faded = (el: Element | null | undefined) =>
+      el?.closest("[class*='opacity-50']") !== null &&
+      item.contains(el?.closest("[class*='opacity-50']") ?? null);
+    const reason = [...item.querySelectorAll("span")].find(
+      (span) => span.textContent === "Nothing to close"
+    );
+    const name = [...item.querySelectorAll("span")].find(
+      (span) => span.textContent === "Close panel"
+    );
+    expect(faded(name)).toBe(true);
+    expect(faded(reason)).toBe(false);
   });
 
   it("leaves out a submenu whose action rows would all be hidden", async () => {
@@ -428,11 +440,18 @@ describe("AgentAvatar and AgentBadge", () => {
 
   it("puts the name beside the mark", () => {
     render(
-      createElement(kit.AgentBadge, { agentId: "gemini", state: "working", "data-testid": "b" })
+      createElement(
+        "div",
+        null,
+        createElement(kit.AgentBadge, { agentId: "gemini", state: "waiting", "data-testid": "b" }),
+        createElement(kit.AgentBadge, { agentId: "codex", state: "working", "data-testid": "w" })
+      )
     );
     const badge = screen.getByTestId("b");
     expect(badge.textContent).toContain("Gemini");
-    expect(badge.textContent).toContain("output active");
+    expect(badge.textContent).toContain("prompt on screen");
+    // Only a state that wants a human earns the pip, as on the host toolbar.
+    expect(screen.getByTestId("w").querySelector("[data-agent-pip]")).toBeNull();
   });
 });
 
@@ -935,6 +954,21 @@ describe("ShortcutHint and KeyHints", () => {
     expect(screen.getByTestId("h").querySelectorAll("kbd")).toHaveLength(2);
   });
 
+  it("speaks literal glyph caps by name, not by symbol", () => {
+    render(
+      createElement(kit.KeyHints, {
+        "data-testid": "k",
+        hints: [{ keys: ["↑↓"], label: "Move" }],
+      })
+    );
+    const chip = screen.getByTestId("k").querySelector("[data-key-hint]")!;
+    const spoken = [...chip.querySelectorAll(".sr-only")].map((el) => el.textContent).join(" ");
+    expect(spoken).toBe("Up Down");
+    for (const cap of chip.querySelectorAll("kbd")) {
+      expect(cap.getAttribute("aria-hidden")).toBe("true");
+    }
+  });
+
   it("redraws when the user rebinds a hinted action", () => {
     combos.set("search.open", "Cmd+F");
     render(
@@ -946,12 +980,12 @@ describe("ShortcutHint and KeyHints", () => {
         ],
       })
     );
-    expect(screen.getByTestId("k").children).toHaveLength(2);
+    expect(screen.getByTestId("k").querySelectorAll("[data-key-hint]")).toHaveLength(2);
     combos.delete("search.open");
     act(() => {
       Reflect.apply(Reflect.get(keybindingService, "notifyListeners"), keybindingService, []);
     });
-    expect(screen.getByTestId("k").children).toHaveLength(1);
+    expect(screen.getByTestId("k").querySelectorAll("[data-key-hint]")).toHaveLength(1);
   });
 
   it("keeps the first hint whatever the width, drops unbound actions and junk", () => {
@@ -971,7 +1005,7 @@ describe("ShortcutHint and KeyHints", () => {
       })
     );
     const row = screen.getByTestId("k");
-    const chips = [...row.children];
+    const chips = [...row.querySelectorAll("[data-key-hint]")];
     expect(
       chips.map((chip) => chip.textContent?.replace(/^.*?(Open|Move|Search|Close)$/, "$1"))
     ).toEqual(["Open", "Move", "Search", "Close"]);
