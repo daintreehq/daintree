@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   collectPluginCustomIconRefs,
@@ -80,6 +81,20 @@ describe("loadPluginCustomIcon", () => {
     await expectError("./big.svg", /larger than 64 KB/);
   });
 
+  it("resolves a relative plugin directory, as `daintree-plugin validate .` passes one", async () => {
+    await write("icons/x.svg", GOOD_SVG);
+    const relative = path.relative(process.cwd(), pluginDir);
+    expect((await loadPluginCustomIcon("acme.tools", relative, "./icons/x.svg")).ok).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a FIFO without blocking on a writer that never comes",
+    async () => {
+      execFileSync("mkfifo", [path.join(pluginDir, "pipe.svg")]);
+      await expectError("./pipe.svg", /not found or is not a readable file/);
+    }
+  );
+
   it("rejects invalid UTF-8", async () => {
     await write("bad.svg", Buffer.from([0x3c, 0x73, 0x76, 0x67, 0xff, 0xfe]));
     await expectError("./bad.svg", /UTF-8/);
@@ -103,6 +118,36 @@ describe("loadPluginCustomIcon", () => {
       "a script",
       GOOD_SVG.replace("</svg>", "<script>alert(1)</script></svg>"),
       /unsafe content/,
+    ],
+    [
+      "an unclosed root",
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h1"/>',
+      /unclosed <svg>/,
+    ],
+    [
+      "an unterminated tag",
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h1"</svg>',
+      /well-formed/,
+    ],
+    [
+      "mismatched tags",
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g><path d="M0 0h1"/></svg></g>',
+      /unexpected <\/svg>/,
+    ],
+    [
+      "a second root",
+      `${GOOD_SVG}<svg xmlns="http://www.w3.org/2000/svg"/>`,
+      /single <svg> root/,
+    ],
+    [
+      "a missing SVG namespace",
+      '<svg viewBox="0 0 24 24"><path d="M0 0h1"/></svg>',
+      /xmlns/,
+    ],
+    [
+      "drawables only inside a comment",
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><!-- <path d="M0 0h1"/> --></svg>',
+      /drawable/,
     ],
     ["an event handler", GOOD_SVG.replace("<path", '<path onclick="x()"'), /unsafe content/],
     [

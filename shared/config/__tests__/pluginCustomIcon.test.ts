@@ -28,6 +28,7 @@ describe("pluginCustomIcon", () => {
     ["no ./ prefix", "icons/x.svg"],
     ["non-svg extension", "./icons/x.png"],
     ["uppercase extension", "./icons/x.SVG"],
+    ["uppercase path, which would collide with its lower-cased key", "./Icons/x.svg"],
     ["parent segment", "./../x.svg"],
     ["nested parent segment", "./icons/../../x.svg"],
     ["dot segment", "./icons/./x.svg"],

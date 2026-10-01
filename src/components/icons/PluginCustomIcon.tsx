@@ -6,17 +6,17 @@ import { getPluginCustomIcon, subscribePluginCustomIcons } from "./pluginCustomI
 
 const components = new Map<string, Map<PluginIconComponent, PluginIconComponent>>();
 
-/** Whether `className` already sizes the box (`w-4`, `h-3.5`, `size-5`, …). */
-function hasSizingClass(className: string | undefined): boolean {
-  return /(?:^|\s)(?:[\w-]+:)*(?:size|w|h)-\S/.test(className ?? "");
-}
-
 /**
  * A plugin-shipped SVG drawn as a CSS mask over `currentColor` (#13143). The
  * markup never enters the DOM: as a mask image it is processed in the SVG
  * image mode, which runs no script and fetches nothing, and the mask keeps
  * only its alpha, so the icon takes the surrounding text colour the way the
  * built-in glyphs do rather than its own fills.
+ *
+ * The mask is painted on an empty `<svg>` sized exactly like a Lucide glyph —
+ * `width`/`height` attributes defaulting to 24, which any sizing class
+ * overrides — so the `[&_svg]:size-4` and `svg.mr-2` rules that size and space
+ * the built-in icons apply to this one too.
  *
  * Draws `fallback` while the asset is missing — before the first snapshot
  * arrives, or after its plugin unloads.
@@ -25,38 +25,16 @@ function createPluginCustomIcon(
   key: string,
   Fallback: PluginIconComponent
 ): PluginIconComponent {
-  function PluginCustomIcon({
-    className,
-    size,
-    width,
-    height,
-    style,
-    "aria-hidden": ariaHidden,
-  }: PluginIconProps) {
+  function PluginCustomIcon(props: PluginIconProps) {
     const asset = useSyncExternalStore(subscribePluginCustomIcons, () => getPluginCustomIcon(key));
-    if (!asset) {
-      return (
-        <Fallback
-          className={className}
-          size={size}
-          width={width}
-          height={height}
-          style={style}
-          aria-hidden={ariaHidden}
-        />
-      );
-    }
-    const resolvedWidth = width ?? size;
-    const resolvedHeight = height ?? size;
-    const mask = `url("${svgToDataUrl(asset.svg)}")`;
+    if (!asset) return <Fallback {...props} />;
+    const { className, size = 24, width, height, style, "aria-hidden": ariaHidden, ...rest } = props;
     const maskStyle: CSSProperties = {
-      width: resolvedWidth,
-      height: resolvedHeight,
       backgroundColor: "currentColor",
       // Forced-colors mode repaints backgrounds with the system Canvas colour,
       // which would hide the glyph; opting out keeps the inherited text colour.
       forcedColorAdjust: "none",
-      maskImage: mask,
+      maskImage: `url("${svgToDataUrl(asset.svg)}")`,
       maskMode: "alpha",
       maskSize: "contain",
       maskRepeat: "no-repeat",
@@ -64,20 +42,14 @@ function createPluginCustomIcon(
       ...style,
     };
     return (
-      <span
+      <svg
+        {...rest}
+        xmlns="http://www.w3.org/2000/svg"
+        width={width ?? size}
+        height={height ?? size}
         data-plugin-icon={key}
         aria-hidden={ariaHidden ?? true}
-        // Lucide's 24px default only when the caller sizes nothing. Left out
-        // rather than overridden when a class sizes it: tailwind-merge keeps
-        // `size-6` beside `w-4 h-4`, and stylesheet order would pick the winner.
-        className={cn(
-          "inline-block shrink-0",
-          resolvedWidth === undefined &&
-            resolvedHeight === undefined &&
-            !hasSizingClass(className) &&
-            "size-6",
-          className
-        )}
+        className={cn("shrink-0", className)}
         style={maskStyle}
       />
     );

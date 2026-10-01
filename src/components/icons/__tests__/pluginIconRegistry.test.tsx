@@ -114,60 +114,67 @@ describe("pluginIconRegistry", () => {
     it("draws the fallback until the asset arrives, then the mask, then the fallback again", () => {
       const Icon = resolvePluginIcon(KEY, DEFAULT_PANEL_ICON);
       const { container } = render(<Icon className="h-4 w-4" />);
-      expect(container.querySelector("svg")).not.toBeNull();
+      expect(container.querySelector("svg:not([data-plugin-icon])")).not.toBeNull();
       expect(container.querySelector("[data-plugin-icon]")).toBeNull();
 
       act(() => setPluginCustomIcons([asset]));
-      const span = container.querySelector<HTMLElement>(`[data-plugin-icon="${KEY}"]`);
-      expect(span).not.toBeNull();
-      expect(container.querySelector("svg")).toBeNull();
+      expect(container.querySelector(`svg[data-plugin-icon="${KEY}"]`)).not.toBeNull();
+      expect(container.querySelector("svg:not([data-plugin-icon])")).toBeNull();
 
       act(() => setPluginCustomIcons([]));
       expect(container.querySelector("[data-plugin-icon]")).toBeNull();
-      expect(container.querySelector("svg")).not.toBeNull();
+      expect(container.querySelector("svg:not([data-plugin-icon])")).not.toBeNull();
     });
 
     it("paints the svg as a currentColor mask rather than inserting its markup", () => {
       setPluginCustomIcons([asset]);
       const Icon = resolvePluginIcon(KEY);
       const { container } = render(<Icon />);
-      const span = container.querySelector<HTMLElement>("[data-plugin-icon]")!;
-      expect(span.innerHTML).toBe("");
-      expect(span.getAttribute("aria-hidden")).toBe("true");
-      expect(span.style.backgroundColor).toBe("currentcolor");
-      const mask = span.style.getPropertyValue("mask-image") || span.style.maskImage;
+      const icon = container.querySelector<SVGSVGElement>("[data-plugin-icon]")!;
+      expect(icon.tagName.toLowerCase()).toBe("svg");
+      expect(icon.childNodes).toHaveLength(0);
+      expect(icon.getAttribute("aria-hidden")).toBe("true");
+      expect(icon.style.backgroundColor).toBe("currentcolor");
+      const mask = icon.style.getPropertyValue("mask-image") || icon.style.maskImage;
       expect(mask).toContain("data:image/svg+xml,");
       expect(decodeURIComponent(mask)).toContain('fill="red"');
     });
 
-    it("sizes like a Lucide glyph: 24px by default, class or explicit size when given", () => {
+    it("sizes like a Lucide glyph so svg-targeted sizing and spacing rules still apply", () => {
       setPluginCustomIcons([asset]);
       const Icon = resolvePluginIcon(KEY);
-      const byDefault = render(<Icon />).container.querySelector<HTMLElement>("[data-plugin-icon]")!;
-      expect(byDefault.className).toContain("size-6");
+      const query = (el: HTMLElement) => el.querySelector<SVGSVGElement>("[data-plugin-icon]")!;
 
-      const byClass = render(<Icon className="h-3.5 w-3.5" />).container.querySelector<HTMLElement>(
-        "[data-plugin-icon]"
-      )!;
-      expect(byClass.className).not.toContain("size-6");
-      expect(byClass.className).toContain("w-3.5");
+      const byDefault = query(render(<Icon />).container);
+      expect(byDefault.getAttribute("width")).toBe("24");
+      expect(byDefault.getAttribute("height")).toBe("24");
 
-      const bySize = render(<Icon size={16} />).container.querySelector<HTMLElement>(
-        "[data-plugin-icon]"
-      )!;
-      expect(bySize.className).not.toContain("size-6");
-      expect(bySize.style.width).toBe("16px");
-      expect(bySize.style.height).toBe("16px");
+      // A class wins over the presentation attributes, exactly as with Lucide.
+      const byClass = query(render(<Icon className="mr-2 h-3.5 w-3.5" />).container);
+      expect(byClass.matches("svg.mr-2")).toBe(true);
+      expect(byClass.getAttribute("class")).toContain("w-3.5");
+
+      const bySize = query(render(<Icon size={16} width={20} />).container);
+      expect(bySize.getAttribute("width")).toBe("20");
+      expect(bySize.getAttribute("height")).toBe("16");
+    });
+
+    it("forwards extra attributes such as the menu-gutter marker", () => {
+      setPluginCustomIcons([asset]);
+      const Icon = resolvePluginIcon(KEY);
+      const markerProps = { "data-menu-icon": true } as Record<string, unknown>;
+      const icon = render(<Icon {...markerProps} />).container.querySelector("[data-plugin-icon]")!;
+      expect(icon.hasAttribute("data-menu-icon")).toBe(true);
     });
 
     it("lets a caller colour override flow into the mask through currentColor", () => {
       setPluginCustomIcons([asset]);
       const Icon = resolvePluginIcon(KEY);
-      const span = render(<Icon style={{ color: "rgb(1, 2, 3)" }} />).container.querySelector<
-        HTMLElement
+      const icon = render(<Icon style={{ color: "rgb(1, 2, 3)" }} />).container.querySelector<
+        SVGSVGElement
       >("[data-plugin-icon]")!;
-      expect(span.style.color).toBe("rgb(1, 2, 3)");
-      expect(span.style.backgroundColor).toBe("currentcolor");
+      expect(icon.style.color).toBe("rgb(1, 2, 3)");
+      expect(icon.style.backgroundColor).toBe("currentcolor");
     });
   });
 });

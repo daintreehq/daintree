@@ -46,7 +46,10 @@ export function validatePluginCustomIconRef(ref: string): string | null {
   if (ref.length > PLUGIN_CUSTOM_ICON_MAX_REF_LENGTH) {
     return `must be at most ${PLUGIN_CUSTOM_ICON_MAX_REF_LENGTH} characters`;
   }
-  if (!ref.endsWith(".svg")) return 'must name an ".svg" file (lowercase extension)';
+  if (!ref.endsWith(".svg")) return 'must name an ".svg" file';
+  // Runtime keys are lower-cased (see makePluginCustomIconKey), so two paths
+  // differing only in case would share one key and one glyph.
+  if (ref !== ref.toLowerCase()) return "must be lowercase";
   if (/[\\?#%:]/.test(ref)) return "must not contain backslashes, URL syntax (?, #, %) or colons";
   for (let i = 0; i < ref.length; i++) {
     if (ref.charCodeAt(i) < 0x20 || ref.charCodeAt(i) === 0x7f) {

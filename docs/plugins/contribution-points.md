@@ -186,10 +186,10 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 
 `shared/config/pluginIconIds.ts` is authoritative — run `daintree-plugin validate` to check a manifest against the set your installed host actually ships. Panel `iconId` also accepts a built-in agent ID (e.g. `claude`) to render that agent's brand mark.
 
-<a id="custom-icons"></a>**Custom icons** — when no generic ID fits, `iconId` on a panel, toolbar button or process tool can point at an SVG file in your plugin instead: a path starting with `./`, relative to `plugin.json`, ending in `.svg`, at most 64 characters (`"iconId": "./icons/flutter.svg"`). It renders on every surface the generic IDs do, including the terminal tab of a detected process tool.
+<a id="custom-icons"></a>**Custom icons** — when no generic ID fits, `iconId` on a panel, toolbar button or process tool can point at an SVG file in your plugin instead: a lowercase path starting with `./`, relative to `plugin.json`, ending in `.svg`, at most 64 characters (`"iconId": "./icons/flutter.svg"`). It renders on every surface the generic IDs do, including the terminal tab of a detected process tool.
 
 - **Draw it monochrome.** The host paints the icon as a mask in the surrounding text colour, so it follows the theme like the built-in glyphs do. Only the shape's opacity counts — fills and stroke colours are ignored, and a multi-colour logo flattens to its silhouette.
-- **Size it like a 24×24 glyph.** Give the `<svg>` root a `viewBox` (for example `0 0 24 24`); the host scales it into the same box as the built-in icons.
+- **Size it like a 24×24 glyph.** Give the `<svg>` root `xmlns="http://www.w3.org/2000/svg"` and a `viewBox` (for example `0 0 24 24`); the host scales it into the same box as the built-in icons. The file has to be well-formed XML with a single `<svg>` root and at least one shape.
 - **Keep it static and self-contained.** At most 64 KB of UTF-8. No scripts, event handlers, `foreignObject`, animation, external or `data:` references, DOCTYPE or entity declarations. A file that needs anything removed is refused rather than silently cleaned.
 - **It has to live inside the plugin.** Paths with `..`, backslashes, URL syntax, or a symlink that resolves outside the plugin directory are refused, and `daintree-plugin package` fails if the file wouldn't make it into the archive.
 

@@ -244,7 +244,10 @@ import {
   registerPluginProcessTools,
   unregisterPluginProcessTools,
 } from "../../shared/config/pluginProcessToolRegistry.js";
-import { makePluginCustomIconKey } from "../../shared/config/pluginCustomIcon.js";
+import {
+  makePluginCustomIconKey,
+  type PluginCustomIconAsset,
+} from "../../shared/config/pluginCustomIcon.js";
 import {
   registerPluginCustomIcons,
   unregisterPluginCustomIcons,
@@ -2121,20 +2124,14 @@ export class PluginService {
       }
     }
 
-    // Scope the contribution registries to this plugin's project BEFORE a
-    // single contribution is registered. The registries are module-level
-    // singletons filtered at read/broadcast time by owning plugin id, so a
-    // contribution registered while the index says "global" is broadcast to
-    // every project until the next mutation corrects it. `"global"` is the
-    // explicit no-op form for the unbound roots.
-    setPluginContributionScope(pluginId, binding.projectId ?? "global");
-
     // Custom SVG icons (#13143) are read before any contribution registers so
     // each `iconId: "./icons/x.svg"` can be rewritten to its runtime key. A
     // reference that fails to load keeps its authored value, which the
     // renderer treats as an unknown id and draws the fallback glyph for — the
-    // plugin itself still loads.
-    let customIconRefs = new Map<string, string>();
+    // plugin itself still loads. The assets are only published once the plugin
+    // commits below, so a load that fails part-way leaves none behind.
+    let customIconAssets: PluginCustomIconAsset[] = [];
+    const customIconKeys = new Map<string, string>();
     try {
       const icons = await loadPluginCustomIcons(pluginId, pluginDir, manifest.contributes);
       for (const issue of icons.issues) {
@@ -2142,26 +2139,34 @@ export class PluginService {
           `[PluginService] Plugin "${manifest.name}": ${issue.path} ${issue.message} — rendering the fallback icon`
         );
       }
-      customIconRefs = new Map(
-        [...icons.loaded.keys()].map((ref) => [ref, makePluginCustomIconKey(pluginId, ref)])
-      );
-      registerPluginCustomIcons(
-        pluginId,
-        [...icons.loaded].map(([ref, svg]) => ({
-          key: makePluginCustomIconKey(pluginId, ref),
+      for (const [ref, svg] of icons.loaded) {
+        const key = makePluginCustomIconKey(pluginId, ref);
+        customIconKeys.set(ref, key);
+        customIconAssets.push({
+          key,
           pluginId,
           pluginName: manifest.displayName ?? manifest.name,
           svg,
-        }))
-      );
-      if (icons.loaded.size > 0) this.broadcaster.schedulePluginIconsBroadcast();
+        });
+      }
     } catch (err) {
       console.warn(
         `[PluginService] Plugin "${manifest.name}": failed to load custom icons — rendering fallbacks`,
         err
       );
     }
-    const resolveIconId = (iconId: string): string => customIconRefs.get(iconId) ?? iconId;
+    // The read above suspends; a service disposed meanwhile has already swept
+    // its plugins and must not gain this one.
+    if (this.disposed) return null;
+    const resolveIconId = (iconId: string): string => customIconKeys.get(iconId) ?? iconId;
+
+    // Scope the contribution registries to this plugin's project BEFORE a
+    // single contribution is registered. The registries are module-level
+    // singletons filtered at read/broadcast time by owning plugin id, so a
+    // contribution registered while the index says "global" is broadcast to
+    // every project until the next mutation corrects it. `"global"` is the
+    // explicit no-op form for the unbound roots.
+    setPluginContributionScope(pluginId, binding.projectId ?? "global");
 
     // Contributed `actionId`s are authored in the plugin's own manifest
     // namespace (the schema enforces exactly that), but a project plugin's
@@ -2298,6 +2303,10 @@ export class PluginService {
     // authority is resolvable the instant the plugin is addressable.
     const authority = this.mintPluginAuthority(pluginId, plugin.dir);
     this.plugins.set(pluginId, plugin);
+    if (customIconAssets.length > 0) {
+      registerPluginCustomIcons(pluginId, customIconAssets);
+      this.broadcaster.schedulePluginIconsBroadcast();
+    }
 
     // The host's read-only database endpoint, bound with the plugin rather than
     // at activation: agents read the data without the plugin's code running.
