@@ -1364,9 +1364,43 @@ function FileDiff({
   // Both of these change the rendered row set, so the effect above issues the
   // `onToggleCollapse` notification — notifying here too would double-fire, and
   // would also fire when an expansion failed and changed nothing.
+  // Expanding re-keys the hunk it grew (its start lines move) and can merge it
+  // with its neighbour, so the header whose button was pressed unmounts and
+  // focus would drop to the body. The hunk is remembered by an old-side line
+  // it holds, and the keyboard handed to the header of whichever hunk holds
+  // that line afterwards.
+  const pendingHeaderLineRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const line = pendingHeaderLineRef.current;
+    if (line === null) return;
+    pendingHeaderLineRef.current = null;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    const region = regionRef.current ?? nativeScrollerRef.current;
+    if (!region) return;
+    let index = visibleHunks.findIndex(
+      (hunk) => hunk.oldStart <= line && line < hunk.oldStart + Math.max(hunk.oldLines, 1)
+    );
+    if (index === -1) index = visibleHunks.findIndex((hunk) => hunk.oldStart >= line);
+    const headers = region.querySelectorAll<HTMLElement>(".diff-hunk-header-inner");
+    const header = index === -1 ? headers[headers.length - 1] : headers[index];
+    const target = header?.querySelector<HTMLElement>("button") ?? region;
+    target.focus({ preventScroll: true });
+  }, [visibleHunks]);
+
   const handleExpandContext = useCallback(
     (start: number, end: number) => {
       if (!oldSource) return;
+      const region = regionRef.current ?? nativeScrollerRef.current;
+      const active = document.activeElement;
+      if (region && active && region.contains(active)) {
+        const headers = Array.from(region.querySelectorAll(".diff-hunk-header-inner"));
+        const index = headers.findIndex((header) => header.contains(active));
+        // A header past the last hunk is the trailing expander: its gap ends
+        // the file, so the last hunk is the one it grows.
+        const hunk = index === -1 ? undefined : (visibleHunks[index] ?? visibleHunks.at(-1));
+        pendingHeaderLineRef.current = hunk ? hunk.oldStart : null;
+      }
       setHunks((prev) => {
         try {
           return expandFromRawCode(prev, oldSource, start, end);
@@ -1375,7 +1409,7 @@ function FileDiff({
         }
       });
     },
-    [oldSource]
+    [oldSource, visibleHunks]
   );
 
   const handleShowMoreHunks = () => {

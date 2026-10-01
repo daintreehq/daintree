@@ -86,10 +86,23 @@ export type EditorThemePolarity = "dark" | "light";
  * theme CSS vars in `daintreeThemeSettings`, which is the render surface
  * (surface-canvas) the syntax roles are validated against.
  */
+/**
+ * The selection a polarity paints. The terminal's selection is tuned for the
+ * terminal's own canvas, which stays dark in most light themes: on a light
+ * editor canvas it lands as a dark slab under dark syntax ink (svalbard's
+ * `#28394E` behind brown property names reads at about 1.7:1). A light editor
+ * takes the soft accent wash the app's own text selection reads as instead,
+ * which keeps every syntax role on it legible.
+ */
+function selectionFor(polarity: EditorThemePolarity): string {
+  return polarity === "light" ? "var(--theme-accent-soft)" : "var(--theme-terminal-selection)";
+}
+
 export function createDaintreeEditorTheme(polarity: EditorThemePolarity) {
+  const selection = selectionFor(polarity);
   return createTheme({
     theme: polarity,
-    settings: daintreeThemeSettings,
+    settings: { ...daintreeThemeSettings, selection, selectionMatch: selection },
     styles: daintreeThemeStyles,
   });
 }
