@@ -1,11 +1,16 @@
 import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewShims";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import type { Project } from "@shared/types";
+import { COMMITS_FIXTURES, listCommitsFrom, listPushCommitsFrom } from "./localCommitsFixtures";
+
+// `?name=` lets a capture vary the project pill's width, which is what a
+// width-proportional press effect would scale with.
+const previewName = new URLSearchParams(window.location.search).get("name");
 
 export const PREVIEW_PROJECT: Project = {
   id: "proj-daintree",
   path: "/Users/greg/Projects/daintree",
-  name: "Daintree",
+  name: previewName || "Daintree",
   emoji: "\u{1F333}",
   lastOpened: 1_764_000_000_000,
 };
@@ -40,6 +45,22 @@ installPreviewShims({
     getCurrent: async () => PREVIEW_PROJECT,
     onSwitch: () => () => {},
   }),
+  // Opening the switcher loads the scratch list; `undefined` from the inert
+  // shim crashes its row builder and takes the page down with it.
+  scratch: withFallback({
+    getAll: async () => [],
+    getCurrent: async () => null,
+    onUpdated: () => () => {},
+    onRemoved: () => () => {},
+    onSwitch: () => () => {},
+  }),
+  // The commits pill opens a list of the branch's history.
+  git: withFallback({
+    listCommits: listCommitsFrom(COMMITS_FIXTURES.few!),
+    listPushCommits: listPushCommitsFrom(COMMITS_FIXTURES.few!),
+  }),
+  // The copy-context menu reads its recents on open.
+  copyTreeHistory: withFallback({ getRecords: async () => [] }),
   // The assistant button reads the MCP runtime snapshot on render; the inert
   // shim would hand it `undefined` and take the whole strip down with it.
   mcpServer: withFallback({
