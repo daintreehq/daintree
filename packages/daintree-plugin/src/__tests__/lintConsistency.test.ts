@@ -50,6 +50,10 @@ const CLASS_CASES: Record<string, [string, string]> = {
     `<div className={cn("grid grid-cols-1", on && "md:grid-cols-3 max-sm:hidden")} />`,
     `<div className="@container"><div className="grid-cols-1 @md:grid-cols-3 hover:bg-overlay-soft" /></div>`,
   ],
+  "hand-rolled-drawer": [
+    `<aside className={cn("absolute inset-y-0 right-0 w-80", !open && "translate-x-full")} />`,
+    `<span className="translate-x-1 -translate-y-1/2" />`,
+  ],
 };
 
 describe("class-string rules", () => {
@@ -144,6 +148,13 @@ describe("element rules", () => {
     expect(findings.map((f) => f.message)).toEqual([
       expect.stringContaining("`Checkbox`"),
       expect.stringContaining("`Input`"),
+    ]);
+  });
+
+  it("points a password field at SecretInput", async () => {
+    const findings = await lintFor("raw-form-control", view(`<input type="password" />`));
+    expect(findings.map((f) => f.message)).toEqual([
+      expect.stringContaining('type="password">; prefer `SecretInput`'),
     ]);
   });
 

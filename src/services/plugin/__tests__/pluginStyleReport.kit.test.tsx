@@ -169,6 +169,49 @@ describe("getPluginStyleReportForRoots with kit markup", () => {
     }
   });
 
+  it("reports nothing for the text-input kit's own markup", async () => {
+    const { container } = render(
+      createElement(
+        TooltipProvider,
+        null,
+        createElement(
+          "div",
+          { [PLUGIN_STYLE_ROOT_ATTRIBUTE]: "" },
+          createElement(kit.Composer, {
+            "aria-label": "Prompt",
+            defaultValue: "Draft",
+            attachments: [{ id: "a", name: "schema.json", detail: "4 KB" }],
+            onRemoveAttachment: () => {},
+            onAttach: () => {},
+            maxLength: 5,
+          }),
+          createElement(kit.InlineEdit, { "aria-label": "Name", value: "Req", onCommit: () => {} }),
+          createElement(kit.KeyValueEditor, {
+            "aria-label": "Headers",
+            defaultValue: [
+              { key: "A", value: "1", secret: true },
+              { key: "A", value: "2" },
+            ],
+          }),
+          createElement(kit.ListEditor, { "aria-label": "Hosts", defaultValue: ["x"] }),
+          createElement(kit.SecretInput, {
+            "aria-label": "Token",
+            stored: true,
+            onClear: () => {},
+          }),
+          createElement(kit.ShortcutRecorder, { defaultValue: "Cmd+K", checkHostConflicts: false })
+        )
+      )
+    );
+    const root = container.querySelector(`[${PLUGIN_STYLE_ROOT_ATTRIBUTE}]`);
+    if (!root) throw new Error("no plugin root");
+    await vi.waitFor(() => {
+      if (!root.querySelector("textarea")) throw new Error("kit not rendered");
+    });
+    const report = await getPluginStyleReportForRoots([root]);
+    expect(report?.notGenerated).toEqual([]);
+  });
+
   it("re-reads a constructed sheet replaced in place with the same rule count", async () => {
     const sheet = new CSSStyleSheet();
     sheet.replaceSync(".replaced-host-class { color: red; }");

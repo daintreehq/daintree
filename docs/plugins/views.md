@@ -26,7 +26,7 @@ The user can reload the panel too, from Reload panel in its menus and dialog hea
 
 ## A settings section
 
-A view with `location: "settings"` is your plugin's custom settings section, for what the generated [settings fields](./contribution-points.md#settings-schema--shipped) can't express — a sign-in, a list editor, a connection test. Declare at most one, with an `id` no panel uses:
+A view with `location: "settings"` is your plugin's custom settings section, for what the generated [settings fields](./contribution-points.md#settings-schema--shipped) can't express — a sign-in, a list or a table of pairs (the kit's `ListEditor` and `KeyValueEditor`), a connection test. Declare at most one, with an `id` no panel uses:
 
 ```json
 { "id": "connection", "componentPath": "dist/settings.js", "location": "settings" }
@@ -74,7 +74,7 @@ host.registerHandler("saveToken", async (_ctx, token) => {
 const { connected } = await window.electron.plugin.invoke(pluginId, "connection");
 ```
 
-Store what the section edits with your worker: credentials as a declared `type: "secret"` setting (`host.settings.set`), everything else in `host.storage` or a `host.db` database (declare it `location: "local"` to keep it on this machine and out of the repository). Never put a credential in `host.storage` or a database.
+Store what the section edits with your worker: credentials as a declared `type: "secret"` setting (`host.settings.set`), everything else in `host.storage` or a `host.db` database (declare it `location: "local"` to keep it on this machine and out of the repository). Never put a credential in `host.storage` or a database. In the section, a kit `SecretInput` with `stored` shows that one is saved, with Replace and Clear, without the view ever holding it.
 
 ## Styling
 
@@ -320,6 +320,7 @@ export default function Notes({ pluginId, disposeSignal }) {
 | Pane chrome | `PaneHeader`, `Toolbar`, `ToolbarButton`, `Tabs` |
 | Navigation | `NavList` (an app's left rail), `Breadcrumbs`, `Stepper` (a wizard's progress), `CommandPalette` (a quick switcher or "jump to…") |
 | Layout | `Card` (header, body and footer; clickable with `onClick`), `Divider`, `SectionLabel`, `ResizableSplit` (two panes with a draggable divider), `Accordion`, `Disclosure`, `DescriptionList` (a record's label and value rows) |
+| Panes | `MasterDetail` (a list and its record, one pane when narrow), `SplitGroup` (three or more resizable, collapsible panes), `Inspector` with `InspectorSection` and `PropertyRow` (a compact property panel), `Drawer` and `DrawerToggle` (a panel that slides in within the pane), `GroupedVirtualList` (sticky group headers with counts), `BulkActionBar`, `LoadMoreFooter`, `TaskList` (a queue of jobs), `RefreshOverlay` and `StaleIndicator` (refreshing and old data) |
 | Drag and drop | `SortableList` (a list reordered by pointer or keyboard), `Kanban` (columns of cards moved between and within columns, with counts and WIP limits), and `DragDropProvider` with `useDraggable` and `useDroppable` for anything else |
 | States and status | `PaneState` (a whole pane's `loading`, `empty` or `error`), `EmptyState`, `Callout` (an inline message; `severity="error"` with a Retry `action` is the error banner, `variant="strip"` the pane-wide band), `Badge`, `Spinner`, `SpinningIcon`, `ProgressBar`, `Skeleton`, `SkeletonBone`, `SkeletonText`, `SkeletonHint`, `SeverityIcon` |
 | Overlays | `Dialog`, `ConfirmDialog` (including the destructive typed-name gate), `ConfirmPopover` (an inline confirm on its trigger), `Sheet` (a record's detail or edit form against the window's edge), `Popover`, `PopoverSearchField`, `EmojiPicker`, `Tooltip`, `TruncatedTooltip` |
