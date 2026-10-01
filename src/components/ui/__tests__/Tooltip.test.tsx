@@ -688,26 +688,34 @@ describe("Tooltip — a press on its trigger dismisses it without the exit fade"
   const contentTokens = () =>
     String(contentSpy.mock.calls.at(-1)?.[0]?.className ?? "").split(/\s+/);
   const hasExit = () => exitTokens.some((t) => contentTokens().includes(t));
-  const lastOnOpenChange = () => rootSpy.mock.calls.at(-1)![0].onOpenChange!;
+  const setOpen = (open: boolean) => rootSpy.mock.calls.at(-1)![0].onOpenChange!(open);
 
-  function renderTooltip() {
+  function renderTooltip(onPointerDown?: React.PointerEventHandler<HTMLButtonElement>) {
     return render(
       <Tooltip>
-        <TooltipTrigger>trigger</TooltipTrigger>
+        <TooltipTrigger onPointerDown={onPointerDown}>trigger</TooltipTrigger>
         <TooltipContent>caption</TooltipContent>
       </Tooltip>
     );
   }
 
-  it("drops the exit animation once the trigger is pressed, so the caption cannot cover what the press opened", () => {
+  // Radix closes a tooltip from inside its trigger's pointerdown, so the press
+  // and the close land in one batch.
+  function pressAndClose(trigger: HTMLElement) {
+    act(() => {
+      fireEvent.pointerDown(trigger);
+      setOpen(false);
+    });
+  }
+
+  it("drops the exit animation when a press closes it, so the caption cannot cover what the press opened", () => {
     expect(exitTokens.length).toBeGreaterThan(0);
     const { getByText } = renderTooltip();
-    act(() => lastOnOpenChange()(true));
+    act(() => setOpen(true));
     expect(hasExit()).toBe(true);
 
-    fireEvent.pointerDown(getByText("trigger"));
+    pressAndClose(getByText("trigger"));
     expect(hasExit()).toBe(false);
-    // The entrance is untouched.
     for (const token of TOOLTIP_PRESS_DISMISSED_MOTION_CLASS.split(" ")) {
       expect(contentTokens()).toContain(token);
     }
@@ -715,10 +723,42 @@ describe("Tooltip — a press on its trigger dismisses it without the exit fade"
 
   it("restores the exit fade on the next open, so a hover-out still eases away", () => {
     const { getByText } = renderTooltip();
-    fireEvent.pointerDown(getByText("trigger"));
-    expect(hasExit()).toBe(false);
-    act(() => lastOnOpenChange()(false));
-    act(() => lastOnOpenChange()(true));
+    act(() => setOpen(true));
+    pressAndClose(getByText("trigger"));
+    act(() => setOpen(true));
+    expect(hasExit()).toBe(true);
+    act(() => setOpen(false));
+    expect(hasExit()).toBe(true);
+  });
+
+  it("keeps the fade when the press leaves the caption up", () => {
+    // An owner that holds its caption open through a press (a validation hint)
+    // has not dismissed it; its later close must still fade.
+    const { getByText } = renderTooltip();
+    act(() => setOpen(true));
+    act(() => {
+      fireEvent.pointerDown(getByText("trigger"));
+    });
+    act(() => setOpen(false));
+    expect(hasExit()).toBe(true);
+  });
+
+  it("keeps the fade when the owner cancels the press", () => {
+    const { getByText } = renderTooltip((event) => event.preventDefault());
+    act(() => setOpen(true));
+    pressAndClose(getByText("trigger"));
+    expect(hasExit()).toBe(true);
+  });
+
+  it("ignores a press while the caption is hidden", () => {
+    // Otherwise a click long before would strip the fade from a later,
+    // owner-driven caption (a completion notice closing on its timer).
+    const { getByText } = renderTooltip();
+    act(() => {
+      fireEvent.pointerDown(getByText("trigger"));
+    });
+    act(() => setOpen(true));
+    act(() => setOpen(false));
     expect(hasExit()).toBe(true);
   });
 });
