@@ -44,6 +44,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuMeta,
   DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -1086,6 +1087,7 @@ const DROPDOWN_MENU_PARTS: KitMenuParts = {
   Label: DropdownMenuLabel,
   Separator: DropdownMenuSeparator,
   Shortcut: DropdownMenuShortcut,
+  Meta: DropdownMenuMeta,
 };
 
 function KitDropdownMenu({

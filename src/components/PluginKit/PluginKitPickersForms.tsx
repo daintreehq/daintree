@@ -47,6 +47,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuMeta,
   DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -2022,6 +2023,7 @@ const SPLIT_MENU_PARTS: KitMenuParts = {
   Label: DropdownMenuLabel,
   Separator: DropdownMenuSeparator,
   Shortcut: DropdownMenuShortcut,
+  Meta: DropdownMenuMeta,
 };
 
 const SPLIT_VARIANTS = [
