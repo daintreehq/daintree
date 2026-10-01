@@ -1,0 +1,38 @@
+/* The rich DataTable's pinned cells. A sticky cell needs a fill of its own or
+   the cells scrolling under it show through, so it paints the panel surface
+   and then repeats the row's own tint over it: the neutral list highlight on
+   a selected row, the lighter hover step otherwise (paletteRowStyles). */
+
+.kit-dt-sticky {
+  position: sticky;
+  z-index: 1;
+  background-color: var(--color-surface);
+}
+
+thead .kit-dt-sticky {
+  z-index: 3;
+  background-color: var(--color-surface-canvas);
+}
+
+tr[aria-selected="true"] > .kit-dt-sticky,
+tr[data-selected="true"] > .kit-dt-sticky {
+  background-image: linear-gradient(var(--color-overlay-highlight), var(--color-overlay-highlight));
+}
+
+tr[data-hoverable]:not([aria-selected="true"]):not([data-selected="true"]):hover > .kit-dt-sticky {
+  background-image: linear-gradient(var(--color-overlay-subtle), var(--color-overlay-subtle));
+}
+
+/* The pinned edge, only once something has scrolled under it. */
+table[data-scrolled-x] .kit-dt-sticky[data-sticky-edge] {
+  box-shadow:
+    inset -1px 0 0 var(--border-divider),
+    6px 0 6px -6px color-mix(in srgb, var(--theme-shadow-color) 30%, transparent);
+}
+
+@media (forced-colors: active) {
+  .kit-dt-sticky {
+    background-color: Canvas;
+    background-image: none;
+  }
+}

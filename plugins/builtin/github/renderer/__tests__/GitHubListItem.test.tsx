@@ -223,6 +223,17 @@ describe("GitHubListItem", () => {
     expect(screen.getByText("time:1001")).toBeTruthy();
   });
 
+  it("keeps each metadata item's separator inside it, so a dropped item takes its dot", () => {
+    const pr: PR = { ...basePR, commentCount: 3, reviewDecision: "APPROVED" };
+    const { container } = render(<GitHubListItem item={pr} type="pr" />);
+    const meta = container.querySelector("[data-forge-row-meta]")!;
+    const items = [...meta.children];
+    expect(items.length).toBeGreaterThanOrEqual(4);
+    for (const item of items) expect(item.textContent?.trimStart().startsWith("·")).toBe(true);
+    // The copy-number control sits outside the clipped line, keeping its hit area whole.
+    expect(meta.querySelector('[aria-label^="Copy number"]')).toBeNull();
+  });
+
   it("renders branch name for PRs", () => {
     render(<GitHubListItem item={basePR} type="pr" />);
     expect(screen.getByText("feature/new-thing")).toBeTruthy();

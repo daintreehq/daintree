@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { createElement } from "react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "@shared/types/plugin";
 import { primeRadix } from "@/components/ui/radix-loader";
@@ -26,11 +26,18 @@ const SEARCH_FIELD_CSS = readFileSync(
   "utf-8"
 );
 
+// The rich DataTable's own sheet, which ships in the kit chunk beside it.
+const KIT_DATA_TABLE_CSS = readFileSync(
+  path.resolve(__dirname, "../../../components/PluginKit/kitDataTable.css"),
+  "utf-8"
+);
+
 // The host's global stylesheet, reduced to the component rules the kit leans
 // on here; the full `index.css` is Tailwind source, not parseable CSS.
 function installHostStyles(): void {
   for (const css of [
     SEARCH_FIELD_CSS,
+    KIT_DATA_TABLE_CSS,
     "@layer components { .toolbar-icon-button { display: inline-flex; } .palette-row { display: flex; } }",
     ".border-divider { border-color: var(--border-divider); }",
     // index.css's gated skeleton pulse, which a loading ImageViewer draws.
@@ -75,6 +82,29 @@ function renderPluginRoot(): Element {
         }),
         createElement(kit.ColorSwatch, { color: "#2f81f7" }),
         createElement(kit.RangeSlider, { "aria-label": "Range", defaultValue: [20, 60] }),
+        createElement(kit.DataTable<{ id: string; name: string; env: string }>, {
+          "aria-label": "Deployments",
+          rows: [{ id: "a", name: "web", env: "prod" }],
+          rowKey: "id",
+          columns: [
+            { id: "name", header: "Name", width: 160, resizable: true, editable: true },
+            { id: "env", header: "Environment" },
+          ],
+          selectable: true,
+          groupBy: "env",
+          columnsMenu: true,
+          stickyFirstColumn: true,
+        }),
+        createElement(kit.TreeView, {
+          "aria-label": "Services",
+          nodes: [{ id: "a", label: "Edge", children: [{ id: "b", label: "CDN" }] }],
+          checkable: true,
+          defaultExpanded: ["a"],
+        }),
+        createElement(kit.ObjectInspector, {
+          "aria-label": "Response",
+          value: { id: "dep", ready: true, tags: ["web"] },
+        }),
         createElement("div", { className: "border-b border-divider plugin-typo-class" }),
         // Lucide's prefix on the author's own element is still checked.
         createElement("span", { className: "lucide-typo" })
@@ -209,6 +239,55 @@ describe("getPluginStyleReportForRoots with kit markup", () => {
     if (!root) throw new Error("no plugin root");
     await vi.waitFor(() => {
       if (!root.querySelector("textarea")) throw new Error("kit not rendered");
+    });
+    const report = await getPluginStyleReportForRoots([root]);
+    expect(report?.notGenerated).toEqual([]);
+  });
+
+  it("reports nothing for the native-agents kit's own markup", async () => {
+    // The agent mark, state glyph and hint card lean on these host rules.
+    const style = document.createElement("style");
+    style.textContent =
+      ".brand-mark { color: var(--brand-mark-rest); } .spinner-circle { display: block; } .animate-spin-slow { animation: none; } .surface-overlay { background: black; }";
+    document.head.appendChild(style);
+    onTestFinished(() => style.remove());
+    const { container } = render(
+      createElement(
+        TooltipProvider,
+        null,
+        createElement(
+          "div",
+          { [PLUGIN_STYLE_ROOT_ATTRIBUTE]: "" },
+          createElement(kit.AgentAvatar, { agentId: "claude", state: "waiting" }),
+          createElement(kit.AgentBadge, { agentId: "codex", state: "working" }),
+          createElement(kit.AgentStateIndicator, { state: "working", since: Date.now() - 120_000 }),
+          createElement(kit.TerminalSnapshot, {
+            text: "\u001b[32mok\u001b[0m done",
+            title: "Claude: fix auth",
+            agentId: "claude",
+            state: "waiting",
+            onClick: () => {},
+          }),
+          createElement(kit.ContextDragSource, { text: "Card body" }),
+          createElement(kit.SendToAgentButton, {
+            text: "Card body",
+            send: async () => ({ status: "cancelled" as const }),
+          }),
+          createElement(kit.ShortcutHint, { shortcut: "Cmd+K", label: "Search" }),
+          createElement(kit.KeyHints, {
+            variant: "footer",
+            hints: [
+              { shortcut: "Enter", label: "Open" },
+              { keys: ["↑↓"], label: "Move" },
+            ],
+          })
+        )
+      )
+    );
+    const root = container.querySelector(`[${PLUGIN_STYLE_ROOT_ATTRIBUTE}]`);
+    if (!root) throw new Error("no plugin root");
+    await vi.waitFor(() => {
+      if (!root.querySelector("figure, button")) throw new Error("kit not rendered");
     });
     const report = await getPluginStyleReportForRoots([root]);
     expect(report?.notGenerated).toEqual([]);

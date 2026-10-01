@@ -1,9 +1,10 @@
-import type { ComponentType, KeyboardEvent, ReactNode, SyntheticEvent } from "react";
-import type { PluginDropdownMenuEntry } from "@shared/types/plugin-sdk-react";
+import { type ComponentType, type KeyboardEvent, type ReactNode, type SyntheticEvent } from "react";
+import type { PluginActionMenuItem, PluginDropdownMenuEntry } from "@shared/types/plugin-sdk-react";
 import {
   ContextMenuCheckboxItem,
   ContextMenuItem,
   ContextMenuLabel,
+  ContextMenuMeta,
   ContextMenuRadioGroup,
   ContextMenuRadioItem,
   ContextMenuSeparator,
@@ -12,7 +13,10 @@ import {
   ContextMenuSubContent,
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
+import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import { resolvePluginKitIcon } from "./PluginKitIcons";
+import { actionMenuRowVisible, useActionMenuRow } from "./PluginKitNativeAgents";
 import { field, fn, nonEmpty, str, useKitOwnerAttributes } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
 
@@ -24,10 +28,13 @@ import { useKitOverlayZClass } from "./kitScope";
 export interface KitMenuParts {
   Item: ComponentType<{
     children?: ReactNode;
-    onSelect?: () => void;
+    onSelect?: (event: Event) => void;
     disabled?: boolean;
     destructive?: boolean;
     textValue?: string;
+    className?: string;
+    "aria-keyshortcuts"?: string;
+    "aria-label"?: string;
   }>;
   CheckboxItem: ComponentType<{
     children?: ReactNode;
@@ -46,6 +53,8 @@ export interface KitMenuParts {
   Label: ComponentType<{ children?: ReactNode }>;
   Separator: ComponentType<object>;
   Shortcut: ComponentType<{ shortcut: string | null | undefined }>;
+  /** The family's trailing metadata slot: a count, a state, why a row is unavailable. */
+  Meta?: ComponentType<{ children?: ReactNode }>;
   /**
    * The family's native submenu. Optional so a parts table without one still
    * renders every other row; a `submenu` entry then renders nothing.
@@ -71,6 +80,7 @@ export const CONTEXT_MENU_PARTS: KitMenuParts = {
   Label: ContextMenuLabel,
   Separator: ContextMenuSeparator,
   Shortcut: ContextMenuShortcut,
+  Meta: ContextMenuMeta,
 };
 
 /** Shift+F10 or the Menu key: the keyboard's right-click. */
@@ -149,6 +159,66 @@ function KitSubmenuContent({
 
 /** A submenu row with a description: the host chevron aligned to the label's line. */
 const TWO_LINE_TRIGGER_CLASS = "items-start [&>svg:last-child]:mt-px";
+
+/** An `action` entry: the action's own label, key and availability, read as the menu opens. */
+function ActionMenuRow({ parts, entry }: { parts: KitMenuParts; entry: PluginActionMenuItem }) {
+  const row = useActionMenuRow(entry);
+  if (!row) return null;
+  const Glyph = row.icon === undefined ? undefined : resolvePluginKitIcon(row.icon);
+  const refused = row.disabled;
+  // The host's unavailable row: dimmed and skipped like every disabled item,
+  // the reason in a few words where the keys would sit, and in full in the
+  // row's name, since the trailing slot is hidden from assistive tech.
+  const reason = refused && row.reason ? `${row.label}, ${lowerFirst(row.reason)}` : undefined;
+  const Meta = parts.Meta ?? FallbackMeta;
+  return (
+    <parts.Item
+      onSelect={() => row.onSelect()}
+      disabled={refused}
+      destructive={row.destructive}
+      textValue={row.label}
+      aria-label={reason}
+      aria-keyshortcuts={row.shortcut ? comboToAriaKeyshortcuts(row.shortcut, isMac()) : undefined}
+    >
+      {Glyph ? <MenuRowIcon Glyph={Glyph} top={row.description !== undefined} /> : null}
+      {row.description === undefined ? (
+        row.label
+      ) : (
+        <MenuRowText label={row.label} description={row.description} />
+      )}
+      {refused && row.meta ? (
+        row.description === undefined ? (
+          <Meta>{row.meta}</Meta>
+        ) : (
+          // Beside two lines the reason reads against the label's line, as the
+          // key column does.
+          <span className="ml-auto flex shrink-0 self-start whitespace-nowrap">
+            <Meta>{row.meta}</Meta>
+          </span>
+        )
+      ) : row.description === undefined ? (
+        <parts.Shortcut shortcut={row.shortcut} />
+      ) : (
+        <span className="ml-auto flex shrink-0 self-start">
+          <parts.Shortcut shortcut={row.shortcut} />
+        </span>
+      )}
+    </parts.Item>
+  );
+}
+
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
+/** The host's trailing metadata slot, for a parts table that brings none. */
+function FallbackMeta({ children }: { children?: ReactNode }) {
+  return (
+    <span aria-hidden="true" className="ml-auto pl-2 text-2xs text-text-secondary tabular-nums">
+      {children}
+    </span>
+  );
+}
 
 // A plugin's items can nest (or, by mistake, contain themselves); past this
 // depth a submenu renders nothing rather than recursing without end.
@@ -229,6 +299,10 @@ function renderMenuEntry(
         </parts.Sub>
       );
     }
+    case "action":
+      return actionMenuRowVisible(typed) ? (
+        <ActionMenuRow key={key} parts={parts} entry={typed} />
+      ) : null;
     case undefined:
     case "item": {
       const label = str(typed.label);

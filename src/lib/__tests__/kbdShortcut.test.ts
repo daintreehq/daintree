@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   describeChord,
+  describeKeyCap,
   parseChord,
   MODIFIER_SEARCH_MAP,
   VALID_KEY_PATTERN,
@@ -518,5 +519,29 @@ describe("describeChord", () => {
         });
       }
     }
+  });
+});
+
+describe("describeKeyCap", () => {
+  it("speaks glyph caps as key names, never as symbols", () => {
+    for (const cap of ["↑↓", "↵", "⎋", "⌘↵", "⇧", "⌦", "Alt+↵", "Ctrl+↵"]) {
+      for (const mac of [true, false]) {
+        const spoken = describeKeyCap(cap, mac);
+        expect(spoken).toMatch(/^[A-Za-z ]+$/);
+      }
+    }
+  });
+
+  it("reads word caps, ranges and joined caps as one key each", () => {
+    expect(describeKeyCap("esc", true)).toBe(describeKeyCap("⎋", true));
+    expect(describeKeyCap("1-9", true)).toMatch(/through/);
+    expect(describeKeyCap("1–9", false)).toMatch(/through/);
+    expect(describeKeyCap("Alt+↵", true)).toBe(
+      `${describeKeyCap("⌥", true)} ${describeKeyCap("↵", true)}`
+    );
+    expect(describeKeyCap("  ", true)).toBe("");
+    expect(describeKeyCap("Ctrl++", false)).toMatch(/Plus$/);
+    expect(describeKeyCap("⌘+", true)).toMatch(/Plus$/);
+    expect(describeKeyCap("Page Up", true)).toBe("Page Up");
   });
 });
