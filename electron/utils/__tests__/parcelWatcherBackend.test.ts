@@ -62,6 +62,21 @@ describe("subscribeParcelWatcher", () => {
     expect(parcelWatcherBackendOption()).toEqual(expected);
   });
 
+  it("observes a failed teardown so a fire-and-forget caller can't crash the host", async () => {
+    const failure = new Error("Unable to remove watcher: Invalid argument");
+    subscribeMock.mockResolvedValueOnce({ unsubscribe: vi.fn().mockRejectedValue(failure) });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const subscription = await subscribeParcelWatcher("/repo/.git/worktrees", vi.fn());
+
+    void subscription.unsubscribe();
+
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(failure.message))
+    );
+    await expect(subscription.unsubscribe()).rejects.toBe(failure);
+    warn.mockRestore();
+  });
+
   it("waits for native unsubscribe before beginning the next lifecycle operation", async () => {
     const firstStop = deferred<void>();
     const firstNative = { unsubscribe: vi.fn(() => firstStop.promise) };

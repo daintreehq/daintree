@@ -66,6 +66,22 @@ function enqueueLifecycle<T>(operation: () => Promise<T>): Promise<T> {
   });
 }
 
+/**
+ * Teardown is fire-and-forget at most call sites, so a rejection left unobserved
+ * surfaces as an unhandled rejection and takes the whole host process down.
+ * Removing an inotify watch whose directory is already gone fails with EINVAL,
+ * which is routine, so observe it here and still hand the rejection to callers
+ * that await the teardown.
+ */
+function observeTeardown(dir: string, teardown: Promise<void>): Promise<void> {
+  teardown.catch((error: unknown) => {
+    console.warn(
+      `[parcelWatcher] unsubscribe failed for ${dir}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  });
+  return teardown;
+}
+
 function waitForLifecycleIdle(): Promise<void> {
   if (!lifecycleBusy && lifecycleQueue.length === 0) return Promise.resolve();
   return new Promise<void>((resolve) => lifecycleIdleWaiters.add(resolve));
@@ -242,7 +258,7 @@ async function subscribeWindowsWatcher(
           watcher.close();
           unsubscribePromise = Promise.resolve();
         } catch (error) {
-          unsubscribePromise = Promise.reject(error);
+          unsubscribePromise = observeTeardown(dir, Promise.reject(error));
         }
       }
       return unsubscribePromise;
@@ -283,7 +299,10 @@ export function subscribeParcelWatcher(
       unsubscribe(): Promise<void> {
         if (!unsubscribePromise) {
           liveSubscriptions.delete(subscription);
-          unsubscribePromise = enqueueLifecycle(() => nativeSubscription.unsubscribe());
+          unsubscribePromise = observeTeardown(
+            dir,
+            enqueueLifecycle(() => nativeSubscription.unsubscribe())
+          );
         }
         return unsubscribePromise;
       },

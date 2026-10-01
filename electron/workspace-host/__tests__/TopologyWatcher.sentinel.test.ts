@@ -201,7 +201,87 @@ describe("TopologyWatcher metadata sentinel", () => {
       const finalFd = pinnedFd()!;
       watcher.stop();
       expect(pinnedFd()).toBeNull();
-      expect(() => fstatSync(finalFd)).toThrow(expect.objectContaining({ code: "EBADF" }));
+      await vi.waitFor(() =>
+        expect(() => fstatSync(finalFd)).toThrow(expect.objectContaining({ code: "EBADF" }))
+      );
+    });
+
+    it("holds the pin until the subscription's teardown settles", async () => {
+      let finishTeardown!: () => void;
+      vi.mocked(subscribeParcelWatcher).mockImplementationOnce((dir: string) => {
+        const entry = { dir, unsubscribed: false };
+        parcelSubscriptions.push(entry);
+        return Promise.resolve({
+          unsubscribe: () => {
+            entry.unsubscribed = true;
+            return new Promise<void>((resolve) => {
+              finishTeardown = resolve;
+            });
+          },
+        } as never);
+      });
+      mkdirSync(metadataDir);
+      await watcher.startWatcher();
+      await vi.waitFor(() => expect((watcher as any).subscription.value).toBeDefined());
+      const heldFd = pinnedFd()!;
+
+      rmSync(metadataDir, { recursive: true });
+      metadataWatchCallbacks[0]!("rename", "worktrees");
+      expect(parcelSubscriptions[0]!.unsubscribed).toBe(true);
+      expect(pinnedFd()).toBeNull();
+
+      // Parcel removes its inotify watch inside that teardown; freeing the inode
+      // first would make the kernel drop the watch and parcel's removal fail.
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(() => fstatSync(heldFd)).not.toThrow();
+
+      finishTeardown();
+      await vi.waitFor(() =>
+        expect(() => fstatSync(heldFd)).toThrow(expect.objectContaining({ code: "EBADF" }))
+      );
+    });
+
+    it("holds a pending subscribe's pin until it lands and is torn down", async () => {
+      let landSubscribe!: () => void;
+      let finishTeardown!: () => void;
+      vi.mocked(subscribeParcelWatcher).mockImplementationOnce((dir: string) => {
+        const entry = { dir, unsubscribed: false };
+        parcelSubscriptions.push(entry);
+        return new Promise((resolve) => {
+          landSubscribe = () =>
+            resolve({
+              unsubscribe: () => {
+                entry.unsubscribed = true;
+                return new Promise<void>((done) => {
+                  finishTeardown = done;
+                });
+              },
+            } as never);
+        });
+      });
+      mkdirSync(metadataDir);
+      await watcher.startWatcher();
+      const heldFd = pinnedFd()!;
+      const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+      try {
+        rmSync(metadataDir, { recursive: true });
+        metadataWatchCallbacks[0]!("rename", "worktrees");
+        expect(pinnedFd()).toBeNull();
+        await flush();
+        expect(() => fstatSync(heldFd)).not.toThrow();
+
+        landSubscribe();
+        await vi.waitFor(() => expect(parcelSubscriptions[0]!.unsubscribed).toBe(true));
+        await flush();
+        expect(() => fstatSync(heldFd)).not.toThrow();
+      } finally {
+        finishTeardown?.();
+      }
+
+      await vi.waitFor(() =>
+        expect(() => fstatSync(heldFd)).toThrow(expect.objectContaining({ code: "EBADF" }))
+      );
     });
 
     it("keeps the pin when an unchanged-root notice lands while the subscribe is pending", async () => {
@@ -233,7 +313,9 @@ describe("TopologyWatcher metadata sentinel", () => {
       await vi.waitFor(() => expect(parcelSubscriptions[0]!.unsubscribed).toBe(true));
       expect((watcher as any).subscription.value).toBeUndefined();
       expect(pinnedFd()).toBeNull();
-      expect(() => fstatSync(heldFd)).toThrow(expect.objectContaining({ code: "EBADF" }));
+      await vi.waitFor(() =>
+        expect(() => fstatSync(heldFd)).toThrow(expect.objectContaining({ code: "EBADF" }))
+      );
     });
 
     it("releases the pin when the subscribe is rejected", async () => {
@@ -247,7 +329,9 @@ describe("TopologyWatcher metadata sentinel", () => {
       pending.reject(new Error("inotify watch limit reached"));
 
       await vi.waitFor(() => expect(pinnedFd()).toBeNull());
-      expect(() => fstatSync(heldFd)).toThrow(expect.objectContaining({ code: "EBADF" }));
+      await vi.waitFor(() =>
+        expect(() => fstatSync(heldFd)).toThrow(expect.objectContaining({ code: "EBADF" }))
+      );
     });
   });
 

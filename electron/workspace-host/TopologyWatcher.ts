@@ -104,6 +104,12 @@ export class TopologyWatcher {
   // recreated between two sentinel callbacks can carry the old dev:ino. An
   // open fd keeps the subscribed root's inode allocated while we compare.
   private metadataRootFd: number | null = null;
+  // The last subscription teardown and the latest subscribe attempt, which
+  // settles only after a superseded subscription has been torn down. A pin
+  // outlives both: freeing the inode first makes the kernel drop the inotify
+  // watch, and parcel's own removal of that watch then fails with EINVAL.
+  private rootTeardown: Promise<unknown> = Promise.resolve();
+  private pendingArm: Promise<unknown> = Promise.resolve();
   // No constructor `timeout` here: this queue's task wraps runReconcile in
   // withTimeout itself (and always resolves via its own try/catch/finally),
   // so it can never pin the single slot. A p-queue constructor timeout would
@@ -210,11 +216,14 @@ export class TopologyWatcher {
     if (this.metadataRootFd === null) return;
     const fd = this.metadataRootFd;
     this.metadataRootFd = null;
-    try {
-      closeSync(fd);
-    } catch {
-      // Already closed — nothing left to release.
-    }
+    const close = (): void => {
+      try {
+        closeSync(fd);
+      } catch {
+        // Already closed — nothing left to release.
+      }
+    };
+    void Promise.allSettled([this.rootTeardown, this.pendingArm]).then(close);
   }
 
   // Idempotent: a second call while the timer is live is a no-op, so the two
@@ -274,7 +283,7 @@ export class TopologyWatcher {
       // Unresolvable now — events outside the lexical root stay relevant.
     }
 
-    subscribeParcelWatcher(
+    this.pendingArm = subscribeParcelWatcher(
       metadataDir,
       (err, events) => {
         if (err) {
@@ -314,18 +323,17 @@ export class TopologyWatcher {
       },
       {}
     )
-      .then((subscription) => {
-        if (generation !== this.generation) {
-          // stop() incremented the generation — discard.
-          subscription.unsubscribe();
-          return;
-        }
-        if (this.subscription.value) {
-          subscription.unsubscribe();
+      .then(async (subscription) => {
+        if (generation !== this.generation || this.subscription.value) {
+          // Superseded by a stop or restart, or a concurrent start already
+          // holds the watcher. The backend logs a failed teardown.
+          await subscription.unsubscribe().catch(() => {});
           return;
         }
         this.subscription.value = {
-          dispose: () => subscription.unsubscribe(),
+          dispose: () => {
+            this.rootTeardown = subscription.unsubscribe();
+          },
         };
       })
       .catch((err) => {
