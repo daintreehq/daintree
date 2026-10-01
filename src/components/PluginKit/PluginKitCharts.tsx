@@ -1653,7 +1653,17 @@ function KitLineChart({
       const entry = resolved[s]!;
       return { key: entry.key, color: entry.color, dash: entry.dash, stroke, fill, dots };
     });
-    return { ticks, sy, left, top, plotW, plotH, pixels, xTicks, lines };
+    return {
+      ticks,
+      sy,
+      left,
+      top,
+      plotW,
+      plotH,
+      pixels,
+      xTicks: withoutOverlaps(xTicks, left, left + plotW),
+      lines,
+    };
   }, [time, xs, values, resolved, formats, width, px, filled, smooth, formatX]);
 
   // Built from the data alone, so moving the cursor never rescans it.
