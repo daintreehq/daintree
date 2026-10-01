@@ -204,7 +204,8 @@ async function pressMetrics(page: Page) {
   const handles = await page.locator(`${STRIP} button:visible`).elementHandles();
   const rows: unknown[] = [];
   for (const handle of handles) {
-    const info = await handle.evaluate((el) => {
+    const info = await handle.evaluate((node) => {
+      const el = node as HTMLElement;
       const r = el.getBoundingClientRect();
       const toolbarId = el
         .closest("[data-toolbar-button-id]")
@@ -224,7 +225,8 @@ async function pressMetrics(page: Page) {
     });
     if (info.hidden || info.w < 8) continue;
     const read = () =>
-      handle.evaluate((el) => {
+      handle.evaluate((node) => {
+        const el = node as HTMLElement;
         const cs = getComputedStyle(el);
         const before = getComputedStyle(el, "::before");
         const r = el.getBoundingClientRect();
@@ -310,22 +312,28 @@ async function filmReveal(
       path.join(OUT_DIR, `reveal-${name}-${theme}.json`),
       JSON.stringify(timings, null, 2)
     );
-    for (const t of FRAMES) {
-      await page.evaluate((ms) => {
+    const seek = async (ms: number) => {
+      await page.evaluate((at) => {
         for (const a of document.getAnimations()) {
           a.pause();
-          a.currentTime = ms;
+          a.currentTime = at;
         }
-      }, t);
+      }, ms);
       await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => r())));
+    };
+    // One crop for every frame, measured on the settled surface, so the frames
+    // line up and a scale or slide reads as motion rather than as re-cropping.
+    await seek(FRAMES[FRAMES.length - 1]!);
+    const tBox = await trigger.boundingBox();
+    const sBox = await page.locator(surface).first().boundingBox();
+    if (!tBox || !sBox) throw new Error(`reveal-${name}-${theme}: trigger or surface has no box`);
+    const x0 = Math.max(0, Math.min(tBox.x, sBox.x) - 16);
+    const x1 = Math.min(1440, Math.max(tBox.x + tBox.width, sBox.x + sBox.width) + 16);
+    const y1 = Math.min(520, Math.max(tBox.y + tBox.height, sBox.y + sBox.height) + 16);
+    for (const t of FRAMES) {
+      await seek(t);
       const file = `reveal-${name}-${theme}-t${String(t).padStart(3, "0")}.png`;
       expected.push(file);
-      const tBox = await trigger.boundingBox();
-      const sBox = await page.locator(surface).first().boundingBox();
-      if (!tBox || !sBox) throw new Error(`${file}: trigger or surface has no box`);
-      const x0 = Math.max(0, Math.min(tBox.x, sBox.x) - 16);
-      const x1 = Math.max(tBox.x + tBox.width, sBox.x + sBox.width) + 16;
-      const y1 = Math.min(520, Math.max(tBox.y + tBox.height, sBox.y + sBox.height) + 16);
       const out = path.join(OUT_DIR, file);
       await page.screenshot({ path: out, clip: { x: x0, y: 0, width: x1 - x0, height: y1 } });
       if (!existsSync(out)) throw new Error(`${file}: screenshot did not land`);
