@@ -97,7 +97,9 @@ describe("deriveTerminalChrome", () => {
   it("labels a plugin process tool with a custom icon by its plugin, never the key (#13143)", () => {
     const key = "plugin-icon:acme.tools:./icons/acme.svg";
     try {
-      setPluginCustomIcons([{ key, pluginId: "acme.tools", pluginName: "Acme Tools", svg: "<svg/>" }]);
+      setPluginCustomIcons([
+        { key, pluginId: "acme.tools", pluginName: "Acme Tools", svg: "<svg/>" },
+      ]);
       expect(deriveTerminalChrome({ detectedProcessId: key })).toMatchObject({
         iconId: key,
         label: "Acme Tools",

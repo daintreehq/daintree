@@ -1564,11 +1564,7 @@ async function handleValidateManifest(
     return { manifestPath, origin, originSource, valid: false, pluginId, errors, warnings: [] };
   }
 
-  const iconErrors = await collectPluginIconIssues(
-    parsed.data.name,
-    dir,
-    parsed.data.contributes
-  );
+  const iconErrors = await collectPluginIconIssues(parsed.data.name, dir, parsed.data.contributes);
   return {
     manifestPath,
     origin,

@@ -815,7 +815,12 @@ describe("PluginService integration — custom SVG icons (#13143)", () => {
         panels: [{ id: "dash", name: "Dash", iconId: "./icons/acme.svg", color: "#336699" }],
         toolbarButtons: [
           { id: "btn", label: "Go", iconId: "./icons/acme.svg", actionId: "acme.icon-plugin.go" },
-          { id: "broken", label: "Nope", iconId: "./icons/missing.svg", actionId: "acme.icon-plugin.go" },
+          {
+            id: "broken",
+            label: "Nope",
+            iconId: "./icons/missing.svg",
+            actionId: "acme.icon-plugin.go",
+          },
         ],
         processTools: [{ command: "acme-cli", iconId: "./icons/acme.svg" }],
       },

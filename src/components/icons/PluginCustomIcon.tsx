@@ -21,14 +21,19 @@ const components = new Map<string, Map<PluginIconComponent, PluginIconComponent>
  * Draws `fallback` while the asset is missing — before the first snapshot
  * arrives, or after its plugin unloads.
  */
-function createPluginCustomIcon(
-  key: string,
-  Fallback: PluginIconComponent
-): PluginIconComponent {
+function createPluginCustomIcon(key: string, Fallback: PluginIconComponent): PluginIconComponent {
   function PluginCustomIcon(props: PluginIconProps) {
     const asset = useSyncExternalStore(subscribePluginCustomIcons, () => getPluginCustomIcon(key));
     if (!asset) return <Fallback {...props} />;
-    const { className, size = 24, width, height, style, "aria-hidden": ariaHidden, ...rest } = props;
+    const {
+      className,
+      size = 24,
+      width,
+      height,
+      style,
+      "aria-hidden": ariaHidden,
+      ...rest
+    } = props;
     const maskStyle: CSSProperties = {
       backgroundColor: "currentColor",
       // Forced-colors mode repaints backgrounds with the system Canvas colour,

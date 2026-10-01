@@ -2130,7 +2130,7 @@ export class PluginService {
     // renderer treats as an unknown id and draws the fallback glyph for — the
     // plugin itself still loads. The assets are only published once the plugin
     // commits below, so a load that fails part-way leaves none behind.
-    let customIconAssets: PluginCustomIconAsset[] = [];
+    const customIconAssets: PluginCustomIconAsset[] = [];
     const customIconKeys = new Map<string, string>();
     try {
       const icons = await loadPluginCustomIcons(pluginId, pluginDir, manifest.contributes);

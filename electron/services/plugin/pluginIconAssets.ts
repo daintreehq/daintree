@@ -118,7 +118,8 @@ function checkSvgStructure(text: string): string | null {
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "")
     .trim();
-  if (/<!--|<!\[CDATA\[/.test(body)) return "is not well-formed XML (unterminated comment or CDATA)";
+  if (/<!--|<!\[CDATA\[/.test(body))
+    return "is not well-formed XML (unterminated comment or CDATA)";
 
   const root = new RegExp(`^<svg${ATTRIBUTES.source}\\s*/?>`, "i").exec(body)?.[0];
   if (!root) return "must have an <svg> root element";

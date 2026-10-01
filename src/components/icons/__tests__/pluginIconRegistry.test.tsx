@@ -170,9 +170,9 @@ describe("pluginIconRegistry", () => {
     it("lets a caller colour override flow into the mask through currentColor", () => {
       setPluginCustomIcons([asset]);
       const Icon = resolvePluginIcon(KEY);
-      const icon = render(<Icon style={{ color: "rgb(1, 2, 3)" }} />).container.querySelector<
-        SVGSVGElement
-      >("[data-plugin-icon]")!;
+      const icon = render(
+        <Icon style={{ color: "rgb(1, 2, 3)" }} />
+      ).container.querySelector<SVGSVGElement>("[data-plugin-icon]")!;
       expect(icon.style.color).toBe("rgb(1, 2, 3)");
       expect(icon.style.backgroundColor).toBe("currentcolor");
     });

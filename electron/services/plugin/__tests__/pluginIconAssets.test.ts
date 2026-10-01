@@ -127,12 +127,12 @@ describe("loadPluginCustomIcon", () => {
       '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h1"/></svg>',
       /viewBox/,
     ],
-    ["nothing drawable", '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"/>', /drawable/],
     [
-      "a script",
-      GOOD_SVG.replace("</svg>", "<script>alert(1)</script></svg>"),
-      /unsafe content/,
+      "nothing drawable",
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"/>',
+      /drawable/,
     ],
+    ["a script", GOOD_SVG.replace("</svg>", "<script>alert(1)</script></svg>"), /unsafe content/],
     [
       "an unclosed root",
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h1"/>',
@@ -148,21 +148,13 @@ describe("loadPluginCustomIcon", () => {
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g><path d="M0 0h1"/></svg></g>',
       /unexpected <\/svg>/,
     ],
-    [
-      "a second root",
-      `${GOOD_SVG}<svg xmlns="http://www.w3.org/2000/svg"/>`,
-      /single <svg> root/,
-    ],
+    ["a second root", `${GOOD_SVG}<svg xmlns="http://www.w3.org/2000/svg"/>`, /single <svg> root/],
     [
       "an unquoted attribute",
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d=M0/></svg>',
       /well-formed/,
     ],
-    [
-      "a missing SVG namespace",
-      '<svg viewBox="0 0 24 24"><path d="M0 0h1"/></svg>',
-      /xmlns/,
-    ],
+    ["a missing SVG namespace", '<svg viewBox="0 0 24 24"><path d="M0 0h1"/></svg>', /xmlns/],
     [
       "drawables only inside a comment",
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><!-- <path d="M0 0h1"/> --></svg>',
