@@ -61,6 +61,17 @@ export function safeFormat<T>(
   return typeof out === "string" ? out : fallback(value);
 }
 
+/** What a failure says, for a person: its message, or `fallback`. */
+export function faultMessage(error: unknown, fallback: string): string {
+  try {
+    if (error instanceof Error && error.message.trim() !== "") return error.message.trim();
+  } catch {
+    // A hostile error object; fall through.
+  }
+  if (typeof error === "string" && error.trim() !== "") return error.trim();
+  return fallback;
+}
+
 export function isThenable(value: unknown): value is PromiseLike<unknown> {
   try {
     return (

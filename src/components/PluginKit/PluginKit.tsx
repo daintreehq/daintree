@@ -128,6 +128,8 @@ import { pluginKitTextInputs } from "./PluginKitTextInputs";
 import { pluginKitRichDisplay } from "./PluginKitRichDisplay";
 import { pluginKitNativeAgents } from "./PluginKitNativeAgents";
 import { pluginKitGit } from "./PluginKitGit";
+import { pluginKitWorkflowsRecords } from "./PluginKitWorkflows";
+import { pluginKitAgentWork } from "./PluginKitAgentWork";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { invalidProp } from "./kitField";
 
@@ -1292,6 +1294,8 @@ export const pluginKitFamilies = [
   pluginKitRichDisplay,
   pluginKitNativeAgents,
   pluginKitGit,
+  pluginKitWorkflowsRecords,
+  pluginKitAgentWork,
   pluginKitDataTables,
 ];
 
@@ -1325,6 +1329,8 @@ export const pluginKit = {
   ...pluginKitRichDisplay,
   ...pluginKitNativeAgents,
   ...pluginKitGit,
+  ...pluginKitWorkflowsRecords,
+  ...pluginKitAgentWork,
   // Last: its DataTable wraps the basic one from pluginKitLists.
   ...pluginKitDataTables,
 };

@@ -435,7 +435,7 @@ interface PluginCalloutProps extends Omit<PluginDomProps<HTMLDivElement>, "title
      * across the top of a pane or popover, Daintree's pane banner: `title` is its
      * headline and `children` one line under it. A strip never stands green:
      * `success` draws as a neutral strip with the check glyph. A strip forwards
-     * `role`, `aria-live` and `data-testid` only.
+     * `id`, `role`, `aria-*` and `data-*`, but not handlers, `style` or `ref`.
      */
     variant?: "box" | "strip";
     /** A domain glyph in place of the info mark, for `neutral` only. */
@@ -3506,6 +3506,8 @@ interface PluginComposerAttachment {
     detail?: string;
     /** Defaults to `file`. */
     icon?: PluginIconSource;
+    /** Defaults to `ready`. See `PluginAttachmentStatus`. */
+    status?: PluginAttachmentStatus;
 }
 /**
  * Props of `Composer`: the agent composer. A `MentionTextarea` in the host
@@ -5725,6 +5727,389 @@ interface PluginTableOfContentsProps extends PluginRootAttributes {
     "aria-label"?: string;
     className?: string;
 }
+/**
+ * What an attachment is doing. `pending` is on its way (uploading, being
+ * processed): it shows a spinner and cannot be opened. `failed` did not make
+ * it: an error glyph, and `detail` should say why.
+ */
+type PluginAttachmentStatus = "ready" | "pending" | "failed";
+/** One attachment of an `AttachmentList`: the same shape the `Composer` takes. */
+type PluginAttachment = PluginComposerAttachment;
+/**
+ * Props of `AttachmentChip`: one attached file or reference, as the
+ * `Composer` draws its own. `onOpen` makes the name a button; `onRemove` adds
+ * an X that takes it off the draft (not a delete of the thing itself).
+ */
+interface PluginAttachmentChipProps extends PluginRootAttributes {
+    name: string;
+    /** A quiet detail after the name ("12 KB", "L10–24", the failure's cause). */
+    detail?: string;
+    /** Defaults to `file`. */
+    icon?: PluginIconSource;
+    status?: PluginAttachmentStatus;
+    onOpen?: () => void;
+    onRemove?: () => void;
+    /** Names the X. Defaults to "Remove {name}". */
+    removeLabel?: string;
+    disabled?: boolean;
+    className?: string;
+}
+/**
+ * Props of `AttachmentList`: attachments as wrapping chips, or as rows with
+ * the detail to the right. Removing one moves focus to its neighbour, so a
+ * keyboard user keeps their place.
+ */
+interface PluginAttachmentListProps extends PluginRootAttributes {
+    attachments: readonly PluginAttachment[];
+    /** `chips` (the default) wraps them in a line; `rows` stacks them as a list. */
+    layout?: "chips" | "rows";
+    onOpen?: (id: string) => void;
+    onRemove?: (id: string) => void;
+    /** Shown when there are none. Omitted, an empty list draws nothing. */
+    empty?: ReactNode;
+    disabled?: boolean;
+    /** Names the list. Defaults to "Attachments". */
+    "aria-label"?: string;
+    className?: string;
+}
+/**
+ * Whether a referenced record could be read. `loading` is still resolving;
+ * `missing` was deleted or never existed; `forbidden` exists but this user
+ * cannot see it. A reference that is not `available` keeps its place: it is
+ * shown as what it is rather than dropped.
+ */
+type PluginEntityAvailability = "available" | "loading" | "missing" | "forbidden";
+/**
+ * Props of `EntityChip`: a reference to one of your records (a customer, a
+ * ticket, a document) drawn the way the kit draws branches and issues: a
+ * glyph or avatar, the label, and an opening action. `preview` adds a card on
+ * hover and focus.
+ */
+interface PluginEntityChipProps extends PluginRootAttributes {
+    label: string;
+    /** The kind of record, read before the label ("Customer"). */
+    type?: string;
+    icon?: PluginIconSource;
+    /** A picture in place of `icon`, for a person or an account. */
+    avatar?: {
+        src?: string;
+        name: string;
+    };
+    /** Defaults to `available`. */
+    availability?: PluginEntityAvailability;
+    onOpen?: () => void;
+    /** The card shown on hover and focus. Not shown unless the record is `available`. */
+    preview?: ReactNode;
+    className?: string;
+}
+/** What `RepeaterField` hands `renderItem` for one item. */
+interface PluginRepeaterItemContext<T = unknown> {
+    index: number;
+    /** The item's stable key, from `getKey`. */
+    key: string;
+    /** Replaces this item. */
+    update(next: T): void;
+    remove(): void;
+    /** The item's error, from `errors`. */
+    error?: ReactNode;
+    /** The field is disabled: disable this item's controls too. `update` does nothing meanwhile. */
+    disabled: boolean;
+}
+/**
+ * Props of `RepeaterField`: a list of structured items (line items, contact
+ * methods, routing rules) edited in place. You render each item's fields;
+ * the field adds, removes, duplicates and optionally reorders them, keeps
+ * every item's error on that item by key, and moves focus sensibly after a
+ * removal. `ListEditor` stays the field for a plain list of strings.
+ */
+interface PluginRepeaterFieldProps<T = unknown> extends PluginRootAttributes {
+    items: readonly T[];
+    /**
+     * A stable key per item. Keys, not positions, tie a draft and an error to
+     * an item, so an insertion above it never moves them onto its neighbour.
+     */
+    getKey(item: T, index: number): string;
+    renderItem(item: T, context: PluginRepeaterItemContext<T>): ReactNode;
+    /** The whole list after any change. */
+    onChange(items: T[]): void;
+    /** Makes a new item for Add. Without it there is no Add button. */
+    createItem?(): T;
+    /** Copies an item for Duplicate, which then sits under it. Without it there is no Duplicate. */
+    duplicateItem?(item: T): T;
+    /** Names an item in its controls ("Remove Line 2"). Defaults to "Item {n}". */
+    getItemLabel?(item: T, index: number): string;
+    /** Add's label. Defaults to "Add item". */
+    addLabel?: string;
+    /** Remove is offered only while there are more than this many. Defaults to 0. */
+    min?: number;
+    /** Add and Duplicate stop at this many. */
+    max?: number;
+    /** Lets the items be dragged, or moved from the keyboard, into a new order. */
+    reorderable?: boolean;
+    /** Errors by item key, shown under that item. */
+    errors?: Readonly<Record<string, ReactNode>>;
+    /** Shown when there are no items. */
+    empty?: ReactNode;
+    disabled?: boolean;
+    /** Required: names the list ("Line items"). */
+    "aria-label": string;
+    className?: string;
+}
+/** One problem a `FormErrorSummary` lists. */
+interface PluginFormErrorEntry {
+    /** The `id` of the control at fault. Omitted, the error is about the form as a whole. */
+    field?: string;
+    message: string;
+}
+/**
+ * Props of `FormErrorSummary`: every problem with a form in one place, above
+ * it, each linked to its control. Choosing one focuses that control, after
+ * `onSelect` has had the chance to open a closed section that holds it. Form
+ * errors without a field come first, as plain text. Draws nothing when there
+ * are no errors.
+ */
+interface PluginFormErrorSummaryProps extends PluginRootAttributes {
+    errors: readonly PluginFormErrorEntry[];
+    /** Defaults to "Fix these to continue". */
+    title?: string;
+    /**
+     * Called with the field's id before it is focused, so a closed section or
+     * tab can open first. Focus follows on the next frame.
+     */
+    onSelect?: (field: string) => void;
+    /** Moves focus to the summary when it appears, as after a refused submit. Defaults to `false`. */
+    autoFocus?: boolean;
+    className?: string;
+}
+/**
+ * Props of `UnsavedChangesBar`: the bar that says edits are not saved yet,
+ * with Discard and Save. It shows while `changes` is above zero, or while a
+ * save is out, and nowhere else (an `error` included). `onSave` may return a
+ * promise: the bar holds Save in its loading state until it settles, and a
+ * rejection stays on the bar as the error, the edits untouched, until the
+ * next save, a Discard, or `changes` reaching zero.
+ */
+interface PluginUnsavedChangesBarProps extends PluginRootAttributes {
+    /** How many fields or records changed. */
+    changes: number;
+    onSave: () => void | Promise<unknown>;
+    onDiscard: () => void;
+    /** A save you are tracking yourself. */
+    saving?: boolean;
+    /** Why the last save failed. */
+    error?: ReactNode;
+    /** Defaults to "Save". */
+    saveLabel?: string;
+    /** Defaults to "Discard". */
+    discardLabel?: string;
+    /** Says what changed. Defaults to "{n} unsaved change(s)". */
+    message?: ReactNode;
+    className?: string;
+}
+/**
+ * The state of a connection to an outside service, as your worker last
+ * established it. `expired` needs the user to sign in again; `limited`
+ * works but lacks something (a scope, a plan); `error` could not be checked.
+ */
+type PluginConnectionStatus = "connected" | "connecting" | "disconnected" | "expired" | "limited" | "error";
+/**
+ * Props of `ConnectionCard`: one outside service your plugin talks to: who it
+ * is, which account, whether it works and when that was last checked, with
+ * your actions (Connect, Reconnect, Test, Disconnect). The card shows what
+ * your worker reports; it never holds a credential.
+ */
+interface PluginConnectionCardProps extends PluginRootAttributes {
+    /** The service ("Linear"). */
+    name: string;
+    icon?: PluginIconSource;
+    /** Which account or workspace ("acme.linear.app"). */
+    account?: string;
+    status: PluginConnectionStatus;
+    /** What the status means here ("Missing the write:issues scope"). */
+    detail?: ReactNode;
+    /** When the connection was last checked: epoch ms, an ISO string or a `Date`. */
+    checkedAt?: number | string | Date;
+    /** Buttons for the card's footer. */
+    actions?: ReactNode;
+    className?: string;
+}
+/**
+ * Where a piece of work stands. Beyond a task's states: `waiting-input` and
+ * `awaiting-approval` are held on the user; `cancelling` asked to stop but has
+ * not confirmed it; `partial` finished with some of its work done and some
+ * not; `unknown` cannot say whether it took effect (a timeout after a write),
+ * which calls for a check rather than a retry.
+ */
+type PluginOperationState = "queued" | "running" | "waiting-input" | "awaiting-approval" | "cancelling" | "partial" | "done" | "failed" | "cancelled" | "unknown";
+/** Props of `OperationStatus`: a glyph and a word for where a piece of work stands. */
+interface PluginOperationStatusProps extends PluginRootAttributes {
+    state: PluginOperationState;
+    /** Replaces the state's word ("Uploading", "8 of 10 done"). */
+    label?: string;
+    /** A quiet detail after the word. */
+    detail?: string;
+    /** Only the glyph, with the word for assistive tech and as its tooltip. */
+    compact?: boolean;
+    className?: string;
+}
+/**
+ * Props of `ToolCallCard`: one tool an agent or a run called, as a compact
+ * row (state, name, what it was for, how long it took) that opens on its
+ * input and result. Pass values already stripped of secrets: the card shows
+ * what it is given.
+ */
+interface PluginToolCallCardProps extends PluginRootAttributes {
+    /** The tool's name ("search_issues"). */
+    name: string;
+    /** What the call was for, in words ("Find open bugs assigned to me"). */
+    summary?: string;
+    state: PluginOperationState;
+    /** The arguments, shown in an `ObjectInspector`. */
+    input?: unknown;
+    /** What came back: a value is inspected, an element drawn as is. */
+    result?: unknown;
+    /** Why it failed. */
+    error?: ReactNode;
+    startedAt?: number | string | Date;
+    finishedAt?: number | string | Date;
+    open?: boolean;
+    defaultOpen?: boolean;
+    onOpenChange?: (open: boolean) => void;
+    className?: string;
+}
+/** One field change of a `StructuredDiff`. */
+interface PluginFieldChange {
+    /** Unique within the diff; what `selected` holds. */
+    id: string;
+    /** The field's name ("Status"). */
+    label: string;
+    /** `changed` (the default) shows before and after; `added` only after; `removed` only before. */
+    kind?: "added" | "changed" | "removed";
+    before?: ReactNode;
+    after?: ReactNode;
+    /** Why, or from where: a short reason, a `SourceCitation`. */
+    note?: ReactNode;
+    /** A problem with the proposed value. A change with one cannot be selected. */
+    error?: string;
+}
+/**
+ * Props of `StructuredDiff`: proposed changes to a record's fields, before and
+ * after, the review step before a change set is applied. With
+ * `onSelectedChange`, each change takes a checkbox and the header one for
+ * all, so a reviewer can apply some and leave the rest.
+ */
+interface PluginStructuredDiffProps extends PluginRootAttributes {
+    changes: readonly PluginFieldChange[];
+    /** The ids chosen to apply, controlled. */
+    selected?: readonly string[];
+    onSelectedChange?: (selected: string[]) => void;
+    /** A heading over the changes: the record they belong to. */
+    title?: ReactNode;
+    /** Shown when there are no changes. Defaults to "No changes". */
+    empty?: ReactNode;
+    disabled?: boolean;
+    className?: string;
+}
+/**
+ * Props of `SuggestedValue`: one proposed value for one field, beside the
+ * current one, with Accept and Reject (and Edit when you can take it into
+ * the field). `stale` marks a suggestion made from data that has since
+ * changed: it can be rejected, not accepted.
+ */
+interface PluginSuggestedValueProps extends PluginRootAttributes {
+    /** The field's name. */
+    label?: string;
+    current?: ReactNode;
+    suggested: ReactNode;
+    /** Why, in a line. */
+    reason?: ReactNode;
+    /** Where it came from: a `SourceCitation`, a link. */
+    source?: ReactNode;
+    onAccept: () => void;
+    onReject: () => void;
+    onEdit?: () => void;
+    stale?: boolean;
+    disabled?: boolean;
+    className?: string;
+}
+/**
+ * Props of `SourceCitation`: an inline marker ("[2]") pointing at the source
+ * a statement came from. `onOpen` makes it a button that opens the source;
+ * `preview` adds a card with the excerpt on hover and focus.
+ */
+interface PluginSourceCitationProps extends PluginRootAttributes {
+    /** The source's number in its `SourceList`. */
+    index: number;
+    /** The source's title, for assistive tech and the tooltip. */
+    title: string;
+    /** Where in the source ("p. 3", "L10–24"). */
+    locator?: string;
+    onOpen?: () => void;
+    preview?: ReactNode;
+    className?: string;
+}
+/** One source of a `SourceList`. */
+interface PluginSource {
+    /** Unique within the list. */
+    id: string;
+    title: string;
+    /** Where in the source ("p. 3", "L10–24"), or what kind it is. */
+    locator?: string;
+    /** The passage relied on, quoted under the title. */
+    excerpt?: string;
+    icon?: PluginIconSource;
+}
+/**
+ * Props of `SourceList`: the numbered sources behind an answer or a proposal,
+ * in the order its `SourceCitation`s count them.
+ */
+interface PluginSourceListProps extends PluginRootAttributes {
+    sources: readonly PluginSource[];
+    onOpen?: (id: string) => void;
+    /** Names the list. Defaults to "Sources". */
+    "aria-label"?: string;
+    className?: string;
+}
+/** One answer a `DecisionRequest` offers. */
+interface PluginDecisionChoice {
+    id: string;
+    label: string;
+    /**
+     * `default` is the primary answer, accent-filled: give it to at most one.
+     * Omitted, a choice is `secondary`.
+     */
+    variant?: "default" | "secondary" | "destructive";
+}
+/**
+ * Where a decision stands. Anything but `pending` takes the answers away:
+ * `answered` shows the answer given, the rest say why it can no longer be
+ * answered.
+ */
+type PluginDecisionStatus = "pending" | "answered" | "expired" | "cancelled" | "superseded";
+/**
+ * Props of `DecisionRequest`: a question a run is waiting on: what is asked,
+ * what it affects, any fields to fill, and the answers. `onRespond` may return
+ * a promise: the answers hold while it is out, so one press is one answer.
+ * A change of `status` drops whatever was in flight. Give each request its
+ * own React `key`, so a new question never inherits the last one's state. A
+ * plugin's own decision authorises nothing in Daintree itself.
+ */
+interface PluginDecisionRequestProps extends PluginRootAttributes {
+    /** The question ("Merge 3 duplicate contacts?"). */
+    title: string;
+    description?: ReactNode;
+    /** What answering changes, set apart from the description. */
+    consequence?: ReactNode;
+    /** Fields the answer needs, drawn between the question and the answers. */
+    children?: ReactNode;
+    choices: readonly PluginDecisionChoice[];
+    onRespond: (choiceId: string) => void | Promise<unknown>;
+    /** Defaults to `pending`. */
+    status?: PluginDecisionStatus;
+    /** The id of the answer given, for `answered`. */
+    answer?: string;
+    className?: string;
+}
 
 /**
  * Typed companion to `host.registerHandler(channel, schema, handler)` for
@@ -6417,4 +6802,4 @@ interface PluginHostBridge {
     onPanel(pluginId: string, channel: string, panelId: string, callback: (payload: unknown) => void): () => void;
 }
 
-export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAccordionItem, type PluginAccordionProps, type PluginActionButtonProps, type PluginActionDispatchOutcome, type PluginActionMenuItem, type PluginAgentAvatarProps, type PluginAgentAvatarSize, type PluginAgentBadgeProps, type PluginAgentPickerChoice, type PluginAgentPickerPane, type PluginAgentPickerProps, type PluginAgentState, type PluginAgentStateIndicatorProps, type PluginAlign, type PluginAnnounceOptions, type PluginAnsiTextProps, type PluginAriaRootAttributes, type PluginAutoGridProps, type PluginAvatarGroupItem, type PluginAvatarGroupProps, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginBarChartProps, type PluginBranchBadgeProps, type PluginBreadcrumbItem, type PluginBreadcrumbsProps, type PluginBulkAction, type PluginBulkActionBarProps, type PluginButtonProps, type PluginButtonVariant, type PluginCalendarBaseProps, type PluginCalendarProps, type PluginCalendarRangeProps, type PluginCalendarSingleProps, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCardProps, type PluginChartBaseProps, type PluginChartColor, type PluginChartSeries, type PluginCheck, type PluginCheckStatus, type PluginCheckboxProps, type PluginChecksListProps, type PluginClusterProps, type PluginCodeBlockProps, type PluginCodeEditorHandle, type PluginCodeEditorProps, type PluginColorPickerProps, type PluginColorSwatch, type PluginColorSwatchProps, type PluginColoredLabelProps, type PluginComboboxProps, type PluginCommandPaletteItem, type PluginCommandPaletteProps, type PluginCommit, type PluginCommitListProps, type PluginCommitRef, type PluginCommitRowProps, type PluginComposerAttachment, type PluginComposerProps, type PluginConfirmDialogProps, type PluginConfirmPopoverProps, type PluginContainerSize, type PluginContainerTarget, type PluginContextDragSourceProps, type PluginContextMenuProps, type PluginContributionGridProps, type PluginCopyButtonProps, type PluginCountIndicatorProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableGroupAccessor, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableRowPredicate, type PluginDataTableSort, type PluginDateFieldBaseProps, type PluginDatePickerProps, type PluginDateRange, type PluginDateRangePickerProps, type PluginDateRangePreset, type PluginDateTimePickerProps, type PluginDebouncedCallback, type PluginDescriptionItem, type PluginDescriptionListItemProps, type PluginDescriptionListProps, type PluginDevServerState, type PluginDevServerStatusProps, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDiffHunk, type PluginDiffHunkAction, type PluginDiffStatProps, type PluginDiffViewProps, type PluginDisclosureProps, type PluginDismissButtonProps, type PluginDividerProps, type PluginDocumentPackage, type PluginDomProps, type PluginDonutChartProps, type PluginDragDropProviderProps, type PluginDragEvent, type PluginDragHandleProps, type PluginDragId, type PluginDraggableState, type PluginDrawerProps, type PluginDrawerToggleProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginDroppableState, type PluginEmojiPickerProps, type PluginEmptyStateProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFieldValidator, type PluginFileDropzoneProps, type PluginFileIconProps, type PluginFileLinkProps, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFilterChipProps, type PluginForgeCiStatus, type PluginForgeLabel, type PluginForgePerson, type PluginForgeReviewDecision, type PluginForgeRowBaseProps, type PluginForgeState, type PluginForgeStateBadgeProps, type PluginFormError, type PluginFormFieldBinding, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginFormHandle, type PluginFormProps, type PluginFormStatus, type PluginFormStatusProps, type PluginGaugeProps, type PluginGaugeThresholds, type PluginGitFileStatus, type PluginGitStatusBadgeProps, type PluginGridProps, type PluginGroupedVirtualListProps, type PluginHeadingProps, type PluginHeatmapProps, type PluginHighlightedTextProps, type PluginHistogramProps, type PluginHostBridge, type PluginHotkey, type PluginHoverCardProps, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginImageViewerImage, type PluginImageViewerProps, type PluginIndicatorPlacement, type PluginInlineCodeProps, type PluginInlineEditProps, type PluginInlineProps, type PluginInputProps, type PluginInspectorProps, type PluginInspectorSectionProps, type PluginIsoDate, type PluginIsoDateTime, type PluginIsoTime, type PluginIssueRowProps, type PluginKanbanCardState, type PluginKanbanColumn, type PluginKanbanMove, type PluginKanbanProps, type PluginKbdChordProps, type PluginKbdProps, type PluginKeyHint, type PluginKeyHintsProps, type PluginKeyValueEditorProps, type PluginKeyValuePair, type PluginLayoutAlign, type PluginLayoutBaseProps, type PluginLayoutElement, type PluginLayoutGap, type PluginLayoutJustify, type PluginLineChartProps, type PluginLinkProps, type PluginListEditorProps, type PluginListGroup, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLiveRegionProps, type PluginLoadMoreFooterProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownEditorMode, type PluginMarkdownEditorProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginMasterDetailProps, type PluginMentionSuggestion, type PluginMentionTextareaProps, type PluginMentionTrigger, type PluginMeterProps, type PluginMeterThresholds, type PluginMultiSelectProps, type PluginNavListItem, type PluginNavListProps, type PluginNavListSection, type PluginNumberInputProps, type PluginObjectInspectorProps, type PluginOverflowToolbarAction, type PluginOverflowToolbarItem, type PluginOverflowToolbarProps, type PluginOverflowToolbarSeparator, type PluginPaneHeaderProps, type PluginPaneLayoutProps, type PluginPaneStateProps, type PluginPathLabelProps, type PluginPickerBaseProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginPortLinkProps, type PluginPortalProps, type PluginProgressBarProps, type PluginPropertyRowProps, type PluginPullRequestRowProps, type PluginRadioGroupProps, type PluginRadioOption, type PluginRangeSliderMark, type PluginRangeSliderProps, type PluginRefreshOverlayProps, type PluginResizableSplitProps, type PluginRootAttributes, type PluginScatterChartProps, type PluginSchemaFormProps, type PluginScrollAreaProps, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSecretInputProps, type PluginSectionLabelProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSelectionGesture, type PluginSelectionItemProps, type PluginSelectionKey, type PluginSendToAgentButtonProps, type PluginSendToAgentOutcome, type PluginSendToAgentRequest, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSheetProps, type PluginShortcutHintProps, type PluginShortcutRecorderProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSliderProps, type PluginSortableItemState, type PluginSortableListProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginSplitButtonProps, type PluginSplitGroupProps, type PluginSplitLayout, type PluginSplitPane, type PluginStackProps, type PluginStackedAreaChartProps, type PluginStaleIndicatorProps, type PluginStatCardProps, type PluginStateGlyphProps, type PluginStatusBarProps, type PluginStatusBarSlot, type PluginStatusDotProps, type PluginStatusState, type PluginStepState, type PluginStepperProps, type PluginStepperStep, type PluginSwitchProps, type PluginTabItem, type PluginTableOfContentsProps, type PluginTabsProps, type PluginTagInputProps, type PluginTask, type PluginTaskListProps, type PluginTaskStatus, type PluginTerminalOutputProps, type PluginTerminalSnapshotProps, type PluginTextProps, type PluginTextSize, type PluginTextTone, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginTimeAgoProps, type PluginTimePickerProps, type PluginTimelineActor, type PluginTimelineItem, type PluginTimelineProps, type PluginToastHandle, type PluginToastTone, type PluginTocHeading, type PluginToggleGroupItem, type PluginToggleGroupProps, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTreeMove, type PluginTreeNodeId, type PluginTreeNodeState, type PluginTreeViewProps, type PluginTruncatedTooltipProps, type PluginUndoRedoPushOptions, type PluginUndoToastOptions, type PluginUnreadDotProps, type PluginUseDraggableOptions, type PluginUseDroppableOptions, type PluginViewToastOptions, type PluginVirtualListBaseProps, type PluginVirtualListComponent, type PluginVirtualListCountProps, type PluginVirtualListItemsProps, type PluginVirtualListProps, type PluginVisuallyHiddenProps, type PluginWorktreeBadgeProps, type PluginWorktreeItem, type PluginWorktreePickerProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseDebouncedCallbackOptions, type UseDisclosureOptions, type UseDisclosureResult, type UseFormOptions, type UseFormResult, type UseHostChannelResult, type UseHotkeysOptions, type UseListNavigationOptions, type UseListNavigationResult, type UseSelectionOptions, type UseSelectionResult, type UseToastResult, type UseUndoRedoOptions, type UseUndoRedoResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };
+export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAccordionItem, type PluginAccordionProps, type PluginActionButtonProps, type PluginActionDispatchOutcome, type PluginActionMenuItem, type PluginAgentAvatarProps, type PluginAgentAvatarSize, type PluginAgentBadgeProps, type PluginAgentPickerChoice, type PluginAgentPickerPane, type PluginAgentPickerProps, type PluginAgentState, type PluginAgentStateIndicatorProps, type PluginAlign, type PluginAnnounceOptions, type PluginAnsiTextProps, type PluginAriaRootAttributes, type PluginAttachment, type PluginAttachmentChipProps, type PluginAttachmentListProps, type PluginAttachmentStatus, type PluginAutoGridProps, type PluginAvatarGroupItem, type PluginAvatarGroupProps, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginBarChartProps, type PluginBranchBadgeProps, type PluginBreadcrumbItem, type PluginBreadcrumbsProps, type PluginBulkAction, type PluginBulkActionBarProps, type PluginButtonProps, type PluginButtonVariant, type PluginCalendarBaseProps, type PluginCalendarProps, type PluginCalendarRangeProps, type PluginCalendarSingleProps, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCardProps, type PluginChartBaseProps, type PluginChartColor, type PluginChartSeries, type PluginCheck, type PluginCheckStatus, type PluginCheckboxProps, type PluginChecksListProps, type PluginClusterProps, type PluginCodeBlockProps, type PluginCodeEditorHandle, type PluginCodeEditorProps, type PluginColorPickerProps, type PluginColorSwatch, type PluginColorSwatchProps, type PluginColoredLabelProps, type PluginComboboxProps, type PluginCommandPaletteItem, type PluginCommandPaletteProps, type PluginCommit, type PluginCommitListProps, type PluginCommitRef, type PluginCommitRowProps, type PluginComposerAttachment, type PluginComposerProps, type PluginConfirmDialogProps, type PluginConfirmPopoverProps, type PluginConnectionCardProps, type PluginConnectionStatus, type PluginContainerSize, type PluginContainerTarget, type PluginContextDragSourceProps, type PluginContextMenuProps, type PluginContributionGridProps, type PluginCopyButtonProps, type PluginCountIndicatorProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableGroupAccessor, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableRowPredicate, type PluginDataTableSort, type PluginDateFieldBaseProps, type PluginDatePickerProps, type PluginDateRange, type PluginDateRangePickerProps, type PluginDateRangePreset, type PluginDateTimePickerProps, type PluginDebouncedCallback, type PluginDecisionChoice, type PluginDecisionRequestProps, type PluginDecisionStatus, type PluginDescriptionItem, type PluginDescriptionListItemProps, type PluginDescriptionListProps, type PluginDevServerState, type PluginDevServerStatusProps, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDiffHunk, type PluginDiffHunkAction, type PluginDiffStatProps, type PluginDiffViewProps, type PluginDisclosureProps, type PluginDismissButtonProps, type PluginDividerProps, type PluginDocumentPackage, type PluginDomProps, type PluginDonutChartProps, type PluginDragDropProviderProps, type PluginDragEvent, type PluginDragHandleProps, type PluginDragId, type PluginDraggableState, type PluginDrawerProps, type PluginDrawerToggleProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginDroppableState, type PluginEmojiPickerProps, type PluginEmptyStateProps, type PluginEntityAvailability, type PluginEntityChipProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFieldChange, type PluginFieldValidator, type PluginFileDropzoneProps, type PluginFileIconProps, type PluginFileLinkProps, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFilterChipProps, type PluginForgeCiStatus, type PluginForgeLabel, type PluginForgePerson, type PluginForgeReviewDecision, type PluginForgeRowBaseProps, type PluginForgeState, type PluginForgeStateBadgeProps, type PluginFormError, type PluginFormErrorEntry, type PluginFormErrorSummaryProps, type PluginFormFieldBinding, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginFormHandle, type PluginFormProps, type PluginFormStatus, type PluginFormStatusProps, type PluginGaugeProps, type PluginGaugeThresholds, type PluginGitFileStatus, type PluginGitStatusBadgeProps, type PluginGridProps, type PluginGroupedVirtualListProps, type PluginHeadingProps, type PluginHeatmapProps, type PluginHighlightedTextProps, type PluginHistogramProps, type PluginHostBridge, type PluginHotkey, type PluginHoverCardProps, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginImageViewerImage, type PluginImageViewerProps, type PluginIndicatorPlacement, type PluginInlineCodeProps, type PluginInlineEditProps, type PluginInlineProps, type PluginInputProps, type PluginInspectorProps, type PluginInspectorSectionProps, type PluginIsoDate, type PluginIsoDateTime, type PluginIsoTime, type PluginIssueRowProps, type PluginKanbanCardState, type PluginKanbanColumn, type PluginKanbanMove, type PluginKanbanProps, type PluginKbdChordProps, type PluginKbdProps, type PluginKeyHint, type PluginKeyHintsProps, type PluginKeyValueEditorProps, type PluginKeyValuePair, type PluginLayoutAlign, type PluginLayoutBaseProps, type PluginLayoutElement, type PluginLayoutGap, type PluginLayoutJustify, type PluginLineChartProps, type PluginLinkProps, type PluginListEditorProps, type PluginListGroup, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLiveRegionProps, type PluginLoadMoreFooterProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownEditorMode, type PluginMarkdownEditorProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginMasterDetailProps, type PluginMentionSuggestion, type PluginMentionTextareaProps, type PluginMentionTrigger, type PluginMeterProps, type PluginMeterThresholds, type PluginMultiSelectProps, type PluginNavListItem, type PluginNavListProps, type PluginNavListSection, type PluginNumberInputProps, type PluginObjectInspectorProps, type PluginOperationState, type PluginOperationStatusProps, type PluginOverflowToolbarAction, type PluginOverflowToolbarItem, type PluginOverflowToolbarProps, type PluginOverflowToolbarSeparator, type PluginPaneHeaderProps, type PluginPaneLayoutProps, type PluginPaneStateProps, type PluginPathLabelProps, type PluginPickerBaseProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginPortLinkProps, type PluginPortalProps, type PluginProgressBarProps, type PluginPropertyRowProps, type PluginPullRequestRowProps, type PluginRadioGroupProps, type PluginRadioOption, type PluginRangeSliderMark, type PluginRangeSliderProps, type PluginRefreshOverlayProps, type PluginRepeaterFieldProps, type PluginRepeaterItemContext, type PluginResizableSplitProps, type PluginRootAttributes, type PluginScatterChartProps, type PluginSchemaFormProps, type PluginScrollAreaProps, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSecretInputProps, type PluginSectionLabelProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSelectionGesture, type PluginSelectionItemProps, type PluginSelectionKey, type PluginSendToAgentButtonProps, type PluginSendToAgentOutcome, type PluginSendToAgentRequest, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSheetProps, type PluginShortcutHintProps, type PluginShortcutRecorderProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSliderProps, type PluginSortableItemState, type PluginSortableListProps, type PluginSource, type PluginSourceCitationProps, type PluginSourceListProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginSplitButtonProps, type PluginSplitGroupProps, type PluginSplitLayout, type PluginSplitPane, type PluginStackProps, type PluginStackedAreaChartProps, type PluginStaleIndicatorProps, type PluginStatCardProps, type PluginStateGlyphProps, type PluginStatusBarProps, type PluginStatusBarSlot, type PluginStatusDotProps, type PluginStatusState, type PluginStepState, type PluginStepperProps, type PluginStepperStep, type PluginStructuredDiffProps, type PluginSuggestedValueProps, type PluginSwitchProps, type PluginTabItem, type PluginTableOfContentsProps, type PluginTabsProps, type PluginTagInputProps, type PluginTask, type PluginTaskListProps, type PluginTaskStatus, type PluginTerminalOutputProps, type PluginTerminalSnapshotProps, type PluginTextProps, type PluginTextSize, type PluginTextTone, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginTimeAgoProps, type PluginTimePickerProps, type PluginTimelineActor, type PluginTimelineItem, type PluginTimelineProps, type PluginToastHandle, type PluginToastTone, type PluginTocHeading, type PluginToggleGroupItem, type PluginToggleGroupProps, type PluginToolCallCardProps, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTreeMove, type PluginTreeNodeId, type PluginTreeNodeState, type PluginTreeViewProps, type PluginTruncatedTooltipProps, type PluginUndoRedoPushOptions, type PluginUndoToastOptions, type PluginUnreadDotProps, type PluginUnsavedChangesBarProps, type PluginUseDraggableOptions, type PluginUseDroppableOptions, type PluginViewToastOptions, type PluginVirtualListBaseProps, type PluginVirtualListComponent, type PluginVirtualListCountProps, type PluginVirtualListItemsProps, type PluginVirtualListProps, type PluginVisuallyHiddenProps, type PluginWorktreeBadgeProps, type PluginWorktreeItem, type PluginWorktreePickerProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseDebouncedCallbackOptions, type UseDisclosureOptions, type UseDisclosureResult, type UseFormOptions, type UseFormResult, type UseHostChannelResult, type UseHotkeysOptions, type UseListNavigationOptions, type UseListNavigationResult, type UseSelectionOptions, type UseSelectionResult, type UseToastResult, type UseUndoRedoOptions, type UseUndoRedoResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };

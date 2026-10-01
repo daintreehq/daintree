@@ -203,6 +203,22 @@ import type {
   PluginTableOfContentsProps,
   PluginTerminalOutputProps,
 } from "@shared/types/plugin-sdk-react";
+import type {
+  PluginAttachmentChipProps,
+  PluginAttachmentListProps,
+  PluginConnectionCardProps,
+  PluginDecisionRequestProps,
+  PluginEntityChipProps,
+  PluginFormErrorSummaryProps,
+  PluginOperationStatusProps,
+  PluginRepeaterFieldProps,
+  PluginSourceCitationProps,
+  PluginSourceListProps,
+  PluginStructuredDiffProps,
+  PluginSuggestedValueProps,
+  PluginToolCallCardProps,
+  PluginUnsavedChangesBarProps,
+} from "@shared/types/plugin-sdk-react";
 import { fromKit } from "./kit";
 
 export { preloadPluginUi, whenPluginUiReady } from "./kit";
@@ -1345,4 +1361,93 @@ export type {
   PluginGaugeProps as GaugeProps,
   PluginTocHeading as TocHeading,
   PluginTableOfContentsProps as TableOfContentsProps,
+} from "@shared/types/plugin-sdk-react";
+
+// Workflow pieces: attachments, record references, repeated structured fields,
+// form completion, connections, and the agent-work vocabulary of operations,
+// tool calls, proposed changes, sources and decisions.
+
+export const AttachmentChip: ComponentType<PluginAttachmentChipProps> = fromKit(
+  "AttachmentChip",
+  (kit) => kit.AttachmentChip
+);
+export const AttachmentList: ComponentType<PluginAttachmentListProps> = fromKit(
+  "AttachmentList",
+  (kit) => kit.AttachmentList
+);
+export const EntityChip: ComponentType<PluginEntityChipProps> = fromKit(
+  "EntityChip",
+  (kit) => kit.EntityChip
+);
+export const RepeaterField: <T>(props: PluginRepeaterFieldProps<T>) => ReactNode = fromKit(
+  "RepeaterField",
+  (kit) => kit.RepeaterField
+);
+export const FormErrorSummary: ComponentType<PluginFormErrorSummaryProps> = fromKit(
+  "FormErrorSummary",
+  (kit) => kit.FormErrorSummary
+);
+export const UnsavedChangesBar: ComponentType<PluginUnsavedChangesBarProps> = fromKit(
+  "UnsavedChangesBar",
+  (kit) => kit.UnsavedChangesBar
+);
+export const ConnectionCard: ComponentType<PluginConnectionCardProps> = fromKit(
+  "ConnectionCard",
+  (kit) => kit.ConnectionCard
+);
+export const OperationStatus: ComponentType<PluginOperationStatusProps> = fromKit(
+  "OperationStatus",
+  (kit) => kit.OperationStatus
+);
+export const ToolCallCard: ComponentType<PluginToolCallCardProps> = fromKit(
+  "ToolCallCard",
+  (kit) => kit.ToolCallCard
+);
+export const StructuredDiff: ComponentType<PluginStructuredDiffProps> = fromKit(
+  "StructuredDiff",
+  (kit) => kit.StructuredDiff
+);
+export const SuggestedValue: ComponentType<PluginSuggestedValueProps> = fromKit(
+  "SuggestedValue",
+  (kit) => kit.SuggestedValue
+);
+export const SourceCitation: ComponentType<PluginSourceCitationProps> = fromKit(
+  "SourceCitation",
+  (kit) => kit.SourceCitation
+);
+export const SourceList: ComponentType<PluginSourceListProps> = fromKit(
+  "SourceList",
+  (kit) => kit.SourceList
+);
+export const DecisionRequest: ComponentType<PluginDecisionRequestProps> = fromKit(
+  "DecisionRequest",
+  (kit) => kit.DecisionRequest
+);
+
+export type {
+  PluginAttachment as Attachment,
+  PluginAttachmentStatus as AttachmentStatus,
+  PluginAttachmentChipProps as AttachmentChipProps,
+  PluginAttachmentListProps as AttachmentListProps,
+  PluginEntityAvailability as EntityAvailability,
+  PluginEntityChipProps as EntityChipProps,
+  PluginRepeaterItemContext as RepeaterItemContext,
+  PluginRepeaterFieldProps as RepeaterFieldProps,
+  PluginFormErrorEntry as FormErrorEntry,
+  PluginFormErrorSummaryProps as FormErrorSummaryProps,
+  PluginUnsavedChangesBarProps as UnsavedChangesBarProps,
+  PluginConnectionStatus as ConnectionStatus,
+  PluginConnectionCardProps as ConnectionCardProps,
+  PluginOperationState as OperationState,
+  PluginOperationStatusProps as OperationStatusProps,
+  PluginToolCallCardProps as ToolCallCardProps,
+  PluginFieldChange as FieldChange,
+  PluginStructuredDiffProps as StructuredDiffProps,
+  PluginSuggestedValueProps as SuggestedValueProps,
+  PluginSourceCitationProps as SourceCitationProps,
+  PluginSource as Source,
+  PluginSourceListProps as SourceListProps,
+  PluginDecisionChoice as DecisionChoice,
+  PluginDecisionStatus as DecisionStatus,
+  PluginDecisionRequestProps as DecisionRequestProps,
 } from "@shared/types/plugin-sdk-react";

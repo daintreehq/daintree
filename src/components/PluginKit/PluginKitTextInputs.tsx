@@ -27,7 +27,6 @@ import {
   X,
 } from "lucide-react";
 import type {
-  PluginComposerAttachment,
   PluginComposerProps,
   PluginInlineEditProps,
   PluginKeyValueEditorProps,
@@ -43,7 +42,6 @@ import {
   inlineRenameFieldClassName,
   inlineRenameFieldInputProps,
 } from "@/components/Panel/inlineRenameField";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { InlineError } from "@/components/ui/field";
 import { inputVariants } from "@/components/ui/input";
@@ -60,7 +58,6 @@ import {
   keybindingService,
   normalizeKeyForBinding,
 } from "@/services/KeybindingService";
-import { renderIconSource } from "./PluginKitIcons";
 import { fileMatchesAccept } from "./PluginKitInputs";
 import { pluginKitDnd } from "./PluginKitDnd";
 import {
@@ -76,8 +73,15 @@ import {
   rowCount,
 } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
-import { isThenable, reportPluginFault, settleThenable, runPluginAction } from "./kitDiagnostics";
+import {
+  isThenable,
+  reportPluginFault,
+  settleThenable,
+  runPluginAction,
+  faultMessage,
+} from "./kitDiagnostics";
 import { invalidProp, useKitFieldControl } from "./kitField";
+import { AttachmentChipView, readAttachmentList } from "./PluginKitWorkflows";
 
 const SortableList = pluginKitDnd.SortableList;
 
@@ -131,12 +135,6 @@ function attempt(run: () => unknown): Outcome {
   } catch (error) {
     return { ok: false, error };
   }
-}
-
-function messageOf(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message.trim() !== "") return error.message.trim();
-  if (typeof error === "string" && error.trim() !== "") return error.trim();
-  return fallback;
 }
 
 /**
@@ -800,70 +798,9 @@ function KitMentionTextarea(props: PluginMentionTextareaProps) {
 // The composer.
 
 /** An attachment as read from the plugin; the icon is narrowed where it is drawn. */
-interface AttachmentEntry extends Omit<PluginComposerAttachment, "icon"> {
-  icon: unknown;
-}
-
-function readAttachments(value: unknown): AttachmentEntry[] {
-  if (!Array.isArray(value)) return [];
-  const seen = new Set<string>();
-  const out: AttachmentEntry[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const id = nonEmpty(field(entry, "id"));
-    const name = nonEmpty(field(entry, "name"));
-    if (id === undefined || name === undefined || seen.has(id)) continue;
-    seen.add(id);
-    out.push({ id, name, detail: nonEmpty(field(entry, "detail")), icon: field(entry, "icon") });
-  }
-  return out;
-}
 
 function carriesFiles(event: DragEvent): boolean {
   return Array.from(event.dataTransfer?.types ?? []).includes("Files");
-}
-
-const CHIP_REMOVE_CLASS =
-  "relative inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[var(--radius-xs)] text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-medium hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary disabled:pointer-events-none after:absolute after:-inset-1 after:content-['']";
-
-function AttachmentChip({
-  attachment,
-  onRemove,
-  disabled,
-}: {
-  attachment: AttachmentEntry;
-  onRemove?: (button: HTMLButtonElement) => void;
-  disabled: boolean;
-}) {
-  const glyph = renderIconSource(attachment.icon ?? "file");
-  return (
-    <Badge
-      size="sm"
-      tone="outline"
-      className="min-w-0 max-w-60 gap-1 pr-0.5 text-text-primary"
-      data-attachment={attachment.id}
-    >
-      {glyph ? <span className="shrink-0 text-text-secondary">{glyph}</span> : null}
-      <span className="truncate">{attachment.name}</span>
-      {attachment.detail ? (
-        <span className="shrink-0 text-text-secondary">{attachment.detail}</span>
-      ) : null}
-      {onRemove ? (
-        <button
-          type="button"
-          aria-label={`Remove ${attachment.name}`}
-          disabled={disabled}
-          data-attachment-remove=""
-          onClick={(event) => onRemove(event.currentTarget)}
-          className={CHIP_REMOVE_CLASS}
-        >
-          <X aria-hidden="true" />
-        </button>
-      ) : (
-        <span className="w-0.5" />
-      )}
-    </Badge>
-  );
 }
 
 function KitComposer(props: PluginComposerProps) {
@@ -911,7 +848,7 @@ function KitComposer(props: PluginComposerProps) {
   const inert = disabled === true;
   const working = busy === true;
   const acceptText = nonEmpty(accept);
-  const chips = readAttachments(attachments);
+  const chips = readAttachmentList(attachments);
   const limit = wholeLimit(maxLength, Number.MAX_SAFE_INTEGER);
   const sendOnEnter = oneOf(submitOn, ["mod+enter", "enter"] as const) === "enter";
   const canSend = !inert && !working && (text.trim() !== "" || chips.length > 0);
@@ -1017,7 +954,7 @@ function KitComposer(props: PluginComposerProps) {
         <ul ref={chipsRef} aria-label="Attachments" className="flex min-w-0 flex-wrap gap-1">
           {chips.map((chip, index) => (
             <li key={chip.id} className="flex min-w-0">
-              <AttachmentChip
+              <AttachmentChipView
                 attachment={chip}
                 disabled={inert}
                 onRemove={removeAttachment ? (button) => remove(chip.id, index, button) : undefined}
@@ -1292,7 +1229,7 @@ function KitInlineEdit(props: PluginInlineEditProps) {
     const outcome = attempt(() => commit(next));
     submittingRef.current = false;
     if (!outcome.ok) {
-      setError(messageOf(outcome.error, "Couldn't rename"));
+      setError(faultMessage(outcome.error, "Couldn't rename"));
       return;
     }
     if (!isThenable(outcome.value)) {
@@ -1316,7 +1253,7 @@ function KitInlineEdit(props: PluginInlineEditProps) {
       (reason: unknown) => {
         if (generationRef.current !== started) return;
         setPending(false);
-        setError(messageOf(reason, "Couldn't rename"));
+        setError(faultMessage(reason, "Couldn't rename"));
         if (stillHere()) inputRef.current?.focus();
       }
     );

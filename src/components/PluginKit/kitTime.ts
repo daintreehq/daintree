@@ -6,6 +6,24 @@ import { toIsoDate } from "@/pluginUi/dateMath";
 
 export const MINUTES_PER_DAY = 24 * 60;
 
+/** Epoch ms from a plugin's epoch ms, ISO string or `Date`; `NaN` for anything else. */
+export function toTimestamp(value: unknown): number {
+  if (value instanceof Date) {
+    // Read through the intrinsic: a Date-shaped object from plugin code can
+    // lack the internal slot, or carry its own throwing getTime.
+    try {
+      return Date.prototype.getTime.call(value);
+    } catch {
+      return Number.NaN;
+    }
+  }
+  // Through a Date, so a number past what one can hold (1e20) is NaN rather
+  // than a timestamp that throws the moment it is formatted.
+  if (typeof value === "number") return new Date(value).getTime();
+  if (typeof value === "string" && value !== "") return Date.parse(value);
+  return Number.NaN;
+}
+
 /** `"HH:mm"` (seconds, if given, are dropped) as minutes since midnight; null for anything else. */
 export function parseIsoTime(value: unknown): number | null {
   if (typeof value !== "string") return null;

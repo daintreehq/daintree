@@ -1412,4 +1412,90 @@ declare module "@daintreehq/plugin-ui" {
   export const ShortcutHint: ComponentType<ShortcutHintProps>;
   /** A row of key hints ("⏎ Open  ⌘K Search"), the last dropping first as it narrows. */
   export const KeyHints: ComponentType<KeyHintsProps>;
+
+  // Workflow pieces: attachments, record references, repeated structured
+  // fields, form completion, connections, and the agent-work vocabulary of
+  // operations, tool calls, proposed changes, sources and decisions.
+  import type {
+    PluginAttachment,
+    PluginAttachmentChipProps,
+    PluginAttachmentListProps,
+    PluginAttachmentStatus,
+    PluginConnectionCardProps,
+    PluginConnectionStatus,
+    PluginDecisionChoice,
+    PluginDecisionRequestProps,
+    PluginDecisionStatus,
+    PluginEntityAvailability,
+    PluginEntityChipProps,
+    PluginFieldChange,
+    PluginFormErrorEntry,
+    PluginFormErrorSummaryProps,
+    PluginOperationState,
+    PluginOperationStatusProps,
+    PluginRepeaterFieldProps,
+    PluginRepeaterItemContext,
+    PluginSource,
+    PluginSourceCitationProps,
+    PluginSourceListProps,
+    PluginStructuredDiffProps,
+    PluginSuggestedValueProps,
+    PluginToolCallCardProps,
+    PluginUnsavedChangesBarProps,
+  } from "@daintreehq/plugin-sdk/react";
+
+  export type Attachment = PluginAttachment;
+  export type AttachmentStatus = PluginAttachmentStatus;
+  export type AttachmentChipProps = PluginAttachmentChipProps;
+  export type AttachmentListProps = PluginAttachmentListProps;
+  export type EntityAvailability = PluginEntityAvailability;
+  export type EntityChipProps = PluginEntityChipProps;
+  export type RepeaterItemContext<T = unknown> = PluginRepeaterItemContext<T>;
+  export type RepeaterFieldProps<T = unknown> = PluginRepeaterFieldProps<T>;
+  export type FormErrorEntry = PluginFormErrorEntry;
+  export type FormErrorSummaryProps = PluginFormErrorSummaryProps;
+  export type UnsavedChangesBarProps = PluginUnsavedChangesBarProps;
+  export type ConnectionStatus = PluginConnectionStatus;
+  export type ConnectionCardProps = PluginConnectionCardProps;
+  export type OperationState = PluginOperationState;
+  export type OperationStatusProps = PluginOperationStatusProps;
+  export type ToolCallCardProps = PluginToolCallCardProps;
+  export type FieldChange = PluginFieldChange;
+  export type StructuredDiffProps = PluginStructuredDiffProps;
+  export type SuggestedValueProps = PluginSuggestedValueProps;
+  export type SourceCitationProps = PluginSourceCitationProps;
+  export type Source = PluginSource;
+  export type SourceListProps = PluginSourceListProps;
+  export type DecisionChoice = PluginDecisionChoice;
+  export type DecisionStatus = PluginDecisionStatus;
+  export type DecisionRequestProps = PluginDecisionRequestProps;
+
+  /** One attached file or reference, as the Composer draws its own. */
+  export const AttachmentChip: ComponentType<AttachmentChipProps>;
+  /** Attachments as wrapping chips or as rows; removing one keeps focus nearby. */
+  export const AttachmentList: ComponentType<AttachmentListProps>;
+  /** A reference to one of your records, with loading, deleted and no-access states. */
+  export const EntityChip: ComponentType<EntityChipProps>;
+  /** A list of structured items edited in place, keyed so drafts and errors stay on their item. */
+  export const RepeaterField: <T>(props: RepeaterFieldProps<T>) => ReactNode;
+  /** Every problem with a form, each linked to its control. */
+  export const FormErrorSummary: ComponentType<FormErrorSummaryProps>;
+  /** Unsaved edits with Discard and Save; a rejected save keeps the edits. */
+  export const UnsavedChangesBar: ComponentType<UnsavedChangesBarProps>;
+  /** An outside service: account, status, when it was checked, your actions. */
+  export const ConnectionCard: ComponentType<ConnectionCardProps>;
+  /** A glyph and a word for where a piece of work stands. */
+  export const OperationStatus: ComponentType<OperationStatusProps>;
+  /** One tool call as a compact row that opens on its input and result. */
+  export const ToolCallCard: ComponentType<ToolCallCardProps>;
+  /** Proposed field changes, before and after, optionally chosen one by one. */
+  export const StructuredDiff: ComponentType<StructuredDiffProps>;
+  /** One proposed value beside the current one, with Accept and Reject. */
+  export const SuggestedValue: ComponentType<SuggestedValueProps>;
+  /** An inline numbered marker pointing at a source. */
+  export const SourceCitation: ComponentType<SourceCitationProps>;
+  /** The numbered sources behind an answer or a proposal. */
+  export const SourceList: ComponentType<SourceListProps>;
+  /** A question a run is waiting on, with its answers. */
+  export const DecisionRequest: ComponentType<DecisionRequestProps>;
 }

@@ -103,6 +103,7 @@ import {
   positive,
   str,
 } from "./kitProps";
+import { toTimestamp } from "./kitTime";
 
 const LIMIT_PX = 100_000;
 const ErrorGlyph = SEVERITY_GLYPH.error;
@@ -159,13 +160,6 @@ function wholeCount(value: unknown): number | undefined {
 // inside its own edge, where its clip cannot cut the ring away.
 const PROGRAMMATIC_FOCUS_RING =
   "outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary";
-
-function toTimestamp(value: unknown): number {
-  if (value instanceof Date) return value.getTime();
-  if (typeof value === "number") return Number.isFinite(value) ? value : Number.NaN;
-  if (typeof value === "string" && value !== "") return new Date(value).getTime();
-  return Number.NaN;
-}
 
 // ---------------------------------------------------------------------------
 // MasterDetail

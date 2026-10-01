@@ -55,6 +55,7 @@ import {
 import { fn, nonEmpty, pickRootProps, str, useKitOwnerAttributes } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
 import { invalidProp, useKitFieldControl } from "./kitField";
+import { toTimestamp } from "./kitTime";
 
 type Mode = "single" | "range";
 
@@ -877,13 +878,6 @@ export function timeAgoTick(ageMs: number, verbose: boolean): number {
   if (age < HOUR) return 30 * SECOND;
   if (age < DAY) return 5 * MINUTE;
   return HOUR;
-}
-
-function toTimestamp(value: unknown): number {
-  if (typeof value === "number" || typeof value === "string" || value instanceof Date) {
-    return new Date(value).getTime();
-  }
-  return Number.NaN;
 }
 
 function KitTimeAgo({ value, verbose, prefix, tooltip, className, ...rest }: PluginTimeAgoProps) {

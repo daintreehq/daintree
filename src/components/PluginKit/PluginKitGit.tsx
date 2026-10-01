@@ -124,6 +124,7 @@ import { pluginKitDates } from "./PluginKitDates";
 import { pluginKitOverlays } from "./PluginKitOverlays";
 import { pluginKitTypography } from "./PluginKitTypography";
 import { reportPluginFault } from "./kitDiagnostics";
+import { toTimestamp } from "./kitTime";
 
 const KitAvatar = pluginKitOverlays.Avatar;
 const KitTimeAgo = pluginKitDates.TimeAgo;
@@ -134,21 +135,6 @@ const FOCUS_RING =
 
 function count(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
-}
-
-function toTimestamp(value: unknown): number {
-  if (value instanceof Date) {
-    // Read through the intrinsic: a Date-shaped object from plugin code can
-    // lack the internal slot, or carry its own throwing getTime.
-    try {
-      return Date.prototype.getTime.call(value);
-    } catch {
-      return NaN;
-    }
-  }
-  if (typeof value === "number") return Number.isFinite(value) ? value : NaN;
-  if (typeof value === "string" && value !== "") return Date.parse(value);
-  return NaN;
 }
 
 /** Runs a host action for a press, logging a refusal: dispatch resolves `{ ok: false }` rather than throwing. */
