@@ -2,7 +2,11 @@ import * as React from "react";
 import type * as TooltipPrimitiveType from "@radix-ui/react-tooltip";
 import { Slot } from "@radix-ui/react-slot";
 import { cn } from "@/lib/utils";
-import { OVERLAY_SIDE_OFFSET, TOOLTIP_MOTION_CLASS } from "./overlayMotion";
+import {
+  OVERLAY_SIDE_OFFSET,
+  TOOLTIP_MOTION_CLASS,
+  TOOLTIP_PRESS_DISMISSED_MOTION_CLASS,
+} from "./overlayMotion";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { FixedDropdownVisibleContext } from "./fixed-dropdown";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
@@ -73,6 +77,18 @@ const TooltipTriggerNodeContext = React.createContext<((node: HTMLElement | null
   null
 );
 
+/**
+ * Whether this tooltip's last close came from pressing its own trigger, and
+ * the setter the trigger calls on pointerdown. A press hands the screen to
+ * whatever the trigger opens or does, so the caption leaves at once instead of
+ * fading out over the menu or palette arriving in its place; a hover-out still
+ * gets the exit fade.
+ */
+const TooltipPressDismissContext = React.createContext<{
+  dismissedByPress: boolean;
+  markPressed: () => void;
+} | null>(null);
+
 const Tooltip = ({
   children,
   open,
@@ -101,6 +117,12 @@ const Tooltip = ({
   // controlled consumers it tracks their value so flipping between modes
   // (`open={cond || undefined}`) can't strand a stale open.
   const [managedOpen, setManagedOpen] = React.useState(defaultOpen ?? false);
+  const [dismissedByPress, setDismissedByPress] = React.useState(false);
+  const markPressed = React.useCallback(() => setDismissedByPress(true), []);
+  const pressDismiss = React.useMemo(
+    () => ({ dismissedByPress, markPressed }),
+    [dismissedByPress, markPressed]
+  );
   const isControlled = open !== undefined;
   const resolvedOpen = isControlled ? open : managedOpen;
   const effectiveOpen = dropdownVisible ? resolvedOpen : false;
@@ -128,6 +150,7 @@ const Tooltip = ({
       // rich hover cards clear of the app-wide dialog hammer, and this window
       // is one element wide.
       if (next && isTooltipSuppressedForElement(triggerNodeRef.current)) return;
+      if (next) setDismissedByPress(false);
       setManagedOpen(next);
       onOpenChangeRef.current?.(next);
     },
@@ -197,7 +220,9 @@ const Tooltip = ({
       onOpenChange={handleOpenChange}
     >
       <TooltipTriggerNodeContext.Provider value={setTriggerNode}>
-        {children}
+        <TooltipPressDismissContext.Provider value={pressDismiss}>
+          {children}
+        </TooltipPressDismissContext.Provider>
       </TooltipTriggerNodeContext.Provider>
     </Root>
   );
@@ -227,6 +252,7 @@ const TooltipTrigger = React.forwardRef<
     // Published to the Root so it can tell a focus restoration aimed at THIS
     // trigger from any other focus in the app.
     const publishTriggerNode = React.useContext(TooltipTriggerNodeContext);
+    const pressDismiss = React.useContext(TooltipPressDismissContext);
     const setTriggerRef = React.useCallback(
       (node: React.ElementRef<typeof TooltipPrimitiveType.Trigger> | null) => {
         publishTriggerNode?.(node);
@@ -273,6 +299,7 @@ const TooltipTrigger = React.forwardRef<
     };
     const handlePointerDown: React.PointerEventHandler<HTMLButtonElement> = (event) => {
       pointerActiveRef.current = true;
+      pressDismiss?.markPressed();
       primeOnEvent();
       onPointerDown?.(event);
     };
@@ -362,6 +389,7 @@ const TooltipContent = React.forwardRef<
   ) => {
     const radix = useRadixPrimitives();
     const isDockPopoverChild = useIsDockPopoverChild();
+    const pressDismiss = React.useContext(TooltipPressDismissContext);
     if (!radix) return null;
     const Portal = radix.TooltipPrimitive.Portal;
     const Content = radix.TooltipPrimitive.Content;
@@ -377,7 +405,9 @@ const TooltipContent = React.forwardRef<
           className={cn(
             "z-[var(--z-popover)] max-w-xs overflow-hidden rounded-[var(--radius-md)] surface-overlay shadow-overlay text-xs text-text-primary",
             TOOLTIP_CARD_PADDING,
-            TOOLTIP_MOTION_CLASS,
+            pressDismiss?.dismissedByPress
+              ? TOOLTIP_PRESS_DISMISSED_MOTION_CLASS
+              : TOOLTIP_MOTION_CLASS,
             className
           )}
           {...props}

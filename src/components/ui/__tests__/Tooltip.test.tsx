@@ -5,6 +5,7 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FixedDropdownVisibleContext } from "../fixed-dropdown";
 import { Tooltip, TooltipTrigger, TooltipContent } from "../tooltip";
+import { TOOLTIP_MOTION_CLASS, TOOLTIP_PRESS_DISMISSED_MOTION_CLASS } from "../overlayMotion";
 import { _resetForTests, dismissAllTooltips } from "@/lib/tooltipDismissRegistry";
 
 const { rootSpy, mountSpy, primeOnEventSpy, contentSpy } = vi.hoisted(() => ({
@@ -14,9 +15,10 @@ const { rootSpy, mountSpy, primeOnEventSpy, contentSpy } = vi.hoisted(() => ({
   contentSpy: vi.fn(),
 }));
 
-vi.mock("../radix-loader", () => ({
-  primeOnEvent: primeOnEventSpy,
-  useRadixPrimitives: () => ({
+vi.mock("../radix-loader", () => {
+  // Built once, like the real loader's cache: a fresh object per call would
+  // hand React new component types on every render and remount the trigger.
+  const primitives = {
     TooltipPrimitive: {
       Provider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
       Root: (props: { open?: boolean; children: React.ReactNode }) => {
@@ -57,8 +59,9 @@ vi.mock("../radix-loader", () => ({
         return <div>{props.children}</div>;
       },
     },
-  }),
-}));
+  };
+  return { primeOnEvent: primeOnEventSpy, useRadixPrimitives: () => primitives };
+});
 
 describe("Tooltip wrapper — FixedDropdownVisibleContext gate (issue #8001)", () => {
   beforeEach(() => {
@@ -670,5 +673,52 @@ describe("TooltipContent — sticky and hideWhenDetached defaults (issue #8100)"
     const lastCall = contentSpy.mock.calls.at(-1)?.[0];
     expect(lastCall?.sticky).toBe("always");
     expect(lastCall?.hideWhenDetached).toBe(false);
+  });
+});
+
+describe("Tooltip — a press on its trigger dismisses it without the exit fade", () => {
+  beforeEach(() => {
+    contentSpy.mockClear();
+    rootSpy.mockClear();
+  });
+
+  const exitTokens = TOOLTIP_MOTION_CLASS.split(" ").filter((t) =>
+    t.startsWith("data-[state=closed]")
+  );
+  const contentTokens = () =>
+    String(contentSpy.mock.calls.at(-1)?.[0]?.className ?? "").split(/\s+/);
+  const hasExit = () => exitTokens.some((t) => contentTokens().includes(t));
+  const lastOnOpenChange = () => rootSpy.mock.calls.at(-1)![0].onOpenChange!;
+
+  function renderTooltip() {
+    return render(
+      <Tooltip>
+        <TooltipTrigger>trigger</TooltipTrigger>
+        <TooltipContent>caption</TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  it("drops the exit animation once the trigger is pressed, so the caption cannot cover what the press opened", () => {
+    expect(exitTokens.length).toBeGreaterThan(0);
+    const { getByText } = renderTooltip();
+    act(() => lastOnOpenChange()(true));
+    expect(hasExit()).toBe(true);
+
+    fireEvent.pointerDown(getByText("trigger"));
+    expect(hasExit()).toBe(false);
+    // The entrance is untouched.
+    for (const token of TOOLTIP_PRESS_DISMISSED_MOTION_CLASS.split(" ")) {
+      expect(contentTokens()).toContain(token);
+    }
+  });
+
+  it("restores the exit fade on the next open, so a hover-out still eases away", () => {
+    const { getByText } = renderTooltip();
+    fireEvent.pointerDown(getByText("trigger"));
+    expect(hasExit()).toBe(false);
+    act(() => lastOnOpenChange()(false));
+    act(() => lastOnOpenChange()(true));
+    expect(hasExit()).toBe(true);
   });
 });
