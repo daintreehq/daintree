@@ -1096,7 +1096,9 @@ function CommitBody({
               </span>
             ) : null}
             {entry.author ? (
-              <span className="inline-flex min-w-0 max-w-full shrink items-center gap-1.5">
+              // Placed at 6ch and grown into the room left, so the author
+              // truncates before the age and churn are lost.
+              <span className="inline-flex min-w-0 max-w-max shrink-0 grow basis-[6ch] items-center gap-1.5">
                 {entry.unpushed ? <Dot /> : null}
                 {entry.author.email ? (
                   <Tooltip>
