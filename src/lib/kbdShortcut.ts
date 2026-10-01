@@ -402,6 +402,57 @@ function spokenToken(rawToken: string, isMac: boolean): string {
   return rawToken;
 }
 
+// The glyphs a literal key cap draws, as the token names the spoken tables use.
+const KEY_CAP_GLYPH_TOKENS: Record<string, string> = {
+  "↑": "up",
+  "↓": "down",
+  "←": "left",
+  "→": "right",
+  "⏎": "enter",
+  "↵": "enter",
+  "⎋": "escape",
+  "⇥": "tab",
+  "⌫": "backspace",
+  "⌦": "delete",
+  "⌘": "cmd",
+  "⇧": "shift",
+  "⌥": "option",
+  "⌃": "ctrl",
+};
+
+/**
+ * A literal key cap as it should be read aloud: `"↑↓"` → `"Up Arrow Down
+ * Arrow"`, `"↵"` → `"Return"` on macOS, `"esc"` → `"Escape"`, `"Alt+↵"` →
+ * `"Option Return"`, `"1–9"` → `"1 through 9"`. For caps drawn from a string
+ * rather than a combo, where `describeChord` does not apply.
+ */
+export function describeKeyCap(cap: string, isMac: boolean): string {
+  const trimmed = cap.trim();
+  if (!trimmed) return "";
+  // A key range ("1–9") and a lone plus are single keys, not joined parts.
+  if (/^\w[–-]\w$/.test(trimmed) || trimmed === "+") return spokenToken(trimmed, isMac);
+  // "Ctrl+↵" joins keys with "+"; "Ctrl++" is Ctrl and the plus key itself.
+  // A cap that only ends in "+" ("⌘+") is glyphs, read one by one below.
+  const joined = trimmed.endsWith("++")
+    ? [...trimmed.slice(0, -2).split("+"), "+"]
+    : /\+./.test(trimmed)
+      ? trimmed.split("+")
+      : null;
+  if (joined) {
+    return joined
+      .filter(Boolean)
+      .map((part) => describeKeyCap(part, isMac))
+      .join(" ");
+  }
+  // A named key ("Space", "F2", "Page Up") is read as its name.
+  if (/^[\p{L}\p{N}][\p{L}\p{N} ]*$/u.test(trimmed) && trimmed.length > 1) {
+    return spokenToken(trimmed, isMac);
+  }
+  return [...trimmed]
+    .map((glyph) => spokenToken(ownLookup(KEY_CAP_GLYPH_TOKENS, glyph) ?? glyph, isMac))
+    .join(" ");
+}
+
 /**
  * The shortcut as it should be read aloud: `"Cmd+K Cmd+S"` →
  * `"Command K, then Command S"` on macOS, `"Ctrl K, then Ctrl S"` elsewhere.

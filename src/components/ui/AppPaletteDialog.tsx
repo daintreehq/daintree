@@ -10,6 +10,8 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
+import { describeKeyCap } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -776,8 +778,13 @@ function HintChip({
     <span
       className={cn("inline-flex items-baseline", truncate ? "min-w-0" : "shrink-0", className)}
     >
+      {/* The caps are glyphs ("↵", "↑"), which a screen reader names as symbols
+          or skips; the keys are spoken by name instead. */}
+      <span className="sr-only">
+        {hint.keys.map((key) => describeKeyCap(key, isMac())).join(" ")}
+      </span>
       {hint.keys.map((key, i) => (
-        <kbd key={key} className={cn(KBD_CLASS, "shrink-0", i > 0 && "ml-1")}>
+        <kbd key={key} aria-hidden="true" className={cn(KBD_CLASS, "shrink-0", i > 0 && "ml-1")}>
           {key}
         </kbd>
       ))}

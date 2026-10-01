@@ -31,6 +31,18 @@ describe("PaletteFooterHints", () => {
     expect(screen.getByText("↵")).toBeTruthy();
   });
 
+  it("speaks glyph caps by key name and hides the glyphs themselves", () => {
+    const { container } = render(<PaletteFooterHints {...defaultProps} />);
+    for (const cap of container.querySelectorAll("kbd")) {
+      expect(cap.getAttribute("aria-hidden")).toBe("true");
+    }
+    const spoken = [...container.querySelectorAll(".sr-only")].map((el) => el.textContent);
+    // Each spoken name is words, never the glyph a screen reader would mangle.
+    expect(spoken).toHaveLength(3);
+    for (const text of spoken) expect(text).toMatch(/^[A-Za-z ]+$/);
+    expect(spoken[1]).toContain("Up");
+  });
+
   it("renders all secondary hints ambient — no popover, no help button", () => {
     render(<PaletteFooterHints {...defaultProps} />);
     expect(screen.getByText("navigate")).toBeTruthy();
