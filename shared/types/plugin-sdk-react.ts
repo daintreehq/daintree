@@ -4269,7 +4269,10 @@ export interface PluginSchemaFormProps extends PluginRootAttributes {
   /** The values, controlled. Passing the prop at all makes it controlled. */
   value?: Record<string, unknown>;
   defaultValue?: Record<string, unknown>;
-  /** The whole object after one field committed. A field left empty is removed. */
+  /**
+   * The whole object after one field committed. A field left empty is removed,
+   * except a required one with no `default`, which says "Enter a value" instead.
+   */
   onValueChange?: (value: Record<string, unknown>) => void;
   /** Errors to show by property name, beside the form's own checks (`useForm().errors`). */
   errors?: Record<string, PluginFormError>;

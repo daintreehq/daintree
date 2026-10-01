@@ -53,7 +53,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { FieldBoundary, useFieldControl } from "@/components/ui/field";
+import { FieldBoundary, InlineError, useFieldControl } from "@/components/ui/field";
 import { inputVariants } from "@/components/ui/input";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -390,6 +390,7 @@ function ColorPanel({
 }) {
   const [text, setText] = useState<string | null>(null);
   const [typedInvalid, setTypedInvalid] = useState(false);
+  const hexErrorId = useId();
   const Dropper = eyeDropperConstructor();
   const hsl = value ? hexToHsl(value) : null;
   const commitText = () => {
@@ -426,6 +427,7 @@ function ColorPanel({
               type="text"
               aria-label="Hex, RGB or HSL colour"
               aria-invalid={typedInvalid || undefined}
+              aria-describedby={typedInvalid ? hexErrorId : undefined}
               spellCheck={false}
               autoComplete="off"
               value={text ?? (value ? value.toUpperCase() : "")}
@@ -480,6 +482,9 @@ function ColorPanel({
               </Button>
             ) : null}
           </div>
+          {typedInvalid ? (
+            <InlineError id={hexErrorId}>Enter a hex, rgb() or hsl() colour</InlineError>
+          ) : null}
         </>
       ) : null}
     </div>
@@ -859,6 +864,8 @@ function TimeField({
   const [ownOpen, setOwnOpen] = useState(false);
   const isOpen = (open ?? ownOpen) && !disabled;
   const boxRef = useRef<HTMLDivElement>(null);
+  // The segment Alt+Down opened the list from, which gets focus back on close.
+  const openedFrom = useRef<SegmentKind | null>(null);
   const shown = draft ?? draftOf(value, cycle);
   const [am, pm] = dayPeriodNames();
   const segments: SegmentKind[] = cycle === 12 ? ["hour", "minute", "period"] : ["hour", "minute"];
@@ -888,7 +895,12 @@ function TimeField({
       }
       setDraft(null);
       setTypedInvalid(false);
-      if (minutes !== value) onChange(minutes);
+      if (minutes !== value) {
+        // A digit still being typed belongs to the value this edit just sent,
+        // not the one it replaced: the next digit carries on from it.
+        setTypedState((current) => (current === null ? null : { ...current, source: minutes }));
+        onChange(minutes);
+      }
       return;
     }
     setTypedInvalid(false);
@@ -953,6 +965,7 @@ function TimeField({
     const key = event.key;
     if (key === "ArrowDown" && event.altKey) {
       event.preventDefault();
+      openedFrom.current = kind;
       setOpen(true);
     } else if (key === "Enter") {
       // A segment is not an input, so the form's implicit submission is ours to give.
@@ -1134,6 +1147,18 @@ function TimeField({
         aria-modal="true"
         {...{ [ESCAPE_RADIX_LAYER_ATTR]: "" }}
         className={cn("w-auto p-0", overlayZ)}
+        onCloseAutoFocus={(event) => {
+          const from = openedFrom.current;
+          openedFrom.current = null;
+          if (from === null) return;
+          event.preventDefault();
+          // A click away that gave focus to something else keeps it there.
+          const active = document.activeElement;
+          if (active !== null && active !== document.body) return;
+          boxRef.current
+            ?.querySelector<HTMLElement>(`[data-segment="${from}"]`)
+            ?.focus({ preventScroll: true });
+        }}
         onOpenAutoFocus={(event) => {
           const panel = event.currentTarget;
           const list =
@@ -2454,18 +2479,22 @@ function SchemaFieldRow({
       return true;
     }
     const outcome = parseSettingDraft(def, type, draft);
+    const removes = outcome.kind === "reset" || (type === "string" && draft === "");
     const refusal =
       outcome.kind === "error"
         ? outcome.message
         : outcome.kind === "value" && integer && !Number.isInteger(outcome.value)
           ? "Enter a whole number"
-          : null;
+          : // A required field with no default to fall back on cannot be emptied.
+            removes && def.required === true && def.default === undefined
+            ? "Enter a value"
+            : null;
     if (refusal !== null) {
       setHeld({ text: draft, source, error: refusal });
       return false;
     }
     setHeld(null);
-    if (outcome.kind === "reset" || (type === "string" && draft === "")) onCommit(undefined, true);
+    if (removes) onCommit(undefined, true);
     else if (outcome.kind === "value") onCommit(outcome.value, false);
     return true;
   };

@@ -182,6 +182,9 @@ describe("ColorPicker", () => {
     fireEvent.change(field, { target: { value: "not a colour" } });
     fireEvent.blur(field);
     expect(field.getAttribute("aria-invalid")).toBe("true");
+    // Said in words, tied to the field, not left to the red edge.
+    const described = document.getElementById(field.getAttribute("aria-describedby") ?? "");
+    expect(described?.textContent).toMatch(/hex/i);
     fireEvent.keyDown(field, { key: "Escape" });
     expect(field.value).toBe("#FF0000");
   });
@@ -247,6 +250,22 @@ describe("TimePicker", () => {
     fireEvent.keyDown(segment("Minute"), { key: "0" });
     fireEvent.keyDown(segment("Minute"), { key: "5" });
     expect(onValueChange).toHaveBeenLastCalledWith("14:05");
+  });
+
+  it("keeps both digits of a minute typed into a filled field", () => {
+    const onValueChange = vi.fn();
+    renderLoose(kit.TimePicker, {
+      defaultValue: "17:30",
+      hourCycle: 24,
+      onValueChange,
+      "aria-label": "Start",
+    });
+    const minute = segment("Minute");
+    minute.focus();
+    fireEvent.keyDown(minute, { key: "4" });
+    fireEvent.keyDown(segment("Minute"), { key: "5" });
+    expect(onValueChange).toHaveBeenLastCalledWith("17:45");
+    expect(segment("Minute").textContent).toBe("45");
   });
 
   it("uses AM/PM segments on a 12-hour clock", () => {
@@ -1240,6 +1259,17 @@ describe("SchemaForm", () => {
     );
     expect(name.value).toBe("reset");
     expect((screen.getByRole("textbox", { name: "Count" }) as HTMLInputElement).value).toBe("");
+  });
+
+  it("refuses to empty a required field that has no default", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onValueChange = vi.fn();
+    renderLoose(kit.SchemaForm, { schema, value: { name: "Bug" }, onValueChange });
+    const name = screen.getByRole("textbox", { name: "Name" });
+    fireEvent.change(name, { target: { value: "" } });
+    fireEvent.blur(name);
+    expect(onValueChange).not.toHaveBeenCalled();
+    expect(screen.getByText("Enter a value")).toBeTruthy();
   });
 
   it("shows errors handed in beside its own", () => {
