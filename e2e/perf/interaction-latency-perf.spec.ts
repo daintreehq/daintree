@@ -15,7 +15,7 @@ import {
   openProjectPluginPanel,
   trustProjectPlugins,
   waitForProjectPluginPanelKind,
-} from "../../helpers/projectPlugins";
+} from "../helpers/projectPlugins";
 import {
   armProbe,
   installProbe,
