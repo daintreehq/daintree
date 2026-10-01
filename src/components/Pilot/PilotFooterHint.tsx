@@ -1,6 +1,8 @@
 import { cn } from "@/lib/utils";
 import { KBD_CLASS } from "@/components/ui/AppPaletteDialog";
 import { Spinner } from "@/components/ui/Spinner";
+import { describeKeyCap } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 
 /**
  * The footer's key hints, which are also its buttons.
@@ -65,7 +67,14 @@ export function PilotFooterHint({
       )}
     >
       <span className={cn("flex items-center", busy && "invisible")}>
-        {keys !== undefined && <kbd className={KBD_CLASS}>{keys}</kbd>}
+        {keys !== undefined && (
+          <>
+            <span className="sr-only">{describeKeyCap(keys, isMac())}</span>
+            <kbd aria-hidden="true" className={KBD_CLASS}>
+              {keys}
+            </kbd>
+          </>
+        )}
         <span className={cn(keys !== undefined && "ml-1.5")}>{label}</span>
       </span>
       {busy && (
