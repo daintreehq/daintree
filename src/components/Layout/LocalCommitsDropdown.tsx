@@ -381,33 +381,45 @@ function LocalCommitRow({
           )}
 
           <div className="flex items-center gap-1.5 mt-0.5 min-w-0 text-xs text-text-secondary">
-            {isUnpushed && (
-              <>
+            {/* One fixed 16px line that wraps what does not fit onto a second,
+                hidden one: an item that cannot fit drops out whole with its
+                separator, never as a clipped fragment. The author is placed at
+                6ch and grows into the room left, so it truncates before the age
+                is lost. The hash keeps its own place outside the line. */}
+            <div
+              data-commit-meta=""
+              className="flex h-4 min-w-0 flex-1 flex-wrap items-center gap-x-1.5 overflow-hidden leading-4"
+            >
+              {isUnpushed && (
                 <span className="inline-flex shrink-0 items-center gap-0.5 font-medium text-text-primary">
                   <ArrowUp aria-hidden="true" className="size-3" />
                   Not pushed
                 </span>
+              )}
+              <span className="inline-flex min-w-0 max-w-max shrink-0 grow basis-[6ch] items-center gap-1.5">
+                {isUnpushed && <span aria-hidden="true">&middot;</span>}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="min-w-0 truncate">{commit.author.name}</span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{commit.author.email}</TooltipContent>
+                </Tooltip>
+              </span>
+              <span className="inline-flex shrink-0 items-center gap-1.5">
                 <span aria-hidden="true">&middot;</span>
-              </>
-            )}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="truncate">{commit.author.name}</span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{commit.author.email}</TooltipContent>
-            </Tooltip>
-            <span aria-hidden="true">&middot;</span>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="shrink-0">{formatTimeAgo(commit.date)}</span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {(() => {
-                  const d = new Date(commit.date);
-                  return isNaN(d.getTime()) ? "Unknown" : d.toLocaleString();
-                })()}
-              </TooltipContent>
-            </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="shrink-0">{formatTimeAgo(commit.date)}</span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {(() => {
+                      const d = new Date(commit.date);
+                      return isNaN(d.getTime()) ? "Unknown" : d.toLocaleString();
+                    })()}
+                  </TooltipContent>
+                </Tooltip>
+              </span>
+            </div>
 
             <Tooltip>
               <TooltipTrigger asChild>
