@@ -13,7 +13,6 @@ const VALID_PROJECTS = new Set([
   "full-panels",
   "full-resilience",
   "full-plugins",
-  "online",
   "nightly",
 ]);
 const MAX_WORKERS = 8;

@@ -19,10 +19,6 @@ const coreTimeout = isWindowsCI
     : isNonWindowsCI
       ? 180_000
       : 120_000;
-// launchOpenCodeReady can run its ready-wait twice (the CLI self-updates and
-// asks for a restart), so the per-test budget has to clear two cold starts at
-// the platform's ready-state deadline — see waitForOpenCodeReady.
-const onlineTimeout = isWindowsCI ? 480_000 : isCI ? 420_000 : 300_000;
 export const expectTimeout = isWindowsCI ? 15_000 : isCI ? 10_000 : 5_000;
 
 // Blob reporter is opted into by the cross-platform stabilize sweep and the
@@ -63,7 +59,7 @@ export default defineConfig({
   fullyParallel: false,
   timeout: 180_000,
   // failOnFlakyTests is top-level only (not per-project). Gate it behind
-  // FAIL_ON_FLAKY_TESTS so only release-gating suites (core, online) enable
+  // FAIL_ON_FLAKY_TESTS so only the release-gating core suite enables
   // it in CI. full-* buckets keep retries without a flake gate for PR velocity.
   failOnFlakyTests: process.env.FAIL_ON_FLAKY_TESTS === "true",
   expect: { timeout: expectTimeout },
@@ -133,18 +129,6 @@ export default defineConfig({
       timeout: coreTimeout,
       workers: 1,
       retries: isCI ? 2 : 0,
-    },
-    {
-      // Real agent CLIs read and write runner-global configuration under the
-      // user's home directory. Concurrent online specs can overlap app
-      // shutdown with the next CLI launch and leave that shared state unusable
-      // for the rest of the job, so keep the release-gating online surface
-      // serial on every platform.
-      name: "online",
-      testDir: "./e2e/online",
-      timeout: onlineTimeout,
-      workers: 1,
-      retries: isCI ? 1 : 0,
     },
     {
       name: "nightly",

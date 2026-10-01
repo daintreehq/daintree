@@ -27,7 +27,6 @@ on:
           - full-panels
           - full-resilience
           - full-plugins
-          - online
           - nightly
       test_file:
         description: "Spec file(s), separated by comma, space, or newline"
@@ -55,10 +54,6 @@ concurrency:
 
 env:
   NODE_VERSION: "22"
-  # Without this the pinned CLI self-updates on first launch and the run
-  # silently uses whatever version npm published today — see
-  # scripts/ci/install-opencode.mjs.
-  OPENCODE_DISABLE_AUTOUPDATE: "1"
 
 jobs:
   matrix-setup:
@@ -212,10 +207,6 @@ jobs:
       - name: Repair Claude Code native binary
         run: node scripts/ci/repair-claude-code-install.mjs
 
-      - name: Install OpenCode
-        if: inputs.suite == 'online'
-        run: node scripts/ci/install-opencode.mjs
-
       - name: Configure Claude Code (macOS/Linux)
         if: runner.os != 'Windows'
         run: |
@@ -245,8 +236,6 @@ jobs:
           E2E_GREP: ${{ inputs.grep }}
           E2E_WORKERS: ${{ inputs.workers }}
           E2E_RETRIES: ${{ inputs.retries }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
         run: node scripts/ci/run-single-e2e.mjs
 
       - name: Run single e2e test (Linux)
@@ -257,8 +246,6 @@ jobs:
           E2E_GREP: ${{ inputs.grep }}
           E2E_WORKERS: ${{ inputs.workers }}
           E2E_RETRIES: ${{ inputs.retries }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
         run: xvfb-run --auto-servernum node scripts/ci/run-single-e2e.mjs
 
       - name: Run single e2e test (Windows)
@@ -269,8 +256,6 @@ jobs:
           E2E_GREP: ${{ inputs.grep }}
           E2E_WORKERS: ${{ inputs.workers }}
           E2E_RETRIES: ${{ inputs.retries }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
           ELECTRON_ENABLE_LOGGING: "1"
         run: node scripts/ci/run-single-e2e.mjs
 

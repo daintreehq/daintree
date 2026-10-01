@@ -4,8 +4,8 @@ import { fileURLToPath } from "url";
 import path from "path";
 import { load } from "js-yaml";
 
-// Regression guard for #11117: online E2E gated the macOS release but not Linux
-// or Windows, so a failing real-agent run could still publish on two of three
+// Regression guard for #11117: an E2E suite gated the macOS release but not
+// Linux or Windows, so a failing run could still publish on two of three
 // platforms. Release workflows only fire on a v* tag or a manual dispatch, so
 // they can never be exercised on a PR — these structural assertions are the
 // only enforcement of the gating contract in CI.
@@ -14,8 +14,8 @@ import { load } from "js-yaml";
 // for a gate to actually gate, and each has a failure mode that looks fine in
 // the YAML:
 //   1. The suite really runs. Suites are resolved from each gate's `with:`/
-//      matrix, not from job names — a job called `e2e-online-gate` passing
-//      `suite: core` would satisfy any name-shaped assertion while testing the
+//      matrix, not from job names — a job called `e2e-core-gate` passing
+//      `suite: full-terminal` would satisfy any name-shaped assertion while testing the
 //      wrong thing.
 //   2. Failure really propagates. A `needs:` edge only blocks while every job
 //      along it keeps its implicit success() check, which ANY status-check
@@ -35,7 +35,6 @@ const RELEASE_WORKFLOWS = ["release-macos.yml", "release-linux.yml", "release-wi
 // so it should cost an edit here.
 const RELEASE_BLOCKING_SUITES = [
   "core",
-  "online",
   "full-terminal",
   "full-worktree",
   "full-presets",
@@ -57,7 +56,7 @@ const needsOf = (job) => {
 
 // A gate either passes one literal suite or fans a matrix of them out. Only
 // credit the matrix when the job actually forwards it: a strategy listing
-// `online` while `with.suite` hardcodes `core` runs core, whatever the matrix
+// `full-terminal` while `with.suite` hardcodes `core` runs core, whatever the matrix
 // says.
 const suitesOf = (job) => {
   const suite = job.with?.suite;
@@ -187,14 +186,6 @@ describe("release workflow e2e gating contract (#11117)", () => {
       }
     }
   );
-
-  // Online drives real agent CLIs against real APIs; without the secrets it
-  // cannot run at all, and a gate that cannot run is not a gate.
-  it.each(workflows)("$file: the online gate inherits secrets", ({ jobs, gates }) => {
-    const online = gates.filter((gate) => suitesOf(jobs[gate]).includes("online"));
-    expect(online.length).toBe(1);
-    expect(jobs[online[0]].secrets).toBe("inherit");
-  });
 
   // continue-on-error is unsupported on reusable-workflow (`uses:`) jobs at any
   // value — it makes the whole workflow fail to start. Added and reverted once

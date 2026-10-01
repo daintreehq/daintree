@@ -50,7 +50,7 @@ Ensure the `publish` URL matches your R2 public URL:
 
 The workflow will:
 
-- Run release checks, unit tests, the `core` smoke gate, all seven `full-*` domain buckets in parallel (terminal, worktree, presets, platform, panels, resilience, plugins), and the `online` agent-integration gate before packaging
+- Run release checks, unit tests, the `core` smoke gate, all seven `full-*` domain buckets in parallel (terminal, worktree, presets, platform, panels, resilience, plugins) before packaging
 - Build for macOS, Windows, and Linux in parallel
 - Validate update metadata files are present
 - Upload binaries to R2 with long cache headers
@@ -119,7 +119,7 @@ The workflow gates release packaging before any artifacts are produced:
 
 1. **Quality gate stage**:
    - Checks and unit tests run on Linux
-   - `core` smoke, the seven `full-*` domain buckets (terminal, worktree, presets, platform, panels, resilience, plugins) fanned out as a matrix, and the `online` gate run before packaging. Each `full-*` bucket auto-shards inside `e2e.yml` (#8053), so Windows `full-*` gates the Windows release too. Broader pre-release cross-platform validation is the on-demand `stabilize.yml` workflow (driven by the `stabilize` skill), not a scheduled nightly.
+   - `core` smoke, the seven `full-*` domain buckets (terminal, worktree, presets, platform, panels, resilience, plugins) fanned out as a matrix, run before packaging. Each `full-*` bucket auto-shards inside `e2e.yml` (#8053), so Windows `full-*` gates the Windows release too. Broader pre-release cross-platform validation is the on-demand `stabilize.yml` workflow (driven by the `stabilize` skill), not a scheduled nightly.
 
 2. **Build stage** (parallel matrix):
    - macOS, Windows, Linux build in parallel

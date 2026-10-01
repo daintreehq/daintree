@@ -1,6 +1,6 @@
 {
   "totals": {
-    "waitForTimeout": 41,
+    "waitForTimeout": 28,
     "isVisibleTimeout": 17
   },
   "files": {
@@ -25,9 +25,6 @@
     },
     "e2e/full/worktree/new-worktree-dialog.spec.ts": {
       "isVisibleTimeout": 1
-    },
-    "e2e/helpers/claudeAuth.ts": {
-      "waitForTimeout": 1
     },
     "e2e/helpers/dragDrop.ts": {
       "waitForTimeout": 4
@@ -58,16 +55,7 @@
     "e2e/helpers/workflows.ts": {
       "waitForTimeout": 3,
       "isVisibleTimeout": 1
-    },
-    "e2e/online/claude-online.spec.ts": {
-      "waitForTimeout": 4
-    },
-    "e2e/online/opencode-online.spec.ts": {
-      "waitForTimeout": 3
-    },
-    "e2e/online/terminal-identity-transitions.spec.ts": {
-      "waitForTimeout": 5
     }
   },
-  "updatedAt": "2026-09-30T13:02:00.698Z"
+  "updatedAt": "2026-10-01T13:28:33.820Z"
 }

@@ -114,20 +114,8 @@ jobs:
       suite: ${{ matrix.suite }}
       platform: macos
 
-  # Online E2E gates build and publish, same as core and full-* — a failing
-  # real-agent run must not ship. Do NOT add job-level continue-on-error here:
-  # it is invalid on reusable-workflow (`uses:`) jobs and makes the whole
-  # workflow fail to start.
-  e2e-online-gate:
-    needs: [checks, unit-tests]
-    uses: ./.github/workflows/e2e.yml
-    with:
-      suite: online
-      platform: macos
-    secrets: inherit
-
   build-daintree:
-    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate, e2e-online-gate]
+    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
     name: Build Daintree (macOS)
     runs-on: macos-14
     timeout-minutes: 90

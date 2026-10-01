@@ -1,7 +1,7 @@
 ---
 name: stabilize
 disable-model-invocation: true
-description: "USE ONLY WHEN A HUMAN EXPLICITLY INVOKES IT — never auto-select or run this proactively: not after adding a feature, fixing a bug, or finishing a task, not as a routine or ambient health check, and not as a step inside another workflow. This is a deliberate, expensive workflow. Once a human explicitly starts it with /stabilize (Claude Code) or $stabilize (Codex) — typically the night before a release, or as a one-off whole-tree validation — it drives Daintree to a fully green, stable state across every check we can run: typecheck/lint/format, unit, integration, knip (local only), build, smoke, and the full Playwright E2E surface (core, all seven full-* buckets, online, and the nightly memory-leak soak). Local-first and strictly serial by OS — the local Mac (macOS) to green first, then the cross-platform stabilize.yml GitHub workflow one OS at a time, Linux to green then Windows to green — fixing real failures in batches and re-validating each fix with the narrowest run that proves it, plus release dry-runs when releasing. The budget is ONE full stabilize.yml run per OS; everything after it is a scoped re-run. Never run Linux and Windows in parallel; a bug caught on Linux that also breaks Windows would waste an expensive Windows run."
+description: "USE ONLY WHEN A HUMAN EXPLICITLY INVOKES IT — never auto-select or run this proactively: not after adding a feature, fixing a bug, or finishing a task, not as a routine or ambient health check, and not as a step inside another workflow. This is a deliberate, expensive workflow. Once a human explicitly starts it with /stabilize (Claude Code) or $stabilize (Codex) — typically the night before a release, or as a one-off whole-tree validation — it drives Daintree to a fully green, stable state across every check we can run: typecheck/lint/format, unit, integration, knip (local only), build, smoke, and the full Playwright E2E surface (core, all seven full-* buckets, and the nightly memory-leak soak). Local-first and strictly serial by OS — the local Mac (macOS) to green first, then the cross-platform stabilize.yml GitHub workflow one OS at a time, Linux to green then Windows to green — fixing real failures in batches and re-validating each fix with the narrowest run that proves it, plus release dry-runs when releasing. The budget is ONE full stabilize.yml run per OS; everything after it is a scoped re-run. Never run Linux and Windows in parallel; a bug caught on Linux that also breaks Windows would waste an expensive Windows run."
 ---
 
 # Stabilize
@@ -16,7 +16,7 @@ There is no issue-creation step anywhere in this flow. You are the triage. Do no
 
 ## What "stabilize" covers
 
-- **Every local check:** `npm run check` (typecheck + lint + format + channel/IPC/confirm-wiring guards), `npm run test` (unit), `npm run test:integration`, `npm run knip`, `npm run build`, `npm run test:smoke`, and ALL end-to-end suites — `core`, every `full-*` bucket, `online`, and the serialized `nightly` memory-leak soak.
+- **Every local check:** `npm run check` (typecheck + lint + format + channel/IPC/confirm-wiring guards), `npm run test` (unit), `npm run test:integration`, `npm run knip`, `npm run build`, `npm run test:smoke`, and ALL end-to-end suites — `core`, every `full-*` bucket, and the serialized `nightly` memory-leak soak.
 - **The cross-platform surface that the local Mac cannot cover:** Linux + Windows for check/unit/build/smoke and all E2E, via the `stabilize.yml` GitHub workflow. `knip` is deliberately absent from CI — it is a static, OS-agnostic report, so the local run is the only run.
 - **Release packaging/signing/notarization/Store/R2/update-metadata** (when stabilizing for a release): via the per-OS release dry-runs (`release-macos.yml` / `release-linux.yml` / `release-windows.yml` with `dry_run=true`).
 
@@ -74,7 +74,7 @@ Track:
 
 - Current branch and pushed SHA.
 - Which OS stage you are in (A macOS-local / B Linux-CI / C Windows-CI), and whether the earlier stages are confirmed green.
-- The green ledger: per OS, which pieces (`check`, `test`, `build`, `integration`, `core`, each `full-*`, `online`, `nightly`) have passed and in which run URL. This is what proves the OS green — see **Run Budget**. A piece closes when everything in it has passed somewhere: the specs that passed in the discovery run plus a successful scoped confirmation (any rung) of each spec that failed — you do not need to re-run the whole bucket to close it. `integration` is Linux-only; mark it not-applicable for Windows. Pieces that never executed (their `e2e-build` failed) stay pending, not green.
+- The green ledger: per OS, which pieces (`check`, `test`, `build`, `integration`, `core`, each `full-*`, `nightly`) have passed and in which run URL. This is what proves the OS green — see **Run Budget**. A piece closes when everything in it has passed somewhere: the specs that passed in the discovery run plus a successful scoped confirmation (any rung) of each spec that failed — you do not need to re-run the whole bucket to close it. `integration` is Linux-only; mark it not-applicable for Windows. Pieces that never executed (their `e2e-build` failed) stay pending, not green.
 - Full-run count per OS against the budget of one, with the justification for any second one.
 - Any active release dry-run URLs and conclusions.
 - Failure queue: job, platform, step, suite/spec, suspected cause, flake-vs-real classification, current status.
@@ -100,8 +100,7 @@ Three OS stages, run strictly in order. Each must be fully green before the next
    npx playwright test \
      --project=core \
      --project=full-terminal --project=full-worktree --project=full-presets \
-     --project=full-platform --project=full-panels --project=full-resilience --project=full-plugins \
-     --project=online
+     --project=full-platform --project=full-panels --project=full-resilience --project=full-plugins
    # E2E — the serialized memory-leak soak (keep it separate, workers=1):
    npm run test:e2e:nightly
    ```
@@ -191,7 +190,7 @@ How to confirm a flake without blindly re-running the whole job:
 - **Locally:** re-run the exact spec in isolation a few times. `npx playwright test --project=<suite> <path/to/spec.spec.ts> --workers=1 --repeat-each=3`. Consistent green = flake; any deterministic red = treat as real.
 - **In CI, scoped to one spec on the failing OS:** `e2e-single.yml` (see below) with `retries=0` to see the raw flake rate, or `retries=2` to mirror CI's own retry budget.
 - **In CI, scoped to one shard on a new SHA:** `gh workflow run e2e.yml --ref <branch> -f platform=<os> -f suite=<suite> -f shard=<n> -f shard_total=<N>` re-runs exactly the shard that failed (read `<n>/<N>` off the failed job name) in ~8 minutes. Note `e2e.yml` cancels an in-progress run of the same suite/platform/ref, so don't fire it while a `stabilize.yml` run on the branch is still executing that suite.
-- **In CI, scoped to a job's prior failures (same SHA only):** GitHub "Re-run failed jobs" re-runs only the failed shards, and `e2e.yml` automatically scopes the retry to the prior attempt's `failed-specs.txt` via `--test-list` (it drops `--shard` for that attempt). Use this to cheaply confirm whether a shard's failures evaporate on re-run. It does NOT scope `nightly` or `online` (a retried `nightly` job repeats the whole ~15–20 minute soak) or a run with no failed-specs artifact — for those, confirm the one spec with `e2e-single.yml` instead.
+- **In CI, scoped to a job's prior failures (same SHA only):** GitHub "Re-run failed jobs" re-runs only the failed shards, and `e2e.yml` automatically scopes the retry to the prior attempt's `failed-specs.txt` via `--test-list` (it drops `--shard` for that attempt). Use this to cheaply confirm whether a shard's failures evaporate on re-run. It does NOT scope `nightly` (a retried `nightly` job repeats the whole ~15–20 minute soak) or a run with no failed-specs artifact — for those, confirm the one spec with `e2e-single.yml` instead.
 
 A flake is not "free to ignore." If a spec flakes repeatedly, the durable fix is to stabilize that spec (replace sleeps with state-based waits, scope locators, add helper-level readiness gates) — that is real stabilization work and belongs in the branch. Only genuinely intermittent, already-tracked flakes are left to the quarantine flow.
 
@@ -199,9 +198,9 @@ A flake is not "free to ignore." If a spec flakes repeatedly, the durable fix is
 
 Authoritative files:
 
-- `.github/workflows/stabilize.yml` — the cross-platform validation surface (this skill's GitHub side). `workflow_dispatch` only, input `platform` (the workflow's own default is `linux-windows`; also `windows` | `linux` | `all` | `non-windows` | `macos`). This skill never relies on that default — it dispatches one OS at a time, `platform=linux` then `platform=windows`, so Linux is fully green before Windows starts. macOS is normally skipped on CI because the local run covers it. Second input `only` scopes a re-run to named pieces (`check test build integration core full-terminal … full-plugins online nightly`, aliases `full` and `e2e`; empty = everything). Runs `check`, `test`, `build` (+ smoke), `integration-test` (Linux legs only), `e2e-build` (one app bundle per OS, shared by every shard), `e2e-core`, `e2e-full` (seven buckets), `e2e-online`, `e2e-nightly` (memory-leak), a non-gating `merge-playwright-reports`, and the `stabilize-ok` gate. All jobs start in parallel — check/test do not gate E2E — and the gate accepts `skipped` only from pieces the run deliberately left out (`only`, or `integration` on a run with no Linux leg); a selection that would run nothing is rejected up front. No `knip` (local only), no cron, no issue creation, no publish.
+- `.github/workflows/stabilize.yml` — the cross-platform validation surface (this skill's GitHub side). `workflow_dispatch` only, input `platform` (the workflow's own default is `linux-windows`; also `windows` | `linux` | `all` | `non-windows` | `macos`). This skill never relies on that default — it dispatches one OS at a time, `platform=linux` then `platform=windows`, so Linux is fully green before Windows starts. macOS is normally skipped on CI because the local run covers it. Second input `only` scopes a re-run to named pieces (`check test build integration core full-terminal … full-plugins nightly`, aliases `full` and `e2e`; empty = everything). Runs `check`, `test`, `build` (+ smoke), `integration-test` (Linux legs only), `e2e-build` (one app bundle per OS, shared by every shard), `e2e-core`, `e2e-full` (seven buckets), `e2e-nightly` (memory-leak), a non-gating `merge-playwright-reports`, and the `stabilize-ok` gate. All jobs start in parallel — check/test do not gate E2E — and the gate accepts `skipped` only from pieces the run deliberately left out (`only`, or `integration` on a run with no Linux leg); a selection that would run nothing is rejected up front. No `knip` (local only), no cron, no issue creation, no publish.
 - `.github/workflows/nightly-publish.yml` — publish-only nightly binaries (macOS + Linux) to the auto-update channel. Cron + manual dispatch, no tests. Not part of stabilization; don't drive it.
-- `.github/workflows/e2e.yml` — the unified suite runner. Valid `suite`: `full`, `core`, `full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `full-plugins`, `online`, `nightly`, `demo`.
+- `.github/workflows/e2e.yml` — the unified suite runner. Valid `suite`: `full`, `core`, `full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `full-plugins`, `nightly`, `demo`.
 - `.github/workflows/e2e-single.yml` — the preferred CI loop for one failing spec. Accepts `platform`, `suite`, `test_file`, optional `grep`, `workers`, `retries`.
 - `.github/workflows/release-macos.yml` / `release-linux.yml` / `release-windows.yml` — per-OS release workflows (#8052), each triggered by the same `v*` tag and each supporting `dry_run=true`. Independent — fix and re-run only the failing OS('s) workflow.
 - `.github/workflows/ci.yml` — per-push/PR gate (`check` + sharded `test` + `build`/smoke on Ubuntu). `ci-ok` is the sole required status check.
@@ -225,14 +224,13 @@ npm run test:e2e:full-platform
 npm run test:e2e:full-panels
 npm run test:e2e:full-resilience
 npm run test:e2e:full-plugins
-npm run test:e2e:online
 npm run test:e2e:nightly
 npx playwright test --project=<suite> <path/to/spec.spec.ts> --workers=1 --repeat-each=3
 # Release-gated broad pass (matches what stabilize.yml gates, minus the nightly soak):
-npx playwright test --project=core --project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=full-plugins --project=online
+npx playwright test --project=core --project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=full-plugins
 ```
 
-The multi-project Playwright command above is the Phase A discovery pass — required once, before the first Linux dispatch, and not repeated after fixes (validation from then on follows the re-run ladder). It matches `core`, all `full-*`, and `online`. Add `--project=nightly` (serialized, `--workers=1`) for the memory-leak soak. Because the local machine is a full macOS host, this fully covers the macOS surface — do not lean on a GitHub macOS run to find these failures.
+The multi-project Playwright command above is the Phase A discovery pass — required once, before the first Linux dispatch, and not repeated after fixes (validation from then on follows the re-run ladder). It matches `core` and all `full-*`. Add `--project=nightly` (serialized, `--workers=1`) for the memory-leak soak. Because the local machine is a full macOS host, this fully covers the macOS surface — do not lean on a GitHub macOS run to find these failures.
 
 ## Branch Setup
 
@@ -277,7 +275,6 @@ Suite-to-path mapping:
 - `e2e/full/panels/**` -> `full-panels`
 - `e2e/full/resilience/**` -> `full-resilience`
 - `e2e/full/plugins/**` -> `full-plugins`
-- `e2e/online/**` -> `online`
 - `e2e/nightly/**` -> `nightly`
 
 When the local OS differs from the failing OS, still run the local narrow test if useful, then use `e2e-single.yml` on the target platform.
@@ -358,7 +355,6 @@ Each dry run executes that OS's checks, unit tests, E2E gates, and its platform 
 - For cross-platform failures, account for Windows path separators, case-insensitive filesystems, shell differences, line endings, process cleanup, and slower cold launches.
 - For the `nightly` memory-leak suite, preserve serialized execution; it must run `--workers=1`.
 - For release package failures, verify `electron-builder.config.cjs`, `package.json` scripts, `scripts/ci/generate-update-metadata.mjs`, `scripts/ci/validate-update-metadata.mjs`, and platform-specific workflow conditionals before changing the workflow.
-- For `online` failures, separate product/test failures from external agent CLI or `ANTHROPIC_API_KEY` problems. Do not add local user config to make online tests pass.
 - If a job passes alone but fails in the full workflow, suspect ordering, cleanup, shared temp dirs, leaked processes, port reuse, caches, or platform matrix differences.
 
 ## Finalization

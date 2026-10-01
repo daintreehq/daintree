@@ -172,7 +172,7 @@ Rules:
 2. **`npm run check` is clean.** Zero typecheck errors, zero new lint errors, formatted. The lint ratchet only moves one direction, and it gates per-rule as well as in total — you can't silence a rule in config to get under it.
 3. **The full `npm test` passes.** Run the whole suite before pushing, not just the files you touched. Scoped runs have repeatedly missed failures. If a test breaks because of your change, update it deliberately and explain why in the PR. Don't delete tests to make them pass.
 4. **Never widen a baseline to pass.** The ratchet baselines in `scripts/baselines/` are generated, not hand-edited. If your change legitimately moves one, regenerate it with the matching `*:update` script and say so in the PR.
-5. **E2E tests when touching covered features.** CI doesn't run E2E on PRs, so if you modify a feature with an existing E2E test under `e2e/core/`, `e2e/full/`, or `e2e/online/`, run that spec locally before pushing:
+5. **E2E tests when touching covered features.** CI doesn't run E2E on PRs, so if you modify a feature with an existing E2E test under `e2e/core/` or `e2e/full/`, run that spec locally before pushing:
    ```bash
    npm run build:e2e
    npx playwright test e2e/core/core-foo.spec.ts

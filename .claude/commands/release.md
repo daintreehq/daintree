@@ -80,7 +80,7 @@ Run ALL of these checks. If any fail, stop and report the problem.
 - [ ] No open PRs targeting `main` that should be merged first — check with `gh pr list --base main --state open`
 - [ ] Remote is reachable (`git fetch origin`)
 
-E2E coverage is **not** run locally. The optional dry run in Phase 2 exercises the full E2E suite (core + every `full-*` bucket + online) in CI on real macOS/Linux/Windows runners — that's the right place to catch render crashes, signing failures, and platform-specific regressions.
+E2E coverage is **not** run locally. The optional dry run in Phase 2 exercises the full E2E suite (core + every `full-*` bucket) in CI on real macOS/Linux/Windows runners — that's the right place to catch render crashes, signing failures, and platform-specific regressions.
 
 ### Checkpoint: Report preflight results
 
@@ -106,7 +106,7 @@ If any check failed, show the failure clearly and ask the user how they'd like t
 Before you do any of the actual release work (changelog, version bump, branching, merges), you can validate the entire release pipeline by triggering the release workflow in **dry-run** mode against `develop`. This is the single best way to avoid the "tag → CI fails → re-tag → CI fails again" loop, because it catches:
 
 - Build, sign, or notarization failures on any of macOS / Linux / Windows
-- E2E regressions across every bucket (`core`, all six `full-*`, `online`)
+- E2E regressions across every bucket (`core` and all seven `full-*`)
 - Unit-test or check failures CI runs that you didn't run locally
 - Workflow-config drift (permissions, reusable-workflow inputs, etc.)
 
