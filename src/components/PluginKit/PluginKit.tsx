@@ -115,8 +115,11 @@ import { normalizeSelectOptions } from "./kitOptions";
 import { pluginKitCharts } from "./PluginKitCharts";
 import { pluginKitDnd } from "./PluginKitDnd";
 import { pluginKitHooksFeedback } from "./PluginKitHooksFeedback";
+import { pluginKitLayoutPanes } from "./PluginKitLayoutPanes";
 import { pluginKitTypography, pluginKitTypographyFunctions } from "./PluginKitTypography";
 import { pluginKitEditors } from "./PluginKitEditors";
+import { pluginKitPickersForms } from "./PluginKitPickersForms";
+import { pluginKitTextInputs } from "./PluginKitTextInputs";
 import { primeRadix } from "@/components/ui/radix-loader";
 
 export { normalizeSelectOptions, pickDomProps };
@@ -1264,9 +1267,12 @@ export const pluginKit = {
   ...pluginKitCharts,
   ...pluginKitDnd,
   ...pluginKitHooksFeedback,
+  ...pluginKitLayoutPanes,
   ...pluginKitTypography,
   ...pluginKitTypographyFunctions,
   ...pluginKitEditors,
+  ...pluginKitPickersForms,
+  ...pluginKitTextInputs,
 };
 
 export type PluginKit = typeof pluginKit;

@@ -160,8 +160,8 @@ describe("McpServerSettingsTab", () => {
 
   // The key section used to announce itself with an ambient "API key active"
   // line; issue #12002 removed it, so gate on a control that only exists once
-  // a key has loaded. Copy is the right anchor — the reveal button's label
-  // flips to "Hide API key" the moment a test reveals the key.
+  // a key has loaded. Copy is the right anchor — the reveal button keeps one
+  // name and flips its pressed state when a test reveals the key.
   const waitForApiKeyControls = (container: HTMLElement) =>
     waitFor(
       () => {
@@ -210,12 +210,15 @@ describe("McpServerSettingsTab", () => {
     expect(displayArea.textContent).not.toContain("dnt-key-abc123");
     expect(displayArea.textContent).toContain("•");
 
-    fireEvent.click(screen.getByLabelText("Show API key"));
+    const reveal = screen.getByLabelText("Show API key");
+    expect(reveal.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(reveal);
     await waitFor(() => {
       expect(displayArea.textContent).toContain("dnt-key-abc123");
     });
+    expect(reveal.getAttribute("aria-pressed")).toBe("true");
 
-    fireEvent.click(screen.getByLabelText("Hide API key"));
+    fireEvent.click(screen.getByLabelText("Show API key"));
     await waitFor(() => {
       expect(displayArea.textContent).not.toContain("dnt-key-abc123");
     });

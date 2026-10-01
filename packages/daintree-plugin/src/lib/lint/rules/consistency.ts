@@ -233,9 +233,15 @@ const rawButton = elementRule(
 const KIT_INPUT_TYPES = new Set(["text", "search", "email", "url", "password", "number", "tel"]);
 
 const KIT_FOR_INPUT: Record<string, string> = {
+  // A token or key: masked, with reveal and a saved state, copy blocked.
+  password: "SecretInput",
   checkbox: "Checkbox",
   radio: "RadioGroup",
   range: "Slider",
+  date: "DatePicker",
+  time: "TimePicker",
+  "datetime-local": "DateTimePicker",
+  color: "ColorPicker",
   button: "Button",
   submit: "Button",
   reset: "Button",
@@ -263,7 +269,7 @@ const rawFormControl = elementRule(
     if (literal === null && hasProp(file, element, "type")) return null;
     const type = (literal ?? "text").toLowerCase();
     const kit = KIT_FOR_INPUT[type] ?? (KIT_INPUT_TYPES.has(type) ? "Input" : null);
-    // date, time, color, hidden and the rest have no kit control: the native
+    // hidden, month, week and the rest have no kit control: the native
     // element, styled with theme tokens, is the right call. A file input is
     // often the hidden half of a plugin's own "Import…" button, so it is left
     // alone rather than pointed at `FileDropzone`.
@@ -404,6 +410,19 @@ const viewportBreakpoint = classRule(
     variants.some((variant) => VIEWPORT_VARIANT.test(variant))
       ? `"${token}" answers to the window's width, not the pane's`
       : null
+);
+
+const SLIDE_OFF = /^-?translate-[xy]-full$/;
+
+const handRolledDrawer = classRule(
+  {
+    id: "hand-rolled-drawer",
+    severity: "warn",
+    message: "hand-built slide-in panel",
+    hint: "prefer `Drawer` (with `DrawerToggle`) from @daintreehq/plugin-ui: it slides in within the pane, over or beside the content, holds focus when modal and closes on Escape",
+  },
+  (token, { base }) =>
+    SLIDE_OFF.test(base) ? `"${token}" slides a panel off the pane's edge by hand` : null
 );
 
 const NATIVE_DIALOG =
@@ -582,4 +601,5 @@ export const CONSISTENCY_RULES: LintRule[] = [
   rawPortal,
   viewportBreakpoint,
   editorLibraryImport,
+  handRolledDrawer,
 ];

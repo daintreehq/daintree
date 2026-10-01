@@ -50,6 +50,10 @@ const CLASS_CASES: Record<string, [string, string]> = {
     `<div className={cn("grid grid-cols-1", on && "md:grid-cols-3 max-sm:hidden")} />`,
     `<div className="@container"><div className="grid-cols-1 @md:grid-cols-3 hover:bg-overlay-soft" /></div>`,
   ],
+  "hand-rolled-drawer": [
+    `<aside className={cn("absolute inset-y-0 right-0 w-80", !open && "translate-x-full")} />`,
+    `<span className="translate-x-1 -translate-y-1/2" />`,
+  ],
 };
 
 describe("class-string rules", () => {
@@ -147,6 +151,13 @@ describe("element rules", () => {
     ]);
   });
 
+  it("points a password field at SecretInput", async () => {
+    const findings = await lintFor("raw-form-control", view(`<input type="password" />`));
+    expect(findings.map((f) => f.message)).toEqual([
+      expect.stringContaining('type="password">; prefer `SecretInput`'),
+    ]);
+  });
+
   it("suggests Input only for the types the kit Input renders", async () => {
     const findings = await lintFor(
       "raw-form-control",
@@ -158,7 +169,10 @@ describe("element rules", () => {
       expect.stringContaining('type="email">; prefer `Input`'),
       expect.stringContaining('type="number">; prefer `Input`'),
       expect.stringContaining("`Button`"),
+      expect.stringContaining('type="date">; prefer `DatePicker`'),
       expect.stringContaining('type="range">; prefer `Slider`'),
+      expect.stringContaining('type="color">; prefer `ColorPicker`'),
+      expect.stringContaining('type="time">; prefer `TimePicker`'),
     ]);
   });
 
@@ -500,7 +514,7 @@ describe("zero-build views written with createElement", () => {
     ],
     "raw-form-control": [
       `h("input", { value: "", placeholder: "Search" })`,
-      `h("input", { type: "date" })`,
+      `h("input", { type: "hidden" })`,
     ],
     "native-title-tooltip": [
       `h("span", { title: "Full path" }, "x")`,

@@ -63,6 +63,16 @@ function renderPluginRoot(): Element {
         createElement(kit.IconButton, { icon: "x", "aria-label": "Close" }),
         createElement(kit.Icon, { name: "search", className: "text-text-secondary" }),
         createElement(kit.SearchField, { value: "", "aria-label": "Search" }),
+        createElement(kit.ToggleGroup, {
+          "aria-label": "Days",
+          items: [
+            { value: "mon", label: "M", "aria-label": "Monday" },
+            { value: "b", icon: "tag", "aria-label": "Bold" },
+          ],
+          defaultValue: ["mon"],
+        }),
+        createElement(kit.ColorSwatch, { color: "#2f81f7" }),
+        createElement(kit.RangeSlider, { "aria-label": "Range", defaultValue: [20, 60] }),
         createElement("div", { className: "border-b border-divider plugin-typo-class" }),
         // Lucide's prefix on the author's own element is still checked.
         createElement("span", { className: "lucide-typo" })
@@ -157,6 +167,49 @@ describe("getPluginStyleReportForRoots with kit markup", () => {
     } finally {
       style.remove();
     }
+  });
+
+  it("reports nothing for the text-input kit's own markup", async () => {
+    const { container } = render(
+      createElement(
+        TooltipProvider,
+        null,
+        createElement(
+          "div",
+          { [PLUGIN_STYLE_ROOT_ATTRIBUTE]: "" },
+          createElement(kit.Composer, {
+            "aria-label": "Prompt",
+            defaultValue: "Draft",
+            attachments: [{ id: "a", name: "schema.json", detail: "4 KB" }],
+            onRemoveAttachment: () => {},
+            onAttach: () => {},
+            maxLength: 5,
+          }),
+          createElement(kit.InlineEdit, { "aria-label": "Name", value: "Req", onCommit: () => {} }),
+          createElement(kit.KeyValueEditor, {
+            "aria-label": "Headers",
+            defaultValue: [
+              { key: "A", value: "1", secret: true },
+              { key: "A", value: "2" },
+            ],
+          }),
+          createElement(kit.ListEditor, { "aria-label": "Hosts", defaultValue: ["x"] }),
+          createElement(kit.SecretInput, {
+            "aria-label": "Token",
+            stored: true,
+            onClear: () => {},
+          }),
+          createElement(kit.ShortcutRecorder, { defaultValue: "Cmd+K", checkHostConflicts: false })
+        )
+      )
+    );
+    const root = container.querySelector(`[${PLUGIN_STYLE_ROOT_ATTRIBUTE}]`);
+    if (!root) throw new Error("no plugin root");
+    await vi.waitFor(() => {
+      if (!root.querySelector("textarea")) throw new Error("kit not rendered");
+    });
+    const report = await getPluginStyleReportForRoots([root]);
+    expect(report?.notGenerated).toEqual([]);
   });
 
   it("re-reads a constructed sheet replaced in place with the same rule count", async () => {

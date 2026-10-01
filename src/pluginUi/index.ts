@@ -108,6 +108,21 @@ import type {
   PluginVirtualListComponent,
 } from "@shared/types/plugin-sdk-react";
 import type {
+  PluginBulkActionBarProps,
+  PluginDrawerProps,
+  PluginDrawerToggleProps,
+  PluginGroupedVirtualListProps,
+  PluginInspectorProps,
+  PluginInspectorSectionProps,
+  PluginLoadMoreFooterProps,
+  PluginMasterDetailProps,
+  PluginPropertyRowProps,
+  PluginRefreshOverlayProps,
+  PluginSplitGroupProps,
+  PluginStaleIndicatorProps,
+  PluginTaskListProps,
+} from "@shared/types/plugin-sdk-react";
+import type {
   PluginCodeBlockProps,
   PluginColoredLabelProps,
   PluginCountIndicatorProps,
@@ -127,6 +142,23 @@ import type {
   PluginCodeEditorProps,
   PluginDiffViewProps,
   PluginMarkdownEditorProps,
+  PluginColorPickerProps,
+  PluginColorSwatchProps,
+  PluginDateTimePickerProps,
+  PluginFormProps,
+  PluginFormStatusProps,
+  PluginRangeSliderProps,
+  PluginSchemaFormProps,
+  PluginSplitButtonProps,
+  PluginTimePickerProps,
+  PluginToggleGroupProps,
+  PluginComposerProps,
+  PluginInlineEditProps,
+  PluginKeyValueEditorProps,
+  PluginListEditorProps,
+  PluginMentionTextareaProps,
+  PluginSecretInputProps,
+  PluginShortcutRecorderProps,
 } from "@shared/types/plugin-sdk-react";
 import { fromKit } from "./kit";
 
@@ -588,6 +620,147 @@ export const OverflowToolbar: ComponentType<PluginOverflowToolbarProps> = fromKi
   (kit) => kit.OverflowToolbar
 );
 
+// Colour, time and range pickers, toggle groups, split buttons and forms.
+
+export const ColorSwatch: ComponentType<PluginColorSwatchProps> = fromKit(
+  "ColorSwatch",
+  (kit) => kit.ColorSwatch
+);
+export const ColorPicker: ComponentType<PluginColorPickerProps> = fromKit(
+  "ColorPicker",
+  (kit) => kit.ColorPicker
+);
+export const TimePicker: ComponentType<PluginTimePickerProps> = fromKit(
+  "TimePicker",
+  (kit) => kit.TimePicker
+);
+export const DateTimePicker: ComponentType<PluginDateTimePickerProps> = fromKit(
+  "DateTimePicker",
+  (kit) => kit.DateTimePicker
+);
+export const RangeSlider: ComponentType<PluginRangeSliderProps> = fromKit(
+  "RangeSlider",
+  (kit) => kit.RangeSlider
+);
+export const ToggleGroup: ComponentType<PluginToggleGroupProps> = fromKit(
+  "ToggleGroup",
+  (kit) => kit.ToggleGroup
+);
+export const SplitButton: ComponentType<PluginSplitButtonProps> = fromKit(
+  "SplitButton",
+  (kit) => kit.SplitButton
+);
+// What Form's loading fallback may render of untyped children: what the
+// loaded adapter keeps, so a plain object is dropped rather than crashing.
+const renderableTree = (children: unknown): ReactNode =>
+  Array.isArray(children) ? children.map(renderableTree) : renderableChild(children);
+
+export const Form: ComponentType<PluginFormProps> = fromKit(
+  "Form",
+  (kit) => kit.Form,
+  // The fields are there from the first frame; only the submit wiring waits.
+  ({ children }) => renderableTree(children)
+);
+export const FormStatus: ComponentType<PluginFormStatusProps> = fromKit(
+  "FormStatus",
+  (kit) => kit.FormStatus
+);
+export const SchemaForm: ComponentType<PluginSchemaFormProps> = fromKit(
+  "SchemaForm",
+  (kit) => kit.SchemaForm
+);
+export { useForm } from "./form";
+// Mention autocomplete, the agent composer, inline rename, key/value and list
+// editors, secrets and shortcut recording.
+
+export const MentionTextarea: ComponentType<PluginMentionTextareaProps> = fromKit(
+  "MentionTextarea",
+  (kit) => kit.MentionTextarea
+);
+export const Composer: ComponentType<PluginComposerProps> = fromKit(
+  "Composer",
+  (kit) => kit.Composer
+);
+export const InlineEdit: ComponentType<PluginInlineEditProps> = fromKit(
+  "InlineEdit",
+  (kit) => kit.InlineEdit
+);
+export const KeyValueEditor: ComponentType<PluginKeyValueEditorProps> = fromKit(
+  "KeyValueEditor",
+  (kit) => kit.KeyValueEditor
+);
+export const ListEditor: ComponentType<PluginListEditorProps> = fromKit(
+  "ListEditor",
+  (kit) => kit.ListEditor
+);
+export const SecretInput: ComponentType<PluginSecretInputProps> = fromKit(
+  "SecretInput",
+  (kit) => kit.SecretInput
+);
+export const ShortcutRecorder: ComponentType<PluginShortcutRecorderProps> = fromKit(
+  "ShortcutRecorder",
+  (kit) => kit.ShortcutRecorder
+);
+
+// List and detail, multi-pane splits, inspectors, in-pane drawers, grouped
+// lists, selection bars, pagination footers, job queues and stale data.
+
+export const MasterDetail: ComponentType<PluginMasterDetailProps> = fromKit(
+  "MasterDetail",
+  (kit) => kit.MasterDetail
+);
+export const SplitGroup: ComponentType<PluginSplitGroupProps> = fromKit(
+  "SplitGroup",
+  (kit) => kit.SplitGroup
+);
+export const Inspector: ComponentType<PluginInspectorProps> = fromKit(
+  "Inspector",
+  (kit) => kit.Inspector
+);
+export const InspectorSection: ComponentType<PluginInspectorSectionProps> = fromKit(
+  "InspectorSection",
+  (kit) => kit.InspectorSection
+);
+export const PropertyRow: ComponentType<PluginPropertyRowProps> = fromKit(
+  "PropertyRow",
+  (kit) => kit.PropertyRow
+);
+export const Drawer: ComponentType<PluginDrawerProps> = fromKit(
+  "Drawer",
+  (kit) => kit.Drawer,
+  // The pane's own content is there from the first frame; only the drawer waits.
+  ({ children }) => children
+);
+export const DrawerToggle: ComponentType<PluginDrawerToggleProps> = fromKit(
+  "DrawerToggle",
+  (kit) => kit.DrawerToggle
+);
+// Generic over the row type in the public types, like the list components.
+export const GroupedVirtualList: <T>(props: PluginGroupedVirtualListProps<T>) => ReactNode =
+  fromKit("GroupedVirtualList", (kit) => kit.GroupedVirtualList);
+export const BulkActionBar: ComponentType<PluginBulkActionBarProps> = fromKit(
+  "BulkActionBar",
+  (kit) => kit.BulkActionBar
+);
+export const LoadMoreFooter: ComponentType<PluginLoadMoreFooterProps> = fromKit(
+  "LoadMoreFooter",
+  (kit) => kit.LoadMoreFooter
+);
+export const TaskList: ComponentType<PluginTaskListProps> = fromKit(
+  "TaskList",
+  (kit) => kit.TaskList
+);
+export const RefreshOverlay: ComponentType<PluginRefreshOverlayProps> = fromKit(
+  "RefreshOverlay",
+  (kit) => kit.RefreshOverlay,
+  // The content is there from the first frame; only the updating marks wait.
+  ({ children }) => children
+);
+export const StaleIndicator: ComponentType<PluginStaleIndicatorProps> = fromKit(
+  "StaleIndicator",
+  (kit) => kit.StaleIndicator
+);
+
 export type {
   PluginMarkdownProps as MarkdownProps,
   PluginButtonProps as ButtonProps,
@@ -831,4 +1004,59 @@ export type {
   PluginDiffViewProps as DiffViewProps,
   PluginMarkdownEditorMode as MarkdownEditorMode,
   PluginMarkdownEditorProps as MarkdownEditorProps,
+} from "@shared/types/plugin-sdk-react";
+
+export type {
+  PluginColorSwatch as ColorSwatchEntry,
+  PluginColorSwatchProps as ColorSwatchProps,
+  PluginColorPickerProps as ColorPickerProps,
+  PluginIsoTime as IsoTime,
+  PluginTimePickerProps as TimePickerProps,
+  PluginIsoDateTime as IsoDateTime,
+  PluginDateTimePickerProps as DateTimePickerProps,
+  PluginRangeSliderMark as RangeSliderMark,
+  PluginRangeSliderProps as RangeSliderProps,
+  PluginToggleGroupItem as ToggleGroupItem,
+  PluginToggleGroupProps as ToggleGroupProps,
+  PluginSplitButtonProps as SplitButtonProps,
+  PluginFormError as FormError,
+  PluginFieldValidator as FieldValidator,
+  UseFormOptions,
+  PluginFormFieldBinding as FormFieldBinding,
+  PluginFormStatus as FormStatusValue,
+  UseFormResult,
+  PluginFormHandle as FormHandle,
+  PluginFormProps as FormProps,
+  PluginFormStatusProps as FormStatusProps,
+  PluginSchemaFormProps as SchemaFormProps,
+  PluginMentionSuggestion as MentionSuggestion,
+  PluginMentionTrigger as MentionTrigger,
+  PluginMentionTextareaProps as MentionTextareaProps,
+  PluginComposerAttachment as ComposerAttachment,
+  PluginComposerProps as ComposerProps,
+  PluginInlineEditProps as InlineEditProps,
+  PluginKeyValuePair as KeyValuePair,
+  PluginKeyValueEditorProps as KeyValueEditorProps,
+  PluginListEditorProps as ListEditorProps,
+  PluginSecretInputProps as SecretInputProps,
+  PluginShortcutRecorderProps as ShortcutRecorderProps,
+  PluginMasterDetailProps as MasterDetailProps,
+  PluginSplitPane as SplitPane,
+  PluginSplitLayout as SplitLayout,
+  PluginSplitGroupProps as SplitGroupProps,
+  PluginInspectorProps as InspectorProps,
+  PluginInspectorSectionProps as InspectorSectionProps,
+  PluginPropertyRowProps as PropertyRowProps,
+  PluginDrawerProps as DrawerProps,
+  PluginDrawerToggleProps as DrawerToggleProps,
+  PluginListGroup as ListGroup,
+  PluginGroupedVirtualListProps as GroupedVirtualListProps,
+  PluginBulkAction as BulkAction,
+  PluginBulkActionBarProps as BulkActionBarProps,
+  PluginLoadMoreFooterProps as LoadMoreFooterProps,
+  PluginTaskStatus as TaskStatus,
+  PluginTask as Task,
+  PluginTaskListProps as TaskListProps,
+  PluginRefreshOverlayProps as RefreshOverlayProps,
+  PluginStaleIndicatorProps as StaleIndicatorProps,
 } from "@shared/types/plugin-sdk-react";
