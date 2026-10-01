@@ -9,7 +9,6 @@ import type {
 } from "@shared/types/plugin-sdk-react";
 import { cn } from "@/lib/utils";
 import {
-  AXIS_CHAR_PX,
   AXIS_FONT_PX,
   AxisChartFrame,
   ChartEmpty,
@@ -40,6 +39,7 @@ import {
   clip,
   columnsOf,
   edgeAnchor,
+  withoutOverlaps,
   finite,
   fixed,
   linear,
@@ -190,7 +190,12 @@ function RampLegend({
                 step === 0 && "bg-overlay-emphasis"
               )}
               style={
-                step === 0 ? undefined : { backgroundColor: rampColor(hue, step / (steps - 1)) }
+                step === 0
+                  ? undefined
+                  : {
+                      backgroundColor: rampColor(hue, step / (steps - 1)),
+                      boxShadow: `inset 0 0 0 1px ${hue}`,
+                    }
               }
             />
           ))}
@@ -425,16 +430,19 @@ function KitHeatmap({
                 <rect
                   key={`${xi}:${yi}`}
                   data-chart-cell=""
-                  x={geometry.left + xi * geometry.cellW + geometry.gap / 2}
-                  y={geometry.top + yi * geometry.cellH + geometry.gap / 2}
-                  width={Math.max(0.5, geometry.cellW - geometry.gap)}
-                  height={Math.max(0.5, geometry.cellH - geometry.gap)}
+                  // Inset half a pixel so the 1px contour sits inside the cell.
+                  x={geometry.left + xi * geometry.cellW + geometry.gap / 2 + 0.5}
+                  y={geometry.top + yi * geometry.cellH + geometry.gap / 2 + 0.5}
+                  width={Math.max(0.5, geometry.cellW - geometry.gap - 1)}
+                  height={Math.max(0.5, geometry.cellH - geometry.gap - 1)}
                   rx={Math.min(2, geometry.cellW / 4, geometry.cellH / 4)}
+                  strokeWidth={1}
                   // A pair with no value is an empty outline, never a shade a
-                  // reader could take for a small one.
-                  className={cell === null ? "fill-transparent stroke-border-subtle" : undefined}
-                  strokeWidth={cell === null ? 1 : undefined}
-                  style={cell === null ? undefined : { fill: shade(cell) }}
+                  // reader could take for a small one. A value carries a
+                  // contour in the full hue, so even the faintest shade stands
+                  // off the surface as a mark.
+                  className={cell === null ? "fill-transparent stroke-border-default" : undefined}
+                  style={cell === null ? undefined : { fill: shade(cell), stroke: hue }}
                 />
               ))
             )}
@@ -624,20 +632,40 @@ function KitContributionGrid({
     return { high, total, best };
   }, [totals, lastColumn, lastDay, span]);
 
+  // The calendar as a table: a row per week, a column per weekday, the way it
+  // is drawn. A year is 53 rows, well inside what a reader can walk.
   const table = useMemo<TableModel>(() => {
-    const first = DAY_DATE_FORMAT.format((lastColumn - (span - 1) * 7) * DAY);
+    const firstWeek = lastColumn - (span - 1) * 7;
+    const first = DAY_DATE_FORMAT.format(firstWeek * DAY);
     const busiest =
       stats.best === null
         ? ""
         : ` The most was ${formats.full(stats.high)} on ${DAY_FORMAT.format(stats.best * DAY)}.`;
+    const summary = `${span} weeks from ${first} to ${DAY_DATE_FORMAT.format(lastDay * DAY)}: ${formats.full(stats.total)}${noun ? ` ${noun}` : ""} in all.${busiest}`;
+    const weekdays = Array.from({ length: 7 }, (_, row) => {
+      const weekday = (startDay + row) % 7;
+      return { key: `d${weekday}`, label: WEEKDAY_FORMAT.format(((weekday + 3) % 7) * DAY) };
+    });
     return {
-      xLabel: "Day",
-      series: [],
+      xLabel: "Week of",
+      series: weekdays,
       omitted: [],
-      rows: null,
-      summary: `${span} weeks from ${first} to ${DAY_DATE_FORMAT.format(lastDay * DAY)}: ${formats.full(stats.total)}${noun ? ` ${noun}` : ""} in all.${busiest}`,
+      rows:
+        span > MAX_TABLE_ROWS
+          ? null
+          : Array.from({ length: span }, (_, week) => {
+              const start = firstWeek + week * 7;
+              return {
+                key: String(start),
+                x: DAY_DATE_FORMAT.format(start * DAY),
+                values: weekdays.map((_, row) =>
+                  start + row > lastDay ? NO_VALUE : formats.full(totals.get(start + row) ?? 0)
+                ),
+              };
+            }),
+      summary,
     };
-  }, [lastColumn, lastDay, span, stats, formats, noun]);
+  }, [lastColumn, lastDay, span, stats, formats, noun, startDay, totals]);
 
   if (loading === true) return <ChartLoading height={px} className={classes} root={root} />;
   // An empty calendar is still a calendar; only an author's own empty state replaces it.
@@ -749,13 +777,16 @@ function KitContributionGrid({
               <rect
                 key={day}
                 data-chart-day={day}
-                x={WEEKDAY_GUTTER_PX + Math.floor(index / 7) * pitch}
-                y={MONTH_ROW_PX + (index % 7) * pitch}
-                width={cell}
-                height={cell}
+                x={WEEKDAY_GUTTER_PX + Math.floor(index / 7) * pitch + 0.5}
+                y={MONTH_ROW_PX + (index % 7) * pitch + 0.5}
+                width={cell - 1}
+                height={cell - 1}
                 rx={2}
+                strokeWidth={fill === null ? undefined : 1}
+                // A day with activity carries a contour in the full hue, so the
+                // faintest level still reads as a mark against an empty day.
                 className={fill === null ? "fill-overlay-emphasis" : undefined}
-                style={fill === null ? undefined : { fill }}
+                style={fill === null ? undefined : { fill, stroke: hue }}
               />
             );
           })}
@@ -914,7 +945,12 @@ function KitScatterChart({
       top,
       plotW,
       plotH,
-      xTicks: xTicks.map((tick) => ({ at: sx(tick.at), text: tick.text })),
+      // Formatted with units, ticks can outgrow their spacing; none may collide.
+      xTicks: withoutOverlaps(
+        xTicks.map((tick) => ({ at: sx(tick.at), text: tick.text })),
+        left,
+        left + plotW
+      ),
       placed: points.map((point) => ({ ...point, px: sx(point.x), py: sy(point.y) })),
     };
   }, [points, xs, time, width, px, formats, formatX]);
@@ -1109,38 +1145,6 @@ export function histogramBins(
 function axisTicksFor(low: number, high: number, target: number): number[] {
   // niceTicks asks for about `target` steps; axisTicks would hold out for three.
   return niceTicks(low, high, Math.max(1, target));
-}
-
-/**
- * Axis labels that do not collide, as `edgeAnchor` places them: a label that
- * would overlap the one before it is dropped, except the last, which displaces
- * every neighbour it would touch so the scale's end stays named. Exported for tests.
- */
-export function withoutOverlaps<T extends { at: number; text: string }>(
-  ticks: readonly T[],
-  left: number,
-  right: number
-): T[] {
-  const extent = (tick: T): [number, number] => {
-    const width = tick.text.length * AXIS_CHAR_PX;
-    const anchor = edgeAnchor(tick, left, right);
-    const start =
-      anchor === "start" ? tick.at : anchor === "end" ? tick.at - width : tick.at - width / 2;
-    return [start, start + width];
-  };
-  const kept: T[] = [];
-  ticks.forEach((tick, index) => {
-    const [start] = extent(tick);
-    const clashes = (previous: T | undefined) =>
-      previous !== undefined && extent(previous)[1] + 6 > start;
-    if (index !== ticks.length - 1) {
-      if (!clashes(kept[kept.length - 1])) kept.push(tick);
-      return;
-    }
-    while (clashes(kept[kept.length - 1])) kept.pop();
-    kept.push(tick);
-  });
-  return kept;
 }
 
 const MAX_BINS = 40;
@@ -1475,7 +1479,17 @@ function KitStackedAreaChart({
       const back = trace([...lower].reverse()).replace(/^M/, "L");
       return { key: entry.key, color: entry.color, area: `${edge}${back}Z`, edge };
     });
-    return { ticks, sy, left, top, plotW, plotH, pixels, xTicks, layers };
+    return {
+      ticks,
+      sy,
+      left,
+      top,
+      plotW,
+      plotH,
+      pixels,
+      xTicks: withoutOverlaps(xTicks, left, left + plotW),
+      layers,
+    };
   }, [time, xs, stack, resolved, width, px, shares, axisValue, formatX]);
 
   const table = useMemo<TableModel>(() => {
