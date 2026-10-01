@@ -157,17 +157,31 @@ async function rest(page: Page): Promise<void> {
   await page.mouse.up().catch(() => {});
   await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
+  // Escape is a key, so the trigger it restores focus to then matches
+  // :focus-visible and its ring would sit in the next control's rest frame.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.mouse.move(700, 480);
   await settle(page, 350);
 }
 
-/** A tight crop around a control: the control plus 14px of strip on every side. */
-async function snapControl(page: Page, target: Locator, file: string): Promise<void> {
+/**
+ * A tight crop around a control: the control plus 14px of strip on every side.
+ * Pass `fixed` (the control's box at rest) when the control may have changed
+ * size, so a press that shrinks it shows as a shrink rather than a re-crop.
+ */
+async function snapControl(
+  page: Page,
+  target: Locator,
+  file: string,
+  fixed?: { x: number; y: number; width: number; height: number }
+): Promise<void> {
   expected.push(file);
-  const box = await target.boundingBox({ timeout: 10_000 }).catch(async (e: unknown) => {
-    await page.screenshot({ path: path.join(OUT_DIR, `debug-${file}`) });
-    throw new Error(`${file}: control never resolved: ${String(e)}`);
-  });
+  const box =
+    fixed ??
+    (await target.boundingBox({ timeout: 10_000 }).catch(async (e: unknown) => {
+      await page.screenshot({ path: path.join(OUT_DIR, `debug-${file}`) });
+      throw new Error(`${file}: control never resolved: ${String(e)}`);
+    }));
   if (!box || box.width < 8 || box.height < 8) {
     throw new Error(`${file}: control has no real box (${JSON.stringify(box)})`);
   }
@@ -372,15 +386,25 @@ test.describe("toolbar press and reveal review", () => {
       ];
       for (const [name, target, frame] of samples) {
         await rest(page);
-        await snapControl(page, frame, `press-${name}-${theme}-1-rest.png`);
+        const frameBox = (await frame.boundingBox())!;
+        await snapControl(page, frame, `press-${name}-${theme}-1-rest.png`, frameBox);
         await target.hover();
         await settle(page, 250);
-        await snapControl(page, frame, `press-${name}-${theme}-2-hover.png`);
+        await snapControl(page, frame, `press-${name}-${theme}-2-hover.png`, frameBox);
         const box = (await target.boundingBox())!;
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        // The first painted frame of the press, on a frozen clock: what an
+        // ordinary quick click shows, since it releases before any easing ends.
+        const cdp = await page.context().newCDPSession(page);
+        await cdp.send("Animation.enable");
+        await cdp.send("Animation.setPlaybackRate", { playbackRate: 0 });
         await page.mouse.down();
+        await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => r())));
+        await snapControl(page, frame, `press-${name}-${theme}-2b-first-frame.png`, frameBox);
+        await cdp.send("Animation.setPlaybackRate", { playbackRate: 1 });
+        await cdp.detach();
         await page.waitForTimeout(HOLD_MS);
-        await snapControl(page, frame, `press-${name}-${theme}-3-held.png`);
+        await snapControl(page, frame, `press-${name}-${theme}-3-held.png`, frameBox);
         await page.mouse.up();
         await rest(page);
       }
@@ -398,13 +422,13 @@ test.describe("toolbar press and reveal review", () => {
       ] as const) {
         await openToolbar(page, { theme, name, branch });
         const p = page.locator(PILL);
-        await snapControl(page, p, `press-pill-${label}-${theme}-1-rest.png`);
         const b = (await p.boundingBox())!;
+        await snapControl(page, p, `press-pill-${label}-${theme}-1-rest.png`, b);
         await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
         await page.mouse.down();
         await page.waitForTimeout(HOLD_MS);
         const held = (await p.boundingBox())!;
-        await snapControl(page, p, `press-pill-${label}-${theme}-3-held.png`);
+        await snapControl(page, p, `press-pill-${label}-${theme}-3-held.png`, b);
         await page.mouse.up();
         widths.push({ label, restW: b.width, heldW: held.width, shrink: b.width - held.width });
       }
