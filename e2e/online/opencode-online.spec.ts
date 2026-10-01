@@ -261,11 +261,12 @@ test.describe("OpenCode Online Flow", () => {
       const agentPanel = window.locator(SEL.opencodeAgent.panel);
 
       // The echoed prompt carries only the lowercase token; the upper-cased
-      // reversal can only come from the model.
+      // answer can only come from the model. OpenCode runs its free default
+      // model in CI, which can take well over a minute to answer.
       await expect
         .poll(async () => containsChallengeAnswer(await getTerminalText(agentPanel), challenge), {
           message: `no "${challenge.answer}" reply to the "${challenge.token}" challenge`,
-          timeout: 60_000,
+          timeout: 120_000,
           intervals: [1_000],
         })
         .toBe(true);

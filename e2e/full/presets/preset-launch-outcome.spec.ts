@@ -226,7 +226,7 @@ test.describe("Presets: launch outcome", () => {
     await test.step("Launch the Claude preset: the CLI gets its env and args, the mark its color", async () => {
       const before = readFakeAgentLaunchLog(claudeBin).length;
       claude = await launchPreset(ctx.window, "claude", CLAUDE_PRESET_ID);
-      const [record] = await waitForLaunchesSince(claudeBin, before);
+      const [record] = await waitForLaunchesSince(claudeBin, before, 1, { paneId: claude.id });
       expect(record.env.DAINTREE_E2E_AGENT_COLOR).toBe(CLAUDE_COLOR);
       expect(record.env.DAINTREE_E2E_PROVIDER).toBe("blue-provider");
       expect(record.argv).toContain(CLAUDE_ARG);
@@ -266,7 +266,7 @@ test.describe("Presets: launch outcome", () => {
     await test.step("Launch the Codex preset: its own color and provider, not Claude's", async () => {
       const before = readFakeAgentLaunchLog(codexBin).length;
       const codex = await launchPreset(ctx.window, "codex", CODEX_PRESET_ID);
-      const [record] = await waitForLaunchesSince(codexBin, before);
+      const [record] = await waitForLaunchesSince(codexBin, before, 1, { paneId: codex.id });
       expect(record.env.DAINTREE_E2E_AGENT_COLOR).toBe(CODEX_COLOR);
       expect(record.env.DAINTREE_E2E_PROVIDER).toBe("green-provider");
       expect(record.argv).not.toContain(CLAUDE_ARG);
@@ -408,7 +408,9 @@ test.describe("Presets: launch outcome", () => {
       // metadata: a fresh launch of each still carries its env, args and color.
       const claudeBefore = readFakeAgentLaunchLog(agents.claudeBin).length;
       const claude = await launchPreset(ctx.window, "claude", CLAUDE_PRESET_ID);
-      const [claudeRecord] = await waitForLaunchesSince(agents.claudeBin, claudeBefore);
+      const [claudeRecord] = await waitForLaunchesSince(agents.claudeBin, claudeBefore, 1, {
+        paneId: claude.id,
+      });
       expect(claudeRecord.env.DAINTREE_E2E_PROVIDER).toBe("blue-provider");
       expect(claudeRecord.argv).toContain(CLAUDE_ARG);
       await expectAgentIconColor(claude.panel, "claude", CLAUDE_COLOR);
@@ -416,7 +418,9 @@ test.describe("Presets: launch outcome", () => {
       const codexBin = agents.codexBin as string;
       const codexBefore = readFakeAgentLaunchLog(codexBin).length;
       const codex = await launchPreset(ctx.window, "codex", CODEX_PRESET_ID);
-      const [codexRecord] = await waitForLaunchesSince(codexBin, codexBefore);
+      const [codexRecord] = await waitForLaunchesSince(codexBin, codexBefore, 1, {
+        paneId: codex.id,
+      });
       expect(codexRecord.env.DAINTREE_E2E_PROVIDER).toBe("green-provider");
       await expectAgentIconColor(codex.panel, "codex", CODEX_COLOR);
     });

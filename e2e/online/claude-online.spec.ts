@@ -187,7 +187,7 @@ test.describe("Claude Online Flow", () => {
 
     await test.step("verify the model answered the challenge", async () => {
       // The echoed prompt carries only the lowercase token; the upper-cased
-      // reversal can only come from the model.
+      // answer can only come from the model.
       await expect
         .poll(
           async () => containsChallengeAnswer(await getTerminalText(claudeAgentPanel), challenge),

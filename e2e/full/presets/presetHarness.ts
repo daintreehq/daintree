@@ -56,19 +56,31 @@ export function installPresetAgents(
   };
 }
 
-/** Launch records the binary wrote after the first `since` launches. */
+/**
+ * Launch records the binary wrote after the first `since` launches. Pass
+ * `paneId` whenever another pane may launch the same binary meanwhile: a
+ * restored agent panel relaunches on boot, and on Windows its record can land
+ * after `since` was read.
+ */
 export async function waitForLaunchesSince(
   binDir: string,
   since: number,
-  count = 1
+  count = 1,
+  options: { paneId?: string } = {}
 ): Promise<FakeAgentLaunchRecord[]> {
+  const fresh = (): FakeAgentLaunchRecord[] =>
+    readFakeAgentLaunchLog(binDir)
+      .slice(since)
+      .filter((record) => options.paneId === undefined || record.paneId === options.paneId);
   await expect
-    .poll(() => readFakeAgentLaunchLog(binDir).length - since, {
-      message: `expected ${count} new fake-agent launch(es) in ${binDir}`,
+    .poll(() => fresh().length, {
+      message: `expected ${count} new fake-agent launch(es) in ${binDir}${
+        options.paneId ? ` from pane ${options.paneId}` : ""
+      }`,
       timeout: T_LONG,
     })
     .toBeGreaterThanOrEqual(count);
-  return readFakeAgentLaunchLog(binDir).slice(since);
+  return fresh();
 }
 
 export async function setAgentSettings(
