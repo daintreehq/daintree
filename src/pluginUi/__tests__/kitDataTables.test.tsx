@@ -696,6 +696,48 @@ describe("TreeView", () => {
     expect(onSelected).toHaveBeenLastCalledWith(["cdn", "waf", "data"]);
   });
 
+  it("shows focus the way FileTree does in single mode, on the cursor row in multiple", () => {
+    const { unmount } = render(
+      inViewport(
+        createElement(
+          "div",
+          null,
+          createElement(kit.FileTree, {
+            "aria-label": "Files",
+            entries: [{ path: "a.ts", type: "file" }],
+          }),
+          createElement(kit.TreeView<Service>, {
+            "aria-label": "Single",
+            nodes: SERVICES.filter((service) => !service.lazy),
+          })
+        )
+      )
+    );
+    const ringOf = (element: HTMLElement) =>
+      element.className
+        .split(/\s+/)
+        .filter((name) => /outline/.test(name))
+        .sort();
+    const files = screen.getByRole("tree", { name: "Files" });
+    const single = screen.getByRole("tree", { name: "Single" });
+    act(() => single.focus());
+    expect(ringOf(single)).toEqual(ringOf(files));
+    unmount();
+    render(
+      inViewport(
+        createElement(kit.TreeView<Service>, {
+          "aria-label": "Many",
+          nodes: SERVICES.filter((service) => !service.lazy),
+          selectionMode: "multiple",
+        })
+      )
+    );
+    const many = screen.getByRole("tree", { name: "Many" });
+    act(() => many.focus());
+    // The cursor can sit on an unselected row, so it carries the ring itself.
+    expect(many.className).toContain("outline-hidden");
+  });
+
   it("builds a discontiguous selection from the keyboard in multiple mode", () => {
     const onSelected = vi.fn();
     render(

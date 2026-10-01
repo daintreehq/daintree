@@ -815,11 +815,14 @@ function KitTreeView(props: PluginTreeViewProps) {
       }}
       className={cn(
         "h-full min-h-0 w-full overflow-hidden focus-visible:-outline-offset-2",
-        // The cursor row carries the focus outline; the tree's own ring
-        // stands down so there is one, not two.
-        cursorPath !== null && "outline-hidden",
-        // The cursor row is outlined while the tree holds keyboard focus.
-        "focus-visible:[&_[data-cursor=true]]:outline focus-visible:[&_[data-cursor=true]]:outline-2 focus-visible:[&_[data-cursor=true]]:-outline-offset-2 focus-visible:[&_[data-cursor=true]]:outline-accent-primary",
+        // The host trees' focus: the tree's own ring, and the cursor row is
+        // the selected row (FileTreeView). A multi-select tree can hold its
+        // cursor on an unselected row, so there the cursor row carries the
+        // ring instead, as the worktree overview grid's does.
+        multiple && [
+          cursorPath !== null && "outline-hidden",
+          "focus-visible:[&_[data-cursor=true]]:outline focus-visible:[&_[data-cursor=true]]:outline-2 focus-visible:[&_[data-cursor=true]]:-outline-offset-2 focus-visible:[&_[data-cursor=true]]:outline-accent-primary",
+        ],
         str(className)
       )}
     >

@@ -437,13 +437,9 @@ function KitObjectInspector(props: PluginObjectInspectorProps) {
               if (event.target instanceof Element && event.target.closest("button")) return;
               container.current?.focus({ preventScroll: true });
             }}
-            className={cn(
-              "min-h-0 w-full flex-1 overflow-hidden py-1 focus-visible:-outline-offset-2",
-              // The cursor row carries the focus outline; the container's
-              // ring stands down so there is one, not two.
-              cursorPath !== null && "outline-hidden",
-              "focus-visible:[&_[aria-selected=true]]:outline focus-visible:[&_[aria-selected=true]]:outline-2 focus-visible:[&_[aria-selected=true]]:-outline-offset-2 focus-visible:[&_[aria-selected=true]]:outline-accent-primary"
-            )}
+            // The host trees' focus: the container's ring, with the cursor
+            // row marked by the neutral highlight (FileTreeView).
+            className="min-h-0 w-full flex-1 overflow-hidden py-1 focus-visible:-outline-offset-2"
           >
             {rows.length === 0 || (query !== "" && !build.matched) ? (
               <p className="px-3 py-2 text-xs text-text-secondary">
