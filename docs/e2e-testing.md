@@ -18,7 +18,6 @@ npm run test:e2e:full-terminal     # Run a single bucket — substitute any of:
                                    #   full-terminal full-worktree full-presets
                                    #   full-platform full-panels full-resilience
                                    #   full-plugins
-npm run test:e2e:online            # Claude/OpenCode-dependent online tests
 npm run test:e2e:nightly           # Memory-leak / soak suite (serialized, workers=1)
 npm run test:e2e:screenshots       # Design-review captures (each spec self-skips without its env var)
 npm run test:e2e:demo              # Demo-engine specs (own config, workers=1, screencast capture)
@@ -42,7 +41,7 @@ npx playwright test --project=core --headed                          # Watch the
 
 ## Test Suites
 
-Tests are split into eleven Playwright projects:
+Tests are split into ten Playwright projects:
 
 - **core** — Lightweight deterministic release-gate smoke (3 specs: the restart-persistence journey, agent promotion in a terminal, and the worktree lifecycle). This is the Playwright e2e smoke suite (`npm run test:e2e:core`), distinct from the Electron stability soak (`npm run test:smoke`). See [test:smoke vs Playwright core](#testsmoke-vs-playwright-core) below.
 - **full-terminal** — Typed terminal I/O (copy, paste, search, links, context menu), PTY mechanics, scrollback, layout, recipes, output flood, context injection, fleet broadcast, and the MCP terminal-notice and orchestration journey.
@@ -52,7 +51,6 @@ Tests are split into eleven Playwright projects:
 - **full-panels** — Browser, dev-preview, portal, Review Hub, file viewer and editor, drag-drop, action palette, notifications, toolbar chrome.
 - **full-resilience** — Errors, IPC faults, real pty-host and renderer crashes, races, process cleanup, diagnostics, MCP consent and workspace binding.
 - **full-plugins** — Plugin manager UI, plugin lifecycle (enable/disable, restart gating), manifest contribution rendering against the sideloaded sample plugin, and `launchMcp` for every wired agent.
-- **online** — Tests that interact with real agent CLIs (requires `ANTHROPIC_API_KEY`).
 - **nightly** — Long-running memory-leak / soak detection, 4 specs (workers=1, no retries). The project name predates the scheduled nightly; it now runs as part of the `stabilize` sweep and on demand, not on a cron.
 - **screenshots** — The theme tour and the per-surface design-review captures. Run locally on demand, not part of the PR/release gates.
 
@@ -63,7 +61,7 @@ An E2E test costs a cold Electron launch, so it has to earn it. Anything a unit 
 - **Cross a process or OS seam.** Renderer to main, main to pty-host, the app to git, the filesystem, a child process or an HTTP client. A test that stays inside one store is a unit test in the wrong place.
 - **Assert user-visible or OS truth.** Rendered text, PTY output, git state on disk, file contents, pids, HTTP replies. Store and IPC values are diagnostics for the failure message, never the subject of the assertion.
 - **Backdoors are for setup and fault injection only.** `dispatchAction`, seeding, `runTerminalCommand` and the fault registry set the scene; the gesture under test goes through the real entry point — a click, a keybinding, typed keys, the palette, a real MCP client.
-- **Deterministic by construction.** Fake agent CLIs (`e2e/helpers/fakeAgent.ts`) instead of real ones, local bare remotes instead of a forge, and no network outside `online`. Poll with `expect.poll` or web-first assertions; never sleep. A negative assertion ("no dialog appeared") needs a dwell window long enough for the positive case to have happened.
+- **Deterministic by construction.** Fake agent CLIs (`e2e/helpers/fakeAgent.ts`) instead of real ones, local bare remotes instead of a forge, and no network. Poll with `expect.poll` or web-first assertions; never sleep. A negative assertion ("no dialog appeared") needs a dwell window long enough for the positive case to have happened.
 - **Fail loud.** No runtime `test.skip()` because a feature "wasn't reachable" — that is a failure. Platform skips and quarantines carry a structured annotation (`{ type: "platform-skip" | "conditional-skip" | "quarantine", description }`, a quarantine's description starting `YYYY-MM-DD`), enforced by the `structured-test-skip-annotations` ESLint rule. `core-file-edit.spec.ts`, the restored-scrollback check in `startup-agent-worktree-restore.spec.ts` and the reload notice in `core-pty-host-crash.spec.ts` are the current quarantines.
 - **One launch per file.** Each file is a launch group: one `launchApp` in `beforeAll`, tests that share it, one `closeApp` in `afterAll`. Use Playwright's default mode unless the file is a true journey where each step builds on the last (`test.describe.serial`). Extra launches are for restart journeys or a deliberately different launch configuration. There is no app fixture shared across files.
 - **Delete what can't earn its launch.** A test that cannot fail, that asserts internals a unit test already covers, or whose feature is gone gets deleted, not kept green.
@@ -88,7 +86,6 @@ Current launch call sites (`launchApp` / `launchWithSamplePlugin`) per gated buc
 | full-panels     | 21         | 24                |
 | full-resilience | 19         | 27                |
 | full-plugins    | 4          | 4                 |
-| online          | 3          | 4                 |
 | nightly         | 4          | 6                 |
 
 A local macOS run of the gated suite (core plus the seven `full-*` buckets, workers=1) takes about 32 minutes. `npm run e2e-durations -- <report.json>...` (`scripts/ci/e2e-durations.mjs`) turns Playwright JSON reports (`PLAYWRIGHT_JSON_REPORT=1` or `PLAYWRIGHT_JSON_OUTPUT_FILE`) into per-spec and per-project durations, merging shards or platforms; launch time in `beforeAll` is attributed to no test, so its figures are lower bounds.
@@ -97,17 +94,17 @@ Scenario specs worth reading before writing a new one: `core-restart-persistence
 
 ## Configuration
 
-`playwright.config.ts` at the project root defines the eleven projects. All `full-*` buckets share `coreTimeout` and `retries: isCI ? 2 : 0`; `full-plugins` and `online` are pinned to workers=1 in the project itself. `core` and `online` keep their own timeouts; `nightly` runs at workers=1 with no retries. Local macOS runs use one worker for every project (parallel cold launches contend for crashpad Mach ports), and retries are 0 locally, so a local pass is a real pass.
+`playwright.config.ts` at the project root defines the ten projects. All `full-*` buckets share `coreTimeout` and `retries: isCI ? 2 : 0`; `full-plugins` is pinned to workers=1 in the project itself. `core` keeps its own timeout; `nightly` runs at workers=1 with no retries. Local macOS runs use one worker for every project (parallel cold launches contend for crashpad Mach ports), and retries are 0 locally, so a local pass is a real pass.
 
 Every config shares `e2e/global-setup.ts` and `e2e/global-teardown.ts`. Setup reaps `daintree-e2e-*` temp dirs older than 24 hours that a killed run left behind and opens a manifest for this run; every userData and HOME dir a launch creates is recorded there, and teardown removes them all (not `closeApp`, because restart journeys relaunch on the same userData). `DAINTREE_E2E_KEEP_USERDATA=1` keeps them for a post-mortem and prints the manifest path.
 
-`failOnFlakyTests` is a single **top-level** flag (not per-project), wired to `process.env.FAIL_ON_FLAKY_TESTS === "true"`. Only the release-gating runs (`core`, `online`) set that env, so a test that passes on retry fails the run there but is tolerated on PR `full-*` runs for velocity.
+`failOnFlakyTests` is a single **top-level** flag (not per-project), wired to `process.env.FAIL_ON_FLAKY_TESTS === "true"`. Only the release-gating `core` run sets that env, so a test that passes on retry fails the run there but is tolerated on PR `full-*` runs for velocity.
 
 ### Mechanism checks (separate config)
 
 `playwright.mechanism.config.ts` holds checks that answer "does the platform actually behave this way" rather than "does the product still work" — currently `e2e/mechanism/media-range-streaming.spec.ts`, which is intended to establish whether Chromium issues real follow-up byte ranges against the `standard: true` `daintree-media://` scheme (#12242). Run it with `npm run test:e2e:mechanism`, after `npm run build:e2e`.
 
-It is a second config rather than a twelfth project on purpose: `npm run test:e2e` is a bare `npx playwright test`, which runs _every_ project in `playwright.config.ts`, and these generate several hundred megabytes of encoded fixtures per run. Don't fold it in.
+It is a second config rather than an eleventh project on purpose: `npm run test:e2e` is a bare `npx playwright test`, which runs _every_ project in `playwright.config.ts`, and these generate several hundred megabytes of encoded fixtures per run. Don't fold it in.
 
 ### Assistant workflow runs (separate config)
 
@@ -177,7 +174,6 @@ Things these specs have to handle that bucket specs don't:
 | full-panels     | `./e2e/full/panels`     | 2            | 1-2     |
 | full-resilience | `./e2e/full/resilience` | 2            | 1-2     |
 | full-plugins    | `./e2e/full/plugins`    | 2            | 1       |
-| online          | `./e2e/online`          | 1            | 1       |
 | nightly         | `./e2e/nightly`         | 0            | 1       |
 | screenshots     | `./e2e/screenshots`     | 0            | 1-2     |
 
@@ -208,7 +204,6 @@ e2e/
 │   ├── panels/          # browser, dev-preview, portal, Review Hub, files
 │   ├── resilience/      # errors, IPC faults, crashes, races, MCP consent
 │   └── plugins/         # plugin manager UI, lifecycle, manifest contributions, launchMcp
-├── online/              # agent-integration specs (release gate)
 ├── nightly/             # 4 memory-leak / soak specs (stabilize sweep / on demand)
 ├── screenshots/         # design-review capture harnesses (on demand)
 │   ├── theme-tour.spec.ts        # 19-scene theme review tour
@@ -300,14 +295,13 @@ Components have `data-testid` and `data-worktree-branch` attributes for reliable
 
 ### `e2e.yml` (unified runner)
 
-A single reusable workflow runs every E2E suite. Pick one via the `suite` input: `full` (meta — all seven buckets sequentially on one runner; workflow_dispatch default), `core`, any of the seven `full-*` buckets (`full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `full-plugins`), `online`, `nightly`, or `demo`.
+A single reusable workflow runs every E2E suite. Pick one via the `suite` input: `full` (meta — all seven buckets sequentially on one runner; workflow_dispatch default), `core`, any of the seven `full-*` buckets (`full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `full-plugins`), `nightly`, or `demo`.
 
 - **Triggers:** workflow_dispatch, workflow_call
 - **Matrix:** macOS-14, ubuntu-22.04, windows-latest (selectable via `platform`)
 - **Single-file runs:** pass `test_file: e2e/full/<bucket>/foo.spec.ts` and set `suite` to the bucket that owns that path (workflow_dispatch).
 - **Conditional behaviour by suite:**
   - `full` — expands to all seven `--project=full-*` flags on a single runner. Use this for ad-hoc validation; the release workflows and `stabilize.yml` fan the buckets out across separate runners instead.
-  - `online` — extra `node scripts/ci/install-opencode.mjs`, the single source of truth for the pinned OpenCode CLI version every workflow installs (#11476); bumping it is a deliberate edit to that script. Caller MUST use `secrets: inherit` so `ANTHROPIC_API_KEY` is reachable.
   - `nightly` — Playwright is invoked with `--workers=1` (the memory-leak heuristic depends on serialized launches).
   - All others — no extra steps.
 
@@ -317,11 +311,11 @@ A separate workflow for fine-grained ad-hoc runs of a single test file with conf
 
 ### `stabilize.yml` (cross-platform validation)
 
-The comprehensive cross-platform surface, dispatched on demand by the `stabilize` skill (`.agents/skills/stabilize/`) — it replaced the old scheduled nightly. `workflow_dispatch` only (no cron), input `platform` defaulting to `linux-windows` (also `windows` | `linux` | `all` | `non-windows` | `macos`). One run executes `check`, unit `test`, `build` + smoke, `integration-test` (Linux legs only), and every E2E suite (`core`, all seven `full-*` buckets, `online`, and the `nightly` memory-leak soak) across the chosen platforms. All of those start in parallel — `check`/`test` do not gate E2E — so a single run surfaces every failure at once, and the app is built once per OS (`e2e-build`) and handed to every shard through `e2e.yml`'s `prebuilt_artifact` input. A second input, `only`, scopes a re-run to named pieces (e.g. `-f only='test full-terminal'`; aliases `full` and `e2e`), and the `stabilize-ok` gate accepts `skipped` only from pieces the run deliberately left out (via `only`, or `integration-test` on a run with no Linux leg). `knip` is not part of the workflow: it is OS-agnostic, so the skill runs it once locally. It opens no issues — the driving agent triages results from the per-shard `failed-specs-*` / `failure-report-*` artifacts and the `stabilize-merged-playwright-report`. Watch the single `stabilize-ok` gate for the overall verdict. The skill runs the full gate locally first on macOS, so CI defaults to `linux-windows` (no macOS); `windows` alone is the usual iteration target, and `all` (adds macOS-on-CI) is reserved for the rare macOS issue that can't be reproduced locally.
+The comprehensive cross-platform surface, dispatched on demand by the `stabilize` skill (`.agents/skills/stabilize/`) — it replaced the old scheduled nightly. `workflow_dispatch` only (no cron), input `platform` defaulting to `linux-windows` (also `windows` | `linux` | `all` | `non-windows` | `macos`). One run executes `check`, unit `test`, `build` + smoke, `integration-test` (Linux legs only), and every E2E suite (`core`, all seven `full-*` buckets, and the `nightly` memory-leak soak) across the chosen platforms. All of those start in parallel — `check`/`test` do not gate E2E — so a single run surfaces every failure at once, and the app is built once per OS (`e2e-build`) and handed to every shard through `e2e.yml`'s `prebuilt_artifact` input. A second input, `only`, scopes a re-run to named pieces (e.g. `-f only='test full-terminal'`; aliases `full` and `e2e`), and the `stabilize-ok` gate accepts `skipped` only from pieces the run deliberately left out (via `only`, or `integration-test` on a run with no Linux leg). `knip` is not part of the workflow: it is OS-agnostic, so the skill runs it once locally. It opens no issues — the driving agent triages results from the per-shard `failed-specs-*` / `failure-report-*` artifacts and the `stabilize-merged-playwright-report`. Watch the single `stabilize-ok` gate for the overall verdict. The skill runs the full gate locally first on macOS, so CI defaults to `linux-windows` (no macOS); `windows` alone is the usual iteration target, and `all` (adds macOS-on-CI) is reserved for the rare macOS issue that can't be reproduced locally.
 
 ### Release Gating
 
-Releases run as three independent per-OS workflows (`release-macos.yml`, `release-linux.yml`, `release-windows.yml`, #8052), each triggered by the same `v*` tag. Every workflow runs checks, unit tests, and that OS's e2e gates (`core` + the seven `full-*` buckets fanned out as a matrix + `online`) before that OS's platform packaging starts, then publishes that OS's artifacts to R2 the moment its own pipeline is green — a failed or hung OS only delays itself. Because each `full-*` bucket auto-shards inside `e2e.yml` (#8053 — Windows buckets fan out 8–12 ways, `full-plugins` 4), a full Windows bucket finishes in ~10min wall-time instead of ~39min serial, so Windows `full-*` now gates the Windows release (it no longer takes ~5–6 hours). Pre-release cross-platform confidence beyond what the release tag itself runs comes from `stabilize.yml` (the `stabilize` skill — normally `platform=linux-windows`, since the mandatory local run already covers macOS; `platform=all` only when a macOS-on-CI check is genuinely essential), not from a scheduled nightly — the test-nightly was retired and only `nightly-publish.yml` (binary publish, smoke only) still runs on a cron.
+Releases run as three independent per-OS workflows (`release-macos.yml`, `release-linux.yml`, `release-windows.yml`, #8052), each triggered by the same `v*` tag. Every workflow runs checks, unit tests, and that OS's e2e gates (`core` + the seven `full-*` buckets fanned out as a matrix) before that OS's platform packaging starts, then publishes that OS's artifacts to R2 the moment its own pipeline is green — a failed or hung OS only delays itself. Because each `full-*` bucket auto-shards inside `e2e.yml` (#8053 — Windows buckets fan out 8–12 ways, `full-plugins` 4), a full Windows bucket finishes in ~10min wall-time instead of ~39min serial, so Windows `full-*` now gates the Windows release (it no longer takes ~5–6 hours). Pre-release cross-platform confidence beyond what the release tag itself runs comes from `stabilize.yml` (the `stabilize` skill — normally `platform=linux-windows`, since the mandatory local run already covers macOS; `platform=all` only when a macOS-on-CI check is genuinely essential), not from a scheduled nightly — the test-nightly was retired and only `nightly-publish.yml` (binary publish, smoke only) still runs on a cron.
 
 ### Cross-Platform Matrix
 

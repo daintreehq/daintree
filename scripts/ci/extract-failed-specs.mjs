@@ -7,7 +7,7 @@ function fail(message) {
 }
 
 // A spec contributes to the retry list when any of its tests failed OR was
-// flaky. Flaky matters because `FAIL_ON_FLAKY_TESTS=true` (core/online) makes
+// flaky. Flaky matters because `FAIL_ON_FLAKY_TESTS=true` (core) makes
 // Playwright exit non-zero on flaky outcomes even though `spec.ok` stays true —
 // so a `.ok === false` filter alone silently drops the flaky spec that tripped
 // the gate. This mirrors the predicate in the "Extract failing spec manifest"
