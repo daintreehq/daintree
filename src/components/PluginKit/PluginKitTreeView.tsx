@@ -229,7 +229,8 @@ function NodeRow({ row, context }: { row: TreeRow; context: TreeContext }) {
             context.onCheck(row);
           }}
           onDoubleClick={(event) => event.stopPropagation()}
-          className="flex h-4 w-4 shrink-0 items-center justify-center"
+          // A 24px target over the 16px slot the glyph is drawn in.
+          className="-mx-1 flex h-6 w-6 shrink-0 items-center justify-center"
         >
           <CheckboxGlyph size="sm" checked={checked === "mixed" ? "indeterminate" : checked} />
         </span>
@@ -571,6 +572,29 @@ function KitTreeView(props: PluginTreeViewProps) {
       selection.selectAll();
       return;
     }
+    // In a multi-select tree Cmd/Ctrl moves the cursor without touching the
+    // selection, and Cmd/Ctrl+Space toggles the cursor node, so a
+    // discontiguous selection can be built from the keyboard.
+    if (primary && !event.altKey && multiple) {
+      if (event.key === " " && current?.kind === "node") {
+        event.preventDefault();
+        selection.toggle(current.id);
+        return;
+      }
+      if (
+        event.key === "ArrowUp" ||
+        event.key === "ArrowDown" ||
+        event.key === "Home" ||
+        event.key === "End"
+      ) {
+        const moved = resolveTreeKey(event.key, rows, cursorPath);
+        if (moved?.type === "select") {
+          event.preventDefault();
+          setCursor(moved.path);
+        }
+        return;
+      }
+    }
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.key === " ") {
       event.preventDefault();
@@ -769,8 +793,22 @@ function KitTreeView(props: PluginTreeViewProps) {
       data-no-dnd={draggable ? "" : undefined}
       onKeyDown={onKeyDown}
       onPointerDown={() => container.current?.focus({ preventScroll: true })}
+      // Focus arriving finds a cursor on screen: the first row when there is
+      // none yet, else the cursor scrolled back into view.
+      onFocus={(event) => {
+        if (event.target !== event.currentTarget || rows.length === 0) return;
+        if (cursorPath === null) {
+          const first = rows[0];
+          if (first) setCursor(first.path);
+          return;
+        }
+        if (!mounted && cursorIndex >= 0) virtuoso.current?.scrollIntoView({ index: cursorIndex });
+      }}
       className={cn(
         "h-full min-h-0 w-full overflow-hidden focus-visible:-outline-offset-2",
+        // The cursor row carries the focus outline; the tree's own ring
+        // stands down so there is one, not two.
+        cursorPath !== null && "outline-hidden",
         // The cursor row is outlined while the tree holds keyboard focus.
         "focus-visible:[&_[data-cursor=true]]:outline focus-visible:[&_[data-cursor=true]]:outline-2 focus-visible:[&_[data-cursor=true]]:-outline-offset-2 focus-visible:[&_[data-cursor=true]]:outline-accent-primary",
         str(className)

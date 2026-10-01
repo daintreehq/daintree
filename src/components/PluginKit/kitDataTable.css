@@ -25,7 +25,9 @@ tr[data-hoverable]:not([aria-selected="true"]):not([data-selected="true"]):hover
 
 /* The pinned edge, only once something has scrolled under it. */
 table[data-scrolled-x] .kit-dt-sticky[data-sticky-edge] {
-  box-shadow: inset -1px 0 0 var(--border-divider);
+  box-shadow:
+    inset -1px 0 0 var(--border-divider),
+    6px 0 6px -6px color-mix(in srgb, var(--theme-shadow-color) 30%, transparent);
 }
 
 @media (forced-colors: active) {

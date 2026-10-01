@@ -191,8 +191,10 @@ describe("DataTable, rich", () => {
     );
     const header = bodyRows().find((row) => row.getAttribute("data-group-row") === "production")!;
     expect(header.getAttribute("aria-expanded")).toBe("false");
-    const box = header.querySelector("[data-slot=checkbox-glyph]")!;
-    fireEvent.click(box.parentElement!);
+    const box = within(header).getByRole("checkbox", { name: "Select production" });
+    expect(box.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(box);
+    expect(box.getAttribute("aria-checked")).toBe("true");
     expect(onKeys).toHaveBeenLastCalledWith(["d1", "d3"]);
     expect(header.getAttribute("aria-selected")).toBe("true");
     const grid = screen.getByRole("treegrid", { name: "Folded" });
@@ -445,6 +447,14 @@ describe("DataTable, rich", () => {
       "fra9"
     );
     expect(screen.getByText("Conflict")).toBeTruthy();
+    // The failed cell keeps its draft, marked, until it is edited again.
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Edit Region" }), { key: "Escape" });
+    const webRow = rowNamed("late");
+    expect(webRow.textContent).toContain("Not saved: Conflict");
+    fireEvent.doubleClick(webRow.querySelectorAll("td")[0]!);
+    const reopened = screen.getByRole("textbox", { name: "Edit Name" }) as HTMLInputElement;
+    expect(reopened.value).toBe("late");
+    expect(reopened.getAttribute("aria-invalid")).toBe("true");
   });
 
   it("ignores malformed rich props rather than throwing", () => {
@@ -519,7 +529,11 @@ describe("TreeView", () => {
     );
     const tree = screen.getByRole("tree", { name: "Services" });
     act(() => tree.focus());
-    fireEvent.keyDown(tree, { key: "ArrowDown" });
+    // Focus lands the cursor on the first node without selecting it.
+    const first = screen.getByRole("treeitem", { name: "Edge" });
+    expect(tree.getAttribute("aria-activedescendant")).toBe(first.id);
+    expect(first.getAttribute("aria-selected")).toBe("false");
+    fireEvent.keyDown(tree, { key: "Home" });
     const edge = screen.getByRole("treeitem", { name: "Edge" });
     expect(edge.getAttribute("aria-selected")).toBe("true");
     expect(edge.getAttribute("aria-expanded")).toBe("false");
@@ -603,6 +617,29 @@ describe("TreeView", () => {
     fireEvent.click(screen.getByRole("treeitem", { name: "CDN" }));
     fireEvent.click(screen.getByRole("treeitem", { name: "Data" }), { shiftKey: true });
     expect(onSelected).toHaveBeenLastCalledWith(["cdn", "waf", "data"]);
+  });
+
+  it("builds a discontiguous selection from the keyboard in multiple mode", () => {
+    const onSelected = vi.fn();
+    render(
+      inViewport(
+        createElement(kit.TreeView<Service>, {
+          "aria-label": "Multi",
+          nodes: SERVICES.filter((service) => !service.lazy),
+          selectionMode: "multiple",
+          defaultExpanded: ["edge"],
+          onSelectedChange: onSelected,
+        })
+      )
+    );
+    const tree = screen.getByRole("tree", { name: "Multi" });
+    act(() => tree.focus());
+    fireEvent.keyDown(tree, { key: "Home" });
+    expect(onSelected).toHaveBeenLastCalledWith(["edge"]);
+    fireEvent.keyDown(tree, { key: "End", ctrlKey: true, metaKey: true });
+    expect(onSelected).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(tree, { key: " ", ctrlKey: true, metaKey: true });
+    expect(onSelected).toHaveBeenLastCalledWith(["edge", "data"]);
   });
 
   it("moves nodes with Alt+arrows, honouring canDrop", () => {

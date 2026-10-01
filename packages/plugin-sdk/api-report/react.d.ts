@@ -4729,7 +4729,7 @@ interface PluginTreeViewProps<T = unknown> extends PluginRootAttributes {
     renderNode?(node: T, state: PluginTreeNodeState): ReactNode;
     /** A glyph before the label, when `renderNode` is not given. */
     getIcon?(node: T, state: PluginTreeNodeState): PluginIconSource | null | undefined;
-    /** `single` (the default): the cursor is the selection. `multiple`: Cmd-click (Ctrl-click) toggles, Shift-click and Shift+arrows extend. */
+    /** `single` (the default): moving the cursor moves the selection. `multiple`: Cmd-click (Ctrl-click) toggles, Shift-click and Shift+arrows extend, Cmd/Ctrl+arrows move without selecting and Cmd/Ctrl+Space toggles. */
     selectionMode?: "single" | "multiple";
     /** Selected nodes' ids, controlled. */
     selected?: readonly PluginTreeNodeId[];
