@@ -121,6 +121,7 @@ import { pluginKitEditors } from "./PluginKitEditors";
 import { pluginKitPickersForms } from "./PluginKitPickersForms";
 import { pluginKitDataTables } from "./PluginKitDataTables";
 import { pluginKitTextInputs } from "./PluginKitTextInputs";
+import { pluginKitGit } from "./PluginKitGit";
 import { primeRadix } from "@/components/ui/radix-loader";
 
 export { normalizeSelectOptions, pickDomProps };
@@ -1274,6 +1275,7 @@ export const pluginKit = {
   ...pluginKitEditors,
   ...pluginKitPickersForms,
   ...pluginKitTextInputs,
+  ...pluginKitGit,
   // Last: its DataTable wraps the basic one from pluginKitLists.
   ...pluginKitDataTables,
 };

@@ -593,8 +593,8 @@ export function GitHubListItem({
           {/* Metadata line: identity, then what is happening locally, then the
               forge's own trail. Local state comes early on purpose — it changes
               what activating the row does, so it must not be the thing that
-              falls off the clipped end. */}
-          <div className="flex items-center gap-1.5 mt-1 text-xs text-text-secondary flex-nowrap overflow-x-clip">
+              falls off the end. */}
+          <div className="flex items-center gap-1.5 mt-1 text-xs text-text-secondary">
             <Tooltip content={copied ? "Copied" : "Copy number"} side="bottom">
               <button
                 type="button"
@@ -629,9 +629,19 @@ export function GitHubListItem({
               </button>
             </Tooltip>
 
-            {worktree && worktreeDescription && (
-              <Tooltip content={worktreeDescription} side="bottom">
-                {/* A word, not a 14px glyph wedged in the rail. This is the
+            {/* One fixed 16px line that wraps what does not fit onto a second,
+                hidden one, so an item that cannot fit drops out whole with its
+                separator instead of leaving a clipped fragment at the edge.
+                The number stays outside it: its 24px hit area reaches past
+                the line, which this line's overflow would cut. Every item
+                carries its own leading middot for that reason. */}
+            <div
+              data-forge-row-meta=""
+              className="flex h-4 min-w-0 flex-1 flex-wrap items-center gap-x-1.5 overflow-hidden leading-4"
+            >
+              {worktree && worktreeDescription && (
+                <Tooltip content={worktreeDescription} side="bottom">
+                  {/* A word, not a 14px glyph wedged in the rail. This is the
                       one fact on the row that changes what activation does, and
                       in an IDE for running work in worktrees it is the most
                       decision-relevant thing the row knows.
@@ -640,208 +650,209 @@ export function GitHubListItem({
                       resource number, so the local branch can legitimately
                       differ from the PR's head ref. The tooltip and the
                       accessible name carry the real name and branch. */}
+                  <span
+                    className={cn(
+                      "shrink-0 inline-flex items-center gap-1",
+                      isActiveWorktree
+                        ? // The one place a status colour is load-bearing in this
+                          // row: this is the worktree you are standing in.
+                          // Forced-colors strips the hue, so the distinction moves
+                          // to `Highlight`, the one system colour that survives it.
+                          "text-status-info forced-colors:text-[color:Highlight]"
+                        : "text-text-secondary"
+                    )}
+                    role="img"
+                    aria-label={worktreeDescription}
+                  >
+                    <span aria-hidden="true">&middot;</span>
+                    <Icon name="worktree" className="w-3 h-3" />
+                    <span>{isActiveWorktree ? "Current" : "Worktree"}</span>
+                  </span>
+                </Tooltip>
+              )}
+
+              {reviewVisual && (
                 <span
-                  className={cn(
-                    "shrink-0 inline-flex items-center gap-1",
-                    isActiveWorktree
-                      ? // The one place a status colour is load-bearing in this
-                        // row: this is the worktree you are standing in.
-                        // Forced-colors strips the hue, so the distinction moves
-                        // to `Highlight`, the one system colour that survives it.
-                        "text-status-info forced-colors:text-[color:Highlight]"
-                      : "text-text-secondary"
-                  )}
+                  className={cn("shrink-0 inline-flex items-center gap-1", reviewVisual.colorClass)}
                   role="img"
-                  aria-label={worktreeDescription}
+                  aria-label={`Review: ${reviewVisual.label}`}
                 >
-                  <span aria-hidden="true">&middot;</span>
-                  <Icon name="worktree" className="w-3 h-3" />
-                  <span>{isActiveWorktree ? "Current" : "Worktree"}</span>
+                  <span aria-hidden="true" className="text-text-secondary">
+                    &middot;
+                  </span>
+                  {reviewVisual.glyph}
+                  <span>{reviewVisual.label}</span>
                 </span>
-              </Tooltip>
-            )}
+              )}
 
-            {reviewVisual && (
-              <span
-                className={cn("shrink-0 inline-flex items-center gap-1", reviewVisual.colorClass)}
-                role="img"
-                aria-label={`Review: ${reviewVisual.label}`}
-              >
-                <span aria-hidden="true" className="text-text-secondary">
-                  &middot;
-                </span>
-                {reviewVisual.glyph}
-                <span>{reviewVisual.label}</span>
-              </span>
-            )}
-
-            {/* Separator kept inside the element it belongs to. Every middot
+              {/* Separator kept inside the element it belongs to. Every middot
                 used to be independently `shrink-0`, so an author name squeezed
                 to nothing left its middot behind as a dangling dot. */}
-            {/* Whose it is outranks which branch it came from: the head ref
+              {/* Whose it is outranks which branch it came from: the head ref
                 usually restates the title, so it is the field that yields.
                 The author keeps its width up to a cap instead of shrinking in
                 step with the ref, which cut every PR author to "gre…". */}
-            <span className="inline-flex items-center gap-1.5 shrink-0 max-w-[120px]">
-              <span className="shrink-0" aria-hidden="true">
-                &middot;
-              </span>
-              <Tooltip content={item.author?.login ?? "unknown"} side="bottom">
-                <span className="truncate">{item.author?.login ?? "unknown"}</span>
-              </Tooltip>
-            </span>
-
-            <span className="shrink-0" aria-hidden="true">
-              &middot;
-            </span>
-            {/* Which timestamp this is depends on the panel's sort order —
-                showing "updated" under a "Newest" sort made the ages read out
-                of order against the list they were sorting. */}
-            <Tooltip content={timeLabel} side="bottom">
-              <span className="whitespace-nowrap shrink-0" role="img" aria-label={timeLabel}>
-                {formatTimeAgo(timestamp)}
-              </span>
-            </Tooltip>
-
-            {(item.commentCount ?? 0) >= 1 && (
-              <>
+              <span className="inline-flex items-center gap-1.5 shrink-0 max-w-[120px]">
                 <span className="shrink-0" aria-hidden="true">
                   &middot;
                 </span>
+                <Tooltip content={item.author?.login ?? "unknown"} side="bottom">
+                  <span className="truncate">{item.author?.login ?? "unknown"}</span>
+                </Tooltip>
+              </span>
+
+              {/* Which timestamp this is depends on the panel's sort order —
+                showing "updated" under a "Newest" sort made the ages read out
+                of order against the list they were sorting. */}
+              <Tooltip content={timeLabel} side="bottom">
+                <span
+                  className="inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                  role="img"
+                  aria-label={timeLabel}
+                >
+                  <span aria-hidden="true">&middot;</span>
+                  {formatTimeAgo(timestamp)}
+                </span>
+              </Tooltip>
+
+              {(item.commentCount ?? 0) >= 1 && (
                 <Tooltip
                   content={item.commentCount === 1 ? "1 comment" : `${item.commentCount} comments`}
                   side="bottom"
                 >
                   <span
-                    className="inline-flex items-center gap-0.5 shrink-0 tabular-nums"
+                    className="inline-flex items-center gap-1.5 shrink-0 tabular-nums"
                     role="img"
                     aria-label={
                       item.commentCount === 1 ? "1 comment" : `${item.commentCount} comments`
                     }
                   >
-                    <Icon name="message-square" className="w-3 h-3" />
-                    <span aria-hidden="true">{item.commentCount}</span>
+                    <span aria-hidden="true">&middot;</span>
+                    <span className="inline-flex items-center gap-0.5">
+                      <Icon name="message-square" className="w-3 h-3" />
+                      <span aria-hidden="true">{item.commentCount}</span>
+                    </span>
                   </span>
                 </Tooltip>
-              </>
-            )}
+              )}
 
-            {isItemPR && item.headRef && (
-              <Tooltip
-                content={
-                  <>
-                    {item.headRef} &rarr; {item.baseRef}
-                  </>
-                }
-                side="bottom"
-              >
-                <span
-                  className="inline-flex items-center gap-1.5 min-w-0"
-                  role="img"
-                  aria-label={`Merges ${item.headRef} into ${item.baseRef}`}
-                >
-                  <span className="shrink-0" aria-hidden="true">
-                    &middot;
-                  </span>
-                  <span className="truncate max-w-[150px]" aria-hidden="true">
-                    {item.headRef}
-                  </span>
-                </span>
-              </Tooltip>
-            )}
-
-            {linkedPR && (
-              <>
-                <span className="shrink-0" aria-hidden="true">
-                  &middot;
-                </span>
+              {isItemPR && item.headRef && (
                 <Tooltip
                   content={
                     <>
-                      Pull request #{linkedPR.number} &middot; {linkedPR.state}
-                      {linkedPRCIVisual ? ` · ${linkedPRCIVisual.ariaLabel}` : ""}
+                      {item.headRef} &rarr; {item.baseRef}
                     </>
                   }
                   side="bottom"
                 >
-                  <button
-                    type="button"
-                    tabIndex={-1}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleOpenLinkedPR();
-                    }}
-                    className={cn(
-                      "shrink-0 inline-flex items-center gap-0.5 tabular-nums rounded-lg cursor-pointer",
-                      "hover:text-text-primary transition-colors duration-150 ease-out",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
-                    )}
-                    aria-label={
-                      // The linked PR's own state and checks arrive with the
-                      // issue and used to be thrown away: a merged linkage and
-                      // one with failing checks rendered identically.
-                      `Open linked pull request #${linkedPR.number} (${linkedPR.state}${
-                        linkedPRCIVisual ? `, ${linkedPRCIVisual.ariaLabel}` : ""
-                      })`
-                    }
+                  {/* Placed at 5ch and grown into whatever room is left, up to
+                    its own width: as much of the branch as fits, or none. */}
+                  <span
+                    className="inline-flex items-center gap-1.5 min-w-0 max-w-max shrink-0 grow basis-[5ch]"
+                    role="img"
+                    aria-label={`Merges ${item.headRef} into ${item.baseRef}`}
                   >
-                    <Icon
-                      name="git-pull-request"
-                      className={cn("w-3 h-3", getStateColor(linkedPR.state))}
-                    />
-                    <span>{linkedPR.number}</span>
-                    {linkedPRCIVisual &&
-                      (linkedPRCIVisual.kind === "icon" ? (
-                        <Icon
-                          name={linkedPRCIVisual.icon}
-                          className={cn("w-3 h-3 ms-0.5", linkedPRCIVisual.colorClass)}
-                        />
-                      ) : (
-                        <span
-                          className={cn(
-                            "status-mark block w-1.5 h-1.5 rounded-full ms-0.5",
-                            linkedPRCIVisual.colorClass
-                          )}
-                          aria-hidden="true"
-                        />
-                      ))}
-                  </button>
+                    <span className="shrink-0" aria-hidden="true">
+                      &middot;
+                    </span>
+                    <span className="truncate max-w-[150px]" aria-hidden="true">
+                      {item.headRef}
+                    </span>
+                  </span>
                 </Tooltip>
-              </>
-            )}
+              )}
 
-            {firstLabel && (
-              <Tooltip content={issueLabels.map((l) => l.name).join(", ")} side="bottom">
-                {/* One complete label plus a count. A label clipped to
+              {linkedPR && (
+                <span className="inline-flex items-center gap-1.5 shrink-0">
+                  <span aria-hidden="true">&middot;</span>
+                  <Tooltip
+                    content={
+                      <>
+                        Pull request #{linkedPR.number} &middot; {linkedPR.state}
+                        {linkedPRCIVisual ? ` · ${linkedPRCIVisual.ariaLabel}` : ""}
+                      </>
+                    }
+                    side="bottom"
+                  >
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenLinkedPR();
+                      }}
+                      className={cn(
+                        "shrink-0 inline-flex items-center gap-0.5 tabular-nums rounded-lg cursor-pointer",
+                        "hover:text-text-primary transition-colors duration-150 ease-out",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                      )}
+                      aria-label={
+                        // The linked PR's own state and checks arrive with the
+                        // issue and used to be thrown away: a merged linkage and
+                        // one with failing checks rendered identically.
+                        `Open linked pull request #${linkedPR.number} (${linkedPR.state}${
+                          linkedPRCIVisual ? `, ${linkedPRCIVisual.ariaLabel}` : ""
+                        })`
+                      }
+                    >
+                      <Icon
+                        name="git-pull-request"
+                        className={cn("w-3 h-3", getStateColor(linkedPR.state))}
+                      />
+                      <span>{linkedPR.number}</span>
+                      {linkedPRCIVisual &&
+                        (linkedPRCIVisual.kind === "icon" ? (
+                          <Icon
+                            name={linkedPRCIVisual.icon}
+                            className={cn("w-3 h-3 ms-0.5", linkedPRCIVisual.colorClass)}
+                          />
+                        ) : (
+                          <span
+                            className={cn(
+                              "status-mark block w-1.5 h-1.5 rounded-full ms-0.5",
+                              linkedPRCIVisual.colorClass
+                            )}
+                            aria-hidden="true"
+                          />
+                        ))}
+                    </button>
+                  </Tooltip>
+                </span>
+              )}
+
+              {firstLabel && (
+                <Tooltip content={issueLabels.map((l) => l.name).join(", ")} side="bottom">
+                  {/* One complete label plus a count. A label clipped to
                       "enhanceme…" reads as broken data, and the labels past
                       the second used to vanish with nothing to say so. */}
-                <span
-                  className="inline-flex items-center gap-1 min-w-0"
-                  role="img"
-                  aria-label={`Labels: ${issueLabels.map((l) => l.name).join(", ")}`}
-                >
-                  <span className="shrink-0" aria-hidden="true">
-                    &middot;
-                  </span>
-                  {firstLabel.color ? (
-                    <span
-                      className="w-2 h-2 rounded-full shrink-0"
-                      style={{ backgroundColor: `#${firstLabel.color}` }}
-                      aria-hidden="true"
-                    />
-                  ) : null}
-                  <span className="truncate max-w-[130px]" aria-hidden="true">
-                    {firstLabel.name}
-                  </span>
-                  {restLabels.length > 0 && (
-                    <span className="shrink-0 tabular-nums" aria-hidden="true">
-                      +{restLabels.length}
+                  <span
+                    className="inline-flex items-center gap-1 shrink-0"
+                    role="img"
+                    aria-label={`Labels: ${issueLabels.map((l) => l.name).join(", ")}`}
+                  >
+                    <span className="shrink-0" aria-hidden="true">
+                      &middot;
                     </span>
-                  )}
-                </span>
-              </Tooltip>
-            )}
+                    {firstLabel.color ? (
+                      <span
+                        className="w-2 h-2 rounded-full shrink-0"
+                        style={{ backgroundColor: `#${firstLabel.color}` }}
+                        aria-hidden="true"
+                      />
+                    ) : null}
+                    <span className="truncate max-w-[130px]" aria-hidden="true">
+                      {firstLabel.name}
+                    </span>
+                    {restLabels.length > 0 && (
+                      <span className="shrink-0 tabular-nums" aria-hidden="true">
+                        +{restLabels.length}
+                      </span>
+                    )}
+                  </span>
+                </Tooltip>
+              )}
+            </div>
           </div>
         </div>
       </div>
