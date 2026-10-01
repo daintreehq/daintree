@@ -53,6 +53,20 @@ describe("loadPluginCustomIcon", () => {
     expect((await loadPluginCustomIcon("acme.tools", pluginDir, "./x.svg")).ok).toBe(true);
   });
 
+  it("accepts real-world markup: title, defs, style with CDATA and quoted '>' values", async () => {
+    await write(
+      "x.svg",
+      `<svg xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24" data-note="a > b">
+        <title>Acme</title>
+        <defs><style><![CDATA[ g > path { opacity: 1 } ]]></style></defs>
+        <g data-label='x > y'><path d="M4 4h16v16H4z" /></g>
+      </svg>`
+    );
+    const outcome = await loadPluginCustomIcon("acme.tools", pluginDir, "./x.svg");
+    expect(outcome.ok ? "ok" : outcome.error).toBe("ok");
+  });
+
   it("rejects a malformed reference before touching the disk", async () => {
     await expectError("./../outside.svg", /segments/);
   });
@@ -138,6 +152,11 @@ describe("loadPluginCustomIcon", () => {
       "a second root",
       `${GOOD_SVG}<svg xmlns="http://www.w3.org/2000/svg"/>`,
       /single <svg> root/,
+    ],
+    [
+      "an unquoted attribute",
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d=M0/></svg>',
+      /well-formed/,
     ],
     [
       "a missing SVG namespace",

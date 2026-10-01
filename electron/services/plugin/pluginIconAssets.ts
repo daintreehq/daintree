@@ -89,6 +89,13 @@ const DRAWABLE_ELEMENTS = new Set([
   "use",
 ]);
 
+/**
+ * Zero or more `name="value"` / `name='value'` attributes. Quote-aware so a
+ * `>` inside a value doesn't end the tag, and strict so an unquoted value —
+ * malformed XML that would render as a blank mask — fails to match.
+ */
+const ATTRIBUTES = /(?:\s+[^\s=<>/"']+\s*=\s*(?:"[^"<]*"|'[^'<]*'))*/;
+
 /** Local name of a possibly namespace-prefixed tag (`svg:path` → `path`). */
 function localName(tag: string): string {
   return tag.slice(tag.indexOf(":") + 1).toLowerCase();
@@ -113,7 +120,7 @@ function checkSvgStructure(text: string): string | null {
     .trim();
   if (/<!--|<!\[CDATA\[/.test(body)) return "is not well-formed XML (unterminated comment or CDATA)";
 
-  const root = /^<svg\b[^>]*>/i.exec(body)?.[0];
+  const root = new RegExp(`^<svg${ATTRIBUTES.source}\\s*/?>`, "i").exec(body)?.[0];
   if (!root) return "must have an <svg> root element";
   if (!new RegExp(`\\sxmlns\\s*=\\s*["']${SVG_NAMESPACE}["']`).test(root)) {
     return `the <svg> root must declare xmlns="${SVG_NAMESPACE}"`;
@@ -125,7 +132,10 @@ function checkSvgStructure(text: string): string | null {
   const stack: string[] = [];
   let drawable = false;
   let end = 0;
-  const TAG = /<(\/?)([A-Za-z_][\w:.-]*)\b[^<>]*?(\/?)>|<\?[^>]*\?>/g;
+  const TAG = new RegExp(
+    `<(/?)([A-Za-z_][\\w:.-]*)${ATTRIBUTES.source}\\s*(/?)>|<\\?[^>]*\\?>`,
+    "g"
+  );
   for (let match = TAG.exec(body); match; match = TAG.exec(body)) {
     // Character data may hold `>` but never a raw `<`: one here is a tag the
     // pattern couldn't read, i.e. malformed markup.

@@ -2155,9 +2155,6 @@ export class PluginService {
         err
       );
     }
-    // The read above suspends; a service disposed meanwhile has already swept
-    // its plugins and must not gain this one.
-    if (this.disposed) return null;
     const resolveIconId = (iconId: string): string => customIconKeys.get(iconId) ?? iconId;
 
     // Scope the contribution registries to this plugin's project BEFORE a
