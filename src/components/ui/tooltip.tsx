@@ -85,6 +85,7 @@ const TooltipTriggerNodeContext = React.createContext<((node: HTMLElement | null
  * gets the exit fade.
  */
 const TooltipPressDismissContext = React.createContext<{
+  open: boolean;
   dismissedByPress: boolean;
   markPressed: () => void;
 } | null>(null);
@@ -118,15 +119,7 @@ const Tooltip = ({
   // (`open={cond || undefined}`) can't strand a stale open.
   const [managedOpen, setManagedOpen] = React.useState(defaultOpen ?? false);
   const [dismissedByPress, setDismissedByPress] = React.useState(false);
-  // Only a press on a showing caption can dismiss it. Read through the
-  // post-commit mirror below; pointer events only fire after a commit.
-  const markPressed = React.useCallback(() => {
-    if (effectiveOpenRef.current) setDismissedByPress(true);
-  }, []);
-  const pressDismiss = React.useMemo(
-    () => ({ dismissedByPress, markPressed }),
-    [dismissedByPress, markPressed]
-  );
+  const markPressed = React.useCallback(() => setDismissedByPress(true), []);
   const isControlled = open !== undefined;
   const resolvedOpen = isControlled ? open : managedOpen;
   const effectiveOpen = dropdownVisible ? resolvedOpen : false;
@@ -173,6 +166,11 @@ const Tooltip = ({
   React.useEffect(() => {
     if (effectiveOpen && dismissedByPress) setDismissedByPress(false);
   }, [effectiveOpen, dismissedByPress]);
+
+  const pressDismiss = React.useMemo(
+    () => ({ open: effectiveOpen, dismissedByPress, markPressed }),
+    [effectiveOpen, dismissedByPress, markPressed]
+  );
 
   // Register with the global dismiss registry so dialog transitions can
   // force-close this tooltip (issue #11030). The callback is a stable
@@ -311,9 +309,9 @@ const TooltipTrigger = React.forwardRef<
       pointerActiveRef.current = true;
       primeOnEvent();
       onPointerDown?.(event);
-      // A press the owner cancelled (a disabled control explaining itself)
-      // leaves the caption up, so it has not dismissed it.
-      if (!event.defaultPrevented) pressDismiss?.markPressed();
+      // Only a press on a showing caption dismisses it, and not one its owner
+      // cancelled (a disabled control explaining itself keeps its caption up).
+      if (pressDismiss?.open && !event.defaultPrevented) pressDismiss.markPressed();
     };
     const handlePointerUp: React.PointerEventHandler<HTMLButtonElement> = (event) => {
       onPointerUp?.(event);
