@@ -8,6 +8,7 @@ import {
 } from "../../../../electron/services/PluginArchive.js";
 import { resolveVitePlan, runVitePlanBuild } from "../lib/viteBuild.js";
 import { runValidate } from "./validate.js";
+import { isPluginCustomIconRef } from "../../../../shared/config/pluginCustomIcon.js";
 
 /**
  * Per-plugin shipping-policy ignore file, `.gitignore` syntax. Only the archive
@@ -73,6 +74,15 @@ function requiredManifestPaths(manifest: MinimalManifest): string[] {
   for (const skill of manifest.contributes?.skills ?? []) {
     add(skill.path);
   }
+  // Custom SVG icons (#13143): a dropped one silently falls back to the generic
+  // glyph at runtime, so catch it while packaging instead.
+  for (const entry of [
+    ...(manifest.contributes?.panels ?? []),
+    ...(manifest.contributes?.toolbarButtons ?? []),
+    ...(manifest.contributes?.processTools ?? []),
+  ]) {
+    if (isPluginCustomIconRef(entry.iconId)) add(entry.iconId);
+  }
   return [...refs];
 }
 
@@ -100,6 +110,9 @@ interface MinimalManifest {
     /** @deprecated Renamed to `views` in the 1.0 freeze; still honored here. */
     experimental_views?: Array<{ componentPath?: string }>;
     skills?: Array<{ path?: string }>;
+    panels?: Array<{ iconId?: string }>;
+    toolbarButtons?: Array<{ iconId?: string }>;
+    processTools?: Array<{ iconId?: string }>;
   };
 }
 

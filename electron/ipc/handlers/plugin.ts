@@ -27,6 +27,7 @@ import type {
 } from "../../../shared/types/ipc/pluginValidation.js";
 import { getPluginManifestSchema } from "../../schemas/plugin.js";
 import { collectManifestAdvisories } from "../../schemas/pluginManifestAdvisories.js";
+import { collectPluginIconIssues } from "../../services/plugin/pluginIconAssets.js";
 import { PLUGIN_METHOD_CHANNELS } from "./plugin.preload.js";
 import type * as PluginServiceModule from "../../services/PluginService.js";
 import { MAX_DNTR_BYTES } from "../../utils/pluginArchiveConstants.js";
@@ -62,7 +63,11 @@ import { sendToRendererContext } from "../utils.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
 import { getPluginKeybindings } from "../../services/pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../../services/pluginContextMenuRegistry.js";
-import { selectContributionsForProject } from "../../services/plugin/PluginContributionBroadcaster.js";
+import {
+  getPluginCustomIconsForProject,
+  selectContributionsForProject,
+} from "../../services/plugin/PluginContributionBroadcaster.js";
+import type { PluginCustomIconAsset } from "../../../shared/config/pluginCustomIcon.js";
 import { getProjectSurfaces } from "../../services/plugin/PluginSurfaceRegistry.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import type { AgentConfig } from "../../../shared/config/agentRegistry.js";
@@ -1105,6 +1110,11 @@ async function handleToursGet(ctx: IpcContext): Promise<PluginTourDescriptor[]> 
   );
 }
 
+async function handleIconsGet(ctx: IpcContext): Promise<PluginCustomIconAsset[]> {
+  await (await getPluginService()).waitForInit();
+  return getPluginCustomIconsForProject(ctx.projectId);
+}
+
 async function handleRecipeRecordUse(recipeId: string, timestamp: number): Promise<TerminalRecipe> {
   const service = await getPluginService();
   await service.waitForInit();
@@ -1554,13 +1564,18 @@ async function handleValidateManifest(
     return { manifestPath, origin, originSource, valid: false, pluginId, errors, warnings: [] };
   }
 
+  const iconErrors = await collectPluginIconIssues(
+    parsed.data.name,
+    dir,
+    parsed.data.contributes
+  );
   return {
     manifestPath,
     origin,
     originSource,
-    valid: true,
+    valid: iconErrors.length === 0,
     pluginId: parsed.data.name,
-    errors: [],
+    errors: iconErrors,
     warnings: await collectManifestAdvisories({ dir, rawJson: json, manifest: parsed.data }),
   };
 }
@@ -2026,6 +2041,7 @@ export const pluginNamespace = defineIpcNamespace({
     getAgents: op(PLUGIN_METHOD_CHANNELS.getAgents, handleAgentsGet),
     getRecipes: op(PLUGIN_METHOD_CHANNELS.getRecipes, handleRecipesGet),
     getTours: op(PLUGIN_METHOD_CHANNELS.getTours, handleToursGet, { withContext: true }),
+    getIcons: op(PLUGIN_METHOD_CHANNELS.getIcons, handleIconsGet, { withContext: true }),
     recordRecipeUse: op(PLUGIN_METHOD_CHANNELS.recordRecipeUse, handleRecipeRecordUse),
     updateRecipeMetadata: op(
       PLUGIN_METHOD_CHANNELS.updateRecipeMetadata,

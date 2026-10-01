@@ -244,6 +244,12 @@ import {
   registerPluginProcessTools,
   unregisterPluginProcessTools,
 } from "../../shared/config/pluginProcessToolRegistry.js";
+import { makePluginCustomIconKey } from "../../shared/config/pluginCustomIcon.js";
+import {
+  registerPluginCustomIcons,
+  unregisterPluginCustomIcons,
+} from "../../shared/config/pluginCustomIconRegistry.js";
+import { loadPluginCustomIcons } from "./plugin/pluginIconAssets.js";
 import { registerPluginSkills, unregisterPluginSkills } from "./plugin/PluginSkillRegistry.js";
 import {
   getPluginRecipe,
@@ -2123,6 +2129,40 @@ export class PluginService {
     // explicit no-op form for the unbound roots.
     setPluginContributionScope(pluginId, binding.projectId ?? "global");
 
+    // Custom SVG icons (#13143) are read before any contribution registers so
+    // each `iconId: "./icons/x.svg"` can be rewritten to its runtime key. A
+    // reference that fails to load keeps its authored value, which the
+    // renderer treats as an unknown id and draws the fallback glyph for — the
+    // plugin itself still loads.
+    let customIconRefs = new Map<string, string>();
+    try {
+      const icons = await loadPluginCustomIcons(pluginId, pluginDir, manifest.contributes);
+      for (const issue of icons.issues) {
+        console.warn(
+          `[PluginService] Plugin "${manifest.name}": ${issue.path} ${issue.message} — rendering the fallback icon`
+        );
+      }
+      customIconRefs = new Map(
+        [...icons.loaded.keys()].map((ref) => [ref, makePluginCustomIconKey(pluginId, ref)])
+      );
+      registerPluginCustomIcons(
+        pluginId,
+        [...icons.loaded].map(([ref, svg]) => ({
+          key: makePluginCustomIconKey(pluginId, ref),
+          pluginId,
+          pluginName: manifest.displayName ?? manifest.name,
+          svg,
+        }))
+      );
+      if (icons.loaded.size > 0) this.broadcaster.schedulePluginIconsBroadcast();
+    } catch (err) {
+      console.warn(
+        `[PluginService] Plugin "${manifest.name}": failed to load custom icons — rendering fallbacks`,
+        err
+      );
+    }
+    const resolveIconId = (iconId: string): string => customIconRefs.get(iconId) ?? iconId;
+
     // Contributed `actionId`s are authored in the plugin's own manifest
     // namespace (the schema enforces exactly that), but a project plugin's
     // commands register under its INSTANCE namespace. Left unrewritten, every
@@ -2144,7 +2184,7 @@ export class PluginService {
       registerToolbarButton({
         id: buttonId,
         label: btn.label,
-        iconId: btn.iconId,
+        iconId: resolveIconId(btn.iconId),
         actionId: qualifyActionId(btn.actionId),
         priority: btn.priority ?? 3,
         pluginId,
@@ -2235,7 +2275,13 @@ export class PluginService {
     }
 
     if (manifest.contributes.processTools.length > 0) {
-      registerPluginProcessTools(pluginId, manifest.contributes.processTools);
+      registerPluginProcessTools(
+        pluginId,
+        manifest.contributes.processTools.map((tool) => ({
+          ...tool,
+          iconId: resolveIconId(tool.iconId),
+        }))
+      );
       // Mirror into the pty-host, where `ProcessDetector` runs — the renderer
       // needs no broadcast because the detected icon id already reaches it on
       // the terminal identity event (#11613).
@@ -2362,7 +2408,7 @@ export class PluginService {
         ...pluginSettingsKindFlags,
         id: panelId,
         name: panel.name,
-        iconId: panel.iconId,
+        iconId: resolveIconId(panel.iconId),
         color: panel.color,
         hasPty: panel.hasPty,
         canRestart: panel.canRestart,
@@ -5966,6 +6012,9 @@ export class PluginService {
     runUnloadStep(pluginId, "syncPluginAgentRegistryToPtyHost", () =>
       getPtyClient()?.syncPluginAgentRegistry()
     );
+    runUnloadStep(pluginId, "unregisterPluginCustomIcons", () => {
+      if (unregisterPluginCustomIcons(pluginId)) this.broadcaster.schedulePluginIconsBroadcast();
+    });
     runUnloadStep(pluginId, "unregisterPluginProcessTools", () =>
       unregisterPluginProcessTools(pluginId)
     );

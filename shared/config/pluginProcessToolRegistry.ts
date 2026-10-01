@@ -1,5 +1,6 @@
 import type { PluginProcessToolContribution } from "../types/plugin.js";
 import { isPluginIconId } from "./pluginIconIds.js";
+import { isPluginCustomIconKeyOwnedBy } from "./pluginCustomIcon.js";
 
 /**
  * Icon a contribution falls back to when it names an id outside the generic
@@ -79,8 +80,9 @@ function rebuildSnapshot(): void {
  * candidate name before looking it up, so a mixed-case key could never match.
  * The manifest schema already rejects uppercase at parse time — this is the
  * belt-and-braces half, covering any caller that bypasses the schema. Icon ids
- * outside the generic plugin namespace collapse to
- * {@link FALLBACK_PLUGIN_PROCESS_ICON_ID}; see that constant for why.
+ * outside the generic plugin namespace — other than this plugin's own
+ * custom-icon keys — collapse to {@link FALLBACK_PLUGIN_PROCESS_ICON_ID}; see
+ * that constant for why.
  *
  * A command repeated within one plugin's array resolves last-wins (plain
  * `Map.set`). The manifest schema rejects exact duplicates before they get
@@ -100,9 +102,14 @@ export function registerPluginProcessTools(
     if (typeof contribution?.command !== "string" || typeof contribution?.iconId !== "string") {
       continue;
     }
-    const iconId = isPluginIconId(contribution.iconId)
-      ? contribution.iconId
-      : FALLBACK_PLUGIN_PROCESS_ICON_ID;
+    // A custom-icon key minted by main for THIS plugin (#13143) is kept: its
+    // `plugin-icon:` prefix can't collide with a built-in identity, and the
+    // ownership check stops one plugin naming another's icon.
+    const iconId =
+      isPluginIconId(contribution.iconId) ||
+      isPluginCustomIconKeyOwnedBy(contribution.iconId, pluginId)
+        ? contribution.iconId
+        : FALLBACK_PLUGIN_PROCESS_ICON_ID;
     commands.set(contribution.command.toLowerCase(), iconId);
   }
   byPlugin.set(pluginId, commands);

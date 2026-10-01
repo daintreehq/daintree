@@ -1088,6 +1088,8 @@ export const CHANNELS = {
   PLUGIN_RECIPES_GET: "plugin:recipes-get",
   /** Plugin tours visible in the sender's project (#12773). */
   PLUGIN_TOURS_GET: "plugin:tours-get",
+  /** Plugin-shipped custom icons visible in the sender's project (#13143). */
+  PLUGIN_ICONS_GET: "plugin:icons-get",
   /** Append one run timestamp to a plugin recipe's sidecar metadata (#11860). */
   PLUGIN_RECIPE_RECORD_USE: "plugin:recipe-record-use",
   /** Patch the user-owned half of a plugin recipe (empty-state pin, auto-assign). */

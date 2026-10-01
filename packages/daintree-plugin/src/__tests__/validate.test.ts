@@ -190,6 +190,58 @@ describe("runValidate", () => {
     expect(result.warnings.join("\n")).not.toMatch(/iconId/);
   });
 
+  describe("custom SVG icons (#13143)", () => {
+    const SVG =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>';
+    const manifestWithIcon = (iconId: string) => ({
+      name: "acme.demo",
+      version: "1.0.0",
+      engines: { daintree: ">=0.11.0" },
+      contributes: {
+        panels: [{ id: "main", name: "Main", iconId, color: "var(--x)" }],
+        toolbarButtons: [{ id: "plan", label: "Plan", iconId, actionId: "acme.demo.plan" }],
+        processTools: [{ command: "acme-cli", iconId }],
+      },
+    });
+
+    it("accepts a usable icon on every contribution without an unknown-id warning", async () => {
+      await fs.mkdir(path.join(tmpDir, "icons"));
+      await fs.writeFile(path.join(tmpDir, "icons", "acme.svg"), SVG);
+      await writeManifest(manifestWithIcon("./icons/acme.svg"));
+      const result = await runValidate({ dir: tmpDir });
+      expect(result.errors).toEqual([]);
+      expect(result.ok).toBe(true);
+      expect(result.warnings.join("\n")).not.toMatch(/iconId/);
+    });
+
+    it("fails on a missing icon file, naming every location", async () => {
+      await writeManifest(manifestWithIcon("./icons/missing.svg"));
+      const result = await runValidate({ dir: tmpDir });
+      expect(result.ok).toBe(false);
+      expect(result.errors).toHaveLength(3);
+      expect(result.errors[0]).toMatch(/contributes\.panels\.0\.iconId: .*not found/);
+      expect(result.errors.join("\n")).toMatch(/contributes\.processTools\.0\.iconId/);
+    });
+
+    it("fails on an unsafe icon", async () => {
+      await fs.writeFile(
+        path.join(tmpDir, "bad.svg"),
+        SVG.replace("</svg>", "<script>alert(1)</script></svg>")
+      );
+      await writeManifest(manifestWithIcon("./bad.svg"));
+      const result = await runValidate({ dir: tmpDir });
+      expect(result.ok).toBe(false);
+      expect(result.errors.join("\n")).toMatch(/unsafe content/);
+    });
+
+    it("fails on a reference that escapes the plugin directory", async () => {
+      await writeManifest(manifestWithIcon("./icons/../../x.svg"));
+      const result = await runValidate({ dir: tmpDir });
+      expect(result.ok).toBe(false);
+      expect(result.errors.join("\n")).toMatch(/segments/);
+    });
+  });
+
   it("warns (non-fatally) on an unrecognized toolbar button iconId (#11298)", async () => {
     await writeManifest({
       name: "acme.demo",
@@ -203,7 +255,7 @@ describe("runValidate", () => {
     });
     const result = await runValidate({ dir: tmpDir });
     expect(result.ok).toBe(true);
-    expect(result.warnings.join("\n")).toMatch(/toolbarButtons\[0\].iconId.*package icon/);
+    expect(result.warnings.join("\n")).toMatch(/toolbarButtons\[0\].iconId.*puzzle icon/);
   });
 
   it("warns (non-fatally) on an unrecognized process-tool iconId (#11613)", async () => {

@@ -5,12 +5,14 @@ import {
   DEFAULT_PANEL_ICON,
   getPluginIconComponent,
   PLUGIN_ICON_COMPONENTS,
+  resolvePluginIcon,
   PLUGIN_ICON_IDS,
   type PluginIconId,
 } from "@/components/icons/pluginIconRegistry";
 import type { PanelKind } from "@/types";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { resolveTerminalRunIcon } from "./terminalRunIconRegistry";
+import { isPluginCustomIconKey } from "@shared/config/pluginCustomIcon";
 import type { ReactNode } from "react";
 
 /** Built-in panel kinds pin their glyph regardless of the chrome's `iconId`. */
@@ -119,6 +121,13 @@ export function TerminalIcon({ kind, chrome, className, brandColor }: TerminalIc
   // Any other registered id renders neutrally — this is what plugin-contributed
   // panels reach, and it's why `puzzle`/`git-branch`/`sticky-note` no longer
   // fall through to the terminal glyph the way the old id conditionals did.
+  // A plugin's own SVG (#13143) — from a panel or a detected process tool —
+  // renders neutrally too, keeping the terminal glyph until the asset arrives.
+  if (isPluginCustomIconKey(resolvedChrome.iconId)) {
+    const CustomIcon = resolvePluginIcon(resolvedChrome.iconId, DEFAULT_PANEL_ICON);
+    return withIconMarker(<CustomIcon {...finalProps} />);
+  }
+
   const RegisteredIcon = getPluginIconComponent(resolvedChrome.iconId);
   if (RegisteredIcon) {
     return withIconMarker(<RegisteredIcon {...finalProps} />);

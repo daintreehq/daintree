@@ -43,6 +43,7 @@ export const PLUGIN_METHOD_CHANNELS = {
   getAgents: "plugin:agents-get",
   getRecipes: "plugin:recipes-get",
   getTours: "plugin:tours-get",
+  getIcons: "plugin:icons-get",
   recordRecipeUse: "plugin:recipe-record-use",
   updateRecipeMetadata: "plugin:recipe-metadata-update",
   getForgeProviders: "plugin:forge-providers-get",

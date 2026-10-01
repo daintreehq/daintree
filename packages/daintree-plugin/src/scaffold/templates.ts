@@ -48,17 +48,32 @@ const DAINTREE_ENGINE_RANGE = ">=0.11.0";
  * same `id`. The runtime (`PluginService.loadPlugin`) only registers a panel
  * kind while iterating declared `panels`, attaching the view's `componentPath`
  * when ids match; a view with no matching panel is ignored, so the scaffold
- * must emit both for a generated view to render. `iconId: "puzzle"` and the
- * plugin brand color are the canonical defaults for plugin-contributed panels.
+ * must emit both for a generated view to render. The panel points at the
+ * plugin's own {@link PANEL_ICON_PATH} so a new author starts from the custom
+ * icon form (#13143); swapping it for a generic id like `"puzzle"` still works.
  */
 function viewPanelContribution(ctx: ScaffoldContext): Record<string, unknown> {
   return {
     id: "main",
     name: ctx.displayName,
-    iconId: "puzzle",
+    iconId: `./${PANEL_ICON_PATH}`,
     color: "var(--theme-category-orange)",
   };
 }
+
+/** Where the view templates put their panel icon, relative to the plugin root. */
+const PANEL_ICON_PATH = "icons/panel.svg";
+
+/**
+ * A monochrome 24×24 starter glyph. The host draws a custom icon as a mask in
+ * the current text colour, so only the shape matters — its stroke colour is
+ * ignored.
+ */
+const PANEL_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3" y="3" width="18" height="18" rx="2" />
+  <path d="M8 12h8M12 8v8" />
+</svg>
+`;
 
 /** A safely-quoted JS/TS string literal for embedding author text in source. */
 function q(value: string): string {
@@ -563,6 +578,7 @@ function templateFiles(ctx: ScaffoldContext): Record<string, string> {
         ".dntrignore": DNTRIGNORE,
         "src/index.ts": viewEntry(ctx),
         "src/panel.tsx": panelComponent(ctx),
+        [PANEL_ICON_PATH]: PANEL_ICON_SVG,
       };
     }
     case "mcp": {
@@ -629,6 +645,7 @@ function templateFiles(ctx: ScaffoldContext): Record<string, string> {
         ".dntrignore": DNTRIGNORE,
         "src/index.ts": commandEntry(ctx),
         "src/panel.tsx": panelComponent(ctx),
+        [PANEL_ICON_PATH]: PANEL_ICON_SVG,
         "src/server.ts": mcpServer(ctx),
       };
     }

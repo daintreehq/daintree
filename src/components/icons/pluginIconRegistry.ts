@@ -57,9 +57,11 @@ import {
 } from "lucide-react";
 import type { ComponentType, CSSProperties } from "react";
 import { PLUGIN_ICON_IDS, type PluginIconId } from "@shared/config/pluginIconIds";
+import { isPluginCustomIconKey } from "@shared/config/pluginCustomIcon";
 // Imported from the module rather than `@/components/icons` so the barrel can
 // keep importing this file's neighbours without a cycle.
 import { DaintreeIcon } from "./DaintreeIcon";
+import { getPluginCustomIconComponent } from "./PluginCustomIcon";
 
 export interface PluginIconProps {
   className?: string;
@@ -174,11 +176,16 @@ export function getPluginIconComponent(
   return (PLUGIN_ICON_COMPONENTS as Record<string, PluginIconComponent>)[id];
 }
 
-/** The glyph for `id`, falling back to `fallback` when `id` isn't registered. */
+/**
+ * The glyph for `id`, falling back to `fallback` when `id` isn't registered.
+ * A plugin custom-icon key (#13143) resolves to a component that draws the
+ * plugin's SVG once this view holds it and `fallback` until then.
+ */
 export function resolvePluginIcon(
   id: string | null | undefined,
   fallback: PluginIconComponent = DEFAULT_PLUGIN_ICON
 ): PluginIconComponent {
+  if (isPluginCustomIconKey(id)) return getPluginCustomIconComponent(id, fallback);
   return getPluginIconComponent(id) ?? fallback;
 }
 

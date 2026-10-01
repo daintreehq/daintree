@@ -158,6 +158,10 @@ import {
   clearPluginProcessToolRegistryForTests,
   getPluginProcessToolRegistry,
 } from "../../../shared/config/pluginProcessToolRegistry.js";
+import {
+  clearPluginCustomIconsForTests,
+  getPluginCustomIcons,
+} from "../../../shared/config/pluginCustomIconRegistry.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import {
   searchPluginSkills,
@@ -784,6 +788,57 @@ describe("PluginService integration — process-tool contributions (#11613)", ()
     await service.initialize();
 
     // The manifest fails strict validation, so nothing reaches the registry.
+    expect(getPluginProcessToolRegistry()).toEqual({});
+  });
+});
+
+describe("PluginService integration — custom SVG icons (#13143)", () => {
+  const SVG =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>';
+
+  beforeEach(() => {
+    clearPluginProcessToolRegistryForTests();
+    clearPluginCustomIconsForTests();
+  });
+
+  afterEach(() => {
+    clearPluginProcessToolRegistryForTests();
+    clearPluginCustomIconsForTests();
+  });
+
+  it("rewrites loaded icon paths to runtime keys everywhere and drops them on unload", async () => {
+    const dir = await writePlugin("acme.icon-plugin", {
+      name: "acme.icon-plugin",
+      version: "1.0.0",
+      displayName: "Acme Icons",
+      contributes: {
+        panels: [{ id: "dash", name: "Dash", iconId: "./icons/acme.svg", color: "#336699" }],
+        toolbarButtons: [
+          { id: "btn", label: "Go", iconId: "./icons/acme.svg", actionId: "acme.icon-plugin.go" },
+          { id: "broken", label: "Nope", iconId: "./icons/missing.svg", actionId: "acme.icon-plugin.go" },
+        ],
+        processTools: [{ command: "acme-cli", iconId: "./icons/acme.svg" }],
+      },
+    });
+    await fs.mkdir(path.join(dir, "icons"));
+    await fs.writeFile(path.join(dir, "icons", "acme.svg"), SVG);
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    const key = "plugin-icon:acme.icon-plugin:./icons/acme.svg";
+    expect(getPluginCustomIcons()).toEqual([
+      { key, pluginId: "acme.icon-plugin", pluginName: "Acme Icons", svg: SVG },
+    ]);
+    expect(getPanelKindConfig("acme.icon-plugin.dash")?.iconId).toBe(key);
+    expect(getToolbarButtonConfig("acme.icon-plugin.btn")?.iconId).toBe(key);
+    // A broken file keeps its authored value, which renders the fallback glyph.
+    expect(getToolbarButtonConfig("acme.icon-plugin.broken")?.iconId).toBe("./icons/missing.svg");
+    expect(getPluginProcessToolRegistry()).toEqual({ "acme-cli": key });
+
+    service.unloadPlugin("acme.icon-plugin");
+
+    expect(getPluginCustomIcons()).toEqual([]);
     expect(getPluginProcessToolRegistry()).toEqual({});
   });
 });

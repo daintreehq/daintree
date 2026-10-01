@@ -2384,6 +2384,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onToursChanged(
       callback: (payload: { tours: import("../plugin.js").PluginTourDescriptor[] }) => void
     ): () => void;
+    /** Subscribe to plugin custom-icon snapshot changes (#13143). Returns a cleanup. */
+    onIconsChanged(
+      callback: (payload: {
+        icons: import("../../config/pluginCustomIcon.js").PluginCustomIconAsset[];
+      }) => void
+    ): () => void;
     /** Subscribe to plugin toolbar button registry changes. Returns a cleanup. */
     onToolbarButtonsChanged(
       callback: (payload: {

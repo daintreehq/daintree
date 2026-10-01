@@ -99,6 +99,7 @@ const PLUGIN_TOURS = "src/components/Tour/pluginTours.tsx";
 const RECIPE_SANITIZER = "shared/utils/recipeSanitizer.ts";
 const ARCHIVE_INSTALL_INTENT = "electron/setup/archiveInstallIntent.ts";
 const PROCESS_TOOL_REGISTRY = "shared/config/pluginProcessToolRegistry.ts";
+const PLUGIN_ICON_ASSETS = "electron/services/plugin/pluginIconAssets.ts";
 const PROCESS_DETECTOR_REGISTRIES = "electron/services/ProcessDetector/registries.ts";
 const AGENT_MCP_DECLARED = "electron/services/pluginAgentMcp/declaredEndpoints.ts";
 const DEV_PREVIEW_TOOL_REGISTRY = "src/registry/devPreviewToolRegistry.ts";
@@ -256,9 +257,12 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       note: "Registered as the panel kind's display name.",
     },
     iconId: {
-      mode: "verbatim",
-      consumers: [{ file: "shared/config/panelKindRegistry.ts", symbol: "registerPanelKind" }],
-      note: "Registered as the panel kind icon.",
+      mode: "derived-input",
+      consumers: [
+        { file: "shared/config/panelKindRegistry.ts", symbol: "registerPanelKind" },
+        { file: PLUGIN_ICON_ASSETS, symbol: "loadPluginCustomIcons" },
+      ],
+      note: "Registered as the panel kind icon; a `./…svg` reference is loaded and rewritten to its custom-icon runtime key first (#13143).",
     },
     color: {
       mode: "verbatim",
@@ -339,11 +343,12 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       note: "Registered as the toolbar button label.",
     },
     iconId: {
-      mode: "verbatim",
+      mode: "derived-input",
       consumers: [
         { file: "shared/config/toolbarButtonRegistry.ts", symbol: "registerToolbarButton" },
+        { file: PLUGIN_ICON_ASSETS, symbol: "loadPluginCustomIcons" },
       ],
-      note: "Registered as the toolbar button icon.",
+      note: "Registered as the toolbar button icon; a `./…svg` reference is loaded and rewritten to its custom-icon runtime key first (#13143).",
     },
     actionId: {
       mode: "verbatim",
@@ -793,8 +798,9 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [
         { file: PROCESS_TOOL_REGISTRY, symbol: "registerPluginProcessTools (snapshot value)" },
         { file: "src/components/Terminal/TerminalIcon.tsx", symbol: "getPluginIconComponent" },
+        { file: PLUGIN_ICON_ASSETS, symbol: "loadPluginCustomIcons" },
       ],
-      note: "Collapsed to the generic `terminal` glyph unless it names a PLUGIN_ICON_ID, then emitted as the detected process icon id — the id doubles as process identity, so an unsanitized value could borrow a built-in agent's mark or a built-in tool's detection priority.",
+      note: "Collapsed to the generic `terminal` glyph unless it names a PLUGIN_ICON_ID or the plugin's own loaded custom-icon key (#13143), then emitted as the detected process icon id — the id doubles as process identity, so an unsanitized value could borrow a built-in agent's mark or a built-in tool's detection priority.",
     },
   },
   settings: {

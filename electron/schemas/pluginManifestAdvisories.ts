@@ -4,6 +4,7 @@ import type { z } from "zod";
 import { DEPRECATED_CONTRIBUTION_ALIASES, getPluginManifestSchema } from "./plugin.js";
 import { PLUGIN_ICON_IDS, isPluginIconId } from "../../shared/config/pluginIconIds.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
+import { isPluginCustomIconRef } from "../../shared/config/pluginCustomIcon.js";
 
 /**
  * Advisory checks that run *after* a manifest has parsed. Everything here is
@@ -111,8 +112,10 @@ export async function collectManifestAdvisories({
   // icon before consulting the registry. Toolbar surfaces get no such
   // exemption: they never resolve agent brand icons.
   const knownIds = PLUGIN_ICON_IDS.join(", ");
+  // A `./…svg` custom-icon reference is checked by `collectPluginIconIssues`
+  // (#13143), which reports a broken file as an error rather than this warning.
   const isUnrenderablePanelIcon = (iconId: string): boolean =>
-    !isPluginIconId(iconId) && !isBuiltInAgentId(iconId);
+    !isPluginIconId(iconId) && !isBuiltInAgentId(iconId) && !isPluginCustomIconRef(iconId);
   for (const [index, panel] of manifest.contributes.panels.entries()) {
     if (panel.iconId && isUnrenderablePanelIcon(panel.iconId)) {
       warnings.push(
@@ -132,9 +135,9 @@ export async function collectManifestAdvisories({
     }
   }
   for (const [index, button] of manifest.contributes.toolbarButtons.entries()) {
-    if (button.iconId && !isPluginIconId(button.iconId)) {
+    if (button.iconId && !isPluginIconId(button.iconId) && !isPluginCustomIconRef(button.iconId)) {
       warnings.push(
-        `toolbarButtons[${index}].iconId "${button.iconId}" isn't a recognized plugin icon — it will render as the default package icon. Known ids: ${knownIds}`
+        `toolbarButtons[${index}].iconId "${button.iconId}" isn't a recognized plugin icon — it will render as the default puzzle icon. Known ids: ${knownIds}`
       );
     }
   }
@@ -145,7 +148,7 @@ export async function collectManifestAdvisories({
   // brand id like `claude` especially worth warning about: it names a real
   // glyph, so it looks like it works, but the host never honors it.
   for (const [index, tool] of manifest.contributes.processTools.entries()) {
-    if (tool.iconId && !isPluginIconId(tool.iconId)) {
+    if (tool.iconId && !isPluginIconId(tool.iconId) && !isPluginCustomIconRef(tool.iconId)) {
       warnings.push(
         `processTools[${index}].iconId "${tool.iconId}" isn't a recognized plugin icon — the host will collapse it and the terminal tab will render the default terminal icon. Known ids: ${knownIds}`
       );

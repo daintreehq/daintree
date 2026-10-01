@@ -570,6 +570,9 @@ export interface GeneratedElectronAPI {
     getForgeProviders(
       ...args: IpcInvokeMap["plugin:forge-providers-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:forge-providers-get"]["result"]>;
+    getIcons(
+      ...args: IpcInvokeMap["plugin:icons-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:icons-get"]["result"]>;
     getLatestBackgroundUpdateCheck(
       ...args: IpcInvokeMap["plugin:bg-update-check-latest"]["args"]
     ): Promise<IpcInvokeMap["plugin:bg-update-check-latest"]["result"]>;
