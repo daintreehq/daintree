@@ -123,7 +123,7 @@ A job that reports per item — a build, an import, a crawl — must not push pe
 
 - **Worker: gather, then push on a timer.** Collect lines in an array and push the batch every 50–100 ms, plus once at the end. The port of that job sent 7 pushes.
 - **View: `useStreamBuffer` for anything appended.** It keeps every item up to `maxItems` (default 1000; older ones are dropped and counted in `dropped`) and commits at most once per frame. Pass `pushMany` (or `push`) straight to the subscription.
-- **Render with `LogView`**, the kit's bounded, virtualised log. It keeps only the newest `maxLines` (default 5000) and mounts only the lines in view.
+- **Render with `LogView`**, the kit's bounded, virtualised log. It keeps only the newest `maxLines` (default 5000) and mounts only the lines in view. Output from a CLI, escape codes and all, goes to `TerminalOutput` instead: pass the growing text (only its new tail is parsed) and it draws the terminal's colours and collapses progress-bar rewrites.
 - **A value that replaces the last one** — a percentage, the current file — is not a stream: wrap its setter in `useThrottledCallback`, which keeps only the latest arguments per frame, and show it in a `ProgressBar`. Never use it for lines; it drops all but the last.
 
 ```js

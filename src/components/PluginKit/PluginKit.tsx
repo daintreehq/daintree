@@ -120,6 +120,7 @@ import { pluginKitTypography, pluginKitTypographyFunctions } from "./PluginKitTy
 import { pluginKitEditors } from "./PluginKitEditors";
 import { pluginKitPickersForms } from "./PluginKitPickersForms";
 import { pluginKitTextInputs } from "./PluginKitTextInputs";
+import { pluginKitRichDisplay } from "./PluginKitRichDisplay";
 import { primeRadix } from "@/components/ui/radix-loader";
 
 export { normalizeSelectOptions, pickDomProps };
@@ -1273,6 +1274,7 @@ export const pluginKit = {
   ...pluginKitEditors,
   ...pluginKitPickersForms,
   ...pluginKitTextInputs,
+  ...pluginKitRichDisplay,
 };
 
 export type PluginKit = typeof pluginKit;

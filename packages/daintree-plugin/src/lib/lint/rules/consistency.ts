@@ -576,6 +576,23 @@ const editorLibraryImport: LintRule = {
   },
 };
 
+// The ANSI-to-HTML libraries a view bundles to show CLI output, which the
+// kit's AnsiText and TerminalOutput now draw in the terminal's own colours.
+const ANSI_LIBRARY_IMPORT =
+  /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\(\s*|\bimport\s+)["'](?:anser|ansi_up|ansi-to-html|ansi-to-react|ansi-html(?:-community)?|fancy-ansi)(?:\/[^"']*)?["']/;
+
+const ansiLibraryImport: LintRule = {
+  id: "ansi-library-import",
+  severity: "warn",
+  appliesTo: "view",
+  message: "an ANSI-to-HTML library is bundled into the view",
+  hint: "prefer `AnsiText` or `TerminalOutput` from @daintreehq/plugin-ui: CLI output in the terminal's own theme colours, with links opened by the host",
+  check(file) {
+    const match = ANSI_LIBRARY_IMPORT.exec(file.code);
+    return match ? [{ offset: match.index }] : [];
+  },
+};
+
 export const CONSISTENCY_RULES: LintRule[] = [
   stockColour,
   darkVariant,
@@ -602,4 +619,5 @@ export const CONSISTENCY_RULES: LintRule[] = [
   viewportBreakpoint,
   editorLibraryImport,
   handRolledDrawer,
+  ansiLibraryImport,
 ];

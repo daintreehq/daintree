@@ -33,6 +33,8 @@ function installHostStyles(): void {
     SEARCH_FIELD_CSS,
     "@layer components { .toolbar-icon-button { display: inline-flex; } .palette-row { display: flex; } }",
     ".border-divider { border-color: var(--border-divider); }",
+    // index.css's gated skeleton pulse, which a loading ImageViewer draws.
+    ".animate-pulse-delayed { animation: none; }",
     // A host class that styles only inside host chrome; a plugin class of the
     // same name elsewhere is not styled by it.
     ".host-toolbar .status { color: red; } .status.host-only::before { content: ''; }",
@@ -207,6 +209,46 @@ describe("getPluginStyleReportForRoots with kit markup", () => {
     if (!root) throw new Error("no plugin root");
     await vi.waitFor(() => {
       if (!root.querySelector("textarea")) throw new Error("kit not rendered");
+    });
+    const report = await getPluginStyleReportForRoots([root]);
+    expect(report?.notGenerated).toEqual([]);
+  });
+
+  it("reports nothing for the rich-display kit's own markup", async () => {
+    const { container } = render(
+      createElement(
+        TooltipProvider,
+        null,
+        createElement(
+          "div",
+          { [PLUGIN_STYLE_ROOT_ATTRIBUTE]: "" },
+          createElement(kit.AnsiText, { text: "\x1b[1;31mFAIL\x1b[0m done", display: "block" }),
+          createElement(kit.TerminalOutput, {
+            text: "\x1b[32mok\x1b[0m\nline",
+            "aria-label": "Output",
+            title: "npm test",
+            lineNumbers: true,
+          }),
+          createElement(kit.HoverCard, {
+            open: true,
+            content: "Card",
+            children: createElement("button", { type: "button" }, "@ada"),
+          }),
+          createElement(kit.ImageViewer, {
+            images: [
+              { src: "data:image/png;base64,AA", alt: "One", caption: "First" },
+              { src: "data:image/png;base64,BB", alt: "Two" },
+            ],
+          }),
+          createElement(kit.Gauge, { value: 40, "aria-label": "Coverage", label: "Lines" }),
+          createElement(kit.TableOfContents, { markdown: "# A\n## B\n### C", target: null })
+        )
+      )
+    );
+    const root = container.querySelector(`[${PLUGIN_STYLE_ROOT_ATTRIBUTE}]`);
+    if (!root) throw new Error("no plugin root");
+    await vi.waitFor(() => {
+      if (!root.querySelector("nav")) throw new Error("kit not rendered");
     });
     const report = await getPluginStyleReportForRoots([root]);
     expect(report?.notGenerated).toEqual([]);

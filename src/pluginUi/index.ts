@@ -160,6 +160,19 @@ import type {
   PluginSecretInputProps,
   PluginShortcutRecorderProps,
 } from "@shared/types/plugin-sdk-react";
+import type {
+  PluginAnsiTextProps,
+  PluginContributionGridProps,
+  PluginGaugeProps,
+  PluginHeatmapProps,
+  PluginHistogramProps,
+  PluginHoverCardProps,
+  PluginImageViewerProps,
+  PluginScatterChartProps,
+  PluginStackedAreaChartProps,
+  PluginTableOfContentsProps,
+  PluginTerminalOutputProps,
+} from "@shared/types/plugin-sdk-react";
 import { fromKit } from "./kit";
 
 export { preloadPluginUi, whenPluginUiReady } from "./kit";
@@ -1059,4 +1072,64 @@ export type {
   PluginTaskListProps as TaskListProps,
   PluginRefreshOverlayProps as RefreshOverlayProps,
   PluginStaleIndicatorProps as StaleIndicatorProps,
+} from "@shared/types/plugin-sdk-react";
+
+// Rich display: ANSI output, hover cards, an image viewer, more chart forms
+// and a table of contents.
+export const AnsiText: ComponentType<PluginAnsiTextProps> = fromKit(
+  "AnsiText",
+  (kit) => kit.AnsiText
+);
+export const TerminalOutput: ComponentType<PluginTerminalOutputProps> = fromKit(
+  "TerminalOutput",
+  (kit) => kit.TerminalOutput
+);
+export const HoverCard: ComponentType<PluginHoverCardProps> = fromKit(
+  "HoverCard",
+  (kit) => kit.HoverCard,
+  // Like a tooltip, the trigger is there from the first frame.
+  ({ children }) => (isValidElement(children) ? children : null)
+);
+export const ImageViewer: ComponentType<PluginImageViewerProps> = fromKit(
+  "ImageViewer",
+  (kit) => kit.ImageViewer
+);
+export const Heatmap: ComponentType<PluginHeatmapProps> = fromKit("Heatmap", (kit) => kit.Heatmap);
+export const ContributionGrid: ComponentType<PluginContributionGridProps> = fromKit(
+  "ContributionGrid",
+  (kit) => kit.ContributionGrid
+);
+export const ScatterChart: ComponentType<PluginScatterChartProps> = fromKit(
+  "ScatterChart",
+  (kit) => kit.ScatterChart
+);
+export const Histogram: ComponentType<PluginHistogramProps> = fromKit(
+  "Histogram",
+  (kit) => kit.Histogram
+);
+export const StackedAreaChart: ComponentType<PluginStackedAreaChartProps> = fromKit(
+  "StackedAreaChart",
+  (kit) => kit.StackedAreaChart
+);
+export const Gauge: ComponentType<PluginGaugeProps> = fromKit("Gauge", (kit) => kit.Gauge);
+export const TableOfContents: ComponentType<PluginTableOfContentsProps> = fromKit(
+  "TableOfContents",
+  (kit) => kit.TableOfContents
+);
+
+export type {
+  PluginAnsiTextProps as AnsiTextProps,
+  PluginTerminalOutputProps as TerminalOutputProps,
+  PluginHoverCardProps as HoverCardProps,
+  PluginImageViewerImage as ImageViewerImage,
+  PluginImageViewerProps as ImageViewerProps,
+  PluginHeatmapProps as HeatmapProps,
+  PluginContributionGridProps as ContributionGridProps,
+  PluginScatterChartProps as ScatterChartProps,
+  PluginHistogramProps as HistogramProps,
+  PluginStackedAreaChartProps as StackedAreaChartProps,
+  PluginGaugeThresholds as GaugeThresholds,
+  PluginGaugeProps as GaugeProps,
+  PluginTocHeading as TocHeading,
+  PluginTableOfContentsProps as TableOfContentsProps,
 } from "@shared/types/plugin-sdk-react";

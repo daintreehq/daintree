@@ -316,7 +316,8 @@ export default function Notes({ pluginId, disposeSignal }) {
 | Lists and tables | `VirtualList`, `DataTable`, `LogView`, `ListRow` with `useListNavigation`, `ScrollShadow`, `FileTree`, `Timeline` (an activity feed or audit log), `HighlightedText` (search matches in a row) |
 | Figures | `StatCard` (a labelled figure with an optional change), `Sparkline`, `Meter` (usage against a limit, with warning and danger thresholds), `DiffStat` ("+12 -3") |
 | Dates | `Calendar` (an inline month grid, one day or a range), `DatePicker` and `DateRangePicker` (typed or picked ISO `"YYYY-MM-DD"` days, range presets), `TimePicker` and `DateTimePicker` (kit-drawn `"HH:mm"` times and `"YYYY-MM-DDTHH:mm"` date-times, with the zone named), `TimeAgo` (an age that keeps itself current) |
-| Charts | `BarChart` (grouped or stacked, upright or across), `LineChart` (numeric or time x, optional area), `DonutChart` (parts of a whole) — all with a tooltip anchored to the point under the pointer or the arrow keys |
+| Charts | `BarChart` (grouped or stacked, upright or across), `LineChart` (numeric or time x, optional area), `DonutChart` (parts of a whole), `StackedAreaChart` (series piled to a total or 100%), `ScatterChart` (points by two numbers), `Histogram` (a distribution), `Heatmap` (a value per pair of categories), `ContributionGrid` (a calendar of daily counts), `Gauge` (one number against its range) — all with a tooltip anchored to the point under the pointer or the arrow keys |
+| Rich display | `TerminalOutput` (CLI output in the terminal's colours, with progress-bar rewrites and OSC 8 links) and `AnsiText` (a short run of it inline), `HoverCard` (a preview of a person, issue or commit), `ImageViewer` (zoom, pan and step through screenshots, in a pane or a lightbox), `TableOfContents` (a long document's sticky, scroll-tracking outline) |
 | Pane chrome | `PaneHeader`, `Toolbar`, `ToolbarButton`, `Tabs` |
 | Navigation | `NavList` (an app's left rail), `Breadcrumbs`, `Stepper` (a wizard's progress), `CommandPalette` (a quick switcher or "jump to…") |
 | Layout | `Card` (header, body and footer; clickable with `onClick`), `Divider`, `SectionLabel`, `ResizableSplit` (two panes with a draggable divider), `Accordion`, `Disclosure`, `DescriptionList` (a record's label and value rows) |
@@ -331,7 +332,7 @@ export default function Notes({ pluginId, disposeSignal }) {
 
 One status vocabulary runs through `Badge` `tone`, `Callout` `severity` and `SeverityIcon`: `error` (the same colour as `danger`, which `Badge` also accepts), `warning`, `success`, `info` and `neutral`.
 
-Not in the kit, so draw them with tokens: other chart forms (a scatter, a heatmap, a graph of nodes), and a point tooltip on a canvas of your own; the kit charts carry theirs. Read the series colours from the `category-*` tokens with a fallback, in the kit charts' order (`blue`, `amber`, `indigo`, `orange`, `violet`, `teal`), so your chart and theirs agree.
+Not in the kit, so draw them with tokens: other chart forms (a graph of nodes, a treemap, a sankey), and a point tooltip on a canvas of your own; the kit charts carry theirs. Read the series colours from the `category-*` tokens with a fallback, in the kit charts' order (`blue`, `amber`, `indigo`, `orange`, `violet`, `teal`), so your chart and theirs agree.
 
 **Never `window.confirm`, `alert` or `prompt` in a view.** A native dialog ignores the theme, blocks the whole window and takes focus from every other panel. `ConfirmDialog` is the view-side confirm, and `ConfirmPopover` the small inline one for an action that is cheap to undo; `host.showConfirm` is the worker's. For feedback after the fact, `useToast` puts a toast (or an Undo toast) in the app's toaster straight from the view.
 
