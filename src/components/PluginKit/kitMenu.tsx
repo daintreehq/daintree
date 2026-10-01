@@ -1,4 +1,10 @@
-import type { ComponentType, KeyboardEvent, ReactNode, SyntheticEvent } from "react";
+import {
+  useId,
+  type ComponentType,
+  type KeyboardEvent,
+  type ReactNode,
+  type SyntheticEvent,
+} from "react";
 import type { PluginActionMenuItem, PluginDropdownMenuEntry } from "@shared/types/plugin-sdk-react";
 import {
   ContextMenuCheckboxItem,
@@ -28,12 +34,14 @@ import { useKitOverlayZClass } from "./kitScope";
 export interface KitMenuParts {
   Item: ComponentType<{
     children?: ReactNode;
-    onSelect?: () => void;
+    onSelect?: (event: Event) => void;
     disabled?: boolean;
     destructive?: boolean;
     textValue?: string;
     className?: string;
     "aria-keyshortcuts"?: string;
+    "aria-disabled"?: boolean;
+    "aria-describedby"?: string;
   }>;
   CheckboxItem: ComponentType<{
     children?: ReactNode;
@@ -158,30 +166,43 @@ const TWO_LINE_TRIGGER_CLASS = "items-start [&>svg:last-child]:mt-px";
 
 /** An `action` entry: the action's own label, key and availability, read as the menu opens. */
 function ActionMenuRow({ parts, entry }: { parts: KitMenuParts; entry: PluginActionMenuItem }) {
+  const reasonId = useId();
   const row = useActionMenuRow(entry);
   if (!row) return null;
   const Glyph = row.icon === undefined ? undefined : resolvePluginKitIcon(row.icon);
-  const refused = row.disabled && row.description !== undefined;
-  // A refused row keeps the host's 50% on its name, glyph and keys, but its
-  // reason is the answer to "why can't I?" and stays readable, in secondary ink.
+  const refused = row.disabled;
   const dim = (node: ReactNode) =>
     refused ? <span className="inline-flex shrink-0 self-start opacity-50">{node}</span> : node;
   return (
     <parts.Item
-      onSelect={row.onSelect}
-      disabled={row.disabled}
+      // A refused row stays reachable by the arrow keys, as a disabled control
+      // with a reason does everywhere in the kit: it is announced unavailable
+      // with its reason, and choosing it does nothing and keeps the menu open.
+      onSelect={(event) => {
+        if (refused) {
+          event.preventDefault();
+          return;
+        }
+        row.onSelect();
+      }}
+      aria-disabled={refused || undefined}
+      aria-describedby={refused && row.description ? reasonId : undefined}
       destructive={row.destructive}
       textValue={row.label}
       aria-keyshortcuts={row.shortcut ? comboToAriaKeyshortcuts(row.shortcut, isMac()) : undefined}
-      className={refused ? "data-[disabled]:opacity-100" : undefined}
+      className={refused ? "cursor-not-allowed" : undefined}
     >
       {Glyph ? dim(<MenuRowIcon Glyph={Glyph} top={row.description !== undefined} />) : null}
       {row.description === undefined ? (
         row.label
       ) : refused ? (
+        // The name, glyph and keys take the host's 50%; the reason is the
+        // answer to "why can't I?" and stays readable, in secondary ink.
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="truncate opacity-50">{row.label}</span>
-          <span className="text-2xs text-text-secondary">{row.description}</span>
+          <span id={reasonId} className="text-2xs text-text-secondary">
+            {row.description}
+          </span>
         </span>
       ) : (
         <MenuRowText label={row.label} description={row.description} />
