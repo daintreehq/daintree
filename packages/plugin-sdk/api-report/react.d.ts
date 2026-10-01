@@ -4670,6 +4670,8 @@ interface PluginFileLinkProps extends PluginRootAttributes {
     mono?: boolean;
     /** Called before the file opens; call `preventDefault()` on the event to open it yourself. */
     onClick?: (event: MouseEvent<HTMLAnchorElement>) => void;
+    /** The link's `tabIndex`: `-1` when your list owns the keyboard, so each row adds no Tab stop. */
+    tabIndex?: number;
     className?: string;
 }
 /** Props of `GitStatusBadge`: a file's git state as the host's change lists mark it. */
@@ -4772,6 +4774,12 @@ interface PluginForgeRowBaseProps extends PluginRootAttributes {
     selected?: boolean;
     /** Your controls at the end of the title line (a `DropdownMenu` trigger). */
     actions?: ReactNode;
+    /**
+     * The title control's `tabIndex`. Pass `-1` when your list owns the keyboard
+     * (a `useListNavigation` listbox, a grid with `aria-activedescendant`), so
+     * the rows add no Tab stops of their own.
+     */
+    titleTabIndex?: number;
     className?: string;
 }
 /** Props of `IssueRow`. */

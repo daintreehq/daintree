@@ -1141,3 +1141,50 @@ describe("round 2 design fixes", () => {
     expect(rows[0]?.children.length).toBe(rows[1]?.children.length);
   });
 });
+
+describe("round 3 design fixes", () => {
+  it("lets a list that owns the keyboard take the rows' titles and links out of the tab order", () => {
+    render(
+      withTooltips(
+        createElement(
+          "div",
+          null,
+          createElement(kit.IssueRow, {
+            number: 1,
+            title: "Row",
+            state: "open",
+            onOpen: () => {},
+            titleTabIndex: -1,
+          }),
+          createElement(kit.FileLink, {
+            path: "a.ts",
+            rootPath: "/repo",
+            tabIndex: -1,
+            "data-testid": "link",
+          }),
+          untyped("IssueRow", {
+            number: 2,
+            title: "Bad",
+            state: "open",
+            onOpen: () => {},
+            titleTabIndex: "x",
+          })
+        )
+      )
+    );
+    expect(screen.getByRole("button", { name: "Row" }).tabIndex).toBe(-1);
+    expect(screen.getByTestId("link").tabIndex).toBe(-1);
+    expect(screen.getByRole("button", { name: "Bad" }).tabIndex).toBe(0);
+  });
+
+  it("keeps each commit metadata item's separator inside it, and the hash outside the line", () => {
+    render(
+      withTooltips(createElement(kit.CommitRow, { commit: COMMITS[0]!, "data-testid": "row" }))
+    );
+    const meta = screen.getByTestId("row").querySelector("[data-kit-commit-meta]")!;
+    const items = [...meta.children];
+    expect(items[0]?.textContent).toBe("Not pushed");
+    for (const item of items.slice(1)) expect(item.textContent?.startsWith("·")).toBe(true);
+    expect(meta.querySelector("[data-kit-commit-sha]")).toBeNull();
+  });
+});

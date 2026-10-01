@@ -297,6 +297,7 @@ function KitFileLink({
   icon,
   mono,
   onClick,
+  tabIndex,
   className,
   ...rest
 }: PluginFileLinkProps) {
@@ -319,7 +320,11 @@ function KitFileLink({
         <KitPathLabel path={shown} mono={mono === true} focusable={false} />
       )}
       {at !== undefined ? (
-        <span className="shrink-0 text-text-secondary tabular-nums">:{at}</span>
+        <span
+          className={cn("shrink-0 text-text-secondary tabular-nums", mono === true && "font-mono")}
+        >
+          :{at}
+        </span>
       ) : null}
     </>
   );
@@ -341,6 +346,7 @@ function KitFileLink({
       {...pickRootProps(rest)}
       data-kit-file-link=""
       href={given}
+      tabIndex={typeof tabIndex === "number" && Number.isInteger(tabIndex) ? tabIndex : undefined}
       aria-label={at !== undefined ? `${shown}, line ${at}` : undefined}
       onClick={(event) => {
         try {
@@ -928,7 +934,9 @@ function CommitRefs({ refs }: { refs: CommitEntry["refs"] }) {
             data-ref-kind={ref.kind}
             aria-label={`${REF_WORD[ref.kind]} ${ref.name}`}
             className={cn(
-              "min-w-0 max-w-[140px] shrink font-mono",
+              "max-w-[140px] shrink font-mono",
+              // A tag cut to "v0…" names no version; it keeps room for one.
+              ref.kind === "tag" ? "min-w-[9ch]" : "min-w-0",
               ref.kind === "head" && "text-text-primary"
             )}
           >
@@ -1064,41 +1072,49 @@ function CommitBody({
           <CommitRefs refs={entry.refs} />
         </div>
         <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary">
-          {entry.unpushed ? (
-            <>
+          {/* Like the forge row's: one line whose items drop out whole, with
+              their separators, when the row is too narrow. "Not pushed" leads
+              and the hash keeps its own place at the end. */}
+          <div
+            data-kit-commit-meta=""
+            className="flex h-4 min-w-0 flex-1 flex-wrap items-center gap-x-1.5 overflow-hidden leading-4"
+          >
+            {entry.unpushed ? (
               <span className="inline-flex shrink-0 items-center gap-0.5 font-medium text-text-primary">
                 <ArrowUp aria-hidden="true" className="size-3" />
                 Not pushed
               </span>
-              {entry.author || dated ? <Dot /> : null}
-            </>
-          ) : null}
-          {entry.author ? (
-            entry.author.email ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="truncate">{entry.author.name}</span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className={overlayZ}>
-                  {entry.author.email}
-                </TooltipContent>
-              </Tooltip>
-            ) : (
-              <span className="truncate">{entry.author.name}</span>
-            )
-          ) : null}
-          {entry.author && dated ? <Dot /> : null}
-          {dated ? <KitTimeAgo value={entry.date} className="shrink-0" /> : null}
-          {entry.additions || entry.deletions ? (
-            <>
-              <Dot />
-              <DiffStat
-                insertions={entry.additions}
-                deletions={entry.deletions}
-                className="shrink-0"
-              />
-            </>
-          ) : null}
+            ) : null}
+            {entry.author ? (
+              <span className="inline-flex min-w-0 max-w-full shrink items-center gap-1.5">
+                {entry.unpushed ? <Dot /> : null}
+                {entry.author.email ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="min-w-0 truncate">{entry.author.name}</span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className={overlayZ}>
+                      {entry.author.email}
+                    </TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <span className="min-w-0 truncate">{entry.author.name}</span>
+                )}
+              </span>
+            ) : null}
+            {dated ? (
+              <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+                {entry.unpushed || entry.author ? <Dot /> : null}
+                <KitTimeAgo value={entry.date} />
+              </span>
+            ) : null}
+            {entry.additions || entry.deletions ? (
+              <span className="inline-flex shrink-0 items-center gap-1.5">
+                {entry.unpushed || entry.author || dated ? <Dot /> : null}
+                <DiffStat insertions={entry.additions} deletions={entry.deletions} />
+              </span>
+            ) : null}
+          </div>
           <ShaButton sha={entry.sha} length={shaLength} />
         </div>
       </div>
@@ -1502,6 +1518,7 @@ function ForgeRow({ props, extra }: { props: PluginForgeRowBaseProps; extra: For
     timePrefix,
     selected,
     actions,
+    titleTabIndex,
     className,
     ...rest
   } = props;
@@ -1525,6 +1542,11 @@ function ForgeRow({ props, extra }: { props: PluginForgeRowBaseProps; extra: For
       <button
         type="button"
         data-forge-row-title=""
+        tabIndex={
+          typeof titleTabIndex === "number" && Number.isInteger(titleTabIndex)
+            ? titleTabIndex
+            : undefined
+        }
         aria-current={selected === true ? "true" : undefined}
         onClick={(event: MouseEvent<HTMLButtonElement>) => {
           event.stopPropagation();
@@ -1672,10 +1694,13 @@ function ForgeRow({ props, extra }: { props: PluginForgeRowBaseProps; extra: For
                       ? `Merges ${extra.headRef} into ${extra.baseRef}`
                       : `From ${extra.headRef}`
                   }
-                  className="inline-flex max-w-[160px] shrink-0 items-center gap-1.5"
+                  // Placed on the line at 5ch, then grown into whatever room is
+                  // left, up to its own width: the branch shows as much of
+                  // itself as fits rather than all or nothing.
+                  className="inline-flex max-w-max min-w-0 shrink-0 grow basis-[5ch] items-center gap-1.5"
                 >
                   <Dot />
-                  <span aria-hidden="true" className="min-w-0 truncate">
+                  <span aria-hidden="true" className="min-w-0 max-w-[150px] truncate">
                     {extra.headRef}
                   </span>
                 </span>
