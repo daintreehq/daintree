@@ -1,8 +1,20 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FocusEvent,
+  type KeyboardEvent,
+  type RefObject,
+  type MouseEvent,
+} from "react";
 import {
   ArrowUp,
   Check,
   ChevronDown,
+  ChevronRight,
   Circle,
   CircleAlert,
   CircleCheck,
@@ -51,7 +63,7 @@ import type {
   PluginWorktreePickerProps,
 } from "@shared/types/plugin-sdk-react";
 import type { ForgeCheckRun } from "@shared/types/ipc/forge";
-import { isAbsolute, isPathInside, join, normalize } from "@shared/utils/path";
+import { isAbsolute, isPathInside, join, normalize, toWorktreeRelative } from "@shared/utils/path";
 import { isLocalhostUrl } from "@shared/utils/urlUtils";
 import { Badge } from "@/components/ui/badge";
 import { BranchBadge } from "@/components/ui/BranchBadge";
@@ -64,6 +76,7 @@ import {
   PALETTE_SECTION_LABEL_CLASS,
 } from "@/components/ui/paletteRowStyles";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { PathTail } from "@/components/ui/PathTail";
 import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
 import { clearSearchBeforeDismiss } from "@/components/ui/SearchField";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
@@ -106,16 +119,15 @@ import {
   useKitOwnerAttributes,
 } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
+import { parseLabelHex, swatchNeedsEdge } from "./kitLabelColor";
+import { useDaintreeTheme } from "@/pluginUi/theme";
 import { pluginKitDates } from "./PluginKitDates";
-import { pluginKitDisplay } from "./PluginKitDisplay";
 import { pluginKitOverlays } from "./PluginKitOverlays";
 import { pluginKitTypography } from "./PluginKitTypography";
 
 const KitAvatar = pluginKitOverlays.Avatar;
-const KitAvatarGroup = pluginKitDisplay.AvatarGroup;
 const KitTimeAgo = pluginKitDates.TimeAgo;
 const KitPathLabel = pluginKitTypography.PathLabel;
-const KitColoredLabel = pluginKitTypography.ColoredLabel;
 
 const FOCUS_RING =
   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary";
@@ -288,9 +300,15 @@ function KitFileLink({
   className,
   ...rest
 }: PluginFileLinkProps) {
-  const shown = str(path) ?? "";
+  const given = str(path) ?? "";
   const at = validLine(line);
   const absolute = resolveFileLink(path, rootPath);
+  // Read against the root, as the host's change lists do: a checkout's
+  // absolute prefix is the same on every row and says nothing.
+  const shown =
+    absolute !== null && isAbsolute(given)
+      ? toWorktreeRelative(absolute, normalize(str(rootPath) ?? ""))
+      : given;
   const ownClick = fn(onClick);
   const body = (
     <>
@@ -322,7 +340,7 @@ function KitFileLink({
     <a
       {...pickRootProps(rest)}
       data-kit-file-link=""
-      href={shown}
+      href={given}
       aria-label={at !== undefined ? `${shown}, line ${at}` : undefined}
       onClick={(event) => {
         try {
@@ -478,10 +496,13 @@ function KitWorktreeBadge({
     >
       <FolderGit2 aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-text-secondary" />
       <TruncatedTooltip content={entry.path ?? entry.name}>
-        <span className="min-w-0 shrink truncate font-medium text-text-primary">{entry.name}</span>
+        {/* The name is what tells worktrees apart, so the branch gives way first. */}
+        <span className="min-w-[6ch] max-w-[60%] shrink-0 truncate font-medium text-text-primary">
+          {entry.name}
+        </span>
       </TruncatedTooltip>
       {branch ? (
-        <span className="inline-flex min-w-0 shrink-[2] items-center gap-1 text-text-secondary">
+        <span className="inline-flex min-w-0 shrink items-center gap-1 text-text-secondary">
           <GitBranch aria-hidden="true" className="h-3 w-3 shrink-0" />
           <span className="truncate font-mono">{branch}</span>
         </span>
@@ -711,7 +732,7 @@ function KitWorktreePicker(props: PluginWorktreePickerProps) {
         sideOffset={4}
         motion="drop"
         className={cn(
-          "w-[var(--radix-popover-trigger-width)] min-w-72 max-w-[calc(100vw-2rem)] p-0",
+          "w-[var(--radix-popover-trigger-width)] min-w-96 max-w-[calc(100vw-2rem)] p-0",
           overlayZ
         )}
         onEscapeKeyDown={(event) =>
@@ -784,24 +805,28 @@ function KitWorktreePicker(props: PluginWorktreePickerProps) {
                 />
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <span className="flex min-w-0 items-center gap-2 text-xs">
-                    <span className="min-w-0 shrink truncate font-medium text-text-primary">
+                    {/* The name keeps its width; the branch takes what is left. */}
+                    <span className="max-w-[60%] shrink-0 truncate font-medium text-text-primary">
                       {row.entry.name}
                     </span>
                     {row.entry.branch && row.entry.branch !== row.entry.name ? (
-                      <span className="min-w-0 shrink-[2] truncate font-mono text-text-secondary">
+                      <span className="min-w-0 flex-1 truncate font-mono text-text-secondary">
                         {row.entry.branch}
                       </span>
-                    ) : null}
-                    <span className="flex-1" />
+                    ) : (
+                      <span className="flex-1" />
+                    )}
                     {row.entry.current ? (
                       <span className="shrink-0 text-text-secondary">Current</span>
                     ) : null}
                     <WorktreeSync entry={row.entry} />
                   </span>
                   {row.entry.path ? (
-                    <span className="truncate font-mono text-2xs text-text-secondary group-aria-selected:text-text-primary">
+                    // Cut from the left: worktree paths share their prefix, so
+                    // the tail is the part that tells them apart.
+                    <PathTail className="font-mono text-2xs text-text-secondary group-aria-selected:text-text-primary">
                       {row.entry.path}
-                    </span>
+                    </PathTail>
                   ) : null}
                 </span>
               </div>
@@ -890,7 +915,9 @@ function CommitRefs({ refs }: { refs: CommitEntry["refs"] }) {
   const shown = refs.slice(0, MAX_REFS);
   const rest = refs.length - shown.length;
   return (
-    <span className="flex shrink-0 items-center gap-1">
+    // The subject outranks its decorations: the refs give way three times as
+    // fast, each cut to an ellipsis with its full name in a tooltip.
+    <span className="flex min-w-[6ch] shrink-[3] items-center gap-1">
       {shown.map((ref) => {
         const Glyph = REF_GLYPH[ref.kind];
         return (
@@ -900,16 +927,21 @@ function CommitRefs({ refs }: { refs: CommitEntry["refs"] }) {
             tone="outline"
             data-ref-kind={ref.kind}
             aria-label={`${REF_WORD[ref.kind]} ${ref.name}`}
-            className={cn("max-w-[160px] font-mono", ref.kind === "head" && "text-text-primary")}
+            className={cn(
+              "min-w-0 max-w-[140px] shrink font-mono",
+              ref.kind === "head" && "text-text-primary"
+            )}
           >
             <Glyph aria-hidden="true" />
-            <span className="truncate">{ref.name}</span>
+            <TruncatedTooltip content={ref.name} focusable={false}>
+              <span className="min-w-0 truncate">{ref.name}</span>
+            </TruncatedTooltip>
           </Badge>
         );
       })}
       {rest > 0 ? (
         <span
-          className="text-2xs text-text-secondary tabular-nums"
+          className="shrink-0 text-2xs text-text-secondary tabular-nums"
           aria-label={`${rest} more: ${refs
             .slice(MAX_REFS)
             .map((ref) => ref.name)
@@ -932,6 +964,7 @@ function ShaButton({ sha, length }: { sha: string; length: number }) {
         <button
           type="button"
           data-kit-commit-sha=""
+          data-kit-rove=""
           onClick={(event) => {
             event.stopPropagation();
             void copy(sha);
@@ -993,6 +1026,7 @@ function CommitBody({
     <button
       type="button"
       data-kit-commit-subject=""
+      data-kit-rove=""
       onClick={() => onActivate(entry.commit)}
       className={cn(
         subjectClass,
@@ -1110,15 +1144,64 @@ function KitCommitRow({
   );
 }
 
-/** Up and Down step between the rows' matching controls, so a long list is not all Tab. */
-function stepRowFocus(event: KeyboardEvent<HTMLElement>, selector: string): void {
-  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+const ROVE = "[data-kit-rove]";
+const ROVE_ROW = "[data-kit-rove-row]";
+const ROVE_STOP = "data-kit-rove-stop";
+
+function setRoveStop(root: HTMLElement, stop: HTMLElement | undefined): void {
+  for (const control of root.querySelectorAll<HTMLElement>(ROVE)) {
+    control.tabIndex = control === stop ? 0 : -1;
+    control.toggleAttribute(ROVE_STOP, control === stop);
+  }
+}
+
+/**
+ * One Tab stop for a list of rows that each hold controls: the control last
+ * focused (else the first) is the only one in the tab order. Pair with
+ * {@link roveFocus} and {@link roveKeyDown} on the same element.
+ */
+function useRovingRows(root: RefObject<HTMLElement | null>): void {
+  useLayoutEffect(() => {
+    const element = root.current;
+    if (!element) return;
+    const controls = [...element.querySelectorAll<HTMLElement>(ROVE)];
+    setRoveStop(element, controls.find((c) => c.hasAttribute(ROVE_STOP)) ?? controls[0]);
+  });
+}
+
+function roveFocus(event: FocusEvent<HTMLElement>): void {
+  const target = event.target;
+  if (target instanceof HTMLElement && target.matches(ROVE)) {
+    setRoveStop(event.currentTarget, target);
+  }
+}
+
+/** Up and Down: the same control in the next row; Left and Right: along the row; Home and End: the first and last row. */
+function roveKeyDown(event: KeyboardEvent<HTMLElement>): void {
   if (event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return;
   const target = event.target;
-  if (!(target instanceof HTMLElement) || !target.matches(selector)) return;
-  const all = [...event.currentTarget.querySelectorAll<HTMLElement>(selector)];
-  const at = all.indexOf(target);
-  const next = all[event.key === "ArrowDown" ? at + 1 : at - 1];
+  if (!(target instanceof HTMLElement) || !target.matches(ROVE)) return;
+  const rows = [...event.currentTarget.querySelectorAll<HTMLElement>(ROVE_ROW)];
+  const row = target.closest<HTMLElement>(ROVE_ROW);
+  if (!row) return;
+  const inRow = (r: HTMLElement) => [...r.querySelectorAll<HTMLElement>(ROVE)];
+  const at = rows.indexOf(row);
+  const col = inRow(row).indexOf(target);
+  let next: HTMLElement | undefined;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    for (let i = at + step; i >= 0 && i < rows.length && !next; i += step) {
+      const cells = inRow(rows[i]!);
+      next = cells[Math.min(col, cells.length - 1)];
+    }
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    next = inRow(row)[col + (event.key === "ArrowRight" ? 1 : -1)];
+  } else if (event.key === "Home" || event.key === "End") {
+    const edge = event.key === "Home" ? rows[0] : rows[rows.length - 1];
+    next = edge ? inRow(edge)[0] : undefined;
+  } else {
+    return;
+  }
   if (!next) return;
   event.preventDefault();
   next.focus();
@@ -1144,6 +1227,8 @@ function KitCommitList({
     loading === true ? 3 : count(loading) !== undefined ? Math.min(count(loading) ?? 0, 20) : 0;
   const activate = fn(onActivate);
   const length = shaLengthOf(shaLength);
+  const listRef = useRef<HTMLUListElement>(null);
+  useRovingRows(listRef);
   if (entries.length === 0 && skeletons === 0) {
     return hasContent(empty) ? (
       <div
@@ -1154,7 +1239,6 @@ function KitCommitList({
       </div>
     ) : null;
   }
-  const selector = activate ? "[data-kit-commit-subject]" : "[data-kit-commit-sha]";
   const seen = new Map<string, number>();
   return (
     <div
@@ -1163,9 +1247,11 @@ function KitCommitList({
       className={cn("flex min-w-0 flex-col", str(className))}
     >
       <ul
+        ref={listRef}
         aria-label={nonEmpty(ariaLabel)}
         aria-busy={skeletons > 0 ? true : undefined}
-        onKeyDown={(event) => stepRowFocus(event, selector)}
+        onFocus={roveFocus}
+        onKeyDown={roveKeyDown}
         className="m-0 flex list-none flex-col p-0"
       >
         {entries.map((entry) => {
@@ -1176,6 +1262,7 @@ function KitCommitList({
           return (
             <li
               key={key}
+              data-kit-rove-row=""
               data-kit-commit={entry.sha}
               className={cn(COMMIT_ROW_CLASS, "rounded-[var(--radius-md)]", LIST_ROW_HOVER_CLASS)}
             >
@@ -1327,34 +1414,66 @@ function readLabels(value: unknown): PluginForgeLabel[] {
   });
 }
 
+/** A label's colour as the dot's fill variable, as `ColoredLabel` sets it. */
+function labelDotStyle(rgb: readonly number[]): CSSProperties & Record<"--kit-label-dot", string> {
+  return { "--kit-label-dot": `rgb(${rgb.join(", ")})` };
+}
+
+/**
+ * The github row's label run: the first label as a dot and its name, then a
+ * count for the rest, all of them named in the tooltip. Plain text rather than
+ * chips, so a row of labels reads as metadata and never as a strip of buttons.
+ */
 function ForgeLabels({ labels, max }: { labels: PluginForgeLabel[]; max: number }) {
+  const theme = useDaintreeTheme();
+  const overlayZ = useKitOverlayZClass();
   if (labels.length === 0) return null;
   const shown = labels.slice(0, max);
   const rest = labels.length - shown.length;
+  const names = labels.map((label) => label.name).join(", ");
   return (
-    <span
-      role="img"
-      aria-label={`Labels: ${labels.map((label) => label.name).join(", ")}`}
-      className="inline-flex min-w-0 items-center gap-1"
-    >
-      {shown.map((label, index) => (
-        <KitColoredLabel
-          key={`${index}:${label.name}`}
-          color={label.color ?? ""}
-          variant="dot"
-          size="xs"
-          aria-hidden="true"
-          className="max-w-[140px]"
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          role="img"
+          aria-label={`Labels: ${names}`}
+          data-forge-labels=""
+          className="inline-flex min-w-0 items-center gap-1.5"
         >
-          {label.name}
-        </KitColoredLabel>
-      ))}
-      {rest > 0 ? (
-        <span aria-hidden="true" className="shrink-0 tabular-nums">
-          +{rest}
+          {shown.map((label, index) => {
+            const hex = parseLabelHex(label.color);
+            return (
+              <span
+                key={`${index}:${label.name}`}
+                aria-hidden="true"
+                className="inline-flex min-w-0 items-center gap-1"
+              >
+                {hex ? (
+                  <span
+                    data-edged={
+                      swatchNeedsEdge(label.color, theme.tokens["surface-panel"], theme.colorMode)
+                        ? ""
+                        : undefined
+                    }
+                    className="h-2 w-2 shrink-0 rounded-full bg-[var(--kit-label-dot)] data-[edged]:ring-1 data-[edged]:ring-text-secondary data-[edged]:ring-inset forced-colors:bg-[CanvasText]"
+                    style={labelDotStyle(hex)}
+                  />
+                ) : null}
+                <span className="max-w-[130px] truncate">{label.name}</span>
+              </span>
+            );
+          })}
+          {rest > 0 ? (
+            <span aria-hidden="true" className="shrink-0 tabular-nums">
+              +{rest}
+            </span>
+          ) : null}
         </span>
-      ) : null}
-    </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className={overlayZ}>
+        {names}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -1396,6 +1515,7 @@ function ForgeRow({ props, extra }: { props: PluginForgeRowBaseProps; extra: For
   const href = safeDetailsUrl(str(url));
   const person = readPerson(author);
   const people = readPeople(assignees);
+  const [lead, ...others] = people;
   const tags = readLabels(labels);
   const comments = count(commentCount) ?? 0;
   const age = toTimestamp(updatedAt);
@@ -1405,6 +1525,7 @@ function ForgeRow({ props, extra }: { props: PluginForgeRowBaseProps; extra: For
       <button
         type="button"
         data-forge-row-title=""
+        aria-current={selected === true ? "true" : undefined}
         onClick={(event: MouseEvent<HTMLButtonElement>) => {
           event.stopPropagation();
           if (open) open();
@@ -1425,7 +1546,8 @@ function ForgeRow({ props, extra }: { props: PluginForgeRowBaseProps; extra: For
       data-forge-state={extra.state}
       data-selected={selected === true ? "true" : undefined}
       className={cn(
-        "group relative flex items-start gap-2.5 rounded-[var(--radius-md)] px-3 py-2.5 transition-colors duration-150 ease-out",
+        // The github row's box: 64px, its state mark level with a 24px title line.
+        "group relative flex min-h-16 items-start gap-2.5 rounded-[var(--radius-md)] px-3 py-2.5 transition-colors duration-150 ease-out",
         LIST_ROW_HOVER_CLASS,
         "data-[selected=true]:bg-overlay-highlight",
         str(className)
@@ -1434,12 +1556,12 @@ function ForgeRow({ props, extra }: { props: PluginForgeRowBaseProps; extra: For
       <span
         role="img"
         aria-label={extra.look.label}
-        className={cn("mt-0.5 inline-flex shrink-0", extra.look.tone)}
+        className={cn("mt-1 inline-flex shrink-0", extra.look.tone)}
       >
         <extra.look.Glyph aria-hidden="true" className="h-4 w-4" />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex h-6 min-w-0 items-center gap-2">
           <TruncatedTooltip content={heading} contentClassName={overlayZ}>
             {titleNode}
           </TruncatedTooltip>
@@ -1459,20 +1581,42 @@ function ForgeRow({ props, extra }: { props: PluginForgeRowBaseProps; extra: For
                 )}
               </span>
             ) : null}
-            {people.length > 0 ? (
-              <KitAvatarGroup
-                avatars={people.map((p) => ({ name: p.name, src: p.avatarUrl }))}
-                size="xs"
-                max={3}
-                aria-label={`Assigned to ${people.map((p) => p.name).join(", ")}`}
-              />
+            {lead ? (
+              // The github row's assignee slot: a count of the rest to the
+              // left, so the one avatar holds a single column down the list.
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    data-rail-slot="assignee"
+                    role="img"
+                    aria-label={`Assigned to ${people.map((p) => p.name).join(", ")}`}
+                    className="flex shrink-0 items-center gap-1.5"
+                  >
+                    {others.length > 0 ? (
+                      <span
+                        aria-hidden="true"
+                        className="text-3xs text-text-secondary tabular-nums"
+                      >
+                        +{others.length}
+                      </span>
+                    ) : null}
+                    <KitAvatar name={lead.name} src={lead.avatarUrl} size="xs" decorative />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className={overlayZ}>
+                  {`Assigned to ${people.map((p) => p.name).join(", ")}`}
+                </TooltipContent>
+              </Tooltip>
             ) : null}
             {hasContent(actions) ? (
               <span className="flex shrink-0 items-center">{node(actions)}</span>
             ) : null}
           </div>
         </div>
-        <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-clip text-xs text-text-secondary">
+        {/* Identity and verdicts hold their width; the author, branch and
+            labels give way, each to an ellipsis rather than a clipped
+            fragment at the edge. */}
+        <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-hidden text-xs text-text-secondary">
           <span className="shrink-0 tabular-nums">#{num}</span>
           {extra.review ? (
             <span
@@ -1488,9 +1632,9 @@ function ForgeRow({ props, extra }: { props: PluginForgeRowBaseProps; extra: For
             </span>
           ) : null}
           {person ? (
-            <span className="inline-flex max-w-[120px] shrink-0 items-center gap-1.5">
+            <span className="inline-flex min-w-[4ch] max-w-[120px] shrink items-center gap-1.5">
               <Dot />
-              <span className="truncate">{person.name}</span>
+              <span className="min-w-0 truncate">{person.name}</span>
             </span>
           ) : null}
           {!Number.isNaN(age) ? (
@@ -1524,18 +1668,18 @@ function ForgeRow({ props, extra }: { props: PluginForgeRowBaseProps; extra: For
                   ? `Merges ${extra.headRef} into ${extra.baseRef}`
                   : `From ${extra.headRef}`
               }
-              className="inline-flex min-w-0 items-center gap-1.5"
+              className="inline-flex min-w-[6ch] shrink-[2] items-center gap-1.5"
             >
               <Dot />
-              <span aria-hidden="true" className="max-w-[150px] truncate font-mono">
+              <span aria-hidden="true" className="min-w-0 max-w-[150px] truncate">
                 {extra.headRef}
               </span>
             </span>
           ) : null}
           {tags.length > 0 ? (
-            <span className="inline-flex min-w-0 items-center gap-1.5">
+            <span className="inline-flex min-w-[6ch] shrink-[3] items-center gap-1.5">
               <Dot />
-              <ForgeLabels labels={tags} max={positive(maxLabels, 20) ?? 2} />
+              <ForgeLabels labels={tags} max={positive(maxLabels, 20) ?? 1} />
             </span>
           ) : null}
         </div>
@@ -1726,6 +1870,7 @@ function CheckRow({
   return (
     <li
       data-check-status={entry.status}
+      data-kit-rove-row=""
       className="flex items-start gap-2.5 rounded-[var(--radius-md)] px-2 py-1.5 transition-colors duration-150 ease-out hover:bg-overlay-subtle focus-within:bg-overlay-subtle"
     >
       <Icon aria-hidden="true" className={cn("mt-px h-3.5 w-3.5 shrink-0", toneClass)} />
@@ -1743,6 +1888,7 @@ function CheckRow({
           size="icon-xs"
           onClick={onDetails}
           aria-label={detailsLabel}
+          data-kit-rove=""
           className="-my-1 shrink-0 [&_svg]:size-3.5"
         >
           <ExternalLink aria-hidden="true" />
@@ -1772,6 +1918,14 @@ function KitChecksList({
   const line = checksSummary(entries.map((entry) => entry.status));
   const showSummary = summary !== false && line !== "";
   const hasHeader = hasContent(title) || showSummary || hasContent(actions);
+  const sectionRef = useRef<HTMLElement>(null);
+  useRovingRows(sectionRef);
+  const baseId = useId();
+  // The Review Hub's fold: while something needs a look, the clean results in
+  // each workflow wait behind a count, so the reader never scrolls past passes
+  // to find the failure in the next group.
+  const needsLook = entries.some((entry) => checkRank(entry.status) < 3);
+  const [shownSettled, setShownSettled] = useState<ReadonlySet<string>>(() => new Set());
 
   // Groups in the order their worst check ranks, first seen breaking ties.
   const groups = new Map<string, CheckEntry[]>();
@@ -1820,6 +1974,9 @@ function KitChecksList({
   return (
     <section
       {...pickRootProps(rest)}
+      ref={sectionRef}
+      onFocus={roveFocus}
+      onKeyDown={roveKeyDown}
       aria-label={nonEmpty(ariaLabel)}
       data-kit-checks-list=""
       className={cn("flex min-w-0 flex-col text-xs", str(className))}
@@ -1832,7 +1989,7 @@ function KitChecksList({
           {showSummary ? (
             <span
               data-kit-checks-summary=""
-              className="min-w-0 flex-1 truncate text-xs font-medium text-text-primary tabular-nums"
+              className="min-w-0 flex-1 py-1 text-xs font-medium text-text-primary tabular-nums"
             >
               {line}
             </span>
@@ -1861,20 +2018,72 @@ function KitChecksList({
                 </span>
               </div>
             ) : null}
-            <ul
-              aria-label={grouped ? group.workflow || "Other checks" : undefined}
-              className="m-0 flex list-none flex-col p-0"
-            >
-              {group.members.map((entry) => (
-                <CheckRow
-                  key={entry.key}
-                  entry={entry}
-                  now={now}
-                  detailsLabel={detailsLabels.get(entry.key) ?? `Open details for ${entry.name}`}
-                  onDetails={detailsFor(entry)}
-                />
-              ))}
-            </ul>
+            {(() => {
+              const settled = group.members.filter((member) => checkRank(member.status) === 3);
+              const folds =
+                needsLook && settled.length > 0 && settled.length < group.members.length;
+              const open = !folds || shownSettled.has(group.workflow);
+              const visible = open
+                ? group.members
+                : group.members.filter((member) => checkRank(member.status) < 3);
+              const listId = `${baseId}-${group.order}`;
+              return (
+                <>
+                  <ul
+                    id={listId}
+                    aria-label={grouped ? group.workflow || "Other checks" : undefined}
+                    className="m-0 flex list-none flex-col p-0"
+                  >
+                    {visible.map((entry) => (
+                      <CheckRow
+                        key={entry.key}
+                        entry={entry}
+                        now={now}
+                        detailsLabel={
+                          detailsLabels.get(entry.key) ?? `Open details for ${entry.name}`
+                        }
+                        onDetails={detailsFor(entry)}
+                      />
+                    ))}
+                  </ul>
+                  {folds ? (
+                    <div data-kit-rove-row="">
+                      <button
+                        type="button"
+                        data-kit-rove=""
+                        data-kit-checks-fold=""
+                        aria-expanded={open}
+                        aria-controls={listId}
+                        onClick={() =>
+                          setShownSettled((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(group.workflow)) next.delete(group.workflow);
+                            else next.add(group.workflow);
+                            return next;
+                          })
+                        }
+                        className={cn(
+                          "flex w-full cursor-pointer items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-1.5 text-left text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary",
+                          FOCUS_RING,
+                          "focus-visible:-outline-offset-2"
+                        )}
+                      >
+                        <ChevronRight
+                          aria-hidden="true"
+                          data-animated-chevron
+                          className={cn(
+                            "h-3.5 w-3.5 shrink-0 transition-transform duration-150 ease-out",
+                            open && "rotate-90"
+                          )}
+                        />
+                        {open ? "Hide" : "Show"}{" "}
+                        {checksSummary(settled.map((member) => member.status))}
+                      </button>
+                    </div>
+                  ) : null}
+                </>
+              );
+            })()}
           </div>
         ))
       )}
