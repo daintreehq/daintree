@@ -622,6 +622,26 @@ describe("AgentPicker", () => {
     });
   });
 
+  it("keeps the active option in view when a query moves it, not only the arrow keys", () => {
+    const scrolled: Element[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+    try {
+      picker({ worktreeId: "w-feat" });
+      scrolled.length = 0;
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "claude" } });
+      const active = screen
+        .getAllByRole("option")
+        .find((o) => o.getAttribute("aria-selected") === "true");
+      expect(active?.getAttribute("data-terminal-id")).toBe("t1");
+      expect(scrolled).toContain(active);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
   it("leaves Enter to an IME composition", () => {
     const onSelect = picker();
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", isComposing: true });
@@ -945,6 +965,11 @@ describe("TerminalSnapshot", () => {
     );
     const still = screen.getByTestId("still");
     expect(still.tagName).toBe("FIGURE");
+    // The painted spans are hidden from assistive tech; one plain transcript stands in.
+    expect(still.querySelector("[data-terminal-snapshot-body]")?.getAttribute("aria-hidden")).toBe(
+      "true"
+    );
+    expect(still.querySelector("pre.sr-only")?.textContent).toBe("hello");
     expect(still.getAttribute("aria-label")).toBe("Claude: fix auth, Prompt on screen");
     expect(still.textContent).toContain("hello");
     fireEvent.click(screen.getByRole("button", { name: "Shell" }));

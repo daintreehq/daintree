@@ -854,11 +854,19 @@ function KitAgentPicker(props: PluginAgentPickerProps) {
     fn(onSelect)?.(choice);
   };
 
+  // Whatever moved it (the keys, a query, new panes from the worker), the
+  // active option is the one in view: aria-activedescendant does not scroll.
+  const activeRowId = active >= 0 ? rows[active]!.id : null;
+  const activeElementId = active >= 0 ? optionId(active) : null;
+  useEffect(() => {
+    if (!isOpen || activeElementId === null) return;
+    document.getElementById(activeElementId)?.scrollIntoView?.({ block: "nearest" });
+  }, [isOpen, activeRowId, activeElementId, query]);
+
   const move = (from: number, step: 1 | -1) => {
     for (let i = from + step; i >= 0 && i < rows.length; i += step) {
       if (selectable(rows[i])) {
         setCursor(rows[i]!.id);
-        document.getElementById(optionId(i))?.scrollIntoView({ block: "nearest" });
         return;
       }
     }
@@ -1513,6 +1521,9 @@ function KitTerminalSnapshot({
   const screen = (
     <div
       data-terminal-snapshot-body=""
+      // The painted spans are for the eye: assistive tech gets the
+      // snapshot's name, and a still figure one plain transcript below.
+      aria-hidden="true"
       // Static: no caret, no selection handles, nothing that reads as input.
       className="relative min-h-0 flex-1 overflow-hidden bg-terminal-background px-2 py-1.5 text-terminal-foreground"
       style={{
@@ -1573,6 +1584,9 @@ function KitTerminalSnapshot({
     <figure {...pickRootProps(rest)} {...current} aria-label={name} className={cn(frame, "m-0")}>
       {header}
       {screen}
+      <pre className="sr-only">
+        {lines.map((spans) => spans.map((span) => span.text).join("")).join("\n")}
+      </pre>
     </figure>
   );
 }
