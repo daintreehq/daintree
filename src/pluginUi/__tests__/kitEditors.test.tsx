@@ -385,6 +385,37 @@ describe("DiffView", () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 
+  it("follows the expanded hunk when expanding merges it with the one above", async () => {
+    const lines = Array.from({ length: 20 }, (_, n) => `line ${n + 1}`);
+    const before = [...lines, ""].join("\n");
+    const after = [
+      ...lines.map((line, n) => ([2, 6, 14].includes(n) ? `${line} changed` : line)),
+      "",
+    ].join("\n");
+    render(
+      withTooltips(
+        createElement(kit.DiffView, {
+          oldText: before,
+          newText: after,
+          context: 1,
+          "data-testid": "diff",
+        })
+      )
+    );
+    const root = await loadedDiff("diff");
+    const headers = await hunkHeaders(root);
+    // Three hunks, plus the trailing expander's row to the end of the file.
+    expect(headers).toHaveLength(4);
+    // The second hunk's expander fills the one-line gap to the first, merging them.
+    const expand = headers[1]!.querySelector("button")!;
+    expand.focus();
+    act(() => expand.click());
+    await waitFor(() => expect(root.querySelectorAll(".diff-hunk-header-inner")).toHaveLength(3));
+    const now = Array.from(root.querySelectorAll(".diff-hunk-header-inner"));
+    // On the merged hunk's header, never the unrelated third hunk's.
+    expect(now.indexOf(document.activeElement!.closest(".diff-hunk-header-inner")!)).toBe(0);
+  });
+
   it("drops a custom hunk node React cannot render", async () => {
     render(
       withTooltips(
