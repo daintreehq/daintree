@@ -244,6 +244,15 @@ import {
   registerPluginProcessTools,
   unregisterPluginProcessTools,
 } from "../../shared/config/pluginProcessToolRegistry.js";
+import {
+  makePluginCustomIconKey,
+  type PluginCustomIconAsset,
+} from "../../shared/config/pluginCustomIcon.js";
+import {
+  registerPluginCustomIcons,
+  unregisterPluginCustomIcons,
+} from "../../shared/config/pluginCustomIconRegistry.js";
+import { loadPluginCustomIcons } from "./plugin/pluginIconAssets.js";
 import { registerPluginSkills, unregisterPluginSkills } from "./plugin/PluginSkillRegistry.js";
 import {
   getPluginRecipe,
@@ -2115,6 +2124,39 @@ export class PluginService {
       }
     }
 
+    // Custom SVG icons (#13143) are read before any contribution registers so
+    // each `iconId: "./icons/x.svg"` can be rewritten to its runtime key. A
+    // reference that fails to load keeps its authored value, which the
+    // renderer treats as an unknown id and draws the fallback glyph for — the
+    // plugin itself still loads. The assets are only published once the plugin
+    // commits below, so a load that fails part-way leaves none behind.
+    const customIconAssets: PluginCustomIconAsset[] = [];
+    const customIconKeys = new Map<string, string>();
+    try {
+      const icons = await loadPluginCustomIcons(pluginId, pluginDir, manifest.contributes);
+      for (const issue of icons.issues) {
+        console.warn(
+          `[PluginService] Plugin "${manifest.name}": ${issue.path} ${issue.message} — rendering the fallback icon`
+        );
+      }
+      for (const [ref, svg] of icons.loaded) {
+        const key = makePluginCustomIconKey(pluginId, ref);
+        customIconKeys.set(ref, key);
+        customIconAssets.push({
+          key,
+          pluginId,
+          pluginName: manifest.displayName ?? manifest.name,
+          svg,
+        });
+      }
+    } catch (err) {
+      console.warn(
+        `[PluginService] Plugin "${manifest.name}": failed to load custom icons — rendering fallbacks`,
+        err
+      );
+    }
+    const resolveIconId = (iconId: string): string => customIconKeys.get(iconId) ?? iconId;
+
     // Scope the contribution registries to this plugin's project BEFORE a
     // single contribution is registered. The registries are module-level
     // singletons filtered at read/broadcast time by owning plugin id, so a
@@ -2144,7 +2186,7 @@ export class PluginService {
       registerToolbarButton({
         id: buttonId,
         label: btn.label,
-        iconId: btn.iconId,
+        iconId: resolveIconId(btn.iconId),
         actionId: qualifyActionId(btn.actionId),
         priority: btn.priority ?? 3,
         pluginId,
@@ -2235,7 +2277,13 @@ export class PluginService {
     }
 
     if (manifest.contributes.processTools.length > 0) {
-      registerPluginProcessTools(pluginId, manifest.contributes.processTools);
+      registerPluginProcessTools(
+        pluginId,
+        manifest.contributes.processTools.map((tool) => ({
+          ...tool,
+          iconId: resolveIconId(tool.iconId),
+        }))
+      );
       // Mirror into the pty-host, where `ProcessDetector` runs — the renderer
       // needs no broadcast because the detected icon id already reaches it on
       // the terminal identity event (#11613).
@@ -2252,6 +2300,10 @@ export class PluginService {
     // authority is resolvable the instant the plugin is addressable.
     const authority = this.mintPluginAuthority(pluginId, plugin.dir);
     this.plugins.set(pluginId, plugin);
+    if (customIconAssets.length > 0) {
+      registerPluginCustomIcons(pluginId, customIconAssets);
+      this.broadcaster.schedulePluginIconsBroadcast();
+    }
 
     // The host's read-only database endpoint, bound with the plugin rather than
     // at activation: agents read the data without the plugin's code running.
@@ -2362,7 +2414,7 @@ export class PluginService {
         ...pluginSettingsKindFlags,
         id: panelId,
         name: panel.name,
-        iconId: panel.iconId,
+        iconId: resolveIconId(panel.iconId),
         color: panel.color,
         hasPty: panel.hasPty,
         canRestart: panel.canRestart,
@@ -5966,6 +6018,9 @@ export class PluginService {
     runUnloadStep(pluginId, "syncPluginAgentRegistryToPtyHost", () =>
       getPtyClient()?.syncPluginAgentRegistry()
     );
+    runUnloadStep(pluginId, "unregisterPluginCustomIcons", () => {
+      if (unregisterPluginCustomIcons(pluginId)) this.broadcaster.schedulePluginIconsBroadcast();
+    });
     runUnloadStep(pluginId, "unregisterPluginProcessTools", () =>
       unregisterPluginProcessTools(pluginId)
     );

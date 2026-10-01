@@ -7,6 +7,8 @@ import { runNewFromArgv } from "../commands/newCommand.js";
 import { runValidate } from "../commands/validate.js";
 import { getPluginManifestSchema } from "../../../../electron/schemas/plugin.js";
 import { isPluginIconId } from "../../../../shared/config/pluginIconIds.js";
+import { isPluginCustomIconRef } from "../../../../shared/config/pluginCustomIcon.js";
+import { loadPluginCustomIcon } from "../../../../electron/services/plugin/pluginIconAssets.js";
 import { TEMPLATE_KINDS } from "../scaffold/templates.js";
 import { TerminalRecipeSchema } from "../../../../electron/schemas/ipc.js";
 import {
@@ -390,15 +392,21 @@ describe("scaffoldPlugin", () => {
     expect(indentOf(lines[closeIdx])).toBe(openIndent);
   });
 
-  it("scaffolds panels with a recognized panel iconId (#10513)", async () => {
+  it("scaffolds panels with a custom icon that loads (#10513, #13143)", async () => {
     const result = await scaffoldView("iconic");
     const manifest = await readJson(path.join(result.dir, "plugin.json"));
     const panels = (manifest.contributes as { panels: Array<{ iconId: string }> }).panels;
     expect(panels.length).toBeGreaterThan(0);
     for (const panel of panels) {
       // Guards against the scaffold drifting to an iconId that renders as the
-      // generic terminal fallback (the advisory validator would flag it).
-      expect(isPluginIconId(panel.iconId)).toBe(true);
+      // generic terminal fallback: a generic id must be recognized, and a
+      // custom reference must name a file the host would actually load.
+      if (isPluginCustomIconRef(panel.iconId)) {
+        const outcome = await loadPluginCustomIcon("acme.iconic", result.dir, panel.iconId);
+        expect(outcome.ok).toBe(true);
+      } else {
+        expect(isPluginIconId(panel.iconId)).toBe(true);
+      }
     }
   });
 

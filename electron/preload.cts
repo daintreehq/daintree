@@ -3535,6 +3535,11 @@ function buildElectronApi(): ElectronAPI {
           tours: import("../shared/types/plugin.js").PluginTourDescriptor[];
         }) => void
       ) => _eventBusOn("plugin:tours-changed", callback),
+      onIconsChanged: (
+        callback: (payload: {
+          icons: import("../shared/config/pluginCustomIcon.js").PluginCustomIconAsset[];
+        }) => void
+      ) => _eventBusOn("plugin:icons-changed", callback),
       onToolbarButtonsChanged: (
         callback: (payload: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void
       ) => _eventBusOn("plugin:toolbar-buttons-changed", callback),

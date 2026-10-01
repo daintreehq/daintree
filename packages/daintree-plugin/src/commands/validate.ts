@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getPluginManifestSchema } from "../../../../electron/schemas/plugin.js";
 import { collectManifestAdvisories } from "../../../../electron/schemas/pluginManifestAdvisories.js";
+import { collectPluginIconIssues } from "../../../../electron/services/plugin/pluginIconAssets.js";
 import type { PluginOrigin } from "../../../../shared/types/plugin.js";
 
 export interface ValidateOptions {
@@ -102,6 +103,12 @@ export async function runValidate(opts: ValidateOptions = {}): Promise<ValidateR
   const manifest = result.data;
 
   warnings.push(...(await collectManifestAdvisories({ dir, rawJson: json, manifest })));
+
+  // A broken custom icon doesn't stop the plugin loading — the host draws the
+  // fallback glyph — but it is never what the author meant, so it fails here.
+  for (const issue of await collectPluginIconIssues(manifest.name, dir, manifest.contributes)) {
+    errors.push(`${issue.path}: ${issue.message}`);
+  }
 
   if (opts.env) {
     const envPath = path.join(dir, ".daintree-plugin-env");

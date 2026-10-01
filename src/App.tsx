@@ -25,6 +25,7 @@ import { usePluginPanelLifecycle } from "./hooks/usePluginPanelLifecycle";
 import { usePluginAgents } from "./hooks/usePluginAgents";
 import { usePluginRecipes } from "./hooks/usePluginRecipes";
 import { usePluginTours } from "./hooks/usePluginTours";
+import { usePluginIcons } from "./hooks/usePluginIcons";
 import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
 import { usePluginMcpConsentBridge } from "./hooks/usePluginMcpConsentBridge";
 import { usePluginCapabilityConsentBridge } from "./hooks/usePluginCapabilityConsentBridge";
@@ -390,6 +391,7 @@ function AppInner() {
   usePluginAgents();
   usePluginRecipes();
   usePluginTours();
+  usePluginIcons();
   usePluginKeybindings();
   usePluginMcpConsentBridge();
   usePluginCapabilityConsentBridge();

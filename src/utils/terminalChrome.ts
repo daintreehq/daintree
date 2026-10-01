@@ -4,6 +4,18 @@ import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 import { getPanelKindColor, getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import { getProcessToolConfig } from "@shared/config/processToolRegistry";
 import { getAgentConfig } from "@/config/agents";
+import { isPluginCustomIconKey } from "@shared/config/pluginCustomIcon";
+import { getPluginCustomIcon } from "@/components/icons/pluginCustomIconStore";
+
+/**
+ * A detected plugin process tool with a custom icon (#13143) carries the icon's
+ * runtime key as its id; label it with the owning plugin's name rather than
+ * showing the key.
+ */
+function customProcessLabel(iconId: string): string | undefined {
+  if (!isPluginCustomIconKey(iconId)) return undefined;
+  return getPluginCustomIcon(iconId)?.pluginName ?? "Terminal";
+}
 
 export interface TerminalChromeInput {
   kind?: PanelKind;
@@ -216,7 +228,11 @@ export function deriveTerminalChrome(input: TerminalChromeInput = {}): TerminalC
     return {
       iconId: identity.iconId,
       color: config?.color ?? getPanelKindColor(kind),
-      label: config?.name ?? getProcessToolConfig(identity.iconId)?.label ?? identity.iconId,
+      label:
+        config?.name ??
+        getProcessToolConfig(identity.iconId)?.label ??
+        customProcessLabel(identity.iconId) ??
+        identity.iconId,
       isAgent: false,
       agentId: null,
       processId: identity.processId ?? identity.id,

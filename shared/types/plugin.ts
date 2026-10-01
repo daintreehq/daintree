@@ -86,6 +86,7 @@ export interface PluginGuestAdapterContribution {
 export interface PanelContribution {
   id: string;
   name: string;
+  /** A generic plugin icon id, or a `./…svg` path to the plugin's own icon (#13143). */
   iconId: string;
   color: string;
   hasPty: boolean;
@@ -125,6 +126,7 @@ export interface PanelMenuItemContribution {
 export interface ToolbarButtonContribution {
   id: string;
   label: string;
+  /** A generic plugin icon id, or a `./…svg` path to the plugin's own icon (#13143). */
   iconId: string;
   actionId: ActionId;
   priority?: 1 | 2 | 3 | 4 | 5;
@@ -1126,9 +1128,10 @@ export interface PluginAgentContribution {
  *
  * `iconId` uses the generic plugin icon namespace ({@link PLUGIN_ICON_IDS} in
  * `shared/config/pluginIconIds.ts`), the same one `contributes.panels[].iconId`
- * and `contributes.toolbarButtons[].iconId` use — plugins cannot ship bundled
- * brand marks. Advisory, like those siblings: an unrecognized id renders a
- * fallback glyph rather than failing the load.
+ * and `contributes.toolbarButtons[].iconId` use, or — like those siblings — a
+ * `./…svg` path to the plugin's own icon file (#13143). Advisory: an
+ * unrecognized id or unloadable file renders a fallback glyph rather than
+ * failing the load.
  *
  * Inert declarative data, so no capability is required. A command that collides
  * with a built-in tool or agent is rejected at parse time; a cross-plugin

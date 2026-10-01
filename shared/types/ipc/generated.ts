@@ -1272,6 +1272,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./pluginDiagnostics.js").PluginDiagnosticsSnapshot;
   };
+  "plugin:icons-get": {
+    args: [];
+    result: import("../../config/pluginCustomIcon.js").PluginCustomIconAsset[];
+  };
   "plugin:install": {
     args: [archivePath: string, opts?: import("../plugin.js").PluginInstallOptions | undefined];
     result: import("../plugin.js").PluginInstallResult;

@@ -17,6 +17,7 @@ const contributionsMock = vi.hoisted(() => ({
   agents: {} as Record<string, unknown>,
   recipes: [] as unknown[],
   tours: [] as Array<{ id: string; pluginId: string }>,
+  icons: [] as Array<{ key: string; pluginId: string }>,
 }));
 
 vi.mock("../../../ipc/utils.js", () => ({
@@ -45,6 +46,9 @@ vi.mock("../../../../shared/config/pluginAgentRegistry.js", () => ({
 }));
 vi.mock("../PluginRecipeRegistry.js", () => ({
   getPluginRecipes: () => contributionsMock.recipes,
+}));
+vi.mock("../../../../shared/config/pluginCustomIconRegistry.js", () => ({
+  getPluginCustomIcons: () => contributionsMock.icons,
 }));
 vi.mock("../PluginTourRegistry.js", () => ({
   getPluginTours: () => contributionsMock.tours,
@@ -145,6 +149,9 @@ beforeEach(() => {
   contributionsMock.agents = { "acme.agent": { id: "acme.agent" } };
   contributionsMock.recipes = [{ id: "acme.recipe" }];
   contributionsMock.tours = [{ id: "acme.global.welcome", pluginId: GLOBAL_PLUGIN }];
+  contributionsMock.icons = [
+    { key: "plugin-icon:acme.global:./icons/a.svg", pluginId: GLOBAL_PLUGIN },
+  ];
 });
 
 describe("contribution scope registry", () => {
@@ -343,6 +350,7 @@ describe("holdBroadcasts", () => {
       b.scheduleAgentsBroadcast(false);
       b.scheduleRecipesBroadcast(false);
       b.scheduleToursBroadcast();
+      b.schedulePluginIconsBroadcast();
     }
     b.scheduleToolbarButtonsBroadcast(true);
     b.scheduleRecipesBroadcast(true);
@@ -362,6 +370,7 @@ describe("holdBroadcasts", () => {
       "plugin:agents-changed",
       "plugin:recipes-changed",
       "plugin:tours-changed",
+      "plugin:icons-changed",
     ]);
     const payloads = new Map(
       ipcUtilsMock.broadcastToRenderer.mock.calls.map((call) => [
@@ -511,12 +520,12 @@ describe("project-scoped mutation broadcasts", () => {
 });
 
 describe("pushSnapshotTo", () => {
-  it("replays the eight channels in order with unfiltered payloads when nothing is scoped", async () => {
+  it("replays the nine channels in order with unfiltered payloads when nothing is scoped", async () => {
     const wc = fakeWebContents(11);
     const b = makeBroadcaster();
     await b.pushSnapshotTo(wc as unknown as Electron.WebContents);
 
-    expect(wc.send).toHaveBeenCalledTimes(8);
+    expect(wc.send).toHaveBeenCalledTimes(9);
     expect(wc.send.mock.calls.map((c) => (c[1] as { name: string }).name)).toEqual([
       "plugin:actions-changed",
       "plugin:panel-kinds-changed",
@@ -526,6 +535,7 @@ describe("pushSnapshotTo", () => {
       "plugin:agents-changed",
       "plugin:recipes-changed",
       "plugin:tours-changed",
+      "plugin:icons-changed",
     ]);
     expect(wc.send.mock.calls.map((c) => (c[1] as { payload: unknown }).payload)).toEqual([
       { actions },
@@ -536,6 +546,7 @@ describe("pushSnapshotTo", () => {
       { agents: contributionsMock.agents, complete: false },
       { recipes: contributionsMock.recipes, complete: false },
       { tours: contributionsMock.tours },
+      { icons: contributionsMock.icons },
     ]);
   });
 
@@ -671,7 +682,7 @@ describe("pushSnapshotTo", () => {
     });
     const b = makeBroadcaster();
     await b.pushSnapshotTo(wc as unknown as Electron.WebContents);
-    expect(wc.send).toHaveBeenCalledTimes(8);
+    expect(wc.send).toHaveBeenCalledTimes(9);
   });
 
   it("skips a destroyed webContents and a disposed service", async () => {
@@ -798,6 +809,35 @@ describe("per-project visibility of installed plugins", () => {
     expect(byName.get("plugin:panel-kinds-changed")).toEqual({ kinds: [] });
     // A hidden plugin's tours leave the project's Help and palette too.
     expect(byName.get("plugin:tours-changed")).toEqual({ tours: [] });
+    // …and its custom icons stop resolving there (#13143).
+    expect(byName.get("plugin:icons-changed")).toEqual({ icons: [] });
+  });
+
+  it("scopes custom icons like every other plugin-owned contribution (#13143)", async () => {
+    setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, false);
+    const viewA = fakeWebContents(31);
+    const viewB = fakeWebContents(32);
+    registryMock.getRegisteredProjectViews.mockReturnValue([
+      { webContents: viewA, projectId: VIS_PROJECT_A },
+      { webContents: viewB, projectId: VIS_PROJECT_B },
+    ]);
+
+    const b = makeBroadcaster();
+    b.schedulePluginIconsBroadcast();
+    b.schedulePluginIconsBroadcast();
+    await flush();
+
+    const sent = ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map((call) => [
+      call[0],
+      call[2] as { name: string; payload: unknown },
+    ]);
+    expect(sent).toEqual([
+      [VIS_PROJECT_A, { name: "plugin:icons-changed", payload: { icons: [] } }],
+      [
+        VIS_PROJECT_B,
+        { name: "plugin:icons-changed", payload: { icons: contributionsMock.icons } },
+      ],
+    ]);
   });
 
   it("scopes tours like every other plugin-owned contribution (#12773)", async () => {

@@ -2026,6 +2026,12 @@ export interface IpcEventMap {
     tours: import("../plugin.js").PluginTourDescriptor[];
   };
 
+  // Plugin-shipped custom icons visible to this view (#13143). A full
+  // snapshot every time; the renderer replaces its copy wholesale.
+  "plugin:icons-changed": {
+    icons: import("../../config/pluginCustomIcon.js").PluginCustomIconAsset[];
+  };
+
   // Plugin file-decoration invalidation (main → renderer). Carries only the
   // changed scope (optionally narrowed to `paths`) — never decoration data.
   // The renderer re-pulls fresh decorations via `plugin:file-decorations-get`.
@@ -2243,6 +2249,7 @@ export type IpcEventBusMap = Pick<
   // Plugin recipe registry (global broadcast)
   | "plugin:recipes-changed"
   | "plugin:tours-changed"
+  | "plugin:icons-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
   // Plugin panel-badge state (global broadcast)

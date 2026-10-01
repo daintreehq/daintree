@@ -116,6 +116,20 @@ describe("pluginProcessToolRegistry (#11613)", () => {
     expect(snapshot["honest"]).toBe("sparkles");
   });
 
+  it("keeps the plugin's own custom-icon key and collapses another plugin's (#13143)", () => {
+    registerPluginProcessTools("acme.tools", [
+      { command: "acme-cli", iconId: "plugin-icon:acme.tools:./icons/acme.svg" },
+      { command: "acme-steal", iconId: "plugin-icon:other.plugin:./icons/other.svg" },
+      { command: "acme-raw", iconId: "./icons/unloaded.svg" },
+    ]);
+
+    expect(getPluginProcessToolRegistry()).toEqual({
+      "acme-cli": "plugin-icon:acme.tools:./icons/acme.svg",
+      "acme-steal": "terminal",
+      "acme-raw": "terminal",
+    });
+  });
+
   it("accepts every id the generic plugin icon namespace declares", () => {
     // Guards the sanitizer against being tightened into rejecting real ids.
     registerPluginProcessTools(

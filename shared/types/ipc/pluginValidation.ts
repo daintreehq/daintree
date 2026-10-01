@@ -1,6 +1,6 @@
 import type { PluginOrigin } from "../plugin.js";
 
-/** One schema rejection, carrying the field path the author has to go fix. */
+/** One schema rejection or unusable custom icon, carrying the field path the author has to go fix. */
 export interface PluginManifestIssue {
   /** Dotted field path (`contributes.panels.0.color`), or `(root)`. */
   path: string;
