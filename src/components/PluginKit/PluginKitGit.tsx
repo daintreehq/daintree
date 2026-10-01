@@ -1613,10 +1613,14 @@ function ForgeRow({ props, extra }: { props: PluginForgeRowBaseProps; extra: For
             ) : null}
           </div>
         </div>
-        {/* Identity and verdicts hold their width; the author, branch and
-            labels give way, each to an ellipsis rather than a clipped
-            fragment at the edge. */}
-        <div className="mt-1 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-hidden text-xs text-text-secondary">
+        {/* One fixed 16px line that wraps what does not fit onto a second,
+            hidden one: an item that cannot fit drops out whole, with its
+            separator, rather than leaving a clipped fragment at the edge.
+            Items are in the order they matter, so the labels go first. */}
+        <div
+          data-forge-row-meta=""
+          className="mt-1 flex h-4 min-w-0 flex-wrap items-center gap-x-1.5 overflow-hidden text-xs leading-4 text-text-secondary"
+        >
           <span className="shrink-0 tabular-nums">#{num}</span>
           {extra.review ? (
             <span
@@ -1632,52 +1636,57 @@ function ForgeRow({ props, extra }: { props: PluginForgeRowBaseProps; extra: For
             </span>
           ) : null}
           {person ? (
-            <span className="inline-flex min-w-[4ch] max-w-[120px] shrink items-center gap-1.5">
+            <span className="inline-flex max-w-[120px] shrink-0 items-center gap-1.5">
               <Dot />
-              <span className="min-w-0 truncate">{person.name}</span>
+              <TruncatedTooltip content={person.name} contentClassName={overlayZ} focusable={false}>
+                <span className="min-w-0 truncate">{person.name}</span>
+              </TruncatedTooltip>
             </span>
           ) : null}
           {!Number.isNaN(age) ? (
-            <>
+            <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
               <Dot />
-              <KitTimeAgo
-                value={age}
-                prefix={str(timePrefix)}
-                className="shrink-0 whitespace-nowrap"
-              />
-            </>
+              <KitTimeAgo value={age} prefix={str(timePrefix)} />
+            </span>
           ) : null}
           {comments > 0 ? (
-            <>
+            <span className="inline-flex shrink-0 items-center gap-1.5">
               <Dot />
               <span
                 role="img"
                 aria-label={pluralize(comments, "comment")}
-                className="inline-flex shrink-0 items-center gap-0.5 tabular-nums"
+                className="inline-flex items-center gap-0.5 tabular-nums"
               >
                 <MessageSquare aria-hidden="true" className="h-3 w-3" />
                 <span aria-hidden="true">{comments}</span>
               </span>
-            </>
-          ) : null}
-          {extra.headRef ? (
-            <span
-              role="img"
-              aria-label={
-                extra.baseRef
-                  ? `Merges ${extra.headRef} into ${extra.baseRef}`
-                  : `From ${extra.headRef}`
-              }
-              className="inline-flex min-w-[6ch] shrink-[2] items-center gap-1.5"
-            >
-              <Dot />
-              <span aria-hidden="true" className="min-w-0 max-w-[150px] truncate">
-                {extra.headRef}
-              </span>
             </span>
           ) : null}
+          {extra.headRef ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  role="img"
+                  aria-label={
+                    extra.baseRef
+                      ? `Merges ${extra.headRef} into ${extra.baseRef}`
+                      : `From ${extra.headRef}`
+                  }
+                  className="inline-flex max-w-[160px] shrink-0 items-center gap-1.5"
+                >
+                  <Dot />
+                  <span aria-hidden="true" className="min-w-0 truncate">
+                    {extra.headRef}
+                  </span>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className={overlayZ}>
+                {extra.baseRef ? `${extra.headRef} → ${extra.baseRef}` : extra.headRef}
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
           {tags.length > 0 ? (
-            <span className="inline-flex min-w-[6ch] shrink-[3] items-center gap-1.5">
+            <span className="inline-flex shrink-0 items-center gap-1.5">
               <Dot />
               <ForgeLabels labels={tags} max={positive(maxLabels, 20) ?? 1} />
             </span>
@@ -1852,11 +1861,14 @@ function CheckRow({
   now,
   detailsLabel,
   onDetails,
+  reserveDetails,
 }: {
   entry: CheckEntry;
   now: number;
   detailsLabel: string;
   onDetails?: () => void;
+  /** Holds the details button's slot open, so every duration shares one column. */
+  reserveDetails: boolean;
 }) {
   const { visual } = getCheckOutcomeVisual(asCheckRun(entry.status));
   const { Icon, toneClass, label } = visual;
@@ -1893,6 +1905,8 @@ function CheckRow({
         >
           <ExternalLink aria-hidden="true" />
         </Button>
+      ) : reserveDetails ? (
+        <span aria-hidden="true" className="w-6 shrink-0" />
       ) : null}
     </li>
   );
@@ -1970,6 +1984,7 @@ function KitChecksList({
     const url = entry.detailsUrl;
     return url ? () => openForgeUrl(url) : undefined;
   };
+  const reserveDetails = entries.some((entry) => detailsFor(entry) !== undefined);
 
   return (
     <section
@@ -2010,10 +2025,10 @@ function KitChecksList({
           <div key={`workflow:${group.workflow}`} data-kit-checks-group={group.workflow}>
             {grouped ? (
               <div className="flex items-center gap-2 px-2 pt-2 pb-1">
-                <span className="min-w-0 flex-1 truncate font-medium text-text-secondary">
+                <span className="min-w-[8ch] flex-1 truncate font-medium text-text-secondary">
                   {group.workflow || "Other checks"}
                 </span>
-                <span className="shrink-0 text-2xs text-text-secondary tabular-nums">
+                <span className="min-w-0 shrink text-right text-2xs text-text-secondary tabular-nums">
                   {checksSummary(group.members.map((member) => member.status))}
                 </span>
               </div>
@@ -2043,6 +2058,7 @@ function KitChecksList({
                           detailsLabels.get(entry.key) ?? `Open details for ${entry.name}`
                         }
                         onDetails={detailsFor(entry)}
+                        reserveDetails={reserveDetails}
                       />
                     ))}
                   </ul>
