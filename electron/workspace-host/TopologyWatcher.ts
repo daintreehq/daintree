@@ -1,4 +1,13 @@
-import { existsSync, realpathSync, statSync, watch as fsWatch, type FSWatcher } from "fs";
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  openSync,
+  realpathSync,
+  statSync,
+  watch as fsWatch,
+  type FSWatcher,
+} from "fs";
 import { basename, dirname, isAbsolute, relative, resolve as pathResolve, sep } from "path";
 import PQueue from "p-queue";
 import { MutableDisposable } from "../utils/lifecycle.js";
@@ -91,6 +100,10 @@ export class TopologyWatcher {
   // when the last linked worktree is removed, especially on Windows.
   private metadataSentinel: FSWatcher | null = null;
   private metadataRootIdentity: string | null = null;
+  // Linux hands a freed inode straight back out, so a root removed and
+  // recreated between two sentinel callbacks can carry the old dev:ino. An
+  // open fd keeps the subscribed root's inode allocated while we compare.
+  private metadataRootFd: number | null = null;
   // No constructor `timeout` here: this queue's task wraps runReconcile in
   // withTimeout itself (and always resolves via its own try/catch/finally),
   // so it can never pin the single slot. A p-queue constructor timeout would
@@ -176,6 +189,34 @@ export class TopologyWatcher {
     }
   }
 
+  private pinMetadataRoot(metadataDir: string): void {
+    this.releaseMetadataRoot();
+    if (process.platform === "linux") {
+      try {
+        const fd = openSync(metadataDir, "r");
+        this.metadataRootFd = fd;
+        const stat = fstatSync(fd);
+        this.metadataRootIdentity = `${stat.dev}:${stat.ino}`;
+        return;
+      } catch {
+        this.releaseMetadataRoot();
+      }
+    }
+    this.metadataRootIdentity = this.rootIdentity(metadataDir);
+  }
+
+  private releaseMetadataRoot(): void {
+    this.metadataRootIdentity = null;
+    if (this.metadataRootFd === null) return;
+    const fd = this.metadataRootFd;
+    this.metadataRootFd = null;
+    try {
+      closeSync(fd);
+    } catch {
+      // Already closed — nothing left to release.
+    }
+  }
+
   // Idempotent: a second call while the timer is live is a no-op, so the two
   // call sites (load-project path + setPollingEnabled resume) can both invoke
   // it unconditionally. Cleared in stop() (which dispose() and the pause path
@@ -219,7 +260,7 @@ export class TopologyWatcher {
       // milliseconds instead of by the 90s safety reconcile.
       return;
     }
-    this.metadataRootIdentity = this.rootIdentity(metadataDir);
+    this.pinMetadataRoot(metadataDir);
 
     const generation = ++this.generation;
     const drain = () => this.drainEventBuffer();
@@ -292,6 +333,7 @@ export class TopologyWatcher {
           // A stop/restart superseded this attempt — the failure is moot.
           return;
         }
+        this.releaseMetadataRoot();
         console.warn(
           `[WorkspaceHost] topology watcher subscribe failed for ${metadataDir}: ${(err as Error).message}`
         );
@@ -324,10 +366,14 @@ export class TopologyWatcher {
         // fs.watch on the parent can also report child metadata churn as a
         // `worktrees` rename. Keep the subscription when its root inode is
         // unchanged; only a removed or replaced root invalidates it.
-        if (this.subscription.value && currentIdentity === this.metadataRootIdentity) return;
-        if (this.subscription.value) {
+        const replaced = currentIdentity !== this.metadataRootIdentity;
+        if (this.subscription.value && !replaced) return;
+        if (this.subscription.value || replaced) {
+          // Bumping the generation also discards a subscribe still in flight
+          // for the old root, so it can't land after its pin is released.
           this.generation++;
           this.subscription.value = undefined;
+          this.releaseMetadataRoot();
         }
         this.metadataRootIdentity = currentIdentity;
         if (currentIdentity === null) {
@@ -377,6 +423,7 @@ export class TopologyWatcher {
       // to re-arm via the sentinel path.
       this.generation++;
       this.subscription.value = undefined;
+      this.releaseMetadataRoot();
     }
     await this.startWatcher();
   }
@@ -389,7 +436,7 @@ export class TopologyWatcher {
     this.handleRecovered();
     this.generation++;
     this.subscription.value = undefined;
-    this.metadataRootIdentity = null;
+    this.releaseMetadataRoot();
     this.disarmMetadataSentinel();
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
