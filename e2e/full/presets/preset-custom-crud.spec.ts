@@ -932,6 +932,9 @@ test.describe("Presets: custom preset CRUD", () => {
     test("50. Deleting every custom preset with no CCR config leaves only Default", async () => {
       removeCcrConfig();
       await waitForCcrPresetsRemoved(ctx.window, ["CCR Adj", "CCR Second"]);
+      // Earlier scenarios share this app; delete only this scenario's presets through the UI.
+      await setAgentSettings(ctx.window, "claude", { customPresets: [] });
+      await expect.poll(() => readCustomPresets(ctx.window)).toEqual([]);
       // Two of its own, so the loop always has something to delete.
       await addNamedPreset("Delete All A 50");
       await addNamedPreset("Delete All B 50");

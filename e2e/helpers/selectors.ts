@@ -360,7 +360,8 @@ export const SEL = {
     center: '[data-testid="notification-center"]',
     centerList: '[role="list"][aria-label="Notifications"]',
     centerRow: '[role="listitem"]',
-    centerFilter: (label: string) => `button[aria-pressed]:text-is("${label}")`,
+    centerFilter: (label: string) =>
+      `button[aria-pressed]:has([data-filter-chip-label]:text-is("${label}"))`,
     markAllReadButton: 'button:text-is("Mark all read")',
     mutedPill: '[data-testid="notification-muted-pill"]',
     mutedEmptyState: '[data-testid="notification-muted-empty-state"]',

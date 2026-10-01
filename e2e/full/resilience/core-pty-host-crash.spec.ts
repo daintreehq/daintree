@@ -200,7 +200,13 @@ async function viewTypedShellPid(wcId: number, panelId: string): Promise<number>
   // Playwright's Page remains attached to the crashed target. Linux does not
   // reliably route synthetic mouse coordinates into its reloaded WebContents,
   // so focus the recovered xterm textarea through that WebContents instead.
-  await ctx.app.evaluate(({ webContents }, id) => webContents.fromId(id)?.focus(), wcId);
+  await ctx.app.evaluate(
+    ({ BrowserWindow, webContents }, { ownerId, id }) => {
+      BrowserWindow.fromId(ownerId)?.focus();
+      webContents.fromId(id)?.focus();
+    },
+    { ownerId: windowId, id: wcId }
+  );
   await expect
     .poll(
       () =>
