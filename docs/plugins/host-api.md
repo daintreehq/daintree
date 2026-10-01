@@ -995,8 +995,8 @@ It never moves focus: a small receipt names the agent the text went to. A projec
 
 ```js
 // worker
-host.registerHandler("sendToAgent", (_ctx, { text, title, worktreeId }) =>
-  host.sendToAgent(text, { title, worktreeId })
+host.registerHandler("sendToAgent", (_ctx, { text, title, worktreeId, terminalId }) =>
+  host.sendToAgent(text, { title, worktreeId, terminalId })
 );
 // view
 const result = await window.electron.plugin.invoke(pluginId, "sendToAgent", {

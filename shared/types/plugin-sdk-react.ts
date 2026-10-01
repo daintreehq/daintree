@@ -826,7 +826,9 @@ export type PluginDropdownMenuEntry =
       label?: string;
     }
   | { type: "label"; label: string }
-  | { type: "separator" };
+  | { type: "separator" }
+  /** A row that runs one of Daintree's actions; see {@link PluginActionMenuItem}. */
+  | PluginActionMenuItem;
 
 /** One choice of a `radio-group` menu entry. */
 export interface PluginDropdownMenuRadioItem {
@@ -1048,7 +1050,40 @@ export interface PluginDataTableColumn<T = unknown> {
   sortable?: boolean;
   /** The cell. Defaults to `row[id]` when that is a string or a number. */
   render?(row: T, index: number): ReactNode;
+  /**
+   * Draws a drag edge on the header's trailing side; the edge is also a
+   * keyboard separator (Left/Right step 8px, Shift 32px, Home/End the
+   * limits). Enter, Space or a double-click go back to `width`. Widths report through
+   * `onColumnWidthsChange`.
+   */
+  resizable?: boolean;
+  /** The narrowest a resize may make it, in px. Defaults to 48. */
+  minWidth?: number;
+  /** The widest a resize may make it, in px. Defaults to 1200. */
+  maxWidth?: number;
+  /** `false` keeps the column always shown: its row in the columns menu stays checked and disabled. Defaults to `true`. */
+  hideable?: boolean;
+  /** The column's name in the columns menu, when `header` is not plain text. */
+  menuLabel?: string;
+  /**
+   * Edits the cell in place: double-click it, or Enter/F2 on its row. A
+   * function decides per row. The edit reports through the table's `onCellEdit`.
+   */
+  editable?: boolean | PluginDataTableRowPredicate<T>;
+  /** The editor: `text` (the default), `number`, or `select` over `editOptions`. */
+  editor?: "text" | "number" | "select";
+  /** The choices of a `select` editor. */
+  editOptions?: readonly PluginSelectOption[];
+  /** The text the editor starts from. Defaults to `row[id]` when that is a string or a number. */
+  editValue?(row: T): string;
+  /** Checks a draft before it is committed: return a message to refuse it and keep the editor open. */
+  validate?(value: string, row: T): string | null | undefined;
 }
+
+/** Decides something per row (selectable, editable). A method, for the same reason as {@link PluginDataTableRowKey}. */
+export type PluginDataTableRowPredicate<T> = {
+  bivarianceHack(row: T): boolean;
+}["bivarianceHack"];
 
 /**
  * A `DataTable` row's stable key. Declared as a method so a table typed for
@@ -1099,7 +1134,92 @@ export interface PluginDataTableProps<T = unknown> extends PluginRootAttributes 
   "aria-label": string;
   /** Classes for the scrolling element. */
   className?: string;
+
+  // Selection. Rows are keyed by `rowKey`.
+  /**
+   * Draws a checkbox column and makes the table multi-select: click a box to
+   * toggle its row, Shift-click for a range, the header box for all. On the
+   * keyboard Space toggles the cursor row, Shift+Up/Down extend, Cmd+A (Ctrl+A)
+   * selects all and Escape clears. A function leaves some rows out. Pair it
+   * with `BulkActionBar`: `count={keys.length}` and `onClear={() => setKeys([])}`.
+   */
+  selectable?: boolean | PluginDataTableRowPredicate<T>;
+  /** The selected rows' keys, controlled. */
+  selectedRowKeys?: readonly (string | number)[];
+  defaultSelectedRowKeys?: readonly (string | number)[];
+  /** The selection changed: the keys in the order the rows are drawn. */
+  onSelectedRowKeysChange?: (keys: (string | number)[]) => void;
+
+  // Groups.
+  /**
+   * Groups the rows under a header row with a disclosure and a count: by a
+   * column id or field name, or a function returning the group's key. Groups
+   * keep the order their first row has in `rows`.
+   */
+  groupBy?: string | PluginDataTableGroupAccessor<T>;
+  /** The header's label for a group. Defaults to the key ("None" for an empty one). */
+  groupLabel?(key: string, rows: readonly T[]): ReactNode;
+  /** Folded groups' keys, controlled. */
+  collapsedGroups?: readonly string[];
+  defaultCollapsedGroups?: readonly string[];
+  onCollapsedGroupsChange?: (keys: string[]) => void;
+
+  // Expandable rows (a tree table). Row keys must be unique across every level.
+  /** A row's children, drawn under it indented when it is expanded. */
+  getSubRows?(row: T): readonly T[] | null | undefined;
+  /**
+   * Whether a row has children to load. With `loadSubRows`, a row this
+   * returns `true` for draws a disclosure; expanding it loads the children,
+   * with a loading row under it meanwhile and Retry if the load fails.
+   */
+  hasSubRows?(row: T): boolean;
+  /** Loads a row's children when it is first expanded. Kept while the row is the same object; Retry or a new row object loads them again. */
+  loadSubRows?(row: T): Promise<readonly T[]>;
+  /** Expanded rows' keys, controlled. */
+  expandedRowKeys?: readonly (string | number)[];
+  defaultExpandedRowKeys?: readonly (string | number)[];
+  onExpandedRowKeysChange?: (keys: (string | number)[]) => void;
+
+  // Columns.
+  /** Column widths in px by column id, controlled. A column not listed keeps its `width`. */
+  columnWidths?: Readonly<Record<string, number>>;
+  defaultColumnWidths?: Readonly<Record<string, number>>;
+  /** A column was resized: every width set so far. */
+  onColumnWidthsChange?: (widths: Record<string, number>) => void;
+  /** Hidden columns' ids, controlled. */
+  hiddenColumns?: readonly string[];
+  defaultHiddenColumns?: readonly string[];
+  onHiddenColumnsChange?: (ids: string[]) => void;
+  /** Draws a Columns button at the header's end, a menu that shows and hides columns. */
+  columnsMenu?: boolean;
+  /**
+   * Remembers column widths, hidden columns, folded groups and expanded rows
+   * with `usePersistentViewState` under this key, so they survive the view
+   * unmounting, a reload and a restart. Controlled props still win.
+   */
+  viewStateKey?: string;
+  /**
+   * Pins the first column (after the checkboxes) to the start while the table
+   * scrolls sideways. The table scrolls sideways once its columns are wider
+   * than the pane.
+   */
+  stickyFirstColumn?: boolean;
+
+  // Editing.
+  /**
+   * An `editable` cell was committed (Enter, Tab or leaving it). Return a
+   * promise to show the cell pending until it settles; a rejection reopens
+   * the editor with the draft and the error's message (while another cell is
+   * being edited the failure is announced instead). Escape cancels an edit.
+   * Tab and Shift+Tab commit and move to the next or previous editable cell.
+   */
+  onCellEdit?(row: T, columnId: string, value: string): void | Promise<void>;
 }
+
+/** Reads a row's group key for `DataTable`'s `groupBy`. */
+export type PluginDataTableGroupAccessor<T> = {
+  bivarianceHack(row: T): string;
+}["bivarianceHack"];
 
 /** One line of a `LogView` with a severity: its glyph leads the line. */
 export interface PluginLogEntry {
@@ -2617,7 +2737,7 @@ export interface PluginSliderProps extends PluginAriaRootAttributes {
   onValueCommit?: (value: number) => void;
   /** Defaults to 0. */
   min?: number;
-  /** Defaults to 100. A `max` not above `min` (or ends too close to tell apart) falls back to 0–100. */
+  /** Defaults to 100. */
   max?: number;
   /** Defaults to 1. */
   step?: number;
@@ -4758,7 +4878,7 @@ export interface PluginRangeSliderProps extends PluginAriaRootAttributes {
   invalid?: boolean;
   /** Defaults to 0. */
   min?: number;
-  /** Defaults to 100. A `max` not above `min` (or ends too close to tell apart) falls back to 0–100. */
+  /** Defaults to 100. */
   max?: number;
   /** Defaults to 1. */
   step?: number;
@@ -5175,6 +5295,815 @@ export interface PluginMarkdownEditorProps extends PluginRootAttributes {
   /** The directory the preview's local links and images must stay inside, as on `Markdown`. */
   rootPath?: string;
   /** Names the text area for assistive tech ("Release notes"). */
+  "aria-label"?: string;
+  className?: string;
+}
+
+// Trees and value inspectors: a generic TreeView and an ObjectInspector for
+// API responses and tool results.
+
+/** Identifies a `TreeView` node. Unique across the whole tree. */
+export type PluginTreeNodeId = string | number;
+
+/** Handed to `TreeView`'s `renderNode` and `getIcon`. */
+export interface PluginTreeNodeState {
+  depth: number;
+  expanded: boolean;
+  /** Has children, or may have (an unloaded async node). */
+  expandable: boolean;
+  selected: boolean;
+  /** With `checkable`: on, off, or some of its children on. */
+  checked: boolean | "mixed";
+  /** Its children are loading. */
+  loading: boolean;
+}
+
+/** A node moved by drag or by Alt+arrow keys, reported once on drop. */
+export interface PluginTreeMove {
+  id: PluginTreeNodeId;
+  /** Its new parent; `null` for the top level. */
+  parentId: PluginTreeNodeId | null;
+  /** Its index among the new parent's children, counted with it removed from where it was. */
+  index: number;
+  /** Where it was. */
+  fromParentId: PluginTreeNodeId | null;
+  fromIndex: number;
+}
+
+/**
+ * Props of `TreeView`: a tree of any nodes, drawn like the host's file tree
+ * (the same rows, chevrons and indentation) and virtualised, so a tree of
+ * thousands of nodes stays light. It is one tab stop with the ARIA tree
+ * keyboard: Up/Down move, Right expands or steps in, Left collapses or steps
+ * out, Home/End, Enter activates, typing jumps to a matching label. It fills
+ * its container's height.
+ */
+export interface PluginTreeViewProps<T = unknown> extends PluginRootAttributes {
+  /** The top-level nodes. */
+  nodes: readonly T[];
+  /** A node's id. Defaults to its `id` field. */
+  getId?(node: T): PluginTreeNodeId;
+  /** A node's text, read for its row, typeahead and announcements. Defaults to its `label`, `name` or `title`. */
+  getLabel?(node: T): string;
+  /**
+   * A node's children: an array, or a promise for a lazy node, loaded the
+   * first time it is expanded with a loading row under it meanwhile (Retry
+   * if it fails). Defaults to the node's `children` field. Pass `hasChildren`
+   * with lazy nodes, or each one is loaded as it is drawn to learn whether it
+   * has any.
+   */
+  getChildren?(node: T): readonly T[] | Promise<readonly T[]> | null | undefined;
+  /** Whether a node has children, without loading them. */
+  hasChildren?(node: T): boolean;
+  /** The row's content after the chevron and checkbox. Defaults to the icon and the label. */
+  renderNode?(node: T, state: PluginTreeNodeState): ReactNode;
+  /** A glyph before the label, when `renderNode` is not given. */
+  getIcon?(node: T, state: PluginTreeNodeState): PluginIconSource | null | undefined;
+  /** `single` (the default): moving the cursor moves the selection. `multiple`: Cmd-click (Ctrl-click) toggles, Shift-click and Shift+arrows extend, Cmd/Ctrl+arrows move without selecting and Cmd/Ctrl+Space toggles. */
+  selectionMode?: "single" | "multiple";
+  /** Selected nodes' ids, controlled. */
+  selected?: readonly PluginTreeNodeId[];
+  defaultSelected?: readonly PluginTreeNodeId[];
+  onSelectedChange?: (ids: PluginTreeNodeId[]) => void;
+  /** Expanded nodes' ids, controlled. */
+  expanded?: readonly PluginTreeNodeId[];
+  defaultExpanded?: readonly PluginTreeNodeId[];
+  onExpandedChange?: (ids: PluginTreeNodeId[]) => void;
+  /**
+   * Draws a checkbox on every row; Space toggles the cursor row's. A parent
+   * is on when all its loaded children are, mixed when some are, and checking
+   * it checks them all.
+   */
+  checkable?: boolean;
+  /** Checked nodes' ids, controlled: parents included when all their children are on. */
+  checked?: readonly PluginTreeNodeId[];
+  defaultChecked?: readonly PluginTreeNodeId[];
+  onCheckedChange?: (ids: PluginTreeNodeId[]) => void;
+  /** Enter or a double-click on a node. */
+  onActivate?(node: T): void;
+  /**
+   * Lets nodes be dragged to reorder or re-parent them: dropped on a row's
+   * upper or lower edge it goes before or after it, on its middle into it.
+   * Alt+Up/Down move the cursor node among its siblings, Alt+Left out to its
+   * parent's level, Alt+Right into the sibling above it. The tree does not
+   * move nodes itself: apply the move to `nodes`.
+   */
+  onMove?(move: PluginTreeMove): void;
+  /** Whether a node may be dropped there. Dropping a node into itself or its own descendants is always refused. */
+  canDrop?(move: PluginTreeMove): boolean;
+  /** Whether a node can be picked up. Defaults to all of them. */
+  canDrag?(node: T): boolean;
+  /** Shown instead of the tree when `nodes` is empty: usually an `EmptyState`. */
+  empty?: ReactNode;
+  /** Required: names the tree for assistive tech. */
+  "aria-label": string;
+  className?: string;
+}
+
+/**
+ * Props of `ObjectInspector`: a read-only, collapsible view of a JSON-like
+ * value (an API response, a tool result) with type-coloured values in the
+ * same syntax colours as `CodeBlock`. Each row copies its value or its path
+ * from its context menu or the buttons that show on hover; Cmd+C (Ctrl+C)
+ * copies the cursor row's value. Long strings are cut with a "more" toggle,
+ * large arrays are split into ranges, and a value that contains itself is
+ * shown as `[Circular]` rather than followed. It is one tab stop with the
+ * ARIA tree keyboard, virtualised, and fills its container's height.
+ */
+export interface PluginObjectInspectorProps extends PluginRootAttributes {
+  value: unknown;
+  /** The root's name, shown as its key and starting every copied path. Defaults to none: paths start at the first key. */
+  name?: string;
+  /** How many levels start open. Defaults to 1; `Infinity` opens everything. */
+  expandDepth?: number;
+  /** Draws a bar with a filter field and Expand all / Collapse all. Defaults to `true`. */
+  toolbar?: boolean;
+  /** Filter text, controlled: rows whose key or value contains it, with their ancestors. */
+  filter?: string;
+  defaultFilter?: string;
+  onFilterChange?: (filter: string) => void;
+  /** Characters of a string shown before it is cut. Defaults to 200. */
+  maxStringLength?: number;
+  /** Items per range in a large array. Defaults to 100. */
+  arrayChunkSize?: number;
+  /** Keys in object order (the default), or sorted. */
+  sortKeys?: boolean;
+  /** Required: names the inspector for assistive tech ("Response body"). */
+  "aria-label": string;
+  className?: string;
+}
+
+// Git and forge: worktrees, branches, files and their status, commits, issues,
+// pull requests, CI checks and dev servers, drawn as the host draws its own.
+// Every component here is presentational: the data comes from your worker
+// (`host.getWorktrees()`, `host.git`, your forge provider) as props.
+
+/** A file's state in git, as the host's change lists letter it. */
+export type PluginGitFileStatus =
+  "modified" | "added" | "deleted" | "untracked" | "renamed" | "copied" | "ignored" | "conflicted";
+
+/**
+ * A worktree as the kit's worktree components read it. The field names are
+ * `PluginWorktreeSnapshot`'s, so a snapshot from `host.getWorktrees()` passes
+ * straight through.
+ */
+export interface PluginWorktreeItem {
+  /** Non-empty and unique. A snapshot's `id`. */
+  id: string;
+  /** What the worktree is called. Falls back to the branch, then the path's last segment. */
+  name?: string;
+  branch?: string;
+  /** Absolute path, shown in the picker and searched. */
+  path?: string;
+  /** The worktree this view stands in: marked "Current". */
+  isCurrent?: boolean;
+  /** The repository's main checkout: listed first. */
+  isMainWorktree?: boolean;
+  /** Commits on the branch its upstream does not have. */
+  aheadCount?: number;
+  /** Commits on the upstream the branch does not have. */
+  behindCount?: number;
+  /** Files with uncommitted changes. When absent, `status.changedFileCount` is read. */
+  changedFileCount?: number;
+  /** A snapshot's status projection; only its `changedFileCount` is read. */
+  status?: { readonly changedFileCount?: number } | null;
+  /** The heading the picker lists it under. Without any, the main checkout leads the rest. */
+  group?: string;
+}
+
+/** Props of `BranchBadge`: a branch name as Daintree draws one in its chrome. */
+export interface PluginBranchBadgeProps extends PluginRootAttributes {
+  branch: string;
+  className?: string;
+}
+
+/** Props of `WorktreeBadge`: a worktree's name, branch and how far it has moved. */
+export interface PluginWorktreeBadgeProps extends PluginRootAttributes {
+  worktree: PluginWorktreeItem;
+  /** Shows the branch beside the name. Defaults to true; hidden anyway when it is the name. */
+  showBranch?: boolean;
+  /** Shows uncommitted changes and ahead/behind counts. Defaults to true. */
+  showStatus?: boolean;
+  className?: string;
+}
+
+/** Props of `WorktreePicker`: choose one of the project's worktrees. */
+export interface PluginWorktreePickerProps extends PluginAriaRootAttributes {
+  worktrees: readonly PluginWorktreeItem[];
+  /** The chosen worktree's `id`, controlled. Passing the prop at all makes it controlled. */
+  value?: string | null;
+  defaultValue?: string;
+  onValueChange?: (id: string, worktree: PluginWorktreeItem) => void;
+  /** Whether the list is open, controlled. Pair with `onOpenChange`. */
+  open?: boolean;
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** Shown on the trigger while nothing is chosen. Defaults to "Choose a worktree". */
+  placeholder?: string;
+  /** The search field's placeholder. Defaults to "Search worktrees". */
+  searchPlaceholder?: string;
+  /** What the list says when nothing matches. Defaults to "No matching worktrees". */
+  emptyMessage?: ReactNode;
+  disabled?: boolean;
+  density?: "default" | "compact";
+  "aria-label"?: string;
+  /** Classes for the trigger. */
+  className?: string;
+}
+
+/** Props of `FileIcon`: the file-type glyph the host's file tree draws for a name. */
+export interface PluginFileIconProps extends PluginRootAttributes {
+  /** A file name or path; only the last segment is read. */
+  path: string;
+  /** `directory` draws a folder (open when `expanded`). Defaults to `file`. */
+  kind?: "file" | "directory";
+  expanded?: boolean;
+  /** In px. Defaults to 14, the tree's size. */
+  size?: number;
+  /** Names the icon for assistive tech. Omitted, it is decorative. */
+  "aria-label"?: string;
+  className?: string;
+}
+
+/** Props of `FileLink`: a file path that opens in Daintree's file viewer. */
+export interface PluginFileLinkProps extends PluginRootAttributes {
+  /** Relative to `rootPath`, or absolute inside it. */
+  path: string;
+  /**
+   * The absolute directory the file must be inside: the worktree's path. A path
+   * that resolves outside it, or no usable root, draws the path without a link.
+   */
+  rootPath?: string;
+  /** A 1-based line to open the file at, shown after the path. */
+  line?: number;
+  /** The text shown in place of the path. */
+  children?: ReactNode;
+  /** Draws the file's `FileIcon` before the path. Defaults to true. */
+  icon?: boolean;
+  /** Draws the path in the monospace face. Defaults to false. */
+  mono?: boolean;
+  /** Called before the file opens; call `preventDefault()` on the event to open it yourself. */
+  onClick?: (event: MouseEvent<HTMLAnchorElement>) => void;
+  /** The link's `tabIndex`: `-1` when your list owns the keyboard, so each row adds no Tab stop. */
+  tabIndex?: number;
+  className?: string;
+}
+
+/** Props of `GitStatusBadge`: a file's git state as the host's change lists mark it. */
+export interface PluginGitStatusBadgeProps extends PluginRootAttributes {
+  status: PluginGitFileStatus;
+  /** `letter` (the default) is the one-character marker; `label` adds the word. */
+  variant?: "letter" | "label";
+  className?: string;
+}
+
+/** A person on a commit, issue or pull request. */
+export interface PluginForgePerson {
+  name: string;
+  /** The avatar's URL. Omitted, the initials are drawn. */
+  avatarUrl?: string;
+  /** Shown in the author's tooltip on a commit. */
+  email?: string;
+}
+
+/** A ref decorating a commit. */
+export interface PluginCommitRef {
+  name: string;
+  /** Defaults to `branch`. `head` is the checked-out branch. */
+  kind?: "branch" | "tag" | "remote" | "head";
+}
+
+/** One commit of a `CommitRow` or `CommitList`. */
+export interface PluginCommit {
+  /** The full hash. Non-empty; in a list, unique. */
+  sha: string;
+  /** The first line of the message. */
+  subject: string;
+  author?: PluginForgePerson;
+  /** When it was authored: epoch ms, an ISO string or a `Date`. */
+  date?: number | string | Date;
+  refs?: readonly PluginCommitRef[];
+  additions?: number;
+  deletions?: number;
+  /** Marks it "Not pushed". */
+  unpushed?: boolean;
+}
+
+/** Props of `CommitRow`: one commit, as the host's commit list draws it. */
+export interface PluginCommitRowProps extends PluginRootAttributes {
+  commit?: PluginCommit;
+  /** Draws the row's loading skeleton in place of a commit. */
+  skeleton?: boolean;
+  /** Makes the subject a button: open the commit. */
+  onActivate?: (commit: PluginCommit) => void;
+  /** The short hash's length. Defaults to 7. */
+  shaLength?: number;
+  className?: string;
+}
+
+/** Props of `CommitList`: commits in the order given (newest first, as git logs them), with skeleton rows while more load. */
+export interface PluginCommitListProps extends PluginRootAttributes {
+  commits: readonly PluginCommit[];
+  /** Skeleton rows after the commits: `true` for three, or a count. */
+  loading?: boolean | number;
+  onActivate?: (commit: PluginCommit) => void;
+  shaLength?: number;
+  /** Shown when there are no commits and nothing is loading. */
+  empty?: ReactNode;
+  /** Names the list ("Commits on main"). */
+  "aria-label"?: string;
+  className?: string;
+}
+
+/** An issue's or pull request's state. `draft` is a pull request's alone. */
+export type PluginForgeState = "open" | "closed" | "merged" | "draft";
+
+/** Props of `ForgeStateBadge`: the host's state glyph for an issue or pull request. */
+export interface PluginForgeStateBadgeProps extends PluginRootAttributes {
+  /** Defaults to `pr`. An issue is open or closed: any other state draws as closed. */
+  kind?: "issue" | "pr";
+  state: PluginForgeState;
+  /** `glyph` (the default) is the 16px mark alone, named for assistive tech; `badge` adds the word. */
+  variant?: "glyph" | "badge";
+  className?: string;
+}
+
+/** A label on an issue or pull request. */
+export interface PluginForgeLabel {
+  name: string;
+  /** `#rgb` or `#rrggbb`, with or without the `#`. */
+  color?: string;
+}
+
+/** What `IssueRow` and `PullRequestRow` share. */
+export interface PluginForgeRowBaseProps extends PluginRootAttributes {
+  /** The issue or pull request number, drawn as `#123`. */
+  number: number | string;
+  title: string;
+  /** The forge page. Without `onOpen`, the title opens it in the browser. */
+  url?: string;
+  /** The title was pressed. Takes the place of opening `url`. */
+  onOpen?: () => void;
+  author?: PluginForgePerson;
+  assignees?: readonly PluginForgePerson[];
+  labels?: readonly PluginForgeLabel[];
+  /** Labels drawn before the rest fold into "+N", from 1 to 20. Defaults to 1, as the host's own rows draw them. */
+  maxLabels?: number;
+  commentCount?: number;
+  /** The age shown: epoch ms, an ISO string or a `Date`. */
+  updatedAt?: number | string | Date;
+  /** Words before the age. Defaults to "" (just "3h ago"). */
+  timePrefix?: string;
+  /** Marks the row as the list's current one: the highlighted fill, and `aria-current` on its title. */
+  selected?: boolean;
+  /** Your controls at the end of the title line (a `DropdownMenu` trigger). */
+  actions?: ReactNode;
+  /**
+   * The title control's `tabIndex`. Pass `-1` when your list owns the keyboard
+   * (a `useListNavigation` listbox, a grid with `aria-activedescendant`), so
+   * the rows add no Tab stops of their own.
+   */
+  titleTabIndex?: number;
+  className?: string;
+}
+
+/** Props of `IssueRow`. */
+export interface PluginIssueRowProps extends PluginForgeRowBaseProps {
+  state: "open" | "closed";
+}
+
+/** A pull request's checks rolled up, as its row shows them. */
+export type PluginForgeCiStatus = "success" | "failure" | "pending" | "neutral";
+
+/** A pull request's review decision. */
+export type PluginForgeReviewDecision = "approved" | "changes_requested" | "review_required";
+
+/** Props of `PullRequestRow`. */
+export interface PluginPullRequestRowProps extends PluginForgeRowBaseProps {
+  state: "open" | "closed" | "merged" | "draft";
+  /** Checks rolled up. Shown while the pull request is open. */
+  ci?: PluginForgeCiStatus;
+  /** The head conflicts with the base: shown in place of `ci`. */
+  mergeConflict?: boolean;
+  /** Approved and changes requested are shown; awaiting review is the resting state and is not. */
+  review?: PluginForgeReviewDecision;
+  headRef?: string;
+  baseRef?: string;
+}
+
+/** A CI check's state. */
+export type PluginCheckStatus =
+  | "queued"
+  | "running"
+  | "success"
+  | "failure"
+  | "skipped"
+  | "cancelled"
+  | "timed_out"
+  | "neutral"
+  | "action_required";
+
+/** One check of a `ChecksList`. */
+export interface PluginCheck {
+  /** Unique when given; matrix jobs repeat names, so the list does not key on them. */
+  id?: string;
+  name: string;
+  status: PluginCheckStatus;
+  /** The workflow or pipeline it belongs to: the list groups by it. */
+  workflow?: string;
+  /** Whether it gates merging. Omitted is unknown, not optional. */
+  required?: boolean;
+  /** How long it ran, in ms. Otherwise worked out from `startedAt` and `finishedAt`, or counted live from `startedAt` while it runs. */
+  durationMs?: number;
+  startedAt?: number | string | Date;
+  finishedAt?: number | string | Date;
+  /** Its log or output page: an http(s) URL, opened in the browser. */
+  detailsUrl?: string;
+}
+
+/** Props of `ChecksList`: CI checks by workflow under a "3 failing, 12 passing" summary. */
+export interface PluginChecksListProps extends PluginRootAttributes {
+  checks: readonly PluginCheck[];
+  /** A heading before the summary ("Checks"). */
+  title?: ReactNode;
+  /** The counts line. Defaults to true. */
+  summary?: boolean;
+  /** Your controls at the end of the header (Re-run). */
+  actions?: ReactNode;
+  /** A check's details button was pressed. Takes the place of opening `detailsUrl`. */
+  onOpenDetails?: (check: PluginCheck) => void;
+  /** Shown when there are no checks. */
+  empty?: ReactNode;
+  "aria-label"?: string;
+  className?: string;
+}
+
+/** A dev server's process state. */
+export type PluginDevServerState =
+  "starting" | "installing" | "running" | "crashed" | "stopping" | "stopped";
+
+/** Props of `PortLink`: a local server's address that opens in Daintree's browser. */
+export interface PluginPortLinkProps extends PluginRootAttributes {
+  /** A loopback http(s) URL (`http://localhost:5173/app`). Anything else draws as text. */
+  url?: string;
+  /** In place of `url`: `http://localhost:<port>`. */
+  port?: number;
+  /** `panel` (the default) opens a Daintree browser panel; `external` the system browser. */
+  target?: "panel" | "external";
+  /** A copy button after the address. Defaults to true. */
+  copyable?: boolean;
+  /** The text shown in place of `localhost:5173`. */
+  children?: ReactNode;
+  className?: string;
+}
+
+/** Props of `DevServerStatus`: a dev server's state and the address it serves. */
+export interface PluginDevServerStatusProps extends PluginRootAttributes {
+  status: PluginDevServerState;
+  /** What it is ("Vite", "web"). Defaults to "Dev server". */
+  name?: string;
+  /** Its address, drawn as a `PortLink` while it runs. */
+  url?: string;
+  port?: number;
+  /** Why it crashed, shown under the state. */
+  error?: string;
+  /** Where the address opens, as `PortLink`'s `target`. */
+  target?: "panel" | "external";
+  /** Your controls at the end (Restart, Stop). */
+  actions?: ReactNode;
+  className?: string;
+}
+
+// Daintree-native: actions, agents, terminals and keys. These components speak
+// the host's own concepts and read only what a plugin view may already see:
+// the action catalogue (`host.actions`, no capability), the agent CLI registry
+// (static), and data the view's worker hands it (`host.agents.list()` under
+// `agent:read`, `host.sendToAgent` under `agent:input`).
+
+/**
+ * An agent state Daintree observed on a terminal, as `host.agents.list()`'s
+ * `observedState` and `host.getAgentState()` report it. Read off the
+ * terminal's output and often wrong: an observation, never a fact.
+ */
+export type PluginAgentState =
+  "idle" | "working" | "waiting" | "directing" | "completed" | "exited";
+
+/** What an action dispatch from a kit control came to. */
+export interface PluginActionDispatchOutcome {
+  ok: boolean;
+  /** Set when `ok` is false: the host's `ActionErrorCode` and its message. */
+  error?: { code: string; message: string };
+}
+
+/**
+ * Props of `ActionButton`: a button that runs one of Daintree's actions, as
+ * `host.dispatch` would. Its label, keyboard shortcut and availability come
+ * from the action itself, so the button reads and behaves like the app's own.
+ * An action plugins may not run (restricted, deny-listed, or one that asks
+ * for confirmation) and one that is disabled right now draw disabled, with the
+ * reason in the tooltip.
+ */
+export interface PluginActionButtonProps extends PluginAriaRootAttributes {
+  /** The action's id, e.g. `"worktree.refresh"` or one your plugin registered. */
+  actionId: string;
+  /** Arguments for the action, checked against its schema at dispatch. */
+  args?: unknown;
+  /** The label. Defaults to the action's own title. */
+  children?: ReactNode;
+  /** A leading icon. Actions carry no icon of their own, so name the one you want. */
+  icon?: PluginIconSource;
+  /**
+   * Draws an icon-only button named by the label, with the label and shortcut
+   * as its tooltip. Needs `icon`.
+   */
+  iconOnly?: boolean;
+  /** As `Button`. Icon-only buttons take `ghost` (the default), `outline`, `subtle` or `ghost-danger`. */
+  variant?: PluginButtonVariant;
+  /** As `Button`; icon-only, as `IconButton` (`sm` by default). */
+  size?: "default" | "sm" | "xs" | "lg";
+  /**
+   * What an action that cannot run draws: `disable` (the default) keeps it in
+   * place with the reason in its tooltip; `hide` draws nothing. An action this
+   * Daintree does not know is always hidden unless you give it a label.
+   */
+  whenUnavailable?: "disable" | "hide";
+  /** Disables it on your own terms, with `disabledReason` in the tooltip. */
+  disabled?: boolean;
+  disabledReason?: string;
+  tooltipSide?: PluginSide;
+  /** Called once the dispatch settles, with its outcome. */
+  onDispatched?: (outcome: PluginActionDispatchOutcome) => void;
+  className?: string;
+}
+
+/**
+ * A menu row that runs one of Daintree's actions, for `DropdownMenu` and
+ * `ContextMenu` `items`. Like `ActionButton`, it takes its label and shortcut
+ * from the action and draws disabled when the action cannot run.
+ */
+export interface PluginActionMenuItem {
+  type: "action";
+  actionId: string;
+  args?: unknown;
+  /** The label. Defaults to the action's own title. */
+  label?: string;
+  icon?: PluginIconName;
+  /** A quiet second line under the label. */
+  description?: string;
+  /** Draws the row in the destructive tone. */
+  destructive?: boolean;
+  /** As `ActionButton`'s: `disable` (the default) or `hide`. */
+  whenUnavailable?: "disable" | "hide";
+  onDispatched?: (outcome: PluginActionDispatchOutcome) => void;
+}
+
+/** Sizes of an agent's mark: 12, 16 (the default), 20 and 24 px. */
+export type PluginAgentAvatarSize = "xs" | "sm" | "md" | "lg";
+
+/**
+ * Props of `AgentAvatar`: an agent CLI's mark from Daintree's agent registry,
+ * the one its tabs, toolbar and launchers draw, in the agent's brand ink.
+ */
+export interface PluginAgentAvatarProps extends PluginRootAttributes {
+  /** The agent's id: `claude`, `codex`, `gemini`, … as `host.agents.list()` reports it. */
+  agentId: string;
+  size?: PluginAgentAvatarSize;
+  /**
+   * A pip on the mark's corner, by the host toolbar's attention rule: only
+   * `waiting` and `directing` (the states that want a human) draw one, in the
+   * hue of that state's glyph. Other states draw none.
+   */
+  state?: PluginAgentState;
+  /** The accessible name. Defaults to the agent's name; `decorative` drops it. */
+  label?: string;
+  /** Hidden from assistive tech, for a mark beside the agent's name in text. */
+  decorative?: boolean;
+  className?: string;
+}
+
+/** Props of `AgentBadge`: an agent's mark and name, inline. */
+export interface PluginAgentBadgeProps extends PluginRootAttributes {
+  agentId: string;
+  /** The name to show. Defaults to the agent's name from the registry. */
+  label?: string;
+  /** `sm` (12px text, the default) or `md` (14px). */
+  size?: "sm" | "md";
+  /** As `AgentAvatar`'s: a pip for a state that wants a human. */
+  state?: PluginAgentState;
+  className?: string;
+}
+
+/**
+ * Props of `AgentStateIndicator`: what Daintree saw on an agent's terminal,
+ * with the app's own state glyph, worded as an observation ("Output stopped
+ * 2m ago"), never as a conclusion ("Done").
+ */
+export interface PluginAgentStateIndicatorProps extends PluginRootAttributes {
+  state: PluginAgentState;
+  /** When the state was observed, in epoch ms. Adds how long ago, kept current. */
+  since?: number;
+  /** `label` (the default) is the glyph and the wording; `glyph` the glyph alone, named. */
+  variant?: "label" | "glyph";
+  /** `sm` (12px, the default) or `md` (14px). */
+  size?: "sm" | "md";
+  /** Your own wording in place of the host's. Keep it an observation. */
+  label?: string;
+  className?: string;
+}
+
+/**
+ * An agent pane `AgentPicker` lists: the shape `host.agents.list()` resolves,
+ * so the worker's answer can be passed straight through.
+ */
+export interface PluginAgentPickerPane {
+  terminalId: string;
+  title: string;
+  agentId: string;
+  worktree: { id: string; name: string; branch?: string } | null;
+  observedState?: PluginAgentState;
+  isFocused?: boolean;
+  /** `false` lists the pane disabled, with `draftRefusal` as the reason. */
+  canDraft?: boolean;
+  draftRefusal?: string;
+}
+
+/** What the user chose in an `AgentPicker`. */
+export type PluginAgentPickerChoice =
+  | { kind: "agent"; terminalId: string; agentId: string; worktreeId: string | null }
+  | { kind: "launch"; agentId: string; worktreeId: string | null };
+
+/**
+ * Props of `AgentPicker`: a searchable list of the project's agent panes,
+ * grouped by worktree, with each pane's last observed state, and optionally
+ * rows to start an agent CLI. It picks; what happens next is yours, usually a
+ * `host.sendToAgent(text, { terminalId })` through your worker.
+ */
+export interface PluginAgentPickerProps {
+  /** The panes, as `host.agents.list()` resolves them. */
+  agents: readonly PluginAgentPickerPane[];
+  onSelect: (choice: PluginAgentPickerChoice) => void;
+  /** Agent CLI ids offered as "New …" rows after the panes. */
+  launchAgents?: readonly string[];
+  /** The worktree this is about: its group comes first and its agent is preselected. */
+  worktreeId?: string;
+  /** The button that opens it. Defaults to a "Choose agent…" button. */
+  trigger?: ReactElement;
+  open?: boolean;
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** Names the list ("Send to agent"). */
+  "aria-label"?: string;
+  searchPlaceholder?: string;
+  /** Shown when there are no panes and nothing to start. */
+  emptyMessage?: ReactNode;
+  side?: PluginSide;
+  align?: PluginAlign;
+}
+
+/**
+ * What `host.sendToAgent` resolved, as your worker hands it back. Only
+ * `project-unavailable`, `prompt-open` and `busy` refusals are yours to report.
+ */
+export type PluginSendToAgentOutcome =
+  | { status: "drafted"; terminalId: string }
+  | { status: "cancelled" }
+  | { status: "refused"; reason: string; worktreeId?: string };
+
+/** The request `SendToAgentButton` sends to your worker. */
+export interface PluginSendToAgentRequest {
+  text: string;
+  title?: string;
+  worktreeId?: string;
+  terminalId?: string;
+}
+
+/**
+ * Props of `SendToAgentButton`: the **Send to agent…** control. It asks your
+ * worker, which alone may call `host.sendToAgent` (gated on `agent:input`),
+ * over a channel: by default it invokes `"sendToAgent"` with a
+ * {@link PluginSendToAgentRequest}, the handler the docs' recipe registers.
+ * A refusal only your plugin hears about is shown as a toast from the view.
+ */
+export interface PluginSendToAgentButtonProps extends PluginAriaRootAttributes {
+  /** The work to hand over. Blank text disables the button. */
+  text: string;
+  /** A heading above the text in the draft, at most 120 characters. */
+  title?: string;
+  /** Steers the host's picker; typically the view's `worktreeId` prop. */
+  worktreeId?: string;
+  /** Drafts straight into this pane, with no picker. */
+  terminalId?: string;
+  /** The worker channel to invoke. Defaults to `"sendToAgent"`. */
+  channel?: string;
+  /** Your own send in place of the channel; resolve with what `host.sendToAgent` resolved. */
+  send?: (request: PluginSendToAgentRequest) => Promise<PluginSendToAgentOutcome>;
+  /** Called with the outcome once the send settles. */
+  onResult?: (outcome: PluginSendToAgentOutcome) => void;
+  /** Called when the send throws. Without it the button shows the failure as a toast. */
+  onError?: (error: unknown) => void;
+  /** Defaults to "Send to agent…". */
+  children?: ReactNode;
+  variant?: PluginButtonVariant;
+  size?: "default" | "sm" | "xs" | "lg";
+  /** Draws an icon-only button with the label as its tooltip. */
+  iconOnly?: boolean;
+  /** Disables it on your own terms, with `disabledReason` in the tooltip and spoken. */
+  disabled?: boolean;
+  disabledReason?: string;
+  className?: string;
+}
+
+/**
+ * Props of `ContextDragSource`: makes its content draggable onto an agent
+ * terminal, carrying the `daintree-context` payload (and the text as plain
+ * text for a drop anywhere else). Coexists with kit drags: a kit drag never
+ * starts from inside it. Without children it draws a "Drag to an agent" grip.
+ */
+export interface PluginContextDragSourceProps extends PluginRootAttributes {
+  /** The text that lands in the agent's draft. Non-blank, at most 32,768 characters. */
+  text: string;
+  /** A heading above it, at most 120 characters. */
+  title?: string;
+  /** Where it came from, beside the heading ("Kanban"), at most 80 characters. */
+  sourceLabel?: string;
+  /** What to make draggable. Omitted, the kit's grip chip with `label`. */
+  children?: ReactNode;
+  /** The chip's text. Defaults to "Drag to an agent". */
+  label?: string;
+  /** Stops it starting a drag. */
+  disabled?: boolean;
+  /** Called after a drag with a valid payload starts. */
+  onDragStart?: () => void;
+  className?: string;
+}
+
+/**
+ * Props of `TerminalSnapshot`: a still, read-only preview of a terminal's
+ * last lines, drawn in the terminal's own colours and face, under a title row
+ * with the agent's mark and observed state. It takes no input.
+ */
+export interface PluginTerminalSnapshotProps extends PluginRootAttributes {
+  /** The output, ANSI colour codes and all; only its last `rows` lines show. */
+  text: string;
+  title?: string;
+  /** Draws the agent's mark before the title. */
+  agentId?: string;
+  state?: PluginAgentState;
+  /** When `state` was observed, in epoch ms. */
+  since?: number;
+  /** Lines shown. Defaults to 12, at most 200. */
+  rows?: number;
+  /** The text size: `xs` (10px, the default) or `sm` (12px, the terminal's own). */
+  scale?: "xs" | "sm";
+  /** Makes the whole snapshot a button, e.g. to focus that terminal. */
+  onClick?: () => void;
+  /**
+   * Marks it as the current one in a set of previews: the host's neutral
+   * current-thumbnail ring, and `aria-current` for assistive tech.
+   */
+  selected?: boolean;
+  /** Names it for assistive tech. Defaults to the title. */
+  "aria-label"?: string;
+  className?: string;
+}
+
+/**
+ * Props of `ShortcutHint`: a label and its keys, drawn as Daintree's shortcut
+ * hint card or as a plain row. Given `actionId`, it shows that action's title
+ * and the user's current binding for it, and draws nothing while it has none.
+ */
+export interface PluginShortcutHintProps extends PluginRootAttributes {
+  /** An action whose title and current binding to show. */
+  actionId?: string;
+  /** A combo in the app's notation (`"Cmd+K"`), when there is no `actionId`. */
+  shortcut?: string;
+  /** The label. Defaults to the action's title. */
+  label?: ReactNode;
+  /** `card` (the default) is the host's hint card; `inline` the row alone. */
+  variant?: "card" | "inline";
+  className?: string;
+}
+
+/** One hint in a `KeyHints` row: literal `keys`, a `shortcut` combo, or an action's binding. */
+export interface PluginKeyHint {
+  label: string;
+  /** Literal key caps, e.g. `["↑↓"]`. */
+  keys?: readonly string[];
+  /** A combo in the app's notation (`"Cmd+K"`, `"Enter"`, `"Escape"`). */
+  shortcut?: string;
+  /** An action whose current binding to show; the hint drops out while it has none. */
+  actionId?: string;
+}
+
+/**
+ * Props of `KeyHints`: a row of key hints ("⏎ Open  ⌘K Search  Esc Close"),
+ * drawn as Daintree's palette footers draw theirs. The first hint never
+ * hides; the rest drop from the end as the row narrows.
+ */
+export interface PluginKeyHintsProps extends PluginRootAttributes {
+  hints: readonly PluginKeyHint[];
+  /** `inline` (the default) is the row alone; `footer` the footer band with its top edge. */
+  variant?: "inline" | "footer";
   "aria-label"?: string;
   className?: string;
 }

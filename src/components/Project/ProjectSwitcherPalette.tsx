@@ -26,7 +26,7 @@ import { FolderDown, Moon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { isMac } from "@/lib/platform";
-import { formatChordText } from "@/lib/kbdShortcut";
+import { describeKeyCap, formatChordText } from "@/lib/kbdShortcut";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
 import {
   PALETTE_ROW_CLASS,
@@ -2148,7 +2148,10 @@ function ProjectSwitcherFooter({
     <div className="@container/switcher-footer w-full flex items-center justify-between gap-3">
       {hint ? (
         <span className="shrink-0">
-          <kbd className={KBD_CLASS}>{hint.keys}</kbd>
+          <span className="sr-only">{describeKeyCap(hint.keys, isMac())}</span>
+          <kbd aria-hidden="true" className={KBD_CLASS}>
+            {hint.keys}
+          </kbd>
           <span className="ml-1.5">{hint.label}</span>
         </span>
       ) : (

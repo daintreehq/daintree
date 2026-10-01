@@ -313,7 +313,7 @@ export default function Notes({ pluginId, disposeSignal }) {
 | --- | --- |
 | Actions | `Button` (variants `default` — the accent primary, and the default — `secondary`, `outline`, `ghost`, `subtle`, `contrast`, `destructive`, `ghost-danger`, `link`, `pill`), `IconButton`, `SplitButton` (a primary action with a menu of alternatives), `ToggleGroup` (toggle buttons, any number or at most one on), `CopyButton`, `DismissButton`, `DropdownMenu`, `ContextMenu` (the same rows on a right-click or Shift+F10; both nest submenus and take a description line per row) |
 | Forms | `Input` (text, search, email, url, password, number, tel, date, time, datetime-local), `Textarea`, `Select` (an `options` array; `value={null}` shows the placeholder again), `Combobox` (a `Select` with a search, for long or fetched lists), `MultiSelect` (several choices, as chips), `TagInput` (free-text tags), `Checkbox`, `Switch`, `RadioGroup`, `SegmentedControl`, `NumberInput` (steppers, units, clamping), `Slider`, `RangeSlider` (a low and a high value), `ColorPicker` and `ColorSwatch` (label and tag colours), `SearchField`, `FilterChip` (a toggle or removable filter in a filter bar), `FileDropzone` (drop or choose files; you get `File` objects, never paths), `FormField` (label, description and error wired to the control), `FormFieldGroup` (one label over a set of controls), `Form` with `useForm` (dirty tracking, sync and async checks, submit and reset) and `FormStatus`, `SchemaForm` (a settings group generated from a JSON Schema) |
-| Lists and tables | `VirtualList`, `DataTable`, `LogView`, `ListRow` with `useListNavigation`, `ScrollShadow`, `FileTree`, `Timeline` (an activity feed or audit log), `HighlightedText` (search matches in a row) |
+| Lists and tables | `VirtualList`, `DataTable` (with checkbox selection, groups, expandable rows, resizable and hideable columns, a pinned first column and inline editing when you ask for them), `LogView`, `ListRow` with `useListNavigation`, `ScrollShadow`, `FileTree`, `TreeView` (a tree of anything: lazy children, checkboxes, drag to reorder), `ObjectInspector` (an API response or tool result as a collapsible value), `Timeline` (an activity feed or audit log), `HighlightedText` (search matches in a row) |
 | Figures | `StatCard` (a labelled figure with an optional change), `Sparkline`, `Meter` (usage against a limit, with warning and danger thresholds), `DiffStat` ("+12 -3") |
 | Dates | `Calendar` (an inline month grid, one day or a range), `DatePicker` and `DateRangePicker` (typed or picked ISO `"YYYY-MM-DD"` days, range presets), `TimePicker` and `DateTimePicker` (kit-drawn `"HH:mm"` times and `"YYYY-MM-DDTHH:mm"` date-times, with the zone named), `TimeAgo` (an age that keeps itself current) |
 | Charts | `BarChart` (grouped or stacked, upright or across), `LineChart` (numeric or time x, optional area), `DonutChart` (parts of a whole), `StackedAreaChart` (series piled to a total or 100%), `ScatterChart` (points by two numbers), `Histogram` (a distribution), `Heatmap` (a value per pair of categories), `ContributionGrid` (a calendar of daily counts), `Gauge` (one number against its range) — all with a tooltip anchored to the point under the pointer or the arrow keys |
@@ -323,11 +323,13 @@ export default function Notes({ pluginId, disposeSignal }) {
 | Layout | `Card` (header, body and footer; clickable with `onClick`), `Divider`, `SectionLabel`, `ResizableSplit` (two panes with a draggable divider), `Accordion`, `Disclosure`, `DescriptionList` (a record's label and value rows) |
 | Editors | `CodeEditor` (Daintree's CodeMirror editor, with the file viewer's theme and find bar), `DiffView` (two texts or a patch, unified or split, with your own hunk actions; `revertHunk` undoes one), `MarkdownEditor` (a comment or notes field with a toolbar and Write and Preview) |
 | Panes | `MasterDetail` (a list and its record, one pane when narrow), `SplitGroup` (three or more resizable, collapsible panes), `Inspector` with `InspectorSection` and `PropertyRow` (a compact property panel), `Drawer` and `DrawerToggle` (a panel that slides in within the pane), `GroupedVirtualList` (sticky group headers with counts), `BulkActionBar`, `LoadMoreFooter`, `TaskList` (a queue of jobs), `RefreshOverlay` and `StaleIndicator` (refreshing and old data) |
+| Git and forge | `WorktreePicker`, `WorktreeBadge` and `BranchBadge` (take `host.getWorktrees()` snapshots as they come), `FileIcon`, `FileLink` (opens in the file viewer at a line), `GitStatusBadge` (the change list's M/A/D/R/?/! letters), `CommitRow` and `CommitList`, `IssueRow`, `PullRequestRow` and `ForgeStateBadge` (one forge-neutral look for any provider), `ChecksList` (CI checks by workflow), `DevServerStatus` and `PortLink` |
 | Drag and drop | `SortableList` (a list reordered by pointer or keyboard), `Kanban` (columns of cards moved between and within columns, with counts and WIP limits), and `DragDropProvider` with `useDraggable` and `useDroppable` for anything else |
 | States and status | `PaneState` (a whole pane's `loading`, `empty` or `error`), `EmptyState`, `Callout` (an inline message; `severity="error"` with a Retry `action` is the error banner, `variant="strip"` the pane-wide band), `Badge`, `Spinner`, `SpinningIcon`, `ProgressBar`, `Skeleton`, `SkeletonBone`, `SkeletonText`, `SkeletonHint`, `SeverityIcon` |
 | Overlays | `Dialog`, `ConfirmDialog` (including the destructive typed-name gate), `ConfirmPopover` (an inline confirm on its trigger), `Sheet` (a record's detail or edit form against the window's edge), `Popover`, `PopoverSearchField`, `EmojiPicker`, `Tooltip`, `TruncatedTooltip` |
 | Settings views | `SettingsSection`, `SettingsGroup`, `SettingsRow`, `SettingsActions` — the host's section → group → row grammar |
 | Behaviour | Hooks: `useSelection` (single, multi and range selection), `useHotkeys` (view-scoped shortcuts that never shadow the app's), `useUndoRedo`, `useDisclosure`, `useDebouncedValue` and `useDebouncedCallback`, `usePersistentViewState` (a remembered tab or split size, through `persistState`), `useToast` (toasts and Undo toasts from the view), `useForm` (form state for `Form`) |
+| Daintree-native | `ActionButton` and the menus' `action` entry (run one of Daintree's actions with its own title, binding and availability), `AgentAvatar`, `AgentBadge`, `AgentStateIndicator` (an agent's mark and what was observed on its terminal), `AgentPicker` (the project's agent panes by worktree), `SendToAgentButton` and `ContextDragSource` (hand work to an agent), `TerminalSnapshot` (a still of a terminal's last lines), `ShortcutHint` and `KeyHints` (keys as the app draws them) |
 | Everything else | `Markdown`, `Icon`, `Avatar`, `AvatarGroup`, `Kbd`, `KbdChord`; formatters `formatTimeAgo`, `formatRelativeTime`, `formatDuration`, `formatBytes`, `formatCount`; the theme API below |
 
 One status vocabulary runs through `Badge` `tone`, `Callout` `severity` and `SeverityIcon`: `error` (the same colour as `danger`, which `Badge` also accepts), `warning`, `success`, `info` and `neutral`.
@@ -415,13 +417,19 @@ The first `Markdown` in a session renders nothing while the async renderer loads
 
 ## Handing work to an agent by drag
 
-A card, a message or a row in your view can be dragged onto an agent terminal — its input bar or the terminal itself — and it lands in that agent's draft for the user to instruct it about. Nothing is submitted. The drag carries one app-internal type, `application/x-daintree-agent-context`, holding JSON:
+A card, a message or a row in your view can be dragged onto an agent terminal — its input bar or the terminal itself — and it lands in that agent's draft for the user to instruct it about. Nothing is submitted. The kit's [`ContextDragSource`](./ui-kit.md#daintree-native-actions-agents-terminals-and-keys) does all of this for you: wrap the card's grip or a chip in it with the text, and it writes the payload below, checks it as the drop will, and keeps clear of kit drags.
+
+```js
+createElement(ContextDragSource, { text: card.body, title: card.title, sourceLabel: "Kanban" });
+```
+
+Underneath, the drag carries one app-internal type, `application/x-daintree-agent-context`, holding JSON:
 
 ```ts
 { v: 1, text: string, title?: string, source?: { label?: string } }
 ```
 
-`text` is required, non-blank and at most 32,768 characters; `title` at most 120; `source.label` at most 80 (say `"Kanban"`). Set `text/plain` to the same text too, so a drop anywhere else — an editor, another app — still gets something sensible. In a hand-written view, with no build step:
+`text` is required, non-blank and at most 32,768 characters; `title` at most 120; `source.label` at most 80 (say `"Kanban"`). Set `text/plain` to the same text too, so a drop anywhere else — an editor, another app — still gets something sensible. Without the kit, in a hand-written view with no build step:
 
 ```js
 createElement(
@@ -447,18 +455,25 @@ import { setAgentContextDragData } from "@daintreehq/plugin-sdk";
 onDragStart={(event) => setAgentContextDragData(event.dataTransfer, { v: 1, title, text })}
 ```
 
-Kit drags (`SortableList`, `Kanban`, `DragDropProvider`) never carry this payload: they move with pointer events and stay inside the view, so a card on a kit board is reordered, not handed off. To offer both, keep the handoff on a separate element that sets `draggable` and the payload itself — a "Drag to an agent" grip beside the kit's — or offer **Send to agent…** instead.
+Kit drags (`SortableList`, `Kanban`, `DragDropProvider`) never carry this payload: they move with pointer events and stay inside the view, so a card on a kit board is reordered, not handed off. To offer both, keep the handoff on a separate element inside the card — a `ContextDragSource` chip, or your own element that sets `draggable` and the payload — and offer **Send to agent…** beside it for the keyboard.
 
 What lands is the same block `host.sendToAgent` drafts: one fenced block tagged `daintree-context`, holding your `source.label` and `title` as a heading (`Kanban: Fix login redirect`) and then the text, appended after whatever the user already typed and kept literal on submit — `@diff` and the other tokens inside it are never expanded. Control characters other than tab and newline are stripped. The drop selects the pane and puts the caret in its input bar, exactly like dropping a file there. Only an agent pane whose input bar can take a draft shows the drop affordance; a plain shell, an exited, docked, locked or restarting agent, one in an armed fleet, or any pane while the input bar is switched off refuses the drag outright, and nothing is ever typed into a terminal. The payload is data, not instructions — anything can start a drag carrying this type, so the host validates it in full at the drop and drops anything malformed: a wrong `v`, blank or oversized text, an over-long `title` or label, or a non-string where a string belongs. Unknown extra keys are ignored.
 
 ## Sending work to an agent from a view
 
-A drag is one route; a **Send to agent…** button or menu entry is the other, and the one keyboard users get. It goes through [`host.sendToAgent`](./host-api.md#sendtoagent--hand-work-to-an-agents-draft), which only your worker can call — it is gated on `agent:input` and bound to your plugin's identity, which a view cannot assert. So the view asks the worker over a channel:
+A drag is one route; a **Send to agent…** button or menu entry is the other, and the one keyboard users get. It goes through [`host.sendToAgent`](./host-api.md#sendtoagent--hand-work-to-an-agents-draft), which only your worker can call — it is gated on `agent:input` and bound to your plugin's identity, which a view cannot assert. So the view asks the worker over a channel. Register the handler below in the worker, and the kit's [`SendToAgentButton`](./ui-kit.md#daintree-native-actions-agents-terminals-and-keys) is the whole view side — label, busy state and the refusals only you hear about:
+
+```js
+// view
+createElement(SendToAgentButton, { text: card.body, title: card.title, worktreeId });
+```
+
+Written by hand, the same thing is:
 
 ```js
 // worker (activate)
-host.registerHandler("sendToAgent", (_ctx, { text, title, worktreeId }) =>
-  host.sendToAgent(text, { title, worktreeId })
+host.registerHandler("sendToAgent", (_ctx, { text, title, worktreeId, terminalId }) =>
+  host.sendToAgent(text, { title, worktreeId, terminalId })
 );
 
 // view
@@ -475,7 +490,7 @@ if (
 }
 ```
 
-Without a `terminalId` the user picks the agent — or starts one, here or in a new worktree — and the text lands in its draft as the same block a drop makes, headed with your plugin's display name rather than a label you choose, and never submitted. The call resolves `drafted`, `cancelled` or `refused`; the user already sees why their agent refused, so a view only needs to speak up for the three reasons that concern the plugin. Label the control **Send to agent…**: the ellipsis says a picker comes first. To put it on the panel's ⋯ and right-click menus instead, declare an action in the panel's [`menu`](./contribution-points.md#panel-menu) — it is dispatched with `{ panelId }`, so the worker knows which panel asked.
+To pick the agent inside your own view instead of the host's picker, pass the panes your worker reads with `host.agents.list()` (it needs `agent:read`) to the kit's `AgentPicker`, and send the chosen `terminalId` back to the worker. Without a `terminalId` the user picks the agent — or starts one, here or in a new worktree — and the text lands in its draft as the same block a drop makes, headed with your plugin's display name rather than a label you choose, and never submitted. The call resolves `drafted`, `cancelled` or `refused`; the user already sees why their agent refused, so a view only needs to speak up for the three reasons that concern the plugin. Label the control **Send to agent…**: the ellipsis says a picker comes first. To put it on the panel's ⋯ and right-click menus instead, declare an action in the panel's [`menu`](./contribution-points.md#panel-menu) — it is dispatched with `{ panelId }`, so the worker knows which panel asked.
 
 ## Resources your view owns
 

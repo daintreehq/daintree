@@ -297,6 +297,28 @@ declare module "@daintreehq/plugin-ui" {
     PluginMarkdownEditorProps,
   } from "@daintreehq/plugin-sdk/react";
 
+  import type {
+    PluginActionButtonProps,
+    PluginActionDispatchOutcome,
+    PluginActionMenuItem,
+    PluginAgentAvatarProps,
+    PluginAgentAvatarSize,
+    PluginAgentBadgeProps,
+    PluginAgentPickerChoice,
+    PluginAgentPickerPane,
+    PluginAgentPickerProps,
+    PluginAgentState,
+    PluginAgentStateIndicatorProps,
+    PluginContextDragSourceProps,
+    PluginKeyHint,
+    PluginKeyHintsProps,
+    PluginSendToAgentButtonProps,
+    PluginSendToAgentOutcome,
+    PluginSendToAgentRequest,
+    PluginShortcutHintProps,
+    PluginTerminalSnapshotProps,
+  } from "@daintreehq/plugin-sdk/react";
+
   export type MarkdownProps = PluginMarkdownProps;
   export type ButtonProps = PluginButtonProps;
   export type IconButtonProps = PluginIconButtonProps;
@@ -548,6 +570,26 @@ declare module "@daintreehq/plugin-ui" {
   export type TaskListProps = PluginTaskListProps;
   export type RefreshOverlayProps = PluginRefreshOverlayProps;
   export type StaleIndicatorProps = PluginStaleIndicatorProps;
+
+  export type ActionButtonProps = PluginActionButtonProps;
+  export type ActionDispatchOutcome = PluginActionDispatchOutcome;
+  export type ActionMenuItem = PluginActionMenuItem;
+  export type AgentState = PluginAgentState;
+  export type AgentAvatarSize = PluginAgentAvatarSize;
+  export type AgentAvatarProps = PluginAgentAvatarProps;
+  export type AgentBadgeProps = PluginAgentBadgeProps;
+  export type AgentStateIndicatorProps = PluginAgentStateIndicatorProps;
+  export type AgentPickerPane = PluginAgentPickerPane;
+  export type AgentPickerChoice = PluginAgentPickerChoice;
+  export type AgentPickerProps = PluginAgentPickerProps;
+  export type SendToAgentOutcome = PluginSendToAgentOutcome;
+  export type SendToAgentRequest = PluginSendToAgentRequest;
+  export type SendToAgentButtonProps = PluginSendToAgentButtonProps;
+  export type ContextDragSourceProps = PluginContextDragSourceProps;
+  export type TerminalSnapshotProps = PluginTerminalSnapshotProps;
+  export type ShortcutHintProps = PluginShortcutHintProps;
+  export type KeyHint = PluginKeyHint;
+  export type KeyHintsProps = PluginKeyHintsProps;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -1217,4 +1259,157 @@ declare module "@daintreehq/plugin-ui" {
   export const Gauge: ComponentType<GaugeProps>;
   /** A document's headings as a sticky outline that tracks and scrolls to sections. */
   export const TableOfContents: ComponentType<TableOfContentsProps>;
+  // Trees and value inspectors: a generic TreeView and an ObjectInspector.
+  import type {
+    PluginDataTableGroupAccessor,
+    PluginDataTableRowPredicate,
+    PluginObjectInspectorProps,
+    PluginTreeMove,
+    PluginTreeNodeId,
+    PluginTreeNodeState,
+    PluginTreeViewProps,
+  } from "@daintreehq/plugin-sdk/react";
+
+  export type DataTableRowPredicate<T = unknown> = PluginDataTableRowPredicate<T>;
+  export type DataTableGroupAccessor<T = unknown> = PluginDataTableGroupAccessor<T>;
+  export type TreeNodeId = PluginTreeNodeId;
+  export type TreeNodeState = PluginTreeNodeState;
+  export type TreeMove = PluginTreeMove;
+  export type TreeViewProps<T = unknown> = PluginTreeViewProps<T>;
+  export type ObjectInspectorProps = PluginObjectInspectorProps;
+
+  /**
+   * A tree of any nodes, drawn like the host's file tree and virtualised:
+   * lazy children with a loading row, single or multiple selection,
+   * tri-state checkboxes, drag (and Alt+arrow) to reorder or re-parent, and
+   * typeahead. Fills its container's height.
+   */
+  export const TreeView: <T>(props: TreeViewProps<T>) => ReactNode;
+  /**
+   * A read-only, collapsible view of a JSON-like value with type-coloured
+   * values, expand to depth, Expand all, a filter, copy value and copy path,
+   * long strings cut and big arrays in ranges. Fills its container's height.
+   */
+  export const ObjectInspector: ComponentType<ObjectInspectorProps>;
+
+  // Git and forge: worktrees, branches, files and their status, commits,
+  // issues, pull requests, CI checks and dev servers, drawn as the host draws
+  // its own. Presentational: the data comes from your worker as props.
+  import type {
+    PluginBranchBadgeProps,
+    PluginCheck,
+    PluginCheckStatus,
+    PluginChecksListProps,
+    PluginCommit,
+    PluginCommitListProps,
+    PluginCommitRef,
+    PluginCommitRowProps,
+    PluginDevServerState,
+    PluginDevServerStatusProps,
+    PluginFileIconProps,
+    PluginFileLinkProps,
+    PluginForgeCiStatus,
+    PluginForgeLabel,
+    PluginForgePerson,
+    PluginForgeReviewDecision,
+    PluginForgeRowBaseProps,
+    PluginForgeState,
+    PluginForgeStateBadgeProps,
+    PluginGitFileStatus,
+    PluginGitStatusBadgeProps,
+    PluginIssueRowProps,
+    PluginPortLinkProps,
+    PluginPullRequestRowProps,
+    PluginWorktreeBadgeProps,
+    PluginWorktreeItem,
+    PluginWorktreePickerProps,
+  } from "@daintreehq/plugin-sdk/react";
+
+  export type GitFileStatus = PluginGitFileStatus;
+  export type WorktreeItem = PluginWorktreeItem;
+  export type BranchBadgeProps = PluginBranchBadgeProps;
+  export type WorktreeBadgeProps = PluginWorktreeBadgeProps;
+  export type WorktreePickerProps = PluginWorktreePickerProps;
+  export type FileIconProps = PluginFileIconProps;
+  export type FileLinkProps = PluginFileLinkProps;
+  export type GitStatusBadgeProps = PluginGitStatusBadgeProps;
+  export type ForgePerson = PluginForgePerson;
+  export type CommitRef = PluginCommitRef;
+  export type Commit = PluginCommit;
+  export type CommitRowProps = PluginCommitRowProps;
+  export type CommitListProps = PluginCommitListProps;
+  export type ForgeState = PluginForgeState;
+  export type ForgeStateBadgeProps = PluginForgeStateBadgeProps;
+  export type ForgeLabel = PluginForgeLabel;
+  export type ForgeRowBaseProps = PluginForgeRowBaseProps;
+  export type IssueRowProps = PluginIssueRowProps;
+  export type ForgeCiStatus = PluginForgeCiStatus;
+  export type ForgeReviewDecision = PluginForgeReviewDecision;
+  export type PullRequestRowProps = PluginPullRequestRowProps;
+  export type CheckStatus = PluginCheckStatus;
+  export type CheckRun = PluginCheck;
+  export type ChecksListProps = PluginChecksListProps;
+  export type DevServerState = PluginDevServerState;
+  export type PortLinkProps = PluginPortLinkProps;
+  export type DevServerStatusProps = PluginDevServerStatusProps;
+
+  /** A branch name as Daintree draws one in its chrome: mono, never uppercased, with its full name in a tooltip when cut. */
+  export const BranchBadge: ComponentType<BranchBadgeProps>;
+  /** A worktree's name and branch, its uncommitted files and how far it is ahead of and behind its upstream. */
+  export const WorktreeBadge: ComponentType<WorktreeBadgeProps>;
+  /** Choose a worktree: a searchable list grouped under headings, the current one marked. Takes `host.getWorktrees()` snapshots as they come. */
+  export const WorktreePicker: ComponentType<WorktreePickerProps>;
+  /** The file-type glyph Daintree's file tree draws for a name, on its own. */
+  export const FileIcon: ComponentType<FileIconProps>;
+  /** A path that opens in Daintree's file viewer, optionally at a line, cut in the middle when it is long. */
+  export const FileLink: ComponentType<FileLinkProps>;
+  /** A file's git state as the host's change lists letter it (M, A, D, R, ?, and ! for a conflict), in its colour. */
+  export const GitStatusBadge: ComponentType<GitStatusBadgeProps>;
+  /** One commit: author, subject, refs, age, churn and a hash that copies; or its loading skeleton. */
+  export const CommitRow: ComponentType<CommitRowProps>;
+  /** Commits in the order given (newest first, as git logs them), Up and Down between rows, with skeleton rows while more load. */
+  export const CommitList: ComponentType<CommitListProps>;
+  /** The host's glyph for an issue's or pull request's state (open, draft, merged, closed), alone or with its word. */
+  export const ForgeStateBadge: ComponentType<ForgeStateBadgeProps>;
+  /** A forge-neutral issue row: state, title, number, author, age, comments, labels and assignees. */
+  export const IssueRow: ComponentType<IssueRowProps>;
+  /** A forge-neutral pull request row: an `IssueRow` plus its checks, review decision and head branch. */
+  export const PullRequestRow: ComponentType<PullRequestRowProps>;
+  /** CI checks grouped by workflow under a "3 failing, 12 passing" summary, failures first, each with its duration and details link. */
+  export const ChecksList: ComponentType<ChecksListProps>;
+  /** A dev server's state (starting, running, crashed, stopped) and, while it runs, its address. */
+  export const DevServerStatus: ComponentType<DevServerStatusProps>;
+  /** A local server's address that opens in a Daintree browser panel, with a copy button. Only loopback URLs link. */
+  export const PortLink: ComponentType<PortLinkProps>;
+  /**
+   * Runs one of Daintree's actions as `host.dispatch` would, with the action's
+   * own title and the user's binding for it; draws disabled, with the reason in
+   * its tooltip, when the action can't run from a plugin right now.
+   */
+  export const ActionButton: ComponentType<ActionButtonProps>;
+  /** An agent CLI's mark from Daintree's registry, with a pip for a live state. */
+  export const AgentAvatar: ComponentType<AgentAvatarProps>;
+  /** An agent's mark and name, inline. */
+  export const AgentBadge: ComponentType<AgentBadgeProps>;
+  /** The app's state glyph and what was observed ("Output stopped 2m ago"), kept current. */
+  export const AgentStateIndicator: ComponentType<AgentStateIndicatorProps>;
+  /**
+   * A searchable popover of the project's agent panes, grouped by worktree, and
+   * agent CLIs to start; it reports the choice. A `trigger` you pass shows
+   * while the kit loads.
+   */
+  export const AgentPicker: ComponentType<AgentPickerProps>;
+  /** **Send to agent…**: invokes your worker's `"sendToAgent"` handler and reports refusals. */
+  export const SendToAgentButton: ComponentType<SendToAgentButtonProps>;
+  /**
+   * Makes its content draggable onto an agent terminal with the
+   * `daintree-context` payload. The content shows while the kit loads.
+   */
+  export const ContextDragSource: ComponentType<ContextDragSourceProps>;
+  /** A still preview of a terminal's last lines in its own colours, under a title row. */
+  export const TerminalSnapshot: ComponentType<TerminalSnapshotProps>;
+  /** A label and its keys as Daintree's shortcut hint, from an action's binding or a combo. */
+  export const ShortcutHint: ComponentType<ShortcutHintProps>;
+  /** A row of key hints ("⏎ Open  ⌘K Search"), the last dropping first as it narrows. */
+  export const KeyHints: ComponentType<KeyHintsProps>;
 }

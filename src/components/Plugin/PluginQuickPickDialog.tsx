@@ -12,6 +12,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { usePluginPromptStore } from "@/store/pluginPromptStore";
 import type { PluginQuickPickItem } from "@shared/types/plugin";
+import { describeKeyCap } from "@/lib/kbdShortcut";
 
 const EMPTY_ITEMS: PluginQuickPickItem[] = [];
 
@@ -196,7 +197,10 @@ export function PluginQuickPickDialog() {
           {/* Enter earns its chip here and only here: in a multi-select list
               it toggles the row instead of confirming. */}
           <span className="inline-flex items-baseline">
-            <kbd className={KBD_CLASS}>↵</kbd>
+            <span className="sr-only">{describeKeyCap("↵", isMac())}</span>
+            <kbd aria-hidden="true" className={KBD_CLASS}>
+              ↵
+            </kbd>
             <span className="ml-1.5">toggle</span>
           </span>
           <span className="inline-flex items-center gap-1.5">

@@ -364,6 +364,15 @@ describe("LocalCommitsDropdown push status", () => {
     expect(rowOf(2)).toContain("Not pushed");
     expect(rowOf(3)).not.toContain("Not pushed");
     expect(listPushCommitsMock).toHaveBeenCalledWith("/repo", "main", 100);
+    // Each item after "Not pushed" carries its own separator, so one that does
+    // not fit drops out whole; the hash stays outside the clipped line.
+    const meta = document
+      .getElementById("local-commit-row-hash-1")
+      ?.querySelector("[data-commit-meta]");
+    const items = [...(meta?.children ?? [])];
+    expect(items[0]?.textContent).toBe("Not pushed");
+    for (const item of items.slice(1)) expect(item.textContent?.startsWith("·")).toBe(true);
+    expect(meta?.querySelector('[aria-label^="Copy hash"]')).toBeNull();
   });
 
   it("marks no rows from an unverified range", async () => {

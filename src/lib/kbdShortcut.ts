@@ -61,12 +61,20 @@ const ARROW_GLYPHS: Record<string, string> = {
   arrowright: "→",
 };
 
+/**
+ * A table's own entry. A combo can come from a plugin, and `"__proto__"` or
+ * `"constructor"` would otherwise read an inherited object as a key label.
+ */
+function ownLookup(table: Record<string, string>, key: string): string | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
 function mapToken(rawToken: string, isMac: boolean): string {
   const lower = rawToken.toLowerCase();
-  const arrow = ARROW_GLYPHS[lower];
+  const arrow = ownLookup(ARROW_GLYPHS, lower);
   if (arrow) return arrow;
   const table = isMac ? MAC_GLYPHS : WIN_LABELS;
-  const mapped = table[lower];
+  const mapped = ownLookup(table, lower);
   if (mapped) return mapped;
   // Single-char keys are uppercased ("p" → "P"). Multi-char unknowns keep
   // their original casing so labels like "PageUp" or "NumpadEnter" don't
@@ -249,9 +257,9 @@ const ARIA_KEY_NAMES: Record<string, string> = {
 
 function mapAriaToken(rawToken: string, modifiers: Record<string, string>): string {
   const lower = rawToken.toLowerCase();
-  const modifier = modifiers[lower];
+  const modifier = ownLookup(modifiers, lower);
   if (modifier) return modifier;
-  const named = ARIA_KEY_NAMES[lower];
+  const named = ownLookup(ARIA_KEY_NAMES, lower);
   if (named) return named;
   if (rawToken.length === 1) return rawToken.toUpperCase();
   return rawToken;
@@ -307,7 +315,7 @@ export function normalizeQuery(query: string): string {
   // of unrelated words ("metadata" stays "metadata", not "cmddata").
   return normalized
     .split("+")
-    .map((token) => MODIFIER_SEARCH_MAP[token] ?? token)
+    .map((token) => ownLookup(MODIFIER_SEARCH_MAP, token) ?? token)
     .join("+");
 }
 
@@ -383,13 +391,66 @@ const SPOKEN_KEY_NAMES: Record<string, string> = {
 
 function spokenToken(rawToken: string, isMac: boolean): string {
   const lower = rawToken.toLowerCase();
-  const named = (isMac ? SPOKEN_MAC_NAMES : SPOKEN_WIN_NAMES)[lower] ?? SPOKEN_KEY_NAMES[lower];
+  const named =
+    ownLookup(isMac ? SPOKEN_MAC_NAMES : SPOKEN_WIN_NAMES, lower) ??
+    ownLookup(SPOKEN_KEY_NAMES, lower);
   if (named) return named;
   // A key range such as "1–9" (a collapsed numbered family) reads as a range.
   const range = /^(\w)[–-](\w)$/.exec(rawToken);
   if (range) return `${range[1]!.toUpperCase()} through ${range[2]!.toUpperCase()}`;
   if (rawToken.length === 1) return rawToken.toUpperCase();
   return rawToken;
+}
+
+// The glyphs a literal key cap draws, as the token names the spoken tables use.
+const KEY_CAP_GLYPH_TOKENS: Record<string, string> = {
+  "↑": "up",
+  "↓": "down",
+  "←": "left",
+  "→": "right",
+  "⏎": "enter",
+  "↵": "enter",
+  "⎋": "escape",
+  "⇥": "tab",
+  "⌫": "backspace",
+  "⌦": "delete",
+  "⌘": "cmd",
+  "⇧": "shift",
+  "⌥": "option",
+  "⌃": "ctrl",
+};
+
+/**
+ * A literal key cap as it should be read aloud: `"↑↓"` → `"Up Arrow Down
+ * Arrow"`, `"↵"` → `"Return"` on macOS, `"esc"` → `"Escape"`, `"Alt+↵"` →
+ * `"Option Return"`, `"1–9"` → `"1 through 9"`. For caps drawn from a string
+ * rather than a combo, where `describeChord` does not apply.
+ */
+export function describeKeyCap(cap: string, isMac: boolean): string {
+  const trimmed = cap.trim();
+  if (!trimmed) return "";
+  // A key range ("1–9") and a lone plus are single keys, not joined parts.
+  if (/^\w[–-]\w$/.test(trimmed) || trimmed === "+") return spokenToken(trimmed, isMac);
+  // "Ctrl+↵" joins keys with "+"; "Ctrl++" is Ctrl and the plus key itself.
+  // A cap that only ends in "+" ("⌘+") is glyphs, read one by one below.
+  const joined = trimmed.endsWith("++")
+    ? [...trimmed.slice(0, -2).split("+"), "+"]
+    : /\+./.test(trimmed)
+      ? trimmed.split("+")
+      : null;
+  if (joined) {
+    return joined
+      .filter(Boolean)
+      .map((part) => describeKeyCap(part, isMac))
+      .join(" ");
+  }
+  // A named key ("Space", "F2", "Page Up") is read as its name.
+  if (/^[\p{L}\p{N}][\p{L}\p{N} ]*$/u.test(trimmed) && trimmed.length > 1) {
+    return spokenToken(trimmed, isMac);
+  }
+  return [...trimmed]
+    .map((glyph) => spokenToken(ownLookup(KEY_CAP_GLYPH_TOKENS, glyph) ?? glyph, isMac))
+    .join(" ");
 }
 
 /**

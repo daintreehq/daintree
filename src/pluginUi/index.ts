@@ -161,6 +161,36 @@ import type {
   PluginShortcutRecorderProps,
 } from "@shared/types/plugin-sdk-react";
 import type {
+  PluginActionButtonProps,
+  PluginAgentAvatarProps,
+  PluginAgentBadgeProps,
+  PluginAgentPickerProps,
+  PluginAgentStateIndicatorProps,
+  PluginContextDragSourceProps,
+  PluginKeyHintsProps,
+  PluginSendToAgentButtonProps,
+  PluginShortcutHintProps,
+  PluginTerminalSnapshotProps,
+} from "@shared/types/plugin-sdk-react";
+import type {
+  PluginObjectInspectorProps,
+  PluginTreeViewProps,
+  PluginBranchBadgeProps,
+  PluginChecksListProps,
+  PluginCommitListProps,
+  PluginCommitRowProps,
+  PluginDevServerStatusProps,
+  PluginFileIconProps,
+  PluginFileLinkProps,
+  PluginForgeStateBadgeProps,
+  PluginGitStatusBadgeProps,
+  PluginIssueRowProps,
+  PluginPortLinkProps,
+  PluginPullRequestRowProps,
+  PluginWorktreeBadgeProps,
+  PluginWorktreePickerProps,
+} from "@shared/types/plugin-sdk-react";
+import type {
   PluginAnsiTextProps,
   PluginContributionGridProps,
   PluginGaugeProps,
@@ -1019,6 +1049,78 @@ export type {
   PluginMarkdownEditorProps as MarkdownEditorProps,
 } from "@shared/types/plugin-sdk-react";
 
+// Daintree-native: actions, agents, terminals and keys.
+export const ActionButton: ComponentType<PluginActionButtonProps> = fromKit(
+  "ActionButton",
+  (kit) => kit.ActionButton
+);
+export const AgentAvatar: ComponentType<PluginAgentAvatarProps> = fromKit(
+  "AgentAvatar",
+  (kit) => kit.AgentAvatar
+);
+export const AgentBadge: ComponentType<PluginAgentBadgeProps> = fromKit(
+  "AgentBadge",
+  (kit) => kit.AgentBadge
+);
+export const AgentStateIndicator: ComponentType<PluginAgentStateIndicatorProps> = fromKit(
+  "AgentStateIndicator",
+  (kit) => kit.AgentStateIndicator
+);
+export const AgentPicker: ComponentType<PluginAgentPickerProps> = fromKit(
+  "AgentPicker",
+  (kit) => kit.AgentPicker,
+  // The trigger shows while the kit loads, as a Popover's does.
+  ({ trigger }) => (isValidElement(trigger) ? trigger : null)
+);
+export const SendToAgentButton: ComponentType<PluginSendToAgentButtonProps> = fromKit(
+  "SendToAgentButton",
+  (kit) => kit.SendToAgentButton
+);
+export const ContextDragSource: ComponentType<PluginContextDragSourceProps> = fromKit(
+  "ContextDragSource",
+  (kit) => kit.ContextDragSource,
+  // The content is there from the first frame; only the drag waits. Narrowed
+  // here as the loaded adapter narrows it, so a stray object can't crash it.
+  ({ children }) =>
+    typeof children === "string" || typeof children === "number" || isValidElement(children)
+      ? children
+      : null
+);
+export const TerminalSnapshot: ComponentType<PluginTerminalSnapshotProps> = fromKit(
+  "TerminalSnapshot",
+  (kit) => kit.TerminalSnapshot
+);
+export const ShortcutHint: ComponentType<PluginShortcutHintProps> = fromKit(
+  "ShortcutHint",
+  (kit) => kit.ShortcutHint
+);
+export const KeyHints: ComponentType<PluginKeyHintsProps> = fromKit(
+  "KeyHints",
+  (kit) => kit.KeyHints
+);
+
+export type {
+  PluginActionButtonProps as ActionButtonProps,
+  PluginActionDispatchOutcome as ActionDispatchOutcome,
+  PluginActionMenuItem as ActionMenuItem,
+  PluginAgentState as AgentState,
+  PluginAgentAvatarSize as AgentAvatarSize,
+  PluginAgentAvatarProps as AgentAvatarProps,
+  PluginAgentBadgeProps as AgentBadgeProps,
+  PluginAgentStateIndicatorProps as AgentStateIndicatorProps,
+  PluginAgentPickerPane as AgentPickerPane,
+  PluginAgentPickerChoice as AgentPickerChoice,
+  PluginAgentPickerProps as AgentPickerProps,
+  PluginSendToAgentOutcome as SendToAgentOutcome,
+  PluginSendToAgentRequest as SendToAgentRequest,
+  PluginSendToAgentButtonProps as SendToAgentButtonProps,
+  PluginContextDragSourceProps as ContextDragSourceProps,
+  PluginTerminalSnapshotProps as TerminalSnapshotProps,
+  PluginShortcutHintProps as ShortcutHintProps,
+  PluginKeyHint as KeyHint,
+  PluginKeyHintsProps as KeyHintsProps,
+} from "@shared/types/plugin-sdk-react";
+
 export type {
   PluginColorSwatch as ColorSwatchEntry,
   PluginColorSwatchProps as ColorSwatchProps,
@@ -1072,6 +1174,117 @@ export type {
   PluginTaskListProps as TaskListProps,
   PluginRefreshOverlayProps as RefreshOverlayProps,
   PluginStaleIndicatorProps as StaleIndicatorProps,
+} from "@shared/types/plugin-sdk-react";
+
+// Trees and value inspectors: a generic TreeView and an ObjectInspector.
+
+export const TreeView: <T>(props: PluginTreeViewProps<T>) => ReactNode = fromKit(
+  "TreeView",
+  (kit) => kit.TreeView
+);
+export const ObjectInspector: ComponentType<PluginObjectInspectorProps> = fromKit(
+  "ObjectInspector",
+  (kit) => kit.ObjectInspector
+);
+
+export type {
+  PluginDataTableRowPredicate as DataTableRowPredicate,
+  PluginDataTableGroupAccessor as DataTableGroupAccessor,
+  PluginTreeNodeId as TreeNodeId,
+  PluginTreeNodeState as TreeNodeState,
+  PluginTreeMove as TreeMove,
+  PluginTreeViewProps as TreeViewProps,
+  PluginObjectInspectorProps as ObjectInspectorProps,
+} from "@shared/types/plugin-sdk-react";
+
+// Git and forge: worktrees, branches, files and their status, commits, issues,
+// pull requests, CI checks and dev servers, drawn as the host draws its own.
+
+export const BranchBadge: ComponentType<PluginBranchBadgeProps> = fromKit(
+  "BranchBadge",
+  (kit) => kit.BranchBadge
+);
+export const WorktreeBadge: ComponentType<PluginWorktreeBadgeProps> = fromKit(
+  "WorktreeBadge",
+  (kit) => kit.WorktreeBadge
+);
+export const WorktreePicker: ComponentType<PluginWorktreePickerProps> = fromKit(
+  "WorktreePicker",
+  (kit) => kit.WorktreePicker
+);
+export const FileIcon: ComponentType<PluginFileIconProps> = fromKit(
+  "FileIcon",
+  (kit) => kit.FileIcon
+);
+export const FileLink: ComponentType<PluginFileLinkProps> = fromKit(
+  "FileLink",
+  (kit) => kit.FileLink
+);
+export const GitStatusBadge: ComponentType<PluginGitStatusBadgeProps> = fromKit(
+  "GitStatusBadge",
+  (kit) => kit.GitStatusBadge
+);
+export const CommitRow: ComponentType<PluginCommitRowProps> = fromKit(
+  "CommitRow",
+  (kit) => kit.CommitRow
+);
+export const CommitList: ComponentType<PluginCommitListProps> = fromKit(
+  "CommitList",
+  (kit) => kit.CommitList
+);
+export const ForgeStateBadge: ComponentType<PluginForgeStateBadgeProps> = fromKit(
+  "ForgeStateBadge",
+  (kit) => kit.ForgeStateBadge
+);
+export const IssueRow: ComponentType<PluginIssueRowProps> = fromKit(
+  "IssueRow",
+  (kit) => kit.IssueRow
+);
+export const PullRequestRow: ComponentType<PluginPullRequestRowProps> = fromKit(
+  "PullRequestRow",
+  (kit) => kit.PullRequestRow
+);
+export const ChecksList: ComponentType<PluginChecksListProps> = fromKit(
+  "ChecksList",
+  (kit) => kit.ChecksList
+);
+export const DevServerStatus: ComponentType<PluginDevServerStatusProps> = fromKit(
+  "DevServerStatus",
+  (kit) => kit.DevServerStatus
+);
+export const PortLink: ComponentType<PluginPortLinkProps> = fromKit(
+  "PortLink",
+  (kit) => kit.PortLink
+);
+
+export type {
+  PluginGitFileStatus as GitFileStatus,
+  PluginWorktreeItem as WorktreeItem,
+  PluginBranchBadgeProps as BranchBadgeProps,
+  PluginWorktreeBadgeProps as WorktreeBadgeProps,
+  PluginWorktreePickerProps as WorktreePickerProps,
+  PluginFileIconProps as FileIconProps,
+  PluginFileLinkProps as FileLinkProps,
+  PluginGitStatusBadgeProps as GitStatusBadgeProps,
+  PluginForgePerson as ForgePerson,
+  PluginCommitRef as CommitRef,
+  PluginCommit as Commit,
+  PluginCommitRowProps as CommitRowProps,
+  PluginCommitListProps as CommitListProps,
+  PluginForgeState as ForgeState,
+  PluginForgeStateBadgeProps as ForgeStateBadgeProps,
+  PluginForgeLabel as ForgeLabel,
+  PluginForgeRowBaseProps as ForgeRowBaseProps,
+  PluginIssueRowProps as IssueRowProps,
+  PluginForgeCiStatus as ForgeCiStatus,
+  PluginForgeReviewDecision as ForgeReviewDecision,
+  PluginPullRequestRowProps as PullRequestRowProps,
+  PluginCheckStatus as CheckStatus,
+  PluginCheck as CheckRun,
+  PluginChecksListProps as ChecksListProps,
+  PluginDevServerState as DevServerState,
+  PluginPortLinkProps as PortLinkProps,
+  PluginDevServerStatusProps as DevServerStatusProps,
 } from "@shared/types/plugin-sdk-react";
 
 // Rich display: ANSI output, hover cards, an image viewer, more chart forms

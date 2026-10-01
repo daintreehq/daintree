@@ -338,6 +338,24 @@ const dndLibraryImport: LintRule = {
   },
 };
 
+// The agent-context drag written by hand: the payload set under its type, or
+// the SDK helper that writes it. Either way the kit's `ContextDragSource` does it.
+// Writers only: a view that reads the type on a drop has nothing to replace.
+const CONTEXT_DRAG_BY_HAND =
+  /\bsetData\s*\(\s*["'`]application\/x-daintree-agent-context["'`]|\bsetAgentContextDragData\s*\(/;
+
+const handRolledContextDrag: LintRule = {
+  id: "hand-rolled-context-drag",
+  severity: "warn",
+  appliesTo: "view",
+  message: "agent-context drag written by hand",
+  hint: "prefer `ContextDragSource` from @daintreehq/plugin-ui: it checks the payload as the drop will and keeps clear of kit drags, and `SendToAgentButton` gives the keyboard the same handoff",
+  check(file) {
+    const match = CONTEXT_DRAG_BY_HAND.exec(file.code);
+    return match ? [{ offset: match.index }] : [];
+  },
+};
+
 /** `@container`, `@container/name` — the element declares itself a query container. */
 const CONTAINER_DECLARATION = /^@container(?:\/([\w-]+))?$/;
 /** `@md`, `@max-lg`, `@min-[400px]`, `@sm/name` — a container-query variant, with its container name. */
@@ -423,6 +441,24 @@ const handRolledDrawer = classRule(
   },
   (token, { base }) =>
     SLIDE_OFF.test(base) ? `"${token}" slides a panel off the pane's edge by hand` : null
+);
+
+// The forge state inks, which only ever ride a state glyph: a view reaching for
+// them is drawing an issue or pull request row's mark itself.
+const FORGE_STATE_INK =
+  /^(?:text|bg|border(?:-[xytrblse])?|fill|stroke|ring|outline|decoration)-pr-(?:open|draft|merged|closed)$/;
+
+const handRolledForgeState = classRule(
+  {
+    id: "hand-rolled-forge-state",
+    severity: "warn",
+    message: "issue or pull request state painted by hand",
+    hint: "prefer `ForgeStateBadge`, `IssueRow` or `PullRequestRow` from @daintreehq/plugin-ui: the host's state glyphs and rows, the same for every forge",
+  },
+  (token, { base }) =>
+    FORGE_STATE_INK.test(splitModifier(base).value)
+      ? `"${token}" paints a forge state by hand`
+      : null
 );
 
 const NATIVE_DIALOG =
@@ -593,6 +629,30 @@ const ansiLibraryImport: LintRule = {
   },
 };
 
+// The table, tree and JSON-viewer libraries a view reaches for to show records
+// or an API response, which the kit's DataTable, TreeView and ObjectInspector
+// now cover in the host's own rows.
+const DATA_VIEW_LIBRARY_IMPORT =
+  /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\(\s*|\bimport\s+)["'](?:@tanstack\/react-table|react-table|ag-grid-[\w-]+|react-data-grid|@mui\/x-data-grid[\w-]*|react-arborist|rc-tree|react-complex-tree|react-json-view|@microlink\/react-json-view|@uiw\/react-json-view|react-json-tree|react-inspector)(?:\/[^"']*)?["']/;
+
+const dataViewLibraryImport: LintRule = {
+  id: "data-view-library-import",
+  severity: "warn",
+  appliesTo: "view",
+  message: "a data grid, tree or JSON viewer library is bundled into the view",
+  hint: "prefer `DataTable`, `TreeView` or `ObjectInspector` from @daintreehq/plugin-ui: selection, groups, editing, lazy trees and value inspection in the host's own rows, served at no bundle cost",
+  check(file) {
+    const pattern = new RegExp(DATA_VIEW_LIBRARY_IMPORT.source, "g");
+    for (const match of file.code.matchAll(pattern)) {
+      // `import type …` and `export type …` bundle nothing.
+      const start = file.code.lastIndexOf("\n", match.index) + 1;
+      if (/^\s*(?:import|export)\s+type\b/.test(file.code.slice(start, match.index))) continue;
+      return [{ offset: match.index }];
+    }
+    return [];
+  },
+};
+
 export const CONSISTENCY_RULES: LintRule[] = [
   stockColour,
   darkVariant,
@@ -611,6 +671,7 @@ export const CONSISTENCY_RULES: LintRule[] = [
   inlineSvgIcon,
   lucideImport,
   dndLibraryImport,
+  handRolledContextDrag,
   selfContainerQuery,
   nativeDialogInView,
   viewWebStorage,
@@ -618,6 +679,8 @@ export const CONSISTENCY_RULES: LintRule[] = [
   rawPortal,
   viewportBreakpoint,
   editorLibraryImport,
+  dataViewLibraryImport,
   handRolledDrawer,
   ansiLibraryImport,
+  handRolledForgeState,
 ];

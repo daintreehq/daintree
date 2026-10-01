@@ -44,6 +44,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuMeta,
   DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -119,8 +120,11 @@ import { pluginKitLayoutPanes } from "./PluginKitLayoutPanes";
 import { pluginKitTypography, pluginKitTypographyFunctions } from "./PluginKitTypography";
 import { pluginKitEditors } from "./PluginKitEditors";
 import { pluginKitPickersForms } from "./PluginKitPickersForms";
+import { pluginKitDataTables } from "./PluginKitDataTables";
 import { pluginKitTextInputs } from "./PluginKitTextInputs";
 import { pluginKitRichDisplay } from "./PluginKitRichDisplay";
+import { pluginKitNativeAgents } from "./PluginKitNativeAgents";
+import { pluginKitGit } from "./PluginKitGit";
 import { primeRadix } from "@/components/ui/radix-loader";
 
 export { normalizeSelectOptions, pickDomProps };
@@ -1086,6 +1090,7 @@ const DROPDOWN_MENU_PARTS: KitMenuParts = {
   Label: DropdownMenuLabel,
   Separator: DropdownMenuSeparator,
   Shortcut: DropdownMenuShortcut,
+  Meta: DropdownMenuMeta,
 };
 
 function KitDropdownMenu({
@@ -1275,6 +1280,10 @@ export const pluginKit = {
   ...pluginKitPickersForms,
   ...pluginKitTextInputs,
   ...pluginKitRichDisplay,
+  ...pluginKitNativeAgents,
+  ...pluginKitGit,
+  // Last: its DataTable wraps the basic one from pluginKitLists.
+  ...pluginKitDataTables,
 };
 
 export type PluginKit = typeof pluginKit;
