@@ -1763,7 +1763,11 @@ function KitRangeSlider(props: PluginRangeSliderProps) {
           })}
         </div>
         {tickList.length > 0 ? (
-          <div aria-hidden="true" className="absolute inset-x-0 top-5 h-4">
+          // Under the track, wherever the tooltip's room puts it.
+          <div
+            aria-hidden="true"
+            className={cn("absolute inset-x-0 h-4", showTip ? "top-12" : "top-5")}
+          >
             {tickList.map((mark) => (
               <span
                 key={mark.value}
@@ -1938,7 +1942,8 @@ function KitToggleGroup(props: PluginToggleGroupProps) {
         if (focusLeft(event)) onBlur?.();
       }}
       data-slot="toggle-group"
-      className={cn("inline-flex shrink-0 items-center gap-0.5", str(className))}
+      // A pressed button carries an edge, so neighbours need room to stay apart.
+      className={cn("inline-flex shrink-0 items-center gap-1", str(className))}
     >
       {entries.map((entry, index) => {
         const pressed = on.includes(entry.value);
