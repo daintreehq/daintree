@@ -68,7 +68,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
+import { comboToAriaKeyshortcuts, describeKeyCap } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
 import { SHORTCUT_ROW_GAP } from "@/lib/tooltipShortcut";
 import { cn } from "@/lib/utils";
@@ -112,6 +112,10 @@ const UNKNOWN_ACTION_REASON = "Not available in this version of Daintree";
 const PLUGIN_BLOCKED_REASON = "Plugins can't run this action";
 const CONFIRM_REASON = "Asks for confirmation, so run it from Daintree itself";
 const DISABLED_FALLBACK_REASON = "Not available right now";
+const PLUGIN_BLOCKED_META = "Not for plugins";
+const CONFIRM_META = "Needs confirmation";
+const DISABLED_META = "Unavailable";
+const META_MAX = 28;
 
 export interface KitActionState {
   /** The action is registered here. */
@@ -122,6 +126,12 @@ export interface KitActionState {
   /** A dispatch from a plugin would get past every gate it can know of now. */
   runnable: boolean;
   reason: string | undefined;
+  /**
+   * The refusal in a few words, for the trailing slot of a menu row, where the
+   * host keeps its own ("No upstream", "Not installed"); the full `reason`
+   * goes into the row's accessible name.
+   */
+  meta: string | undefined;
 }
 
 /**
@@ -144,16 +154,25 @@ export function readActionState(actionId: string, args: unknown, revision = 0): 
   // A restricted action is invisible to plugins (`host.actions.get` answers
   // null for it), so the kit does not hand its title to a view either.
   if (!entry || entry.danger === "restricted") {
-    return { known: false, title: "", combo, runnable: false, reason: UNKNOWN_ACTION_REASON };
+    return {
+      known: false,
+      title: "",
+      combo,
+      runnable: false,
+      reason: UNKNOWN_ACTION_REASON,
+      meta: "Not available",
+    };
   }
-  const blocked = (reason: string): KitActionState => ({
+  const blocked = (reason: string, meta: string): KitActionState => ({
     known: true,
     title: entry.title,
     combo,
     runnable: false,
     reason,
+    meta,
   });
-  if (actionService.deniesPluginDispatch(id)) return blocked(PLUGIN_BLOCKED_REASON);
+  if (actionService.deniesPluginDispatch(id))
+    return blocked(PLUGIN_BLOCKED_REASON, PLUGIN_BLOCKED_META);
   let danger: ActionDanger = entry.danger;
   try {
     danger = resolveEffectiveActionDanger(actionId, entry.danger, "plugin", args);
@@ -161,9 +180,24 @@ export function readActionState(actionId: string, args: unknown, revision = 0): 
     // The declared danger stands; dispatch re-checks with validated arguments.
   }
   if (danger !== "safe")
-    return blocked(danger === "confirm" ? CONFIRM_REASON : PLUGIN_BLOCKED_REASON);
-  if (!entry.enabled) return blocked(nonEmpty(entry.disabledReason) ?? DISABLED_FALLBACK_REASON);
-  return { known: true, title: entry.title, combo, runnable: true, reason: undefined };
+    return danger === "confirm"
+      ? blocked(CONFIRM_REASON, CONFIRM_META)
+      : blocked(PLUGIN_BLOCKED_REASON, PLUGIN_BLOCKED_META);
+  if (!entry.enabled) {
+    const reason = nonEmpty(entry.disabledReason);
+    // The action's own reason fits the trailing slot when it is short, as the
+    // host's are ("No upstream"); a sentence goes to the name alone.
+    const meta = reason !== undefined && reason.length <= META_MAX ? reason : DISABLED_META;
+    return blocked(reason ?? DISABLED_FALLBACK_REASON, meta);
+  }
+  return {
+    known: true,
+    title: entry.title,
+    combo,
+    runnable: true,
+    reason: undefined,
+    meta: undefined,
+  };
 }
 
 /** Runs an action as `host.dispatch` would, never throwing. */
@@ -418,6 +452,9 @@ export interface KitActionMenuRowModel {
   destructive: boolean;
   icon: unknown;
   shortcut: string | undefined;
+  /** For a refused row: the refusal in a few words, and in full for its name. */
+  meta: string | undefined;
+  reason: string | undefined;
   onSelect: () => void;
 }
 
@@ -436,9 +473,9 @@ export function actionMenuRowVisible(entry: unknown): boolean {
 
 /**
  * The live model of an `action` menu entry. A menu's rows mount when it
- * opens, so each opening reads the action afresh. A row the action refuses
- * carries the reason as its second line, since a disabled row takes no
- * tooltip.
+ * opens, so each opening reads the action afresh. A row the action refuses is
+ * drawn as the host draws its own unavailable rows: disabled, with the reason
+ * in a few words in the trailing slot and in full in its accessible name.
  */
 export function useActionMenuRow(entry: PluginActionMenuItem): KitActionMenuRowModel | null {
   const owner = usePluginKitOwner();
@@ -453,8 +490,10 @@ export function useActionMenuRow(entry: PluginActionMenuItem): KitActionMenuRowM
   const onDispatched = fn(entry.onDispatched);
   return {
     label,
-    description: state.runnable ? nonEmpty(field(entry, "description")) : state.reason,
+    description: nonEmpty(field(entry, "description")),
     disabled: !state.runnable,
+    meta: state.runnable ? undefined : state.meta,
+    reason: state.runnable ? undefined : state.reason,
     destructive: field(entry, "destructive") === true,
     icon: field(entry, "icon"),
     shortcut: combo,
@@ -1556,9 +1595,10 @@ function KitTerminalSnapshot({
   const isSelected = selected === true;
   const frame = cn(
     "flex min-w-0 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default text-left",
-    // The host's selection mark: the one ink held to 3:1 against the surface,
-    // never accent, since several previews sit side by side.
-    isSelected && "outline outline-2 -outline-offset-1 outline-selection-outline",
+    // The host's mark for the current thumbnail in a set (the help panel's
+    // figure rail): a neutral ring outside the frame, never accent, since
+    // several previews sit side by side and focus takes accent.
+    isSelected && "outline-2 outline-offset-1 outline-text-secondary",
     str(className)
   );
   const current = isSelected ? { "aria-current": true as const } : {};
@@ -1669,30 +1709,6 @@ function readHints(value: unknown, revision: number): KeyHintModel[] {
   return out;
 }
 
-// Spoken names for the glyph caps a literal `keys` hint draws, as KbdChord
-// speaks its own: "↑↓" is read as "Up Down", never as the symbol names.
-const KEY_GLYPH_NAMES: Record<string, string> = {
-  "↑": "Up",
-  "↓": "Down",
-  "←": "Left",
-  "→": "Right",
-  "⏎": "Enter",
-  "↵": "Enter",
-  "⎋": "Escape",
-  "⇥": "Tab",
-  "⌫": "Delete",
-  "⌘": "Command",
-  "⇧": "Shift",
-  "⌥": "Option",
-  "⌃": "Control",
-};
-
-function spokenKey(key: string): string {
-  return [...key]
-    .map((glyph) => (Object.hasOwn(KEY_GLYPH_NAMES, glyph) ? KEY_GLYPH_NAMES[glyph] : glyph))
-    .join(" ");
-}
-
 /** One hint as the host's palette footer draws it: full-size caps, then the label. */
 function KeyHintChip({
   hint,
@@ -1713,7 +1729,9 @@ function KeyHintChip({
         <KbdChord shortcut={hint.shortcut} className="shrink-0" />
       ) : (
         <>
-          <span className="sr-only">{hint.keys!.map(spokenKey).join(" ")}</span>
+          <span className="sr-only">
+            {hint.keys!.map((key) => describeKeyCap(key, isMac())).join(" ")}
+          </span>
           {hint.keys!.map((key, index) => (
             // Sans, as KbdChord sets its glyph keys: the mono face has no arrows.
             <kbd

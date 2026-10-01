@@ -342,7 +342,7 @@ describe("action menu entries", () => {
     expect(dispatch).toHaveBeenCalledWith("worktree.refresh", undefined, { source: "plugin" });
   });
 
-  it("disables a row the action refuses, with the reason as its second line", async () => {
+  it("draws a refused row as the host draws its unavailable rows", async () => {
     addAction({
       id: "panel.close",
       title: "Close panel",
@@ -359,35 +359,17 @@ describe("action menu entries", () => {
     );
     fireEvent.contextMenu(screen.getByTestId("row"), { clientX: 4, clientY: 4 });
     const item = await screen.findByRole("menuitem", { name: /Close panel/ });
-    expect(item.getAttribute("aria-disabled")).toBe("true");
-    expect(item.textContent).toContain("Nothing to close");
     expect(screen.getAllByRole("menuitem")).toHaveLength(1);
-    // The row's name fades with the refusal; the reason itself stays readable.
-    // Faded when the element or an ancestor inside the row carries the 50% class itself.
-    const faded = (el: Element | null | undefined) => {
-      for (let at = el ?? null; at && at !== item; at = at.parentElement) {
-        if (at.classList.contains("opacity-50")) return true;
-      }
-      return false;
-    };
-    const reason = [...item.querySelectorAll("span")].find(
-      (span) => span.textContent === "Nothing to close"
-    );
-    const name = [...item.querySelectorAll("span")].find(
-      (span) => span.textContent === "Close panel"
-    );
-    expect(faded(name)).toBe(true);
-    expect(faded(reason)).toBe(false);
-    // Reachable by the arrow keys (not the primitive's skipped disabled state),
-    // described by its reason, and choosing it runs nothing.
-    expect(item.hasAttribute("data-disabled")).toBe(false);
-    expect(document.getElementById(item.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
-      "Nothing to close"
-    );
+    // The primitive's disabled item, as every unavailable row in the app is.
+    expect(item.hasAttribute("data-disabled")).toBe(true);
+    // The full reason is in the row's name; the trailing slot says it briefly.
+    expect(item.getAttribute("aria-label")).toBe("Close panel, nothing to close");
+    // A short reason of the action's own is what the trailing slot shows.
+    const meta = item.querySelector("[aria-hidden='true']:last-child");
+    expect(meta?.textContent).toBe("Nothing to close");
     fireEvent.click(item);
     await flush();
     expect(dispatch).not.toHaveBeenCalled();
-    expect(screen.getByRole("menu")).toBeTruthy();
   });
 
   it("leaves out a submenu whose action rows would all be hidden", async () => {
@@ -1020,7 +1002,7 @@ describe("ShortcutHint and KeyHints", () => {
     );
     const chip = screen.getByTestId("k").querySelector("[data-key-hint]")!;
     const spoken = [...chip.querySelectorAll(".sr-only")].map((el) => el.textContent).join(" ");
-    expect(spoken).toBe("Up Down");
+    expect(spoken).toBe("Up Arrow Down Arrow");
     for (const cap of chip.querySelectorAll("kbd")) {
       expect(cap.getAttribute("aria-hidden")).toBe("true");
     }
