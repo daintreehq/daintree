@@ -887,7 +887,9 @@ function SettingField({
                     variant="ghost"
                     size="icon-sm"
                     disabled={disabled || saving}
-                    aria-label={revealed ? `Hide ${label}` : `Reveal ${label}`}
+                    // A toggle: one name, its state carried by `pressed`.
+                    aria-label={`Show ${label}`}
+                    pressed={revealed}
                     // Toggle reveal without firing the input's blur-commit.
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
