@@ -319,6 +319,25 @@ describe("HoverCard", () => {
     }
   });
 
+  it("lets a click on the trigger close a card that keyboard focus opened", async () => {
+    mount(
+      createElement(kit.HoverCard, {
+        content: createElement("p", null, "Linus Pauling"),
+        children: createElement("button", { type: "button" }, "@linus"),
+      })
+    );
+    const trigger = screen.getByRole("button", { name: "@linus" });
+    await act(async () => {
+      fireEvent.focus(trigger);
+    });
+    await screen.findByRole("tooltip", { hidden: true }, { timeout: 3000 });
+    await act(async () => {
+      fireEvent.pointerDown(trigger);
+      fireEvent.focus(trigger);
+    });
+    expect(screen.queryAllByText("Linus Pauling")).toHaveLength(0);
+  });
+
   it("stays open when controlled, on the host's hover-card width", () => {
     mount(
       createElement(kit.HoverCard, {
@@ -940,6 +959,23 @@ describe("TableOfContents", () => {
     expect(screen.getByRole("button", { name: "Tests" }).getAttribute("aria-current")).toBe(
       "location"
     );
+  });
+
+  it("lets the reader's own scroll end a click's hold on the marker", async () => {
+    renderToc();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Tests" }));
+    expect(screen.getByRole("button", { name: "Tests" }).getAttribute("aria-current")).toBe(
+      "location"
+    );
+    // jsdom lays every heading at the top, so a fresh measurement marks the last one.
+    await act(async () => {
+      fireEvent.wheel(screen.getByTestId("scroller"));
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    });
+    expect(
+      screen.getByRole("button", { name: "Coverage summary" }).getAttribute("aria-current")
+    ).toBe("location");
   });
 
   it("folds a section from the keyboard and keeps one tab stop", () => {

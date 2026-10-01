@@ -489,6 +489,9 @@ function KitHoverCard({
   const focused = useRef(false);
   const hovering = useRef(false);
   const escaping = useRef(false);
+  // Set by a press on the trigger: the focus that follows is the pointer's,
+  // not the keyboard's, and must not pin the card.
+  const pressing = useRef(false);
   useEffect(
     () => () => {
       if (closeTimer.current !== null) clearTimeout(closeTimer.current);
@@ -528,7 +531,8 @@ function KitHoverCard({
       commit(true);
       return;
     }
-    if (escaping.current) {
+    if (escaping.current || pressing.current) {
+      // Escape, or activating the trigger (Radix closes on the press): at once.
       escaping.current = false;
       closeNow();
       return;
@@ -550,8 +554,18 @@ function KitHoverCard({
     if (shown) closeSoon();
   };
   const focus = () => {
+    // Only keyboard focus holds the card; a click's focus is the pointer's.
+    if (pressing.current) return;
     focused.current = true;
     cancelClose();
+  };
+  const press = () => {
+    pressing.current = true;
+    focused.current = false;
+    // Cleared after the press's own focus and close requests have been seen.
+    setTimeout(() => {
+      pressing.current = false;
+    }, 0);
   };
   const blur = () => {
     focused.current = false;
@@ -573,6 +587,7 @@ function KitHoverCard({
         asChild
         onPointerEnter={enter}
         onPointerLeave={leaveTrigger}
+        onPointerDown={press}
         onFocus={focus}
         onBlur={blur}
       >
@@ -1492,9 +1507,21 @@ function KitTableOfContents({
       const found = resolveHeadingElements(root, allRef.current);
       elements = entries.map((entry) => found[entry.order] ?? null);
     };
+    let holdTimer: ReturnType<typeof setTimeout> | null = null;
     const measure = () => {
       frame = 0;
-      if (Date.now() < holdUntil.current) return;
+      const held = holdUntil.current - Date.now();
+      if (held > 0) {
+        // A click's own smooth scroll holds the marker on the clicked entry;
+        // look again once that hold is over, wherever the scroll stopped.
+        if (holdTimer === null) {
+          holdTimer = setTimeout(() => {
+            holdTimer = null;
+            schedule();
+          }, held + 16);
+        }
+        return;
+      }
       const edge = (scroller ? scroller.getBoundingClientRect().top : 0) + spyOffset;
       let current = 0;
       for (let index = 0; index < elements.length; index++) {
@@ -1520,7 +1547,16 @@ function KitTableOfContents({
     resolve();
     measure();
     const source: EventTarget = scroller ?? window;
+    // The reader taking over a click's scroll ends its hold at once.
+    const intervene = () => {
+      if (holdUntil.current === 0) return;
+      holdUntil.current = 0;
+      schedule();
+    };
     source.addEventListener("scroll", schedule, { passive: true });
+    for (const kind of ["wheel", "touchstart", "pointerdown", "keydown"]) {
+      source.addEventListener(kind, intervene, { passive: true });
+    }
     window.addEventListener("resize", schedule);
     // Markdown renders after its own chunk loads, and documents change: find
     // the headings again whenever the content does.
@@ -1534,7 +1570,11 @@ function KitTableOfContents({
     mutations?.observe(root, { childList: true, subtree: true, characterData: true });
     return () => {
       if (frame !== 0) cancelAnimationFrame(frame);
+      if (holdTimer !== null) clearTimeout(holdTimer);
       source.removeEventListener("scroll", schedule);
+      for (const kind of ["wheel", "touchstart", "pointerdown", "keydown"]) {
+        source.removeEventListener(kind, intervene);
+      }
       window.removeEventListener("resize", schedule);
       mutations?.disconnect();
     };
