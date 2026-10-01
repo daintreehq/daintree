@@ -577,7 +577,7 @@ function CellEditor({
           }
         }}
         onBlur={(event) => settle(() => onCommit(event.currentTarget.value, null))}
-        className="h-6 w-full min-w-0 px-1.5"
+        className="h-6 w-full min-w-0 px-1.5 focus-visible:outline-offset-0"
       />
     );
   // One structure whether or not there is an error, so the field is never
@@ -935,6 +935,9 @@ function RichDataTable(props: PluginDataTableProps) {
   // Edits.
   const [edit, setEdit] = useState<CellEdit | null>(null);
   const [pending, setPending] = useState<Record<string, { draft: string; generation: number }>>({});
+  // Saves that failed while the reader was editing elsewhere: the cell keeps
+  // the draft and the error until it is edited again.
+  const [failures, setFailures] = useState<Record<string, { draft: string; error: string }>>({});
   const saveGeneration = useRef(0);
   const latestSave = useRef(new Map<string, number>());
   const [message, setMessage] = useState("");
@@ -947,11 +950,12 @@ function RichDataTable(props: PluginDataTableProps) {
     return item?.kind === "row" ? { item, index } : null;
   };
   const beginEdit = (row: DrawnRow, column: RichColumn, draft?: string, error?: string) => {
+    const failure = failures[cellId(row.key, column.id)];
     setEdit({
       key: row.key,
       columnId: column.id,
-      draft: draft ?? startValue(column, row.row),
-      error,
+      draft: draft ?? failure?.draft ?? startValue(column, row.row),
+      error: error ?? failure?.error,
     });
   };
   const nextEditable = (from: DrawnRow, columnId: string, move: "next" | "previous") => {
@@ -982,6 +986,8 @@ function RichDataTable(props: PluginDataTableProps) {
       return true;
     }
     const { item } = located;
+    const id = cellId(item.key, column.id);
+    if (failures[id]) setFailures((map) => omitKey(map, id));
     const refusal = column.validate?.(draft, item.row);
     if (refusal) {
       setEdit({ ...edit, draft, error: refusal });
@@ -1016,7 +1022,6 @@ function RichDataTable(props: PluginDataTableProps) {
     }
     leave();
     if (!isThenable(result)) return true;
-    const id = cellId(item.key, column.id);
     // Each save of a cell is its own generation: only the newest one settles
     // the cell, so an older save landing late cannot clear a newer one's
     // spinner or bring back a draft the newer save replaced.
@@ -1030,8 +1035,10 @@ function RichDataTable(props: PluginDataTableProps) {
       const text = errorMessage(error);
       setMessage(text);
       if (latestSave.current.get(id) !== generation) return;
-      // Reopen only into an idle table: an edit the reader has moved on to
-      // keeps its draft, and the failure is announced instead.
+      // Reopen only into an idle table. An edit the reader has moved on to
+      // keeps its draft, and the failed cell keeps its own, marked, until
+      // it is edited again.
+      setFailures((map) => ({ ...map, [id]: { draft, error: text } }));
       setEdit((current) => current ?? { ...failed, error: text });
     };
     Promise.resolve(result).then(
@@ -1459,29 +1466,40 @@ function RichDataTable(props: PluginDataTableProps) {
   const renderGroup = (item: DrawnGroup) => {
     const keys = groupKeys(item);
     const state = groupState(item);
+    const label = labelFor(item.groupKey, item.rows);
     return (
       <td colSpan={fullSpan} className="h-7 border-b border-divider bg-surface p-0">
-        <div className="sticky left-0 flex h-7 w-max max-w-full items-center gap-1.5 px-3">
-          <TreeChevron
-            expanded={!item.collapsed}
-            onToggle={() => toggleGroup(item.groupKey, item.collapsed)}
-          />
-          {canSelect && keys.length > 0 ? (
-            <span
-              onClick={(event) => {
-                event.stopPropagation();
-                toggleGroupSelection(item);
-              }}
-              className="flex h-4 w-4 items-center justify-center"
-            >
-              <CheckboxGlyph size="sm" checked={state} />
+        {/* The group's box sits in the checkbox column, over its rows' boxes,
+            and its chevron where the rows' own chevrons start. */}
+        <div className="sticky left-0 flex h-7 w-max max-w-full items-center">
+          {canSelect ? (
+            <span className="flex w-8 shrink-0 items-center justify-center">
+              {keys.length > 0 ? (
+                <span
+                  role="checkbox"
+                  aria-checked={state === "indeterminate" ? "mixed" : state}
+                  aria-label={`Select ${typeof label === "string" ? label : item.groupKey || "None"}`}
+                  tabIndex={-1}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggleGroupSelection(item);
+                  }}
+                  className="flex h-6 w-6 items-center justify-center"
+                >
+                  <CheckboxGlyph size="sm" checked={state} />
+                </span>
+              ) : null}
             </span>
           ) : null}
-          <span className={cn(LIST_LABEL_CLASS, "min-w-0 truncate")}>
-            {labelFor(item.groupKey, item.rows)}
-          </span>
-          <span className="text-3xs font-medium tabular-nums text-text-secondary">
-            {item.rows.length}
+          <span className="flex min-w-0 items-center gap-1.5 px-3">
+            <TreeChevron
+              expanded={!item.collapsed}
+              onToggle={() => toggleGroup(item.groupKey, item.collapsed)}
+            />
+            <span className={cn(LIST_LABEL_CLASS, "min-w-0 truncate")}>{label}</span>
+            <span className="text-3xs font-medium tabular-nums text-text-secondary">
+              {item.rows.length}
+            </span>
           </span>
         </div>
       </td>
@@ -1520,6 +1538,7 @@ function RichDataTable(props: PluginDataTableProps) {
   const renderCell = (item: DrawnRow, column: RichColumn, columnIndex: number) => {
     const editing = edit !== null && edit.key === item.key && edit.columnId === column.id;
     const pendingDraft = pending[cellId(item.key, column.id)]?.draft;
+    const failure = failures[cellId(item.key, column.id)];
     const canEditCell = column.editable !== null && column.editable(item.row);
     let content: ReactNode;
     if (editing) {
@@ -1532,6 +1551,23 @@ function RichDataTable(props: PluginDataTableProps) {
           onCommit={commitEdit}
           onCancel={cancelEdit}
         />
+      );
+    } else if (failure !== undefined) {
+      content = (
+        <span className="flex min-w-0 items-center gap-1.5">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="flex shrink-0" aria-hidden="true">
+                {severityGlyph("error", "h-3 w-3")}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" align="start">
+              {failure.error}
+            </TooltipContent>
+          </Tooltip>
+          <span className="min-w-0 truncate text-text-secondary">{failure.draft}</span>
+          <span className="sr-only">{`Not saved: ${failure.error}`}</span>
+        </span>
       );
     } else if (pendingDraft !== undefined) {
       const option = column.editOptions.find((entry) => entry.value === pendingDraft);
@@ -1623,7 +1659,18 @@ function RichDataTable(props: PluginDataTableProps) {
         : []),
       ...visible.map((column, columnIndex) => renderCell(item, column, columnIndex)),
       ...(layout.filler ? [<td key={"\u0000filler"} aria-hidden="true" className="p-0" />] : []),
-      ...(trailing ? [<td key={"\u0000menu"} aria-hidden="true" className="p-0" />] : []),
+      // Under the Columns button the body keeps the same opaque edge, so a
+      // column scrolling beneath it is cut on the same line in every row.
+      ...(trailing
+        ? [
+            <td
+              key={"\u0000menu"}
+              aria-hidden="true"
+              style={{ right: 0 }}
+              className="kit-dt-sticky p-0"
+            />,
+          ]
+        : []),
     ];
   };
 

@@ -72,6 +72,7 @@ function Highlight({ text, query }: { text: string; query: string }) {
 interface InspectorContext {
   cursorPath: string | null;
   filter: string;
+  fullStrings: ReadonlySet<string>;
   rowId: (path: string) => string;
   menuPath: string | null;
   onRowClick: (row: InspectorRow) => void;
@@ -98,12 +99,13 @@ function InspectorRowView({ row, context }: { row: InspectorRow; context: Inspec
       onClick={() => context.onRowClick(row)}
       style={{ paddingLeft: treeRowPadding(row.depth) }}
       className={cn(
-        "group/row palette-row relative flex min-h-6 w-full cursor-default select-text items-start gap-1 rounded-[var(--radius-md)] border border-transparent pr-14 font-mono text-xs leading-6",
+        "group/row palette-row relative flex min-h-6 w-full cursor-default select-text items-start gap-1 rounded-[var(--radius-md)] border border-transparent pr-14 font-mono text-xs leading-[22px]",
         "aria-selected:bg-overlay-highlight not-aria-selected:hover:bg-overlay-subtle",
         "data-[state=open]:outline data-[state=open]:outline-1 data-[state=open]:-outline-offset-1 data-[state=open]:outline-border-strong"
       )}
     >
-      <span className="flex h-6 shrink-0 items-center">
+      {/* 22px inside the row's 1px transparent border: FileTree's 24px rows. */}
+      <span className="flex h-[22px] shrink-0 items-center">
         {row.isDirectory ? (
           <TreeChevron expanded={row.isExpanded} onToggle={() => context.onToggle(row)} />
         ) : (
@@ -111,7 +113,9 @@ function InspectorRowView({ row, context }: { row: InspectorRow; context: Inspec
         )}
       </span>
       {keyText !== null ? (
-        <span className="shrink-0 whitespace-pre text-text-secondary">
+        // A long key is cut before it can crowd its value off the row; the
+        // row's name carries it whole.
+        <span className="max-w-[45%] shrink-0 truncate whitespace-pre text-text-secondary">
           {row.keyKind === "range" ? keyText : <Highlight text={keyText} query={context.filter} />}
           {row.keyKind === "range" ? null : <span className="text-syntax-punctuation">:</span>}
         </span>
@@ -120,7 +124,11 @@ function InspectorRowView({ row, context }: { row: InspectorRow; context: Inspec
         <span
           className={cn(
             "min-w-0",
-            row.truncated || row.kind !== "string" ? "truncate" : "whitespace-pre-wrap break-all",
+            // One line per value, as every other row; only a string the
+            // reader asked to see whole wraps.
+            row.kind === "string" && context.fullStrings.has(row.path)
+              ? "whitespace-pre-wrap break-all"
+              : "truncate",
             VALUE_CLASS[row.kind]
           )}
         >
@@ -256,6 +264,17 @@ function KitObjectInspector(props: PluginObjectInspectorProps) {
     if (!row.truncated) return;
     setFullStrings((current) => new Set(current).add(row.path));
   };
+  // Enter on a string row shows it whole (wrapped, uncut) or back on one line,
+  // whether it was cut for length or just for the pane's width.
+  const toggleFull = (row: InspectorRow) => {
+    if (row.kind !== "string") return;
+    setFullStrings((current) => {
+      const next = new Set(current);
+      if (next.has(row.path)) next.delete(row.path);
+      else next.add(row.path);
+      return next;
+    });
+  };
   const copy = (row: InspectorRow, what: "value" | "path") => {
     const text = what === "value" ? copyTextOf(row.value, row.kind) : row.copyPath;
     if (what === "path" && text === "") return;
@@ -327,7 +346,7 @@ function KitObjectInspector(props: PluginObjectInspectorProps) {
     }
     if ((event.key === "Enter" || event.key === " ") && current) {
       event.preventDefault();
-      if (current.truncated) showMore(current);
+      if (current.kind === "string") toggleFull(current);
       else if (current.isDirectory) toggle(current, !current.isExpanded);
       return;
     }
@@ -345,6 +364,7 @@ function KitObjectInspector(props: PluginObjectInspectorProps) {
   const context: InspectorContext = {
     cursorPath,
     filter: query,
+    fullStrings,
     rowId,
     menuPath: menu.open ? menu.path : null,
     onRowClick: (row) => setCursor(row.path),
@@ -404,8 +424,11 @@ function KitObjectInspector(props: PluginObjectInspectorProps) {
             data-row-menu=""
             onKeyDown={onKeyDown}
             onFocus={(event) => {
-              if (event.target === event.currentTarget && cursorPath === null && rows[0]) {
-                setCursor(rows[0].path);
+              if (event.target !== event.currentTarget) return;
+              if (cursorPath === null) {
+                if (rows[0]) setCursor(rows[0].path);
+              } else if (!mounted && cursorIndex >= 0) {
+                virtuoso.current?.scrollIntoView({ index: cursorIndex });
               }
             }}
             onPointerDown={(event) => {
@@ -414,6 +437,9 @@ function KitObjectInspector(props: PluginObjectInspectorProps) {
             }}
             className={cn(
               "min-h-0 w-full flex-1 overflow-hidden py-1 focus-visible:-outline-offset-2",
+              // The cursor row carries the focus outline; the container's
+              // ring stands down so there is one, not two.
+              cursorPath !== null && "outline-hidden",
               "focus-visible:[&_[aria-selected=true]]:outline focus-visible:[&_[aria-selected=true]]:outline-2 focus-visible:[&_[aria-selected=true]]:-outline-offset-2 focus-visible:[&_[aria-selected=true]]:outline-accent-primary"
             )}
           >
