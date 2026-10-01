@@ -299,9 +299,9 @@ describe("Toolbar responsive design — issue #4133", () => {
       expect(armedIndex).toBeGreaterThan(hoverIndex);
     });
 
-    it("press transform is owned by base Button cva, not the toolbar transition list", () => {
-      // The .toolbar-icon-button transition list must NOT include `transform` —
-      // adding it would slow the cva's 1ms press-snap to 150ms.
+    it("keeps geometry out of the toolbar transition list and the press", () => {
+      // The toolbar press is a fill step only (toolbarPress.contract.test.ts);
+      // a transform in the transition list would animate one back in.
       const baseBlock = css.match(
         /\.toolbar-icon-button,\s*\n\s*\.toolbar-agent-button\s*\{[\s\S]*?\}/
       )?.[0];
@@ -310,7 +310,7 @@ describe("Toolbar responsive design — issue #4133", () => {
       const transitionMatch = baseBlock!.match(/transition:[\s\S]*?;/)![0];
       expect(transitionMatch).not.toContain("transform");
 
-      // The :active rule contributes background only; transform belongs to the cva.
+      // The :active rule paints the pressed fill and never a transform.
       const activeBlock = css.match(
         /\.toolbar-icon-button:active,\s*\n\s*\.toolbar-agent-button:active\s*\{[\s\S]*?\}/
       )?.[0];
