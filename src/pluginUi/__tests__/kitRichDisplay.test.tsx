@@ -195,7 +195,11 @@ describe("TerminalOutput", () => {
         onWrapChange,
       })
     );
-    const gutters = Array.from(container.querySelectorAll("[data-ansi-line] > span[aria-hidden]"));
+    const gutters = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-ansi-line] > span[aria-hidden]")
+    );
+    // Quiet ink is the terminal's own foreground mixed toward its background.
+    expect(gutters[0]!.style.color).toContain("--theme-terminal-foreground");
     expect(gutters.map((gutter) => gutter.textContent)).toEqual(["3", "4"]);
     const wrap = screen.getByRole("button", { name: "Wrap lines" });
     expect(wrap.getAttribute("aria-pressed")).toBe("true");
@@ -400,6 +404,42 @@ describe("ImageViewer", () => {
     expect(dialog.textContent).toContain("1 of 2");
     fireEvent.click(screen.getByRole("button", { name: /close/i }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("starts each picture's caption at its first line", () => {
+    const view = (index: number) =>
+      createElement(kit.ImageViewer, {
+        images: [
+          { src: "data:image/png;base64,AA", alt: "One", caption: "First caption" },
+          { src: "data:image/png;base64,BB", alt: "Two", caption: "Second caption" },
+        ],
+        index,
+      });
+    const { rerender } = mount(view(0));
+    const caption = () => document.querySelector<HTMLElement>("[data-image-viewer-caption]")!;
+    // jsdom does not scroll; give the caption a scroll position to keep.
+    let scrolled = 0;
+    Object.defineProperty(caption(), "scrollTop", {
+      configurable: true,
+      get: () => scrolled,
+      set: (value: number) => {
+        scrolled = value;
+      },
+    });
+    caption().scrollTop = 40;
+    rerender(
+      createElement(
+        TooltipProvider,
+        null,
+        createElement(
+          VirtuosoMockContext.Provider,
+          { value: { viewportHeight: 360, itemHeight: 18 } },
+          view(1)
+        )
+      )
+    );
+    expect(caption().textContent).toBe("Second caption");
+    expect(caption().scrollTop).toBe(0);
   });
 
   it("leaves a caption's own scroll keys to the caption", () => {
@@ -726,6 +766,10 @@ describe("charts", () => {
     expect(screen.getByRole("meter", { name: "Over" }).getAttribute("aria-valuetext")).toBe("140%");
     expect(gaugeTone(90, { warning: 80 })).toBe("warning");
     expect(gaugeTone(10, null)).toBe("neutral");
+    cleanup();
+    // Below the smallest size its figure, label and ends fit in, it holds that size.
+    mount(createElement(kit.Gauge, { value: 5, size: 48, label: "Lines", "aria-label": "Tiny" }));
+    expect(screen.getByRole("meter", { name: "Tiny" }).style.width).toBe("96px");
   });
 
   it("keeps numeric extremes from hanging or breaking the charts", () => {
@@ -928,7 +972,17 @@ describe("TableOfContents", () => {
     build.focus();
     fireEvent.keyDown(build, { key: "ArrowLeft" });
     expect(screen.queryByRole("button", { name: "Cache" })).toBeNull();
-    rerender(createElement(TooltipProvider, null, view(false)));
+    rerender(
+      createElement(
+        TooltipProvider,
+        null,
+        createElement(
+          VirtuosoMockContext.Provider,
+          { value: { viewportHeight: 360, itemHeight: 18 } },
+          view(false)
+        )
+      )
+    );
     expect(screen.getByRole("button", { name: "Cache" })).toBeTruthy();
   });
 

@@ -155,6 +155,11 @@ function AnsiRuns({ line }: { line: AnsiLine }) {
 
 // The terminal's own face at its default 12px, on an 18px line.
 const TERMINAL_TEXT_STYLE: CSSProperties = { fontFamily: DEFAULT_TERMINAL_FONT_FAMILY };
+// Quieter text on the terminal surface (line numbers, "No output"): the
+// terminal's own ink mixed toward its background, opaque, so its contrast is
+// the theme's foreground-on-background ratio scaled down, never a guess at how
+// a secondary token from another surface lands on this one.
+const TERMINAL_QUIET_INK = `color-mix(in oklab, ${TERMINAL_FOREGROUND} 62%, ${TERMINAL_BACKGROUND})`;
 const TERMINAL_SURFACE_STYLE: CSSProperties = {
   ...TERMINAL_TEXT_STYLE,
   backgroundColor: TERMINAL_BACKGROUND,
@@ -358,7 +363,8 @@ function KitTerminalOutput({
         // With no toolbar, the note still says the view is not the whole output.
         <div
           data-terminal-dropped=""
-          className="shrink-0 border-b border-divider px-3 py-1 text-xs tabular-nums text-text-secondary"
+          // On the toolbar's panel surface, where secondary ink has its contrast.
+          className="shrink-0 border-b border-divider bg-surface-panel px-3 py-1 text-xs tabular-nums text-text-secondary"
         >
           {droppedNote}
         </div>
@@ -370,7 +376,8 @@ function KitTerminalOutput({
           aria-live="off"
           aria-label={label}
           tabIndex={0}
-          className="flex min-h-0 flex-1 items-center justify-center text-xs text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+          style={{ color: TERMINAL_QUIET_INK }}
+          className="flex min-h-0 flex-1 items-center justify-center text-xs focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         >
           {hasContent(empty) ? node(empty) : "No output"}
         </div>
@@ -409,7 +416,7 @@ function KitTerminalOutput({
                   className="sticky left-0 shrink-0 select-none pl-3 pr-3 text-right tabular-nums"
                   style={{
                     width: `calc(${gutterCh}ch + 1.5rem)`,
-                    color: "var(--theme-terminal-muted, var(--theme-text-secondary))",
+                    color: TERMINAL_QUIET_INK,
                     backgroundColor: TERMINAL_BACKGROUND,
                   }}
                 >
@@ -1184,20 +1191,23 @@ function KitImageViewer({
  * becomes a focusable region only while it has more to show.
  */
 function ViewerCaption({ children }: { children: ReactNode }) {
-  const [element, setElement] = useState<HTMLDivElement | null>(null);
+  const elementRef = useRef<HTMLDivElement>(null);
   const [overflows, setOverflows] = useState(false);
   useLayoutEffect(() => {
+    const element = elementRef.current;
     if (element === null) return;
     const measure = () => setOverflows(element.scrollHeight > element.clientHeight + 1);
+    // A new caption starts at its first line, as the host's figure lightbox does.
+    element.scrollTop = 0;
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [element, children]);
+  }, [children]);
   return (
     <div
-      ref={setElement}
+      ref={elementRef}
       tabIndex={overflows ? 0 : undefined}
       role={overflows ? "region" : undefined}
       aria-label={overflows ? "Caption" : undefined}

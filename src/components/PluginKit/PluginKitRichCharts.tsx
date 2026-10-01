@@ -1669,7 +1669,8 @@ const TONE_COLOR: Record<Exclude<GaugeTone, "neutral">, string> = {
 // A 240° sweep: the open quarter at the bottom holds the range's ends.
 const SWEEP = (Math.PI * 4) / 3;
 const DEFAULT_GAUGE_PX = 160;
-const MIN_GAUGE_PX = 48;
+// The smallest gauge whose figure, label and range ends do not collide.
+const MIN_GAUGE_PX = 96;
 
 /** The gauge's scale: the given ends when they make a drawable range, else 0–100. Exported for tests. */
 export function gaugeRange(low: number, high: number): [number, number] {
