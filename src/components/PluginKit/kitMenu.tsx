@@ -1,10 +1,4 @@
-import {
-  useId,
-  type ComponentType,
-  type KeyboardEvent,
-  type ReactNode,
-  type SyntheticEvent,
-} from "react";
+import { type ComponentType, type KeyboardEvent, type ReactNode, type SyntheticEvent } from "react";
 import type { PluginActionMenuItem, PluginDropdownMenuEntry } from "@shared/types/plugin-sdk-react";
 import {
   ContextMenuCheckboxItem,
