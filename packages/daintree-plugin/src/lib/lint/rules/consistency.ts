@@ -233,6 +233,8 @@ const rawButton = elementRule(
 const KIT_INPUT_TYPES = new Set(["text", "search", "email", "url", "password", "number", "tel"]);
 
 const KIT_FOR_INPUT: Record<string, string> = {
+  // A token or key: masked, with reveal and a saved state, copy blocked.
+  password: "SecretInput",
   checkbox: "Checkbox",
   radio: "RadioGroup",
   range: "Slider",
@@ -410,6 +412,19 @@ const viewportBreakpoint = classRule(
       : null
 );
 
+const SLIDE_OFF = /^-?translate-[xy]-full$/;
+
+const handRolledDrawer = classRule(
+  {
+    id: "hand-rolled-drawer",
+    severity: "warn",
+    message: "hand-built slide-in panel",
+    hint: "prefer `Drawer` (with `DrawerToggle`) from @daintreehq/plugin-ui: it slides in within the pane, over or beside the content, holds focus when modal and closes on Escape",
+  },
+  (token, { base }) =>
+    SLIDE_OFF.test(base) ? `"${token}" slides a panel off the pane's edge by hand` : null
+);
+
 const NATIVE_DIALOG =
   /(?:\b(?:window|globalThis|self)\s*\.\s*|(?<![\w$.]))(confirm|alert|prompt)\s*\(/g;
 
@@ -568,4 +583,5 @@ export const CONSISTENCY_RULES: LintRule[] = [
   globalKeyListener,
   rawPortal,
   viewportBreakpoint,
+  handRolledDrawer,
 ];

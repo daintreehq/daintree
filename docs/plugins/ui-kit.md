@@ -164,6 +164,60 @@ createElement(ContextMenu, {
 
 A view is part of Daintree's own window, so `FileDropzone` (or your own `<input type="file">`) hands you standard `File` objects: `name`, `size`, `type`, `lastModified`, and the contents through `file.text()`, `file.arrayBuffer()` or `file.stream()`. A view never gets the file's path on disk, and the host has no file-open dialog that returns paths. To act on the contents in your worker, read them in the view and send them over a channel (an `invoke`'s arguments may be up to 4 MiB); to work with files the user already has in the project, use [`host.fs`](./host-api.md#fs--host-mediated-scope-contained-filesystem) in the worker and a `FileTree` or `Combobox` in the view to pick among them. A drag from Daintree's own file browser carries paths rather than files, so a `FileDropzone` does not take it.
 
+### Text inputs
+
+Richer fields for views that talk to agents, APIs and forges: prompts with mentions and commands, names renamed in place, headers and environment variables, tokens and keyboard shortcuts.
+
+| Export | Props | Notes |
+| --- | --- | --- |
+| `MentionTextarea` | `value?`, `defaultValue?`, `onValueChange?`, `triggers?: (string \| { char, title?, emptyMessage?, atStart? })[]`, `getSuggestions?(trigger, query) => MentionSuggestion[] \| Promise<…>`, `onSuggestionInsert?(suggestion, trigger)`, `onKeyDown?`, `onFocus?`, `onBlur?`, `placeholder?`, `name?`, `disabled?`, `readOnly?`, `autoFocus?`, `spellCheck?`, `maxLength?`, `invalid?`, `minRows?` (1), `maxRows?` (8), `variant?: "default" \| "code"`, `density?`, `ref?` (the textarea), `className?`; `id`, `data-*` and `aria-*` | A `Textarea` that grows with its text up to `maxRows`, then scrolls, and opens the host composer's own autocomplete menu when a trigger is typed at the start of the text or after a space (`atStart` holds a slash command to the very start). Suggestions are `{ id, label, insertText?, description?, badge?, disabled? }`, at most 50 shown. While an async reply is out the last rows stay up, dimmed, and a reply that lands after a newer query is dropped. Focus never leaves the text: Up and Down move the highlighted row (skipping disabled ones), Enter or Tab inserts it, Escape closes the menu (and keeps that trigger closed until you leave it) without reaching the pane. The inserted text is `insertText`, or the trigger and label (`@alice`), followed by one space, with the caret after it. Each row shows the token it inserts, as the host's own menu does, unless `insertText` says otherwise. The menu opens above the line unless there is plainly more room below, and stays within the field's width where it can. `onKeyDown` hears every key the menu did not take. |
+| `Composer` | `value?`, `defaultValue?`, `onValueChange?`, `onSubmit?(text)`, `submitOn?: "mod+enter" \| "enter"`, `busy?`, `onStop?`, `disabled?`, `placeholder?`, `triggers?`, `getSuggestions?`, `onSuggestionInsert?`, `attachments?: { id, name, detail?, icon? }[]`, `onRemoveAttachment?(id)`, `onAttach?(files)`, `accept?`, `maxLength?`, `toolbar?: ReactNode`, `submitLabel?` ("Send"), `minRows?` (2), `maxRows?` (10), `autoFocus?`, `ref?` (the textarea), `className?`; `id`, `data-*` and `aria-*` (the text) | The agent composer: a `MentionTextarea` in one field-coloured shell with the field's focus ring, attachment chips above the text and a footer below it with the attach button (only with `onAttach`), your `toolbar`, a character count once the text passes 80% of `maxLength`, and Send, a neutral high-contrast button since the ring already spends the accent. Cmd/Ctrl+Enter sends and Enter is a new line; with `submitOn="enter"`, Enter sends too and Shift+Enter is the new line. Enter while the suggestion menu is up inserts rather than sends, and while its rows are still loading it waits rather than sending the half-typed query. Send is held while the text is empty and there are no attachments. While `busy`, Send becomes Stop (and Escape anywhere in the composer stops too), sending is held and the text stays editable for the next message. The suggestion menu hangs above the whole shell rather than over its chips, and Send and Stop are one button, so focus stays on it when it changes. Files dropped on the shell or pasted into the text go to `onAttach`, filtered by `accept`; removing a chip hands focus to the next chip, or the text. Clearing the draft after a send is yours to do. |
+| `InlineEdit` | `value`, `onCommit(value) => void \| Promise<void>`, `"aria-label"`, `validate?(value) => string \| null`, `allowEmpty?`, `placeholder?`, `blurAction?: "commit" \| "cancel"`, `activation?: "click" \| "doubleClick"`, `selectOnEdit?: "all" \| "stem" \| "end"`, `editing?`, `onEditingChange?`, `maxLength?`, `disabled?`, `size?: "sm" \| "md" \| "lg"`, `className?`; `id` and `data-*` | A name you rename in place, drawn and behaving like a pane title's rename: a click (or double-click with `activation`), F2 or Enter turns the text into the host's chrome-free rename field with the text selected (`stem` stops before a file extension). Enter commits the trimmed value and returns focus to the text, Escape cancels without the key reaching the pane, and leaving the field commits unless `blurAction="cancel"`. An unchanged value commits nothing; an emptied one reverts on blur and is refused on Enter, unless `allowEmpty`. A `validate` message keeps the field open with the message under it; a validator that throws refuses too. Escape does nothing while a commit is pending. When `onCommit` returns a promise the field holds read-only with a spinner until it settles; a rejection keeps it open with the error's message. |
+| `KeyValueEditor` | `value?: { id?, key, value, secret? }[]`, `defaultValue?`, `onValueChange?(pairs)`, `"aria-label"`, `onValidityChange?(valid)`, `validateKey?(key) => string \| null`, `caseInsensitiveKeys?`, `allowDuplicateKeys?`, `reorderable?`, `keyLabel?`, `valueLabel?`, `keyPlaceholder?`, `valuePlaceholder?`, `addLabel?` ("Add"), `max?`, `allowSecretToggle?`, `disabled?`, `className?`; `id` and `data-*` | Environment variables, headers, mappings: a row of compact key and value fields per pair, a remove button on each and an Add button that puts focus in the new key. A value marked `secret` is a `SecretInput`; `allowSecretToggle` adds a lock toggle per row. A key that repeats another (ignoring case with `caseInsensitiveKeys`, as HTTP headers want) and a value with no key are marked on their row; a fresh empty row is not an error. `onValidityChange` tells you when that changes, to hold your Save. Pasting `KEY=value`, `export KEY=value` or `Key: value` lines into a key field adds a row per line (quotes and `#` comments dropped). Rows keep an `id`, added when missing, so give it back. `reorderable` draws a grip per row and reorders like `SortableList`. |
+| `ListEditor` | `value?: string[]`, `defaultValue?`, `onValueChange?(items)`, `"aria-label"`, `onValidityChange?`, `validate?(item) => string \| null`, `allowDuplicates?`, `reorderable?`, `placeholder?`, `addLabel?`, `max?`, `variant?: "default" \| "code"`, `disabled?`, `className?`; `id` and `data-*` | `KeyValueEditor` for single values: hosts, globs, scopes. Pasting several lines adds a row per line; a repeated item is marked, and empty rows are ignored rather than refused. `code` sets the fields in the mono face. |
+| `SecretInput` | `value?`, `defaultValue?`, `onValueChange?`, `stored?`, `storedHint?`, `onReplace?`, `onCancelReplace?`, `onClear?`, `onSubmit?(value)`, `allowCopy?`, `revealable?` (true), `placeholder?`, `name?`, `disabled?`, `invalid?`, `autoFocus?`, `density?`, `"aria-label"?`, `"aria-labelledby"?`, `"aria-describedby"?`, `className?`; `id` and `data-*` | A token or API key: a masked mono field with an eye toggle inside it; a press on the toggle leaves focus in the field, so a save-on-blur around it is safe. Turning `revealable` off hides a shown value. Copying, cutting and dragging the value out are blocked unless `allowCopy`. With `stored`, a secret is saved that the view never holds: the field reads "Saved ••••••••" and the last few characters of `storedHint`, beside Replace and, with `onClear`, Clear (confirming is yours to do). Replace empties and focuses the field; Cancel or Escape goes back to the saved state with focus on Replace. Enter with `onSubmit` while replacing returns to the saved state once `onSubmit` returns, or once its promise resolves; while a promise is out the field holds read-only (a spinner after 400 ms) and Cancel stays available, and a rejection keeps the typed value to try again. The saved state also returns, with the draft dropped, when `stored` turns from false to true. Keep the secret in the worker's secret settings, never in view state. |
+| `ShortcutRecorder` | `value?: string \| null`, `defaultValue?`, `onValueChange?(combo \| null)`, `allowChords?`, `requireModifier?` (true), `validate?(combo) => string \| null`, `getConflict?(combo) => string \| null`, `checkHostConflicts?` (true), `placeholder?` ("Not set"), `disabled?`, `density?: "default" \| "compact"`, `"aria-label"?`, `"aria-labelledby"?`, `"aria-describedby"?`, `className?`; `id` and `data-*` | Focus it (or click it) and press a shortcut; it records in the app's combo notation (`"Cmd+Shift+K"`, Cmd being Ctrl off macOS), the notation `KbdChord` takes, and `useHotkeys` for a single-step combo. While it records, Daintree's own shortcuts stand down. Modifiers held so far show as you press them. `allowChords` records a second step pressed within a second ("Cmd+K Cmd+S"), with the host's draining bar under the field. Escape stops recording, Enter or Space starts it again, a plain Backspace or Delete clears, and a plain Tab or Shift+Tab always moves on. A first key that is bare or only Shift+key is refused unless `requireModifier` is false (F-keys pass), so a shortcut never types into a field. AltGr input is ignored, since the host never matches it. A combo Daintree already uses is flagged with the action's name, since Daintree's binding wins; `getConflict` adds your own warnings. While a new chord is under way the warnings follow its first step rather than the shortcut it would replace, and leaving the window ends recording with the old shortcut kept. `compact` matches a compact `Input`. |
+
+```tsx
+import { Composer, KeyValueEditor, SecretInput } from "@daintreehq/plugin-ui";
+
+<Composer
+  aria-label="Request for the agent"
+  value={draft}
+  onValueChange={setDraft}
+  onSubmit={(text) => send(text).then(() => setDraft(""))}
+  busy={running}
+  onStop={cancel}
+  triggers={[
+    { char: "@", title: "Files" },
+    { char: "/", title: "Commands", atStart: true },
+  ]}
+  getSuggestions={(trigger, query) => (trigger === "@" ? searchFiles(query) : commands(query))}
+  attachments={attachments}
+  onAttach={addFiles}
+  onRemoveAttachment={removeAttachment}
+/>;
+
+<KeyValueEditor
+  aria-label="Headers"
+  value={headers}
+  onValueChange={setHeaders}
+  caseInsensitiveKeys
+  addLabel="Add header"
+  onValidityChange={setHeadersValid}
+/>;
+
+<SecretInput
+  aria-label="API token"
+  stored={tokenSaved}
+  storedHint={tokenTail}
+  value={token}
+  onValueChange={setToken}
+  onSubmit={saveToken}
+  onClear={confirmClearToken}
+/>;
+```
+
 ### Status and feedback
 
 | Export | Props | Notes |
@@ -329,6 +383,98 @@ export default function Dashboard() {
     </div>
   );
 }
+```
+
+### Panes
+
+What a panel needs once it is more than one pane: a list beside its record, splits of three or more, an inspector, a drawer inside the pane, a long grouped list, a selection bar, the end of a paged list, a queue of jobs and the marks of data that is refreshing or old. All of it answers to the pane's own width, never the window's.
+
+| Export | Props | Notes |
+| --- | --- | --- |
+| `MasterDetail` | `list`, `detail`, `selectedId?: string \| number \| null`, `onBack?()`, `listLabel?` ("List"), `detailLabel?` ("Details"), `backLabel?` ("Back"), `detailTitle?`, `collapseBelow?` (560), `defaultListSize?` (320), `minListSize?` (220), `maxListSize?` (560), `persistKey?`, `className?` | A list pane beside a detail pane, split by the host's divider (a `ResizableSplit`). Below `collapseBelow` px of its own width it is one pane: the list while `selectedId` is `null` or `undefined`, the detail under a 32 px Back strip (with `detailTitle`) once it is not; clear `selectedId` in `onBack`. Focus follows the swap: to Back when a record opens, and back to the row that opened it. Both panes stay mounted across the breakpoint, so a scrolled list or a half-written comment survives it. `persistKey` remembers the list width (see `usePersistentViewState`). It fills its container. |
+| `SplitGroup` | `panes: { id, content, defaultSize?, fill?, minSize?, maxSize?, collapsible?, defaultCollapsed?, handleLabel? }[]`, `orientation?: "horizontal" \| "vertical"`, `persistKey?`, `collapsed?: string[]`, `onCollapsedChange?(ids)`, `onLayoutChange?({ sizes, collapsed })`, `className?` | Two or more panes in a row or column. One pane fills (the one marked `fill`, else the first without a `defaultSize`, else the last); every other pane holds a size in px (240 by default, `minSize` 120) and owns the one handle on its side facing the filling pane, so each boundary has exactly one handle and a drag moves only that pane. Handles are the host's: arrows (10 px), Shift+arrows (50), Home, End, double-click to reset, and a pane never grows past the room the others leave. `collapsible` panes fold on a drag below half their `minSize` or on Enter or Space, and stay mounted; `collapsed` makes that controlled, for a toolbar toggle. Nest a `SplitGroup` in a pane for a grid of splits. `persistKey` remembers sizes and folded panes. |
+| `Inspector` | `children?`, `"aria-label"?`, `labelWidth?` (88), `className?` | A property panel's frame, for a side pane or a `Drawer`. Its `PropertyRow`s put the label in a `labelWidth` column beside the value while the inspector is at least 240 px wide, and above it when narrower. Named, it is a region. |
+| `InspectorSection` | `title`, `children?`, `collapsible?` (true), `open?`, `defaultOpen?` (true), `onOpenChange?(open)`, `actions?`, `className?` | A 28 px heading row (the small uppercase label) over a group of rows, split from the one above by a hairline. The heading folds the section; folded, its rows stay mounted and hidden, so a half-edited field keeps its value, and focus inside them moves to the heading. `actions` is a button or two at the row's end. |
+| `PropertyRow` | `label`, `children?`, `htmlFor?`, `hint?`, `align?: "center" \| "start"`, `className?` | One property at a height the eye can count: a 12 px label and its value, 28 px tall. A kit control in `children` (an `Input`, `Select`, `Switch`, …) is labelled by the row, as in a `FormField`; `htmlFor` names a control the row cannot find. Text or a number is a read-only value, and nothing draws a quiet dash read as "None". `hint` sits after the label and is never part of its name. `align="start"` pins the label to the first line of a tall control. Give controls their compact size. |
+| `Drawer` | `open`, `onOpenChange?(open)`, `children?` (the pane's content), `panel` (the drawer's body), `title?`, `"aria-label"?`, `actions?`, `footer?`, `side?: "left" \| "right" \| "top" \| "bottom"` (`right`), `mode?: "overlay" \| "push"` (`overlay`), `modal?`, `size?` (320), `panelId?`, `className?` | A panel that slides in from an edge of its own pane: wrap the pane's content in it. `overlay` floats on the app's elevated surface and shadow over the content and, `modal` by default, dims it, makes it inert and holds focus in the drawer until it closes; `push` sits beside the content and narrows it, and is never modal. Opening moves focus in (the body's first control when modal, else the drawer), without a focus ring when it was opened with the pointer; a drawer that mounts already open (restored with its view) leaves focus where it is. A modal drawer is a `dialog` whose scope is its own pane, so it does not claim `aria-modal` and the pane's toolbar stays live; Escape, the header's close button and a click on the scrim close it, and focus goes back to what opened it. With `title` it draws a 32 px header with `actions` and a close button; `footer` is a strip for Apply and Reset. It is never wider than 90 % of the pane. For a record against the window's edge use `Sheet`. |
+| `DrawerToggle` | `open`, `onOpenChange(open)`, `label`, `controls?` (the `Drawer`'s `panelId`), `icon?`, `side?`, `showLabel?`, `badge?`, `disabled?`, `className?` | The pane-toolbar button for a `Drawer`: a panel glyph facing `side`, `aria-expanded` for the state and `aria-controls` for the drawer. The name is the drawer ("Filters"), never the next action. `badge` counts what the drawer has in effect, as a quiet number. |
+| `GroupedVirtualList<T>` | `groups: { id, label, items, count? }[]`, `renderItem(item, index, group)`, `itemKey?(item, group)`, `"aria-label"`, `collapsible?`, `collapsedGroups?`, `defaultCollapsedGroups?`, `onCollapsedGroupsChange?(ids)`, `footer?`, `empty?`, `estimatedItemSize?` (28), `overscan?`, `onEndReached?(lastIndex)`, `activeIndex?`, `shadows?`, `className?`; DOM props except `style` and `ref` | A `VirtualList` in groups, each under a 28 px header (the list label, then the count) that sticks to the top while its rows scroll past. `count` overrides the number shown (a total larger than the page loaded) and `false` hides it. `collapsible` headers fold their group; they carry `aria-expanded` but no `aria-controls` (optional in the disclosure pattern), because a virtualised group's rows have no container of their own to point at. Rows are indexed across the list as drawn, headers not counted and folded groups left out, so `renderItem`'s `index`, `activeIndex` and `useListNavigation`'s `count` agree; spread `containerProps` for a keyboard listbox as on `VirtualList`. `footer` sits after the last row inside the scroller, usually a `LoadMoreFooter`. `empty` replaces the list when every group is empty. It fills its container's height. |
+| `BulkActionBar` | `count?` or `selection?` (a `useSelection` result), `noun?: string \| { one, other }`, `hiddenCount?`, `actions?: { id, label, icon?, onSelect?, disabled?, destructive?, priority? }[]`, `onClear?`, `"aria-label"?`, `className?` | "3 issues selected", the actions that apply to them, and a clear button, in a 36 px band with a hairline on top: render it in place of the list's footer, not under it. It renders nothing while the count is 0. Actions are text buttons that fold into a "More actions" menu when the band is too narrow (the lowest `priority` first). `hiddenCount` adds "· 2 not shown" for selected rows a filter or an unloaded page hides. Escape inside the bar clears the selection. |
+| `LoadMoreFooter` | `status: "idle" \| "loading" \| "error" \| "done"`, `onLoadMore?()`, `loadedCount?`, `totalCount?`, `noun?`, `error?`, `autoLoad?`, `label?` ("Load more"), `className?` | The end of a paged list. `idle` is a Load more button with "50 of 212" when both counts are known; `loading` keeps the button in place with its spinner (and focus); `done` says "All 212 issues loaded"; `error` shows the reason and Retry. Each change is announced. `autoLoad` loads the next page as the footer scrolls into view, and again while it stays in view after each page, but never retries an error. When the focused button goes away, focus stays in the footer. |
+| `TaskList` | `tasks: { id, title, status: "pending" \| "running" \| "done" \| "failed" \| "cancelled", progress?, detail?, startedAt?, finishedAt?, retryable?, cancellable? }[]`, `"aria-label"`, `title?`, `summary?` (true), `actions?`, `onRetry?(task)`, `onCancel?(task)`, `empty?`, `className?` | A queue of jobs: sync runs, exports, deliveries. Each row has its state's glyph (spoken as a word), its title, a `detail` line, a spinner while it runs with a thin bar under it once `progress` (0 to 1) is known, and its duration (live while running, from `startedAt`; fixed once `finishedAt` is set). Only a failure is coloured: finished work is neutral. With `onRetry`, failed and cancelled jobs offer Retry; with `onCancel`, pending and running ones offer Cancel; a job's `retryable` or `cancellable` opts it out. Each is an icon button in one reserved column, so every duration lines up; when a job's action goes away under focus, focus stays on its row. A job settling (finished, failed, cancelled) is announced; progress and ticking times are not. The header's summary reads "2 running · 1 failed · 5 done". |
+| `RefreshOverlay` | `refreshing`, `children?`, `label?` ("Updating…"), `className?` | Content that is still valid while a fresh copy loads. Its content is `aria-busy` at once (the announcement of the note sits outside it, so it is not held back), and past the 400 ms gate draws a thin bar along its top edge and a small "Updating…" note in the corner, both on top of the content: nothing moves, nothing is dimmed, and the content stays usable. For a first load with nothing to show, use `PaneState` or `Skeleton`. |
+| `StaleIndicator` | `updatedAt?`, `staleAfterMs?`, `stale?`, `disconnected?`, `refreshing?`, `onRefresh?()`, `refreshLabel?` ("Refresh"), `className?` | "Updated 5m ago" as a live `TimeAgo`, for a `StatusBar` or a `PaneHeader` subtitle. Older than `staleAfterMs` (a positive number of ms), or with `stale`, a clock glyph marks it out of date; `disconnected` leads with "Disconnected" and the last update after it. `onRefresh` adds a refresh button that spins while `refreshing`, and ignores presses until it stops. Dropping to `disconnected` and coming back are announced; the age ticking over is not. It takes the text size of where it sits. |
+
+```tsx
+import {
+  BulkActionBar,
+  Drawer,
+  DrawerToggle,
+  GroupedVirtualList,
+  ListRow,
+  LoadMoreFooter,
+  MasterDetail,
+  PaneLayout,
+  StaleIndicator,
+  StatusBar,
+  Toolbar,
+  useSelection,
+} from "@daintreehq/plugin-ui";
+
+const selection = useSelection({ ids: issues.map((issue) => issue.id) });
+
+<PaneLayout
+  scroll="none"
+  toolbar={
+    <Toolbar variant="bar" aria-label="Issues">
+      <DrawerToggle
+        label="Filters"
+        controls="filters"
+        open={filtersOpen}
+        onOpenChange={setFiltersOpen}
+      />
+    </Toolbar>
+  }
+  footer={
+    <BulkActionBar
+      selection={selection}
+      noun="issue"
+      actions={[{ id: "close", label: "Close", icon: "x", onSelect: closeSelected }]}
+    />
+  }
+  statusBar={
+    <StatusBar
+      right={<StaleIndicator updatedAt={syncedAt} staleAfterMs={300_000} onRefresh={sync} />}
+    />
+  }
+>
+  <Drawer
+    open={filtersOpen}
+    onOpenChange={setFiltersOpen}
+    panelId="filters"
+    title="Filters"
+    panel={<Filters />}
+  >
+    <MasterDetail
+      persistKey="issues"
+      selectedId={openId}
+      onBack={() => setOpenId(null)}
+      detailTitle={openIssue?.title}
+      list={
+        <GroupedVirtualList
+          aria-label="Issues"
+          groups={groups}
+          collapsible
+          renderItem={(issue) => (
+            <ListRow title={issue.title} onSelect={() => setOpenId(issue.id)} />
+          )}
+          footer={<LoadMoreFooter status={pageStatus} onLoadMore={loadMore} autoLoad />}
+        />
+      }
+      detail={<IssueDetail issue={openIssue} />}
+    />
+  </Drawer>
+</PaneLayout>;
 ```
 
 ### Settings grammar
@@ -618,4 +764,4 @@ A builtin that still needs a covered export gets an exception scoped to one file
 
 ## Checking a view against the kit
 
-`daintree-plugin lint` points at hand-rolled versions of kit controls — `raw-button`, `raw-form-control`, `native-title-tooltip`, `inline-svg-icon`, `lucide-react-import`, `dnd-library-import`, `hand-rolled-spinner`, `hand-rolled-badge`, `native-dialog-in-view`, `raw-portal`, `view-web-storage`, `global-key-listener` — and at classes that compile to nothing against the design contract. The Styles tab in Settings → Plugins runs the same class check against a running view. See [Development loop → Lint](./dev-loop.md#daintree-plugin-lint-dir).
+`daintree-plugin lint` points at hand-rolled versions of kit controls — `raw-button`, `raw-form-control` (a password field points at `SecretInput`), `native-title-tooltip`, `inline-svg-icon`, `lucide-react-import`, `dnd-library-import`, `hand-rolled-spinner`, `hand-rolled-badge`, `native-dialog-in-view`, `raw-portal`, `view-web-storage`, `global-key-listener` — and at classes that compile to nothing against the design contract. The Styles tab in Settings → Plugins runs the same class check against a running view. See [Development loop → Lint](./dev-loop.md#daintree-plugin-lint-dir).

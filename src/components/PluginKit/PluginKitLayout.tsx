@@ -388,17 +388,32 @@ function KitResizableSplit({
       event.preventDefault();
       return;
     }
+    // From what is drawn, as a drag is: a container narrower than the size
+    // caps the pane, and a step from the size would change nothing on screen.
+    // Layout pixels (offset/client sizes), so a scaled ancestor does not read
+    // as a smaller pane; only a pane drawn a whole pixel short counts as capped.
+    const pane = document.getElementById(paneId);
+    const frame = pane?.parentElement;
+    const axis = horizontal ? "horizontal" : "vertical";
+    const drawn = pane ? (horizontal ? pane.offsetWidth : pane.offsetHeight) : 0;
+    const extent = frame ? (horizontal ? frame.clientWidth : frame.clientHeight) : 0;
+    const room = extent > 0 ? extent - SPLIT_TRACK_PX[axis] : 0;
+    const capped = drawn > 0 && drawn <= committedSize - 1;
+    const current = capped ? drawn : committedSize;
+    const limit = room > 0 ? Math.max(current, Math.min(max, room)) : max;
     const result = resolveSplitterKey(event, {
       growKey,
-      value: committedCollapsed ? 0 : committedSize,
+      value: committedCollapsed ? 0 : current,
       min,
-      max,
+      max: limit,
       step: SPLIT_STEP_PX,
       largeStep: SPLIT_LARGE_STEP_PX,
     });
     if (!result) return;
     event.preventDefault();
     if (result.kind === "set") {
+      // Already at the limit the key asks for: nothing to commit.
+      if (!committedCollapsed && result.value === current) return;
       commit({ size: result.value, collapsed: false });
     } else if (canCollapse) {
       commit({ size: committedSize, collapsed: !committedCollapsed });

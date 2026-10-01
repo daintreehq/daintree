@@ -258,6 +258,38 @@ declare module "@daintreehq/plugin-ui" {
     PluginStackProps,
     PluginStatusBarProps,
     PluginStatusBarSlot,
+    PluginBulkAction,
+    PluginBulkActionBarProps,
+    PluginDrawerProps,
+    PluginDrawerToggleProps,
+    PluginGroupedVirtualListProps,
+    PluginInspectorProps,
+    PluginInspectorSectionProps,
+    PluginListGroup,
+    PluginLoadMoreFooterProps,
+    PluginMasterDetailProps,
+    PluginPropertyRowProps,
+    PluginRefreshOverlayProps,
+    PluginSplitGroupProps,
+    PluginSplitLayout,
+    PluginSplitPane,
+    PluginStaleIndicatorProps,
+    PluginTask,
+    PluginTaskListProps,
+    PluginTaskStatus,
+  } from "@daintreehq/plugin-sdk/react";
+  import type {
+    PluginComposerAttachment,
+    PluginComposerProps,
+    PluginInlineEditProps,
+    PluginKeyValueEditorProps,
+    PluginKeyValuePair,
+    PluginListEditorProps,
+    PluginMentionSuggestion,
+    PluginMentionTextareaProps,
+    PluginMentionTrigger,
+    PluginSecretInputProps,
+    PluginShortcutRecorderProps,
   } from "@daintreehq/plugin-sdk/react";
 
   export type MarkdownProps = PluginMarkdownProps;
@@ -474,6 +506,36 @@ declare module "@daintreehq/plugin-ui" {
   export type OverflowToolbarSeparator = PluginOverflowToolbarSeparator;
   export type ContainerSize = PluginContainerSize;
   export type ContainerTarget = PluginContainerTarget;
+  export type MentionSuggestion = PluginMentionSuggestion;
+  export type MentionTrigger = PluginMentionTrigger;
+  export type MentionTextareaProps = PluginMentionTextareaProps;
+  export type ComposerAttachment = PluginComposerAttachment;
+  export type ComposerProps = PluginComposerProps;
+  export type InlineEditProps = PluginInlineEditProps;
+  export type KeyValuePair = PluginKeyValuePair;
+  export type KeyValueEditorProps = PluginKeyValueEditorProps;
+  export type ListEditorProps = PluginListEditorProps;
+  export type SecretInputProps = PluginSecretInputProps;
+  export type ShortcutRecorderProps = PluginShortcutRecorderProps;
+  export type MasterDetailProps = PluginMasterDetailProps;
+  export type SplitPane = PluginSplitPane;
+  export type SplitLayout = PluginSplitLayout;
+  export type SplitGroupProps = PluginSplitGroupProps;
+  export type InspectorProps = PluginInspectorProps;
+  export type InspectorSectionProps = PluginInspectorSectionProps;
+  export type PropertyRowProps = PluginPropertyRowProps;
+  export type DrawerProps = PluginDrawerProps;
+  export type DrawerToggleProps = PluginDrawerToggleProps;
+  export type ListGroup<T = unknown> = PluginListGroup<T>;
+  export type GroupedVirtualListProps<T = unknown> = PluginGroupedVirtualListProps<T>;
+  export type BulkAction = PluginBulkAction;
+  export type BulkActionBarProps = PluginBulkActionBarProps;
+  export type LoadMoreFooterProps = PluginLoadMoreFooterProps;
+  export type TaskStatus = PluginTaskStatus;
+  export type Task = PluginTask;
+  export type TaskListProps = PluginTaskListProps;
+  export type RefreshOverlayProps = PluginRefreshOverlayProps;
+  export type StaleIndicatorProps = PluginStaleIndicatorProps;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -989,4 +1051,69 @@ declare module "@daintreehq/plugin-ui" {
   export const FormStatus: ComponentType<FormStatusProps>;
   /** A settings group generated from a JSON Schema by the plugin settings generator. */
   export const SchemaForm: ComponentType<SchemaFormProps>;
+
+  /**
+   * A textarea that grows with its text and opens the host's autocomplete
+   * menu on a trigger character (`@`, `/`, `#`), with suggestions from
+   * `getSuggestions`, sync or async. The caret stays in the text.
+   */
+  export const MentionTextarea: ComponentType<MentionTextareaProps>;
+  /**
+   * The agent composer: mentions and commands, attachment chips, an attach
+   * button, your footer controls, and Send (Stop while `busy`). Cmd/Ctrl+Enter
+   * sends by default.
+   */
+  export const Composer: ComponentType<ComposerProps>;
+  /** Text you rename in place: click or F2, Enter commits, Escape cancels. */
+  export const InlineEdit: ComponentType<InlineEditProps>;
+  /** Rows of key and value fields, with duplicate checks, secret values and `KEY=value` paste. */
+  export const KeyValueEditor: ComponentType<KeyValueEditorProps>;
+  /** An editable list of single values, with duplicate checks and multi-line paste. */
+  export const ListEditor: ComponentType<ListEditorProps>;
+  /** A masked token field with reveal, and a saved state with Replace and Clear. */
+  export const SecretInput: ComponentType<SecretInputProps>;
+  /** Records a keyboard shortcut in the app's combo notation and flags ones Daintree uses. */
+  export const ShortcutRecorder: ComponentType<ShortcutRecorderProps>;
+  /**
+   * A list pane beside a detail pane that becomes one pane with a Back strip
+   * below `collapseBelow` px of its own width. The list width is resizable
+   * when wide and remembered under `persistKey`.
+   */
+  export const MasterDetail: ComponentType<MasterDetailProps>;
+  /**
+   * Two or more panes in a row or column, each sized pane with a draggable,
+   * keyboard-resizable handle facing the pane that fills. Min, max, collapse
+   * and remembered sizes per pane; nest one in a pane for a grid of splits.
+   */
+  export const SplitGroup: ComponentType<SplitGroupProps>;
+  /** A property panel's frame: its `PropertyRow`s put labels beside values when it is 240px or wider. */
+  export const Inspector: ComponentType<InspectorProps>;
+  /** A collapsible heading over a group of `PropertyRow`s in an `Inspector`. */
+  export const InspectorSection: ComponentType<InspectorSectionProps>;
+  /** A 28px label and value row; a kit control inside is labelled by it. */
+  export const PropertyRow: ComponentType<PropertyRowProps>;
+  /**
+   * A panel that slides in from an edge of its own pane, over the content or
+   * beside it. Modal overlays trap focus over a scrim; Escape closes. The
+   * content shows while the kit loads.
+   */
+  export const Drawer: ComponentType<DrawerProps>;
+  /** The toolbar button that opens and closes a `Drawer`, with `aria-expanded`. */
+  export const DrawerToggle: ComponentType<DrawerToggleProps>;
+  /** A `VirtualList` in groups under sticky headers with counts, optionally foldable. */
+  export const GroupedVirtualList: <T>(props: GroupedVirtualListProps<T>) => ReactNode;
+  /** "3 issues selected", the actions for them and a clear button; nothing while none are. */
+  export const BulkActionBar: ComponentType<BulkActionBarProps>;
+  /** The end of a paged list: Load more, loading, "All 212 loaded", or the error with Retry. */
+  export const LoadMoreFooter: ComponentType<LoadMoreFooterProps>;
+  /** A queue of jobs with state, progress, duration and Retry or Cancel, under a count summary. */
+  export const TaskList: ComponentType<TaskListProps>;
+  /**
+   * Content that stays valid while a fresh copy loads: a thin bar and an
+   * "Updating…" note past 400ms, no layout shift, no blocking. The content
+   * shows while the kit loads.
+   */
+  export const RefreshOverlay: ComponentType<RefreshOverlayProps>;
+  /** "Updated 5m ago", stale or disconnected, with a refresh button. */
+  export const StaleIndicator: ComponentType<StaleIndicatorProps>;
 }
