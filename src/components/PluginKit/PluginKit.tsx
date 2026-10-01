@@ -120,8 +120,10 @@ import { pluginKitLayoutPanes } from "./PluginKitLayoutPanes";
 import { pluginKitTypography, pluginKitTypographyFunctions } from "./PluginKitTypography";
 import { pluginKitEditors } from "./PluginKitEditors";
 import { pluginKitPickersForms } from "./PluginKitPickersForms";
+import { pluginKitDataTables } from "./PluginKitDataTables";
 import { pluginKitTextInputs } from "./PluginKitTextInputs";
 import { pluginKitNativeAgents } from "./PluginKitNativeAgents";
+import { pluginKitGit } from "./PluginKitGit";
 import { primeRadix } from "@/components/ui/radix-loader";
 
 export { normalizeSelectOptions, pickDomProps };
@@ -1277,6 +1279,9 @@ export const pluginKit = {
   ...pluginKitPickersForms,
   ...pluginKitTextInputs,
   ...pluginKitNativeAgents,
+  ...pluginKitGit,
+  // Last: its DataTable wraps the basic one from pluginKitLists.
+  ...pluginKitDataTables,
 };
 
 export type PluginKit = typeof pluginKit;

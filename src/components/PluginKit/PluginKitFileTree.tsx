@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { Virtuoso, type ListRange, type VirtuosoHandle } from "react-virtuoso";
-import { ChevronDown, ChevronRight, Folder, FolderOpen } from "lucide-react";
+import { Folder, FolderOpen } from "lucide-react";
 import type { PluginFileTreeItem, PluginFileTreeProps } from "@shared/types/plugin-sdk-react";
 import type { FileTreeNode } from "@shared/types/ipc/copyTree";
 import {
@@ -23,14 +23,15 @@ import {
   FILE_TREE_ICON_COLOR_CLASS,
   getFileTypeIcon,
 } from "@/panels/file-browser/fileTypeIcons";
-import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { cn } from "@/lib/utils";
 import { field, fn, hasContent, node, nonEmpty, pickRootProps, str } from "./kitProps";
-
-// The host browser's geometry (FileTreeView), so a plugin tree lines up with it.
-const INDENT_PER_DEPTH_PX = 12;
-const BASE_PADDING_PX = 6;
-const ROW_HEIGHT_PX = 24;
+import {
+  TREE_ROW_CLASS,
+  TREE_ROW_HEIGHT_PX,
+  TreeChevron,
+  TreeGutter,
+  treeRowPadding,
+} from "./kitTreeRow";
 
 /**
  * Natural order: numeric-aware and case-insensitive, so `churn-2` precedes
@@ -166,7 +167,6 @@ interface TreeContext {
 
 function TreeRow({ row, context }: { row: FlatTreeRow; context: TreeContext }) {
   const selected = context.cursorPath === row.path;
-  const Chevron = row.isExpanded ? ChevronDown : ChevronRight;
   const RowIcon = row.isDirectory
     ? row.isExpanded
       ? FolderOpen
@@ -188,29 +188,16 @@ function TreeRow({ row, context }: { row: FlatTreeRow; context: TreeContext }) {
         if (row.isDirectory) context.toggle(row, !row.isExpanded);
       }}
       onDoubleClick={activate ? () => activate(row) : undefined}
-      style={{ paddingLeft: BASE_PADDING_PX + row.depth * INDENT_PER_DEPTH_PX }}
-      className={cn(
-        "flex h-6 w-full cursor-default select-none items-center gap-1 rounded-[var(--radius-md)] pr-2 text-xs",
-        LIST_DETAIL_ROW_CLASS,
-        selected ? "text-text-primary" : "text-text-secondary"
-      )}
+      style={{ paddingLeft: treeRowPadding(row.depth) }}
+      className={cn(TREE_ROW_CLASS, selected ? "text-text-primary" : "text-text-secondary")}
     >
       {row.isDirectory ? (
-        // The chevron opens and closes without moving the selection, as in the host tree.
-        <span
-          aria-hidden="true"
-          onClick={(event) => {
-            event.stopPropagation();
-            context.toggle(row, !row.isExpanded);
-          }}
-          onDoubleClick={(event) => event.stopPropagation()}
-          className="flex h-4 w-4 shrink-0 items-center justify-center text-text-secondary"
-        >
-          <Chevron className="h-3 w-3" />
-        </span>
+        <TreeChevron
+          expanded={row.isExpanded}
+          onToggle={() => context.toggle(row, !row.isExpanded)}
+        />
       ) : context.hasDirectories ? (
-        // The gutter a file keeps so its icon lines up under its folder's.
-        <span data-file-tree-gutter="" className="h-4 w-4 shrink-0" />
+        <TreeGutter />
       ) : null}
       <RowIcon
         className={cn(FILE_TREE_ICON_CLASS, "h-3.5 w-3.5 shrink-0", FILE_TREE_ICON_COLOR_CLASS)}
@@ -382,7 +369,7 @@ function KitFileTree(props: PluginFileTreeProps) {
         context={context}
         computeItemKey={rowKey}
         itemContent={renderRow}
-        fixedItemHeight={ROW_HEIGHT_PX}
+        fixedItemHeight={TREE_ROW_HEIGHT_PX}
         rangeChanged={(next) =>
           setRange((current) =>
             current?.startIndex === next.startIndex && current.endIndex === next.endIndex
