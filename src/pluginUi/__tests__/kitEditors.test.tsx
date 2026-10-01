@@ -364,6 +364,27 @@ describe("DiffView", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Revert" }));
   });
 
+  it("keeps the keyboard in the diff when a Revert removes the last hunk", async () => {
+    function Reverting() {
+      const [text, setText] = useState("a\nnew\n");
+      return createElement(kit.DiffView, {
+        oldText: "a\n",
+        newText: text,
+        hunkActions: [{ id: "revert", label: "Revert" }],
+        onHunkAction: (_id: string, hunk: DiffHunk) => setText(kit.revertHunk(text, hunk) ?? text),
+        "data-testid": "diff",
+      });
+    }
+    render(withTooltips(createElement(Reverting)));
+    const root = await loadedDiff("diff");
+    await hunkHeaders(root);
+    const button = screen.getByRole("button", { name: "Revert" });
+    button.focus();
+    act(() => button.click());
+    await screen.findByText("No changes detected");
+    await waitFor(() => expect(document.activeElement).toBe(root));
+  });
+
   it("keeps the keyboard on the hunk header after expanding hidden lines", async () => {
     render(
       withTooltips(
