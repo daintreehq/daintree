@@ -77,10 +77,15 @@ function hueOf(color: unknown): string {
   return chartColor(oneOf(color, COLORS) ?? "blue");
 }
 
+// The ramp's faintest shade. Below about this, the smallest populated value
+// sinks into the surface and reads as no data at all.
+const RAMP_FLOOR = 0.38;
+
 /** A step along a one-hue ramp: `t` 0 is the faintest shade, 1 the full hue. Exported for tests. */
 export function rampColor(hue: string, t: number): string {
   const clamped = Number.isFinite(t) ? Math.max(0, Math.min(1, t)) : 0;
-  return `color-mix(in oklab, ${hue} ${Math.round(18 + clamped * 82)}%, transparent)`;
+  const share = RAMP_FLOOR + clamped * (1 - RAMP_FLOOR);
+  return `color-mix(in oklab, ${hue} ${Math.round(share * 100)}%, transparent)`;
 }
 
 /**
@@ -425,7 +430,10 @@ function KitHeatmap({
                   width={Math.max(0.5, geometry.cellW - geometry.gap)}
                   height={Math.max(0.5, geometry.cellH - geometry.gap)}
                   rx={Math.min(2, geometry.cellW / 4, geometry.cellH / 4)}
-                  className={cell === null ? "fill-overlay-subtle" : undefined}
+                  // A pair with no value is an empty outline, never a shade a
+                  // reader could take for a small one.
+                  className={cell === null ? "fill-transparent stroke-border-subtle" : undefined}
+                  strokeWidth={cell === null ? 1 : undefined}
                   style={cell === null ? undefined : { fill: shade(cell) }}
                 />
               ))
@@ -518,6 +526,7 @@ const GRID_LEVELS = 5;
 const DEFAULT_WEEKS = 53;
 const MAX_WEEKS = 260;
 const DEFAULT_PITCH = 14;
+const MIN_PITCH = 10;
 const MONTH_ROW_PX = 16;
 const WEEKDAY_GUTTER_PX = 30;
 
@@ -568,18 +577,24 @@ function KitContributionGrid({
   const root = pickRootProps(rest);
   const { label, classes } = chartProps(height, ariaLabel, className);
   const given = positive(height, 600);
-  const pitch = given
-    ? Math.max(10, Math.min(28, Math.floor((given - MONTH_ROW_PX) / 7)))
+  const [measure, width] = useWidth();
+  const span = Math.floor(positive(weeks, MAX_WEEKS) ?? DEFAULT_WEEKS) || DEFAULT_WEEKS;
+  const preferred = given
+    ? Math.max(MIN_PITCH, Math.min(28, Math.floor((given - MONTH_ROW_PX) / 7)))
     : DEFAULT_PITCH;
+  // Cells shrink to fit every requested week before any week is dropped; only
+  // below the smallest legible cell do the oldest weeks give way.
+  const pitch =
+    width > 0
+      ? Math.max(MIN_PITCH, Math.min(preferred, Math.floor((width - WEEKDAY_GUTTER_PX + 3) / span)))
+      : preferred;
   const cell = pitch - 3;
   const px = MONTH_ROW_PX + pitch * 7;
-  const [measure, width] = useWidth();
   const formats = useMemo(() => valueFormats(formatValue), [formatValue]);
   const hue = hueOf(color);
   const noun = str(unit) ?? "";
   const startDay = weekStart === 1 ? 1 : 0;
   const totals = useMemo(() => dayTotals(data, str(x) ?? "", str(value) ?? ""), [data, x, value]);
-  const span = Math.floor(positive(weeks, MAX_WEEKS) ?? DEFAULT_WEEKS) || DEFAULT_WEEKS;
   const endAt = toX(end, true);
   const lastDay = useMemo(() => {
     let latest = endAt === null ? -Infinity : dayNumber(endAt);
@@ -1338,6 +1353,8 @@ export function stackLayers(
   return { lower, upper, totals };
 }
 
+const SINGLE_SAMPLE_PX = 16;
+
 function KitStackedAreaChart({
   data,
   x,
@@ -1442,14 +1459,21 @@ function KitStackedAreaChart({
     const layers = resolved.map((entry, s) => {
       const upper = stack.upper[s]!.map((v, i): [number, number] => [pixels[i]!, sy(v)]);
       const lower = stack.lower[s]!.map((v, i): [number, number] => [pixels[i]!, sy(v)]);
+      if (xs.length === 1) {
+        // One sample has no span to fill: each layer is a short column segment.
+        const [x0, top0] = upper[0]!;
+        const bottom0 = lower[0]![1];
+        const half = SINGLE_SAMPLE_PX / 2;
+        return {
+          key: entry.key,
+          color: entry.color,
+          area: `M${fixed(x0 - half)},${fixed(top0)}H${fixed(x0 + half)}V${fixed(bottom0)}H${fixed(x0 - half)}Z`,
+          edge: `M${fixed(x0 - half)},${fixed(top0)}H${fixed(x0 + half)}`,
+        };
+      }
       const edge = trace(upper);
       const back = trace([...lower].reverse()).replace(/^M/, "L");
-      return {
-        key: entry.key,
-        color: entry.color,
-        area: xs.length > 1 ? `${edge}${back}Z` : "",
-        edge: xs.length > 1 ? edge : "",
-      };
+      return { key: entry.key, color: entry.color, area: `${edge}${back}Z`, edge };
     });
     return { ticks, sy, left, top, plotW, plotH, pixels, xTicks, layers };
   }, [time, xs, stack, resolved, width, px, shares, axisValue, formatX]);
@@ -1673,12 +1697,15 @@ function KitGauge({
   const describedBy = useId();
   // A range whose ends a double cannot tell apart has no scale: fall back to 0–100.
   const [low, high] = gaugeRange(finite(min) ?? 0, finite(max) ?? 100);
-  const reading = Math.min(high, Math.max(low, finite(value) ?? low));
+  // A value that is missing says so; one outside the range keeps its number
+  // and only its arc stops at the end.
+  const raw = finite(value);
+  const reading = Math.min(high, Math.max(low, raw ?? low));
   const percentScale = low === 0 && high === 100;
   const format = userFormat<number>(formatValue, (amount) =>
     percentScale ? `${Math.round(amount)}%` : FULL.format(amount)
   );
-  const tone = gaugeTone(reading, thresholds);
+  const tone = raw === null ? "neutral" : gaugeTone(raw, thresholds);
   const width = Math.max(MIN_GAUGE_PX, Math.round(positive(size, 600) ?? DEFAULT_GAUGE_PX));
   const thickness = Math.max(6, Math.round(width * 0.075));
   const r = width / 2 - thickness / 2 - 1;
@@ -1689,7 +1716,7 @@ function KitGauge({
   const angleOf = (amount: number) => start + ((amount - low) / (high - low)) * SWEEP;
   const goal = finite(target);
   const fill = tone === "neutral" ? hueOf(color) : TONE_COLOR[tone];
-  const text = format(reading);
+  const text = raw === null ? NO_VALUE : format(raw);
   const glyph = tone === "neutral" ? null : severityGlyph(tone, "h-3.5 w-3.5");
 
   if (loading === true) {
@@ -1705,6 +1732,7 @@ function KitGauge({
       aria-valuemax={high}
       aria-valuenow={reading}
       aria-valuetext={tone === "neutral" ? text : `${text}, ${tone}`}
+      data-unavailable={raw === null ? "" : undefined}
       aria-describedby={goal !== null ? describedBy : undefined}
       data-tone={tone}
       className={cn("relative inline-flex shrink-0 flex-col items-center", str(className))}
@@ -1718,7 +1746,7 @@ function KitGauge({
           strokeLinecap="round"
           className="stroke-overlay-emphasis"
         />
-        {reading > low ? (
+        {raw !== null && reading > low ? (
           <path
             data-chart-gauge-value=""
             d={arc(cx, cy, r, start, angleOf(reading))}
@@ -1753,7 +1781,7 @@ function KitGauge({
           )}
         >
           {glyph}
-          {text}
+          {raw === null ? "—" : text}
         </span>
         {hasContent(label) ? (
           <span className="max-w-full truncate px-4 text-xs text-text-secondary">

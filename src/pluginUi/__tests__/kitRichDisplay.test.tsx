@@ -105,6 +105,29 @@ describe("AnsiText", () => {
     expect(ansiStyle(PLAIN_STYLE)).toBeUndefined();
   });
 
+  it("always sits on the terminal's own surface, inline or as a block", () => {
+    const { container } = mount(
+      createElement("div", null, [
+        createElement(kit.AnsiText, {
+          key: "i",
+          text: "\x1b[33mwarn\x1b[0m",
+          "data-testid": "inline",
+        }),
+        createElement(kit.AnsiText, {
+          key: "b",
+          text: "x",
+          display: "block",
+          "data-testid": "block",
+        }),
+      ])
+    );
+    for (const id of ["inline", "block"]) {
+      const element = container.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
+      expect(element.style.backgroundColor).toContain("--theme-terminal-background");
+      expect(element.style.color).toContain("--theme-terminal-foreground");
+    }
+  });
+
   it("ignores junk props from untyped JS", () => {
     expect(() => renderLoose(kit.AnsiText, { text: 42, display: "huge" })).not.toThrow();
   });
@@ -182,6 +205,23 @@ describe("TerminalOutput", () => {
     expect(container.querySelector("[data-ansi-line]")?.className).toContain("whitespace-pre");
   });
 
+  it("says how many earlier lines it no longer keeps", () => {
+    mount(
+      createElement(kit.TerminalOutput, {
+        text: "a\nb\nc\nd",
+        "aria-label": "Out",
+        maxLines: 2,
+        follow: false,
+      })
+    );
+    expect(document.querySelector("[data-terminal-dropped]")?.textContent).toBe(
+      "2 earlier lines not kept"
+    );
+    cleanup();
+    mount(createElement(kit.TerminalOutput, { text: "a\nb", "aria-label": "Out", follow: false }));
+    expect(document.querySelector("[data-terminal-dropped]")).toBeNull();
+  });
+
   it("says there is no output, and drops the toolbar on request", () => {
     mount(createElement(kit.TerminalOutput, { text: "", "aria-label": "Out", toolbar: false }));
     expect(screen.getByRole("log", { name: "Out" }).textContent).toBe("No output");
@@ -221,6 +261,39 @@ describe("HoverCard", () => {
       fireEvent.keyDown(document, { key: "Escape" });
     });
     expect(screen.queryByText("Ada Lovelace · 214 commits")).toBeNull();
+  });
+
+  it("stays while its trigger holds keyboard focus, whatever the pointer does", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mount(
+        createElement(kit.HoverCard, {
+          content: createElement("p", null, "Grace Hopper"),
+          closeDelay: 50,
+          children: createElement("button", { type: "button" }, "@grace"),
+        })
+      );
+      const trigger = screen.getByRole("button", { name: "@grace" });
+      await act(async () => {
+        fireEvent.focus(trigger);
+      });
+      await screen.findByRole("tooltip", { hidden: true }, { timeout: 3000 });
+      const card = screen.getAllByText("Grace Hopper")[0]!.closest("[data-side]")!;
+      await act(async () => {
+        fireEvent.pointerEnter(trigger);
+        fireEvent.pointerLeave(trigger);
+        fireEvent.pointerEnter(card);
+        fireEvent.pointerLeave(card);
+        vi.advanceTimersByTime(500);
+      });
+      expect(screen.queryAllByText("Grace Hopper").length).toBeGreaterThan(0);
+      await act(async () => {
+        fireEvent.blur(trigger);
+      });
+      expect(screen.queryAllByText("Grace Hopper")).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stays open when controlled, on the host's hover-card width", () => {
@@ -372,8 +445,36 @@ describe("charts", () => {
     );
     expect(model.xs.keys).toEqual(["a", "b"]);
     expect(model.grid).toEqual([[null, 5]]);
-    expect(rampColor("red", 0)).toBe("color-mix(in oklab, red 18%, transparent)");
-    expect(rampColor("red", 1)).toBe("color-mix(in oklab, red 100%, transparent)");
+  });
+
+  it("keeps the faintest ramp shade well clear of the surface, rising to the full hue", () => {
+    const share = (t: number) => Number(/ (\d+)%/.exec(rampColor("red", t))![1]);
+    // Below about a third, a small value reads as no value at all.
+    expect(share(0)).toBeGreaterThanOrEqual(35);
+    expect(share(1)).toBe(100);
+    expect(share(0.5)).toBeGreaterThan(share(0.25));
+  });
+
+  it("draws a missing heatmap pair as an empty outline, not a faint shade", () => {
+    const { container } = mount(
+      createElement(kit.Heatmap, {
+        data: [
+          { x: "a", y: "r", v: 0 },
+          { x: "b", y: "s", v: 5 },
+        ],
+        x: "x",
+        y: "y",
+        value: "v",
+        "aria-label": "Sparse",
+      })
+    );
+    const cells = Array.from(container.querySelectorAll<SVGRectElement>("[data-chart-cell]"));
+    const hollow = cells.filter((cell) => !cell.style.fill);
+    const filled = cells.filter((cell) => cell.style.fill);
+    // Two pairs are missing; the zero is a value and is shaded.
+    expect(hollow).toHaveLength(2);
+    expect(filled).toHaveLength(2);
+    for (const cell of hollow) expect(cell.getAttribute("class")).toContain("stroke-");
   });
 
   it("lays a ContributionGrid out a week a column, ending on the last day", () => {
@@ -491,6 +592,21 @@ describe("charts", () => {
     ]);
     expect(totals).toEqual([4, 2]);
     expect(stackLayers([[1], [3]], true).upper).toEqual([[25], [100]]);
+    const single = mount(
+      createElement(kit.StackedAreaChart, {
+        data: [{ day: 1, a: 2, b: 3 }],
+        x: "day",
+        series: [
+          { key: "a", label: "A" },
+          { key: "b", label: "B" },
+        ],
+        "aria-label": "First run",
+      })
+    );
+    for (const layer of single.container.querySelectorAll("[data-chart-series] path")) {
+      expect(layer.getAttribute("d")).not.toBe("");
+    }
+    single.unmount();
     mount(
       createElement(kit.StackedAreaChart, {
         data: [
@@ -528,6 +644,15 @@ describe("charts", () => {
     expect(meter.getAttribute("aria-valuetext")).toBe("58%, warning");
     expect(meter.textContent).toContain("Lines");
     expect(gaugeTone(40, { warning: 70, danger: 50, direction: "below" })).toBe("danger");
+    cleanup();
+    mount(createElement(kit.Gauge, { value: Number.NaN, "aria-label": "Missing" }));
+    const missing = screen.getByRole("meter", { name: "Missing" });
+    expect(missing.getAttribute("aria-valuetext")).toBe("No value");
+    expect(missing.querySelector("[data-chart-gauge-value]")).toBeNull();
+    cleanup();
+    mount(createElement(kit.Gauge, { value: 140, "aria-label": "Over" }));
+    // The arc stops at the end; the number does not pretend to be 100.
+    expect(screen.getByRole("meter", { name: "Over" }).getAttribute("aria-valuetext")).toBe("140%");
     expect(gaugeTone(90, { warning: 80 })).toBe("warning");
     expect(gaugeTone(10, null)).toBe("neutral");
   });
@@ -693,6 +818,9 @@ describe("TableOfContents", () => {
     await act(async () => {});
     fireEvent.click(screen.getByRole("button", { name: "Tests" }));
     expect(scrollTo).toHaveBeenCalled();
+    // The reader is taken to the section, focus included.
+    expect(document.activeElement?.textContent).toBe("Tests");
+    expect(document.activeElement?.tagName).toBe("H2");
     expect(onNavigate).toHaveBeenCalledWith({ text: "Tests", level: 2, id: undefined }, 3);
     expect(screen.getByRole("button", { name: "Tests" }).getAttribute("aria-current")).toBe(
       "location"
