@@ -143,13 +143,3 @@ describe("toolbar project pill — branch chip contrast", () => {
     expect(declaration(".toolbar-project-meta", "color")).toBe("var(--_fg)");
   });
 });
-
-describe("toolbar project pill — press snap", () => {
-  it("snaps to the toolbar controls' pressed scale without easing it", () => {
-    // The pill is a raw button, so it cannot inherit the Button cva's
-    // `active:scale-[0.98]`; it has to state the press itself.
-    expect(declaration(".toolbar-project-pill:active", "transform")).toMatch(/^scale\(0\.98\)$/);
-    // An eased transform would stretch the snap into a 150ms shrink.
-    expect(declaration(".toolbar-project-pill", "transition")).not.toMatch(/transform|\ball\b/);
-  });
-});

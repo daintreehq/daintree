@@ -236,8 +236,8 @@ const BUTTON_VARIANT: Record<ButtonVariant, NonNullable<ButtonProps["variant"]>>
 function ContextLine({ text, truncate }: { text: string; truncate: "end" | "middle" }) {
   // The middle form clips in either of two spans and never in the <p> that
   // hosts the tooltip, so each span reports its own overflow.
-  const head = useTruncationDetection();
-  const tail = useTruncationDetection();
+  const { ref: headRef, isTruncated: isHeadTruncated } = useTruncationDetection();
+  const { ref: tailRef, isTruncated: isTailTruncated } = useTruncationDetection();
   const split = truncate === "middle" ? text.replace(/[\\/]+$/, "").search(/[\\/][^\\/]*$/) : -1;
   if (split <= 0) {
     return (
@@ -247,12 +247,12 @@ function ContextLine({ text, truncate }: { text: string; truncate: "end" | "midd
     );
   }
   return (
-    <TruncatedTooltip content={text} isTruncated={head.isTruncated || tail.isTruncated}>
+    <TruncatedTooltip content={text} isTruncated={isHeadTruncated || isTailTruncated}>
       <p className="text-xs font-mono mt-1 flex min-w-0 text-text-secondary">
-        <span ref={head.ref} className="truncate">
+        <span ref={headRef} className="truncate">
           {text.slice(0, split)}
         </span>
-        <span ref={tail.ref} className="shrink-0 max-w-[75%] truncate">
+        <span ref={tailRef} className="shrink-0 max-w-[75%] truncate">
           {text.slice(split)}
         </span>
       </p>

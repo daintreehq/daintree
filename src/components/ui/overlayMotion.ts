@@ -16,6 +16,13 @@
  */
 
 /**
+ * The gap between a trigger and the surface it opens, for every anchored
+ * overlay — Radix's and `FixedDropdown`'s alike — so a menu, a palette and a
+ * toolbar dropdown all hang the same distance below the control that owns them.
+ */
+export const OVERLAY_SIDE_OFFSET = 4;
+
+/**
  * The 4px directional nudge, shared by every surface including the tooltip.
  * Radix sets `data-side` to the side the content was actually placed on after
  * collision handling, so the surface always drifts in from its anchor.
@@ -85,8 +92,19 @@ export const OVERLAY_DROP_MOTION_CLASS = "overlay-motion-drop";
  * a few subpixels of blur, all cost and no signal. Everything that carries the
  * shared language — direction, distance, the fade — comes from the same place.
  */
+const TOOLTIP_ENTER =
+  "animate-in fade-in-0 animation-duration-150 ease-[var(--ease-spring-critical)]";
+
 export const TOOLTIP_MOTION_CLASS = [
-  "animate-in fade-in-0 animation-duration-150 ease-[var(--ease-spring-critical)]",
+  TOOLTIP_ENTER,
   "data-[state=closed]:animate-out data-[state=closed]:animation-duration-100 data-[state=closed]:fade-out-0 data-[state=closed]:ease-[var(--ease-exit)]",
   OVERLAY_SLIDE,
 ].join(" ");
+
+/**
+ * A tooltip whose trigger was just pressed: the same entrance, and no exit.
+ * The press hands the screen to whatever the trigger opens, and a caption
+ * fading out for 100ms sat over the menu or palette fading in beneath it. With
+ * no exit animation, Radix's Presence unmounts the caption on the spot.
+ */
+export const TOOLTIP_PRESS_DISMISSED_MOTION_CLASS = [TOOLTIP_ENTER, OVERLAY_SLIDE].join(" ");

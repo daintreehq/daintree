@@ -5,6 +5,7 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FixedDropdownVisibleContext } from "../fixed-dropdown";
 import { Tooltip, TooltipTrigger, TooltipContent } from "../tooltip";
+import { TOOLTIP_MOTION_CLASS, TOOLTIP_PRESS_DISMISSED_MOTION_CLASS } from "../overlayMotion";
 import { _resetForTests, dismissAllTooltips } from "@/lib/tooltipDismissRegistry";
 
 const { rootSpy, mountSpy, primeOnEventSpy, contentSpy } = vi.hoisted(() => ({
@@ -14,9 +15,10 @@ const { rootSpy, mountSpy, primeOnEventSpy, contentSpy } = vi.hoisted(() => ({
   contentSpy: vi.fn(),
 }));
 
-vi.mock("../radix-loader", () => ({
-  primeOnEvent: primeOnEventSpy,
-  useRadixPrimitives: () => ({
+vi.mock("../radix-loader", () => {
+  // Built once, like the real loader's cache: a fresh object per call would
+  // hand React new component types on every render and remount the trigger.
+  const primitives = {
     TooltipPrimitive: {
       Provider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
       Root: (props: { open?: boolean; children: React.ReactNode }) => {
@@ -57,8 +59,9 @@ vi.mock("../radix-loader", () => ({
         return <div>{props.children}</div>;
       },
     },
-  }),
-}));
+  };
+  return { primeOnEvent: primeOnEventSpy, useRadixPrimitives: () => primitives };
+});
 
 describe("Tooltip wrapper — FixedDropdownVisibleContext gate (issue #8001)", () => {
   beforeEach(() => {
@@ -670,5 +673,92 @@ describe("TooltipContent — sticky and hideWhenDetached defaults (issue #8100)"
     const lastCall = contentSpy.mock.calls.at(-1)?.[0];
     expect(lastCall?.sticky).toBe("always");
     expect(lastCall?.hideWhenDetached).toBe(false);
+  });
+});
+
+describe("Tooltip — a press on its trigger dismisses it without the exit fade", () => {
+  beforeEach(() => {
+    contentSpy.mockClear();
+    rootSpy.mockClear();
+  });
+
+  const exitTokens = TOOLTIP_MOTION_CLASS.split(" ").filter((t) =>
+    t.startsWith("data-[state=closed]")
+  );
+  const contentTokens = () =>
+    String(contentSpy.mock.calls.at(-1)?.[0]?.className ?? "").split(/\s+/);
+  const hasExit = () => exitTokens.some((t) => contentTokens().includes(t));
+  const setOpen = (open: boolean) => rootSpy.mock.calls.at(-1)![0].onOpenChange!(open);
+
+  function renderTooltip(onPointerDown?: React.PointerEventHandler<HTMLButtonElement>) {
+    return render(
+      <Tooltip>
+        <TooltipTrigger onPointerDown={onPointerDown}>trigger</TooltipTrigger>
+        <TooltipContent>caption</TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  // Radix closes a tooltip from inside its trigger's pointerdown, so the press
+  // and the close land in one batch.
+  function pressAndClose(trigger: HTMLElement) {
+    act(() => {
+      fireEvent.pointerDown(trigger);
+      setOpen(false);
+    });
+  }
+
+  it("drops the exit animation when a press closes it, so the caption cannot cover what the press opened", () => {
+    expect(exitTokens.length).toBeGreaterThan(0);
+    const { getByText } = renderTooltip();
+    act(() => setOpen(true));
+    expect(hasExit()).toBe(true);
+
+    pressAndClose(getByText("trigger"));
+    expect(hasExit()).toBe(false);
+    for (const token of TOOLTIP_PRESS_DISMISSED_MOTION_CLASS.split(" ")) {
+      expect(contentTokens()).toContain(token);
+    }
+  });
+
+  it("restores the exit fade on the next open, so a hover-out still eases away", () => {
+    const { getByText } = renderTooltip();
+    act(() => setOpen(true));
+    pressAndClose(getByText("trigger"));
+    act(() => setOpen(true));
+    expect(hasExit()).toBe(true);
+    act(() => setOpen(false));
+    expect(hasExit()).toBe(true);
+  });
+
+  it("keeps the fade when the press leaves the caption up", () => {
+    // An owner that holds its caption open through a press (a validation hint)
+    // has not dismissed it; its later close must still fade.
+    const { getByText } = renderTooltip();
+    act(() => setOpen(true));
+    act(() => {
+      fireEvent.pointerDown(getByText("trigger"));
+    });
+    act(() => setOpen(false));
+    expect(hasExit()).toBe(true);
+  });
+
+  it("keeps the fade when the owner cancels the press", () => {
+    const { getByText } = renderTooltip((event) => event.preventDefault());
+    act(() => setOpen(true));
+    pressAndClose(getByText("trigger"));
+    expect(hasExit()).toBe(true);
+  });
+
+  it("ignores a press while the caption is hidden", () => {
+    // Otherwise a click long before would strip the fade from a later,
+    // owner-driven caption (a completion notice closing on its timer).
+    const { getByText } = renderTooltip();
+    act(() => {
+      fireEvent.pointerDown(getByText("trigger"));
+    });
+    act(() => setOpen(true));
+    act(() => setOpen(false));
+    expect(hasExit()).toBe(true);
   });
 });

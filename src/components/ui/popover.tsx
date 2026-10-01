@@ -2,7 +2,11 @@ import * as React from "react";
 import type * as PopoverPrimitiveType from "@radix-ui/react-popover";
 import { Slot } from "@radix-ui/react-slot";
 import { cn } from "@/lib/utils";
-import { OVERLAY_DROP_MOTION_CLASS, OVERLAY_MOTION_CLASS } from "./overlayMotion";
+import {
+  OVERLAY_DROP_MOTION_CLASS,
+  OVERLAY_MOTION_CLASS,
+  OVERLAY_SIDE_OFFSET,
+} from "./overlayMotion";
 import { BrandSurfaceReset } from "@/components/icons/BrandSurface";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import {
@@ -243,7 +247,7 @@ const PopoverContent = React.forwardRef<
     {
       className,
       align = "center",
-      sideOffset = 4,
+      sideOffset = OVERLAY_SIDE_OFFSET,
       collisionPadding = 8,
       collisionBoundary,
       style,

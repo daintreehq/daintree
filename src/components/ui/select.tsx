@@ -3,7 +3,11 @@ import type * as SelectPrimitiveType from "@radix-ui/react-select";
 import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
-import { OVERLAY_DROP_MOTION_CLASS, OVERLAY_MOTION_CLASS } from "./overlayMotion";
+import {
+  OVERLAY_DROP_MOTION_CLASS,
+  OVERLAY_MOTION_CLASS,
+  OVERLAY_SIDE_OFFSET,
+} from "./overlayMotion";
 import { composeHandlers, primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { menuRowPointerMove } from "./menu-row-hover-focus";
@@ -241,7 +245,7 @@ const SelectContent = React.forwardRef<
       className,
       children,
       position = "popper",
-      sideOffset = 4,
+      sideOffset = OVERLAY_SIDE_OFFSET,
       onEscapeKeyDown,
       onCloseAutoFocus,
       style,

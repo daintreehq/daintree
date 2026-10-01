@@ -50,12 +50,15 @@ import "@/index.css";
  *   ?fixture=<name>          one of FIXTURES below (default owner)
  *   ?platform=mac|windows    which native controls to paint (default mac)
  *   ?fullscreen=1            macOS fullscreen: no traffic lights, no spacer
+ *   ?name=<text>             project name on the pill (default Daintree)
+ *   ?branch=<text>           branch on the pill's chip (default develop)
  */
 
 const params = new URLSearchParams(window.location.search);
 const themeId = params.get("theme") ?? "daintree";
 const fixtureName = params.get("fixture") ?? "owner";
 const platform = params.get("platform") === "windows" ? "windows" : "mac";
+const branchName = params.get("branch") || "develop";
 
 const PROJECT = PREVIEW_PROJECT;
 
@@ -65,7 +68,7 @@ const WORKTREES: WorktreeSnapshot[] = [
     worktreeId: "wt-main",
     path: "/Users/greg/Projects/daintree",
     name: "main",
-    branch: "develop",
+    branch: branchName,
     isCurrent: true,
     isMainWorktree: true,
   },

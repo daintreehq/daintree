@@ -54,17 +54,42 @@
   }
 }
 
+/* ── Press ──
+ * One press for every toolbar control, whatever its size: the pressed fill
+ * lands on the first frame of the press and fades back over 150ms on release,
+ * and the control never changes size. `--_fill-duration` is the fill's
+ * transition duration, zeroed while :active — a transition takes the timing of
+ * the style it is heading into, so the step in snaps and the step out eases.
+ * A fill that eased in never reached its pressed value in an ordinary
+ * 60-100ms click.
+ *
+ * Geometry is deliberately absent. The base Button cva's `active:scale-[0.98]`
+ * is proportional to width, so on this strip it moved a 32px icon by 0.6px and
+ * the project pill by 3-9px depending on the length of the project and branch
+ * names. `scale: none` here is unlayered, so it beats that utility. Box-shadow
+ * is not transitioned either: the armed ring snaps. */
+.toolbar-icon-button,
+.toolbar-agent-button,
+.toolbar-stat-pill,
+.toolbar-project-pill {
+  --_fill-duration: 150ms;
+}
+
+.toolbar-icon-button:active,
+.toolbar-agent-button:active,
+.toolbar-stat-pill:active,
+.toolbar-project-pill:active {
+  --_fill-duration: 0s;
+  scale: none;
+}
+
 .toolbar-icon-button,
 .toolbar-agent-button {
   --_hover-fg: var(--toolbar-control-hover-fg, var(--theme-accent-primary));
   --_hover-shadow: var(--toolbar-control-hover-shadow, none);
-  /* Press-scale is owned by the base Button cva (`active:scale-[0.98] active:duration-[1ms]`),
-   * so transform is intentionally absent from this transition list — adding it would slow
-   * the snap to 150ms and override the cva's intent. Same for box-shadow: the armed-state
-   * inset ring is the result of an intentional click or keypress and should snap too. */
   transition:
     color 150ms ease-out,
-    background-color 150ms ease-out;
+    background-color var(--_fill-duration) ease-out;
 }
 
 .toolbar-icon-button:hover {
@@ -137,22 +162,25 @@
   box-shadow: var(--toolbar-control-armed-shadow, inset 0 0 0 1px var(--theme-border-strong));
 }
 
-/* The press snap (transform: scale(0.98) at 1ms) comes from the base Button cva.
- * This rule only contributes the momentary click background for non-armed
- * buttons. Fill default stays overlay-emphasis so dark is unchanged; light
- * flips to the overlay-raised lift below alongside armed. */
+/* The pressed fill: one step further from the surface than hover, in both
+ * polarities. It comes after armed in source order, so pressing an armed
+ * control still shows the press. */
 .toolbar-icon-button:active,
 .toolbar-agent-button:active {
   background: var(--toolbar-control-active-bg, var(--theme-overlay-emphasis));
 }
 
-/* LIGHT-only: flip the armed/active FILL from a darkening overlay-emphasis to the
+/* LIGHT-only: flip the armed FILL from a darkening overlay-emphasis to the
  * elevate-to-select overlay-raised lift. The :where() keeps specificity equal to
  * the base rules above (selector specificity unchanged; the polarity scope only
  * adds a zero-weight :where), so source order — these come later — wins, and the
- * armed-over-hover and :active tiebreakers are preserved. The fallback chain
- * mirrors the base rules so a per-theme --toolbar-control-armed-bg / -active-bg
- * override still wins on light. Dark never matches this block. */
+ * armed-over-hover tiebreaker is preserved. The fallback chain mirrors the base
+ * rules so a per-theme --toolbar-control-armed-bg override still wins on light.
+ * Dark never matches this block.
+ *
+ * The press does not flip with it. The raised lift is lighter than the light
+ * themes' darkening hover, so a pressed control read as letting go; the
+ * press keeps overlay-emphasis, a deeper step of the hover's own tint. */
 :where(.light, [data-color-mode="light"])
   .toolbar-icon-button[aria-pressed="true"]:where(:not([data-sidebar-toggle])),
 :where(.light, [data-color-mode="light"]) .toolbar-icon-button[aria-checked="true"],
@@ -165,9 +193,11 @@
   background: var(--toolbar-control-armed-bg, var(--theme-overlay-raised));
 }
 
+/* Restated after the light armed block so pressing an armed control on light
+ * still shows the press; same fill as the base rule. */
 :where(.light, [data-color-mode="light"]) .toolbar-icon-button:active,
 :where(.light, [data-color-mode="light"]) .toolbar-agent-button:active {
-  background: var(--toolbar-control-active-bg, var(--theme-overlay-raised));
+  background: var(--toolbar-control-active-bg, var(--theme-overlay-emphasis));
 }
 
 /* One disabled treatment for every toolbar icon button, whether it is natively
@@ -319,23 +349,31 @@
   }
 }
 
-/* The stat pills transition opacity, background-color and scale as Tailwind
- * utilities (ForgeStatPill.tsx) — scale is what gives the base Button cva's
- * `active:scale-[0.98]` press snap a property to interpolate.
- *
- * Each pill is a Radix context-menu trigger layered over its tooltip trigger, so
- * it always carries the menu's data-state — "closed" at rest, "open" while its
- * menu is — and the global reduced-motion control rule in index.css excludes
- * exactly [data-state="open"] and [data-state="closed"]. So the pill always
- * falls through that rule's exclusion and would keep easing its scale.
- * Drop the scale interpolation here to cover it. The tint fades are not spatial
- * motion, so they stay — matching the reduce-motion block further down. The
- * scale still applies on :active; it just snaps instead of easing back.
- * WCAG 2.3.3. */
-@variant reduce-motion {
-  .toolbar-stat-pill {
-    transition-property: opacity, background-color;
-  }
+/* The stat pills take the toolbar press (above) and the toolbar armed fill.
+ * Hover stays on the stats capsule's own token, set in ForgeStatPill.tsx; these
+ * rules are unlayered, so armed and pressed win over that utility without a
+ * specificity contest. No spatial motion remains, so reduced motion has nothing
+ * to remove here. */
+.toolbar-stat-pill {
+  transition:
+    color 150ms ease-out,
+    background-color var(--_fill-duration) ease-out;
+}
+
+.toolbar-stat-pill[aria-expanded="true"] {
+  background: var(--toolbar-control-armed-bg, var(--theme-overlay-emphasis));
+}
+
+.toolbar-stat-pill:active {
+  background: var(--toolbar-control-active-bg, var(--theme-overlay-emphasis));
+}
+
+:where(.light, [data-color-mode="light"]) .toolbar-stat-pill[aria-expanded="true"] {
+  background: var(--toolbar-control-armed-bg, var(--theme-overlay-raised));
+}
+
+:where(.light, [data-color-mode="light"]) .toolbar-stat-pill:active {
+  background: var(--toolbar-control-active-bg, var(--theme-overlay-emphasis));
 }
 
 .toolbar-project-pill {
@@ -356,21 +394,18 @@
    * lift lives on the ::before overlay below — stacked OVER the pill's own
    * background (a near-transparent wash by default, an opaque near-white capsule
    * on light themes) rather than replacing it. Replacing erased the capsule fill
-   * on hover; layering preserves it. The pill is a raw button, so it states the
-   * base Button cva's press snap itself (below); transform stays out of the
-   * transition so the snap is instant both ways, as on its toolbar siblings. */
+   * on hover; layering preserves it. The press is the toolbar's (above): no
+   * scale, so the pill's width — set by the project and branch names — never
+   * decides how big a click looks. */
   transition: color 150ms ease-out;
-}
-
-.toolbar-project-pill:active {
-  transform: scale(0.98);
 }
 
 /* Surface-lift overlay. Sits above the pill's background fill but below its
  * content — direct children are lifted to z-index 1 so the tint never washes out
  * the label. Fading opacity keeps the Tier 1 150ms ease-out without animating the
  * background-image layer (gradients can't be transitioned). Hover paints the
- * elevated overlay; armed/active escalate to emphasis (raised on light). */
+ * elevated overlay; armed escalates to emphasis (raised on light) and the press
+ * to emphasis in both polarities. Both properties take the press timing. */
 .toolbar-project-pill::before {
   content: "";
   position: absolute;
@@ -380,7 +415,9 @@
   pointer-events: none;
   opacity: 0;
   background: var(--toolbar-control-hover-bg, var(--theme-overlay-elevated));
-  transition: opacity 150ms ease-out;
+  transition:
+    opacity var(--_fill-duration) ease-out,
+    background-color var(--_fill-duration) ease-out;
 }
 
 .toolbar-project-pill > * {
@@ -399,11 +436,19 @@
 
 /* Armed state (dropdown open). aria-expanded is hand-authored only when a project
  * is selected; data-state="open" is injected by the Radix trigger and covers the
- * no-project case. The overlay escalates to the emphasis fill. */
+ * no-project case. The overlay escalates to the emphasis fill, and the pill's
+ * own 1px border steps up to the armed ring's ink — the same edge the icon
+ * buttons draw as an inset ring, which here would sit inside the border and
+ * double it. Like that ring it snaps. */
 .toolbar-project-pill[aria-expanded="true"]::before,
 .toolbar-project-pill[data-state="open"]::before {
   opacity: 1;
   background: var(--toolbar-control-armed-bg, var(--theme-overlay-emphasis));
+}
+
+.toolbar-project-pill[aria-expanded="true"],
+.toolbar-project-pill[data-state="open"] {
+  border-color: var(--theme-border-strong);
 }
 
 .toolbar-project-pill:active::before {
@@ -411,16 +456,17 @@
   background: var(--toolbar-control-active-bg, var(--theme-overlay-emphasis));
 }
 
-/* LIGHT-only: flip the armed/active fill to the elevate-to-select overlay-raised
- * lift, mirroring the icon-button block above — overlay-emphasis subtracts
- * luminance and reads as a smudge on near-white light themes. Dark never matches. */
+/* LIGHT-only: flip the armed fill to the elevate-to-select overlay-raised lift,
+ * mirroring the icon-button block above — overlay-emphasis subtracts luminance
+ * and reads as a smudge on a near-white chip that stays open. The press keeps
+ * emphasis, as on the icon buttons. Dark never matches. */
 :where(.light, [data-color-mode="light"]) .toolbar-project-pill[aria-expanded="true"]::before,
 :where(.light, [data-color-mode="light"]) .toolbar-project-pill[data-state="open"]::before {
   background: var(--toolbar-control-armed-bg, var(--theme-overlay-raised));
 }
 
 :where(.light, [data-color-mode="light"]) .toolbar-project-pill:active::before {
-  background: var(--toolbar-control-active-bg, var(--theme-overlay-raised));
+  background: var(--toolbar-control-active-bg, var(--theme-overlay-emphasis));
 }
 
 .toolbar-project-chip {
@@ -595,8 +641,9 @@
  * not a pip, so scaling would read as a glitch. @starting-style + allow-discrete
  * drive entry/exit in pure CSS; the button stays mounted and toggles
  * data-visible (going display:none when empty so it reclaims its layout slot
- * and drops out of roving focus). color/background-color stay at 150ms so the
- * hover tint still animates at its normal cadence.
+ * and drops out of roving focus). The fill keeps the toolbar press timing
+ * (`--_fill-duration`) and color stays at 150ms, so hover and press read as on
+ * every other toolbar button.
  */
 [data-toolbar-overflow-trigger] {
   display: none;
@@ -605,7 +652,7 @@
     display var(--duration-120) allow-discrete,
     opacity var(--duration-120) var(--ease-exit),
     color var(--duration-150) ease-out,
-    background-color var(--duration-150) ease-out;
+    background-color var(--_fill-duration) ease-out;
 }
 
 [data-toolbar-overflow-trigger][data-visible="true"] {
@@ -615,7 +662,7 @@
     display var(--duration-200) allow-discrete,
     opacity var(--duration-200) var(--ease-spring-critical),
     color var(--duration-150) ease-out,
-    background-color var(--duration-150) ease-out;
+    background-color var(--_fill-duration) ease-out;
 
   @starting-style {
     opacity: 0;

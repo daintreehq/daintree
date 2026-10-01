@@ -874,11 +874,12 @@ describe("FixedDropdown rAF re-position throttle (issue #9580)", () => {
   it("positions synchronously on open without waiting for a frame", () => {
     const { ref } = createMutableAnchor(40, 100);
     render(
-      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref} sideOffset={8}>
         <div data-testid="dropdown-body">Content</div>
       </FixedDropdown>
     );
-    // bottom(40) + sideOffset(8) = 48 — set before any rAF is flushed.
+    // bottom(40) + sideOffset(8) = 48 — set before any rAF is flushed. The
+    // offset is passed explicitly so these cases test scheduling, not the default.
     expect(portalTop()).toBe("48px");
     expect(rafQueue.size).toBe(0);
   });
@@ -886,7 +887,7 @@ describe("FixedDropdown rAF re-position throttle (issue #9580)", () => {
   it("coalesces a burst of scroll events into a single frame", () => {
     const { ref } = createMutableAnchor(40, 100);
     render(
-      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref} sideOffset={8}>
         <div data-testid="dropdown-body">Content</div>
       </FixedDropdown>
     );
@@ -904,7 +905,7 @@ describe("FixedDropdown rAF re-position throttle (issue #9580)", () => {
   it("applies the latest measurement when the frame flushes", () => {
     const { ref, setRect } = createMutableAnchor(40, 100);
     render(
-      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref} sideOffset={8}>
         <div data-testid="dropdown-body">Content</div>
       </FixedDropdown>
     );
@@ -919,7 +920,7 @@ describe("FixedDropdown rAF re-position throttle (issue #9580)", () => {
   it("re-arms scheduling after a frame flushes", () => {
     const { ref, setRect } = createMutableAnchor(40, 100);
     render(
-      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref} sideOffset={8}>
         <div data-testid="dropdown-body">Content</div>
       </FixedDropdown>
     );
@@ -940,7 +941,7 @@ describe("FixedDropdown rAF re-position throttle (issue #9580)", () => {
   it("does not regress position when the anchor rect is unchanged across frames", () => {
     const { ref } = createMutableAnchor(40, 100);
     render(
-      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref} sideOffset={8}>
         <div data-testid="dropdown-body">Content</div>
       </FixedDropdown>
     );
@@ -956,7 +957,7 @@ describe("FixedDropdown rAF re-position throttle (issue #9580)", () => {
   it("coalesces resize events through the same throttle", () => {
     const { ref } = createMutableAnchor(40, 100);
     render(
-      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref} sideOffset={8}>
         <div data-testid="dropdown-body">Content</div>
       </FixedDropdown>
     );
@@ -972,7 +973,7 @@ describe("FixedDropdown rAF re-position throttle (issue #9580)", () => {
   it("applies the rect from the last event in a coalesced burst", () => {
     const { ref, setRect } = createMutableAnchor(40, 100);
     render(
-      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref} sideOffset={8}>
         <div data-testid="dropdown-body">Content</div>
       </FixedDropdown>
     );
@@ -989,7 +990,7 @@ describe("FixedDropdown rAF re-position throttle (issue #9580)", () => {
   it("cancels a pending re-position frame on unmount", () => {
     const { ref } = createMutableAnchor(40, 100);
     const { unmount } = render(
-      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref} sideOffset={8}>
         <div data-testid="dropdown-body">Content</div>
       </FixedDropdown>
     );
@@ -1007,7 +1008,7 @@ describe("FixedDropdown rAF re-position throttle (issue #9580)", () => {
   it("cancels a pending re-position frame and stops re-scheduling when closed", () => {
     const { ref } = createMutableAnchor(40, 100);
     const { rerender } = render(
-      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref}>
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref} sideOffset={8}>
         <div data-testid="dropdown-body">Content</div>
       </FixedDropdown>
     );
@@ -1017,7 +1018,7 @@ describe("FixedDropdown rAF re-position throttle (issue #9580)", () => {
     cancelSpy.mockClear();
 
     rerender(
-      <FixedDropdown open={false} onOpenChange={onOpenChange} anchorRef={ref}>
+      <FixedDropdown open={false} onOpenChange={onOpenChange} anchorRef={ref} sideOffset={8}>
         <div data-testid="dropdown-body">Content</div>
       </FixedDropdown>
     );
