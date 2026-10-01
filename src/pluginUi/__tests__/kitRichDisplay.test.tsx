@@ -27,8 +27,8 @@ import {
   histogramBins,
   rampColor,
   stackLayers,
-  withoutOverlaps,
 } from "@/components/PluginKit/PluginKitRichCharts";
+import { withoutOverlaps } from "@/components/PluginKit/PluginKitCharts";
 import { PLAIN_STYLE } from "@/components/PluginKit/kitAnsi";
 
 // The setup file's ResizeObserver never reports; charts size from its
@@ -224,8 +224,27 @@ describe("TerminalOutput", () => {
 
   it("says there is no output, and drops the toolbar on request", () => {
     mount(createElement(kit.TerminalOutput, { text: "", "aria-label": "Out", toolbar: false }));
-    expect(screen.getByRole("log", { name: "Out" }).textContent).toBe("No output");
+    const log = screen.getByRole("log", { name: "Out" });
+    expect(log.textContent).toBe("No output");
+    // The same one quiet stop as a log with output in it.
+    expect(log.getAttribute("aria-live")).toBe("off");
+    expect(log.tabIndex).toBe(0);
     expect(screen.queryByRole("toolbar")).toBeNull();
+  });
+
+  it("still says what it dropped when there is no toolbar", () => {
+    mount(
+      createElement(kit.TerminalOutput, {
+        text: "a\nb\nc",
+        "aria-label": "Out",
+        maxLines: 1,
+        toolbar: false,
+        follow: false,
+      })
+    );
+    expect(document.querySelector("[data-terminal-dropped]")?.textContent).toBe(
+      "2 earlier lines not kept"
+    );
   });
 
   it("parses only the new tail of output that grows", () => {
@@ -383,6 +402,15 @@ describe("ImageViewer", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("leaves a caption's own scroll keys to the caption", () => {
+    const onIndexChange = vi.fn();
+    mount(createElement(kit.ImageViewer, { images: SHOTS, onIndexChange }));
+    const caption = document.querySelector<HTMLElement>("[data-image-viewer-caption]")!;
+    fireEvent.keyDown(caption, { key: "PageDown" });
+    fireEvent.keyDown(caption, { key: "End" });
+    expect(onIndexChange).not.toHaveBeenCalled();
+  });
+
   it("never pans a picture past its own edges", () => {
     const natural = { width: 1000, height: 500 };
     const stage = { width: 400, height: 400 };
@@ -475,6 +503,36 @@ describe("charts", () => {
     expect(hollow).toHaveLength(2);
     expect(filled).toHaveLength(2);
     for (const cell of hollow) expect(cell.getAttribute("class")).toContain("stroke-");
+    // A value's faintest shade still stands off the surface on a full-hue contour.
+    for (const cell of filled) expect(cell.style.stroke).toContain("--theme-category-blue");
+  });
+
+  it("never lets formatted x labels collide, on the new charts or the line chart", () => {
+    const rows = Array.from({ length: 9 }, (_, i) => ({ x: 200 + i * 175, y: i }));
+    const long = (value: number) => `${value.toLocaleString()} lines of code`;
+    const extents = (container: Element) =>
+      Array.from(container.querySelectorAll<SVGTextElement>("[data-chart-x-tick]")).map((tick) => {
+        const at = Number(tick.getAttribute("x"));
+        const width = (tick.textContent ?? "").length * 6.2;
+        const anchor = tick.getAttribute("text-anchor");
+        const start = anchor === "start" ? at : anchor === "end" ? at - width : at - width / 2;
+        return [start, start + width] as const;
+      });
+    for (const component of [kit.ScatterChart, kit.LineChart]) {
+      const { container, unmount } = mount(
+        createElement(component, {
+          data: rows,
+          x: "x",
+          series: [{ key: "y", label: "Y" }],
+          formatX: long,
+          "aria-label": "Ticks",
+        })
+      );
+      const spans = extents(container);
+      expect(spans.length).toBeGreaterThan(1);
+      for (let i = 1; i < spans.length; i++) expect(spans[i]![0]).toBeGreaterThan(spans[i - 1]![1]);
+      unmount();
+    }
   });
 
   it("lays a ContributionGrid out a week a column, ending on the last day", () => {
@@ -502,7 +560,20 @@ describe("charts", () => {
     expect(tooltip()?.textContent).toContain("4commits");
     fireEvent.keyDown(plot(), { key: "ArrowUp" });
     expect(tooltip()?.textContent).toContain("2commits");
-    expect(container.textContent).toContain("6 commits in all");
+    // The table is the calendar as drawn: a row per week, a column per weekday.
+    const rows = container.querySelectorAll("table tbody tr");
+    expect(rows).toHaveLength(4);
+    const last = rows[3]!.querySelectorAll("td");
+    // Sunday-first weeks: Tue the 29th and Wed the 30th, then days not yet come.
+    expect(Array.from(last).map((cell) => cell.textContent)).toEqual([
+      "0",
+      "0",
+      "2",
+      "4",
+      "No value",
+      "No value",
+      "No value",
+    ]);
   });
 
   it("buckets contribution counts by the busiest day", () => {

@@ -1096,6 +1096,38 @@ export function edgeAnchor(
   return "middle";
 }
 
+/**
+ * Axis labels that do not collide, as `edgeAnchor` places them: a label that
+ * would overlap the one before it is dropped, except the last, which displaces
+ * every neighbour it would touch so the scale's end stays named. Exported for tests.
+ */
+export function withoutOverlaps<T extends { at: number; text: string }>(
+  ticks: readonly T[],
+  left: number,
+  right: number
+): T[] {
+  const extent = (tick: T): [number, number] => {
+    const width = tick.text.length * AXIS_CHAR_PX;
+    const anchor = edgeAnchor(tick, left, right);
+    const start =
+      anchor === "start" ? tick.at : anchor === "end" ? tick.at - width : tick.at - width / 2;
+    return [start, start + width];
+  };
+  const kept: T[] = [];
+  ticks.forEach((tick, index) => {
+    const [start] = extent(tick);
+    const clashes = (previous: T | undefined) =>
+      previous !== undefined && extent(previous)[1] + 6 > start;
+    if (index !== ticks.length - 1) {
+      if (!clashes(kept[kept.length - 1])) kept.push(tick);
+      return;
+    }
+    while (clashes(kept[kept.length - 1])) kept.pop();
+    kept.push(tick);
+  });
+  return kept;
+}
+
 export function linear(d0: number, d1: number, r0: number, r1: number): (value: number) => number {
   const span = d1 - d0;
   return (value) => (span === 0 ? (r0 + r1) / 2 : r0 + ((value - d0) / span) * (r1 - r0));

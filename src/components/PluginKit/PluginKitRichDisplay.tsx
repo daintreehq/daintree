@@ -305,6 +305,8 @@ function KitTerminalOutput({
   const isEmpty = lines.length === 1 && lines[0]!.length === 0;
   const gutterCh = String(dropped + lines.length).length + 1;
   const copyText = () => lines.map(lineText).join("\n");
+  // Copy and the view hold only the kept lines; say how many went.
+  const droppedNote = dropped > 0 ? `${pluralize(dropped, "earlier line")} not kept` : null;
 
   return (
     <div
@@ -317,13 +319,12 @@ function KitTerminalOutput({
           <div className="min-w-0 flex-1 truncate text-xs font-medium text-text-secondary">
             {node(title)}
           </div>
-          {dropped > 0 ? (
-            // Copy and the view hold only the kept lines; say how many went.
+          {droppedNote ? (
             <span
               data-terminal-dropped=""
               className="shrink-0 text-xs tabular-nums text-text-secondary"
             >
-              {`${pluralize(dropped, "earlier line")} not kept`}
+              {droppedNote}
             </span>
           ) : null}
           <div
@@ -353,12 +354,23 @@ function KitTerminalOutput({
             />
           </div>
         </div>
+      ) : droppedNote ? (
+        // With no toolbar, the note still says the view is not the whole output.
+        <div
+          data-terminal-dropped=""
+          className="shrink-0 border-b border-divider px-3 py-1 text-xs tabular-nums text-text-secondary"
+        >
+          {droppedNote}
+        </div>
       ) : null}
       {isEmpty ? (
         <div
+          // The same one stop and quiet log as with output in it.
           role="log"
+          aria-live="off"
           aria-label={label}
-          className="flex min-h-0 flex-1 items-center justify-center text-xs text-text-secondary"
+          tabIndex={0}
+          className="flex min-h-0 flex-1 items-center justify-center text-xs text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         >
           {hasContent(empty) ? node(empty) : "No output"}
         </div>
@@ -686,7 +698,6 @@ function ImageStage({
     return () => observer.disconnect();
   }, [stageElement]);
 
-  useEffect(() => trackInputModality(), []);
   // AppDialog focuses the first tabbable control a frame after it opens, and
   // its programmatic focus rings whatever it lands on. A pointer opening gets
   // the stage, focused without a ring, before that frame; a keyboard opening
@@ -829,19 +840,27 @@ function ImageStage({
 
   const step = (to: number) => {
     if (to < 0 || to >= count || to === index) return;
-    // Stepping swaps the stage's content: focus inside it (a failed image's
-    // Retry) moves to the stage first, or it would fall out of the viewer.
+    // Stepping swaps the stage's content and the caption: focus inside either
+    // (a failed image's Retry, a long caption) moves to the stage first, or it
+    // would fall out of the viewer.
     const active = document.activeElement;
-    if (stageElement && active !== stageElement && stageElement.contains(active)) {
-      stageElement.focus({ preventScroll: true });
-    }
+    const swapped =
+      active instanceof Element &&
+      active !== stageElement &&
+      (stageElement?.contains(active) || active.closest("[data-image-viewer-caption]") !== null);
+    if (stageElement && swapped) stageElement.focus({ preventScroll: true });
     onStep(to);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
-    // The toolbar keeps its own arrows.
-    if (event.target instanceof Element && event.target.closest('[role="toolbar"]')) return;
+    // The toolbar keeps its own arrows, and a scrolling caption its own scroll keys.
+    if (
+      event.target instanceof Element &&
+      event.target.closest('[role="toolbar"], [data-image-viewer-caption]')
+    ) {
+      return;
+    }
     const key = event.key;
     let handled = true;
     if (key === "+" || key === "=") zoomTo(scale * BUTTON_ZOOM_STEP);
@@ -1081,6 +1100,9 @@ function KitImageViewer({
   ...rest
 }: PluginImageViewerProps) {
   const list = useMemo(() => readImages(images), [images]);
+  // From the viewer's mount, before a lightbox opens: the key that opens it
+  // must already count as keyboard input.
+  useEffect(() => trackInputModality(), []);
   const whole = (value: unknown) =>
     typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
   const [ownIndex, setOwnIndex] = useState(whole(defaultIndex) ?? 0);
