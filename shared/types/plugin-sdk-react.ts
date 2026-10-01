@@ -3846,6 +3846,1155 @@ export interface PluginContainerSize {
 /** What `useContainerSize` and `useBreakpoint` observe: a ref, or the element itself. */
 export type PluginContainerTarget = RefObject<Element | null> | Element | null | undefined;
 
+// Text inputs: mention autocomplete, the agent composer, inline rename,
+// key/value and list editors, secrets and shortcut recording.
+
+/** One row of a `MentionTextarea` suggestion menu. */
+export interface PluginMentionSuggestion {
+  /** Unique within one list. */
+  id: string;
+  /** The row's text, drawn in the mono face the host's composer uses for tokens. */
+  label: string;
+  /**
+   * What replaces the trigger and the typed query. Defaults to the trigger
+   * followed by `label` (`@alice`). A space follows it unless it already
+   * ends in one.
+   */
+  insertText?: string;
+  /** A quieter second part of the row: a name, a path, what a command does. */
+  description?: string;
+  /** A short neutral tag after the label ("Skill", "Team"). */
+  badge?: string;
+  disabled?: boolean;
+}
+
+/** A character that opens the suggestion menu, and how its menu reads. */
+export interface PluginMentionTrigger {
+  /** One character: `"@"`, `"/"`, `"#"`, `":"`. */
+  char: string;
+  /** The menu's header ("People", "Commands"). Defaults to none. */
+  title?: string;
+  /** What the menu says when nothing matches. Defaults to "No matches". */
+  emptyMessage?: string;
+  /**
+   * Only at the very start of the text, as a slash command is. Otherwise the
+   * trigger counts at the start or after whitespace, so `a@b.c` never opens it.
+   */
+  atStart?: boolean;
+}
+
+/**
+ * Props of `MentionTextarea`: a textarea that grows with its text and opens
+ * the host's autocomplete menu when a trigger character is typed. Up and
+ * Down move through the suggestions, Enter or Tab insert one, Escape closes
+ * the menu and keeps the text. Focus stays in the textarea throughout.
+ */
+export interface PluginMentionTextareaProps extends PluginAriaRootAttributes {
+  value?: string;
+  defaultValue?: string;
+  onValueChange?: (value: string) => void;
+  /** The trigger characters, as `"@"` or with a title and empty message. */
+  triggers?: readonly (string | PluginMentionTrigger)[];
+  /**
+   * The suggestions for `query`, the text typed after `trigger`. May return a
+   * promise; while it is out the last rows stay up, dimmed, and a reply that
+   * arrives after a newer query is dropped. At most 50 rows are shown.
+   */
+  getSuggestions?: (
+    trigger: string,
+    query: string
+  ) => readonly PluginMentionSuggestion[] | Promise<readonly PluginMentionSuggestion[]>;
+  /** Called after a suggestion was inserted. */
+  onSuggestionInsert?: (suggestion: PluginMentionSuggestion, trigger: string) => void;
+  /**
+   * Keys the menu did not take. Call `preventDefault()` to keep the
+   * textarea from acting on one.
+   */
+  onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onBlur?: () => void;
+  onFocus?: () => void;
+  placeholder?: string;
+  name?: string;
+  disabled?: boolean;
+  readOnly?: boolean;
+  autoFocus?: boolean;
+  spellCheck?: boolean;
+  maxLength?: number;
+  invalid?: boolean;
+  /** Rows shown when empty. Defaults to 1. */
+  minRows?: number;
+  /** The height it grows to before it scrolls. Defaults to 8 rows. */
+  maxRows?: number;
+  /** `code` sets it in the mono face, for prompts and commands. */
+  variant?: "default" | "code";
+  density?: "default" | "compact";
+  /** The textarea element. */
+  ref?: Ref<HTMLTextAreaElement>;
+  className?: string;
+}
+
+/** A file or context item attached to a `Composer`, drawn as a removable chip. */
+export interface PluginComposerAttachment {
+  /** Unique within the list. */
+  id: string;
+  /** The chip's text: a file name, "Selection", "Diff". */
+  name: string;
+  /** A quiet detail after the name ("12 KB", "L10–24"). */
+  detail?: string;
+  /** Defaults to `file`. */
+  icon?: PluginIconSource;
+}
+
+/**
+ * Props of `Composer`: the agent composer. A `MentionTextarea` in the host
+ * composer's shell, with attachment chips above the text and a footer that
+ * holds an attach button, your own controls and Send, which turns into Stop
+ * while `busy`. Cmd/Ctrl+Enter sends and Enter is a new line, unless
+ * `submitOn` is `"enter"`. Files dropped or pasted onto it go to `onAttach`.
+ */
+export interface PluginComposerProps extends PluginAriaRootAttributes {
+  value?: string;
+  defaultValue?: string;
+  onValueChange?: (value: string) => void;
+  /** Called with the text when the user sends. Clearing the draft is up to you. */
+  onSubmit?: (value: string) => void;
+  /**
+   * Which key sends. Defaults to `"mod+enter"`, with Enter a new line. With
+   * `"enter"`, Enter sends, Shift+Enter is a new line, and Cmd/Ctrl+Enter
+   * still sends.
+   */
+  submitOn?: "mod+enter" | "enter";
+  /** An agent is working: Send becomes Stop and sending is held, the text stays editable. */
+  busy?: boolean;
+  /** Called by Stop, or Escape in the composer, while `busy`. */
+  onStop?: () => void;
+  disabled?: boolean;
+  placeholder?: string;
+  triggers?: readonly (string | PluginMentionTrigger)[];
+  getSuggestions?: PluginMentionTextareaProps["getSuggestions"];
+  onSuggestionInsert?: PluginMentionTextareaProps["onSuggestionInsert"];
+  attachments?: readonly PluginComposerAttachment[];
+  onRemoveAttachment?: (id: string) => void;
+  /**
+   * Files from the attach button, a drop or a paste. Without it there is no
+   * attach button and files are not taken.
+   */
+  onAttach?: (files: File[]) => void;
+  /** As on `<input type="file">`: extensions and MIME types, comma-separated. */
+  accept?: string;
+  /**
+   * At most this many characters. A count shows once the text passes 80% of
+   * it.
+   */
+  maxLength?: number;
+  /** Your controls in the footer, before Send: an agent picker, a mode toggle. */
+  toolbar?: ReactNode;
+  /** Send's label. Defaults to "Send". */
+  submitLabel?: string;
+  /** Defaults to 2. */
+  minRows?: number;
+  /** Defaults to 10. */
+  maxRows?: number;
+  autoFocus?: boolean;
+  /** The textarea element. */
+  ref?: Ref<HTMLTextAreaElement>;
+  className?: string;
+}
+
+/**
+ * Props of `InlineEdit`: text that turns into a field to rename it, as a
+ * pane title does. A click (or a double-click, with `activation`), F2 or
+ * Enter starts editing; Enter commits, Escape cancels, and leaving the field
+ * commits unless `blurAction` is `"cancel"`. An unchanged value commits nothing.
+ */
+export interface PluginInlineEditProps extends PluginRootAttributes {
+  value: string;
+  /**
+   * Called with the trimmed new value. Return a promise to hold the field,
+   * read-only with a spinner, until it settles; a rejection keeps the field
+   * open with the error's message under it.
+   */
+  onCommit: (value: string) => void | Promise<void>;
+  /**
+   * A message refuses the value; `null` or `undefined` accepts it, and a
+   * validator that throws refuses. Unless `allowEmpty`, Enter on an emptied
+   * field is refused and leaving it puts the value back.
+   */
+  validate?: (value: string) => string | null | undefined;
+  allowEmpty?: boolean;
+  /** Shown in place of an empty value. */
+  placeholder?: string;
+  /** What leaving the field does. Defaults to `"commit"`. */
+  blurAction?: "commit" | "cancel";
+  /** What starts editing with the pointer. Defaults to `"click"`. */
+  activation?: "click" | "doubleClick";
+  /** `stem` selects a file name up to its extension. Defaults to `all`. */
+  selectOnEdit?: "all" | "stem" | "end";
+  /** Editing, controlled. */
+  editing?: boolean;
+  onEditingChange?: (editing: boolean) => void;
+  maxLength?: number;
+  disabled?: boolean;
+  /** The type size: `sm` for rows and headers (the default), `md` and `lg` for titles. */
+  size?: "sm" | "md" | "lg";
+  /** Required: names the field ("Request name"). */
+  "aria-label": string;
+  className?: string;
+}
+
+/** One row of a `KeyValueEditor`. */
+export interface PluginKeyValuePair {
+  /** Keeps a row's identity through edits and reordering. The editor adds one when it is missing. */
+  id?: string;
+  key: string;
+  value: string;
+  /** Draw the value as a `SecretInput`. */
+  secret?: boolean;
+}
+
+/**
+ * Props of `KeyValueEditor`: rows of key and value fields for environment
+ * variables, headers and mappings. A value with no key and a repeated key are
+ * marked on the row; an entirely empty row is not. Pasting `KEY=value` or `Key: value` lines into a key field adds a
+ * row per line.
+ */
+export interface PluginKeyValueEditorProps extends PluginRootAttributes {
+  value?: readonly PluginKeyValuePair[];
+  defaultValue?: readonly PluginKeyValuePair[];
+  onValueChange?: (pairs: PluginKeyValuePair[]) => void;
+  /** Whether every row is valid, called when that changes (and once on mount). */
+  onValidityChange?: (valid: boolean) => void;
+  /** A message refuses a key; `null` or `undefined` accepts it. Runs after the built-in checks. */
+  validateKey?: (key: string) => string | null | undefined;
+  /** Compare keys ignoring case, as HTTP headers do. */
+  caseInsensitiveKeys?: boolean;
+  allowDuplicateKeys?: boolean;
+  /** Rows can be dragged into a new order by a grip, or moved with the keyboard. */
+  reorderable?: boolean;
+  /** Column names over the fields. Default to "Key" and "Value". */
+  keyLabel?: string;
+  valueLabel?: string;
+  keyPlaceholder?: string;
+  valuePlaceholder?: string;
+  /** The add button's label. Defaults to "Add". */
+  addLabel?: string;
+  /** No more rows than this. */
+  max?: number;
+  /** Show a toggle on each row that masks its value. */
+  allowSecretToggle?: boolean;
+  disabled?: boolean;
+  /** Required: names the editor ("Headers"). */
+  "aria-label": string;
+  className?: string;
+}
+
+/**
+ * Props of `ListEditor`: an editable list of single values (hosts, globs,
+ * scopes). Pasting several lines into a field adds a row per line; repeated
+ * values are marked.
+ */
+export interface PluginListEditorProps extends PluginRootAttributes {
+  value?: readonly string[];
+  defaultValue?: readonly string[];
+  onValueChange?: (items: string[]) => void;
+  onValidityChange?: (valid: boolean) => void;
+  /** A message refuses an item; `null` or `undefined` accepts it. Empty rows are ignored, not refused. */
+  validate?: (item: string) => string | null | undefined;
+  allowDuplicates?: boolean;
+  reorderable?: boolean;
+  placeholder?: string;
+  addLabel?: string;
+  max?: number;
+  /** `code` sets the fields in the mono face, for paths and globs. */
+  variant?: "default" | "code";
+  disabled?: boolean;
+  "aria-label": string;
+  className?: string;
+}
+
+/**
+ * Props of `SecretInput`: a masked field for a token or key, with a reveal
+ * toggle. With `stored`, the field shows that a secret is saved without
+ * knowing it, and offers Replace (and Clear, with `onClear`). Copying out of
+ * the field is blocked unless `allowCopy`.
+ */
+export interface PluginSecretInputProps extends PluginAriaRootAttributes {
+  value?: string;
+  defaultValue?: string;
+  onValueChange?: (value: string) => void;
+  /** A secret is saved already; the view does not hold it. */
+  stored?: boolean;
+  /** The last few characters of the saved secret, shown after the dots ("a1b2"). At most 6 are used. */
+  storedHint?: string;
+  /** Called when the user chooses Replace; the field is then empty and focused. */
+  onReplace?: () => void;
+  /** Called when the user backs out of a replace, back to the saved secret. */
+  onCancelReplace?: () => void;
+  /** Shows Clear beside the saved secret. Asking for confirmation is up to you. */
+  onClear?: () => void;
+  /** Enter in the field. */
+  onSubmit?: (value: string) => void;
+  /** Allows copying and cutting the value out of the field. */
+  allowCopy?: boolean;
+  /** Defaults to true. */
+  revealable?: boolean;
+  placeholder?: string;
+  name?: string;
+  disabled?: boolean;
+  invalid?: boolean;
+  autoFocus?: boolean;
+  density?: "default" | "compact";
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  className?: string;
+}
+
+/**
+ * Props of `ShortcutRecorder`: focus it and press a shortcut to record it,
+ * in the app's combo notation (`"Cmd+Shift+K"`; Cmd is Ctrl off macOS).
+ * Escape stops recording, a plain Backspace or Delete clears, a plain Tab
+ * moves on. A shortcut Daintree
+ * already uses is flagged, since Daintree's binding wins over a view's.
+ */
+export interface PluginShortcutRecorderProps extends PluginAriaRootAttributes {
+  /** The combo, controlled; `null` or `""` for none. */
+  value?: string | null;
+  defaultValue?: string | null;
+  onValueChange?: (combo: string | null) => void;
+  /** Record a two-step chord ("Cmd+K Cmd+S"): a second key within a second completes it. */
+  allowChords?: boolean;
+  /** Refuse a first key that is bare or only Shift+key (outside F1–F24). Defaults to true. */
+  requireModifier?: boolean;
+  /** A message refuses the combo; `null` or `undefined` accepts it. */
+  validate?: (combo: string) => string | null | undefined;
+  /** A warning to show for a combo you already use elsewhere; `null` or `undefined` for none. */
+  getConflict?: (combo: string) => string | null | undefined;
+  /** Flag combos Daintree's own shortcuts use. Defaults to true. */
+  checkHostConflicts?: boolean;
+  /** Shown while no shortcut is set. Defaults to "Not set". */
+  placeholder?: string;
+  disabled?: boolean;
+  /** `compact` matches a compact `Input` beside it. */
+  density?: "default" | "compact";
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  className?: string;
+}
+
+// Layout panes: list and detail, multi-pane splits, inspectors, in-pane
+// drawers, grouped lists, selection bars, pagination footers, job queues and
+// stale-data signals.
+
+/**
+ * Props of `MasterDetail`: a list pane beside a detail pane that becomes one
+ * pane with a Back strip when the panel is narrower than `collapseBelow`. It
+ * answers to its own width, never the window's, and fills its container.
+ */
+export interface PluginMasterDetailProps extends PluginRootAttributes {
+  /** The list pane, usually a `VirtualList` or `GroupedVirtualList`. */
+  list: ReactNode;
+  /** The detail pane: the selected record, or what to show while none is. */
+  detail: ReactNode;
+  /**
+   * The selected record's id, controlled. Narrow, a value shows the detail
+   * pane and `null` or `undefined` shows the list; wide, both show whatever it is.
+   */
+  selectedId?: string | number | null;
+  /** The Back strip's button, narrow: clear `selectedId` here. */
+  onBack?: () => void;
+  /** Names the list pane as a region. Defaults to "List". */
+  listLabel?: string;
+  /** Names the detail pane as a region. Defaults to "Details". */
+  detailLabel?: string;
+  /** The Back button's name. Defaults to "Back". */
+  backLabel?: string;
+  /** What the Back strip shows beside the button, narrow: the record's title. */
+  detailTitle?: ReactNode;
+  /** Below this width in px the two panes become one. Defaults to 560. */
+  collapseBelow?: number;
+  /** The list pane's width in px when wide, before the reader resizes it. Defaults to 320. */
+  defaultListSize?: number;
+  /** In px. Defaults to 220. */
+  minListSize?: number;
+  /** In px. Defaults to 560. */
+  maxListSize?: number;
+  /**
+   * Remembers the list pane's width under this key (see
+   * `usePersistentViewState`). Without it the width lasts until unmount.
+   */
+  persistKey?: string;
+  className?: string;
+}
+
+/** One pane of a `SplitGroup`. */
+export interface PluginSplitPane {
+  /** Non-empty and unique within the group. */
+  id: string;
+  content: ReactNode;
+  /**
+   * The pane's starting size in px. Omit it on the one pane that fills what
+   * the others leave (or mark that pane `fill`); without either, the last pane fills.
+   */
+  defaultSize?: number;
+  /** Takes the room the sized panes leave. At most one pane fills. */
+  fill?: boolean;
+  /** In px. Defaults to 120 (a filling pane: 0). */
+  minSize?: number;
+  /** In px. Defaults to 100000. */
+  maxSize?: number;
+  /**
+   * The pane can collapse: a drag below half its `minSize`, or Enter or Space
+   * on its handle. It stays mounted while collapsed. A filling pane cannot.
+   */
+  collapsible?: boolean;
+  /** Starts collapsed when uncontrolled. */
+  defaultCollapsed?: boolean;
+  /** Names the pane's handle ("Resize inspector"). Defaults to "Resize pane". */
+  handleLabel?: string;
+}
+
+/** A `SplitGroup`'s layout, as `onLayoutChange` reports it and `persistKey` stores it. */
+export interface PluginSplitLayout {
+  /** Each sized pane's size in px, by pane id. */
+  sizes: Record<string, number>;
+  /** The ids of the collapsed panes. */
+  collapsed: string[];
+}
+
+/**
+ * Props of `SplitGroup`: two or more panes in a row or a column, each sized
+ * pane with its own draggable, keyboard-resizable handle on the side facing
+ * the filling pane. Nest a `SplitGroup` in a pane for a grid of splits.
+ */
+export interface PluginSplitGroupProps extends PluginRootAttributes {
+  panes: readonly PluginSplitPane[];
+  /** `horizontal` (the default) puts the panes side by side; `vertical` stacks them. */
+  orientation?: "horizontal" | "vertical";
+  /** Remembers sizes and collapsed panes under this key (see `usePersistentViewState`). */
+  persistKey?: string;
+  /** The collapsed panes' ids, controlled: a toolbar toggle for an inspector. */
+  collapsed?: readonly string[];
+  onCollapsedChange?: (collapsed: string[]) => void;
+  /** Called when a drag ends, on a key press and on a reset. */
+  onLayoutChange?: (layout: PluginSplitLayout) => void;
+  className?: string;
+}
+
+/**
+ * Props of `Inspector`: the frame of a property panel. Its `PropertyRow`s put
+ * the label beside the value while the inspector is at least 240px wide and
+ * above it when narrower.
+ */
+export interface PluginInspectorProps extends PluginAriaRootAttributes {
+  children?: ReactNode;
+  /** Names the inspector as a region. */
+  "aria-label"?: string;
+  /** The label column's width in px, wide. Defaults to 88. */
+  labelWidth?: number;
+  className?: string;
+}
+
+/**
+ * Props of `InspectorSection`: a heading row over a group of `PropertyRow`s,
+ * collapsible by default. A folded section keeps its rows mounted and hidden,
+ * so a half-edited field keeps its value.
+ */
+export interface PluginInspectorSectionProps extends PluginRootAttributes {
+  /** Sentence case; drawn as a small uppercase label. */
+  title: string;
+  children?: ReactNode;
+  /** `false` for a section that cannot fold. Defaults to `true`. */
+  collapsible?: boolean;
+  open?: boolean;
+  /** Defaults to `true`. */
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** A control or two at the end of the heading row (an add or reset button). */
+  actions?: ReactNode;
+  className?: string;
+}
+
+/**
+ * Props of `PropertyRow`: a label beside its value in a 28px row. A kit
+ * control in `children` is labelled by the row, as in a `FormField`.
+ */
+export interface PluginPropertyRowProps extends PluginRootAttributes {
+  label: string;
+  /** The control, or read-only text. */
+  children?: ReactNode;
+  /** A control id to label, when the row cannot find its control. */
+  htmlFor?: string;
+  /** A quiet note after the label (a unit, "Inherited"); never part of its name. */
+  hint?: ReactNode;
+  /** `start` pins the label to the first line of a tall control. Defaults to `center`. */
+  align?: "center" | "start";
+  className?: string;
+}
+
+/**
+ * Props of `Drawer`: a panel that slides in from an edge of its own pane,
+ * over the content (`overlay`) or beside it (`push`). Wrap the pane's content
+ * in it; `Sheet` is the window-edge equivalent.
+ */
+export interface PluginDrawerProps extends PluginRootAttributes {
+  open: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** The pane's own content, which the drawer slides over or beside. */
+  children?: ReactNode;
+  /** The drawer's body. */
+  panel: ReactNode;
+  /** The drawer's heading. With it the drawer draws a header row with a close button. */
+  title?: ReactNode;
+  /** Names the drawer when there is no string `title`. */
+  "aria-label"?: string;
+  /** Controls at the end of the header row, before the close button. */
+  actions?: ReactNode;
+  /** A strip along the drawer's bottom (Apply, Reset). */
+  footer?: ReactNode;
+  /** Defaults to `right`. */
+  side?: "left" | "right" | "top" | "bottom";
+  /** `overlay` (the default) floats over the content; `push` narrows it. */
+  mode?: "overlay" | "push";
+  /**
+   * An overlay drawer that holds focus until closed, over a scrim that closes
+   * it. Defaults to `true` for `overlay`; a `push` drawer is never modal.
+   */
+  modal?: boolean;
+  /** Width (or height, top and bottom) in px. Defaults to 320; never more than 90% of the pane. */
+  size?: number;
+  /** The drawer panel's id, for a `DrawerToggle`'s `controls`. Generated when omitted. */
+  panelId?: string;
+  className?: string;
+}
+
+/** Props of `DrawerToggle`: the toolbar button that opens and closes a `Drawer`. */
+export interface PluginDrawerToggleProps extends PluginRootAttributes {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Required: the drawer it opens ("Filters"). The name holds still; the state is `aria-expanded`. */
+  label: string;
+  /** The `Drawer`'s `panelId`. */
+  controls?: string;
+  /** Defaults to a panel glyph facing `side`. */
+  icon?: PluginIconSource;
+  /** Where the drawer sits, for the default glyph. Defaults to `right`. */
+  side?: "left" | "right" | "top" | "bottom";
+  /** Draws the label beside the icon. */
+  showLabel?: boolean;
+  /** A count of what the drawer has in effect (active filters), as a quiet badge. */
+  badge?: number;
+  disabled?: boolean;
+  className?: string;
+}
+
+/** One group of a `GroupedVirtualList`. */
+export interface PluginListGroup<T = unknown> {
+  /** Non-empty and unique within the list. */
+  id: string;
+  /** The sticky header's text, sentence case. */
+  label: string;
+  items: readonly T[];
+  /** The number after the label. Defaults to `items.length`; `false` for none. */
+  count?: number | false;
+}
+
+/**
+ * Props of `GroupedVirtualList`: a `VirtualList` in groups, each under a
+ * header that sticks to the top while its rows scroll past. Rows are indexed
+ * across the list as drawn, headers not counted and folded groups left out,
+ * so `activeIndex` and `useListNavigation`'s `count` use the same numbers.
+ */
+export interface PluginGroupedVirtualListProps<T = unknown> extends PluginVirtualListBaseProps {
+  groups: readonly PluginListGroup<T>[];
+  /** Renders one row. `index` is the row's index across the drawn list. */
+  renderItem(item: T, index: number, group: PluginListGroup<T>): ReactNode;
+  /** A stable key per row. Defaults to the group id and the row's index in it. */
+  itemKey?(item: T, group: PluginListGroup<T>): string | number;
+  /** Headers fold their group on click, Enter or Space. */
+  collapsible?: boolean;
+  /** The folded groups' ids, controlled. */
+  collapsedGroups?: readonly string[];
+  defaultCollapsedGroups?: readonly string[];
+  onCollapsedGroupsChange?: (collapsed: string[]) => void;
+  /** After the last row, inside the scroller: usually a `LoadMoreFooter`. */
+  footer?: ReactNode;
+  /** Shown instead of the list when every group is empty. */
+  empty?: ReactNode;
+}
+
+/** One action of a `BulkActionBar`. */
+export interface PluginBulkAction {
+  /** Non-empty and unique within the bar. */
+  id: string;
+  label: string;
+  icon?: PluginIconSource;
+  onSelect?: () => void;
+  disabled?: boolean;
+  /** A destructive menu row once it has folded. */
+  destructive?: boolean;
+  /** Higher stays in the bar longer. Defaults to 0. */
+  priority?: number;
+}
+
+/**
+ * Props of `BulkActionBar`: "3 issues selected", the actions that apply to
+ * them and a clear button, in the band along a list's bottom. It renders
+ * nothing while the count is 0. Actions that do not fit fold into a menu.
+ */
+export interface PluginBulkActionBarProps extends PluginRootAttributes {
+  /** How many are selected. Or pass `selection`. */
+  count?: number;
+  /** A `useSelection` result: its `count` and `clear` drive the bar. */
+  selection?: { count: number; clear: () => void };
+  /** What is selected: `"issue"`, or `{ one: "pull request", other: "pull requests" }`. */
+  noun?: string | { one: string; other: string };
+  /** How many selected rows the list is not showing (filtered or not loaded). */
+  hiddenCount?: number;
+  actions?: readonly PluginBulkAction[];
+  /** Clears the selection. Defaults to `selection.clear`. */
+  onClear?: () => void;
+  /** Names the bar. Defaults to "Bulk actions". */
+  "aria-label"?: string;
+  className?: string;
+}
+
+/**
+ * Props of `LoadMoreFooter`: the end of a paged list. A Load more button, a
+ * loading row, "All 212 loaded", or the error with Retry.
+ */
+export interface PluginLoadMoreFooterProps extends PluginRootAttributes {
+  status: "idle" | "loading" | "error" | "done";
+  onLoadMore?: () => void;
+  /** Rows loaded so far, for "50 of 212". */
+  loadedCount?: number;
+  /** Rows there are in all, when known. */
+  totalCount?: number;
+  /** What the rows are: `"issue"`, or `{ one, other }`. Defaults to "item". */
+  noun?: string | { one: string; other: string };
+  /** What went wrong, with `status: "error"`. Defaults to "Couldn't load more". */
+  error?: ReactNode;
+  /** Loads the next page when the footer scrolls into view while `idle`. Never retries an error. */
+  autoLoad?: boolean;
+  /** The button's label. Defaults to "Load more". */
+  label?: string;
+  className?: string;
+}
+
+/** A `TaskList` job's state. */
+export type PluginTaskStatus = "pending" | "running" | "done" | "failed" | "cancelled";
+
+/** One job of a `TaskList`. */
+export interface PluginTask {
+  /** Non-empty and unique within the list. */
+  id: string;
+  title: string;
+  status: PluginTaskStatus;
+  /** 0 to 1 while running: a thin bar under the title. Omitted or `null`, the spinner alone. */
+  progress?: number | null;
+  /** A quiet line under the title ("12 of 40 issues", the failure's cause). */
+  detail?: ReactNode;
+  /** Epoch ms, an ISO string or a `Date`: when the job started. */
+  startedAt?: number | string | Date;
+  /** When it finished; with `startedAt`, the duration a settled job shows. */
+  finishedAt?: number | string | Date;
+  /** Offers Retry on a failed or cancelled job. Defaults to `true` when `onRetry` is set. */
+  retryable?: boolean;
+  /** Offers Cancel on a pending or running job. Defaults to `true` when `onCancel` is set. */
+  cancellable?: boolean;
+}
+
+/**
+ * Props of `TaskList`: a queue of jobs, each with its state, progress,
+ * duration and Retry or Cancel, under a summary ("2 running · 1 failed").
+ */
+export interface PluginTaskListProps extends PluginRootAttributes {
+  tasks: readonly PluginTask[];
+  /** Required: names the list ("Sync jobs"). */
+  "aria-label": string;
+  /** A heading drawn before the summary. */
+  title?: ReactNode;
+  /** The summary line of counts. Defaults to `true`. */
+  summary?: boolean;
+  /** Controls at the end of the summary row ("Clear finished"). */
+  actions?: ReactNode;
+  onRetry?: (task: PluginTask) => void;
+  onCancel?: (task: PluginTask) => void;
+  /** Shown when there are no tasks. */
+  empty?: ReactNode;
+  className?: string;
+}
+
+/**
+ * Props of `RefreshOverlay`: content that is still valid while a fresh copy
+ * loads. A thin bar along the top and an "Updating…" note, drawn after 400ms
+ * so a quick refresh shows nothing; the content never moves or blocks.
+ */
+export interface PluginRefreshOverlayProps extends PluginRootAttributes {
+  refreshing: boolean;
+  children?: ReactNode;
+  /** The note's words. Defaults to "Updating…". */
+  label?: string;
+  className?: string;
+}
+
+/**
+ * Props of `StaleIndicator`: when the data was last updated, whether that is
+ * now old or the source is disconnected, and a refresh button.
+ */
+export interface PluginStaleIndicatorProps extends PluginRootAttributes {
+  /** Epoch ms, an ISO string or a `Date`. Omitted reads "Not updated yet". */
+  updatedAt?: number | string | Date | null;
+  /** Older than this many ms (positive) reads as stale. Omit to never go stale on age alone. */
+  staleAfterMs?: number;
+  /** Stale whatever the age. */
+  stale?: boolean;
+  /** The source is unreachable: the strongest state, with the last update after it. */
+  disconnected?: boolean;
+  /** A refresh is in flight: the button spins and is disabled. */
+  refreshing?: boolean;
+  onRefresh?: () => void;
+  /** The refresh button's name. Defaults to "Refresh". */
+  refreshLabel?: string;
+  className?: string;
+}
+
+// Pickers and forms: colours, times, two-thumb ranges, toggle groups, split
+// buttons, form state and forms generated from a JSON Schema.
+
+/** A preset in a `ColorPicker`'s palette: a colour, or a colour with a spoken name. */
+export type PluginColorSwatch = string | { value: string; label: string };
+
+/**
+ * Props of `ColorSwatch`: a small chip of one colour, drawn with an edge so a
+ * pale colour keeps its shape on any surface. With an `onClick` (a `Popover`
+ * or `DropdownMenu` trigger hands it one) it is a button; without, a picture.
+ */
+export interface PluginColorSwatchProps extends PluginDomProps<HTMLElement> {
+  /** `#rgb` or `#rrggbb`, with or without the `#`. Anything else draws an empty chip. */
+  color: string | null | undefined;
+  /** `xs` 12px, `sm` 16px (the default), `md` 20px, `lg` 24px. */
+  size?: "xs" | "sm" | "md" | "lg";
+  /** `circle` (the default) or `square`. */
+  shape?: "circle" | "square";
+  /** Draws the chip as chosen: a ring round it, for a palette of your own. */
+  selected?: boolean;
+  /** The colour's spoken name. Defaults to its hex. */
+  "aria-label"?: string;
+  disabled?: boolean;
+  className?: string;
+}
+
+/**
+ * Props of `ColorPicker`: a field showing the colour and its hex that opens a
+ * palette, a saturation area, a hue strip, a hex field that also takes
+ * `rgb()` and `hsl()`, and the eyedropper where the platform has one. Built
+ * for label and tag colours; pair it with `ColoredLabel` for the preview.
+ */
+export interface PluginColorPickerProps extends PluginAriaRootAttributes {
+  /** `#rrggbb`, controlled. `null` is no colour. Passing the prop at all makes it controlled. */
+  value?: string | null;
+  defaultValue?: string | null;
+  /**
+   * Every change, as lowercase `#rrggbb`: a swatch, a committed hex, and each
+   * move across the area or the hue strip.
+   */
+  onValueChange?: (value: string) => void;
+  /**
+   * The palette. Defaults to the theme's category colours (blue, purple, cyan,
+   * green, amber, orange, teal, indigo, rose, pink, violet, slate), resolved in
+   * the active theme.
+   */
+  swatches?: readonly PluginColorSwatch[];
+  /** Focus left the control (and whatever it opened), or its panel closed: `useForm`'s `field()` hands this in. */
+  onBlur?: () => void;
+  /** Offers the area, hue strip, hex field and eyedropper beside the palette. Default true. */
+  allowCustom?: boolean;
+  /** `field` (the default) is a Select-sized field with the hex; `swatch` is the chip alone. */
+  variant?: "field" | "swatch";
+  /** Shown on a `field` with no colour. Defaults to "Choose a colour". */
+  placeholder?: string;
+  disabled?: boolean;
+  invalid?: boolean;
+  /** Submits the hex in a native form under this name. */
+  name?: string;
+  open?: boolean;
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  side?: PluginSide;
+  align?: PluginAlign;
+  density?: "default" | "compact";
+  id?: string;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  /** Classes for the trigger. */
+  className?: string;
+}
+
+/** A wall-clock time, `"HH:mm"` in 24-hour form ("09:30", "17:05"). It carries no day and no zone. */
+export type PluginIsoTime = string;
+
+/**
+ * Props of `TimePicker`: a time typed into hour and minute segments (and AM/PM
+ * where the locale uses a 12-hour clock), or chosen from a list. Each segment
+ * is a spin button: Up/Down step it, digits type into it, Left/Right move
+ * between segments, Backspace clears it. The value commits once every segment
+ * is filled; a time outside `min`/`max` marks the field invalid and leaves the
+ * value alone. Joins a `FormField` on its own.
+ */
+export interface PluginTimePickerProps extends PluginAriaRootAttributes {
+  /** The time, controlled. `null` is empty. Passing the prop at all makes it controlled. */
+  value?: PluginIsoTime | null;
+  defaultValue?: PluginIsoTime | null;
+  /** The new time, or `null` when the field was cleared. */
+  onValueChange?: (value: PluginIsoTime | null) => void;
+  /** Focus left the control (and whatever it opened), or its list closed: `useForm`'s `field()` hands this in. */
+  onBlur?: () => void;
+  /** The earliest time, inclusive. */
+  min?: PluginIsoTime;
+  /** The latest time, inclusive. */
+  max?: PluginIsoTime;
+  /**
+   * Minutes per Up/Down press on the minute segment, 1–60 (default 1). The
+   * list steps by the smallest multiple of it that is at least 15 minutes.
+   */
+  step?: number;
+  /** 12 or 24. Defaults to the user's locale. */
+  hourCycle?: 12 | 24;
+  /** Draws a clear button while there is a value. Default true. */
+  clearable?: boolean;
+  disabled?: boolean;
+  /** Also pass `required` to the enclosing `FormField`. Stops the field clearing. */
+  required?: boolean;
+  invalid?: boolean;
+  /** Submits the `"HH:mm"` value in a native form under this name. */
+  name?: string;
+  /** The list popover, controlled. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  density?: "default" | "compact";
+  id?: string;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  /** Classes for the field. */
+  className?: string;
+}
+
+/**
+ * A local date and wall-clock time, `"YYYY-MM-DDTHH:mm"` ("2026-09-30T14:05"),
+ * as `<input type="datetime-local">` holds it. Read it as a time in the zone
+ * the picker shows, never through `new Date()` alone.
+ */
+export type PluginIsoDateTime = string;
+
+/**
+ * Props of `DateTimePicker`: a `DatePicker` and a `TimePicker` side by side as
+ * one value, with the time zone named after them. Picking a day with no time
+ * yet fills the earliest allowed time of that day; typing a time with no day
+ * yet fills today. Clearing the day clears the value.
+ */
+export interface PluginDateTimePickerProps extends PluginAriaRootAttributes {
+  /** The date and time, controlled. `null` is empty. Passing the prop at all makes it controlled. */
+  value?: PluginIsoDateTime | null;
+  defaultValue?: PluginIsoDateTime | null;
+  onValueChange?: (value: PluginIsoDateTime | null) => void;
+  /** Focus left both parts (and their popovers): `useForm`'s `field()` hands this in. */
+  onBlur?: () => void;
+  /** The earliest date and time, inclusive. */
+  min?: PluginIsoDateTime;
+  /** The latest date and time, inclusive. */
+  max?: PluginIsoDateTime;
+  /** Days that cannot be chosen. */
+  isDateDisabled?: (date: PluginIsoDate) => boolean;
+  weekStartsOn?: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+  /** As `TimePicker`. */
+  step?: number;
+  hourCycle?: 12 | 24;
+  /**
+   * The IANA zone the time is in ("Europe/Berlin"), named after the field.
+   * Display only: the value is the wall time as typed. Defaults to the user's zone.
+   */
+  timeZone?: string;
+  /** Names the zone after the field. Default true. */
+  showTimeZone?: boolean;
+  clearable?: boolean;
+  disabled?: boolean;
+  required?: boolean;
+  invalid?: boolean;
+  /** Submits the `"YYYY-MM-DDTHH:mm"` value in a native form under this name. */
+  name?: string;
+  density?: "default" | "compact";
+  id?: string;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  className?: string;
+}
+
+/** A tick under a `RangeSlider`'s track: a value, or a value with a label under it. */
+export type PluginRangeSliderMark = number | { value: number; label: string };
+
+/**
+ * Props of `RangeSlider`: a low and a high value on one track, drawn exactly
+ * like `Slider`. Each thumb is its own slider with its own keys (arrows step,
+ * Page Up/Down step ten times, Home/End go as far as the other thumb allows);
+ * a press on the track moves the nearer thumb. The thumbs never cross and
+ * stay `minDistance` apart.
+ */
+export interface PluginRangeSliderProps extends PluginAriaRootAttributes {
+  /** `[low, high]`, controlled. An array makes the slider controlled. */
+  value?: readonly [number, number];
+  defaultValue?: readonly [number, number];
+  /** Every move of either thumb. */
+  onValueChange?: (value: [number, number]) => void;
+  /** Once a drag or a key press ends: the moment to save. */
+  onValueCommit?: (value: [number, number]) => void;
+  /** Focus left both thumbs: `useForm`'s `field()` hands this in. */
+  onBlur?: () => void;
+  /** Marks the slider invalid, as an enclosing `FormField`'s error does. */
+  invalid?: boolean;
+  /** Defaults to 0. */
+  min?: number;
+  /** Defaults to 100. */
+  max?: number;
+  /** Defaults to 1. */
+  step?: number;
+  /** The smallest gap between the thumbs, rounded up to whole steps. Defaults to 0. */
+  minDistance?: number;
+  /** A value in words, spoken as `aria-valuetext` and shown by `showValue` and the tooltip. */
+  formatValue?: (value: number) => string;
+  /** Shows "low – high" beside the track. */
+  showValue?: boolean;
+  /** Ticks under the track, labelled where given a label. */
+  marks?: readonly PluginRangeSliderMark[];
+  /**
+   * The value over a thumb: `auto` (the default) while it is dragged or has
+   * keyboard focus, `never` for none.
+   */
+  tooltip?: "auto" | "never";
+  /** The thumbs' spoken names. Defaults to "Minimum" and "Maximum". */
+  thumbLabels?: readonly [string, string];
+  /** Submits both values in a native form under this name, low first. */
+  name?: string;
+  disabled?: boolean;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  className?: string;
+}
+
+/** One button of a `ToggleGroup`: a label, an icon, or both. */
+export interface PluginToggleGroupItem {
+  /** Non-empty and unique within the group. */
+  value: string;
+  label?: string;
+  icon?: PluginIconSource;
+  /** Required when there is no `label`; the spoken name when the label is an abbreviation. */
+  "aria-label"?: string;
+  /** Hover detail. An icon-only item shows its `aria-label` by default. */
+  tooltip?: ReactNode;
+  disabled?: boolean;
+}
+
+/**
+ * Props of `ToggleGroup`: a row of subtle toggle buttons, as Daintree's own
+ * weekday picker draws them, an "on" one with the kit `Button`'s pressed look. `multiple` (the default) turns any number on, as weekday
+ * choices or text styles; `single` turns at most one on and lets it be turned
+ * off again (for exactly one, always, use `SegmentedControl`). One tab stop:
+ * arrow keys, Home and End move between the buttons, Space or Enter toggles.
+ */
+export interface PluginToggleGroupProps extends PluginAriaRootAttributes {
+  items: readonly PluginToggleGroupItem[];
+  type?: "multiple" | "single";
+  /** The values that are on, controlled. Passing the prop at all makes it controlled. */
+  value?: readonly string[];
+  defaultValue?: readonly string[];
+  /** The values now on, in the items' order. */
+  onValueChange?: (value: string[]) => void;
+  /** Focus left the group: `useForm`'s `field()` hands this in. */
+  onBlur?: () => void;
+  /** Marks the group invalid. */
+  invalid?: boolean;
+  /** Required: the group's name. */
+  "aria-label": string;
+  disabled?: boolean;
+  /** `compact` (24px) for a 32px strip; `default` (28px) is a small `Button`'s height. */
+  density?: "default" | "compact";
+  className?: string;
+}
+
+/**
+ * Props of `SplitButton`: a primary action and, on a separate chevron with its
+ * own tab stop, a `DropdownMenu` of the alternatives ("Save" and "Save as
+ * template"). The two halves share one shape in any `Button` variant and size.
+ */
+export interface PluginSplitButtonProps extends PluginRootAttributes {
+  /** The primary action's label. */
+  children: ReactNode;
+  onClick?: () => void;
+  /** The menu's entries, any `DropdownMenu` entry type (submenus and descriptions included). */
+  items: readonly PluginDropdownMenuEntry[];
+  variant?: Exclude<PluginButtonVariant, "link" | "pill">;
+  size?: "default" | "sm" | "xs" | "lg";
+  /** A leading icon on the primary action. */
+  icon?: PluginIconSource;
+  /** Busy: the primary action shows a spinner and both halves stop taking presses. */
+  loading?: boolean;
+  disabled?: boolean;
+  /** Disables only the menu half. */
+  menuDisabled?: boolean;
+  /** `submit` makes the primary action submit its form. */
+  type?: "button" | "submit";
+  /** The chevron's spoken name and tooltip. Defaults to "More options". */
+  menuLabel?: string;
+  side?: PluginSide;
+  /** Defaults to `end`, so the menu lines up under the chevron. */
+  align?: PluginAlign;
+  className?: string;
+}
+
+/** A field's error: a message, or nothing when it is fine. */
+export type PluginFormError = string | null | undefined;
+
+/** Checks one field. Return the message to show, or nothing. May be async. */
+export type PluginFieldValidator<V, T> = (
+  value: V,
+  values: T
+) => PluginFormError | Promise<PluginFormError>;
+
+export interface UseFormOptions<T extends Record<string, unknown>> {
+  /** The values the form starts from, and what "dirty" compares against. */
+  initialValues: T;
+  /** Per-field checks, run as the field is left and on submit. */
+  validators?: { [K in keyof T]?: PluginFieldValidator<T[K], T> };
+  /** A whole-form check run on submit, for rules across fields. May be async. */
+  validate?: (
+    values: T
+  ) =>
+    Partial<Record<keyof T, PluginFormError>> | Promise<Partial<Record<keyof T, PluginFormError>>>;
+  /**
+   * Called with the values once every check passes. A throw (or rejection)
+   * keeps the form dirty and shows its message as the form's error status.
+   * On success the values become the new clean state.
+   */
+  onSubmit: (values: T) => void | Promise<void>;
+  /**
+   * When a field is checked: `blur` (the default) once it is left, then on
+   * every change after that; `change` on every change; `submit` only on submit.
+   */
+  validateOn?: "blur" | "change" | "submit";
+}
+
+/** Spread onto a kit control: its value, change and blur, and whether it is invalid. */
+// A type alias rather than an interface, so it spreads into props that also
+// take `data-*` attributes (an interface has no implicit index signature).
+export type PluginFormFieldBinding<V> = {
+  name: string;
+  value: V;
+  onValueChange: (value: V) => void;
+  onBlur: () => void;
+  invalid: boolean;
+};
+
+/**
+ * Where a form stands: `clean` (nothing changed), `dirty`, `invalid` (a
+ * shown check failed), `submitting`, `saved` (the last submit went through and
+ * nothing changed since) or `error` (the last submit threw).
+ */
+export type PluginFormStatus = "clean" | "dirty" | "invalid" | "submitting" | "saved" | "error";
+
+export interface UseFormResult<T extends Record<string, unknown>> {
+  values: T;
+  /** Errors to show: a field's once it has been checked, every field's after a submit. */
+  errors: Partial<Record<keyof T, string>>;
+  /** Fields whose value differs from the clean state. */
+  dirtyFields: (keyof T)[];
+  isDirty: boolean;
+  isSubmitting: boolean;
+  /** An async check is running. */
+  isValidating: boolean;
+  status: PluginFormStatus;
+  /** The status in words for `SettingsActions`' `status`, or `FormStatus`: "Unsaved changes", "Saved". */
+  statusMessage: string | undefined;
+  /** The last submit's failure, when it threw. */
+  submitError: string | undefined;
+  setValue: <K extends keyof T>(name: K, value: T[K]) => void;
+  setValues: (values: Partial<T>) => void;
+  /** Sets or clears one field's error by hand (a server-side check, say). */
+  setError: (name: keyof T, error: PluginFormError) => void;
+  /** Back to the clean state, or to `values`, which become the new clean state. */
+  reset: (values?: T) => void;
+  /** Runs every check, then `onSubmit`. Resolves `true` when it went through. */
+  submit: () => Promise<boolean>;
+  /** The value, change, blur and invalid props of one field. */
+  field: <K extends keyof T & string>(name: K) => PluginFormFieldBinding<T[K]>;
+}
+
+/** The part of a `useForm` result that `Form` and `FormStatus` read: pass the whole result. */
+export interface PluginFormHandle {
+  submit: () => Promise<boolean>;
+  reset: () => void;
+  status: PluginFormStatus;
+  statusMessage: string | undefined;
+}
+
+/**
+ * Props of `Form`: a native `<form>` driven by `useForm`. Enter in a text
+ * field or a time segment, or a `type="submit"` button, submits through
+ * `form.submit()` (a second submit while one is running is refused), a `type="reset"`
+ * button resets, and a submit that fails a check moves focus to the first
+ * invalid control.
+ */
+export interface PluginFormProps extends PluginRootAttributes {
+  form: PluginFormHandle;
+  children?: ReactNode;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  className?: string;
+}
+
+/**
+ * Props of `FormStatus`: a form's status as the `status` of `SettingsActions`
+ * shows it — "Unsaved changes", "Saving…", "Saved" with a check, and a failed
+ * check or submit in the error ink with its glyph. `SettingsActions` announces
+ * it politely; anywhere else, put it in a `LiveRegion`.
+ */
+export interface PluginFormStatusProps extends PluginRootAttributes {
+  form: PluginFormHandle;
+}
+
+/**
+ * Props of `SchemaForm`: a settings group generated from a JSON Schema by the
+ * same generator as plugin settings, so it reads and behaves like the form in
+ * the plugin's settings home. The schema is an object with `properties`; each
+ * is a row. `string` is a text field (`format: "password"` or `writeOnly`
+ * masks it), `number`/`integer` a number field held to `minimum`/`maximum`,
+ * `boolean` a switch, `enum` of strings a segmented control or select, and
+ * `object`/`array` a JSON text area. `title`, `description`, `default` and the
+ * root's `required` are read; anything else is ignored, with a warning in
+ * development (the annotations `$schema`, `$id`, `$comment` and `examples`
+ * quietly). Text commits as the field is left or on Enter, choices at once.
+ */
+export interface PluginSchemaFormProps extends PluginRootAttributes {
+  schema: Record<string, unknown>;
+  /** The values, controlled. Passing the prop at all makes it controlled. */
+  value?: Record<string, unknown>;
+  defaultValue?: Record<string, unknown>;
+  /**
+   * The whole object after one field committed. A field left empty is removed,
+   * except a required one with no `default`, which says "Enter a value" instead.
+   */
+  onValueChange?: (value: Record<string, unknown>) => void;
+  /** Errors to show by property name, beside the form's own checks (`useForm().errors`). */
+  errors?: Record<string, PluginFormError>;
+  /** A sub-label above the group, as `SettingsGroup`'s. */
+  label?: string;
+  disabled?: boolean;
+}
+
 // Editors: the host's code editor, its diff surface, and a Markdown field with
 // Write and Preview.
 

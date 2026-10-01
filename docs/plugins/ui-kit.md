@@ -142,7 +142,7 @@ createElement(ContextMenu, {
 
 | Export | Props | Notes |
 | --- | --- | --- |
-| `Input` | `type?: "text" \| "search" \| "email" \| "url" \| "password" \| "number" \| "tel" \| "date" \| "time" \| "datetime-local"`, `value?`, `defaultValue?`, `onValueChange?(value)`, `placeholder?`, `name?`, `disabled?`, `readOnly?`, `required?`, `autoFocus?`, `autoComplete?`, `spellCheck?`, `maxLength?`, `min?`, `max?`, `step?`, `invalid?`, `density?: "default" \| "compact"`, `className?`; DOM props | Single-line field. `date`, `time` and `datetime-local` use the platform picker in the theme's light or dark scheme, with ISO values (`"2026-09-30"`, `"14:05"`, `"2026-09-30T14:05"`). `onValueChange` fires beside the native `onChange`. |
+| `Input` | `type?: "text" \| "search" \| "email" \| "url" \| "password" \| "number" \| "tel" \| "date" \| "time" \| "datetime-local"`, `value?`, `defaultValue?`, `onValueChange?(value)`, `placeholder?`, `name?`, `disabled?`, `readOnly?`, `required?`, `autoFocus?`, `autoComplete?`, `spellCheck?`, `maxLength?`, `min?`, `max?`, `step?`, `invalid?`, `density?: "default" \| "compact"`, `className?`; DOM props | Single-line field. `date`, `time` and `datetime-local` use the platform picker in the theme's light or dark scheme, with ISO values (`"2026-09-30"`, `"14:05"`, `"2026-09-30T14:05"`); `DatePicker`, `TimePicker` and `DateTimePicker` take the same values and are drawn by the kit, so prefer them. `onValueChange` fires beside the native `onChange`. |
 | `Textarea` | `value?`, `defaultValue?`, `onValueChange?`, `placeholder?`, `name?`, `rows?`, `disabled?`, `readOnly?`, `required?`, `autoFocus?`, `spellCheck?`, `maxLength?`, `invalid?`, `density?`, `variant?: "default" \| "code"`, `resize?: "vertical" \| "none"`, `className?`; DOM props | `code` for paths, prompts and JSON. |
 | `Select` | `options: (SelectOption \| SelectOptionGroup)[]`, `value?: string \| null`, `defaultValue?`, `onValueChange?`, `placeholder?`, `disabled?`, `density?`, `name?`, `id?`, `"aria-label"?`, `"aria-labelledby"?`, `"aria-describedby"?`, `className?` (trigger) | Options are `{ value, label, description?, icon?, disabled? }`, values non-empty and unique; a group is `{ label, options }`. Passing `value` at all makes it controlled, and `""`, `null` or `undefined` then shows the placeholder again (a form reset); leave it out for an uncontrolled Select. `compact` is 28 px. |
 | `SegmentedControl` | `options: { value, label, disabled?, "aria-label"?, tooltip? }[]`, `value`, `onValueChange`, `"aria-label"`, `"aria-describedby"?`, `disabled?`, `fullWidth?`, `density?`, `className?` | Exactly one of a few options, with radio-group keyboard behaviour. `compact` is 24 px, for a 32 px toolbar strip. |
@@ -150,11 +150,11 @@ createElement(ContextMenu, {
 | `Switch` | `checked?`, `defaultChecked?`, `onCheckedChange?`, `disabled?`, `name?`, `size?` (deprecated, ignored), `className?`; DOM props | An instant on/off setting, neutral (never accent) when on. In a form with a Save, use `Checkbox`. |
 | `SearchField` | `value`, `onValueChange?`, `onClear?`, `placeholder?`, `"aria-label"?`, `clearLabel?`, `size?: "compact" \| "dense" \| "palette"`, `autoFocus?`, `disabled?`, `invalid?`, `className?`; DOM props | Controlled only. `onClear` shows the clear button while there is text and makes Escape clear first. Sizes are 28 (default), 24 and 38 px. |
 | `FilterChip` | `children?`, `selected?`, `defaultSelected?`, `onSelectedChange?(selected)`, `count?`, `onRemove?()`, `removeLabel?`, `disabled?`, `className?`; DOM props except `aria-pressed` | One value in a filter bar above a list or table: Daintree's own filter pill, never accent, since several can be on at once. A toggle chip is pressed while its filter is on; controlled with `selected`, uncontrolled with `defaultSelected`. `count` shows "(3)", exact and grouped ("(2,172)"), and `0` on an unselected chip drops it to a quiet edge without disabling it. With `onRemove` it is an applied filter ("Status: Open"): always pressed, drawn with a ×, and removed by a click, Backspace or Delete, with `removeLabel` ("Remove filter") as its tooltip; it shows no count. A chip never grows past its container: when the row is short of room a long label ellipsises while the count and × keep their size, and the full label heads the chip's tooltip. |
-| `FormField` | `label`, `description?`, `error?`, `required?`, `htmlFor?`, `orientation?: "vertical" \| "horizontal"`, `disabled?`, `children: ReactNode \| ((control) => ReactNode)`, `className?` | Wires label, description and error to the control for assistive tech. Kit `Input`, `Textarea`, `Select`, `Checkbox`, `Switch`, `RadioGroup`, `NumberInput`, `Slider`, `Combobox`, `MultiSelect`, `TagInput`, `FileDropzone`, `DatePicker` and `DateRangePicker` join on their own; for your own control, pass a function and spread the `{ id, "aria-labelledby"?, "aria-describedby"?, "aria-invalid"? }` it receives. `horizontal` puts a checkbox or switch before its label and makes the row clickable; a switch is centred on the label's first line. |
+| `FormField` | `label`, `description?`, `error?`, `required?`, `htmlFor?`, `orientation?: "vertical" \| "horizontal"`, `disabled?`, `children: ReactNode \| ((control) => ReactNode)`, `className?` | Wires label, description and error to the control for assistive tech. Kit `Input`, `Textarea`, `Select`, `Checkbox`, `Switch`, `RadioGroup`, `NumberInput`, `Slider`, `Combobox`, `MultiSelect`, `TagInput`, `FileDropzone`, `DatePicker`, `DateRangePicker`, `TimePicker`, `DateTimePicker`, `ColorPicker` and `RangeSlider` join on their own; for your own control, pass a function and spread the `{ id, "aria-labelledby"?, "aria-describedby"?, "aria-invalid"? }` it receives. `horizontal` puts a checkbox or switch before its label and makes the row clickable; a switch is centred on the label's first line. |
 | `FormFieldGroup` | `label`, `description?`, `error?`, `required?`, `disabled?`, `layout?: "stack" \| "inline"`, `children?`, `className?` | One label over a set of controls that answer it together, such as a row of checkboxes, each its own horizontal `FormField`. The label is a `FormField` label's size and tone, so the group reads as one more field. A `fieldset` named by its label: `disabled` disables every control inside. `inline` wraps the controls in a row; `stack` (the default) puts one per line. |
 | `RadioGroup` | `options: { value, label, description?, disabled? }[]`, `value?: string \| null`, `defaultValue?`, `onValueChange?`, `orientation?: "vertical" \| "horizontal"`, `variant?: "card" \| "plain"`, `name?`, `disabled?`, `required?`, `"aria-label"?`, `"aria-labelledby"?`, `"aria-describedby"?`, `className?` | Exactly one of a few options you want visible at once, each with its consequence as a description. Native radios in Daintree's choice cards, so the group is one tab stop, the arrow keys move the choice, forced colours still show which is chosen, and `required` holds a form's native validation until one is picked. `plain` drops the card for a dense form. Passing `value` at all makes it controlled. For two to four short, symmetric values use `SegmentedControl`; for more than about six, `Select`. |
 | `NumberInput` | `value?: number \| null`, `defaultValue?`, `onValueChange?(value \| null)`, `min?`, `max?`, `step?` (1), `precision?`, `unit?`, `stepper?` (true), `placeholder?`, `name?`, `disabled?`, `readOnly?`, `required?`, `invalid?`, `autoFocus?`, `density?`, `"aria-label"?`, `className?` | A `spinbutton` on the host `Input`. Typing is free and commits on blur or Enter, rounded to `precision` (by default the step's own decimals) and always within `min`/`max`; text that is not a number marks the field invalid while you type and reverts on commit, and Escape drops an edit. Up/Down and the stepper buttons step from the number in the field, typed or not; Shift or Page Up/Down step ten, Home/End jump to the bounds. `unit` is drawn inside the field beside the number, never over it (in a narrow column the unit ellipsises first, the number keeps room for four digits, and nothing is drawn past the field's edge; when the stepper buttons would no longer fit beside that, both hide together and come back once the field is wide enough for them, while the keys go on stepping), and spoken with the value; the stepper buttons stay out of the tab order, as a native spin button's do, and a `readOnly` field shows none. The spoken value follows the number in the field as it is typed, and there is none while the text is empty or not a number. An empty field commits `null`, or reverts when `required`. |
-| `Slider` | `value?`, `defaultValue?`, `onValueChange?`, `onValueCommit?`, `min?` (0), `max?` (100), `step?` (1), `formatValue?(value)`, `showValue?`, `name?`, `disabled?`, `"aria-label"?`, `className?` | A native range drawn in neutral inks: the track fills with the primary ink up to the thumb and is the input-edge ink past it, and the thumb is a field-coloured disc ringed in the primary ink, so it stands apart from both in either theme. The focus ring is its one accent; keyboard and assistive-tech behaviour are the native range's. A value off the step snaps to the nearest one from `min`, as the native range does, before it is shown or spoken. `formatValue` is spoken as `aria-valuetext` and shown by `showValue`. `onValueChange` fires on every move, `onValueCommit` when a drag or key press ends: save there. One thumb; for a range, use two `NumberInput`s. |
+| `Slider` | `value?`, `defaultValue?`, `onValueChange?`, `onValueCommit?`, `min?` (0), `max?` (100), `step?` (1), `formatValue?(value)`, `showValue?`, `name?`, `disabled?`, `"aria-label"?`, `className?` | A native range drawn in neutral inks: the track fills with the primary ink up to the thumb and is the input-edge ink past it, and the thumb is a field-coloured disc ringed in the primary ink, so it stands apart from both in either theme. The focus ring is its one accent; keyboard and assistive-tech behaviour are the native range's. A value off the step snaps to the nearest one from `min`, as the native range does, before it is shown or spoken. `formatValue` is spoken as `aria-valuetext` and shown by `showValue`. `onValueChange` fires on every move, `onValueCommit` when a drag or key press ends: save there. One thumb; for a low and a high value, use `RangeSlider`. |
 | `Combobox` | `options` (as `Select`), `value?: string \| null`, `defaultValue?`, `onValueChange?`, `placeholder?`, `searchPlaceholder?`, `onSearchChange?(query)`, `filter?: "contains" \| "none"`, `loading?`, `emptyMessage?`, `allowCustomValue?`, `disabled?`, `density?`, `name?`, `id?`, `"aria-label"?`, `className?` (trigger) | A `Select` with a search: the same trigger, opening the picker search strip over a virtualised list, so a thousand options cost what forty do. Typing filters by label and description; Up/Down/Home/End move the cursor, Enter picks, Escape clears the query and then closes. For options you fetch as the user types, pass `filter="none"`, load from `onSearchChange` and set `loading` while you do: the list says "Loading…" after 400 ms rather than "No matches". The trigger keeps the label of a pick your options no longer list. `allowCustomValue` offers the typed text as a value of its own. Disabling it closes an open list, and a disabled `name`d field submits nothing, as a disabled native one does. Inside a `FormField` with an `error` (or given `aria-invalid`) the trigger takes the error edge, as `Input` does. |
 | `MultiSelect` | `options`, `value?: string[]`, `defaultValue?`, `onValueChange?(values)`, `max?`, `maxChips?` (3), and the rest of `Combobox`'s props except `allowCustomValue` | Labels, assignees: the `Combobox` list with a check box on each row, staying open while you toggle. The trigger shows as many of the first `maxChips` choices as chips as its width holds (at least one, truncating) and the rest as "+N", and is read as the whole list. The list is `aria-multiselectable`, each row's membership is its `aria-checked`, and the cursor is drawn apart from it. Once `max` is reached the unchecked rows are disabled. Values come back in the order they were chosen. |
 | `TagInput` | `value?: string[]`, `defaultValue?`, `onValueChange?`, `validate?(tag, tags) => boolean`, `max?`, `placeholder?`, `disabled?`, `invalid?`, `"aria-label"?`, `className?` | Free-text tags in one field: Enter or a comma adds, a pasted list splits on commas and new lines (replacing any selected text, as a plain paste would), Backspace in the empty field removes the last tag, and each chip has its own remove button, which hands focus to the next chip's or to the field. A tag already there, ignoring case, is not added twice. A tag `validate` refuses (or one past `max`) stays in the field, marked invalid, to be fixed or cleared. For choosing from known values use `MultiSelect`. |
@@ -163,6 +163,60 @@ createElement(ContextMenu, {
 ### Files from the user
 
 A view is part of Daintree's own window, so `FileDropzone` (or your own `<input type="file">`) hands you standard `File` objects: `name`, `size`, `type`, `lastModified`, and the contents through `file.text()`, `file.arrayBuffer()` or `file.stream()`. A view never gets the file's path on disk, and the host has no file-open dialog that returns paths. To act on the contents in your worker, read them in the view and send them over a channel (an `invoke`'s arguments may be up to 4 MiB); to work with files the user already has in the project, use [`host.fs`](./host-api.md#fs--host-mediated-scope-contained-filesystem) in the worker and a `FileTree` or `Combobox` in the view to pick among them. A drag from Daintree's own file browser carries paths rather than files, so a `FileDropzone` does not take it.
+
+### Text inputs
+
+Richer fields for views that talk to agents, APIs and forges: prompts with mentions and commands, names renamed in place, headers and environment variables, tokens and keyboard shortcuts.
+
+| Export | Props | Notes |
+| --- | --- | --- |
+| `MentionTextarea` | `value?`, `defaultValue?`, `onValueChange?`, `triggers?: (string \| { char, title?, emptyMessage?, atStart? })[]`, `getSuggestions?(trigger, query) => MentionSuggestion[] \| Promise<…>`, `onSuggestionInsert?(suggestion, trigger)`, `onKeyDown?`, `onFocus?`, `onBlur?`, `placeholder?`, `name?`, `disabled?`, `readOnly?`, `autoFocus?`, `spellCheck?`, `maxLength?`, `invalid?`, `minRows?` (1), `maxRows?` (8), `variant?: "default" \| "code"`, `density?`, `ref?` (the textarea), `className?`; `id`, `data-*` and `aria-*` | A `Textarea` that grows with its text up to `maxRows`, then scrolls, and opens the host composer's own autocomplete menu when a trigger is typed at the start of the text or after a space (`atStart` holds a slash command to the very start). Suggestions are `{ id, label, insertText?, description?, badge?, disabled? }`, at most 50 shown. While an async reply is out the last rows stay up, dimmed, and a reply that lands after a newer query is dropped. Focus never leaves the text: Up and Down move the highlighted row (skipping disabled ones), Enter or Tab inserts it, Escape closes the menu (and keeps that trigger closed until you leave it) without reaching the pane. The inserted text is `insertText`, or the trigger and label (`@alice`), followed by one space, with the caret after it. Each row shows the token it inserts, as the host's own menu does, unless `insertText` says otherwise. The menu opens above the line unless there is plainly more room below, and stays within the field's width where it can. `onKeyDown` hears every key the menu did not take. |
+| `Composer` | `value?`, `defaultValue?`, `onValueChange?`, `onSubmit?(text)`, `submitOn?: "mod+enter" \| "enter"`, `busy?`, `onStop?`, `disabled?`, `placeholder?`, `triggers?`, `getSuggestions?`, `onSuggestionInsert?`, `attachments?: { id, name, detail?, icon? }[]`, `onRemoveAttachment?(id)`, `onAttach?(files)`, `accept?`, `maxLength?`, `toolbar?: ReactNode`, `submitLabel?` ("Send"), `minRows?` (2), `maxRows?` (10), `autoFocus?`, `ref?` (the textarea), `className?`; `id`, `data-*` and `aria-*` (the text) | The agent composer: a `MentionTextarea` in one field-coloured shell with the field's focus ring, attachment chips above the text and a footer below it with the attach button (only with `onAttach`), your `toolbar`, a character count once the text passes 80% of `maxLength`, and Send, a neutral high-contrast button since the ring already spends the accent. Cmd/Ctrl+Enter sends and Enter is a new line; with `submitOn="enter"`, Enter sends too and Shift+Enter is the new line. Enter while the suggestion menu is up inserts rather than sends, and while its rows are still loading it waits rather than sending the half-typed query. Send is held while the text is empty and there are no attachments. While `busy`, Send becomes Stop (and Escape anywhere in the composer stops too), sending is held and the text stays editable for the next message. The suggestion menu hangs above the whole shell rather than over its chips, and Send and Stop are one button, so focus stays on it when it changes. Files dropped on the shell or pasted into the text go to `onAttach`, filtered by `accept`; removing a chip hands focus to the next chip, or the text. Clearing the draft after a send is yours to do. |
+| `InlineEdit` | `value`, `onCommit(value) => void \| Promise<void>`, `"aria-label"`, `validate?(value) => string \| null`, `allowEmpty?`, `placeholder?`, `blurAction?: "commit" \| "cancel"`, `activation?: "click" \| "doubleClick"`, `selectOnEdit?: "all" \| "stem" \| "end"`, `editing?`, `onEditingChange?`, `maxLength?`, `disabled?`, `size?: "sm" \| "md" \| "lg"`, `className?`; `id` and `data-*` | A name you rename in place, drawn and behaving like a pane title's rename: a click (or double-click with `activation`), F2 or Enter turns the text into the host's chrome-free rename field with the text selected (`stem` stops before a file extension). Enter commits the trimmed value and returns focus to the text, Escape cancels without the key reaching the pane, and leaving the field commits unless `blurAction="cancel"`. An unchanged value commits nothing; an emptied one reverts on blur and is refused on Enter, unless `allowEmpty`. A `validate` message keeps the field open with the message under it; a validator that throws refuses too. Escape does nothing while a commit is pending. When `onCommit` returns a promise the field holds read-only with a spinner until it settles; a rejection keeps it open with the error's message. |
+| `KeyValueEditor` | `value?: { id?, key, value, secret? }[]`, `defaultValue?`, `onValueChange?(pairs)`, `"aria-label"`, `onValidityChange?(valid)`, `validateKey?(key) => string \| null`, `caseInsensitiveKeys?`, `allowDuplicateKeys?`, `reorderable?`, `keyLabel?`, `valueLabel?`, `keyPlaceholder?`, `valuePlaceholder?`, `addLabel?` ("Add"), `max?`, `allowSecretToggle?`, `disabled?`, `className?`; `id` and `data-*` | Environment variables, headers, mappings: a row of compact key and value fields per pair, a remove button on each and an Add button that puts focus in the new key. A value marked `secret` is a `SecretInput`; `allowSecretToggle` adds a lock toggle per row. A key that repeats another (ignoring case with `caseInsensitiveKeys`, as HTTP headers want) and a value with no key are marked on their row; a fresh empty row is not an error. `onValidityChange` tells you when that changes, to hold your Save. Pasting `KEY=value`, `export KEY=value` or `Key: value` lines into a key field adds a row per line (quotes and `#` comments dropped). Rows keep an `id`, added when missing, so give it back. `reorderable` draws a grip per row and reorders like `SortableList`. |
+| `ListEditor` | `value?: string[]`, `defaultValue?`, `onValueChange?(items)`, `"aria-label"`, `onValidityChange?`, `validate?(item) => string \| null`, `allowDuplicates?`, `reorderable?`, `placeholder?`, `addLabel?`, `max?`, `variant?: "default" \| "code"`, `disabled?`, `className?`; `id` and `data-*` | `KeyValueEditor` for single values: hosts, globs, scopes. Pasting several lines adds a row per line; a repeated item is marked, and empty rows are ignored rather than refused. `code` sets the fields in the mono face. |
+| `SecretInput` | `value?`, `defaultValue?`, `onValueChange?`, `stored?`, `storedHint?`, `onReplace?`, `onCancelReplace?`, `onClear?`, `onSubmit?(value)`, `allowCopy?`, `revealable?` (true), `placeholder?`, `name?`, `disabled?`, `invalid?`, `autoFocus?`, `density?`, `"aria-label"?`, `"aria-labelledby"?`, `"aria-describedby"?`, `className?`; `id` and `data-*` | A token or API key: a masked mono field with an eye toggle inside it; a press on the toggle leaves focus in the field, so a save-on-blur around it is safe. Turning `revealable` off hides a shown value. Copying, cutting and dragging the value out are blocked unless `allowCopy`. With `stored`, a secret is saved that the view never holds: the field reads "Saved ••••••••" and the last few characters of `storedHint`, beside Replace and, with `onClear`, Clear (confirming is yours to do). Replace empties and focuses the field; Cancel or Escape goes back to the saved state with focus on Replace. Enter with `onSubmit` while replacing returns to the saved state once `onSubmit` returns, or once its promise resolves; while a promise is out the field holds read-only (a spinner after 400 ms) and Cancel stays available, and a rejection keeps the typed value to try again. The saved state also returns, with the draft dropped, when `stored` turns from false to true. Keep the secret in the worker's secret settings, never in view state. |
+| `ShortcutRecorder` | `value?: string \| null`, `defaultValue?`, `onValueChange?(combo \| null)`, `allowChords?`, `requireModifier?` (true), `validate?(combo) => string \| null`, `getConflict?(combo) => string \| null`, `checkHostConflicts?` (true), `placeholder?` ("Not set"), `disabled?`, `density?: "default" \| "compact"`, `"aria-label"?`, `"aria-labelledby"?`, `"aria-describedby"?`, `className?`; `id` and `data-*` | Focus it (or click it) and press a shortcut; it records in the app's combo notation (`"Cmd+Shift+K"`, Cmd being Ctrl off macOS), the notation `KbdChord` takes, and `useHotkeys` for a single-step combo. While it records, Daintree's own shortcuts stand down. Modifiers held so far show as you press them. `allowChords` records a second step pressed within a second ("Cmd+K Cmd+S"), with the host's draining bar under the field. Escape stops recording, Enter or Space starts it again, a plain Backspace or Delete clears, and a plain Tab or Shift+Tab always moves on. A first key that is bare or only Shift+key is refused unless `requireModifier` is false (F-keys pass), so a shortcut never types into a field. AltGr input is ignored, since the host never matches it. A combo Daintree already uses is flagged with the action's name, since Daintree's binding wins; `getConflict` adds your own warnings. While a new chord is under way the warnings follow its first step rather than the shortcut it would replace, and leaving the window ends recording with the old shortcut kept. `compact` matches a compact `Input`. |
+
+```tsx
+import { Composer, KeyValueEditor, SecretInput } from "@daintreehq/plugin-ui";
+
+<Composer
+  aria-label="Request for the agent"
+  value={draft}
+  onValueChange={setDraft}
+  onSubmit={(text) => send(text).then(() => setDraft(""))}
+  busy={running}
+  onStop={cancel}
+  triggers={[
+    { char: "@", title: "Files" },
+    { char: "/", title: "Commands", atStart: true },
+  ]}
+  getSuggestions={(trigger, query) => (trigger === "@" ? searchFiles(query) : commands(query))}
+  attachments={attachments}
+  onAttach={addFiles}
+  onRemoveAttachment={removeAttachment}
+/>;
+
+<KeyValueEditor
+  aria-label="Headers"
+  value={headers}
+  onValueChange={setHeaders}
+  caseInsensitiveKeys
+  addLabel="Add header"
+  onValidityChange={setHeadersValid}
+/>;
+
+<SecretInput
+  aria-label="API token"
+  stored={tokenSaved}
+  storedHint={tokenTail}
+  value={token}
+  onValueChange={setToken}
+  onSubmit={saveToken}
+  onClear={confirmClearToken}
+/>;
+```
 
 ### Status and feedback
 
@@ -331,6 +385,98 @@ export default function Dashboard() {
 }
 ```
 
+### Panes
+
+What a panel needs once it is more than one pane: a list beside its record, splits of three or more, an inspector, a drawer inside the pane, a long grouped list, a selection bar, the end of a paged list, a queue of jobs and the marks of data that is refreshing or old. All of it answers to the pane's own width, never the window's.
+
+| Export | Props | Notes |
+| --- | --- | --- |
+| `MasterDetail` | `list`, `detail`, `selectedId?: string \| number \| null`, `onBack?()`, `listLabel?` ("List"), `detailLabel?` ("Details"), `backLabel?` ("Back"), `detailTitle?`, `collapseBelow?` (560), `defaultListSize?` (320), `minListSize?` (220), `maxListSize?` (560), `persistKey?`, `className?` | A list pane beside a detail pane, split by the host's divider (a `ResizableSplit`). Below `collapseBelow` px of its own width it is one pane: the list while `selectedId` is `null` or `undefined`, the detail under a 32 px Back strip (with `detailTitle`) once it is not; clear `selectedId` in `onBack`. Focus follows the swap: to Back when a record opens, and back to the row that opened it. Both panes stay mounted across the breakpoint, so a scrolled list or a half-written comment survives it. `persistKey` remembers the list width (see `usePersistentViewState`). It fills its container. |
+| `SplitGroup` | `panes: { id, content, defaultSize?, fill?, minSize?, maxSize?, collapsible?, defaultCollapsed?, handleLabel? }[]`, `orientation?: "horizontal" \| "vertical"`, `persistKey?`, `collapsed?: string[]`, `onCollapsedChange?(ids)`, `onLayoutChange?({ sizes, collapsed })`, `className?` | Two or more panes in a row or column. One pane fills (the one marked `fill`, else the first without a `defaultSize`, else the last); every other pane holds a size in px (240 by default, `minSize` 120) and owns the one handle on its side facing the filling pane, so each boundary has exactly one handle and a drag moves only that pane. Handles are the host's: arrows (10 px), Shift+arrows (50), Home, End, double-click to reset, and a pane never grows past the room the others leave. `collapsible` panes fold on a drag below half their `minSize` or on Enter or Space, and stay mounted; `collapsed` makes that controlled, for a toolbar toggle. Nest a `SplitGroup` in a pane for a grid of splits. `persistKey` remembers sizes and folded panes. |
+| `Inspector` | `children?`, `"aria-label"?`, `labelWidth?` (88), `className?` | A property panel's frame, for a side pane or a `Drawer`. Its `PropertyRow`s put the label in a `labelWidth` column beside the value while the inspector is at least 240 px wide, and above it when narrower. Named, it is a region. |
+| `InspectorSection` | `title`, `children?`, `collapsible?` (true), `open?`, `defaultOpen?` (true), `onOpenChange?(open)`, `actions?`, `className?` | A 28 px heading row (the small uppercase label) over a group of rows, split from the one above by a hairline. The heading folds the section; folded, its rows stay mounted and hidden, so a half-edited field keeps its value, and focus inside them moves to the heading. `actions` is a button or two at the row's end. |
+| `PropertyRow` | `label`, `children?`, `htmlFor?`, `hint?`, `align?: "center" \| "start"`, `className?` | One property at a height the eye can count: a 12 px label and its value, 28 px tall. A kit control in `children` (an `Input`, `Select`, `Switch`, …) is labelled by the row, as in a `FormField`; `htmlFor` names a control the row cannot find. Text or a number is a read-only value, and nothing draws a quiet dash read as "None". `hint` sits after the label and is never part of its name. `align="start"` pins the label to the first line of a tall control. Give controls their compact size. |
+| `Drawer` | `open`, `onOpenChange?(open)`, `children?` (the pane's content), `panel` (the drawer's body), `title?`, `"aria-label"?`, `actions?`, `footer?`, `side?: "left" \| "right" \| "top" \| "bottom"` (`right`), `mode?: "overlay" \| "push"` (`overlay`), `modal?`, `size?` (320), `panelId?`, `className?` | A panel that slides in from an edge of its own pane: wrap the pane's content in it. `overlay` floats on the app's elevated surface and shadow over the content and, `modal` by default, dims it, makes it inert and holds focus in the drawer until it closes; `push` sits beside the content and narrows it, and is never modal. Opening moves focus in (the body's first control when modal, else the drawer), without a focus ring when it was opened with the pointer; a drawer that mounts already open (restored with its view) leaves focus where it is. A modal drawer is a `dialog` whose scope is its own pane, so it does not claim `aria-modal` and the pane's toolbar stays live; Escape, the header's close button and a click on the scrim close it, and focus goes back to what opened it. With `title` it draws a 32 px header with `actions` and a close button; `footer` is a strip for Apply and Reset. It is never wider than 90 % of the pane. For a record against the window's edge use `Sheet`. |
+| `DrawerToggle` | `open`, `onOpenChange(open)`, `label`, `controls?` (the `Drawer`'s `panelId`), `icon?`, `side?`, `showLabel?`, `badge?`, `disabled?`, `className?` | The pane-toolbar button for a `Drawer`: a panel glyph facing `side`, `aria-expanded` for the state and `aria-controls` for the drawer. The name is the drawer ("Filters"), never the next action. `badge` counts what the drawer has in effect, as a quiet number. |
+| `GroupedVirtualList<T>` | `groups: { id, label, items, count? }[]`, `renderItem(item, index, group)`, `itemKey?(item, group)`, `"aria-label"`, `collapsible?`, `collapsedGroups?`, `defaultCollapsedGroups?`, `onCollapsedGroupsChange?(ids)`, `footer?`, `empty?`, `estimatedItemSize?` (28), `overscan?`, `onEndReached?(lastIndex)`, `activeIndex?`, `shadows?`, `className?`; DOM props except `style` and `ref` | A `VirtualList` in groups, each under a 28 px header (the list label, then the count) that sticks to the top while its rows scroll past. `count` overrides the number shown (a total larger than the page loaded) and `false` hides it. `collapsible` headers fold their group; they carry `aria-expanded` but no `aria-controls` (optional in the disclosure pattern), because a virtualised group's rows have no container of their own to point at. Rows are indexed across the list as drawn, headers not counted and folded groups left out, so `renderItem`'s `index`, `activeIndex` and `useListNavigation`'s `count` agree; spread `containerProps` for a keyboard listbox as on `VirtualList`. `footer` sits after the last row inside the scroller, usually a `LoadMoreFooter`. `empty` replaces the list when every group is empty. It fills its container's height. |
+| `BulkActionBar` | `count?` or `selection?` (a `useSelection` result), `noun?: string \| { one, other }`, `hiddenCount?`, `actions?: { id, label, icon?, onSelect?, disabled?, destructive?, priority? }[]`, `onClear?`, `"aria-label"?`, `className?` | "3 issues selected", the actions that apply to them, and a clear button, in a 36 px band with a hairline on top: render it in place of the list's footer, not under it. It renders nothing while the count is 0. Actions are text buttons that fold into a "More actions" menu when the band is too narrow (the lowest `priority` first). `hiddenCount` adds "· 2 not shown" for selected rows a filter or an unloaded page hides. Escape inside the bar clears the selection. |
+| `LoadMoreFooter` | `status: "idle" \| "loading" \| "error" \| "done"`, `onLoadMore?()`, `loadedCount?`, `totalCount?`, `noun?`, `error?`, `autoLoad?`, `label?` ("Load more"), `className?` | The end of a paged list. `idle` is a Load more button with "50 of 212" when both counts are known; `loading` keeps the button in place with its spinner (and focus); `done` says "All 212 issues loaded"; `error` shows the reason and Retry. Each change is announced. `autoLoad` loads the next page as the footer scrolls into view, and again while it stays in view after each page, but never retries an error. When the focused button goes away, focus stays in the footer. |
+| `TaskList` | `tasks: { id, title, status: "pending" \| "running" \| "done" \| "failed" \| "cancelled", progress?, detail?, startedAt?, finishedAt?, retryable?, cancellable? }[]`, `"aria-label"`, `title?`, `summary?` (true), `actions?`, `onRetry?(task)`, `onCancel?(task)`, `empty?`, `className?` | A queue of jobs: sync runs, exports, deliveries. Each row has its state's glyph (spoken as a word), its title, a `detail` line, a spinner while it runs with a thin bar under it once `progress` (0 to 1) is known, and its duration (live while running, from `startedAt`; fixed once `finishedAt` is set). Only a failure is coloured: finished work is neutral. With `onRetry`, failed and cancelled jobs offer Retry; with `onCancel`, pending and running ones offer Cancel; a job's `retryable` or `cancellable` opts it out. Each is an icon button in one reserved column, so every duration lines up; when a job's action goes away under focus, focus stays on its row. A job settling (finished, failed, cancelled) is announced; progress and ticking times are not. The header's summary reads "2 running · 1 failed · 5 done". |
+| `RefreshOverlay` | `refreshing`, `children?`, `label?` ("Updating…"), `className?` | Content that is still valid while a fresh copy loads. Its content is `aria-busy` at once (the announcement of the note sits outside it, so it is not held back), and past the 400 ms gate draws a thin bar along its top edge and a small "Updating…" note in the corner, both on top of the content: nothing moves, nothing is dimmed, and the content stays usable. For a first load with nothing to show, use `PaneState` or `Skeleton`. |
+| `StaleIndicator` | `updatedAt?`, `staleAfterMs?`, `stale?`, `disconnected?`, `refreshing?`, `onRefresh?()`, `refreshLabel?` ("Refresh"), `className?` | "Updated 5m ago" as a live `TimeAgo`, for a `StatusBar` or a `PaneHeader` subtitle. Older than `staleAfterMs` (a positive number of ms), or with `stale`, a clock glyph marks it out of date; `disconnected` leads with "Disconnected" and the last update after it. `onRefresh` adds a refresh button that spins while `refreshing`, and ignores presses until it stops. Dropping to `disconnected` and coming back are announced; the age ticking over is not. It takes the text size of where it sits. |
+
+```tsx
+import {
+  BulkActionBar,
+  Drawer,
+  DrawerToggle,
+  GroupedVirtualList,
+  ListRow,
+  LoadMoreFooter,
+  MasterDetail,
+  PaneLayout,
+  StaleIndicator,
+  StatusBar,
+  Toolbar,
+  useSelection,
+} from "@daintreehq/plugin-ui";
+
+const selection = useSelection({ ids: issues.map((issue) => issue.id) });
+
+<PaneLayout
+  scroll="none"
+  toolbar={
+    <Toolbar variant="bar" aria-label="Issues">
+      <DrawerToggle
+        label="Filters"
+        controls="filters"
+        open={filtersOpen}
+        onOpenChange={setFiltersOpen}
+      />
+    </Toolbar>
+  }
+  footer={
+    <BulkActionBar
+      selection={selection}
+      noun="issue"
+      actions={[{ id: "close", label: "Close", icon: "x", onSelect: closeSelected }]}
+    />
+  }
+  statusBar={
+    <StatusBar
+      right={<StaleIndicator updatedAt={syncedAt} staleAfterMs={300_000} onRefresh={sync} />}
+    />
+  }
+>
+  <Drawer
+    open={filtersOpen}
+    onOpenChange={setFiltersOpen}
+    panelId="filters"
+    title="Filters"
+    panel={<Filters />}
+  >
+    <MasterDetail
+      persistKey="issues"
+      selectedId={openId}
+      onBack={() => setOpenId(null)}
+      detailTitle={openIssue?.title}
+      list={
+        <GroupedVirtualList
+          aria-label="Issues"
+          groups={groups}
+          collapsible
+          renderItem={(issue) => (
+            <ListRow title={issue.title} onSelect={() => setOpenId(issue.id)} />
+          )}
+          footer={<LoadMoreFooter status={pageStatus} onLoadMore={loadMore} autoLoad />}
+        />
+      }
+      detail={<IssueDetail issue={openIssue} />}
+    />
+  </Drawer>
+</PaneLayout>;
+```
+
 ### Settings grammar
 
 A settings view is a stack of `SettingsSection`s, each holding `SettingsGroup`s of `SettingsRow`s — the same section → group → row grammar Daintree's own settings pages use.
@@ -360,6 +506,94 @@ Days are ISO `"YYYY-MM-DD"` strings and ranges are `{ start, end }` of them, bot
 | `DatePicker` | `value?: string \| null`, `defaultValue?`, `onValueChange?(value \| null)`, `min?`, `max?`, `isDateDisabled?`, `weekStartsOn?`, `placeholder?`, `clearable?` (true), `disabled?`, `required?`, `invalid?`, `name?`, `open?`, `onOpenChange?`, `density?: "default" \| "compact"`, `id?`, `"aria-label"?`, `"aria-labelledby"?`, `"aria-describedby"?`, `className?` | A field drawn like `Input` that shows the day as "Sep 30, 2026" (in the Gregorian calendar and Western digits whatever the locale, so what it shows can be typed back) and opens a `Calendar` from its calendar button (or Alt+Down) in a modal popover: it is announced as a modal dialog, Tab stays inside it, the page behind is inert, and Escape or a click away closes it and returns focus to the button (to the text, when Alt+Down opened it). Same height as `Input` and `Select` at either density, so it lines up in a form row. Typing is lenient: `2026-09-30`, `2026/9/30`, `Sep 30 2026`, `30 September`, or the locale's numeric order; it is checked on Enter or blur, and text that is not an allowed day marks the field invalid without touching the value. Escape puts the text back. `null` is empty; the clear button hides when `required`. `name` submits the ISO value in a native form. Joins a `FormField` on its own. |
 | `DateRangePicker` | `value?: { start, end } \| null`, `defaultValue?`, `onValueChange?(range \| null)`, `presets?: { label, range }[]`, and the rest of `DatePicker`'s | Lays out for the room the popover actually has (the window less any panel open on the right edge; the panel floats over the app, so it is not held to the width of the view that opens it): two months side by side where they fit in a row with the presets (the month before and the month `max` falls in, when the month after it would be wholly past `max`, so a range ending today opens on last month and this one), one month where they do not, and where even the presets and one month do not fit in a row, the presets wrap above the month; `presets` ("Last 7 days") are otherwise listed beside the months; work a preset's range out when you render. A preset whose ends `min`, `max` or `isDateDisabled` rule out is shown disabled, as a typed range with those ends would be refused. Shows a range with the parts both ends share said once, in the locale's order ("Sep 24 – 30, 2026", "Sep 24 – Oct 3, 2026", "Dec 28, 2026 – Jan 3, 2027"), ending in an ellipsis when the field is too narrow; while the text has focus it reads in full ("Sep 24, 2026 – Sep 30, 2026"), so what you edit is what the parser reads back. Typed ranges take two dates with `–`, `-` or `to` between. `name` submits `start/end`. |
 | `TimeAgo` | `value: number \| string \| Date`, `verbose?`, `prefix?`, `tooltip?` (true), `className?`, `id?`, `data-*` | A `<time dateTime>` reading `formatTimeAgo` ("5m ago"), or `formatRelativeTime` ("5 minutes ago") when `verbose`, that keeps itself current: every `TimeAgo` shares `useNow`'s clocks, ticking every 30 s for the first hour and then every 5 minutes and every hour (by the second only while a verbose age is under a minute), and none tick while the view is hidden. The full date and time is in a tooltip; `tooltip={false}` puts it in a native `title` instead, for an age inside a button or option. |
+
+### Pickers and forms
+
+Colours are lowercase `"#rrggbb"`. A time is `"HH:mm"` on a 24-hour clock whatever the user's locale shows, and a date-time is `"YYYY-MM-DDTHH:mm"`, a day and a wall time with no zone, as `<input type="datetime-local">` holds it.
+
+| Export | Props | Notes |
+| --- | --- | --- |
+| `ColorSwatch` | `color`, `size?: "xs" \| "sm" \| "md" \| "lg"`, `shape?: "circle" \| "square"`, `selected?`, `"aria-label"?`, `disabled?`, `className?`; DOM props | A chip of one colour with a strong-border edge, so white and near-black keep their shape on either theme. Given an `onClick` (a `Popover` or `DropdownMenu` trigger hands it one) it is a button, named by its hex unless `aria-label` says otherwise; without, an image. A colour that is not hex draws the empty chip, a diagonal rule. `selected` rings it in the primary ink, never accent. |
+| `ColorPicker` | `value?: string \| null`, `defaultValue?`, `onValueChange?(hex)`, `onBlur?()`, `swatches?: (string \| { value, label })[]`, `allowCustom?` (true), `variant?: "field" \| "swatch"`, `placeholder?`, `disabled?`, `invalid?`, `name?`, `open?`, `defaultOpen?`, `onOpenChange?`, `side?`, `align?`, `density?`, `id?`, `"aria-label"?`, `className?` | For label and tag colours. The `field` trigger is a `Select`-sized field showing the chip, the hex and the swatch's name; `swatch` is the chip alone, for a dense row. The popover leads with the palette — by default the theme's twelve `category-*` colours, resolved in the active theme, each named for its hue — as one tab stop whose arrow keys move the choice in rows of six; a click picks and closes. Below it, with `allowCustom`, a saturation area and a hue strip (arrow keys move either), a hex field that also takes `#rgb`, `rgb()` and `hsl()` on Enter or blur (text it cannot read marks it invalid and Escape puts the colour back), the colour as HSL, and the eyedropper where the platform has one. `onValueChange` fires on every change, including each move across the area: save on close or with the form. Pair with `ColoredLabel` for the preview. |
+| `TimePicker` | `value?: string \| null`, `defaultValue?`, `onValueChange?(time \| null)`, `onBlur?()`, `min?`, `max?`, `step?` (1), `hourCycle?: 12 \| 24`, `clearable?` (true), `disabled?`, `required?`, `invalid?`, `name?`, `open?`, `onOpenChange?`, `density?`, `id?`, `"aria-label"?`, `className?` | Drawn like `DatePicker`: hour and minute segments, and AM/PM where the locale (or `hourCycle`) uses a 12-hour clock. Each segment is a spin button and a tab stop: Up/Down step it (the minute by `step`), digits type into it and move on once no further digit could fit, Left/Right and `:` move between segments, Backspace clears one. The value commits once every segment is filled; a time outside `min`/`max` marks the field invalid and leaves the value alone, and leaving the field half-typed puts the time back. The clock button (or Alt+Down) opens a list of times, spaced by the smallest multiple of `step` that is at least 15 minutes and held to `min`/`max`, with the arrow keys, Page Up/Down, Home/End and Enter. |
+| `DateTimePicker` | `value?: string \| null`, `defaultValue?`, `onValueChange?(value \| null)`, `onBlur?()`, `min?`, `max?`, `isDateDisabled?`, `weekStartsOn?`, `step?`, `hourCycle?`, `timeZone?`, `showTimeZone?` (true), `clearable?`, `disabled?`, `required?`, `invalid?`, `name?`, `density?`, `id?`, `"aria-label"?`, `className?` | A `DatePicker` and a `TimePicker` as one value, wrapping to two lines in a narrow pane, with the zone's short name ("GMT+10") after them and its IANA id in the tooltip. `timeZone` only names the zone: the value is the wall time as typed. Picking a day with no time yet fills the earliest time allowed that day (midnight unless `min` says later); a time with no day yet fills today; clearing the day clears the value. `min` and `max` bound the days, and the time on their first and last day. |
+| `RangeSlider` | `value?: [low, high]`, `defaultValue?`, `onValueChange?([low, high])`, `onValueCommit?`, `onBlur?()`, `invalid?`, `min?` (0), `max?` (100), `step?` (1), `minDistance?` (0), `formatValue?(value)`, `showValue?`, `marks?: (number \| { value, label })[]`, `tooltip?: "auto" \| "never"`, `thumbLabels?: [string, string]`, `name?`, `disabled?`, `"aria-label"?`, `className?` | `Slider` with two thumbs, drawn exactly like it: the primary ink fills the span between them. Each thumb is its own `slider` with its own keys — arrows step, Page Up/Down step ten times, Home/End go as far as the other thumb allows — and the thumbs never cross or come closer than `minDistance`, which is rounded up to whole steps. A press on the track moves the nearer thumb and drags it. While a thumb is dragged or has keyboard focus, its value floats over it in the tooltip card. `marks` draws ticks under the track, labelled where given one. `showValue` shows "low – high" beside it; `formatValue` words both, and is spoken. `name` submits two fields, low first. |
+| `ToggleGroup` | `items: { value, label?, icon?, "aria-label"?, tooltip?, disabled? }[]`, `type?: "multiple" \| "single"`, `value?: string[]`, `defaultValue?`, `onValueChange?(values)`, `onBlur?()`, `invalid?`, `"aria-label"`, `disabled?`, `density?: "default" \| "compact"`, `className?` | Subtle toggle buttons, as Daintree's own weekday picker in Notification settings draws them; an "on" button wears the kit `Button`'s `pressed` look (the filter chip's selected fill with a secondary-ink edge that holds 3:1 in either theme), never accent. Sizes are a small `Button`'s 28 px, or 24 px `compact`. `multiple` (the default) turns any number on — weekdays, text styles; `single` turns at most one on and lets it go again. For exactly one, always, use `SegmentedControl`. One tab stop: arrows, Home and End move between the buttons, Space or Enter toggles. Inside a `Toolbar`, the toolbar's own arrow keys run through the buttons instead. An icon-only item needs `aria-label`, which is also its tooltip. `onValueChange` receives the values in the items' order. |
+| `SplitButton` | `children`, `onClick?`, `items` (as `DropdownMenu`), `variant?`, `size?`, `icon?`, `loading?`, `disabled?`, `menuDisabled?`, `type?: "button" \| "submit"`, `menuLabel?` ("More options"), `side?`, `align?` ("end"), `className?` | A primary action and, on a chevron that is its own tab stop, a `DropdownMenu` of the alternatives — every entry type, submenus and descriptions included. Both halves share one shape in any `Button` variant but `link` and `pill`, and every size; the seam is the variant's own ink. `loading` spins the primary half and disables both. In a settings group, `variant="contrast"` and `size="sm"`, as `SettingsActions` asks. |
+| `Form` | `form` (a `useForm` result), `children?`, `"aria-label"?`, `"aria-labelledby"?`, `className?`, `id?`, `data-*` | A native `<form noValidate>`: Enter in a text field or a time segment, or a `type="submit"` button, runs `form.submit()` (a second submit while one is running is refused), a `type="reset"` button runs `form.reset()`, and a submit that fails a check moves focus to the first invalid control. Its fields show while the kit loads. |
+| `FormStatus` | `form`, `id?`, `data-*` | The form's status for `SettingsActions`' `status`: "Unsaved changes", "Saving…" with a spinner, "Saved" with a check, or a failed check ("Fix 2 fields") or submit (its message) in the error ink with its glyph. Nothing while the form is clean. `SettingsActions` announces it politely; anywhere else, put it in a `LiveRegion`. |
+| `SchemaForm` | `schema`, `value?`, `defaultValue?`, `onValueChange?(value)`, `errors?: Record<string, string>`, `label?`, `disabled?`, `id?`, `data-*` | A `SettingsGroup` generated from a JSON Schema by the same generator as your plugin's [settings](./contribution-points.md#settings-schema--shipped), so it reads and behaves like the form in your settings home. One row per property of a root `object`: `string` is a text field (`format: "password"` or `writeOnly` masks it), `number` and `integer` a number field held to `minimum` and `maximum` (an `integer` refuses a fraction), `boolean` a switch, a string `enum` a segmented control (up to five short options) or a select, and `object` or `array` a JSON text area. `title`, `description`, `default` and the root's `required` are read; any other keyword is ignored, with a console warning in development (the annotations `$schema`, `$id`, `$comment` and `examples` quietly). Text commits as the field is left or on Enter, choices at once, and a field left empty is removed from the value, except a required one with no `default`, which keeps the edit and says "Enter a value". |
+
+`useForm(options)` holds a form's state; spread `form.field(name)` onto a kit control and hand `form.errors[name]` to its `FormField`.
+
+| Option | Notes |
+| --- | --- |
+| `initialValues` | The values the form starts from and what "dirty" compares against, structurally (arrays and plain objects by content). |
+| `validators?: { [name]: (value, values) => message \| undefined \| Promise<…> }` | Per-field checks. With `validateOn` `blur` (the default) a field is checked once it is left and on every change after that; `change` checks on every change; `submit` only on submit. An async check shows `isValidating`, and one that finishes after a newer one is dropped. |
+| `validate?: (values) => { [name]: message } \| Promise<…>` | A whole-form check, run on submit, for rules across fields. |
+| `onSubmit(values)` | Called once every check passes. On success the values become the new clean state and the status reads "Saved"; a throw or rejection keeps the form dirty and shows its message. |
+
+It returns `{ values, errors, dirtyFields, isDirty, isSubmitting, isValidating, status, statusMessage, submitError, setValue(name, value), setValues(partial), setError(name, message), reset(values?), submit(), field(name) }`. `errors` holds what should show: a field's once it has been checked, every field's after a submit. `status` is `clean`, `dirty`, `invalid`, `submitting`, `saved` or `error`, and `statusMessage` says it in words. `field(name)` is `{ name, value, onValueChange, onBlur, invalid }`.
+
+```jsx
+const form = useForm({
+  initialValues: { name: "", color: "#2f81f7", window: [2, 4] },
+  validators: {
+    name: async (name) =>
+      !name.trim() ? "Enter a name" : (await exists(name)) ? "That name is taken" : undefined,
+  },
+  onSubmit: (values) => saveLabel(values), // your own save, e.g. through useHostChannel
+});
+
+<Form form={form} aria-label="New label">
+  <SettingsGroup>
+    <SettingsRow
+      label="Name"
+      error={form.errors.name}
+      control={(ids) => (
+        <Input
+          {...form.field("name")}
+          aria-labelledby={ids.labelId}
+          aria-describedby={ids.descriptionId}
+          disabled={ids.disabled}
+        />
+      )}
+    />
+    <SettingsRow
+      label="Colour"
+      control={<ColorPicker {...form.field("color")} aria-label="Colour" />}
+    />
+    <SettingsRow
+      label="Priority"
+      layout="stacked"
+      control={
+        <RangeSlider
+          {...form.field("window")}
+          min={0}
+          max={5}
+          minDistance={1}
+          aria-label="Priority range"
+        />
+      }
+    />
+    <SettingsActions status={<FormStatus form={form} />}>
+      <Button variant="outline" size="sm" type="reset" disabled={!form.isDirty}>
+        Discard
+      </Button>
+      <SplitButton
+        variant="contrast"
+        size="sm"
+        type="submit"
+        disabled={!form.isDirty}
+        loading={form.isSubmitting}
+        items={[{ label: "Save as template", onSelect: () => saveTemplate(form.values) }]}
+      >
+        Save
+      </SplitButton>
+    </SettingsActions>
+  </SettingsGroup>
+</Form>;
+```
 
 ### Navigation
 
@@ -575,4 +809,4 @@ A builtin that still needs a covered export gets an exception scoped to one file
 
 ## Checking a view against the kit
 
-`daintree-plugin lint` points at hand-rolled versions of kit controls — `raw-button`, `raw-form-control`, `native-title-tooltip`, `inline-svg-icon`, `lucide-react-import`, `dnd-library-import`, `editor-library-import`, `hand-rolled-spinner`, `hand-rolled-badge`, `native-dialog-in-view`, `raw-portal`, `view-web-storage`, `global-key-listener` — and at classes that compile to nothing against the design contract. The Styles tab in Settings → Plugins runs the same class check against a running view. See [Development loop → Lint](./dev-loop.md#daintree-plugin-lint-dir).
+`daintree-plugin lint` points at hand-rolled versions of kit controls — `raw-button`, `raw-form-control` (a password field points at `SecretInput`), `native-title-tooltip`, `inline-svg-icon`, `lucide-react-import`, `dnd-library-import`, `editor-library-import`, `hand-rolled-spinner`, `hand-rolled-badge`, `native-dialog-in-view`, `raw-portal`, `view-web-storage`, `global-key-listener` — and at classes that compile to nothing against the design contract. The Styles tab in Settings → Plugins runs the same class check against a running view. See [Development loop → Lint](./dev-loop.md#daintree-plugin-lint-dir).

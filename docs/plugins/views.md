@@ -26,7 +26,7 @@ The user can reload the panel too, from Reload panel in its menus and dialog hea
 
 ## A settings section
 
-A view with `location: "settings"` is your plugin's custom settings section, for what the generated [settings fields](./contribution-points.md#settings-schema--shipped) can't express — a sign-in, a list editor, a connection test. Declare at most one, with an `id` no panel uses:
+A view with `location: "settings"` is your plugin's custom settings section, for what the generated [settings fields](./contribution-points.md#settings-schema--shipped) can't express — a sign-in, a list or a table of pairs (the kit's `ListEditor` and `KeyValueEditor`), a connection test. Declare at most one, with an `id` no panel uses:
 
 ```json
 { "id": "connection", "componentPath": "dist/settings.js", "location": "settings" }
@@ -74,7 +74,7 @@ host.registerHandler("saveToken", async (_ctx, token) => {
 const { connected } = await window.electron.plugin.invoke(pluginId, "connection");
 ```
 
-Store what the section edits with your worker: credentials as a declared `type: "secret"` setting (`host.settings.set`), everything else in `host.storage` or a `host.db` database (declare it `location: "local"` to keep it on this machine and out of the repository). Never put a credential in `host.storage` or a database.
+Store what the section edits with your worker: credentials as a declared `type: "secret"` setting (`host.settings.set`), everything else in `host.storage` or a `host.db` database (declare it `location: "local"` to keep it on this machine and out of the repository). Never put a credential in `host.storage` or a database. In the section, a kit `SecretInput` with `stored` shows that one is saved, with Replace and Clear, without the view ever holding it.
 
 ## Styling
 
@@ -311,21 +311,22 @@ export default function Notes({ pluginId, disposeSignal }) {
 
 | For | Components |
 | --- | --- |
-| Actions | `Button` (variants `default` — the accent primary, and the default — `secondary`, `outline`, `ghost`, `subtle`, `contrast`, `destructive`, `ghost-danger`, `link`, `pill`), `IconButton`, `CopyButton`, `DismissButton`, `DropdownMenu`, `ContextMenu` (the same rows on a right-click or Shift+F10; both nest submenus and take a description line per row) |
-| Forms | `Input` (text, search, email, url, password, number, tel, date, time, datetime-local), `Textarea`, `Select` (an `options` array; `value={null}` shows the placeholder again), `Combobox` (a `Select` with a search, for long or fetched lists), `MultiSelect` (several choices, as chips), `TagInput` (free-text tags), `Checkbox`, `Switch`, `RadioGroup`, `SegmentedControl`, `NumberInput` (steppers, units, clamping), `Slider`, `SearchField`, `FilterChip` (a toggle or removable filter in a filter bar), `FileDropzone` (drop or choose files; you get `File` objects, never paths), `FormField` (label, description and error wired to the control), `FormFieldGroup` (one label over a set of controls) |
+| Actions | `Button` (variants `default` — the accent primary, and the default — `secondary`, `outline`, `ghost`, `subtle`, `contrast`, `destructive`, `ghost-danger`, `link`, `pill`), `IconButton`, `SplitButton` (a primary action with a menu of alternatives), `ToggleGroup` (toggle buttons, any number or at most one on), `CopyButton`, `DismissButton`, `DropdownMenu`, `ContextMenu` (the same rows on a right-click or Shift+F10; both nest submenus and take a description line per row) |
+| Forms | `Input` (text, search, email, url, password, number, tel, date, time, datetime-local), `Textarea`, `Select` (an `options` array; `value={null}` shows the placeholder again), `Combobox` (a `Select` with a search, for long or fetched lists), `MultiSelect` (several choices, as chips), `TagInput` (free-text tags), `Checkbox`, `Switch`, `RadioGroup`, `SegmentedControl`, `NumberInput` (steppers, units, clamping), `Slider`, `RangeSlider` (a low and a high value), `ColorPicker` and `ColorSwatch` (label and tag colours), `SearchField`, `FilterChip` (a toggle or removable filter in a filter bar), `FileDropzone` (drop or choose files; you get `File` objects, never paths), `FormField` (label, description and error wired to the control), `FormFieldGroup` (one label over a set of controls), `Form` with `useForm` (dirty tracking, sync and async checks, submit and reset) and `FormStatus`, `SchemaForm` (a settings group generated from a JSON Schema) |
 | Lists and tables | `VirtualList`, `DataTable`, `LogView`, `ListRow` with `useListNavigation`, `ScrollShadow`, `FileTree`, `Timeline` (an activity feed or audit log), `HighlightedText` (search matches in a row) |
 | Figures | `StatCard` (a labelled figure with an optional change), `Sparkline`, `Meter` (usage against a limit, with warning and danger thresholds), `DiffStat` ("+12 -3") |
-| Dates | `Calendar` (an inline month grid, one day or a range), `DatePicker` and `DateRangePicker` (typed or picked ISO `"YYYY-MM-DD"` days, range presets), `TimeAgo` (an age that keeps itself current) |
+| Dates | `Calendar` (an inline month grid, one day or a range), `DatePicker` and `DateRangePicker` (typed or picked ISO `"YYYY-MM-DD"` days, range presets), `TimePicker` and `DateTimePicker` (kit-drawn `"HH:mm"` times and `"YYYY-MM-DDTHH:mm"` date-times, with the zone named), `TimeAgo` (an age that keeps itself current) |
 | Charts | `BarChart` (grouped or stacked, upright or across), `LineChart` (numeric or time x, optional area), `DonutChart` (parts of a whole) — all with a tooltip anchored to the point under the pointer or the arrow keys |
 | Pane chrome | `PaneHeader`, `Toolbar`, `ToolbarButton`, `Tabs` |
 | Navigation | `NavList` (an app's left rail), `Breadcrumbs`, `Stepper` (a wizard's progress), `CommandPalette` (a quick switcher or "jump to…") |
 | Layout | `Card` (header, body and footer; clickable with `onClick`), `Divider`, `SectionLabel`, `ResizableSplit` (two panes with a draggable divider), `Accordion`, `Disclosure`, `DescriptionList` (a record's label and value rows) |
 | Editors | `CodeEditor` (Daintree's CodeMirror editor, with the file viewer's theme and find bar), `DiffView` (two texts or a patch, unified or split, with your own hunk actions; `revertHunk` undoes one), `MarkdownEditor` (a comment or notes field with a toolbar and Write and Preview) |
+| Panes | `MasterDetail` (a list and its record, one pane when narrow), `SplitGroup` (three or more resizable, collapsible panes), `Inspector` with `InspectorSection` and `PropertyRow` (a compact property panel), `Drawer` and `DrawerToggle` (a panel that slides in within the pane), `GroupedVirtualList` (sticky group headers with counts), `BulkActionBar`, `LoadMoreFooter`, `TaskList` (a queue of jobs), `RefreshOverlay` and `StaleIndicator` (refreshing and old data) |
 | Drag and drop | `SortableList` (a list reordered by pointer or keyboard), `Kanban` (columns of cards moved between and within columns, with counts and WIP limits), and `DragDropProvider` with `useDraggable` and `useDroppable` for anything else |
 | States and status | `PaneState` (a whole pane's `loading`, `empty` or `error`), `EmptyState`, `Callout` (an inline message; `severity="error"` with a Retry `action` is the error banner, `variant="strip"` the pane-wide band), `Badge`, `Spinner`, `SpinningIcon`, `ProgressBar`, `Skeleton`, `SkeletonBone`, `SkeletonText`, `SkeletonHint`, `SeverityIcon` |
 | Overlays | `Dialog`, `ConfirmDialog` (including the destructive typed-name gate), `ConfirmPopover` (an inline confirm on its trigger), `Sheet` (a record's detail or edit form against the window's edge), `Popover`, `PopoverSearchField`, `EmojiPicker`, `Tooltip`, `TruncatedTooltip` |
 | Settings views | `SettingsSection`, `SettingsGroup`, `SettingsRow`, `SettingsActions` — the host's section → group → row grammar |
-| Behaviour | Hooks: `useSelection` (single, multi and range selection), `useHotkeys` (view-scoped shortcuts that never shadow the app's), `useUndoRedo`, `useDisclosure`, `useDebouncedValue` and `useDebouncedCallback`, `usePersistentViewState` (a remembered tab or split size, through `persistState`), `useToast` (toasts and Undo toasts from the view) |
+| Behaviour | Hooks: `useSelection` (single, multi and range selection), `useHotkeys` (view-scoped shortcuts that never shadow the app's), `useUndoRedo`, `useDisclosure`, `useDebouncedValue` and `useDebouncedCallback`, `usePersistentViewState` (a remembered tab or split size, through `persistState`), `useToast` (toasts and Undo toasts from the view), `useForm` (form state for `Form`) |
 | Everything else | `Markdown`, `Icon`, `Avatar`, `AvatarGroup`, `Kbd`, `KbdChord`; formatters `formatTimeAgo`, `formatRelativeTime`, `formatDuration`, `formatBytes`, `formatCount`; the theme API below |
 
 One status vocabulary runs through `Badge` `tone`, `Callout` `severity` and `SeverityIcon`: `error` (the same colour as `danger`, which `Badge` also accepts), `warning`, `success`, `info` and `neutral`.
