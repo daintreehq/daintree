@@ -1068,6 +1068,10 @@ function RichDataTable(props: PluginDataTableProps) {
       // keeps its draft, and the failed cell keeps its own, marked, until
       // it is edited again.
       setFailures((map) => ({ ...map, [id]: { draft, error: text } }));
+      // Reopening focuses the field, so it happens only while the reader is
+      // still in this table; anywhere else the marked cell waits for them.
+      const active = typeof document === "undefined" ? null : document.activeElement;
+      if (scroller === null || active === null || !scroller.contains(active)) return;
       setEdit((current) => current ?? { ...failed, error: text });
     };
     Promise.resolve(result).then(
