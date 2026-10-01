@@ -1,5 +1,5 @@
 import type { ComponentType, KeyboardEvent, ReactNode, SyntheticEvent } from "react";
-import type { PluginDropdownMenuEntry } from "@shared/types/plugin-sdk-react";
+import type { PluginActionMenuItem, PluginDropdownMenuEntry } from "@shared/types/plugin-sdk-react";
 import {
   ContextMenuCheckboxItem,
   ContextMenuItem,
@@ -13,6 +13,7 @@ import {
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
 import { resolvePluginKitIcon } from "./PluginKitIcons";
+import { actionMenuRowVisible, useActionMenuRow } from "./PluginKitNativeAgents";
 import { field, fn, nonEmpty, str, useKitOwnerAttributes } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
 
@@ -150,6 +151,35 @@ function KitSubmenuContent({
 /** A submenu row with a description: the host chevron aligned to the label's line. */
 const TWO_LINE_TRIGGER_CLASS = "items-start [&>svg:last-child]:mt-px";
 
+/** An `action` entry: the action's own label, key and availability, read as the menu opens. */
+function ActionMenuRow({ parts, entry }: { parts: KitMenuParts; entry: PluginActionMenuItem }) {
+  const row = useActionMenuRow(entry);
+  if (!row) return null;
+  const Glyph = row.icon === undefined ? undefined : resolvePluginKitIcon(row.icon);
+  return (
+    <parts.Item
+      onSelect={row.onSelect}
+      disabled={row.disabled}
+      destructive={row.destructive}
+      textValue={row.label}
+    >
+      {Glyph ? <MenuRowIcon Glyph={Glyph} top={row.description !== undefined} /> : null}
+      {row.description === undefined ? (
+        row.label
+      ) : (
+        <MenuRowText label={row.label} description={row.description} />
+      )}
+      {row.description === undefined ? (
+        <parts.Shortcut shortcut={row.shortcut} />
+      ) : (
+        <span className="ml-auto flex shrink-0 self-start">
+          <parts.Shortcut shortcut={row.shortcut} />
+        </span>
+      )}
+    </parts.Item>
+  );
+}
+
 // A plugin's items can nest (or, by mistake, contain themselves); past this
 // depth a submenu renders nothing rather than recursing without end.
 const MAX_SUBMENU_DEPTH = 6;
@@ -229,6 +259,10 @@ function renderMenuEntry(
         </parts.Sub>
       );
     }
+    case "action":
+      return actionMenuRowVisible(typed) ? (
+        <ActionMenuRow key={key} parts={parts} entry={typed} />
+      ) : null;
     case undefined:
     case "item": {
       const label = str(typed.label);

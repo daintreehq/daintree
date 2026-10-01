@@ -338,6 +338,24 @@ const dndLibraryImport: LintRule = {
   },
 };
 
+// The agent-context drag written by hand: the payload set under its type, or
+// the SDK helper that writes it. Either way the kit's `ContextDragSource` does it.
+// Writers only: a view that reads the type on a drop has nothing to replace.
+const CONTEXT_DRAG_BY_HAND =
+  /\bsetData\s*\(\s*["'`]application\/x-daintree-agent-context["'`]|\bsetAgentContextDragData\s*\(/;
+
+const handRolledContextDrag: LintRule = {
+  id: "hand-rolled-context-drag",
+  severity: "warn",
+  appliesTo: "view",
+  message: "agent-context drag written by hand",
+  hint: "prefer `ContextDragSource` from @daintreehq/plugin-ui: it checks the payload as the drop will and keeps clear of kit drags, and `SendToAgentButton` gives the keyboard the same handoff",
+  check(file) {
+    const match = CONTEXT_DRAG_BY_HAND.exec(file.code);
+    return match ? [{ offset: match.index }] : [];
+  },
+};
+
 /** `@container`, `@container/name` — the element declares itself a query container. */
 const CONTAINER_DECLARATION = /^@container(?:\/([\w-]+))?$/;
 /** `@md`, `@max-lg`, `@min-[400px]`, `@sm/name` — a container-query variant, with its container name. */
@@ -594,6 +612,7 @@ export const CONSISTENCY_RULES: LintRule[] = [
   inlineSvgIcon,
   lucideImport,
   dndLibraryImport,
+  handRolledContextDrag,
   selfContainerQuery,
   nativeDialogInView,
   viewWebStorage,

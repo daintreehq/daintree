@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { createElement } from "react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "@shared/types/plugin";
 import { primeRadix } from "@/components/ui/radix-loader";
@@ -207,6 +207,55 @@ describe("getPluginStyleReportForRoots with kit markup", () => {
     if (!root) throw new Error("no plugin root");
     await vi.waitFor(() => {
       if (!root.querySelector("textarea")) throw new Error("kit not rendered");
+    });
+    const report = await getPluginStyleReportForRoots([root]);
+    expect(report?.notGenerated).toEqual([]);
+  });
+
+  it("reports nothing for the native-agents kit's own markup", async () => {
+    // The agent mark, state glyph and hint card lean on these host rules.
+    const style = document.createElement("style");
+    style.textContent =
+      ".brand-mark { color: var(--brand-mark-rest); } .spinner-circle { display: block; } .animate-spin-slow { animation: none; } .surface-overlay { background: black; }";
+    document.head.appendChild(style);
+    onTestFinished(() => style.remove());
+    const { container } = render(
+      createElement(
+        TooltipProvider,
+        null,
+        createElement(
+          "div",
+          { [PLUGIN_STYLE_ROOT_ATTRIBUTE]: "" },
+          createElement(kit.AgentAvatar, { agentId: "claude", state: "waiting" }),
+          createElement(kit.AgentBadge, { agentId: "codex", state: "working" }),
+          createElement(kit.AgentStateIndicator, { state: "working", since: Date.now() - 120_000 }),
+          createElement(kit.TerminalSnapshot, {
+            text: "\u001b[32mok\u001b[0m done",
+            title: "Claude: fix auth",
+            agentId: "claude",
+            state: "waiting",
+            onClick: () => {},
+          }),
+          createElement(kit.ContextDragSource, { text: "Card body" }),
+          createElement(kit.SendToAgentButton, {
+            text: "Card body",
+            send: async () => ({ status: "cancelled" as const }),
+          }),
+          createElement(kit.ShortcutHint, { shortcut: "Cmd+K", label: "Search" }),
+          createElement(kit.KeyHints, {
+            variant: "footer",
+            hints: [
+              { shortcut: "Enter", label: "Open" },
+              { keys: ["↑↓"], label: "Move" },
+            ],
+          })
+        )
+      )
+    );
+    const root = container.querySelector(`[${PLUGIN_STYLE_ROOT_ATTRIBUTE}]`);
+    if (!root) throw new Error("no plugin root");
+    await vi.waitFor(() => {
+      if (!root.querySelector("figure, button")) throw new Error("kit not rendered");
     });
     const report = await getPluginStyleReportForRoots([root]);
     expect(report?.notGenerated).toEqual([]);

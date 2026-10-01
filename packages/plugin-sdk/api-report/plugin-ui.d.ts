@@ -301,6 +301,28 @@ declare module "@daintreehq/plugin-ui" {
     PluginMarkdownEditorProps,
   } from "@daintreehq/plugin-sdk/react";
 
+  import type {
+    PluginActionButtonProps,
+    PluginActionDispatchOutcome,
+    PluginActionMenuItem,
+    PluginAgentAvatarProps,
+    PluginAgentAvatarSize,
+    PluginAgentBadgeProps,
+    PluginAgentPickerChoice,
+    PluginAgentPickerPane,
+    PluginAgentPickerProps,
+    PluginAgentState,
+    PluginAgentStateIndicatorProps,
+    PluginContextDragSourceProps,
+    PluginKeyHint,
+    PluginKeyHintsProps,
+    PluginSendToAgentButtonProps,
+    PluginSendToAgentOutcome,
+    PluginSendToAgentRequest,
+    PluginShortcutHintProps,
+    PluginTerminalSnapshotProps,
+  } from "@daintreehq/plugin-sdk/react";
+
   export type MarkdownProps = PluginMarkdownProps;
   export type ButtonProps = PluginButtonProps;
   export type IconButtonProps = PluginIconButtonProps;
@@ -552,6 +574,26 @@ declare module "@daintreehq/plugin-ui" {
   export type TaskListProps = PluginTaskListProps;
   export type RefreshOverlayProps = PluginRefreshOverlayProps;
   export type StaleIndicatorProps = PluginStaleIndicatorProps;
+
+  export type ActionButtonProps = PluginActionButtonProps;
+  export type ActionDispatchOutcome = PluginActionDispatchOutcome;
+  export type ActionMenuItem = PluginActionMenuItem;
+  export type AgentState = PluginAgentState;
+  export type AgentAvatarSize = PluginAgentAvatarSize;
+  export type AgentAvatarProps = PluginAgentAvatarProps;
+  export type AgentBadgeProps = PluginAgentBadgeProps;
+  export type AgentStateIndicatorProps = PluginAgentStateIndicatorProps;
+  export type AgentPickerPane = PluginAgentPickerPane;
+  export type AgentPickerChoice = PluginAgentPickerChoice;
+  export type AgentPickerProps = PluginAgentPickerProps;
+  export type SendToAgentOutcome = PluginSendToAgentOutcome;
+  export type SendToAgentRequest = PluginSendToAgentRequest;
+  export type SendToAgentButtonProps = PluginSendToAgentButtonProps;
+  export type ContextDragSourceProps = PluginContextDragSourceProps;
+  export type TerminalSnapshotProps = PluginTerminalSnapshotProps;
+  export type ShortcutHintProps = PluginShortcutHintProps;
+  export type KeyHint = PluginKeyHint;
+  export type KeyHintsProps = PluginKeyHintsProps;
 
   /** The kit's contract version (semver): `"1.0.0"` for this release. */
   export const PLUGIN_UI_VERSION: string;
@@ -1157,4 +1199,35 @@ declare module "@daintreehq/plugin-ui" {
   export const RefreshOverlay: ComponentType<RefreshOverlayProps>;
   /** "Updated 5m ago", stale or disconnected, with a refresh button. */
   export const StaleIndicator: ComponentType<StaleIndicatorProps>;
+  /**
+   * Runs one of Daintree's actions as `host.dispatch` would, with the action's
+   * own title and the user's binding for it; draws disabled, with the reason in
+   * its tooltip, when the action can't run from a plugin right now.
+   */
+  export const ActionButton: ComponentType<ActionButtonProps>;
+  /** An agent CLI's mark from Daintree's registry, with a pip for a live state. */
+  export const AgentAvatar: ComponentType<AgentAvatarProps>;
+  /** An agent's mark and name, inline. */
+  export const AgentBadge: ComponentType<AgentBadgeProps>;
+  /** The app's state glyph and what was observed ("Output stopped 2m ago"), kept current. */
+  export const AgentStateIndicator: ComponentType<AgentStateIndicatorProps>;
+  /**
+   * A searchable popover of the project's agent panes, grouped by worktree, and
+   * agent CLIs to start; it reports the choice. A `trigger` you pass shows
+   * while the kit loads.
+   */
+  export const AgentPicker: ComponentType<AgentPickerProps>;
+  /** **Send to agent…**: invokes your worker's `"sendToAgent"` handler and reports refusals. */
+  export const SendToAgentButton: ComponentType<SendToAgentButtonProps>;
+  /**
+   * Makes its content draggable onto an agent terminal with the
+   * `daintree-context` payload. The content shows while the kit loads.
+   */
+  export const ContextDragSource: ComponentType<ContextDragSourceProps>;
+  /** A still preview of a terminal's last lines in its own colours, under a title row. */
+  export const TerminalSnapshot: ComponentType<TerminalSnapshotProps>;
+  /** A label and its keys as Daintree's shortcut hint, from an action's binding or a combo. */
+  export const ShortcutHint: ComponentType<ShortcutHintProps>;
+  /** A row of key hints ("⏎ Open  ⌘K Search"), the last dropping first as it narrows. */
+  export const KeyHints: ComponentType<KeyHintsProps>;
 }
