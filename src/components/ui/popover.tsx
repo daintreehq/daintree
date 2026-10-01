@@ -268,7 +268,11 @@ const PopoverContent = React.forwardRef<
     // stale position. Observe the boundary and bump a tick to re-run Radix's positioning.
     const [repositionTick, setRepositionTick] = React.useState(0);
     const focusRestore = useOverlayFocusRestore();
-    const pressGuard = useLayerPressFocusGuard(ref);
+    const {
+      ref: guardedRef,
+      onPointerDownCapture: claimPress,
+      onFocusOutside: guardFocusOutside,
+    } = useLayerPressFocusGuard(ref);
 
     React.useEffect(() => {
       const element = getPortalBoundary();
@@ -306,11 +310,11 @@ const PopoverContent = React.forwardRef<
     // focus on pointerdown (see `layer-press-focus-guard.ts`).
     const handlePointerDownCapture: React.PointerEventHandler<HTMLDivElement> = (event) => {
       onPointerDownCapture?.(event);
-      pressGuard.onPointerDownCapture();
+      claimPress();
     };
     const handleFocusOutside: NonNullable<PopoverContentProps["onFocusOutside"]> = (event) => {
       onFocusOutside?.(event);
-      pressGuard.onFocusOutside(event);
+      guardFocusOutside(event);
     };
     const handleKeyDown: React.KeyboardEventHandler<HTMLDivElement> = (event) => {
       onKeyDown?.(event);
@@ -335,7 +339,7 @@ const PopoverContent = React.forwardRef<
             marks against the toolbar's surface instead of this floating one. */}
         <BrandSurfaceReset>
           <Content
-            ref={pressGuard.ref}
+            ref={guardedRef}
             align={align}
             sideOffset={sideOffset}
             collisionPadding={collisionPadding}

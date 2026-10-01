@@ -2,8 +2,11 @@ import { useCallback, useEffect, useId, useState } from "react";
 import { Radar } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FOOTER_ITEM_CLASS } from "@/components/HelpPanel/footerItem";
 import { terminalClient } from "@/clients";
 import { cn } from "@/lib/utils";
+import { pluralize } from "@/lib/pluralize";
 import {
   HEADER_CHIP_CLASS,
   HEADER_CHIP_FOCUS_CLASS,
@@ -94,7 +97,7 @@ function describeDelivery(delivery: TerminalNotifyDelivery): { text: string; ton
       }
       return { text: "Not sent: no agent is waiting at this pane's prompt.", tone: "warning" };
     case "outstanding":
-      return { text: "Delivered. The agent is reading it.", tone: "quiet" };
+      return { text: "Delivered.", tone: "quiet" };
     case "failed":
       return {
         text: "The last notice couldn't be confirmed, so it goes out again after this pane's next turn.",
@@ -108,52 +111,100 @@ function describeDelivery(delivery: TerminalNotifyDelivery): { text: string; ton
  * working: Daintree may type one line into this pane's prompt. Self-gating,
  * and the only control over it the user needs — stopping drops every notice
  * the pane has pending.
+ *
+ * Two looks for two hosts. In a pane header it is one of the header's chips.
+ * In the assistant's status footer it is a flat status item like its
+ * neighbours, and says what it counts until the row runs out of room.
  */
-export function TerminalNotifyChip({ terminalId }: { terminalId: string }) {
+export function TerminalNotifyChip({
+  terminalId,
+  variant = "header",
+  compact = false,
+}: {
+  terminalId: string;
+  variant?: "header" | "footer";
+  /** Footer only: drop the noun and keep the count. */
+  compact?: boolean;
+}) {
   const state = usePaneNotifyState(terminalId);
-  const [stopping, setStopping] = useState(false);
+  // Scoped to the pane it was started for, so a stop still in flight, or one
+  // that failed, never shows on a different pane this chip is reused for.
+  const [stopOp, setStopOp] = useState<{
+    terminalId: string;
+    phase: "stopping" | "failed";
+  } | null>(null);
   const headingId = useId();
+  const visible = state !== null && (state.pendingCount > 0 || state.readyCount > 0);
+  const stopping = stopOp?.terminalId === terminalId && stopOp.phase === "stopping";
+  const stopFailed = stopOp?.terminalId === terminalId && stopOp.phase === "failed";
+
+  // A failure belongs to the notices it failed to stop. Once they are gone,
+  // the next batch starts clean.
+  if (!visible && stopOp?.phase === "failed") setStopOp(null);
 
   const stop = useCallback(() => {
-    setStopping(true);
-    window.electron.mcpServer
-      .stopPaneNotices(terminalId)
-      .catch((err: unknown) => {
+    const settle = (next: typeof stopOp) =>
+      setStopOp((current) => (current?.terminalId === terminalId ? next : current));
+    setStopOp({ terminalId, phase: "stopping" });
+    window.electron.mcpServer.stopPaneNotices(terminalId).then(
+      () => settle(null),
+      (err: unknown) => {
+        settle({ terminalId, phase: "failed" });
         logWarn("Failed to stop pane notices", { error: formatErrorMessage(err, "") });
-      })
-      .finally(() => setStopping(false));
+      }
+    );
   }, [terminalId]);
 
-  if (state === null || (state.pendingCount === 0 && state.readyCount === 0)) return null;
+  if (state === null || !visible) return null;
 
   const { text, tone } = describeDelivery(state.delivery);
   const pending = state.pendingCount;
-  const noun = pending === 1 ? "terminal" : "terminals";
-  const heading =
-    pending > 0 ? `Waiting on ${pending} ${noun}` : "A notice is waiting to be delivered";
+  const count = (pending > 0 ? pending : state.readyCount).toLocaleString();
+  const counted =
+    pending > 0 ? pluralize(pending, "terminal") : pluralize(state.readyCount, "notice");
+  const heading = pending > 0 ? `Waiting on ${counted}` : `${counted} waiting to be delivered`;
+  const footer = variant === "footer";
 
   return (
     <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            HEADER_CHIP_CLASS,
-            HEADER_CHIP_SURFACE,
-            HEADER_CHIP_TRIGGER_CLASS,
-            tone === "warning"
-              ? "text-status-warning"
-              : "text-text-secondary hover:text-text-primary",
-            HEADER_CHIP_FOCUS_CLASS
-          )}
-          aria-label={`${heading}; Daintree may type a notice into this pane`}
-          data-testid="terminal-notify-chip"
-        >
-          <Radar className="w-3 h-3" aria-hidden="true" />
-          <span className="tabular-nums">{pending > 0 ? pending : state.readyCount}</span>
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-72 p-0" aria-labelledby={headingId}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className={cn(
+                footer
+                  ? cn(FOOTER_ITEM_CLASS, "shrink-0 gap-1 aria-expanded:bg-overlay-soft")
+                  : cn(
+                      HEADER_CHIP_CLASS,
+                      HEADER_CHIP_SURFACE,
+                      HEADER_CHIP_TRIGGER_CLASS,
+                      HEADER_CHIP_FOCUS_CLASS
+                    ),
+                tone === "warning"
+                  ? "text-status-warning"
+                  : footer
+                    ? "hover:text-text-primary"
+                    : "text-text-secondary hover:text-text-primary"
+              )}
+              aria-label={`${heading}; Daintree may type a notice into this pane`}
+              data-testid="terminal-notify-chip"
+            >
+              <Radar className="w-3 h-3 shrink-0" aria-hidden="true" />
+              <span className="tabular-nums">{footer && !compact ? counted : count}</span>
+            </button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side={footer ? "top" : "bottom"}>
+          {heading}. Daintree may type a notice into this pane.
+        </TooltipContent>
+      </Tooltip>
+      <PopoverContent
+        side={footer ? "top" : "bottom"}
+        align="end"
+        className="w-72 p-0"
+        aria-labelledby={headingId}
+      >
         <div className={POPOVER_HEADER_CLASS}>
           <span id={headingId} className={POPOVER_TITLE_CLASS}>
             {heading}
@@ -161,8 +212,8 @@ export function TerminalNotifyChip({ terminalId }: { terminalId: string }) {
         </div>
         <div className="flex flex-col gap-2 p-3">
           <p className="text-xs text-text-secondary">
-            The agent asked to be told when they stop working. Daintree types one line into this
-            pane's prompt while it sits idle.
+            The agent asked to be told when other terminals stop working. Daintree types one line
+            into this pane's prompt while it sits idle.
           </p>
           <p
             className={cn(
@@ -173,9 +224,14 @@ export function TerminalNotifyChip({ terminalId }: { terminalId: string }) {
           >
             {text}
           </p>
+          {stopFailed && (
+            <p className="text-xs text-status-danger" role="alert">
+              Couldn't stop notices. They're still on.
+            </p>
+          )}
           <div className="flex justify-end">
             <Button variant="secondary" size="xs" onClick={stop} disabled={stopping}>
-              Stop notices
+              {stopFailed ? "Try again" : "Stop notices"}
             </Button>
           </div>
         </div>

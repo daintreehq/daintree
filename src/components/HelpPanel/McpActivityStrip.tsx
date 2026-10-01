@@ -11,6 +11,7 @@ import { actionService } from "@/services/ActionService";
 import type { McpAuditRecord } from "@shared/types";
 import type { McpToolActivityState } from "@/controllers/HelpSessionController";
 import { RecentCallsPopover } from "./RecentCallsPopover";
+import { getEffectiveStateIcon } from "@/components/Worktree/terminalStateConfig";
 import { FOOTER_ITEM_CLASS } from "./footerItem";
 
 // Deliberately small — the popover is a quick glance at what the assistant
@@ -169,6 +170,12 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
 
   const tooltip = activity && showLive ? buildTitle(activity) : "Recent tool calls";
   const awaiting = Boolean(showLive && inFlight && activity?.danger);
+  // The live words are visible, so they belong in the name too (WCAG 2.5.3);
+  // the stable "Recent tool calls" stays first as the control's purpose.
+  const name =
+    activity && showLive
+      ? `Recent tool calls: ${liveLabel(activity, inFlight)}`
+      : "Recent tool calls";
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -177,7 +184,7 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
           <PopoverTrigger asChild>
             <button
               type="button"
-              aria-label="Recent tool calls"
+              aria-label={name}
               className={cn(
                 FOOTER_ITEM_CLASS,
                 "hover:text-text-primary",
@@ -186,11 +193,13 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
                 // confirmation keeps its words even then, because it is the
                 // one live state waiting on the user.
                 showLive && (!compact || awaiting) ? "min-w-[5.5rem]" : "min-w-0",
-                showLive && activity?.isError
-                  ? "text-status-danger hover:text-status-danger"
-                  : showLive && inFlight
-                    ? "text-text-secondary"
-                    : undefined
+                awaiting
+                  ? "text-state-waiting hover:text-state-waiting"
+                  : showLive && activity?.isError
+                    ? "text-status-danger hover:text-status-danger"
+                    : showLive && inFlight
+                      ? "text-text-secondary"
+                      : undefined
               )}
             >
               {activity && showLive ? (
@@ -249,17 +258,24 @@ function LiveContent({
   inFlight: boolean;
   compact: boolean;
 }) {
-  const coalesced = activity.callCount > 1;
-  const label = coalesced ? `${activity.callCount} calls · ${activity.toolId}` : activity.toolId;
+  const awaiting = activity.danger && inFlight;
   // A call waiting on the user outranks its own tool id: the id moves to the
   // tooltip and the words stay, truncating rather than disappearing.
-  const text = activity.danger && inFlight ? "Awaiting confirmation" : compact ? null : label;
+  const text = awaiting || !compact ? liveLabel(activity, inFlight) : null;
   return (
     <span aria-hidden className="flex items-center gap-1.5 min-w-0">
       <ActivityGlyph activity={activity} inFlight={inFlight} />
       {text && <span className="font-medium truncate min-w-0">{text}</span>}
     </span>
   );
+}
+
+/** The words the live row shows when it has room for them. */
+function liveLabel(activity: McpToolActivityState, inFlight: boolean): string {
+  if (activity.danger && inFlight) return "Awaiting confirmation";
+  return activity.callCount > 1
+    ? `${activity.callCount} calls · ${activity.toolId}`
+    : activity.toolId;
 }
 
 function ActivityGlyph({
@@ -269,6 +285,12 @@ function ActivityGlyph({
   activity: McpToolActivityState;
   inFlight: boolean;
 }) {
+  // A call held for the user's confirmation is the assistant waiting on them,
+  // so it wears the app's waiting glyph rather than a busy spinner.
+  if (inFlight && activity.danger) {
+    const Waiting = getEffectiveStateIcon("waiting");
+    return <Waiting aria-hidden className="w-3 h-3 shrink-0" />;
+  }
   if (inFlight) {
     return <Spinner size="xs" />;
   }

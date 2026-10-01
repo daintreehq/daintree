@@ -616,6 +616,52 @@ describe("McpActivityStrip live activity", () => {
     expect(liveText()).not.toBe("");
   });
 
+  it("names the trigger with every word it shows, in every live state", () => {
+    const states = [
+      makeActivity({ turnId: "t1" }),
+      makeActivity({ turnId: "t1", callCount: 3 }),
+      makeActivity({ turnId: "t1", danger: true }),
+    ];
+    for (const activity of states) {
+      for (const compact of [false, true]) {
+        const { unmount } = render(
+          <McpActivityStrip sessionId="session-a" activity={activity} compact={compact} />
+        );
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        const trigger = screen.getByRole("button", { name: /recent tool calls/i });
+        const shown = (trigger.textContent ?? "").trim();
+        expect(trigger.getAttribute("aria-label")).toContain(shown);
+        // A call waiting on the user keeps its words at every width.
+        if (activity.danger) expect(shown).toContain("Awaiting confirmation");
+        unmount();
+      }
+    }
+  });
+
+  it("never shows a call waiting on the user with the busy glyph", () => {
+    const glyph = (danger: boolean) => {
+      const { unmount } = render(
+        <McpActivityStrip
+          sessionId="session-a"
+          activity={makeActivity({ turnId: "t1", danger })}
+          compact
+        />
+      );
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      const trigger = screen.getByRole("button", { name: /recent tool calls/i });
+      // The glyph alone: the words differ between these states anyway.
+      const markup = trigger.querySelector("span[aria-hidden] > :first-child")?.outerHTML;
+      expect(markup).toBeTruthy();
+      unmount();
+      return markup;
+    };
+    expect(glyph(true)).not.toBe(glyph(false));
+  });
+
   it("labels a coalesced same-turn burst with its call count", () => {
     render(
       <McpActivityStrip
