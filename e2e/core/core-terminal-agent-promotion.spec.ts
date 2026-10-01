@@ -38,9 +38,10 @@ const SHELL_COMMAND_EXPIRY_OVERRIDE_MS = 3_000;
 // guard runs the marker is usually already logged; the bound only has to be
 // comfortably under the 30 s product expiry so a dead override fails here.
 const T_SHELL_EXPIRY_OBSERVED = 20_000;
-// Covers several ProcessTreeCache polls after expiry (1.5 s base, backing off
-// toward 5 s on an unchanged tree), so an off-streak demotion that needs two
-// passes would land inside the window.
+// Covers several ProcessTreeCache polls after expiry while the window has
+// focus (2.5 s base, backing off on an unchanged tree). A parallel worker can
+// take focus, which slows the census to 12.5 s, so on those runs the dwell may
+// cover a single pass.
 const T_POST_EXPIRY_DWELL = 10_000;
 const FAKE_CLAUDE_STOP = "__DAINTREE_FAKE_CLAUDE_STOP__";
 const FAKE_NPM_STOP = "__DAINTREE_FAKE_NPM_STOP__";

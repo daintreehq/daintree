@@ -93,6 +93,10 @@ export class ProcessTreeCache {
   private cache: Map<number, ProcessInfo> = new Map();
   private childrenMap: Map<number, number[]> = new Map();
   private pollTimer: NodeJS.Timeout | null = null;
+  // When the pending poll's wait began. A cadence change re-times from here,
+  // so a focus throttle that flaps can bring the census forward but never keep
+  // pushing it out.
+  private pollArmedAt = 0;
   private disposed: boolean = false;
   private currentIntervalMs: number;
   private isRefreshing: boolean = false;
@@ -154,16 +158,16 @@ export class ProcessTreeCache {
     this.pollIntervalMs = ms;
     this.currentIntervalMs = ms;
     if (!this.disposed && this.pollTimer !== null) {
-      clearTimeout(this.pollTimer);
-      this.pollTimer = null;
-      this.schedulePoll(ms);
+      const armedAt = this.pollArmedAt;
+      this.schedulePoll(Math.max(0, armedAt + ms - performance.now()), armedAt);
     }
   }
 
-  private schedulePoll(delayMs: number): void {
+  private schedulePoll(delayMs: number, armedAt: number = performance.now()): void {
     if (this.pollTimer !== null) {
       clearTimeout(this.pollTimer);
     }
+    this.pollArmedAt = armedAt;
     this.pollTimer = setTimeout(() => {
       this.pollTimer = null;
       if (this.disposed) return;
