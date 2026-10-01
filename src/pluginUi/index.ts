@@ -160,6 +160,22 @@ import type {
   PluginSecretInputProps,
   PluginShortcutRecorderProps,
 } from "@shared/types/plugin-sdk-react";
+import type {
+  PluginBranchBadgeProps,
+  PluginChecksListProps,
+  PluginCommitListProps,
+  PluginCommitRowProps,
+  PluginDevServerStatusProps,
+  PluginFileIconProps,
+  PluginFileLinkProps,
+  PluginForgeStateBadgeProps,
+  PluginGitStatusBadgeProps,
+  PluginIssueRowProps,
+  PluginPortLinkProps,
+  PluginPullRequestRowProps,
+  PluginWorktreeBadgeProps,
+  PluginWorktreePickerProps,
+} from "@shared/types/plugin-sdk-react";
 import { fromKit } from "./kit";
 
 export { preloadPluginUi, whenPluginUiReady } from "./kit";
@@ -1059,4 +1075,94 @@ export type {
   PluginTaskListProps as TaskListProps,
   PluginRefreshOverlayProps as RefreshOverlayProps,
   PluginStaleIndicatorProps as StaleIndicatorProps,
+} from "@shared/types/plugin-sdk-react";
+
+// Git and forge: worktrees, branches, files and their status, commits, issues,
+// pull requests, CI checks and dev servers, drawn as the host draws its own.
+
+export const BranchBadge: ComponentType<PluginBranchBadgeProps> = fromKit(
+  "BranchBadge",
+  (kit) => kit.BranchBadge
+);
+export const WorktreeBadge: ComponentType<PluginWorktreeBadgeProps> = fromKit(
+  "WorktreeBadge",
+  (kit) => kit.WorktreeBadge
+);
+export const WorktreePicker: ComponentType<PluginWorktreePickerProps> = fromKit(
+  "WorktreePicker",
+  (kit) => kit.WorktreePicker
+);
+export const FileIcon: ComponentType<PluginFileIconProps> = fromKit(
+  "FileIcon",
+  (kit) => kit.FileIcon
+);
+export const FileLink: ComponentType<PluginFileLinkProps> = fromKit(
+  "FileLink",
+  (kit) => kit.FileLink
+);
+export const GitStatusBadge: ComponentType<PluginGitStatusBadgeProps> = fromKit(
+  "GitStatusBadge",
+  (kit) => kit.GitStatusBadge
+);
+export const CommitRow: ComponentType<PluginCommitRowProps> = fromKit(
+  "CommitRow",
+  (kit) => kit.CommitRow
+);
+export const CommitList: ComponentType<PluginCommitListProps> = fromKit(
+  "CommitList",
+  (kit) => kit.CommitList
+);
+export const ForgeStateBadge: ComponentType<PluginForgeStateBadgeProps> = fromKit(
+  "ForgeStateBadge",
+  (kit) => kit.ForgeStateBadge
+);
+export const IssueRow: ComponentType<PluginIssueRowProps> = fromKit(
+  "IssueRow",
+  (kit) => kit.IssueRow
+);
+export const PullRequestRow: ComponentType<PluginPullRequestRowProps> = fromKit(
+  "PullRequestRow",
+  (kit) => kit.PullRequestRow
+);
+export const ChecksList: ComponentType<PluginChecksListProps> = fromKit(
+  "ChecksList",
+  (kit) => kit.ChecksList
+);
+export const DevServerStatus: ComponentType<PluginDevServerStatusProps> = fromKit(
+  "DevServerStatus",
+  (kit) => kit.DevServerStatus
+);
+export const PortLink: ComponentType<PluginPortLinkProps> = fromKit(
+  "PortLink",
+  (kit) => kit.PortLink
+);
+
+export type {
+  PluginGitFileStatus as GitFileStatus,
+  PluginWorktreeItem as WorktreeItem,
+  PluginBranchBadgeProps as BranchBadgeProps,
+  PluginWorktreeBadgeProps as WorktreeBadgeProps,
+  PluginWorktreePickerProps as WorktreePickerProps,
+  PluginFileIconProps as FileIconProps,
+  PluginFileLinkProps as FileLinkProps,
+  PluginGitStatusBadgeProps as GitStatusBadgeProps,
+  PluginForgePerson as ForgePerson,
+  PluginCommitRef as CommitRef,
+  PluginCommit as Commit,
+  PluginCommitRowProps as CommitRowProps,
+  PluginCommitListProps as CommitListProps,
+  PluginForgeState as ForgeState,
+  PluginForgeStateBadgeProps as ForgeStateBadgeProps,
+  PluginForgeLabel as ForgeLabel,
+  PluginForgeRowBaseProps as ForgeRowBaseProps,
+  PluginIssueRowProps as IssueRowProps,
+  PluginForgeCiStatus as ForgeCiStatus,
+  PluginForgeReviewDecision as ForgeReviewDecision,
+  PluginPullRequestRowProps as PullRequestRowProps,
+  PluginCheckStatus as CheckStatus,
+  PluginCheck as CheckRun,
+  PluginChecksListProps as ChecksListProps,
+  PluginDevServerState as DevServerState,
+  PluginPortLinkProps as PortLinkProps,
+  PluginDevServerStatusProps as DevServerStatusProps,
 } from "@shared/types/plugin-sdk-react";
