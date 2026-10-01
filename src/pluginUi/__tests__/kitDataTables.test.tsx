@@ -495,6 +495,45 @@ describe("DataTable, rich", () => {
     expect(reopened.getAttribute("aria-invalid")).toBe("true");
   });
 
+  it("leaves focus where the reader went when a save fails after they left", async () => {
+    let reject: (error: Error) => void = () => {};
+    render(
+      inViewport(
+        createElement(
+          "div",
+          null,
+          createElement("button", { type: "button" }, "Elsewhere"),
+          createElement(kit.DataTable<Deploy>, {
+            "aria-label": "Away",
+            rows: DEPLOYS,
+            rowKey: "id",
+            columns: [{ id: "name", header: "Name", editable: true }],
+            onCellEdit: () =>
+              new Promise<void>((_resolve, fail) => {
+                reject = fail;
+              }),
+          })
+        )
+      )
+    );
+    const grid = screen.getByRole("grid", { name: "Away" });
+    act(() => grid.focus());
+    fireEvent.keyDown(grid, { key: "F2" });
+    const name = screen.getByRole("textbox", { name: "Edit Name" });
+    fireEvent.change(name, { target: { value: "web-renamed" } });
+    fireEvent.keyDown(name, { key: "Enter" });
+    const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
+    act(() => elsewhere.focus());
+    await act(async () => {
+      reject(new Error("Conflict"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(document.activeElement).toBe(elsewhere);
+    expect(screen.queryByRole("textbox", { name: "Edit Name" })).toBeNull();
+    expect(rowNamed("web-renamed").textContent).toContain("Not saved: Conflict");
+  });
+
   it("ignores malformed rich props rather than throwing", () => {
     render(
       inViewport(
