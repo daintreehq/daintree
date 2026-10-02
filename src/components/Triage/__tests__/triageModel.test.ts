@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { TriageCard } from "@shared/types/ipc/triage";
 import { buildPilotGroups, type PilotRowContext } from "@/components/Pilot/pilotRows";
-import { buildTriageSections, observedKind } from "../triageModel";
+import { buildTriageSections, observedKind, type TriageReadState } from "../triageModel";
 
 const NOW = 1_700_000_000_000;
 
@@ -43,8 +43,12 @@ function card(runId: string, overrides: Partial<TriageCard> = {}): TriageCard {
   };
 }
 
-function sections(runs: FleetRunRow[], cards: TriageCard[] = []) {
-  return buildTriageSections(buildPilotGroups(runs, ctx), new Map(cards.map((c) => [c.runId, c])));
+function sections(runs: FleetRunRow[], cards: TriageCard[] = [], read?: TriageReadState) {
+  return buildTriageSections(
+    buildPilotGroups(runs, ctx),
+    new Map(cards.map((c) => [c.runId, c])),
+    read
+  );
 }
 
 describe("observedKind", () => {
@@ -159,5 +163,21 @@ describe("buildTriageSections", () => {
       [card("a", { category: "question", observedAt: NOW - 60_000, question: "Keep it?" })]
     );
     expect(result[0]!.items[0]!.stale).toBe(true);
+  });
+
+  it("promises words only while something is on its way to write them", () => {
+    const waiting = [run("a", { agentState: "waiting", waitingReason: "question", since: NOW })];
+    const staleCard = [card("a", { category: "question", observedAt: NOW - 60_000 })];
+    const pending = (cards: TriageCard[], read: TriageReadState) =>
+      sections(waiting, cards, read)[0]!.items[0]!.pending;
+
+    // A first read, or a re-read of a card the run has moved past, is coming.
+    expect(pending([], { configured: true, failed: false })).toBe(true);
+    expect(pending(staleCard, { configured: true, failed: false })).toBe(true);
+    // Without keys nothing reads; after a failed read nothing is reading now.
+    for (const cards of [[], staleCard]) {
+      expect(pending(cards, { configured: false, failed: false })).toBe(false);
+      expect(pending(cards, { configured: true, failed: true })).toBe(false);
+    }
   });
 });

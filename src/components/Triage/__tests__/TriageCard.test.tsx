@@ -1,11 +1,37 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render as rtlRender } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { TriageCard as TriageCardData, TriageCategory } from "@shared/types/ipc/triage";
 import { buildPilotGroups } from "@/components/Pilot/pilotRows";
 import { buildTriageSections, type TriageItem } from "../triageModel";
 import { TriageCard, type TriageCardHandlers } from "../TriageCard";
+import { useTriageStore } from "@/store/triageStore";
+
+beforeEach(() => {
+  // Drafts and answers outlive a card by design, so they must not leak between tests.
+  useTriageStore.setState({ drafts: {}, acks: {} });
+});
+
+/** The app root provides tooltips; the row's action buttons need one. */
+function render(ui: ReactElement) {
+  const view = rtlRender(ui, { wrapper: TooltipProvider });
+  return {
+    ...view,
+    rerender: (next: ReactElement) => view.rerender(next),
+  };
+}
+
+const ROW_PROPS = {
+  domId: "card",
+  isFocused: true,
+  position: 1,
+  setSize: 1,
+  onFocusCard: () => {},
+  onPointerCursor: () => {},
+};
 
 const NOW = 1_700_000_000_000;
 
@@ -55,15 +81,13 @@ function handlers() {
 }
 
 function renderCard(item: TriageItem, h = handlers()) {
-  const view = render(
-    <TriageCard item={item} domId="card" isFocused onFocusCard={() => {}} {...h} />
-  );
+  const view = render(<TriageCard item={item} {...ROW_PROPS} {...h} />);
   return { ...view, h, card: view.container.querySelector<HTMLElement>("[data-triage-card]")! };
 }
 
 function buttonNamed(container: HTMLElement, text: string): HTMLButtonElement {
-  const button = [...container.querySelectorAll("button")].find((b) =>
-    b.textContent?.includes(text)
+  const button = [...container.querySelectorAll("button")].find(
+    (b) => b.textContent?.includes(text) || b.getAttribute("aria-label") === text
   );
   if (!button) throw new Error(`no button "${text}"`);
   return button;
@@ -117,8 +141,11 @@ describe("TriageCard", () => {
     expect(container.textContent).toContain("answer it in the terminal");
   });
 
-  it("offers a follow-up and trash on finished work", () => {
+  it("offers a follow-up on finished work only when asked for, and trash", () => {
     const { container, h } = renderCard(itemFor("finished"));
+    // A follow-up is optional, so its box costs no height until it is wanted.
+    expect(container.querySelector("textarea")).toBeNull();
+    fireEvent.click(buttonNamed(container, "Send a follow-up"));
     expect(container.querySelector("textarea")?.getAttribute("placeholder")).toBe(
       "Send a follow-up…"
     );
@@ -150,7 +177,29 @@ describe("TriageCard", () => {
     fireEvent.keyDown(card, { key: "2" });
     fireEvent.click(buttonNamed(container, "No"));
     expect(h.onChoose).toHaveBeenCalledTimes(1);
-    expect(buttonNamed(container, "Yes").disabled).toBe(true);
+    expect(buttonNamed(container, "No").disabled).toBe(true);
+  });
+
+  it("says which answer main took, in place of the menu", async () => {
+    const { container } = renderCard(itemFor("approval", { options: ["Yes", "No"] }));
+    fireEvent.click(buttonNamed(container, "No"));
+    // The status line is mounted ahead of time so it is announced; it speaks once main has it.
+    await vi.waitFor(() =>
+      expect(container.querySelector('[role="status"]')?.textContent).toContain("No")
+    );
+    expect(container.querySelector('[role="group"]')).toBeNull();
+  });
+
+  it("keeps a half-typed reply when its card is unmounted and drawn again", () => {
+    const item = itemFor("question", { question: "Keep it?" });
+    const first = renderCard(item);
+    fireEvent.change(first.container.querySelector("textarea")!, {
+      target: { value: "keep the old table" },
+    });
+    // A run changing section or going stale remounts its card.
+    first.unmount();
+    const second = renderCard(item);
+    expect(second.container.querySelector("textarea")!.value).toBe("keep the old table");
   });
 
   it("lets Escape from an empty composer reach the dialog", () => {
@@ -159,7 +208,7 @@ describe("TriageCard", () => {
     const h = handlers();
     const { container } = render(
       <div onKeyDown={(event) => onDialogKey(event.key)}>
-        <TriageCard item={item} domId="card" isFocused onFocusCard={() => {}} {...h} />
+        <TriageCard item={item} {...ROW_PROPS} {...h} />
       </div>
     );
     const textarea = container.querySelector("textarea")!;
@@ -186,7 +235,7 @@ describe("TriageCard", () => {
     const textarea = container.querySelector("textarea")!;
     fireEvent.change(textarea, { target: { value: "keep it" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
-    await vi.waitFor(() => expect(textarea.disabled).toBe(false));
+    await vi.waitFor(() => expect(textarea.readOnly).toBe(false));
     expect(textarea.value).toBe("keep it");
   });
 
@@ -202,7 +251,7 @@ describe("TriageCard", () => {
     expect(container.querySelector("textarea")).toBeNull();
   });
 
-  it("re-arms the answer buttons only for a new prompt revision", () => {
+  it("re-arms the answer buttons only for a new prompt revision", async () => {
     const h = handlers();
     const first = itemFor("approval", { options: ["Yes", "No"], revision: 3 });
     const { container, rerender } = renderCard(first, h);
@@ -211,19 +260,15 @@ describe("TriageCard", () => {
     rerender(
       <TriageCard
         item={itemFor("approval", { options: ["Yes", "No"], revision: 3, observedAt: NOW + 5_000 })}
-        domId="card"
-        isFocused
-        onFocusCard={() => {}}
+        {...ROW_PROPS}
         {...h}
       />
     );
-    expect(buttonNamed(container, "Yes").disabled).toBe(true);
+    await vi.waitFor(() => expect(container.textContent).toContain("Answered"));
     rerender(
       <TriageCard
         item={itemFor("approval", { options: ["Yes", "No"], revision: 4 })}
-        domId="card"
-        isFocused
-        onFocusCard={() => {}}
+        {...ROW_PROPS}
         {...h}
       />
     );

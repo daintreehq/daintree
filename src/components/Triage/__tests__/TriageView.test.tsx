@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+/** The app root provides tooltips; the rows' action buttons need one. */
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import type { TriageSnapshot } from "@shared/types/ipc/triage";
 
@@ -61,10 +66,10 @@ const triageSnapshot: TriageSnapshot = {
   lastError: null,
 };
 
-function installElectron() {
+function installElectron(snapshot: TriageSnapshot = triageSnapshot) {
   const triage = {
     onSnapshotUpdated: vi.fn(() => () => {}),
-    setActive: vi.fn(async () => triageSnapshot),
+    setActive: vi.fn(async () => snapshot),
     refresh: vi.fn(async () => {}),
     choose: vi.fn(async () => {}),
     reply: vi.fn(async () => {}),
@@ -104,7 +109,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  useTriageStore.setState({ isOpen: false, snapshot: null });
+  useTriageStore.setState({ isOpen: false, snapshot: null, drafts: {}, acks: {} });
   vi.clearAllMocks();
 });
 
@@ -151,5 +156,56 @@ describe("TriageView", () => {
     await act(async () => {});
     expect(useTriageStore.getState().isOpen).toBe(true);
     delete (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__;
+  });
+
+  it("moves on from an answer to the next prompt this panel hasn't answered", async () => {
+    const approval = (runId: string, minutes: number) =>
+      run(runId, {
+        agentState: "waiting",
+        waitingReason: "approval",
+        since: NOW - minutes * 60_000,
+      });
+    const menu = (runId: string) => ({
+      runId,
+      spawnedAt: NOW - 3_600_000,
+      revision: 1,
+      category: "approval" as const,
+      confidence: 0.9,
+      stage: "described" as const,
+      describing: false,
+      headline: null,
+      summary: null,
+      question: "Proceed?",
+      options: ["Yes", "No"],
+      secretPrompt: false,
+      activity: null,
+      observedAt: NOW,
+    });
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        // Oldest first, so the queue reads first, answered, last.
+        runs: [approval("first", 3), approval("answered", 2), approval("last", 1)],
+        changedAt: NOW,
+        degraded: false,
+        lastSuccessfulAt: NOW,
+      },
+    });
+    const snapshot = { ...triageSnapshot, cards: ["first", "answered", "last"].map(menu) };
+    useTriageStore.setState({
+      snapshot,
+      acks: {
+        answered: { promptKey: `${NOW - 3_600_000}:1`, kind: "answer", text: "Yes", sent: true },
+      },
+    });
+    const triage = installElectron(snapshot);
+    const { container } = render(<TriageView />);
+    await frames();
+    const [first, , last] = cards(container);
+    expect(document.activeElement).toBe(first);
+
+    fireEvent.keyDown(first!, { key: "1" });
+    await act(async () => {});
+    expect(triage.choose).toHaveBeenCalledWith("first", "Yes", expect.anything());
+    expect(document.activeElement).toBe(last);
   });
 });
