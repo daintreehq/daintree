@@ -18,6 +18,11 @@ import { MouseWheelClassifier } from "./mouseWheelClassifier";
 import { getTerminalMetrics } from "@/config/xtermConfig";
 import { hashPerfLine, PERF_MARKS } from "@shared/perf/marks";
 import { isRendererPerfCaptureActive, markRendererPerformance } from "@/utils/performance";
+import {
+  createPaddingPaintSampler,
+  paddingPaintEquals,
+  type TerminalPaddingPaint,
+} from "./terminalPaddingPaint";
 
 // Debounce: coalesce a burst of OSC 0/2 title changes from agent shells
 // (which can emit many per second) into a single panel-store / main-process
@@ -250,6 +255,8 @@ function snapDomRowHeightsToIntegerPixels(terminal: Terminal): void {
 export interface TerminalListenerInstallDeps {
   // Buffer / scroll / selection scrollback
   onBufferModeChange: (id: string, isAltBuffer: boolean) => void;
+  /** Publishes a changed padding paint (#13160); called at most once per frame. */
+  onPaddingPaintChange: (id: string, paint: TerminalPaddingPaint) => void;
   /**
    * Whether the terminal is currently on the WebGL renderer. Gates the DOM
    * integer row-height snap (#10768) so it only runs for DOM-rendered panes.
@@ -344,6 +351,35 @@ export function installTerminalBoundListeners(
     deps.onBufferModeChange(id, true);
   }
 
+  // Padding extension (#13160): re-sample the grid's edge backgrounds after a
+  // render, coalesced to one perimeter read per frame. Render-driven rather than
+  // parse-driven so it stays off the write path (#11023) and naturally skips
+  // hidden panes, which xterm doesn't render; reveal, resize, theme and buffer
+  // switches all end in a full render, which re-samples.
+  const samplePaddingPaint = createPaddingPaintSampler();
+  // A rebuilt xterm has a fresh DOM, so its first sample must publish even if
+  // the edges match the old instance's — the adapter re-styles the new nodes.
+  managed.paddingPaint = undefined;
+  let paddingPaintRaf: number | null = null;
+  const schedulePaddingPaintSample = () => {
+    // An unopened terminal has no padding to paint.
+    if (paddingPaintRaf !== null || !terminal.element) return;
+    paddingPaintRaf = requestAnimationFrame(() => {
+      paddingPaintRaf = null;
+      // Mid synchronized update the buffer is ahead of the canvas; the render
+      // that ends the update schedules a fresh sample.
+      if (deps.isDisposed(id) || terminal.modes.synchronizedOutputMode) return;
+      const paint = samplePaddingPaint(terminal);
+      if (managed.paddingPaint && paddingPaintEquals(managed.paddingPaint, paint)) return;
+      managed.paddingPaint = paint;
+      deps.onPaddingPaintChange(id, paint);
+    });
+  };
+  managed.listeners.push(() => {
+    if (paddingPaintRaf !== null) cancelAnimationFrame(paddingPaintRaf);
+    paddingPaintRaf = null;
+  });
+
   // DOM-renderer zebra-banding fix (#10768): after each render on a DOM-rendered
   // pane, snap fractional row heights to integer pixels. onRender (not onResize)
   // is the trigger because it also fires when a pane swaps WebGL→DOM on a fleet
@@ -371,6 +407,7 @@ export function installTerminalBoundListeners(
         });
       }
     }
+    schedulePaddingPaintSample();
     if (deps.isWebGLActive(id)) return;
     snapDomRowHeightsToIntegerPixels(terminal);
   });

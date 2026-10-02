@@ -1,3 +1,4 @@
+import type { TerminalPaddingPaint } from "./terminalPaddingPaint";
 import { Terminal, IDisposable, IMarker, ILink } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
@@ -370,6 +371,11 @@ export interface ManagedTerminal {
   // Used to adapt UI (remove padding) and resize strategy for TUI applications.
   isAltBuffer?: boolean;
   altBufferListeners: Set<(isAltBuffer: boolean) => void>;
+
+  // App-painted edge colours for the normal-buffer padding (#13160), sampled
+  // after renders by TerminalListenerInstaller. Absent until first sampled.
+  paddingPaint?: TerminalPaddingPaint;
+  paddingPaintListeners?: Set<(paint: TerminalPaddingPaint) => void>;
 
   // Project-switch detach state: instance is alive but not in any visible container
   isDetached?: boolean;
