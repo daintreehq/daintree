@@ -23,7 +23,7 @@ const CLASS_CASES: Record<string, [string, string]> = {
   ],
   "raw-shadow": [
     `<div className="shadow-lg" />`,
-    `<div className="shadow-[var(--theme-shadow-floating)] shadow-none" />`,
+    `<div className="shadow-floating shadow-[var(--theme-shadow-floating)] shadow-none" />`,
   ],
   "arbitrary-text-size": [
     `<div className="text-[11px]" />`,
@@ -260,6 +260,93 @@ describe("element rules", () => {
       "src/index.ts": `export async function activate() { const tag = createElement("button", {}); }\n`,
     });
     expect(findings).toEqual([]);
+  });
+});
+
+describe("inline-style-colour", () => {
+  it("flags literal colours in colour-bearing style properties", async () => {
+    const findings = await lintFor(
+      "inline-style-colour",
+      view(
+        `<div style={{ color: "#fff", backgroundColor: on ? "rgb(12, 34, 56)" : "var(--theme-surface-panel)", border: "1px solid red", boxShadow: "0 1px 2px hsla(0, 0%, 0%, 0.4)", width: 4, fontFamily: "Tan Sans" }} />`
+      )
+    );
+    expect(findings.map((f) => f.message)).toEqual([
+      expect.stringContaining('style color: "#fff"'),
+      expect.stringContaining('style backgroundColor: "rgb(12, 34, 56)"'),
+      expect.stringContaining('style border: "red"'),
+      expect.stringContaining('style boxShadow: "hsla(0, 0%, 0%, 0.4)"'),
+    ]);
+    expect(findings[0]).toMatchObject({ file: "src/panel.tsx", line: 4, severity: "warn" });
+    expect(findings[0]!.hint).toContain("var(--theme-");
+  });
+
+  it("flags literal fill, stroke and stop colours on SVG elements", async () => {
+    const findings = await lintFor(
+      "inline-style-colour",
+      view(
+        `<svg viewBox="0 0 100 40"><linearGradient id="g"><stop stopColor="oklch(0.7 0.1 200)" /><stop stop-color="white" /></linearGradient><path fill="#0af" stroke="hsl(210 50% 40%)" /></svg>`
+      )
+    );
+    expect(findings.map((f) => f.message)).toEqual([
+      expect.stringContaining('stopColor="oklch(0.7 0.1 200)" on <stop>'),
+      expect.stringContaining('stop-color="white" on <stop>'),
+      expect.stringContaining('fill="#0af" on <path>'),
+      expect.stringContaining('stroke="hsl(210 50% 40%)" on <path>'),
+    ]);
+  });
+
+  it("passes a chart painted with currentColor, tokens and gradient references", async () => {
+    const chart = `<svg viewBox="0 0 100 40" className="text-category-blue" style={{ color: "var(--theme-category-blue)", background: "transparent" }}>
+      <defs><linearGradient id="abc"><stop offset="0" stopColor="var(--theme-category-blue)" /><stop offset="1" stopColor="currentColor" stopOpacity={0} /></linearGradient></defs>
+      <path d="M0 40 L50 10 L100 20" fill="url(#abc)" stroke="currentColor" />
+      <rect className="fill-surface-panel-elevated stroke-border-default" fill="none" stroke="var(--theme-border-default, #ccc)" style={{ fill: on ? "var(--theme-accent-primary)" : "currentColor", borderColor: "inherit" }} />
+      <mask id="m"><rect width="100" height="40" fill="white" /><circle r="4" fill="#000" /></mask>
+    </svg>`;
+    expect(await lintFor("inline-style-colour", view(chart))).toEqual([]);
+  });
+
+  it("reads computed keys and inline spreads in a style object", async () => {
+    const findings = await lintFor(
+      "inline-style-colour",
+      view(`<div style={{ ["color"]: "#fff", ...{ borderColor: "navy" } }} />`)
+    );
+    expect(findings.map((f) => f.message)).toEqual([
+      expect.stringContaining('style color: "#fff"'),
+      expect.stringContaining('style borderColor: "navy"'),
+    ]);
+  });
+
+  it("ignores strings that select a value, image paths, and anything painted inside a mask", async () => {
+    const clean = `<div>
+      <div style={{ color: kind === "red" ? "var(--theme-status-danger)" : "currentColor", borderColor: palette["red"], outlineColor: on ? "var(--theme-border-strong)" : undefined }} />
+      <div style={{ backgroundImage: 'image-set("/red.png" 1x, "/blue.png" 2x)' }} />
+      <div style={{ backgroundImage: \`url(/images/\${name}/red.png)\` }} />
+      <svg viewBox="0 0 10 10"><mask id="m"><rect style={{ fill: "white", stroke: "#000" }} /></mask></svg>
+    </div>`;
+    expect(await lintFor("inline-style-colour", view(clean))).toEqual([]);
+  });
+
+  it("reads createElement views, and leaves worker code and kit components alone", async () => {
+    const flagged = await lintFor("inline-style-colour", {
+      "dist/panel.js": `import { createElement as h } from "react";\nexport default function P() {\n  return h("circle", { r: 4, fill: "rebeccapurple", style: { stroke: "#123456" } });\n}\n`,
+      "dist/index.mjs": "export async function activate() {}\n",
+    });
+    expect(flagged.map((f) => f.line)).toEqual([3, 3]);
+    expect(
+      await lintFor("inline-style-colour", {
+        "src/index.ts": `export const palette = { fill: "#fff" };\nexport async function activate() {}\n`,
+      })
+    ).toEqual([]);
+    expect(
+      await lintFor(
+        "inline-style-colour",
+        view(
+          `<Sparkline fill="#0af" stroke="red" />`,
+          `import { Sparkline } from "@daintreehq/plugin-ui";\n`
+        )
+      )
+    ).toEqual([]);
   });
 });
 

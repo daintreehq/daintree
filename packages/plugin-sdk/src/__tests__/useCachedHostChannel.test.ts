@@ -3,9 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import {
   HOST_CHANNEL_CACHE_LIMIT,
-  resetHostChannelCacheForTests,
+  resetHostChannelCache,
   useCachedHostChannel,
 } from "../react/useCachedHostChannel.js";
+import * as sdkReact from "../react.js";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -25,7 +26,7 @@ function deferred<T>(): Deferred<T> {
 let invoke: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
-  resetHostChannelCacheForTests();
+  resetHostChannelCache();
   invoke = vi.fn();
   vi.stubGlobal("electron", { plugin: { invoke, on: vi.fn(), onPanel: vi.fn() } });
 });
@@ -355,5 +356,133 @@ describe("useCachedHostChannel invalidateOn", () => {
     push("k-changed");
     await act(async () => void (await vi.advanceTimersByTimeAsync(100)));
     expect(invoke).toHaveBeenCalledTimes(2);
+  });
+  it("listens on every channel in an array, and a burst across them costs one refetch", async () => {
+    let n = 0;
+    invoke.mockImplementation(async () => ++n);
+    const { result } = renderHook(() =>
+      useCachedHostChannel("acme", "summary", null, {
+        invalidateOn: ["entries-changed", "accounts-changed"],
+        debounceMs: 10,
+      })
+    );
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    expect(result.current.data).toBe(1);
+
+    push("accounts-changed");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(10)));
+    expect(invoke).toHaveBeenCalledTimes(2);
+
+    push("entries-changed");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(10)));
+    expect(invoke).toHaveBeenCalledTimes(3);
+
+    push("entries-changed");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(5)));
+    push("accounts-changed");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(10)));
+    expect(invoke).toHaveBeenCalledTimes(4);
+    expect(result.current.data).toBe(4);
+  });
+
+  it("does not resubscribe when an inline array keeps its contents", async () => {
+    invoke.mockResolvedValue(1);
+    const on = (window as unknown as { electron: { plugin: { on: ReturnType<typeof vi.fn> } } })
+      .electron.plugin.on;
+    const { rerender, unmount } = renderHook(
+      ({ channels }: { channels: string[] }) =>
+        useCachedHostChannel("acme", "r", null, { invalidateOn: channels }),
+      { initialProps: { channels: ["a-changed", "b-changed"] } }
+    );
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    expect(on).toHaveBeenCalledTimes(2);
+
+    rerender({ channels: ["a-changed", "b-changed"] });
+    rerender({ channels: ["a-changed", "b-changed", "a-changed"] });
+    expect(on).toHaveBeenCalledTimes(2);
+
+    rerender({ channels: ["b-changed", "c-changed"] });
+    expect(on).toHaveBeenCalledTimes(4);
+    expect(subs.get("a-changed")?.size ?? 0).toBe(0);
+    expect(subs.get("c-changed")?.size).toBe(1);
+
+    unmount();
+    expect(subs.get("b-changed")?.size ?? 0).toBe(0);
+    expect(subs.get("c-changed")?.size ?? 0).toBe(0);
+  });
+
+  it("subscribes to nothing for an empty array", async () => {
+    invoke.mockResolvedValue(1);
+    renderHook(() => useCachedHostChannel("acme", "e", null, { invalidateOn: [] }));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    expect(subs.size).toBe(0);
+  });
+
+  it("drops a refetch queued behind a request the reset discarded", async () => {
+    const pending = deferred<number>();
+    invoke.mockResolvedValueOnce(0).mockReturnValueOnce(pending.promise).mockResolvedValue(9);
+    const { result } = renderHook(() =>
+      useCachedHostChannel("acme", "z", null, { invalidateOn: "z-changed", debounceMs: 10 })
+    );
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    push("z-changed");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(10)));
+    expect(invoke).toHaveBeenCalledTimes(2);
+    push("z-changed");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(10)));
+    expect(invoke).toHaveBeenCalledTimes(2);
+
+    act(() => resetHostChannelCache());
+    await act(async () => pending.resolve(1));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(50)));
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result.current.data).toBeUndefined();
+
+    push("z-changed");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(10)));
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(result.current.data).toBe(9);
+  });
+
+  it("keeps a mounted view's invalidation working across a cache reset", async () => {
+    let n = 0;
+    invoke.mockImplementation(async () => ++n);
+    const { result } = renderHook(() =>
+      useCachedHostChannel("acme", "x", null, { invalidateOn: "x-changed", debounceMs: 10 })
+    );
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    expect(result.current.data).toBe(1);
+
+    act(() => resetHostChannelCache());
+    expect(result.current.data).toBeUndefined();
+
+    push("x-changed");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(10)));
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result.current.data).toBe(2);
+  });
+});
+
+describe("resetHostChannelCache", () => {
+  it("is exported from the /react entry", () => {
+    expect(sdkReact.resetHostChannelCache).toBe(resetHostChannelCache);
+  });
+
+  it("drops cached results so the next mount fetches, and discards a response to a dropped request", async () => {
+    const pending = deferred<string>();
+    invoke.mockResolvedValueOnce("first").mockReturnValueOnce(pending.promise);
+    const a = renderHook(() => useCachedHostChannel("acme", "r", null, { staleMs: 60_000 }));
+    await waitFor(() => expect(a.result.current.data).toBe("first"));
+    a.unmount();
+
+    resetHostChannelCache();
+    const b = renderHook(() => useCachedHostChannel("acme", "r", null, { staleMs: 60_000 }));
+    expect(b.result.current.data).toBeUndefined();
+    await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+
+    act(() => resetHostChannelCache());
+    await act(async () => pending.resolve("stale"));
+    expect(b.result.current.data).toBeUndefined();
+    expect(b.result.current.validating).toBe(false);
   });
 });

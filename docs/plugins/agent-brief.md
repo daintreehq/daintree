@@ -379,13 +379,25 @@ Prefer container queries (`@container`, `@sm:`) over viewport breakpoints — yo
 
 `bg-accent-primary` `bg-accent-hover` `bg-accent-foreground` `bg-accent-primary-foreground` `bg-accent-soft` `bg-accent-muted` `bg-accent-secondary` `bg-accent-secondary-soft` `bg-accent-secondary-muted`
 
+**Overlays** — shown with `bg-`; `border-` takes the same names
+
+`bg-overlay-base` `bg-overlay-subtle` `bg-overlay-soft` `bg-overlay-medium` `bg-overlay-strong` `bg-overlay-emphasis` `bg-overlay-hover` `bg-overlay-active` `bg-overlay-selected` `bg-overlay-elevated` `bg-overlay-raised` `bg-overlay-highlight`
+
 **Radii**
 
 `rounded-xs` `rounded-sm` `rounded-md` `rounded-lg` `rounded-xl` `rounded-2xl` `rounded-3xl` `rounded-4xl`
 
+**Shadows**
+
+`shadow-ambient` `shadow-floating` `shadow-dialog`
+
 **Type scale below Tailwind's floor**
 
 `text-2xs` `text-3xs` `text-4xs`
+
+**Fonts**
+
+`font-mono`
 
 **Durations**
 
@@ -400,6 +412,10 @@ Prefer container queries (`@container`, `@sm:`) over viewport breakpoints — yo
 hues: `blue` `purple` `cyan` `green` `amber` `orange` `teal` `indigo` `rose` `pink` `violet` `slate`
 
 variants: `(bare)` `-subtle` `-text` `-border`
+
+**SVG paint** — `fill-` and `stroke-` take every colour name above, and `fill-current` / `stroke-current` paint with the element's text colour
+
+`fill-text-muted` `stroke-border-default` `fill-status-danger` `fill-category-blue`
 
 **Custom variants** — write as `variant:utility`
 

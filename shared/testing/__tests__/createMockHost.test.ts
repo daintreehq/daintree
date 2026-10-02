@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import { createMockHost } from "../createMockHost.js";
 import type {
   PluginActionContribution,
@@ -270,6 +271,19 @@ describe("createMockHost", () => {
     await host.registerHandler("ping", handler);
     expect(host.registeredHandlers).toHaveLength(1);
     expect(host.registeredHandlers[0]).toEqual({ channel: "ping", handler });
+  });
+
+  it("refuses a registerHandler channel with a colon, as the host does", () => {
+    const host = createMockHost();
+    const handler = vi.fn();
+    expect(() => host.registerHandler("ledger:list", handler)).toThrow(
+      "Plugin channel must not contain colons: ledger:list"
+    );
+    const schema = { args: z.null(), result: z.null() };
+    expect(() => host.registerHandler("ledger:totals", schema, async () => null)).toThrow(
+      "Plugin channel must not contain colons: ledger:totals"
+    );
+    expect(host.registeredHandlers).toEqual([]);
   });
 
   it("records broadcastToRenderer calls", async () => {

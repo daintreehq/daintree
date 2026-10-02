@@ -34,6 +34,7 @@ export {
 } from "./react/useHostStore.js";
 export {
   useCachedHostChannel,
+  resetHostChannelCache,
   HOST_CHANNEL_CACHE_LIMIT,
   type CachedHostChannelOptions,
   type CachedHostChannelResult,

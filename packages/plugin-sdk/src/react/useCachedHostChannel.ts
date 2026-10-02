@@ -25,12 +25,15 @@ export interface CachedHostChannelOptions {
   enabled?: boolean;
   /**
    * A push channel (`host.postToPanel(channel, …)` broadcast) that means "this
-   * result is stale". Each push marks the cached result stale and schedules a
-   * refetch; a burst of them within `debounceMs` of each other costs one. The
+   * result is stale", or several of them. Each push on any of them marks the
+   * cached result stale and schedules a refetch; a burst of them within
+   * `debounceMs` of each other, across every listed channel, costs one. The
    * mark outlives the view: if every view unmounts before the refetch runs, the
-   * next mount refetches regardless of `staleMs`. The payload is ignored.
+   * next mount refetches regardless of `staleMs`. The payload is ignored. An
+   * array is compared by its contents, so an inline literal does not
+   * resubscribe on every render.
    */
-  invalidateOn?: string;
+  invalidateOn?: string | readonly string[];
   /**
    * Quiet time after the last invalidation before refetching, in ms. Default
    * 100. An invalidation that lands while a request is in flight queues one
@@ -155,13 +158,6 @@ function leaveInvalidation(key: string, subscriber: InvalidationSubscriber): voi
   if (!entry) return;
   entry.subscribers.delete(subscriber);
   if (entry.subscribers.size > 0) return;
-  if (entry.timer !== null) clearTimeout(entry.timer);
-  invalidations.delete(key);
-}
-
-function cancelInvalidation(key: string): void {
-  const entry = invalidations.get(key);
-  if (!entry) return;
   if (entry.timer !== null) clearTimeout(entry.timer);
   invalidations.delete(key);
 }
@@ -301,6 +297,20 @@ function cacheKeyFor(pluginId: string, channel: string, args: unknown, cacheKey?
   return JSON.stringify([pluginId, channel, argsKey]);
 }
 
+/** The listed push channels, deduplicated, as a string that changes only with them. */
+function invalidationChannelsKey(invalidateOn: unknown): string {
+  const list: unknown[] =
+    typeof invalidateOn === "string"
+      ? [invalidateOn]
+      : Array.isArray(invalidateOn)
+        ? invalidateOn
+        : [];
+  const channels = [
+    ...new Set(list.filter((c): c is string => typeof c === "string" && c.length > 0)),
+  ];
+  return channels.length > 0 ? JSON.stringify(channels) : "";
+}
+
 /**
  * Paint-first companion to {@link useHostChannel}: returns the cached result
  * for `(pluginId, channel, args)` immediately and revalidates it in the
@@ -329,6 +339,15 @@ function cacheKeyFor(pluginId: string, channel: string, args: unknown, cacheKey?
  *   debounceMs: 100,
  * });
  * ```
+ *
+ * A result that more than one change makes stale lists every channel, and a
+ * burst across them still costs one refetch:
+ *
+ * ```tsx
+ * useCachedHostChannel<null, Summary>(pluginId, "summary", null, {
+ *   invalidateOn: ["entries-changed", "accounts-changed"],
+ * });
+ * ```
  */
 export function useCachedHostChannel<TArgs = unknown, TResult = unknown>(
   pluginId: string,
@@ -338,6 +357,7 @@ export function useCachedHostChannel<TArgs = unknown, TResult = unknown>(
 ): CachedHostChannelResult<TResult> {
   const { staleMs = 0, cacheKey, signal, enabled = true, invalidateOn, debounceMs = 100 } = options;
   const key = cacheKeyFor(pluginId, channel, args, cacheKey);
+  const invalidateKey = invalidationChannelsKey(invalidateOn);
 
   const subscribe = useCallback((notify: () => void) => subscribeKey(key, notify), [key]);
   const getSnapshot = useCallback(() => states.get(key) ?? EMPTY, [key]);
@@ -363,27 +383,30 @@ export function useCachedHostChannel<TArgs = unknown, TResult = unknown>(
   }, [key, enabled, staleMs, signal, pluginId, channel]);
 
   useEffect(() => {
-    if (!invalidateOn || !enabled || signal?.aborted) return;
+    if (!invalidateKey || !enabled || signal?.aborted) return;
     const wait = Math.max(0, debounceMs);
     const args = argsRef;
     const subscriber: InvalidationSubscriber = {
       refetch: () => request(key, pluginId, channel, args.current, true),
     };
     invalidationFor(key).subscribers.add(subscriber);
-    const off = getPluginHostBridge().on(pluginId, invalidateOn, () => {
-      if (signal?.aborted) return;
-      invalidate(key, wait);
-    });
+    const bridge = getPluginHostBridge();
+    const offs = (JSON.parse(invalidateKey) as string[]).map((pushChannel) =>
+      bridge.on(pluginId, pushChannel, () => {
+        if (signal?.aborted) return;
+        invalidate(key, wait);
+      })
+    );
     // An aborted view stops counting at once, so a refetch it scheduled runs
     // only if a sibling on the same key is still listening.
     const leave = (): void => leaveInvalidation(key, subscriber);
     signal?.addEventListener("abort", leave, { once: true });
     return () => {
-      off();
+      for (const off of offs) off();
       signal?.removeEventListener("abort", leave);
       leave();
     };
-  }, [invalidateOn, enabled, signal, debounceMs, key, pluginId, channel]);
+  }, [invalidateKey, enabled, signal, debounceMs, key, pluginId, channel]);
 
   const revalidate = useCallback(async (): Promise<TResult | undefined> => {
     if (signal?.aborted) return undefined;
@@ -399,11 +422,23 @@ export function useCachedHostChannel<TArgs = unknown, TResult = unknown>(
   };
 }
 
-/** Test-only: drop every cached entry. Not exported from the package entry. */
-export function resetHostChannelCacheForTests(): void {
+/**
+ * Drop every cached result, in-flight request, stale mark and scheduled
+ * refetch. For tests: the cache is module-global, shared by every view in the
+ * bundle, so without a reset in `beforeEach` one test's results paint first in
+ * the next. A view still mounted re-renders with no data and keeps its
+ * subscriptions; it fetches again on `revalidate()`, an invalidation or its
+ * next mount. A response to a request dropped here is discarded.
+ */
+export function resetHostChannelCache(): void {
   states.clear();
-  listeners.clear();
   inFlight.clear();
   staleMarks.clear();
-  for (const key of [...invalidations.keys()]) cancelInvalidation(key);
+  // A fresh entry per key, with the same views listening: a follow-up queued
+  // behind a dropped request checks its entry is current and finds it is not.
+  for (const [key, entry] of [...invalidations]) {
+    if (entry.timer !== null) clearTimeout(entry.timer);
+    invalidations.set(key, { timer: null, queued: false, subscribers: entry.subscribers });
+  }
+  for (const subs of [...listeners.values()]) for (const notify of [...subs]) notify();
 }
