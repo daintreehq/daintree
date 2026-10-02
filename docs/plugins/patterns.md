@@ -158,7 +158,7 @@ A list whose length the user controls — search results, a table of records, a 
 
 | Rows | Use |
 | --- | --- |
-| A table of records | `DataTable` from `@daintreehq/plugin-ui`: sticky header, always-virtualised body, controlled sort (`sort` + `onSortChange`; you sort `rows`), keyboard grid with `onRowClick`, `empty` for the zero state |
+| A table of records | `DataTable` from `@daintreehq/plugin-ui`: sticky header, a virtualised body by default (`virtualize={false}` for a short ledger that sizes to its rows), controlled sort (`sort` + `onSortChange`; you sort `rows`), keyboard grid with `onRowClick`, `empty` for the zero state |
 | A list of any length | `VirtualList` with `ListRow` rows; add `useListNavigation` for a keyboard listbox |
 | Up to a few hundred rows you render yourself | `useProgressiveList(items, { initial, step })` from `@daintreehq/plugin-sdk/react`: the first screenful paints at once, the rest arrives in non-blocking transitions |
 | Thousands of rows in your own markup | `useVirtualList({ count, estimateSize, getScrollElement })`, the headless windowing hook behind a custom layout |

@@ -903,7 +903,7 @@ interface PluginDataTableProps<T = unknown> extends PluginRootAttributes {
     selectedRowKey?: string | number | null;
     /** Shown in place of the body while `rows` is empty: usually an `EmptyState`. */
     empty?: ReactNode;
-    /** Expected row height in px. Defaults to 28. */
+    /** Expected row height in px. Defaults to the `density`'s row height (24, 28 or 32); ignored with `virtualize={false}`. */
     estimatedRowSize?: number;
     onEndReached?: (lastIndex: number) => void;
     /** Required: names the table for assistive tech. */
