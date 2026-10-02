@@ -16,6 +16,7 @@ vi.mock("@/clients", () => ({
 import {
   cleanupProjectSettingsStore,
   patchCachedProjectSettings,
+  prePopulateProjectSettings,
   useProjectSettingsStore,
 } from "../projectSettingsStore";
 
@@ -111,6 +112,32 @@ describe("projectSettingsStore", () => {
     expect(state.allDetectedRunners).toEqual([]);
     expect(state.error).toBe("boom");
     expect(state.isLoading).toBe(false);
+  });
+
+  it("refreshes runners detected empty before the project was scaffolded", async () => {
+    getSettingsMock.mockResolvedValue({ runCommands: [] });
+    detectRunnersMock.mockResolvedValueOnce([]);
+    await useProjectSettingsStore.getState().loadSettings("project-scaffold");
+    expect(useProjectSettingsStore.getState().allDetectedRunners).toEqual([]);
+
+    // Switching away and back re-hydrates the view from the snapshot cache.
+    cleanupProjectSettingsStore();
+    prePopulateProjectSettings("project-scaffold");
+
+    const deferred = createDeferred<RunCommand[]>();
+    detectRunnersMock.mockReturnValueOnce(deferred.promise);
+    const refresh = useProjectSettingsStore.getState().loadSettings("project-scaffold");
+
+    // Revalidating keeps the cached settings up rather than flashing a load.
+    expect(useProjectSettingsStore.getState().isLoading).toBe(false);
+
+    deferred.resolve(DETECTED_RUNNERS);
+    await refresh;
+    expect(useProjectSettingsStore.getState().allDetectedRunners).toEqual(DETECTED_RUNNERS);
+
+    cleanupProjectSettingsStore();
+    prePopulateProjectSettings("project-scaffold");
+    expect(useProjectSettingsStore.getState().allDetectedRunners).toEqual(DETECTED_RUNNERS);
   });
 
   it("recomputes detected runners when settings are updated", () => {

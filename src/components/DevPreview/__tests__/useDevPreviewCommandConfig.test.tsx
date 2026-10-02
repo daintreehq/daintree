@@ -6,8 +6,9 @@ import { renderHook, waitFor, act, render, screen } from "@testing-library/react
 import type { RunCommand } from "@shared/types";
 
 const saveSettingsMock = vi.fn().mockResolvedValue(undefined);
+const refreshSettingsMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("@/hooks/useProjectSettings", () => ({
-  useProjectSettings: () => ({ saveSettings: saveSettingsMock }),
+  useProjectSettings: () => ({ saveSettings: saveSettingsMock, refresh: refreshSettingsMock }),
 }));
 
 const getSettingsMock = vi.fn();
@@ -69,6 +70,7 @@ function baseParams(overrides: Partial<Parameters<typeof useDevPreviewCommandCon
 beforeEach(() => {
   vi.clearAllMocks();
   saveSettingsMock.mockResolvedValue(undefined);
+  refreshSettingsMock.mockResolvedValue(undefined);
   useProjectSettingsStore.setState({ allDetectedRunners: [], settings: null, isLoading: false });
 });
 
@@ -77,6 +79,30 @@ afterEach(() => {
 });
 
 describe("useDevPreviewCommandConfig", () => {
+  it("re-detects project scripts once when the preview opens", () => {
+    const { rerender } = renderHook((props) => useDevPreviewCommandConfig(props), {
+      initialProps: baseParams(),
+    });
+    rerender(baseParams({ devCommand: "npm run dev" }));
+
+    expect(refreshSettingsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-detects again when the preview moves to another project", () => {
+    const { rerender } = renderHook((props) => useDevPreviewCommandConfig(props), {
+      initialProps: baseParams(),
+    });
+    rerender(baseParams({ currentProjectId: "proj-2" }));
+
+    expect(refreshSettingsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not re-detect without a project", () => {
+    renderHook(() => useDevPreviewCommandConfig(baseParams({ currentProjectId: undefined })));
+
+    expect(refreshSettingsMock).not.toHaveBeenCalled();
+  });
+
   it("derives candidates from allDetectedRunners and picks the first as primary", () => {
     useProjectSettingsStore.setState({ allDetectedRunners: [runner()] });
     const { result } = renderHook(() => useDevPreviewCommandConfig(baseParams()));

@@ -79,15 +79,65 @@ function detectNpmFrameworkCanonicalScript(
   return undefined;
 }
 
+const JUSTFILE_VARIANTS = ["justfile", "Justfile", ".justfile", "JUSTFILE"];
+const TASKFILE_VARIANTS = [
+  "Taskfile.yml",
+  "taskfile.yml",
+  "Taskfile.yaml",
+  "taskfile.yaml",
+  "Taskfile.dist.yml",
+  "taskfile.dist.yml",
+  "Taskfile.dist.yaml",
+  "taskfile.dist.yaml",
+];
+
+// Every file a detector reads or probes. Must stay in step with the detect*
+// methods: a file missing here can change without invalidating the cache.
+const DETECTION_INPUTS: readonly string[] = [
+  "package.json",
+  "bun.lock",
+  "bun.lockb",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "Makefile",
+  ...JUSTFILE_VARIANTS,
+  ...TASKFILE_VARIANTS,
+  "Procfile",
+  "mise.toml",
+  "manage.py",
+  "composer.json",
+  path.join(".devcontainer", "devcontainer.json"),
+];
+
+async function readInputSignature(root: string): Promise<string> {
+  const parts = await Promise.all(
+    DETECTION_INPUTS.map((name) =>
+      fs.stat(path.join(root, name)).then(
+        (stat) => `${stat.mtimeMs}:${stat.size}`,
+        () => "-"
+      )
+    )
+  );
+  return parts.join("|");
+}
+
+interface CachedDetection {
+  signature: string;
+  commands: RunCommand[];
+}
+
 export class RunCommandDetector {
-  private readonly cache = new Cache<string, RunCommand[]>({
+  private readonly cache = new Cache<string, CachedDetection>({
     maxSize: 50,
     defaultTTL: 60_000,
   });
 
   async detect(projectPath: string): Promise<RunCommand[]> {
+    // A project is often added before it is scaffolded, so a cached result is
+    // only reused while none of the files it was derived from has changed.
+    const signature = await readInputSignature(projectPath);
     const cached = this.cache.get(projectPath);
-    if (cached) return cached;
+    if (cached && cached.signature === signature) return cached.commands;
 
     const results = await Promise.all([
       this.detectNpm(projectPath),
@@ -102,7 +152,7 @@ export class RunCommandDetector {
     ]);
 
     const commands = results.flat();
-    this.cache.set(projectPath, commands);
+    this.cache.set(projectPath, { signature, commands });
     return commands;
   }
 
@@ -202,9 +252,8 @@ export class RunCommandDetector {
   }
 
   private async detectJustfile(root: string): Promise<RunCommand[]> {
-    const variants = ["justfile", "Justfile", ".justfile", "JUSTFILE"];
     let justfilePath: string | null = null;
-    for (const name of variants) {
+    for (const name of JUSTFILE_VARIANTS) {
       const candidate = path.join(root, name);
       if (existsSync(candidate)) {
         justfilePath = candidate;
@@ -264,18 +313,8 @@ export class RunCommandDetector {
   }
 
   private async detectTaskfile(root: string): Promise<RunCommand[]> {
-    const variants = [
-      "Taskfile.yml",
-      "taskfile.yml",
-      "Taskfile.yaml",
-      "taskfile.yaml",
-      "Taskfile.dist.yml",
-      "taskfile.dist.yml",
-      "Taskfile.dist.yaml",
-      "taskfile.dist.yaml",
-    ];
     let taskfilePath: string | null = null;
-    for (const name of variants) {
+    for (const name of TASKFILE_VARIANTS) {
       const candidate = path.join(root, name);
       if (existsSync(candidate)) {
         taskfilePath = candidate;
