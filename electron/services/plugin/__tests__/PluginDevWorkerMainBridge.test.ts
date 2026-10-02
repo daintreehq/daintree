@@ -63,6 +63,7 @@ function makeHost() {
     sendToAgent: vi.fn(async (): Promise<unknown> => ({ status: "drafted", terminalId: "t-1" })),
     agents: {
       list: vi.fn(async () => [{ terminalId: "t-1", canDraft: true }]),
+      listAll: vi.fn(async () => ({ agents: [], degraded: false, lastSuccessfulAt: 1 })),
     },
     showInputBox: vi.fn(async (): Promise<unknown> => undefined),
     showConfirm: vi.fn(async () => false),
@@ -2436,6 +2437,51 @@ describe("PluginDevWorkerMainBridge handler invoke deadline", () => {
       ok: true,
       result: "late",
     });
+  });
+});
+
+describe("PluginDevWorkerMainBridge app-wide agent list (#13154)", () => {
+  it("routes agents.listAll to the real host", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "la1",
+      method: "agents.listAll",
+      params: undefined,
+    });
+    await flush();
+
+    expect(host.agents.listAll).toHaveBeenCalledTimes(1);
+    expect(workerHost.sent.find((m) => m.requestId === "la1")).toMatchObject({
+      ok: true,
+      result: { agents: [], degraded: false, lastSuccessfulAt: 1 },
+    });
+  });
+
+  it("subscribes all-agents through the real host and pushes each snapshot", async () => {
+    const { host, workerHost } = makeBridge({ capabilities: ["agent:read"] });
+    let deliver: ((snapshot: unknown) => void) | undefined;
+    (host as any).onDidChangeAllAgents = vi.fn(async (cb: (snapshot: unknown) => void) => {
+      deliver = cb;
+      return vi.fn();
+    });
+    workerHost.emit("worker-message", {
+      type: "subscribe",
+      subscriptionId: "s-all",
+      kind: "all-agents",
+      debounceMs: 250,
+    });
+    await flush();
+
+    expect((host as any).onDidChangeAllAgents).toHaveBeenCalledWith(expect.any(Function), {
+      debounceMs: 250,
+    });
+    const snapshot = { agents: [{ terminalId: "t-1" }], degraded: false, lastSuccessfulAt: 2 };
+    deliver?.(snapshot);
+    const evt = workerHost.sent.find(
+      (m: any) => m.type === "subscription-event" && m.subscriptionId === "s-all"
+    );
+    expect(evt.payload).toEqual(snapshot);
   });
 });
 

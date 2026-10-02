@@ -243,6 +243,74 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
     await expect(promise).resolves.toEqual({ status: "drafted", terminalId: "t-1" });
   });
 
+  it("relays agents.listAll and re-freezes the allowlisted snapshot after the clone", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.agents.listAll();
+    expect(sent.find((m) => m.type === "host-call" && m.method === "agents.listAll")).toBeDefined();
+    resolveCall(proxy, sent, "agents.listAll", {
+      agents: [
+        {
+          workspaceId: "p1",
+          workspaceKind: "project",
+          terminalId: "t-1",
+          observedState: "working",
+          cwd: "/leaked",
+        },
+      ],
+      degraded: false,
+      lastSuccessfulAt: 5,
+    });
+    const result = await promise;
+    expect(result).toEqual({
+      agents: [
+        {
+          workspaceId: "p1",
+          workspaceKind: "project",
+          terminalId: "t-1",
+          observedState: "working",
+        },
+      ],
+      degraded: false,
+      lastSuccessfulAt: 5,
+    });
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.agents[0])).toBe(true);
+  });
+
+  it("answers an unavailable app-wide list when disposed mid-call", async () => {
+    const { proxy } = makeProxy();
+    const listAll = proxy.host.agents.listAll();
+    proxy.dispose();
+    await expect(listAll).resolves.toEqual({ agents: [], degraded: true, lastSuccessfulAt: null });
+  });
+
+  it("subscribes all-agents with its debounce and delivers frozen snapshots", async () => {
+    const { proxy, sent } = makeProxy();
+    const callback = vi.fn();
+    await proxy.host.onDidChangeAllAgents(callback, { debounceMs: 0 });
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "all-agents");
+    expect(sub).toMatchObject({ debounceMs: 0 });
+
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: {
+        agents: [{ workspaceId: "p1", terminalId: "t-1" }],
+        degraded: true,
+        lastSuccessfulAt: null,
+      },
+    });
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    const snapshot = callback.mock.calls[0][0];
+    expect(snapshot.agents[0]).toEqual({
+      workspaceId: "p1",
+      workspaceKind: "project",
+      terminalId: "t-1",
+    });
+    expect(Object.isFrozen(snapshot)).toBe(true);
+  });
+
   it("answers the host's own unload values when the proxy is disposed mid-call", async () => {
     const { proxy } = makeProxy();
     const list = proxy.host.agents.list();

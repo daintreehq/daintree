@@ -64,6 +64,7 @@ export class FleetSnapshotService {
    * when something else already justified a send.
    */
   private lastSuccessfulReadAt: number | null = null;
+  private listeners = new Set<(snapshot: FleetSnapshot) => void>();
 
   constructor(
     private ptyClient: PtyClient | undefined | null,
@@ -124,6 +125,18 @@ export class FleetSnapshotService {
   }
 
   /**
+   * Be told each time a snapshot is published — the same moments every view
+   * is, so unchanged polls stay suppressed. No replay on subscribe: read
+   * {@link getLastBroadcast} for the current value.
+   */
+  subscribe(listener: (snapshot: FleetSnapshot) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  /**
    * Replay the retained snapshot to a single freshly-loaded view (cold start,
    * LRU restore, crash reload, DevTools refresh), mirroring
    * `ProjectStatsService.pushSnapshotTo`.
@@ -151,6 +164,7 @@ export class FleetSnapshotService {
     // Always bump the generation so an in-flight compute — including one a
     // pre-start refresh() kicked off — is invalidated before it can broadcast.
     this.generation++;
+    this.listeners.clear();
     if (!this.started) return;
     this.started = false;
 
@@ -401,5 +415,15 @@ export class FleetSnapshotService {
   private publish(snapshot: FleetSnapshot): void {
     this.lastBroadcast = snapshot;
     typedBroadcast<"fleet:snapshot-updated">(CHANNELS.FLEET_SNAPSHOT_UPDATED, snapshot);
+    // Snapshot the set so a listener that unsubscribes mid-delivery can't skip
+    // a sibling, and isolate each one: a throwing listener must not be able to
+    // turn a healthy read into the degraded path in `computeOnce`'s catch.
+    for (const listener of [...this.listeners]) {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        console.error("[FleetSnapshotService] Snapshot listener failed:", error);
+      }
+    }
   }
 }

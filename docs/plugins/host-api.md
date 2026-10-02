@@ -14,7 +14,7 @@ This page is the reference: every member, its gates and its failure modes. For a
 - Registration: [`registerAction`](#registeraction) · [`registerHandler` and `broadcastToRenderer`](#registerhandler-and-broadcasttorenderer) · [Deadlines and size limits](#deadlines-and-size-limits) · [`postToPanel`](#posttopanel) · [Push delivery](#push-delivery) · [Listener hints](#listener-hints--haslisteners-ondidchangelisteners) · [`registerForgeProvider`](#registerforgeprovider) · [File decorations](#registerfiledecorationprovider-and-invalidatefiledecorations) · [`mcp.registerTools`](#mcpregistertools)
 - Observation: [Worktrees](#worktree-observation) · [Agent state](#agent-observation) · [Panel lifecycle](#ondidchangepanellifecycle) · [`onDidWake`](#ondidwake)
 - Panels and actions: [`reloadPanel`](#reloadpanel) · [`setPanelBadge`](#setpanelbadge) · [`dispatch`](#dispatch) · [`actions`](#actions--built-in-action-catalog)
-- Agents: [`sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) · [`sendToAgent`](#sendtoagent--hand-work-to-an-agents-draft) · [`agents.list`](#agentslist--the-projects-agent-panes)
+- Agents: [`sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) · [`sendToAgent`](#sendtoagent--hand-work-to-an-agents-draft) · [`agents.list`](#agentslist--the-projects-agent-panes) · [`agents.listAll`](#agentslistall--every-agent-in-every-open-project)
 - State: [`settings`](#settings) · [`storage`](#storage--private-keyvalue-storage) · [`db`](#db--host-managed-sqlite)
 - UI: [`logger`](#logger) · [`showToast`](#showtoast) · [User prompts](#user-prompts--showquickpick-showinputbox-showconfirm)
 - System: [`process`](#process--managed-child-processes) · [`fs`](#fs--host-mediated-scope-contained-filesystem) · [`git`](#git--host-mediated-git-scoped-to-a-worktree) · [`clipboard`](#clipboard--host-mediated-os-clipboard) · [`system`](#system--open-and-reveal-files-in-your-own-scope) · [`documents`](#documents--render-html-to-pdf)
@@ -32,7 +32,7 @@ Every callback a plugin hands the host has a fixed shape, and the one for `regis
 | `registerHandler(channel, schema, handler, options?)` (typed) | `(ctx, args)` | Same order; `args` is the single, schema-parsed payload. `options.timeoutMs` sets the invoke deadline for either overload ([Deadlines and size limits](#deadlines-and-size-limits)). |
 | `postToPanel(channel, payload)` | view: `on(pluginId, channel, cb)` receives `payload` | Broadcast. Subscriptions are keyed by plugin and channel only, so it reaches every `on` subscriber your plugin has on that channel, across all of its panel kinds. `usePluginEvent` in a view. |
 | `postToPanel(channel, payload, panelId)` | view: `onPanel(pluginId, channel, panelId, cb)` receives `payload` | One instance only, disjoint from the broadcast. `usePluginPanelEvent` in a view. |
-| `onDidChangeActiveWorktree`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange`, `storage.onDidChange` | `(event)` | One argument. A listener that throws is logged; see [Disposables](#disposables) for which ones are unsubscribed after three failures in a row. The first two coalesce bursts by default ([`PluginHostSubscriptionOptions`](#pluginhostapi)). |
+| `onDidChangeActiveWorktree`, `onDidChangeAgentState`, `onDidChangeAllAgents`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange`, `storage.onDidChange` | `(event)` | One argument. A listener that throws is logged; see [Disposables](#disposables) for which ones are unsubscribed after three failures in a row. The first three coalesce bursts by default ([`PluginHostSubscriptionOptions`](#pluginhostapi)). |
 | `onDidChangeWorktrees` | `(snapshots, change)` | The full list, then `{ added, removed, changed }` snapshot ids since this subscription's previous delivery. Coalesced by default. |
 | `onDidChangeListeners(channel, cb)` | `(hasListeners)` | A boolean. Returns its disposer synchronously. |
 | `db` handle `onDidChange(cb)` | `({ origin })` | Frozen, and at most one per 50 ms window. Returns its disposer synchronously, not a Promise. |
@@ -135,6 +135,11 @@ interface PluginHostApi {
   getAgentState(): Promise<PluginAgentSnapshot | null>;
   onDidChangeAgentState(
     callback: (snapshot: PluginAgentSnapshot) => void,
+    options?: PluginHostSubscriptionOptions
+  ): Promise<() => void>;
+  // Every agent in every open project — `agent:read`, installed and built-in plugins only
+  onDidChangeAllAgents(
+    callback: (snapshot: PluginAllAgentsSnapshot) => void,
     options?: PluginHostSubscriptionOptions
   ): Promise<() => void>;
 
@@ -312,7 +317,7 @@ A capability is declared in `manifest.capabilities` and checked on every call �
 
 | Capability | Unlocks | Consent |
 | --- | --- | --- |
-| `agent:read` | `getAgentState`, `onDidChangeAgentState`, `agents.list` | — |
+| `agent:read` | `getAgentState`, `onDidChangeAgentState`, `agents.list`, `agents.listAll`, `onDidChangeAllAgents` | — |
 | `agent:input` | `sendToActiveAgent`, `sendToAgent` | First use |
 | `fs:project-read`, `fs:user-data-read` | `fs` reads, `readdir`, `stat`, `watch`; `renderPdf`'s `htmlPath`; `system.*` (read or write of the root class) | — |
 | `fs:project-write`, `fs:user-data-write` | `fs.writeFile`, `appendFile`, `mkdir`; `renderPdf`'s output; `db` handle `backup` destination | First write. The prompt is keyed on the strongest write capability you declare (`fs:project-write` when declared, else `fs:user-data-write`), not on the target's root class, so one grant covers writes to every root, your data directory included. |
@@ -1050,6 +1055,25 @@ const agents = await host.agents.list();
 
 The live agent panes in this plugin's project, in grid order — the same set the `sendToAgent` picker offers. Exited and demoted agents are left out; a docked or locked agent is listed with `canDraft: false` and its `draftRefusal`. `observedState` is the agent state Daintree last read off the terminal: an observation, often wrong, never a promise about what the agent is doing. Gated on `agent:read`; resolves `[]` when the project has no open view or the plugin has unloaded. NOT revoke-guarded.
 
+## `agents.listAll` — every agent in every open project
+
+```ts
+// Subscribe first, then read, so no change between the two is missed.
+await host.onDidChangeAllAgents((snapshot) => render(snapshot));
+render(await host.agents.listAll());
+// { agents: [{ workspaceId, workspaceKind: "project" | "scratch", terminalId,
+//              worktreeId?, title?, agentId?, observedState? }],
+//   degraded, lastSuccessfulAt }
+```
+
+Every agent run across every open project and scratch, answered by main — so a project whose view is not loaded still shows up, which `agents.list` cannot do. The same set the All agents view shows: exited and demoted agents are left out. `observedState` is the agent state Daintree last read off the terminal: an observation, often wrong, never a promise about what the agent is doing. `title` is the pane's own title, not the composed one its header shows; `worktreeId` is an id only. `terminalId` is what `sendToAgent` takes, but it is not a lasting identity — a restarted pane can come back under the same id.
+
+An empty list only means "no agents" when `degraded` is `false`. `degraded: true` means the host could not read every terminal, so `agents` is the last complete view — show it as stale. Before the first read, and after the plugin unloads, `listAll` answers `{ agents: [], degraded: true, lastSuccessfulAt: null }`: "can't tell", not "nothing running".
+
+Gated on `agent:read`, and only for installed and built-in plugins. A project plugin is scoped to its own project everywhere else, so both calls throw `PERMISSION_REQUIRED:` for one. `listAll` is NOT revoke-guarded; subscribing is.
+
+`onDidChangeAllAgents` fires with the whole new snapshot, frozen, when a run is added or removed or one's state, title or worktree changes, and when the host loses or regains sight of the fleet. There is no initial callback. A callback can repeat the previous snapshot, when something the plugin cannot see changed. Coalesced to the latest snapshot by default ([`PluginHostSubscriptionOptions`](#pluginhostapi)). It throws `FLEET_UNAVAILABLE:` if the host is not tracking agents at all.
+
 ## `logger`
 
 Structured diagnostic logger backed by a bounded per-plugin ring buffer (most recent ~500 entries) in the main process.
@@ -1782,7 +1806,7 @@ A zero-build worker imports it with no install — the plugin worker serves this
 
 Anything that takes a callback and returns a cleanup function follows the VS Code-style Disposable pattern. You can safely ignore the return value — the plugin's disposal cascade cleans everything up on unload. If you need explicit control (e.g., unsubscribe from a worktree change listener after a one-shot reaction), keep the reference and call it.
 
-**Throwing listeners are quarantined in process.** A listener you pass to `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, `onDidChangeListeners`, `settings.onDidChange` or `storage.onDidChange` runs inside the host's event dispatch. If it throws (synchronously or by rejecting), an in-process host logs the failure with a running counter (`1/3`, `2/3`, …) and keeps the subscription alive; after three _consecutive_ failures it unsubscribes the listener so a broken callback can't spam the log forever. A single successful invocation resets the counter, so a listener that fails only intermittently is never removed. The worktree subscriptions, `fs.watch` callbacks and database `onDidChange` listeners are only logged, and so is every listener in a worker plugin, which never quarantines. Either way dispatch is fire-and-forget — a throw never propagates back into the host's own work or another plugin's listeners.
+**Throwing listeners are quarantined in process.** A listener you pass to `onDidChangeAgentState`, `onDidChangeAllAgents`, `onDidChangePanelLifecycle`, `onDidWake`, `onDidChangeListeners`, `settings.onDidChange` or `storage.onDidChange` runs inside the host's event dispatch. If it throws (synchronously or by rejecting), an in-process host logs the failure with a running counter (`1/3`, `2/3`, …) and keeps the subscription alive; after three _consecutive_ failures it unsubscribes the listener so a broken callback can't spam the log forever. A single successful invocation resets the counter, so a listener that fails only intermittently is never removed. The worktree subscriptions, `fs.watch` callbacks and database `onDidChange` listeners are only logged, and so is every listener in a worker plugin, which never quarantines. Either way dispatch is fire-and-forget — a throw never propagates back into the host's own work or another plugin's listeners.
 
 See [Architecture → Lifecycle](./architecture.md#lifecycle) for how disposal works internally.
 
@@ -1816,6 +1840,7 @@ It validates argument shapes the way the real host does — `registerAction` des
 | `capabilities` | `["agent:read", "agent:input"]` | The declared set the agent APIs check. |
 | `hasActiveAgent` | `true` | `false` makes `sendToActiveAgent` reject `NO_ACTIVE_AGENT`. |
 | `agents` | `[]` | The panes `agents.list()` returns and `sendToAgent({ terminalId })` resolves against. |
+| `allAgents` | `{ agents: [], degraded: false, lastSuccessfulAt: 0 }` | What `agents.listAll()` returns, reduced to the allowlist and frozen as production does. |
 | `activeWorktree`, `worktrees`, `worktreesResult` | `null`, `[]`, derived | What the worktree reads return. Without `worktreesResult`, `getWorktreesResult()` answers `{ status: "ok", projectId: "test-project", worktrees }`; with one, it also drives `getWorktrees()` (`[]` unless `ok`) and `getActiveWorktree()` (the `isCurrent` entry). Worktree roots also count as existing directories in the mock `fs`, and the active one keys `"worktree"` storage. |
 | `manifestSettings` | none | Your `contributes.settings` declarations. With them, `get`, `set` and `onDidChange` follow declared scopes (a conflicting scope throws), `get` returns declared defaults, and `missingRequired` works; without them, scopes are whatever you pass and nothing is required. |
 | `settings`, `storage` | empty | Starting values per scope (`user` / `project` / `local`; `user` / `project` / `worktree`). A `storage.worktree` seed goes to the initial active worktree, and is dropped when there is none. |
@@ -1830,7 +1855,7 @@ There is no option to seed files; write them with `host.fs.writeFile` (which rec
 All are read-only arrays in call order.
 
 - **Current registrations**, not a history — re-registering the same id replaces the entry in place, and disposing a provider or MCP roster removes it: `registeredActions`, `registeredForgeProviders`, `registeredFileDecorationProviders`, `registeredMcpTools` (with each tool's `execute`, so a test can call a tool directly).
-- **Subscription windows:** `subscriptionOptions` has one `{ kind, debounceMs }` per `onDidChangeWorktrees` (`"worktrees"`), `onDidChangeActiveWorktree` (`"active-worktree"`) and `onDidChangeAgentState` (`"agent-state"`) subscription, with the window the host would apply — 100 for an omitted option, `0` for raw, otherwise clamped to 50–60,000 — so a test can assert a plugin kept the default or opted out.
+- **Subscription windows:** `subscriptionOptions` has one `{ kind, debounceMs }` per `onDidChangeWorktrees` (`"worktrees"`), `onDidChangeActiveWorktree` (`"active-worktree"`), `onDidChangeAgentState` (`"agent-state"`) and `onDidChangeAllAgents` (`"all-agents"`) subscription, with the window the host would apply — 100 for an omitted option, `0` for raw, otherwise clamped to 50–60,000 — so a test can assert a plugin kept the default or opted out.
 - **Append-only call records:** `registeredHandlers`, `broadcastCalls`, `postToPanelCalls` (`panelId` is `null` for a broadcast), `shownToasts`, `dispatchedActions` (every call, including `settings.open`, recorded as `plugin.openSettings`), `sentToActiveAgentCalls`, `sentToAgentCalls` (`{ text, options, result }`), `invalidationCalls`, `setPanelBadgeCalls`, `reloadPanelCalls`, `showQuickPickCalls`, `showInputBoxCalls`, `showConfirmCalls`, `spawnCalls`, `fsWriteCalls`, `fsAppendCalls` (the appended text only), `fsMkdirCalls`, `gitCommitCalls`, `clipboardWriteCalls`, `clipboardWriteImageCalls` (byte lengths), `systemOpenPathCalls`, `systemShowItemCalls`, `documentsRenderPdfCalls`.
 
 Calls that fail validation, and prompts or `sendToAgent` calls whose signal was already aborted, are not recorded. `/testing` exports some record types by name (`RegisteredActionRecord`, `RegisteredHandlerRecord`, `ShownToastRecord`, `ShowConfirmRecord`, …) but not all: the elements of `postToPanelCalls`, `spawnCalls`, `setPanelBadgeCalls`, `fsWriteCalls`, `gitCommitCalls`, `sentToActiveAgentCalls` and `subscriptionOptions` have no importable type, so infer them from the array — `MockHostState["postToPanelCalls"][number]`.
@@ -1844,6 +1869,7 @@ Calls that fail validation, and prompts or `sendToAgent` calls whose signal was 
 | `simulateWorktreesResult(result \| null)` | Forces what `getWorktreesResult()` answers; `null` goes back to deriving it. Notifies nobody. |
 | `simulateAgentStateChange(snapshot)` | Sets what `getAgentState()` returns and notifies `onDidChangeAgentState`. |
 | `simulateAgentsChange(panes)` | Replaces what `agents.list()` returns. |
+| `simulateAllAgentsChange(snapshot)` | Replaces what `agents.listAll()` returns and notifies `onDidChangeAllAgents` at once, ignoring its window. |
 | `simulateSendToAgentPick(terminalId \| null)` | What the picker "chooses" when `sendToAgent` has no `terminalId`; `null` (the default) cancels. A pane with `canDraft: false` refuses with its `draftRefusal`, an unknown one with `unknown-terminal`. |
 | `simulatePanelLifecycleChange(event)` | Notifies `onDidChangePanelLifecycle` and updates the phases `reloadPanel` reads. |
 | `simulateSystemWake(event)` | Notifies `onDidWake`. |
@@ -1857,7 +1883,7 @@ Calls that fail validation, and prompts or `sendToAgent` calls whose signal was 
 
 It has no manifest model and no processes behind it, so a test that passes against it is not proof the real host will accept the plugin. The gaps, from `shared/testing/createMockHost.ts`:
 
-- **Capabilities and consent.** Only `getAgentState`, `agents.list`, `sendToActiveAgent` and `sendToAgent` check `capabilities`. `onDidChangeAgentState` subscribes without `agent:read`, and `fs`, `git`, `process`, `clipboard`, `system`, `documents`, `db` and `mcp` run without their capabilities. No just-in-time consent is modelled anywhere, and `sendToAgent` draws no picker.
+- **Capabilities and consent.** Only `getAgentState`, `agents.list`, `agents.listAll`, `onDidChangeAllAgents`, `sendToActiveAgent` and `sendToAgent` check `capabilities`. `onDidChangeAgentState` subscribes without `agent:read`, and `fs`, `git`, `process`, `clipboard`, `system`, `documents`, `db` and `mcp` run without their capabilities. No just-in-time consent is modelled anywhere, and `sendToAgent` draws no picker.
 - **`fs`** is an in-memory map of text with no containment and no symlinks. A directory exists when `mkdir` made it (with every ancestor), when something stored sits beneath it, or when it is a worktree root; a path holding a file is never a directory. `appendFile` refuses a directory target and a missing parent (outside `pluginDataDir`); `writeFile` does not check parents. A missing file rejects with an `ENOENT:` message but no `err.code`. `stat` reports `isDirectory` only for `mkdir`-made directories and never throws; `readdir` of a missing directory resolves `[]`; `size` in a detailed listing is the string length, not bytes, and `mtimeMs` is `0`. `watch` validates `allowMissing` but otherwise ignores it.
 - **`db`** always reports `location: "local"`, and `backup` approves any absolute destination — the fs gate is not modelled.
 - **`documents.renderPdf`** renders nothing: it validates the options, requires an in-memory `htmlPath`, and writes a small `%PDF-1.4` placeholder to `outputPath` so a plugin that reads or lists its export sees a file. That write is not in `fsWriteCalls`, and the parent directory is not checked.

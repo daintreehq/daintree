@@ -3018,8 +3018,9 @@ interface PluginHostCallOptions {
 /**
  * Options accepted by the bursty host subscriptions —
  * {@link PluginActivationApi.onDidChangeWorktrees},
- * {@link PluginActivationApi.onDidChangeActiveWorktree} and
- * {@link PluginActivationApi.onDidChangeAgentState}. These coalesce by default:
+ * {@link PluginActivationApi.onDidChangeActiveWorktree},
+ * {@link PluginActivationApi.onDidChangeAgentState} and
+ * {@link PluginActivationApi.onDidChangeAllAgents}. These coalesce by default:
  * a burst of events becomes one trailing callback fired `debounceMs` after the
  * last event (the host re-emits the worktree set on every git-status poll, and
  * agents change state many times a second). A burst that never goes quiet
@@ -3646,6 +3647,56 @@ interface PluginAgentPane {
     /** Why it would not, when `canDraft` is `false`. */
     readonly draftRefusal?: PluginSendToAgentRefusalReason;
 }
+/**
+ * One agent run anywhere in the app, as {@link PluginAgentsApi.listAll}
+ * reports it — any open project or scratch, including ones whose view is not
+ * loaded.
+ *
+ * `observedState` is what the host last read off the agent's own terminal
+ * output — a heuristic that is often wrong, never a guarantee the agent is
+ * doing (or done doing) anything. Show it as "last seen working", not as fact.
+ */
+interface PluginAgentRun {
+    /** The project or scratch the run belongs to. */
+    readonly workspaceId: string;
+    /** Whether {@link workspaceId} names a project or a scratch workspace. */
+    readonly workspaceKind: "project" | "scratch";
+    /**
+     * The run's terminal id. Not a lasting identity: a restarted pane can come
+     * back under the same id.
+     */
+    readonly terminalId: string;
+    /** The worktree the run belongs to, when it has one. An id only — no name or branch. */
+    readonly worktreeId?: string;
+    /** The pane's own title, when it has one. Not the composed title the pane header shows. */
+    readonly title?: string;
+    /** The agent detected in the run (`claude`, `codex`, …), once detection has committed. */
+    readonly agentId?: string;
+    /** Last observed agent state, when there is one. An observation, not a fact. */
+    readonly observedState?: AgentState;
+}
+/**
+ * Every agent run across every open project and scratch, as
+ * {@link PluginAgentsApi.listAll} and
+ * {@link PluginActivationApi.onDidChangeAllAgents} report it.
+ *
+ * An empty `agents` list only means "no agents" when `degraded` is `false`.
+ */
+interface PluginAllAgentsSnapshot {
+    readonly agents: readonly PluginAgentRun[];
+    /**
+     * The host could not read every terminal behind this answer, so `agents` is
+     * the last complete view rather than the current one — show it as stale,
+     * never as clear. Also `true`, with `agents` empty and `lastSuccessfulAt`
+     * `null`, before the host has read the fleet even once.
+     */
+    readonly degraded: boolean;
+    /**
+     * When a complete read last succeeded (epoch ms), or `null` if none has. Only
+     * updated when the answer changes, so it is not a heartbeat.
+     */
+    readonly lastSuccessfulAt: number | null;
+}
 /** `host.agents` — the agent panes in the plugin's project. */
 interface PluginAgentsApi {
     /**
@@ -3660,6 +3711,22 @@ interface PluginAgentsApi {
      * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare `agent:read`.
      */
     list(): Promise<PluginAgentPane[]>;
+    /**
+     * Every agent run across every open project and scratch, answered by the
+     * host's main process — so projects whose view is not loaded are included.
+     * Exited and demoted agents are left out. Gated on `agent:read`, and only
+     * for installed and built-in plugins: a project plugin is scoped to its own
+     * project and is refused.
+     *
+     * Resolves an empty, `degraded` snapshot before the host has read the fleet
+     * once and after the plugin is unloaded. Subscribe with
+     * {@link PluginActivationApi.onDidChangeAllAgents} before the first call so
+     * no change between the two is missed.
+     *
+     * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+     *   `agent:read`, or is a project plugin.
+     */
+    listAll(): Promise<PluginAllAgentsSnapshot>;
 }
 /** Options for {@link PluginHostApi.sendToAgent}. */
 interface PluginSendToAgentOptions {
@@ -4896,6 +4963,26 @@ interface PluginActivationApi {
      */
     onDidChangeAgentState(callback: (snapshot: PluginAgentSnapshot) => void, options?: PluginHostSubscriptionOptions): Promise<() => void>;
     /**
+     * Subscribe to changes in the app-wide agent list that
+     * {@link PluginAgentsApi.listAll} returns: a run added or removed, or one's
+     * observed state, title or worktree changing, in any open project or scratch.
+     * The callback receives the whole new {@link PluginAllAgentsSnapshot},
+     * frozen. Gated on `agent:read`, and refused for project plugins like
+     * `listAll`. Resolves to a disposer; calling it more than once is a no-op.
+     * Disposed automatically when the plugin is unloaded.
+     *
+     * There is no initial callback — call `listAll()` after subscribing. A
+     * callback can repeat the previous snapshot when something the plugin cannot
+     * see changed. Coalesced by default to the latest snapshot; see
+     * {@link PluginHostSubscriptionOptions}.
+     *
+     * Subscribing is revoke-guarded — call it during `activate()`.
+     *
+     * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+     *   `agent:read`, is a project plugin, or the host is revoked.
+     */
+    onDidChangeAllAgents(callback: (snapshot: PluginAllAgentsSnapshot) => void, options?: PluginHostSubscriptionOptions): Promise<() => void>;
+    /**
      * Subscribe to panel lifecycle transitions for this plugin's own contributed
      * panels (#11301). No capability is required — a plugin only ever sees events
      * for panel instances of kinds it contributed itself.
@@ -5838,4 +5925,4 @@ declare function syncedCollectionSnapshotChannel(channel: string): string;
  */
 declare function createSyncedCollection<T>(host: SyncedCollectionHost, channel: string, options: SyncedCollectionOptions<T>): Promise<SyncedCollection<T>>;
 
-export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDispatchOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWalkEntry, type PluginFsWalkOptions, type PluginFsWalkResult, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPanelToolbarItemState, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type SyncedCollection, type SyncedCollectionDelta, type SyncedCollectionHost, type SyncedCollectionOptions, type SyncedCollectionSnapshot, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };
+export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentRun, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAllAgentsSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDispatchOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWalkEntry, type PluginFsWalkOptions, type PluginFsWalkResult, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPanelToolbarItemState, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type SyncedCollection, type SyncedCollectionDelta, type SyncedCollectionHost, type SyncedCollectionOptions, type SyncedCollectionSnapshot, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };
