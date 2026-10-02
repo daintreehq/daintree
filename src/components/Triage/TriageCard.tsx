@@ -189,7 +189,15 @@ function CardIdentity({
  * ask, quoted, and the reading only adds the why; without one the reading's
  * headline carries the card.
  */
-function CardWords({ item, hasQuote }: { item: TriageItem; hasQuote: boolean }) {
+function CardWords({
+  item,
+  hasQuote,
+  summaryId,
+}: {
+  item: TriageItem;
+  hasQuote: boolean;
+  summaryId: string;
+}) {
   const headline = hasQuote ? null : (item.card?.headline ?? null);
   const summary = item.card?.summary ?? null;
   if (headline === null && summary === null) {
@@ -205,7 +213,7 @@ function CardWords({ item, hasQuote }: { item: TriageItem; hasQuote: boolean }) 
     <div className="flex min-w-0 flex-col gap-0.5">
       {headline !== null && <p className="text-sm leading-snug text-text-primary">{headline}</p>}
       {summary !== null && (
-        <p title={summary} className="line-clamp-2 text-xs leading-relaxed text-text-secondary">
+        <p id={summaryId} title={summary} className="line-clamp-2 text-xs leading-relaxed text-text-secondary">
           {summary}
         </p>
       )}
@@ -403,6 +411,7 @@ export function TriageCard({
   const canReply = canReplyTo(item);
   const canTrash = canTrashItem(item);
   const quoteId = `${domId}-prompt`;
+  const summaryId = `${domId}-summary`;
 
   // One answer per prompt, from a click or a digit alike. Keyed on the prompt,
   // so the next menu — even one with the same labels — starts answerable.
@@ -518,7 +527,12 @@ export function TriageCard({
       role="article"
       tabIndex={isFocused ? 0 : -1}
       aria-label={accessibleName}
-      aria-describedby={question !== null ? quoteId : undefined}
+      // The whole reading, unclamped, for anyone who cannot hover the clamp.
+      aria-describedby={
+        [question !== null ? quoteId : null, card?.summary != null ? summaryId : null]
+          .filter(Boolean)
+          .join(" ") || undefined
+      }
       aria-posinset={position}
       aria-setsize={setSize}
       data-triage-card=""
@@ -553,7 +567,7 @@ export function TriageCard({
       ) : (
         <div className="flex min-w-0 flex-col gap-1.5 pb-0.5 pl-[46px]">
           {question !== null && <QuestionQuote question={question} id={quoteId} />}
-          <CardWords item={item} hasQuote={question !== null} />
+          <CardWords item={item} hasQuote={question !== null} summaryId={summaryId} />
           {options.length > 0 && (
             <OptionButtons
               options={options}
@@ -580,11 +594,21 @@ export function TriageCard({
                 cardRef.current?.focus();
               }}
               onSent={(text) => {
-                setAck(item.runId, () => ({ promptKey, kind: "reply", text, sent: true }));
+                const key = promptKey;
+                // Never over an answer given to a newer prompt while this was in flight.
+                setAck(item.runId, (current) =>
+                  current !== undefined && current.promptKey !== key && current.kind === "answer"
+                    ? current
+                    : { promptKey: key, kind: "reply", text, sent: true }
+                );
                 if (!composerAlwaysOpen(item)) {
+                  // Only when the keyboard is still here: the box is about to
+                  // unmount, and a send the user moved on from must not pull them back.
+                  const active = document.activeElement;
+                  const stayed =
+                    active === null || active === document.body || cardRef.current?.contains(active);
                   setComposerOpened(false);
-                  // The box held focus and is about to unmount: keep the keyboard on the row.
-                  cardRef.current?.focus();
+                  if (stayed) cardRef.current?.focus();
                 }
               }}
             />

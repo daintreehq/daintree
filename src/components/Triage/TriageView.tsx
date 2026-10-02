@@ -458,7 +458,6 @@ export function TriageView() {
               <div
                 role="feed"
                 aria-labelledby={`triage-section-${section.id}`}
-                aria-busy={busy}
                 className="flex flex-col gap-0.5"
               >
                 {section.items.map((item, index) => (
