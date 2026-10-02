@@ -5,6 +5,7 @@ import {
   useId,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
@@ -12,6 +13,7 @@ import { ChevronRight } from "lucide-react";
 import type {
   PluginAccordionProps,
   PluginCardProps,
+  PluginChartColor,
   PluginDescriptionItem,
   PluginDescriptionListItemProps,
   PluginDescriptionListProps,
@@ -40,15 +42,63 @@ import {
   str,
 } from "./kitProps";
 
+// `gap` is the header's bottom padding when a padded body follows it, so the
+// title never sits on the body's first line.
 const CARD_SPACE = {
-  md: { x: "px-4", top: "pt-3.5", bottom: "pb-3.5", y: "py-3.5" },
-  sm: { x: "px-3", top: "pt-2.5", bottom: "pb-2.5", y: "py-2.5" },
+  lg: { x: "px-5", top: "pt-5", bottom: "pb-5", y: "py-5", gap: "pb-4" },
+  md: { x: "px-4", top: "pt-3.5", bottom: "pb-3.5", y: "py-3.5", gap: "pb-3" },
+  sm: { x: "px-3", top: "pt-2.5", bottom: "pb-2.5", y: "py-2.5", gap: "pb-2" },
+} as const;
+
+const CARD_VARIANTS = ["default", "inset", "elevated", "feature"] as const;
+
+const CARD_HOST_VARIANT = {
+  default: "default",
+  inset: "subtle",
+  elevated: "elevated",
+  feature: "elevated",
+} as const satisfies Record<(typeof CARD_VARIANTS)[number], "default" | "subtle" | "elevated">;
+
+// The cap is an inset shadow on a full-size layer rather than a border or a
+// strip, so it follows the card's rounded top corners and leaves the frame's
+// own shadow alone. Every class is whole for Tailwind; `neutral` is the
+// charts' slate.
+const CARD_CAP_CLASS: Record<PluginChartColor, string> = {
+  blue: "before:shadow-[inset_0_2px_0_0_var(--color-category-blue)]",
+  amber: "before:shadow-[inset_0_2px_0_0_var(--color-category-amber)]",
+  indigo: "before:shadow-[inset_0_2px_0_0_var(--color-category-indigo)]",
+  orange: "before:shadow-[inset_0_2px_0_0_var(--color-category-orange)]",
+  violet: "before:shadow-[inset_0_2px_0_0_var(--color-category-violet)]",
+  teal: "before:shadow-[inset_0_2px_0_0_var(--color-category-teal)]",
+  neutral: "before:shadow-[inset_0_2px_0_0_var(--color-category-slate)]",
+};
+const CARD_CAP_COLORS = [
+  "blue",
+  "amber",
+  "indigo",
+  "orange",
+  "violet",
+  "teal",
+  "neutral",
+] as const satisfies readonly PluginChartColor[];
+
+// A small button is a few px taller than the title line; the box gives back
+// exactly that much, so the button centres on the line and overhangs into the
+// header's padding instead of growing it. A taller control still grows it.
+const CARD_ACTIONS_LINE = { feature: "-my-0.5", standard: "-my-1" } as const;
+
+const CARD_FOOTER_ALIGN_CLASS = {
+  end: "justify-end",
+  start: "justify-start",
+  between: "justify-end [&>:first-child]:mr-auto",
+  stretch: "[&>*]:flex-1",
 } as const;
 
 // The host `Card` frame for a static card and the host `ChoiceCard` for a
 // clickable one: a card that is itself the control owns focus and press, and
-// is outlined at rest, so `variant` only applies to the static frame. Inside a
-// button every part is a span, since a button holds phrasing content only.
+// is outlined at rest, so `variant` and `capColor` only apply to the static
+// frame. Inside a button every part is a span, since a button holds phrasing
+// content only.
 function KitCard(props: PluginCardProps) {
   const {
     title,
@@ -56,7 +106,9 @@ function KitCard(props: PluginCardProps) {
     children,
     footer,
     variant,
+    capColor,
     padding,
+    footerAlign,
     className,
     onClick,
     actions,
@@ -65,8 +117,12 @@ function KitCard(props: PluginCardProps) {
   } = props;
   const baseId = useId();
   const click = fn(onClick);
+  const kind = click ? "default" : (oneOf(variant, CARD_VARIANTS) ?? "default");
+  const feature = kind === "feature";
+  const cap = feature ? oneOf(capColor, CARD_CAP_COLORS) : undefined;
   const pad = oneOf(padding, ["none", "sm", "md"] as const) ?? "md";
-  const space = CARD_SPACE[pad === "sm" ? "sm" : "md"];
+  const space = CARD_SPACE[pad === "sm" ? "sm" : feature ? "lg" : "md"];
+  const footAlign = oneOf(footerAlign, ["end", "start", "between", "stretch"] as const) ?? "end";
   const hasTitle = hasContent(title);
   const hasDescription = hasContent(description);
   const hasActions = !click && hasContent(actions);
@@ -85,14 +141,17 @@ function KitCard(props: PluginCardProps) {
           "flex min-w-0 items-start gap-3",
           space.x,
           space.top,
-          (!hasBody || pad === "none") && space.bottom
+          !hasBody || pad === "none" ? space.bottom : space.gap
         )}
       >
         <Block className="block min-w-0 flex-1">
           {hasTitle ? (
             <Heading
               id={titleId}
-              className="block break-words text-sm font-semibold text-text-primary"
+              className={cn(
+                "block break-words font-semibold text-text-primary",
+                feature ? "text-base" : "text-sm"
+              )}
             >
               {node(title)}
             </Heading>
@@ -110,7 +169,14 @@ function KitCard(props: PluginCardProps) {
           ) : null}
         </Block>
         {hasActions ? (
-          <div className="flex shrink-0 items-center gap-2">{node(actions)}</div>
+          <div
+            className={cn(
+              "flex shrink-0 items-center gap-2",
+              CARD_ACTIONS_LINE[feature ? "feature" : "standard"]
+            )}
+          >
+            {node(actions)}
+          </div>
         ) : null}
       </Block>
     ) : null;
@@ -128,7 +194,9 @@ function KitCard(props: PluginCardProps) {
   const foot = hasFooter ? (
     <Block
       className={cn(
-        "flex min-w-0 flex-wrap items-center justify-end gap-2 border-t border-divider",
+        "flex min-w-0 flex-wrap items-center",
+        CARD_FOOTER_ALIGN_CLASS[footAlign],
+        "gap-2 border-t border-divider",
         space.x,
         space.y
       )}
@@ -168,9 +236,16 @@ function KitCard(props: PluginCardProps) {
   return (
     <Card
       {...pickDomProps(rest)}
-      variant={oneOf(variant, ["default", "inset"] as const) === "inset" ? "subtle" : "default"}
+      variant={CARD_HOST_VARIANT[kind]}
       padding="none"
-      className={cn("flex min-w-0 flex-col", str(className))}
+      className={cn(
+        "flex min-w-0 flex-col",
+        feature && "rounded-[var(--radius-xl)]",
+        cap &&
+          "relative before:pointer-events-none before:absolute before:inset-0 before:rounded-[var(--radius-xl)]",
+        cap && CARD_CAP_CLASS[cap],
+        str(className)
+      )}
     >
       {header}
       {body}
@@ -754,11 +829,13 @@ function KitDisclosure({
 interface DescriptionListSettings {
   layout: "inline" | "stacked";
   copyable: boolean;
+  valueEnd: boolean;
 }
 
 const DescriptionListContext = createContext<DescriptionListSettings>({
   layout: "inline",
   copyable: false,
+  valueEnd: false,
 });
 
 function copyTextOf(item: PluginDescriptionItem, copyable: boolean): string | undefined {
@@ -780,7 +857,7 @@ function DescriptionRow({
   root: Record<string, string | number | boolean>;
   className?: string;
 }) {
-  const { layout, copyable } = useContext(DescriptionListContext);
+  const { layout, copyable, valueEnd } = useContext(DescriptionListContext);
   const inline = layout === "inline";
   const copyText = copyTextOf(item, copyable);
   const label: unknown = item.label;
@@ -808,7 +885,13 @@ function DescriptionRow({
           inline ? "col-span-2 grid grid-cols-subgrid" : "flex gap-1.5"
         )}
       >
-        <div className={cn("min-w-0", !inline && "flex-1")}>
+        <div
+          className={cn(
+            "min-w-0",
+            !inline && "flex-1",
+            inline && valueEnd && "text-end tabular-nums"
+          )}
+        >
           <div className="break-words text-sm text-text-primary select-text">
             {hasContent(item.value) ? (
               node(item.value)
@@ -853,21 +936,62 @@ function readDescriptionItem(entry: unknown): PluginDescriptionItem | null {
 // the values while the buttons still line up with each other; a long value
 // wraps inside what is left beside the label. No column gap, so an empty copy
 // column costs nothing: the label and button carry their own spacing.
-const DESCRIPTION_LIST_INLINE_GRID =
-  "grid grid-cols-[fit-content(40%)_minmax(0,max-content)_auto_minmax(0,1fr)] gap-y-2.5";
+//
+// End-aligned values take the free width themselves, so the filler is empty
+// and each copy button sits at the trailing edge. A set label width reads off
+// a variable, since the length is the plugin's and no class can spell it.
+const DESCRIPTION_LIST_INLINE_GRID = {
+  start: "grid grid-cols-[fit-content(40%)_minmax(0,max-content)_auto_minmax(0,1fr)] gap-y-2.5",
+  end: "grid grid-cols-[fit-content(40%)_minmax(0,1fr)_auto_0px] gap-y-2.5",
+  startSized:
+    "grid grid-cols-[var(--kit-dl-label)_minmax(0,max-content)_auto_minmax(0,1fr)] gap-y-2.5",
+  endSized: "grid grid-cols-[var(--kit-dl-label)_minmax(0,1fr)_auto_0px] gap-y-2.5",
+} as const;
+
+const DESCRIPTION_LABEL_MAX_PX = 2000;
+
+function cssLength(value: unknown): string | undefined {
+  if (typeof value === "number") {
+    const px = positive(value, DESCRIPTION_LABEL_MAX_PX);
+    return px === undefined ? undefined : `${px}px`;
+  }
+  const text = nonEmpty(value)?.trim();
+  if (!text) return undefined;
+  // A value that is not a track size would void the whole track list and drop
+  // every row into one column, so it is ignored instead. Checking it as a
+  // track also turns away the CSS-wide keywords, which a width would take.
+  if (typeof CSS !== "undefined" && typeof CSS.supports === "function") {
+    return CSS.supports("grid-template-columns", `${text} 1fr`) ? text : undefined;
+  }
+  return /^(\d+(\.\d+)?(px|rem|em|ch|%)|(calc|min|max|clamp)\([^;{}]*\))$/.test(text)
+    ? text
+    : undefined;
+}
 
 function KitDescriptionList({
   items,
   children,
   layout,
   copyable,
+  valueAlign,
+  labelWidth,
   className,
   ...rest
 }: PluginDescriptionListProps) {
   const settings: DescriptionListSettings = {
     layout: oneOf(layout, ["inline", "stacked"] as const) ?? "inline",
     copyable: copyable === true,
+    valueEnd: oneOf(valueAlign, ["start", "end"] as const) === "end",
   };
+  const inline = settings.layout === "inline";
+  const labelLength = inline ? cssLength(labelWidth) : undefined;
+  const labelStyle: (CSSProperties & Record<`--${string}`, string>) | undefined = labelLength
+    ? { "--kit-dl-label": labelLength }
+    : undefined;
+  const grid =
+    DESCRIPTION_LIST_INLINE_GRID[
+      settings.valueEnd ? (labelLength ? "endSized" : "end") : labelLength ? "startSized" : "start"
+    ];
   const rows = Array.isArray(items)
     ? items.map(readDescriptionItem).filter((item) => item !== null)
     : [];
@@ -875,11 +999,8 @@ function KitDescriptionList({
     <DescriptionListContext value={settings}>
       <dl
         {...pickRootProps(rest)}
-        className={cn(
-          "m-0 min-w-0",
-          settings.layout === "inline" ? DESCRIPTION_LIST_INLINE_GRID : "flex flex-col gap-3",
-          str(className)
-        )}
+        style={labelStyle}
+        className={cn("m-0 min-w-0", inline ? grid : "flex flex-col gap-3", str(className))}
       >
         {rows.map((item, index) => (
           <DescriptionRow key={index} item={item} root={{}} />

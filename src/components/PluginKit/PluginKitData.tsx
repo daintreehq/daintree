@@ -15,6 +15,7 @@ import {
   pickDomProps,
   pickRootProps,
   positive,
+  rowCount,
   str,
 } from "./kitProps";
 import { severityGlyph } from "./PluginKitPatterns";
@@ -74,10 +75,41 @@ function DeltaView({
   );
 }
 
+const STAT_SIZES = ["md", "lg"] as const;
+type StatSize = (typeof STAT_SIZES)[number];
+
+const STAT_VALUE_CLASS: Record<StatSize, string> = { md: "text-xl", lg: "text-2xl" };
+const STAT_UNIT_CLASS: Record<StatSize, string> = { md: "text-sm", lg: "text-base" };
+const STAT_TWIN_CLASS: Record<StatSize, string> = { md: "text-xs", lg: "text-sm" };
+
+// Only the cautions draw on the edge: an info or success edge would be one
+// more coloured outline in a row of readings, saying nothing the glyph does not.
+const STAT_FILLED_EDGE: Partial<Record<PluginSeverity, string>> = {
+  warning: "border-status-warning",
+  error: "border-status-error",
+  danger: "border-status-danger",
+};
+
+// One line truncates as the hint always has; more clamp, and past the last
+// entry a request takes the last entry's clamp.
+const HINT_CLAMP_CLASS = [
+  "truncate",
+  "line-clamp-2 break-words",
+  "line-clamp-3 break-words",
+  "line-clamp-4 break-words",
+] as const;
+
+function hintClampClass(lines: unknown): string {
+  if (lines === "wrap") return "break-words";
+  const count = rowCount(lines, Number.MAX_SAFE_INTEGER) ?? 1;
+  return HINT_CLAMP_CLASS[Math.min(count, HINT_CLAMP_CLASS.length) - 1] ?? "truncate";
+}
+
 // The settings card's frame (radius, hairline), not a raised tile: a
 // dashboard row is several of these at once, so none may carry accent or a
-// fill of its own. The label is sentence case at the field-label step, never
-// the tracked uppercase eyebrow the host does not use.
+// fill of its own. `filled` is the recessed tile for readings inside a card,
+// still with no accent. The label is sentence case at the field-label step,
+// never the tracked uppercase eyebrow the host does not use.
 function KitStatCard({
   label,
   value,
@@ -85,17 +117,34 @@ function KitStatCard({
   formatDelta,
   tone,
   hint,
+  hintLines,
+  unit,
+  twin,
+  size,
+  variant,
   children,
   className,
   ...rest
 }: PluginStatCardProps) {
   const severity = oneOf(tone, TONES) ?? "neutral";
   const glyph = severity === "neutral" ? null : severityGlyph(severity, "h-3.5 w-3.5");
+  const scale = oneOf(size, STAT_SIZES) ?? "md";
+  const filled = oneOf(variant, ["outline", "filled"] as const) === "filled";
+  const valueClass = cn(
+    "min-w-0 truncate",
+    STAT_VALUE_CLASS[scale],
+    "font-semibold tabular-nums text-text-primary"
+  );
   return (
     <div
       {...pickDomProps(rest)}
       className={cn(
-        "flex min-w-0 flex-col gap-1 rounded-[var(--radius-lg)] border border-border-default px-3 py-2.5",
+        "flex min-w-0 flex-col gap-1",
+        filled
+          ? "rounded-[var(--radius-md)] border border-border-subtle bg-surface-inset"
+          : "rounded-[var(--radius-lg)] border border-border-default",
+        filled && STAT_FILLED_EDGE[severity],
+        "px-3 py-2.5",
         str(className)
       )}
     >
@@ -107,13 +156,39 @@ function KitStatCard({
         <span className="min-w-0 truncate text-xs text-text-secondary">{node(label)}</span>
       </div>
       <div className="flex min-w-0 items-baseline gap-2">
-        <span className="min-w-0 truncate text-xl font-semibold tabular-nums text-text-primary">
-          {node(value)}
-        </span>
+        {hasContent(unit) ? (
+          // The figure truncates inside this pair and the unit does not, so a
+          // narrow card cuts digits, never the unit that says what they are.
+          <span className="flex min-w-0 items-baseline">
+            <span className={valueClass}>{node(value)}</span>
+            <span
+              className={cn(
+                "ml-0.5 shrink-0 whitespace-nowrap font-normal text-text-secondary",
+                STAT_UNIT_CLASS[scale]
+              )}
+            >
+              {node(unit)}
+            </span>
+          </span>
+        ) : (
+          <span className={valueClass}>{node(value)}</span>
+        )}
         <DeltaView delta={delta} format={fn(formatDelta)} />
       </div>
+      {hasContent(twin) ? (
+        <p
+          className={cn(
+            "min-w-0 truncate tabular-nums text-text-secondary",
+            STAT_TWIN_CLASS[scale]
+          )}
+        >
+          {node(twin)}
+        </p>
+      ) : null}
       {hasContent(hint) ? (
-        <p className="min-w-0 truncate text-xs text-text-secondary">{node(hint)}</p>
+        <p className={cn("min-w-0", hintClampClass(hintLines), "text-xs text-text-secondary")}>
+          {node(hint)}
+        </p>
       ) : null}
       {hasContent(children) ? <div className="mt-1 min-w-0">{node(children)}</div> : null}
     </div>
@@ -253,10 +328,108 @@ function KitSparkline({
   );
 }
 
-function KitFigure({ value, className, ...rest }: PluginFigureProps) {
+const FIGURE_SIZES = ["display", "xl", "lg", "md"] as const;
+type FigureSize = (typeof FIGURE_SIZES)[number];
+
+// `display` steps with the width the figure is given, read off its own root.
+const FIGURE_VALUE_CLASS: Record<FigureSize, string> = {
+  display: "text-4xl @lg/figure:text-5xl @2xl/figure:text-6xl",
+  xl: "text-3xl",
+  lg: "text-2xl",
+  md: "text-xl",
+};
+
+// About 40% of the figure, never below the smallest step the host sets text in.
+const FIGURE_UNIT_CLASS: Record<FigureSize, string> = {
+  display: "text-sm @lg/figure:text-lg @2xl/figure:text-2xl",
+  xl: "text-xs",
+  lg: "text-xs",
+  md: "text-xs",
+};
+
+const FIGURE_TWIN_CLASS: Record<FigureSize, string> = {
+  display: "text-base @lg/figure:text-lg",
+  xl: "text-sm",
+  lg: "text-sm",
+  md: "text-xs",
+};
+
+// A figure set as type: no frame, no accent. It wraps rather than truncates,
+// since a cut-off figure reads as a different, smaller number.
+function KitFigure({
+  value,
+  unit,
+  twin,
+  label,
+  caption,
+  size,
+  mono,
+  delta,
+  formatDelta,
+  align,
+  className,
+  ...rest
+}: PluginFigureProps) {
+  const scale = oneOf(size, FIGURE_SIZES) ?? "lg";
+  const end = oneOf(align, ["start", "end"] as const) === "end";
+  const display = scale === "display";
   return (
-    <div {...pickDomProps(rest)} className={cn("min-w-0 tabular-nums", str(className))}>
-      {node(value)}
+    <div
+      {...pickDomProps(rest)}
+      data-size={scale}
+      className={cn(
+        "flex min-w-0 flex-col gap-1",
+        // Inline-size containment sizes the root without its content: it takes
+        // the full row, and an ancestor sized by its content (a card in a row)
+        // is given a stand-in width rather than none.
+        display && "@container/figure w-full [contain-intrinsic-inline-size:auto_16rem]",
+        end && "items-end text-end",
+        str(className)
+      )}
+    >
+      {hasContent(label) ? (
+        <div className="min-w-0 break-words text-xs text-text-secondary">{node(label)}</div>
+      ) : null}
+      <div
+        className={cn(
+          "flex min-w-0 max-w-full flex-wrap items-baseline gap-x-2 gap-y-0.5",
+          end && "justify-end"
+        )}
+      >
+        <span
+          className={cn(
+            "min-w-0 break-words font-semibold leading-tight tabular-nums lining-nums text-text-primary",
+            FIGURE_VALUE_CLASS[scale],
+            mono === true && "font-mono tracking-tight"
+          )}
+        >
+          {node(value)}
+          {hasContent(unit) ? (
+            <span
+              className={cn(
+                "ml-0.5 whitespace-nowrap font-normal tracking-normal text-text-secondary",
+                FIGURE_UNIT_CLASS[scale]
+              )}
+            >
+              {node(unit)}
+            </span>
+          ) : null}
+        </span>
+        <DeltaView delta={delta} format={fn(formatDelta)} />
+      </div>
+      {hasContent(twin) ? (
+        <div
+          className={cn(
+            "min-w-0 break-words tabular-nums lining-nums text-text-secondary",
+            FIGURE_TWIN_CLASS[scale]
+          )}
+        >
+          {node(twin)}
+        </div>
+      ) : null}
+      {hasContent(caption) ? (
+        <p className="min-w-0 break-words text-xs text-text-secondary">{node(caption)}</p>
+      ) : null}
     </div>
   );
 }
