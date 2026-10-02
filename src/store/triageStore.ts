@@ -28,7 +28,10 @@ interface TriageState {
   toggle: () => void;
   applySnapshot: (snapshot: TriageSnapshot) => void;
   setDraft: (key: string, text: string) => void;
-  setAck: (runId: string, update: (current: TriageAck | undefined) => TriageAck | undefined) => void;
+  setAck: (
+    runId: string,
+    update: (current: TriageAck | undefined) => TriageAck | undefined
+  ) => void;
 }
 
 /** One prompt on one terminal incarnation: stable while it sits unanswered. */

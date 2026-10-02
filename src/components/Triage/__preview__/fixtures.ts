@@ -257,7 +257,8 @@ function fleetCards(runs: FleetRunRow[], now: number): TriageCard[] {
         category: "approval",
         headline: "Debug the failed research extension?",
         summary: "The extension failed to start because SERPER_API_KEY is missing.",
-        question: "Would you like me to help debug the 'internal-research-tools' extension failure?",
+        question:
+          "Would you like me to help debug the 'internal-research-tools' extension failure?",
         options: ["No", "Yes"],
       },
       runs,

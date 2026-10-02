@@ -1,10 +1,17 @@
 import { useCallback, useRef, useState } from "react";
 import type { KeyboardEvent, PointerEvent } from "react";
-import { Check, CornerDownLeft, KeyRound, Reply, SquareArrowOutUpRight, Trash2 } from "lucide-react";
+import {
+  Check,
+  CornerDownLeft,
+  KeyRound,
+  Reply,
+  SquareArrowOutUpRight,
+  Trash2,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { Button } from "@/components/ui/button";
-import { KBD_BARE_CLASS } from "@/components/ui/Kbd";
+import { KbdChord } from "@/components/ui/Kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { SkeletonBone } from "@/components/ui/Skeleton";
 import { TimeAgo } from "@/components/ui/TimeAgo";
@@ -213,7 +220,11 @@ function CardWords({
     <div className="flex min-w-0 flex-col gap-0.5">
       {headline !== null && <p className="text-sm leading-snug text-text-primary">{headline}</p>}
       {summary !== null && (
-        <p id={summaryId} title={summary} className="line-clamp-2 text-xs leading-relaxed text-text-secondary">
+        <p
+          id={summaryId}
+          title={summary}
+          className="line-clamp-2 text-xs leading-relaxed text-text-secondary"
+        >
           {summary}
         </p>
       )}
@@ -342,44 +353,68 @@ function OptionButtons({
   tabbable: boolean;
   onPick: (label: string) => void;
 }) {
-  if (answered?.sent) {
-    return (
-      <p role="status" className="flex items-center gap-1.5 text-xs text-text-secondary">
-        <Check className="size-3.5 shrink-0" aria-hidden="true" />
-        <span className="min-w-0 truncate">
-          Answered <span className="text-text-primary">{answered.label}</span>
-        </span>
-      </p>
-    );
-  }
+  const sent = answered?.sent === true;
   return (
-    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Answer">
-      {options.map((label, index) => (
-        <Button
-          key={label}
-          variant="subtle"
-          size="sm"
-          tabIndex={tabbable ? 0 : -1}
-          disabled={answered !== null && answered.label !== label}
-          loading={answered?.label === label}
-          aria-keyshortcuts={index < 9 ? String(index + 1) : undefined}
-          onClick={(event) => {
-            event.stopPropagation();
-            onPick(label);
-          }}
-          // A permission's scope is often in its last words, so a long label
-          // wraps under its digit rather than truncating them away.
-          className="h-auto min-h-7 max-w-full items-start justify-start py-1.5 text-left whitespace-normal"
-        >
-          {index < 9 && (
-            <kbd aria-hidden="true" className={cn(KBD_BARE_CLASS, "shrink-0 leading-4")}>
-              {index + 1}
-            </kbd>
-          )}
-          <span className="min-w-0 leading-4">{label}</span>
-        </Button>
-      ))}
-    </div>
+    <>
+      {!sent && (
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Answer">
+          {options.map((label, index) => (
+            <Button
+              key={label}
+              variant="subtle"
+              size="sm"
+              tabIndex={tabbable ? 0 : -1}
+              disabled={answered !== null && answered.label !== label}
+              loading={answered?.label === label}
+              aria-keyshortcuts={index < 9 ? String(index + 1) : undefined}
+              onClick={(event) => {
+                event.stopPropagation();
+                onPick(label);
+              }}
+              // A permission's scope is often in its last words, so a long label
+              // wraps under its digit rather than truncating them away.
+              className="h-auto min-h-7 max-w-full items-start justify-start py-1.5 text-left whitespace-normal"
+            >
+              {index < 9 && (
+                <KbdChord
+                  shortcut={String(index + 1)}
+                  density="bare"
+                  // The button says its key through aria-keyshortcuts already.
+                  rootAttributes={{ "aria-hidden": "true" }}
+                  className="shrink-0 leading-4"
+                />
+              )}
+              <span className="min-w-0 leading-4">{label}</span>
+            </Button>
+          ))}
+        </div>
+      )}
+      <AckLine text={sent ? answered.label : null} verb="Answered" />
+    </>
+  );
+}
+
+/**
+ * What main took from the panel. Mounted before there is anything to say, so
+ * the acknowledgement is announced when it lands rather than inserted unheard.
+ */
+function AckLine({ text, verb }: { text: string | null; verb: string }) {
+  return (
+    <p
+      role="status"
+      className={
+        text === null ? "sr-only" : "flex items-center gap-1.5 text-xs text-text-secondary"
+      }
+    >
+      {text === null ? null : (
+        <>
+          <Check className="size-3.5 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 truncate">
+            {verb}: <span className="text-text-primary">{text}</span>
+          </span>
+        </>
+      )}
+    </p>
   );
 }
 
@@ -432,7 +467,9 @@ export function TriageCard({
     onChoose(item, label).then(
       () =>
         setAck(runId, (current) =>
-          current?.promptKey === key && current.text === label ? { ...current, sent: true } : current
+          current?.promptKey === key && current.text === label
+            ? { ...current, sent: true }
+            : current
         ),
       // A failure frees only its own prompt, never a newer one answered since.
       () => setAck(runId, (current) => (current?.promptKey === key ? undefined : current))
@@ -606,7 +643,9 @@ export function TriageCard({
                   // unmount, and a send the user moved on from must not pull them back.
                   const active = document.activeElement;
                   const stayed =
-                    active === null || active === document.body || cardRef.current?.contains(active);
+                    active === null ||
+                    active === document.body ||
+                    cardRef.current?.contains(active);
                   setComposerOpened(false);
                   if (stayed) cardRef.current?.focus();
                 }
@@ -619,14 +658,7 @@ export function TriageCard({
               {item.pending ? " · reading again…" : " · retried on the next scan"}
             </p>
           )}
-          {sentHere !== null && (
-            <p role="status" className="flex items-center gap-1.5 text-xs text-text-secondary">
-              <Check className="size-3.5 shrink-0" aria-hidden="true" />
-              <span className="min-w-0 truncate">
-                Sent <span className="text-text-primary">{sentHere}</span>
-              </span>
-            </p>
-          )}
+          {canReply && <AckLine text={sentHere} verb="Sent" />}
         </div>
       )}
     </div>
