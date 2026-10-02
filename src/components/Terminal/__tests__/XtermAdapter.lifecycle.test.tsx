@@ -1088,8 +1088,9 @@ describe("XtermAdapter lifecycle", () => {
       expect(wrapper.style.backgroundImage).toContain("rgb(20, 20, 20)");
       expect(wrapper.style.backgroundImage).toContain("rgb(25, 25, 25)");
       expect(wrapper.className).toContain("pl-3");
-      expect(scrollable.style.backgroundImage).toContain("rgb(25, 25, 25)");
-      expect(scrollable.style.backgroundPosition).toContain("408px");
+      // The right remainder sits on xterm's scrollable element, past the grid.
+      expect(scrollable.style.backgroundImage).toContain("rgb(20, 20, 20)");
+      expect(scrollable.style.backgroundPosition).toContain("720px");
 
       // Back to the default background: every layer clears.
       act(() =>

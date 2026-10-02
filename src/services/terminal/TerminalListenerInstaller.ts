@@ -357,13 +357,18 @@ export function installTerminalBoundListeners(
   // hidden panes, which xterm doesn't render; reveal, resize, theme and buffer
   // switches all end in a full render, which re-samples.
   const samplePaddingPaint = createPaddingPaintSampler();
+  // A rebuilt xterm has a fresh DOM, so its first sample must publish even if
+  // the edges match the old instance's — the adapter re-styles the new nodes.
+  managed.paddingPaint = undefined;
   let paddingPaintRaf: number | null = null;
   const schedulePaddingPaintSample = () => {
     // An unopened terminal has no padding to paint.
     if (paddingPaintRaf !== null || !terminal.element) return;
     paddingPaintRaf = requestAnimationFrame(() => {
       paddingPaintRaf = null;
-      if (deps.isDisposed(id)) return;
+      // Mid synchronized update the buffer is ahead of the canvas; the render
+      // that ends the update schedules a fresh sample.
+      if (deps.isDisposed(id) || terminal.modes.synchronizedOutputMode) return;
       const paint = samplePaddingPaint(terminal);
       if (managed.paddingPaint && paddingPaintEquals(managed.paddingPaint, paint)) return;
       managed.paddingPaint = paint;

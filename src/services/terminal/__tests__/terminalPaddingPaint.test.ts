@@ -142,6 +142,8 @@ describe("padding paint sampler (#13160)", () => {
 describe("padding paint colour resolution", () => {
   it("parses opaque theme colours and rejects translucent ones", () => {
     expect(parseOpaqueColor("#abc")).toBe(0xaabbcc);
+    expect(parseOpaqueColor("#abcf")).toBe(0xaabbcc);
+    expect(parseOpaqueColor("#abc8")).toBeNull();
     expect(parseOpaqueColor("#141414")).toBe(0x141414);
     expect(parseOpaqueColor("#141414ff")).toBe(0x141414);
     expect(parseOpaqueColor("#14141480")).toBeNull();
@@ -173,8 +175,17 @@ describe("padding paint styles", () => {
 
   it("compares every field", () => {
     expect(paddingPaintEquals(paint, { ...paint })).toBe(true);
-    expect(paddingPaintEquals(paint, { ...paint, gridHeight: 390 })).toBe(false);
-    expect(paddingPaintEquals(paint, { ...paint, right: "#141414" })).toBe(false);
+    const changes: Partial<TerminalPaddingPaint>[] = [
+      { top: null },
+      { right: "#141414" },
+      { bottom: "#141414" },
+      { left: null },
+      { gridWidth: 711 },
+      { gridHeight: 390 },
+    ];
+    for (const change of changes) {
+      expect(paddingPaintEquals(paint, { ...paint, ...change })).toBe(false);
+    }
   });
 
   it("layers top and bottom over the side strips", () => {
@@ -182,18 +193,27 @@ describe("padding paint styles", () => {
     expect(style.backgroundImage).toBe(
       "linear-gradient(#141414, #141414), linear-gradient(#191919, #191919), linear-gradient(#141414, #141414)"
     );
-    expect(style.backgroundPosition).toBe("top left, bottom left, left center");
     expect(style.backgroundRepeat).toBe("no-repeat");
     expect(buildPaddingBackgroundStyle(NO_PADDING_PAINT)).toBeNull();
   });
 
-  it("paints the grid remainder below and right of the canvas", () => {
-    expect(buildGridRemainderBackground(paint)).toEqual({
-      image: "linear-gradient(#191919, #191919)",
-      position: "0 408px",
+  it("starts the bottom strip at the grid's bottom edge so the fit remainder is covered", () => {
+    const [, bottom] = buildPaddingBackgroundStyle(paint)!.backgroundPosition!.split(", ");
+    expect(bottom).toContain(`${paint.gridHeight}px`);
+
+    // Grid size unknown: fall back to a padding-high strip at the bottom.
+    const unsized = buildPaddingBackgroundStyle({ ...paint, gridWidth: 0, gridHeight: 0 })!;
+    expect(unsized.backgroundPosition!.split(", ")[1]).toBe("bottom left");
+  });
+
+  it("paints the right grid remainder past the canvas", () => {
+    const right = { ...paint, right: "#202020" };
+    expect(buildGridRemainderBackground(right)).toEqual({
+      image: "linear-gradient(#202020, #202020)",
+      position: "720px 0",
       size: "100% 100%",
     });
-    expect(buildGridRemainderBackground({ ...paint, gridWidth: 0, gridHeight: 0 })).toBeNull();
-    expect(buildGridRemainderBackground({ ...paint, bottom: null })).toBeNull();
+    expect(buildGridRemainderBackground(paint)).toBeNull();
+    expect(buildGridRemainderBackground({ ...right, gridWidth: 0 })).toBeNull();
   });
 });

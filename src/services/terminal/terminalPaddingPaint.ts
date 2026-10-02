@@ -3,11 +3,10 @@ import type { IBuffer, IBufferCell, IBufferLine, ITheme } from "@xterm/xterm";
 
 /**
  * The colour each side of a normal-buffer terminal's padding should take so a
- * TUI that paints its own background reads edge to edge (#13160) — the
- * equivalent of Ghostty's `window-padding-color = extend`. A null side keeps
- * the theme background. `gridWidth`/`gridHeight` are the rendered grid's CSS
- * size, so the strip xterm leaves between the last cell and its own edge can be
- * painted to match.
+ * TUI that paints its own background reads edge to edge (#13160), modelled on
+ * Ghostty's `window-padding-color = extend`. A null side keeps the theme
+ * background. `gridWidth`/`gridHeight` are the rendered grid's CSS size, so the
+ * strip the whole-cell fit leaves beyond the last cell can be painted to match.
  */
 export interface TerminalPaddingPaint {
   top: string | null;
@@ -67,9 +66,9 @@ const CUBE_STEPS = [0, 95, 135, 175, 215, 255];
 export function parseOpaqueColor(css: string | undefined): number | null {
   if (!css) return null;
   const value = css.trim();
-  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(value)?.[1];
+  const hex = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(value)?.[1];
   if (hex !== undefined) {
-    const digits = hex.length === 3 ? hex.replace(/./g, "$&$&") : hex;
+    const digits = hex.length <= 4 ? hex.replace(/./g, "$&$&") : hex;
     if (digits.length === 8 && digits.slice(6).toLowerCase() !== "ff") return null;
     return parseInt(digits.slice(0, 6), 16);
   }
@@ -256,7 +255,9 @@ const solid = (color: string) => `linear-gradient(${color}, ${color})`;
 /**
  * Background layers for the padded wrapper. Top and bottom strips span the full
  * width and own the corners; left and right fill only between them, so an
- * unextended top or bottom keeps square theme-coloured corners.
+ * unextended top or bottom keeps square theme-coloured corners. xterm's root is
+ * only as tall as the grid, so the wrapper also shows through below it — the
+ * bottom strip starts at the grid's bottom edge when that is known.
  */
 export function buildPaddingBackgroundStyle(
   paint: TerminalPaddingPaint
@@ -274,8 +275,13 @@ export function buildPaddingBackgroundStyle(
   }
   if (paint.bottom) {
     images.push(solid(paint.bottom));
-    positions.push("bottom left");
-    sizes.push(`100% ${PADDING}`);
+    if (paint.gridHeight > 0) {
+      positions.push(`left 0 top calc(${PADDING} + ${paint.gridHeight}px)`);
+      sizes.push("100% 100%");
+    } else {
+      positions.push("bottom left");
+      sizes.push(`100% ${PADDING}`);
+    }
   }
   if (paint.left) {
     images.push(solid(paint.left));
@@ -297,31 +303,17 @@ export function buildPaddingBackgroundStyle(
 }
 
 /**
- * Background layers for xterm's scrollable element, which fills the host but
- * carries an inline theme background. The grid is fitted in whole cells, so up
- * to a cell of that element shows below and right of the canvas — paint it with
- * the bottom and right colours so the extension has no seam. Bottom wins the
- * shared corner.
+ * Background layer for xterm's scrollable element, which spans the host's full
+ * width at the grid's height and carries an inline theme background. The grid
+ * is fitted in whole cells, so up to a cell of it shows right of the canvas —
+ * paint that with the right colour so the extension has no seam. (Below the
+ * grid the wrapper shows through; `buildPaddingBackgroundStyle` covers it.)
  */
 export function buildGridRemainderBackground(paint: TerminalPaddingPaint): {
   image: string;
   position: string;
   size: string;
 } | null {
-  if (paint.gridWidth <= 0 || paint.gridHeight <= 0) return null;
-  const images: string[] = [];
-  const positions: string[] = [];
-  const sizes: string[] = [];
-  if (paint.bottom) {
-    images.push(solid(paint.bottom));
-    positions.push(`0 ${paint.gridHeight}px`);
-    sizes.push("100% 100%");
-  }
-  if (paint.right) {
-    images.push(solid(paint.right));
-    positions.push(`${paint.gridWidth}px 0`);
-    sizes.push("100% 100%");
-  }
-  if (images.length === 0) return null;
-  return { image: images.join(", "), position: positions.join(", "), size: sizes.join(", ") };
+  if (!paint.right || paint.gridWidth <= 0) return null;
+  return { image: solid(paint.right), position: `${paint.gridWidth}px 0`, size: "100% 100%" };
 }

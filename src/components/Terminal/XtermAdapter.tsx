@@ -781,7 +781,7 @@ export function XtermAdapter({
   const paddingBackgroundStyle = buildPaddingBackgroundStyle(activePaddingPaint);
 
   // xterm's scrollable element carries an inline theme background and shows
-  // below/right of the whole-cell grid; paint that remainder to match so the
+  // right of the whole-cell grid; paint that remainder to match so the
   // extension has no seam. xterm only ever writes its backgroundColor.
   useLayoutEffect(() => {
     const remainder = buildGridRemainderBackground(activePaddingPaint);

@@ -1654,23 +1654,92 @@ describe("installTerminalBoundListeners", () => {
       for (const cb of pending) cb(0);
     };
 
+    // Rows painted edge to edge with one RGB background, or default cells.
+    function paintScreen(terminal: ReturnType<typeof makeMockTerminal>, rgb: number | null) {
+      const attrs = {
+        isInverse: () => 0,
+        isBgRGB: () => rgb !== null,
+        isBgPalette: () => false,
+        getBgColor: () => rgb ?? 0,
+      };
+      // Like xterm, getCell fills the caller's reusable cell.
+      const line = {
+        translateToString: () => "",
+        getCell: (_x: number, target: object) => Object.assign(target, attrs),
+      };
+      terminal.buffer.active.getLine.mockImplementation((index: number) =>
+        index < terminal.rows ? line : undefined
+      );
+    }
+
     it("coalesces a burst of renders into one sample and publishes only changes", () => {
       const deps = makeDeps();
-      const { captured, managed } = install(deps);
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      terminal.element = document.createElement("div");
+      installOnMock(terminal, deps);
+      const published = () =>
+        vi.mocked(deps.onPaddingPaintChange).mock.calls.map(([, paint]) => paint.top);
 
+      paintScreen(terminal, 0x141414);
       captured.onRender!();
       captured.onRender!();
       captured.onRender!();
       expect(frames).toHaveLength(1);
-
       flushFrames();
-      expect(deps.onPaddingPaintChange).toHaveBeenCalledTimes(1);
-      expect(managed.paddingPaint).toBeDefined();
+      expect(published()).toEqual(["#141414"]);
 
-      // Same edges on the next frame: nothing to publish.
+      // Same edges next frame: nothing to publish.
+      captured.onRender!();
+      flushFrames();
+      expect(published()).toEqual(["#141414"]);
+
+      paintScreen(terminal, 0x191919);
+      captured.onRender!();
+      flushFrames();
+      expect(published()).toEqual(["#141414", "#191919"]);
+
+      // The app exits back to default-background output.
+      paintScreen(terminal, null);
+      captured.onRender!();
+      flushFrames();
+      expect(published()).toEqual(["#141414", "#191919", null]);
+    });
+
+    it("waits out a synchronized update instead of sampling ahead of the canvas", () => {
+      const deps = makeDeps();
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      terminal.element = document.createElement("div");
+      installOnMock(terminal, deps);
+      paintScreen(terminal, 0x141414);
+
+      terminal.modes.synchronizedOutputMode = true;
+      captured.onRender!();
+      flushFrames();
+      expect(deps.onPaddingPaintChange).not.toHaveBeenCalled();
+
+      terminal.modes.synchronizedOutputMode = false;
       captured.onRender!();
       flushFrames();
       expect(deps.onPaddingPaintChange).toHaveBeenCalledTimes(1);
+    });
+
+    it("republishes after a reinstall even when the edges are unchanged", () => {
+      const deps = makeDeps();
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      terminal.element = document.createElement("div");
+      const managed = installOnMock(terminal, deps);
+      paintScreen(terminal, 0x141414);
+      captured.onRender!();
+      flushFrames();
+
+      // A rebuilt xterm reinstalls its listeners on the same managed terminal.
+      installTerminalBoundListeners(managed.terminal, managed, "t1", deps);
+      captured.onRender!();
+      flushFrames();
+      expect(deps.onPaddingPaintChange).toHaveBeenCalledTimes(2);
     });
 
     it("skips unopened and disposed terminals", () => {
@@ -1689,7 +1758,7 @@ describe("installTerminalBoundListeners", () => {
       const { captured, managed } = install(deps);
       captured.onRender!();
       for (const dispose of managed.listeners) dispose();
-      expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
+      expect(cancelAnimationFrame).toHaveBeenCalledWith(1);
     });
   });
 
