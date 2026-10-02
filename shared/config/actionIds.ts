@@ -582,8 +582,10 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "plugin.reloadPanel",
   "terminal.sendCommand",
   "terminal.sendCommandOwned",
-  // Plugins read terminal text through `host.terminals.readScreen` (#13155).
+  // Plugins read terminal text through `host.terminals.readScreen` (#13155),
+  // not by reading it out of an action or the clipboard.
   "terminal.getOutput",
+  "terminal.copy",
   "terminal.injectOwned",
   "terminal.setClientMetadata",
   "terminal.paste",

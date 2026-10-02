@@ -234,3 +234,14 @@ describe("host.terminals.readScreen", () => {
     expect(pty.getTerminalAsync).not.toHaveBeenCalled();
   });
 });
+
+describe("host.terminals.readScreen null lines", () => {
+  it("rejects lines: null like any other non-integer", async () => {
+    installPty();
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    await expect(
+      host.terminals.readScreen("t-1", { lines: null as unknown as number })
+    ).rejects.toThrow(/lines/);
+  });
+});

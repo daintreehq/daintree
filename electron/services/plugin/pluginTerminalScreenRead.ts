@@ -40,18 +40,26 @@ export async function readPluginTerminalScreen(
   // Re-resolved every call: terminal ids are reused across respawns, so an
   // earlier answer says nothing about what holds the id now.
   const record = await ptyClient.getTerminalAsync(terminalId);
-  if (!record) return { status: "not-found" };
-  if (scopeProjectId !== null && record.projectId !== scopeProjectId) {
-    return { status: "not-found" };
+  if (!record) {
+    // `getTerminalAsync` folds an RPC failure into `null`. A terminal this
+    // client still tracks did not vanish — the host just did not answer.
+    return trackedOwner !== null ? { status: "unavailable" } : { status: "not-found" };
   }
-  // A record with no `kind` is a plain terminal from an older pty-host entry.
-  if (record.kind !== undefined && !panelKindHasPty(record.kind)) return { status: "not-found" };
-  if (isAssistantTerminalRecord(record)) return { status: "not-found" };
+  if (!isReadable(record, scopeProjectId)) return { status: "not-found" };
   // `isExited`, not `!hasPty`: the latter also covers a kill still waiting on
   // its exit, which is not yet an exited terminal.
   if (record.isExited === true) return { status: "exited" };
 
   const snapshot = await ptyClient.getSerializedStateAsync(terminalId, { tailRows: 0 });
+  // Check the id again after the read: the two RPCs resolve it separately, so
+  // a respawn in between could hand back a different terminal's screen, and an
+  // exit in between serves the preserved whole buffer rather than the screen.
+  const after = await ptyClient.getTerminalAsync(terminalId);
+  if (!after) return { status: "unavailable" };
+  if (!isReadable(after, scopeProjectId) || after.spawnedAt !== record.spawnedAt) {
+    return { status: "not-found" };
+  }
+  if (after.isExited === true) return { status: "exited" };
   if (!snapshot) return { status: "unavailable" };
   const tail = tailCapturedOutput(activeScreenData(snapshot.data), lines, true);
   const clipped = clipToUtf8Bytes(tail.content, PLUGIN_TERMINAL_SCREEN_MAX_BYTES);
@@ -61,6 +69,15 @@ export async function readPluginTerminalScreen(
     lineCount: clipped.text.length === 0 ? 0 : clipped.text.split("\n").length,
     truncated: tail.truncated || clipped.clipped,
   };
+}
+
+type ScreenReadRecord = NonNullable<Awaited<ReturnType<PtyClient["getTerminalAsync"]>>>;
+
+function isReadable(record: ScreenReadRecord, scopeProjectId: string | null): boolean {
+  if (scopeProjectId !== null && record.projectId !== scopeProjectId) return false;
+  // A record with no `kind` is a plain terminal from an older pty-host entry.
+  if (record.kind !== undefined && !panelKindHasPty(record.kind)) return false;
+  return !isAssistantTerminalRecord(record);
 }
 
 const ALT_SCREEN_ENTER = "\x1b[?1049h";

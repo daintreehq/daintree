@@ -509,7 +509,8 @@ export interface CreateMockHostOptions {
   allAgents?: PluginAllAgentsSnapshot;
   /**
    * What `terminals.readScreen` finds, by terminal id. An id not listed reads
-   * `not-found`. Defaults to none. The mock does not rate limit.
+   * `not-found`. Defaults to none. The mock neither rate limits nor applies
+   * the host's 16 KiB byte cap.
    */
   terminalScreens?: Record<string, PluginTerminalScreenResult>;
 }
@@ -1581,7 +1582,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         if (options !== undefined && (options === null || typeof options !== "object")) {
           throw new Error("terminals.readScreen: options must be an object");
         }
-        const lines = options?.lines ?? PLUGIN_TERMINAL_SCREEN_DEFAULT_LINES;
+        const lines =
+          options?.lines === undefined ? PLUGIN_TERMINAL_SCREEN_DEFAULT_LINES : options.lines;
         if (
           typeof lines !== "number" ||
           !Number.isInteger(lines) ||

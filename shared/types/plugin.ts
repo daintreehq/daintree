@@ -2903,7 +2903,8 @@ export interface PluginAgentsApi {
 export interface PluginTerminalReadScreenOptions {
   /**
    * How many of the screen's last lines to return: an integer from 1 to 100.
-   * Defaults to 20. Fewer come back when the screen holds fewer.
+   * Defaults to 20. Fewer come back when the screen holds fewer. A line the
+   * terminal soft-wrapped across rows counts once.
    */
   lines?: number;
 }

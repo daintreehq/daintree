@@ -1092,7 +1092,7 @@ switch (screen.status) {
 }
 ```
 
-The terminal's current screen as plain text: its last `lines` lines (1–100, default 20) with blank padding trimmed and no ANSI, never its scrollback or the serialized buffer. A blank screen is `{ status: "ok", text: "", lineCount: 0 }`, so an empty screen is never confused with a missing terminal. `truncated` is `true` when lines above the returned ones, or text past the 16 KiB cap, were left out; the newest content is kept. Take ids from [`agents.list`](#agentslist--the-projects-agent-panes).
+The terminal's current screen as plain text: its last `lines` lines (1–100, default 20; a line soft-wrapped across rows counts once) with blank padding trimmed and no ANSI, never its scrollback or the serialized buffer. A blank screen is `{ status: "ok", text: "", lineCount: 0 }`, so an empty screen is never confused with a missing terminal. `truncated` is `true` when lines above the returned ones, or text past the 16 KiB cap, were left out; the newest content is kept. Take ids from [`agents.list`](#agentslist--the-projects-agent-panes).
 
 It is answered in main from the terminal host's own copy of the screen, so a terminal in a project whose view is closed still reads. A project plugin reads only its own project's terminals; an installed plugin may read any user terminal by id. An unknown id, one in another project and one that is not a user terminal all answer the same `not-found`. Nothing about the terminal changes: no input, no resize.
 
@@ -1100,7 +1100,7 @@ Gated on `terminal:read`, which `agent:read` does not imply, with a first-use co
 
 The host does not log or store the text. Treat it as a secret: terminals show tokens, env dumps and customer data, and once it reaches your plugin, keeping it on the machine is your code's job.
 
-The `terminal.getOutput` action, and `terminal.getStatus` with `includeOutput`, are closed to plugin dispatch; `readScreen` is the plugin path to terminal text.
+The `terminal.getOutput` and `terminal.copy` actions, and `terminal.getStatus` with `includeOutput`, are closed to plugin dispatch; `readScreen` is the plugin path to terminal text.
 
 ## `logger`
 
@@ -1869,7 +1869,7 @@ It validates argument shapes the way the real host does — `registerAction` des
 | `hasActiveAgent` | `true` | `false` makes `sendToActiveAgent` reject `NO_ACTIVE_AGENT`. |
 | `agents` | `[]` | The panes `agents.list()` returns and `sendToAgent({ terminalId })` resolves against. |
 | `allAgents` | `{ agents: [], degraded: false, lastSuccessfulAt: 0 }` | What `agents.listAll()` returns, reduced to the allowlist and frozen as production does. |
-| `terminalScreens` | `{}` | What `terminals.readScreen` finds, by terminal id; an unlisted id reads `not-found`. An `ok` screen is trimmed to the call's `lines`. There is no rate limit. |
+| `terminalScreens` | `{}` | What `terminals.readScreen` finds, by terminal id; an unlisted id reads `not-found`. An `ok` screen is trimmed to the call's `lines`. There is no rate limit and no byte cap. |
 | `activeWorktree`, `worktrees`, `worktreesResult` | `null`, `[]`, derived | What the worktree reads return. Without `worktreesResult`, `getWorktreesResult()` answers `{ status: "ok", projectId: "test-project", worktrees }`; with one, it also drives `getWorktrees()` (`[]` unless `ok`) and `getActiveWorktree()` (the `isCurrent` entry). Worktree roots also count as existing directories in the mock `fs`, and the active one keys `"worktree"` storage. |
 | `manifestSettings` | none | Your `contributes.settings` declarations. With them, `get`, `set` and `onDidChange` follow declared scopes (a conflicting scope throws), `get` returns declared defaults, and `missingRequired` works; without them, scopes are whatever you pass and nothing is required. |
 | `settings`, `storage` | empty | Starting values per scope (`user` / `project` / `local`; `user` / `project` / `worktree`). A `storage.worktree` seed goes to the initial active worktree, and is dropped when there is none. |

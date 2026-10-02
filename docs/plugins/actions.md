@@ -434,7 +434,6 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.closeAll` | Close all terminals | safe | — |
 | `terminal.closeOwned` | Close owned terminal | safe | `terminalId` |
 | `terminal.contextMenu` | Open context menu | safe | `terminalId?` |
-| `terminal.copy` | Copy selection | safe | `terminalId?` |
 | `terminal.copyLink` | Copy link address | safe | `url` |
 | `terminal.disarm` | Disarm terminal | safe | `terminalId` |
 | `terminal.disarmAll` | Disarm all | safe | — |

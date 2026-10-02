@@ -15,6 +15,7 @@ import {
 
 type Record = {
   id: string;
+  spawnedAt?: number;
   projectId?: string;
   kind?: string;
   isExited?: boolean;
@@ -122,6 +123,38 @@ describe("readPluginTerminalScreen", () => {
     await expect(read(null, "p-a")).resolves.toEqual({ status: "unavailable" });
     const client = makeClient({ id: "t-1", projectId: "p-a" }, null);
     await expect(read(client, "p-a")).resolves.toEqual({ status: "unavailable" });
+  });
+
+  it("answers unavailable, not not-found, when the host fails to answer for a tracked terminal", async () => {
+    const client = makeClient(null);
+    client.getTerminalProjectId.mockReturnValue("p-a");
+    await expect(read(client, "p-a")).resolves.toEqual({ status: "unavailable" });
+    expect(client.getSerializedStateAsync).not.toHaveBeenCalled();
+  });
+
+  it("discards a screen read across a respawn of the id", async () => {
+    const client = makeClient({ id: "t-1", projectId: "p-a", spawnedAt: 1 }, "old");
+    client.getTerminalAsync
+      .mockResolvedValueOnce({ id: "t-1", projectId: "p-a", spawnedAt: 1 })
+      .mockResolvedValueOnce({ id: "t-1", projectId: "p-a", spawnedAt: 2 });
+    await expect(read(client, "p-a")).resolves.toEqual({ status: "not-found" });
+  });
+
+  it("discards a screen read when the id moved to another project mid-read", async () => {
+    const client = makeClient({ id: "t-1", projectId: "p-a", spawnedAt: 1 }, "secret");
+    client.getTerminalAsync
+      .mockResolvedValueOnce({ id: "t-1", projectId: "p-a", spawnedAt: 1 })
+      .mockResolvedValueOnce({ id: "t-1", projectId: "p-b", spawnedAt: 1 });
+    await expect(read(client, "p-a")).resolves.toEqual({ status: "not-found" });
+  });
+
+  it("answers exited, not the preserved whole buffer, when the terminal exits mid-read", async () => {
+    const history = Array.from({ length: 40 }, (_, i) => `history ${i}`).join("\r\n");
+    const client = makeClient({ id: "t-1", projectId: "p-a", spawnedAt: 1 }, history);
+    client.getTerminalAsync
+      .mockResolvedValueOnce({ id: "t-1", projectId: "p-a", spawnedAt: 1 })
+      .mockResolvedValueOnce({ id: "t-1", projectId: "p-a", spawnedAt: 1, isExited: true });
+    await expect(read(client, "p-a")).resolves.toEqual({ status: "exited" });
   });
 
   it("caps the text at 16 KiB, keeping the newest lines", async () => {

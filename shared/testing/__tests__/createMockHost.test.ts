@@ -1927,6 +1927,9 @@ describe("createMockHost terminals.readScreen", () => {
     await expect(host.terminals.readScreen("")).rejects.toThrow(/terminalId/);
     await expect(host.terminals.readScreen("t-1", { lines: 0 })).rejects.toThrow(/lines/);
     await expect(host.terminals.readScreen("t-1", { lines: 101 })).rejects.toThrow(/lines/);
+    await expect(
+      host.terminals.readScreen("t-1", { lines: null as unknown as number })
+    ).rejects.toThrow(/lines/);
     expect(host.readScreenCalls).toEqual([]);
   });
 
