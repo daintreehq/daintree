@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -369,7 +369,11 @@ describe("Plugin agent-state host API (#10521)", () => {
     expect(byState.get("exited")).toBe(false);
   });
 
-  it("the snapshot omits internal routing ids and activity-detector internals", async () => {
+  it("the snapshot carries the terminal and workspace ids and nothing else internal", async () => {
+    setPtyClientRef({
+      getTerminalProjectId: (id: string) => (id === "term-internal" ? "workspace-1" : null),
+    } as never);
+    onTestFinished(() => setPtyClientRef(null));
     const { host } = await setupAgentHost(["agent:read"]);
     const received: Array<Record<string, unknown>> = [];
     await host.onDidChangeAgentState((s) => received.push(s as Record<string, unknown>), {
@@ -392,8 +396,9 @@ describe("Plugin agent-state host API (#10521)", () => {
     } as never);
 
     const snap = received[0];
+    expect(snap.terminalId).toBe("term-internal");
+    expect(snap.workspaceId).toBe("workspace-1");
     for (const leaked of [
-      "terminalId",
       "worktreeId",
       "cwd",
       "trigger",
@@ -409,8 +414,11 @@ describe("Plugin agent-state host API (#10521)", () => {
       "previousState",
       "running",
       "state",
+      "terminalId",
       "timestamp",
+      "workspaceId",
     ]);
+    expect(await host.getAgentState()).toEqual(snap);
   });
 
   it("the disposer stops further callbacks and is safe to call twice", async () => {

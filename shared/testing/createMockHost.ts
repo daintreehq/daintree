@@ -290,7 +290,8 @@ export interface MockHostState {
   /**
    * Push an agent-state snapshot to every `onDidChangeAgentState` subscriber and
    * update the value `getAgentState()` returns. Mirrors the production host's
-   * cache-then-notify behaviour.
+   * cache-then-notify behaviour. Include `terminalId` and `workspaceId` to
+   * drive a plugin that routes by where the transition came from.
    */
   simulateAgentStateChange(snapshot: PluginAgentSnapshot): void;
 

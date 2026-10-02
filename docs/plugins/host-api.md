@@ -688,13 +688,15 @@ export async function activate(host: PluginHostApi) {
 | Field | Notes |
 | --- | --- |
 | `agentId` | Stable session id, when the host could attribute the transition to one. Absent for detector-only flows that route by terminal. |
+| `terminalId` | The terminal the transition came from — the same id `agents.list()` reports and `sendToAgent` takes. Absent when the host could not attribute the transition to a terminal. |
+| `workspaceId` | The workspace (project or scratch) that owns that terminal. Opaque: compare it, don't parse it. A project plugin only ever sees its own project's id. Absent when the host no longer tracks the terminal, e.g. while it is being torn down. |
 | `state` / `previousState` | `idle` \| `working` \| `waiting` \| `directing` \| `completed` \| `exited`. |
 | `running` | Convenience flag — `true` while the session is doing in-flight work (`working` / `waiting` / `directing`). Derived from the host's own `ACTIVE_AGENT_STATES` set so you don't re-maintain the membership list. |
 | `waitingReason` | `prompt` \| `question` \| `approval` \| `error`. Present only when `state === "waiting"`. |
 | `sessionCost` / `sessionTokens` | Cumulative for the session. Present only on `completed` / `exited` transitions. |
 | `timestamp` | Epoch milliseconds when the transition was committed. |
 
-Two things this surface deliberately does **not** carry. It omits the internal routing ids (`terminalId`, `worktreeId`, `cwd`) and the detector internals (`trigger`, `confidence`, …): a plugin holding only `agent:read` has no declared capability reaching PTY or worktree internals, so exposing them here would let it cross-reference state it otherwise can't. And it is **observation only** — nothing here drives, pauses, or resumes a session.
+`terminalId` and `workspaceId` say where a transition came from, so an installed plugin, which observes every project, can tell which agent needs attention and join the event to an `agents.list()` entry. Nothing else about the terminal comes with them: the snapshot omits the worktree id, `cwd`, the detector internals (`trigger`, `confidence`, …) and all terminal content, so it is safe to send off the machine. And it is **observation only** — nothing here drives, pauses, or resumes a session.
 
 **Treat the state as an observation, not a fact.** Agent state comes from passive PTY output heuristics and is frequently wrong. Surface what the host saw; don't build a control flow that assumes it.
 
