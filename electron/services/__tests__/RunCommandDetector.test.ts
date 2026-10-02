@@ -1281,6 +1281,53 @@ describe("RunCommandDetector", () => {
       readSpy.mockRestore();
     });
 
+    it("re-scans when package.json appears after an empty detection", async () => {
+      const empty = await detector.detect(tempDir);
+      expect(empty).toEqual([]);
+
+      await fs.writeFile(
+        path.join(tempDir, "package.json"),
+        JSON.stringify({
+          name: "test",
+          scripts: { dev: "vite dev" },
+          devDependencies: { "@sveltejs/kit": "^2.0.0" },
+        }),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      expect(commands.map((cmd) => cmd.command)).toEqual(["npm run dev"]);
+      expect(commands[0]?.isFrameworkDefault).toBe(true);
+    });
+
+    it("re-scans when scripts change in an existing package.json", async () => {
+      const pkgPath = path.join(tempDir, "package.json");
+      await fs.writeFile(pkgPath, JSON.stringify({ name: "test", scripts: {} }), "utf-8");
+      expect(await detector.detect(tempDir)).toEqual([]);
+
+      await fs.writeFile(
+        pkgPath,
+        JSON.stringify({ name: "test", scripts: { dev: "vite", build: "vite build" } }),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      expect(commands.map((cmd) => cmd.name)).toEqual(["dev", "build"]);
+    });
+
+    it("re-scans when a lockfile appears and changes the runner", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "package.json"),
+        JSON.stringify({ name: "test", scripts: { dev: "vite" } }),
+        "utf-8"
+      );
+      expect((await detector.detect(tempDir))[0]?.command).toBe("npm run dev");
+
+      await fs.writeFile(path.join(tempDir, "pnpm-lock.yaml"), "", "utf-8");
+
+      expect((await detector.detect(tempDir))[0]?.command).toBe("pnpm run dev");
+    });
+
     it("caches independently per project path", async () => {
       const tempDir2 = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-run-cmd-2-"));
       try {

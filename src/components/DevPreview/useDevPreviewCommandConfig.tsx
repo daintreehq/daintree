@@ -34,8 +34,16 @@ export function useDevPreviewCommandConfig({
   stop,
   isMountedRef,
 }: UseDevPreviewCommandConfigParams) {
-  const { saveSettings } = useProjectSettings();
+  const { saveSettings, refresh: refreshSettings } = useProjectSettings();
   const allDetectedRunners = useProjectSettingsStore((state) => state.allDetectedRunners);
+
+  // Detected scripts are otherwise only fetched when the project is first loaded
+  // into this view, so a project scaffolded after it was added would never offer
+  // its dev script. Re-detect on open; the cached list stays up meanwhile.
+  useEffect(() => {
+    if (!currentProjectId) return;
+    void refreshSettings();
+  }, [currentProjectId, refreshSettings]);
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
   // The command whose auto-detect/save attempt failed; null = no failure shown.
   // Empty string means the attempt never resolved a command (re-detection found

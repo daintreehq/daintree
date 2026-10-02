@@ -60,6 +60,12 @@ interface SettingsSnapshot {
 
 const settingsSnapshotCache = new Map<string, SettingsSnapshot>();
 
+// Loads now also revalidate a project already on screen (the dev preview
+// re-detects on open), so several can overlap: only the newest may land, and a
+// save made while one was in flight must survive its older settings read.
+let latestLoadRequest = 0;
+let settingsRevision = 0;
+
 function evictOldestSettings(): void {
   if (settingsSnapshotCache.size <= MAX_SETTINGS_CACHE_SIZE) return;
   const firstKey = settingsSnapshotCache.keys().next().value;
@@ -81,12 +87,17 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
       return;
     }
 
+    const isRevalidation = currentState.projectId === projectId && !!currentState.settings;
+
     // Only show loading state if no snapshot was pre-populated.
-    if (currentState.projectId !== projectId || !currentState.settings) {
+    if (!isRevalidation) {
       set({ isLoading: true, error: null, projectId });
     } else {
       set({ error: null });
     }
+
+    const request = ++latestLoadRequest;
+    const revisionAtStart = settingsRevision;
 
     try {
       const [data, detected] = await Promise.all([
@@ -95,15 +106,17 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
       ]);
 
       // Verify we're still loading for this project (handle race conditions)
-      if (get().projectId !== projectId) {
+      if (request !== latestLoadRequest || get().projectId !== projectId) {
         return;
       }
 
-      const savedCommandStrings = new Set(data.runCommands?.map((c) => c.command) || []);
+      const current = get().settings;
+      const settings = settingsRevision !== revisionAtStart && current ? current : data;
+      const savedCommandStrings = new Set(settings.runCommands?.map((c) => c.command) || []);
       const newDetected = detected.filter((d) => !savedCommandStrings.has(d.command));
 
       set({
-        settings: data,
+        settings,
         allDetectedRunners: detected,
         detectedRunners: newDetected,
         isLoading: false,
@@ -113,7 +126,7 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
       // Update the snapshot cache with fresh data
       settingsSnapshotCache.delete(projectId);
       settingsSnapshotCache.set(projectId, {
-        settings: data,
+        settings,
         detectedRunners: newDetected,
         allDetectedRunners: detected,
       });
@@ -122,12 +135,19 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
       logError("Failed to load project settings", err);
 
       // Verify we're still loading for this project
-      if (get().projectId !== projectId) {
+      if (request !== latestLoadRequest || get().projectId !== projectId) {
+        return;
+      }
+
+      const error = formatErrorMessage(err, "Failed to load project settings");
+      // A failed revalidation leaves the settings already on screen in place.
+      if (isRevalidation && get().settings) {
+        set({ error, isLoading: false });
         return;
       }
 
       set({
-        error: formatErrorMessage(err, "Failed to load project settings"),
+        error,
         settings: { runCommands: [] },
         detectedRunners: [],
         allDetectedRunners: [],
@@ -137,6 +157,7 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
   },
 
   setSettings: (settings: ProjectSettings) => {
+    settingsRevision++;
     const savedCommandStrings = new Set(settings.runCommands?.map((c) => c.command) || []);
     set((state) => ({
       settings,
