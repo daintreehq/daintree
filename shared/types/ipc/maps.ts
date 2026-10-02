@@ -1722,6 +1722,7 @@ export interface IpcEventMap {
   "project:background-resize": { width: number; height: number };
   "project:stats-updated": ProjectStatusMap;
   "fleet:snapshot-updated": FleetSnapshot;
+  "triage:snapshot-updated": import("./triage.js").TriageSnapshot;
   "project:updated": Project;
   /**
    * A project was put to sleep. Carries the project id so a window showing it

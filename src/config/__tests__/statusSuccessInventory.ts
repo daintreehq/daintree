@@ -243,13 +243,15 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Ahead-arrow count against the base branch",
     },
   ],
-  "src/components/Settings/VoiceInputSettingsTab.tsx": [
+  "src/components/Settings/ApiKeyRow.tsx": [
     {
       category: "outcome",
       signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Recorded result of the API-key validation the user ran",
     },
+  ],
+  "src/components/Settings/VoiceInputSettingsTab.tsx": [
     {
       category: "verification",
       signature: "bg-status-success",

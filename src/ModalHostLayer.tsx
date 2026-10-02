@@ -24,6 +24,7 @@ import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { StopProjectConfirmDialog } from "./components/Project/StopProjectConfirmDialog";
 import { usePilotStore } from "@/store/pilotStore";
+import { useTriageStore } from "@/store/triageStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
@@ -47,6 +48,7 @@ import {
   LazyActionPalette,
   LazyWorktreeOverviewModal,
   LazyPilotView,
+  LazyTriageView,
   LazyCrossWorktreeDiff,
   LazySettingsDialog,
   LazyShortcutReferenceDialog,
@@ -261,6 +263,7 @@ export function ModalHostLayer({
   // registry, a keybinding and the project switcher, none of which has a prop
   // path into this layer.
   const isPilotOpen = usePilotStore((s) => s.isOpen);
+  const isTriageOpen = useTriageStore((s) => s.isOpen);
   const hasScratch = useScratchStore((s) => s.currentScratch !== null);
 
   // Both palette activation paths (click and Enter) launch the same way, and
@@ -986,6 +989,17 @@ export function ModalHostLayer({
         {isPilotOpen && (
           <Suspense fallback={null}>
             <LazyPilotView />
+          </Suspense>
+        )}
+      </ErrorBoundary>
+      <ErrorBoundary
+        variant="component"
+        componentName="TriageView"
+        resetKeys={[Number(isTriageOpen)]}
+      >
+        {isTriageOpen && (
+          <Suspense fallback={null}>
+            <LazyTriageView />
           </Suspense>
         )}
       </ErrorBoundary>

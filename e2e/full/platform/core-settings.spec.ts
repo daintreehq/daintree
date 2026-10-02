@@ -228,6 +228,13 @@ const GLOBAL_TABS: Record<GlobalSettingsTab, TabExpectation> = {
     },
   },
   voice: {},
+  triage: {
+    content: async (window) => {
+      await expect(window.getByText("TypeSafe API key", { exact: true })).toBeVisible({
+        timeout: T_SHORT,
+      });
+    },
+  },
   portal: { title: "Portal links" },
   mcp: {
     content: async (window) => {

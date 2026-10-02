@@ -336,6 +336,7 @@ export function createHeavyMigrationFixture(): LegacyStoreV0 {
     projectEnv: {},
     globalEnvironmentVariables,
     appAgentConfig: {} as StoreSchema["appAgentConfig"],
+    triageProviderKeys: {},
     windowStates: {},
     worktreeIssueMap,
     wslGitByWorktree: {},

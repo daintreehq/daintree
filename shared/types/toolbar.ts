@@ -64,6 +64,7 @@ export type ToolbarButtonId =
   | "settings"
   | "problems"
   | "notification-center"
+  | "triage"
   | "assistant-toggle"
   | "portal-toggle";
 
@@ -342,6 +343,7 @@ export const TOOLBAR_BUTTON_PRIORITIES: Record<ToolbarButtonId, ToolbarButtonPri
   "resume-sessions": 4,
   settings: 5,
   "notification-center": 5,
+  triage: 5,
   "copy-tree": 5,
   problems: 5,
 };

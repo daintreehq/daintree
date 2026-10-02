@@ -275,6 +275,9 @@ export const BUILT_IN_ACTION_IDS = [
   "pilot.toggle",
   "pilot.openProject",
   "pilot.openRun",
+
+  // -- triageActions --
+  "triage.toggle",
   "project.getAll",
   "project.getCurrent",
   "project.add",

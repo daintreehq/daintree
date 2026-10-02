@@ -98,6 +98,7 @@ import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
 import { buildWindowChromePreloadBindings } from "./ipc/handlers/windowChrome.preload.js";
 import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
+import { buildTriagePreloadBindings } from "./ipc/handlers/triage.preload.js";
 import { buildProjectHistoryPreloadBindings } from "./ipc/handlers/projectHistory.preload.js";
 import { buildWorkspacePreloadBindings } from "./ipc/handlers/workspace.preload.js";
 import { buildProjectRelocationPreloadBindings } from "./ipc/handlers/projectRelocation.preload.js";
@@ -2216,6 +2217,15 @@ function buildElectronApi(): ElectronAPI {
       onSnapshotUpdated: (
         callback: (snapshot: import("../shared/types/ipc/fleet.js").FleetSnapshot) => void
       ) => _typedOn(CHANNELS.FLEET_SNAPSHOT_UPDATED, callback),
+    },
+
+    // Triage panel cards, built in main from every agent run's screen.
+    triage: {
+      ...buildTriagePreloadBindings(_unwrappingInvoke),
+
+      onSnapshotUpdated: (
+        callback: (snapshot: import("../shared/types/ipc/triage.js").TriageSnapshot) => void
+      ) => _typedOn(CHANNELS.TRIAGE_SNAPSHOT_UPDATED, callback),
     },
 
     // Scratch (one-off agent workspace) API

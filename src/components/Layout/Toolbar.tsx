@@ -147,6 +147,7 @@ import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
+import { TriageToolbarButton } from "./TriageToolbarButton";
 import { AppMenuButton } from "./AppMenuButton";
 import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
 import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
@@ -223,6 +224,7 @@ for (const [id, meta] of Object.entries(TOOLBAR_BUTTON_METADATA)) {
 const OVERFLOW_KEYBINDING_BY_ID: Partial<Record<string, string>> = {
   "copy-tree": "worktree.copyTree",
   "notification-center": "notifications.toggle",
+  triage: "triage.toggle",
   "command-palette": "action.palette.open",
   "resume-sessions": "terminal.resumeSessions",
   "dev-server": "devServer.start",
@@ -1475,6 +1477,10 @@ export function Toolbar({
           ),
         isAvailable: true,
       },
+      triage: {
+        render: () => <TriageToolbarButton key="triage" data-toolbar-item="" />,
+        isAvailable: true,
+      },
       "notification-center": {
         render: () => (
           <NotificationCenterToolbarButton key="notification-center" data-toolbar-item="" />
@@ -2156,6 +2162,9 @@ export function Toolbar({
       },
       "notification-center": () => {
         void actionService.dispatch("notifications.toggle", undefined, { source: "user" });
+      },
+      triage: () => {
+        void actionService.dispatch("triage.toggle", undefined, { source: "user" });
       },
       "copy-tree": () => {
         void handleCopyTreeClick();

@@ -47,6 +47,12 @@ export const LazyPilotView = lazyWithPreload(
 );
 export const preloadPilotView = LazyPilotView.preload;
 
+export const LazyTriageView = lazyWithPreload(
+  () => import("./components/Triage/TriageView"),
+  (m) => m.TriageView
+);
+export const preloadTriageView = LazyTriageView.preload;
+
 export const LazyQuickCreatePalette = lazyWithPreload(
   () => import("./components/Worktree/QuickCreatePalette"),
   (m) => m.QuickCreatePalette

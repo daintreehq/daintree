@@ -884,6 +884,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onSnapshotUpdated(callback: (snapshot: import("./fleet.js").FleetSnapshot) => void): () => void;
   };
+  /**
+   * Triage cards for every agent run. The pulls are generated; only the push
+   * subscription is declared by hand, like `fleet`.
+   */
+  triage: GeneratedElectronAPI["triage"] & {
+    onSnapshotUpdated(
+      callback: (snapshot: import("./triage.js").TriageSnapshot) => void
+    ): () => void;
+  };
   scratch: {
     getAll(): Promise<import("../scratch.js").Scratch[]>;
     getCurrent(): Promise<import("../scratch.js").Scratch | null>;

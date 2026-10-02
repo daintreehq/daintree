@@ -341,6 +341,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `project.silenceNotificationKind` | Silence notification kind | safe | `kind`, `projectId?` |
 | `project.switch` | Switch project | safe | `projectId` |
 | `project.update` | Update project | safe | `projectId`, `updates` |
+| `triage.toggle` | Triage agents | safe | — |
 
 ## recipes
 

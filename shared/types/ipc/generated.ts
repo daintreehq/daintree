@@ -2052,6 +2052,46 @@ export interface GeneratedIpcInvokeMap {
     args: [id: string];
     result: void;
   };
+  "triage:check-key": {
+    args: [id: import("./triage.js").TriageKeyId, key: string];
+    result: import("./triage.js").TriageKeyCheck;
+  };
+  "triage:choose": {
+    args: [runId: string, label: string, target: import("./triage.js").TriageTarget];
+    result: void;
+  };
+  "triage:clear-key": {
+    args: [id: import("./triage.js").TriageKeyId];
+    result: import("./triage.js").TriageKeysStatus;
+  };
+  "triage:get-keys": {
+    args: [];
+    result: import("./triage.js").TriageKeysStatus;
+  };
+  "triage:get-snapshot": {
+    args: [];
+    result: import("./triage.js").TriageSnapshot;
+  };
+  "triage:refresh": {
+    args: [];
+    result: void;
+  };
+  "triage:reply": {
+    args: [runId: string, text: string, target: import("./triage.js").TriageTarget];
+    result: void;
+  };
+  "triage:save-key": {
+    args: [id: import("./triage.js").TriageKeyId, key: string];
+    result: import("./triage.js").TriageKeysStatus;
+  };
+  "triage:set-active": {
+    args: [active: boolean];
+    result: import("./triage.js").TriageSnapshot;
+  };
+  "triage:trash": {
+    args: [runId: string, target: import("./triage.js").TriageTarget];
+    result: void;
+  };
   "watchdog:restart": {
     args: [];
     result: void;

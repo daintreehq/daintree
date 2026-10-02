@@ -474,6 +474,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       notifications: "Notifications",
       integrations: "Integrations",
       voice: "Voice input",
+      triage: "Triage",
       assistant: "Daintree Assistant",
 
       mcp: "MCP server",
@@ -516,6 +517,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       notifications: "Notifications",
       integrations: "Integrations",
       voice: "Voice input",
+      triage: "Triage",
       assistant: "Daintree Assistant",
 
       mcp: "MCP server",

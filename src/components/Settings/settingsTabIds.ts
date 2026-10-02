@@ -20,6 +20,7 @@ export const GLOBAL_SETTINGS_TAB_IDS = [
   "code-forge",
   "integrations",
   "voice",
+  "triage",
   "portal",
   "mcp",
   "plugins",

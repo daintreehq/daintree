@@ -265,6 +265,12 @@ export interface StoreSchema {
   projectEnv: Record<string, string>;
   globalEnvironmentVariables: Record<string, string>;
   appAgentConfig: AppAgentConfig;
+  /**
+   * The triage panel's provider keys, each `safeStorage`-encrypted and base64
+   * encoded. Never stored in plaintext: with no OS keychain the write is refused.
+   * TEMPORARY until the triage backend takes a single Daintree key.
+   */
+  triageProviderKeys: { classifier?: string; describer?: string };
   windowStates: Record<
     string,
     {
@@ -798,6 +804,7 @@ const storeOptions = {
     projectEnv: {},
     globalEnvironmentVariables: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
+    triageProviderKeys: {},
     windowStates: {},
     worktreeIssueMap: {},
     wslGitByWorktree: {},

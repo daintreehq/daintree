@@ -1,0 +1,386 @@
+import type { TriageSnapshot, TriageTarget } from "../../../shared/types/ipc/triage.js";
+import { planChoice } from "../../../shared/utils/terminalChoice.js";
+import { getPtyClient } from "../../window/serviceRefs.js";
+import { getFleetSnapshotService } from "./projectCrud/index.js";
+import { readPluginTerminalScreen } from "../../services/plugin/pluginTerminalScreenRead.js";
+import { TriageService, TRIAGE_SCREEN_LINES } from "../../services/triage/TriageService.js";
+import {
+  checkProviderKey,
+  classifyScreen,
+  describeScreen,
+  readTriageProviderConfig,
+} from "../../services/triage/triageProviders.js";
+import { TriageKeys } from "../../services/triage/triageKeyStore.js";
+import type {
+  TriageKeyCheck,
+  TriageKeyId,
+  TriageKeysStatus,
+} from "../../../shared/types/ipc/triage.js";
+import { planYesNoKeys } from "../../services/triage/triageScreen.js";
+import { checkRateLimit, typedBroadcast } from "../utils.js";
+import { CHANNELS } from "../channels.js";
+import { defineIpcNamespace, op } from "../define.js";
+import { TRIAGE_METHOD_CHANNELS } from "./triage.preload.js";
+
+const KEY_NAMES: Record<string, string> = {
+  Up: "\x1b[A",
+  Down: "\x1b[B",
+  Enter: "\r",
+};
+/** Same pacing as `terminal.sendKeys`: a TUI can read a burst as one sequence. */
+const KEY_GAP_MS = 80;
+const MAX_REPLY_LENGTH = 8_000;
+const MAX_LABEL_LENGTH = 200;
+
+let service: TriageService | null = null;
+let keys: TriageKeys | null = null;
+let unsubscribeFleet: (() => void) | null = null;
+const activeViews = new Set<number>();
+/** Views that already carry lifecycle listeners, with the way to take them off. */
+const watchedViews = new Map<number, () => void>();
+/** Runs with an answer or a reply being sent, so two can't interleave keys. */
+const choosing = new Set<string>();
+
+/** The card's prompt is still on screen; a card that quoted none has nothing to check. */
+async function assertPromptStillShown(runId: string, target: TriageTarget): Promise<string> {
+  const screen = await readPluginTerminalScreen(
+    requirePtyClient(),
+    runId,
+    null,
+    TRIAGE_SCREEN_LINES
+  );
+  if (screen.status !== "ok") throw new Error("Couldn't read that terminal's screen.");
+  if (
+    typeof target.question === "string" &&
+    target.question.trim() !== "" &&
+    !normalizePrompt(screen.text).includes(normalizePrompt(target.question))
+  ) {
+    throw new Error("The agent has moved on from that question. Nothing was sent.");
+  }
+  return screen.text;
+}
+
+function getKeys(): TriageKeys {
+  keys ??= new TriageKeys();
+  return keys;
+}
+
+function currentConfig() {
+  const store = getKeys();
+  return readTriageProviderConfig({
+    classifier: store.effective("classifier"),
+    describer: store.effective("describer"),
+  });
+}
+
+function assertKeyId(value: unknown): asserts value is TriageKeyId {
+  if (value !== "classifier" && value !== "describer") throw new Error("Invalid key id");
+}
+
+function getService(): TriageService {
+  // The fleet service is created after the handlers register, so the
+  // subscription is made here — on first use — rather than at registration,
+  // and retried on each use until the fleet service exists.
+  if (unsubscribeFleet === null) {
+    unsubscribeFleet =
+      getFleetSnapshotService()?.subscribe(() => service?.onFleetChanged()) ?? null;
+  }
+  if (service) return service;
+  service = new TriageService({
+    config: currentConfig(),
+    getRuns: () => {
+      const snapshot = getFleetSnapshotService()?.getLastBroadcast();
+      return snapshot && !snapshot.degraded ? snapshot.runs : null;
+    },
+    readScreen: async (runId, lines) => {
+      const result = await readPluginTerminalScreen(getPtyClient(), runId, null, lines);
+      return result.status === "ok" ? result.text : null;
+    },
+    // Resolved per call, so a key saved in Settings takes effect without a restart.
+    classify: (input, signal) =>
+      classifyScreen(getKeys().effective("classifier") ?? "", input, signal),
+    describe: (input, classifierSays, signal) => {
+      const latest = currentConfig();
+      return describeScreen(
+        latest.describerKey ?? "",
+        latest.describerModel,
+        input,
+        classifierSays,
+        signal
+      );
+    },
+    broadcast: (snapshot) =>
+      typedBroadcast<"triage:snapshot-updated">(CHANNELS.TRIAGE_SNAPSHOT_UPDATED, snapshot),
+  });
+  return service;
+}
+
+function assertRunId(value: unknown): asserts value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 200) {
+    throw new Error("Invalid run id");
+  }
+}
+
+function assertTarget(value: unknown): asserts value is TriageTarget {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Invalid target");
+  }
+  const target = value as Record<string, unknown>;
+  if (typeof target.spawnedAt !== "number" || !Number.isFinite(target.spawnedAt)) {
+    throw new Error("Invalid target");
+  }
+  if (
+    target.question !== undefined &&
+    target.question !== null &&
+    (typeof target.question !== "string" || target.question.length > 2_000)
+  ) {
+    throw new Error("Invalid target");
+  }
+}
+
+/**
+ * Writes only ever reach the terminal the card was built from: a run the fleet
+ * can see right now, in the same incarnation (ids are reused across respawns),
+ * and not exited. The fleet is polled, so the PTY host's own record is the one
+ * checked last.
+ */
+async function assertSameTerminal(runId: string, target: TriageTarget): Promise<void> {
+  const snapshot = getFleetSnapshotService()?.getLastBroadcast();
+  if (!snapshot || snapshot.degraded) {
+    throw new Error("Agent state is unavailable right now — try again in a moment.");
+  }
+  if (!snapshot.runs.some((run) => run.runId === runId && run.spawnedAt === target.spawnedAt)) {
+    throw new Error("That agent isn't running any more.");
+  }
+  const record = await requirePtyClient()
+    .getTerminalAsync(runId)
+    .catch(() => null);
+  if (!record || record.spawnedAt !== target.spawnedAt || record.isExited === true) {
+    throw new Error("That agent isn't running any more.");
+  }
+}
+
+function normalizePrompt(text: string): string {
+  return text
+    .replace(/[│▌❯›>▶●]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function requirePtyClient() {
+  const ptyClient = getPtyClient();
+  if (!ptyClient) throw new Error("The terminal host isn't available.");
+  return ptyClient;
+}
+
+function syncActive(): void {
+  getService().setActive(activeViews.size > 0);
+}
+
+/** A view that stopped showing its panel without saying so (reload, crash, teardown). */
+function forgetView(id: number): void {
+  if (!activeViews.delete(id)) return;
+  // Never builds a service: after cleanup there may be none, and none is wanted.
+  service?.setActive(activeViews.size > 0);
+}
+
+function watchView(sender: Electron.WebContents): void {
+  const id = sender.id;
+  if (watchedViews.has(id)) return;
+  // One set of listeners per WebContents for its whole life, not one per
+  // opening: re-adding on every open leaked a `destroyed` listener each time
+  // the panel was closed and reopened.
+  const onNavigate = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+    // A reload replaces the document without running React's cleanup, so the
+    // new document starts with its panel closed and must open it again.
+    if (details.isMainFrame && !details.isSameDocument) forgetView(id);
+  };
+  const onGone = () => forgetView(id);
+  const onDestroyed = () => {
+    watchedViews.delete(id);
+    forgetView(id);
+  };
+  sender.on("did-start-navigation", onNavigate);
+  sender.on("render-process-gone", onGone);
+  sender.once("destroyed", onDestroyed);
+  watchedViews.set(id, () => {
+    sender.removeListener("did-start-navigation", onNavigate);
+    sender.removeListener("render-process-gone", onGone);
+    sender.removeListener("destroyed", onDestroyed);
+  });
+}
+
+export const triageNamespace = defineIpcNamespace({
+  name: "triage",
+  ops: {
+    getSnapshot: op(TRIAGE_METHOD_CHANNELS.getSnapshot, async (): Promise<TriageSnapshot> => {
+      return getService().getSnapshot();
+    }),
+
+    /**
+     * A panel opened or closed. Main watches screens only while at least one
+     * view has a panel open, so a closed panel sends nothing anywhere.
+     */
+    setActive: op(
+      TRIAGE_METHOD_CHANNELS.setActive,
+      async (ctx, active: boolean): Promise<TriageSnapshot> => {
+        if (typeof active !== "boolean") throw new Error("Invalid active flag");
+        const id = ctx.webContentsId;
+        if (active) {
+          activeViews.add(id);
+          watchView(ctx.event.sender);
+        } else {
+          activeViews.delete(id);
+        }
+        syncActive();
+        return getService().getSnapshot();
+      },
+      { withContext: true }
+    ),
+
+    refresh: op(TRIAGE_METHOD_CHANNELS.refresh, async (): Promise<void> => {
+      checkRateLimit(TRIAGE_METHOD_CHANNELS.refresh, 6, 10_000);
+      await getService().refresh();
+    }),
+
+    /**
+     * Pick an option in the run's on-screen menu by its label.
+     *
+     * Bound to the card the user acted on: the same terminal incarnation, and —
+     * when the card quoted one — the same prompt still on screen, so a click on
+     * a card that has gone stale can't answer whatever menu came next. Errors
+     * say what went wrong without repeating any screen text, because IPC
+     * failures reach the logs.
+     */
+    choose: op(
+      TRIAGE_METHOD_CHANNELS.choose,
+      async (runId: string, label: string, target: TriageTarget): Promise<void> => {
+        checkRateLimit(TRIAGE_METHOD_CHANNELS.choose, 20, 10_000);
+        assertRunId(runId);
+        if (typeof label !== "string" || label.trim() === "" || label.length > MAX_LABEL_LENGTH) {
+          throw new Error("Invalid option");
+        }
+        assertTarget(target);
+        if (choosing.has(runId)) throw new Error("An answer is already being sent to that agent.");
+        choosing.add(runId);
+        try {
+          await assertSameTerminal(runId, target);
+          const ptyClient = requirePtyClient();
+          const screen = { text: await assertPromptStillShown(runId, target) };
+
+          const plan = planChoice(screen.text, label);
+          // The plain-text y/n fallback is only for prompts with no list at all,
+          // never a way round a list that made the label ambiguous.
+          const noList = !plan.ok && !/more than one/i.test(plan.reason);
+          const keys = plan.ok
+            ? plan.keys.map((key) => KEY_NAMES[key] ?? key)
+            : noList
+              ? planYesNoKeys(screen.text, label)
+              : null;
+          if (keys === null) {
+            throw new Error("That option isn't on screen any more. Nothing was pressed.");
+          }
+          for (const [index, key] of keys.entries()) {
+            if (index > 0) await new Promise((resolve) => setTimeout(resolve, KEY_GAP_MS));
+            ptyClient.write(runId, key);
+          }
+        } finally {
+          choosing.delete(runId);
+        }
+        void service?.scan();
+      }
+    ),
+
+    /** Type a message into the run and submit it. */
+    reply: op(
+      TRIAGE_METHOD_CHANNELS.reply,
+      async (runId: string, text: string, target: TriageTarget): Promise<void> => {
+        checkRateLimit(TRIAGE_METHOD_CHANNELS.reply, 20, 10_000);
+        assertRunId(runId);
+        if (typeof text !== "string" || text.trim() === "" || text.length > MAX_REPLY_LENGTH) {
+          throw new Error("Invalid message");
+        }
+        assertTarget(target);
+        if (choosing.has(runId)) throw new Error("An answer is already being sent to that agent.");
+        choosing.add(runId);
+        try {
+          await assertSameTerminal(runId, target);
+          await assertPromptStillShown(runId, target);
+          requirePtyClient().submit(runId, text);
+        } finally {
+          choosing.delete(runId);
+        }
+        void service?.scan();
+      }
+    ),
+
+    getKeys: op(TRIAGE_METHOD_CHANNELS.getKeys, async (): Promise<TriageKeysStatus> => {
+      return getKeys().status();
+    }),
+
+    /** Ask the provider whether it accepts a key, before it is saved. */
+    checkKey: op(
+      TRIAGE_METHOD_CHANNELS.checkKey,
+      async (id: TriageKeyId, key: string): Promise<TriageKeyCheck> => {
+        checkRateLimit(TRIAGE_METHOD_CHANNELS.checkKey, 10, 10_000);
+        assertKeyId(id);
+        if (typeof key !== "string" || key.trim() === "" || key.length > 512) {
+          return { valid: false, error: "That doesn't look like an API key." };
+        }
+        return checkProviderKey(id, key.trim());
+      }
+    ),
+
+    saveKey: op(
+      TRIAGE_METHOD_CHANNELS.saveKey,
+      async (id: TriageKeyId, key: string): Promise<TriageKeysStatus> => {
+        checkRateLimit(TRIAGE_METHOD_CHANNELS.saveKey, 10, 10_000);
+        assertKeyId(id);
+        if (typeof key !== "string") throw new Error("Invalid key");
+        getKeys().save(id, key);
+        service?.setConfig(currentConfig());
+        return getKeys().status();
+      }
+    ),
+
+    clearKey: op(
+      TRIAGE_METHOD_CHANNELS.clearKey,
+      async (id: TriageKeyId): Promise<TriageKeysStatus> => {
+        checkRateLimit(TRIAGE_METHOD_CHANNELS.clearKey, 10, 10_000);
+        assertKeyId(id);
+        getKeys().clear(id);
+        service?.setConfig(currentConfig());
+        return getKeys().status();
+      }
+    ),
+
+    /** Move the run to the trash — restorable, so no confirmation tier applies (D0). */
+    trash: op(
+      TRIAGE_METHOD_CHANNELS.trash,
+      async (runId: string, target: TriageTarget): Promise<void> => {
+        checkRateLimit(TRIAGE_METHOD_CHANNELS.trash, 20, 10_000);
+        assertRunId(runId);
+        assertTarget(target);
+        await assertSameTerminal(runId, target);
+        requirePtyClient().trash(runId);
+      }
+    ),
+  },
+});
+
+export function registerTriageHandlers(): () => void {
+  const unregister = triageNamespace.register();
+  return () => {
+    unregister();
+    unsubscribeFleet?.();
+    unsubscribeFleet = null;
+    for (const unwatch of watchedViews.values()) unwatch();
+    watchedViews.clear();
+    activeViews.clear();
+    choosing.clear();
+    service?.dispose();
+    service = null;
+    keys = null;
+  };
+}

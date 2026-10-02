@@ -23,7 +23,14 @@ import {
   Shield,
   ArrowDownUp,
 } from "lucide-react";
-import { DaintreeIcon, FolderGit2, Plug, McpServerIcon, Workflow } from "@/components/icons";
+import {
+  DaintreeIcon,
+  FolderGit2,
+  Plug,
+  McpServerIcon,
+  ScanEye,
+  Workflow,
+} from "@/components/icons";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { GeneralTab } from "./GeneralTab";
@@ -122,6 +129,7 @@ const importWorktreeSettingsTab = () => import("./WorktreeSettingsTab");
 const importToolbarSettingsTab = () => import("./ToolbarSettingsTab");
 const importIntegrationsTab = () => import("./IntegrationsTab");
 const importVoiceInputSettingsTab = () => import("./VoiceInputSettingsTab");
+const importTriageSettingsTab = () => import("./TriageSettingsTab");
 const importMcpServerSettingsTab = () => import("./McpServerSettingsTab");
 const importPluginActionsSettingsTab = () => import("./PluginActionsSettingsTab");
 const importRunHistorySettingsTab = () => import("./RunHistorySettingsTab");
@@ -177,6 +185,7 @@ const LazyCodeForgeSettingsTab = lazyWithPreload(
   importCodeForgeSettingsTab,
   (m) => m.CodeForgeSettingsTab
 );
+const LazyTriageSettingsTab = lazyWithPreload(importTriageSettingsTab, (m) => m.TriageSettingsTab);
 const LazyVoiceInputSettingsTab = lazyWithPreload(
   importVoiceInputSettingsTab,
   (m) => m.VoiceInputSettingsTab
@@ -1677,6 +1686,35 @@ export const SETTINGS_REGISTRY = [
   } satisfies LazySettingsTabEntry,
 
   {
+    id: "triage",
+    scope: "global",
+    group: "Integrations",
+    label: "Triage",
+    icon: <ScanEye className="w-4 h-4" />,
+    importKind: "lazy",
+    importer: LazyTriageSettingsTab.preload,
+    LazyComponent: LazyTriageSettingsTab,
+    searchNavDescription: "Provider keys for the triage panel's screen reading",
+    searchNavKeywords: ["triage", "typesafe", "jev", "cerebras", "api", "key", "agents", "summary"],
+    sections: [
+      {
+        id: "triage-typesafe-key",
+        section: "Provider keys",
+        title: "TypeSafe API key",
+        description: "Jev reads every agent's screen and sorts it by what it needs",
+        keywords: ["typesafe", "jev", "api", "key", "classifier"],
+      },
+      {
+        id: "triage-cerebras-key",
+        section: "Provider keys",
+        title: "Cerebras API key",
+        description: "Writes the card for each agent that needs you",
+        keywords: ["cerebras", "api", "key", "gpt-oss", "qwen", "summary"],
+      },
+    ],
+  } satisfies LazySettingsTabEntry,
+
+  {
     id: "run-history",
     scope: "global",
     group: "Integrations",
@@ -2188,6 +2226,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   "import-export": <ArrowDownUp className="w-5 h-5 text-text-secondary" />,
   integrations: <Blocks className="w-5 h-5 text-text-secondary" />,
   voice: <Mic className="w-5 h-5 text-text-secondary" />,
+  triage: <ScanEye className="w-5 h-5 text-text-secondary" />,
   mcp: <McpServerIcon className="w-5 h-5 text-text-secondary" />,
   plugins: <Package className="w-5 h-5 text-text-secondary" />,
   "plugin-actions": <ScrollText className="w-5 h-5 text-text-secondary" />,

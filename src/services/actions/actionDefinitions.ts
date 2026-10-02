@@ -17,6 +17,7 @@ import { registerNotificationsActions } from "./definitions/notificationsActions
 import { registerPanelActions } from "./definitions/panelActions";
 import { registerPreferencesActions } from "./definitions/preferencesActions";
 import { registerProjectActions } from "./definitions/projectActions";
+import { registerTriageActions } from "./definitions/triageActions";
 import { registerRecipeActions } from "./definitions/recipeActions";
 import { registerSystemActions } from "./definitions/systemActions";
 import { registerTerminalQueryActions } from "./definitions/terminalQueryActions";
@@ -65,6 +66,7 @@ export function createActionDefinitions(
   registerWorktreeBulkActions(actions);
   registerRecipeActions(actions, callbacks);
   registerProjectActions(actions, callbacks);
+  registerTriageActions(actions);
   registerWorkspaceActions(actions);
   registerEnvActions(actions, callbacks);
   registerForgeActions(actions, callbacks);

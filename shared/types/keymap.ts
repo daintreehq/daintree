@@ -189,6 +189,7 @@ export type BuiltInKeyAction =
   // Project actions
   | "pilot.toggle"
   | "pilot.openProject"
+  | "triage.toggle"
   | "project.switcherPalette"
   | "project.mruCycleOlder"
   | "project.openInNewWindow"
@@ -379,6 +380,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "action.repeatLast",
   "pilot.toggle",
   "pilot.openProject",
+  "triage.toggle",
   "project.switcherPalette",
   "project.mruCycleOlder",
   "project.openInNewWindow",

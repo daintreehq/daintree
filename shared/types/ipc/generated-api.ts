@@ -932,6 +932,38 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["system-sleep:reset"]["args"]
     ): Promise<IpcInvokeMap["system-sleep:reset"]["result"]>;
   };
+  triage: {
+    checkKey(
+      ...args: IpcInvokeMap["triage:check-key"]["args"]
+    ): Promise<IpcInvokeMap["triage:check-key"]["result"]>;
+    choose(
+      ...args: IpcInvokeMap["triage:choose"]["args"]
+    ): Promise<IpcInvokeMap["triage:choose"]["result"]>;
+    clearKey(
+      ...args: IpcInvokeMap["triage:clear-key"]["args"]
+    ): Promise<IpcInvokeMap["triage:clear-key"]["result"]>;
+    getKeys(
+      ...args: IpcInvokeMap["triage:get-keys"]["args"]
+    ): Promise<IpcInvokeMap["triage:get-keys"]["result"]>;
+    getSnapshot(
+      ...args: IpcInvokeMap["triage:get-snapshot"]["args"]
+    ): Promise<IpcInvokeMap["triage:get-snapshot"]["result"]>;
+    refresh(
+      ...args: IpcInvokeMap["triage:refresh"]["args"]
+    ): Promise<IpcInvokeMap["triage:refresh"]["result"]>;
+    reply(
+      ...args: IpcInvokeMap["triage:reply"]["args"]
+    ): Promise<IpcInvokeMap["triage:reply"]["result"]>;
+    saveKey(
+      ...args: IpcInvokeMap["triage:save-key"]["args"]
+    ): Promise<IpcInvokeMap["triage:save-key"]["result"]>;
+    setActive(
+      ...args: IpcInvokeMap["triage:set-active"]["args"]
+    ): Promise<IpcInvokeMap["triage:set-active"]["result"]>;
+    trash(
+      ...args: IpcInvokeMap["triage:trash"]["args"]
+    ): Promise<IpcInvokeMap["triage:trash"]["result"]>;
+  };
   webview: {
     captureScreenshot(
       ...args: IpcInvokeMap["webview:capture-screenshot"]["args"]

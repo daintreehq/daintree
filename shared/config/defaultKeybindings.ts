@@ -880,6 +880,16 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Project",
   },
   {
+    // Pilot's chord with Shift for Alt: the same population, read and acted on.
+    // Double-Shift is the action palette's, so this got a chord of its own.
+    actionId: "triage.toggle",
+    combo: "Cmd+Shift+O",
+    scope: "global",
+    priority: 0,
+    description: "Triage agents",
+    category: "Project",
+  },
+  {
     // The sibling one step IN from the chord above: same surface, same rows,
     // scoped to the project this view owns and grouped by worktree. Adjacent
     // letter because the two are one pair — O for the whole fleet, I for the
