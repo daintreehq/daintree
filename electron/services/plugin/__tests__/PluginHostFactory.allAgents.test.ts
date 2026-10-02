@@ -338,6 +338,42 @@ describe("onDidChangeAllAgents", () => {
     expect(callback).not.toHaveBeenCalled();
   });
 
+  it("falls silent, including a pending delivery, once a same-id reload replaces the plugin", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness(makeFleet(fleetSnapshot([row({})])));
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    await host.onDidChangeAllAgents(callback);
+
+    h.fleet!.publish(fleetSnapshot([row({ agentState: "working" })]));
+    h.plugins.set(PLUGIN_ID, { ...h.plugins.get(PLUGIN_ID)! } as LoadedPlugin);
+    vi.advanceTimersByTime(100);
+    h.fleet!.publish(fleetSnapshot([row({ agentState: "waiting" })]));
+    vi.advanceTimersByTime(100);
+
+    expect(callback).not.toHaveBeenCalled();
+    await expect(host.agents.listAll()).resolves.toEqual({
+      agents: [],
+      degraded: true,
+      lastSuccessfulAt: null,
+    });
+  });
+
+  it("unsubscribes a listener after three consecutive throws", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn(() => {
+      throw new Error("boom");
+    });
+    await host.onDidChangeAllAgents(callback, { debounceMs: 0 });
+
+    for (let i = 0; i < 4; i++) h.fleet!.publish(fleetSnapshot([]));
+
+    expect(callback).toHaveBeenCalledTimes(3);
+    expect(h.fleet!.listeners.size).toBe(0);
+    expect(h.deps.pluginEventCleanups.has(PLUGIN_ID)).toBe(false);
+  });
+
   it("requires agent:read", () => {
     const h = makeHarness();
     h.capabilities.clear();

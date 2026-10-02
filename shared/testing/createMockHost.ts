@@ -1607,12 +1607,15 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         kind: "all-agents",
         debounceMs: mockResolveSubscriptionDebounceMs(subscribeOptions?.debounceMs),
       });
-      allAgentsSubs.add(callback);
+      // A wrapper per subscription, so the same callback subscribed twice is
+      // two independent subscriptions, as in production.
+      const subscription = (snapshot: PluginAllAgentsSnapshot) => callback(snapshot);
+      allAgentsSubs.add(subscription);
       let disposed = false;
       const dispose = () => {
         if (disposed) return;
         disposed = true;
-        allAgentsSubs.delete(callback);
+        allAgentsSubs.delete(subscription);
       };
       return Promise.resolve(dispose);
     },

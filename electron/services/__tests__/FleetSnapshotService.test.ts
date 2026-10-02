@@ -955,8 +955,10 @@ describe("FleetSnapshotService.subscribe", () => {
     const client = makePtyClient([terminal({ id: "t1" })]);
     const service = new FleetSnapshotService(client as never);
     const second = vi.fn();
-    const unsubscribeSecond = service.subscribe(second);
+    let unsubscribeSecond = (): void => {};
+    // Registered first, so it unsubscribes `second` before `second` is reached.
     service.subscribe(() => unsubscribeSecond());
+    unsubscribeSecond = service.subscribe(second);
 
     service.refresh();
     await vi.runOnlyPendingTimersAsync();

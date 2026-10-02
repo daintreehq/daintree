@@ -1372,6 +1372,14 @@ describe("createMockHost production-parity validation (#10617)", () => {
       dispose();
       host.simulateAllAgentsChange({ agents: [], degraded: true, lastSuccessfulAt: null });
       expect(received).toHaveLength(1);
+
+      // The same callback twice is two subscriptions; disposing one keeps the other.
+      const twice = vi.fn();
+      const first = await host.onDidChangeAllAgents(twice);
+      await host.onDidChangeAllAgents(twice);
+      first();
+      host.simulateAllAgentsChange({ agents: [], degraded: false, lastSuccessfulAt: 1 });
+      expect(twice).toHaveBeenCalledTimes(1);
     });
 
     it("sendToAgent gates on agent:input and validates like production", async () => {
