@@ -206,6 +206,16 @@ describe("routeHostEvent", () => {
     expect(listener).toHaveBeenCalledWith(4, "postMessage-error", undefined);
   });
 
+  it("re-emits an answer typed over a MessagePort, which Main never saw", () => {
+    const { deps, emitter } = makeDeps();
+    const listener = vi.fn();
+    emitter.on("terminal-input", listener);
+
+    routeHostEvent({ type: "terminal-input", id: "t1", answer: "submit" }, deps);
+
+    expect(listener).toHaveBeenCalledWith("t1", { answer: "submit" });
+  });
+
   it("forwards the departing holder id so Main can identity-match the clear (#12557)", () => {
     // A port-replace teardown reaches Main after the replacement holder is
     // already registered; without the departing identity Main cannot tell the

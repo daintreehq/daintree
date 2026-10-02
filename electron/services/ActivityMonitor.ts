@@ -959,6 +959,16 @@ export class ActivityMonitor {
     return createVisibleContentSnapshot(this.getVisibleLines(AGENT_OUTPUT_ACTIVITY_LINE_COUNT));
   }
 
+  /**
+   * The rows the waiting reason is read from: the classifier's own window, which
+   * is wider than the prompt scan — an approval's selector sits above the input
+   * box and, for Claude Code, above its task checklist too.
+   */
+  private waitingReasonLines(lines: string[]): string[] {
+    if (!this.getVisibleLines || lines.length >= WAITING_REASON_SCAN_LINE_COUNT) return lines;
+    return this.getVisibleLines(WAITING_REASON_SCAN_LINE_COUNT);
+  }
+
   // The viewport can keep mutating after these signals without new PTY data
   // (async reflow/redraw), so restart the settle clock rather than just
   // dropping the cached frame.
@@ -1593,7 +1603,7 @@ export class ActivityMonitor {
       this.state = "idle";
       this.idleSince = now;
       this.patternBuf.clear();
-      const waitingReason = classifyWaitingReason(lines, true);
+      const waitingReason = classifyWaitingReason(this.waitingReasonLines(lines), true);
       this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
         trigger: "pattern",
         waitingReason,
@@ -1650,7 +1660,7 @@ export class ActivityMonitor {
       this.state = "idle";
       this.idleSince = now;
       this.patternBuf.clear();
-      const waitingReason = classifyWaitingReason(lines, isPrompt);
+      const waitingReason = classifyWaitingReason(this.waitingReasonLines(lines), isPrompt);
       this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
         trigger: "timeout",
         waitingReason,
@@ -1849,11 +1859,7 @@ export class ActivityMonitor {
       // Classification scans a wider window than prompt detection: approval
       // dialogs put the question + selector rows above the input-box chrome,
       // outside the 6-line prompt window.
-      const reasonLines =
-        WAITING_REASON_SCAN_LINE_COUNT > this.promptDetectorConfig.promptScanLineCount
-          ? this.getVisibleLines(WAITING_REASON_SCAN_LINE_COUNT)
-          : lines;
-      waitingReason = classifyWaitingReason(reasonLines, promptResult.isPrompt);
+      waitingReason = classifyWaitingReason(this.waitingReasonLines(lines), promptResult.isPrompt);
     }
     this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
       trigger: "timeout",

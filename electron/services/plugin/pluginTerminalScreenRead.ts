@@ -3,7 +3,7 @@ import {
   PLUGIN_TERMINAL_SCREEN_MAX_BYTES,
   PLUGIN_TERMINAL_SCREEN_RATE_PER_SECOND,
 } from "../../../shared/config/pluginBudgets.js";
-import { tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
+import { stripAnsiCodes, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import type { PluginTerminalScreenResult } from "../../../shared/types/plugin.js";
 import { isAssistantTerminalRecord } from "../assistantTerminal.js";
 import type { PtyClient } from "../PtyClient.js";
@@ -29,8 +29,21 @@ export async function readPluginTerminalScreen(
   ptyClient: ScreenReadPtyClient | null,
   terminalId: string,
   scopeProjectId: string | null,
-  lines: number
-): Promise<PluginTerminalScreenResult> {
+  lines: number,
+  /**
+   * Rows of scrollback to read above the screen, and the byte cap that goes
+   * with them. Plugins never pass these; Canopy reads history above the screen
+   * when it writes a card, which a screen-only read cannot see.
+   */
+  history: { scrollbackRows: number; maxBytes: number } | null = null,
+  /**
+   * `dropGhostInput`: drop the dim suggestion an agent draws in its empty input
+   * box; see `dropGhostInput`. `withCols`: also say how wide the terminal is,
+   * which Canopy needs to put rows the agent wrapped back together. Plugins
+   * never ask for it.
+   */
+  options: { dropGhostInput?: boolean; withCols?: boolean } = {}
+): Promise<PluginTerminalScreenResult & { cols?: number }> {
   if (!ptyClient) return { status: "unavailable" };
   // A tracked owner that is some other project settles it with no RPC at all.
   const trackedOwner = ptyClient.getTerminalProjectId(terminalId);
@@ -50,7 +63,9 @@ export async function readPluginTerminalScreen(
   // its exit, which is not yet an exited terminal.
   if (record.isExited === true) return { status: "exited" };
 
-  const snapshot = await ptyClient.getSerializedStateAsync(terminalId, { tailRows: 0 });
+  const snapshot = await ptyClient.getSerializedStateAsync(terminalId, {
+    tailRows: history?.scrollbackRows ?? 0,
+  });
   // Check the id again after the read: the two RPCs resolve it separately, so
   // a respawn in between could hand back a different terminal's screen, and an
   // exit in between serves the preserved whole buffer rather than the screen.
@@ -61,13 +76,22 @@ export async function readPluginTerminalScreen(
   }
   if (after.isExited === true) return { status: "exited" };
   if (!snapshot) return { status: "unavailable" };
-  const tail = tailCapturedOutput(activeScreenData(snapshot.data), lines, true);
-  const clipped = clipToUtf8Bytes(tail.content, PLUGIN_TERMINAL_SCREEN_MAX_BYTES);
+  const screen = activeScreenData(snapshot.data);
+  const tail = tailCapturedOutput(
+    options.dropGhostInput ? dropGhostInput(screen) : screen,
+    lines,
+    true
+  );
+  const clipped = clipToUtf8Bytes(
+    tail.content,
+    history?.maxBytes ?? PLUGIN_TERMINAL_SCREEN_MAX_BYTES
+  );
   return {
     status: "ok",
     text: clipped.text,
     lineCount: clipped.text.length === 0 ? 0 : clipped.text.split("\n").length,
     truncated: tail.truncated || clipped.clipped,
+    ...(options.withCols && snapshot.cols > 0 ? { cols: snapshot.cols } : {}),
   };
 }
 
@@ -81,6 +105,69 @@ function isReadable(record: ScreenReadRecord, scopeProjectId: string | null): bo
 }
 
 const ALT_SCREEN_ENTER = "\x1b[?1049h";
+
+// eslint-disable-next-line no-control-regex -- matches the serializer's own SGR sequences
+const SGR = /\x1b\[([0-9;:]*)m/g;
+const PROMPT_LINE = /^\s*(?:❯|›|>)\s/;
+
+/**
+ * Remove the dim text in the agent's input box: the suggestion it offers in an
+ * empty prompt (Claude Code's `❯ commit this`), which plain text cannot tell
+ * from words the user typed. Read as a draft or an echoed request, it put
+ * replies in the user's mouth. Only the last row that opens with a prompt
+ * glyph is the input box; echoes of earlier messages above it are left alone,
+ * whatever their styling, and whatever the user really typed is drawn at full
+ * intensity.
+ */
+export function dropGhostInput(serialized: string): string {
+  const lines = serialized.split("\n");
+  let input = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (PROMPT_LINE.test(stripAnsiCodes(lines[i]!))) {
+      input = i;
+      break;
+    }
+  }
+  if (input === -1) return serialized;
+  // SGR state carries across rows, so it is walked from the top.
+  let dim = false;
+  for (let i = 0; i < input; i++) {
+    for (const match of lines[i]!.matchAll(SGR)) dim = applySgrDim(dim, match[1]!);
+  }
+  const line = lines[input]!;
+  let out = "";
+  let last = 0;
+  for (const match of line.matchAll(SGR)) {
+    if (!dim) out += line.slice(last, match.index);
+    out += match[0];
+    dim = applySgrDim(dim, match[1]!);
+    last = match.index + match[0].length;
+  }
+  if (!dim) out += line.slice(last);
+  lines[input] = out;
+  return lines.join("\n");
+}
+
+/**
+ * Whether text is dim after an SGR with these parameters. A colon group
+ * (`4:2` double underline, `38:2::255:0:0`) is one code with sub-parameters, so
+ * only its first number counts; `;`-separated colours skip their arguments.
+ */
+function applySgrDim(dim: boolean, params: string): boolean {
+  if (params === "") return false;
+  const parts = params.split(";");
+  for (let i = 0; i < parts.length; i++) {
+    const code = Number(parts[i]!.split(":")[0]);
+    if ((code === 38 || code === 48 || code === 58) && !parts[i]!.includes(":")) {
+      i += parts[i + 1] === "5" ? 2 : parts[i + 1] === "2" ? 4 : 0;
+    } else if (code === 0 || code === 22) {
+      dim = false;
+    } else if (code === 2) {
+      dim = true;
+    }
+  }
+  return dim;
+}
 
 /**
  * The serializer writes the normal screen first and, while a TUI holds the

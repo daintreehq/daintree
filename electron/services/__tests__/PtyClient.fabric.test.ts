@@ -308,6 +308,40 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
+    it("reports answers from every input path and every shard on the one client", () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("t2", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
+      projectShard("project-a").child.emit("message", { type: "ready" });
+      const answers: unknown[] = [];
+      client.on("terminal-input", (id: string, notice: unknown) => answers.push([id, notice]));
+
+      client.write("t1", "hello");
+      client.write("t1", "\x1b\r");
+      client.write("t1", "\r");
+      client.sendKey("t1", "escape");
+      client.submit("t2", "go");
+      client.submit("t2", "wake", undefined, undefined, "settled-prompt");
+      client.broadcastWrite(["t1", "t2"], "y");
+      client.batchDoubleEscape(["t2"]);
+      projectShard("project-a").child.emit("message", {
+        type: "terminal-input",
+        id: "t1",
+        answer: "submit",
+      });
+
+      expect(answers).toEqual([
+        ["t1", { answer: "submit" }],
+        ["t1", { answer: "key" }],
+        ["t2", { answer: "submit" }],
+        ["t1", { answer: "key" }],
+        ["t2", { answer: "key" }],
+        ["t2", { answer: "key" }],
+        ["t1", { answer: "submit" }],
+      ]);
+      client.dispose();
+    });
+
     it("forwards a success-report request to every shard", () => {
       const client = createFabricClient();
       client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });

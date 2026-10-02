@@ -212,7 +212,12 @@ describe("admitPluginTerminalScreenRead", () => {
 });
 
 describe("screen text from a real headless terminal", () => {
-  async function screenRead(rows: number, output: string, lines = 20) {
+  async function screenRead(
+    rows: number,
+    output: string,
+    lines = 20,
+    options: { dropGhostInput?: boolean } = {}
+  ) {
     const { Terminal } = await import("@xterm/headless");
     const serializeModule = await import("@xterm/addon-serialize");
     const terminal = new Terminal({ cols: 40, rows, scrollback: 1000, allowProposedApi: true });
@@ -228,7 +233,7 @@ describe("screen text from a real headless terminal", () => {
     client.getSerializedStateAsync.mockImplementation(async (_id, options) =>
       serializeTerminalTail("t-1", info, options?.tailRows ?? 0)
     );
-    return readPluginTerminalScreen(client as never, "t-1", "p-a", lines);
+    return readPluginTerminalScreen(client as never, "t-1", "p-a", lines, null, options);
   }
 
   it("reads the alternate screen while a TUI holds it, not the shell history beneath", async () => {
@@ -250,6 +255,31 @@ describe("screen text from a real headless terminal", () => {
     if (result.status !== "ok") return;
     expect(result.text).toContain("before");
     expect(result.text).not.toContain("frame");
+  });
+
+  it("drops the dim suggestion in an agent's input box when asked, and nothing else", async () => {
+    const output =
+      "\x1b[2m(ctrl+o to expand)\x1b[22m\r\n⏺ Done.\r\n❯ \x1b[2;38;5;246mcommit this\x1b[0m";
+    const plain = await screenRead(6, output);
+    expect(plain.status === "ok" && plain.text).toContain("commit this");
+    const result = await screenRead(6, output, 20, { dropGhostInput: true });
+    // Dim text off the input row stays.
+    expect(result.status === "ok" && result.text).toBe("(ctrl+o to expand)\n⏺ Done.\n❯");
+    // What the user typed is drawn at full intensity and stays.
+    const typed = await screenRead(6, "⏺ Done.\r\n❯ add a test", 20, { dropGhostInput: true });
+    expect(typed.status === "ok" && typed.text).toBe("⏺ Done.\n❯ add a test");
+  });
+
+  it("leaves a dim echo of an earlier message alone: only the input box is filtered", async () => {
+    const output = "> \x1b[2mfix the rounding\x1b[22m\r\n⏺ Fixed.\r\n> \x1b[2mcommit this\x1b[22m";
+    const result = await screenRead(4, output, 20, { dropGhostInput: true });
+    expect(result.status === "ok" && result.text).toBe("> fix the rounding\n⏺ Fixed.\n>");
+  });
+
+  it("keeps a double-underlined word on an input row: 4:2 is not dim", async () => {
+    const output = "⏺ Done.\r\n> \x1b[4:2mkeep me\x1b[24m \x1b[38;2;10;2;2mand me\x1b[0m";
+    const result = await screenRead(4, output, 20, { dropGhostInput: true });
+    expect(result.status === "ok" && result.text).toBe("⏺ Done.\n> keep me and me");
   });
 
   it("leaves scrollback out of a long shell session", async () => {

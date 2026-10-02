@@ -649,7 +649,13 @@ export type PtyHostEvent =
   // re-broadcast to renderers — broadcasting it would double-deliver into the
   // same xterm (terminalClient.onData subscribes to both the port and IPC
   // paths on the strength of the one-visual-path invariant).
-  | { type: "data-mirror"; id: string; data: string }
+  | {
+      type: "data-mirror";
+      id: string;
+      data: string;
+      /** The chunk's end offset in the terminal's output stream, when the host has one. */
+      streamEnd?: number;
+    }
   // `launchGeneration` attributes the exit to one terminal incarnation so a
   // stale exit arriving after a same-id respawn can't close the successor.
   | { type: "exit"; id: string; exitCode: number; signal?: number; launchGeneration?: number }
@@ -797,6 +803,9 @@ export type PtyHostEvent =
   // `launchGeneration` binds the PID to the incarnation that owns it, so Main
   // never attributes a predecessor's PID to a same-id respawn.
   | { type: "terminal-pid"; id: string; pid: number; launchGeneration?: number }
+  // Input from a renderer's MessagePort, which bypasses Main, that answered
+  // the terminal's screen: Return, or a key that answers an approval menu.
+  | { type: "terminal-input"; id: string; answer: "submit" | "key" }
   | { type: "snapshot"; id: string; requestId: string; snapshot: PtyHostTerminalSnapshot | null }
   | { type: "all-snapshots"; requestId: string; snapshots: PtyHostTerminalSnapshot[] }
   | { type: "transition-result"; id: string; requestId: string; success: boolean }
