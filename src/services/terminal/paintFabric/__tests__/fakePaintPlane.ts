@@ -42,6 +42,7 @@ export function makeFakePlane() {
     addAgentStateListener: vi.fn(() => vi.fn()),
     addExitListener: vi.fn(() => vi.fn()),
     addAltBufferListener: vi.fn(() => vi.fn()),
+    addPaddingPaintListener: vi.fn(() => vi.fn()),
     registerPostCompleteHook: vi.fn(() => vi.fn()),
     unregisterPostCompleteHook: vi.fn(),
     fetchAndRestore: vi.fn(async () => true),

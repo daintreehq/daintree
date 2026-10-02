@@ -15,6 +15,12 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { writeTerminalInputOrFleet } from "@/services/terminal/fleetInputRouter";
 import { isOptimisticallyClosing } from "@/services/terminal/optimisticPanelClose";
 import { useTerminalAppearance } from "@/hooks/useTerminalAppearance";
+import {
+  buildGridRemainderBackground,
+  buildPaddingBackgroundStyle,
+  NO_PADDING_PAINT,
+  type TerminalPaddingPaint,
+} from "@/services/terminal/terminalPaddingPaint";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
 import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
@@ -163,6 +169,12 @@ export function XtermAdapter({
   const [isAltBuffer, setIsAltBuffer] = useState(() =>
     terminalInstanceService.getAltBufferState(terminalId)
   );
+
+  // App-painted edge colours (#13160): a normal-buffer TUI that paints its own
+  // background extends it into the padding instead of being framed by the
+  // theme colour. Changes only when the sampled edges change, not per frame.
+  const [paddingPaint, setPaddingPaint] = useState<TerminalPaddingPaint>(NO_PADDING_PAINT);
+  const paddingPaintUnsubRef = useRef<(() => void) | null>(null);
 
   // Attach image paste and file drag-and-drop handlers to the padded wrapper
   // rather than the xterm host: in normal-buffer mode the wrapper adds a 12px
@@ -611,6 +623,10 @@ export function XtermAdapter({
       exitUnsubRef.current = terminalInstanceService.addExitListener(terminalId, (code) => {
         onExitRef.current?.(code);
       });
+      paddingPaintUnsubRef.current = terminalInstanceService.addPaddingPaintListener(
+        terminalId,
+        setPaddingPaint
+      );
 
       if (!wasDetachedForSwitch || !hasSavedTargetDims) {
         performFit();
@@ -662,6 +678,9 @@ export function XtermAdapter({
         exitUnsubRef.current();
         exitUnsubRef.current = null;
       }
+      paddingPaintUnsubRef.current?.();
+      paddingPaintUnsubRef.current = null;
+      setPaddingPaint(NO_PADDING_PAINT);
 
       prevDimensionsRef.current = null;
       initialFitDoneRef.current = false;
@@ -758,6 +777,30 @@ export function XtermAdapter({
     return unsubscribe;
   }, [terminalId]);
 
+  const activePaddingPaint = isAltBuffer ? NO_PADDING_PAINT : paddingPaint;
+  const paddingBackgroundStyle = buildPaddingBackgroundStyle(activePaddingPaint);
+
+  // xterm's scrollable element carries an inline theme background and shows
+  // below/right of the whole-cell grid; paint that remainder to match so the
+  // extension has no seam. xterm only ever writes its backgroundColor.
+  useLayoutEffect(() => {
+    const remainder = buildGridRemainderBackground(activePaddingPaint);
+    const scrollable = containerRef.current?.querySelector<HTMLElement>(
+      ".xterm-scrollable-element"
+    );
+    if (!scrollable || !remainder) return;
+    scrollable.style.backgroundImage = remainder.image;
+    scrollable.style.backgroundPosition = remainder.position;
+    scrollable.style.backgroundSize = remainder.size;
+    scrollable.style.backgroundRepeat = "no-repeat";
+    return () => {
+      scrollable.style.backgroundImage = "";
+      scrollable.style.backgroundPosition = "";
+      scrollable.style.backgroundSize = "";
+      scrollable.style.backgroundRepeat = "";
+    };
+  }, [activePaddingPaint]);
+
   useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -847,7 +890,7 @@ export function XtermAdapter({
           : ["pl-3 pt-3 pb-3 pr-3", !hasBottomBar && "rounded-b-[var(--radius-lg)]"],
         className
       )}
-      style={{ backgroundColor: wrapperBackground, contain: "strict" }}
+      style={{ backgroundColor: wrapperBackground, ...paddingBackgroundStyle, contain: "strict" }}
     >
       <div
         ref={containerRef}

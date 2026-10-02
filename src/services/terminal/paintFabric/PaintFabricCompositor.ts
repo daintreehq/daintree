@@ -11,6 +11,7 @@ import { GRID_RESIZE_COALESCE_MS } from "../types";
 import type { UnseenOutputSnapshot } from "../TerminalUnseenOutputTracker";
 import type { TerminalGeometry } from "@shared/types/terminal";
 import type { TerminalPaintPlane } from "../TerminalInstanceService";
+import type { TerminalPaddingPaint } from "../terminalPaddingPaint";
 import { logWarn } from "@/utils/logger";
 import { PaintSurfaceRegistry, surfaceKind, type PaintSurface } from "./PaintSurfaceRegistry";
 import {
@@ -33,7 +34,14 @@ interface PaintFabricCompositorOptions {
 // move) stay stranded on the old surface and silently never fire again
 // (Phase 1 watch-list: "subscription rebinding on placement").
 interface TrackedSubscription {
-  kind: "unseenOutput" | "hibernation" | "agentState" | "exit" | "altBuffer" | "postCompleteHook";
+  kind:
+    | "unseenOutput"
+    | "hibernation"
+    | "agentState"
+    | "exit"
+    | "altBuffer"
+    | "paddingPaint"
+    | "postCompleteHook";
   plane: TerminalPaintPlane;
   resubscribe: (plane: TerminalPaintPlane) => () => void;
   unsubscribe: () => void;
@@ -962,6 +970,12 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   getAltBufferState(id: string): boolean {
     if (this.isViewOwned(id)) return false;
     return this.plane(id).getAltBufferState(id);
+  }
+
+  addPaddingPaintListener(id: string, callback: (paint: TerminalPaddingPaint) => void): () => void {
+    return this.trackSubscription(id, "paddingPaint", (plane) =>
+      plane.addPaddingPaintListener(id, callback)
+    );
   }
 
   getSynchronizedOutputMode(id: string): boolean | null {

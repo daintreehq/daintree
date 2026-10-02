@@ -95,6 +95,7 @@ function makeMockTerminal(captured: CapturedCallbacks) {
         getLine: vi.fn(
           (_index: number): { translateToString: () => string } | undefined => undefined
         ),
+        getNullCell: vi.fn(() => ({})),
       },
       onBufferChange: vi.fn(() => ({ dispose: vi.fn() })),
     },
@@ -187,11 +188,23 @@ function makeMockManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTermi
   } as ManagedTerminal;
 }
 
+function installOnMock(
+  terminal: ReturnType<typeof makeMockTerminal>,
+  deps: TerminalListenerInstallDeps
+): ManagedTerminal {
+  const managed = makeMockManaged();
+  const asXterm = terminal as unknown as ManagedTerminal["terminal"];
+  managed.terminal = asXterm;
+  installTerminalBoundListeners(asXterm, managed, "t1", deps);
+  return managed;
+}
+
 function makeDeps(
   overrides: Partial<TerminalListenerInstallDeps> = {}
 ): TerminalListenerInstallDeps {
   return {
     onBufferModeChange: vi.fn(),
+    onPaddingPaintChange: vi.fn(),
     isWebGLActive: vi.fn(() => false),
     notifyParsed: vi.fn(),
     scrollToBottomSafe: vi.fn(),
@@ -1450,16 +1463,6 @@ describe("installTerminalBoundListeners", () => {
       return Array.from(rows).map((r) => parseFloat((r as HTMLElement).style.height));
     }
 
-    function install(
-      terminal: ReturnType<typeof makeMockTerminal>,
-      deps: TerminalListenerInstallDeps
-    ) {
-      const managed = makeMockManaged();
-      const asXterm = terminal as unknown as ManagedTerminal["terminal"];
-      managed.terminal = asXterm;
-      installTerminalBoundListeners(asXterm, managed, "t1", deps);
-    }
-
     it("records each newly painted non-empty buffer line once during perf capture", () => {
       const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
       const terminal = makeMockTerminal(captured);
@@ -1469,7 +1472,7 @@ describe("installTerminalBoundListeners", () => {
       }));
       isRendererPerfCaptureActiveMock.mockReturnValue(true);
 
-      install(terminal, makeDeps());
+      installOnMock(terminal, makeDeps());
       captured.onRender!({ start: 0, end: 2 });
       captured.onRender!({ start: 0, end: 2 });
 
@@ -1488,7 +1491,7 @@ describe("installTerminalBoundListeners", () => {
       terminal.element = element;
       const deps = makeDeps();
 
-      install(terminal, deps);
+      installOnMock(terminal, deps);
       captured.onRender!();
 
       const heights = rowHeights(element);
@@ -1513,7 +1516,7 @@ describe("installTerminalBoundListeners", () => {
       terminal.element = element;
       const deps = makeDeps({ isWebGLActive: vi.fn(() => true) });
 
-      install(terminal, deps);
+      installOnMock(terminal, deps);
       captured.onRender!();
 
       expect(rowHeights(element).every((h) => h === 17.275)).toBe(true);
@@ -1526,7 +1529,7 @@ describe("installTerminalBoundListeners", () => {
       terminal.element = element;
       const deps = makeDeps();
 
-      install(terminal, deps);
+      installOnMock(terminal, deps);
       captured.onRender!();
 
       expect(rowHeights(element).every((h) => h === 18)).toBe(true);
@@ -1539,7 +1542,7 @@ describe("installTerminalBoundListeners", () => {
       terminal.element = element;
       const deps = makeDeps();
 
-      install(terminal, deps);
+      installOnMock(terminal, deps);
       captured.onRender!();
       const first = rowHeights(element);
       captured.onRender!();
@@ -1554,7 +1557,7 @@ describe("installTerminalBoundListeners", () => {
       // No `element` set — terminal.open() hasn't run.
       const deps = makeDeps();
 
-      install(terminal, deps);
+      installOnMock(terminal, deps);
       expect(() => captured.onRender!()).not.toThrow();
     });
 
@@ -1564,7 +1567,7 @@ describe("installTerminalBoundListeners", () => {
       terminal.element = makeRowsElement("17.275px", 0);
       const deps = makeDeps();
 
-      install(terminal, deps);
+      installOnMock(terminal, deps);
       expect(() => captured.onRender!()).not.toThrow();
     });
 
@@ -1578,7 +1581,7 @@ describe("installTerminalBoundListeners", () => {
       const isWebGLActive = vi.fn(() => true);
       const deps = makeDeps({ isWebGLActive });
 
-      install(terminal, deps);
+      installOnMock(terminal, deps);
       captured.onRender!();
       expect(rowHeights(element).every((h) => h === 17.275)).toBe(true);
 
@@ -1597,7 +1600,7 @@ describe("installTerminalBoundListeners", () => {
       terminal.element = element;
       const deps = makeDeps();
 
-      install(terminal, deps);
+      installOnMock(terminal, deps);
       captured.onRender!();
 
       const heights = rowHeights(element);
@@ -1613,12 +1616,80 @@ describe("installTerminalBoundListeners", () => {
       terminal.element = element;
       const deps = makeDeps();
 
-      install(terminal, deps);
+      installOnMock(terminal, deps);
       captured.onRender!();
 
       // "auto" stays as-is (parseFloat → NaN, guarded out).
       const rows = element.querySelector(".xterm-rows")!.children;
       expect((rows[0] as HTMLElement).style.height).toBe("auto");
+    });
+  });
+
+  describe("padding paint sampling (#13160)", () => {
+    let frames: FrameRequestCallback[];
+
+    beforeEach(() => {
+      frames = [];
+      vi.stubGlobal(
+        "requestAnimationFrame",
+        vi.fn((cb: FrameRequestCallback) => frames.push(cb))
+      );
+      vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    function install(deps: TerminalListenerInstallDeps, opened = true) {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      if (opened) terminal.element = document.createElement("div");
+      return { captured, managed: installOnMock(terminal, deps) };
+    }
+
+    const flushFrames = () => {
+      const pending = frames;
+      frames = [];
+      for (const cb of pending) cb(0);
+    };
+
+    it("coalesces a burst of renders into one sample and publishes only changes", () => {
+      const deps = makeDeps();
+      const { captured, managed } = install(deps);
+
+      captured.onRender!();
+      captured.onRender!();
+      captured.onRender!();
+      expect(frames).toHaveLength(1);
+
+      flushFrames();
+      expect(deps.onPaddingPaintChange).toHaveBeenCalledTimes(1);
+      expect(managed.paddingPaint).toBeDefined();
+
+      // Same edges on the next frame: nothing to publish.
+      captured.onRender!();
+      flushFrames();
+      expect(deps.onPaddingPaintChange).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips unopened and disposed terminals", () => {
+      const unopened = makeDeps();
+      install(unopened, false).captured.onRender!();
+      expect(frames).toHaveLength(0);
+
+      const disposed = makeDeps({ isDisposed: vi.fn(() => true) });
+      install(disposed).captured.onRender!();
+      flushFrames();
+      expect(disposed.onPaddingPaintChange).not.toHaveBeenCalled();
+    });
+
+    it("cancels a pending sample when the terminal-bound listeners are torn down", () => {
+      const deps = makeDeps();
+      const { captured, managed } = install(deps);
+      captured.onRender!();
+      for (const dispose of managed.listeners) dispose();
+      expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
     });
   });
 
