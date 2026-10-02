@@ -24,6 +24,7 @@ import type { PluginManifest, BuiltInPluginCapability } from "../../../shared/ty
  */
 const SENSITIVE_READ_CAPABILITIES: ReadonlySet<BuiltInPluginCapability> = new Set([
   "agent:read",
+  "terminal:read",
   "git:read",
   "fs:project-read",
   "fs:user-data-read",

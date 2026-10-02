@@ -43,6 +43,7 @@ const HOST_CALL_METHODS = {
   sendToActiveAgent: true,
   "agents.list": true,
   "agents.listAll": true,
+  "terminals.readScreen": true,
   sendToAgent: true,
   showToast: true,
   dispatch: true,

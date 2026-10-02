@@ -246,6 +246,7 @@ Array of capability tokens the plugin wants. The model is **disclosure-first wit
 | `agent:invoke` | Drive AI agents from plugin code. Disclosure and confirm elevation only — no host API is gated on it |
 | `agent:read` | Observe agent state (`host.getAgentState`, `host.onDidChangeAgentState`: lifecycle phase, session cost/tokens on completion) and list the project's agent panes (`host.agents.list`); installed and built-in plugins can also list every agent in every open project (`host.agents.listAll`, `host.onDidChangeAllAgents`) |
 | `agent:register` | Register a launchable agent CLI as a selectable agent |
+| `terminal:read` | Read a terminal's current screen as plain text (`host.terminals.readScreen`). Terminals show secrets, so this is separate from `agent:read` and asks for JIT consent on first use |
 | `agent:input` | Send text to the active agent terminal (`host.sendToActiveAgent`) or append it to a chosen agent's draft (`host.sendToAgent`); JIT consent on first use |
 | `git:read` | Read git state (branches, status, log) |
 | `git:write` | Make git changes (commits, branches) |
@@ -262,7 +263,7 @@ Declare honestly. A `.dntr` archive opened from the operating system shows a con
 
 Some capabilities are harmless alone and dangerous together, so the host also raises a plugin's actions to confirm when its declared set forms one of two combinations, even if none of the seven high-risk tokens is present:
 
-- **Sensitive read plus an unconstrained sink.** The sensitive reads are `agent:read`, `git:read`, `fs:project-read` and `fs:user-data-read`. Any of them paired with `shell:exec`, or with `network:fetch` when `scopes.network.allowedUrls` is not declared, elevates.
+- **Sensitive read plus an unconstrained sink.** The sensitive reads are `agent:read`, `terminal:read`, `git:read`, `fs:project-read` and `fs:user-data-read`. Any of them paired with `shell:exec`, or with `network:fetch` when `scopes.network.allowedUrls` is not declared, elevates.
 - **Unconstrained network plus a local mutation.** `network:fetch` without `scopes.network.allowedUrls`, paired with `fs:project-write`, `fs:user-data-write`, `git:write` or `shell:exec`, elevates.
 
 A non-empty `scopes.network.allowedUrls` takes `network:fetch` out of both rules. `clipboard:read`, `clipboard:write` and `socket:connect` take no part in either. A command's [`requires`](./contribution-points.md#commands--shipped) narrows the set both rules consult, as it does for the high-risk tokens. The same derivation also produces a single verdict for the whole plugin, `"safe"` or `"confirm"`, which the plugin manager shows.

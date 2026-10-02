@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { serializeTerminal, serializeTerminalAsync } from "../terminalSerialization.js";
+import {
+  serializeTerminal,
+  serializeTerminalAsync,
+  serializeTerminalTail,
+} from "../terminalSerialization.js";
 import { disposeTerminalSerializerService } from "../TerminalSerializerService.js";
 import type { TerminalInfo } from "../types.js";
 
@@ -117,5 +121,39 @@ describe("terminalSerialization guards", () => {
     await expect(pending).resolves.toBeNull();
     expect(addon.serialize).not.toHaveBeenCalled();
     expect(errSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("serializeTerminalTail", () => {
+  async function makeLiveTerminal(rows: number, output: string): Promise<TerminalInfo> {
+    const { Terminal } = await import("@xterm/headless");
+    const serializeModule = await import("@xterm/addon-serialize");
+    const terminal = new Terminal({ cols: 40, rows, scrollback: 1000, allowProposedApi: true });
+    const addon = new serializeModule.default.SerializeAddon();
+    terminal.loadAddon(addon);
+    await new Promise<void>((resolve) => terminal.write(output, resolve));
+    return makeTerminalInfo({
+      headlessTerminal: terminal as unknown as TerminalInfo["headlessTerminal"],
+      serializeAddon: addon as unknown as TerminalInfo["serializeAddon"],
+      preservedSnapshot: undefined,
+    });
+  }
+
+  it("reads only the screen at tailRows 0 and flags the scrollback it left out", async () => {
+    const lines = Array.from({ length: 50 }, (_, i) => `line ${i}`).join("\r\n");
+    const info = await makeLiveTerminal(5, lines);
+
+    const snapshot = serializeTerminalTail("t1", info, 0);
+
+    expect(snapshot?.partial).toBe(true);
+    expect(snapshot?.data).toContain("line 49");
+    expect(snapshot?.data).toContain("line 45");
+    expect(snapshot?.data).not.toContain("line 44");
+  });
+
+  it("serves the preserved snapshot for an exited terminal", () => {
+    const preserved = { data: "final", cols: 80, rows: 24 };
+    const info = makeTerminalInfo({ preservedSnapshot: preserved });
+    expect(serializeTerminalTail("t1", info, 0)).toBe(preserved);
   });
 });

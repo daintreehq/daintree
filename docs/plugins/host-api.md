@@ -188,6 +188,8 @@ interface PluginHostApi {
   ): Promise<PluginSendToAgentResult>;
   // The project's agent panes — gated on `agent:read`
   readonly agents: PluginAgentsApi;
+  // What a terminal's screen shows, as plain text — gated on `terminal:read`
+  readonly terminals: PluginTerminalsApi;
 
   // Settings (user-facing, schema-declared; get/set/onDidChange/open/missingRequired)
   // + private storage (machine-owned)
@@ -284,6 +286,7 @@ Node's own filesystem errors (`ENOENT`, `ENOTDIR`, `EISDIR`, `EACCES`) reach you
 | `PLUGIN_PAYLOAD_UNCLONEABLE` | message and `code` | the same payloads | Structured clone refuses the value (a function, a symbol, a throwing getter). In a worker, a push the port cannot clone rejects with the port's own `DataCloneError` instead. |
 | `PLUGIN_UNLOADED` | message; `dispatch` result code | `fs`, `git`, `clipboard`, `system`, `documents`, `db` after unload | You are being torn down; stop. |
 | `PROJECT_VIEW_UNAVAILABLE` | `code` only | `dispatch` and the prompts from a project plugin; `settings.open` folds it into its message | Your project has no live window. Try again when it is open. (`agents.list` and `actions.*` answer empty instead, and `sendToAgent` refuses with `project-unavailable`.) |
+| `RATE_LIMITED` | both | `terminals.readScreen` | More than 60 calls in a second. Nothing is queued; slow the poll and call again. |
 | `NO_ACTIVE_AGENT` | message | `sendToActiveAgent` | The terminal host is not available, or — for an app-global plugin only — no agent terminal can take the input. A project plugin with no eligible agent resolves silently instead and logs a warning. Tell the user, or use `sendToAgent`. |
 | `PROCESS_LIMIT_REACHED` | both | `process.spawn` | Eight of your processes are already running. Wait for one to exit, or kill one. |
 | `SCHEMA_ERROR` | message | a typed `registerHandler` channel | Args or result failed the schema; reaches the view's `useHostChannel` `error`. |
@@ -319,6 +322,7 @@ A capability is declared in `manifest.capabilities` and checked on every call �
 | --- | --- | --- |
 | `agent:read` | `getAgentState`, `onDidChangeAgentState`, `agents.list`, `agents.listAll`, `onDidChangeAllAgents` | — |
 | `agent:input` | `sendToActiveAgent`, `sendToAgent` | First use |
+| `terminal:read` | `terminals.readScreen` | First use. Not granted by `agent:read`. |
 | `fs:project-read`, `fs:user-data-read` | `fs` reads, `readdir`, `stat`, `watch`; `renderPdf`'s `htmlPath`; `system.*` (read or write of the root class) | — |
 | `fs:project-write`, `fs:user-data-write` | `fs.writeFile`, `appendFile`, `mkdir`; `renderPdf`'s output; `db` handle `backup` destination | First write. The prompt is keyed on the strongest write capability you declare (`fs:project-write` when declared, else `fs:user-data-write`), not on the target's root class, so one grant covers writes to every root, your data directory included. |
 | `fs:project-write` | A `location: "project"` database — required by the manifest check, which also limits it to `"scope": "project"` plugins | The first writable `db.open` / `db.resolve`: the same grant as `fs.writeFile`. A `"local"` database and a `readonly` open need none. |
@@ -1075,6 +1079,28 @@ An empty list only means "no agents" when `degraded` is `false`. `degraded: true
 Gated on `agent:read`, and only for installed and built-in plugins. A project plugin is scoped to its own project everywhere else, so both calls throw `PERMISSION_REQUIRED:` for one — in a worker, `listAll` rejects with it, while a refused `onDidChangeAllAgents` is logged by main and resolves a disposer that never fires, like every worker subscription. `listAll` is NOT revoke-guarded; subscribing is.
 
 `onDidChangeAllAgents` fires with the whole new snapshot, frozen, when a run is added or removed or one's state, title or worktree changes, and when the host loses or regains sight of the fleet. There is no initial callback. A callback can repeat the previous snapshot, when something the plugin cannot see changed. Coalesced to the latest snapshot by default ([`PluginHostSubscriptionOptions`](#pluginhostapi)). In process it throws `FLEET_UNAVAILABLE:` if the host is not tracking agents at all.
+
+## `terminals.readScreen` — what a terminal shows
+
+```ts
+const screen = await host.terminals.readScreen(terminalId, { lines: 12 });
+switch (screen.status) {
+  case "ok": // screen.text, screen.lineCount, screen.truncated
+  case "exited": // the process exited; the pane may still be open
+  case "not-found": // no terminal this plugin may read has that id
+  case "unavailable": // could not read it right now; try again later
+}
+```
+
+The terminal's current screen as plain text: its last `lines` lines (1–100, default 20) with blank padding trimmed and no ANSI, never its scrollback or the serialized buffer. A blank screen is `{ status: "ok", text: "", lineCount: 0 }`, so an empty screen is never confused with a missing terminal. `truncated` is `true` when lines above the returned ones, or text past the 16 KiB cap, were left out; the newest content is kept. Take ids from [`agents.list`](#agentslist--the-projects-agent-panes).
+
+It is answered in main from the terminal host's own copy of the screen, so a terminal in a project whose view is closed still reads. A project plugin reads only its own project's terminals; an installed plugin may read any user terminal by id. An unknown id, one in another project and one that is not a user terminal all answer the same `not-found`. Nothing about the terminal changes: no input, no resize.
+
+Gated on `terminal:read`, which `agent:read` does not imply, with a first-use consent prompt telling the user the plugin can read what their terminals show. Arguments are checked before the prompt. Calls are limited to 60 a second per plugin — a grid polling twenty cards once a second uses a third of it — and a call past that throws `RATE_LIMITED:` at once rather than waiting. Resolves `unavailable` once the plugin is unloaded. NOT revoke-guarded, so poll from a timer.
+
+The host does not log or store the text. Treat it as a secret: terminals show tokens, env dumps and customer data, and once it reaches your plugin, keeping it on the machine is your code's job.
+
+The `terminal.getOutput` action, and `terminal.getStatus` with `includeOutput`, are closed to plugin dispatch; `readScreen` is the plugin path to terminal text.
 
 ## `logger`
 
@@ -1843,6 +1869,7 @@ It validates argument shapes the way the real host does — `registerAction` des
 | `hasActiveAgent` | `true` | `false` makes `sendToActiveAgent` reject `NO_ACTIVE_AGENT`. |
 | `agents` | `[]` | The panes `agents.list()` returns and `sendToAgent({ terminalId })` resolves against. |
 | `allAgents` | `{ agents: [], degraded: false, lastSuccessfulAt: 0 }` | What `agents.listAll()` returns, reduced to the allowlist and frozen as production does. |
+| `terminalScreens` | `{}` | What `terminals.readScreen` finds, by terminal id; an unlisted id reads `not-found`. An `ok` screen is trimmed to the call's `lines`. There is no rate limit. |
 | `activeWorktree`, `worktrees`, `worktreesResult` | `null`, `[]`, derived | What the worktree reads return. Without `worktreesResult`, `getWorktreesResult()` answers `{ status: "ok", projectId: "test-project", worktrees }`; with one, it also drives `getWorktrees()` (`[]` unless `ok`) and `getActiveWorktree()` (the `isCurrent` entry). Worktree roots also count as existing directories in the mock `fs`, and the active one keys `"worktree"` storage. |
 | `manifestSettings` | none | Your `contributes.settings` declarations. With them, `get`, `set` and `onDidChange` follow declared scopes (a conflicting scope throws), `get` returns declared defaults, and `missingRequired` works; without them, scopes are whatever you pass and nothing is required. |
 | `settings`, `storage` | empty | Starting values per scope (`user` / `project` / `local`; `user` / `project` / `worktree`). A `storage.worktree` seed goes to the initial active worktree, and is dropped when there is none. |
@@ -1872,6 +1899,7 @@ Calls that fail validation, and prompts or `sendToAgent` calls whose signal was 
 | `simulateAgentStateChange(snapshot)` | Sets what `getAgentState()` returns and notifies `onDidChangeAgentState`. |
 | `simulateAgentsChange(panes)` | Replaces what `agents.list()` returns. |
 | `simulateAllAgentsChange(snapshot)` | Replaces what `agents.listAll()` returns and notifies `onDidChangeAllAgents` at once, ignoring its window. |
+| `simulateTerminalScreen(terminalId, screen \| null)` | Sets what `terminals.readScreen(terminalId)` finds; `null` forgets the terminal, so it reads `not-found`. Every call that passes validation lands in `readScreenCalls` as `{ terminalId, lines, result }`. |
 | `simulateSendToAgentPick(terminalId \| null)` | What the picker "chooses" when `sendToAgent` has no `terminalId`; `null` (the default) cancels. A pane with `canDraft: false` refuses with its `draftRefusal`, an unknown one with `unknown-terminal`. |
 | `simulatePanelLifecycleChange(event)` | Notifies `onDidChangePanelLifecycle` and updates the phases `reloadPanel` reads. |
 | `simulateSystemWake(event)` | Notifies `onDidWake`. |
@@ -1885,7 +1913,7 @@ Calls that fail validation, and prompts or `sendToAgent` calls whose signal was 
 
 It has no manifest model and no processes behind it, so a test that passes against it is not proof the real host will accept the plugin. The gaps, from `shared/testing/createMockHost.ts`:
 
-- **Capabilities and consent.** Only `getAgentState`, `agents.list`, `agents.listAll`, `onDidChangeAllAgents`, `sendToActiveAgent` and `sendToAgent` check `capabilities`. `onDidChangeAgentState` subscribes without `agent:read`, and `fs`, `git`, `process`, `clipboard`, `system`, `documents`, `db` and `mcp` run without their capabilities. No just-in-time consent is modelled anywhere, and `sendToAgent` draws no picker.
+- **Capabilities and consent.** Only `getAgentState`, `agents.list`, `agents.listAll`, `onDidChangeAllAgents`, `sendToActiveAgent`, `sendToAgent` and `terminals.readScreen` check `capabilities`. `onDidChangeAgentState` subscribes without `agent:read`, and `fs`, `git`, `process`, `clipboard`, `system`, `documents`, `db` and `mcp` run without their capabilities. No just-in-time consent is modelled anywhere, and `sendToAgent` draws no picker.
 - **`fs`** is an in-memory map of text with no containment and no symlinks. A directory exists when `mkdir` made it (with every ancestor), when something stored sits beneath it, or when it is a worktree root; a path holding a file is never a directory. `appendFile` refuses a directory target and a missing parent (outside `pluginDataDir`); `writeFile` does not check parents. A missing file rejects with an `ENOENT:` message but no `err.code`. `stat` reports `isDirectory` only for `mkdir`-made directories and never throws; `readdir` of a missing directory resolves `[]`; `size` in a detailed listing is the string length, not bytes, and `mtimeMs` is `0`. `watch` validates `allowMissing` but otherwise ignores it.
 - **`db`** always reports `location: "local"`, and `backup` approves any absolute destination — the fs gate is not modelled.
 - **`documents.renderPdf`** renders nothing: it validates the options, requires an in-memory `htmlPath`, and writes a small `%PDF-1.4` placeholder to `outputPath` so a plugin that reads or lists its export sees a file. That write is not in `fsWriteCalls`, and the parent directory is not checked.

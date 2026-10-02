@@ -43,6 +43,22 @@ export const PLUGIN_PUSH_MAX_BATCH_SIZE = 256;
  */
 export const PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS = 100;
 
+/** Lines `host.terminals.readScreen` returns when the caller names none. */
+export const PLUGIN_TERMINAL_SCREEN_DEFAULT_LINES = 20;
+
+/** Most lines one `host.terminals.readScreen` call may ask for. */
+export const PLUGIN_TERMINAL_SCREEN_MAX_LINES = 100;
+
+/** UTF-8 size ceiling for the text one `host.terminals.readScreen` call returns. */
+export const PLUGIN_TERMINAL_SCREEN_MAX_BYTES = 16 * KiB;
+
+/**
+ * Calls one loaded plugin may make to `host.terminals.readScreen` in any
+ * rolling second. A grid of twenty cards polling once a second uses a third of
+ * it; past it a call fails fast with `RATE_LIMITED:` rather than queueing.
+ */
+export const PLUGIN_TERMINAL_SCREEN_RATE_PER_SECOND = 60;
+
 /** Observational budgets. Exceeding one is recorded and surfaced, never enforced. */
 export const PLUGIN_PERF_BUDGETS = {
   /** `activate()` from call to settled, including worker boot for worker plugins. */

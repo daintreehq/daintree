@@ -37,6 +37,7 @@ import type {
   PluginMcpJsonSchema,
   PluginMcpToolAnnotations,
   PluginSendToAgentOptions,
+  PluginTerminalReadScreenOptions,
   PluginFsReadFilesEncoding,
   PluginFsWalkOptions,
   PluginWorktreeSnapshot,
@@ -53,6 +54,7 @@ export type PluginHostCallMethod =
   | "sendToActiveAgent"
   | "agents.list"
   | "agents.listAll"
+  | "terminals.readScreen"
   | "sendToAgent"
   | "showToast"
   | "dispatch"
@@ -537,6 +539,12 @@ export interface ActionsGetParams {
 export interface SendToActiveAgentParams {
   text: string;
   options?: { submit?: boolean };
+}
+
+/** Params for `terminals.readScreen` (`host-call`). */
+export interface TerminalsReadScreenParams {
+  terminalId: string;
+  options?: PluginTerminalReadScreenOptions;
 }
 
 /** Params for `sendToAgent` (`host-call`). `agents.list` takes none. */

@@ -37,6 +37,7 @@ import type {
   DispatchParams,
   SendToActiveAgentParams,
   SendToAgentParams,
+  TerminalsReadScreenParams,
   InvalidateFileDecorationsParams,
   LoggerParams,
   PluginWorkerToHostMessage,
@@ -829,6 +830,10 @@ export class PluginDevWorkerMainBridge {
         return this.host.agents.list();
       case "agents.listAll":
         return this.host.agents.listAll();
+      case "terminals.readScreen": {
+        const p = params as TerminalsReadScreenParams;
+        return this.host.terminals.readScreen(p.terminalId, p.options);
+      }
       case "sendToAgent": {
         // `signal` ties an open picker to this generation, like showQuickPick:
         // a retired worker's question comes off the screen with it.

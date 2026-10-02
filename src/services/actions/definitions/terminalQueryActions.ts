@@ -1,4 +1,5 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import type { ActionContext } from "@shared/types/actions";
 import { z } from "zod";
 import {
   TerminalSummarySchema,
@@ -219,6 +220,10 @@ export function registerTerminalQueryActions(
     category: "terminal",
     kind: "query",
     danger: "safe",
+    // Terminal text routinely carries secrets, so plugins read it through
+    // `host.terminals.readScreen`, behind `terminal:read` and its consent
+    // prompt, never through this ungated `safe` action (#13155).
+    denyPluginDispatch: true,
     scope: "renderer",
     argsSchema: z.object({
       terminalId: z
@@ -415,7 +420,7 @@ export function registerTerminalQueryActions(
       .optional(),
     resultSchema: TerminalStatusResultSchema,
     mcpOutputSchema: true,
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx?: ActionContext) => {
       const {
         terminalIds,
         worktreeId,
@@ -431,6 +436,14 @@ export function registerTerminalQueryActions(
       };
       const includeOutput =
         includeOutputArg === true ? {} : includeOutputArg === false ? undefined : includeOutputArg;
+      // Status stays open to plugins; the output half does not. Terminal text
+      // is behind `terminal:read` and its consent prompt (#13155), so a plugin
+      // reads it through `host.terminals.readScreen` instead.
+      if (includeOutput && ctx?.dispatchSource === "plugin") {
+        throw new Error(
+          "terminal.getStatus `includeOutput` is not available to plugin dispatch; use host.terminals.readScreen with the terminal:read capability."
+        );
+      }
       if (submissionToken !== undefined && terminalIds === undefined) {
         throw new Error("terminal.getStatus requires `terminalIds` when `submissionToken` is set.");
       }
