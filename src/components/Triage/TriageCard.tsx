@@ -381,7 +381,8 @@ function OptionButtons({
                   density="bare"
                   // The button says its key through aria-keyshortcuts already.
                   rootAttributes={{ "aria-hidden": "true" }}
-                  className="shrink-0 leading-4"
+                  // One label line tall, so the digit centres on the first line of a wrapped label.
+                  className="h-4 shrink-0"
                 />
               )}
               <span className="min-w-0 leading-4">{label}</span>
