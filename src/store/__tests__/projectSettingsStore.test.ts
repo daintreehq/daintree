@@ -203,6 +203,25 @@ describe("projectSettingsStore", () => {
     expect(state.isLoading).toBe(false);
   });
 
+  it("does not carry another project's settings through a failed load", async () => {
+    useProjectSettingsStore.setState({
+      settings: SETTINGS_WITH_COMMANDS,
+      allDetectedRunners: DETECTED_RUNNERS,
+      projectId: "project-a",
+      isLoading: false,
+    });
+    getSettingsMock.mockRejectedValueOnce(new Error("boom"));
+    detectRunnersMock.mockResolvedValueOnce([]);
+
+    await useProjectSettingsStore.getState().loadSettings("project-b");
+
+    const state = useProjectSettingsStore.getState();
+    expect(state.projectId).toBe("project-b");
+    expect(state.settings).toEqual({ runCommands: [] });
+    expect(state.allDetectedRunners).toEqual([]);
+    expect(state.error).toBe("boom");
+  });
+
   it("recomputes detected runners when settings are updated", () => {
     useProjectSettingsStore.setState({
       allDetectedRunners: DETECTED_RUNNERS,

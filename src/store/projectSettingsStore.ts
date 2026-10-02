@@ -87,8 +87,10 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
       return;
     }
 
+    const isRevalidation = currentState.projectId === projectId && !!currentState.settings;
+
     // Only show loading state if no snapshot was pre-populated.
-    if (currentState.projectId !== projectId || !currentState.settings) {
+    if (!isRevalidation) {
       set({ isLoading: true, error: null, projectId });
     } else {
       set({ error: null });
@@ -139,7 +141,7 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
 
       const error = formatErrorMessage(err, "Failed to load project settings");
       // A failed revalidation leaves the settings already on screen in place.
-      if (get().settings) {
+      if (isRevalidation && get().settings) {
         set({ error, isLoading: false });
         return;
       }
