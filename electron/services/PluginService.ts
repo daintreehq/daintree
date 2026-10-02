@@ -2440,6 +2440,19 @@ export class PluginService {
               })),
             }
           : {}),
+        // The manifest's own id rides along as `stateKey`: it is what the view
+        // names when it sets a button's state, so it must not be rewritten.
+        ...(panel.toolbar !== undefined && panel.toolbar.length > 0
+          ? {
+              pluginToolbar: panel.toolbar.map((item) => ({
+                actionId: qualifyActionId(item.actionId),
+                stateKey: item.actionId,
+                ...(item.label !== undefined ? { label: item.label } : {}),
+                ...(item.iconId !== undefined ? { iconId: resolveIconId(item.iconId) } : {}),
+                ...(item.status === true ? { status: true } : {}),
+              })),
+            }
+          : {}),
         // Keyed by the INSTANCE, because `unregisterPluginPanelKinds` matches
         // on `extensionId` alone: keying by manifest id would make one
         // project's unload sweep every other project's copies of the same kind.

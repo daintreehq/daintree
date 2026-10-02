@@ -20,6 +20,7 @@ import {
   MenuItemContributionSchema,
   PanelContributionObjectSchema,
   PanelMenuItemSchema,
+  PanelToolbarItemSchema,
   PreviewToolContributionSchema,
   GuestAdapterContributionSchema,
   ProcessToolContributionSchema,
@@ -110,6 +111,7 @@ const PLUGIN_DATABASE_HANDLE = "shared/utils/pluginDatabaseHandle.ts";
 const PLUGIN_HOST_FACTORY = "electron/services/plugin/PluginHostFactory.ts";
 const PLUGIN_DATABASES_SECTION = "src/components/Plugin/PluginDatabasesSection.tsx";
 const GENERIC_PANEL_MENU = "src/components/Panel/genericPanelMenu.ts";
+const PLUGIN_PANEL_TOOLBAR = "src/components/Panel/PluginPanelToolbar.tsx";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -141,6 +143,7 @@ const SWEPT_SCHEMAS = {
   databases: DatabaseContributionSchema,
   surfaces: SurfaceContributionsSchema,
   "panels.menu": PanelMenuItemSchema,
+  "panels.toolbar": PanelToolbarItemSchema,
   "agents.detection": AgentDetectionConfigSchema,
   "surfaces.emptyCanvas": SurfaceViewSlotSchema,
   "recipes.terminals": RecipeContributionTerminalSchema,
@@ -228,6 +231,7 @@ type FieldConsumerCoverage = {
   databases: Record<keyof z.infer<typeof DatabaseContributionSchema>, ConsumerDescriptor>;
   surfaces: Record<keyof z.infer<typeof SurfaceContributionsSchema>, ConsumerDescriptor>;
   "panels.menu": Record<keyof z.infer<typeof PanelMenuItemSchema>, ConsumerDescriptor>;
+  "panels.toolbar": Record<keyof z.infer<typeof PanelToolbarItemSchema>, ConsumerDescriptor>;
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
   "surfaces.emptyCanvas": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
   "recipes.terminals": Record<
@@ -306,6 +310,51 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: GENERIC_PANEL_MENU, symbol: "readPanelKindMenuCapabilities (pluginMenuItems)" },
       ],
       note: "Registered on the panel kind and drawn by both panel menus, above the plugin's own entries, once each action is registered.",
+    },
+    toolbar: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SERVICE,
+          symbol: "loadPlugin (panels loop → PanelKindConfig.pluginToolbar)",
+        },
+        { file: PLUGIN_PANEL_TOOLBAR, symbol: "resolvePluginToolbarButtons" },
+      ],
+      note: "Registered on the panel kind and drawn as buttons in the panel header once each action is registered.",
+    },
+  },
+  "panels.toolbar": {
+    actionId: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (panel_toolbar_action_not_own)" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (qualifyActionId → pluginToolbar)" },
+        { file: PLUGIN_PANEL_TOOLBAR, symbol: "PluginPanelToolbarItem (dispatch)" },
+      ],
+      note: "Checked to be the plugin's own action, qualified to the instance namespace and dispatched with { panelId }; the authored id is kept as the stateKey the view's setToolbarItemState names.",
+    },
+    label: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_PANEL_TOOLBAR,
+          symbol: "resolvePluginToolbarButtons (label ?? action title)",
+        },
+      ],
+      note: "The button's accessible name and resting tooltip; the action's registered title when absent.",
+    },
+    iconId: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (resolveIconId → pluginToolbar)" },
+        { file: PLUGIN_PANEL_TOOLBAR, symbol: "PluginPanelToolbarItem (resolvePluginIcon)" },
+      ],
+      note: "Drawn as the button's glyph, resolved like a panel's own iconId; absent, the label is drawn as text.",
+    },
+    status: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_PANEL_TOOLBAR, symbol: "PluginPanelToolbarStatus" }],
+      note: "Draws the live state's text, updatedAt age and tone beside the button.",
     },
   },
   "panels.menu": {

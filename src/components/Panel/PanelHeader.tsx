@@ -248,6 +248,10 @@ export interface PanelHeaderProps {
   headerContent?: ReactNode;
   headerStatus?: ReactNode;
   headerActions?: ReactNode;
+  // Buttons the panel's kind puts in the header itself, ahead of the status box
+  // and the window controls. `headerActions` is the overflow menu's slot; this
+  // is the visible one, with its own toolbar semantics.
+  headerToolbar?: ReactNode;
 
   // The agent state glyph. It is the single most important signal in the app
   // and a deliberate special case: it renders all the way right, PAST the close
@@ -307,6 +311,7 @@ function PanelHeaderComponent({
   headerContent,
   headerStatus,
   headerActions,
+  headerToolbar,
   agentIndicator,
   tabs,
   groupId,
@@ -683,6 +688,7 @@ function PanelHeaderComponent({
   const titleContent = compactTitle && compactTitle !== displayTitle ? compactTitle : displayTitle;
   // A truncated badge, or one hidden by the compact query, still has to give
   // the branch back somewhere — the title tooltip carries it.
+  const worktreeChipLabel = `Belongs to the worktree on ${worktreeBranch ?? ""}`;
   const titleTooltip = [title, worktreeBranch && worktreeAccentColor ? worktreeBranch : null]
     .filter(Boolean)
     .join(" · ");
@@ -1370,12 +1376,14 @@ function PanelHeaderComponent({
                         "--worktree-color": worktreeAccentColor,
                       } as React.CSSProperties
                     }
-                    aria-label={`Branch: ${worktreeBranch}`}
+                    aria-label={worktreeChipLabel}
                   >
                     <span className="truncate">{worktreeBranch}</span>
                   </span>
                 </TooltipTrigger>
-                <TooltipContent side="bottom">{worktreeBranch}</TooltipContent>
+                {/* Says what the chip is, not just the branch again: a bare ref
+                    in a pane's header read as an unexplained label. */}
+                <TooltipContent side="bottom">{worktreeChipLabel}</TooltipContent>
               </Tooltip>
             )}
 
@@ -1465,6 +1473,8 @@ function PanelHeaderComponent({
           </div>
         </div>
       )}
+
+      {headerToolbar}
 
       {headerStatus !== undefined && (
         // Reserved whether or not a status is showing: the box never changes

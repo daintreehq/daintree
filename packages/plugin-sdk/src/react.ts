@@ -49,6 +49,7 @@ export {
   type AnimationFrameOptions,
 } from "./react/useAnimationFrame.js";
 export { useNow, type NowOptions } from "./react/useNow.js";
+export { usePanelToolbarItem } from "./react/usePanelToolbarItem.js";
 export {
   useStreamBuffer,
   type StreamBufferOptions,

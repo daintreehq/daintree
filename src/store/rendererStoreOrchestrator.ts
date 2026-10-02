@@ -15,6 +15,7 @@ import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import { useResourceMonitoringStore } from "./resourceMonitoringStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { usePluginPanelBadgeStore } from "./pluginPanelBadgeStore";
+import { usePluginPanelToolbarStore } from "./pluginPanelToolbarStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
@@ -400,6 +401,8 @@ export function initStoreOrchestrator(): () => void {
             // resource-metrics store above this leaks otherwise: badges are
             // keyed by panelId and nothing else drops them when a panel closes.
             usePluginPanelBadgeStore.getState().removePanel(removedId);
+            // Header button states are keyed the same way and leak the same way.
+            usePluginPanelToolbarStore.getState().clearPanel(removedId);
             useVoiceRecordingStore.getState().clearPanelBuffer(removedId);
             // Drop the dictation lock if it was pinned to this panel — panelIds
             // are ephemeral and a stale lock would silently break routing.

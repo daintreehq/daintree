@@ -2,6 +2,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
+import type { PanelViewProps } from "@shared/types/plugin";
 
 // Stub presentational deps — the skeleton and fade-in are incidental here. The
 // host's contract is panel adaptation: mapping panel props onto ContentPanel and
@@ -504,6 +505,85 @@ describe("makePluginViewHost", () => {
       // The content withholds it unless the host opts in; grid, dock and
       // dialog panels all render through this host, so all of them get it.
       expect(typeof capturedProps[capturedProps.length - 1]!.requestReload).toBe("function");
+    } finally {
+      vi.doUnmock(VIEW_MODULE);
+    }
+  });
+
+  it("draws the kind's toolbar in the panel header and lets the view set its state", async () => {
+    const capturedProps: PanelViewProps[] = [];
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CapturingView(props: PanelViewProps) {
+        capturedProps.push(props);
+        return <div data-testid="plugin-view" />;
+      },
+    }));
+
+    try {
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const { registerPanelKind } = await import("@shared/config/panelKindRegistry");
+      const { publishRegisteredPluginActions } =
+        await import("@/services/plugin/registeredPluginActions");
+      const config = makeConfig({
+        pluginToolbar: [
+          { actionId: "acme.refresh", stateKey: "acme.refresh", label: "Refresh", iconId: "gauge" },
+        ],
+      });
+      registerPanelKind(config);
+      publishRegisteredPluginActions([["acme.refresh", "Refresh dashboard"]]);
+      const Host = makePluginViewHost(config);
+
+      render(
+        <Host
+          id="panel-toolbar"
+          title="Dashboard"
+          isFocused={false}
+          onFocus={(): void => {}}
+          onClose={(): void => {}}
+        />
+      );
+
+      await waitFor(() => expect(screen.queryByTestId("plugin-view")).toBeTruthy());
+      const toolbar = screen.getByRole("toolbar", { name: "Dashboard actions" });
+      const button = within(toolbar).getByRole("button", { name: "Refresh" });
+      // In the header, not the view: a crashed or loading view keeps it.
+      expect(screen.getByTestId("plugin-view").contains(button)).toBe(false);
+
+      const { setToolbarItemState } = capturedProps[capturedProps.length - 1]!;
+      expect(typeof setToolbarItemState).toBe("function");
+      act(() => setToolbarItemState?.("acme.refresh", { busy: true }));
+      expect(button.getAttribute("aria-busy")).toBe("true");
+    } finally {
+      vi.doUnmock(VIEW_MODULE);
+    }
+  });
+
+  it("withholds setToolbarItemState in the dialog presentation, which draws no toolbar", async () => {
+    const capturedProps: PanelViewProps[] = [];
+    vi.doMock(VIEW_MODULE, () => ({
+      default: function CapturingView(props: PanelViewProps) {
+        capturedProps.push(props);
+        return <div data-testid="plugin-view" />;
+      },
+    }));
+
+    try {
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(makeConfig());
+
+      render(
+        <Host
+          id="panel-dialog"
+          title="Dashboard"
+          location="dialog"
+          isFocused={false}
+          onFocus={(): void => {}}
+          onClose={(): void => {}}
+        />
+      );
+
+      await waitFor(() => expect(screen.queryByTestId("plugin-view")).toBeTruthy());
+      expect(capturedProps[capturedProps.length - 1]!.setToolbarItemState).toBeUndefined();
     } finally {
       vi.doUnmock(VIEW_MODULE);
     }

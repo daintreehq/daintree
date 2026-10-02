@@ -16,6 +16,7 @@ import {
 import type {
   PanelReloadResult,
   PanelViewProps,
+  PluginPanelToolbarItemState,
   PluginSettingsViewContext,
 } from "@shared/types/plugin";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
@@ -66,6 +67,8 @@ import { markRendererPerformance } from "@/utils/performance";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { PluginKitOwnerContext } from "@/components/PluginKit/kitScope";
 import { PluginKitViewHostContext } from "@/components/PluginKit/kitViewHost";
+import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
+import { usePluginPanelToolbarStore } from "@/store/pluginPanelToolbarStore";
 
 /**
  * The resolved subset of `PanelKindConfig` a plugin view actually needs. Both
@@ -165,6 +168,11 @@ export interface PluginViewContentProps {
    * a real panel — grid, dock, or dialog — can offer it. Project surfaces don't.
    */
   offerRequestReload?: boolean;
+  /**
+   * Hand the view `setToolbarItemState`, for a host that draws the panel's
+   * header and with it the kind's manifest `toolbar`. Project surfaces don't.
+   */
+  offerToolbar?: boolean;
   /** Forwarded as `PanelViewProps.settingsContext`, for a settings view's host only. */
   settingsContext?: PluginSettingsViewContext;
 }
@@ -927,6 +935,7 @@ export function makePluginViewContent(
     panelRemovedSignal: panelRemovedSignalOverride,
     readRecoveryState,
     offerRequestReload = false,
+    offerToolbar = false,
     settingsContext,
   }: PluginViewContentProps) {
     // Resolved before any attempt is built so the first attempt already takes
@@ -1152,6 +1161,15 @@ export function makePluginViewContent(
     }, [panelId]);
 
     /**
+     * Reset the header buttons when the view that set them is discarded. Not
+     * on unmount: their state belongs to the panel, and a view remounted by a
+     * dock or tab move picks up where it left off.
+     */
+    const clearToolbarState = useCallback((): void => {
+      if (offerToolbar) usePluginPanelToolbarStore.getState().clearPanel(panelId);
+    }, [offerToolbar, panelId]);
+
+    /**
      * Whether the boundary is currently showing its fallback.
      *
      * Tracked here because the boundary does not expose it, and the rebind path
@@ -1170,6 +1188,7 @@ export function makePluginViewContent(
         // (#12611). Retired before the abort so no abort listener sees it live.
         attemptRef.current += 1;
         retireUnsavedOwner();
+        clearToolbarState();
         // Abort BEFORE reporting, and for the same reason `handleReset` does it
         // on retry: the thrown-away view instance is finished either way, so
         // anything it tied to `disposeSignal` has to cancel now rather than keep
@@ -1179,7 +1198,7 @@ export function makePluginViewContent(
         controllerRef.current?.abort();
         reportViewRenderFailed(panelId, { kindId, pluginId });
       },
-      [panelId, retireUnsavedOwner]
+      [panelId, retireUnsavedOwner, clearToolbarState]
     );
 
     /**
@@ -1198,6 +1217,9 @@ export function makePluginViewContent(
         // attempt stale.
         attemptRef.current += 1;
         retireUnsavedOwner();
+        // Header buttons describe the view that set them; a fresh view starts
+        // them at rest and says again what it knows.
+        clearToolbarState();
         const replacesFailure = boundaryShowingError.current;
         // The attempt being built is new, so whatever the last one threw is no
         // longer on screen once it commits, and whatever focus the last one held
@@ -1242,7 +1264,7 @@ export function makePluginViewContent(
         // takes.
         clearViewRenderFailure(panelId);
       },
-      [panelId, readRecoveryState, retireUnsavedOwner]
+      [panelId, readRecoveryState, retireUnsavedOwner, clearToolbarState]
     );
 
     const handleReset = (): void => {
@@ -1444,6 +1466,7 @@ export function makePluginViewContent(
             // leave the next one to the user.
             attemptRef.current += 1;
             retireUnsavedOwner();
+            clearToolbarState();
             controllerRef.current.abort();
             setReloadBlocked(true);
             settle?.("rate-limited");
@@ -1454,7 +1477,7 @@ export function makePluginViewContent(
         });
       },
       // `pluginId` is a factory-scope constant, not a reactive value.
-      [panelId, replaceAttempt, retireUnsavedOwner]
+      [panelId, replaceAttempt, retireUnsavedOwner, clearToolbarState]
     );
 
     // One callback per attempt, so a view can safely list it as a dependency.
@@ -1499,6 +1522,30 @@ export function makePluginViewContent(
           ? (hasUnsavedChanges: boolean) => setHasUnsavedChangesFor(retryCount, hasUnsavedChanges)
           : undefined,
       [offerRequestReload, setHasUnsavedChangesFor, retryCount]
+    );
+
+    /**
+     * A view's header-button state, bound to the attempt that set it like
+     * `setHasUnsavedChanges`, so a refresh that settles after a reload cannot
+     * repaint the fresh view's buttons. Keyed by the manifest's own `actionId`,
+     * and an id the kind's toolbar does not list is dropped.
+     */
+    const setToolbarItemStateFor = useCallback(
+      (attempt: number, actionId: unknown, state: unknown): void => {
+        if (attempt !== attemptRef.current || typeof actionId !== "string") return;
+        const declared = getPanelKindConfig(kindId)?.pluginToolbar;
+        if (!declared?.some((item) => item.stateKey === actionId)) return;
+        usePluginPanelToolbarStore.getState().setItemState(panelId, actionId, state);
+      },
+      [panelId]
+    );
+    const setToolbarItemState = useMemo(
+      () =>
+        offerToolbar
+          ? (actionId: string, state: PluginPanelToolbarItemState | null) =>
+              setToolbarItemStateFor(retryCount, actionId, state)
+          : undefined,
+      [offerToolbar, setToolbarItemStateFor, retryCount]
     );
 
     // The user's reload reaches this mount through the lifecycle service, which
@@ -1752,6 +1799,7 @@ export function makePluginViewContent(
                           persistState={persistState}
                           requestReload={requestReload}
                           setHasUnsavedChanges={setHasUnsavedChanges}
+                          setToolbarItemState={setToolbarItemState}
                           worktreeId={worktreeId}
                           styleRootAttributes={styleRootProps}
                           {...(settingsContext ? { settingsContext } : {})}

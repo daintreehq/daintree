@@ -174,13 +174,14 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 | `name` | yes | Display label in the panel header and palette. |
 | `iconId` | yes | One of the shared plugin icon IDs listed in `shared/config/pluginIconIds.ts`, or a [custom SVG](#custom-icons) inside your plugin (`"./icons/dash.svg"`). An unrecognized ID falls back to the generic terminal glyph on panel surfaces; `daintree-plugin validate` warns about it. |
 | `color` | yes | Any CSS colour, applied raw to the panel's icon on the palette and launcher surfaces — not to the active-tab indicator, which is a fixed accent. The convention for plugin panels is a theme category token, `var(--theme-category-orange)`, so it follows the active theme; every fixture in the repo uses that form. |
-| `hasPty` | no | `false` (default) for a view panel. `true` makes the kind a terminal: it renders through the terminal host, never loads a view, and is refused together with `menu` or `dockable: false`. Not a way to build plugin UI. |
+| `hasPty` | no | `false` (default) for a view panel. `true` makes the kind a terminal: it renders through the terminal host, never loads a view, and is refused together with `menu`, `toolbar` or `dockable: false`. Not a way to build plugin UI. |
 | `canRestart` | no | Show a "restart" control in the panel header. Default `false`. |
 | `canConvert` | no | Allow conversion between compatible panel kinds. Rarely useful for plugins. Default `false`. |
 | `showInPalette` | no | Include in the "New Panel…" palette. Default `true`. |
 | `dockable` | no | Dockable by default. Declare `false` to opt the kind out of the dock. Rejected together with `hasPty: true` (`pty_panel_dock_opt_out_unsupported`) — a plugin PTY kind renders as a terminal, which is always dockable, so the opt-out could never be honoured. |
 | `stateVersion` | no | Integer from 1 to 1,000,000 naming the shape your panel writes through `persistState`. Omit it and the host makes no promises about your saved state; declare it and you get the migration contract below. |
 | `menu` | no | Up to five of your own actions to offer in the panel's ⋯ and right-click menus. See [Panel menu](#panel-menu) below. |
+| `toolbar` | no | Up to three of your own actions drawn as buttons in the panel header, with live state your view sets. See [Panel toolbar](#panel-toolbar) below. |
 
 **Icon IDs** — one shared set backs every surface that renders a plugin icon (the panel palette, panel headers, tabs, the dock, toolbar buttons, and the toolbar overflow menu), so an ID looks the same everywhere it appears:
 
@@ -253,6 +254,69 @@ Bump `stateVersion` when the shape changes incompatibly, never for an additive k
 - **Label.** `label` is the menu text, 1–80 characters after trimming. Leave it out to use the action's `title`. End it with `…` when the action asks for more before it acts, as the host's own entries do.
 - **Arguments.** The action is dispatched with `{ panelId }`, the id of the panel whose menu was used, the same `panelId` your view receives in `PanelViewProps`. If the action declares an `inputSchema`, it has to accept that property, or the dispatch fails validation. From the right-click menu, focus moves into that panel before the action runs, so a dialog it opens hands focus back there.
 - **Danger.** The action's own danger tier applies: a `"confirm"` action asks first, as it does from the palette.
+
+### Panel toolbar
+
+`toolbar` puts up to three of your own actions in the panel's header, as buttons beside the window controls. Each entry is `{ "actionId", "label"?, "iconId"?, "status"? }`, and your view sets each button's live state while it runs:
+
+```json
+{
+  "panels": [
+    {
+      "id": "ledger",
+      "name": "Ledger",
+      "iconId": "wallet",
+      "color": "var(--theme-category-blue)",
+      "toolbar": [
+        {
+          "actionId": "acme.ledger.refresh-quotes",
+          "label": "Refresh prices",
+          "iconId": "./icons/refresh.svg",
+          "status": true
+        }
+      ]
+    }
+  ]
+}
+```
+
+- **Only your own actions**, by the same rules as `menu`: written `"{manifestId}.{id}"`, matching a declared command when you declare any (`action_id_undeclared_command`), never a built-in or another plugin's (`panel_toolbar_action_not_own`). A project plugin writes its manifest id; the host moves it into the instance's namespace.
+- **At most three**, each action once (`panel_toolbar_duplicate_action`). The same action may also sit in `menu`. A `hasPty: true` panel draws the terminal's header, so a `toolbar` on one is refused (`pty_panel_toolbar_unsupported`).
+- **When they appear.** A button shows only while its action is registered, in declared order, ahead of the window controls.
+- **Label and icon.** `label` (1–80 characters, trimmed) is the button's name and resting tooltip; leave it out to use the action's `title`. `iconId` takes the same generic plugin icon IDs as a panel's own `iconId`; leave it out and the label is drawn as a text button, cut short on a narrow header with the full label on hover. A `./…svg` path is accepted, but the host does not load SVG files referenced only from a toolbar entry yet, so it draws the generic plugin glyph unless the same file is also a panel, toolbar button or process tool icon.
+- **Status.** `status: true` draws a short status beside the button from its live state: the `text`, then "Updated 3h ago" from `updatedAt`, ticking on the host's shared clock. Without it those fields are ignored.
+- **Arguments.** A click dispatches the action with `{ panelId }`, as a menu entry does, and the action's own danger tier applies.
+
+**Live state.** Your view sets a button's state with `setToolbarItemState(actionId, state)` from `PanelViewProps`, naming the button by its `actionId` exactly as the manifest writes it. Each call replaces that button's state, and `null` resets it. Every field is optional:
+
+| Field | Effect |
+| --- | --- |
+| `busy` | A spinner on the button, which ignores clicks until it is cleared. |
+| `disabled` | Announced unavailable and ignores clicks. The button keeps its place in the tab order. |
+| `text` | The status beside a `status: true` button ("2 prices kept from cache"). Cut to 120 characters. |
+| `updatedAt` | Epoch ms or an ISO string, drawn as "Updated 3h ago". |
+| `staleAfterMs` | Once `updatedAt` is older than this, the status turns to a warning (glyph and colour) on its own, with no further call. |
+| `tone` | `"warning"` or `"danger"` adds that glyph and colour to the status; colour is never the only signal. An explicit tone, `"default"` included, wins over the stale warning. |
+| `tooltip` | The button's tooltip when it says more than the label ("Prices fetched 14:02"). Cut to 120 characters. |
+
+State belongs to the panel: it survives your view unmounting and remounting (a dock move, a tab switch) and is cleared when the panel closes, the view reloads or the view crashes. The setter belongs to its attempt like `setHasUnsavedChanges`, so a refresh that settles after a reload does nothing. An `actionId` the manifest doesn't list is ignored. The setter is absent on project surfaces, settings views and a panel shown as a dialog, none of which draws the toolbar.
+
+In React, `usePanelToolbarItem(props, actionId, state)` from `@daintreehq/plugin-sdk/react` keeps a button in step with your view. It sends the state on mount and whenever a field changes, resets the button when the view unmounts, and does nothing where the setter is absent:
+
+```tsx
+import { usePanelToolbarItem } from "@daintreehq/plugin-sdk/react";
+
+export default function LedgerView(props: PanelViewProps) {
+  const { refreshing, fetchedAt, cachedCount } = useQuotes();
+  usePanelToolbarItem(props, "acme.ledger.refresh-quotes", {
+    busy: refreshing,
+    text: cachedCount > 0 ? `${cachedCount} prices kept from cache` : undefined,
+    updatedAt: fetchedAt,
+    staleAfterMs: 15 * 60_000,
+  });
+  // …
+}
+```
 
 ### Host entries on plugin panel menus
 
@@ -376,6 +440,7 @@ export default function Dashboard(props) {
 | `persistState` | `(patch: Record<string, unknown>) => boolean` \| `undefined` | Writes view state back onto the panel record, so the next mount sees it in `initialArgs`. The two are one bag: spawn seeds it, this updates it, `initialArgs` reads it back — which is what lets a view survive the teardowns a panel routinely outlives (maximizing a sibling pane, leaving a dock tab, a project view reclaimed under memory pressure, a restart) without forgetting where the user was. The patch is **merged**, so independent parts of a view can each persist their own key; a key set to `undefined` is removed. An unchanged write is free — it neither churns the store nor schedules a save — so calling it from a render-derived effect is fine. Keep it small: the host refuses an update whose serialized form exceeds 64KB, and anything larger, not JSON round-trippable, or that should outlive the panel belongs in `host.storage`. Returns `true` when the stored state now matches what you asked for (applied, or already identical) and `false` when the host rejected the write — the merged bag would exceed 64KB, or it is not JSON-serializable (a cyclic value, a `BigInt`, a throwing `toJSON`). `true` means accepted and scheduled, not flushed: the layout save is debounced. |
 | `requestReload` | `() => void` \| `undefined` | Ask the host to discard this view attempt and mount a fresh one for the same panel, without restarting the backend. The current `disposeSignal` aborts and React cleanup runs; the next attempt gets a new `disposeSignal` and the latest accepted `persistState` bag as `initialArgs`, while `panelId`, `panelRemovedSignal` and the backend carry over. The module is reused, so module globals, document-wide registrations and anything on `window` survive — a reload frees only what your cleanup releases, and cannot rescue a blocked renderer. A request, not a command: the host may refuse it, reports no completion, and merges calls in the same tick. A callback held past its own attempt does nothing. A fourth reload within 30 seconds of three accepted ones stops the view until the user reloads the panel. Absent on project surfaces and settings views. See [Views → Reloading a view](./views.md#reloading-a-view). |
 | `setHasUnsavedChanges` | `(hasUnsavedChanges: boolean) => void` \| `undefined` | Tell the host whether the view holds work a reload would lose. The user and agents can reload a plugin panel without being asked, since persisted state comes back; while this is `true`, they are asked to confirm first. Your own `requestReload` is never held up by it. The setter belongs to its attempt, so one held past its teardown does nothing, and a new attempt starts with nothing unsaved. Absent where the host offers no reload. See [Views → Reloading a view](./views.md#reloading-a-view). |
+| `setToolbarItemState` | `(actionId: string, state: PluginPanelToolbarItemState \| null) => void` \| `undefined` | Set the live state of one of the panel's manifest `toolbar` buttons: busy, disabled, a status line, an "Updated" age and its tone. Each call replaces that button's state; `null` resets it. State survives the view remounting and is cleared when the panel closes or the view reloads. Belongs to its attempt, like `setHasUnsavedChanges`. Absent on project surfaces, settings views and a panel shown as a dialog. See [Panel toolbar](#panel-toolbar). |
 | `styleRootAttributes` | `Readonly<Record<string, string>>` | Spread onto any container you render through `createPortal`, so the runtime-compiled Tailwind classes inside it still apply. See [Views → Styling](./views.md#styling). |
 | `settingsContext` | `{ scope: "user" \| "project"; projectId: string \| null }` \| `undefined` | Present only on a `location: "settings"` view: which settings home it is mounted in. `projectId` is `null` in the `"user"` home. See [A custom settings section](#a-custom-settings-section). |
 
