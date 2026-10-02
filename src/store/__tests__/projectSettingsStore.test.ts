@@ -140,6 +140,69 @@ describe("projectSettingsStore", () => {
     expect(useProjectSettingsStore.getState().allDetectedRunners).toEqual(DETECTED_RUNNERS);
   });
 
+  it("keeps a save made while a revalidation was in flight", async () => {
+    useProjectSettingsStore.setState({
+      settings: { runCommands: [] },
+      projectId: "project-save",
+      isLoading: false,
+    });
+    const detected = createDeferred<RunCommand[]>();
+    getSettingsMock.mockResolvedValueOnce({ runCommands: [] });
+    detectRunnersMock.mockReturnValueOnce(detected.promise);
+
+    const refresh = useProjectSettingsStore.getState().loadSettings("project-save");
+    useProjectSettingsStore.getState().setSettings(SETTINGS_WITH_COMMANDS);
+    detected.resolve(DETECTED_RUNNERS);
+    await refresh;
+
+    const state = useProjectSettingsStore.getState();
+    expect(state.settings).toEqual(SETTINGS_WITH_COMMANDS);
+    expect(state.allDetectedRunners).toEqual(DETECTED_RUNNERS);
+    expect(state.detectedRunners).toEqual([
+      { id: "det-2", name: "Build", command: "npm run build" },
+    ]);
+  });
+
+  it("applies only the newest of overlapping revalidations", async () => {
+    useProjectSettingsStore.setState({
+      settings: { runCommands: [] },
+      projectId: "project-overlap",
+      isLoading: false,
+    });
+    const older = createDeferred<RunCommand[]>();
+    const newer = createDeferred<RunCommand[]>();
+    getSettingsMock.mockResolvedValue({ runCommands: [] });
+    detectRunnersMock.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+
+    const first = useProjectSettingsStore.getState().loadSettings("project-overlap");
+    const second = useProjectSettingsStore.getState().loadSettings("project-overlap");
+    newer.resolve(DETECTED_RUNNERS);
+    await second;
+    older.resolve([]);
+    await first;
+
+    expect(useProjectSettingsStore.getState().allDetectedRunners).toEqual(DETECTED_RUNNERS);
+  });
+
+  it("keeps cached settings when a revalidation fails", async () => {
+    useProjectSettingsStore.setState({
+      settings: SETTINGS_WITH_COMMANDS,
+      allDetectedRunners: DETECTED_RUNNERS,
+      projectId: "project-flaky",
+      isLoading: false,
+    });
+    getSettingsMock.mockRejectedValueOnce(new Error("boom"));
+    detectRunnersMock.mockResolvedValueOnce([]);
+
+    await useProjectSettingsStore.getState().loadSettings("project-flaky");
+
+    const state = useProjectSettingsStore.getState();
+    expect(state.settings).toEqual(SETTINGS_WITH_COMMANDS);
+    expect(state.allDetectedRunners).toEqual(DETECTED_RUNNERS);
+    expect(state.error).toBe("boom");
+    expect(state.isLoading).toBe(false);
+  });
+
   it("recomputes detected runners when settings are updated", () => {
     useProjectSettingsStore.setState({
       allDetectedRunners: DETECTED_RUNNERS,
