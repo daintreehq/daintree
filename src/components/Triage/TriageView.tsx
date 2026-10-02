@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { buildPilotGroups, type PilotWorkspaceMeta } from "@/components/Pilot/pilotRows";
+import { TRIAGE_ATTENTION_CATEGORIES } from "@shared/types/ipc/triage";
 import { buildTriageSections, type TriageItem, type TriageSectionId } from "./triageModel";
 import {
   TriageCard,
@@ -125,7 +126,11 @@ export function TriageView() {
       nowMs,
     });
     const cards = new Map((triage?.cards ?? []).map((card) => [card.runId, card]));
-    return buildTriageSections(groups, cards);
+    return buildTriageSections(groups, cards, {
+      // Unknown until main answers, which is still a read on its way.
+      configured: triage?.configured ?? true,
+      failed: (triage?.lastError ?? null) !== null,
+    });
   }, [fleet, workspaces, nowMs, triage]);
 
   const items = useMemo(() => sections.flatMap((section) => section.items), [sections]);
@@ -205,6 +210,30 @@ export function TriageView() {
     }
   };
 
+  // The pointer moves the same cursor the arrows do — but never out of a reply
+  // being typed, and without a ring, which belongs to the keyboard.
+  const onPointerCursor = useCallback((element: HTMLElement) => {
+    const active = document.activeElement;
+    if (active instanceof Element && active.closest("textarea, input")) return;
+    element.focus({ preventScroll: true, focusVisible: false } as FocusOptions);
+  }, []);
+
+  // Answered: the agent goes back to work, so the cursor goes on to whatever
+  // is still waiting rather than following it out of the queue.
+  const advancePast = useCallback(
+    (runId: string) => {
+      const card = document.getElementById(triageCardDomId(runId));
+      const active = document.activeElement;
+      if (active !== null && active !== document.body && !card?.contains(active)) return;
+      const index = items.findIndex((item) => item.runId === runId);
+      const next = items
+        .slice(index + 1)
+        .find((item) => TRIAGE_ATTENTION_CATEGORIES.has(item.kind) && item.kind !== "finished");
+      if (next) focusCardNow(next.runId);
+    },
+    [items, focusCardNow]
+  );
+
   const handlers = useMemo<TriageCardHandlers>(() => {
     const openRun = (item: TriageItem) => {
       const args = { runId: item.runId, workspaceId: item.workspaceId };
@@ -233,6 +262,7 @@ export function TriageView() {
       onChoose: async (item, label) => {
         try {
           await window.electron.triage.choose(item.runId, label, target(item));
+          advancePast(item.runId);
         } catch (error) {
           failToast("Couldn't answer agent", error, goTo(item));
           throw error;
@@ -241,6 +271,7 @@ export function TriageView() {
       onReply: async (item, text) => {
         try {
           await window.electron.triage.reply(item.runId, text, target(item));
+          if (item.kind === "question") advancePast(item.runId);
         } catch (error) {
           failToast("Couldn't send message", error, goTo(item));
           throw error;
@@ -272,7 +303,7 @@ export function TriageView() {
         );
       },
     };
-  }, [close]);
+  }, [close, advancePast]);
 
   const counts = useMemo(() => {
     const byId = new Map(sections.map((section) => [section.id, section.items.length]));
@@ -285,8 +316,11 @@ export function TriageView() {
 
   const busy = triage?.busy === true;
   const focusedItem = items[activeIndex] ?? null;
+  // The footer speaks for whatever holds focus: inside a reply, Enter sends.
+  const [typing, setTyping] = useState(false);
   const footerHints = useMemo(() => {
     if (!focusedItem) return [];
+    if (typing) return [{ keys: ["⇧", "↵"], label: "New line" }];
     const hints = [{ keys: ["↑", "↓"], label: "Move" }];
     if (focusedItem.kind === "approval" && (focusedItem.card?.options.length ?? 0) > 0) {
       hints.push({ keys: ["1–9"], label: "Answer" });
@@ -298,7 +332,7 @@ export function TriageView() {
       hints.push({ keys: [isMac() ? "⌘" : "Ctrl", "⌫"], label: "Trash" });
     }
     return hints;
-  }, [focusedItem]);
+  }, [focusedItem, typing]);
 
   return (
     <AppPaletteDialog isOpen={isOpen} onClose={close} ariaLabel="Triage" tier="workspace">
@@ -309,7 +343,7 @@ export function TriageView() {
         trailing={
           triage?.refreshedAt ? (
             <span className="text-xs text-text-secondary">
-              <TimeAgo timestamp={triage.refreshedAt} now={nowMs} prefix="Read " />
+              <TimeAgo timestamp={triage.refreshedAt} now={nowMs} prefix="Scanned " />
             </span>
           ) : null
         }
@@ -354,10 +388,21 @@ export function TriageView() {
       <AppPaletteDialog.Body
         ariaLabel="Agents"
         maxHeight="max-h-[70vh]"
-        scrollClassName="flex flex-col gap-4 p-3"
+        scrollClassName="flex flex-col gap-4 p-2"
         onNavigationKeyDown={onNavigationKeyDown}
       >
-        <div ref={bodyRef} className="contents" onKeyDown={onNavigationKeyDown}>
+        <div
+          ref={bodyRef}
+          className="contents"
+          onKeyDown={onNavigationKeyDown}
+          onFocusCapture={(event) =>
+            setTyping(
+              event.target instanceof Element &&
+                event.target.closest("[data-triage-composer]") !== null
+            )
+          }
+          onBlurCapture={() => setTyping(false)}
+        >
           {triage !== null && !triage.configured && (
             <Callout
               severity="neutral"
@@ -388,25 +433,30 @@ export function TriageView() {
             </Callout>
           )}
           {sections.map((section) => (
-            <section
-              key={section.id}
-              aria-label={SECTION_LABEL[section.id]}
-              className="flex flex-col gap-2"
-            >
-              <h3 className={cn(PALETTE_SECTION_LABEL_CLASS, "px-1")}>
+            <section key={section.id} className="flex flex-col gap-1">
+              <h3
+                id={`triage-section-${section.id}`}
+                className={cn(PALETTE_SECTION_LABEL_CLASS, "px-2.5")}
+              >
                 {SECTION_LABEL[section.id]}
                 <span className="ml-1.5 tabular-nums">{section.items.length}</span>
               </h3>
               <div
-                className={cn("flex flex-col", section.id === "needs-you" ? "gap-2" : "gap-0.5")}
+                role="feed"
+                aria-labelledby={`triage-section-${section.id}`}
+                aria-busy={busy}
+                className="flex flex-col gap-0.5"
               >
-                {section.items.map((item) => (
+                {section.items.map((item, index) => (
                   <TriageCard
                     key={item.runId}
                     item={item}
                     domId={triageCardDomId(item.runId)}
                     isFocused={focusedItem?.runId === item.runId}
+                    position={index + 1}
+                    setSize={section.items.length}
                     onFocusCard={() => setFocusedId(item.runId)}
+                    onPointerCursor={onPointerCursor}
                     {...handlers}
                   />
                 ))}
@@ -424,13 +474,15 @@ export function TriageView() {
       <AppPaletteDialog.Footer>
         {focusedItem && (
           <PaletteFooterHints
-            primaryHint={{ keys: ["↵"], label: "Go to terminal" }}
+            primaryHint={
+              typing ? { keys: ["↵"], label: "Send" } : { keys: ["↵"], label: "Go to terminal" }
+            }
             hints={footerHints}
           />
         )}
         {triage?.configured && (
           <span className="ml-auto shrink-0 whitespace-nowrap text-2xs text-text-secondary">
-            Cards by Jev + {triage.describerModel}
+            AI summaries · {triage.describerModel}
           </span>
         )}
       </AppPaletteDialog.Footer>

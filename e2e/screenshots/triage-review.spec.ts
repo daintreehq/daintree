@@ -85,9 +85,14 @@ async function load(page: Page, theme: string, fixture: TriageFixture): Promise<
   await page.goto(
     `${baseURL}/triage-preview.html?theme=${theme}&fixture=${fixture}&projectId=${CURRENT_PROJECT}`
   );
-  // Generous: a first load after a new import re-optimises Vite's deps.
-  await expect(page.locator("[data-preview-shell]")).toBeAttached({ timeout: 60_000 });
-  await expect(dialog(page)).toBeVisible({ timeout: 30_000 });
+  try {
+    // Generous: a first load after a new import re-optimises Vite's deps.
+    await expect(page.locator("[data-preview-shell]")).toBeAttached({ timeout: 60_000 });
+    await expect(dialog(page)).toBeVisible({ timeout: 30_000 });
+  } catch (error) {
+    // A blank page is almost always a throw during module evaluation; say which.
+    throw new Error(`${fixture}: panel never mounted — ${errors.join("; ") || String(error)}`);
+  }
   await page.evaluate(() => document.fonts.ready);
   await page.addStyleTag({ content: FREEZE_CSS });
   // The panel lands keyboard focus on its first card two frames after open.

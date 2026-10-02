@@ -15,7 +15,7 @@ export interface TriageItem {
   kind: TriageCategory;
   /** The classifier's card, when it still describes the run's current state. */
   card: TriageCard | null;
-  /** No card yet, or the describer is still writing it. */
+  /** Words for the card are on their way: its first read, a describe, or a re-read. */
   pending: boolean;
   /**
    * The run's state moved after its card was read. Its words may still show,
@@ -84,9 +84,18 @@ function currentCard(
   return { card, stale: false };
 }
 
+/** Whether a missing card is still coming: never without keys, nor after a failed read. */
+export interface TriageReadState {
+  configured: boolean;
+  failed: boolean;
+}
+
+const READING: TriageReadState = { configured: true, failed: false };
+
 export function buildTriageSections(
   groups: readonly PilotProjectGroup[],
-  cards: ReadonlyMap<string, TriageCard>
+  cards: ReadonlyMap<string, TriageCard>,
+  read: TriageReadState = READING
 ): TriageSection[] {
   const items: TriageItem[] = [];
   for (const group of groups) {
@@ -105,7 +114,11 @@ export function buildTriageSections(
         },
         kind: card?.category ?? observedKind(row.run),
         card,
-        pending: card === null || card.describing || stale,
+        // A bone promises words. Without keys nothing will write them, and after
+        // a failed read nothing is writing them now, so neither draws one.
+        pending:
+          read.configured &&
+          (card === null ? !read.failed : card.describing || stale),
         stale,
       });
     }
