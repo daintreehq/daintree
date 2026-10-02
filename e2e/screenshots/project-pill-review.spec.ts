@@ -82,9 +82,10 @@ const STATES = [
 ] as const;
 
 /** The pill menu's "Copy path" toast, succeeding and failing. */
+// Success is the brief "Copied" flash, a refusal the error toast.
 const COPY_RESULTS = [
-  { result: "ok", text: "Path copied" },
-  { result: "fail", text: "Couldn't copy path" },
+  { result: "ok", selector: "[data-copy-flash]" },
+  { result: "fail", selector: "text=Couldn't copy path" },
 ] as const;
 
 /** Horizontal margin of toolbar kept either side of the pill in each crop. */
@@ -208,13 +209,13 @@ test("Project pill — states and themes", async ({ browser }) => {
   }
 
   for (const theme of FULL_THEMES) {
-    for (const { result, text } of COPY_RESULTS) {
+    for (const { result, selector } of COPY_RESULTS) {
       await stubViteHmrClient(page);
       await page.setViewportSize({ width: 640, height: 320 });
       await page.goto(`${server!.baseURL}/project-pill-preview.html?theme=${theme}&copy=${result}`);
       await page.evaluate(() => document.fonts.ready);
-      const toast = page.getByText(text, { exact: true });
-      await expect(toast, `copy ${result}: toast not raised`).toBeVisible();
+      const confirmation = page.locator(selector);
+      await expect(confirmation, `copy ${result}: confirmation not raised`).toBeVisible();
       await page.waitForTimeout(400);
       const out = path.join(OUT_DIR, `copy-${result}-${theme}.png`);
       await page.screenshot({ path: out });

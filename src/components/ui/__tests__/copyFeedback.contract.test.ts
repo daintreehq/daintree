@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 
 /**
  * A copy is confirmed one of three ways, each owned by one primitive:
- * `copyWithToast` for a menu row (it has closed, so a toast confirms and a
- * refusal offers Retry), `CopyButton` for an icon or labelled button, and
+ * `copyWithToast` for a menu row (it has closed, so a "Copied" flash beside
+ * it confirms and a refusal toast offers Retry), `CopyButton` for an icon or labelled button, and
  * `useCopyWithFeedback` for a control that cannot be a `CopyButton` (a path
  * pill, a banner action). They share the dwell, the word "Copied" and the
  * live-region announcement. The audit that produced this found fifteen

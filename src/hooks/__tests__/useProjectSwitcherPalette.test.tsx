@@ -181,6 +181,7 @@ vi.mock("@/hooks/useCopyWithFeedback", () => ({
 }));
 
 import { usePaletteStore } from "@/store/paletteStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import {
   DEFAULT_OTHER_PROJECTS_SORT_MODE,
@@ -1640,8 +1641,9 @@ describe("useProjectSwitcherPalette", () => {
   });
 
   describe("copyPath", () => {
-    it("writes the path to the clipboard and emits a transient Path copied toast on success", async () => {
+    it("writes the path to the clipboard and announces it without a toast on success", async () => {
       copyMock.mockResolvedValueOnce(true);
+      useAnnouncerStore.setState({ polite: null, assertive: null });
 
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -1650,12 +1652,8 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       expect(copyMock).toHaveBeenCalledWith("/repo/one");
-      expect(notifyMock).toHaveBeenCalledWith({
-        type: "info",
-        title: "Path copied",
-        message: "/repo/one",
-        transient: true,
-      });
+      expect(useAnnouncerStore.getState().polite?.msg).toBe("Path copied");
+      expect(notifyMock).not.toHaveBeenCalled();
     });
 
     it("raises an error toast with a Retry that re-runs the copy when the write fails", async () => {
@@ -1677,6 +1675,7 @@ describe("useProjectSwitcherPalette", () => {
       expect(failure.type).toBe("error");
       expect(failure.title).toBe("Couldn't copy path");
       expect(failure.action.label).toBe("Retry");
+      useAnnouncerStore.setState({ polite: null, assertive: null });
 
       await act(async () => {
         failure.action.onClick();
@@ -1684,12 +1683,8 @@ describe("useProjectSwitcherPalette", () => {
 
       expect(copyMock).toHaveBeenCalledTimes(2);
       expect(copyMock).toHaveBeenLastCalledWith("/repo/one");
-      expect(notifyMock).toHaveBeenLastCalledWith({
-        type: "info",
-        title: "Path copied",
-        message: "/repo/one",
-        transient: true,
-      });
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(useAnnouncerStore.getState().polite?.msg).toBe("Path copied");
     });
   });
 

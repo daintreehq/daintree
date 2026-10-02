@@ -518,7 +518,7 @@ export function BrowserToolbar({
   );
 
   // The compact layout's menu row closes on select, so it confirms like every
-  // other menu copy: with a toast.
+  // other menu copy, through copyWithToast.
   const handleMenuCopy = useCallback(() => {
     copyWithToast("URL", address, {
       write: (text) =>

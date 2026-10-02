@@ -8,6 +8,7 @@ import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentit
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { shortSha } from "@/utils/textParsing";
 import { Toaster } from "@/components/ui/toaster";
+import { CopyFlash } from "@/components/ui/CopyFlash";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { ToolbarProjectPill, ToolbarProjectPillTooltipBody } from "../ToolbarProjectPill";
 import "@/index.css";
@@ -196,6 +197,7 @@ function App() {
       <TooltipProvider>
         <div data-preview-shell="" className="h-[320px] w-[640px]">
           <Toaster />
+          <CopyFlash />
         </div>
       </TooltipProvider>
     );

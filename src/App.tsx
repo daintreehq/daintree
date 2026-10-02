@@ -64,6 +64,7 @@ import { useTypeAnywhere } from "./hooks/useTypeAnywhere";
 import { useResumeAgentSession } from "./hooks/useResumeAgentSession";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
+import { CopyFlash } from "./components/ui/CopyFlash";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "./lib/animationUtils";
 import { useE2EBridges } from "./hooks/app/useE2EBridges";
@@ -477,6 +478,7 @@ function AppInner() {
               disableHoverableContent
             >
               <DndProvider>
+                <CopyFlash />
                 <AppLayout
                   onLaunchAgent={handleLaunchAgent}
                   onSettings={handleSettings}
@@ -507,6 +509,7 @@ function AppInner() {
             <DndProvider>
               <VoiceRecordingAnnouncer />
               <AccessibilityAnnouncer />
+              <CopyFlash />
               <Profiler id="app-layout" onRender={onLayoutRender}>
                 <AppLayout
                   sidebarContent={<SidebarContent onOpenOverview={openWorktreeOverview} />}

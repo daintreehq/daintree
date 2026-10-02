@@ -151,6 +151,7 @@ describe("no ui/ surface portals over the toolbar without opting out", () => {
     "tooltip.tsx":
       "non-interactive, so there is no dead click zone to fix — and opting it out would carve a dead *drag* zone out of the title bar for as long as one shows",
     "ShortcutHint.tsx": "pointer-events-none and aria-hidden — nothing in it is clickable",
+    "CopyFlash.tsx": 'same as ShortcutHint.tsx — a pointer-events-none, aria-hidden "Copied" card',
     "AppDialog.tsx":
       "centred modal panel; it only reaches the drag band on a short window with a global banner up, and whether a window should drag at all behind an open modal is a separate call",
     "AppPaletteDialog.tsx": "same as AppDialog.tsx — pt-[15vh] panel, modal",

@@ -209,7 +209,7 @@ Every copy is confirmed, in the word "Copied" (never "Copied!"), and a refused w
 
 | Where the copy lives | Use | Success | Refusal |
 | --- | --- | --- | --- |
-| A menu row, a banner's overflow item — anything that closes on select | `copyWithToast(label, value)` in `src/lib/copyWithToast.ts` | Transient toast, `"{Label} copied"`, the value (or a stand-in such as the file name) as its body | Error toast `"Couldn't copy {label}"` with Retry, coalesced per value |
+| A menu row, a banner's overflow item — anything that closes on select | `copyWithToast(label, value)` in `src/lib/copyWithToast.ts` | A "Copied" flash (`CopyFlash`) beside where the copy was asked for, gone after the dwell and never outliving a project switch, plus a polite `"{Label} copied"` announcement | Error toast `"Couldn't copy {label}"` with Retry, coalesced per value |
 | An icon-only button | `CopyButton` with `aria-label` | Copy glyph swaps to a neutral check for `UI_ACTION_SUCCESS_DWELL_MS` | Announced assertively |
 | A labelled button | `CopyButton` with `label` | The label reads "Copied" for the dwell | The label reads "Couldn't copy", announced assertively — or `onCopyError` when the surface already has an error line for it (a settings row's `error`), so the failure is stated once |
 | A control that cannot be a button (a path pill, a banner action) | `useCopyWithFeedback` | The control's own swap, gated on `copiedText` | The control's own |
@@ -217,9 +217,9 @@ Every copy is confirmed, in the word "Copied" (never "Copied!"), and a refused w
 Rules that hold across all four:
 
 - **One dwell.** `UI_ACTION_SUCCESS_DWELL_MS`, owned by the hook. Never a local timer or a literal.
-- **One announcement.** The hook announces through the polite live region, or the toast's own region does. The accessible name stays constant — a name that flips to "Copied" under focus is announced a second time — and no surface keeps its own `role="status"` copy message beside it.
+- **One announcement.** The hook or `copyWithToast` announces through the polite live region; the menu-row flash is `aria-hidden` and never speaks. The accessible name stays constant — a name that flips to "Copied" under focus is announced a second time — and no surface keeps its own `role="status"` copy message beside it.
 - **The confirmation belongs to the value.** A string payload is confirmed only while it is still the current one, so a re-pointed control never arrives confirmed. Where two items can carry identical text (two telemetry events), key the button by item.
-- **A menu confirms with the toast, not its trigger.** Flipping a "More actions" glyph to a check was three surfaces' private channel for this and is retired.
+- **A menu confirms with the flash, not its trigger.** Flipping a "More actions" glyph to a check was three surfaces' private channel for this and is retired.
 - **Variant.** A labelled copy takes its context's grammar: `outline` `sm` on a settings row or rail, the group's variant inside a button group, and otherwise `ghost` `xs` beside the payload it copies. The label slot reserves the wider of the label and "Copied", so the button holds its width through the dwell.
 - **Main-process clipboard.** Panes hosting a guest webview pass `write={(t) => window.electron.clipboard.writeText(t)}`, since the guest may hold focus.
 

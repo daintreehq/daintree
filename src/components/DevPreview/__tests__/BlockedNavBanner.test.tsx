@@ -6,6 +6,8 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 const notifyMock = vi.hoisted(() => vi.fn(() => "toast-1"));
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -452,9 +454,10 @@ describe("BlockedNavBanner copy feedback lifetime", () => {
   }
 
   // On an error the copy lives in the overflow menu, which closes before the
-  // copy settles: it confirms like every menu copy, with a toast.
-  it("confirms a demoted copy with a toast rather than on the band", async () => {
+  // copy settles: it confirms like every menu copy, through copyWithToast.
+  it("confirms a demoted copy like a menu copy rather than on the band", async () => {
     notifyMock.mockClear();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
     const { container } = render(
       <BlockedNavBanner
         state={timedOutWith("copied")}
@@ -466,11 +469,8 @@ describe("BlockedNavBanner copy feedback lifetime", () => {
     const menu = screen.getByTestId("overflow-content");
     fireEvent.click(within(menu).getByText("Copy URL"));
 
-    await waitFor(() =>
-      expect(notifyMock).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "info", title: "URL copied" })
-      )
-    );
+    await waitFor(() => expect(useAnnouncerStore.getState().polite?.msg).toBe("URL copied"));
+    expect(notifyMock).not.toHaveBeenCalled();
     // The alert band would announce any result written into it a second time.
     expect(bannerRoot(container).textContent).not.toMatch(/url copied|couldn't copy/i);
   });

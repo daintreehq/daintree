@@ -30,6 +30,7 @@ import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
 import { notify } from "@/lib/notify";
 import { copyWithToast } from "@/lib/copyWithToast";
+import { captureCopyFlash } from "@/lib/copyFlash";
 import { actionService } from "@/services/ActionService";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { CopyTreeRunSource, GitStatus } from "@shared/types";
@@ -88,9 +89,11 @@ function runRowAction<Result>(
   args: Record<string, string>,
   errorTitle: string,
   worktreeId: string | null,
-  onSuccess?: (result: Result) => void
+  /** Called as each attempt starts, inside its gesture; returns its success handler. */
+  onAttempt?: () => (result: Result) => void
 ): void {
   const run = async () => {
+    const onSuccess = onAttempt?.();
     const result = await actionService.dispatch<Result>(actionId, args, {
       source: "context-menu",
     });
@@ -272,7 +275,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
   const insertAriaKeyshortcuts = comboToAriaKeyshortcuts(INSERT_FILE_REFERENCE_COMBO, isMac());
 
   const handleCopyFileContents = useCallback(
-    (absolutePath: string, name: string) =>
+    (absolutePath: string) =>
       // `file.read`, not filesClient: the action resolves the path against the
       // project and its worktrees and refuses anything outside them, and reports
       // binary, oversized and LFS-pointer files as named failures rather than
@@ -285,8 +288,13 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
         worktreeId,
         // Written straight off the read: clipboard writes want a fresh
         // transient activation, and parking the text in state first would put a
-        // render between the gesture and the write for no gain.
-        (result) => copyWithToast("File contents", result.content, { message: name })
+        // render between the gesture and the write for no gain. The flash is
+        // anchored before the read, while the menu item still holds focus and
+        // before a project switch could void it.
+        () => {
+          const flash = captureCopyFlash();
+          return (result) => copyWithToast("File contents", result.content, { flash });
+        }
       ),
     [worktreeId]
   );
@@ -439,7 +447,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
                 Copy file name
               </ContextMenuItem>
               {showCopyFileContents && (
-                <ContextMenuItem onSelect={() => handleCopyFileContents(absolutePath, name)}>
+                <ContextMenuItem onSelect={() => handleCopyFileContents(absolutePath)}>
                   <Copy className={ICON_CLASS} />
                   Copy file contents
                 </ContextMenuItem>

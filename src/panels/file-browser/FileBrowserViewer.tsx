@@ -1337,13 +1337,7 @@ function FileActions({
           </>
         )}
         {contents !== null && (
-          <DropdownMenuItem
-            onSelect={() =>
-              copyWithToast("File contents", contents, {
-                message: filePath.split(/[/\\]/).pop() ?? filePath,
-              })
-            }
-          >
+          <DropdownMenuItem onSelect={() => copyWithToast("File contents", contents)}>
             <Copy className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
             Copy file contents
           </DropdownMenuItem>

@@ -466,7 +466,7 @@ One treatment per state, owned by `Button` (`src/components/ui/button.tsx`). A s
 - **Destructive** — `ghost-danger` (red at rest) for inline and row actions, filled `destructive` for a confirmation's footer. The exception is sidebar chrome (worktree cards, deleted-worktree rows), which stays neutral at rest and turns red on hover and focus: the sidebar repeats these on every card, and its red belongs to the interaction and the confirm. A fix action on an error band (Retry, Restart) is not destructive and is `outline`, like `InlineStatusBanner`'s.
 - **Icon gap** — the size carries it (`default` 8px, `sm` 6px, `xs` 4px). Never add `mr-*`/`ml-*` to an icon inside a Button, and let the size set the glyph too.
 - **Size** — pick the size whose height you want. `sm` forced to `h-6` is `xs`; `icon` forced to `h-7 w-7` is `icon-sm`. A row action under 24px fails WCAG 2.5.8: use `icon-xs` with a negative margin when the row cannot grow.
-- **Copied** — `CopyButton` for any copy button, labelled or icon-only; it owns the check glyph, the "Copied" label swap, the dwell and the announcement. The check is neutral, never `text-status-success`. Menu-row copies confirm with a toast instead. See [Copy feedback](./component-contract.md#copy-feedback).
+- **Copied** — `CopyButton` for any copy button, labelled or icon-only; it owns the check glyph, the "Copied" label swap, the dwell and the announcement. The check is neutral, never `text-status-success`. Menu-row copies confirm with `copyWithToast`'s brief "Copied" flash instead. See [Copy feedback](./component-contract.md#copy-feedback).
 
 ---
 
