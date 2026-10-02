@@ -550,10 +550,7 @@ function KitTabs({
       aria-label={str(ariaLabel) ?? ""}
       onKeyDown={onStripKeyDown}
       data-kit-tabs=""
-      className={cn(
-        "flex overflow-x-auto [scrollbar-width:none]",
-        end === undefined ? "shrink-0 border-b border-divider" : "min-w-0 flex-1"
-      )}
+      className="flex min-w-0 flex-1 overflow-x-auto [scrollbar-width:none]"
     >
       {tabs.map((tab) => {
         const selected = tab.value === active;
@@ -599,13 +596,13 @@ function KitTabs({
   );
   return (
     <div {...pickRootProps(rest)} className={cn("flex min-h-0 flex-col", str(className))}>
-      {end === undefined ? (
-        strip
-      ) : (
-        // The rule runs under the whole row, so the controls sit on the strip
-        // rather than beside it; outside the tablist they are never a tab.
-        <div className="flex shrink-0 items-stretch border-b border-divider">
-          {strip}
+      {/* One row whether or not there is a trailing slot, so showing or hiding
+          it never remounts the tabs out from under keyboard focus. The rule
+          runs under the whole row and the controls sit on the strip; outside
+          the tablist they are never a tab. */}
+      <div className="flex shrink-0 items-stretch border-b border-divider">
+        {strip}
+        {end === undefined ? null : (
           <div
             data-kit-tabs-trailing=""
             // Quieter than the tabs at either density: it reports, they navigate.
@@ -616,8 +613,8 @@ function KitTabs({
           >
             {end}
           </div>
-        </div>
-      )}
+        )}
+      </div>
       {hasPanel ? (
         <div
           role="tabpanel"

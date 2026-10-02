@@ -608,6 +608,29 @@ describe("@daintreehq/plugin-ui forms and settings", () => {
     expect(tabs.map((tab) => tab.tabIndex)).toEqual([-1, 0, -1]);
   });
 
+  it("keeps the focused tab when a trailing control comes and goes", () => {
+    const tabsWith = (trailing: unknown) =>
+      createElement(kit.Tabs, {
+        "aria-label": "Ledger",
+        value: "accounts",
+        onValueChange: () => {},
+        items: [
+          { value: "accounts", label: "Accounts" },
+          { value: "budget", label: "Budget" },
+        ],
+        trailing: trailing as never,
+        children: "Body",
+      });
+    const { rerender } = render(tabsWith(undefined));
+    const first = screen.getAllByRole("tab")[0]!;
+    act(() => first.focus());
+    rerender(tabsWith("Updated 3m ago"));
+    expect(screen.getAllByRole("tab")[0]).toBe(first);
+    expect(document.activeElement).toBe(first);
+    rerender(tabsWith(undefined));
+    expect(document.activeElement).toBe(first);
+  });
+
   it("puts Tabs' trailing controls on the strip, outside the tablist and its arrow keys", () => {
     const onValueChange = vi.fn();
     const onRefresh = vi.fn();

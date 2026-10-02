@@ -399,6 +399,7 @@ describe("useCachedHostChannel invalidateOn", () => {
 
     rerender({ channels: ["a-changed", "b-changed"] });
     rerender({ channels: ["a-changed", "b-changed", "a-changed"] });
+    rerender({ channels: ["b-changed", "a-changed"] });
     expect(on).toHaveBeenCalledTimes(2);
 
     rerender({ channels: ["b-changed", "c-changed"] });

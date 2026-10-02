@@ -1,5 +1,5 @@
+import { isValidElement } from "react";
 import type { PluginSelectOption } from "@shared/types/plugin-sdk-react";
-import { isPluginKitIconName } from "./PluginKitIcons";
 import { field, nonEmpty, str } from "./kitProps";
 
 export type SelectEntry =
@@ -19,8 +19,9 @@ function readSelectOption(value: unknown, seen: Set<string>): PluginSelectOption
     value: optionValue,
     label,
     description: str(field(value, "description")),
-    // Kept only when it names a glyph, so the row never reserves an empty gutter.
-    icon: isPluginKitIconName(icon) ? icon : undefined,
+    // A name (any Lucide icon, loaded on first use) or the plugin's own
+    // element; anything else leaves the row without an icon gutter.
+    icon: nonEmpty(icon) ?? (isValidElement(icon) ? icon : undefined),
     disabled: field(value, "disabled") === true,
   };
 }

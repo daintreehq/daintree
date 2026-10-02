@@ -768,6 +768,18 @@ describe("Combobox", () => {
     expect(pickerRows(entries, "zzz", false)).toHaveLength(6);
   });
 
+  it("keeps any Lucide name or the plugin's own element as an option icon", () => {
+    const glyph = createElement("svg", { "data-testid": "own" });
+    const entries = normalizeSelectOptions([
+      { value: "a", label: "Wallet", icon: "wallet" },
+      { value: "b", label: "Candles", icon: "chart-candlestick" },
+      { value: "c", label: "Own", icon: glyph },
+      { value: "d", label: "None", icon: 42 },
+    ]);
+    const icons = entries.map((entry) => (entry.kind === "option" ? entry.option.icon : null));
+    expect(icons).toEqual(["wallet", "chart-candlestick", glyph, undefined]);
+  });
+
   it("opens a searchable list, filters as you type and picks with the keyboard", async () => {
     const onValueChange = vi.fn();
     const onSearchChange = vi.fn();

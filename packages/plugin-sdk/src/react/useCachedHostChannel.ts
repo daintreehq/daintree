@@ -297,7 +297,11 @@ function cacheKeyFor(pluginId: string, channel: string, args: unknown, cacheKey?
   return JSON.stringify([pluginId, channel, argsKey]);
 }
 
-/** The listed push channels, deduplicated, as a string that changes only with them. */
+/**
+ * The listed push channels as a set, in a string that changes only when the
+ * set does: listing the same channels in another order must not resubscribe,
+ * since dropping the last subscriber cancels a refetch already scheduled.
+ */
 function invalidationChannelsKey(invalidateOn: unknown): string {
   const list: unknown[] =
     typeof invalidateOn === "string"
@@ -307,7 +311,7 @@ function invalidationChannelsKey(invalidateOn: unknown): string {
         : [];
   const channels = [
     ...new Set(list.filter((c): c is string => typeof c === "string" && c.length > 0)),
-  ];
+  ].sort();
   return channels.length > 0 ? JSON.stringify(channels) : "";
 }
 

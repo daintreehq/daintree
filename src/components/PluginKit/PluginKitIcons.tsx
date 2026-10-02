@@ -429,6 +429,11 @@ function loadLucideImports(): Promise<LucideImports> {
   return lucideImportsLoad;
 }
 
+// Waits before each retry of a glyph whose chunk failed to load. Past the last
+// one the frame stays empty until the name is next mounted.
+const LUCIDE_RETRY_DELAYS_MS = [2_000, 10_000, 60_000];
+const lucideFailures = new Map<string, number>();
+
 function loadLucideGlyph(name: string): void {
   if (lucideGlyphs.has(name) || lucideLoads.has(name)) return;
   const load = loadLucideImports()
@@ -436,18 +441,32 @@ function loadLucideGlyph(name: string): void {
       const importGlyph = Object.hasOwn(imports, name) ? imports[name] : undefined;
       const glyph = importGlyph ? (await importGlyph()).default : null;
       lucideGlyphs.set(name, glyph);
+      lucideFailures.delete(name);
       if (!glyph) warnUnknownIcon(name);
       for (const listener of lucideListeners) listener();
     })
     .catch(() => {
-      // Offline or a chunk that failed: the frame stays, and the next frame
-      // drawn for this name tries again; every drawn one then fills in.
+      // Offline or a chunk that failed: the frame stays and the load is tried
+      // again on a backoff, so icons already drawn fill in once it lands
+      // without anything having to remount them.
+      const failures = lucideFailures.get(name) ?? 0;
+      const delay = LUCIDE_RETRY_DELAYS_MS[failures];
+      if (delay === undefined) {
+        lucideFailures.delete(name);
+        return;
+      }
+      lucideFailures.set(name, failures + 1);
+      setTimeout(() => {
+        if (lucideListeners.size > 0) loadLucideGlyph(name);
+      }, delay);
     })
     .finally(() => {
       lucideLoads.delete(name);
     });
   lucideLoads.set(name, load);
 }
+
+const noLucideGlyph = (): undefined => undefined;
 
 function subscribeLucideGlyphs(listener: () => void): () => void {
   lucideListeners.add(listener);
@@ -458,7 +477,11 @@ function subscribeLucideGlyphs(listener: () => void): () => void {
 
 const LucideGlyphByName = forwardRef<SVGSVGElement, LucideProps & { lucideName: string }>(
   function LucideGlyphByName({ lucideName, ...props }, ref) {
-    const Glyph = useSyncExternalStore(subscribeLucideGlyphs, () => lucideGlyphs.get(lucideName));
+    const Glyph = useSyncExternalStore(
+      subscribeLucideGlyphs,
+      () => lucideGlyphs.get(lucideName),
+      noLucideGlyph
+    );
     useEffect(() => {
       if (Glyph === undefined) loadLucideGlyph(lucideName);
     }, [Glyph, lucideName]);
