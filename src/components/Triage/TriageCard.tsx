@@ -7,11 +7,13 @@ import { Button } from "@/components/ui/button";
 import { KBD_BARE_CLASS } from "@/components/ui/Kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { SkeletonBone } from "@/components/ui/Skeleton";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PilotRunState } from "@/components/Pilot/PilotRunState";
 import type { TriageCategory } from "@shared/types/ipc/triage";
+import { triageDraftKey, triagePromptKey, useTriageStore } from "@/store/triageStore";
 import type { TriageItem } from "./triageModel";
 
 const KIND_LABEL: Record<TriageCategory, string> = {
@@ -203,10 +205,9 @@ function CardWords({ item, hasQuote }: { item: TriageItem; hasQuote: boolean }) 
     <div className="flex min-w-0 flex-col gap-0.5">
       {headline !== null && <p className="text-sm leading-snug text-text-primary">{headline}</p>}
       {summary !== null && (
-        <p className="line-clamp-2 text-xs leading-relaxed text-text-secondary">{summary}</p>
-      )}
-      {item.stale && (
-        <p className="text-2xs text-text-secondary">Changed since it was read · reading again…</p>
+        <p title={summary} className="line-clamp-2 text-xs leading-relaxed text-text-secondary">
+          {summary}
+        </p>
       )}
     </div>
   );
@@ -243,7 +244,10 @@ function Composer({
   onEscape: () => void;
   onSent: (text: string) => void;
 }) {
-  const [text, setText] = useState("");
+  const draftKey = triageDraftKey(item.runId, item.card?.spawnedAt ?? item.row.run.spawnedAt);
+  const text = useTriageStore((state) => state.drafts[draftKey] ?? "");
+  const setDraft = useTriageStore((state) => state.setDraft);
+  const setText = useCallback((next: string) => setDraft(draftKey, next), [setDraft, draftKey]);
   const [sending, setSending] = useState(false);
 
   const send = useCallback(async () => {
@@ -259,22 +263,27 @@ function Composer({
     } finally {
       setSending(false);
     }
-  }, [item, onReply, onSent, sending, text]);
+  }, [item, onReply, onSent, sending, text, setText]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    // An IME's own Escape cancels the composition, not the draft.
+    if (event.nativeEvent.isComposing) {
+      event.stopPropagation();
+      return;
+    }
     if (event.key === "Escape") {
       // Escape clears a draft first, then folds a follow-up box away; only an
       // empty box that is always out lets it through to close the dialog.
       if (text === "" && !collapsible) return;
       event.stopPropagation();
       event.preventDefault();
-      setText("");
-      onEscape();
+      if (text !== "") setText("");
+      else onEscape();
       return;
     }
     // The card's and the list's keys must not fire while typing.
     event.stopPropagation();
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void send();
     }
@@ -350,14 +359,16 @@ function OptionButtons({
             event.stopPropagation();
             onPick(label);
           }}
-          className="max-w-full justify-start"
+          // A permission's scope is often in its last words, so a long label
+          // wraps under its digit rather than truncating them away.
+          className="h-auto min-h-7 max-w-full items-start justify-start py-1.5 text-left whitespace-normal"
         >
           {index < 9 && (
-            <kbd aria-hidden="true" className={cn(KBD_BARE_CLASS, "shrink-0")}>
+            <kbd aria-hidden="true" className={cn(KBD_BARE_CLASS, "shrink-0 leading-4")}>
               {index + 1}
             </kbd>
           )}
-          <span className="truncate">{label}</span>
+          <span className="min-w-0 leading-4">{label}</span>
         </Button>
       ))}
     </div>
@@ -395,29 +406,32 @@ export function TriageCard({
 
   // One answer per prompt, from a click or a digit alike. Keyed on the prompt,
   // so the next menu — even one with the same labels — starts answerable.
-  const promptKey = card === null ? "" : `${card.spawnedAt}:${card.revision}`;
-  const [answer, setAnswer] = useState<{ key: string; label: string; sent: boolean } | null>(
-    null
-  );
-  const answered = answer !== null && answer.key === promptKey ? answer : null;
+  const promptKey = card === null ? "" : triagePromptKey(card);
+  const ack = useTriageStore((state) => state.acks[item.runId]);
+  const setAck = useTriageStore((state) => state.setAck);
+  const answered =
+    ack !== undefined && ack.kind === "answer" && ack.promptKey === promptKey
+      ? { label: ack.text, sent: ack.sent }
+      : null;
+  const sentHere =
+    ack !== undefined && ack.kind === "reply" && ack.promptKey === promptKey ? ack.text : null;
   const pick = (label: string) => {
     if (answered) return;
     const key = promptKey;
-    setAnswer({ key, label, sent: false });
+    const runId = item.runId;
+    setAck(runId, () => ({ promptKey: key, kind: "answer", text: label, sent: false }));
     onChoose(item, label).then(
       () =>
-        setAnswer((current) =>
-          current?.key === key && current.label === label ? { ...current, sent: true } : current
+        setAck(runId, (current) =>
+          current?.promptKey === key && current.text === label ? { ...current, sent: true } : current
         ),
       // A failure frees only its own prompt, never a newer one answered since.
-      () => setAnswer((current) => (current?.key === key ? null : current))
+      () => setAck(runId, (current) => (current?.promptKey === key ? undefined : current))
     );
   };
 
   const [composerOpened, setComposerOpened] = useState(false);
   const composerOpen = canReply && (composerAlwaysOpen(item) || composerOpened);
-  const [lastSent, setLastSent] = useState<{ key: string; text: string } | null>(null);
-  const sentHere = lastSent !== null && lastSent.key === promptKey ? lastSent.text : null;
   const openComposer = () => {
     setComposerOpened(true);
     // The box mounts this render; focus it once it is there.
@@ -465,6 +479,7 @@ export function TriageCard({
     item.pending ||
     card?.secretPrompt === true ||
     composerOpen ||
+    item.stale ||
     sentHere !== null;
   const oneLine = compact || !hasBody;
   const accessibleName = [
@@ -524,7 +539,7 @@ export function TriageCard({
         "group cursor-pointer rounded-[var(--radius-md)] px-2.5",
         // Inside the panel's scroller, so the ring sits inset rather than clipped.
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
-        oneLine ? "py-1" : "flex flex-col gap-2 py-2"
+        oneLine ? "py-1" : "flex flex-col gap-1.5 py-1.5"
       )}
     >
       <CardIdentity item={item} strong={!compact} actions={actions} showActions={isFocused} />
@@ -536,7 +551,7 @@ export function TriageCard({
           </p>
         ) : null
       ) : (
-        <div className="flex min-w-0 flex-col gap-2 pb-0.5 pl-[46px]">
+        <div className="flex min-w-0 flex-col gap-1.5 pb-0.5 pl-[46px]">
           {question !== null && <QuestionQuote question={question} id={quoteId} />}
           <CardWords item={item} hasQuote={question !== null} />
           {options.length > 0 && (
@@ -565,11 +580,21 @@ export function TriageCard({
                 cardRef.current?.focus();
               }}
               onSent={(text) => {
-                setLastSent({ key: promptKey, text });
-                if (!composerAlwaysOpen(item)) setComposerOpened(false);
+                setAck(item.runId, () => ({ promptKey, kind: "reply", text, sent: true }));
+                if (!composerAlwaysOpen(item)) {
+                  setComposerOpened(false);
+                  // The box held focus and is about to unmount: keep the keyboard on the row.
+                  cardRef.current?.focus();
+                }
               }}
             />
           ) : null}
+          {item.stale && card !== null && (
+            <p className="text-2xs text-text-secondary">
+              Changed since it was read <TimeAgo timestamp={card.observedAt} />
+              {item.pending ? " · reading again…" : " · retried on the next scan"}
+            </p>
+          )}
           {sentHere !== null && (
             <p role="status" className="flex items-center gap-1.5 text-xs text-text-secondary">
               <Check className="size-3.5 shrink-0" aria-hidden="true" />

@@ -118,7 +118,7 @@ export function buildTriageSections(
         // a failed read nothing is writing them now, so neither draws one.
         pending:
           read.configured &&
-          (card === null ? !read.failed : card.describing || stale),
+          (card === null ? !read.failed : card.describing || (stale && !read.failed)),
         stale,
       });
     }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useTriageStore } from "@/store/triageStore";
+import { triagePromptKey, useTriageStore } from "@/store/triageStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -176,11 +176,17 @@ export function TriageView() {
   // the page. Only when focus really was lost — a composer the user is typing
   // in elsewhere keeps it.
   const lastIndexRef = useRef(0);
+  const refreshRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (focusedIndex !== -1) lastIndexRef.current = focusedIndex;
-    if (!landedRef.current || focusedId === null || items.length === 0) return;
+    if (!landedRef.current || focusedId === null) return;
     const active = document.activeElement;
     if (active !== null && active !== document.body && active.isConnected) return;
+    if (items.length === 0) {
+      // The last run left: the one control still in reach is Refresh.
+      refreshRef.current?.focus();
+      return;
+    }
     // Either the card left, or it moved section and its node was replaced.
     const target =
       focusedIndex !== -1
@@ -225,10 +231,17 @@ export function TriageView() {
       const card = document.getElementById(triageCardDomId(runId));
       const active = document.activeElement;
       if (active !== null && active !== document.body && !card?.contains(active)) return;
+      // Onward first, then back round to anything left above; never to a prompt
+      // this panel has already answered while main catches up.
+      const acks = useTriageStore.getState().acks;
       const index = items.findIndex((item) => item.runId === runId);
-      const next = items
-        .slice(index + 1)
-        .find((item) => TRIAGE_ATTENTION_CATEGORIES.has(item.kind) && item.kind !== "finished");
+      const waiting = (item: TriageItem) =>
+        item.runId !== runId &&
+        TRIAGE_ATTENTION_CATEGORIES.has(item.kind) &&
+        item.kind !== "finished" &&
+        !(item.card !== null && acks[item.runId]?.promptKey === triagePromptKey(item.card));
+      const next =
+        items.slice(index + 1).find(waiting) ?? items.slice(0, Math.max(index, 0)).find(waiting);
       if (next) focusCardNow(next.runId);
     },
     [items, focusCardNow]
@@ -365,6 +378,7 @@ export function TriageView() {
                     .join(" · ")}
           </p>
           <Button
+            ref={refreshRef}
             variant="ghost"
             size="xs"
             disabled={triage?.configured !== true}
