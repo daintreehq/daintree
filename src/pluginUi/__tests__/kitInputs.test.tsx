@@ -43,6 +43,7 @@ import * as kit from "@daintreehq/plugin-ui";
 import {
   fileMatchesAccept,
   fitChipCount,
+  formatNumberField,
   parseNumberText,
   pickerRows,
   snapToStep,
@@ -498,6 +499,137 @@ describe("NumberInput", () => {
     fireEvent.blur(field);
     expect(field.getAttribute("aria-valuenow")).toBe("3");
     expect(field.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("formats a value at rest: fixed or trimmed decimals, grouped into the same digits", () => {
+    // Nothing asked for is the plain value, as the field has always shown it.
+    expect(formatNumberField(2.5, {})).toBe(String(2.5));
+    expect(formatNumberField(2.5, { places: 2 })).toBe((2.5).toFixed(2));
+    expect(formatNumberField(-0.001, { places: 2 })).toBe((-0.001).toFixed(2));
+    expect(formatNumberField(null, { places: 2, grouping: true })).toBe("");
+
+    expect(formatNumberField(2.5, { places: 2, trimZeros: true })).toBe("2.5");
+    expect(formatNumberField(1200, { places: 2, trimZeros: true })).toBe("1200");
+    expect(formatNumberField(-0.001, { places: 2, trimZeros: true })).toBe("0");
+
+    expect(formatNumberField(1234567.5, { places: 2, grouping: true }, "en-US")).toBe(
+      "1,234,567.50"
+    );
+    expect(formatNumberField(-1234.5, { grouping: true, trimZeros: true }, "de-DE")).toBe(
+      "-1.234,5"
+    );
+    // Grouping never rounds again: toFixed's digits are the ones shown.
+    const quantity = 12345.12345678;
+    expect(formatNumberField(quantity, { grouping: true }, "en-US").replace(/,/g, "")).toBe(
+      String(quantity)
+    );
+    expect(formatNumberField(1.005, { places: 2, grouping: true }, "en-US")).toBe(
+      (1.005).toFixed(2)
+    );
+    // An exponent form has no digits to group.
+    expect(formatNumberField(1e21, { grouping: true }, "en-US")).toBe(String(1e21));
+  });
+
+  it("keeps a typed quantity as typed with step any, and still steps by one", () => {
+    const onValueChange = vi.fn();
+    render(
+      createElement(kit.NumberInput, {
+        "aria-label": "Units",
+        defaultValue: 0.07,
+        step: "any",
+        onValueChange,
+      })
+    );
+    const field = screen.getByRole("spinbutton", { name: "Units" }) as HTMLInputElement;
+    fireEvent.keyDown(field, { key: "ArrowUp" });
+    expect(onValueChange).toHaveBeenLastCalledWith(1.07);
+    fireEvent.change(field, { target: { value: "0.12345678" } });
+    fireEvent.blur(field);
+    expect(onValueChange).toHaveBeenLastCalledWith(0.12345678);
+    expect(field.value).toBe("0.12345678");
+  });
+
+  it("keeps every decimal a value has when step any steps it", () => {
+    const onValueChange = vi.fn();
+    const { rerender } = render(
+      createElement(kit.NumberInput, {
+        "aria-label": "Units",
+        value: 0.123456789012345,
+        step: "any",
+        onValueChange,
+      })
+    );
+    const field = screen.getByRole("spinbutton", { name: "Units" });
+    fireEvent.keyDown(field, { key: "ArrowUp" });
+    expect(onValueChange).toHaveBeenLastCalledWith(1.123456789012345);
+    rerender(
+      createElement(kit.NumberInput, {
+        "aria-label": "Units",
+        value: 1.23456789e-7,
+        step: "any",
+        onValueChange,
+      })
+    );
+    fireEvent.keyDown(field, { key: "ArrowUp" });
+    expect(onValueChange).toHaveBeenLastCalledWith(1.000000123456789);
+  });
+
+  it("still rounds to an explicit precision with step any", () => {
+    const onValueChange = vi.fn();
+    render(
+      createElement(kit.NumberInput, {
+        "aria-label": "Price",
+        step: "any",
+        precision: 2,
+        onValueChange,
+      })
+    );
+    const field = screen.getByRole("spinbutton", { name: "Price" });
+    fireEvent.change(field, { target: { value: "3.14159" } });
+    fireEvent.blur(field);
+    expect(onValueChange).toHaveBeenLastCalledWith(3.14);
+  });
+
+  it("groups thousands only while the field is not being edited, and round-trips exactly", () => {
+    const onValueChange = vi.fn();
+    render(
+      createElement(kit.NumberInput, {
+        "aria-label": "Balance",
+        defaultValue: 1234567.5,
+        precision: 2,
+        grouping: true,
+        fixedDecimals: false,
+        onValueChange,
+      })
+    );
+    const field = screen.getByRole("spinbutton", { name: "Balance" }) as HTMLInputElement;
+    const rest = field.value;
+    expect(rest).toBe(formatNumberField(1234567.5, { places: 2, grouping: true, trimZeros: true }));
+    expect(rest).not.toBe("1234567.5");
+    fireEvent.focus(field);
+    expect(field.value).toBe("1234567.5");
+    fireEvent.blur(field);
+    expect(field.value).toBe(rest);
+    expect(onValueChange).not.toHaveBeenCalled();
+    // An edit is typed in plain digits and shows grouped again once committed.
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: "2500000.25" } });
+    fireEvent.blur(field);
+    expect(onValueChange).toHaveBeenLastCalledWith(2500000.25);
+    expect(field.value).toBe(
+      formatNumberField(2500000.25, { places: 2, grouping: true, trimZeros: true })
+    );
+  });
+
+  it("regroups a controlled value that changes while the field is at rest", () => {
+    const field = (value: number) =>
+      createElement(kit.NumberInput, { "aria-label": "Total", value, grouping: true });
+    const { rerender } = render(field(1000));
+    const input = screen.getByRole("spinbutton", { name: "Total" }) as HTMLInputElement;
+    expect(input.value).toBe(formatNumberField(1000, { grouping: true }));
+    rerender(field(98765.4321));
+    expect(input.value).toBe(formatNumberField(98765.4321, { grouping: true }));
+    expect(input.value.replace(/\D/g, "")).toBe("987654321");
   });
 
   it("degrades bad props rather than throwing", () => {

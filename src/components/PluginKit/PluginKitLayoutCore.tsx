@@ -46,7 +46,7 @@ import { ScrollShadow, ScrollShadowOverlay } from "@/components/ui/ScrollShadow"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { cn } from "@/lib/utils";
-import { resolvePluginKitIcon } from "./PluginKitIcons";
+import { renderIconSource } from "./PluginKitIcons";
 import { pluginKitPatterns, sizedIcon } from "./PluginKitPatterns";
 import { useKitOverlayZClass } from "./kitScope";
 import {
@@ -1101,11 +1101,10 @@ function KitOverflowToolbar({
                 if (entry.kind === "separator") {
                   return <DropdownMenuSeparator key={`separator-${index}`} />;
                 }
-                const Glyph =
-                  typeof entry.icon === "string" ? resolvePluginKitIcon(entry.icon) : undefined;
-                const glyph = Glyph ? (
+                const icon = renderIconSource(entry.icon, "h-3.5 w-3.5");
+                const glyph = icon ? (
                   <span data-menu-icon="" aria-hidden="true" className="mr-2 inline-flex shrink-0">
-                    <Glyph className="h-3.5 w-3.5" aria-hidden="true" />
+                    {icon}
                   </span>
                 ) : null;
                 if (entry.pressed !== undefined) {

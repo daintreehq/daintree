@@ -16,6 +16,7 @@ import {
   taskSummary,
 } from "@/components/PluginKit/PluginKitLayoutPanes";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
 // A ResizeObserver that reports when the test says the layout changed.
 const resizeCallbacks = new Set<() => void>();
@@ -1267,6 +1268,66 @@ describe("StaleIndicator", () => {
     expect(screen.getByTestId("s").textContent).toMatch(/^Disconnected·Updated/);
     at({});
     expect(screen.getByText("Not updated yet")).toBeTruthy();
+  });
+
+  it("explains its reading and its refresh button in tooltips", async () => {
+    mount(
+      <kit.StaleIndicator
+        updatedAt={Date.now()}
+        detail="Prices fetched 30 Sep 14:02"
+        onRefresh={() => {}}
+        refreshLabel="Refresh prices"
+      />
+    );
+    const reading = screen.getByText(/Updated/).closest("[tabindex]");
+    if (!(reading instanceof HTMLElement)) throw new Error("the reading is not focusable");
+    expect(reading.tabIndex).toBe(0);
+    act(() => reading.focus());
+    const detail = await screen.findByRole("tooltip", { hidden: true }, { timeout: 3000 });
+    expect(detail.textContent).toBe("Prices fetched 30 Sep 14:02");
+    act(() => screen.getByRole("button", { name: "Refresh prices" }).focus());
+    await vi.waitFor(() => {
+      const tips = screen.queryAllByRole("tooltip", { hidden: true });
+      if (!tips.some((tip) => tip.textContent === "Refresh prices")) throw new Error("no tip");
+    });
+  });
+
+  it("leaves a reading with no detail out of the tab order", () => {
+    mount(<kit.StaleIndicator updatedAt={Date.now()} />);
+    expect(screen.getByText(/Updated/).closest("[tabindex]")).toBeNull();
+  });
+
+  it("tints a stale reading's words like its glyph only when asked", () => {
+    const stale = (props: Record<string, unknown>) => (
+      <kit.StaleIndicator data-testid="s" updatedAt={Date.now()} stale {...props} />
+    );
+    const view = mount(stale({}));
+    const glyphTint = [...screen.getByTestId("s").querySelector("svg")!.classList].filter((name) =>
+      name.startsWith("text-")
+    );
+    expect(glyphTint.length).toBeGreaterThan(0);
+    const words = () => screen.getByText(/Updated/).closest("span")!;
+    const tinted = () => glyphTint.every((name) => words().classList.contains(name));
+    expect(tinted()).toBe(false);
+    view.update(stale({ staleTint: "text" }));
+    expect(tinted()).toBe(true);
+    view.update(stale({ staleTint: "text", stale: false }));
+    expect(tinted()).toBe(false);
+  });
+
+  it("announces each new refresh result politely, once", () => {
+    const announce = vi.spyOn(useAnnouncerStore.getState(), "announce");
+    const at = (result?: string) => <kit.StaleIndicator updatedAt={Date.now()} announce={result} />;
+    const view = mount(at());
+    view.update(at("Prices updated"));
+    view.update(at("Prices updated"));
+    view.update(at("2 prices kept from cache"));
+    view.update(at(undefined));
+    expect(announce.mock.calls).toEqual([
+      ["Prices updated", "polite"],
+      ["2 prices kept from cache", "polite"],
+    ]);
+    announce.mockRestore();
   });
 
   it("refreshes from its button, and not while a refresh is in flight", () => {

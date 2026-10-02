@@ -691,6 +691,24 @@ describe("OverflowToolbar", () => {
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a folded control's own element icon on its menu row", async () => {
+    setGeometry(60);
+    toolbar(vi.fn(), [
+      ...ITEMS.slice(0, 2),
+      {
+        id: "ledger",
+        label: "Ledger",
+        icon: createElement("svg", { "data-own-icon": "", viewBox: "0 0 16 16" }),
+      },
+    ]);
+    relayout();
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("button", { name: "More actions" }), { key: "Enter" });
+    });
+    const row = await screen.findByRole("menuitem", { name: "Ledger" });
+    expect(row.querySelector("[data-menu-icon] [data-own-icon]")).not.toBeNull();
+  });
+
   it("hands focus to the menu button when the focused control folds away", () => {
     setGeometry(1000);
     toolbar();
