@@ -656,8 +656,9 @@ describe("ThemeBrowser", () => {
 
 // These pin the CONTRACT the surface owes, not the styling that currently
 // expresses it. A theme, a token or a glyph may change freely; what may not
-// change is that navigating never strands the filter, that pointer and keyboard
-// share one cursor, and that "saved" and "being tried" stay two separate facts.
+// change is that navigating never strands the filter, that a click and the
+// arrow keys share one cursor which hover never moves, and that "saved" and
+// "being tried" stay two separate facts.
 describe("ThemeBrowser navigation contract", () => {
   beforeEach(() => {
     _resetForTests();
@@ -754,6 +755,70 @@ describe("ThemeBrowser navigation contract", () => {
     // The rule: one cursor, shared by both input devices. After clicking row N,
     // ArrowDown must land on N+1 — not wherever the keyboard cursor was left.
     expect(useAppThemeStore.getState().previewSchemeId).toBe(darkSchemeAt(3)!.id);
+  });
+
+  it("saves the clicked theme even when the pointer crosses other rows on the way to Set theme", async () => {
+    const { appThemeClient } = await import("@/clients/appThemeClient");
+    vi.mocked(appThemeClient.setColorScheme).mockClear();
+    render(<Harness />);
+    const input = screen.getByLabelText("Filter themes");
+
+    const clicked = darkSchemeAt(1)!;
+    const clickedRow = findRowByName(clicked.name);
+    fireEvent.pointerDown(clickedRow);
+    fireEvent.click(clickedRow);
+
+    // The rule: hover never moves the cursor, so it never retargets the save.
+    for (const crossed of [darkSchemeAt(2)!, darkSchemeAt(3)!]) {
+      const row = findRowByName(crossed.name);
+      fireEvent.pointerOver(row);
+      fireEvent.pointerMove(row);
+    }
+
+    expect(useAppThemeStore.getState().previewSchemeId).toBe(clicked.id);
+    expect(input.getAttribute("aria-activedescendant")).toBe(`theme-option-${clicked.id}`);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Set theme" }));
+    });
+
+    expect(useAppThemeStore.getState().selectedSchemeId).toBe(clicked.id);
+    expect(vi.mocked(appThemeClient.setColorScheme)).toHaveBeenCalledWith(clicked.id);
+  });
+
+  it("never previews a row the pointer merely moves over", () => {
+    render(<Harness />);
+    const input = screen.getByLabelText("Filter themes");
+    const activeBefore = input.getAttribute("aria-activedescendant");
+
+    const row = findRowByName(darkSchemeAt(2)!.name);
+    fireEvent.pointerOver(row);
+    fireEvent.pointerMove(row);
+
+    expect(useAppThemeStore.getState().previewSchemeId).toBeNull();
+    expect(useAppThemeStore.getState().selectedSchemeId).toBe(DEFAULT_APP_SCHEME_ID);
+    expect(input.getAttribute("aria-activedescendant")).toBe(activeBefore);
+    expect(row.getAttribute("aria-selected")).toBe("false");
+  });
+
+  it("lets Enter save the arrowed theme even after the pointer wanders", () => {
+    render(<Harness />);
+    const input = screen.getByLabelText("Filter themes");
+    act(() => input.focus());
+
+    const clickedRow = findRowByName(darkSchemeAt(1)!.name);
+    fireEvent.pointerDown(clickedRow);
+    fireEvent.click(clickedRow);
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    const arrowed = darkSchemeAt(2)!;
+    expect(useAppThemeStore.getState().previewSchemeId).toBe(arrowed.id);
+
+    fireEvent.pointerMove(findRowByName(darkSchemeAt(4)!.name));
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(useAppThemeStore.getState().selectedSchemeId).toBe(arrowed.id);
+    expect(useThemeBrowserStore.getState().isOpen).toBe(false);
   });
 
   it("clears a non-empty query on Escape instead of closing the dialog", () => {
