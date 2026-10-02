@@ -383,7 +383,11 @@ export function sceneFor(fixture: TriageFixture, now: number): TriageScene {
       };
     case "read-error":
       return {
-        fleet: fleet(runs, now),
+        // One run moved after its card was read, so its words are kept but its menu is not.
+        fleet: fleet(
+          runs.map((r) => (r.runId === "t-approval-yn" ? { ...r, since: now } : r)),
+          now
+        ),
         triage: snapshot(
           cards.filter((c) => c.runId !== "t-question"),
           now,
