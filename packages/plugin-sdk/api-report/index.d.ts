@@ -3572,15 +3572,17 @@ interface PluginAgentSnapshot {
     /**
      * The terminal the transition came from — the same id
      * {@link PluginAgentPane.terminalId} reports and
-     * {@link PluginHostApi.sendToAgent} takes. Absent when the host could not
-     * attribute the transition to a terminal.
+     * {@link PluginHostApi.sendToAgent} takes. Those two only reach the plugin's
+     * own (or the focused) project, so a transition from another workspace has no
+     * pane to join. Absent when the host could not attribute the transition to a
+     * terminal.
      */
     readonly terminalId?: string;
     /**
      * The workspace (project or scratch) that owns the terminal. Opaque: compare
      * it, don't parse it. A project plugin only ever sees its own project's id.
-     * Absent when the host no longer tracks the terminal, e.g. while it is being
-     * torn down.
+     * Resolved when the transition arrives; absent when the host could not tell
+     * which workspace owned the terminal then, e.g. one already torn down.
      */
     readonly workspaceId?: string;
     /** Coarse lifecycle state: idle | working | waiting | directing | completed | exited. */

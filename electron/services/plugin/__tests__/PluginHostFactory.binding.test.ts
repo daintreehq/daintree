@@ -954,7 +954,10 @@ describe("createHost onDidChangeAgentState", () => {
       timestamp: 2,
     } as never);
     expect(callback).toHaveBeenCalledTimes(1);
-    expect(callback.mock.calls[0][0]).toMatchObject({ terminalId: "term-a", workspaceId: PROJECT_A });
+    expect(callback.mock.calls[0][0]).toMatchObject({
+      terminalId: "term-a",
+      workspaceId: PROJECT_A,
+    });
     expect(await host.getAgentState()).toMatchObject({
       state: "waiting",
       terminalId: "term-a",
@@ -975,6 +978,33 @@ describe("createHost onDidChangeAgentState", () => {
       timestamp: 1,
     } as never);
     expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("drops a bound host's transitions it cannot attribute to its project", async () => {
+    const h = makeHarness();
+    installPtyForAgentState({ "term-a": PROJECT_A });
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+    await host.onDidChangeAgentState(callback, { debounceMs: 0 });
+
+    for (const terminalId of ["", 42, "term-unknown"]) {
+      events.emit("agent:state-changed", {
+        terminalId,
+        state: "working",
+        previousState: "idle",
+        timestamp: 1,
+      } as never);
+    }
+    serviceRefsMock.getPtyClient.mockReturnValue(null);
+    events.emit("agent:state-changed", {
+      terminalId: "term-a",
+      state: "working",
+      previousState: "idle",
+      timestamp: 2,
+    } as never);
+
+    expect(callback).not.toHaveBeenCalled();
+    expect(await host.getAgentState()).toBeNull();
   });
 
   it("keeps an unbound host observing every project's agents", async () => {
@@ -1517,6 +1547,32 @@ describe("createHost subscriptions coalesce by default", () => {
       ["agent-term-b", "working"],
       ["agent-term-a", "idle"],
     ]);
+  });
+
+  it("keeps the workspace resolved at arrival when the terminal is gone by flush", async () => {
+    vi.useFakeTimers();
+    const terminalProjects: Record<string, string> = { "term-a": PROJECT_A };
+    serviceRefsMock.getPtyClient.mockReturnValue({
+      getTerminalProjectId: vi.fn((id: string) => terminalProjects[id] ?? null),
+    });
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const received: Array<{ terminalId?: string; workspaceId?: string }> = [];
+    await host.onDidChangeAgentState((s) => received.push(s));
+
+    events.emit("agent:state-changed", {
+      terminalId: "term-a",
+      state: "exited",
+      previousState: "working",
+      timestamp: 1,
+    } as never);
+    delete terminalProjects["term-a"];
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(received).toEqual([
+      expect.objectContaining({ terminalId: "term-a", workspaceId: PROJECT_A }),
+    ]);
+    expect(await host.getAgentState()).toMatchObject({ workspaceId: PROJECT_A });
   });
 
   it("delivers every agent transition for debounceMs: 0", async () => {

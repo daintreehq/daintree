@@ -689,14 +689,14 @@ export async function activate(host: PluginHostApi) {
 | --- | --- |
 | `agentId` | Stable session id, when the host could attribute the transition to one. Absent for detector-only flows that route by terminal. |
 | `terminalId` | The terminal the transition came from — the same id `agents.list()` reports and `sendToAgent` takes. Absent when the host could not attribute the transition to a terminal. |
-| `workspaceId` | The workspace (project or scratch) that owns that terminal. Opaque: compare it, don't parse it. A project plugin only ever sees its own project's id. Absent when the host no longer tracks the terminal, e.g. while it is being torn down. |
+| `workspaceId` | The workspace (project or scratch) that owns that terminal. Opaque: compare it, don't parse it. A project plugin only ever sees its own project's id. Resolved when the transition arrives; absent when the host could not tell which workspace owned the terminal then, e.g. one already torn down. A project plugin never receives a transition it can't attribute to its own project. |
 | `state` / `previousState` | `idle` \| `working` \| `waiting` \| `directing` \| `completed` \| `exited`. |
 | `running` | Convenience flag — `true` while the session is doing in-flight work (`working` / `waiting` / `directing`). Derived from the host's own `ACTIVE_AGENT_STATES` set so you don't re-maintain the membership list. |
 | `waitingReason` | `prompt` \| `question` \| `approval` \| `error`. Present only when `state === "waiting"`. |
 | `sessionCost` / `sessionTokens` | Cumulative for the session. Present only on `completed` / `exited` transitions. |
 | `timestamp` | Epoch milliseconds when the transition was committed. |
 
-`terminalId` and `workspaceId` say where a transition came from, so an installed plugin, which observes every project, can tell which agent needs attention and join the event to an `agents.list()` entry. Nothing else about the terminal comes with them: the snapshot omits the worktree id, `cwd`, the detector internals (`trigger`, `confidence`, …) and all terminal content, so it is safe to send off the machine. And it is **observation only** — nothing here drives, pauses, or resumes a session.
+`terminalId` and `workspaceId` say where a transition came from, so an installed plugin, which observes every project, can tell which agent needs attention and join the event to an `agents.list()` entry. The ids add no targeting: `agents.list()` and `sendToAgent` still cover only the plugin's own project (the focused one for an installed plugin), so a transition from another workspace has no matching pane there, and neither does an agent that has exited. Nothing else about the terminal comes with them: the snapshot omits the worktree id, `cwd`, the detector internals (`trigger`, `confidence`, …) and all terminal content, so it is safe to send off the machine. And it is **observation only** — nothing here drives, pauses, or resumes a session.
 
 **Treat the state as an observation, not a fact.** Agent state comes from passive PTY output heuristics and is frequently wrong. Surface what the host saw; don't build a control flow that assumes it.
 
