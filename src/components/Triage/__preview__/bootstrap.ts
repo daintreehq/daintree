@@ -1,0 +1,37 @@
+// Imported FIRST by preview.tsx, so the bridge exists before any module that
+// reaches for `window.electron` at evaluation time.
+import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewShims";
+import type { TriageSnapshot } from "@shared/types/ipc/triage";
+
+/** Every age on the panel is read against this, so two rounds' captures differ only in design. */
+export const FROZEN_NOW = 1_764_000_000_000;
+Date.now = () => FROZEN_NOW;
+
+const listeners = new Set<(snapshot: TriageSnapshot) => void>();
+let current: TriageSnapshot | null = null;
+
+export function setPreviewTriageSnapshot(snapshot: TriageSnapshot): void {
+  current = snapshot;
+  for (const listener of listeners) listener(snapshot);
+}
+
+/** What the panel last asked main to do, for the spec to assert on. */
+function record(action: string, detail: unknown): Promise<void> {
+  document.body.dataset.triageLast = JSON.stringify({ action, detail });
+  return Promise.resolve();
+}
+
+installPreviewShims({
+  triage: {
+    onSnapshotUpdated: (listener: (snapshot: TriageSnapshot) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    setActive: () => Promise.resolve(current),
+    getSnapshot: () => Promise.resolve(current),
+    refresh: () => record("refresh", null),
+    choose: (runId: string, label: string) => record("choose", { runId, label }),
+    reply: (runId: string, text: string) => record("reply", { runId, text }),
+    trash: (runId: string) => record("trash", { runId }),
+  },
+});
