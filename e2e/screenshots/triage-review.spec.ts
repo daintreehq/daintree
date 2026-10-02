@@ -91,7 +91,9 @@ async function load(page: Page, theme: string, fixture: TriageFixture): Promise<
     await expect(dialog(page)).toBeVisible({ timeout: 30_000 });
   } catch (error) {
     // A blank page is almost always a throw during module evaluation; say which.
-    throw new Error(`${fixture}: panel never mounted — ${errors.join("; ") || String(error)}`);
+    throw new Error(`${fixture}: panel never mounted — ${errors.join("; ") || String(error)}`, {
+      cause: error,
+    });
   }
   await page.evaluate(() => document.fonts.ready);
   await page.addStyleTag({ content: FREEZE_CSS });
@@ -131,7 +133,11 @@ const FLEET_CARDS = 9;
 
 for (const theme of THEMES) {
   test(`triage panel — ${theme}`, async ({ page }) => {
-    test.skip(!ENABLED, "DAINTREE_SHOT_TRIAGE not set");
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "DAINTREE_SHOT_TRIAGE is required for the triage panel capture",
+    });
+    test.skip(!ENABLED, "set DAINTREE_SHOT_TRIAGE=1 to run the capture");
     test.setTimeout(240_000);
     const written: string[] = [];
 
