@@ -4,6 +4,7 @@ import {
   DEFAULT_APP_SCHEME_ID,
   getTerminalThemeFromAppScheme,
   getTerminalScrollbarDefaults,
+  TRANSPARENT_OVERVIEW_RULER_BORDER,
 } from "@shared/theme";
 
 const DEFAULT_APP_SCHEME =
@@ -81,12 +82,9 @@ export function getTerminalThemeFromCSS(): typeof DAINTREE_TERMINAL_THEME {
   return {
     background: getVar("--theme-terminal-background", DAINTREE_TERMINAL_THEME.background ?? ""),
     foreground: getVar("--theme-terminal-foreground", DAINTREE_TERMINAL_THEME.foreground ?? ""),
-    // Match the background so xterm's overview ruler outline (white by default in
-    // xterm 6.0) blends in instead of painting a white strip on the right edge.
-    overviewRulerBorder: getVar(
-      "--theme-terminal-background",
-      DAINTREE_TERMINAL_THEME.overviewRulerBorder ?? ""
-    ),
+    // Transparent so xterm's overview ruler outline (white by default in xterm
+    // 6.0) never paints a strip on the right edge, theme- or app-coloured.
+    overviewRulerBorder: TRANSPARENT_OVERVIEW_RULER_BORDER,
     cursor: getVar("--theme-accent-primary", DAINTREE_TERMINAL_THEME.cursor ?? ""),
     cursorAccent: getVar("--theme-text-inverse", DAINTREE_TERMINAL_THEME.cursorAccent ?? ""),
     selectionBackground: getVar(

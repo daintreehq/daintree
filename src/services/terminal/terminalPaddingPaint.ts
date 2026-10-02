@@ -85,7 +85,11 @@ function packRgb(r: number, g: number, b: number): number {
   return (Math.min(255, r) << 16) | (Math.min(255, g) << 8) | Math.min(255, b);
 }
 
-/** Resolves a 256-colour palette index against the theme; null when the theme can't say. */
+/**
+ * Resolves a 256-colour palette index against the configured theme; null when
+ * the theme can't say. Live OSC 4 palette overrides aren't visible here, so an
+ * app that redefines a palette slot extends the configured colour instead.
+ */
 export function resolvePaletteColor(index: number, theme: ITheme | undefined): number | null {
   if (index < 16) {
     const key = ANSI_THEME_KEYS[index];
@@ -247,8 +251,8 @@ export function createPaddingPaintSampler(): (
   };
 }
 
-// Matches the wrapper's `p-3` gutter in XtermAdapter.
-const PADDING = "calc(var(--spacing) * 3)";
+// The wrapper's `pl-3 pt-3 pb-3 pr-3` gutter in XtermAdapter (3 × Tailwind's 0.25rem spacing).
+const PADDING = "0.75rem";
 
 const solid = (color: string) => `linear-gradient(${color}, ${color})`;
 

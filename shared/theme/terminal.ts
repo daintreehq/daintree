@@ -11,14 +11,17 @@ export function getTerminalScrollbarDefaults(type: "dark" | "light") {
   };
 }
 
+export const TRANSPARENT_OVERVIEW_RULER_BORDER = "#00000000";
+
 export function getTerminalThemeFromAppTokens(tokens: AppColorSchemeTokens): ITheme {
   return {
     background: tokens["terminal-background"],
     foreground: tokens["terminal-foreground"],
     // xterm 6.0 defaults overviewRulerBorder to #ffffff (the typings doc comment
     // claiming black is stale). With the ruler enabled this paints a 1px white
-    // strip down the right edge — match the background so the outline blends in.
-    overviewRulerBorder: tokens["terminal-background"],
+    // strip down the right edge — draw it transparent so whatever is behind
+    // shows, including an app-painted right edge extended into the padding.
+    overviewRulerBorder: TRANSPARENT_OVERVIEW_RULER_BORDER,
     cursor: tokens["terminal-cursor"],
     cursorAccent: tokens["terminal-cursor-accent"],
     selectionBackground: tokens["terminal-selection"],
