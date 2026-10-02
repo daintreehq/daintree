@@ -27,6 +27,8 @@ vi.mock("@/lib/viewCacheState", () => ({
 
 import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 import { _resetCopyFlashForTests, captureCopyFlash, showCopyFlash } from "@/lib/copyFlash";
+import { copyWithToast } from "@/lib/copyWithToast";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { CopyFlash } from "../CopyFlash";
 
 const card = () => document.querySelector<HTMLElement>("[data-copy-flash]");
@@ -124,6 +126,28 @@ describe("CopyFlash", () => {
     flash();
     fireEvent.wheel(document.body);
     expect(card()).toBeNull();
+  });
+
+  it("confirms a menu copy end to end, and only announces one the view can't show", async () => {
+    render(<CopyFlash />);
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+    fireEvent.pointerDown(document.body, { clientX: 300, clientY: 400 });
+    await act(async () => {
+      copyWithToast("Path", "/repo", { write: async () => true });
+    });
+    expect(card()).not.toBeNull();
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Path copied");
+
+    act(() => {
+      for (const listener of viewMock.listeners) listener(false);
+    });
+    viewMock.isProjectViewObservable.mockReturnValue(false);
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+    await act(async () => {
+      copyWithToast("URL", "http://x/", { write: async () => true });
+    });
+    expect(card()).toBeNull();
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("URL copied");
   });
 
   it("removes its listeners on unmount", () => {

@@ -1,5 +1,5 @@
 import { notify } from "@/lib/notify";
-import { captureCopyFlash, showCopyFlash } from "@/lib/copyFlash";
+import { captureCopyFlash, showCopyFlash, type CopyFlashTicket } from "@/lib/copyFlash";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
 async function writeClipboard(text: string): Promise<boolean> {
@@ -12,6 +12,13 @@ async function writeClipboard(text: string): Promise<boolean> {
 }
 
 export interface CopyWithToastOptions {
+  /**
+   * Where the gesture started, for a caller that does async work (a file read)
+   * between the select and the copy: by then the menu has closed and the view
+   * may have been switched away and back. Applies to the first attempt only;
+   * a Retry is its own gesture.
+   */
+  flash?: CopyFlashTicket;
   /** The clipboard write. Defaults to `navigator.clipboard.writeText`. */
   write?: (text: string) => Promise<boolean>;
 }
@@ -47,6 +54,7 @@ function lowerNoun(label: string): string {
  */
 export function copyWithToast(label: string, value: string, options: CopyWithToastOptions = {}) {
   const { write = writeClipboard } = options;
+  let initialFlash = options.flash;
   const noun = lowerNoun(label);
   const successTitle = `${label} copied`;
   const failureTitle = `Couldn't copy ${noun}`;
@@ -54,7 +62,8 @@ export function copyWithToast(label: string, value: string, options: CopyWithToa
   // second attempt still confirms.
   const attempt = () => {
     // Where the user is acting, read before the menu's close moves focus.
-    const flash = captureCopyFlash();
+    const flash = initialFlash ?? captureCopyFlash();
+    initialFlash = undefined;
     // Started synchronously, inside the gesture that asked for it. A caller's
     // write that throws or rejects is a refusal like any other.
     let written: Promise<boolean>;

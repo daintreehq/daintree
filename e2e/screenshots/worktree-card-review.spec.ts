@@ -855,10 +855,12 @@ test("sidebar worktree card review — states and themes", async () => {
         }
       };
 
+      // Success is a brief flash beside the menu row, not a toast.
+      const copyFlash = page.locator("[data-copy-flash]");
       await copyRow("Path");
-      await toastFrame("88-copy-path-toast", "Path copied");
+      await snap(page, "88-copy-path-flash", copyFlash, "Copied");
       await copyRow("Branch name");
-      await toastFrame("89-copy-branch-toast", "Branch name copied");
+      await snap(page, "89-copy-branch-flash", copyFlash, "Copied");
 
       await page.evaluate(() => {
         navigator.clipboard.writeText = () => Promise.reject(new Error("denied"));

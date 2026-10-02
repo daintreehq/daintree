@@ -82,6 +82,7 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { _resetCopyFlashForTests, getCopyFlash, invalidateCopyFlash } from "@/lib/copyFlash";
 import {
   isFileRowMenuKey,
   useFileRowMenuItems,
@@ -198,6 +199,8 @@ beforeEach(() => {
   insertRef.current = { canInsert: true, refusalReason: null, insert: vi.fn(() => true) };
   writeTextMock.mockReset();
   writeTextMock.mockResolvedValue(undefined);
+  _resetCopyFlashForTests();
+  useAnnouncerStore.setState({ polite: null, assertive: null });
   Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
 });
 
@@ -693,6 +696,28 @@ describe("useFileRowMenuItems — Copy file contents", () => {
       expect(useAnnouncerStore.getState().polite?.msg).toBe("File contents copied")
     );
     expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("draws no flash for a read that settles after the view was switched away", async () => {
+    let finishRead!: (value: DispatchResult) => void;
+    dispatchMock.mockImplementation((id) =>
+      id === "file.read"
+        ? new Promise<DispatchResult>((resolve) => (finishRead = resolve))
+        : Promise.resolve({ ok: true, result: undefined })
+    );
+    const menu = await openMenu();
+    const copy = await openSubmenu(menu, "Copy");
+
+    fireEvent.click(within(copy).getByRole("menuitem", { name: "Copy file contents" }));
+    await waitFor(() => expect(finishRead).toBeDefined());
+    // Switched away and back while the read was in flight.
+    invalidateCopyFlash();
+    finishRead({ ok: true, result: { content: "body" } });
+
+    await waitFor(() =>
+      expect(useAnnouncerStore.getState().polite?.msg).toBe("File contents copied")
+    );
+    expect(getCopyFlash()).toBeNull();
   });
 
   it("keeps the item for an extension it doesn't recognise", async () => {

@@ -73,6 +73,22 @@ describe("copyWithToast", () => {
     expect(flashMock.showCopyFlash).toHaveBeenCalledWith(ticket);
   });
 
+  it("uses a caller's ticket for the first attempt and captures afresh for Retry", async () => {
+    writeText.mockRejectedValueOnce(new Error("denied")).mockResolvedValue();
+    notifyMock.mockReturnValue("toast-1");
+    const early = { origin: { kind: "point" as const, x: 1, y: 2 }, generation: 0 };
+    const retry = { origin: { kind: "point" as const, x: 50, y: 60 }, generation: 0 };
+    flashMock.captureCopyFlash.mockReturnValue(retry);
+    copyWithToast("File contents", "body", { flash: early });
+    await flush();
+    expect(flashMock.captureCopyFlash).not.toHaveBeenCalled();
+
+    void notifyMock.mock.calls[0]![0].action!.onClick();
+    await flush();
+
+    expect(flashMock.showCopyFlash).toHaveBeenCalledWith(retry);
+  });
+
   it("announces every success, even an identical repeat", async () => {
     writeText.mockResolvedValue();
     copyWithToast("Path", "/repo/wt");
