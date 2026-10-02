@@ -176,7 +176,7 @@ function CardIdentity({
       </span>
       <span
         aria-hidden="true"
-        className="w-12 shrink-0 text-right text-2xs leading-none text-text-secondary tabular-nums"
+        className="min-w-12 shrink-0 text-right text-2xs leading-none whitespace-nowrap text-text-secondary tabular-nums"
       >
         {row.age ?? ""}
       </span>
