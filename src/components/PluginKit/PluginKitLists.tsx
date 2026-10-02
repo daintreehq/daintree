@@ -3,6 +3,7 @@ import {
   useId,
   useRef,
   useState,
+  type FocusEvent,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -57,9 +58,63 @@ import {
 import { CONTEXT_MENU_PARTS, isMenuKey, renderMenuEntries } from "./kitMenu";
 import { useKitOverlayZClass } from "./kitScope";
 import { severityGlyph } from "./PluginKitPatterns";
+import { formatNumeric, readNumericFormat, sumField, type NumericFormat } from "./kitNumericFormat";
+import { readTotals, type TotalSpec } from "./kitDataTableModel";
 
 export const DEFAULT_ROW_PX = 28;
 export const DEFAULT_OVERSCAN_ROWS = 8;
+
+export type TableDensity = "compact" | "default" | "comfortable";
+
+export function readDensity(value: unknown): TableDensity {
+  return oneOf(value, ["compact", "default", "comfortable"] as const) ?? "default";
+}
+
+/** A DataTable row's height at each density: the virtualiser's estimate. */
+export const DENSITY_ROW_PX: Record<TableDensity, number> = {
+  compact: 24,
+  default: DEFAULT_ROW_PX,
+  comfortable: 32,
+};
+
+export const DENSITY_TEXT_CLASS: Record<TableDensity, string> = {
+  compact: "text-xs",
+  default: "text-xs",
+  comfortable: "text-sm",
+};
+
+/** A header or body cell's padding: with the type size, it sets the row height. */
+export const DENSITY_CELL_CLASS: Record<TableDensity, string> = {
+  compact: "px-3 py-1",
+  default: "px-3 py-1.5",
+  comfortable: "px-3 py-1.5",
+};
+
+/**
+ * Clicks and keys on a control inside a cell belong to the control, not to the
+ * row it sits in.
+ */
+export const IN_CELL_CONTROL_SELECTOR =
+  "button, a, input, select, textarea, label, [role=button], [role=link], [role=checkbox], [role=switch], [role=combobox], [contenteditable]:not([contenteditable=false])";
+
+export function fromCellControl(event: { target: EventTarget | null; currentTarget: Element }) {
+  const target = event.target instanceof Element ? event.target : null;
+  const control = target?.closest(IN_CELL_CONTROL_SELECTOR);
+  return (
+    control !== null &&
+    control !== undefined &&
+    control !== event.currentTarget &&
+    event.currentTarget.contains(control)
+  );
+}
+
+/** A drawn row's rules: a hairline above every row but the first, and a fill on every other one. */
+export function rowRuleClass(index: number, dividers: boolean, striped: boolean): string {
+  return cn(
+    dividers && index > 0 && "border-t border-divider",
+    striped && index % 2 === 1 && "bg-overlay-subtle"
+  );
+}
 
 // A focused list must not point `aria-activedescendant` at a row the reader
 // scrolled out of the mounted window; the next arrow key scrolls it back.
@@ -229,6 +284,10 @@ export interface TableColumn {
   width: number | string | undefined;
   grow: boolean;
   align: "start" | "center" | "end";
+  /** A figure column: tabular digits, end-aligned unless `align` says otherwise. */
+  numeric: boolean;
+  /** Formats a number cell that has no `render`. */
+  format: NumericFormat | null;
   sortable: boolean;
   render: ((row: unknown, index: number) => unknown) | undefined;
 }
@@ -244,6 +303,9 @@ export function readColumns(columns: unknown): TableColumn[] {
     seen.add(id);
     const width = field(entry, "width");
     const render = field(entry, "render");
+    const numeric = field(entry, "numeric");
+    const format = readNumericFormat(numeric);
+    const isNumeric = numeric === true || format !== null;
     out.push({
       id,
       header: node(field(entry, "header")),
@@ -253,7 +315,11 @@ export function readColumns(columns: unknown): TableColumn[] {
           : typeof width === "number"
             ? positive(width, 10_000)
             : undefined,
-      align: oneOf(field(entry, "align"), ["start", "center", "end"] as const) ?? "start",
+      align:
+        oneOf(field(entry, "align"), ["start", "center", "end"] as const) ??
+        (isNumeric ? "end" : "start"),
+      numeric: isNumeric,
+      format,
       grow: field(entry, "grow") === true,
       sortable: field(entry, "sortable") === true,
       render:
@@ -315,11 +381,66 @@ export function layoutColumns(
 
 export const ALIGN_CLASS = { start: "text-start", center: "text-center", end: "text-end" } as const;
 
+/** A number as a column draws it: formatted when the column has a `numeric` format. */
+export function columnFigure(value: number, column: TableColumn): string | number {
+  return column.format ? formatNumeric(value, column.format) : value;
+}
+
 export function cellValue(row: unknown, column: TableColumn, index: number): ReactNode {
   if (column.render) return node(column.render(row, index));
   if (typeof row !== "object" || row === null) return null;
   const value = field(row, column.id);
-  return typeof value === "string" || typeof value === "number" ? value : null;
+  if (typeof value === "number") return columnFigure(value, column);
+  return typeof value === "string" ? value : null;
+}
+
+/** A totals or subtotal cell over `rows`: the column's sum drawn like its cells, or the plugin's own. */
+export function totalContent(
+  spec: TotalSpec,
+  rows: readonly unknown[],
+  column: TableColumn
+): ReactNode {
+  if (spec !== "sum") return node(spec(rows));
+  const sum = sumField(rows, column.id);
+  return sum === null ? null : columnFigure(sum, column);
+}
+
+/** The totals row's label, or null when no shown column is free to hold it. */
+export function totalsLabelFor(
+  columns: readonly TableColumn[],
+  totals: ReadonlyMap<string, TotalSpec>,
+  label: unknown
+): { columnId: string; label: ReactNode } | null {
+  const free = columns.find((column) => !totals.has(column.id));
+  if (!free) return null;
+  return { columnId: free.id, label: label === undefined ? "Total" : node(label) };
+}
+
+/**
+ * A totals cell: under a strong rule, in semibold, with a fill of its own so
+ * the rows a pinned footer is held over do not show through it.
+ */
+export const TOTALS_CELL_CLASS =
+  "kit-dt-foot border-t border-border-strong bg-surface-canvas font-semibold";
+
+/** A header cell's box and type, shared by both tables. */
+export function headerCellClass(column: TableColumn, density: TableDensity): string {
+  return cn(
+    "border-b border-divider bg-surface-canvas font-medium text-text-secondary",
+    DENSITY_CELL_CLASS[density],
+    ALIGN_CLASS[column.align],
+    column.numeric && "tabular-nums"
+  );
+}
+
+/** A body cell's box and type, shared by both tables. */
+export function bodyCellClass(column: TableColumn, density: TableDensity): string {
+  return cn(
+    "overflow-hidden text-ellipsis whitespace-nowrap text-text-primary",
+    DENSITY_CELL_CLASS[density],
+    ALIGN_CLASS[column.align],
+    column.numeric && "tabular-nums"
+  );
 }
 
 interface TableContext {
@@ -335,6 +456,7 @@ interface TableContext {
   menuIndex: number;
   /** Set when the table has a `rowMenu`: the body is then the menu's trigger. */
   openRowMenu: ((event: MouseEvent<HTMLElement>) => void) | undefined;
+  density: TableDensity;
 }
 
 function TableScroller({
@@ -350,7 +472,7 @@ function TableElement({ context, style, children }: TableProps & { context: Tabl
     <table
       {...context.tableProps}
       style={{ ...style, tableLayout: "fixed", width: "100%", borderCollapse: "collapse" }}
-      className={cn("text-xs", context.interactive && GRID_FOCUS_RING)}
+      className={cn(DENSITY_TEXT_CLASS[context.density], context.interactive && GRID_FOCUS_RING)}
     >
       {children}
     </table>
@@ -388,7 +510,13 @@ function TableRow({ context, item, ...props }: ItemProps<unknown> & { context: T
       data-active={interactive && index === context.activeIndex ? "true" : undefined}
       // The same marker Radix writes on a row that is its own menu trigger.
       data-state={index === context.menuIndex ? "open" : undefined}
-      onClick={interactive ? () => context.activate(index) : undefined}
+      onClick={
+        interactive
+          ? (event: MouseEvent<HTMLTableRowElement>) => {
+              if (!fromCellControl(event)) context.activate(index);
+            }
+          : undefined
+      }
       className={cn(
         PALETTE_ROW_CLASS,
         interactive && [LIST_ROW_HOVER_CLASS, "cursor-pointer"],
@@ -427,6 +555,11 @@ function KitDataTable({
   onEndReached,
   "aria-label": ariaLabel,
   className,
+  density,
+  rowDividers,
+  striped,
+  totals,
+  totalsLabel,
   ...rest
 }: PluginDataTableProps) {
   // `aria-*` belongs on the grid inside, which names itself; the root takes `id` and `data-*`.
@@ -442,7 +575,11 @@ function KitDataTable({
   const interactive = rowClick !== undefined || menuFor !== undefined;
   const overlayZ = useKitOverlayZClass();
   const owner = useKitOwnerAttributes();
-  const rowPx = positive(estimatedRowSize, 10_000) ?? DEFAULT_ROW_PX;
+  const size = readDensity(density);
+  const dividers = rowDividers === true;
+  const stripes = striped === true;
+  const footTotals = readTotals(totals);
+  const rowPx = positive(estimatedRowSize, 10_000) ?? DENSITY_ROW_PX[size];
   const keyField = typeof rowKey === "string" ? rowKey : undefined;
   const keyFn = typeof rowKey === "function" ? rowKey : undefined;
   const keyOf = (row: unknown, index: number): string | number => {
@@ -555,11 +692,13 @@ function KitDataTable({
   };
 
   const label = str(ariaLabel) ?? "";
+  // The header, the rows, and the totals row.
+  const rowTotal = data.length + 1 + (footTotals ? 1 : 0);
   const tableProps: Record<string, unknown> = interactive
     ? {
         role: "grid",
         "aria-label": label,
-        "aria-rowcount": data.length + 1,
+        "aria-rowcount": rowTotal,
         tabIndex: 0,
         "aria-activedescendant": activeMounted(activeIndex, range) ? rowId(activeIndex) : undefined,
         // Tells the global Shift+F10 handler to stand down for the grid's own menu.
@@ -569,14 +708,14 @@ function KitDataTable({
         // The cursor row is the grid's focus indicator, so focus arriving
         // must find it on screen: the first row when there is no cursor yet,
         // else the cursor scrolled back into the mounted window.
-        onFocus: () => {
-          if (data.length === 0) return;
+        onFocus: (event: FocusEvent<HTMLTableElement>) => {
+          if (event.target !== event.currentTarget || data.length === 0) return;
           const at = cursor < 0 ? 0 : activeIndex;
           if (cursor < 0) setCursor(0);
           if (!activeMounted(at, range)) handle.current?.scrollIntoView({ index: at });
         },
       }
-    : { "aria-label": label, "aria-rowcount": data.length + 1 };
+    : { "aria-label": label, "aria-rowcount": rowTotal };
 
   const context: TableContext = {
     columns: cols,
@@ -589,6 +728,7 @@ function KitDataTable({
     activate,
     menuIndex: menu.open ? menu.index : -1,
     openRowMenu: menuFor ? openRowMenu : undefined,
+    density: size,
   };
 
   if (data.length === 0 && empty !== undefined && empty !== null) {
@@ -618,10 +758,7 @@ function KitDataTable({
                 : undefined
             }
             style={width === undefined ? undefined : { width }}
-            className={cn(
-              "border-b border-divider bg-surface-canvas px-3 py-1.5 font-medium text-text-secondary",
-              ALIGN_CLASS[column.align]
-            )}
+            className={headerCellClass(column, size)}
           >
             {column.sortable && handleSort ? (
               <button
@@ -654,6 +791,29 @@ function KitDataTable({
     </tr>
   );
 
+  const totalsLabelAt = footTotals ? totalsLabelFor(cols, footTotals, totalsLabel) : null;
+  const footer = footTotals
+    ? () => (
+        <tr aria-rowindex={rowTotal} data-totals-row="">
+          {cols.map((column) => {
+            const spec = footTotals.get(column.id);
+            return (
+              <td key={column.id} className={cn(bodyCellClass(column, size), TOTALS_CELL_CLASS)}>
+                {spec
+                  ? totalContent(spec, data, column)
+                  : column.id === totalsLabelAt?.columnId
+                    ? totalsLabelAt.label
+                    : null}
+              </td>
+            );
+          })}
+          {layout.filler ? (
+            <td aria-hidden="true" className={cn(TOTALS_CELL_CLASS, "p-0")} />
+          ) : null}
+        </tr>
+      )
+    : undefined;
+
   const table = (
     <TableVirtuoso
       {...rootAttributes}
@@ -668,21 +828,21 @@ function KitDataTable({
       increaseViewportBy={DEFAULT_OVERSCAN_ROWS * rowPx}
       computeItemKey={(index, row) => keyOf(row, index)}
       fixedHeaderContent={header}
+      fixedFooterContent={footer}
       rangeChanged={setRange}
-      itemContent={(index, row) => [
-        ...cols.map((column) => (
-          <td
-            key={column.id}
-            className={cn(
-              "overflow-hidden text-ellipsis whitespace-nowrap px-3 py-1.5 text-text-primary",
-              ALIGN_CLASS[column.align]
-            )}
-          >
-            {cellValue(row, column, index)}
-          </td>
-        )),
-        ...(layout.filler ? [<td key={"\u0000filler"} aria-hidden="true" className="p-0" />] : []),
-      ]}
+      itemContent={(index, row) => {
+        const rules = rowRuleClass(index, dividers, stripes);
+        return [
+          ...cols.map((column) => (
+            <td key={column.id} className={cn(bodyCellClass(column, size), rules)}>
+              {cellValue(row, column, index)}
+            </td>
+          )),
+          ...(layout.filler
+            ? [<td key={"\u0000filler"} aria-hidden="true" className={cn("p-0", rules)} />]
+            : []),
+        ];
+      }}
       endReached={endReached ? (index) => endReached(index) : undefined}
     />
   );

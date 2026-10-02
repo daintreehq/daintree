@@ -9,9 +9,16 @@
   background-color: var(--color-surface);
 }
 
-thead .kit-dt-sticky {
+thead .kit-dt-sticky,
+.kit-dt-sticky.kit-dt-foot {
   z-index: 3;
   background-color: var(--color-surface-canvas);
+}
+
+/* A striped row's pinned cells carry the stripe over the row's own tint, as
+   the unpinned cells' fill lies over the row's: the first layer is the top. */
+tr[data-striped] > .kit-dt-sticky {
+  background-image: linear-gradient(var(--color-overlay-subtle), var(--color-overlay-subtle));
 }
 
 tr[aria-selected="true"] > .kit-dt-sticky,
@@ -23,11 +30,49 @@ tr[data-hoverable]:not([aria-selected="true"]):not([data-selected="true"]):hover
   background-image: linear-gradient(var(--color-overlay-subtle), var(--color-overlay-subtle));
 }
 
+tr[data-striped][aria-selected="true"] > .kit-dt-sticky,
+tr[data-striped][data-selected="true"] > .kit-dt-sticky {
+  background-image:
+    linear-gradient(var(--color-overlay-subtle), var(--color-overlay-subtle)),
+    linear-gradient(var(--color-overlay-highlight), var(--color-overlay-highlight));
+}
+
+tr[data-striped][data-hoverable]:not([aria-selected="true"]):not([data-selected="true"]):hover
+  > .kit-dt-sticky {
+  background-image:
+    linear-gradient(var(--color-overlay-subtle), var(--color-overlay-subtle)),
+    linear-gradient(var(--color-overlay-subtle), var(--color-overlay-subtle));
+}
+
+/* An editable cell's resting cue, under the pointer or the keyboard cursor:
+   a lift and a pencil at its end. An inset shadow rather than a fill, so it
+   lays over whatever the cell already paints (a stripe, the selection, a
+   pinned cell's surface) instead of replacing it. */
+.kit-dt-edit:hover,
+table:focus-visible tr[data-active="true"] > .kit-dt-edit {
+  box-shadow: inset 0 0 0 100vmax var(--color-overlay-subtle);
+}
+
+.kit-dt-edit:hover > .kit-dt-edit-glyph,
+table:focus-visible tr[data-active="true"] > .kit-dt-edit > .kit-dt-edit-glyph {
+  opacity: 1;
+}
+
 /* The pinned edge, only once something has scrolled under it. */
 table[data-scrolled-x] .kit-dt-sticky[data-sticky-edge] {
   box-shadow:
     inset -1px 0 0 var(--border-divider),
     6px 0 6px -6px color-mix(in srgb, var(--theme-shadow-color) 30%, transparent);
+}
+
+table[data-scrolled-x] .kit-dt-sticky[data-sticky-edge].kit-dt-edit:hover,
+table[data-scrolled-x]:focus-visible
+  tr[data-active="true"]
+  > .kit-dt-sticky[data-sticky-edge].kit-dt-edit {
+  box-shadow:
+    inset -1px 0 0 var(--border-divider),
+    6px 0 6px -6px color-mix(in srgb, var(--theme-shadow-color) 30%, transparent),
+    inset 0 0 0 100vmax var(--color-overlay-subtle);
 }
 
 @media (forced-colors: active) {
