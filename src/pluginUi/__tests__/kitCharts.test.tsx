@@ -585,6 +585,77 @@ describe("BarChart", () => {
     // One series needs no legend: the chart's label names it.
     expect(screen.queryByRole("list", { name: "Legend" })).toBeNull();
   });
+
+  it("colours a lone series' bars by category, in the bars, the legend and the tooltip", () => {
+    const data = [
+      { kind: "equity", now: 60 },
+      { kind: "bonds", now: 30 },
+      { kind: "cash", now: 10 },
+    ];
+    const { container } = render(
+      createElement(kit.BarChart, {
+        data,
+        x: "kind",
+        series: [{ key: "now", label: "Now" }],
+        "aria-label": "Allocation",
+        formatX: (value: unknown) => String(value).toUpperCase(),
+        // Keyed by the formatted name; "cash" is left to the series colour.
+        // @ts-expect-error a colour the charts do not know, as untyped JS can send
+        categoryColors: { EQUITY: "teal", BONDS: "violet", equity: "orange", CASH: "pink" },
+      })
+    );
+    const fills = [...container.querySelectorAll<SVGPathElement>("[data-chart-bar]")].map(
+      (bar) => bar.style.fill
+    );
+    expect(fills).toEqual([chartColor("teal"), chartColor("violet"), chartColor("blue")]);
+    const legend = screen.getByRole("list", { name: "Legend" });
+    expect(legend.textContent).toBe("EQUITYBONDSNow");
+    expect(
+      [...legend.querySelectorAll<HTMLElement>("[data-chart-swatch]")].map(
+        (swatch) => swatch.style.backgroundColor
+      )
+    ).toEqual([chartColor("teal"), chartColor("violet"), chartColor("blue")]);
+    fireEvent.keyDown(plot(), { key: "Home" });
+    expect(
+      tooltip()!.querySelector<HTMLElement>("[data-chart-swatch]")?.style.backgroundColor
+    ).toBe(chartColor("teal"));
+  });
+
+  it("names even one coloured category, and the series only where a bar still wears it", () => {
+    render(
+      createElement(kit.BarChart, {
+        data: [
+          { kind: "Equity", now: 60 },
+          { kind: "Cash", now: 0 },
+        ],
+        x: "kind",
+        series: [{ key: "now", label: "Now" }],
+        "aria-label": "One pinned",
+        categoryColors: { Equity: "teal" },
+      })
+    );
+    // Cash draws no bar, so nothing on the plot wears the series colour.
+    expect(screen.getByRole("list", { name: "Legend" }).textContent).toBe("Equity");
+  });
+
+  it("ignores category colours when several series need the hue to tell apart", () => {
+    const { container } = render(
+      createElement(kit.BarChart, {
+        data: BUILDS,
+        x: "day",
+        series: BUILD_SERIES,
+        "aria-label": "Builds",
+        categoryColors: { Mon: "teal", Tue: "teal", Wed: "teal" },
+      })
+    );
+    const fills = new Set(
+      [...container.querySelectorAll<SVGPathElement>("[data-chart-bar]")].map(
+        (bar) => bar.style.fill
+      )
+    );
+    expect(fills).toEqual(new Set([chartColor("blue"), chartColor("amber")]));
+    expect(screen.getByRole("list", { name: "Legend" }).textContent).toBe("PassedFailed");
+  });
 });
 
 describe("LineChart", () => {
@@ -778,6 +849,172 @@ describe("LineChart", () => {
     expect(() => render(createElement(kit.LineChart, untyped))).not.toThrow();
     expect(screen.getByRole("group", { name: "Bad" }).textContent).toBe("No data");
   });
+
+  const SAVINGS = [
+    { year: 2020, saved: 10 },
+    { year: 2021, saved: 30 },
+    { year: 2022, saved: 45 },
+    { year: 2023, saved: 60 },
+  ];
+
+  function gridTicks(container: HTMLElement): number[] {
+    return [...container.querySelectorAll("[data-chart-grid]")].map((line) =>
+      Number(line.getAttribute("data-chart-grid"))
+    );
+  }
+
+  it("draws labelled reference lines and bands, and names them for assistive tech", () => {
+    const { container } = render(
+      createElement(kit.LineChart, {
+        data: SAVINGS,
+        x: "year",
+        series: [{ key: "saved", label: "Saved" }],
+        "aria-label": "Savings",
+        referenceLines: [
+          { value: 200, label: "Goal", color: "amber" },
+          { axis: "x", value: 2022, label: "Moved house", stroke: "solid" },
+          { axis: "x", value: 1990, label: "Before the data" },
+          // @ts-expect-error a y value that is not a number, as untyped JS can send
+          { value: "high", label: "Not a number" },
+          // @ts-expect-error an axis that does not exist
+          { axis: "z", value: 3 },
+        ],
+        bands: [
+          { from: 2021.5, to: 2020.5, label: "Sabbatical" },
+          { axis: "y", from: 40, to: 50 },
+          { from: 2021, to: 2021 },
+        ],
+      })
+    );
+    // The goal sits far above the data and still lands on the axis.
+    expect(Math.max(...gridTicks(container))).toBeGreaterThanOrEqual(200);
+    const lines = [...container.querySelectorAll<SVGLineElement>("[data-chart-reference-line]")];
+    expect(lines.map((line) => line.getAttribute("data-chart-reference-line"))).toEqual(["y", "x"]);
+    expect(lines[0]?.getAttribute("stroke-dasharray")).not.toBeNull();
+    expect(lines[0]?.style.color).toBe(chartColor("amber"));
+    expect(lines[1]?.getAttribute("stroke-dasharray")).toBeNull();
+    expect(lines[1]?.style.color).toBe(chartColor("neutral"));
+    const bands = [...container.querySelectorAll<SVGRectElement>("[data-chart-reference-band]")];
+    expect(bands.map((band) => band.getAttribute("data-chart-reference-band"))).toEqual(["x", "y"]);
+    for (const band of bands) {
+      expect(band.getAttribute("fill")).toBe("currentColor");
+      expect(Number(band.getAttribute("fill-opacity"))).toBeLessThan(0.2);
+    }
+    // Bands sit behind the rules, and the rules under the series.
+    const order = [
+      ...container.querySelectorAll(
+        "[data-chart-reference-band], [data-chart-reference-line], [data-chart-series]"
+      ),
+    ].map((element) =>
+      element.hasAttribute("data-chart-reference-band")
+        ? "band"
+        : element.hasAttribute("data-chart-reference-line")
+          ? "line"
+          : "series"
+    );
+    expect(order).toEqual(["band", "band", "line", "line", "series"]);
+    const labels = [...container.querySelectorAll("[data-chart-annotation-label]")].map(
+      (label) => label.textContent
+    );
+    expect(labels).toEqual(expect.arrayContaining(["Goal", "Moved house", "Sabbatical"]));
+    expect(container.querySelector("caption")?.textContent).toBe(
+      "Savings. Reference lines: Goal at 200; Moved house at 2,022; Before the data at 1,990. " +
+        "Shaded ranges: Sabbatical from 2,020.5 to 2,021.5; Range from 40 to 50"
+    );
+    expect(container.innerHTML).not.toMatch(/#[0-9a-f]{3,6}\b|rgb\(/i);
+  });
+
+  it("reads an x rule like the chart's own x values", () => {
+    const { container } = render(
+      createElement(kit.LineChart, {
+        data: [
+          { at: "2026-01-01", v: 1 },
+          { at: "2026-03-01", v: 2 },
+        ],
+        x: "at",
+        series: [{ key: "v", label: "V" }],
+        "aria-label": "Dated",
+        referenceLines: [
+          { axis: "x", value: "2026-02-01", label: "Launch" },
+          { axis: "x", value: new Date(2026, 1, 15), label: "Review" },
+          { axis: "x", value: "soon", label: "Unreadable" },
+        ],
+      })
+    );
+    expect(container.querySelectorAll("[data-chart-reference-line='x']")).toHaveLength(2);
+  });
+
+  it("holds a fixed value axis and clips what runs past it", () => {
+    const { container } = render(
+      createElement(kit.LineChart, {
+        data: SAVINGS,
+        x: "year",
+        series: [{ key: "saved", label: "Saved" }],
+        "aria-label": "Fixed",
+        yDomain: [50, 0],
+        referenceLines: [{ value: 200, label: "Off the axis" }],
+      })
+    );
+    const ticks = gridTicks(container);
+    expect(Math.min(...ticks)).toBeGreaterThanOrEqual(0);
+    expect(Math.max(...ticks)).toBeLessThanOrEqual(50);
+    // A fixed axis is not widened for a rule; the rule past it is not drawn.
+    expect(container.querySelector("[data-chart-reference-line]")).toBeNull();
+    const clipped = container.querySelector("[data-chart-series]")?.parentElement;
+    const id = clipped?.getAttribute("clip-path")?.match(/^url\(#(.+)\)$/)?.[1];
+    expect(id).toBeTruthy();
+    expect(container.querySelector(`clipPath[id="${id}"]`)).not.toBeNull();
+    cleanup();
+
+    const loose = render(
+      createElement(kit.LineChart, {
+        data: SAVINGS,
+        x: "year",
+        series: [{ key: "saved", label: "Saved" }],
+        "aria-label": "Loose",
+        // @ts-expect-error a domain with equal ends, as untyped JS can send
+        yDomain: [5, 5, 5],
+      })
+    );
+    expect(Math.max(...gridTicks(loose.container))).toBeGreaterThanOrEqual(60);
+    expect(loose.container.querySelector("clipPath")).toBeNull();
+    cleanup();
+
+    // Finer than the ticks round to: the ends stand in rather than no axis at all.
+    const fine = render(
+      createElement(kit.LineChart, {
+        data: SAVINGS,
+        x: "year",
+        series: [{ key: "saved", label: "Saved" }],
+        "aria-label": "Fine",
+        yDomain: [1.000000000001, 1.000000000002],
+      })
+    );
+    expect(gridTicks(fine.container)).toEqual([1.000000000001, 1.000000000002]);
+  });
+
+  it("keeps y rule labels a line apart where they land, not where their rules do", () => {
+    const { container } = render(
+      createElement(kit.LineChart, {
+        data: SAVINGS,
+        x: "year",
+        series: [{ key: "saved", label: "Saved" }],
+        "aria-label": "Close rules",
+        yDomain: [0, 200],
+        referenceLines: [
+          { value: 200, label: "Cap" },
+          { value: 180, label: "Stretch" },
+        ],
+      })
+    );
+    const ys = [...container.querySelectorAll("[data-chart-annotation-label]")].map((label) =>
+      Number(label.getAttribute("y"))
+    );
+    for (let i = 1; i < ys.length; i++) {
+      expect(Math.abs(ys[i]! - ys[i - 1]!)).toBeGreaterThanOrEqual(12);
+    }
+    expect(ys.length).toBeGreaterThan(0);
+  });
 });
 
 describe("DonutChart", () => {
@@ -847,5 +1084,41 @@ describe("DonutChart", () => {
     // @ts-expect-error the untyped shape a JavaScript view can send
     expect(() => render(createElement(kit.DonutChart, untyped))).not.toThrow();
     expect(screen.getByRole("group", { name: "Bad" }).textContent).toBe("No data");
+  });
+
+  it("pins parts to colours by name, and the rest take the free slots", () => {
+    const rows = [
+      { name: "Stocks", n: 6 },
+      { name: "Bonds", n: 3 },
+      { name: "Cash", n: 1 },
+      { name: "toString", n: 1 },
+    ];
+    const parts = donutParts(rows, "name", "n", "Other", { Bonds: "blue", Cash: "plaid" });
+    // Bonds holds blue, so the first free slot is amber; "toString" is no pin.
+    expect(parts.map((part) => part.color)).toEqual([
+      chartColor("amber"),
+      chartColor("blue"),
+      chartColor("indigo"),
+      chartColor("orange"),
+    ]);
+    const many = Array.from({ length: 8 }, (_, index) => ({ name: `p${index}`, n: 1 }));
+    const folded = donutParts(many, "name", "n", "Other", { Other: "teal", p7: "teal" });
+    expect(folded[5]?.color).toBe(chartColor("neutral"));
+    expect(folded.slice(0, 5).map((part) => part.color)).not.toContain(chartColor("teal"));
+    cleanup();
+
+    const { container } = render(
+      createElement(kit.DonutChart, {
+        data: LANGS,
+        x: "lang",
+        value: "files",
+        "aria-label": "Pinned",
+        colors: { CSS: "teal" },
+      })
+    );
+    const fills = [...container.querySelectorAll<SVGPathElement>("[data-chart-part]")].map(
+      (part) => part.style.fill
+    );
+    expect(fills).toEqual([chartColor("blue"), chartColor("teal")]);
   });
 });

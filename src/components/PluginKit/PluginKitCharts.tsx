@@ -60,6 +60,27 @@ export function chartColor(color: PluginChartColor): string {
   return `var(--theme-category-${color}, ${FALLBACK[color]})`;
 }
 
+/**
+ * A colour pinned by name in a plugin's `{ [name]: color }` map, read from
+ * untyped JS: only the map's own keys, and only a colour the charts know.
+ */
+export function pinnedColor(map: unknown, name: string): PluginChartColor | undefined {
+  if (typeof map !== "object" || map === null || !Object.hasOwn(map, name)) return undefined;
+  return oneOf(field(map, name), COLORS);
+}
+
+/**
+ * Colours for parts in order: a pinned part keeps its colour, the rest take
+ * the slots no part pinned, in the fixed order, so two parts share a hue only
+ * when every slot is spoken for. Exported for tests.
+ */
+export function slotColors(pins: readonly (PluginChartColor | undefined)[]): PluginChartColor[] {
+  const taken = new Set(pins.filter((color) => color !== undefined));
+  const free = SLOTS.filter((slot) => !taken.has(slot));
+  let next = 0;
+  return pins.map((pin, index) => pin ?? free[next++] ?? SLOTS[index % SLOTS.length]!);
+}
+
 export const DEFAULT_HEIGHT = 200;
 export const MAX_HEIGHT = 2000;
 // jsdom and any host without ResizeObserver still get a drawable width.
@@ -739,12 +760,15 @@ export function Legend({
   series,
   omitted,
   shape,
+  always,
 }: {
   series: (ResolvedSeries & { marker?: MarkerShape })[];
   omitted: number;
   shape: SwatchShape;
+  /** Shows a one-entry legend, for keys the chart's label does not already name. */
+  always?: boolean;
 }) {
-  if (series.length < 2 && omitted === 0) return null;
+  if (series.length === 0 || (series.length < 2 && omitted === 0 && always !== true)) return null;
   return (
     <ul
       aria-label="Legend"
@@ -827,6 +851,8 @@ export interface TableModel {
   summary: string;
   /** Said, and shown under the plot, when the chart drew only part of the data: {@link limitNote}. */
   limit?: string;
+  /** What the plot marks besides the data (reference lines, shaded ranges), said with the caption. */
+  annotations?: string;
 }
 
 /** The note for a chart that drew only the first `shown` of `total` (categories, rows). */
@@ -846,7 +872,11 @@ export function DataFallback({
   label: string;
   table: TableModel;
 }) {
-  const note = [omittedNote(table.omitted, table.cap ?? MAX_SERIES), table.limit ?? ""]
+  const note = [
+    omittedNote(table.omitted, table.cap ?? MAX_SERIES),
+    table.limit ?? "",
+    table.annotations ?? "",
+  ]
     .filter((part) => part !== "")
     .join(". ");
   if (table.rows === null) {
@@ -1167,6 +1197,7 @@ function KitBarChart({
   formatValue,
   formatX,
   xLabel,
+  categoryColors,
   loading,
   empty,
   className,
@@ -1192,6 +1223,36 @@ function KitBarChart({
     () => resolved.map((entry) => rows.map((row) => finite(field(row, entry.key)))),
     [resolved, rows]
   );
+  // With several series the hue is what tells them apart, so only a lone
+  // series can trade it for the category's own colour.
+  const byCategory = useMemo(() => {
+    if (resolved.length !== 1 || omitted.length > 0) return null;
+    const pins = categories.map((category) => pinnedColor(categoryColors, category));
+    if (pins.every((pin) => pin === undefined)) return null;
+    const legend: ResolvedSeries[] = [];
+    const listed = new Set<string>();
+    categories.forEach((category, index) => {
+      const pin = pins[index];
+      if (pin === undefined || listed.has(category)) return;
+      listed.add(category);
+      legend.push({
+        key: `category:${category}`,
+        label: category,
+        color: chartColor(pin),
+        dash: undefined,
+      });
+    });
+    // A drawn bar left out still wears the series' colour, so the series is named beside them.
+    const plain = pins.some((pin, index) => {
+      const value = values[0]?.[index] ?? null;
+      return pin === undefined && value !== null && value !== 0;
+    });
+    if (plain) legend.push(resolved[0]!);
+    return {
+      colors: pins.map((pin) => (pin === undefined ? resolved[0]!.color : chartColor(pin))),
+      legend,
+    };
+  }, [resolved, omitted, categories, categoryColors, values]);
   const cursor = useCursor(rows.length);
 
   const geometry = useMemo(() => {
@@ -1300,7 +1361,7 @@ function KitBarChart({
               to,
               s === (value > 0 ? lastUp : lastDown),
               `${index}:${s}`,
-              resolved[s]!.color
+              byCategory?.colors[index] ?? resolved[s]!.color
             );
           }
           if (value > 0) up = next;
@@ -1316,7 +1377,7 @@ function KitBarChart({
             scale(value),
             true,
             `${index}:${s}`,
-            resolved[s]!.color
+            byCategory?.colors[index] ?? resolved[s]!.color
           );
         });
       }
@@ -1350,7 +1411,7 @@ function KitBarChart({
       labelEvery,
       groupSpan,
     };
-  }, [rows, resolved, values, categories, formats, stacked, across, width, px]);
+  }, [rows, resolved, values, categories, formats, stacked, across, width, px, byCategory]);
 
   // Built from the data alone, so moving the cursor never rescans it.
   const table = useMemo<TableModel>(() => {
@@ -1397,7 +1458,9 @@ function KitBarChart({
     geometry && active !== null
       ? {
           title: categories[active] ?? "",
-          rows: readoutRows(resolved, values, active, formats.full),
+          rows: readoutRows(resolved, values, active, formats.full).map((row) =>
+            byCategory ? { ...row, color: byCategory.colors[active] ?? row.color } : row
+          ),
           x: across ? geometry.ends[active]! : geometry.bandStart + (active + 0.5) * geometry.band,
           // Up in the plot's top margin where bars are shortest, beside the
           // column; a horizontal bar's tooltip starts level with its band.
@@ -1413,7 +1476,14 @@ function KitBarChart({
       className={classes}
       label={label}
       height={px}
-      legend={<Legend series={resolved} omitted={omitted.length} shape="bar" />}
+      legend={
+        <Legend
+          series={byCategory?.legend ?? resolved}
+          omitted={omitted.length}
+          shape="bar"
+          always={byCategory !== null}
+        />
+      }
       table={table}
       cursor={cursor}
       readout={readout}
@@ -1518,6 +1588,99 @@ export function nearest(sorted: readonly number[], target: number): number {
   return lo;
 }
 
+// Fainter than the area wash, so a wash laid over a band still reads as its own.
+const BAND_OPACITY = 0.08;
+const REFERENCE_DASH = "4 3";
+// Annotation labels sit on the plot; a surface halo keeps them legible where
+// they cross a gridline, a rule or a series.
+const LABEL_HALO = { stroke: "var(--theme-surface-panel)" };
+
+export interface ChartRule {
+  key: string;
+  axis: "x" | "y";
+  value: number;
+  label: string | undefined;
+  color: string;
+  dashed: boolean;
+}
+
+export interface ChartBand {
+  key: string;
+  axis: "x" | "y";
+  from: number;
+  to: number;
+  label: string | undefined;
+  color: string;
+}
+
+function overlayAxis(value: unknown, fallback: "x" | "y"): "x" | "y" | undefined {
+  return value === undefined ? fallback : oneOf(value, ["x", "y"] as const);
+}
+
+function overlayColor(entry: object): string {
+  return chartColor(oneOf(field(entry, "color"), COLORS) ?? "neutral");
+}
+
+/**
+ * Reference lines and bands from untyped JS: an x reads like the chart's own
+ * x values, a y must be a finite number, and anything else is dropped.
+ * Exported for tests.
+ */
+export function chartAnnotations(
+  referenceLines: unknown,
+  bands: unknown,
+  time: boolean
+): { rules: ChartRule[]; bands: ChartBand[] } {
+  const rules: ChartRule[] = [];
+  const shaded: ChartBand[] = [];
+  const read = (axis: "x" | "y", value: unknown) =>
+    axis === "y" ? finite(value) : toX(value, time);
+  if (Array.isArray(referenceLines)) {
+    referenceLines.forEach((entry: unknown, index) => {
+      if (typeof entry !== "object" || entry === null) return;
+      const axis = overlayAxis(field(entry, "axis"), "y");
+      const value = axis ? read(axis, field(entry, "value")) : null;
+      if (!axis || value === null) return;
+      rules.push({
+        key: `rule:${index}`,
+        axis,
+        value,
+        label: nonEmpty(field(entry, "label")),
+        color: overlayColor(entry),
+        dashed: field(entry, "stroke") !== "solid",
+      });
+    });
+  }
+  if (Array.isArray(bands)) {
+    bands.forEach((entry: unknown, index) => {
+      if (typeof entry !== "object" || entry === null) return;
+      const axis = overlayAxis(field(entry, "axis"), "x");
+      if (!axis) return;
+      const a = read(axis, field(entry, "from"));
+      const b = read(axis, field(entry, "to"));
+      if (a === null || b === null || a === b) return;
+      shaded.push({
+        key: `band:${index}`,
+        axis,
+        from: Math.min(a, b),
+        to: Math.max(a, b),
+        label: nonEmpty(field(entry, "label")),
+        color: overlayColor(entry),
+      });
+    });
+  }
+  return { rules, bands: shaded };
+}
+
+/** A plugin's fixed value axis: two finite, distinct ends in either order, or none. */
+export function fixedDomain(value: unknown): [number, number] | null {
+  if (!Array.isArray(value) || value.length !== 2) return null;
+  const a = finite(value[0]);
+  const b = finite(value[1]);
+  if (a === null || b === null || a === b) return null;
+  return a < b ? [a, b] : [b, a];
+}
+
 function KitLineChart({
   data,
   x,
@@ -1530,6 +1693,9 @@ function KitLineChart({
   formatValue,
   formatX,
   xLabel,
+  referenceLines,
+  bands,
+  yDomain,
   loading,
   empty,
   className,
@@ -1538,6 +1704,7 @@ function KitLineChart({
   const root = pickRootProps(rest);
   const { px, label, classes } = chartProps(height, ariaLabel, className);
   const [measure, width] = useWidth();
+  const clipId = `chart-clip-${useId().replace(/[^\w-]/g, "")}`;
   const { drawn: resolved, omitted } = useMemo(() => chartSeries(series), [series]);
   const formats = useMemo(() => valueFormats(formatValue), [formatValue]);
   const smooth = oneOf(curve, ["linear", "monotone"] as const) === "monotone";
@@ -1564,6 +1731,11 @@ function KitLineChart({
 
   const { time, xs, values, hidden } = model;
   const cursor = useCursor(xs.length);
+  const marks = useMemo(
+    () => chartAnnotations(referenceLines, bands, time),
+    [referenceLines, bands, time]
+  );
+  const domain = useMemo(() => fixedDomain(yDomain), [yDomain]);
 
   const formatPoint = useMemo(
     () =>
@@ -1594,11 +1766,27 @@ function KitLineChart({
       low = Math.min(0, low);
       high = Math.max(0, high);
     }
+    // A target the data never reaches is still the point of the line.
+    for (const rule of marks.rules) {
+      if (rule.axis !== "y") continue;
+      low = Math.min(low, rule.value);
+      high = Math.max(high, rule.value);
+    }
     const top = TOP_PAD;
     const plotH = Math.max(1, px - top - X_AXIS_PX);
-    const ticks = axisTicks(low, high, plotH, Y_TICK_SPACING);
-    const d0 = ticks[0]!;
-    const d1 = ticks[ticks.length - 1]!;
+    let ticks = axisTicks(
+      domain ? domain[0] : low,
+      domain ? domain[1] : high,
+      plotH,
+      Y_TICK_SPACING
+    );
+    if (domain) {
+      const inside = ticks.filter((tick) => tick >= domain[0] && tick <= domain[1]);
+      // A span finer than the ticks' rounding leaves none inside: its ends stand in.
+      ticks = new Set(inside).size >= 2 ? inside : [domain[0], domain[1]];
+    }
+    const d0 = domain ? domain[0] : ticks[0]!;
+    const d1 = domain ? domain[1] : ticks[ticks.length - 1]!;
     const left = axisWidth(ticks.map(formats.axis), 72);
     const right = 8;
     const plotW = Math.max(1, width - left - right);
@@ -1664,18 +1852,101 @@ function KitLineChart({
       const entry = resolved[s]!;
       return { key: entry.key, color: entry.color, dash: entry.dash, stroke, fill, dots };
     });
+    const right0 = left + plotW;
+    const bottom = top + plotH;
+    const inX = (value: number) => value >= x0 && value <= x1;
+    const inY = (value: number) => value >= d0 && value <= d1;
+    const shades = marks.bands.flatMap((band) => {
+      if (band.axis === "x") {
+        if (band.from > x1 || band.to < x0) return [];
+        const a = band.from <= x0 ? left : sx(band.from);
+        const b = band.to >= x1 ? right0 : sx(band.to);
+        return [{ ...band, x: a, y: top, w: b - a, h: plotH }];
+      }
+      if (band.from > d1 || band.to < d0) return [];
+      const a = sy(Math.min(band.to, d1));
+      const b = sy(Math.max(band.from, d0));
+      return [{ ...band, x: left, y: a, w: plotW, h: b - a }];
+    });
+    const rules = marks.rules.flatMap((rule) =>
+      (rule.axis === "x" ? inX(rule.value) : inY(rule.value))
+        ? [
+            {
+              ...rule,
+              at: Math.round(rule.axis === "x" ? sx(rule.value) : sy(rule.value)) + 0.5,
+            },
+          ]
+        : []
+    );
+    // Along the top: x rules' and x bands' labels, thinned as the x ticks are.
+    const topLabels = withoutOverlaps(
+      [
+        ...rules.flatMap((rule) =>
+          rule.axis === "x" && rule.label
+            ? [{ key: rule.key, at: rule.at, text: clip(rule.label, 160) }]
+            : []
+        ),
+        ...shades.flatMap((band) =>
+          band.axis === "x" && band.label
+            ? [{ key: band.key, at: band.x + band.w / 2, text: clip(band.label, band.w - 4) }]
+            : []
+        ),
+      ]
+        .filter((entry) => entry.text !== "")
+        .sort((a, b) => a.at - b.at),
+      left,
+      right0
+    );
+    // Down the right edge, clear of the value axis: y rules' labels, each
+    // above its rule (below one at the plot's top), a line apart and clear of
+    // any top-lane label that reaches the right edge.
+    const lane = top + AXIS_FONT_PX;
+    const laneRight = topLabels.reduce((most, entry) => {
+      const width = entry.text.length * AXIS_CHAR_PX;
+      const anchor = edgeAnchor(entry, left, right0);
+      const end =
+        anchor === "start" ? entry.at + width : anchor === "end" ? entry.at : entry.at + width / 2;
+      return Math.max(most, end);
+    }, -Infinity);
+    const candidates = rules.flatMap((rule) => {
+      if (rule.axis !== "y" || !rule.label) return [];
+      const above = rule.at - 4;
+      const y = above - AXIS_FONT_PX < top ? rule.at + AXIS_FONT_PX + 2 : above;
+      return [{ key: rule.key, y, text: clip(rule.label, plotW / 2) }];
+    });
+    const sideLabels: { key: string; y: number; text: string }[] = [];
+    let lastY = -Infinity;
+    for (const entry of candidates.sort((a, b) => a.y - b.y)) {
+      if (entry.y - lastY < AXIS_FONT_PX + 2) continue;
+      const start = right0 - 4 - entry.text.length * AXIS_CHAR_PX;
+      if (Math.abs(entry.y - lane) < AXIS_FONT_PX + 2 && laneRight + 6 > start) continue;
+      lastY = entry.y;
+      sideLabels.push(entry);
+    }
+    const labelled = new Set(topLabels.map((entry) => entry.key));
     return {
       ticks,
       sy,
+      d0,
+      d1,
       left,
       top,
       plotW,
       plotH,
+      bottom,
       pixels,
       xTicks: withoutOverlaps(xTicks, left, left + plotW),
       lines,
+      shades,
+      rules: rules.map((rule) => ({
+        ...rule,
+        // A rule whose label caps it starts under the label.
+        from: labelled.has(rule.key) ? top + AXIS_FONT_PX + 4 : top,
+      })),
+      topLabels,
+      sideLabels,
     };
-  }, [time, xs, values, resolved, formats, width, px, filled, smooth, formatX]);
+  }, [time, xs, values, resolved, formats, width, px, filled, smooth, formatX, marks, domain]);
 
   // Built from the data alone, so moving the cursor never rescans it.
   const table = useMemo<TableModel>(() => {
@@ -1704,8 +1975,9 @@ function KitLineChart({
               formats.full
             )
           : "",
+      annotations: annotationNote(marks, formats.full, formatPoint),
     };
-  }, [xLabel, time, resolved, omitted, xs, values, hidden, formats, formatPoint]);
+  }, [xLabel, time, resolved, omitted, xs, values, hidden, formats, formatPoint, marks]);
 
   if (loading === true) return <ChartLoading height={px} className={classes} root={root} />;
   if (xs.length === 0 || resolved.length === 0 || values.every((c) => c.every((v) => v === null))) {
@@ -1719,7 +1991,9 @@ function KitLineChart({
     const at = geometry.pixels[active] ?? 0;
     const dots = resolved.flatMap((entry, s) => {
       const value = values[s]?.[active] ?? null;
-      return value === null ? [] : [{ key: entry.key, color: entry.color, y: geometry.sy(value) }];
+      return value === null || value < geometry.d0 || value > geometry.d1
+        ? []
+        : [{ key: entry.key, color: entry.color, y: geometry.sy(value) }];
     });
     focus = { x: at, dots };
     readout = {
@@ -1752,6 +2026,31 @@ function KitLineChart({
     >
       {geometry ? (
         <svg width={width} height={px} className="block overflow-visible" aria-hidden="true">
+          {domain ? (
+            <defs>
+              <clipPath id={clipId}>
+                <rect
+                  x={geometry.left}
+                  y={geometry.top}
+                  width={geometry.plotW}
+                  height={geometry.plotH}
+                />
+              </clipPath>
+            </defs>
+          ) : null}
+          {geometry.shades.map((band) => (
+            <rect
+              key={band.key}
+              data-chart-reference-band={band.axis}
+              x={band.x}
+              y={band.y}
+              width={Math.max(0, band.w)}
+              height={Math.max(0, band.h)}
+              fill="currentColor"
+              fillOpacity={BAND_OPACITY}
+              style={{ color: band.color }}
+            />
+          ))}
           <ValueGrid
             ticks={geometry.ticks}
             scale={geometry.sy}
@@ -1775,23 +2074,108 @@ function KitLineChart({
               </text>
             ))}
           </g>
-          {geometry.lines.map((line) => (
-            <g key={line.key} style={{ color: line.color }} data-chart-series={line.key}>
-              {line.fill ? <path d={line.fill} fill="currentColor" fillOpacity={0.1} /> : null}
-              <path
-                d={line.stroke}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                strokeLinecap="round"
+          <g data-chart-annotations="">
+            {geometry.rules.map((rule) =>
+              rule.axis === "y" ? (
+                <line
+                  key={rule.key}
+                  data-chart-reference-line="y"
+                  x1={geometry.left}
+                  x2={geometry.left + geometry.plotW}
+                  y1={rule.at}
+                  y2={rule.at}
+                  stroke="currentColor"
+                  strokeWidth={1}
+                  strokeDasharray={rule.dashed ? REFERENCE_DASH : undefined}
+                  style={{ color: rule.color }}
+                />
+              ) : (
+                <line
+                  key={rule.key}
+                  data-chart-reference-line="x"
+                  x1={rule.at}
+                  x2={rule.at}
+                  y1={rule.from}
+                  y2={geometry.bottom}
+                  stroke="currentColor"
+                  strokeWidth={1}
+                  strokeDasharray={rule.dashed ? REFERENCE_DASH : undefined}
+                  style={{ color: rule.color }}
+                />
+              )
+            )}
+            {geometry.shades.map((band) =>
+              band.axis === "y" && band.label && band.h >= AXIS_FONT_PX + 4 ? (
+                <text
+                  key={band.key}
+                  data-chart-annotation-label=""
+                  x={geometry.left + 4}
+                  y={band.y + AXIS_FONT_PX}
+                  fontSize={AXIS_FONT_PX}
+                  strokeWidth={3}
+                  strokeLinejoin="round"
+                  paintOrder="stroke"
+                  className="fill-text-secondary"
+                  style={LABEL_HALO}
+                >
+                  {clip(band.label, geometry.plotW / 2)}
+                </text>
+              ) : null
+            )}
+            {geometry.topLabels.map((entry) => (
+              <text
+                key={entry.key}
+                data-chart-annotation-label=""
+                x={entry.at}
+                y={geometry.top + AXIS_FONT_PX}
+                textAnchor={edgeAnchor(entry, geometry.left, geometry.left + geometry.plotW)}
+                fontSize={AXIS_FONT_PX}
+                strokeWidth={3}
                 strokeLinejoin="round"
-                strokeDasharray={line.dash}
-              />
-              {line.dots.map(([cx, cy], index) => (
-                <circle key={index} cx={cx} cy={cy} r={2} fill="currentColor" />
-              ))}
-            </g>
-          ))}
+                paintOrder="stroke"
+                className="fill-text-secondary"
+                style={LABEL_HALO}
+              >
+                {entry.text}
+              </text>
+            ))}
+            {geometry.sideLabels.map((entry) => (
+              <text
+                key={entry.key}
+                data-chart-annotation-label=""
+                x={geometry.left + geometry.plotW - 4}
+                y={entry.y}
+                textAnchor="end"
+                fontSize={AXIS_FONT_PX}
+                strokeWidth={3}
+                strokeLinejoin="round"
+                paintOrder="stroke"
+                className="fill-text-secondary"
+                style={LABEL_HALO}
+              >
+                {entry.text}
+              </text>
+            ))}
+          </g>
+          <g clipPath={domain ? `url(#${clipId})` : undefined}>
+            {geometry.lines.map((line) => (
+              <g key={line.key} style={{ color: line.color }} data-chart-series={line.key}>
+                {line.fill ? <path d={line.fill} fill="currentColor" fillOpacity={0.1} /> : null}
+                <path
+                  d={line.stroke}
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeDasharray={line.dash}
+                />
+                {line.dots.map(([cx, cy], index) => (
+                  <circle key={index} cx={cx} cy={cy} r={2} fill="currentColor" />
+                ))}
+              </g>
+            ))}
+          </g>
           {focus ? (
             <g data-chart-crosshair="">
               <line
@@ -1821,6 +2205,30 @@ function KitLineChart({
   );
 }
 
+function annotationNote(
+  marks: { rules: ChartRule[]; bands: ChartBand[] },
+  formatValue: Format<number>,
+  formatPoint: Format<number>
+): string | undefined {
+  const at = (axis: "x" | "y", value: number) =>
+    axis === "y" ? formatValue(value) : formatPoint(value);
+  const parts: string[] = [];
+  if (marks.rules.length > 0) {
+    const rules = marks.rules.map(
+      (rule) => `${rule.label ?? "Line"} at ${at(rule.axis, rule.value)}`
+    );
+    parts.push(`Reference lines: ${rules.join("; ")}`);
+  }
+  if (marks.bands.length > 0) {
+    const bands = marks.bands.map(
+      (band) =>
+        `${band.label ?? "Range"} from ${at(band.axis, band.from)} to ${at(band.axis, band.to)}`
+    );
+    parts.push(`Shaded ranges: ${bands.join("; ")}`);
+  }
+  return parts.length > 0 ? parts.join(". ") : undefined;
+}
+
 interface DonutPart {
   key: string;
   name: string;
@@ -1828,12 +2236,26 @@ interface DonutPart {
   color: string;
 }
 
+/**
+ * Up to {@link MAX_DONUT_PARTS} parts by name; past that the first five keep
+ * their names and `rest` is what the others add up to, for one neutral
+ * "Other" part. Shared by every part-of-whole mark so they fold alike.
+ */
+export function foldParts<T extends { value: number }>(
+  parts: readonly T[]
+): { named: T[]; rest: number | null } {
+  if (parts.length <= MAX_DONUT_PARTS) return { named: [...parts], rest: null };
+  const rest = parts.slice(MAX_DONUT_PARTS - 1).reduce((sum, part) => sum + part.value, 0);
+  return { named: parts.slice(0, MAX_DONUT_PARTS - 1), rest };
+}
+
 /** Parts from rows: positive finite sizes only, the tail past the fifth folded into one neutral part. Exported for tests. */
 export function donutParts(
   data: unknown,
   x: string,
   valueKey: string,
-  otherLabel: string
+  otherLabel: string,
+  colors?: unknown
 ): DonutPart[] {
   const parts = rowsOf(data)
     .map((row) => {
@@ -1846,15 +2268,15 @@ export function donutParts(
     .filter(
       (part): part is { name: string; value: number } => part.value !== null && part.value > 0
     );
-  const named = parts.length > MAX_DONUT_PARTS ? parts.slice(0, MAX_DONUT_PARTS - 1) : parts;
+  const { named, rest } = foldParts(parts);
+  const hues = slotColors(named.map((part) => pinnedColor(colors, part.name)));
   const out: DonutPart[] = named.map((part, index) => ({
     key: String(index),
     name: part.name,
     value: part.value,
-    color: chartColor(SLOTS[index] ?? "neutral"),
+    color: chartColor(hues[index] ?? "neutral"),
   }));
-  if (parts.length > MAX_DONUT_PARTS) {
-    const rest = parts.slice(MAX_DONUT_PARTS - 1).reduce((sum, part) => sum + part.value, 0);
+  if (rest !== null) {
     out.push({ key: "other", name: otherLabel, value: rest, color: chartColor("neutral") });
   }
   return out;
@@ -1887,7 +2309,8 @@ export function arcPath(
   return `M${fixed(ox0)},${fixed(oy0)}A${outer},${outer} 0 ${large} 1 ${fixed(ox1)},${fixed(oy1)}L${fixed(ix1)},${fixed(iy1)}A${inner},${inner} 0 ${large} 0 ${fixed(ix0)},${fixed(iy0)}Z`;
 }
 
-function share(value: number, total: number): string {
+/** A part's share of a whole as a whole percentage, "<1%" for a sliver. */
+export function share(value: number, total: number): string {
   const percent = (value / total) * 100;
   if (percent > 0 && percent < 0.5) return "<1%";
   return `${Math.round(percent)}%`;
@@ -1900,6 +2323,7 @@ function KitDonutChart({
   centerValue,
   centerLabel,
   otherLabel,
+  colors,
   "aria-label": ariaLabel,
   height,
   formatValue,
@@ -1912,8 +2336,8 @@ function KitDonutChart({
   const { px, label, classes } = chartProps(height, ariaLabel, className);
   const format = valueFormats(formatValue).full;
   const parts = useMemo(
-    () => donutParts(data, str(x) ?? "", str(value) ?? "", nonEmpty(otherLabel) ?? "Other"),
-    [data, x, value, otherLabel]
+    () => donutParts(data, str(x) ?? "", str(value) ?? "", nonEmpty(otherLabel) ?? "Other", colors),
+    [data, x, value, otherLabel, colors]
   );
   const cursor = useCursor(parts.length);
   const describedBy = useId();

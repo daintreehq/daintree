@@ -360,6 +360,79 @@ describe("Meter", () => {
     expect(meter.getAttribute("aria-valuenow")).toBe("1");
     expect(meter.getAttribute("data-tone")).toBe("neutral");
   });
+
+  it("draws reference marks on the track and reads their labels with the value", async () => {
+    render(
+      withTooltips(
+        createElement(kit.Meter, {
+          value: 620,
+          max: 1000,
+          label: "Monthly spend",
+          marks: [
+            { value: 750, label: "Reserve minimum", head: true },
+            { value: 1500, label: "Ceiling" },
+            { value: Number.NaN, label: "Broken" },
+            // @ts-expect-error a mark with no label, as untyped JS can send
+            { value: 300 },
+          ],
+        })
+      )
+    );
+    const meter = screen.getByRole("meter", { name: "Monthly spend" });
+    // Clamped onto the track, and never a position with nothing to say.
+    expect(meter.getAttribute("aria-valuetext")).toBe(
+      "62%; Reserve minimum at 75%, Ceiling at 100%"
+    );
+    const marks = [...document.querySelectorAll<HTMLElement>("[data-track-mark]")];
+    expect(marks.map((mark) => mark.style.left)).toEqual(["75%", "100%"]);
+    expect(marks.map((mark) => mark.getAttribute("data-track-mark"))).toEqual(["head", ""]);
+    // The marks rise past the track, so they are not clipped inside it.
+    expect(meter.contains(marks[0]!)).toBe(false);
+    expect(meter.firstElementChild?.getAttribute("style")).toContain("width: 62%");
+    await act(async () => {
+      fireEvent.pointerMove(marks[0]!, { pointerType: "mouse" });
+    });
+    const tip = await screen.findByRole("tooltip", { hidden: true }, { timeout: 3000 });
+    expect(tip.textContent).toBe("Reserve minimum");
+  });
+
+  it("hides the readout but keeps the severity glyph and the spoken value", () => {
+    const { container } = render(
+      createElement(kit.Meter, {
+        value: 0.9,
+        label: "Disk",
+        readout: false,
+        thresholds: { warning: 0.8 },
+        showLabel: false,
+      })
+    );
+    const meter = screen.getByRole("meter", { name: "Disk" });
+    expect(meter.getAttribute("aria-valuetext")).toBe("90%, warning");
+    expect(container.textContent).toBe("");
+    expect(container.querySelector("svg")).not.toBeNull();
+    cleanup();
+
+    const quiet = render(createElement(kit.Meter, { value: 0.2, label: "Disk", readout: false }));
+    expect(quiet.container.querySelector("svg")).toBeNull();
+    expect(quiet.container.textContent).toBe("Disk");
+  });
+
+  it("sizes the readout without reaching into its DOM", () => {
+    const { container, rerender } = render(
+      createElement(kit.Meter, { value: 0.5, label: "A", showLabel: false, readoutWidth: 64 })
+    );
+    const readout = () => screen.getByText("50%").parentElement!;
+    expect(readout().style.width).toBe("64px");
+    rerender(
+      createElement(kit.Meter, { value: 0.5, label: "A", showLabel: false, readoutWidth: "6rem" })
+    );
+    expect(readout().style.width).toBe("6rem");
+    rerender(createElement(kit.Meter, { value: 0.5, label: "A", showLabel: false }));
+    expect(readout().style.width).toBe("");
+    // Without marks, the meter is still the bar itself.
+    expect(container.querySelector("[data-track-mark]")).toBeNull();
+    expect(screen.getByRole("meter").parentElement?.className).toContain("flex");
+  });
 });
 
 describe("Timeline", () => {
