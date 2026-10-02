@@ -198,12 +198,12 @@ describe("padding paint styles", () => {
   });
 
   it("starts the bottom strip at the grid's bottom edge so the fit remainder is covered", () => {
-    const [, bottom] = buildPaddingBackgroundStyle(paint)!.backgroundPosition!.split(", ");
+    const [, bottom] = buildPaddingBackgroundStyle(paint)!.backgroundPosition.split(", ");
     expect(bottom).toContain(`${paint.gridHeight}px`);
 
     // Grid size unknown: fall back to a padding-high strip at the bottom.
     const unsized = buildPaddingBackgroundStyle({ ...paint, gridWidth: 0, gridHeight: 0 })!;
-    expect(unsized.backgroundPosition!.split(", ")[1]).toBe("bottom left");
+    expect(unsized.backgroundPosition.split(", ")[1]).toBe("bottom left");
   });
 
   it("paints the right grid remainder past the canvas", () => {

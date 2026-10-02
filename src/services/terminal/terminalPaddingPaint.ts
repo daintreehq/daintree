@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import type { IBuffer, IBufferCell, IBufferLine, ITheme } from "@xterm/xterm";
 
 /**
@@ -256,6 +255,11 @@ const PADDING = "0.75rem";
 
 const solid = (color: string) => `linear-gradient(${color}, ${color})`;
 
+export type PaddingBackgroundStyle = Record<
+  "backgroundImage" | "backgroundPosition" | "backgroundSize" | "backgroundRepeat",
+  string
+>;
+
 /**
  * Background layers for the padded wrapper. Top and bottom strips span the full
  * width and own the corners; left and right fill only between them, so an
@@ -265,10 +269,7 @@ const solid = (color: string) => `linear-gradient(${color}, ${color})`;
  */
 export function buildPaddingBackgroundStyle(
   paint: TerminalPaddingPaint
-): Pick<
-  CSSProperties,
-  "backgroundImage" | "backgroundPosition" | "backgroundSize" | "backgroundRepeat"
-> | null {
+): PaddingBackgroundStyle | null {
   const images: string[] = [];
   const positions: string[] = [];
   const sizes: string[] = [];
