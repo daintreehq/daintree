@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { ArrowDown, ArrowUp } from "lucide-react";
 import type {
   PluginFigureProps,
@@ -90,19 +91,19 @@ const STAT_FILLED_EDGE: Partial<Record<PluginSeverity, string>> = {
   danger: "border-status-danger",
 };
 
-// One line truncates as the hint always has; more clamp, and past the last
-// entry a request takes the last entry's clamp.
-const HINT_CLAMP_CLASS = [
-  "truncate",
-  "line-clamp-2 break-words",
-  "line-clamp-3 break-words",
-  "line-clamp-4 break-words",
-] as const;
+// One line truncates as the hint always has. More lines clamp at the count
+// asked for, which no fixed class can spell, so it is read off a variable.
+const HINT_CLAMP_CLASS = "line-clamp-(--kit-hint-lines) break-words";
+const MAX_HINT_LINES = 1000;
 
-function hintClampClass(lines: unknown): string {
-  if (lines === "wrap") return "break-words";
-  const count = rowCount(lines, Number.MAX_SAFE_INTEGER) ?? 1;
-  return HINT_CLAMP_CLASS[Math.min(count, HINT_CLAMP_CLASS.length) - 1] ?? "truncate";
+function hintClamp(lines: unknown): {
+  className: string;
+  style?: CSSProperties & Record<`--${string}`, string>;
+} {
+  if (lines === "wrap") return { className: "break-words" };
+  const count = rowCount(lines, MAX_HINT_LINES) ?? 1;
+  if (count === 1) return { className: "truncate" };
+  return { className: HINT_CLAMP_CLASS, style: { "--kit-hint-lines": String(count) } };
 }
 
 // The settings card's frame (radius, hairline), not a raised tile: a
@@ -186,7 +187,10 @@ function KitStatCard({
         </p>
       ) : null}
       {hasContent(hint) ? (
-        <p className={cn("min-w-0", hintClampClass(hintLines), "text-xs text-text-secondary")}>
+        <p
+          className={cn("min-w-0", hintClamp(hintLines).className, "text-xs text-text-secondary")}
+          style={hintClamp(hintLines).style}
+        >
           {node(hint)}
         </p>
       ) : null}

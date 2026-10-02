@@ -1530,8 +1530,21 @@ export function makePluginViewContent(
      * repaint the fresh view's buttons. Keyed by the manifest's own `actionId`,
      * and an id the kind's toolbar does not list is dropped.
      */
+    /**
+     * Set the moment this mount's teardown runs, before the attempt is retired
+     * in a microtask: `disposeSignal` aborts in between, and a listener writing
+     * state there would otherwise recreate what closing the panel just pruned.
+     */
+    const toolbarClosedRef = useRef(false);
+    useEffect(() => {
+      toolbarClosedRef.current = false;
+      return () => {
+        toolbarClosedRef.current = true;
+      };
+    }, []);
     const setToolbarItemStateFor = useCallback(
       (attempt: number, actionId: unknown, state: unknown): void => {
+        if (toolbarClosedRef.current) return;
         if (attempt !== attemptRef.current || typeof actionId !== "string") return;
         const declared = getPanelKindConfig(kindId)?.pluginToolbar;
         if (!declared?.some((item) => item.stateKey === actionId)) return;

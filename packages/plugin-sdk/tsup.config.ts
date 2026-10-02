@@ -43,12 +43,20 @@ export default defineConfig((override) => {
     },
     dts: {
       ...shared.dts,
-      entry: { index: "src/index.ts", react: "src/react.ts", files: "src/files.ts" },
+      entry: { index: "src/index.ts", files: "src/files.ts" },
     },
   } satisfies Options;
   if (override.dts === false) return js;
   return [
     js,
+    // A pass of its own: `react` and `index` both reach `shared/types/plugin.ts`,
+    // and one dts pass over both hoists those types into a hashed chunk that
+    // each entry only re-exports, so neither declaration is self-contained.
+    {
+      ...shared,
+      entry: { react: "src/react.ts" },
+      dts: { ...shared.dts, only: true },
+    },
     {
       ...shared,
       // `createMockHost`, folded in from the former plugin-testing package. Its

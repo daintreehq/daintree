@@ -188,16 +188,15 @@ const DENSITY_EDIT_CELL_CLASS: Record<TableDensity, string> = {
 };
 
 /**
- * The room an editable column keeps at its end for the edit cue's pencil, in
- * every cell and its header, so a column's figures line up whether or not the
- * cue is showing. Its editor stops short of the same room, so the draft sits
- * exactly where the value did.
+ * The edit cue's pencil sits inside the cell's own 12px end padding, so an
+ * editable column keeps exactly the geometry it had before the cue existed and
+ * figures never move when it shows.
  */
-const EDIT_CUE_RESERVE_CLASS = "pe-7";
-const EDIT_CELL_END_CLASS = { plain: "pe-1.5", reserved: "pe-5.5" } as const;
+/** How far Left or Right scrolls a wide table when the row has no tree or group step to take. */
+const HORIZONTAL_KEY_STEP_PX = 40;
 
 const EDIT_CUE_GLYPH_CLASS =
-  "kit-dt-edit-glyph pointer-events-none absolute end-2 top-1/2 h-3 w-3 -translate-y-1/2 text-text-secondary opacity-0 transition-opacity duration-150 ease-out motion-reduce:transition-none";
+  "kit-dt-edit-glyph pointer-events-none absolute end-0.5 top-1/2 h-2.5 w-2.5 -translate-y-1/2 text-text-secondary opacity-0 transition-opacity duration-150 ease-out motion-reduce:transition-none";
 
 type EditorKind = "text" | "number" | "select";
 
@@ -1008,7 +1007,6 @@ function RichDataTable(props: PluginDataTableProps) {
 
   const editableColumns = visible.filter((column) => column.editable !== null);
   const canEdit = editableColumns.length > 0;
-  const reservesCue = (column: RichColumn) => editCue && column.editable !== null;
   const totalCell = (spec: TotalSpec, over: readonly unknown[], column: RichColumn): ReactNode =>
     attempt(() => totalContent(spec, over, column), null);
   const interactive =
@@ -1043,6 +1041,14 @@ function RichDataTable(props: PluginDataTableProps) {
   };
 
   const [scroller, setScroller] = useState<HTMLElement | null>(null);
+  // Left and Right belong to the tree and groups, so where neither has a use
+  // for them they scroll a table wider than its pane, which a grid's single
+  // tab stop would otherwise leave out of keyboard reach.
+  const scrollAcross = (towardEnd: 1 | -1) => {
+    if (!scroller || scroller.scrollWidth <= scroller.clientWidth) return;
+    const rtl = getComputedStyle(scroller).direction === "rtl";
+    scroller.scrollBy({ left: towardEnd * (rtl ? -1 : 1) * HORIZONTAL_KEY_STEP_PX });
+  };
   const [available, setAvailable] = useState<number | null>(null);
   const [scrolledX, setScrolledX] = useState(false);
   useEffect(() => {
@@ -1357,6 +1363,7 @@ function RichDataTable(props: PluginDataTableProps) {
       else if (item.kind === "group") moveCursor(Math.min(from + 1, last));
       else if (item.kind === "row" && item.expandable && !item.expanded) toggleRow(item, true);
       else if (item.kind === "row" && item.expanded) moveCursor(Math.min(from + 1, last));
+      else scrollAcross(1);
       return;
     }
     if (event.key === "ArrowLeft") {
@@ -1379,6 +1386,7 @@ function RichDataTable(props: PluginDataTableProps) {
               )
             : -1;
       if (parentIndex >= 0) moveCursor(parentIndex);
+      else scrollAcross(-1);
       return;
     }
     if (item.kind === "group" && (event.key === "Enter" || event.key === " ")) {
@@ -1544,12 +1552,7 @@ function RichDataTable(props: PluginDataTableProps) {
             }
             {...stickyEdge(column)}
             style={{ ...(width === undefined ? null : { width }), ...stickyStyle(column) }}
-            className={cn(
-              "relative",
-              headerCellClass(column, size),
-              reservesCue(column) && EDIT_CUE_RESERVE_CLASS,
-              stickyClass(column)
-            )}
+            className={cn("relative", headerCellClass(column, size), stickyClass(column))}
           >
             {column.sortable && handleSort ? (
               <button
@@ -1729,12 +1732,7 @@ function RichDataTable(props: PluginDataTableProps) {
           <td
             key={column.id}
             aria-colindex={colIndex(column)}
-            className={cn(
-              band,
-              bodyCellClass(column, size),
-              reservesCue(column) && EDIT_CUE_RESERVE_CLASS,
-              "font-medium"
-            )}
+            className={cn(band, bodyCellClass(column, size), "font-medium")}
           >
             {spec ? totalCell(spec, item.rows, column) : null}
           </td>
@@ -1796,9 +1794,8 @@ function RichDataTable(props: PluginDataTableProps) {
     const pendingDraft = pending[cellId(item.key, column.id)]?.draft;
     const failure = failures[cellId(item.key, column.id)];
     const canEditCell = column.editable !== null && column.editable(item.row);
-    const reserved = reservesCue(column);
     const cue =
-      reserved && canEditCell && !editing && pendingDraft === undefined && failure === undefined;
+      editCue && canEditCell && !editing && pendingDraft === undefined && failure === undefined;
     let content: ReactNode;
     if (editing) {
       content = (
@@ -1865,9 +1862,7 @@ function RichDataTable(props: PluginDataTableProps) {
         }
         className={cn(
           bodyCellClass(column, size),
-          editing
-            ? [DENSITY_EDIT_CELL_CLASS[size], EDIT_CELL_END_CLASS[reserved ? "reserved" : "plain"]]
-            : reserved && EDIT_CUE_RESERVE_CLASS,
+          editing ? [DENSITY_EDIT_CELL_CLASS[size], "pe-1.5"] : null,
           cue && "kit-dt-edit relative",
           rules,
           stickyClass(column)
@@ -1965,12 +1960,7 @@ function RichDataTable(props: PluginDataTableProps) {
                 {...stickyEdge(column)}
                 aria-colindex={colIndex(column)}
                 style={stickyStyle(column)}
-                className={cn(
-                  bodyCellClass(column, size),
-                  reservesCue(column) && EDIT_CUE_RESERVE_CLASS,
-                  TOTALS_CELL_CLASS,
-                  stickyClass(column)
-                )}
+                className={cn(bodyCellClass(column, size), TOTALS_CELL_CLASS, stickyClass(column))}
               >
                 {spec
                   ? totalCell(spec, data, column)

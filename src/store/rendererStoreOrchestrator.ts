@@ -505,6 +505,10 @@ export function initStoreOrchestrator(): () => void {
           for (const id of trashed.keys()) {
             if (!prevTrashed.has(id)) {
               removeArtifactsForTerminal(id);
+              // Closing is the end of a panel's header-button state, though the
+              // id survives in the trash: an undone close must not bring back a
+              // spinner for a refresh the old view started.
+              usePluginPanelToolbarStore.getState().clearPanel(id);
               // Drop an inactive worktree's stashed maximize when its panel is
               // trashed (#11183). `trashPanel` doesn't shrink `panelIds`, so the
               // removal subscriber above never fires for this — the same

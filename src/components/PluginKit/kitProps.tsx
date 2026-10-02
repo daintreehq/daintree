@@ -40,6 +40,30 @@ export function positive(value: unknown, max: number): number | undefined {
     : undefined;
 }
 
+/** The widest a plugin-given length may be, in px. */
+const MAX_LENGTH_PX = 4000;
+
+/**
+ * One CSS length from untyped JS: a positive number is px, a string must be a
+ * single length the browser accepts as a width (`12rem`, `40%`,
+ * `calc(100% - 2rem)`). Anything else, CSS-wide keywords included, is ignored
+ * rather than voiding the declaration it lands in.
+ */
+export function cssLength(value: unknown): string | undefined {
+  if (typeof value === "number") {
+    const px = positive(value, MAX_LENGTH_PX);
+    return px === undefined ? undefined : `${px}px`;
+  }
+  const text = nonEmpty(value)?.trim();
+  if (!text || /^(inherit|initial|unset|revert|revert-layer|auto)$/i.test(text)) return undefined;
+  if (typeof CSS !== "undefined" && typeof CSS.supports === "function") {
+    return CSS.supports("width", text) ? text : undefined;
+  }
+  return /^(\d+(\.\d+)?(px|rem|em|ch|%)|(calc|min|max|clamp)\([^;{}]*\))$/.test(text)
+    ? text
+    : undefined;
+}
+
 /** A duration in ms, where zero means at once. */
 export function durationMs(value: unknown, max: number): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= max

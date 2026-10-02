@@ -87,16 +87,21 @@ describe("Card variants", () => {
     expect(cardWith({ variant: "feature" }).card.className).not.toContain("category-");
   });
 
-  it("keeps a clickable card outlined whatever its variant", () => {
-    const plain = markup(untyped("Card", { title: "Open", onClick: () => {} }, "Body"));
-    const feature = markup(
-      untyped(
-        "Card",
-        { title: "Open", onClick: () => {}, variant: "feature", capColor: "blue" },
-        "Body"
-      )
-    );
-    expect(feature).toBe(plain);
+  it("lifts a clickable card through the choice card's elevated tone, cap included", () => {
+    const button = (props: Record<string, unknown>) => {
+      render(untyped("Card", { title: "Open", onClick: () => {}, ...props }, "Body"));
+      const card = screen.getByRole("button", { name: "Open" });
+      const read = { tone: card.getAttribute("data-tone"), className: card.className };
+      cleanup();
+      return read;
+    };
+    expect(button({}).tone).toBe("default");
+    expect(button({ variant: "inset" }).tone).toBe("default");
+    expect(button({ variant: "elevated" }).tone).toBe("elevated");
+    const feature = button({ variant: "feature", capColor: "blue" });
+    expect(feature.tone).toBe("elevated");
+    expect(feature.className).toContain("category-blue");
+    expect(feature.className).toContain("rounded-[var(--radius-xl)]");
   });
 
   it("ignores an unknown variant", () => {
@@ -292,6 +297,20 @@ describe("StatCard identity props", () => {
     expect(
       markup(untyped("StatCard", { ...base, size: "md", variant: "outline", hintLines: 1 }))
     ).toBe(markup(untyped("StatCard", base)));
+    // And that default is the card as it was: a hairline outline with no fill,
+    // a 20px figure, and a one-line hint.
+    render(untyped("StatCard", { ...base, "data-testid": "legacy" }));
+    const legacy = screen.getByTestId("legacy");
+    expect(legacy.className).toBe(
+      "flex min-w-0 flex-col gap-1 rounded-[var(--radius-lg)] border border-border-default px-3 py-2.5"
+    );
+    expect(element(screen.getByText("€2,140")).className).toBe(
+      "min-w-0 truncate text-xl font-semibold tabular-nums text-text-primary"
+    );
+    expect(element(screen.getByText("This month")).className).toBe(
+      "min-w-0 truncate text-xs text-text-secondary"
+    );
+    cleanup();
     // Unknown values fall back to the same defaults.
     expect(
       markup(untyped("StatCard", { ...base, size: "xl", variant: "tile", hintLines: "lots" }))
@@ -333,12 +352,20 @@ describe("StatCard identity props", () => {
       cleanup();
       return value;
     };
+    const clampedTo = (hintLines: unknown) => {
+      stat({ hint: "Groceries, transport and the rest", hintLines });
+      const hint = element(screen.getByText("Groceries, transport and the rest"));
+      const lines = hint.className.includes("line-clamp-(--kit-hint-lines)")
+        ? hint.style.getPropertyValue("--kit-hint-lines")
+        : null;
+      cleanup();
+      return lines;
+    };
     expect(hintClass(undefined)).toContain("truncate");
-    expect(hintClass(2)).toContain("line-clamp-2");
-    expect(hintClass(2.4)).toContain("line-clamp-2");
-    expect(hintClass(4)).toContain("line-clamp-4");
-    // Past the deepest clamp the kit has, the request takes that clamp.
-    expect(hintClass(12)).toContain("line-clamp-4");
+    expect(clampedTo(2)).toBe("2");
+    expect(clampedTo(2.4)).toBe("2");
+    expect(clampedTo(4)).toBe("4");
+    expect(clampedTo(12)).toBe("12");
     const wrap = hintClass("wrap");
     expect(wrap).not.toMatch(/truncate|line-clamp/);
     expect(wrap).toContain("break-words");

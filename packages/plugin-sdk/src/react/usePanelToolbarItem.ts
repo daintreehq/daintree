@@ -13,10 +13,11 @@ type ToolbarSetter = NonNullable<PanelViewProps["setToolbarItemState"]>;
  *
  * Sends `state` when the view mounts and again whenever it changes, compared
  * field by field so a fresh object literal on every render costs nothing.
- * Resets the button to rest (`null`) when the view unmounts or `actionId`
- * changes, so a button never keeps a spinner for a view that is gone. Does
- * nothing where the host offers no setter (a project surface), so it is safe
- * in a view that also renders there.
+ * When `actionId` changes, the old button is reset to rest (`null`) first.
+ * Unmounting leaves the state alone: it belongs to the panel, so it survives
+ * a tab switch or a move to the dock, and the host clears it when the panel
+ * closes or the view reloads. Does nothing where the host offers no setter (a
+ * project surface), so it is safe in a view that also renders there.
  *
  * ```tsx
  * export default function LedgerView(props: PanelViewProps) {
@@ -57,17 +58,12 @@ export function usePanelToolbarItem(
     ) {
       return;
     }
+    // A setter from a reloaded attempt starts with nothing set, so only a
+    // button this same setter was driving needs putting back to rest.
+    if (sent !== null && sent.setter === setter && sent.actionId !== actionId) {
+      setter(sent.actionId, null);
+    }
     sentRef.current = { setter, actionId, state };
     setter(actionId, state);
   }, [setter, actionId, state]);
-
-  // React runs every cleanup before any setup, so a changed `actionId` resets
-  // the old button before the sender above sets the new one.
-  useEffect(() => {
-    if (!setter) return;
-    return () => {
-      sentRef.current = null;
-      setter(actionId, null);
-    };
-  }, [setter, actionId]);
 }

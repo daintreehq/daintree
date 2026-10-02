@@ -1090,6 +1090,22 @@ describe("setToolbarItemState", () => {
     expect(stateOf()).toEqual({ [REFRESH]: { text: "Fresh" } });
   });
 
+  it("ignores a write from the unmounting view's teardown", async () => {
+    const { stateOf, unmount } = await mountWithToolbar();
+    const view = latest();
+    act(() => view.setToolbarItemState?.(REFRESH, { text: "Fresh" }));
+
+    // The panel is closed: its state is pruned, then the view's own abort
+    // listener tries to say the refresh it was running has stopped.
+    unmount();
+    const { usePluginPanelToolbarStore } = await import("@/store/pluginPanelToolbarStore");
+    usePluginPanelToolbarStore.getState().clearPanel("panel-1");
+    view.setToolbarItemState?.(REFRESH, { busy: false, text: "Cancelled" });
+    await act(async () => {});
+
+    expect(stateOf()).toBeUndefined();
+  });
+
   it("clears on a reload and ignores the old attempt's setter", async () => {
     const { stateOf } = await mountWithToolbar();
     const stale = latest();

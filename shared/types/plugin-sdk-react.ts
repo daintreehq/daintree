@@ -2488,7 +2488,11 @@ export interface PluginSegmentedBarSegment {
  * colour is never the only signal.
  */
 export interface PluginSegmentedBarProps extends PluginAriaRootAttributes {
-  /** The parts, in drawing order. Past the fifth they fold into one "Other" part, as `DonutChart`'s do. */
+  /**
+   * The parts, in drawing order. Up to six are drawn as given; past that the
+   * first five stay and the rest gather into one "Other" part, as
+   * `DonutChart`'s do.
+   */
   segments: readonly PluginSegmentedBarSegment[];
   /** Required: the accessible name, and the visible label unless `showLabel` is false. */
   label: string;
@@ -2760,7 +2764,10 @@ interface PluginCardBaseProps extends Omit<PluginDomProps<HTMLElement>, "title" 
    * the view's own colour for its answer. Ignored on other variants.
    */
   capColor?: PluginChartColor;
-  /** The body's padding: 16 px (`md`, the default), 12 px (`sm`), or none, for a list or table edge to edge. */
+  /**
+   * The body's padding: 16 px (`md`, the default; 20 px on a `feature` card),
+   * 12 px (`sm`), or none, for a list or table edge to edge.
+   */
   padding?: "none" | "sm" | "md";
   /** How the footer's contents sit: `end` (the default), `start`, `between` (first item at the start, the rest at the end) or `stretch` (each fills an equal share). */
   footerAlign?: "end" | "start" | "between" | "stretch";

@@ -81,6 +81,22 @@ function pluginMenuEqual(a: PanelKindConfig, b: PanelKindConfig): boolean {
   );
 }
 
+function pluginToolbarEqual(a: PanelKindConfig, b: PanelKindConfig): boolean {
+  const toolbarA = a.pluginToolbar ?? [];
+  const toolbarB = b.pluginToolbar ?? [];
+  if (toolbarA.length !== toolbarB.length) return false;
+  return toolbarA.every((item, i) => {
+    const other = toolbarB[i]!;
+    return (
+      item.actionId === other.actionId &&
+      item.label === other.label &&
+      item.iconId === other.iconId &&
+      item.status === other.status &&
+      item.stateKey === other.stateKey
+    );
+  });
+}
+
 function panelKindMetaEqual(a: PanelKindConfig, b: PanelKindConfig): boolean {
   for (const key of PANEL_KIND_META_KEYS) {
     if (a[key] !== b[key]) return false;
@@ -88,6 +104,7 @@ function panelKindMetaEqual(a: PanelKindConfig, b: PanelKindConfig): boolean {
   // An array, so compared by content: a reload that only edits the panel's
   // menu must still reach the registry the menus read.
   if (!pluginMenuEqual(a, b)) return false;
+  if (!pluginToolbarEqual(a, b)) return false;
   const aliasesA = a.searchAliases ?? [];
   const aliasesB = b.searchAliases ?? [];
   if (aliasesA.length !== aliasesB.length) return false;

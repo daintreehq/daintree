@@ -301,7 +301,7 @@ Bump `stateVersion` when the shape changes incompatibly, never for an additive k
 
 State belongs to the panel: it survives your view unmounting and remounting (a dock move, a tab switch) and is cleared when the panel closes, the view reloads or the view crashes. The setter belongs to its attempt like `setHasUnsavedChanges`, so a refresh that settles after a reload does nothing. An `actionId` the manifest doesn't list is ignored. The setter is absent on project surfaces, settings views and a panel shown as a dialog, none of which draws the toolbar.
 
-In React, `usePanelToolbarItem(props, actionId, state)` from `@daintreehq/plugin-sdk/react` keeps a button in step with your view. It sends the state on mount and whenever a field changes, resets the button when the view unmounts, and does nothing where the setter is absent:
+In React, `usePanelToolbarItem(props, actionId, state)` from `@daintreehq/plugin-sdk/react` keeps a button in step with your view. It sends the state on mount and whenever a field changes, resets the old button when `actionId` changes, leaves the state to the panel when the view unmounts (so it survives a tab switch or a move to the dock), and does nothing where the setter is absent:
 
 ```tsx
 import { usePanelToolbarItem } from "@daintreehq/plugin-sdk/react";

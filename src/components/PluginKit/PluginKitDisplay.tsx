@@ -31,6 +31,7 @@ import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
 import { formatAbsoluteDate } from "@/utils/timeAgo";
 import {
+  cssLength,
   field,
   fn,
   hasContent,
@@ -439,10 +440,6 @@ function marksText(marks: TrackMark[], at: (mark: TrackMark) => string): string 
   return marks.map((mark) => `${mark.label} at ${at(mark)}`).join(", ");
 }
 
-function readoutWidthOf(value: unknown): number | string | undefined {
-  return positive(value, 10_000) ?? nonEmpty(value);
-}
-
 // The quota meters' instrument (settings, rate limits): a heavier track than
 // ProgressBar's, because a level is read at rest where progress is watched.
 function KitMeter({
@@ -467,7 +464,7 @@ function KitMeter({
   const glyph = tone === "neutral" ? null : severityGlyph(tone, "h-3 w-3");
   const stacked = showLabel !== false;
   const visible = showReadout !== false;
-  const width = readoutWidthOf(readoutWidth);
+  const width = cssLength(readoutWidth);
   const references = readMarks(marks, limit);
   const spoken = tone === "neutral" ? text : `${text}, ${TONE_WORD[tone].toLowerCase()}`;
   const readout =

@@ -2131,7 +2131,11 @@ interface PluginSegmentedBarSegment {
  * colour is never the only signal.
  */
 interface PluginSegmentedBarProps extends PluginAriaRootAttributes {
-    /** The parts, in drawing order. Past the fifth they fold into one "Other" part, as `DonutChart`'s do. */
+    /**
+     * The parts, in drawing order. Up to six are drawn as given; past that the
+     * first five stay and the rest gather into one "Other" part, as
+     * `DonutChart`'s do.
+     */
     segments: readonly PluginSegmentedBarSegment[];
     /** Required: the accessible name, and the visible label unless `showLabel` is false. */
     label: string;
@@ -2386,7 +2390,10 @@ interface PluginCardBaseProps extends Omit<PluginDomProps<HTMLElement>, "title" 
      * the view's own colour for its answer. Ignored on other variants.
      */
     capColor?: PluginChartColor;
-    /** The body's padding: 16 px (`md`, the default), 12 px (`sm`), or none, for a list or table edge to edge. */
+    /**
+     * The body's padding: 16 px (`md`, the default; 20 px on a `feature` card),
+     * 12 px (`sm`), or none, for a list or table edge to edge.
+     */
     padding?: "none" | "sm" | "md";
     /** How the footer's contents sit: `end` (the default), `start`, `between` (first item at the start, the rest at the end) or `stretch` (each fills an equal share). */
     footerAlign?: "end" | "start" | "between" | "stretch";
@@ -6983,6 +6990,284 @@ interface NowOptions {
  */
 declare function useNow(options?: NowOptions): number;
 
+/**
+ * The live state of one panel `toolbar` button, set by the view with
+ * `setToolbarItemState`. Every field is optional; an omitted field is the
+ * button's resting value.
+ */
+interface PluginPanelToolbarItemState {
+    /** Draws a spinner on the button and ignores clicks until it is cleared. */
+    busy?: boolean;
+    /** Announced unavailable and ignores clicks. */
+    disabled?: boolean;
+    /**
+     * `warning` or `danger` colours the status and adds its glyph; colour is
+     * never the only signal. Needs `status: true`. An explicit tone wins over
+     * the age's own stale warning.
+     */
+    tone?: "default" | "warning" | "danger";
+    /** A short status beside the button ("2 prices kept from cache"). Needs `status: true`. */
+    text?: string;
+    /** Epoch ms or an ISO string: drawn as "Updated 3h ago" on the host's shared clock. Needs `status: true`. */
+    updatedAt?: number | string;
+    /** Once `updatedAt` is older than this many ms the age reads as stale (warning glyph and colour) without another update. */
+    staleAfterMs?: number;
+    /** The button's tooltip, when it says more than the label ("Prices fetched 14:02"). */
+    tooltip?: string;
+}
+/**
+ * Where a `location: "settings"` view is mounted, handed to it as
+ * {@link PanelViewProps.settingsContext}. An installed plugin's section mounts
+ * in the plugin manager with `scope: "user"` and in Project settings → Plugins
+ * with `scope: "project"`, so it renders the rows that belong to that scope; a
+ * project plugin's section always mounts with `scope: "project"`.
+ */
+interface PluginSettingsViewContext {
+    readonly scope: "user" | "project";
+    /** The project the section is shown for; `null` in the `"user"` home. */
+    readonly projectId: string | null;
+}
+/**
+ * Props every plugin-contributed panel view receives from the renderer host.
+ * Intentionally narrower than the host-internal `PanelComponentProps` so the
+ * SDK surface stays stable across a future `plugin://` → trusted-iframe
+ * cutover (#9229).
+ *
+ * - `panelId` is the runtime panel instance id (the same value the host uses
+ *   in `addPanelOptions` / IPC). Plugins should treat it as opaque.
+ * - `pluginId` is the plugin's RUNTIME id, sourced from
+ *   `PanelKindConfig.extensionId` — the bare manifest `name` for an installed
+ *   or builtin plugin, but the instance key `project__{projectId}__{manifestId}`
+ *   for a project plugin. Pass it back verbatim to `window.electron.plugin.*`;
+ *   a view that writes its own manifest name down instead addresses nothing.
+ * - `disposeSignal` aborts on unmount AND when the host receives a
+ *   `plugin:panel-kinds-changed` push that no longer contains this kind. The
+ *   broadcast fires before the main process tears down plugin IPC handlers,
+ *   so signal-driven cleanup (fetch aborts, subscription teardown) runs
+ *   while the plugin host APIs are still live.
+ * - `panelRemovedSignal` aborts ONLY when the panel is permanently gone.
+ */
+interface PanelViewProps {
+    readonly panelId: string;
+    readonly pluginId: string;
+    /**
+     * Lifetime of THIS mounted view attempt — not of the panel (#11301).
+     *
+     * Aborts on React unmount, on "Try again", on an accepted
+     * {@link requestReload}, and when a `plugin:panel-kinds-changed` push drops
+     * this kind. Crucially, a temporary unmount aborts it too: maximizing a
+     * sibling pane, switching away from a dock tab, or caching a background
+     * project view all tear the subtree down while the panel itself lives on.
+     * Tie only view-scoped work to it — in-flight `fetch`es, DOM observers,
+     * `postToPanel` subscriptions. On unmount it aborts just after React has run
+     * your effect cleanups, so a cleanup may still see it open.
+     *
+     * NEVER tie a durable resource (a spawned process, a long-lived session) to
+     * this signal: it will be killed the first time the user maximizes another
+     * pane. Durable resources belong in the plugin's worker, which observes the
+     * panel across every remount via `host.onDidChangePanelLifecycle`.
+     */
+    readonly disposeSignal: AbortSignal;
+    /**
+     * Lifetime of the PANEL RECORD (#11301). The same `AbortSignal` object is
+     * handed to every mount of a given `panelId`, so it survives remounts,
+     * retries, trash-then-restore, and plugin view upgrades.
+     *
+     * Aborts exactly once, when the panel is permanently removed from the panel
+     * store — never for a temporary unmount and never while a trashed panel is
+     * still restorable. This is the signal to use for cleanup that must happen
+     * once and only when the user is genuinely done with the panel.
+     */
+    readonly panelRemovedSignal: AbortSignal;
+    /**
+     * Opaque argument bag handed to the view when the panel is spawned with one
+     * — e.g. `{ path }` from a "open file in plugin panel" intent. Sourced from
+     * the panel's `extensionState` (the same bag that survives the save/restore
+     * round-trip), so a restored panel sees the args it was originally spawned
+     * with. Empty (no key) for panels opened without an initial argument.
+     *
+     * This is a snapshot taken at mount, not a live value: it does not update
+     * while the view is mounted, including in response to your own
+     * {@link persistState} calls. Treat the contents as read-only and hold your
+     * working copy in React state seeded from here.
+     */
+    readonly initialArgs?: Record<string, unknown>;
+    /**
+     * Which version of your `stateVersion` schema {@link initialArgs} was written
+     * against — the other half of declaring one in `contributes.panels` (#12280).
+     *
+     * `0` means the bag predates versioning: it was persisted before the host
+     * stamped anything, so its shape is whatever you were writing at the time.
+     * Absent means you declared no `stateVersion`, so nothing was tracked and
+     * nothing is promised.
+     *
+     * Migrate forward from whatever this says and persist the result; your next
+     * {@link persistState} call re-stamps the bag at your current version. You
+     * never have to handle a value ABOVE the version you declare — the host
+     * refuses that bag rather than hand you state a newer build of your plugin
+     * wrote, and shows the user an error naming both versions. The state is kept
+     * on disk, so reinstalling the newer build brings it back intact.
+     */
+    readonly stateVersion?: number;
+    /**
+     * Persist view state onto the panel record, so the next mount of this panel
+     * sees it in {@link initialArgs}.
+     *
+     * The two are one bag: spawn seeds it, this updates it, `initialArgs` reads
+     * it back. That round trip is what lets a view survive the teardowns a panel
+     * routinely outlives — maximizing a sibling pane, leaving a dock tab, a
+     * cached project view, an app restart — without forgetting where the user
+     * was. A file browser's expanded paths, selection, root and sort are exactly
+     * this kind of state.
+     *
+     * The patch is **merged**, so two independent parts of a view can each
+     * persist their own key without reading and rewriting the whole bag; setting
+     * a key to `undefined` removes it. Writing state identical to what is already
+     * stored is free — it neither churns the store nor schedules a save — so
+     * calling this from a render-derived effect is fine.
+     *
+     * **Stored as JSON, canonically.** The host round-trips what you pass through
+     * `JSON.stringify`/`parse` and keeps that, so the value is detached from any
+     * object you still hold — mutating a patch afterwards changes nothing — and
+     * what you read back on the next mount is exactly what you would read back
+     * after a restart. A `NaN` becomes `null` and a `Date` becomes its ISO string
+     * at the moment you persist, not silently at the next launch.
+     *
+     * Keep it small. The bag rides the panel record into the layout save, and the
+     * host refuses an update whose serialized form exceeds 64KB. Anything larger,
+     * anything not JSON round-trippable, and anything that should outlive the
+     * panel belongs in `host.storage` instead. State here rides the panel
+     * snapshot into the project's `state.json` as plaintext JSON, so it is not a
+     * place for secrets.
+     *
+     * Returns whether the stored state is now what you asked for: `false` when
+     * the host rejected the update (over the cap, or not serializable), `true`
+     * when it was applied or already matched. Best-effort in the sense that
+     * `true` means "accepted and scheduled" — the layout save is debounced, so it
+     * is not a promise that bytes have reached disk.
+     *
+     * Absent when the host does not support persistence for this panel; call it
+     * optionally.
+     */
+    readonly persistState?: (patch: Record<string, unknown>) => boolean;
+    /**
+     * Ask the host to discard this view attempt and mount a fresh one for the
+     * same panel (#12609) — for a view that has built up more than it can shed
+     * and wants to start over without restarting the plugin's backend.
+     *
+     * A reload is a new React attempt using the module that is already loaded.
+     * This attempt's {@link disposeSignal} aborts and its React cleanup runs;
+     * the next attempt gets a new `disposeSignal`, the latest state accepted
+     * through {@link persistState} as {@link initialArgs}, and the same
+     * `panelId`, {@link panelRemovedSignal} and backend. Module-scope state,
+     * document-wide registrations and anything attached to `window` survive it,
+     * so a reload frees only what your cleanup releases. It does not promise to
+     * reclaim memory, and it cannot rescue a view that is blocking the renderer.
+     *
+     * A request, not a command: the host may refuse it, and nothing reports
+     * whether or when the next attempt mounted. Calls in the same tick coalesce
+     * into one reload. The callback belongs to the attempt that received it, so
+     * one held past this attempt's teardown does nothing. A fourth reload within
+     * 30 seconds of three accepted ones stops the view instead, and the panel
+     * stays stopped until the user reloads it.
+     *
+     * Absent where the host offers no reload (a project surface, for one), so
+     * call it optionally.
+     */
+    readonly requestReload?: () => void;
+    /**
+     * Tell the host whether this view holds work that a reload would lose
+     * (#12611).
+     *
+     * The user can reload a plugin panel from its menus, and an agent can do the
+     * same through the host's tools. Neither asks first by default, because what
+     * you accepted through {@link persistState} comes back. While this is set to
+     * `true`, both ask the user to confirm before discarding the view. Set it
+     * back to `false` once the work is saved or dropped.
+     *
+     * Your own {@link requestReload} is never held up by it. The setter belongs to
+     * the attempt that received it: one held past this attempt's teardown does
+     * nothing, and a new attempt starts with no unsaved work until it says so.
+     *
+     * Absent where the host offers no reload, so call it optionally.
+     */
+    readonly setHasUnsavedChanges?: (hasUnsavedChanges: boolean) => void;
+    /**
+     * Sets the live state of one of this panel's manifest `toolbar` buttons by
+     * its `actionId` (as written in the manifest). Each call replaces that
+     * button's state; `null` resets it. State belongs to the panel, so it
+     * survives the view re-rendering, unmounting and remounting, and is cleared
+     * when the panel closes or the view reloads. An `actionId` the manifest
+     * does not list is ignored.
+     *
+     * Like {@link setHasUnsavedChanges}, the setter belongs to the attempt that
+     * received it: a call held past this attempt's teardown (a refresh that
+     * settles after a reload) does nothing.
+     *
+     * Absent where the panel has no header (a surface), so call it optionally.
+     */
+    readonly setToolbarItemState?: (actionId: string, state: PluginPanelToolbarItemState | null) => void;
+    /**
+     * The worktree the panel instance belongs to, as recorded on the panel at
+     * spawn time. Lets a view reconstruct its own context without dispatching
+     * `worktree.getCurrent` — which resolves the *visible* worktree, not the
+     * one that owns the panel, and so returns the wrong answer for a background
+     * or restored panel. `undefined` for a panel spawned without a worktree.
+     */
+    readonly worktreeId?: string;
+    /**
+     * Spread onto any container you render through `createPortal`, so the
+     * portalled subtree stays inside Daintree's styling contract.
+     *
+     * Tailwind classes in a plugin view are compiled at runtime and scoped to the
+     * element the host marks as the view's style root. A portal renders outside
+     * that element — into `document.body`, or a container of your own — so
+     * without this its classes generate CSS that never matches, and the subtree
+     * paints unstyled. Everything rendered normally is already inside the root
+     * and needs nothing.
+     *
+     * ```tsx
+     * createPortal(<div {...styleRootAttributes}>…</div>, document.body)
+     * ```
+     */
+    readonly styleRootAttributes: Readonly<Record<string, string>>;
+    /**
+     * Present only for a `location: "settings"` view: which settings home it is
+     * mounted in, so it renders the rows for that scope. Absent for a panel view.
+     */
+    readonly settingsContext?: PluginSettingsViewContext;
+}
+
+/**
+ * Keep one of your panel's manifest `toolbar` buttons in step with the view:
+ * the declarative side of `PanelViewProps.setToolbarItemState`.
+ *
+ * Sends `state` when the view mounts and again whenever it changes, compared
+ * field by field so a fresh object literal on every render costs nothing.
+ * When `actionId` changes, the old button is reset to rest (`null`) first.
+ * Unmounting leaves the state alone: it belongs to the panel, so it survives
+ * a tab switch or a move to the dock, and the host clears it when the panel
+ * closes or the view reloads. Does nothing where the host offers no setter (a
+ * project surface), so it is safe in a view that also renders there.
+ *
+ * ```tsx
+ * export default function LedgerView(props: PanelViewProps) {
+ *   const { refreshing, fetchedAt } = useQuotes();
+ *   usePanelToolbarItem(props, "acme.ledger.refresh-quotes", {
+ *     busy: refreshing,
+ *     updatedAt: fetchedAt,
+ *     staleAfterMs: 15 * 60_000,
+ *   });
+ *   // …
+ * }
+ * ```
+ *
+ * @param view The view's props, or any object carrying its `setToolbarItemState`.
+ * @param actionId The button's `actionId` exactly as the manifest writes it.
+ * @param state The button's live state; `null` leaves it at rest.
+ */
+declare function usePanelToolbarItem(view: Pick<PanelViewProps, "setToolbarItemState">, actionId: string, state: PluginPanelToolbarItemState | null): void;
+
 interface StreamBufferOptions {
     /**
      * How many items to keep. Beyond it the oldest are dropped and counted in
@@ -7091,4 +7376,4 @@ interface PluginHostBridge {
     onPanel(pluginId: string, channel: string, panelId: string, callback: (payload: unknown) => void): () => void;
 }
 
-export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAccordionItem, type PluginAccordionProps, type PluginActionButtonProps, type PluginActionDispatchOutcome, type PluginActionMenuItem, type PluginAgentAvatarProps, type PluginAgentAvatarSize, type PluginAgentBadgeProps, type PluginAgentPickerChoice, type PluginAgentPickerPane, type PluginAgentPickerProps, type PluginAgentState, type PluginAgentStateIndicatorProps, type PluginAlign, type PluginAnnounceOptions, type PluginAnsiTextProps, type PluginAriaRootAttributes, type PluginAttachment, type PluginAttachmentChipProps, type PluginAttachmentListProps, type PluginAttachmentStatus, type PluginAutoGridProps, type PluginAvatarGroupItem, type PluginAvatarGroupProps, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginBarChartProps, type PluginBranchBadgeProps, type PluginBreadcrumbItem, type PluginBreadcrumbsProps, type PluginBulkAction, type PluginBulkActionBarProps, type PluginButtonProps, type PluginButtonVariant, type PluginCalendarBaseProps, type PluginCalendarProps, type PluginCalendarRangeProps, type PluginCalendarSingleProps, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCardProps, type PluginChartBand, type PluginChartBaseProps, type PluginChartColor, type PluginChartReferenceLine, type PluginChartSeries, type PluginCheck, type PluginCheckStatus, type PluginCheckboxProps, type PluginChecksListProps, type PluginClusterProps, type PluginCodeBlockProps, type PluginCodeEditorHandle, type PluginCodeEditorProps, type PluginColorPickerProps, type PluginColorSwatch, type PluginColorSwatchProps, type PluginColoredLabelProps, type PluginComboboxProps, type PluginCommandPaletteItem, type PluginCommandPaletteProps, type PluginCommit, type PluginCommitListProps, type PluginCommitRef, type PluginCommitRowProps, type PluginComposerAttachment, type PluginComposerProps, type PluginConfirmDialogProps, type PluginConfirmPopoverProps, type PluginConnectionCardProps, type PluginConnectionStatus, type PluginContainerSize, type PluginContainerTarget, type PluginContextDragSourceProps, type PluginContextMenuProps, type PluginContributionGridProps, type PluginCopyButtonProps, type PluginCountIndicatorProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableGroupAccessor, type PluginDataTableNumericFormat, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableRowPredicate, type PluginDataTableSort, type PluginDataTableTotal, type PluginDateFieldBaseProps, type PluginDatePickerProps, type PluginDateRange, type PluginDateRangePickerProps, type PluginDateRangePreset, type PluginDateTimePickerProps, type PluginDebouncedCallback, type PluginDecisionChoice, type PluginDecisionRequestProps, type PluginDecisionStatus, type PluginDescriptionItem, type PluginDescriptionListItemProps, type PluginDescriptionListProps, type PluginDevServerState, type PluginDevServerStatusProps, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDiffHunk, type PluginDiffHunkAction, type PluginDiffStatProps, type PluginDiffViewProps, type PluginDisclosureProps, type PluginDismissButtonProps, type PluginDividerProps, type PluginDocumentPackage, type PluginDomProps, type PluginDonutChartProps, type PluginDragDropProviderProps, type PluginDragEvent, type PluginDragHandleProps, type PluginDragId, type PluginDraggableState, type PluginDrawerProps, type PluginDrawerToggleProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginDroppableState, type PluginEmojiPickerProps, type PluginEmptyStateProps, type PluginEntityAvailability, type PluginEntityChipProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFieldChange, type PluginFieldValidator, type PluginFigureProps, type PluginFileDropzoneProps, type PluginFileIconProps, type PluginFileLinkProps, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFilterChipProps, type PluginForgeCiStatus, type PluginForgeLabel, type PluginForgePerson, type PluginForgeReviewDecision, type PluginForgeRowBaseProps, type PluginForgeState, type PluginForgeStateBadgeProps, type PluginFormError, type PluginFormErrorEntry, type PluginFormErrorSummaryProps, type PluginFormFieldBinding, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginFormHandle, type PluginFormProps, type PluginFormStatus, type PluginFormStatusProps, type PluginGaugeProps, type PluginGaugeThresholds, type PluginGitFileStatus, type PluginGitStatusBadgeProps, type PluginGridProps, type PluginGroupedVirtualListProps, type PluginHeadingProps, type PluginHeatmapProps, type PluginHighlightedTextProps, type PluginHistogramProps, type PluginHostBridge, type PluginHotkey, type PluginHoverCardProps, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginImageViewerImage, type PluginImageViewerProps, type PluginIndicatorPlacement, type PluginInlineCodeProps, type PluginInlineEditProps, type PluginInlineProps, type PluginInputProps, type PluginInspectorProps, type PluginInspectorSectionProps, type PluginIsoDate, type PluginIsoDateTime, type PluginIsoTime, type PluginIssueRowProps, type PluginKanbanCardState, type PluginKanbanColumn, type PluginKanbanMove, type PluginKanbanProps, type PluginKbdChordProps, type PluginKbdProps, type PluginKeyHint, type PluginKeyHintsProps, type PluginKeyValueEditorProps, type PluginKeyValuePair, type PluginLayoutAlign, type PluginLayoutBaseProps, type PluginLayoutElement, type PluginLayoutGap, type PluginLayoutJustify, type PluginLineChartProps, type PluginLinkProps, type PluginListEditorProps, type PluginListGroup, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLiveRegionProps, type PluginLoadMoreFooterProps, type PluginLogEntry, type PluginLogViewProps, type PluginLucideIconName, type PluginMarkdownEditorMode, type PluginMarkdownEditorProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginMasterDetailProps, type PluginMentionSuggestion, type PluginMentionTextareaProps, type PluginMentionTrigger, type PluginMeterMark, type PluginMeterProps, type PluginMeterThresholds, type PluginMultiSelectProps, type PluginNavListItem, type PluginNavListProps, type PluginNavListSection, type PluginNumberInputProps, type PluginObjectInspectorProps, type PluginOperationState, type PluginOperationStatusProps, type PluginOverflowToolbarAction, type PluginOverflowToolbarItem, type PluginOverflowToolbarProps, type PluginOverflowToolbarSeparator, type PluginPaneHeaderProps, type PluginPaneLayoutProps, type PluginPaneStateProps, type PluginPathLabelProps, type PluginPickerBaseProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginPortLinkProps, type PluginPortalProps, type PluginProgressBarProps, type PluginPropertyRowProps, type PluginPullRequestRowProps, type PluginRadioGroupProps, type PluginRadioOption, type PluginRangeSliderMark, type PluginRangeSliderProps, type PluginRefreshOverlayProps, type PluginRepeaterFieldProps, type PluginRepeaterItemContext, type PluginResizableSplitProps, type PluginRootAttributes, type PluginScatterChartProps, type PluginSchemaFormProps, type PluginScrollAreaProps, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSecretInputProps, type PluginSectionLabelProps, type PluginSegmentedBarProps, type PluginSegmentedBarSegment, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSelectionGesture, type PluginSelectionItemProps, type PluginSelectionKey, type PluginSendToAgentButtonProps, type PluginSendToAgentOutcome, type PluginSendToAgentRequest, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSheetProps, type PluginShortcutHintProps, type PluginShortcutRecorderProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSliderProps, type PluginSortableItemState, type PluginSortableListProps, type PluginSource, type PluginSourceCitationProps, type PluginSourceListProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginSplitButtonProps, type PluginSplitGroupProps, type PluginSplitLayout, type PluginSplitPane, type PluginStackProps, type PluginStackedAreaChartProps, type PluginStaleIndicatorProps, type PluginStatCardProps, type PluginStateGlyphProps, type PluginStatusBarProps, type PluginStatusBarSlot, type PluginStatusDotProps, type PluginStatusState, type PluginStepState, type PluginStepperProps, type PluginStepperStep, type PluginStructuredDiffProps, type PluginSuggestedValueProps, type PluginSwitchProps, type PluginTabItem, type PluginTableOfContentsProps, type PluginTabsProps, type PluginTagInputProps, type PluginTask, type PluginTaskListProps, type PluginTaskStatus, type PluginTerminalOutputProps, type PluginTerminalSnapshotProps, type PluginTextProps, type PluginTextSize, type PluginTextTone, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginTimeAgoProps, type PluginTimePickerProps, type PluginTimelineActor, type PluginTimelineItem, type PluginTimelineProps, type PluginToastHandle, type PluginToastTone, type PluginTocHeading, type PluginToggleGroupItem, type PluginToggleGroupProps, type PluginToolCallCardProps, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTreeMove, type PluginTreeNodeId, type PluginTreeNodeState, type PluginTreeViewProps, type PluginTruncatedTooltipProps, type PluginUndoRedoPushOptions, type PluginUndoToastOptions, type PluginUnreadDotProps, type PluginUnsavedChangesBarProps, type PluginUseDraggableOptions, type PluginUseDroppableOptions, type PluginViewToastOptions, type PluginVirtualListBaseProps, type PluginVirtualListComponent, type PluginVirtualListCountProps, type PluginVirtualListItemsProps, type PluginVirtualListProps, type PluginVisuallyHiddenProps, type PluginWorktreeBadgeProps, type PluginWorktreeItem, type PluginWorktreePickerProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseDebouncedCallbackOptions, type UseDisclosureOptions, type UseDisclosureResult, type UseFormOptions, type UseFormResult, type UseHostChannelResult, type UseHotkeysOptions, type UseListNavigationOptions, type UseListNavigationResult, type UseSelectionOptions, type UseSelectionResult, type UseToastResult, type UseUndoRedoOptions, type UseUndoRedoResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };
+export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAccordionItem, type PluginAccordionProps, type PluginActionButtonProps, type PluginActionDispatchOutcome, type PluginActionMenuItem, type PluginAgentAvatarProps, type PluginAgentAvatarSize, type PluginAgentBadgeProps, type PluginAgentPickerChoice, type PluginAgentPickerPane, type PluginAgentPickerProps, type PluginAgentState, type PluginAgentStateIndicatorProps, type PluginAlign, type PluginAnnounceOptions, type PluginAnsiTextProps, type PluginAriaRootAttributes, type PluginAttachment, type PluginAttachmentChipProps, type PluginAttachmentListProps, type PluginAttachmentStatus, type PluginAutoGridProps, type PluginAvatarGroupItem, type PluginAvatarGroupProps, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginBarChartProps, type PluginBranchBadgeProps, type PluginBreadcrumbItem, type PluginBreadcrumbsProps, type PluginBulkAction, type PluginBulkActionBarProps, type PluginButtonProps, type PluginButtonVariant, type PluginCalendarBaseProps, type PluginCalendarProps, type PluginCalendarRangeProps, type PluginCalendarSingleProps, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCardProps, type PluginChartBand, type PluginChartBaseProps, type PluginChartColor, type PluginChartReferenceLine, type PluginChartSeries, type PluginCheck, type PluginCheckStatus, type PluginCheckboxProps, type PluginChecksListProps, type PluginClusterProps, type PluginCodeBlockProps, type PluginCodeEditorHandle, type PluginCodeEditorProps, type PluginColorPickerProps, type PluginColorSwatch, type PluginColorSwatchProps, type PluginColoredLabelProps, type PluginComboboxProps, type PluginCommandPaletteItem, type PluginCommandPaletteProps, type PluginCommit, type PluginCommitListProps, type PluginCommitRef, type PluginCommitRowProps, type PluginComposerAttachment, type PluginComposerProps, type PluginConfirmDialogProps, type PluginConfirmPopoverProps, type PluginConnectionCardProps, type PluginConnectionStatus, type PluginContainerSize, type PluginContainerTarget, type PluginContextDragSourceProps, type PluginContextMenuProps, type PluginContributionGridProps, type PluginCopyButtonProps, type PluginCountIndicatorProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableGroupAccessor, type PluginDataTableNumericFormat, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableRowPredicate, type PluginDataTableSort, type PluginDataTableTotal, type PluginDateFieldBaseProps, type PluginDatePickerProps, type PluginDateRange, type PluginDateRangePickerProps, type PluginDateRangePreset, type PluginDateTimePickerProps, type PluginDebouncedCallback, type PluginDecisionChoice, type PluginDecisionRequestProps, type PluginDecisionStatus, type PluginDescriptionItem, type PluginDescriptionListItemProps, type PluginDescriptionListProps, type PluginDevServerState, type PluginDevServerStatusProps, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDiffHunk, type PluginDiffHunkAction, type PluginDiffStatProps, type PluginDiffViewProps, type PluginDisclosureProps, type PluginDismissButtonProps, type PluginDividerProps, type PluginDocumentPackage, type PluginDomProps, type PluginDonutChartProps, type PluginDragDropProviderProps, type PluginDragEvent, type PluginDragHandleProps, type PluginDragId, type PluginDraggableState, type PluginDrawerProps, type PluginDrawerToggleProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginDroppableState, type PluginEmojiPickerProps, type PluginEmptyStateProps, type PluginEntityAvailability, type PluginEntityChipProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFieldChange, type PluginFieldValidator, type PluginFigureProps, type PluginFileDropzoneProps, type PluginFileIconProps, type PluginFileLinkProps, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFilterChipProps, type PluginForgeCiStatus, type PluginForgeLabel, type PluginForgePerson, type PluginForgeReviewDecision, type PluginForgeRowBaseProps, type PluginForgeState, type PluginForgeStateBadgeProps, type PluginFormError, type PluginFormErrorEntry, type PluginFormErrorSummaryProps, type PluginFormFieldBinding, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginFormHandle, type PluginFormProps, type PluginFormStatus, type PluginFormStatusProps, type PluginGaugeProps, type PluginGaugeThresholds, type PluginGitFileStatus, type PluginGitStatusBadgeProps, type PluginGridProps, type PluginGroupedVirtualListProps, type PluginHeadingProps, type PluginHeatmapProps, type PluginHighlightedTextProps, type PluginHistogramProps, type PluginHostBridge, type PluginHotkey, type PluginHoverCardProps, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginImageViewerImage, type PluginImageViewerProps, type PluginIndicatorPlacement, type PluginInlineCodeProps, type PluginInlineEditProps, type PluginInlineProps, type PluginInputProps, type PluginInspectorProps, type PluginInspectorSectionProps, type PluginIsoDate, type PluginIsoDateTime, type PluginIsoTime, type PluginIssueRowProps, type PluginKanbanCardState, type PluginKanbanColumn, type PluginKanbanMove, type PluginKanbanProps, type PluginKbdChordProps, type PluginKbdProps, type PluginKeyHint, type PluginKeyHintsProps, type PluginKeyValueEditorProps, type PluginKeyValuePair, type PluginLayoutAlign, type PluginLayoutBaseProps, type PluginLayoutElement, type PluginLayoutGap, type PluginLayoutJustify, type PluginLineChartProps, type PluginLinkProps, type PluginListEditorProps, type PluginListGroup, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLiveRegionProps, type PluginLoadMoreFooterProps, type PluginLogEntry, type PluginLogViewProps, type PluginLucideIconName, type PluginMarkdownEditorMode, type PluginMarkdownEditorProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginMasterDetailProps, type PluginMentionSuggestion, type PluginMentionTextareaProps, type PluginMentionTrigger, type PluginMeterMark, type PluginMeterProps, type PluginMeterThresholds, type PluginMultiSelectProps, type PluginNavListItem, type PluginNavListProps, type PluginNavListSection, type PluginNumberInputProps, type PluginObjectInspectorProps, type PluginOperationState, type PluginOperationStatusProps, type PluginOverflowToolbarAction, type PluginOverflowToolbarItem, type PluginOverflowToolbarProps, type PluginOverflowToolbarSeparator, type PluginPaneHeaderProps, type PluginPaneLayoutProps, type PluginPaneStateProps, type PluginPathLabelProps, type PluginPickerBaseProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginPortLinkProps, type PluginPortalProps, type PluginProgressBarProps, type PluginPropertyRowProps, type PluginPullRequestRowProps, type PluginRadioGroupProps, type PluginRadioOption, type PluginRangeSliderMark, type PluginRangeSliderProps, type PluginRefreshOverlayProps, type PluginRepeaterFieldProps, type PluginRepeaterItemContext, type PluginResizableSplitProps, type PluginRootAttributes, type PluginScatterChartProps, type PluginSchemaFormProps, type PluginScrollAreaProps, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSecretInputProps, type PluginSectionLabelProps, type PluginSegmentedBarProps, type PluginSegmentedBarSegment, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSelectionGesture, type PluginSelectionItemProps, type PluginSelectionKey, type PluginSendToAgentButtonProps, type PluginSendToAgentOutcome, type PluginSendToAgentRequest, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSheetProps, type PluginShortcutHintProps, type PluginShortcutRecorderProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSliderProps, type PluginSortableItemState, type PluginSortableListProps, type PluginSource, type PluginSourceCitationProps, type PluginSourceListProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginSplitButtonProps, type PluginSplitGroupProps, type PluginSplitLayout, type PluginSplitPane, type PluginStackProps, type PluginStackedAreaChartProps, type PluginStaleIndicatorProps, type PluginStatCardProps, type PluginStateGlyphProps, type PluginStatusBarProps, type PluginStatusBarSlot, type PluginStatusDotProps, type PluginStatusState, type PluginStepState, type PluginStepperProps, type PluginStepperStep, type PluginStructuredDiffProps, type PluginSuggestedValueProps, type PluginSwitchProps, type PluginTabItem, type PluginTableOfContentsProps, type PluginTabsProps, type PluginTagInputProps, type PluginTask, type PluginTaskListProps, type PluginTaskStatus, type PluginTerminalOutputProps, type PluginTerminalSnapshotProps, type PluginTextProps, type PluginTextSize, type PluginTextTone, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginTimeAgoProps, type PluginTimePickerProps, type PluginTimelineActor, type PluginTimelineItem, type PluginTimelineProps, type PluginToastHandle, type PluginToastTone, type PluginTocHeading, type PluginToggleGroupItem, type PluginToggleGroupProps, type PluginToolCallCardProps, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTreeMove, type PluginTreeNodeId, type PluginTreeNodeState, type PluginTreeViewProps, type PluginTruncatedTooltipProps, type PluginUndoRedoPushOptions, type PluginUndoToastOptions, type PluginUnreadDotProps, type PluginUnsavedChangesBarProps, type PluginUseDraggableOptions, type PluginUseDroppableOptions, type PluginViewToastOptions, type PluginVirtualListBaseProps, type PluginVirtualListComponent, type PluginVirtualListCountProps, type PluginVirtualListItemsProps, type PluginVirtualListProps, type PluginVisuallyHiddenProps, type PluginWorktreeBadgeProps, type PluginWorktreeItem, type PluginWorktreePickerProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseDebouncedCallbackOptions, type UseDisclosureOptions, type UseDisclosureResult, type UseFormOptions, type UseFormResult, type UseHostChannelResult, type UseHotkeysOptions, type UseListNavigationOptions, type UseListNavigationResult, type UseSelectionOptions, type UseSelectionResult, type UseToastResult, type UseUndoRedoOptions, type UseUndoRedoResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePanelToolbarItem, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };

@@ -30,6 +30,7 @@ import { LIST_LABEL_CLASS, SECTION_LABEL_CLASS } from "@/components/ui/sectionLa
 import { resolveSplitterKey, type SplitterGrowKey } from "@/hooks/useSplitterKeys";
 import { cn } from "@/lib/utils";
 import {
+  cssLength,
   field,
   fn,
   hasContent,
@@ -95,10 +96,11 @@ const CARD_FOOTER_ALIGN_CLASS = {
 } as const;
 
 // The host `Card` frame for a static card and the host `ChoiceCard` for a
-// clickable one: a card that is itself the control owns focus and press, and
-// is outlined at rest, so `variant` and `capColor` only apply to the static
-// frame. Inside a button every part is a span, since a button holds phrasing
-// content only.
+// clickable one: a card that is itself the control owns focus and press. A
+// clickable card lifts through the choice card's own elevated tone and keeps
+// a feature card's shape and cap; `inset` has no clickable form, so it draws
+// as the default. Inside a button every part is a span, since a button holds
+// phrasing content only.
 function KitCard(props: PluginCardProps) {
   const {
     title,
@@ -117,7 +119,7 @@ function KitCard(props: PluginCardProps) {
   } = props;
   const baseId = useId();
   const click = fn(onClick);
-  const kind = click ? "default" : (oneOf(variant, CARD_VARIANTS) ?? "default");
+  const kind = oneOf(variant, CARD_VARIANTS) ?? "default";
   const feature = kind === "feature";
   const cap = feature ? oneOf(capColor, CARD_CAP_COLORS) : undefined;
   const pad = oneOf(padding, ["none", "sm", "md"] as const) ?? "md";
@@ -205,6 +207,13 @@ function KitCard(props: PluginCardProps) {
     </Block>
   ) : null;
 
+  const frameClass = cn(
+    feature && "rounded-[var(--radius-xl)]",
+    cap &&
+      "relative before:pointer-events-none before:absolute before:inset-0 before:rounded-[var(--radius-xl)]",
+    cap && CARD_CAP_CLASS[cap]
+  );
+
   if (click) {
     const dom = pickDomProps(rest);
     // The plugin's own name wins over the title's; its description references
@@ -225,7 +234,8 @@ function KitCard(props: PluginCardProps) {
           nonEmpty(dom["aria-labelledby"]) ?? (!ownLabel && hasTitle ? titleId : undefined)
         }
         aria-describedby={describedBy || undefined}
-        className={cn("min-w-0 flex-col items-stretch p-0", str(className))}
+        tone={kind === "elevated" || feature ? "elevated" : "default"}
+        className={cn("min-w-0 flex-col items-stretch p-0", frameClass, str(className))}
       >
         {header}
         {body}
@@ -238,14 +248,7 @@ function KitCard(props: PluginCardProps) {
       {...pickDomProps(rest)}
       variant={CARD_HOST_VARIANT[kind]}
       padding="none"
-      className={cn(
-        "flex min-w-0 flex-col",
-        feature && "rounded-[var(--radius-xl)]",
-        cap &&
-          "relative before:pointer-events-none before:absolute before:inset-0 before:rounded-[var(--radius-xl)]",
-        cap && CARD_CAP_CLASS[cap],
-        str(className)
-      )}
+      className={cn("flex min-w-0 flex-col", frameClass, str(className))}
     >
       {header}
       {body}
@@ -947,26 +950,6 @@ const DESCRIPTION_LIST_INLINE_GRID = {
     "grid grid-cols-[var(--kit-dl-label)_minmax(0,max-content)_auto_minmax(0,1fr)] gap-y-2.5",
   endSized: "grid grid-cols-[var(--kit-dl-label)_minmax(0,1fr)_auto_0px] gap-y-2.5",
 } as const;
-
-const DESCRIPTION_LABEL_MAX_PX = 2000;
-
-function cssLength(value: unknown): string | undefined {
-  if (typeof value === "number") {
-    const px = positive(value, DESCRIPTION_LABEL_MAX_PX);
-    return px === undefined ? undefined : `${px}px`;
-  }
-  const text = nonEmpty(value)?.trim();
-  if (!text) return undefined;
-  // A value that is not a track size would void the whole track list and drop
-  // every row into one column, so it is ignored instead. Checking it as a
-  // track also turns away the CSS-wide keywords, which a width would take.
-  if (typeof CSS !== "undefined" && typeof CSS.supports === "function") {
-    return CSS.supports("grid-template-columns", `${text} 1fr`) ? text : undefined;
-  }
-  return /^(\d+(\.\d+)?(px|rem|em|ch|%)|(calc|min|max|clamp)\([^;{}]*\))$/.test(text)
-    ? text
-    : undefined;
-}
 
 function KitDescriptionList({
   items,

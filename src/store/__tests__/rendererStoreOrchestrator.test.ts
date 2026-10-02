@@ -299,6 +299,31 @@ describe("rendererStoreOrchestrator", () => {
     expect(states.keep).toEqual({ "acme.ledger.refresh": { text: "Fresh" } });
   });
 
+  it("clears plugin panel toolbar state when the panel is closed to the trash", () => {
+    usePanelStore.setState({
+      panelsById: {
+        closed: {
+          id: "closed",
+          title: "C",
+          kind: "terminal" as const,
+          cwd: "/",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: ["closed"],
+    });
+    usePluginPanelToolbarStore.getState().setItemState("closed", "acme.ledger.refresh", {
+      busy: true,
+    });
+
+    usePanelStore.getState().trashPanel("closed");
+
+    expect(usePanelStore.getState().panelIds).toContain("closed");
+    expect(usePluginPanelToolbarStore.getState().statesByPanelId.closed).toBeUndefined();
+  });
+
   it("prunes plugin panel badges for every terminal removed in one batch", () => {
     usePanelStore.setState({
       panelsById: {

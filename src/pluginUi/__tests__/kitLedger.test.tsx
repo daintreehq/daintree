@@ -480,8 +480,11 @@ describe("DataTable as a ledger", () => {
     expect(cue("Rent").glyph?.getAttribute("aria-hidden")).toBe("true");
     expect(cue("Power")).toEqual({ cue: false, glyph: null });
     expect(cue("Home").cue).toBe(false);
-    // The pencil's room is kept down the whole column, header included.
-    expect(screen.getByRole("columnheader", { name: "Item" }).className).toMatch(/\bpe-7\b/);
+    // The pencil lives in the cell's own padding: the column's geometry is unchanged.
+    expect(screen.getByRole("columnheader", { name: "Item" }).className).not.toMatch(/\bpe-\d/);
+    expect(within(rowNamed("Rent")).getByText("Rent").closest("td")!.className).not.toMatch(
+      /\bpe-\d/
+    );
     // Editing hides the cue.
     fireEvent.doubleClick(within(rowNamed("Rent")).getByText("Rent"));
     expect(container.querySelector("td[data-edit-cell]")?.classList.contains("kit-dt-edit")).toBe(
@@ -500,7 +503,38 @@ describe("DataTable as a ledger", () => {
       )
     );
     expect(cue("Rent")).toEqual({ cue: false, glyph: null });
-    expect(screen.getByRole("columnheader", { name: "Item" }).className).not.toMatch(/\bpe-7\b/);
+  });
+
+  it("scrolls a wide plain grid sideways on Left and Right where no tree step applies", () => {
+    const flat = ENTRIES.slice(0, 3);
+    render(
+      inViewport(
+        createElement(kit.DataTable<Entry>, {
+          "aria-label": "Wide ledger",
+          rows: flat,
+          rowKey: "id",
+          columns: [
+            { id: "item", header: "Item", width: 400 },
+            { id: "category", header: "Category", width: 400 },
+          ],
+          onRowClick: () => {},
+          virtualize: false,
+        })
+      )
+    );
+    const grid = screen.getByRole("grid", { name: "Wide ledger" });
+    const scroller =
+      grid.closest<HTMLElement>(".overflow-auto, [data-kit-scroll]") ?? grid.parentElement!;
+    Object.defineProperty(scroller, "scrollWidth", { configurable: true, value: 800 });
+    Object.defineProperty(scroller, "clientWidth", { configurable: true, value: 300 });
+    const scrollBy = vi.fn();
+    scroller.scrollBy = scrollBy as unknown as typeof scroller.scrollBy;
+
+    act(() => grid.focus());
+    fireEvent.keyDown(grid, { key: "ArrowRight" });
+    fireEvent.keyDown(grid, { key: "ArrowLeft" });
+
+    expect(scrollBy.mock.calls).toEqual([[{ left: 40 }], [{ left: -40 }]]);
   });
 
   it("leaves clicks and keys on in-cell controls to the control", () => {

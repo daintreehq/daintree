@@ -25,13 +25,13 @@ function renderToolbarItem(
 }
 
 describe("usePanelToolbarItem", () => {
-  it("sets the state on mount and resets it on unmount", () => {
+  it("sets the state on mount and leaves it to the panel on unmount", () => {
     const setter = vi.fn();
     const { unmount } = renderToolbarItem({ setter, actionId: ID, state: { busy: true } });
     expect(setter.mock.calls).toEqual([[ID, { busy: true }]]);
 
     unmount();
-    expect(setter.mock.calls.at(-1)).toEqual([ID, null]);
+    expect(setter.mock.calls).toEqual([[ID, { busy: true }]]);
   });
 
   it("skips a re-render whose state is equal field by field", () => {
@@ -63,6 +63,7 @@ describe("usePanelToolbarItem", () => {
     rerender({ setter: second, actionId: ID, state: { busy: true } });
 
     expect(second.mock.calls).toEqual([[ID, { busy: true }]]);
+    expect(first.mock.calls).toEqual([[ID, { busy: true }]]);
   });
 
   it("does nothing where the host offers no setter", () => {
