@@ -136,6 +136,26 @@ export type RunExclusionReason = "trashed" | "help" | "dev-preview" | "no-pty" |
  * one surface and not the other. A second copy of these five rules is a bug
  * waiting to be written, so there is exactly one.
  */
+/** An agent gone within this long of its launch failed to start, rather than finished. */
+export const LAUNCH_FAILURE_WINDOW_MS = 60_000;
+
+/**
+ * Launched as an agent, and the agent was gone within a minute: a crash, a
+ * missing login or a broken install, with the reason on screen in the shell it
+ * left behind. Still a run — the user asked for an agent and has none, which
+ * they need to see — unlike an agent quit on purpose after doing its work.
+ */
+function diedAtLaunch(terminal: CountableTerminal): boolean {
+  return (
+    Boolean(terminal.launchAgentId) &&
+    !terminal.detectedAgentId &&
+    terminal.agentState === "exited" &&
+    terminal.spawnedAt !== undefined &&
+    terminal.lastStateChange !== undefined &&
+    terminal.lastStateChange - terminal.spawnedAt <= LAUNCH_FAILURE_WINDOW_MS
+  );
+}
+
 export function classifyRun(
   terminal: CountableTerminal,
   isHelpTerminal: (id: string) => boolean
@@ -164,7 +184,7 @@ export function classifyRun(
   const hasLiveOrBootAgent =
     Boolean(terminal.detectedAgentId) ||
     (Boolean(terminal.launchAgentId) && terminal.everDetectedAgent !== true);
-  if (!hasLiveOrBootAgent) return "not-an-agent";
+  if (!hasLiveOrBootAgent && !diedAtLaunch(terminal)) return "not-an-agent";
 
   return null;
 }

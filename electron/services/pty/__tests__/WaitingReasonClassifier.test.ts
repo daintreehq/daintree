@@ -344,4 +344,58 @@ describe("hasRateLimitMessage (#12797)", () => {
     expect(classifyWaitingReason(["You've hit your usage limit."], true)).toBe("error");
     expect(classifyWaitingReason(["request failed: too many requests"], true)).toBe("error");
   });
+
+  it("sees a Claude approval dialog through the task checklist drawn beneath it", () => {
+    const lines = [
+      "Do you want to make this edit to units.ts?",
+      "❯ 1. Yes",
+      "  2. Yes, and switch to accept edits (auto-approve file edits and common file",
+      "  commands) for this session (shift+tab)",
+      "  3. No",
+      "",
+      " Esc to cancel · Tab to amend",
+      "",
+      "  6 tasks (4 done, 1 in progress, 1 open)",
+      "  ◼ Fix test failures",
+      "  ◻ Commit changes",
+      "  ✔ Run npm test to identify failures",
+      "  ✔ Refactor src/server.ts to use router",
+      "  ✔ Create test/server.test.ts with comprehensive tests",
+      "  ✔ Update README",
+      "   … +1 completed",
+    ];
+    expect(classifyWaitingReason(lines, true)).toBe("approval");
+  });
+
+  it("does not read a finished turn's checklist as the question it ends on", () => {
+    const lines = [
+      "⏺ Done. Should I also push the branch?",
+      "",
+      "  2 tasks (2 done, 0 open)",
+      "  ✔ Fix the bug",
+      "  ✔ Commit the fix",
+    ];
+    expect(classifyWaitingReason(lines, true)).toBe("question");
+  });
+
+  it("does not bring back an answered approval from above the old window", () => {
+    const lines = [
+      "Do you want to proceed?",
+      "❯ 1. Yes",
+      "  2. No",
+      ...Array.from({ length: 12 }, () => ""),
+      "⏺ Done.",
+      "",
+      "  2 tasks (2 done, 0 open)",
+      "  ✔ Fix the bug",
+      "  ✔ Commit the fix",
+      "❯ ",
+    ];
+    expect(classifyWaitingReason(lines, true)).toBe("prompt");
+  });
+
+  it("keeps a dialog's own checkbox rows", () => {
+    const lines = ["Allow this tool?", "❯ ☐ Allow once", "  ☐ Always allow"];
+    expect(classifyWaitingReason(lines, true)).toBe("approval");
+  });
 });
