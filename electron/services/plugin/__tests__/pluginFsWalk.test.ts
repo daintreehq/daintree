@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
-import { mkdtempSync, realpathSync, rmSync, type Dirent } from "node:fs";
+import { mkdtempSync, rmSync, type Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -49,8 +49,8 @@ const walk = (options?: unknown) =>
 
 const paths = (result: { entries: Array<{ path: string }> }) => result.entries.map((e) => e.path);
 
-beforeEach(() => {
-  root = realpathSync(mkdtempSync(path.join(tmpdir(), "plugin-walk-")));
+beforeEach(async () => {
+  root = await fs.realpath(mkdtempSync(path.join(tmpdir(), "plugin-walk-")));
 });
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
@@ -158,7 +158,7 @@ describe("runWalk", () => {
   });
 
   it("neither follows nor lists a symlink, even one pointing outside the root", async () => {
-    const outside = realpathSync(mkdtempSync(path.join(tmpdir(), "plugin-walk-outside-")));
+    const outside = await fs.realpath(mkdtempSync(path.join(tmpdir(), "plugin-walk-outside-")));
     try {
       await fs.writeFile(path.join(outside, "secret.txt"), "s");
       await write("inside.txt");

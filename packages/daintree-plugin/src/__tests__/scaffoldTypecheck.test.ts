@@ -87,9 +87,10 @@ function typecheck(dir: string, override: ts.CompilerOptions = {}): string[] {
   const host = ts.createCompilerHost(options);
   host.getCurrentDirectory = () => dir;
   const program = ts.createProgram(parsed.fileNames, options, host);
+  const sourcePrefix = path.join(dir, "src") + path.sep;
   const own = program
     .getSourceFiles()
-    .filter((file) => file.fileName.startsWith(path.join(dir, "src")));
+    .filter((file) => path.resolve(file.fileName).startsWith(sourcePrefix));
   return [
     ...program.getOptionsDiagnostics(),
     ...program.getGlobalDiagnostics(),
