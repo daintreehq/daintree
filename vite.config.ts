@@ -673,6 +673,7 @@ const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly string[
     "EmojiPicker",
     "EmptyState",
     "EntityChip",
+    "Figure",
     "FileDropzone",
     "FileIcon",
     "FileLink",
@@ -750,6 +751,7 @@ const HOST_FACADE_REQUIRED_EXPORTS: Record<HostFacadeSpecifier, readonly string[
     "SearchField",
     "SecretInput",
     "SectionLabel",
+    "SegmentedBar",
     "SegmentedControl",
     "Select",
     "SendToAgentButton",
@@ -1801,7 +1803,28 @@ export default defineConfig(({ command, mode }) => {
                 priority: 50,
               },
               {
-                name: "vendor-icons",
+                // The glyphs the app imports by name. The plugin kit reaches
+                // every other Lucide icon through lucide-react's dynamic import
+                // map, and a module reached only that way (the map, its
+                // re-export shim, and each of ~1,600 icons) keeps its own lazy
+                // chunk: claimed here, all of it would load at startup. A
+                // lucide-react module is static when anything outside the
+                // package imports it, or a static lucide-react module does.
+                name: (id, ctx) => {
+                  const seen = new Set<string>();
+                  const isStatic = (moduleId: string): boolean => {
+                    if (seen.has(moduleId)) return false;
+                    seen.add(moduleId);
+                    const info = ctx.getModuleInfo(moduleId);
+                    if (!info) return true;
+                    if (info.isEntry) return true;
+                    return info.importers.some(
+                      (importer) =>
+                        !/node_modules[\\/]lucide-react[\\/]/.test(importer) || isStatic(importer)
+                    );
+                  };
+                  return isStatic(id) ? "vendor-icons" : null;
+                },
                 test: /node_modules[\\/]lucide-react[\\/]/,
                 priority: 40,
               },

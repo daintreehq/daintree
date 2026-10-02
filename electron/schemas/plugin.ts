@@ -10,6 +10,7 @@ import {
   AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN,
   BUILT_IN_PLUGIN_CAPABILITIES,
   PANEL_MENU_MAX_ITEMS,
+  PANEL_TOOLBAR_MAX_ITEMS,
   PLUGIN_CATEGORY_IDS,
   PLUGIN_PANEL_BADGE_LABEL_MAX,
 } from "../../shared/types/plugin.js";
@@ -83,6 +84,20 @@ export const PanelMenuItemSchema = z
   .strict();
 
 /**
+ * One `contributes.panels[].toolbar` entry: a button in the panel header.
+ * `actionId` is held to the plugin's own namespace by the same manifest-level
+ * check as the menu; `iconId` takes what a panel's own `iconId` takes.
+ */
+export const PanelToolbarItemSchema = z
+  .object({
+    actionId: z.string().min(1).max(200),
+    label: z.string().trim().min(1).max(80).optional(),
+    iconId: z.string().min(1).max(200).optional(),
+    status: z.boolean().optional(),
+  })
+  .strict();
+
+/**
  * The unrefined object base — exported so the field-consumer contract test
  * (`manifestContributionConsumers.test.ts`) can enumerate `.shape` without
  * reaching through the `.superRefine` wrapper, mirroring
@@ -116,6 +131,9 @@ export const PanelContributionObjectSchema = z
     // declared order. Which actions may appear is checked at manifest level,
     // where the plugin's namespace and declared commands are known.
     menu: z.array(PanelMenuItemSchema).max(PANEL_MENU_MAX_ITEMS).optional(),
+    // The plugin's own actions as buttons in this panel's header, in declared
+    // order, held to the same namespace rule as `menu`.
+    toolbar: z.array(PanelToolbarItemSchema).max(PANEL_TOOLBAR_MAX_ITEMS).optional(),
   })
   .strict();
 
@@ -127,7 +145,8 @@ export const PanelContributionObjectSchema = z
  * opt-out could never be honored and would silently vanish; surface the
  * conflict to the author at manifest-write time instead of swallowing it at
  * runtime (#11375). `hasPty` with menu entries is rejected for the same reason: a
- * PTY kind uses the terminal menus, where the entries would never show.
+ * PTY kind uses the terminal menus, where the entries would never show. Toolbar
+ * entries likewise: the terminal header has no room for a plugin's buttons.
  * `hasPty` has already defaulted to `false` here, so an omitted `hasPty` never
  * trips either.
  */
@@ -150,6 +169,27 @@ export const PanelContributionSchema = PanelContributionObjectSchema.superRefine
       params: { errorCode: "pty_panel_menu_unsupported" },
     });
   }
+  if (panel.hasPty === true && panel.toolbar !== undefined && panel.toolbar.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["toolbar"],
+      message:
+        "A PTY-backed panel (hasPty: true) renders as a terminal and uses the terminal's header, so its toolbar buttons would never appear. Remove the toolbar, or put the actions on a view panel.",
+      params: { errorCode: "pty_panel_toolbar_unsupported" },
+    });
+  }
+  const seenToolbarActions = new Set<string>();
+  panel.toolbar?.forEach((item, index) => {
+    if (seenToolbarActions.has(item.actionId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["toolbar", index, "actionId"],
+        message: `Duplicate toolbar action "${item.actionId}" — each action appears at most once in a panel's toolbar.`,
+        params: { errorCode: "panel_toolbar_duplicate_action" },
+      });
+    }
+    seenToolbarActions.add(item.actionId);
+  });
   const seenMenuActions = new Set<string>();
   panel.menu?.forEach((item, index) => {
     if (seenMenuActions.has(item.actionId)) {
@@ -2511,32 +2551,46 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       // menus already carry the host's commands. So a built-in id, allowed on
       // the surfaces above, is refused here; the own-namespace rules match
       // theirs, including the imperative escape hatch when no commands exist.
+      // A panel's `toolbar` follows the same rule, for the same reason.
       manifest.contributes.panels.forEach((panel, panelIndex) => {
-        panel.menu?.forEach((item, itemIndex) => {
-          const { actionId } = item;
-          const issuePath = ["contributes", "panels", panelIndex, "menu", itemIndex, "actionId"];
-          if (
-            !actionId.startsWith(ownNamespacePrefix) ||
-            actionId.length === ownNamespacePrefix.length ||
-            !PANEL_MENU_ACTION_ID.test(actionId)
-          ) {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: issuePath,
-              message: `Panel menu actionId "${actionId}" must be one of this plugin's own actions, written "${manifest.name}.<id>" — a panel's menu can't offer built-in or other plugins' actions.`,
-              params: { errorCode: "panel_menu_action_not_own" },
-            });
-            return;
-          }
-          if (declaredCommandActionIds.size > 0 && !declaredCommandActionIds.has(actionId)) {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: issuePath,
-              message: `Panel menu actionId "${actionId}" is in this plugin's "${manifest.name}" namespace but matches no entry in contributes.commands — likely a typo for a declared command.`,
-              params: { errorCode: "action_id_undeclared_command" },
-            });
-          }
-        });
+        const surfaces = [
+          { key: "menu", noun: "menu", items: panel.menu ?? [] },
+          { key: "toolbar", noun: "toolbar", items: panel.toolbar ?? [] },
+        ] as const;
+        for (const surface of surfaces) {
+          surface.items.forEach((item, itemIndex) => {
+            const { actionId } = item;
+            const issuePath = [
+              "contributes",
+              "panels",
+              panelIndex,
+              surface.key,
+              itemIndex,
+              "actionId",
+            ];
+            if (
+              !actionId.startsWith(ownNamespacePrefix) ||
+              actionId.length === ownNamespacePrefix.length ||
+              !PANEL_MENU_ACTION_ID.test(actionId)
+            ) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: issuePath,
+                message: `Panel ${surface.noun} actionId "${actionId}" must be one of this plugin's own actions, written "${manifest.name}.<id>" — a panel's ${surface.noun} can't offer built-in or other plugins' actions.`,
+                params: { errorCode: `panel_${surface.key}_action_not_own` },
+              });
+              return;
+            }
+            if (declaredCommandActionIds.size > 0 && !declaredCommandActionIds.has(actionId)) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: issuePath,
+                message: `Panel ${surface.noun} actionId "${actionId}" is in this plugin's "${manifest.name}" namespace but matches no entry in contributes.commands — likely a typo for a declared command.`,
+                params: { errorCode: "action_id_undeclared_command" },
+              });
+            }
+          });
+        }
       });
 
       // Duplicate contribution ids — within each contribution array, the bare

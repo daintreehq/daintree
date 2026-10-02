@@ -58,6 +58,7 @@ import {
 } from "@/components/ui/paneToolbarStyles";
 import { PaneState, PaneStateActions } from "@/components/ui/PaneState";
 import { ProgressBar } from "@/components/ui/ProgressBar";
+import { Spinner } from "@/components/ui/Spinner";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { documentTabClassName, revealTabInStrip } from "@/components/ui/document-tab";
@@ -65,7 +66,7 @@ import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { SEVERITY_VISUAL } from "@/lib/statusSeverity";
 import { formatCompactCount } from "@/lib/formatCount";
 import { cn } from "@/lib/utils";
-import { renderIconSource, resolvePluginKitIcon } from "./PluginKitIcons";
+import { renderIconSource } from "./PluginKitIcons";
 import { useKitOverlayZClass } from "./kitScope";
 import {
   content,
@@ -84,16 +85,7 @@ import {
 
 /** A kit icon source at a fixed size: names resolve to host glyphs, elements get sized. */
 export function sizedIcon(source: unknown, className: string): ReactNode {
-  if (typeof source === "string") {
-    const Glyph = resolvePluginKitIcon(source);
-    return Glyph ? <Glyph className={className} aria-hidden="true" /> : null;
-  }
-  const element = renderIconSource(source);
-  return element ? (
-    <span aria-hidden="true" className={cn("inline-flex shrink-0 [&>svg]:size-full", className)}>
-      {element}
-    </span>
-  ) : null;
+  return renderIconSource(source, className);
 }
 
 function KitPaneHeader({
@@ -164,13 +156,17 @@ function KitToolbarButton({
   disabled,
   tooltip,
   tooltipSide,
+  loading,
   ...rest
 }: PluginToolbarButtonProps) {
   const overlayZ = useKitOverlayZClass();
   const text = nonEmpty(label);
   const name = str(ariaLabel);
   const handleClick = fn(onClick);
-  const inert = disabled === true;
+  const busy = loading === true;
+  // Busy stays focusable and announced as busy rather than unavailable, so it
+  // is not dimmed; it only refuses to start the work again.
+  const inert = disabled === true || busy;
   // Everything a trigger hands its child (ref, pointer, key and focus
   // handlers, its state) is forwarded, so a menu or popover can open from
   // here as it does from a Button.
@@ -197,7 +193,8 @@ function KitToolbarButton({
       // aria-disabled, not disabled, so the control keeps its place in the
       // toolbar's arrow-key order (the APG toolbar pattern). The trigger's
       // handlers are held back too, so an unavailable control opens nothing.
-      aria-disabled={inert || undefined}
+      aria-disabled={disabled === true || undefined}
+      aria-busy={busy || undefined}
       onPointerDown={inert ? undefined : (dom.onPointerDown as PointerEventHandler | undefined)}
       onKeyDown={inert ? undefined : (dom.onKeyDown as KeyboardEventHandler | undefined)}
       onContextMenu={inert ? undefined : (dom.onContextMenu as MouseEventHandler | undefined)}
@@ -207,7 +204,7 @@ function KitToolbarButton({
       }}
       className={text ? PANE_TOOLBAR_TEXT_BUTTON_CLASS : PANE_TOOLBAR_ICON_BUTTON_CLASS}
     >
-      {sizedIcon(icon, PANE_TOOLBAR_ICON_CLASS)}
+      {busy ? <Spinner size="sm" /> : sizedIcon(icon, PANE_TOOLBAR_ICON_CLASS)}
       {text}
     </button>
   );
@@ -493,6 +490,7 @@ function KitTabs({
   children,
   content: panels,
   density,
+  trailing,
   className,
   panelClassName,
   ...rest
@@ -513,6 +511,10 @@ function KitTabs({
       : undefined;
   const panel =
     typeof children === "function" ? node(children(active)) : (mapped ?? node(children));
+  // Nothing to show is no panel at all: an empty, focusable tabpanel is a dead
+  // tab stop, and the tabs then control nothing.
+  const hasPanel = panel !== null;
+  const end = content(trailing);
   const compact = oneOf(density, ["page", "strip"] as const) === "strip";
   // APG tabs with automatic activation: arrows and Home/End move and select in
   // one step, wrapping at the ends, and only the selected tab is a tab stop.
@@ -540,67 +542,90 @@ function KitTabs({
     revealTabInStrip(event.currentTarget, button, "smooth");
     handleChange?.(tab.value);
   };
+  const strip = (
+    // The app's document-tab cells, divided by hairlines: the selected cell is
+    // filled and carries the accent underline native tab groups use.
+    <div
+      role="tablist"
+      aria-label={str(ariaLabel) ?? ""}
+      onKeyDown={onStripKeyDown}
+      data-kit-tabs=""
+      className="flex min-w-0 flex-1 overflow-x-auto [scrollbar-width:none]"
+    >
+      {tabs.map((tab) => {
+        const selected = tab.value === active;
+        return (
+          <button
+            key={tab.value}
+            type="button"
+            role="tab"
+            id={tabId(tab.value)}
+            aria-selected={selected}
+            aria-controls={hasPanel ? panelId(tab.value) : undefined}
+            tabIndex={selected ? 0 : -1}
+            data-tab={tab.value}
+            data-document-tab=""
+            onClick={(event) => {
+              const strip = event.currentTarget.parentElement;
+              if (strip) revealTabInStrip(strip, event.currentTarget, "smooth");
+              handleChange?.(tab.value);
+            }}
+            className={cn(
+              documentTabClassName(selected),
+              "shrink-0 whitespace-nowrap",
+              compact ? "h-8 gap-1.5 px-3 text-xs" : "h-9 gap-2 px-4 text-sm",
+              selected && "bg-overlay-selected"
+            )}
+          >
+            {tab.icon === undefined
+              ? null
+              : sizedIcon(tab.icon, compact ? "h-3.5 w-3.5" : "h-4 w-4")}
+            <span>{tab.label}</span>
+            {tabBadge(tab.badge) ?? null}
+            {selected ? (
+              <span
+                aria-hidden="true"
+                data-kit-tab-indicator=""
+                className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-accent-primary"
+              />
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
+  );
   return (
     <div {...pickRootProps(rest)} className={cn("flex min-h-0 flex-col", str(className))}>
-      {/* The app's document-tab cells, divided by hairlines: the selected cell
-          is filled and carries the accent underline native tab groups use. */}
-      <div
-        role="tablist"
-        aria-label={str(ariaLabel) ?? ""}
-        onKeyDown={onStripKeyDown}
-        data-kit-tabs=""
-        className="flex shrink-0 overflow-x-auto border-b border-divider [scrollbar-width:none]"
-      >
-        {tabs.map((tab) => {
-          const selected = tab.value === active;
-          return (
-            <button
-              key={tab.value}
-              type="button"
-              role="tab"
-              id={tabId(tab.value)}
-              aria-selected={selected}
-              aria-controls={panelId(tab.value)}
-              tabIndex={selected ? 0 : -1}
-              data-tab={tab.value}
-              data-document-tab=""
-              onClick={(event) => {
-                const strip = event.currentTarget.parentElement;
-                if (strip) revealTabInStrip(strip, event.currentTarget, "smooth");
-                handleChange?.(tab.value);
-              }}
-              className={cn(
-                documentTabClassName(selected),
-                "shrink-0 whitespace-nowrap",
-                compact ? "h-8 gap-1.5 px-3 text-xs" : "h-9 gap-2 px-4 text-sm",
-                selected && "bg-overlay-selected"
-              )}
-            >
-              {tab.icon === undefined
-                ? null
-                : sizedIcon(tab.icon, compact ? "h-3.5 w-3.5" : "h-4 w-4")}
-              <span>{tab.label}</span>
-              {tabBadge(tab.badge) ?? null}
-              {selected ? (
-                <span
-                  aria-hidden="true"
-                  data-kit-tab-indicator=""
-                  className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-accent-primary"
-                />
-              ) : null}
-            </button>
-          );
-        })}
+      {/* One row whether or not there is a trailing slot, so showing or hiding
+          it never remounts the tabs out from under keyboard focus. The rule
+          runs under the whole row and the controls sit on the strip; outside
+          the tablist they are never a tab. */}
+      <div className="flex shrink-0 items-stretch border-b border-divider">
+        {strip}
+        {end === undefined ? null : (
+          <div
+            data-kit-tabs-trailing=""
+            // Quieter than the tabs at either density: it reports, they navigate.
+            className={cn(
+              "flex shrink-0 items-center gap-1 text-xs text-text-secondary",
+              compact ? "h-8 px-1.5" : "h-9 px-2"
+            )}
+          >
+            {end}
+          </div>
+        )}
       </div>
-      <div
-        role="tabpanel"
-        id={panelId(active)}
-        aria-labelledby={tabId(active)}
-        tabIndex={0}
-        className={cn("min-h-0 flex-1", str(panelClassName))}
-      >
-        {panel}
-      </div>
+      {hasPanel ? (
+        <div
+          role="tabpanel"
+          id={panelId(active)}
+          aria-labelledby={tabId(active)}
+          tabIndex={0}
+          className={cn("min-h-0 flex-1", str(panelClassName))}
+        >
+          {panel}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -673,6 +698,7 @@ function KitSettingsRow({
   error,
   isModified,
   onReset,
+  resetAriaLabel,
   id,
   ...rest
 }: PluginSettingsRowProps) {
@@ -694,6 +720,7 @@ function KitSettingsRow({
       error={content(error)}
       isModified={isModified === true}
       onReset={fn(onReset)}
+      resetAriaLabel={nonEmpty(resetAriaLabel)}
       id={nonEmpty(id)}
     />
   );

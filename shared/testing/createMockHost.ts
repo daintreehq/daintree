@@ -641,7 +641,7 @@ interface MockFsWatcher {
   pending: string | null;
 }
 
-/** Reject a postToPanel/broadcastToRenderer channel the way production does. */
+/** Refuse a registerHandler/postToPanel/broadcastToRenderer channel the way production does. */
 function isInvalidChannel(channel: unknown, allowEmpty: boolean): boolean {
   if (typeof channel !== "string") return true;
   if (!allowEmpty && channel.length === 0) return true;
@@ -1325,6 +1325,13 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       handlerOrOptions?: PluginTypedIpcHandler<TArgs, TResult> | PluginHandlerOptions,
       _options?: PluginHandlerOptions
     ): Promise<void> {
+      // The host's channel guard, thrown at the call as an in-process host
+      // throws it: a colon collides with the `{pluginId}:{channel}` transport.
+      // Production accepts an empty channel here, so only the colon and
+      // non-string checks apply.
+      if (isInvalidChannel(channel, true)) {
+        throw new Error(`Plugin channel must not contain colons: ${String(channel)}`);
+      }
       // Handle both overloads, each with an optional trailing options bag:
       // 1. registerHandler(channel, schema, handler, options?) — typed
       // 2. registerHandler(channel, handler, options?) — untyped

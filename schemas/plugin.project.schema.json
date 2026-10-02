@@ -253,6 +253,37 @@
                   ],
                   "additionalProperties": false
                 }
+              },
+              "toolbar": {
+                "maxItems": 3,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "actionId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    },
+                    "iconId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "status": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "actionId"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [

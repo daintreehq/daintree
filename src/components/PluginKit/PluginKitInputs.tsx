@@ -41,7 +41,7 @@ import { Spinner } from "@/components/ui/Spinner";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { keyBelongsToField, stepListboxCursor } from "@/hooks/useListboxCursor";
 import { cn } from "@/lib/utils";
-import { renderIconSource, resolvePluginKitIcon } from "./PluginKitIcons";
+import { renderIconSource } from "./PluginKitIcons";
 import { normalizeSelectOptions, type SelectEntry } from "./kitOptions";
 import {
   ALIGNS,
@@ -178,6 +178,14 @@ function decimalsOf(value: number): number {
   return dot < 0 ? 0 : text.length - dot - 1;
 }
 
+/** Every decimal a number carries, exponent forms included (1.5e-7 has 8). */
+function fractionDigits(value: number): number {
+  const match = /^-?\d+(?:\.(\d+))?(?:e([+-]\d+))?$/.exec(String(value));
+  if (!match) return 0;
+  const digits = (match[1]?.length ?? 0) - Number(match[2] ?? 0);
+  return Math.min(Math.max(digits, 0), 100);
+}
+
 const NUMBER_TEXT = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
 const GROUPED_NUMBER_TEXT = /^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$/;
 
@@ -196,6 +204,54 @@ export function parseNumberText(text: string, unit?: string): number | null | un
   if (!NUMBER_TEXT.test(body)) return undefined;
   const parsed = Number(body);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+const groupingFormats = new Map<string, { whole: Intl.NumberFormat; decimal: string }>();
+
+function groupingFormat(locale: string | undefined) {
+  const key = locale ?? "";
+  let format = groupingFormats.get(key);
+  if (!format) {
+    // Latin digits whatever the locale, so the grouped text and the text
+    // being edited are the same digits.
+    const options = { numberingSystem: "latn" } as const;
+    const decimal = new Intl.NumberFormat(locale, options)
+      .formatToParts(1.5)
+      .find((part) => part.type === "decimal")?.value;
+    format = {
+      whole: new Intl.NumberFormat(locale, { ...options, useGrouping: true }),
+      decimal: decimal ?? ".",
+    };
+    groupingFormats.set(key, format);
+  }
+  return format;
+}
+
+/**
+ * A NumberInput's value as it shows at rest. `places` fixes the decimals
+ * (`trimZeros` then drops the ones the value does not need); `grouping` puts
+ * the locale's thousands separators into those same digits, never rounding
+ * them again. Exported for tests.
+ */
+export function formatNumberField(
+  value: number | null,
+  options: { places?: number; grouping?: boolean; trimZeros?: boolean },
+  locale?: string
+): string {
+  if (value === null) return "";
+  const text = options.places === undefined ? String(value) : value.toFixed(options.places);
+  const parts = /^(-?)(\d+)(?:\.(\d+))?$/.exec(text);
+  // An exponent form (past 1e21, below 1e-6) is left exactly as JavaScript spells it.
+  if (!parts) return text;
+  const [, rawSign = "", whole = "0", rawFraction = ""] = parts;
+  const trim = options.trimZeros === true;
+  const fraction = trim ? rawFraction.replace(/0+$/, "") : rawFraction;
+  // Trimmed to nothing but zeros, a rounded-away negative reads "0", not "-0".
+  const sign = trim && fraction === "" && /^0+$/.test(whole) ? "" : rawSign;
+  if (options.grouping !== true) return `${sign}${whole}${fraction ? `.${fraction}` : ""}`;
+  const format = groupingFormat(locale);
+  const grouped = format.whole.format(BigInt(whole));
+  return `${sign}${grouped}${fraction ? `${format.decimal}${fraction}` : ""}`;
 }
 
 // The frame round the value, unit and buttons paints the field's one ring via
@@ -271,6 +327,8 @@ function KitNumberInput(props: PluginNumberInputProps) {
     max,
     step,
     precision,
+    grouping,
+    fixedDecimals,
     unit,
     stepper,
     placeholder,
@@ -287,12 +345,15 @@ function KitNumberInput(props: PluginNumberInputProps) {
   const lo = finite(min);
   const rawHi = finite(max);
   const hi = lo !== undefined && rawHi !== undefined && rawHi < lo ? undefined : rawHi;
+  const anyStep = step === "any";
   const stepBy = positive(step, Number.MAX_SAFE_INTEGER) ?? 1;
   const places =
     typeof precision === "number" && Number.isInteger(precision) && precision >= 0
       ? Math.min(precision, 12)
       : undefined;
-  const digits = places ?? Math.min(decimalsOf(stepBy), 12);
+  // `undefined` keeps a committed value as typed: only `step="any"` without a
+  // precision, so a quantity with many decimals is not cut to the step's.
+  const digits = places ?? (anyStep ? undefined : Math.min(decimalsOf(stepBy), 12));
   const suffix = nonEmpty(unit);
   const compact = density === "compact";
   const inert = disabled === true || readOnly === true;
@@ -303,9 +364,11 @@ function KitNumberInput(props: PluginNumberInputProps) {
   const current = controlled ? (finite(value) ?? null) : own;
   // The text while it is being edited; `null` shows the committed value.
   const [draft, setDraft] = useState<string | null>(null);
+  // Separators are for reading: the field is edited in plain digits.
+  const [focused, setFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const format = (n: number | null) =>
-    n === null ? "" : places !== undefined ? n.toFixed(places) : String(n);
+  const trimZeros = fixedDecimals === false;
+  const format = (n: number | null) => formatNumberField(n, { places, trimZeros });
   const parsed = draft === null ? current : parseNumberText(draft, suffix);
   // What stepping starts from, and so what the buttons' limits read: the
   // typed number when there is one.
@@ -316,7 +379,11 @@ function KitNumberInput(props: PluginNumberInputProps) {
     // Rounded, then held in bounds again: rounding can step past a bound that
     // is finer than the precision.
     const resolved =
-      next === null ? null : clamp(Number(clamp(next, lo, hi).toFixed(digits)), lo, hi);
+      next === null
+        ? null
+        : digits === undefined
+          ? clamp(next, lo, hi)
+          : clamp(Number(clamp(next, lo, hi).toFixed(digits)), lo, hi);
     if (resolved === current) return;
     if (!controlled) setOwn(resolved);
     onChange?.(resolved);
@@ -333,7 +400,15 @@ function KitNumberInput(props: PluginNumberInputProps) {
   };
   const stepBySteps = (steps: number) => {
     if (inert) return;
-    commit(shownValue === null ? (lo ?? 0) : shownValue + steps * stepBy);
+    if (shownValue === null) {
+      commit(lo ?? 0);
+      return;
+    }
+    const next = shownValue + steps * stepBy;
+    // A whole step cannot add decimals, so with no rounding of its own an
+    // "any" step drops the float noise the addition can leave (0.07 + 1),
+    // keeping every decimal the value had.
+    commit(digits === undefined ? Number(next.toFixed(fractionDigits(shownValue))) : next);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -456,9 +531,18 @@ function KitNumberInput(props: PluginNumberInputProps) {
         role="spinbutton"
         autoComplete="off"
         spellCheck={false}
-        value={draft ?? format(current)}
+        value={
+          draft ??
+          (grouping === true && !focused
+            ? formatNumberField(current, { places, trimZeros, grouping: true })
+            : format(current))
+        }
         onChange={(event) => setDraft(event.target.value)}
-        onBlur={commitDraft}
+        onFocus={() => setFocused(true)}
+        onBlur={() => {
+          setFocused(false);
+          commitDraft();
+        }}
         onKeyDown={onKeyDown}
         aria-valuenow={spokenValue}
         aria-valuemin={lo}
@@ -817,8 +901,10 @@ function Picker({
     const value = row.kind === "custom" ? row.value : row.option.value;
     const blocked = !selectable(row);
     const checked = row.kind === "option" && isChecked(value);
-    const Glyph =
-      row.kind === "option" && row.option.icon ? resolvePluginKitIcon(row.option.icon) : undefined;
+    const glyph =
+      row.kind === "option" && row.option.icon
+        ? renderIconSource(row.option.icon, "mt-px h-3.5 w-3.5 shrink-0 text-text-secondary")
+        : null;
     const description = row.kind === "option" ? row.option.description : undefined;
     return (
       <div
@@ -852,9 +938,7 @@ function Picker({
             aria-hidden="true"
           />
         )}
-        {Glyph ? (
-          <Glyph className="mt-px h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
-        ) : null}
+        {glyph}
         <span className="flex min-w-0 flex-col gap-0.5">
           <span className="truncate">
             {row.kind === "custom" ? `Use “${row.value}”` : row.option.label}
@@ -1002,12 +1086,12 @@ function hiddenInputs(
 }
 
 function OptionLabel({ option, label }: { option: PluginSelectOption | undefined; label: string }) {
-  const Glyph = option?.icon ? resolvePluginKitIcon(option.icon) : undefined;
+  const glyph = option?.icon
+    ? renderIconSource(option.icon, "h-3.5 w-3.5 shrink-0 text-text-secondary")
+    : null;
   return (
     <span className="flex min-w-0 flex-1 items-center gap-2">
-      {Glyph ? (
-        <Glyph className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
-      ) : null}
+      {glyph}
       <span className="truncate">{label}</span>
     </span>
   );

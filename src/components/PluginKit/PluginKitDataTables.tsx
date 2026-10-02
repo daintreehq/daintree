@@ -5,13 +5,14 @@ import {
   useState,
   type CSSProperties,
   type FocusEvent,
+  type HTMLAttributes,
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type Ref,
 } from "react";
-import { Columns3 } from "lucide-react";
+import { Columns3, Pencil } from "lucide-react";
 import {
   TableVirtuoso,
   type ItemProps,
@@ -75,18 +76,29 @@ import { useKitOverlayZClass } from "./kitScope";
 import {
   ALIGN_CLASS,
   activeMounted,
+  bodyCellClass,
   cellValue,
   DEFAULT_OVERSCAN_ROWS,
-  DEFAULT_ROW_PX,
+  DENSITY_ROW_PX,
+  DENSITY_TEXT_CLASS,
+  fromCellControl,
   GRID_FOCUS_RING,
+  headerCellClass,
+  IN_CELL_CONTROL_SELECTOR,
   layoutColumns,
   pluginKitLists,
   reactKey,
   readColumns,
+  readDensity,
   readSort,
+  rowRuleClass,
   SCROLLER_RING_INSET,
   SortGlyph,
+  totalContent,
+  TOTALS_CELL_CLASS,
+  totalsLabelFor,
   type TableColumn,
+  type TableDensity,
 } from "./PluginKitLists";
 import {
   buildTableItems,
@@ -94,11 +106,13 @@ import {
   declaredPx,
   selectionOrder,
   groupKeyOf,
+  readTotals,
   type DrawnGroup,
   type DrawnItem,
   type DrawnRow,
   type RowKey,
   type SubRows,
+  type TotalSpec,
 } from "./kitDataTableModel";
 import {
   errorMessage,
@@ -158,6 +172,31 @@ const CHECK_COLUMN_PX = 32;
 const MENU_COLUMN_PX = 32;
 const RESIZE_STEP_PX = 8;
 const RESIZE_BIG_STEP_PX = 32;
+
+/** A group header or loading row, as tall as a data row at the same density. */
+const DENSITY_BAND_CLASS: Record<TableDensity, string> = {
+  compact: "h-6",
+  default: "h-7",
+  comfortable: "h-8",
+};
+
+/** An editing cell's padding: the 24px field fills the row at every density. */
+const DENSITY_EDIT_CELL_CLASS: Record<TableDensity, string> = {
+  compact: "py-0 ps-1.5",
+  default: "py-0.5 ps-1.5",
+  comfortable: "py-1 ps-1.5",
+};
+
+/**
+ * The edit cue's pencil sits inside the cell's own 12px end padding, so an
+ * editable column keeps exactly the geometry it had before the cue existed and
+ * figures never move when it shows.
+ */
+/** How far Left or Right scrolls a wide table when the row has no tree or group step to take. */
+const HORIZONTAL_KEY_STEP_PX = 40;
+
+const EDIT_CUE_GLYPH_CLASS =
+  "kit-dt-edit-glyph pointer-events-none absolute end-0.5 top-1/2 h-2.5 w-2.5 -translate-y-1/2 text-text-secondary opacity-0 transition-opacity duration-150 ease-out motion-reduce:transition-none";
 
 type EditorKind = "text" | "number" | "select";
 
@@ -290,7 +329,8 @@ export function usesRichDataTable(props: object): boolean {
     Array.isArray(read("defaultHiddenColumns")) ||
     read("columnsMenu") === true ||
     nonEmpty(read("viewStateKey")) !== undefined ||
-    read("stickyFirstColumn") === true
+    read("stickyFirstColumn") === true ||
+    read("virtualize") === false
   ) {
     return true;
   }
@@ -335,6 +375,8 @@ interface RichContext {
   onRowClick: (index: number, event: MouseEvent<HTMLTableRowElement>) => void;
   menuIndex: number;
   openRowMenu: ((event: MouseEvent<HTMLElement>) => void) | undefined;
+  density: TableDensity;
+  striped: boolean;
 }
 
 function RichScroller({
@@ -351,7 +393,7 @@ function RichTableElement({ context, style, children }: TableProps & { context: 
       {...context.tableProps}
       data-scrolled-x={context.scrolledX ? "" : undefined}
       style={{ ...style, ...context.tableStyle }}
-      className={cn("text-xs", context.interactive && GRID_FOCUS_RING)}
+      className={cn(DENSITY_TEXT_CLASS[context.density], context.interactive && GRID_FOCUS_RING)}
     >
       {children}
     </table>
@@ -371,17 +413,16 @@ function RichTableBody({
   );
 }
 
-function RichTableRow({
-  context,
-  item: _item,
-  ...props
-}: ItemProps<DrawnItem> & { context: RichContext }) {
-  const index = props["data-index"];
+type RowAttributes = HTMLAttributes<HTMLTableRowElement> & {
+  [attribute: `data-${string}`]: string | undefined;
+};
+
+/** A drawn item's row attributes, whether the virtualiser or the plain table draws it. */
+function richRowProps(context: RichContext, index: number): RowAttributes {
   const item = context.items[index];
-  if (!item) return <tr {...props} />;
+  if (!item) return {};
   const active = context.interactive && index === context.activeIndex;
-  const common = {
-    ...props,
+  const common: RowAttributes = {
     id: context.interactive ? context.rowId(index) : undefined,
     "aria-rowindex": index + 2,
     "data-active": active ? "true" : undefined,
@@ -389,49 +430,53 @@ function RichTableRow({
   };
   const tree = context.treegrid;
   if (item.kind === "group") {
-    return (
-      <tr
-        {...common}
-        aria-level={1}
-        aria-expanded={!item.collapsed}
-        aria-selected={context.groupSelected(item) ?? undefined}
-        aria-posinset={item.posInSet}
-        aria-setsize={item.setSize}
-        data-group-row={item.groupKey}
-        className="cursor-pointer"
-      />
-    );
+    return {
+      ...common,
+      "aria-level": 1,
+      "aria-expanded": !item.collapsed,
+      "aria-selected": context.groupSelected(item) ?? undefined,
+      "aria-posinset": item.posInSet,
+      "aria-setsize": item.setSize,
+      "data-group-row": item.groupKey,
+      className: "cursor-pointer",
+    };
   }
   if (item.kind === "status") {
-    return (
-      <tr
-        {...common}
-        aria-level={tree ? item.level : undefined}
-        aria-posinset={tree ? 1 : undefined}
-        aria-setsize={tree ? 1 : undefined}
-        data-status-row={item.status}
-      />
-    );
+    return {
+      ...common,
+      "aria-level": tree ? item.level : undefined,
+      "aria-posinset": tree ? 1 : undefined,
+      "aria-setsize": tree ? 1 : undefined,
+      "data-status-row": item.status,
+    };
   }
   const selected = context.isSelected(item);
-  return (
-    <tr
-      {...common}
-      aria-level={tree ? item.level : undefined}
-      aria-posinset={tree ? item.posInSet : undefined}
-      aria-setsize={tree ? item.setSize : undefined}
-      aria-expanded={tree && item.expandable ? item.expanded : undefined}
-      aria-selected={context.interactive ? selected : undefined}
-      data-selected={!context.interactive && selected ? "true" : undefined}
-      data-hoverable={context.interactive ? "" : undefined}
-      data-state={index === context.menuIndex ? "open" : undefined}
-      className={cn(
-        PALETTE_ROW_CLASS,
-        context.interactive && [LIST_ROW_HOVER_CLASS, "cursor-pointer"],
-        context.openRowMenu && ROW_MENU_TARGET_CLASS
-      )}
-    />
-  );
+  return {
+    ...common,
+    "aria-level": tree ? item.level : undefined,
+    "aria-posinset": tree ? item.posInSet : undefined,
+    "aria-setsize": tree ? item.setSize : undefined,
+    "aria-expanded": tree && item.expandable ? item.expanded : undefined,
+    "aria-selected": context.interactive ? selected : undefined,
+    "data-selected": !context.interactive && selected ? "true" : undefined,
+    "data-hoverable": context.interactive ? "" : undefined,
+    // Pinned cells repeat the row's fills over their own; this tells them to stripe.
+    "data-striped": context.striped && index % 2 === 1 ? "" : undefined,
+    "data-state": index === context.menuIndex ? "open" : undefined,
+    className: cn(
+      PALETTE_ROW_CLASS,
+      context.interactive && [LIST_ROW_HOVER_CLASS, "cursor-pointer"],
+      context.openRowMenu && ROW_MENU_TARGET_CLASS
+    ),
+  };
+}
+
+function RichTableRow({
+  context,
+  item: _item,
+  ...props
+}: ItemProps<DrawnItem> & { context: RichContext }) {
+  return <tr {...props} {...richRowProps(context, props["data-index"])} />;
 }
 
 const RICH_COMPONENTS = {
@@ -440,6 +485,47 @@ const RICH_COMPONENTS = {
   TableBody: RichTableBody,
   TableRow: RichTableRow,
 };
+
+// Pinned as the virtualiser pins its own, so a plain table given a height
+// keeps its header and totals in view while its rows scroll.
+const PLAIN_HEAD_STYLE: CSSProperties = { position: "sticky", top: 0, zIndex: 2 };
+const PLAIN_FOOT_STYLE: CSSProperties = { position: "sticky", bottom: 0, zIndex: 1 };
+
+/** The plain table's sections: every drawn item at once, in the virtualiser's rows and cells. */
+function PlainTableSections({
+  context,
+  header,
+  footer,
+  renderItem,
+}: {
+  context: RichContext;
+  header: () => ReactNode;
+  footer: (() => ReactNode) | undefined;
+  renderItem: (index: number) => ReactNode;
+}) {
+  const body = (
+    <tbody>
+      {context.items.map((item, index) => (
+        <tr key={item.id} data-index={index} {...richRowProps(context, index)}>
+          {renderItem(index)}
+        </tr>
+      ))}
+    </tbody>
+  );
+  return (
+    <>
+      <thead style={PLAIN_HEAD_STYLE}>{header()}</thead>
+      {context.openRowMenu ? (
+        <ContextMenuTrigger asChild onContextMenu={context.openRowMenu}>
+          {body}
+        </ContextMenuTrigger>
+      ) : (
+        body
+      )}
+      {footer ? <tfoot style={PLAIN_FOOT_STYLE}>{footer()}</tfoot> : null}
+    </>
+  );
+}
 
 /**
  * Scrolls the cell being edited out from under the pinned column on the left
@@ -461,6 +547,19 @@ function revealEditCell(scroller: HTMLElement, rail: number): void {
   else if (box.right > right) scroller.scrollLeft += Math.min(box.right - right, box.left - left);
 }
 
+function focusVisible(element: Element): boolean {
+  try {
+    return element.matches(":focus-visible");
+  } catch {
+    return false;
+  }
+}
+
+function scrollRowIntoView(id: string): void {
+  const row = document.getElementById(id);
+  if (row && typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "nearest" });
+}
+
 function useControllable<T>(
   controlled: T | undefined,
   initial: () => T,
@@ -479,6 +578,7 @@ function CellEditor({
   column,
   edit,
   label,
+  density,
   onDraft,
   onCommit,
   onCancel,
@@ -486,6 +586,8 @@ function CellEditor({
   column: RichColumn;
   edit: CellEdit;
   label: string;
+  /** The field stays 24px tall; its type follows the table's. */
+  density: TableDensity;
   onDraft: (draft: string) => void;
   /** False when the draft was refused and the editor stays open. */
   onCommit: (draft: string, move: CellMove) => boolean;
@@ -539,7 +641,7 @@ function CellEditor({
           aria-label={label}
           density="compact"
           {...described}
-          className="h-6 w-full min-w-0"
+          className={cn("h-6 w-full min-w-0", DENSITY_TEXT_CLASS[density])}
         >
           <SelectValue />
         </SelectTrigger>
@@ -586,7 +688,13 @@ function CellEditor({
           }
         }}
         onBlur={(event) => settle(() => onCommit(event.currentTarget.value, null))}
-        className="h-6 w-full min-w-0 px-1.5 focus-visible:-outline-offset-2"
+        // The draft sits where the value did, so an end-aligned figure does not jump.
+        className={cn(
+          "h-6 w-full min-w-0 px-1.5 focus-visible:-outline-offset-2",
+          DENSITY_TEXT_CLASS[density],
+          ALIGN_CLASS[column.align],
+          column.numeric && "tabular-nums"
+        )}
       />
     );
   // One structure whether or not there is an error, so the field is never
@@ -733,6 +841,15 @@ function RichDataTable(props: PluginDataTableProps) {
     viewStateKey: _viewStateKey,
     stickyFirstColumn,
     onCellEdit,
+    virtualize,
+    density,
+    rowDividers,
+    striped,
+    totals,
+    totalsLabel,
+    editAffordance,
+    groupTotals,
+    groupCount,
     ...rest
   } = props;
   const rootAttributes = pickRootProps(rest);
@@ -746,7 +863,14 @@ function RichDataTable(props: PluginDataTableProps) {
   const cellEdit = fn(onCellEdit);
   const overlayZ = useKitOverlayZClass();
   const owner = useKitOwnerAttributes();
-  const rowPx = positive(estimatedRowSize, 10_000) ?? DEFAULT_ROW_PX;
+  const plain = virtualize === false;
+  const size = readDensity(density);
+  const dividers = rowDividers === true;
+  const stripes = striped === true;
+  const editCue = oneOf(editAffordance, ["hover", "none"] as const) !== "none";
+  const footTotals = readTotals(totals);
+  const subtotals = readTotals(groupTotals);
+  const rowPx = positive(estimatedRowSize, 10_000) ?? DENSITY_ROW_PX[size];
   const keyField = typeof rowKey === "string" ? rowKey : undefined;
   const keyFn = typeof rowKey === "function" ? rowKey : undefined;
   const keyOf = (row: unknown, index: number): RowKey => {
@@ -883,6 +1007,8 @@ function RichDataTable(props: PluginDataTableProps) {
 
   const editableColumns = visible.filter((column) => column.editable !== null);
   const canEdit = editableColumns.length > 0;
+  const totalCell = (spec: TotalSpec, over: readonly unknown[], column: RichColumn): ReactNode =>
+    attempt(() => totalContent(spec, over, column), null);
   const interactive =
     rowClick !== undefined || menuFor !== undefined || canSelect || tree || !!groupOf || canEdit;
 
@@ -892,11 +1018,21 @@ function RichDataTable(props: PluginDataTableProps) {
   const baseId = useId();
   const rowId = (index: number) => `${baseId}row-${index}`;
   const handle = useRef<TableVirtuosoHandle>(null);
-  const [range, setRange] = useState<ListRange | null>(null);
+  const [virtualRange, setRange] = useState<ListRange | null>(null);
+  // Every row is mounted without the virtualiser, whatever range it last reported.
+  const range = plain ? null : virtualRange;
   const [revealIndex, setRevealIndex] = useState(-1);
+  // Without the virtualiser every row is in the DOM, so the row itself is
+  // scrolled into whatever scrolls the table.
+  const revealRow = (index: number) => {
+    if (plain) scrollRowIntoView(`${baseId}row-${index}`);
+    else handle.current?.scrollIntoView({ index });
+  };
   useEffect(() => {
-    if (revealIndex >= 0) handle.current?.scrollIntoView({ index: revealIndex });
-  }, [revealIndex]);
+    if (revealIndex < 0) return;
+    if (plain) scrollRowIntoView(`${baseId}row-${revealIndex}`);
+    else handle.current?.scrollIntoView({ index: revealIndex });
+  }, [revealIndex, plain, baseId]);
   const moveCursor = (index: number, reveal = true) => {
     const item = items[index];
     if (!item) return;
@@ -905,6 +1041,14 @@ function RichDataTable(props: PluginDataTableProps) {
   };
 
   const [scroller, setScroller] = useState<HTMLElement | null>(null);
+  // Left and Right belong to the tree and groups, so where neither has a use
+  // for them they scroll a table wider than its pane, which a grid's single
+  // tab stop would otherwise leave out of keyboard reach.
+  const scrollAcross = (towardEnd: 1 | -1) => {
+    if (!scroller || scroller.scrollWidth <= scroller.clientWidth) return;
+    const rtl = getComputedStyle(scroller).direction === "rtl";
+    scroller.scrollBy({ left: towardEnd * (rtl ? -1 : 1) * HORIZONTAL_KEY_STEP_PX });
+  };
   const [available, setAvailable] = useState<number | null>(null);
   const [scrolledX, setScrolledX] = useState(false);
   useEffect(() => {
@@ -1116,7 +1260,7 @@ function RichDataTable(props: PluginDataTableProps) {
 
   const onRowClickAt = (index: number, event: MouseEvent<HTMLTableRowElement>) => {
     const item = items[index];
-    if (!item || !interactive) return;
+    if (!item || !interactive || fromCellControl(event)) return;
     moveCursor(index, false);
     if (item.kind === "group") {
       toggleGroup(item.groupKey, item.collapsed);
@@ -1219,6 +1363,7 @@ function RichDataTable(props: PluginDataTableProps) {
       else if (item.kind === "group") moveCursor(Math.min(from + 1, last));
       else if (item.kind === "row" && item.expandable && !item.expanded) toggleRow(item, true);
       else if (item.kind === "row" && item.expanded) moveCursor(Math.min(from + 1, last));
+      else scrollAcross(1);
       return;
     }
     if (event.key === "ArrowLeft") {
@@ -1241,6 +1386,7 @@ function RichDataTable(props: PluginDataTableProps) {
               )
             : -1;
       if (parentIndex >= 0) moveCursor(parentIndex);
+      else scrollAcross(-1);
       return;
     }
     if (item.kind === "group" && (event.key === "Enter" || event.key === " ")) {
@@ -1277,11 +1423,13 @@ function RichDataTable(props: PluginDataTableProps) {
 
   const label = str(ariaLabel) ?? "";
   const role = tree || groupOf ? "treegrid" : "grid";
+  // The header, every drawn item, and the totals row.
+  const rowCount = items.length + 1 + (footTotals ? 1 : 0);
   const tableProps: Record<string, unknown> = interactive
     ? {
         role,
         "aria-label": label,
-        "aria-rowcount": items.length + 1,
+        "aria-rowcount": rowCount,
         "aria-colcount": railIndex ?? allColumns.length + (canSelect ? 1 : 0),
         "aria-multiselectable": canSelect ? true : undefined,
         tabIndex: 0,
@@ -1292,12 +1440,15 @@ function RichDataTable(props: PluginDataTableProps) {
           if (event.target !== event.currentTarget || items.length === 0) return;
           const at = activeIndex < 0 ? 0 : activeIndex;
           if (activeIndex < 0) moveCursor(0, false);
-          if (!activeMounted(at, range)) handle.current?.scrollIntoView({ index: at });
+          // A plain table's rows are all mounted but may be scrolled away; it
+          // reveals the cursor for keyboard focus only, so a click is not
+          // answered by a jump to the row the cursor was on before it.
+          if (plain ? focusVisible(event.currentTarget) : !activeMounted(at, range)) revealRow(at);
         },
       }
     : {
         "aria-label": label,
-        "aria-rowcount": items.length + 1,
+        "aria-rowcount": rowCount,
         "aria-colcount": railIndex ?? allColumns.length + (canSelect ? 1 : 0),
       };
 
@@ -1322,11 +1473,13 @@ function RichDataTable(props: PluginDataTableProps) {
     onRowClick: onRowClickAt,
     menuIndex: menu.open ? menu.index : -1,
     openRowMenu: menuFor ? openRowMenu : undefined,
+    density: size,
+    striped: stripes,
   };
 
   if (data.length === 0 && hasContent(empty)) {
     return (
-      <div {...rootAttributes} className={cn("h-full", str(className))}>
+      <div {...rootAttributes} className={cn(!plain && "h-full", str(className))}>
         {node(empty)}
       </div>
     );
@@ -1399,11 +1552,7 @@ function RichDataTable(props: PluginDataTableProps) {
             }
             {...stickyEdge(column)}
             style={{ ...(width === undefined ? null : { width }), ...stickyStyle(column) }}
-            className={cn(
-              "relative border-b border-divider bg-surface-canvas px-3 py-1.5 font-medium text-text-secondary",
-              ALIGN_CLASS[column.align],
-              stickyClass(column)
-            )}
+            className={cn("relative", headerCellClass(column, size), stickyClass(column))}
           >
             {column.sortable && handleSort ? (
               <button
@@ -1514,15 +1663,32 @@ function RichDataTable(props: PluginDataTableProps) {
     return groupKey === "" ? "None" : groupKey;
   };
 
-  const renderGroup = (item: DrawnGroup) => {
+  // A group's subtotals start at the first column after the first that has
+  // one; the label runs across every column before it.
+  const subtotalFrom = subtotals
+    ? visible.findIndex((column, index) => index > 0 && subtotals.has(column.id))
+    : -1;
+
+  const renderGroup = (item: DrawnGroup, index: number) => {
     const keys = groupKeys(item);
     const state = groupState(item);
     const label = labelFor(item.groupKey, item.rows);
-    return (
-      <td colSpan={fullSpan} className="h-7 border-b border-divider bg-surface p-0">
+    const rules = rowRuleClass(index, dividers, false);
+    const band = cn(DENSITY_BAND_CLASS[size], "border-b border-divider bg-surface", rules);
+    const head = (
+      <td
+        key={"\u0000group"}
+        colSpan={subtotalFrom > 0 ? subtotalFrom + (canSelect ? 1 : 0) : fullSpan}
+        className={cn(band, "p-0")}
+      >
         {/* The group's box sits in the checkbox column, over its rows' boxes,
             and its chevron where the rows' own chevrons start. */}
-        <div className="sticky left-0 flex h-7 w-max max-w-full items-center">
+        <div
+          className={cn(
+            "sticky left-0 flex w-max max-w-full items-center",
+            DENSITY_BAND_CLASS[size]
+          )}
+        >
           {canSelect ? (
             <span className="flex w-8 shrink-0 items-center justify-center">
               {keys.length > 0 ? (
@@ -1548,19 +1714,56 @@ function RichDataTable(props: PluginDataTableProps) {
               onToggle={() => toggleGroup(item.groupKey, item.collapsed)}
             />
             <span className={cn(LIST_LABEL_CLASS, "min-w-0 truncate")}>{label}</span>
-            <span className="text-3xs font-medium tabular-nums text-text-secondary">
-              {item.rows.length}
-            </span>
+            {groupCount === false ? null : (
+              <span className="text-3xs font-medium tabular-nums text-text-secondary">
+                {item.rows.length}
+              </span>
+            )}
           </span>
         </div>
       </td>
     );
+    if (subtotalFrom <= 0 || !subtotals) return head;
+    return [
+      head,
+      ...visible.slice(subtotalFrom).map((column) => {
+        const spec = subtotals.get(column.id);
+        return (
+          <td
+            key={column.id}
+            aria-colindex={colIndex(column)}
+            className={cn(band, bodyCellClass(column, size), "font-medium")}
+          >
+            {spec ? totalCell(spec, item.rows, column) : null}
+          </td>
+        );
+      }),
+      ...(layout.filler
+        ? [<td key={"\u0000filler"} aria-hidden="true" className={cn(band, "p-0")} />]
+        : []),
+      ...(trailing
+        ? [
+            <td
+              key={"\u0000menu"}
+              aria-colindex={railIndex}
+              style={{ right: 0 }}
+              className={cn("kit-dt-sticky", band, "p-0")}
+            />,
+          ]
+        : []),
+    ];
   };
 
-  const renderStatus = (item: Extract<DrawnItem, { kind: "status" }>) => (
-    <td colSpan={fullSpan} className="h-7 p-0">
+  const renderStatus = (item: Extract<DrawnItem, { kind: "status" }>, index: number) => (
+    <td
+      colSpan={fullSpan}
+      className={cn(DENSITY_BAND_CLASS[size], "p-0", rowRuleClass(index, dividers, stripes))}
+    >
       <div
-        className="sticky left-0 flex h-7 w-max max-w-full items-center gap-1.5 px-3 text-text-secondary"
+        className={cn(
+          "sticky left-0 flex w-max max-w-full items-center gap-1.5 px-3 text-text-secondary",
+          DENSITY_BAND_CLASS[size]
+        )}
         style={{ paddingInlineStart: 12 + leading + item.depth * TREE_INDENT_PX + 20 }}
       >
         {item.status === "loading" ? (
@@ -1586,11 +1789,13 @@ function RichDataTable(props: PluginDataTableProps) {
     </td>
   );
 
-  const renderCell = (item: DrawnRow, column: RichColumn, columnIndex: number) => {
+  const renderCell = (item: DrawnRow, column: RichColumn, columnIndex: number, rules: string) => {
     const editing = edit !== null && edit.key === item.key && edit.columnId === column.id;
     const pendingDraft = pending[cellId(item.key, column.id)]?.draft;
     const failure = failures[cellId(item.key, column.id)];
     const canEditCell = column.editable !== null && column.editable(item.row);
+    const cue =
+      editCue && canEditCell && !editing && pendingDraft === undefined && failure === undefined;
     let content: ReactNode;
     if (editing) {
       content = (
@@ -1598,6 +1803,7 @@ function RichDataTable(props: PluginDataTableProps) {
           column={column}
           edit={edit}
           label={`Edit ${column.menuLabel}`}
+          density={size}
           onDraft={(draft) => setEdit({ ...edit, draft })}
           onCommit={commitEdit}
           onCancel={cancelEdit}
@@ -1644,6 +1850,7 @@ function RichDataTable(props: PluginDataTableProps) {
         onDoubleClick={
           canEditCell && !editing
             ? (event) => {
+                if (fromCellControl(event)) return;
                 event.stopPropagation();
                 moveCursor(
                   items.findIndex((candidate) => candidate.id === item.id),
@@ -1654,9 +1861,10 @@ function RichDataTable(props: PluginDataTableProps) {
             : undefined
         }
         className={cn(
-          "overflow-hidden text-ellipsis whitespace-nowrap px-3 py-1.5 text-text-primary",
-          editing && "py-0.5 pl-1.5 pr-1.5",
-          ALIGN_CLASS[column.align],
+          bodyCellClass(column, size),
+          editing ? [DENSITY_EDIT_CELL_CLASS[size], "pe-1.5"] : null,
+          cue && "kit-dt-edit relative",
+          rules,
           stickyClass(column)
         )}
       >
@@ -1678,6 +1886,7 @@ function RichDataTable(props: PluginDataTableProps) {
         ) : (
           content
         )}
+        {cue ? <Pencil aria-hidden="true" className={EDIT_CUE_GLYPH_CLASS} /> : null}
       </td>
     );
   };
@@ -1685,9 +1894,10 @@ function RichDataTable(props: PluginDataTableProps) {
   const renderItem = (index: number) => {
     const item = items[index];
     if (!item) return null;
-    if (item.kind === "group") return renderGroup(item);
-    if (item.kind === "status") return renderStatus(item);
+    if (item.kind === "group") return renderGroup(item, index);
+    if (item.kind === "status") return renderStatus(item, index);
     const selected = canSelect && selection.isSelected(item.key);
+    const rules = rowRuleClass(index, dividers, stripes);
     return [
       ...(canSelect
         ? [
@@ -1702,7 +1912,7 @@ function RichDataTable(props: PluginDataTableProps) {
                 if (event.shiftKey) selection.selectRange(item.key, { additive: true });
                 else selection.toggle(item.key);
               }}
-              className={cn("p-0", sticky && "kit-dt-sticky")}
+              className={cn("p-0", rules, sticky && "kit-dt-sticky")}
             >
               {selectableRow(item.row) ? (
                 <span className="flex h-full items-center justify-center">
@@ -1712,8 +1922,10 @@ function RichDataTable(props: PluginDataTableProps) {
             </td>,
           ]
         : []),
-      ...visible.map((column, columnIndex) => renderCell(item, column, columnIndex)),
-      ...(layout.filler ? [<td key={"\u0000filler"} aria-hidden="true" className="p-0" />] : []),
+      ...visible.map((column, columnIndex) => renderCell(item, column, columnIndex, rules)),
+      ...(layout.filler
+        ? [<td key={"\u0000filler"} aria-hidden="true" className={cn("p-0", rules)} />]
+        : []),
       // Under the Columns button the body keeps the same opaque edge, so a
       // column scrolling beneath it is cut on the same line in every row.
       ...(trailing
@@ -1722,14 +1934,92 @@ function RichDataTable(props: PluginDataTableProps) {
               key={"\u0000menu"}
               aria-colindex={railIndex}
               style={{ right: 0 }}
-              className="kit-dt-sticky p-0"
+              className={cn("kit-dt-sticky p-0", rules)}
             />,
           ]
         : []),
     ];
   };
 
-  const table = (
+  const totalsLabelAt = footTotals ? totalsLabelFor(visible, footTotals, totalsLabel) : null;
+  const footer = footTotals
+    ? () => (
+        <tr aria-rowindex={rowCount} data-totals-row="">
+          {canSelect ? (
+            <td
+              aria-colindex={1}
+              style={sticky ? { left: 0 } : undefined}
+              className={cn(TOTALS_CELL_CLASS, "p-0", sticky && "kit-dt-sticky")}
+            />
+          ) : null}
+          {visible.map((column) => {
+            const spec = footTotals.get(column.id);
+            return (
+              <td
+                key={column.id}
+                {...stickyEdge(column)}
+                aria-colindex={colIndex(column)}
+                style={stickyStyle(column)}
+                className={cn(bodyCellClass(column, size), TOTALS_CELL_CLASS, stickyClass(column))}
+              >
+                {spec
+                  ? totalCell(spec, data, column)
+                  : column.id === totalsLabelAt?.columnId
+                    ? totalsLabelAt.label
+                    : null}
+              </td>
+            );
+          })}
+          {layout.filler ? (
+            <td aria-hidden="true" className={cn(TOTALS_CELL_CLASS, "p-0")} />
+          ) : null}
+          {trailing ? (
+            <td
+              aria-colindex={railIndex}
+              style={{ right: 0 }}
+              className={cn(TOTALS_CELL_CLASS, "kit-dt-sticky p-0")}
+            />
+          ) : null}
+        </tr>
+      )
+    : undefined;
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    // Rows never take focus (they unmount as they scroll), so a click in
+    // the body pulls it to the grid and the keys keep working.
+    const target = event.target instanceof Element ? event.target : null;
+    if (!interactive || !target?.closest("tbody")) return;
+    if (target.closest(IN_CELL_CONTROL_SELECTOR)) return;
+    if (edit) return;
+    requestAnimationFrame(() => {
+      // A double-click opens an editor between this press and the frame;
+      // pulling focus to the grid then would blur and commit it.
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active.closest("td")) return;
+      focusGrid();
+    });
+  };
+
+  // Every row drawn, as tall as its rows: the table sizes to its content and
+  // only scrolls sideways, when its columns are wider than the pane.
+  const table = plain ? (
+    <div
+      {...rootAttributes}
+      ref={setScroller}
+      tabIndex={interactive || available === null || minTableWidth <= available ? undefined : 0}
+      className={cn(SCROLLER_RING_INSET, "overflow-x-auto", str(className))}
+      onPointerDown={onPointerDown}
+    >
+      <RichTableElement context={context} style={{ borderSpacing: 0 }}>
+        <PlainTableSections
+          context={context}
+          header={header}
+          footer={footer}
+          renderItem={renderItem}
+        />
+      </RichTableElement>
+    </div>
+  ) : (
     <TableVirtuoso
       {...rootAttributes}
       ref={handle}
@@ -1743,24 +2033,11 @@ function RichDataTable(props: PluginDataTableProps) {
       increaseViewportBy={DEFAULT_OVERSCAN_ROWS * rowPx}
       computeItemKey={(index) => items[index]?.id ?? index}
       fixedHeaderContent={header}
+      fixedFooterContent={footer}
       rangeChanged={setRange}
       itemContent={(index) => renderItem(index)}
       endReached={endReached ? (index) => endReached(index) : undefined}
-      onPointerDown={(event: ReactPointerEvent<HTMLDivElement>) => {
-        // Rows never take focus (they unmount as they scroll), so a click in
-        // the body pulls it to the grid and the keys keep working.
-        const target = event.target instanceof Element ? event.target : null;
-        if (!interactive || !target?.closest("tbody")) return;
-        if (target.closest("input, button, select, textarea, [role=combobox]")) return;
-        if (edit) return;
-        requestAnimationFrame(() => {
-          // A double-click opens an editor between this press and the frame;
-          // pulling focus to the grid then would blur and commit it.
-          const active = document.activeElement;
-          if (active instanceof HTMLElement && active.closest("td")) return;
-          focusGrid();
-        });
-      }}
+      onPointerDown={onPointerDown}
     />
   );
   const withStatus = (

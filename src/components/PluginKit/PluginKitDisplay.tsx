@@ -1,12 +1,21 @@
-import { useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref } from "react";
+import {
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  type Ref,
+} from "react";
 import { X } from "lucide-react";
 import { Virtuoso, type ItemProps, type ListProps, type ScrollerProps } from "react-virtuoso";
 import type {
   PluginAvatarGroupProps,
+  PluginChartColor,
   PluginDiffStatProps,
   PluginFilterChipProps,
   PluginHighlightedTextProps,
   PluginMeterProps,
+  PluginSegmentedBarProps,
   PluginSeverity,
   PluginTimelineItem,
   PluginTimelineProps,
@@ -22,6 +31,7 @@ import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
 import { formatAbsoluteDate } from "@/utils/timeAgo";
 import {
+  cssLength,
   field,
   fn,
   hasContent,
@@ -34,6 +44,15 @@ import {
   str,
   PluginStyleScope,
 } from "./kitProps";
+import {
+  COLORS,
+  Swatch,
+  chartColor,
+  foldParts,
+  share,
+  slotColors,
+  valueFormats,
+} from "./PluginKitCharts";
 import { renderIconSource } from "./PluginKitIcons";
 import { pluginKitOverlays } from "./PluginKitOverlays";
 import { severityGlyph } from "./PluginKitPatterns";
@@ -331,6 +350,96 @@ export function meterTone(ratio: number, thresholds: unknown): MeterTone {
   return "neutral";
 }
 
+interface TrackMark {
+  key: string;
+  /** Where along the track, 0 to 1. */
+  at: number;
+  value: number;
+  label: string;
+  head: boolean;
+}
+
+/** Marks from untyped JS on a track `limit` long: a finite value and a label each, clamped onto the track. */
+function readMarks(value: unknown, limit: number): TrackMark[] {
+  if (!Array.isArray(value)) return [];
+  const out: TrackMark[] = [];
+  value.forEach((entry: unknown, index) => {
+    if (typeof entry !== "object" || entry === null) return;
+    const at = finiteNumber(field(entry, "value"));
+    const label = nonEmpty(field(entry, "label"));
+    if (at === undefined || label === undefined) return;
+    const clamped = Math.min(limit, Math.max(0, at));
+    out.push({
+      key: `${index}`,
+      at: limit > 0 ? clamped / limit : 0,
+      value: clamped,
+      label,
+      head: field(entry, "head") === true,
+    });
+  });
+  return out;
+}
+
+type TrackSize = "sm" | "md";
+
+const TRACK_HEIGHT: Record<TrackSize, string> = { sm: "h-1.5", md: "h-2.5" };
+// The track's height plus 4px above and below.
+const MARK_PX: Record<TrackSize, number> = { sm: 14, md: 18 };
+const MARK_BOX: Record<TrackSize, string> = { sm: "h-4", md: "h-5" };
+const MARK_BOX_W = 9;
+
+// A 3px rule with an optional 7px cap, outlined in the panel's surface so it
+// stands off whatever fill runs under it: the stroke paints first and the
+// fill over its inner half, leaving a 1px halo.
+function markPath(height: number, head: boolean): string {
+  const top = 1;
+  const bottom = top + height;
+  const stem = `M3,${top}H6V${bottom}H3Z`;
+  return head ? `${stem}M1,${top}H8V${top + 2.5}H1Z` : stem;
+}
+
+function TrackMarks({ marks, size }: { marks: TrackMark[]; size: TrackSize }) {
+  const overlayZ = useKitOverlayZClass();
+  const height = MARK_PX[size];
+  return (
+    <>
+      {marks.map((mark) => (
+        <Tooltip key={mark.key}>
+          <TooltipTrigger asChild>
+            <span
+              aria-hidden="true"
+              data-track-mark={mark.head ? "head" : ""}
+              className={cn(
+                "absolute top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center",
+                MARK_BOX[size]
+              )}
+              style={{ left: `${mark.at * 100}%`, width: MARK_BOX_W }}
+            >
+              <svg width={MARK_BOX_W} height={height + 2} className="block shrink-0">
+                <path
+                  d={markPath(height, mark.head)}
+                  strokeWidth={2}
+                  strokeLinejoin="round"
+                  paintOrder="stroke"
+                  className="fill-text-primary stroke-surface-panel"
+                />
+              </svg>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top" className={overlayZ}>
+            {mark.label}
+          </TooltipContent>
+        </Tooltip>
+      ))}
+    </>
+  );
+}
+
+/** The marks in words, for a track's spoken value: "Target at 80%". */
+function marksText(marks: TrackMark[], at: (mark: TrackMark) => string): string {
+  return marks.map((mark) => `${mark.label} at ${at(mark)}`).join(", ");
+}
+
 // The quota meters' instrument (settings, rate limits): a heavier track than
 // ProgressBar's, because a level is read at rest where progress is watched.
 function KitMeter({
@@ -340,6 +449,9 @@ function KitMeter({
   showLabel,
   valueText,
   thresholds,
+  marks,
+  readout: showReadout,
+  readoutWidth,
   className,
   ...rest
 }: PluginMeterProps) {
@@ -351,13 +463,24 @@ function KitMeter({
   const text = nonEmpty(valueText) ?? `${Math.round(ratio * 100)}%`;
   const glyph = tone === "neutral" ? null : severityGlyph(tone, "h-3 w-3");
   const stacked = showLabel !== false;
-  const readout = (
-    <span className="inline-flex min-w-0 shrink-0 items-center gap-1 text-2xs tabular-nums text-text-secondary">
-      {glyph}
-      <span className="truncate">{text}</span>
-    </span>
-  );
-  const bar = (
+  const visible = showReadout !== false;
+  const width = cssLength(readoutWidth);
+  const references = readMarks(marks, limit);
+  const spoken = tone === "neutral" ? text : `${text}, ${TONE_WORD[tone].toLowerCase()}`;
+  const readout =
+    visible || glyph ? (
+      <span
+        className={cn(
+          "inline-flex min-w-0 shrink-0 items-center gap-1 text-2xs tabular-nums text-text-secondary",
+          width !== undefined && "justify-end"
+        )}
+        style={width !== undefined && visible ? { width } : undefined}
+      >
+        {glyph}
+        {visible ? <span className="truncate">{text}</span> : null}
+      </span>
+    ) : null;
+  const track = (
     <div
       {...pickRootProps(rest, { aria: true })}
       role="meter"
@@ -365,11 +488,15 @@ function KitMeter({
       aria-valuemin={0}
       aria-valuemax={limit}
       aria-valuenow={amount}
-      aria-valuetext={tone === "neutral" ? text : `${text}, ${TONE_WORD[tone].toLowerCase()}`}
+      aria-valuetext={
+        references.length > 0
+          ? `${spoken}; ${marksText(references, (mark) => `${Math.round(mark.at * 100)}%`)}`
+          : spoken
+      }
       data-tone={tone}
       className={cn(
         "h-1.5 overflow-hidden rounded-full bg-overlay-emphasis",
-        stacked ? "w-full" : "min-w-0 flex-1"
+        stacked || references.length > 0 ? "w-full" : "min-w-0 flex-1"
       )}
     >
       <div
@@ -381,6 +508,16 @@ function KitMeter({
       />
     </div>
   );
+  // The marks rise past the track's clipped edge, so they sit in a box beside it.
+  const bar =
+    references.length > 0 ? (
+      <div className={cn("relative", stacked ? "w-full" : "min-w-0 flex-1")}>
+        {track}
+        <TrackMarks marks={references} size="sm" />
+      </div>
+    ) : (
+      track
+    );
   if (!stacked) {
     return (
       <div className={cn("flex min-w-0 items-center gap-2", str(className))}>
@@ -689,11 +826,197 @@ function KitTimeline({
   );
 }
 
+interface BarPart {
+  key: string;
+  label: string;
+  value: number;
+  color: string;
+  /** The value in words, or the formatted value and share. */
+  text: string;
+  /** The formatted value, `undefined` when the plugin's `valueText` stands in. */
+  figure: string | undefined;
+  share: string | undefined;
+}
+
+/**
+ * A SegmentedBar's parts from untyped JS: positive finite sizes only, folded
+ * past the fifth as a DonutChart's are, and coloured from the charts' slots
+ * around any pinned colours. `whole` is the larger of `total` and the parts'
+ * sum, so the bar never overflows and no share passes 100%. Exported for tests.
+ */
+export function segmentedParts(
+  segments: unknown,
+  total: unknown,
+  format: (value: number) => string
+): { parts: BarPart[]; sum: number; whole: number } {
+  const valid: {
+    value: number;
+    label: string;
+    pin: PluginChartColor | undefined;
+    valueText: string | undefined;
+  }[] = [];
+  let running = 0;
+  if (Array.isArray(segments)) {
+    for (const entry of segments as unknown[]) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const value = finiteNumber(field(entry, "value"));
+      // A part whose size would push the sum past what a number holds has no share to draw.
+      if (value === undefined || value <= 0 || !Number.isFinite(running + value)) continue;
+      running += value;
+      valid.push({
+        value,
+        label: str(field(entry, "label")) ?? "",
+        pin: oneOf(field(entry, "color"), COLORS),
+        valueText: nonEmpty(field(entry, "valueText")),
+      });
+    }
+  }
+  const { named, rest } = foldParts(valid);
+  const hues = slotColors(named.map((part) => part.pin));
+  const drawn = named.map((part, index) => ({
+    key: String(index),
+    label: part.label,
+    value: part.value,
+    color: chartColor(hues[index] ?? "neutral"),
+    valueText: part.valueText,
+  }));
+  if (rest !== null) {
+    drawn.push({
+      key: "other",
+      label: "Other",
+      value: rest,
+      color: chartColor("neutral"),
+      valueText: undefined,
+    });
+  }
+  const sum = drawn.reduce((acc, part) => acc + part.value, 0);
+  const whole = Math.max(positive(total, Number.MAX_VALUE) ?? 0, sum);
+  const parts = drawn.map((part) => {
+    const portion = share(part.value, whole);
+    const figure = part.valueText === undefined ? format(part.value) : undefined;
+    return {
+      key: part.key,
+      label: part.label,
+      value: part.value,
+      color: part.color,
+      text: part.valueText ?? `${figure}, ${portion}`,
+      figure,
+      share: part.valueText === undefined ? portion : undefined,
+    };
+  });
+  return { parts, sum, whole };
+}
+
+/** A part's share of the track, and its colour as the fill variable so forced colours can replace it. */
+function segmentStyle(
+  grow: number,
+  color: string
+): CSSProperties & Record<"--kit-segment", string> {
+  return { flex: `${grow} 1 0px`, "--kit-segment": color };
+}
+
+function KitSegmentedBar({
+  segments,
+  label,
+  showLabel,
+  total,
+  formatValue,
+  legend,
+  marks,
+  size,
+  className,
+  ...rest
+}: PluginSegmentedBarProps) {
+  const overlayZ = useKitOverlayZClass();
+  const name = nonEmpty(label) ?? "Parts";
+  const format = valueFormats(formatValue).full;
+  const { parts, sum, whole } = segmentedParts(segments, total, format);
+  const height = oneOf(size, ["sm", "md"] as const) ?? "sm";
+  const references = readMarks(marks, whole);
+  const empty = whole - sum;
+  const pieces = parts.map((part) => (part.label ? `${part.label} ${part.text}` : part.text));
+  if (parts.length === 0) pieces.push("no data");
+  if (empty > 0 && parts.length > 0) pieces.push(`of ${format(whole)}`);
+  const summary = `${name}: ${pieces.join("; ")}${
+    references.length > 0 ? `; ${marksText(references, (mark) => format(mark.value))}` : ""
+  }`;
+  const stacked = showLabel !== false;
+  // Grow factors that sum below 1 leave part of the track unclaimed, so each
+  // is its percentage of the whole rather than the raw value.
+  const grow = (value: number) => (value / whole) * 100;
+  return (
+    <div className={cn("flex min-w-0 flex-col gap-1.5", str(className))}>
+      {stacked ? (
+        <span aria-hidden="true" className="min-w-0 truncate text-xs font-medium text-text-primary">
+          {name}
+        </span>
+      ) : null}
+      <div className="relative w-full">
+        <div
+          {...pickRootProps(rest, { aria: true })}
+          role="img"
+          aria-label={summary}
+          data-segmented-track=""
+          className={cn(
+            "flex w-full gap-px overflow-hidden rounded-full forced-colors:outline forced-colors:outline-1 forced-colors:outline-[CanvasText]",
+            TRACK_HEIGHT[height]
+          )}
+        >
+          {parts.map((part) => (
+            <Tooltip key={part.key}>
+              <TooltipTrigger asChild>
+                <span
+                  data-segment={part.key}
+                  className="h-full min-w-0.5 bg-[var(--kit-segment)] forced-colors:bg-[CanvasText]"
+                  style={segmentStyle(grow(part.value), part.color)}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="top" className={overlayZ}>
+                {part.label ? `${part.label}: ${part.text}` : part.text}
+              </TooltipContent>
+            </Tooltip>
+          ))}
+          {empty > 0 || parts.length === 0 ? (
+            <span
+              data-segment-rest=""
+              className="h-full bg-overlay-emphasis"
+              style={{ flex: `${parts.length === 0 ? 1 : grow(empty)} 1 0px` }}
+            />
+          ) : null}
+        </div>
+        {references.length > 0 ? <TrackMarks marks={references} size={height} /> : null}
+      </div>
+      {legend !== false && parts.length > 0 ? (
+        <ul
+          aria-label="Legend"
+          className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs text-text-secondary"
+        >
+          {parts.map((part) => (
+            <li key={part.key} className="flex min-w-0 items-center gap-1.5">
+              <Swatch color={part.color} shape="bar" />
+              {part.label ? <span className="min-w-0 truncate">{part.label}</span> : null}
+              {part.figure === undefined ? (
+                <span className="tabular-nums text-text-primary">{part.text}</span>
+              ) : (
+                <>
+                  <span className="tabular-nums text-text-primary">{part.figure}</span>
+                  <span className="tabular-nums">{part.share}</span>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 export const pluginKitDisplay = {
   FilterChip: KitFilterChip,
   HighlightedText: KitHighlightedText,
   DiffStat: KitDiffStat,
   AvatarGroup: KitAvatarGroup,
   Meter: KitMeter,
+  SegmentedBar: KitSegmentedBar,
   Timeline: KitTimeline,
 };

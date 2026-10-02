@@ -85,6 +85,7 @@ import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { usePersistentViewState } from "@/pluginUi/viewState";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useNow } from "../../../packages/plugin-sdk/src/react/useNow";
 import { pluginKitDates } from "./PluginKitDates";
 import { isShrinkKey, pluginKitLayout } from "./PluginKitLayout";
@@ -2319,9 +2320,13 @@ function KitStaleIndicator({
   refreshing,
   onRefresh,
   refreshLabel,
+  detail,
+  staleTint,
+  announce,
   className,
   ...rest
 }: PluginStaleIndicatorProps) {
+  const overlayZ = useKitOverlayZClass();
   const timestamp = toTimestamp(updatedAt);
   const valid = !Number.isNaN(timestamp);
   const threshold = positive(staleAfterMs, Number.MAX_SAFE_INTEGER);
@@ -2345,6 +2350,50 @@ function KitStaleIndicator({
     if (previous === null || previous === offline) return;
     setSpoken(offline ? "Disconnected" : "Reconnected");
   }, [offline]);
+  // The host's announcer rather than the region above, so a result that lands
+  // in the same commit as a reconnect is not overwritten by it.
+  const result = nonEmpty(announce);
+  const lastResult = useRef(result);
+  useEffect(() => {
+    if (result === lastResult.current) return;
+    lastResult.current = result;
+    if (result) useAnnouncerStore.getState().announce(result, "polite");
+  }, [result]);
+  const more = nonEmpty(detail);
+  const tintWords = state === "stale" && oneOf(staleTint, ["glyph", "text"] as const) === "text";
+  const reading = (
+    <span
+      // Focusable only to reach its tooltip from the keyboard.
+      tabIndex={more ? 0 : undefined}
+      className={cn(
+        "min-w-0 truncate",
+        tintWords && "text-status-warning",
+        // The reading's tooltip stands in for the age's own, and its native
+        // title would otherwise surface beside it.
+        more && "[&_time]:pointer-events-none"
+      )}
+    >
+      {valid ? (
+        <TimeAgo value={timestamp} prefix="Updated " tooltip={more ? false : undefined} />
+      ) : (
+        "Not updated yet"
+      )}
+    </span>
+  );
+  const refreshButton = refresh ? (
+    <Button
+      variant="ghost"
+      size="icon-xs"
+      aria-label={refreshName}
+      aria-disabled={busy || undefined}
+      onClick={() => {
+        if (!busy) refresh();
+      }}
+      className="-my-1 shrink-0 [&_svg]:size-3"
+    >
+      <SpinningIcon icon={RefreshCw} active={busy} aria-hidden="true" />
+    </Button>
+  ) : null;
   return (
     <span
       {...pickRootProps(rest)}
@@ -2365,22 +2414,23 @@ function KitStaleIndicator({
           <span className="sr-only">Out of date:</span>
         </>
       ) : null}
-      <span className="min-w-0 truncate">
-        {valid ? <TimeAgo value={timestamp} prefix="Updated " /> : "Not updated yet"}
-      </span>
-      {refresh ? (
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label={refreshName}
-          aria-disabled={busy || undefined}
-          onClick={() => {
-            if (!busy) refresh();
-          }}
-          className="-my-1 shrink-0 [&_svg]:size-3"
-        >
-          <SpinningIcon icon={RefreshCw} active={busy} aria-hidden="true" />
-        </Button>
+      {more ? (
+        <Tooltip>
+          <TooltipTrigger asChild>{reading}</TooltipTrigger>
+          <TooltipContent side="top" className={overlayZ}>
+            {more}
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        reading
+      )}
+      {refreshButton ? (
+        <Tooltip>
+          <TooltipTrigger asChild>{refreshButton}</TooltipTrigger>
+          <TooltipContent side="top" className={overlayZ}>
+            {refreshName}
+          </TooltipContent>
+        </Tooltip>
       ) : null}
       <span role="status" className="sr-only">
         {spoken}

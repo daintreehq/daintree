@@ -16,7 +16,7 @@ import { PluginPathNotAllowedError, resolveContainedPath } from "./pluginFsConta
  */
 
 interface IconBearingContributions {
-  panels: ReadonlyArray<{ iconId: string }>;
+  panels: ReadonlyArray<{ iconId: string; toolbar?: ReadonlyArray<{ iconId?: string }> }>;
   toolbarButtons: ReadonlyArray<{ iconId: string }>;
   processTools: ReadonlyArray<{ iconId: string }>;
 }
@@ -41,16 +41,23 @@ export function collectPluginCustomIconRefs(
   contributes: IconBearingContributions
 ): Map<string, string[]> {
   const refs = new Map<string, string[]>();
+  const note = (iconId: string | undefined, where: string) => {
+    if (!isPluginCustomIconRef(iconId)) return;
+    const existing = refs.get(iconId);
+    if (existing) existing.push(where);
+    else refs.set(iconId, [where]);
+  };
   const add = (group: keyof IconBearingContributions) => {
     for (const [index, entry] of contributes[group].entries()) {
-      if (!isPluginCustomIconRef(entry.iconId)) continue;
-      const where = `contributes.${group}.${index}.iconId`;
-      const existing = refs.get(entry.iconId);
-      if (existing) existing.push(where);
-      else refs.set(entry.iconId, [where]);
+      note(entry.iconId, `contributes.${group}.${index}.iconId`);
     }
   };
   add("panels");
+  for (const [index, panel] of contributes.panels.entries()) {
+    for (const [slot, item] of (panel.toolbar ?? []).entries()) {
+      note(item.iconId, `contributes.panels.${index}.toolbar.${slot}.iconId`);
+    }
+  }
   add("toolbarButtons");
   add("processTools");
   return refs;

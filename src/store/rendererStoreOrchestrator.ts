@@ -15,6 +15,7 @@ import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import { useResourceMonitoringStore } from "./resourceMonitoringStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { usePluginPanelBadgeStore } from "./pluginPanelBadgeStore";
+import { usePluginPanelToolbarStore } from "./pluginPanelToolbarStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
@@ -400,6 +401,8 @@ export function initStoreOrchestrator(): () => void {
             // resource-metrics store above this leaks otherwise: badges are
             // keyed by panelId and nothing else drops them when a panel closes.
             usePluginPanelBadgeStore.getState().removePanel(removedId);
+            // Header button states are keyed the same way and leak the same way.
+            usePluginPanelToolbarStore.getState().clearPanel(removedId);
             useVoiceRecordingStore.getState().clearPanelBuffer(removedId);
             // Drop the dictation lock if it was pinned to this panel — panelIds
             // are ephemeral and a stale lock would silently break routing.
@@ -502,6 +505,10 @@ export function initStoreOrchestrator(): () => void {
           for (const id of trashed.keys()) {
             if (!prevTrashed.has(id)) {
               removeArtifactsForTerminal(id);
+              // Closing is the end of a panel's header-button state, though the
+              // id survives in the trash: an undone close must not bring back a
+              // spinner for a refresh the old view started.
+              usePluginPanelToolbarStore.getState().clearPanel(id);
               // Drop an inactive worktree's stashed maximize when its panel is
               // trashed (#11183). `trashPanel` doesn't shrink `panelIds`, so the
               // removal subscriber above never fires for this — the same

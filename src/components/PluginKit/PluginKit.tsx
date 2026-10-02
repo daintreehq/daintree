@@ -79,7 +79,12 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
-import { PluginKitIcon, renderIconSource, resolvePluginKitIcon } from "./PluginKitIcons";
+import {
+  PluginKitIcon,
+  PluginKitIconScope,
+  renderIconSource,
+  resolvePluginKitIcon,
+} from "./PluginKitIcons";
 import {
   ALIGNS,
   SIDES,
@@ -285,15 +290,17 @@ function KitSpinningIcon({ icon, active, size, className, ...rest }: PluginSpinn
   if (!glyph) return null;
   const px = positive(size, 512) ?? 16;
   return (
-    <SpinningIcon
-      {...pickRootProps(rest)}
-      icon={glyph}
-      active={active === true}
-      width={px}
-      height={px}
-      aria-hidden="true"
-      className={str(className)}
-    />
+    <PluginKitIconScope source={icon}>
+      <SpinningIcon
+        {...pickRootProps(rest)}
+        icon={glyph}
+        active={active === true}
+        width={px}
+        height={px}
+        aria-hidden="true"
+        className={str(className)}
+      />
+    </PluginKitIconScope>
   );
 }
 
@@ -485,7 +492,10 @@ function KitTextarea({
 }
 
 function renderSelectItem(option: PluginSelectOption) {
-  const Glyph = option.icon === undefined ? undefined : resolvePluginKitIcon(option.icon);
+  const glyph =
+    option.icon === undefined
+      ? null
+      : renderIconSource(option.icon, "h-3.5 w-3.5 shrink-0 text-text-secondary");
   return (
     <SelectItem
       key={option.value}
@@ -493,10 +503,10 @@ function renderSelectItem(option: PluginSelectOption) {
       disabled={option.disabled}
       description={option.description}
     >
-      {Glyph ? (
+      {glyph ? (
         // Inside the item text, so the trigger mirrors the glyph with the label.
         <span className="inline-flex min-w-0 items-center gap-2">
-          <Glyph className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
+          {glyph}
           {option.label}
         </span>
       ) : (
@@ -743,7 +753,16 @@ const CALLOUT_SEVERITIES = [
   "neutral",
 ] as const satisfies readonly CalloutSeverity[];
 
-function KitCallout({
+// The scope lets a plugin's own element reach the host's glyph slot.
+function KitCallout(props: PluginCalloutProps) {
+  return (
+    <PluginKitIconScope source={props.icon}>
+      <KitCalloutBody {...props} />
+    </PluginKitIconScope>
+  );
+}
+
+function KitCalloutBody({
   severity,
   children,
   title,

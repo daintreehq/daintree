@@ -34,6 +34,7 @@ export {
 } from "./react/useHostStore.js";
 export {
   useCachedHostChannel,
+  resetHostChannelCache,
   HOST_CHANNEL_CACHE_LIMIT,
   type CachedHostChannelOptions,
   type CachedHostChannelResult,
@@ -49,6 +50,7 @@ export {
   type AnimationFrameOptions,
 } from "./react/useAnimationFrame.js";
 export { useNow, type NowOptions } from "./react/useNow.js";
+export { usePanelToolbarItem } from "./react/usePanelToolbarItem.js";
 export {
   useStreamBuffer,
   type StreamBufferOptions,

@@ -68,16 +68,34 @@ const FAMILIES = [
     utilities: ["bg-", "text-", "border-"],
   },
   {
+    title: "Overlays",
+    prefix: "--color-overlay-",
+    keep: (name) => `overlay-${name}`,
+    utilities: ["bg-", "border-"],
+  },
+  {
     title: "Radii",
     prefix: "--radius-",
     keep: (name) => name,
     utilities: ["rounded-"],
   },
   {
+    title: "Shadows",
+    prefix: "--shadow-",
+    keep: (name) => name,
+    utilities: ["shadow-"],
+  },
+  {
     title: "Type scale below Tailwind's floor",
     prefix: "--text-",
     keep: (name) => name,
     utilities: ["text-"],
+  },
+  {
+    title: "Fonts",
+    prefix: "--font-",
+    keep: (name) => name,
+    utilities: ["font-"],
   },
   {
     title: "Durations",
@@ -125,6 +143,25 @@ function customVariants(source) {
   return [...source.matchAll(/@custom-variant\s+([\w-]+)/g)].map((m) => m[1]);
 }
 
+/** `a`, `a and b`, `a, b and c`. */
+function prose(values) {
+  return values.length < 2
+    ? values.join("")
+    : `${values.slice(0, -1).join(", ")} and ${values[values.length - 1]}`;
+}
+
+/**
+ * SVG paint takes the same colour names through `fill-` and `stroke-`. The
+ * examples are listed only while the contract still declares them, so a
+ * renamed token drops out here instead of being advertised.
+ */
+const SVG_PAINT_EXAMPLES = [
+  ["fill-", "--color-text-muted"],
+  ["stroke-", "--color-border-default"],
+  ["fill-", "--color-status-danger"],
+  ["fill-", "--color-category-blue"],
+];
+
 function inlineList(values) {
   return values.map((value) => `\`${value}\``).join(" ");
 }
@@ -147,7 +184,7 @@ function renderVocabulary() {
     const alternatives =
       others.length === 0
         ? ""
-        : `; ${others.map((u) => `\`${u}\``).join(" and ")} take the same names`;
+        : `; ${prose(others.map((u) => `\`${u}\``))} ${others.length === 1 ? "takes" : "take"} the same names`;
     lines.push(
       others.length === 0
         ? `**${family.title}**`
@@ -175,6 +212,18 @@ function renderVocabulary() {
       `hues: ${inlineList([...hues])}`,
       "",
       `variants: ${inlineList(suffixes)}`,
+      ""
+    );
+  }
+
+  const svgExamples = SVG_PAINT_EXAMPLES.filter(([, token]) => tokens.includes(token)).map(
+    ([utility, token]) => `${utility}${token.slice("--color-".length)}`
+  );
+  if (svgExamples.length > 0) {
+    lines.push(
+      "**SVG paint** — `fill-` and `stroke-` take every colour name above, and `fill-current` / `stroke-current` paint with the element's text colour",
+      "",
+      inlineList(svgExamples),
       ""
     );
   }

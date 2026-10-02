@@ -608,6 +608,176 @@ describe("@daintreehq/plugin-ui forms and settings", () => {
     expect(tabs.map((tab) => tab.tabIndex)).toEqual([-1, 0, -1]);
   });
 
+  it("keeps the focused tab when a trailing control comes and goes", () => {
+    const tabsWith = (trailing: unknown) =>
+      createElement(kit.Tabs, {
+        "aria-label": "Ledger",
+        value: "accounts",
+        onValueChange: () => {},
+        items: [
+          { value: "accounts", label: "Accounts" },
+          { value: "budget", label: "Budget" },
+        ],
+        trailing: trailing as never,
+        children: "Body",
+      });
+    const { rerender } = render(tabsWith(undefined));
+    const first = screen.getAllByRole("tab")[0]!;
+    act(() => first.focus());
+    rerender(tabsWith("Updated 3m ago"));
+    expect(screen.getAllByRole("tab")[0]).toBe(first);
+    expect(document.activeElement).toBe(first);
+    rerender(tabsWith(undefined));
+    expect(document.activeElement).toBe(first);
+  });
+
+  it("puts Tabs' trailing controls on the strip, outside the tablist and its arrow keys", () => {
+    const onValueChange = vi.fn();
+    const onRefresh = vi.fn();
+    render(
+      createElement(kit.Tabs, {
+        "aria-label": "Ledger",
+        value: "accounts",
+        onValueChange,
+        density: "strip",
+        items: [
+          { value: "accounts", label: "Accounts", icon: "wallet" },
+          { value: "budget", label: "Budget", icon: "piggy-bank" },
+        ],
+        trailing: createElement(kit.ToolbarButton, {
+          icon: "refresh",
+          "aria-label": "Refresh",
+          tooltip: false,
+          onClick: onRefresh,
+        }),
+        children: "Body",
+      })
+    );
+    const tablist = screen.getByRole("tablist", { name: "Ledger" });
+    const refresh = screen.getByRole("button", { name: "Refresh" });
+    expect(tablist.contains(refresh)).toBe(false);
+    expect(refresh.getAttribute("role")).toBeNull();
+    // The controls share the strip's row, under one rule.
+    expect(refresh.closest("[data-kit-tabs-trailing]")?.parentElement).toBe(tablist.parentElement);
+    const tabs = screen.getAllByRole("tab");
+    act(() => tabs[0]!.focus());
+    fireEvent.keyDown(tabs[0]!, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tabs[1]);
+    fireEvent.keyDown(tabs[1]!, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tabs[0]);
+    expect(onValueChange.mock.calls).toEqual([["budget"], ["accounts"]]);
+    fireEvent.click(refresh);
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws no tabpanel when Tabs have nothing to show, and the tabs then control nothing", () => {
+    const { rerender } = render(
+      createElement(kit.Tabs, {
+        "aria-label": "Views",
+        value: "a",
+        onValueChange: () => {},
+        items: [
+          { value: "a", label: "A" },
+          { value: "b", label: "B" },
+        ],
+        content: { b: "Only B" },
+      })
+    );
+    expect(screen.queryByRole("tabpanel")).toBeNull();
+    for (const tab of screen.getAllByRole("tab"))
+      expect(tab.hasAttribute("aria-controls")).toBe(false);
+    rerender(
+      createElement(kit.Tabs, {
+        "aria-label": "Views",
+        value: "b",
+        onValueChange: () => {},
+        items: [
+          { value: "a", label: "A" },
+          { value: "b", label: "B" },
+        ],
+        content: { b: "Only B" },
+      })
+    );
+    const panel = screen.getByRole("tabpanel");
+    expect(panel.textContent).toBe("Only B");
+    expect(screen.getByRole("tab", { name: "B" }).getAttribute("aria-controls")).toBe(panel.id);
+  });
+
+  it("draws a Tabs item's own element icon at the size a named icon gets", () => {
+    render(
+      createElement(kit.Tabs, {
+        "aria-label": "Views",
+        value: "a",
+        onValueChange: () => {},
+        items: [
+          { value: "a", label: "Accounts", icon: "wallet" },
+          {
+            value: "b",
+            label: "Budget",
+            icon: createElement("svg", { "data-own-icon": "", viewBox: "0 0 16 16" }),
+          },
+        ],
+        children: "Body",
+      })
+    );
+    const named = screen.getByRole("tab", { name: "Accounts" }).querySelector("svg")!;
+    const box = screen
+      .getByRole("tab", { name: "Budget" })
+      .querySelector("[data-own-icon]")!.parentElement!;
+    expect(box.getAttribute("aria-hidden")).toBe("true");
+    const sizing = [...named.classList].filter((name) => !name.startsWith("lucide"));
+    expect(sizing.length).toBeGreaterThan(0);
+    for (const name of sizing) expect(box.classList.contains(name)).toBe(true);
+  });
+
+  it("shows a loading ToolbarButton busy, still focusable, and ignores its clicks", () => {
+    const onClick = vi.fn();
+    const { rerender } = render(
+      createElement(kit.ToolbarButton, {
+        icon: "refresh",
+        "aria-label": "Refresh",
+        tooltip: false,
+        onClick,
+      })
+    );
+    const button = screen.getByRole("button", { name: "Refresh" });
+    const idleGlyph = button.querySelector("svg")?.getAttribute("class");
+    rerender(
+      createElement(kit.ToolbarButton, {
+        icon: "refresh",
+        "aria-label": "Refresh",
+        tooltip: false,
+        onClick,
+        loading: true,
+      })
+    );
+    expect(button.getAttribute("aria-busy")).toBe("true");
+    // Busy is not unavailable: nothing dims it or takes it out of the order.
+    expect(button.hasAttribute("aria-disabled")).toBe(false);
+    expect(button.hasAttribute("disabled")).toBe(false);
+    expect(button.querySelector(".animate-spin")).not.toBeNull();
+    expect(button.querySelector("svg")?.getAttribute("class")).not.toBe(idleGlyph);
+    fireEvent.click(button);
+    expect(onClick).not.toHaveBeenCalled();
+    act(() => button.focus());
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("names a SettingsRow's reset button with resetAriaLabel", () => {
+    render(
+      createElement(kit.SettingsRow, {
+        label: "Base currency",
+        isModified: true,
+        onReset: () => {},
+        resetAriaLabel: "Reset base currency to the saved value",
+        control: createElement("span", null, "EUR"),
+      })
+    );
+    expect(
+      screen.getByRole("button", { name: "Reset base currency to the saved value" })
+    ).toBeTruthy();
+  });
+
   it("maps ProgressBar 0..1 onto the host bar and drops a bad value to indeterminate", () => {
     render(
       createElement(

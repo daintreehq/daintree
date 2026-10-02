@@ -1,9 +1,19 @@
 import type { PanelKind, PanelLocation, TerminalInstance } from "../types/panel.js";
 import type { TerminalSnapshot } from "../types/project.js";
 import type { AddPanelOptions } from "../types/addPanelOptions.js";
-import type { PanelMenuItemContribution } from "../types/plugin.js";
+import type { PanelMenuItemContribution, PanelToolbarItemContribution } from "../types/plugin.js";
 import { getAgentConfig } from "./agentRegistry.js";
 import { PANEL_KIND_BRAND_COLORS } from "../theme/index.js";
+
+/**
+ * One `contributes.panels[].toolbar` entry as the registry carries it. `actionId`
+ * is already in the plugin instance's namespace, which is what the button
+ * dispatches; `stateKey` is the id as the manifest wrote it, which is what the
+ * view names in `setToolbarItemState`. The two differ only for a project plugin.
+ */
+export interface PluginPanelToolbarItemConfig extends PanelToolbarItemContribution {
+  stateKey: string;
+}
 
 /**
  * Single source of truth for the set of built-in panel kinds. Adding a fourth
@@ -190,6 +200,12 @@ export interface PanelKindConfig {
    * registered and dispatch it with `{ panelId }`. Absent when none is declared.
    */
   pluginMenu?: readonly PanelMenuItemContribution[];
+  /**
+   * The kind's `contributes.panels[].toolbar`, drawn as buttons in the panel
+   * header once each action is registered and dispatched with `{ panelId }`.
+   * Absent when none is declared.
+   */
+  pluginToolbar?: readonly PluginPanelToolbarItemConfig[];
   /**
    * Owning project, or `null`/absent for global plugin and built-in kinds. Set
    * only for kinds contributed by a project-local plugin, whose `id` is the

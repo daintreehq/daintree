@@ -191,6 +191,22 @@ describe("loadPluginCustomIcons", () => {
     );
   });
 
+  it("collects the icons of a panel's header toolbar entries", () => {
+    const withToolbar = {
+      panels: [
+        {
+          iconId: "puzzle",
+          toolbar: [{ iconId: "./icons/refresh.svg" }, { iconId: "refresh-cw" }, {}],
+        },
+      ],
+      toolbarButtons: [],
+      processTools: [],
+    };
+    expect(collectPluginCustomIconRefs(withToolbar)).toEqual(
+      new Map([["./icons/refresh.svg", ["contributes.panels.0.toolbar.0.iconId"]]])
+    );
+  });
+
   it("loads the good references and reports each location of a broken one", async () => {
     await write("icons/a.svg", GOOD_SVG);
     const result = await loadPluginCustomIcons("acme.tools", pluginDir, contributes);

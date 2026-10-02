@@ -178,8 +178,8 @@ Consistency rules:
 | `stock-palette-colour` | error | A stock Tailwind colour (`bg-blue-500`), which compiles to nothing in a plugin; use a semantic token |
 | `dark-variant` | warn | `dark:`, which follows the OS colour scheme, not the Daintree theme |
 | `legacy-daintree-utility` | warn | A legacy `daintree-*` colour alias |
-| `raw-shadow` | warn | A stock or hard-coded shadow instead of a `--theme-shadow-*` token |
-| `arbitrary-text-size` | warn | An arbitrary font size off the type scale |
+| `raw-shadow` | warn | A stock or hard-coded shadow instead of the theme's `shadow-ambient`, `shadow-floating` or `shadow-dialog` |
+| `arbitrary-text-size` | warn | An arbitrary font size off the type scale (`text-4xs` … `text-xs`, `text-sm`, `text-base`, `text-lg`, `text-xl` … `text-9xl`) |
 | `text-colour-slash-alpha` | warn | A text colour with slash alpha; use a solid token one step down |
 | `raw-radius` | warn | A radius off the theme's scale |
 | `unpaired-outline-suppression` | warn | `outline-none`, or an `outline-hidden` / `outline-0` with no visible focus treatment beside it |
@@ -190,7 +190,8 @@ Consistency rules:
 | `raw-form-control` | warn | A raw form control; use the matching kit component |
 | `native-title-tooltip` | warn | A native `title=` tooltip, which ignores the theme and the keyboard |
 | `inline-svg-icon` | warn | An inline 24×24 SVG icon; use `Icon` |
-| `lucide-react-import` | warn | `lucide-react` bundled into a view; the kit's `Icon` is served at no bundle cost |
+| `inline-style-colour` | warn | A literal colour (hex, `rgb()`/`hsl()`/`oklch()` with numbers, a named colour) in a colour property of `style={{…}}`, or in an SVG element's `fill`, `stroke` or `stop-color`; use a token utility (`fill-category-blue`, `stroke-border-default`, `fill-current`) or `var(--theme-…)`. `currentColor`, `none`, `transparent`, `url(#…)` and image paths pass, and paint inside a `<mask>` is left alone |
+| `lucide-react-import` | warn | `lucide-react` bundled into a view; the kit's `Icon` (or a component's `icon` prop) names any Lucide icon at no bundle cost |
 | `dnd-library-import` | warn | A drag-and-drop library (`@dnd-kit/*`, `react-beautiful-dnd`, `sortablejs`, …) bundled into a view; the kit's `SortableList`, `Kanban` and `DragDropProvider` cover reordering and boards |
 | `hand-rolled-context-drag` | warn | The agent-context drag written by hand (the `application/x-daintree-agent-context` type, or `setAgentContextDragData`) in a view; the kit's `ContextDragSource` writes and checks the payload, and `SendToAgentButton` is the keyboard route |
 | `editor-library-import` | warn | A code editor or diff library (`@codemirror/*`, `@uiw/react-codemirror`, `react-diff-view`, `diff2html`, …) bundled into a view; the kit's `CodeEditor` and `DiffView` are Daintree's own editor and diff viewer, themed with the app |
@@ -251,6 +252,34 @@ npx daintree-plugin package [--verbose] [--dry-run] [--sourcemaps] [--skip-build
 `package` and `dev` both run the plugin's own `node_modules/.bin/vite` directly. They never run `npm run build`, so a custom `build` script in `package.json` is ignored. When the plugin directory also holds a `vite.config.server.{js,mjs,ts,cjs,mts,cts}` (first match in that order), a second pass builds it after the main one — `vite build --config <that file>` — which is how the `mcp` and `full` templates build `dist/server.js`. In `dev`'s watch mode the two watchers share `dist/`, so both get `--no-emptyOutDir`; otherwise each browser rebuild would empty `dist/` and delete the server bundle. A single-config plugin keeps plain `vite build --watch`.
 
 Without Vite installed, both commands fail with `Couldn't find Vite at <path>. Run npm install in the plugin directory, or pass --skip-build.` A plugin built with something other than Vite runs its own build first and packages with `--skip-build`. `dev` cannot be used without Vite: `--skip-build` skips only its initial build, and the watcher it starts is always Vite.
+
+A non-Vite view build (esbuild, Rollup, tsup) has to mark external exactly what the host import map serves, and nothing else. `HOST_IMPORTMAP_SPECIFIERS`, exported from `@daintreehq/plugin-vite`, is that list: `react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, `react-dom/client`, `@daintreehq/plugin-ui` and the `@daintreehq/tour` entries. Match it exactly, not by prefix — `react-dom/server` or a deep `@daintreehq/plugin-ui/…` path is not served, so an external one fails at runtime as an unresolved bare specifier. Rollup's `external: [...HOST_IMPORTMAP_SPECIFIERS]` matches exactly; esbuild's `external` (and so tsup's) also takes every subpath of a package, so use a resolve hook. Bundle everything else, `@daintreehq/plugin-sdk/react` included: the host serves that one only to zero-build views. Importing the constant loads `vite`, the package's peer dependency; a build without Vite installed can copy the list instead and re-check it on upgrade.
+
+```js
+// esbuild.config.mjs
+import { build } from "esbuild";
+import { HOST_IMPORTMAP_SPECIFIERS } from "@daintreehq/plugin-vite";
+
+const served = new Set(HOST_IMPORTMAP_SPECIFIERS);
+
+await build({
+  entryPoints: ["src/panel.tsx"],
+  bundle: true,
+  format: "esm",
+  jsx: "automatic",
+  outfile: "dist/panel.js",
+  plugins: [
+    {
+      name: "daintree-host-imports",
+      setup(b) {
+        b.onResolve({ filter: /^[@\w]/ }, ({ path }) =>
+          served.has(path) ? { path, external: true } : undefined
+        );
+      },
+    },
+  ],
+});
+```
 
 ### `daintree-plugin install <path-or-url>`
 
@@ -472,7 +501,7 @@ describe("acme.linear-planner", () => {
 
 A filesystem-convention handler (a compiled `src/{id}.js` default export) receives the args only, never `host`, so it can be imported and called directly with an args object.
 
-`createMockHost` implements the `PluginHostApi` surface with in-memory state and records the calls a plugin makes for assertion — dispatched actions land on `host.dispatchedActions` as `{ actionId, args }` (the `DispatchedActionRecord` type), alongside `registeredActions`, `registeredHandlers`, `postToPanelCalls`, `shownToasts`, and the rest. It validates argument shapes the way the real host does (`registerAction` descriptors, toast and badge options, channel names, quick-pick items) and gates the agent APIs (`getAgentState`, `agents.list`, `sendToActiveAgent`, `sendToAgent`) on the `capabilities` you pass in, so a malformed call fails the test rather than the app. `host.db` runs against real SQLite files, `host.fs` against an in-memory tree, and `sendToAgent` against the panes you seed. Good for covering handler logic without spinning up an Electron instance. [Host API → Testing against a mock host](./host-api.md#testing-against-a-mock-host) is the full reference — every option, recorder and `simulate*` driver — and lists what the mock deliberately does not model: consent prompts, filesystem containment, process handles, git, the manifest gates. A test that passes against it is not proof the real host will accept the plugin.
+`createMockHost` implements the `PluginHostApi` surface with in-memory state and records the calls a plugin makes for assertion — dispatched actions land on `host.dispatchedActions` as `{ actionId, args }` (the `DispatchedActionRecord` type), alongside `registeredActions`, `registeredHandlers`, `postToPanelCalls`, `shownToasts`, and the rest. It validates argument shapes the way the real host does (`registerAction` descriptors, toast and badge options, quick-pick items, and channel names: a colon in a `registerHandler`, `postToPanel` or `broadcastToRenderer` channel is refused with the host's own error) and gates the agent APIs (`getAgentState`, `agents.list`, `sendToActiveAgent`, `sendToAgent`) on the `capabilities` you pass in, so a malformed call fails the test rather than the app. `host.db` runs against real SQLite files, `host.fs` against an in-memory tree, and `sendToAgent` against the panes you seed. Good for covering handler logic without spinning up an Electron instance. [Host API → Testing against a mock host](./host-api.md#testing-against-a-mock-host) is the full reference — every option, recorder and `simulate*` driver — and lists what the mock deliberately does not model: consent prompts, filesystem containment, process handles, git, the manifest gates. A test that passes against it is not proof the real host will accept the plugin.
 
 ### Testing a raw-ESM project plugin
 
@@ -550,6 +579,8 @@ it("renders the worktree name it pulls on mount", async () => {
   expect(root.textContent).toContain("feature-x");
 });
 ```
+
+A view that reads through `useCachedHostChannel` shares one module-global cache across every test in the file, so a result cached by one test paints first in the next, and with a `staleMs` still fresh the next test's `invoke` stub is never called at all. Call `resetHostChannelCache()` from `@daintreehq/plugin-sdk/react` in `beforeEach`. It clears the copy your test imports, which is the view's own when the test renders the view's source or a raw view that bare-imports the SDK; a bundled `dist/panel.js` carries a private copy no reset reaches, so call `vi.resetModules()` before each test's dynamic `import()` of it instead.
 
 ### Testing a data contract
 

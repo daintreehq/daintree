@@ -1849,6 +1849,57 @@ interface PanelContribution {
      * panel the menu was opened on.
      */
     menu?: PanelMenuItemContribution[];
+    /**
+     * Up to three of your own actions drawn as buttons in this panel's header,
+     * in the order given. Each is dispatched with `{ panelId }` naming the panel
+     * it was clicked on. The view sets a button's live state (busy, disabled,
+     * tone, a status line, an "Updated" age) with `setToolbarItemState`.
+     */
+    toolbar?: PanelToolbarItemContribution[];
+}
+/** One entry of a panel's `toolbar`: a button in the panel header. */
+interface PanelToolbarItemContribution {
+    /**
+     * One of your own actions, in your plugin's namespace (`"{manifestId}.{id}"`),
+     * from `contributes.commands` or `host.registerAction`. The button appears
+     * while that action is registered.
+     */
+    actionId: string;
+    /** The button's name, and its tooltip. Defaults to the action's title. */
+    label?: string;
+    /** A generic plugin icon id, or a `./…svg` path to the plugin's own icon. Omitted, the label is drawn as text. */
+    iconId?: string;
+    /**
+     * Draws a status beside the button: the state's `text` and `updatedAt` age,
+     * and its `tone`. Omitted (false), only the button is drawn and those
+     * fields are ignored.
+     */
+    status?: boolean;
+}
+/**
+ * The live state of one panel `toolbar` button, set by the view with
+ * `setToolbarItemState`. Every field is optional; an omitted field is the
+ * button's resting value.
+ */
+interface PluginPanelToolbarItemState {
+    /** Draws a spinner on the button and ignores clicks until it is cleared. */
+    busy?: boolean;
+    /** Announced unavailable and ignores clicks. */
+    disabled?: boolean;
+    /**
+     * `warning` or `danger` colours the status and adds its glyph; colour is
+     * never the only signal. Needs `status: true`. An explicit tone wins over
+     * the age's own stale warning.
+     */
+    tone?: "default" | "warning" | "danger";
+    /** A short status beside the button ("2 prices kept from cache"). Needs `status: true`. */
+    text?: string;
+    /** Epoch ms or an ISO string: drawn as "Updated 3h ago" on the host's shared clock. Needs `status: true`. */
+    updatedAt?: number | string;
+    /** Once `updatedAt` is older than this many ms the age reads as stale (warning glyph and colour) without another update. */
+    staleAfterMs?: number;
+    /** The button's tooltip, when it says more than the label ("Prices fetched 14:02"). */
+    tooltip?: string;
 }
 /** One entry of a panel's `menu`. */
 interface PanelMenuItemContribution {
@@ -2151,6 +2202,21 @@ interface PanelViewProps {
      * Absent where the host offers no reload, so call it optionally.
      */
     readonly setHasUnsavedChanges?: (hasUnsavedChanges: boolean) => void;
+    /**
+     * Sets the live state of one of this panel's manifest `toolbar` buttons by
+     * its `actionId` (as written in the manifest). Each call replaces that
+     * button's state; `null` resets it. State belongs to the panel, so it
+     * survives the view re-rendering, unmounting and remounting, and is cleared
+     * when the panel closes or the view reloads. An `actionId` the manifest
+     * does not list is ignored.
+     *
+     * Like {@link setHasUnsavedChanges}, the setter belongs to the attempt that
+     * received it: a call held past this attempt's teardown (a refresh that
+     * settles after a reload) does nothing.
+     *
+     * Absent where the panel has no header (a surface), so call it optionally.
+     */
+    readonly setToolbarItemState?: (actionId: string, state: PluginPanelToolbarItemState | null) => void;
     /**
      * The worktree the panel instance belongs to, as recorded on the panel at
      * spawn time. Lets a view reconstruct its own context without dispatching
@@ -5772,4 +5838,4 @@ declare function syncedCollectionSnapshotChannel(channel: string): string;
  */
 declare function createSyncedCollection<T>(host: SyncedCollectionHost, channel: string, options: SyncedCollectionOptions<T>): Promise<SyncedCollection<T>>;
 
-export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDispatchOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWalkEntry, type PluginFsWalkOptions, type PluginFsWalkResult, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type SyncedCollection, type SyncedCollectionDelta, type SyncedCollectionHost, type SyncedCollectionOptions, type SyncedCollectionSnapshot, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };
+export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragPayload, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentPane, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDispatchOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWalkEntry, type PluginFsWalkOptions, type PluginFsWalkResult, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPanelToolbarItemState, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type SyncedCollection, type SyncedCollectionDelta, type SyncedCollectionHost, type SyncedCollectionOptions, type SyncedCollectionSnapshot, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };

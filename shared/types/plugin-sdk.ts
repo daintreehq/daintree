@@ -78,6 +78,7 @@ export type {
   PluginToastOptions,
   PluginPanelBadge,
   PluginPanelBadgeColor,
+  PluginPanelToolbarItemState,
   PluginQuickPickItem,
   PluginQuickPickOptions,
   PluginInputBoxOptions,

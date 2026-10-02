@@ -60,6 +60,8 @@ declare module "@daintreehq/plugin-ui" {
     PluginChartBaseProps,
     PluginChartColor,
     PluginChartSeries,
+    PluginChartReferenceLine,
+    PluginChartBand,
     PluginCheckboxProps,
     PluginComboboxProps,
     PluginCommandPaletteItem,
@@ -72,6 +74,8 @@ declare module "@daintreehq/plugin-ui" {
     PluginDataTableProps,
     PluginDataTableRowKey,
     PluginDataTableSort,
+    PluginDataTableNumericFormat,
+    PluginDataTableTotal,
     PluginDateFieldBaseProps,
     PluginDatePickerProps,
     PluginDateRange,
@@ -107,6 +111,7 @@ declare module "@daintreehq/plugin-ui" {
     PluginIconName,
     PluginIconProps,
     PluginIconSource,
+    PluginLucideIconName,
     PluginInputProps,
     PluginIsoDate,
     PluginKbdChordProps,
@@ -120,6 +125,9 @@ declare module "@daintreehq/plugin-ui" {
     PluginMarkdownProps,
     PluginMeterProps,
     PluginMeterThresholds,
+    PluginMeterMark,
+    PluginSegmentedBarProps,
+    PluginSegmentedBarSegment,
     PluginMultiSelectProps,
     PluginNavListItem,
     PluginNavListProps,
@@ -159,6 +167,7 @@ declare module "@daintreehq/plugin-ui" {
     PluginSpinnerProps,
     PluginSpinningIconProps,
     PluginStatCardProps,
+    PluginFigureProps,
     PluginStepState,
     PluginStepperProps,
     PluginStepperStep,
@@ -367,6 +376,8 @@ declare module "@daintreehq/plugin-ui" {
   export type DataTableColumn<T = unknown> = PluginDataTableColumn<T>;
   export type DataTableRowKey<T = unknown> = PluginDataTableRowKey<T>;
   export type DataTableSort = PluginDataTableSort;
+  export type DataTableNumericFormat = PluginDataTableNumericFormat;
+  export type DataTableTotal<T = unknown> = PluginDataTableTotal<T>;
   export type LogViewProps = PluginLogViewProps;
   export type LogEntry = PluginLogEntry;
   export type PaneHeaderProps = PluginPaneHeaderProps;
@@ -398,11 +409,13 @@ declare module "@daintreehq/plugin-ui" {
   export type DropdownMenuRadioItem = PluginDropdownMenuRadioItem;
   export type DialogLayer = PluginDialogLayer;
   export type IconSource = PluginIconSource;
+  export type LucideIconName = PluginLucideIconName;
   export type FileTreeProps = PluginFileTreeProps;
   export type FileTreeEntry = PluginFileTreeEntry;
   export type FileTreeNode = PluginFileTreeNode;
   export type FileTreeItem = PluginFileTreeItem;
   export type StatCardProps = PluginStatCardProps;
+  export type FigureProps = PluginFigureProps;
   export type SparklineProps = PluginSparklineProps;
   export type FormFieldGroupProps = PluginFormFieldGroupProps;
   export type FilterChipProps = PluginFilterChipProps;
@@ -412,6 +425,9 @@ declare module "@daintreehq/plugin-ui" {
   export type AvatarGroupItem = PluginAvatarGroupItem;
   export type MeterProps = PluginMeterProps;
   export type MeterThresholds = PluginMeterThresholds;
+  export type MeterMark = PluginMeterMark;
+  export type SegmentedBarProps = PluginSegmentedBarProps;
+  export type SegmentedBarSegment = PluginSegmentedBarSegment;
   export type TimelineProps<T extends TimelineItem = TimelineItem> = PluginTimelineProps<T>;
   export type TimelineItem = PluginTimelineItem;
   export type TimelineActor = PluginTimelineActor;
@@ -460,6 +476,8 @@ declare module "@daintreehq/plugin-ui" {
   export type EmojiPickerProps = PluginEmojiPickerProps;
   export type ChartColor = PluginChartColor;
   export type ChartSeries = PluginChartSeries;
+  export type ChartReferenceLine = PluginChartReferenceLine;
+  export type ChartBand = PluginChartBand;
   export type ChartBaseProps = PluginChartBaseProps;
   export type BarChartProps = PluginBarChartProps;
   export type LineChartProps = PluginLineChartProps;
@@ -739,6 +757,12 @@ declare module "@daintreehq/plugin-ui" {
   export const FileTree: ComponentType<FileTreeProps>;
   /** One figure with a sentence-case label, an optional delta and a quiet hint. */
   export const StatCard: ComponentType<StatCardProps>;
+  /**
+   * One figure set as type: the answer a page leads with (`size="display"`
+   * steps with the container) or a lead figure in a card, with a unit, a
+   * second-currency twin and a caption. Tabular digits; never truncates.
+   */
+  export const Figure: ComponentType<FigureProps>;
   /** A small trend line with no axes, in a theme colour, filling its container's width. */
   export const Sparkline: ComponentType<SparklineProps>;
   /** One label, at a field label's size, over a set of controls such as checkboxes. */
@@ -767,6 +791,8 @@ declare module "@daintreehq/plugin-ui" {
   export const AvatarGroup: ComponentType<AvatarGroupProps>;
   /** How much of a limit is used: neutral below its thresholds, then warning or danger. */
   export const Meter: ComponentType<MeterProps>;
+  /** Parts of a whole on one bar with a legend, for two to six parts where a donut would be mostly one colour. */
+  export const SegmentedBar: ComponentType<SegmentedBarProps>;
   /**
    * An activity feed or audit log on a connecting rail, virtualised with
    * measured rows. As tall as its entries up to its container, then it scrolls.

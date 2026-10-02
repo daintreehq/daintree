@@ -1042,3 +1042,95 @@ describe("setHasUnsavedChanges (#12611)", () => {
     expect(lifecycle.requestUserViewReload("panel-1")).toBe(false);
   });
 });
+
+describe("setToolbarItemState", () => {
+  const REFRESH = "acme.refresh-quotes";
+
+  /** The kind declares one toolbar button; the store and registry are this load's. */
+  async function mountWithToolbar(props: Partial<PluginViewContentProps> = {}) {
+    const mounted = await mountContent({ offerToolbar: true, ...props });
+    const registry = await import("@shared/config/panelKindRegistry");
+    registry.registerPanelKind({
+      id: "acme.dashboard",
+      name: "Dashboard",
+      iconId: "gauge",
+      color: "#38bdf8",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme",
+      pluginToolbar: [{ actionId: REFRESH, stateKey: REFRESH, status: true }],
+    });
+    const { usePluginPanelToolbarStore } = await import("@/store/pluginPanelToolbarStore");
+    const stateOf = () => usePluginPanelToolbarStore.getState().statesByPanelId["panel-1"];
+    return { ...mounted, stateOf };
+  }
+
+  it("is withheld where the host draws no header toolbar", async () => {
+    await mountContent();
+    expect(latest().setToolbarItemState).toBeUndefined();
+  });
+
+  it("sets a declared button's state and ignores an undeclared one", async () => {
+    const { stateOf } = await mountWithToolbar();
+
+    act(() => latest().setToolbarItemState?.(REFRESH, { busy: true }));
+    act(() => latest().setToolbarItemState?.("acme.not-in-the-manifest", { busy: true }));
+
+    expect(stateOf()).toEqual({ [REFRESH]: { busy: true } });
+  });
+
+  it("keeps the state through an unmount, for the panel's next view", async () => {
+    const { stateOf, unmount } = await mountWithToolbar();
+    act(() => latest().setToolbarItemState?.(REFRESH, { text: "Fresh" }));
+
+    unmount();
+    await act(async () => {});
+
+    expect(stateOf()).toEqual({ [REFRESH]: { text: "Fresh" } });
+  });
+
+  it("ignores a write from the unmounting view's teardown", async () => {
+    const { stateOf, unmount } = await mountWithToolbar();
+    const view = latest();
+    act(() => view.setToolbarItemState?.(REFRESH, { text: "Fresh" }));
+
+    // The panel is closed: its state is pruned, then the view's own abort
+    // listener tries to say the refresh it was running has stopped.
+    unmount();
+    const { usePluginPanelToolbarStore } = await import("@/store/pluginPanelToolbarStore");
+    usePluginPanelToolbarStore.getState().clearPanel("panel-1");
+    view.setToolbarItemState?.(REFRESH, { busy: false, text: "Cancelled" });
+    await act(async () => {});
+
+    expect(stateOf()).toBeUndefined();
+  });
+
+  it("clears on a reload and ignores the old attempt's setter", async () => {
+    const { stateOf } = await mountWithToolbar();
+    const stale = latest();
+    act(() => stale.setToolbarItemState?.(REFRESH, { busy: true }));
+
+    await requestReload();
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
+    expect(stateOf()).toBeUndefined();
+
+    // A refresh the old view started settles after the reload: it must not
+    // repaint the fresh view's button.
+    act(() => stale.setToolbarItemState?.(REFRESH, { text: "Late" }));
+    expect(stateOf()).toBeUndefined();
+    act(() => latest().setToolbarItemState?.(REFRESH, { text: "Current" }));
+    expect(stateOf()).toEqual({ [REFRESH]: { text: "Current" } });
+  });
+
+  it("clears when the view crashes", async () => {
+    const { stateOf } = await mountWithToolbar();
+    act(() => latest().setToolbarItemState?.(REFRESH, { busy: true }));
+
+    await act(async () => {
+      boundaryCallbacks.onError?.(new Error("view threw"));
+    });
+
+    expect(stateOf()).toBeUndefined();
+  });
+});

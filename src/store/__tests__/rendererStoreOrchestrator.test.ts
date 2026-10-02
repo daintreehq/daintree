@@ -90,6 +90,7 @@ const { useConsoleCaptureStore } = await import("../consoleCaptureStore");
 const { useResourceMonitoringStore } = await import("../resourceMonitoringStore");
 const { useVoiceRecordingStore } = await import("../voiceRecordingStore");
 const { usePluginPanelBadgeStore } = await import("../pluginPanelBadgeStore");
+const { usePluginPanelToolbarStore } = await import("../pluginPanelToolbarStore");
 const { unregisterInputController } = await import("../terminalInputStore");
 const { useCliAvailabilityStore, cleanupCliAvailabilityStore } =
   await import("../cliAvailabilityStore");
@@ -122,6 +123,7 @@ describe("rendererStoreOrchestrator", () => {
     useResourceMonitoringStore.setState({ metrics: new Map() });
     useVoiceRecordingStore.setState({ panelBuffers: {} });
     usePluginPanelBadgeStore.setState({ badgesByPanelId: {} });
+    usePluginPanelToolbarStore.setState({ statesByPanelId: {} });
   });
 
   afterEach(() => {
@@ -266,6 +268,60 @@ describe("rendererStoreOrchestrator", () => {
     expect(badges[panelId]).toBeUndefined();
     // Unrelated panels' badges survive the prune.
     expect(badges.keep).toEqual({ "plugin-1": { kind: "dot" } });
+  });
+
+  it("prunes plugin panel toolbar state for the removed panel only", () => {
+    usePanelStore.setState({
+      panelsById: {
+        gone: {
+          id: "gone",
+          title: "G",
+          kind: "terminal" as const,
+          cwd: "/",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: ["gone"],
+    });
+    usePluginPanelToolbarStore.getState().setItemState("gone", "acme.ledger.refresh", {
+      busy: true,
+    });
+    usePluginPanelToolbarStore.getState().setItemState("keep", "acme.ledger.refresh", {
+      text: "Fresh",
+    });
+
+    usePanelStore.getState().removePanel("gone");
+
+    const states = usePluginPanelToolbarStore.getState().statesByPanelId;
+    expect(states.gone).toBeUndefined();
+    expect(states.keep).toEqual({ "acme.ledger.refresh": { text: "Fresh" } });
+  });
+
+  it("clears plugin panel toolbar state when the panel is closed to the trash", () => {
+    usePanelStore.setState({
+      panelsById: {
+        closed: {
+          id: "closed",
+          title: "C",
+          kind: "terminal" as const,
+          cwd: "/",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      },
+      panelIds: ["closed"],
+    });
+    usePluginPanelToolbarStore.getState().setItemState("closed", "acme.ledger.refresh", {
+      busy: true,
+    });
+
+    usePanelStore.getState().trashPanel("closed");
+
+    expect(usePanelStore.getState().panelIds).toContain("closed");
+    expect(usePluginPanelToolbarStore.getState().statesByPanelId.closed).toBeUndefined();
   });
 
   it("prunes plugin panel badges for every terminal removed in one batch", () => {

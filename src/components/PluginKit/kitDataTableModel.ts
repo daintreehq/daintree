@@ -214,3 +214,19 @@ export function declaredPx(width: number | string | undefined): number | undefin
   const match = /^\s*(\d+(?:\.\d+)?)px\s*$/.exec(width);
   return match ? Number(match[1]) : undefined;
 }
+
+/** A `totals` or `groupTotals` cell: add the column, or draw it from the rows. */
+export type TotalSpec = "sum" | ((rows: readonly unknown[]) => unknown);
+
+/** A totals record read from untyped plugin input; `null` when it names no column. */
+export function readTotals(value: unknown): Map<string, TotalSpec> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const out = new Map<string, TotalSpec>();
+  for (const [id, spec] of Object.entries(value)) {
+    if (spec === "sum") out.set(id, "sum");
+    else if (typeof spec === "function") {
+      out.set(id, (rows) => Reflect.apply(spec, undefined, [rows]));
+    }
+  }
+  return out.size > 0 ? out : null;
+}

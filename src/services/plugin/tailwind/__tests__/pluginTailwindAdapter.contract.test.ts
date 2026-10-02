@@ -116,6 +116,27 @@ describe("plugin Tailwind adapter — the design system, enforced by the compile
     expect(css).toContain("var(--text-3xs)");
     expect(css).toContain("var(--text-4xs)");
   });
+
+  it("compiles the overlay, shadow, font and SVG paint vocabulary the plugin docs list", () => {
+    const css = compiler.build([
+      "bg-overlay-emphasis",
+      "border-overlay-soft",
+      "shadow-floating",
+      "font-mono",
+      "fill-text-muted",
+      "stroke-border-default",
+      "fill-category-blue",
+    ]);
+
+    expect(css).toContain("background-color: var(--theme-overlay-emphasis)");
+    expect(css).toContain("border-color: var(--theme-overlay-soft)");
+    // A theme shadow as the whole `--tw-shadow`, so it composes with rings.
+    expect(css).toContain("--tw-shadow: var(--theme-shadow-floating)");
+    expect(css).toMatch(/\.font-mono\s*\{\s*font-family: "JetBrains Mono"/);
+    expect(css).toContain("fill: var(--theme-text-muted)");
+    expect(css).toContain("stroke: var(--theme-border-default)");
+    expect(css).toContain("fill: var(--theme-category-blue)");
+  });
 });
 
 describe("plugin Tailwind adapter — scoping, which is what protects host chrome", () => {

@@ -84,7 +84,7 @@ const rawShadow = classRule(
     id: "raw-shadow",
     severity: "warn",
     message: "stock or hardcoded shadow",
-    hint: "use shadow-[var(--theme-shadow-ambient)], shadow-[var(--theme-shadow-floating)] or shadow-[var(--theme-shadow-dialog)]",
+    hint: "use the theme's shadows: shadow-ambient, shadow-floating or shadow-dialog",
   },
   (token, { base }) =>
     STOCK_SHADOW.test(base) || isRawArbitraryShadow(base)
@@ -97,7 +97,7 @@ const arbitraryTextSize = classRule(
     id: "arbitrary-text-size",
     severity: "warn",
     message: "arbitrary font size",
-    hint: "use a step of the type scale: text-2xs, text-xs, text-sm, text-base, text-lg",
+    hint: "use a step of the type scale: text-4xs, text-3xs, text-2xs, text-xs, text-sm, text-base, text-lg, text-xl, text-2xl … text-9xl",
   },
   (token, { base }) => (isArbitraryTextSize(base) ? `"${token}" is off the type scale` : null)
 );
@@ -307,12 +307,192 @@ const inlineSvgIcon = elementRule(
       : null
 );
 
+/** CSS named colours; `transparent` and `currentColor` are keywords that follow the theme. */
+const NAMED_COLOURS = new Set(
+  (
+    "aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue " +
+    "blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk " +
+    "crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki " +
+    "darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen " +
+    "darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue " +
+    "dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite " +
+    "gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki " +
+    "lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan " +
+    "lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen " +
+    "lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen " +
+    "magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen " +
+    "mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream " +
+    "mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid " +
+    "palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum " +
+    "powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown " +
+    "seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen " +
+    "steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen"
+  ).split(" ")
+);
+
+const HEX_COLOUR = /#(?:[\da-f]{8}|[\da-f]{6}|[\da-f]{3,4})(?![\w-])/i;
+/** A colour function whose first channel is a number, not a `var()`. */
+const COLOUR_FUNCTION = /\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch)\(\s*[-+.\d][^)]*\)?/i;
+/** `var(…)` and `url(…)`, one level of nesting deep: a token, or a gradient id like `url(#abc)`. */
+const VAR_OR_URL = /\b(?:var|url)\((?:[^()]|\([^()]*\))*\)/gi;
+/** A CSS string (an `image-set()` path, a `content` value): never a colour. */
+const CSS_STRING = /"[^"]*"|'[^']*'/g;
+
+/**
+ * The first literal colour in a CSS value, ignoring tokens and references. A
+ * template quasi beside a `${…}` may hold half of a `url(`/`var(`; that half is
+ * dropped too, so a path like `url(/img/${name}/red.png)` is not read as red.
+ */
+function literalColour(value: string, exprBefore = false, exprAfter = false): string | null {
+  let text = value.replace(CSS_STRING, " ").replace(VAR_OR_URL, " ");
+  if (exprBefore) text = text.replace(/^[^()]*\)/, " ");
+  if (exprAfter) text = text.replace(/\b(?:var|url|image-set)\([^()]*$/i, " ");
+  const fn = COLOUR_FUNCTION.exec(text);
+  if (fn) return fn[0];
+  const hex = HEX_COLOUR.exec(text);
+  if (hex) return hex[0];
+  // A word inside a path or file name (`/red.png`) is not a colour keyword.
+  for (const word of text.matchAll(/(?<![\w./-])[a-z]+(?![\w./-])/gi)) {
+    if (NAMED_COLOURS.has(word[0].toLowerCase())) return word[0];
+  }
+  return null;
+}
+
+/** `style={{…}}` keys whose value can carry a colour. */
+const STYLE_COLOUR_KEY =
+  /^(?:color|fill|stroke|background(?:Color|Image)?|border(?:(?:Top|Right|Bottom|Left|Block|Inline)(?:Start|End)?)?(?:Color)?|outline(?:Color)?|(?:box|text)Shadow|caretColor|accentColor|columnRule(?:Color)?|textDecoration(?:Color)?|textEmphasisColor|stopColor|floodColor|lightingColor|scrollbarColor|filter|WebkitTextFillColor|WebkitTextStrokeColor)$/;
+
+/** Presentation attributes that paint an SVG element. */
+const SVG_COLOUR_ATTRIBUTE =
+  /^(?:fill|stroke|stopColor|stop-color|floodColor|flood-color|lightingColor|lighting-color)$/;
+
+interface ObjectMember {
+  key: string;
+  /** Value range in `code`/`masked`. */
+  value: [number, number];
+}
+
+/** The `key: value` members at the top level of the object literal spanning `range`. */
+function objectMembers(file: LintFile, [start, end]: [number, number]): ObjectMember[] {
+  const members: ObjectMember[] = [];
+  const key = /^\s*(?:(["'])([^"']+)\1|\[\s*(["'])([^"']+)\3\s*\]|([A-Za-z_$][\w$]*))\s*:/;
+  let depth = 0;
+  let open: ObjectMember | null = null;
+  for (let i = start; i < end; i++) {
+    const c = file.masked[i]!;
+    if (c === "{" || c === "(" || c === "[") depth++;
+    else if (c === "}" || c === ")" || c === "]") depth--;
+    const boundary = (c === "," && depth === 1) || (c === "{" && depth === 1 && i === start);
+    const closing = c === "}" && depth === 0;
+    if (!boundary && !closing) continue;
+    if (open) {
+      open.value[1] = i;
+      members.push(open);
+      open = null;
+    }
+    if (closing) break;
+    const ahead = file.code.slice(i + 1, i + 160);
+    const match = key.exec(ahead);
+    if (match) {
+      const at = i + 1 + match[0].length;
+      open = { key: match[2] ?? match[4] ?? match[5]!, value: [at, at] };
+      continue;
+    }
+    // `...{ color: "#fff" }` spreads its members into this object.
+    const spread = /^\s*\.\.\.\s*\{/.exec(ahead);
+    if (spread) {
+      const brace = i + spread[0].length;
+      const inner = matchClose(file.masked, brace);
+      if (inner > brace) members.push(...objectMembers(file, [brace, inner + 1]));
+    }
+  }
+  return members;
+}
+
+/**
+ * A string that picks a value rather than being one: a comparison operand
+ * (`kind === "red" ? …`), a ternary's condition, or a lookup key (`palette["red"]`).
+ */
+function isSelector(file: LintFile, segment: LintFile["strings"][number]): boolean {
+  if (segment.template) return false;
+  const before = file.masked.slice(Math.max(0, segment.start - 9), segment.start - 1).trimEnd();
+  const after = file.masked.slice(segment.end + 1, segment.end + 9).trimStart();
+  return /(?:[=!]==?|\[|\bin|\bcase)$/.test(before) || /^(?:[=!]==?|\]|\?(?!\?)|in\b)/.test(after);
+}
+
+/** The literal colour among the string literals inside `range`, with its offset. */
+function colourIn(file: LintFile, [start, end]: [number, number]): RuleHit | null {
+  for (const segment of file.strings) {
+    if (segment.start < start || segment.end > end) continue;
+    if (isSelector(file, segment)) continue;
+    const literal = literalColour(segment.text, segment.exprBefore, segment.exprAfter);
+    if (literal !== null) return { offset: segment.start, message: literal };
+  }
+  return null;
+}
+
+/** Where `<mask>` elements' contents sit: paint there is luminance coverage, not colour. */
+function maskRanges(file: LintFile): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  for (const element of file.elements) {
+    if (!element.intrinsic || element.tag !== "mask") continue;
+    const open = file.masked.indexOf("(", element.offset);
+    const close = open < 0 ? -1 : matchClose(file.masked, open);
+    if (close > open) ranges.push([open, close]);
+  }
+  return ranges;
+}
+
+const inlineStyleColour: LintRule = {
+  id: "inline-style-colour",
+  severity: "warn",
+  appliesTo: "view",
+  message: "literal colour in an inline style or SVG attribute",
+  hint: "use a token: a utility on className (text-text-secondary, bg-surface-panel-elevated, fill-category-blue, stroke-border-default, fill-current) or var(--theme-…) in the value — a literal colour stays put when the theme changes",
+  check(file) {
+    const hits: RuleHit[] = [];
+    const masks = maskRanges(file);
+    for (const element of file.elements) {
+      if (!element.props) continue;
+      if (masks.some(([s, e]) => element.offset > s && element.offset < e)) continue;
+      for (const member of objectMembers(file, element.props)) {
+        if (member.key === "style") {
+          const at =
+            member.value[0] + (/^\s*/.exec(file.masked.slice(member.value[0]))?.[0].length ?? 0);
+          if (file.masked[at] !== "{") continue;
+          const close = matchClose(file.masked, at);
+          if (close < 0) continue;
+          for (const property of objectMembers(file, [at, close + 1])) {
+            if (!STYLE_COLOUR_KEY.test(property.key)) continue;
+            const hit = colourIn(file, property.value);
+            if (hit) {
+              hits.push({
+                offset: hit.offset,
+                message: `style ${property.key}: "${hit.message}" is a literal colour the theme cannot move`,
+              });
+            }
+          }
+        } else if (element.intrinsic && SVG_COLOUR_ATTRIBUTE.test(member.key)) {
+          const hit = colourIn(file, member.value);
+          if (hit) {
+            hits.push({
+              offset: hit.offset,
+              message: `${member.key}="${hit.message}" on <${element.tag}> is a literal colour the theme cannot move`,
+            });
+          }
+        }
+      }
+    }
+    return hits;
+  },
+};
+
 const lucideImport: LintRule = {
   id: "lucide-react-import",
   severity: "warn",
   appliesTo: "view",
   message: "lucide-react is bundled into the view",
-  hint: "prefer `Icon` from @daintreehq/plugin-ui, served by the host at no bundle cost",
+  hint: "prefer `Icon` from @daintreehq/plugin-ui, or a kit component's `icon` prop: name any Lucide icon and the host draws it, at no bundle cost",
   check(file) {
     const match = /(?:from\s*|import\s*\(\s*|require\(\s*)["']lucide-react(?:\/[^"']*)?["']/.exec(
       file.code
@@ -669,6 +849,7 @@ export const CONSISTENCY_RULES: LintRule[] = [
   rawFormControl,
   nativeTitle,
   inlineSvgIcon,
+  inlineStyleColour,
   lucideImport,
   dndLibraryImport,
   handRolledContextDrag,

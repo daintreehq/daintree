@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/context-menu";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
-import { resolvePluginKitIcon } from "./PluginKitIcons";
+import { renderIconSource } from "./PluginKitIcons";
 import { actionMenuRowVisible, useActionMenuRow } from "./PluginKitNativeAgents";
 import { field, fn, nonEmpty, str, useKitOwnerAttributes } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
@@ -106,13 +106,11 @@ function readRadioItems(items: unknown): { value: string; label: string; disable
   return out;
 }
 
-function MenuRowIcon({
-  Glyph,
-  top,
-}: {
-  Glyph: ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
-  top: boolean;
-}) {
+// A row's icon, or `null` when the source draws nothing, so a row without one
+// takes no gutter of its own.
+function menuRowIcon(source: unknown, top: boolean): ReactNode {
+  const glyph = source === undefined ? null : renderIconSource(source, "h-3.5 w-3.5");
+  if (!glyph) return null;
   return (
     // `data-menu-icon` gives text-only rows in the same menu the matching gutter.
     // Beside a two-line row it sits on the label's line, not between the two.
@@ -121,7 +119,7 @@ function MenuRowIcon({
       aria-hidden="true"
       className={top ? "mr-2 inline-flex shrink-0 self-start py-px" : "mr-2 inline-flex shrink-0"}
     >
-      <Glyph className="h-3.5 w-3.5" aria-hidden="true" />
+      {glyph}
     </span>
   );
 }
@@ -164,7 +162,6 @@ const TWO_LINE_TRIGGER_CLASS = "items-start [&>svg:last-child]:mt-px";
 function ActionMenuRow({ parts, entry }: { parts: KitMenuParts; entry: PluginActionMenuItem }) {
   const row = useActionMenuRow(entry);
   if (!row) return null;
-  const Glyph = row.icon === undefined ? undefined : resolvePluginKitIcon(row.icon);
   const refused = row.disabled;
   // The host's unavailable row: dimmed and skipped like every disabled item,
   // the reason in a few words where the keys would sit, and in full in the
@@ -180,7 +177,7 @@ function ActionMenuRow({ parts, entry }: { parts: KitMenuParts; entry: PluginAct
       aria-label={reason}
       aria-keyshortcuts={row.shortcut ? comboToAriaKeyshortcuts(row.shortcut, isMac()) : undefined}
     >
-      {Glyph ? <MenuRowIcon Glyph={Glyph} top={row.description !== undefined} /> : null}
+      {menuRowIcon(row.icon, row.description !== undefined)}
       {row.description === undefined ? (
         row.label
       ) : (
@@ -282,7 +279,6 @@ function renderMenuEntry(
       if (depth >= MAX_SUBMENU_DEPTH) return null;
       const rows = renderMenuEntries(parts, typed.items, depth + 1).filter((row) => row !== null);
       if (rows.length === 0) return null;
-      const Glyph = typed.icon === undefined ? undefined : resolvePluginKitIcon(typed.icon);
       const description = nonEmpty(typed.description);
       return (
         <parts.Sub key={key}>
@@ -292,7 +288,7 @@ function renderMenuEntry(
             // Beside two lines the chevron sits on the label's line, not between them.
             className={description === undefined ? undefined : TWO_LINE_TRIGGER_CLASS}
           >
-            {Glyph ? <MenuRowIcon Glyph={Glyph} top={description !== undefined} /> : null}
+            {menuRowIcon(typed.icon, description !== undefined)}
             <MenuRowText label={label} description={description} />
           </parts.SubTrigger>
           <KitSubmenuContent SubContent={parts.SubContent}>{rows}</KitSubmenuContent>
@@ -308,7 +304,6 @@ function renderMenuEntry(
       const label = str(typed.label);
       const onSelect = fn(typed.onSelect);
       if (!label) return null;
-      const Glyph = typed.icon === undefined ? undefined : resolvePluginKitIcon(typed.icon);
       const description = nonEmpty(typed.description);
       return (
         <parts.Item
@@ -318,7 +313,7 @@ function renderMenuEntry(
           destructive={typed.destructive === true}
           textValue={label}
         >
-          {Glyph ? <MenuRowIcon Glyph={Glyph} top={description !== undefined} /> : null}
+          {menuRowIcon(typed.icon, description !== undefined)}
           {description === undefined ? (
             label
           ) : (

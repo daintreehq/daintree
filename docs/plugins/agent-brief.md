@@ -317,7 +317,7 @@ A plugin view shares the app's main thread, so a slow panel is a slow Daintree. 
 - **Never push per item.** A job that pushed each of 20,000 progress lines, appended with `setState([...prev, line])`, caused 300 ms frame gaps and left 20,000 rows in the DOM; gathered in the worker and pushed every 50 ms it sent 7 messages. Render streams with `useStreamBuffer` and `LogView`, and throttle a replaceable value (a percentage) with `useThrottledCallback`. [Patterns → Stream progress and logs](./patterns.md#stream-progress-and-logs).
 - **Push deltas, not the whole state.** Re-sending a growing list on every change costs the square of its length: 100 tool calls cost 1.1 MB in 200 pushes. `createSyncedCollection` in the worker and `useSyncedCollection` in the view sent 23 KB in 13, and handle the ordering races for you. A delta carries each changed item whole, so a status flip on a large item resends all of it: keep items to what the list shows, and fetch a large field (a body, a diff, a log) with its own `invoke` when a row is opened. [Patterns → Push deltas](./patterns.md#push-deltas-not-the-whole-state).
 - **Subscribe first, then pull**, and keep whichever answer carries the newer revision: pushes are not ordered against `invoke` results (rule 8).
-- **Refetch once per burst.** For a "this changed" push (a database `onDidChange`, a file watch), use `useCachedHostChannel(pluginId, channel, args, { invalidateOn })`: one refetch after `debounceMs` (default 100) of quiet instead of one per push.
+- **Refetch once per burst.** For a "this changed" push (a database `onDidChange`, a file watch), use `useCachedHostChannel(pluginId, channel, args, { invalidateOn })` (one channel or an array): one refetch after `debounceMs` (default 100) of quiet instead of one per push.
 - **Host subscriptions coalesce by default.** `onDidChangeWorktrees`, `onDidChangeActiveWorktree` and `onDidChangeAgentState` deliver one callback per 100 ms burst with the latest state; pass `{ debounceMs: 0 }` only when you need every event. `host.fs.watch` does not — give it `debounceMs`.
 - **Stop producing when nobody listens.** A broadcast to a closed panel still crosses to the renderer. Gate a worker ticker on `host.hasListeners?.(channel)` or `host.onDidChangeListeners?.(channel, cb)`, for state a view re-pulls on mount.
 - **Batch file reads in the worker.** `host.fs.walk(root, { include, exclude })` lists a tree in one call and `host.fs.readFiles(paths)` reads up to 1,024 files in another; a search built from one `readdir` and one `readFile` per entry took 960 ms where the ported one took 335 ms. A file tree wants `readdir(dir, { detail: true })` for sizes, times and Daintree's own numeric-aware order. [Patterns → Build a file UI](./patterns.md#build-a-file-ui).
@@ -379,13 +379,25 @@ Prefer container queries (`@container`, `@sm:`) over viewport breakpoints — yo
 
 `bg-accent-primary` `bg-accent-hover` `bg-accent-foreground` `bg-accent-primary-foreground` `bg-accent-soft` `bg-accent-muted` `bg-accent-secondary` `bg-accent-secondary-soft` `bg-accent-secondary-muted`
 
+**Overlays** — shown with `bg-`; `border-` takes the same names
+
+`bg-overlay-base` `bg-overlay-subtle` `bg-overlay-soft` `bg-overlay-medium` `bg-overlay-strong` `bg-overlay-emphasis` `bg-overlay-hover` `bg-overlay-active` `bg-overlay-selected` `bg-overlay-elevated` `bg-overlay-raised` `bg-overlay-highlight`
+
 **Radii**
 
 `rounded-xs` `rounded-sm` `rounded-md` `rounded-lg` `rounded-xl` `rounded-2xl` `rounded-3xl` `rounded-4xl`
 
+**Shadows**
+
+`shadow-ambient` `shadow-floating` `shadow-dialog`
+
 **Type scale below Tailwind's floor**
 
 `text-2xs` `text-3xs` `text-4xs`
+
+**Fonts**
+
+`font-mono`
 
 **Durations**
 
@@ -400,6 +412,10 @@ Prefer container queries (`@container`, `@sm:`) over viewport breakpoints — yo
 hues: `blue` `purple` `cyan` `green` `amber` `orange` `teal` `indigo` `rose` `pink` `violet` `slate`
 
 variants: `(bare)` `-subtle` `-text` `-border`
+
+**SVG paint** — `fill-` and `stroke-` take every colour name above, and `fill-current` / `stroke-current` paint with the element's text colour
+
+`fill-text-muted` `stroke-border-default` `fill-status-danger` `fill-category-blue`
 
 **Custom variants** — write as `variant:utility`
 
