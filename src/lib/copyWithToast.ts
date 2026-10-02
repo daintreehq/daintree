@@ -1,4 +1,5 @@
 import { notify } from "@/lib/notify";
+import { captureCopyFlash, showCopyFlash } from "@/lib/copyFlash";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
 async function writeClipboard(text: string): Promise<boolean> {
@@ -11,12 +12,6 @@ async function writeClipboard(text: string): Promise<boolean> {
 }
 
 export interface CopyWithToastOptions {
-  /**
-   * The toast body. Defaults to the value itself, so the user sees what they
-   * now hold; pass a shorter stand-in for a payload too long to echo (a file's
-   * contents).
-   */
-  message?: string;
   /** The clipboard write. Defaults to `navigator.clipboard.writeText`. */
   write?: (text: string) => Promise<boolean>;
 }
@@ -40,24 +35,26 @@ function lowerNoun(label: string): string {
 
 /**
  * The copy gesture for a menu row. The row closes on select, so nothing on
- * screen is left to show the result: success is a transient toast naming what
- * was copied, and a refused write is an error toast whose Retry re-runs the
- * whole gesture. The toast's own live region speaks, and only a copy whose
- * toast was held back (window unfocused, quiet hours) is announced here
- * instead.
+ * screen is left to show the result. Success is an acknowledgement, not a
+ * notification: a brief "Copied" flash beside where the copy was asked for,
+ * plus one polite announcement naming what was copied ("Path copied") that
+ * does not depend on the flash being drawn. A refused write is an error toast
+ * whose Retry re-runs the whole gesture, because a silent failure leaves the
+ * old clipboard contents for the next paste.
  *
- * `label` is the capitalised noun ("Path", "Branch name", "URL"): it titles
- * both toasts, "Path copied" and "Couldn't copy path".
+ * `label` is the capitalised noun ("Path", "Branch name", "URL"): it names the
+ * announcement and titles the failure toast, "Couldn't copy path".
  */
 export function copyWithToast(label: string, value: string, options: CopyWithToastOptions = {}) {
   const { write = writeClipboard } = options;
-  const { message = value } = options;
   const noun = lowerNoun(label);
   const successTitle = `${label} copied`;
   const failureTitle = `Couldn't copy ${noun}`;
   // Retry re-enters the whole gesture, so a write that only succeeds on the
   // second attempt still confirms.
   const attempt = () => {
+    // Where the user is acting, read before the menu's close moves focus.
+    const flash = captureCopyFlash();
     // Started synchronously, inside the gesture that asked for it. A caller's
     // write that throws or rejects is a refusal like any other.
     let written: Promise<boolean>;
@@ -68,13 +65,8 @@ export function copyWithToast(label: string, value: string, options: CopyWithToa
     }
     void written.then((copied) => {
       if (copied) {
-        const toastId = notify({
-          type: "info",
-          title: successTitle,
-          message,
-          transient: true,
-        });
-        if (!toastId) useAnnouncerStore.getState().announce(successTitle, "polite");
+        useAnnouncerStore.getState().announce(successTitle, "polite");
+        showCopyFlash(flash);
         return;
       }
       // A silent failure leaves the previous clipboard contents in place, and

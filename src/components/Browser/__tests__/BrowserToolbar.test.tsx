@@ -1190,8 +1190,9 @@ describe("BrowserToolbar at compact widths", () => {
     rowWidth.current = 1000;
   });
 
-  it("confirms a copy from More with a toast, like every menu copy", async () => {
+  it("confirms a copy from More like every menu copy, without a toast", async () => {
     notifyMock.mockClear();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
     const { getByLabelText } = renderToolbar();
     const glyphBefore = getByLabelText("More page actions").innerHTML;
     fireEvent.pointerDown(getByLabelText("More page actions"), { button: 0, ctrlKey: false });
@@ -1200,11 +1201,8 @@ describe("BrowserToolbar at compact widths", () => {
       (i) => i.textContent?.trim() === "Copy URL"
     )!;
     fireEvent.click(copyItem);
-    await waitFor(() =>
-      expect(notifyMock).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "info", title: "URL copied" })
-      )
-    );
+    await waitFor(() => expect(useAnnouncerStore.getState().polite?.msg).toBe("URL copied"));
+    expect(notifyMock).not.toHaveBeenCalled();
     // The trigger is not a second confirmation channel.
     expect(getByLabelText("More page actions").innerHTML).toBe(glyphBefore);
   });

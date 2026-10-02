@@ -272,7 +272,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
   const insertAriaKeyshortcuts = comboToAriaKeyshortcuts(INSERT_FILE_REFERENCE_COMBO, isMac());
 
   const handleCopyFileContents = useCallback(
-    (absolutePath: string, name: string) =>
+    (absolutePath: string) =>
       // `file.read`, not filesClient: the action resolves the path against the
       // project and its worktrees and refuses anything outside them, and reports
       // binary, oversized and LFS-pointer files as named failures rather than
@@ -286,7 +286,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
         // Written straight off the read: clipboard writes want a fresh
         // transient activation, and parking the text in state first would put a
         // render between the gesture and the write for no gain.
-        (result) => copyWithToast("File contents", result.content, { message: name })
+        (result) => copyWithToast("File contents", result.content)
       ),
     [worktreeId]
   );
@@ -439,7 +439,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
                 Copy file name
               </ContextMenuItem>
               {showCopyFileContents && (
-                <ContextMenuItem onSelect={() => handleCopyFileContents(absolutePath, name)}>
+                <ContextMenuItem onSelect={() => handleCopyFileContents(absolutePath)}>
                   <Copy className={ICON_CLASS} />
                   Copy file contents
                 </ContextMenuItem>

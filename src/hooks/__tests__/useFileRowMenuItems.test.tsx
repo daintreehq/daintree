@@ -81,6 +81,7 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
 
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { primeRadix } from "@/components/ui/radix-loader";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   isFileRowMenuKey,
   useFileRowMenuItems,
@@ -539,17 +540,22 @@ describe("useFileRowMenuItems — path semantics", () => {
     ["Copy path", "Path copied", "/repo/src/index.ts"],
     ["Copy relative path", "Relative path copied", "src/index.ts"],
     ["Copy file name", "File name copied", "index.ts"],
-  ] as const)("confirms %s with a toast naming the value", async (label, title, value) => {
-    const menu = await openMenu();
-    const copy = await openSubmenu(menu, "Copy");
+  ] as const)(
+    "confirms %s by announcing what was copied, not with a toast",
+    async (label, title, value) => {
+      useAnnouncerStore.setState({ polite: null, assertive: null });
+      const writeText = vi.mocked(navigator.clipboard.writeText);
+      const menu = await openMenu();
+      const copy = await openSubmenu(menu, "Copy");
 
-    fireEvent.click(within(copy).getByRole("menuitem", { name: label }));
+      fireEvent.click(within(copy).getByRole("menuitem", { name: label }));
 
-    // The row closes on select, so nothing on screen is left to confirm it.
-    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
-    const [payload] = notifyMock.mock.calls[0]!;
-    expect(payload).toMatchObject({ type: "info", title, message: value });
-  });
+      // The row closes on select, so nothing on screen is left to confirm it.
+      await waitFor(() => expect(useAnnouncerStore.getState().polite?.msg).toBe(title));
+      expect(writeText).toHaveBeenCalledWith(value);
+      expect(notifyMock).not.toHaveBeenCalled();
+    }
+  );
 
   it("raises a retryable toast when the clipboard rejects, and Retry rewrites the same path", async () => {
     const writeText = navigator.clipboard.writeText as ReturnType<typeof vi.fn>;
@@ -593,13 +599,10 @@ describe("useFileRowMenuItems — Copy file contents", () => {
       expect(call![2]).toEqual({ source: "context-menu" });
     });
     await waitFor(() => expect(writeTextMock).toHaveBeenCalledWith("raw\nsource\n"));
-    // The menu has closed, so the toast is the confirmation. It names the file
-    // rather than echoing the whole contents back.
-    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
-    const [payload] = notifyMock.mock.calls[0]!;
-    expect(payload.type).toBe("info");
-    expect(payload.title).toBe("File contents copied");
-    expect(payload.message).toBe("index.ts");
+    await waitFor(() =>
+      expect(useAnnouncerStore.getState().polite?.msg).toBe("File contents copied")
+    );
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("raises a retryable toast when the read fails, and writes nothing", async () => {
@@ -673,6 +676,7 @@ describe("useFileRowMenuItems — Copy file contents", () => {
   });
 
   it("copies an empty file as the empty string", async () => {
+    useAnnouncerStore.setState({ polite: null, assertive: null });
     dispatchMock.mockImplementation((id) =>
       id === "file.read"
         ? Promise.resolve({ ok: true, result: { content: "" } })
@@ -685,8 +689,10 @@ describe("useFileRowMenuItems — Copy file contents", () => {
 
     // A truthiness gate on the read result would silently write nothing here.
     await waitFor(() => expect(writeTextMock).toHaveBeenCalledWith(""));
-    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
-    expect(notifyMock.mock.calls[0]![0].type).toBe("info");
+    await waitFor(() =>
+      expect(useAnnouncerStore.getState().polite?.msg).toBe("File contents copied")
+    );
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("keeps the item for an extension it doesn't recognise", async () => {
