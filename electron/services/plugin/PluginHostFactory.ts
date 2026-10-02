@@ -841,16 +841,6 @@ export function createHost(
   };
 
   /**
-   * Does an agent transition belong to the bound project? Unbound hosts observe
-   * every agent by design — that is what `agent:read` has always meant.
-   *
-   * Fails CLOSED, unlike the worktree predicate: the event carries no
-   * project-scoped payload for the callback to re-derive, so delivering one we
-   * cannot attribute would hand a bound plugin another project's agent state
-   * outright. The routing id is read off the raw event; the plugin-facing
-   * projection deliberately drops it (see `toPluginAgentSnapshot`).
-   */
-  /**
    * The project root a `"project"`-scoped settings or storage call targets.
    *
    * Unbound stays `null`, which both managers read as "use the app-global
@@ -863,6 +853,17 @@ export function createHost(
 
   const resolveAgentEventWorkspace = (terminalId: string | undefined): string | null =>
     terminalId === undefined ? null : (getPtyClient()?.getTerminalProjectId(terminalId) ?? null);
+
+  /**
+   * Does an agent transition belong to the bound project? Unbound hosts observe
+   * every agent by design — that is what `agent:read` has always meant.
+   *
+   * Fails CLOSED, unlike the worktree predicate: the event carries no
+   * project-scoped payload for the callback to re-derive, so delivering one we
+   * cannot attribute would hand a bound plugin another project's agent state
+   * outright. The workspace is resolved from the raw event's terminal id, which
+   * the plugin-facing projection also carries (see `toPluginAgentSnapshot`).
+   */
   const isAgentEventForBoundProject = (workspaceId: string | null): boolean =>
     boundProjectId === null || (workspaceId !== null && workspaceId === boundProjectId);
   // The LoadedPlugin this host is bound to. recordPluginLog compares against

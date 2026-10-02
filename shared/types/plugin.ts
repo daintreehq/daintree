@@ -2939,9 +2939,9 @@ export interface PluginTerminalsApi {
    * Read the current screen of one terminal as plain text: its last
    * `options.lines` non-padding lines, never its scrollback. Answered by the
    * terminal host, so it works for terminals in projects whose view is not
-   * open. Take ids from {@link PluginAgentsApi.list}. A project plugin reads
-   * only its own project's terminals; an installed plugin may read any user
-   * terminal by id.
+   * open. Take ids from {@link PluginAgentsApi.list}, or, for an installed
+   * plugin, {@link PluginAgentsApi.listAll}. A project plugin reads only its own
+   * project's terminals; an installed plugin may read any user terminal by id.
    *
    * Gated on `terminal:read`, with a first-use consent prompt that tells the
    * user the plugin can read what their terminals show. Rate limited to 60

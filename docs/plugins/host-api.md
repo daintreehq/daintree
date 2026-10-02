@@ -1092,7 +1092,7 @@ switch (screen.status) {
 }
 ```
 
-The terminal's current screen as plain text: its last `lines` lines (1–100, default 20; a line soft-wrapped across rows counts once) with blank padding trimmed and no ANSI, never its scrollback or the serialized buffer. A blank screen is `{ status: "ok", text: "", lineCount: 0 }`, so an empty screen is never confused with a missing terminal. `truncated` is `true` when lines above the returned ones, or text past the 16 KiB cap, were left out; the newest content is kept. Take ids from [`agents.list`](#agentslist--the-projects-agent-panes).
+The terminal's current screen as plain text: its last `lines` lines (1–100, default 20; a line soft-wrapped across rows counts once) with blank padding trimmed and no ANSI, never its scrollback or the serialized buffer. A blank screen is `{ status: "ok", text: "", lineCount: 0 }`, so an empty screen is never confused with a missing terminal. `truncated` is `true` when lines above the returned ones, or text past the 16 KiB cap, were left out; the newest content is kept. Take ids from [`agents.list`](#agentslist--the-projects-agent-panes), or, for an installed plugin, from [`agents.listAll`](#agentslistall--every-agent-in-every-open-project).
 
 It is answered in main from the terminal host's own copy of the screen, so a terminal in a project whose view is closed still reads. A project plugin reads only its own project's terminals; an installed plugin may read any user terminal by id. An unknown id, one in another project and one that is not a user terminal all answer the same `not-found`. Nothing about the terminal changes: no input, no resize.
 
