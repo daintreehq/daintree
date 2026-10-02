@@ -1914,3 +1914,54 @@ describe("createMockHost fs.walk", () => {
     await expect(host.fs.walk!("/nope")).rejects.toThrow(/ENOENT/);
   });
 });
+
+describe("createMockHost terminals.readScreen", () => {
+  it("gates on terminal:read, not agent:read", async () => {
+    await expect(
+      createMockHost({ capabilities: ["agent:read"] }).terminals.readScreen("t-1")
+    ).rejects.toThrow(/PERMISSION_REQUIRED: .*"terminal:read"/);
+  });
+
+  it("validates arguments like production", async () => {
+    const host = createMockHost({ capabilities: ["terminal:read"] });
+    await expect(host.terminals.readScreen("")).rejects.toThrow(/terminalId/);
+    await expect(host.terminals.readScreen("t-1", { lines: 0 })).rejects.toThrow(/lines/);
+    await expect(host.terminals.readScreen("t-1", { lines: 101 })).rejects.toThrow(/lines/);
+    await expect(
+      host.terminals.readScreen("t-1", { lines: null as unknown as number })
+    ).rejects.toThrow(/lines/);
+    expect(host.readScreenCalls).toEqual([]);
+  });
+
+  it("reports configured screens, trimmed to the requested lines, and records each call", async () => {
+    const host = createMockHost({
+      capabilities: ["terminal:read"],
+      terminalScreens: {
+        "t-1": { status: "ok", text: "a\nb\nc", lineCount: 3, truncated: false },
+        "t-2": { status: "exited" },
+      },
+    });
+
+    await expect(host.terminals.readScreen("t-1", { lines: 2 })).resolves.toEqual({
+      status: "ok",
+      text: "b\nc",
+      lineCount: 2,
+      truncated: true,
+    });
+    await expect(host.terminals.readScreen("t-2")).resolves.toEqual({ status: "exited" });
+    await expect(host.terminals.readScreen("t-3")).resolves.toEqual({ status: "not-found" });
+    expect(host.readScreenCalls.map((c) => [c.terminalId, c.lines])).toEqual([
+      ["t-1", 2],
+      ["t-2", 20],
+      ["t-3", 20],
+    ]);
+
+    host.simulateTerminalScreen("t-3", { status: "ok", text: "", lineCount: 0, truncated: false });
+    await expect(host.terminals.readScreen("t-3")).resolves.toMatchObject({
+      status: "ok",
+      text: "",
+    });
+    host.simulateTerminalScreen("t-1", null);
+    await expect(host.terminals.readScreen("t-1")).resolves.toEqual({ status: "not-found" });
+  });
+});

@@ -65,6 +65,14 @@ function makeHost() {
       list: vi.fn(async () => [{ terminalId: "t-1", canDraft: true }]),
       listAll: vi.fn(async () => ({ agents: [], degraded: false, lastSuccessfulAt: 1 })),
     },
+    terminals: {
+      readScreen: vi.fn(async (): Promise<unknown> => ({
+        status: "ok",
+        text: "Waiting",
+        lineCount: 1,
+        truncated: false,
+      })),
+    },
     showInputBox: vi.fn(async (): Promise<unknown> => undefined),
     showConfirm: vi.fn(async () => false),
     dispatch: vi.fn(async () => ({ ok: true, result: undefined })),
@@ -498,6 +506,23 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(workerHost.sent.find((m) => m.requestId === "g2")).toMatchObject({
       ok: true,
       result: { status: "drafted", terminalId: "t-1" },
+    });
+  });
+
+  it("routes terminals.readScreen with its id and options to the real host", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "s1",
+      method: "terminals.readScreen",
+      params: { terminalId: "t-1", options: { lines: 5 } },
+    });
+    await flush();
+
+    expect(host.terminals.readScreen).toHaveBeenCalledWith("t-1", { lines: 5 });
+    expect(workerHost.sent.find((m) => m.requestId === "s1")).toMatchObject({
+      ok: true,
+      result: { status: "ok", text: "Waiting" },
     });
   });
 

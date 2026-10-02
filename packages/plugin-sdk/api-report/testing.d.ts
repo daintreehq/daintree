@@ -1597,7 +1597,7 @@ type PluginPanelBadge = {
     color?: PluginPanelBadgeColor;
     tooltip?: string;
 };
-declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch"];
+declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch"];
 type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
 /** Third argument to {@link PluginHostApi.dispatch} (#13119). */
 interface PluginDispatchOptions {
@@ -2605,6 +2605,67 @@ interface PluginAgentsApi {
      *   `agent:read`, or is a project plugin.
      */
     listAll(): Promise<PluginAllAgentsSnapshot>;
+}
+/** Options for {@link PluginTerminalsApi.readScreen}. */
+interface PluginTerminalReadScreenOptions {
+    /**
+     * How many of the screen's last lines to return: an integer from 1 to 100.
+     * Defaults to 20. Fewer come back when the screen holds fewer. A line the
+     * terminal soft-wrapped across rows counts once.
+     */
+    lines?: number;
+}
+/**
+ * What {@link PluginTerminalsApi.readScreen} found.
+ *
+ * - `ok`: the terminal's current screen, as plain text with no ANSI. `text` is
+ *   `""` (and `lineCount` `0`) when the screen is blank — an empty screen, not a
+ *   missing terminal. `truncated` is `true` when lines above the returned ones,
+ *   or bytes past the 16 KiB cap, were left out; the newest content is kept.
+ * - `exited`: the terminal is still listed but its process has exited.
+ * - `not-found`: no terminal this plugin may read has that id. One answer for
+ *   an unknown id, one in another project, and one that is not a user terminal.
+ * - `unavailable`: the terminal exists but its screen could not be read right
+ *   now (the terminal host is down or did not answer). Worth retrying later.
+ */
+type PluginTerminalScreenResult = {
+    readonly status: "ok";
+    readonly text: string;
+    readonly lineCount: number;
+    readonly truncated: boolean;
+} | {
+    readonly status: "exited";
+} | {
+    readonly status: "not-found";
+} | {
+    readonly status: "unavailable";
+};
+/** `host.terminals` — read-only access to what terminals show. */
+interface PluginTerminalsApi {
+    /**
+     * Read the current screen of one terminal as plain text: its last
+     * `options.lines` non-padding lines, never its scrollback. Answered by the
+     * terminal host, so it works for terminals in projects whose view is not
+     * open. Take ids from {@link PluginAgentsApi.list}, or, for an installed
+     * plugin, {@link PluginAgentsApi.listAll}. A project plugin reads only its own
+     * project's terminals; an installed plugin may read any user terminal by id.
+     *
+     * Gated on `terminal:read`, with a first-use consent prompt that tells the
+     * user the plugin can read what their terminals show. Rate limited to 60
+     * calls per second per plugin — enough for a grid polling a few dozen cards
+     * once a second. Never touches the terminal's input or size. The host neither
+     * logs nor stores the text; once returned, it is the plugin's to protect.
+     *
+     * Resolves `{ status: "unavailable" }` once the plugin is unloaded.
+     *
+     * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+     *   `terminal:read`, or the user denies the consent prompt.
+     * @throws {Error} `RATE_LIMITED:` when the plugin exceeds 60 calls a second.
+     *   Nothing is queued; call again later.
+     * @throws {Error} If `terminalId` is not a non-empty string or `options.lines`
+     *   is not an integer from 1 to 100.
+     */
+    readScreen(terminalId: string, options?: PluginTerminalReadScreenOptions): Promise<PluginTerminalScreenResult>;
 }
 /** Options for {@link PluginHostApi.sendToAgent}. */
 interface PluginSendToAgentOptions {
@@ -4182,6 +4243,11 @@ interface PluginHostApi extends PluginActivationApi {
      */
     readonly agents: PluginAgentsApi;
     /**
+     * Read what a terminal's screen shows, as plain text. Gated on
+     * `terminal:read`. See {@link PluginTerminalsApi}.
+     */
+    readonly terminals: PluginTerminalsApi;
+    /**
      * Hand `text` to an agent: it is appended to that agent's visible draft,
      * below anything the user already typed, as a fenced block headed by
      * `options.title` and the plugin's name. Nothing is ever submitted — the user
@@ -4573,6 +4639,12 @@ interface SentToAgentRecord {
     options: PluginSendToAgentOptions | undefined;
     result: PluginSendToAgentResult;
 }
+/** Captured `host.terminals.readScreen(terminalId, options)` calls, with what each resolved. */
+interface ReadScreenRecord {
+    terminalId: string;
+    lines: number;
+    result: PluginTerminalScreenResult;
+}
 interface RegisteredForgeProviderRecord {
     descriptor: ForgeProviderDescriptor;
     impl: ForgeProviderImpl;
@@ -4642,6 +4714,8 @@ interface MockHostState {
     readonly sentToActiveAgentCalls: ReadonlyArray<SentToActiveAgentRecord>;
     /** Every `host.sendToAgent` call that got past validation, in order. */
     readonly sentToAgentCalls: ReadonlyArray<SentToAgentRecord>;
+    /** Every `host.terminals.readScreen` call that got past validation, in order. */
+    readonly readScreenCalls: ReadonlyArray<ReadScreenRecord>;
     readonly registeredForgeProviders: ReadonlyArray<RegisteredForgeProviderRecord>;
     readonly registeredFileDecorationProviders: ReadonlyArray<RegisteredFileDecorationProviderRecord>;
     /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
@@ -4778,6 +4852,12 @@ interface MockHostState {
      * picker and resolves `{ status: "cancelled" }`.
      */
     simulateSendToAgentPick(terminalId: string | null): void;
+    /**
+     * Set what `terminals.readScreen(terminalId)` finds, or pass `null` to forget
+     * the terminal so it reads `not-found`. An `ok` screen's `text` is trimmed to
+     * the call's last `lines` lines, as the host does.
+     */
+    simulateTerminalScreen(terminalId: string, screen: PluginTerminalScreenResult | null): void;
 }
 interface CreateMockHostOptions {
     pluginId?: string;
@@ -4885,7 +4965,13 @@ interface CreateMockHostOptions {
      * (`{ agents: [], degraded: false, lastSuccessfulAt: 0 }`).
      */
     allAgents?: PluginAllAgentsSnapshot;
+    /**
+     * What `terminals.readScreen` finds, by terminal id. An id not listed reads
+     * `not-found`. Defaults to none. The mock neither rate limits nor applies
+     * the host's 16 KiB byte cap.
+     */
+    terminalScreens?: Record<string, PluginTerminalScreenResult>;
 }
 declare function createMockHost(options?: CreateMockHostOptions): PluginHostApi & MockHostState;
 
-export { type BroadcastRecord, type CreateMockHostOptions, type DispatchedActionRecord, type InvalidationRecord, type MockHostState, type PluginActionManifestEntry, type PluginCanDispatchResult, type RegisteredActionRecord, type RegisteredFileDecorationProviderRecord, type RegisteredForgeProviderRecord, type RegisteredHandlerRecord, type RegisteredMcpToolsRecord, type SentToAgentRecord, type ShowConfirmRecord, type ShowInputBoxRecord, type ShowQuickPickRecord, type ShownToastRecord, createMockHost };
+export { type BroadcastRecord, type CreateMockHostOptions, type DispatchedActionRecord, type InvalidationRecord, type MockHostState, type PluginActionManifestEntry, type PluginCanDispatchResult, type ReadScreenRecord, type RegisteredActionRecord, type RegisteredFileDecorationProviderRecord, type RegisteredForgeProviderRecord, type RegisteredHandlerRecord, type RegisteredMcpToolsRecord, type SentToAgentRecord, type ShowConfirmRecord, type ShowInputBoxRecord, type ShowQuickPickRecord, type ShownToastRecord, createMockHost };

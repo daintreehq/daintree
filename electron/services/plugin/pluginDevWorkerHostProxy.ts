@@ -78,6 +78,7 @@ import type {
   PanelReloadResult,
   PluginAgentPane,
   PluginSendToAgentResult,
+  PluginTerminalScreenResult,
 } from "../../../shared/types/plugin.js";
 import { withTimeout } from "../../utils/withTimeout.js";
 import { actionHandlerArityHint, appendHandlerHint } from "./pluginHandlerHints.js";
@@ -1217,6 +1218,16 @@ export class PluginDevWorkerHostProxy {
             undefined,
             UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT
           ).then(normalizePluginAllAgentsSnapshot),
+      },
+      // Capability, consent, rate limit and project scope all live on the real
+      // host in main; the grace value is the host's own unload answer.
+      terminals: {
+        readScreen: (terminalId, options) =>
+          this.callWithGrace<PluginTerminalScreenResult>(
+            "terminals.readScreen",
+            { terminalId, options },
+            { status: "unavailable" }
+          ),
       },
       // A cancel is main's to answer: a targeted draft, or a picker the user
       // already accepted, lands anyway, and settling "cancelled" here would

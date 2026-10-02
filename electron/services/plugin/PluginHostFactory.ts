@@ -82,7 +82,15 @@ import {
   scopeMatchesPattern,
 } from "../fileDecorationRegistry.js";
 import { broadcastToRenderer, broadcastToProjectRenderers } from "../../ipc/utils.js";
-import { PLUGIN_PUSH_MAX_PAYLOAD_BYTES } from "../../../shared/config/pluginBudgets.js";
+import {
+  PLUGIN_PUSH_MAX_PAYLOAD_BYTES,
+  PLUGIN_TERMINAL_SCREEN_DEFAULT_LINES,
+  PLUGIN_TERMINAL_SCREEN_MAX_LINES,
+} from "../../../shared/config/pluginBudgets.js";
+import {
+  admitPluginTerminalScreenRead,
+  readPluginTerminalScreen,
+} from "./pluginTerminalScreenRead.js";
 import { assertPayloadWithinLimit, snapshotPayload } from "./pluginPayloadLimits.js";
 import { resolveInvokeTimeoutMs, runWithInvokeDeadline } from "./pluginInvokeDeadline.js";
 import { flushPluginPushes, routePluginPush, withPushFlushBarrier } from "./pluginPushBatcher.js";
@@ -305,6 +313,36 @@ function validateOptionalId(pluginId: string, name: string, value: unknown): str
     );
   }
   return value;
+}
+
+/** Check a `host.terminals.readScreen` call and resolve its line count. */
+function validateReadScreenCall(pluginId: string, terminalId: unknown, options: unknown): number {
+  if (
+    typeof terminalId !== "string" ||
+    terminalId.length === 0 ||
+    terminalId.length > SEND_TO_AGENT_MAX_ID_LENGTH
+  ) {
+    throw new Error(
+      `Plugin "${pluginId}" terminals.readScreen: terminalId must be a non-empty string of at most ${SEND_TO_AGENT_MAX_ID_LENGTH} characters`
+    );
+  }
+  if (options === undefined) return PLUGIN_TERMINAL_SCREEN_DEFAULT_LINES;
+  if (options === null || typeof options !== "object") {
+    throw new Error(`Plugin "${pluginId}" terminals.readScreen: options must be an object`);
+  }
+  const lines = (options as { lines?: unknown }).lines;
+  if (lines === undefined) return PLUGIN_TERMINAL_SCREEN_DEFAULT_LINES;
+  if (
+    typeof lines !== "number" ||
+    !Number.isInteger(lines) ||
+    lines < 1 ||
+    lines > PLUGIN_TERMINAL_SCREEN_MAX_LINES
+  ) {
+    throw new Error(
+      `Plugin "${pluginId}" terminals.readScreen: options.lines must be an integer from 1 to ${PLUGIN_TERMINAL_SCREEN_MAX_LINES}`
+    );
+  }
+  return lines;
 }
 
 /**
@@ -803,16 +841,6 @@ export function createHost(
   };
 
   /**
-   * Does an agent transition belong to the bound project? Unbound hosts observe
-   * every agent by design — that is what `agent:read` has always meant.
-   *
-   * Fails CLOSED, unlike the worktree predicate: the event carries no
-   * project-scoped payload for the callback to re-derive, so delivering one we
-   * cannot attribute would hand a bound plugin another project's agent state
-   * outright. The routing id is read off the raw event; the plugin-facing
-   * projection deliberately drops it (see `toPluginAgentSnapshot`).
-   */
-  /**
    * The project root a `"project"`-scoped settings or storage call targets.
    *
    * Unbound stays `null`, which both managers read as "use the app-global
@@ -825,6 +853,17 @@ export function createHost(
 
   const resolveAgentEventWorkspace = (terminalId: string | undefined): string | null =>
     terminalId === undefined ? null : (getPtyClient()?.getTerminalProjectId(terminalId) ?? null);
+
+  /**
+   * Does an agent transition belong to the bound project? Unbound hosts observe
+   * every agent by design — that is what `agent:read` has always meant.
+   *
+   * Fails CLOSED, unlike the worktree predicate: the event carries no
+   * project-scoped payload for the callback to re-derive, so delivering one we
+   * cannot attribute would hand a bound plugin another project's agent state
+   * outright. The workspace is resolved from the raw event's terminal id, which
+   * the plugin-facing projection also carries (see `toPluginAgentSnapshot`).
+   */
   const isAgentEventForBoundProject = (workspaceId: string | null): boolean =>
     boundProjectId === null || (workspaceId !== null && workspaceId === boundProjectId);
   // The LoadedPlugin this host is bound to. recordPluginLog compares against
@@ -1381,6 +1420,40 @@ export function createHost(
         if (!isBound()) return UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT;
         assertCanReadAllAgents("agents.listAll");
         return toPluginAllAgentsSnapshot(deps.getFleetSnapshotService()?.getLastBroadcast());
+      },
+    },
+    // NOT revoke-guarded: grid plugins poll screens from timers long after
+    // activation. Answered in main from the pty-host's own mirror, so a
+    // terminal in a project with no open view still reads.
+    terminals: {
+      readScreen: async (terminalId, options) => {
+        if (!isBound()) return { status: "unavailable" };
+        if (!deps.declaredCapabilities(pluginId).has("terminal:read")) {
+          throw new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" terminals.readScreen requires "terminal:read", which is not declared in manifest.capabilities`
+          );
+        }
+        // Validated before the consent prompt, so a malformed call can't bank a
+        // grant for a later one.
+        const lines = validateReadScreenCall(pluginId, terminalId, options);
+        await ensureCapabilityConsent(deps, pluginId, "terminal:read");
+        if (!isBound()) return { status: "unavailable" };
+        // Charged per consented call, whatever the id resolves to, so probing
+        // ids costs the same budget as reading them.
+        if (!admitPluginTerminalScreenRead(boundPlugin!, Date.now())) {
+          const err = new Error(
+            `RATE_LIMITED: plugin "${pluginId}" terminals.readScreen exceeded its calls-per-second limit`
+          );
+          (err as Error & { code?: string }).code = "RATE_LIMITED";
+          throw err;
+        }
+        const result = await readPluginTerminalScreen(
+          getPtyClient(),
+          terminalId,
+          boundProjectId,
+          lines
+        );
+        return isBound() ? result : { status: "unavailable" };
       },
     },
     sendToAgent: async (text, options, callOptions) => {

@@ -311,6 +311,22 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
     expect(Object.isFrozen(snapshot)).toBe(true);
   });
 
+  it("relays terminals.readScreen and resolves with the screen", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.terminals.readScreen("t-1", { lines: 5 });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "terminals.readScreen");
+    expect(call).toMatchObject({ params: { terminalId: "t-1", options: { lines: 5 } } });
+    resolveCall(proxy, sent, "terminals.readScreen", { status: "exited" });
+    await expect(promise).resolves.toEqual({ status: "exited" });
+  });
+
+  it("answers unavailable for a screen read when the proxy is disposed mid-call", async () => {
+    const { proxy } = makeProxy();
+    const read = proxy.host.terminals.readScreen("t-1");
+    proxy.dispose();
+    await expect(read).resolves.toEqual({ status: "unavailable" });
+  });
+
   it("answers the host's own unload values when the proxy is disposed mid-call", async () => {
     const { proxy } = makeProxy();
     const list = proxy.host.agents.list();

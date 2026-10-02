@@ -233,6 +233,10 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   "agent:read",
   "agent:register",
   "agent:input",
+  // Read a terminal's current screen as plain text (`host.terminals.readScreen`).
+  // Separate from `agent:read` on purpose: what a terminal shows routinely
+  // includes tokens and env dumps, so it carries its own first-use consent.
+  "terminal:read",
   "git:read",
   "git:write",
   "clipboard:read",
@@ -2895,6 +2899,71 @@ export interface PluginAgentsApi {
   listAll(): Promise<PluginAllAgentsSnapshot>;
 }
 
+/** Options for {@link PluginTerminalsApi.readScreen}. */
+export interface PluginTerminalReadScreenOptions {
+  /**
+   * How many of the screen's last lines to return: an integer from 1 to 100.
+   * Defaults to 20. Fewer come back when the screen holds fewer. A line the
+   * terminal soft-wrapped across rows counts once.
+   */
+  lines?: number;
+}
+
+/**
+ * What {@link PluginTerminalsApi.readScreen} found.
+ *
+ * - `ok`: the terminal's current screen, as plain text with no ANSI. `text` is
+ *   `""` (and `lineCount` `0`) when the screen is blank — an empty screen, not a
+ *   missing terminal. `truncated` is `true` when lines above the returned ones,
+ *   or bytes past the 16 KiB cap, were left out; the newest content is kept.
+ * - `exited`: the terminal is still listed but its process has exited.
+ * - `not-found`: no terminal this plugin may read has that id. One answer for
+ *   an unknown id, one in another project, and one that is not a user terminal.
+ * - `unavailable`: the terminal exists but its screen could not be read right
+ *   now (the terminal host is down or did not answer). Worth retrying later.
+ */
+export type PluginTerminalScreenResult =
+  | {
+      readonly status: "ok";
+      readonly text: string;
+      readonly lineCount: number;
+      readonly truncated: boolean;
+    }
+  | { readonly status: "exited" }
+  | { readonly status: "not-found" }
+  | { readonly status: "unavailable" };
+
+/** `host.terminals` — read-only access to what terminals show. */
+export interface PluginTerminalsApi {
+  /**
+   * Read the current screen of one terminal as plain text: its last
+   * `options.lines` non-padding lines, never its scrollback. Answered by the
+   * terminal host, so it works for terminals in projects whose view is not
+   * open. Take ids from {@link PluginAgentsApi.list}, or, for an installed
+   * plugin, {@link PluginAgentsApi.listAll}. A project plugin reads only its own
+   * project's terminals; an installed plugin may read any user terminal by id.
+   *
+   * Gated on `terminal:read`, with a first-use consent prompt that tells the
+   * user the plugin can read what their terminals show. Rate limited to 60
+   * calls per second per plugin — enough for a grid polling a few dozen cards
+   * once a second. Never touches the terminal's input or size. The host neither
+   * logs nor stores the text; once returned, it is the plugin's to protect.
+   *
+   * Resolves `{ status: "unavailable" }` once the plugin is unloaded.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+   *   `terminal:read`, or the user denies the consent prompt.
+   * @throws {Error} `RATE_LIMITED:` when the plugin exceeds 60 calls a second.
+   *   Nothing is queued; call again later.
+   * @throws {Error} If `terminalId` is not a non-empty string or `options.lines`
+   *   is not an integer from 1 to 100.
+   */
+  readScreen(
+    terminalId: string,
+    options?: PluginTerminalReadScreenOptions
+  ): Promise<PluginTerminalScreenResult>;
+}
+
 /** Options for {@link PluginHostApi.sendToAgent}. */
 export interface PluginSendToAgentOptions {
   /**
@@ -4603,6 +4672,11 @@ export interface PluginHostApi extends PluginActivationApi {
    * Gated on `agent:read`. See {@link PluginAgentsApi}.
    */
   readonly agents: PluginAgentsApi;
+  /**
+   * Read what a terminal's screen shows, as plain text. Gated on
+   * `terminal:read`. See {@link PluginTerminalsApi}.
+   */
+  readonly terminals: PluginTerminalsApi;
   /**
    * Hand `text` to an agent: it is appended to that agent's visible draft,
    * below anything the user already typed, as a fenced block headed by

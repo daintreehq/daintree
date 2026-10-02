@@ -73,6 +73,12 @@ export const CAPABILITY_META = {
     description: "Type and submit text into running agent sessions",
     severity: "warning",
   },
+  "terminal:read": {
+    label: "Read your terminals",
+    description:
+      "Read what your terminals show, which can include passwords, tokens, and other secrets",
+    severity: "warning",
+  },
   "git:read": {
     label: "Read git status",
     description: "View branch and change information",

@@ -116,6 +116,8 @@ export function capabilityAction(capability: BuiltInPluginCapability): string {
       return "write to its data folder";
     case "git:write":
       return "make git changes";
+    case "terminal:read":
+      return "read what your terminals show";
     default:
       return `use the '${capability}' capability`;
   }

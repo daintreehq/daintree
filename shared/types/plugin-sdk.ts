@@ -190,6 +190,14 @@ export type {
 export type { PluginAgentSnapshot } from "./plugin.js";
 export type { AgentState, WaitingReason } from "./agent.js";
 
+// ── Reading terminal screens (host.terminals) ───────────────────────
+
+export type {
+  PluginTerminalsApi,
+  PluginTerminalReadScreenOptions,
+  PluginTerminalScreenResult,
+} from "./plugin.js";
+
 // ── Handing work to agents (host.agents, host.sendToAgent, drag) ────
 // The drag contract is runtime values a view needs at `dragstart`, so the
 // constants and the helper are value exports.

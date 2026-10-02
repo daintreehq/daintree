@@ -26,6 +26,8 @@ import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import {
   PLUGIN_INVOKE_MAX_RESULT_BYTES,
   PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS,
+  PLUGIN_TERMINAL_SCREEN_DEFAULT_LINES,
+  PLUGIN_TERMINAL_SCREEN_MAX_LINES,
 } from "../config/pluginBudgets.js";
 import type {
   ActionDispatchResult,
@@ -82,6 +84,7 @@ import type {
   PluginAllAgentsSnapshot,
   PluginSendToAgentOptions,
   PluginSendToAgentResult,
+  PluginTerminalScreenResult,
   PluginPanelLifecycleEvent,
   PanelReloadResult,
   PluginSystemWakeEvent,
@@ -149,6 +152,13 @@ export interface SentToAgentRecord {
   text: string;
   options: PluginSendToAgentOptions | undefined;
   result: PluginSendToAgentResult;
+}
+
+/** Captured `host.terminals.readScreen(terminalId, options)` calls, with what each resolved. */
+export interface ReadScreenRecord {
+  terminalId: string;
+  lines: number;
+  result: PluginTerminalScreenResult;
 }
 
 export interface RegisteredForgeProviderRecord {
@@ -231,6 +241,8 @@ export interface MockHostState {
   readonly sentToActiveAgentCalls: ReadonlyArray<SentToActiveAgentRecord>;
   /** Every `host.sendToAgent` call that got past validation, in order. */
   readonly sentToAgentCalls: ReadonlyArray<SentToAgentRecord>;
+  /** Every `host.terminals.readScreen` call that got past validation, in order. */
+  readonly readScreenCalls: ReadonlyArray<ReadScreenRecord>;
   readonly registeredForgeProviders: ReadonlyArray<RegisteredForgeProviderRecord>;
   readonly registeredFileDecorationProviders: ReadonlyArray<RegisteredFileDecorationProviderRecord>;
   /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
@@ -377,6 +389,12 @@ export interface MockHostState {
    * picker and resolves `{ status: "cancelled" }`.
    */
   simulateSendToAgentPick(terminalId: string | null): void;
+  /**
+   * Set what `terminals.readScreen(terminalId)` finds, or pass `null` to forget
+   * the terminal so it reads `not-found`. An `ok` screen's `text` is trimmed to
+   * the call's last `lines` lines, as the host does.
+   */
+  simulateTerminalScreen(terminalId: string, screen: PluginTerminalScreenResult | null): void;
 }
 
 export interface CreateMockHostOptions {
@@ -489,6 +507,12 @@ export interface CreateMockHostOptions {
    * (`{ agents: [], degraded: false, lastSuccessfulAt: 0 }`).
    */
   allAgents?: PluginAllAgentsSnapshot;
+  /**
+   * What `terminals.readScreen` finds, by terminal id. An id not listed reads
+   * `not-found`. Defaults to none. The mock neither rate limits nor applies
+   * the host's 16 KiB byte cap.
+   */
+  terminalScreens?: Record<string, PluginTerminalScreenResult>;
 }
 
 /**
@@ -791,6 +815,10 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   );
   const allAgentsSubs = new Set<(snapshot: PluginAllAgentsSnapshot) => void>();
   let sendToAgentPick: string | null = null;
+  const readScreenCalls: ReadScreenRecord[] = [];
+  const terminalScreens = new Map<string, PluginTerminalScreenResult>(
+    Object.entries(options.terminalScreens ?? {})
+  );
   const registeredForgeProviders: RegisteredForgeProviderRecord[] = [];
   const registeredFileDecorationProviders: RegisteredFileDecorationProviderRecord[] = [];
   const registeredMcpTools: RegisteredMcpToolsRecord[] = [];
@@ -1535,6 +1563,53 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       async listAll() {
         assertMockCanReadAllAgents("agents.listAll");
         return allAgentsSnapshot;
+      },
+    },
+    terminals: {
+      async readScreen(terminalId, options) {
+        // Same order as production: capability, then argument validation. No
+        // consent prompt and no rate limit — a test grants by declaring.
+        if (!capabilities.has("terminal:read")) {
+          throw new Error(
+            'PERMISSION_REQUIRED: terminals.readScreen requires "terminal:read", which is not declared in manifest.capabilities'
+          );
+        }
+        if (typeof terminalId !== "string" || terminalId.length === 0 || terminalId.length > 512) {
+          throw new Error(
+            "terminals.readScreen: terminalId must be a non-empty string of at most 512 characters"
+          );
+        }
+        if (options !== undefined && (options === null || typeof options !== "object")) {
+          throw new Error("terminals.readScreen: options must be an object");
+        }
+        const lines =
+          options?.lines === undefined ? PLUGIN_TERMINAL_SCREEN_DEFAULT_LINES : options.lines;
+        if (
+          typeof lines !== "number" ||
+          !Number.isInteger(lines) ||
+          lines < 1 ||
+          lines > PLUGIN_TERMINAL_SCREEN_MAX_LINES
+        ) {
+          throw new Error(
+            `terminals.readScreen: options.lines must be an integer from 1 to ${PLUGIN_TERMINAL_SCREEN_MAX_LINES}`
+          );
+        }
+        const screen = terminalScreens.get(terminalId);
+        let result: PluginTerminalScreenResult = screen ?? { status: "not-found" };
+        if (screen?.status === "ok" && screen.text.length > 0) {
+          const all = screen.text.split("\n");
+          const kept = all.slice(-lines);
+          result = {
+            status: "ok",
+            text: kept.join("\n"),
+            lineCount: kept.length,
+            truncated: screen.truncated || all.length > kept.length,
+          };
+        } else if (screen) {
+          result = { ...screen };
+        }
+        readScreenCalls.push({ terminalId, lines, result });
+        return result;
       },
     },
     async sendToAgent(text, options, callOptions) {
@@ -2412,6 +2487,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     dispatchedActions,
     sentToActiveAgentCalls,
     sentToAgentCalls,
+    readScreenCalls,
     registeredForgeProviders,
     registeredFileDecorationProviders,
     registeredMcpTools,
@@ -2528,6 +2604,10 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     },
     simulateSendToAgentPick(terminalId) {
       sendToAgentPick = terminalId;
+    },
+    simulateTerminalScreen(terminalId, screen) {
+      if (screen === null) terminalScreens.delete(terminalId);
+      else terminalScreens.set(terminalId, screen);
     },
   };
 

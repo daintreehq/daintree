@@ -72,6 +72,7 @@ import { getLiveAgentId } from "./terminalTitle.js";
 import {
   serializeTerminal,
   serializeTerminalAsync,
+  serializeTerminalTail,
   serializeForPersistence,
 } from "./terminalSerialization.js";
 import {
@@ -779,7 +780,7 @@ export class TerminalProcess {
       },
       readViewportLines: (n) => readLastNLines(this.terminalInfo.headlessTerminal, n),
       readCursorLine: () => readCursorLine(this.terminalInfo.headlessTerminal),
-      serialize: () => this.serializeLiveInThread(),
+      serialize: (options) => this.serializeLiveInThread(options),
       serializeForPersistence: () => this.serializeForPersistence(),
       captureFinalSnapshot: async (): Promise<AnalysisFinalCapture> => {
         const snapshot = await serializeTerminalAsync(this.id, this.terminalInfo);
@@ -1776,16 +1777,24 @@ export class TerminalProcess {
    * later chunks had parsed, and the snapshot would cover bytes past the
    * offset it is stamped with.
    */
-  private serializeLiveInThread(): Promise<SerializedTerminalSnapshot | null> {
+  private serializeLiveInThread(
+    options?: SerializeReadOptions
+  ): Promise<SerializedTerminalSnapshot | null> {
     const terminal = this.terminalInfo;
     const headless = terminal.headlessTerminal;
     if (terminal.preservedSnapshot !== undefined || !headless || !terminal.serializeAddon) {
       return serializeTerminalAsync(this.id, terminal);
     }
+    const tailRows = options?.tailRows;
     return new Promise((resolve) => {
       headlessMirrorScheduler.flush(this.id, headless, () => {
         if (terminal.headlessTerminal !== headless) {
           resolve(serializeTerminal(this.id, terminal));
+          return;
+        }
+        // A capped read carries no continuation, matching the worker's.
+        if (tailRows !== undefined) {
+          resolve(serializeTerminalTail(this.id, terminal, tailRows));
           return;
         }
         const snapshot = serializeTerminal(this.id, terminal);
