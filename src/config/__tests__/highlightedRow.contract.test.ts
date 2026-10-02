@@ -66,6 +66,7 @@ const LIST_DETAIL_FILES = new Set([
   "src/components/Plugin/ProjectPluginSection.tsx",
   "src/components/Diagnostics/TelemetryContent.tsx",
   "src/components/EventInspector/EventTimeline.tsx",
+  "src/components/ThemeBrowser/ThemeBrowser.tsx",
 ]);
 
 const files = ROOTS.flatMap(sourceFiles).map((file) => ({
