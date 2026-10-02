@@ -103,6 +103,11 @@ import {
   toPluginAgentSnapshot,
   type AgentStateChangePayload,
 } from "../../../shared/utils/pluginAgentSnapshot.js";
+import {
+  toPluginAllAgentsSnapshot,
+  UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT,
+} from "../../../shared/utils/pluginAllAgentsSnapshot.js";
+import type { FleetSnapshotService } from "../FleetSnapshotService.js";
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import {
   promptOpensDialog,
@@ -138,6 +143,7 @@ import type {
   PluginSettingsScope,
   PluginStorageScope,
   PluginAgentSnapshot,
+  PluginAllAgentsSnapshot,
   PluginSendToAgentRefusalReason,
   PluginSendToAgentResult,
   PluginPanelLifecycleEvent,
@@ -461,6 +467,15 @@ export interface PluginHostFactoryDeps {
   getHostGitFactory: () => HostGitFactory | undefined;
   getProcessManager: () => PluginProcessManager;
   declaredCapabilities: (pluginId: string) => Set<BuiltInPluginCapability>;
+  /**
+   * Main's fleet snapshot service, read at call time — it is created by the
+   * project stats handlers and may not exist yet (or any more). Behind
+   * `agents.listAll` and `onDidChangeAllAgents`.
+   */
+  getFleetSnapshotService: () => Pick<
+    FleetSnapshotService,
+    "getLastBroadcast" | "subscribe"
+  > | null;
   /**
    * Worktree snapshots for the host's project, carrying why there are none and
    * which project the ones there are belong to (#12174).
@@ -826,6 +841,21 @@ export function createHost(
   // onDidChangeAgentState. The host keeps no pre-subscription history, so
   // getAgentState() returns null until the first transition is observed.
   let lastAgentSnapshot: PluginAgentSnapshot | null = null;
+  // The app-wide agent list crosses every project, so a project-bound host —
+  // scoped to its own project everywhere else — is refused it outright rather
+  // than handed a filtered copy that would read as "the whole app".
+  const assertCanReadAllAgents = (method: string): void => {
+    if (!deps.declaredCapabilities(pluginId).has("agent:read")) {
+      throw new Error(
+        `PERMISSION_REQUIRED: plugin "${pluginId}" ${method} requires "agent:read", which is not declared in manifest.capabilities`
+      );
+    }
+    if (boundProjectId !== null) {
+      throw new Error(
+        `PERMISSION_REQUIRED: plugin "${pluginId}" ${method} lists agents in every project, which is not available to a project plugin`
+      );
+    }
+  };
   /**
    * The availability- and scope-aware worktree read behind
    * {@link PluginHostApi.getWorktreesResult}, and the single source the
@@ -1345,6 +1375,13 @@ export function createHost(
           throw err;
         }
       },
+      // Answered by main from the fleet snapshot, never a renderer: per-project
+      // views are LRU-evicted, and an evicted project's agents keep running.
+      listAll: async () => {
+        if (!isBound()) return UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT;
+        assertCanReadAllAgents("agents.listAll");
+        return toPluginAllAgentsSnapshot(deps.getFleetSnapshotService()?.getLastBroadcast());
+      },
     },
     sendToAgent: async (text, options, callOptions) => {
       // Liveness first, for the same reason as sendToActiveAgent: an unloaded
@@ -1564,6 +1601,51 @@ export function createHost(
         active = false;
         coalescer.dispose();
         pending.clear();
+        unsub();
+      });
+      return Promise.resolve(dispose);
+    },
+    onDidChangeAllAgents: (callback, options) => {
+      if (revoked) {
+        throw new Error(
+          `Plugin "${pluginId}" host revoked: onDidChangeAllAgents called after activate() returned or timed out`
+        );
+      }
+      assertCanReadAllAgents("onDidChangeAllAgents");
+      const fleet = deps.getFleetSnapshotService();
+      if (!fleet) {
+        throw new Error(
+          `FLEET_UNAVAILABLE: plugin "${pluginId}" onDidChangeAllAgents — the agent fleet is not being tracked`
+        );
+      }
+      const failures = createListenerFailureState();
+      // One slot: each publication is the whole fleet, so only the latest matters.
+      let pending: PluginAllAgentsSnapshot | null = null;
+      let active = true;
+      const coalescer = createSubscriptionCoalescer(
+        resolveSubscriptionDebounceMs(options?.debounceMs),
+        () => {
+          const snapshot = pending;
+          pending = null;
+          if (snapshot === null || !active || !isBound()) return;
+          invokeTrackedListener(
+            failures,
+            pluginId,
+            "onDidChangeAllAgents",
+            () => callback(snapshot),
+            () => dispose()
+          );
+        }
+      );
+      const unsub = fleet.subscribe((snapshot) => {
+        if (!active || !isBound()) return;
+        pending = toPluginAllAgentsSnapshot(snapshot);
+        coalescer.push();
+      });
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
+        active = false;
+        coalescer.dispose();
+        pending = null;
         unsub();
       });
       return Promise.resolve(dispose);

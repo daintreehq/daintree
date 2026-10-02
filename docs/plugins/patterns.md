@@ -234,7 +234,7 @@ Your own writes come back through the watch too. Keep the revision each write re
 
 Watchers and badges are both released on unload; `dispose()` the watcher yourself when the panel that needed it is removed (`onDidChangePanelLifecycle`, phase `removed`).
 
-The host's own bursty subscriptions coalesce without being asked: `onDidChangeWorktrees`, `onDidChangeActiveWorktree` and `onDidChangeAgentState` deliver one trailing callback 100 ms after a burst (and at least every four windows while it lasts), always with the latest state; `onDidChangeWorktrees` also hands you `{ added, removed, changed }` ids for the net change. Pass `{ debounceMs: 0 }` only when you need every event, or a larger window when you need fewer. `host.fs.watch` is the exception, with no debounce unless you pass one.
+The host's own bursty subscriptions coalesce without being asked: `onDidChangeWorktrees`, `onDidChangeActiveWorktree`, `onDidChangeAgentState` and `onDidChangeAllAgents` deliver one trailing callback 100 ms after a burst (and at least every four windows while it lasts), always with the latest state; `onDidChangeWorktrees` also hands you `{ added, removed, changed }` ids for the net change. Pass `{ debounceMs: 0 }` only when you need every event, or a larger window when you need fewer. `host.fs.watch` is the exception, with no debounce unless you pass one.
 
 ## Build a file UI
 

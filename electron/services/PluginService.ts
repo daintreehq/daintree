@@ -194,7 +194,7 @@ import type {
 } from "./plugin/PluginServiceTypes.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeStatus } from "../../shared/utils/pluginWorktreeSnapshot.js";
-import { getPtyClient } from "../window/serviceRefs.js";
+import { getFleetSnapshotServiceRef, getPtyClient } from "../window/serviceRefs.js";
 import { getWindowForWebContents } from "../window/webContentsRegistry.js";
 import { makePluginTourId } from "../../shared/utils/tourIds.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
@@ -3755,6 +3755,7 @@ export class PluginService {
       getHostGitFactory: () => this.hostGitFactory,
       getProcessManager: () => this.getProcessManager(),
       declaredCapabilities: (pluginId) => this.declaredCapabilities(pluginId),
+      getFleetSnapshotService: () => getFleetSnapshotServiceRef(),
       fetchWorktreeSnapshotsResult: () => this.fetchAllWorktreeSnapshotsResult(),
       fetchWorktreeSnapshotsForProjectResult: (projectId, projectRoot) =>
         this.fetchWorktreeSnapshotsForProjectResult(projectId, projectRoot),

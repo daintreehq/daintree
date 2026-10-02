@@ -827,6 +827,8 @@ export class PluginDevWorkerMainBridge {
       }
       case "agents.list":
         return this.host.agents.list();
+      case "agents.listAll":
+        return this.host.agents.listAll();
       case "sendToAgent": {
         // `signal` ties an open picker to this generation, like showQuickPick:
         // a retired worker's question comes off the screen with it.
@@ -1426,6 +1428,10 @@ export class PluginDevWorkerMainBridge {
         );
       } else if (kind === "agent-state") {
         dispose = await this.host.onDidChangeAgentState((snapshot) => push(snapshot), {
+          debounceMs: msg.debounceMs,
+        });
+      } else if (kind === "all-agents") {
+        dispose = await this.host.onDidChangeAllAgents((snapshot) => push(snapshot), {
           debounceMs: msg.debounceMs,
         });
       } else if (kind === "panel-lifecycle") {

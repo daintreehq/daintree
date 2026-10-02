@@ -1326,6 +1326,64 @@ describe("createMockHost production-parity validation (#10617)", () => {
       await expect(host.agents.list()).resolves.toEqual([]);
     });
 
+    it("agents.listAll and onDidChangeAllAgents mirror production's gates and shape", async () => {
+      await expect(
+        createMockHost({ capabilities: ["agent:input"] }).agents.listAll()
+      ).rejects.toThrow(/PERMISSION_REQUIRED/);
+      const projectHost = createMockHost({ pluginId: `project__${"a".repeat(64)}__acme.board` });
+      await expect(projectHost.agents.listAll()).rejects.toThrow(/project plugin/);
+      expect(() => projectHost.onDidChangeAllAgents(() => {})).toThrow(/project plugin/);
+
+      const host = createMockHost();
+      await expect(host.agents.listAll()).resolves.toEqual({
+        agents: [],
+        degraded: false,
+        lastSuccessfulAt: 0,
+      });
+
+      const received: unknown[] = [];
+      const dispose = await host.onDidChangeAllAgents((s) => received.push(s), { debounceMs: 0 });
+      expect(host.subscriptionOptions.at(-1)).toEqual({ kind: "all-agents", debounceMs: 0 });
+
+      host.simulateAllAgentsChange({
+        agents: [
+          {
+            workspaceId: "12345678-1234-4abc-8def-123456789abc",
+            workspaceKind: "project",
+            terminalId: "t-1",
+            observedState: "waiting",
+            cwd: "/leak",
+          } as never,
+        ],
+        degraded: false,
+        lastSuccessfulAt: 9,
+      });
+      const listed = await host.agents.listAll();
+      expect(listed.agents).toEqual([
+        {
+          workspaceId: "12345678-1234-4abc-8def-123456789abc",
+          workspaceKind: "scratch",
+          terminalId: "t-1",
+          observedState: "waiting",
+        },
+      ]);
+      expect(Object.isFrozen(listed.agents[0])).toBe(true);
+      expect(received).toEqual([listed]);
+
+      dispose();
+      dispose();
+      host.simulateAllAgentsChange({ agents: [], degraded: true, lastSuccessfulAt: null });
+      expect(received).toHaveLength(1);
+
+      // The same callback twice is two subscriptions; disposing one keeps the other.
+      const twice = vi.fn();
+      const first = await host.onDidChangeAllAgents(twice);
+      await host.onDidChangeAllAgents(twice);
+      first();
+      host.simulateAllAgentsChange({ agents: [], degraded: false, lastSuccessfulAt: 1 });
+      expect(twice).toHaveBeenCalledTimes(1);
+    });
+
     it("sendToAgent gates on agent:input and validates like production", async () => {
       await expect(
         createMockHost({ capabilities: ["agent:read"] }).sendToAgent("x")

@@ -21,6 +21,7 @@ import path from "node:path";
 import { join as joinPath } from "node:path";
 import { databaseError, openPluginDatabase } from "../utils/pluginDatabaseHandle.js";
 import { validateAgentContextPayload } from "../utils/agentContextDrag.js";
+import { normalizePluginAllAgentsSnapshot } from "../utils/pluginAllAgentsSnapshot.js";
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import {
   PLUGIN_INVOKE_MAX_RESULT_BYTES,
@@ -78,6 +79,7 @@ import type {
   PluginWorktreesResult,
   PluginAgentSnapshot,
   PluginAgentPane,
+  PluginAllAgentsSnapshot,
   PluginSendToAgentOptions,
   PluginSendToAgentResult,
   PluginPanelLifecycleEvent,
@@ -208,7 +210,7 @@ export interface FsWriteRecord {
 
 /** A coalesced host subscription, with the window the host resolves for it. */
 export interface MockSubscriptionRecord {
-  kind: "worktrees" | "active-worktree" | "agent-state";
+  kind: "worktrees" | "active-worktree" | "agent-state" | "all-agents";
   /** Effective window in ms: the 100ms default, `0` for raw, else clamped to 50–60000. */
   debounceMs: number;
 }
@@ -365,6 +367,11 @@ export interface MockHostState {
   /** Replace the agent panes `agents.list()` reports and `sendToAgent` targets. */
   simulateAgentsChange(agents: PluginAgentPane[]): void;
   /**
+   * Replace what `agents.listAll()` reports and push it, frozen and reduced to
+   * the allowlist like production, to every `onDidChangeAllAgents` subscriber.
+   */
+  simulateAllAgentsChange(snapshot: PluginAllAgentsSnapshot): void;
+  /**
    * Configure what the user picks when `sendToAgent` is called without a
    * `terminalId`: a pane id drafts there, `null` (the default) dismisses the
    * picker and resolves `{ status: "cancelled" }`.
@@ -477,6 +484,11 @@ export interface CreateMockHostOptions {
    * `draftRefusal`. Defaults to none.
    */
   agents?: PluginAgentPane[];
+  /**
+   * What `agents.listAll()` reports. Defaults to a healthy, empty app
+   * (`{ agents: [], degraded: false, lastSuccessfulAt: 0 }`).
+   */
+  allAgents?: PluginAllAgentsSnapshot;
 }
 
 /**
@@ -774,6 +786,10 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const sentToActiveAgentCalls: SentToActiveAgentRecord[] = [];
   const sentToAgentCalls: SentToAgentRecord[] = [];
   let agentPanes: PluginAgentPane[] = options.agents ?? [];
+  let allAgentsSnapshot: PluginAllAgentsSnapshot = normalizePluginAllAgentsSnapshot(
+    options.allAgents ?? { agents: [], degraded: false, lastSuccessfulAt: 0 }
+  );
+  const allAgentsSubs = new Set<(snapshot: PluginAllAgentsSnapshot) => void>();
   let sendToAgentPick: string | null = null;
   const registeredForgeProviders: RegisteredForgeProviderRecord[] = [];
   const registeredFileDecorationProviders: RegisteredFileDecorationProviderRecord[] = [];
@@ -1172,6 +1188,20 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     projectRoot: mockProjectRoot,
   });
 
+  // Same gates as production: `agent:read`, and never for a project plugin.
+  const assertMockCanReadAllAgents = (method: string): void => {
+    if (!capabilities.has("agent:read")) {
+      throw new Error(
+        `PERMISSION_REQUIRED: ${method} requires "agent:read", which is not declared in manifest.capabilities`
+      );
+    }
+    if (mockProjectId !== null) {
+      throw new Error(
+        `PERMISSION_REQUIRED: ${method} lists agents in every project, which is not available to a project plugin`
+      );
+    }
+  };
+
   let mockDatabaseDir: string | null = options.databases?.directory ?? null;
   const resolveMockDatabase = async (
     id: string,
@@ -1502,6 +1532,10 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         }
         return agentPanes.map((pane) => ({ ...pane }));
       },
+      async listAll() {
+        assertMockCanReadAllAgents("agents.listAll");
+        return allAgentsSnapshot;
+      },
     },
     async sendToAgent(text, options, callOptions) {
       // Same order as production: capability, then argument validation. The
@@ -1565,6 +1599,24 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         if (disposed) return;
         disposed = true;
         agentStateSubs.delete(callback);
+      };
+      return Promise.resolve(dispose);
+    },
+    onDidChangeAllAgents(callback, subscribeOptions) {
+      assertMockCanReadAllAgents("onDidChangeAllAgents");
+      subscriptionOptions.push({
+        kind: "all-agents",
+        debounceMs: mockResolveSubscriptionDebounceMs(subscribeOptions?.debounceMs),
+      });
+      // A wrapper per subscription, so the same callback subscribed twice is
+      // two independent subscriptions, as in production.
+      const subscription = (snapshot: PluginAllAgentsSnapshot) => callback(snapshot);
+      allAgentsSubs.add(subscription);
+      let disposed = false;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        allAgentsSubs.delete(subscription);
       };
       return Promise.resolve(dispose);
     },
@@ -2469,6 +2521,10 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     },
     simulateAgentsChange(agents) {
       agentPanes = agents;
+    },
+    simulateAllAgentsChange(snapshot) {
+      allAgentsSnapshot = normalizePluginAllAgentsSnapshot(snapshot);
+      for (const cb of [...allAgentsSubs]) cb(allAgentsSnapshot);
     },
     simulateSendToAgentPick(terminalId) {
       sendToAgentPick = terminalId;

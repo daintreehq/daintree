@@ -69,6 +69,10 @@ import type {
   PluginActionManifestEntry,
 } from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import {
+  normalizePluginAllAgentsSnapshot,
+  UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT,
+} from "../../../shared/utils/pluginAllAgentsSnapshot.js";
 import { AGENT_MCP_MAX_RESULT_BYTES } from "../../../shared/types/plugin.js";
 import type {
   PanelReloadResult,
@@ -942,6 +946,18 @@ export class PluginDevWorkerHostProxy {
         );
         return Promise.resolve(dispose);
       },
+      onDidChangeAllAgents: (callback, options) => {
+        this.assertActivationOpen("onDidChangeAllAgents");
+        // Same re-freeze as listAll: the snapshot arrives as a plain clone.
+        const dispose = this.subscribe(
+          "all-agents",
+          (payload) => callback(normalizePluginAllAgentsSnapshot(payload)),
+          undefined,
+          undefined,
+          options?.debounceMs
+        );
+        return Promise.resolve(dispose);
+      },
       onDidChangePanelLifecycle: (callback) => {
         this.assertActivationOpen("onDidChangePanelLifecycle");
         // Subscription wired synchronously; only the disposer is async. The
@@ -1194,6 +1210,13 @@ export class PluginDevWorkerHostProxy {
       // values match the host's own unload answers ([] / cancelled).
       agents: {
         list: () => this.callWithGrace<PluginAgentPane[]>("agents.list", undefined, []),
+        // Re-frozen on arrival: the port's structured clone drops main's freeze.
+        listAll: () =>
+          this.callWithGrace<unknown>(
+            "agents.listAll",
+            undefined,
+            UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT
+          ).then(normalizePluginAllAgentsSnapshot),
       },
       // A cancel is main's to answer: a targeted draft, or a picker the user
       // already accepted, lands anyway, and settling "cancelled" here would

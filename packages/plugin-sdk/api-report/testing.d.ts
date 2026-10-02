@@ -1880,8 +1880,9 @@ interface PluginHostCallOptions {
 /**
  * Options accepted by the bursty host subscriptions —
  * {@link PluginActivationApi.onDidChangeWorktrees},
- * {@link PluginActivationApi.onDidChangeActiveWorktree} and
- * {@link PluginActivationApi.onDidChangeAgentState}. These coalesce by default:
+ * {@link PluginActivationApi.onDidChangeActiveWorktree},
+ * {@link PluginActivationApi.onDidChangeAgentState} and
+ * {@link PluginActivationApi.onDidChangeAllAgents}. These coalesce by default:
  * a burst of events becomes one trailing callback fired `debounceMs` after the
  * last event (the host re-emits the worktree set on every git-status poll, and
  * agents change state many times a second). A burst that never goes quiet
@@ -2524,6 +2525,56 @@ interface PluginAgentPane {
     /** Why it would not, when `canDraft` is `false`. */
     readonly draftRefusal?: PluginSendToAgentRefusalReason;
 }
+/**
+ * One agent run anywhere in the app, as {@link PluginAgentsApi.listAll}
+ * reports it — any open project or scratch, including ones whose view is not
+ * loaded.
+ *
+ * `observedState` is what the host last read off the agent's own terminal
+ * output — a heuristic that is often wrong, never a guarantee the agent is
+ * doing (or done doing) anything. Show it as "last seen working", not as fact.
+ */
+interface PluginAgentRun {
+    /** The project or scratch the run belongs to. */
+    readonly workspaceId: string;
+    /** Whether {@link workspaceId} names a project or a scratch workspace. */
+    readonly workspaceKind: "project" | "scratch";
+    /**
+     * The run's terminal id. Not a lasting identity: a restarted pane can come
+     * back under the same id.
+     */
+    readonly terminalId: string;
+    /** The worktree the run belongs to, when it has one. An id only — no name or branch. */
+    readonly worktreeId?: string;
+    /** The pane's own title, when it has one. Not the composed title the pane header shows. */
+    readonly title?: string;
+    /** The agent detected in the run (`claude`, `codex`, …), once detection has committed. */
+    readonly agentId?: string;
+    /** Last observed agent state, when there is one. An observation, not a fact. */
+    readonly observedState?: AgentState;
+}
+/**
+ * Every agent run across every open project and scratch, as
+ * {@link PluginAgentsApi.listAll} and
+ * {@link PluginActivationApi.onDidChangeAllAgents} report it.
+ *
+ * An empty `agents` list only means "no agents" when `degraded` is `false`.
+ */
+interface PluginAllAgentsSnapshot {
+    readonly agents: readonly PluginAgentRun[];
+    /**
+     * The host could not read every terminal behind this answer, so `agents` is
+     * the last complete view rather than the current one — show it as stale,
+     * never as clear. Also `true`, with `agents` empty and `lastSuccessfulAt`
+     * `null`, before the host has read the fleet even once.
+     */
+    readonly degraded: boolean;
+    /**
+     * When a complete read last succeeded (epoch ms), or `null` if none has. Only
+     * updated when the answer changes, so it is not a heartbeat.
+     */
+    readonly lastSuccessfulAt: number | null;
+}
 /** `host.agents` — the agent panes in the plugin's project. */
 interface PluginAgentsApi {
     /**
@@ -2538,6 +2589,22 @@ interface PluginAgentsApi {
      * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare `agent:read`.
      */
     list(): Promise<PluginAgentPane[]>;
+    /**
+     * Every agent run across every open project and scratch, answered by the
+     * host's main process — so projects whose view is not loaded are included.
+     * Exited and demoted agents are left out. Gated on `agent:read`, and only
+     * for installed and built-in plugins: a project plugin is scoped to its own
+     * project and is refused.
+     *
+     * Resolves an empty, `degraded` snapshot before the host has read the fleet
+     * once and after the plugin is unloaded. Subscribe with
+     * {@link PluginActivationApi.onDidChangeAllAgents} before the first call so
+     * no change between the two is missed.
+     *
+     * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+     *   `agent:read`, or is a project plugin.
+     */
+    listAll(): Promise<PluginAllAgentsSnapshot>;
 }
 /** Options for {@link PluginHostApi.sendToAgent}. */
 interface PluginSendToAgentOptions {
@@ -3756,6 +3823,26 @@ interface PluginActivationApi {
      */
     onDidChangeAgentState(callback: (snapshot: PluginAgentSnapshot) => void, options?: PluginHostSubscriptionOptions): Promise<() => void>;
     /**
+     * Subscribe to changes in the app-wide agent list that
+     * {@link PluginAgentsApi.listAll} returns: a run added or removed, or one's
+     * observed state, title or worktree changing, in any open project or scratch.
+     * The callback receives the whole new {@link PluginAllAgentsSnapshot},
+     * frozen. Gated on `agent:read`, and refused for project plugins like
+     * `listAll`. Resolves to a disposer; calling it more than once is a no-op.
+     * Disposed automatically when the plugin is unloaded.
+     *
+     * There is no initial callback — call `listAll()` after subscribing. A
+     * callback can repeat the previous snapshot when something the plugin cannot
+     * see changed. Coalesced by default to the latest snapshot; see
+     * {@link PluginHostSubscriptionOptions}.
+     *
+     * Subscribing is revoke-guarded — call it during `activate()`.
+     *
+     * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+     *   `agent:read`, is a project plugin, or the host is revoked.
+     */
+    onDidChangeAllAgents(callback: (snapshot: PluginAllAgentsSnapshot) => void, options?: PluginHostSubscriptionOptions): Promise<() => void>;
+    /**
      * Subscribe to panel lifecycle transitions for this plugin's own contributed
      * panels (#11301). No capability is required — a plugin only ever sees events
      * for panel instances of kinds it contributed itself.
@@ -4536,7 +4623,7 @@ interface FsWriteRecord {
 }
 /** A coalesced host subscription, with the window the host resolves for it. */
 interface MockSubscriptionRecord {
-    kind: "worktrees" | "active-worktree" | "agent-state";
+    kind: "worktrees" | "active-worktree" | "agent-state" | "all-agents";
     /** Effective window in ms: the 100ms default, `0` for raw, else clamped to 50–60000. */
     debounceMs: number;
 }
@@ -4681,6 +4768,11 @@ interface MockHostState {
     /** Replace the agent panes `agents.list()` reports and `sendToAgent` targets. */
     simulateAgentsChange(agents: PluginAgentPane[]): void;
     /**
+     * Replace what `agents.listAll()` reports and push it, frozen and reduced to
+     * the allowlist like production, to every `onDidChangeAllAgents` subscriber.
+     */
+    simulateAllAgentsChange(snapshot: PluginAllAgentsSnapshot): void;
+    /**
      * Configure what the user picks when `sendToAgent` is called without a
      * `terminalId`: a pane id drafts there, `null` (the default) dismisses the
      * picker and resolves `{ status: "cancelled" }`.
@@ -4788,6 +4880,11 @@ interface CreateMockHostOptions {
      * `draftRefusal`. Defaults to none.
      */
     agents?: PluginAgentPane[];
+    /**
+     * What `agents.listAll()` reports. Defaults to a healthy, empty app
+     * (`{ agents: [], degraded: false, lastSuccessfulAt: 0 }`).
+     */
+    allAgents?: PluginAllAgentsSnapshot;
 }
 declare function createMockHost(options?: CreateMockHostOptions): PluginHostApi & MockHostState;
 

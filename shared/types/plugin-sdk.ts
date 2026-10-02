@@ -196,7 +196,9 @@ export type { AgentState, WaitingReason } from "./agent.js";
 
 export type {
   PluginAgentPane,
+  PluginAgentRun,
   PluginAgentsApi,
+  PluginAllAgentsSnapshot,
   PluginSendToAgentOptions,
   PluginSendToAgentResult,
   PluginSendToAgentRefusalReason,
