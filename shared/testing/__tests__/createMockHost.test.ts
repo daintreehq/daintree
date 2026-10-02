@@ -467,6 +467,8 @@ describe("createMockHost", () => {
     const dispose = await host.onDidChangeAgentState(cb);
     const snapshot = {
       agentId: "a1",
+      terminalId: "term-1",
+      workspaceId: "project-1",
       state: "working" as const,
       previousState: "idle" as const,
       running: true,

@@ -2687,11 +2687,11 @@ export type PluginWorktreesResult =
  * plugins. Observation only: nothing on this surface can drive, pause, resume,
  * or inject into an agent session.
  *
- * Deliberately omits the internal routing ids (`terminalId`, `worktreeId`,
- * `cwd`) and the activity-detector internals (`trigger`, `confidence`,
- * `temperature`, …): a plugin holding only `agent:read` has no declared
- * capability to access PTY/worktree internals, so exposing them here would let
- * it cross-reference state it can't otherwise reach.
+ * Carries the terminal and workspace a transition came from, so a plugin can
+ * say where an agent needs attention and join the event to
+ * {@link PluginAgentsApi.list}. Deliberately omits `worktreeId`, `cwd` and the
+ * activity-detector internals (`trigger`, `confidence`, `temperature`, …), so
+ * the snapshot stays safe to send off the machine.
  */
 export interface PluginAgentSnapshot {
   /**
@@ -2700,6 +2700,22 @@ export interface PluginAgentSnapshot {
    * terminal rather than a resolved agent id.
    */
   readonly agentId?: string;
+  /**
+   * The terminal the transition came from — the same id
+   * {@link PluginAgentPane.terminalId} reports and
+   * {@link PluginHostApi.sendToAgent} takes. Those two only reach the plugin's
+   * own (or the focused) project, so a transition from another workspace has no
+   * pane to join. Absent when the host could not attribute the transition to a
+   * terminal.
+   */
+  readonly terminalId?: string;
+  /**
+   * The workspace (project or scratch) that owns the terminal. Opaque: compare
+   * it, don't parse it. A project plugin only ever sees its own project's id.
+   * Resolved when the transition arrives; absent when the host could not tell
+   * which workspace owned the terminal then, e.g. one already torn down.
+   */
+  readonly workspaceId?: string;
   /** Coarse lifecycle state: idle | working | waiting | directing | completed | exited. */
   readonly state: AgentState;
   /** The state the session transitioned away from. */

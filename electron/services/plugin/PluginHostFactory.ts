@@ -808,12 +808,10 @@ export function createHost(
    */
   const boundScopeRoot: string | null = boundProjectId === null ? null : (boundProjectRoot ?? "");
 
-  const isAgentEventForBoundProject = (payload: AgentStateChangePayload): boolean => {
-    if (boundProjectId === null) return true;
-    const terminalId = (payload as { terminalId?: unknown }).terminalId;
-    if (typeof terminalId !== "string" || terminalId.length === 0) return false;
-    return getPtyClient()?.getTerminalProjectId(terminalId) === boundProjectId;
-  };
+  const resolveAgentEventWorkspace = (terminalId: string | undefined): string | null =>
+    terminalId === undefined ? null : (getPtyClient()?.getTerminalProjectId(terminalId) ?? null);
+  const isAgentEventForBoundProject = (workspaceId: string | null): boolean =>
+    boundProjectId === null || (workspaceId !== null && workspaceId === boundProjectId);
   // The LoadedPlugin this host is bound to. recordPluginLog compares against
   // the live instance so a stale host (post-unload, or after a same-id
   // reload) can't write into the current session's log buffer.
@@ -1539,16 +1537,21 @@ export function createHost(
         }
       );
       const handler = (payload: AgentStateChangePayload): void => {
-        if (!isAgentEventForBoundProject(payload)) return;
+        const rawTerminalId: unknown = payload.terminalId;
+        const terminalId =
+          typeof rawTerminalId === "string" && rawTerminalId.length > 0 ? rawTerminalId : undefined;
+        // Resolved once, at arrival: the PTY record is gone by the time a
+        // debounced window flushes for a terminal that was just killed.
+        const workspaceId = resolveAgentEventWorkspace(terminalId);
+        if (!isAgentEventForBoundProject(workspaceId)) return;
         if (!isBound()) return;
-        const snapshot = toPluginAgentSnapshot(payload);
+        const snapshot = toPluginAgentSnapshot(payload, { workspaceId });
         lastAgentSnapshot = snapshot;
-        // Keyed by the raw routing ids the projection drops; an event with
-        // neither shares one bucket, so it still ends on its latest value.
-        const raw = payload as { terminalId?: unknown };
+        // An event with neither id shares one bucket, so it still ends on its
+        // latest value.
         const key =
-          typeof raw.terminalId === "string" && raw.terminalId.length > 0
-            ? `t:${raw.terminalId}`
+          terminalId !== undefined
+            ? `t:${terminalId}`
             : payload.agentId !== undefined
               ? `a:${payload.agentId}`
               : "unkeyed";

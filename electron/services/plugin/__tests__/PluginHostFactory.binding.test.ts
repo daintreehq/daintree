@@ -954,7 +954,15 @@ describe("createHost onDidChangeAgentState", () => {
       timestamp: 2,
     } as never);
     expect(callback).toHaveBeenCalledTimes(1);
-    expect((await host.getAgentState())?.state).toBe("waiting");
+    expect(callback.mock.calls[0][0]).toMatchObject({
+      terminalId: "term-a",
+      workspaceId: PROJECT_A,
+    });
+    expect(await host.getAgentState()).toMatchObject({
+      state: "waiting",
+      terminalId: "term-a",
+      workspaceId: PROJECT_A,
+    });
   });
 
   it("drops an unattributable transition for a bound host", async () => {
@@ -972,6 +980,33 @@ describe("createHost onDidChangeAgentState", () => {
     expect(callback).not.toHaveBeenCalled();
   });
 
+  it("drops a bound host's transitions it cannot attribute to its project", async () => {
+    const h = makeHarness();
+    installPtyForAgentState({ "term-a": PROJECT_A });
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+    await host.onDidChangeAgentState(callback, { debounceMs: 0 });
+
+    for (const terminalId of ["", 42, "term-unknown"]) {
+      events.emit("agent:state-changed", {
+        terminalId,
+        state: "working",
+        previousState: "idle",
+        timestamp: 1,
+      } as never);
+    }
+    serviceRefsMock.getPtyClient.mockReturnValue(null);
+    events.emit("agent:state-changed", {
+      terminalId: "term-a",
+      state: "working",
+      previousState: "idle",
+      timestamp: 2,
+    } as never);
+
+    expect(callback).not.toHaveBeenCalled();
+    expect(await host.getAgentState()).toBeNull();
+  });
+
   it("keeps an unbound host observing every project's agents", async () => {
     const h = makeHarness();
     installPtyForAgentState({ "term-b": "project-b" });
@@ -986,6 +1021,66 @@ describe("createHost onDidChangeAgentState", () => {
       timestamp: 1,
     } as never);
     expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells an unbound host which workspace and terminal each transition came from", async () => {
+    const h = makeHarness();
+    const scratchId = "6f1c2a4e-1b7d-4c1e-9a55-0d2b8c3e4f10";
+    installPtyForAgentState({ "term-a": PROJECT_A, "term-s": scratchId });
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    await host.onDidChangeAgentState(callback, { debounceMs: 0 });
+
+    for (const [terminalId, timestamp] of [
+      ["term-a", 1],
+      ["term-s", 2],
+    ] as const) {
+      events.emit("agent:state-changed", {
+        terminalId,
+        worktreeId: "wt-internal",
+        cwd: "/secret/path",
+        state: "waiting",
+        previousState: "working",
+        timestamp,
+      } as never);
+    }
+
+    expect(callback.mock.calls.map(([s]) => [s.terminalId, s.workspaceId])).toEqual([
+      ["term-a", PROJECT_A],
+      ["term-s", scratchId],
+    ]);
+    expect(Object.keys(callback.mock.calls[1][0]).sort()).toEqual([
+      "previousState",
+      "running",
+      "state",
+      "terminalId",
+      "timestamp",
+      "workspaceId",
+    ]);
+    expect(await host.getAgentState()).toMatchObject({
+      terminalId: "term-s",
+      workspaceId: scratchId,
+    });
+  });
+
+  it("delivers an untracked terminal's transition to an unbound host without a workspace id", async () => {
+    const h = makeHarness();
+    installPtyForAgentState({});
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    await host.onDidChangeAgentState(callback, { debounceMs: 0 });
+
+    events.emit("agent:state-changed", {
+      terminalId: "term-gone",
+      state: "exited",
+      previousState: "working",
+      timestamp: 1,
+    } as never);
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    const snapshot = callback.mock.calls[0][0];
+    expect(snapshot.terminalId).toBe("term-gone");
+    expect("workspaceId" in snapshot).toBe(false);
   });
 });
 
@@ -1452,6 +1547,32 @@ describe("createHost subscriptions coalesce by default", () => {
       ["agent-term-b", "working"],
       ["agent-term-a", "idle"],
     ]);
+  });
+
+  it("keeps the workspace resolved at arrival when the terminal is gone by flush", async () => {
+    vi.useFakeTimers();
+    const terminalProjects: Record<string, string> = { "term-a": PROJECT_A };
+    serviceRefsMock.getPtyClient.mockReturnValue({
+      getTerminalProjectId: vi.fn((id: string) => terminalProjects[id] ?? null),
+    });
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const received: Array<{ terminalId?: string; workspaceId?: string }> = [];
+    await host.onDidChangeAgentState((s) => received.push(s));
+
+    events.emit("agent:state-changed", {
+      terminalId: "term-a",
+      state: "exited",
+      previousState: "working",
+      timestamp: 1,
+    } as never);
+    delete terminalProjects["term-a"];
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(received).toEqual([
+      expect.objectContaining({ terminalId: "term-a", workspaceId: PROJECT_A }),
+    ]);
+    expect(await host.getAgentState()).toMatchObject({ workspaceId: PROJECT_A });
   });
 
   it("delivers every agent transition for debounceMs: 0", async () => {
