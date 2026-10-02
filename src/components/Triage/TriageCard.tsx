@@ -455,6 +455,18 @@ export function TriageCard({
   };
 
   const compact = item.kind === "working" || item.kind === "running" || item.kind === "idle";
+  // Without a reading or a prompt there is nothing under the identity line, and
+  // the row keeps the one-line height its working neighbours have.
+  const hasBody =
+    question !== null ||
+    options.length > 0 ||
+    card?.headline != null ||
+    card?.summary != null ||
+    item.pending ||
+    card?.secretPrompt === true ||
+    composerOpen ||
+    sentHere !== null;
+  const oneLine = compact || !hasBody;
   const accessibleName = [
     item.row.title,
     item.row.chrome.label,
@@ -512,12 +524,12 @@ export function TriageCard({
         "group cursor-pointer rounded-[var(--radius-md)] px-2.5",
         // Inside the panel's scroller, so the ring sits inset rather than clipped.
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
-        compact ? "py-1" : "flex flex-col gap-2 py-2"
+        oneLine ? "py-1" : "flex flex-col gap-2 py-2"
       )}
     >
       <CardIdentity item={item} strong={!compact} actions={actions} showActions={isFocused} />
 
-      {compact ? (
+      {!hasBody && !compact ? null : compact ? (
         card?.activity ? (
           <p className="-mt-0.5 truncate pb-1 pl-[46px] font-mono text-xs text-text-secondary">
             {card.activity}
