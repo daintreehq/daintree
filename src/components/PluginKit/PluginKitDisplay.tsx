@@ -7,6 +7,7 @@ import type {
   PluginFilterChipProps,
   PluginHighlightedTextProps,
   PluginMeterProps,
+  PluginSegmentedBarProps,
   PluginSeverity,
   PluginTimelineItem,
   PluginTimelineProps,
@@ -689,11 +690,16 @@ function KitTimeline({
   );
 }
 
+function KitSegmentedBar({ label, className }: PluginSegmentedBarProps) {
+  return <div role="img" aria-label={str(label)} className={cn("min-w-0", str(className))} />;
+}
+
 export const pluginKitDisplay = {
   FilterChip: KitFilterChip,
   HighlightedText: KitHighlightedText,
   DiffStat: KitDiffStat,
   AvatarGroup: KitAvatarGroup,
   Meter: KitMeter,
+  SegmentedBar: KitSegmentedBar,
   Timeline: KitTimeline,
 };

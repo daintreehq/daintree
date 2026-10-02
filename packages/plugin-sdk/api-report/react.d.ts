@@ -110,10 +110,10 @@ interface PluginAriaRootAttributes extends PluginRootAttributes, AriaAttributes 
  * Lucide-style kebab-case names, plus Daintree concept icons: `worktree`
  * (a git worktree), `daintree` (the app's mark). The set only grows.
  */
-type PluginIconName = "activity" | "alert-octagon" | "alert-triangle" | "arrow-down" | "arrow-left" | "arrow-right" | "arrow-up" | "arrow-up-right" | "at-sign" | "bell" | "bell-dot" | "book-open" | "bookmark" | "bot" | "braces" | "bug" | "calendar" | "chart-column" | "chart-line" | "chart-pie" | "check" | "check-square" | "chevron-down" | "chevron-left" | "chevron-right" | "chevron-up" | "chevrons-up-down" | "circle-check" | "circle-dashed" | "circle-dot" | "circle-slash" | "circle-x" | "clipboard" | "clock" | "cloud" | "cloud-off" | "code" | "copy" | "daintree" | "database" | "download" | "external-link" | "eye" | "eye-off" | "file" | "file-code" | "file-diff" | "file-plus" | "file-text" | "file-warning" | "filter" | "flame" | "flask" | "folder" | "folder-code" | "folder-open" | "folder-search" | "folder-tree" | "folder-x" | "gauge" | "git-branch" | "git-branch-plus" | "git-commit" | "git-compare" | "git-fork" | "git-merge" | "git-merge-conflict" | "git-pull-request" | "git-pull-request-closed" | "git-pull-request-draft" | "globe" | "grip-vertical" | "hash" | "help" | "history" | "home" | "hourglass" | "image" | "import" | "inbox" | "info" | "key" | "layers" | "layout-grid" | "layout-panel-top" | "lightbulb" | "link" | "list" | "list-checks" | "list-todo" | "loader" | "lock" | "mail" | "maximize" | "menu" | "message-square" | "minimize" | "minus" | "monitor" | "monitor-play" | "more-horizontal" | "more-vertical" | "mouse-pointer" | "notebook" | "package" | "panel-left" | "panel-right" | "panel-right-close" | "panel-right-open" | "paperclip" | "pause" | "pencil" | "pin" | "pin-off" | "play" | "plug" | "plus" | "puzzle" | "redo" | "refresh" | "rocket" | "rotate-ccw" | "rotate-cw" | "save" | "search" | "send" | "server" | "settings" | "share" | "shield" | "sliders" | "sort" | "sparkles" | "square" | "square-dashed-mouse-pointer" | "star" | "sticky-note" | "table" | "tag" | "target" | "terminal" | "trash" | "undo" | "unlink" | "unlock" | "unplug" | "upload" | "user" | "user-plus" | "users" | "wifi-off" | "workflow" | "worktree" | "wrench" | "x" | "zap";
+type PluginIconName = "activity" | "alert-octagon" | "alert-triangle" | "arrow-down" | "arrow-left" | "arrow-right" | "arrow-up" | "arrow-up-right" | "at-sign" | "banknote" | "bell" | "bell-dot" | "book-open" | "bookmark" | "bot" | "braces" | "bug" | "calendar" | "car" | "chart-column" | "chart-line" | "chart-pie" | "check" | "check-square" | "chevron-down" | "chevron-left" | "chevron-right" | "chevron-up" | "chevrons-up-down" | "circle-check" | "circle-dashed" | "circle-dot" | "circle-slash" | "circle-x" | "clipboard" | "clock" | "cloud" | "cloud-off" | "code" | "coins" | "copy" | "credit-card" | "daintree" | "database" | "download" | "external-link" | "eye" | "eye-off" | "file" | "file-code" | "file-diff" | "file-plus" | "file-text" | "file-warning" | "filter" | "flame" | "flask" | "folder" | "folder-code" | "folder-open" | "folder-search" | "folder-tree" | "folder-x" | "gauge" | "git-branch" | "git-branch-plus" | "git-commit" | "git-compare" | "git-fork" | "git-merge" | "git-merge-conflict" | "git-pull-request" | "git-pull-request-closed" | "git-pull-request-draft" | "globe" | "grip-vertical" | "hash" | "heart" | "help" | "history" | "home" | "hourglass" | "image" | "import" | "inbox" | "info" | "key" | "landmark" | "layers" | "layout-grid" | "layout-panel-top" | "lightbulb" | "link" | "list" | "list-checks" | "list-todo" | "loader" | "lock" | "mail" | "maximize" | "menu" | "message-square" | "minimize" | "minus" | "monitor" | "monitor-play" | "more-horizontal" | "more-vertical" | "mouse-pointer" | "notebook" | "package" | "panel-left" | "panel-right" | "panel-right-close" | "panel-right-open" | "paperclip" | "pause" | "pencil" | "percent" | "piggy-bank" | "pin" | "pin-off" | "play" | "plug" | "plus" | "puzzle" | "receipt" | "redo" | "refresh" | "rocket" | "rotate-ccw" | "rotate-cw" | "save" | "scale" | "search" | "send" | "server" | "settings" | "share" | "shield" | "sliders" | "sort" | "sparkles" | "square" | "square-dashed-mouse-pointer" | "star" | "sticky-note" | "table" | "tag" | "target" | "terminal" | "trash" | "trending-down" | "trending-up" | "undo" | "unlink" | "unlock" | "unplug" | "upload" | "user" | "user-plus" | "users" | "wallet" | "wifi-off" | "workflow" | "worktree" | "wrench" | "x" | "zap";
 /** Props of `Icon`. */
 interface PluginIconProps extends PluginRootAttributes {
-    name: PluginIconName;
+    name: PluginIconName | PluginLucideIconName;
     /** Square size in px. Defaults to 16. Inside a kit `Button` the button sizes it. */
     size?: number;
     className?: string;
@@ -121,10 +121,19 @@ interface PluginIconProps extends PluginRootAttributes {
     "aria-label"?: string;
 }
 /**
- * An icon a kit prop can take: a {@link PluginIconName}, or your own element
- * (an inline `<svg>`). A string is always read as a name, never as text.
+ * Any Lucide icon by its kebab-case name ("piggy-bank", "chart-candlestick"),
+ * beyond the names {@link PluginIconName} lists (https://lucide.dev/icons).
+ * A listed name draws at once; any other Lucide name is loaded the first time
+ * it is drawn, holding its square empty until then. A name Lucide does not
+ * have draws nothing and warns in development.
  */
-type PluginIconSource = PluginIconName | ReactElement;
+type PluginLucideIconName = string & {};
+/**
+ * An icon a kit prop can take: a {@link PluginIconName}, any other Lucide
+ * name, or your own element (an inline `<svg>`). A string is always read as a
+ * name, never as text.
+ */
+type PluginIconSource = PluginIconName | PluginLucideIconName | ReactElement;
 type PluginButtonVariant = "default" | "secondary" | "outline" | "ghost" | "subtle" | "contrast" | "destructive" | "ghost-danger" | "link"
 /** A rounded, quiet chip-shaped button: a floating toolbar or a status strip's control. */
  | "pill";
@@ -202,7 +211,7 @@ interface PluginSpinnerProps extends PluginRootAttributes {
 }
 /** Props of `SpinningIcon`: an icon that finishes its current turn before it stops. */
 interface PluginSpinningIconProps extends PluginRootAttributes {
-    icon: PluginIconName;
+    icon: PluginIconSource;
     /** True while the operation runs. It always plays at least one full turn. */
     active: boolean;
     /** Square size in px. Defaults to 16. */
@@ -297,7 +306,7 @@ interface PluginSelectOption {
     /** A second line under the label (`Select` only). */
     description?: string;
     /** A leading glyph, shown in the list and on the trigger (`Select` only). */
-    icon?: PluginIconName;
+    icon?: PluginIconSource;
     disabled?: boolean;
 }
 /** A labelled run of options in a `Select`. */
@@ -439,7 +448,7 @@ interface PluginCalloutProps extends Omit<PluginDomProps<HTMLDivElement>, "title
      */
     variant?: "box" | "strip";
     /** A domain glyph in place of the info mark, for `neutral` only. */
-    icon?: PluginIconName;
+    icon?: PluginIconSource;
     size?: "default" | "compact";
     className?: string;
 }
@@ -546,7 +555,7 @@ type PluginDropdownMenuEntry = {
     type?: "item";
     label: string;
     onSelect: () => void;
-    icon?: PluginIconName;
+    icon?: PluginIconSource;
     /** A canonical combo shown in the key column, e.g. `"Cmd+Enter"`. */
     shortcut?: string;
     disabled?: boolean;
@@ -571,7 +580,7 @@ type PluginDropdownMenuEntry = {
     type: "submenu";
     label: string;
     items: readonly PluginDropdownMenuEntry[];
-    icon?: PluginIconName;
+    icon?: PluginIconSource;
     disabled?: boolean;
     /** A quiet second line under the label. */
     description?: string;
@@ -794,6 +803,13 @@ interface PluginDataTableColumn<T = unknown> {
      */
     grow?: boolean;
     align?: "start" | "center" | "end";
+    /**
+     * A figure column: end-aligned (unless `align` says otherwise), drawn with
+     * tabular digits so a column of figures lines up, and its number editor stays
+     * end-aligned. `true` draws the cell as `render` or `row[id]` gives it; an
+     * object also formats a number cell that has no `render`.
+     */
+    numeric?: boolean | PluginDataTableNumericFormat;
     /** Draws the header as a sort button that reports through `onSortChange`. */
     sortable?: boolean;
     /** The cell. Defaults to `row[id]` when that is a string or a number. */
@@ -827,6 +843,19 @@ interface PluginDataTableColumn<T = unknown> {
     /** Checks a draft before it is committed: return a message to refuse it and keep the editor open. */
     validate?(value: string, row: T): string | null | undefined;
 }
+/** How a `numeric` column formats a number cell that has no `render`. */
+interface PluginDataTableNumericFormat {
+    /** An ISO 4217 code ("EUR"): formats as money in the user's locale. */
+    currency?: string;
+    /** Fixed decimal places. Defaults to the currency's own, else up to 2. */
+    decimals?: number;
+    /** `minus` (the default) draws a true minus sign (U+2212); `parens` wraps a negative figure in brackets. */
+    negative?: "minus" | "parens";
+}
+/** A `DataTable` totals cell: `"sum"` adds the column's finite numbers (formatted like a `numeric` cell), or a function draws it from the rows. */
+type PluginDataTableTotal<T> = "sum" | {
+    bivarianceHack(rows: readonly T[]): ReactNode;
+}["bivarianceHack"];
 /** Decides something per row (selectable, editable). A method, for the same reason as {@link PluginDataTableRowKey}. */
 type PluginDataTableRowPredicate<T> = {
     bivarianceHack(row: T): boolean;
@@ -844,10 +873,13 @@ interface PluginDataTableSort {
     direction: "asc" | "desc";
 }
 /**
- * Props of `DataTable`: a table whose body is always virtualised, with a
- * header that stays put. It fills its container's height, like `VirtualList`.
- * With `onRowClick` the table is a keyboard grid: one tab stop, Up/Down/Home/End
- * move the cursor and Enter activates the row.
+ * Props of `DataTable`: a table with a header that stays put. By default the
+ * body is virtualised and the table fills its container's height, like
+ * `VirtualList`; `virtualize={false}` draws a plain table that sizes to its
+ * rows, for a ledger, statement or schedule inside a card. With `onRowClick`
+ * the table is a keyboard grid: one tab stop, Up/Down/Home/End move the cursor
+ * and Enter activates the row. Buttons, links and inputs inside a cell keep
+ * their own clicks and keys; they do not activate the row.
  */
 interface PluginDataTableProps<T = unknown> extends PluginRootAttributes {
     columns: readonly PluginDataTableColumn<T>[];
@@ -879,6 +911,40 @@ interface PluginDataTableProps<T = unknown> extends PluginRootAttributes {
     /** Classes for the scrolling element. */
     className?: string;
     /**
+     * `true` (the default) virtualises the body and fills the container's
+     * height, as the table always has. `false` draws every row in a plain table
+     * that is exactly as tall as its rows, so a short table needs no height of
+     * its own; use it for up to a few hundred rows. `onEndReached` and
+     * `estimatedRowSize` do nothing without the virtualiser.
+     */
+    virtualize?: boolean;
+    /**
+     * Row height and type size: `compact` (24px, 12px type) for a dense
+     * projection, `default` (28px, 12px; the default), or `comfortable` (32px,
+     * 14px) for a ledger read line by line. Sets the virtualiser's row estimate
+     * unless `estimatedRowSize` is given.
+     */
+    density?: "compact" | "default" | "comfortable";
+    /** A hairline rule between rows, so the eye can follow a row across many columns. Defaults to `false`. */
+    rowDividers?: boolean;
+    /** A quiet fill on every other drawn row. Defaults to `false`. */
+    striped?: boolean;
+    /**
+     * A totals row at the foot of the table, by column id: `"sum"` adds the
+     * column's finite numbers, a function draws the cell. Both read exactly
+     * `rows` (never sub-rows, whatever is expanded). Drawn in a `<tfoot>` under
+     * a strong rule, in semibold, and kept in view while the body scrolls.
+     */
+    totals?: Readonly<Record<string, PluginDataTableTotal<T>>>;
+    /** The totals row's label, in its first column that has no total. Defaults to "Total". */
+    totalsLabel?: ReactNode;
+    /**
+     * How an `editable` cell shows it can be edited before it is: `hover` (the
+     * default) lifts the cell and draws a pencil at its end while the pointer or
+     * the keyboard cursor is on it; `none` draws nothing.
+     */
+    editAffordance?: "hover" | "none";
+    /**
      * Draws a checkbox column and makes the table multi-select: click a box to
      * toggle its row, Shift-click for a range, the header box for all. On the
      * keyboard Space toggles the cursor row, Shift+Up/Down extend, Cmd+A (Ctrl+A)
@@ -899,6 +965,17 @@ interface PluginDataTableProps<T = unknown> extends PluginRootAttributes {
     groupBy?: string | PluginDataTableGroupAccessor<T>;
     /** The header's label for a group. Defaults to the key ("None" for an empty one). */
     groupLabel?(key: string, rows: readonly T[]): ReactNode;
+    /**
+     * Subtotals on a group's header row, by column id: the same `"sum"` or
+     * function as `totals`, over exactly the rows `groupLabel` receives
+     * (folded or not). The disclosure and label keep the first visible column
+     * and run across the columns after it up to the first one with a subtotal;
+     * a subtotal for the first visible column is not drawn. Columns not listed
+     * stay empty.
+     */
+    groupTotals?: Readonly<Record<string, PluginDataTableTotal<T>>>;
+    /** `false` drops the row count after a group's label. Defaults to `true`. */
+    groupCount?: boolean;
     /** Folded groups' keys, controlled. */
     collapsedGroups?: readonly string[];
     defaultCollapsedGroups?: readonly string[];
@@ -1028,6 +1105,8 @@ interface PluginToolbarButtonProps extends Omit<PluginDomProps<HTMLButtonElement
     /** Tooltip text when it says more than the name (a shortcut). `false` for none. */
     tooltip?: ReactNode | false;
     tooltipSide?: "top" | "bottom";
+    /** Work it started is in flight: the icon becomes a spinner, the button is `aria-busy` and ignores clicks. */
+    loading?: boolean;
 }
 /**
  * Props of `PaneState`, what a whole pane shows instead of its content.
@@ -1099,7 +1178,7 @@ interface PluginSwitchProps extends PluginDomProps<HTMLButtonElement> {
 interface PluginTabItem {
     value: string;
     label: string;
-    icon?: PluginIconName;
+    icon?: PluginIconSource;
     /** A count or short tag after the label. A number draws a count pill. */
     badge?: ReactNode;
 }
@@ -1118,6 +1197,12 @@ interface PluginTabsProps extends PluginRootAttributes {
     content?: Readonly<Record<string, ReactNode>>;
     /** `strip` fills a fixed-height chrome row; `page` (the default) sits above content. */
     density?: "page" | "strip";
+    /**
+     * Controls at the strip's trailing end, outside the tablist: a refresh
+     * button and its "Updated" age, a filter. Keep it to a few `ToolbarButton`s
+     * and quiet text.
+     */
+    trailing?: ReactNode;
     className?: string;
     /** Classes for the tab panel. */
     panelClassName?: string;
@@ -1190,6 +1275,8 @@ interface PluginSettingsRowProps extends PluginRootAttributes {
     /** Draws the modified-from-default mark; with `onReset`, a reset button too. */
     isModified?: boolean;
     onReset?: () => void;
+    /** The reset button's accessible name. Defaults to "Reset {label} to default". */
+    resetAriaLabel?: string;
     id?: string;
 }
 /** Props of `SettingsActions`: the last row of a group with an explicit Save. */
@@ -1454,8 +1541,56 @@ interface PluginStatCardProps extends PluginDomProps<HTMLDivElement> {
     tone?: PluginSeverity;
     /** One quiet line under the figure: its scope or source. */
     hint?: ReactNode;
-    /** Below the hint: a `Sparkline`, say. */
+    /** How many lines the hint may take before it is cut: a number, or `"wrap"` for all of it. Defaults to 1. */
+    hintLines?: number | "wrap";
+    /** A unit after the figure ("/mo", "ms"), a step down in size and weight. */
+    unit?: ReactNode;
+    /** The same figure another way, on its own quieter line ("≈ $13,500/mo"). */
+    twin?: ReactNode;
+    /** `md` (the default) draws a 20px figure; `lg` a 24px one, for the one or two figures a row leads with. */
+    size?: "md" | "lg";
+    /**
+     * `outline` (the default) is a hairline frame on the surface beneath.
+     * `filled` is a recessed tile: an inset fill and a quieter edge, for a row
+     * of readings inside a card. On a filled card a `warning`, `error` or
+     * `danger` tone also draws the edge in its status colour; the figure stays
+     * neutral either way.
+     */
+    variant?: "outline" | "filled";
+    /** Below the hint: a `Sparkline` or a `Meter`, say. */
     children?: ReactNode;
+    className?: string;
+}
+/**
+ * Props of `Figure`: one figure set as type rather than as a card: the
+ * answer at the top of a page, or a lead figure in a card. Digits are
+ * tabular and lining, so a figure that updates never jitters. The figure
+ * never truncates; it wraps.
+ */
+interface PluginFigureProps extends PluginDomProps<HTMLDivElement> {
+    /** The figure. Format it yourself (`formatCount`, `Intl.NumberFormat`). */
+    value: ReactNode;
+    /** A unit after the figure ("/mo", "%"), a step down in size, regular weight and secondary colour. */
+    unit?: ReactNode;
+    /** The same figure another way, on its own line under it in secondary text ("≈ $13,500/mo"). */
+    twin?: ReactNode;
+    /** A sentence-case label above the figure. */
+    label?: ReactNode;
+    /** A quiet line under the figure (and its twin): its scope or basis ("today's money, after tax"). */
+    caption?: ReactNode;
+    /**
+     * `display` steps 36/48/60px with the container's width and is for the one
+     * answer a page leads with. `xl` is 30px, `lg` (the default) 24px, `md` 20px.
+     */
+    size?: "display" | "xl" | "lg" | "md";
+    /** Sets the figure in the host's monospace face with slightly tightened tracking. */
+    mono?: boolean;
+    /** The change beside the figure, drawn as `StatCard`'s `delta`: a number is signed with an arrow, anything else is shown as given. */
+    delta?: ReactNode;
+    /** Words a number `delta`, as `StatCard`'s `formatDelta`. */
+    formatDelta?(magnitude: number): string;
+    /** `start` (the default) or `end`, for a figure at the trailing edge of a row. */
+    align?: "start" | "end";
     className?: string;
 }
 /**
@@ -1540,7 +1675,51 @@ interface PluginBarChartProps extends PluginChartBaseProps {
     formatX?: (value: unknown) => string;
     /** The category column's header in the accessible data table. Defaults to "Category". */
     xLabel?: string;
+    /**
+     * Colours the bars by category rather than by series, keyed by the
+     * category's formatted name (`formatX`'s output): an allocation chart keeps
+     * each class in the colour it wears elsewhere in the view. A category not
+     * listed takes the series colour. Applies to a chart with exactly one
+     * series; with more it is ignored, since the colour has to tell the series
+     * apart. The legend then lists the categories it coloured.
+     */
+    categoryColors?: Readonly<Record<string, PluginChartColor>>;
 }
+interface PluginChartOverlayStyle {
+    /** A short label drawn on the plot, and read in the accessible table's caption. */
+    label?: string;
+    /** Defaults to `neutral`. */
+    color?: PluginChartColor;
+}
+/**
+ * A labelled rule across a chart: a target or threshold value (`axis: "y"`,
+ * the default), or the x where something changed (`axis: "x"`: a number, a
+ * `Date`, epoch ms or an ISO string, read like the chart's x values).
+ */
+type PluginChartReferenceLine = PluginChartOverlayStyle & {
+    /** `dashed` (the default) or `solid`. */
+    stroke?: "dashed" | "solid";
+} & ({
+    axis?: "y";
+    value: number;
+} | {
+    axis: "x";
+    value: number | string | Date;
+});
+/**
+ * A labelled shaded range across a chart: a span of x (`axis: "x"`, the
+ * default: a period, a phase) or a span of values (`axis: "y"`: a target zone).
+ * `from` and `to` may come in either order.
+ */
+type PluginChartBand = PluginChartOverlayStyle & ({
+    axis?: "x";
+    from: number | string | Date;
+    to: number | string | Date;
+} | {
+    axis: "y";
+    from: number;
+    to: number;
+});
 /**
  * Props of `LineChart`: one or more series over a numeric or time x axis,
  * with an optional area wash.
@@ -1570,6 +1749,12 @@ interface PluginLineChartProps extends PluginChartBaseProps {
     formatX?: (value: number) => string;
     /** The x column's header in the accessible data table. Defaults to "Time" or "X". */
     xLabel?: string;
+    /** Labelled rules drawn over the plot, under the lines. */
+    referenceLines?: readonly PluginChartReferenceLine[];
+    /** Labelled shaded ranges drawn behind the lines. */
+    bands?: readonly PluginChartBand[];
+    /** Fixed ends of the value axis. Omitted, the axis fits the data (and any reference lines). */
+    yDomain?: readonly [number, number];
 }
 /**
  * Props of `DonutChart`: parts of a whole, with the total (or your own
@@ -1586,6 +1771,13 @@ interface PluginDonutChartProps extends PluginChartBaseProps {
     centerLabel?: ReactNode;
     /** The name of the part that gathers everything past the fifth. Defaults to "Other". */
     otherLabel?: string;
+    /**
+     * Pins parts to colours by name, so a part keeps the colour it wears
+     * elsewhere in the view. Parts not listed take the remaining slots in the
+     * fixed order. A donut whose largest part is over about 90% says more as a
+     * `SegmentedBar`.
+     */
+    colors?: Readonly<Record<string, PluginChartColor>>;
 }
 /**
  * Props of `FormFieldGroup`: one label over a set of controls that answer it
@@ -1897,6 +2089,72 @@ interface PluginMeterProps extends PluginAriaRootAttributes {
     valueText?: string;
     /** Neutral when omitted. `{ warning: 0.8, danger: 0.95 }` warns at 80% and 95%. */
     thresholds?: PluginMeterThresholds;
+    /**
+     * Reference marks on the track (a target, a floor), drawn as a short haloed
+     * rule that rises above and below the bar. Each mark's label is read with
+     * the value.
+     */
+    marks?: readonly PluginMeterMark[];
+    /**
+     * `false` hides the value text, for a meter whose figure is drawn
+     * elsewhere. The value is still spoken, and a warning or danger glyph stays
+     * beside the bar. Defaults to `true`.
+     */
+    readout?: boolean;
+    /** The readout's width (px or a CSS length), so a column of meters lines up. Defaults to its content. */
+    readoutWidth?: number | string;
+    className?: string;
+}
+/** A reference mark on a `Meter` or `SegmentedBar` track. */
+interface PluginMeterMark {
+    /** Where the mark sits, on the same scale as the meter's `value` (0 to `max`). */
+    value: number;
+    /** What the mark is ("Essential floor"): its tooltip, and spoken with the value. */
+    label: string;
+    /** A small head on the mark's top, for the one mark the reading is measured against. */
+    head?: boolean;
+}
+/** One part of a `SegmentedBar`. */
+interface PluginSegmentedBarSegment {
+    /** The part's size. Zero, negative and non-finite parts are left out. */
+    value: number;
+    label: string;
+    /** Pins the colour. Omitted, the part takes the next slot in the charts' fixed order. */
+    color?: PluginChartColor;
+    /** The part's value in words for the legend and assistive tech. Defaults to the formatted value and share. */
+    valueText?: string;
+}
+/**
+ * Props of `SegmentedBar`: parts of a whole on one bar, with a legend, for
+ * two to six parts where a donut would be mostly one colour. Each part is
+ * coloured from the charts' categorical slots and named in the legend, so
+ * colour is never the only signal.
+ */
+interface PluginSegmentedBarProps extends PluginAriaRootAttributes {
+    /** The parts, in drawing order. Past the fifth they fold into one "Other" part, as `DonutChart`'s do. */
+    segments: readonly PluginSegmentedBarSegment[];
+    /** Required: the accessible name, and the visible label unless `showLabel` is false. */
+    label: string;
+    /** False drops the visible label. Defaults to true. */
+    showLabel?: boolean;
+    /**
+     * The whole the parts are out of. Defaults to their sum; a larger total
+     * leaves the rest of the track empty. A total below the parts' sum is
+     * ignored, so the bar never overflows and shares never pass 100%.
+     */
+    total?: number;
+    /** Formats a part's value for the legend. Defaults to the grouped number. */
+    formatValue?: (value: number) => string;
+    /**
+     * `true` (the default) lists every part with its value and share under the
+     * bar. Without it each part is named only in its tooltip and the accessible
+     * name, so turn it off only where the parts are named beside the bar.
+     */
+    legend?: boolean;
+    /** Reference marks on the track, on the scale of `total`. */
+    marks?: readonly PluginMeterMark[];
+    /** The bar's thickness: `sm` (6px, the default) or `md` (10px). */
+    size?: "sm" | "md";
     className?: string;
 }
 /** Who did a `Timeline` item: a name, or a name with a picture. */
@@ -2116,17 +2374,29 @@ interface PluginCardBaseProps extends Omit<PluginDomProps<HTMLElement>, "title" 
     footer?: ReactNode;
     /**
      * `default` is the panel surface. `inset` recedes: a nested group or a
-     * read-only detail block inside another surface.
+     * read-only detail block inside another surface. `elevated` lifts off the
+     * page on the raised surface with a soft shadow, so a section reads as an
+     * object rather than an outline. `feature` is the one card a view leads
+     * with: elevated, rounder, roomier, with a larger title and an optional
+     * `capColor` cap. Use at most one `feature` card per view.
      */
-    variant?: "default" | "inset";
+    variant?: "default" | "inset" | "elevated" | "feature";
+    /**
+     * A `feature` card's 2px top cap, in one of the charts' category colours:
+     * the view's own colour for its answer. Ignored on other variants.
+     */
+    capColor?: PluginChartColor;
     /** The body's padding: 16 px (`md`, the default), 12 px (`sm`), or none, for a list or table edge to edge. */
     padding?: "none" | "sm" | "md";
+    /** How the footer's contents sit: `end` (the default), `start`, `between` (first item at the start, the rest at the end) or `stretch` (each fills an equal share). */
+    footerAlign?: "end" | "start" | "between" | "stretch";
     className?: string;
 }
 /**
  * Props of `Card`: the app's card surface, a hairline frame with an optional
- * header (`title`, `description`, `actions`), a body and a `footer`. Never
- * accent. With `onClick` the whole card is one button, a destination or a
+ * header (`title`, `description`, `actions`), a body and a `footer`. The
+ * frame never takes accent; a `feature` card's `capColor` cap is the one place a
+ * card carries colour. With `onClick` the whole card is one button, a destination or a
  * choice; controls cannot sit inside a button, so a clickable card takes no
  * `actions`. DOM props land on the root.
  */
@@ -2270,6 +2540,10 @@ interface PluginDescriptionListProps extends PluginRootAttributes {
     layout?: "inline" | "stacked";
     /** Draws a copy button after every value that is text or a number. An item's `copyText` wins. */
     copyable?: boolean;
+    /** `end` aligns inline values to the trailing edge with tabular digits, for a list of figures. Defaults to `start`. */
+    valueAlign?: "start" | "end";
+    /** The inline label column's width (px or a CSS length). Defaults to fit its labels, up to 40%. */
+    labelWidth?: number | string;
     className?: string;
 }
 /** Props of `DescriptionListItem`: one row, as a child of `DescriptionList`. */
@@ -2331,10 +2605,19 @@ interface PluginNumberInputProps extends PluginAriaRootAttributes {
     onValueChange?: (value: number | null) => void;
     min?: number;
     max?: number;
-    /** What an arrow key or a stepper press adds. Shift, Page Up and Page Down step ten times. Defaults to 1. */
-    step?: number;
-    /** Decimal places the value is rounded to and shown with. Defaults to the step's own. */
+    /**
+     * What an arrow key or a stepper press adds. Shift, Page Up and Page Down
+     * step ten times. Defaults to 1. `"any"` steps by 1 and takes away the
+     * step's implicit rounding, so a typed quantity with many decimals is kept
+     * as typed; an explicit `precision` still rounds.
+     */
+    step?: number | "any";
+    /** Decimal places the value is rounded to and shown with. Defaults to the step's own (no rounding for `step="any"`). */
     precision?: number;
+    /** Draws thousands separators in the user's locale while the field is not being edited. Defaults to `false`. */
+    grouping?: boolean;
+    /** `false` drops trailing zeros the shown value does not need (2.50 shows as 2.5). Omitted, the field formats as it always has. */
+    fixedDecimals?: boolean;
     /** A suffix drawn inside the field ("ms", "px", "%") and spoken with the value. */
     unit?: string;
     /** The decrease and increase buttons. Defaults to `true`. */
@@ -4101,6 +4384,12 @@ interface PluginStaleIndicatorProps extends PluginRootAttributes {
     onRefresh?: () => void;
     /** The refresh button's name. Defaults to "Refresh". */
     refreshLabel?: string;
+    /** More about the data's age, in a tooltip on the reading ("Prices fetched 30 Sep 14:02; 2 kept from cache"). */
+    detail?: string;
+    /** What a stale reading tints: `glyph` (the default) the clock only, `text` the words too. */
+    staleTint?: "glyph" | "text";
+    /** Announced politely each time it changes: say how a refresh went ("Prices updated", "2 prices kept from cache"). */
+    announce?: string;
     className?: string;
 }
 /** A preset in a `ColorPicker`'s palette: a colour, or a colour with a spoken name. */
@@ -5178,7 +5467,7 @@ interface PluginActionMenuItem {
     args?: unknown;
     /** The label. Defaults to the action's own title. */
     label?: string;
-    icon?: PluginIconName;
+    icon?: PluginIconSource;
     /** A quiet second line under the label. */
     description?: string;
     /** Draws the row in the destructive tone. */
@@ -6802,4 +7091,4 @@ interface PluginHostBridge {
     onPanel(pluginId: string, channel: string, panelId: string, callback: (payload: unknown) => void): () => void;
 }
 
-export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAccordionItem, type PluginAccordionProps, type PluginActionButtonProps, type PluginActionDispatchOutcome, type PluginActionMenuItem, type PluginAgentAvatarProps, type PluginAgentAvatarSize, type PluginAgentBadgeProps, type PluginAgentPickerChoice, type PluginAgentPickerPane, type PluginAgentPickerProps, type PluginAgentState, type PluginAgentStateIndicatorProps, type PluginAlign, type PluginAnnounceOptions, type PluginAnsiTextProps, type PluginAriaRootAttributes, type PluginAttachment, type PluginAttachmentChipProps, type PluginAttachmentListProps, type PluginAttachmentStatus, type PluginAutoGridProps, type PluginAvatarGroupItem, type PluginAvatarGroupProps, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginBarChartProps, type PluginBranchBadgeProps, type PluginBreadcrumbItem, type PluginBreadcrumbsProps, type PluginBulkAction, type PluginBulkActionBarProps, type PluginButtonProps, type PluginButtonVariant, type PluginCalendarBaseProps, type PluginCalendarProps, type PluginCalendarRangeProps, type PluginCalendarSingleProps, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCardProps, type PluginChartBaseProps, type PluginChartColor, type PluginChartSeries, type PluginCheck, type PluginCheckStatus, type PluginCheckboxProps, type PluginChecksListProps, type PluginClusterProps, type PluginCodeBlockProps, type PluginCodeEditorHandle, type PluginCodeEditorProps, type PluginColorPickerProps, type PluginColorSwatch, type PluginColorSwatchProps, type PluginColoredLabelProps, type PluginComboboxProps, type PluginCommandPaletteItem, type PluginCommandPaletteProps, type PluginCommit, type PluginCommitListProps, type PluginCommitRef, type PluginCommitRowProps, type PluginComposerAttachment, type PluginComposerProps, type PluginConfirmDialogProps, type PluginConfirmPopoverProps, type PluginConnectionCardProps, type PluginConnectionStatus, type PluginContainerSize, type PluginContainerTarget, type PluginContextDragSourceProps, type PluginContextMenuProps, type PluginContributionGridProps, type PluginCopyButtonProps, type PluginCountIndicatorProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableGroupAccessor, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableRowPredicate, type PluginDataTableSort, type PluginDateFieldBaseProps, type PluginDatePickerProps, type PluginDateRange, type PluginDateRangePickerProps, type PluginDateRangePreset, type PluginDateTimePickerProps, type PluginDebouncedCallback, type PluginDecisionChoice, type PluginDecisionRequestProps, type PluginDecisionStatus, type PluginDescriptionItem, type PluginDescriptionListItemProps, type PluginDescriptionListProps, type PluginDevServerState, type PluginDevServerStatusProps, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDiffHunk, type PluginDiffHunkAction, type PluginDiffStatProps, type PluginDiffViewProps, type PluginDisclosureProps, type PluginDismissButtonProps, type PluginDividerProps, type PluginDocumentPackage, type PluginDomProps, type PluginDonutChartProps, type PluginDragDropProviderProps, type PluginDragEvent, type PluginDragHandleProps, type PluginDragId, type PluginDraggableState, type PluginDrawerProps, type PluginDrawerToggleProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginDroppableState, type PluginEmojiPickerProps, type PluginEmptyStateProps, type PluginEntityAvailability, type PluginEntityChipProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFieldChange, type PluginFieldValidator, type PluginFileDropzoneProps, type PluginFileIconProps, type PluginFileLinkProps, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFilterChipProps, type PluginForgeCiStatus, type PluginForgeLabel, type PluginForgePerson, type PluginForgeReviewDecision, type PluginForgeRowBaseProps, type PluginForgeState, type PluginForgeStateBadgeProps, type PluginFormError, type PluginFormErrorEntry, type PluginFormErrorSummaryProps, type PluginFormFieldBinding, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginFormHandle, type PluginFormProps, type PluginFormStatus, type PluginFormStatusProps, type PluginGaugeProps, type PluginGaugeThresholds, type PluginGitFileStatus, type PluginGitStatusBadgeProps, type PluginGridProps, type PluginGroupedVirtualListProps, type PluginHeadingProps, type PluginHeatmapProps, type PluginHighlightedTextProps, type PluginHistogramProps, type PluginHostBridge, type PluginHotkey, type PluginHoverCardProps, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginImageViewerImage, type PluginImageViewerProps, type PluginIndicatorPlacement, type PluginInlineCodeProps, type PluginInlineEditProps, type PluginInlineProps, type PluginInputProps, type PluginInspectorProps, type PluginInspectorSectionProps, type PluginIsoDate, type PluginIsoDateTime, type PluginIsoTime, type PluginIssueRowProps, type PluginKanbanCardState, type PluginKanbanColumn, type PluginKanbanMove, type PluginKanbanProps, type PluginKbdChordProps, type PluginKbdProps, type PluginKeyHint, type PluginKeyHintsProps, type PluginKeyValueEditorProps, type PluginKeyValuePair, type PluginLayoutAlign, type PluginLayoutBaseProps, type PluginLayoutElement, type PluginLayoutGap, type PluginLayoutJustify, type PluginLineChartProps, type PluginLinkProps, type PluginListEditorProps, type PluginListGroup, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLiveRegionProps, type PluginLoadMoreFooterProps, type PluginLogEntry, type PluginLogViewProps, type PluginMarkdownEditorMode, type PluginMarkdownEditorProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginMasterDetailProps, type PluginMentionSuggestion, type PluginMentionTextareaProps, type PluginMentionTrigger, type PluginMeterProps, type PluginMeterThresholds, type PluginMultiSelectProps, type PluginNavListItem, type PluginNavListProps, type PluginNavListSection, type PluginNumberInputProps, type PluginObjectInspectorProps, type PluginOperationState, type PluginOperationStatusProps, type PluginOverflowToolbarAction, type PluginOverflowToolbarItem, type PluginOverflowToolbarProps, type PluginOverflowToolbarSeparator, type PluginPaneHeaderProps, type PluginPaneLayoutProps, type PluginPaneStateProps, type PluginPathLabelProps, type PluginPickerBaseProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginPortLinkProps, type PluginPortalProps, type PluginProgressBarProps, type PluginPropertyRowProps, type PluginPullRequestRowProps, type PluginRadioGroupProps, type PluginRadioOption, type PluginRangeSliderMark, type PluginRangeSliderProps, type PluginRefreshOverlayProps, type PluginRepeaterFieldProps, type PluginRepeaterItemContext, type PluginResizableSplitProps, type PluginRootAttributes, type PluginScatterChartProps, type PluginSchemaFormProps, type PluginScrollAreaProps, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSecretInputProps, type PluginSectionLabelProps, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSelectionGesture, type PluginSelectionItemProps, type PluginSelectionKey, type PluginSendToAgentButtonProps, type PluginSendToAgentOutcome, type PluginSendToAgentRequest, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSheetProps, type PluginShortcutHintProps, type PluginShortcutRecorderProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSliderProps, type PluginSortableItemState, type PluginSortableListProps, type PluginSource, type PluginSourceCitationProps, type PluginSourceListProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginSplitButtonProps, type PluginSplitGroupProps, type PluginSplitLayout, type PluginSplitPane, type PluginStackProps, type PluginStackedAreaChartProps, type PluginStaleIndicatorProps, type PluginStatCardProps, type PluginStateGlyphProps, type PluginStatusBarProps, type PluginStatusBarSlot, type PluginStatusDotProps, type PluginStatusState, type PluginStepState, type PluginStepperProps, type PluginStepperStep, type PluginStructuredDiffProps, type PluginSuggestedValueProps, type PluginSwitchProps, type PluginTabItem, type PluginTableOfContentsProps, type PluginTabsProps, type PluginTagInputProps, type PluginTask, type PluginTaskListProps, type PluginTaskStatus, type PluginTerminalOutputProps, type PluginTerminalSnapshotProps, type PluginTextProps, type PluginTextSize, type PluginTextTone, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginTimeAgoProps, type PluginTimePickerProps, type PluginTimelineActor, type PluginTimelineItem, type PluginTimelineProps, type PluginToastHandle, type PluginToastTone, type PluginTocHeading, type PluginToggleGroupItem, type PluginToggleGroupProps, type PluginToolCallCardProps, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTreeMove, type PluginTreeNodeId, type PluginTreeNodeState, type PluginTreeViewProps, type PluginTruncatedTooltipProps, type PluginUndoRedoPushOptions, type PluginUndoToastOptions, type PluginUnreadDotProps, type PluginUnsavedChangesBarProps, type PluginUseDraggableOptions, type PluginUseDroppableOptions, type PluginViewToastOptions, type PluginVirtualListBaseProps, type PluginVirtualListComponent, type PluginVirtualListCountProps, type PluginVirtualListItemsProps, type PluginVirtualListProps, type PluginVisuallyHiddenProps, type PluginWorktreeBadgeProps, type PluginWorktreeItem, type PluginWorktreePickerProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseDebouncedCallbackOptions, type UseDisclosureOptions, type UseDisclosureResult, type UseFormOptions, type UseFormResult, type UseHostChannelResult, type UseHotkeysOptions, type UseListNavigationOptions, type UseListNavigationResult, type UseSelectionOptions, type UseSelectionResult, type UseToastResult, type UseUndoRedoOptions, type UseUndoRedoResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };
+export { type AnimationFrameCallback, type AnimationFrameOptions, type CachedHostChannelOptions, type CachedHostChannelResult, type EqualityFn, HOST_CHANNEL_CACHE_LIMIT, type NowOptions, type PluginAccordionItem, type PluginAccordionProps, type PluginActionButtonProps, type PluginActionDispatchOutcome, type PluginActionMenuItem, type PluginAgentAvatarProps, type PluginAgentAvatarSize, type PluginAgentBadgeProps, type PluginAgentPickerChoice, type PluginAgentPickerPane, type PluginAgentPickerProps, type PluginAgentState, type PluginAgentStateIndicatorProps, type PluginAlign, type PluginAnnounceOptions, type PluginAnsiTextProps, type PluginAriaRootAttributes, type PluginAttachment, type PluginAttachmentChipProps, type PluginAttachmentListProps, type PluginAttachmentStatus, type PluginAutoGridProps, type PluginAvatarGroupItem, type PluginAvatarGroupProps, type PluginAvatarProps, type PluginBadgeProps, type PluginBadgeTone, type PluginBarChartProps, type PluginBranchBadgeProps, type PluginBreadcrumbItem, type PluginBreadcrumbsProps, type PluginBulkAction, type PluginBulkActionBarProps, type PluginButtonProps, type PluginButtonVariant, type PluginCalendarBaseProps, type PluginCalendarProps, type PluginCalendarRangeProps, type PluginCalendarSingleProps, type PluginCalloutProps, type PluginCalloutSeverity, type PluginCardProps, type PluginChartBand, type PluginChartBaseProps, type PluginChartColor, type PluginChartReferenceLine, type PluginChartSeries, type PluginCheck, type PluginCheckStatus, type PluginCheckboxProps, type PluginChecksListProps, type PluginClusterProps, type PluginCodeBlockProps, type PluginCodeEditorHandle, type PluginCodeEditorProps, type PluginColorPickerProps, type PluginColorSwatch, type PluginColorSwatchProps, type PluginColoredLabelProps, type PluginComboboxProps, type PluginCommandPaletteItem, type PluginCommandPaletteProps, type PluginCommit, type PluginCommitListProps, type PluginCommitRef, type PluginCommitRowProps, type PluginComposerAttachment, type PluginComposerProps, type PluginConfirmDialogProps, type PluginConfirmPopoverProps, type PluginConnectionCardProps, type PluginConnectionStatus, type PluginContainerSize, type PluginContainerTarget, type PluginContextDragSourceProps, type PluginContextMenuProps, type PluginContributionGridProps, type PluginCopyButtonProps, type PluginCountIndicatorProps, type PluginDaintreeTheme, type PluginDataTableColumn, type PluginDataTableGroupAccessor, type PluginDataTableNumericFormat, type PluginDataTableProps, type PluginDataTableRowKey, type PluginDataTableRowPredicate, type PluginDataTableSort, type PluginDataTableTotal, type PluginDateFieldBaseProps, type PluginDatePickerProps, type PluginDateRange, type PluginDateRangePickerProps, type PluginDateRangePreset, type PluginDateTimePickerProps, type PluginDebouncedCallback, type PluginDecisionChoice, type PluginDecisionRequestProps, type PluginDecisionStatus, type PluginDescriptionItem, type PluginDescriptionListItemProps, type PluginDescriptionListProps, type PluginDevServerState, type PluginDevServerStatusProps, type PluginDialogAction, type PluginDialogLayer, type PluginDialogProps, type PluginDiffHunk, type PluginDiffHunkAction, type PluginDiffStatProps, type PluginDiffViewProps, type PluginDisclosureProps, type PluginDismissButtonProps, type PluginDividerProps, type PluginDocumentPackage, type PluginDomProps, type PluginDonutChartProps, type PluginDragDropProviderProps, type PluginDragEvent, type PluginDragHandleProps, type PluginDragId, type PluginDraggableState, type PluginDrawerProps, type PluginDrawerToggleProps, type PluginDropdownMenuEntry, type PluginDropdownMenuProps, type PluginDropdownMenuRadioItem, type PluginDroppableState, type PluginEmojiPickerProps, type PluginEmptyStateProps, type PluginEntityAvailability, type PluginEntityChipProps, type PluginEventHandler, type PluginEventSelectorOptions, type PluginFieldChange, type PluginFieldValidator, type PluginFigureProps, type PluginFileDropzoneProps, type PluginFileIconProps, type PluginFileLinkProps, type PluginFileTreeEntry, type PluginFileTreeItem, type PluginFileTreeNode, type PluginFileTreeProps, type PluginFilterChipProps, type PluginForgeCiStatus, type PluginForgeLabel, type PluginForgePerson, type PluginForgeReviewDecision, type PluginForgeRowBaseProps, type PluginForgeState, type PluginForgeStateBadgeProps, type PluginFormError, type PluginFormErrorEntry, type PluginFormErrorSummaryProps, type PluginFormFieldBinding, type PluginFormFieldControlProps, type PluginFormFieldGroupProps, type PluginFormFieldProps, type PluginFormHandle, type PluginFormProps, type PluginFormStatus, type PluginFormStatusProps, type PluginGaugeProps, type PluginGaugeThresholds, type PluginGitFileStatus, type PluginGitStatusBadgeProps, type PluginGridProps, type PluginGroupedVirtualListProps, type PluginHeadingProps, type PluginHeatmapProps, type PluginHighlightedTextProps, type PluginHistogramProps, type PluginHostBridge, type PluginHotkey, type PluginHoverCardProps, type PluginIconButtonProps, type PluginIconName, type PluginIconProps, type PluginIconSource, type PluginImageViewerImage, type PluginImageViewerProps, type PluginIndicatorPlacement, type PluginInlineCodeProps, type PluginInlineEditProps, type PluginInlineProps, type PluginInputProps, type PluginInspectorProps, type PluginInspectorSectionProps, type PluginIsoDate, type PluginIsoDateTime, type PluginIsoTime, type PluginIssueRowProps, type PluginKanbanCardState, type PluginKanbanColumn, type PluginKanbanMove, type PluginKanbanProps, type PluginKbdChordProps, type PluginKbdProps, type PluginKeyHint, type PluginKeyHintsProps, type PluginKeyValueEditorProps, type PluginKeyValuePair, type PluginLayoutAlign, type PluginLayoutBaseProps, type PluginLayoutElement, type PluginLayoutGap, type PluginLayoutJustify, type PluginLineChartProps, type PluginLinkProps, type PluginListEditorProps, type PluginListGroup, type PluginListNavigationContainerProps, type PluginListNavigationRowProps, type PluginListRowProps, type PluginLiveRegionProps, type PluginLoadMoreFooterProps, type PluginLogEntry, type PluginLogViewProps, type PluginLucideIconName, type PluginMarkdownEditorMode, type PluginMarkdownEditorProps, type PluginMarkdownFontSize, type PluginMarkdownProps, type PluginMasterDetailProps, type PluginMentionSuggestion, type PluginMentionTextareaProps, type PluginMentionTrigger, type PluginMeterMark, type PluginMeterProps, type PluginMeterThresholds, type PluginMultiSelectProps, type PluginNavListItem, type PluginNavListProps, type PluginNavListSection, type PluginNumberInputProps, type PluginObjectInspectorProps, type PluginOperationState, type PluginOperationStatusProps, type PluginOverflowToolbarAction, type PluginOverflowToolbarItem, type PluginOverflowToolbarProps, type PluginOverflowToolbarSeparator, type PluginPaneHeaderProps, type PluginPaneLayoutProps, type PluginPaneStateProps, type PluginPathLabelProps, type PluginPickerBaseProps, type PluginPopoverProps, type PluginPopoverSearchFieldProps, type PluginPortLinkProps, type PluginPortalProps, type PluginProgressBarProps, type PluginPropertyRowProps, type PluginPullRequestRowProps, type PluginRadioGroupProps, type PluginRadioOption, type PluginRangeSliderMark, type PluginRangeSliderProps, type PluginRefreshOverlayProps, type PluginRepeaterFieldProps, type PluginRepeaterItemContext, type PluginResizableSplitProps, type PluginRootAttributes, type PluginScatterChartProps, type PluginSchemaFormProps, type PluginScrollAreaProps, type PluginScrollShadowProps, type PluginSearchFieldProps, type PluginSecretInputProps, type PluginSectionLabelProps, type PluginSegmentedBarProps, type PluginSegmentedBarSegment, type PluginSegmentedControlProps, type PluginSegmentedOption, type PluginSelectOption, type PluginSelectOptionGroup, type PluginSelectProps, type PluginSelectionGesture, type PluginSelectionItemProps, type PluginSelectionKey, type PluginSendToAgentButtonProps, type PluginSendToAgentOutcome, type PluginSendToAgentRequest, type PluginSettingsActionsProps, type PluginSettingsGroupProps, type PluginSettingsRowControlIds, type PluginSettingsRowProps, type PluginSettingsSectionProps, type PluginSeverity, type PluginSeverityIconProps, type PluginSheetProps, type PluginShortcutHintProps, type PluginShortcutRecorderProps, type PluginSide, type PluginSkeletonBoneProps, type PluginSkeletonHintProps, type PluginSkeletonProps, type PluginSkeletonTextProps, type PluginSliderProps, type PluginSortableItemState, type PluginSortableListProps, type PluginSource, type PluginSourceCitationProps, type PluginSourceListProps, type PluginSparklineProps, type PluginSpinnerProps, type PluginSpinnerSize, type PluginSpinningIconProps, type PluginSplitButtonProps, type PluginSplitGroupProps, type PluginSplitLayout, type PluginSplitPane, type PluginStackProps, type PluginStackedAreaChartProps, type PluginStaleIndicatorProps, type PluginStatCardProps, type PluginStateGlyphProps, type PluginStatusBarProps, type PluginStatusBarSlot, type PluginStatusDotProps, type PluginStatusState, type PluginStepState, type PluginStepperProps, type PluginStepperStep, type PluginStructuredDiffProps, type PluginSuggestedValueProps, type PluginSwitchProps, type PluginTabItem, type PluginTableOfContentsProps, type PluginTabsProps, type PluginTagInputProps, type PluginTask, type PluginTaskListProps, type PluginTaskStatus, type PluginTerminalOutputProps, type PluginTerminalSnapshotProps, type PluginTextProps, type PluginTextSize, type PluginTextTone, type PluginTextareaProps, type PluginThemeTokenKey, type PluginThemeTokens, type PluginTimeAgoProps, type PluginTimePickerProps, type PluginTimelineActor, type PluginTimelineItem, type PluginTimelineProps, type PluginToastHandle, type PluginToastTone, type PluginTocHeading, type PluginToggleGroupItem, type PluginToggleGroupProps, type PluginToolCallCardProps, type PluginToolbarButtonProps, type PluginToolbarProps, type PluginTooltipProps, type PluginTreeMove, type PluginTreeNodeId, type PluginTreeNodeState, type PluginTreeViewProps, type PluginTruncatedTooltipProps, type PluginUndoRedoPushOptions, type PluginUndoToastOptions, type PluginUnreadDotProps, type PluginUnsavedChangesBarProps, type PluginUseDraggableOptions, type PluginUseDroppableOptions, type PluginViewToastOptions, type PluginVirtualListBaseProps, type PluginVirtualListComponent, type PluginVirtualListCountProps, type PluginVirtualListItemsProps, type PluginVirtualListProps, type PluginVisuallyHiddenProps, type PluginWorktreeBadgeProps, type PluginWorktreeItem, type PluginWorktreePickerProps, type PreloadIntentHandlers, type PreloadableComponent, type ProgressiveListOptions, type ProgressiveListResult, type StreamBufferOptions, type StreamBufferResult, type SyncedCollectionViewOptions, type SyncedCollectionViewResult, type ThrottledCallback, type ThrottledCallbackOptions, type UseDebouncedCallbackOptions, type UseDisclosureOptions, type UseDisclosureResult, type UseFormOptions, type UseFormResult, type UseHostChannelResult, type UseHotkeysOptions, type UseListNavigationOptions, type UseListNavigationResult, type UseSelectionOptions, type UseSelectionResult, type UseToastResult, type UseUndoRedoOptions, type UseUndoRedoResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, type VirtualListOptions, type VirtualListResult, type VirtualRow, createViewScope, lazyWithPreload, loadDocumentPackage, shallowEqual, useAnimationFrame, useCachedHostChannel, useHostChannel, useHostStore, useNow, usePluginEvent, usePluginEventSelector, usePluginPanelEvent, usePreloadOnIntent, useProgressiveList, useStreamBuffer, useSyncedCollection, useThrottledCallback, useVirtualList };

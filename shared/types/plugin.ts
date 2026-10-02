@@ -106,10 +106,69 @@ export interface PanelContribution {
    * panel the menu was opened on.
    */
   menu?: PanelMenuItemContribution[];
+  /**
+   * Up to three of your own actions drawn as buttons in this panel's header,
+   * in the order given. Each is dispatched with `{ panelId }` naming the panel
+   * it was clicked on. The view sets a button's live state (busy, disabled,
+   * tone, a status line, an "Updated" age) with `setToolbarItemState`.
+   */
+  toolbar?: PanelToolbarItemContribution[];
 }
 
 /** Most entries one panel's `menu` may declare. */
 export const PANEL_MENU_MAX_ITEMS = 5;
+
+/** Most entries one panel's `toolbar` may declare. */
+export const PANEL_TOOLBAR_MAX_ITEMS = 3;
+
+/** One entry of a panel's `toolbar`: a button in the panel header. */
+export interface PanelToolbarItemContribution {
+  /**
+   * One of your own actions, in your plugin's namespace (`"{manifestId}.{id}"`),
+   * from `contributes.commands` or `host.registerAction`. The button appears
+   * while that action is registered.
+   */
+  actionId: string;
+  /** The button's name, and its tooltip. Defaults to the action's title. */
+  label?: string;
+  /** A generic plugin icon id, or a `./…svg` path to the plugin's own icon. Omitted, the label is drawn as text. */
+  iconId?: string;
+  /**
+   * Draws a status beside the button: the state's `text` and `updatedAt` age,
+   * and its `tone`. Omitted (false), only the button is drawn and those
+   * fields are ignored.
+   */
+  status?: boolean;
+}
+
+/**
+ * The live state of one panel `toolbar` button, set by the view with
+ * `setToolbarItemState`. Every field is optional; an omitted field is the
+ * button's resting value.
+ */
+export interface PluginPanelToolbarItemState {
+  /** Draws a spinner on the button and ignores clicks until it is cleared. */
+  busy?: boolean;
+  /** Announced unavailable and ignores clicks. */
+  disabled?: boolean;
+  /**
+   * `warning` or `danger` colours the status and adds its glyph; colour is
+   * never the only signal. Needs `status: true`. An explicit tone wins over
+   * the age's own stale warning.
+   */
+  tone?: "default" | "warning" | "danger";
+  /** A short status beside the button ("2 prices kept from cache"). Needs `status: true`. */
+  text?: string;
+  /** Epoch ms or an ISO string: drawn as "Updated 3h ago" on the host's shared clock. Needs `status: true`. */
+  updatedAt?: number | string;
+  /** Once `updatedAt` is older than this many ms the age reads as stale (warning glyph and colour) without another update. */
+  staleAfterMs?: number;
+  /** The button's tooltip, when it says more than the label ("Prices fetched 14:02"). */
+  tooltip?: string;
+}
+
+/** Most characters a toolbar item's `text` or `tooltip` may carry; longer values are cut. */
+export const PLUGIN_PANEL_TOOLBAR_TEXT_MAX = 120;
 
 /** One entry of a panel's `menu`. */
 export interface PanelMenuItemContribution {
@@ -581,6 +640,24 @@ export interface PanelViewProps {
    * Absent where the host offers no reload, so call it optionally.
    */
   readonly setHasUnsavedChanges?: (hasUnsavedChanges: boolean) => void;
+  /**
+   * Sets the live state of one of this panel's manifest `toolbar` buttons by
+   * its `actionId` (as written in the manifest). Each call replaces that
+   * button's state; `null` resets it. State belongs to the panel, so it
+   * survives the view re-rendering, unmounting and remounting, and is cleared
+   * when the panel closes or the view reloads. An `actionId` the manifest
+   * does not list is ignored.
+   *
+   * Like {@link setHasUnsavedChanges}, the setter belongs to the attempt that
+   * received it: a call held past this attempt's teardown (a refresh that
+   * settles after a reload) does nothing.
+   *
+   * Absent where the panel has no header (a surface), so call it optionally.
+   */
+  readonly setToolbarItemState?: (
+    actionId: string,
+    state: PluginPanelToolbarItemState | null
+  ) => void;
   /**
    * The worktree the panel instance belongs to, as recorded on the panel at
    * spawn time. Lets a view reconstruct its own context without dispatching

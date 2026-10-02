@@ -59,6 +59,7 @@ import type {
   PluginLogViewProps,
   PluginMeterProps,
   PluginMultiSelectProps,
+  PluginSegmentedBarProps,
   PluginNavListProps,
   PluginNumberInputProps,
   PluginOverflowToolbarProps,
@@ -92,6 +93,7 @@ import type {
   PluginSpinningIconProps,
   PluginStackProps,
   PluginStatCardProps,
+  PluginFigureProps,
   PluginStatusBarProps,
   PluginStepperProps,
   PluginSwitchProps,
@@ -415,6 +417,7 @@ export const StatCard: ComponentType<PluginStatCardProps> = fromKit(
   "StatCard",
   (kit) => kit.StatCard
 );
+export const Figure: ComponentType<PluginFigureProps> = fromKit("Figure", (kit) => kit.Figure);
 export const Sparkline: ComponentType<PluginSparklineProps> = fromKit(
   "Sparkline",
   (kit) => kit.Sparkline
@@ -443,6 +446,10 @@ export const AvatarGroup: ComponentType<PluginAvatarGroupProps> = fromKit(
   (kit) => kit.AvatarGroup
 );
 export const Meter: ComponentType<PluginMeterProps> = fromKit("Meter", (kit) => kit.Meter);
+export const SegmentedBar: ComponentType<PluginSegmentedBarProps> = fromKit(
+  "SegmentedBar",
+  (kit) => kit.SegmentedBar
+);
 // Generic over the entry type in the public types, like the list components.
 export const Timeline: <T extends PluginTimelineItem>(props: PluginTimelineProps<T>) => ReactNode =
   fromKit("Timeline", (kit) => kit.Timeline);
@@ -864,6 +871,8 @@ export type {
   PluginDataTableProps as DataTableProps,
   PluginDataTableColumn as DataTableColumn,
   PluginDataTableSort as DataTableSort,
+  PluginDataTableNumericFormat as DataTableNumericFormat,
+  PluginDataTableTotal as DataTableTotal,
   PluginLogViewProps as LogViewProps,
   PluginLogEntry as LogEntry,
   PluginPaneHeaderProps as PaneHeaderProps,
@@ -895,11 +904,13 @@ export type {
   PluginDropdownMenuRadioItem as DropdownMenuRadioItem,
   PluginDialogLayer as DialogLayer,
   PluginIconSource as IconSource,
+  PluginLucideIconName as LucideIconName,
   PluginFileTreeProps as FileTreeProps,
   PluginFileTreeEntry as FileTreeEntry,
   PluginFileTreeNode as FileTreeNode,
   PluginFileTreeItem as FileTreeItem,
   PluginStatCardProps as StatCardProps,
+  PluginFigureProps as FigureProps,
   PluginSparklineProps as SparklineProps,
   PluginFormFieldGroupProps as FormFieldGroupProps,
   PluginFilterChipProps as FilterChipProps,
@@ -909,6 +920,9 @@ export type {
   PluginAvatarGroupItem as AvatarGroupItem,
   PluginMeterProps as MeterProps,
   PluginMeterThresholds as MeterThresholds,
+  PluginMeterMark as MeterMark,
+  PluginSegmentedBarProps as SegmentedBarProps,
+  PluginSegmentedBarSegment as SegmentedBarSegment,
   PluginTimelineProps as TimelineProps,
   PluginTimelineItem as TimelineItem,
   PluginTimelineActor as TimelineActor,
@@ -957,6 +971,8 @@ export type {
   PluginEmojiPickerProps as EmojiPickerProps,
   PluginChartColor as ChartColor,
   PluginChartSeries as ChartSeries,
+  PluginChartReferenceLine as ChartReferenceLine,
+  PluginChartBand as ChartBand,
   PluginChartBaseProps as ChartBaseProps,
   PluginBarChartProps as BarChartProps,
   PluginLineChartProps as LineChartProps,

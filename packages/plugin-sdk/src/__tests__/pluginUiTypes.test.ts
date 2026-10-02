@@ -84,12 +84,15 @@ export const version: string = PLUGIN_UI_VERSION;
 
 const branch: IconName = "git-branch";
 export const icon = createElement(Icon, { name: branch, size: 14 });
-// @ts-expect-error icon names are a closed set
-export const badIcon = createElement(Icon, { name: "not-an-icon" });
+// Any Lucide name is accepted beyond the listed ones; a number is not a name.
+export const lucideIcon = createElement(Icon, { name: "chart-candlestick" });
+// @ts-expect-error an icon name is a string
+export const badIcon = createElement(Icon, { name: 42 });
 
 export const button = createElement(Button, { variant: "ghost", icon: "play", "data-testid": "go" });
-// @ts-expect-error icon strings are names, not text
-export const badButtonIcon = createElement(Button, { icon: "not-an-icon" });
+export const lucideButtonIcon = createElement(Button, { icon: "piggy-bank" });
+// @ts-expect-error an icon is a name or an element, never a number
+export const badButtonIcon = createElement(Button, { icon: 7 });
 // @ts-expect-error variants are a closed set
 export const badButton = createElement(Button, { variant: "rainbow" });
 
@@ -483,8 +486,9 @@ export const card = createElement(ui.Card, { title: "Deploy", description: "Prod
 export const clickCard = createElement(ui.Card, { title: "Open", onClick: () => {}, disabled: false });
 // @ts-expect-error a clickable card is one button, so it takes no actions
 export const clickCardActions = createElement(ui.Card, { title: "Open", onClick: () => {}, actions: "x" });
+export const featureCard = createElement(ui.Card, { variant: "feature", capColor: "teal" });
 // @ts-expect-error card variants are a closed set
-export const badCardVariant = createElement(ui.Card, { variant: "elevated" });
+export const badCardVariant = createElement(ui.Card, { variant: "floating" });
 export const divider = createElement(ui.Divider, { orientation: "vertical" });
 export const labelledDivider = createElement(ui.Divider, { label: "Older" });
 export const sectionLabel = createElement(ui.SectionLabel, { variant: "list", as: "div" }, "Recent");

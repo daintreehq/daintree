@@ -1,5 +1,6 @@
 import { ArrowDown, ArrowUp } from "lucide-react";
 import type {
+  PluginFigureProps,
   PluginSeverity,
   PluginSparklineProps,
   PluginStatCardProps,
@@ -252,7 +253,16 @@ function KitSparkline({
   );
 }
 
+function KitFigure({ value, className, ...rest }: PluginFigureProps) {
+  return (
+    <div {...pickDomProps(rest)} className={cn("min-w-0 tabular-nums", str(className))}>
+      {node(value)}
+    </div>
+  );
+}
+
 export const pluginKitData = {
   StatCard: KitStatCard,
+  Figure: KitFigure,
   Sparkline: KitSparkline,
 };

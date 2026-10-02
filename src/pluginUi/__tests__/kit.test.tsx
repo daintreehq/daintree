@@ -122,7 +122,7 @@ describe("@daintreehq/plugin-ui kit", () => {
 
   it("serves a curated icon set", () => {
     expect(PLUGIN_KIT_ICON_NAMES.length).toBeGreaterThanOrEqual(60);
-    expect(PLUGIN_KIT_ICON_NAMES.length).toBeLessThanOrEqual(160);
+    expect(PLUGIN_KIT_ICON_NAMES.length).toBeLessThanOrEqual(180);
     for (const name of PLUGIN_KIT_ICON_NAMES) expect(name).toMatch(/^[a-z]+(-[a-z]+)*$/);
   });
 
