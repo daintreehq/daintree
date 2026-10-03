@@ -1,6 +1,6 @@
 import type { FleetRunRow } from "../../../shared/types/ipc/fleet.js";
 import {
-  TRIAGE_ATTENTION_CATEGORIES,
+  TRIAGE_ATTENTION_THRESHOLD,
   type TriageCard,
   type TriageCategory,
   type TriageSnapshot,
@@ -13,18 +13,17 @@ import {
 } from "./triageScreen.js";
 import {
   TriageProviderError,
+  combinePriority,
   type ClassifierResult,
   type DescriberResult,
   type TriageProviderConfig,
   type TriageScreenInput,
 } from "./triageProviders.js";
 
-/** How often an open panel re-reads every screen. Unchanged screens cost nothing. */
-export const TRIAGE_SCAN_INTERVAL_MS = 3_000;
 /** Screen rows read per run — the tail the cards are written from. */
 export const TRIAGE_SCREEN_LINES = 50;
-/** Below this classifier confidence a run is described even when it looks quiet. */
-export const TRIAGE_DESCRIBE_CONFIDENCE = 0.6;
+/** An unchanged screen read longer ago than this is judged again on the next scan. */
+export const TRIAGE_REJUDGE_AFTER_MS = 120_000;
 const CLASSIFIER_CONCURRENCY = 16;
 const DESCRIBER_CONCURRENCY = 12;
 const SCREEN_READ_CONCURRENCY = 8;
@@ -44,7 +43,6 @@ export interface TriageServiceDeps {
   ) => Promise<DescriberResult>;
   broadcast: (snapshot: TriageSnapshot) => void;
   now?: () => number;
-  setInterval?: (fn: () => void, ms: number) => () => void;
 }
 
 interface RunEntry {
@@ -55,6 +53,8 @@ interface RunEntry {
   card: TriageCard | null;
   /** A pass for this run is in flight. */
   pending: boolean;
+  /** When the classifier last read this screen (epoch ms), 0 before it has. */
+  readAt: number;
 }
 
 /**
@@ -69,7 +69,6 @@ export class TriageService {
   private readonly entries = new Map<string, RunEntry>();
   private readonly now: () => number;
   private active = false;
-  private stopInterval: (() => void) | null = null;
   private scanning: Promise<void> | null = null;
   private rescanRequested = false;
   private inFlight = 0;
@@ -141,45 +140,44 @@ export class TriageService {
     };
   }
 
-  /** A panel opened or closed. Opening scans straight away, then on an interval. */
+  /**
+   * A panel opened or closed. Opening scans once; after that the panel scans
+   * only when the user presses Refresh. There is deliberately no polling: every
+   * changed screen costs a provider call, and a panel left open would otherwise
+   * keep paying for screens nobody is reading.
+   */
   setActive(active: boolean): void {
     if (this.disposed || active === this.active) return;
     this.active = active;
     if (active) {
-      const schedule =
-        this.deps.setInterval ??
-        ((fn, ms) => {
-          const handle = setInterval(fn, ms);
-          return () => clearInterval(handle);
-        });
-      this.stopInterval = schedule(() => void this.scan(), TRIAGE_SCAN_INTERVAL_MS);
       void this.scan();
     } else {
-      this.stopInterval?.();
-      this.stopInterval = null;
       // Closing means nothing more is sent, including work already queued.
       this.invalidateInFlight();
     }
     this.scheduleBroadcast();
   }
 
-  /** Rebuild every card from scratch, ignoring what is cached. */
+  /**
+   * The user asked for a fresh look. Every screen is re-read, but only the ones
+   * that changed since their card was written go to the providers — an
+   * unchanged screen would get the same card back for the price of a call.
+   */
   refresh(): Promise<void> {
-    for (const entry of this.entries.values()) entry.hash = null;
     return this.scan();
   }
 
-  /** The fleet changed shape; drop cards for runs that left and look again soon. */
+  /**
+   * The fleet changed shape. Cards for runs that left are dropped at once; the
+   * rest wait for the next scan the user asks for.
+   */
   onFleetChanged(): void {
     if (this.pruneDeparted()) this.scheduleBroadcast();
-    if (this.active) void this.scan();
   }
 
   dispose(): void {
     this.disposed = true;
     this.active = false;
-    this.stopInterval?.();
-    this.stopInterval = null;
     this.abort.abort();
     if (this.broadcastTimer !== null) clearTimeout(this.broadcastTimer);
     this.broadcastTimer = null;
@@ -228,6 +226,7 @@ export class TriageService {
             seq: 0,
             card: null,
             pending: false,
+            readAt: 0,
           };
           this.entries.set(run.runId, entry);
           // The observed state and the terminal's incarnation are part of what
@@ -236,6 +235,16 @@ export class TriageService {
           const key = `${screen.hash}:${run.spawnedAt}:${run.agentState ?? ""}:${run.waitingReason ?? ""}`;
           if (entry.hash === key) {
             this.refreshActivity(entry, screen);
+            // Unchanged, but time is part of the reading: an agent on the same
+            // step for minutes may be stuck rather than busy, so a screen read
+            // long enough ago is judged again, as the same prompt.
+            if (
+              !entry.pending &&
+              entry.card !== null &&
+              this.now() - entry.readAt >= TRIAGE_REJUDGE_AFTER_MS
+            ) {
+              passes.push(this.rebuild(run, entry, entry.seq, epoch, screen, true));
+            }
             return;
           }
           entry.hash = key;
@@ -279,7 +288,8 @@ export class TriageService {
     entry: RunEntry,
     seq: number,
     epoch: number,
-    screen: PreparedScreen
+    screen: PreparedScreen,
+    rejudge = false
   ): Promise<void> {
     const input: TriageScreenInput = {
       agent: run.agentId ?? run.launchAgentId ?? "terminal",
@@ -294,7 +304,9 @@ export class TriageService {
           run.since !== undefined ? Math.max(0, Math.round((this.now() - run.since) / 1000)) : null,
       },
     };
-    const observedAt = this.now();
+    // A re-judged screen is the one the user may already have opened; it keeps
+    // the time it was first read, so it neither reads as new nor as unread.
+    const observedAt = rejudge && entry.card ? entry.card.observedAt : this.now();
     const signal = this.abort.signal;
 
     entry.pending = true;
@@ -313,22 +325,29 @@ export class TriageService {
       this.inFlight--;
     }
     if (!this.stillWanted(run, entry, seq, epoch)) return;
+    entry.readAt = this.now();
 
-    const describe =
-      TRIAGE_ATTENTION_CATEGORIES.has(classified.category) ||
-      classified.confidence < TRIAGE_DESCRIBE_CONFIDENCE;
+    // The classifier's probability is the gate: only a run likely to need the
+    // user is worth a describer call.
+    const describe = needsAttention(classified.attention);
     const previous = entry.card;
     // A card whose screen moved keeps its old words until new ones arrive,
     // unless the state itself changed — then stale words would describe the
     // wrong thing.
-    const keepWords = previous !== null && previous.category === classified.category;
+    // …and only while new words are on their way: a run the describer is
+    // skipped for must not wear words written about an earlier screen.
+    const keepWords = describe && previous !== null && previous.category === classified.category;
     entry.card = {
       runId: run.runId,
       spawnedAt: run.spawnedAt,
       revision: seq,
       category: classified.category,
       confidence: classified.confidence,
-      stage: keepWords && describe ? previous.stage : "classified",
+      attentionProbability: classified.attention,
+      // An old score stands in only while new words for the same state are due.
+      attentionScore: keepWords ? previous.attentionScore : null,
+      priority: combinePriority(classified.attention, keepWords ? previous.attentionScore : null),
+      stage: keepWords ? previous.stage : "classified",
       describing: describe,
       headline: keepWords ? previous.headline : null,
       summary: keepWords ? previous.summary : null,
@@ -371,6 +390,8 @@ export class TriageService {
     entry.card = {
       ...entry.card,
       category: described.category,
+      attentionScore: described.attentionScore,
+      priority: combinePriority(entry.card.attentionProbability, described.attentionScore),
       stage: "described",
       describing: false,
       headline: described.headline || null,
@@ -443,6 +464,10 @@ export class TriageService {
       if (!this.disposed) this.deps.broadcast(this.getSnapshot());
     }, BROADCAST_DEBOUNCE_MS);
   }
+}
+
+function needsAttention(probability: number): boolean {
+  return probability >= TRIAGE_ATTENTION_THRESHOLD;
 }
 
 function normalize(text: string): string {

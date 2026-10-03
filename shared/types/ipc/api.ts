@@ -892,6 +892,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onSnapshotUpdated(
       callback: (snapshot: import("./triage.js").TriageSnapshot) => void
     ): () => void;
+    /** Output of the terminal `watchTerminal` started streaming to this view. */
+    onTerminalData(callback: (chunk: import("./triage.js").TriageTerminalData) => void): () => void;
   };
   scratch: {
     getAll(): Promise<import("../scratch.js").Scratch[]>;

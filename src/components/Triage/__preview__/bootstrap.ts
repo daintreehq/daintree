@@ -31,7 +31,23 @@ installPreviewShims({
     getSnapshot: () => Promise.resolve(current),
     refresh: () => record("refresh", null),
     choose: (runId: string, label: string) => record("choose", { runId, label }),
-    reply: (runId: string, text: string) => record("reply", { runId, text }),
     trash: (runId: string) => record("trash", { runId }),
+    // The live pane: a still screen for whichever run is selected, and the
+    // input it would send, recorded like the rest.
+    onTerminalData: () => () => {},
+    watchTerminal: (runId: string) =>
+      Promise.resolve({
+        watchId: 1,
+        snapshot: {
+          data: `\x1b[2m${runId}\x1b[0m\r\n\r\n❯ `,
+          cols: 100,
+          rows: 30,
+          continuation: { pendingEscapeTail: "", streamOffset: 0 },
+        },
+      }),
+    unwatchTerminal: () => Promise.resolve(),
+    terminalInput: (_watchId: number, data: string) => record("input", { data }),
+    terminalSendKey: (_watchId: number, key: string) => record("key", { key }),
+    terminalSubmit: (_watchId: number, text: string) => record("submit", { text }),
   },
 });

@@ -2076,10 +2076,6 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
-  "triage:reply": {
-    args: [runId: string, text: string, target: import("./triage.js").TriageTarget];
-    result: void;
-  };
   "triage:save-key": {
     args: [id: import("./triage.js").TriageKeyId, key: string];
     result: import("./triage.js").TriageKeysStatus;
@@ -2088,9 +2084,29 @@ export interface GeneratedIpcInvokeMap {
     args: [active: boolean];
     result: import("./triage.js").TriageSnapshot;
   };
+  "triage:terminal-input": {
+    args: [watchId: number, data: string];
+    result: void;
+  };
+  "triage:terminal-send-key": {
+    args: [watchId: number, key: string];
+    result: void;
+  };
+  "triage:terminal-submit": {
+    args: [watchId: number, text: string, imagePaths?: string[] | undefined];
+    result: void;
+  };
   "triage:trash": {
     args: [runId: string, target: import("./triage.js").TriageTarget];
     result: void;
+  };
+  "triage:unwatch-terminal": {
+    args: [];
+    result: void;
+  };
+  "triage:watch-terminal": {
+    args: [runId: string, target: import("./triage.js").TriageTarget];
+    result: import("./triage.js").TriageTerminalView;
   };
   "watchdog:restart": {
     args: [];

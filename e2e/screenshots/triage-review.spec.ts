@@ -74,7 +74,7 @@ test.afterAll(async () => {
   await server?.close();
 });
 
-const dialog = (page: Page) => page.locator('[role="dialog"][aria-label="Triage"]');
+const dialog = (page: Page) => page.getByRole("dialog", { name: "Triage" });
 const cards = (page: Page) => dialog(page).locator("[data-triage-card]");
 
 async function load(page: Page, theme: string, fixture: TriageFixture): Promise<void> {
@@ -153,22 +153,24 @@ for (const theme of THEMES) {
     await page.waitForTimeout(100);
     written.push(await snap(page, `${theme}--02-fleet-scrolled.png`, FLEET_CARDS));
 
-    // Keyboard onto a compact working row.
+    // Keyboard down the inbox: the pane beside it follows the cursor.
     await load(page, theme, "fleet");
     await expect(cards(page).first()).toBeFocused();
     for (let i = 0; i < 6; i += 1) await page.keyboard.press("ArrowDown");
     await expect(cards(page).nth(6)).toBeFocused();
-    await expect(cards(page).nth(6)).toHaveAttribute("data-kind", "working");
-    written.push(await snap(page, `${theme}--03-keyboard-on-working.png`, FLEET_CARDS));
+    await expect(cards(page).nth(6)).not.toHaveAttribute("data-unread", "true");
+    written.push(await snap(page, `${theme}--03-keyboard-down-the-inbox.png`, FLEET_CARDS));
 
     // Answer the first menu with its key, then start a reply on the question.
     await load(page, theme, "fleet");
     await expect(cards(page).first()).toBeFocused();
     await page.keyboard.press("1");
     await expect(page.locator("body")).toHaveAttribute("data-triage-last", /"choose"/);
-    const question = dialog(page).locator('[data-triage-card][data-kind="question"]').first();
-    await question.getByRole("textbox").fill("Start with the contract tests");
-    await expect(question.getByRole("textbox")).toBeFocused();
+    // The reply goes in the selected agent's own composer, in the pane.
+    await dialog(page).locator('[data-triage-card][data-kind="question"]').first().click();
+    const composer = dialog(page).locator("[data-triage-detail] .cm-content");
+    await composer.fill("Start with the contract tests");
+    await expect(composer).toBeFocused();
     written.push(await snap(page, `${theme}--04-answered-and-replying.png`, FLEET_CARDS));
 
     await load(page, theme, "describing");
@@ -180,7 +182,7 @@ for (const theme of THEMES) {
     written.push(await snap(page, `${theme}--06-unconfigured.png`, FLEET_CARDS));
 
     await load(page, theme, "read-error");
-    await expect(dialog(page).getByText("Some cards couldn't be read")).toBeVisible();
+    await expect(dialog(page).getByText("Some screens couldn't be read")).toBeVisible();
     written.push(await snap(page, `${theme}--07-read-error.png`, FLEET_CARDS));
 
     await load(page, theme, "calm");

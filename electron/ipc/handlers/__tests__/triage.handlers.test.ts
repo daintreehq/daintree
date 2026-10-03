@@ -12,13 +12,19 @@ const state = vi.hoisted(() => ({
   screen: "",
   writes: [] as string[],
   submits: [] as string[],
+  releaseMirror: (() => {}) as () => void,
 }));
 
 const ptyClient = vi.hoisted(() => ({
   getTerminalAsync: vi.fn(async () => state.record),
   write: vi.fn((_id: string, data: string) => state.writes.push(data)),
   submit: vi.fn((_id: string, text: string) => state.submits.push(text)),
+  sendKey: vi.fn(),
   trash: vi.fn(),
+  on: vi.fn(),
+  off: vi.fn(),
+  acquireIpcDataMirror: vi.fn(() => state.releaseMirror),
+  getSerializedStateAsync: vi.fn(async () => ({ data: "screen", cols: 80, rows: 24 })),
 }));
 
 vi.mock("electron", () => ({
@@ -160,10 +166,10 @@ describe("triage IPC", () => {
   it("refuses a terminal respawned under the same id", async () => {
     state.record = { spawnedAt: 200 };
     const result = await outcome(
-      invoke(TRIAGE_METHOD_CHANNELS.reply, fakeSender(1), "run-1", "keep going", { spawnedAt: 100 })
+      invoke(TRIAGE_METHOD_CHANNELS.choose, fakeSender(1), "run-1", "Yes", { spawnedAt: 100 })
     );
     expect(result.ok).toBe(false);
-    expect(state.submits).toEqual([]);
+    expect(state.writes).toEqual([]);
   });
 
   it("refuses a second answer while the first is still being typed", async () => {
@@ -188,15 +194,84 @@ describe("triage IPC", () => {
     expect(result.message).not.toContain("customer-data-export");
   });
 
-  it("refuses a reply once the question it answered has left the screen", async () => {
-    state.screen = "Which database should I use?";
+  it("streams a run's terminal only for the incarnation the card was built from", async () => {
+    state.record = { spawnedAt: 200 };
     const result = await outcome(
-      invoke(TRIAGE_METHOD_CHANNELS.reply, fakeSender(1), "run-1", "postgres", {
-        spawnedAt: 100,
-        question: "Should I drop the sessions table?",
-      })
+      invoke(TRIAGE_METHOD_CHANNELS.watchTerminal, fakeSender(1), "run-1", { spawnedAt: 100 })
     );
     expect(result.ok).toBe(false);
-    expect(state.submits).toEqual([]);
+    expect(ptyClient.acquireIpcDataMirror).not.toHaveBeenCalled();
+  });
+
+  it("ends a view's stream when the view reloads", async () => {
+    const release = vi.fn();
+    state.releaseMirror = release;
+    const sender = fakeSender(9);
+    await invoke(TRIAGE_METHOD_CHANNELS.watchTerminal, sender, "run-1", { spawnedAt: 100 });
+    expect(ptyClient.acquireIpcDataMirror).toHaveBeenCalledWith("run-1");
+    sender.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  describe("input through a stream", () => {
+    async function openStream(sender = fakeSender(4)) {
+      const view = (await invoke(TRIAGE_METHOD_CHANNELS.watchTerminal, sender, "run-1", {
+        spawnedAt: 100,
+      })) as { data?: { watchId: number }; watchId?: number };
+      return { sender, watchId: (view.data ?? view).watchId! };
+    }
+
+    it("types, presses keys and submits to the terminal the stream is for", async () => {
+      const { sender, watchId } = await openStream();
+      await invoke(TRIAGE_METHOD_CHANNELS.terminalInput, sender, watchId, "y");
+      await invoke(TRIAGE_METHOD_CHANNELS.terminalSendKey, sender, watchId, "escape");
+      await invoke(TRIAGE_METHOD_CHANNELS.terminalSubmit, sender, watchId, "navy");
+      expect(state.writes).toEqual(["y"]);
+      expect(ptyClient.sendKey).toHaveBeenCalledWith("run-1", "escape");
+      expect(state.submits).toEqual(["navy"]);
+    });
+
+    it("refuses input for a stream the view no longer holds", async () => {
+      const { sender, watchId } = await openStream();
+      await invoke(TRIAGE_METHOD_CHANNELS.unwatchTerminal, sender);
+      const typed = await outcome(
+        invoke(TRIAGE_METHOD_CHANNELS.terminalInput, sender, watchId, "y")
+      );
+      const otherView = await outcome(
+        invoke(TRIAGE_METHOD_CHANNELS.terminalInput, fakeSender(5), watchId, "y")
+      );
+      expect(typed.ok).toBe(false);
+      expect(otherView.ok).toBe(false);
+      expect(state.writes).toEqual([]);
+    });
+
+    it("never submits to a terminal respawned under the stream's id", async () => {
+      const { sender, watchId } = await openStream();
+      state.record = { spawnedAt: 200 };
+      const result = await outcome(
+        invoke(TRIAGE_METHOD_CHANNELS.terminalSubmit, sender, watchId, "navy")
+      );
+      expect(result.ok).toBe(false);
+      expect(state.submits).toEqual([]);
+    });
+
+    it("starts no stream for a request cancelled while it was being checked", async () => {
+      const sender = fakeSender(6);
+      let release: (value: { spawnedAt: number }) => void = () => {};
+      ptyClient.getTerminalAsync.mockImplementationOnce(
+        () => new Promise((resolve) => (release = resolve))
+      );
+      const pending = invoke(TRIAGE_METHOD_CHANNELS.watchTerminal, sender, "run-1", {
+        spawnedAt: 100,
+      });
+      await invoke(TRIAGE_METHOD_CHANNELS.unwatchTerminal, sender);
+      release({ spawnedAt: 100 });
+      const view = (await pending) as {
+        data?: { watchId: number | null };
+        watchId?: number | null;
+      };
+      expect((view.data ?? view).watchId).toBeNull();
+      expect(ptyClient.acquireIpcDataMirror).not.toHaveBeenCalled();
+    });
   });
 });

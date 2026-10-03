@@ -389,7 +389,11 @@ export class PtyClient extends EventEmitter {
    * replay (#12498). Keyed by id, tagged with the displacing generation.
    */
   private displacedSpawns = new Map<string, { byGeneration: number; entry: PtyHostSpawnOptions }>();
+  /** Terminals the host mirrors to Main: an explicit enable or any live lease. */
   private ipcDataMirrorIds = new Set<string>();
+  private ipcDataMirrorExplicit = new Set<string>();
+  /** Live leases by terminal, each its own token so a stale release finds nothing. */
+  private ipcDataMirrorLeases = new Map<string, Set<object>>();
   private pendingKillCount: Map<string, number> = new Map();
   // Captures streamed back for a graceful kill that is still in flight, keyed
   // by project. Seeded when the call starts and dropped when it settles, so an
@@ -1883,6 +1887,8 @@ export class PtyClient extends EventEmitter {
     this.pendingSpawns.delete(id);
     this.displacedSpawns.delete(id);
     this.ipcDataMirrorIds.delete(id);
+    this.ipcDataMirrorExplicit.delete(id);
+    this.ipcDataMirrorLeases.delete(id);
 
     // Only track pendingKillCount for ids we've seen locally. An "exit"
     // decrement only arrives for terminals the host actually owned, so
@@ -2054,10 +2060,42 @@ export class PtyClient extends EventEmitter {
    */
   setIpcDataMirror(id: string, enabled: boolean): void {
     if (enabled) {
-      this.ipcDataMirrorIds.add(id);
+      this.ipcDataMirrorExplicit.add(id);
     } else {
-      this.ipcDataMirrorIds.delete(id);
+      this.ipcDataMirrorExplicit.delete(id);
     }
+    this.syncIpcDataMirror(id);
+  }
+
+  /**
+   * Mirror a terminal to Main for as long as the caller holds the lease. Leases
+   * and {@link setIpcDataMirror} stack: the mirror stays on while anyone still
+   * wants it, so a short-lived viewer can never switch off a dev preview's copy.
+   */
+  acquireIpcDataMirror(id: string): () => void {
+    const lease = {};
+    let held = this.ipcDataMirrorLeases.get(id);
+    if (!held) {
+      held = new Set();
+      this.ipcDataMirrorLeases.set(id, held);
+    }
+    held.add(lease);
+    this.syncIpcDataMirror(id);
+    return () => {
+      // A kill drops the terminal's leases; one taken out before it must not
+      // release a lease taken out since, on the terminal's next incarnation.
+      const current = this.ipcDataMirrorLeases.get(id);
+      if (!current?.delete(lease)) return;
+      if (current.size === 0) this.ipcDataMirrorLeases.delete(id);
+      this.syncIpcDataMirror(id);
+    };
+  }
+
+  private syncIpcDataMirror(id: string): void {
+    const enabled = this.ipcDataMirrorExplicit.has(id) || this.ipcDataMirrorLeases.has(id);
+    if (enabled === this.ipcDataMirrorIds.has(id)) return;
+    if (enabled) this.ipcDataMirrorIds.add(id);
+    else this.ipcDataMirrorIds.delete(id);
     this.shardForTerminal(id).send({ type: "set-ipc-data-mirror", id, enabled });
   }
 
@@ -2960,6 +2998,8 @@ export class PtyClient extends EventEmitter {
     this.windowProjectContexts.clear();
     this.windowFocusedTerminals.clear();
     this.ipcDataMirrorIds.clear();
+    this.ipcDataMirrorExplicit.clear();
+    this.ipcDataMirrorLeases.clear();
     this.terminalPids.clear();
     this.terminalOwners.clear();
     this.projectShardOverrides.clear();

@@ -22,6 +22,13 @@ export const TRIAGE_CATEGORIES: readonly TriageCategory[] = [
   "idle",
 ];
 
+/**
+ * Below this classifier probability a run is not treated as needing the user:
+ * it is never sent to the describer and never listed under "needs you",
+ * whatever category it was given.
+ */
+export const TRIAGE_ATTENTION_THRESHOLD = 0.5;
+
 /** Categories where the run is stopped until the user does something. */
 export const TRIAGE_ATTENTION_CATEGORIES: ReadonlySet<TriageCategory> = new Set([
   "approval",
@@ -43,6 +50,16 @@ export interface TriageCard {
   category: TriageCategory;
   /** Classifier confidence in `category`, 0–1. */
   confidence: number;
+  /** The classifier's probability that the terminal needs the user now, 0–1. */
+  attentionProbability: number;
+  /** The describer's 0–100 attention score; null until described. */
+  attentionScore: number | null;
+  /**
+   * The two readings combined, 0–100, and the order the panel lists runs in.
+   * Two independent models averaged, so one model's overreaction is damped by
+   * the other.
+   */
+  priority: number;
   /** `described` once the describer has written the card's text. */
   stage: "classified" | "described";
   /** True while a describer pass for this run is in flight. */
@@ -62,6 +79,38 @@ export interface TriageCard {
   /** When the screen this card was built from was read (epoch ms). */
   observedAt: number;
 }
+
+/** A terminal the triage panel is showing live: where its stream starts. */
+export interface TriageTerminalView {
+  /**
+   * Tags every chunk of this stream; chunks from an older watch are dropped.
+   * Null when the request was overtaken or cancelled before the stream began.
+   */
+  watchId: number | null;
+  /** The screen as it was when the stream began; null when the host had none. */
+  snapshot: {
+    data: string;
+    cols: number;
+    rows: number;
+    /** What the snapshot covers up to; chunks at or before it are already in it. */
+    continuation?: import("../terminal.js").SnapshotContinuation;
+  } | null;
+}
+
+/** What a watched terminal's stream carries, in order. */
+export type TriageTerminalData =
+  | {
+      kind: "data";
+      watchId: number;
+      runId: string;
+      data: string | Uint8Array;
+      /** End offset in the terminal's output stream, for fencing against the snapshot. */
+      streamEnd?: number;
+    }
+  /** The PTY took a new size from the pane that owns it. */
+  | { kind: "resize"; watchId: number; runId: string; cols: number; rows: number }
+  /** The terminal exited or its host went down; the stream takes no more input. */
+  | { kind: "ended"; watchId: number; runId: string };
 
 export interface TriageSnapshot {
   /** Both provider keys are present in main's environment. */

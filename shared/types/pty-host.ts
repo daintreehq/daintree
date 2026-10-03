@@ -638,7 +638,13 @@ export type PtyHostEvent =
   // re-broadcast to renderers — broadcasting it would double-deliver into the
   // same xterm (terminalClient.onData subscribes to both the port and IPC
   // paths on the strength of the one-visual-path invariant).
-  | { type: "data-mirror"; id: string; data: string }
+  | {
+      type: "data-mirror";
+      id: string;
+      data: string;
+      /** The chunk's end offset in the terminal's output stream, when the host has one. */
+      streamEnd?: number;
+    }
   // `launchGeneration` attributes the exit to one terminal incarnation so a
   // stale exit arriving after a same-id respawn can't close the successor.
   | { type: "exit"; id: string; exitCode: number; signal?: number; launchGeneration?: number }

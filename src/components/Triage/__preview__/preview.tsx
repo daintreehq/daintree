@@ -7,6 +7,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useTriageStore } from "@/store/triageStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
+import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
+import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 import { TriageView } from "../TriageView";
 import { isTriageFixture, projectsFor, sceneFor } from "./fixtures";
 import "@/index.css";
@@ -41,13 +43,19 @@ useProjectStore.setState({ projects: projectsFor(FROZEN_NOW) });
 useFleetSnapshotStore.setState({ snapshot: scene.fleet });
 useTriageStore.setState({ isOpen: true, snapshot: scene.triage });
 
+// The real composer reads the view's worktree store, as it does in the app.
+const worktreeStore = createWorktreeStore();
+setCurrentViewStore(worktreeStore);
+
 const root = document.getElementById("root");
 if (root) {
   createRoot(root).render(
     <StrictMode>
       <TooltipProvider>
-        <div data-preview-shell="" className="h-screen bg-surface-canvas" />
-        <TriageView />
+        <WorktreeStoreContext.Provider value={worktreeStore}>
+          <div data-preview-shell="" className="h-screen bg-surface-canvas" />
+          <TriageView />
+        </WorktreeStoreContext.Provider>
       </TooltipProvider>
     </StrictMode>
   );

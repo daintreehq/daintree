@@ -68,6 +68,18 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // Skip if user is typing in an input/textarea or editable content
       // Exception: allow shortcuts with modifiers (Cmd, Ctrl)
       const target = e.target as HTMLElement;
+
+      // A surface that types to one terminal outside the grid (the triage
+      // panel's live view and its composer) keeps every shortcut but its own
+      // toggle away from it: the rest act on the focused pane or the armed
+      // fleet, neither of which is the terminal the user is typing to.
+      if (
+        typeof target.closest === "function" &&
+        target.closest("[data-keybindings-isolated]") !== null
+      ) {
+        const toggle = keybindingService.getEffectiveCombo("triage.toggle");
+        if (toggle === undefined || !keybindingService.matchesEvent(e, toggle)) return;
+      }
       const isEditable =
         target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 

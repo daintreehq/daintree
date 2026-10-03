@@ -36,6 +36,7 @@ async function makeHarness(options: {
   classify?: (input: TriageScreenInput) => Promise<ClassifierResult>;
   describe?: (input: TriageScreenInput, says: TriageCategory) => Promise<DescriberResult>;
   missingKeys?: string[];
+  now?: () => number;
 }): Promise<Harness> {
   const screens = new Map<string, string>();
   const runs: FleetRunRow[] = [];
@@ -44,6 +45,7 @@ async function makeHarness(options: {
       (async (): Promise<ClassifierResult> => ({
         category: "working",
         confidence: 0.99,
+        attention: 0.99,
         question: null,
       }))
   );
@@ -53,6 +55,7 @@ async function makeHarness(options: {
         category: says,
         headline: "Headline",
         summary: "Summary",
+        attentionScore: 95,
         question: null,
         options: [],
       }))
@@ -70,7 +73,7 @@ async function makeHarness(options: {
     classify: (input) => classify(input),
     describe: (input, says) => describe(input, says),
     broadcast: (snapshot) => snapshots.push(snapshot),
-    setInterval: () => () => {},
+    ...(options.now ? { now: options.now } : {}),
   };
   harness = { service: new TriageService(deps), screens, runs, classify, describe, snapshots };
   harness.service.setActive(true);
@@ -95,12 +98,18 @@ describe("TriageService", () => {
     const h = await makeHarness({
       classify: async (input) =>
         input.screen.includes("proceed")
-          ? { category: "approval", confidence: 0.95, question: "Do you want to proceed?" }
-          : { category: "working", confidence: 0.99, question: null },
+          ? {
+              category: "approval",
+              confidence: 0.95,
+              attention: 0.95,
+              question: "Do you want to proceed?",
+            }
+          : { category: "working", confidence: 0.99, attention: 0.05, question: null },
       describe: async () => ({
         category: "approval",
         headline: "Run the tests?",
         summary: "Waiting to run npm test.",
+        attentionScore: 95,
         question: "Do you want to proceed?",
         options: ["Yes", "No, and tell Claude what to do differently (esc)"],
       }),
@@ -117,24 +126,36 @@ describe("TriageService", () => {
     expect(cards.get("a")).toMatchObject({
       category: "approval",
       stage: "described",
+      attentionProbability: 0.95,
+      attentionScore: 95,
+      priority: 95,
       headline: "Run the tests?",
       options: ["Yes", "No, and tell Claude what to do differently (esc)"],
     });
     expect(cards.get("b")).toMatchObject({
       category: "working",
       stage: "classified",
+      // Never described, so the classifier's probability alone.
+      attentionScore: null,
+      priority: 5,
       headline: null,
     });
   });
 
-  it("describes a quiet-looking run when the classifier is unsure of it", async () => {
+  it("describes a run only when the classifier thinks it likely needs the user", async () => {
     const h = await makeHarness({
-      classify: async () => ({ category: "idle", confidence: 0.4, question: null }),
+      classify: async (input) =>
+        input.screen.includes("proceed")
+          ? { category: "approval", confidence: 0.6, attention: 0.45, question: null }
+          : { category: "idle", confidence: 0.4, attention: 0.7, question: null },
     });
-    h.runs.push(run("a"));
-    h.screens.set("a", "dev@studio app % ");
+    h.runs.push(run("doubted"), run("likely"));
+    h.screens.set("doubted", APPROVAL_SCREEN);
+    h.screens.set("likely", "dev@studio app % ");
     await h.service.scan();
+    // The probability is the gate, whatever category came with it.
     expect(h.describe).toHaveBeenCalledTimes(1);
+    expect(h.describe.mock.calls[0]![0].screen).toBe("dev@studio app %");
   });
 
   it("hands the classifier Daintree's own observed state", async () => {
@@ -164,13 +185,79 @@ describe("TriageService", () => {
     expect(h.classify).toHaveBeenCalledTimes(2);
   });
 
-  it("re-sends every screen on refresh", async () => {
+  it("re-reads every screen on refresh but sends only the ones that changed", async () => {
     const h = await makeHarness({});
-    h.runs.push(run("a"));
-    h.screens.set("a", "anything");
+    h.runs.push(run("a"), run("b"));
+    h.screens.set("a", "unchanged");
+    h.screens.set("b", "before");
     await h.service.scan();
+    h.screens.set("b", "after");
+    await h.service.refresh();
+    expect(h.classify).toHaveBeenCalledTimes(3);
+  });
+
+  it("scans once when a panel opens and never again on its own", async () => {
+    const h = await makeHarness({});
+    h.service.setActive(false);
+    h.runs.push(run("a"));
+    h.screens.set("a", "screen");
+    h.service.setActive(true);
+    await settle();
+    await settle();
+    expect(h.classify).toHaveBeenCalledTimes(1);
+
+    h.screens.set("a", "a new screen");
+    h.runs.push(run("b"));
+    h.screens.set("b", "another");
+    h.service.onFleetChanged();
+    // Long past any interval a poll would have used.
+    vi.useFakeTimers();
+    try {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(h.classify).toHaveBeenCalledTimes(1);
+  });
+
+  it("judges an unchanged screen again once it has sat long enough to look stuck", async () => {
+    let now = 1_000_000;
+    const h = await makeHarness({ now: () => now });
+    h.runs.push(run("a", { agentState: "working" }));
+    h.screens.set("a", "✻ Running tests… (esc to interrupt)");
+    await h.service.scan();
+    const first = h.service.getSnapshot().cards[0]!;
+
+    now += 60_000;
+    await h.service.refresh();
+    expect(h.classify).toHaveBeenCalledTimes(1);
+
+    now += 61_000;
     await h.service.refresh();
     expect(h.classify).toHaveBeenCalledTimes(2);
+    // Still the same prompt, first read when it was: nothing reads as new or unread.
+    const again = h.service.getSnapshot().cards[0]!;
+    expect(again.revision).toBe(first.revision);
+    expect(again.observedAt).toBe(first.observedAt);
+  });
+
+  it("drops a card's old words when the describer is not asked for new ones", async () => {
+    let attention = 0.9;
+    const h = await makeHarness({
+      classify: async () => ({ category: "approval", confidence: 0.9, attention, question: null }),
+    });
+    h.runs.push(run("a"));
+    h.screens.set("a", APPROVAL_SCREEN);
+    await h.service.scan();
+    expect(h.service.getSnapshot().cards[0]!.headline).toBe("Headline");
+
+    attention = 0.3;
+    h.screens.set("a", `${APPROVAL_SCREEN}\n(a different menu)`);
+    await h.service.refresh();
+    const card = h.service.getSnapshot().cards[0]!;
+    expect(card.headline).toBeNull();
+    expect(card.summary).toBeNull();
+    expect(h.describe).toHaveBeenCalledTimes(1);
   });
 
   it("drops a quote or option the describer made up", async () => {
@@ -178,12 +265,14 @@ describe("TriageService", () => {
       classify: async () => ({
         category: "approval",
         confidence: 0.9,
+        attention: 0.9,
         question: "Do you want to proceed?",
       }),
       describe: async () => ({
         category: "approval",
         headline: "Run the tests?",
         summary: "",
+        attentionScore: 95,
         question: "Shall I deploy to production?",
         options: ["Yes", "Deploy everything"],
       }),
@@ -198,11 +287,17 @@ describe("TriageService", () => {
 
   it("orders options the way the screen draws them, whatever order they were described in", async () => {
     const h = await makeHarness({
-      classify: async () => ({ category: "approval", confidence: 0.9, question: null }),
+      classify: async () => ({
+        category: "approval",
+        confidence: 0.9,
+        attention: 0.9,
+        question: null,
+      }),
       describe: async () => ({
         category: "approval",
         headline: "Trust this folder?",
         summary: "",
+        attentionScore: 95,
         question: null,
         options: ["No, exit", "Yes, I trust this folder"],
       }),
@@ -221,11 +316,17 @@ describe("TriageService", () => {
 
   it("marks a password prompt as secret", async () => {
     const h = await makeHarness({
-      classify: async () => ({ category: "question", confidence: 0.9, question: "Password:" }),
+      classify: async () => ({
+        category: "question",
+        confidence: 0.9,
+        attention: 0.9,
+        question: "Password:",
+      }),
       describe: async () => ({
         category: "question",
         headline: "sudo wants your password",
         summary: "",
+        attentionScore: 95,
         question: "Password:",
         options: [],
       }),
@@ -241,7 +342,7 @@ describe("TriageService", () => {
     const h = await makeHarness({
       classify: async () => {
         await new Promise<void>((resolve) => (release = resolve));
-        return { category: "approval", confidence: 0.9, question: null };
+        return { category: "approval", confidence: 0.9, attention: 0.9, question: null };
       },
     });
     h.runs.push(run("a"));
@@ -264,7 +365,7 @@ describe("TriageService", () => {
       classify: async () => {
         calls++;
         if (calls === 1) await new Promise<void>((resolve) => (release = resolve));
-        return { category: "working", confidence: 0.9, question: null };
+        return { category: "working", confidence: 0.9, attention: 0.9, question: null };
       },
     });
     h.runs.push(run("a"));
@@ -355,7 +456,7 @@ describe("TriageService", () => {
     const h = await makeHarness({
       classify: async () => {
         if (fail) throw new Error("secret screen text must not leak");
-        return { category: "working", confidence: 0.9, question: null };
+        return { category: "working", confidence: 0.9, attention: 0.9, question: null };
       },
     });
     h.runs.push(run("a"));

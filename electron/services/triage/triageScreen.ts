@@ -14,7 +14,17 @@ const FRAME = /^[\s│▌╭╮╰╯─┃┏┓┗┛║]+|[\s│▌╭╮╰�
  * anything" as the question being asked on a third of finished runs.
  */
 const CHROME =
-  /^(?:>|›)\s*(?:Ask Codex to do anything|Type your message or @path\/to\/file)?\s*$|accept edits on \(shift\+tab|\d+% context left|Context left(?: until auto-compact)?: \d+%|\? for shortcuts|no sandbox\s+\S|bypass permissions on/;
+  /^(?:>|›|❯)\s*(?:Ask Codex to do anything|Type your message or @path\/to\/file)?\s*$|accept edits on \(shift\+tab|\d+% context left|Context left(?: until auto-compact)?: \d+%|\? for shortcuts|no sandbox\s+\S|bypass permissions on|⏵⏵\s*(?:auto mode|accept edits|bypass permissions|plan mode) on\b|auto mode on \(shift\+tab/;
+
+/**
+ * The suggestion an empty input box shows as placeholder text: Claude Code's
+ * `> Try "fix typecheck errors"`, and Codex's rotating `› Explain this
+ * codebase`-style prompts. They read exactly like a question to a classifier —
+ * a live session was carded as asking "Try "fix typecheck errors"" — and they
+ * are never something the agent asked.
+ */
+const PLACEHOLDER =
+  /^(?:>|›|❯)\s*(?:Try ".*"|Explain this codebase|Summarize recent commits|Implement \{feature\}|Find and fix a bug in @filename|Write tests for @filename|Improve documentation in @filename|Run \/review on my current changes|Use \/skills to list available skills)\s*$/;
 
 const AGENT_BULLET = /^(?:⏺|•|✦|●|▌|■|⎿)\s*/;
 
@@ -102,7 +112,7 @@ export function prepareScreen(raw: string, extraSecrets: readonly string[] = [])
   const lines: string[] = [];
   for (const row of raw.replace(/\r/g, "").split("\n")) {
     const line = row.replace(FRAME, "").replace(/\s{3,}/g, "  ");
-    if (CHROME.test(line)) continue;
+    if (CHROME.test(line) || PLACEHOLDER.test(line)) continue;
     // Collapse runs of blank rows; a dialog's spacing carries no meaning here.
     if (line.length === 0 && (lines.length === 0 || lines[lines.length - 1] === "")) continue;
     lines.push(line);
@@ -122,19 +132,7 @@ function findActivity(lines: readonly string[], extraSecrets: readonly string[])
   return null;
 }
 
-const SECRET_WORD = /\b(?:password|passphrase|passcode|pin|one-time code|otp|2fa|token|secret)\b/i;
-
-/**
- * The prompt asks the user to type a secret, which the panel never takes inline.
- * A secret word in a line that ends asking for input (`Password:`, `Enter
- * passphrase for key '…':`) — not in a question about one ("Should I rotate the
- * token?"), which is an ordinary reply.
- */
-export function isSecretPrompt(question: string | null): boolean {
-  if (question === null) return false;
-  const text = question.trim();
-  return text.endsWith(":") && SECRET_WORD.test(text);
-}
+export { isSecretPrompt } from "../../../shared/utils/secretPrompt.js";
 
 /**
  * The answer letters a plain-text prompt at the bottom of the screen offers:

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { RefreshCw } from "lucide-react";
+import { ScanEye } from "@/components/icons";
 import { cn } from "@/lib/utils";
-import { triagePromptKey, useTriageStore } from "@/store/triageStore";
+import { isTriageRead, triagePromptKey, useTriageStore } from "@/store/triageStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -15,30 +16,27 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useOverlayClaim } from "@/hooks/useOverlayState";
-import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
-import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
+import { AppDialog } from "@/components/ui/AppDialog";
+import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
+import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { Button } from "@/components/ui/button";
+import { KbdChord } from "@/components/ui/Kbd";
 import { Callout } from "@/components/ui/Callout";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { buildPilotGroups, type PilotWorkspaceMeta } from "@/components/Pilot/pilotRows";
-import { TRIAGE_ATTENTION_CATEGORIES } from "@shared/types/ipc/triage";
-import { buildTriageSections, type TriageItem, type TriageSectionId } from "./triageModel";
+import { buildTriageInbox, itemNeedsAttention, type TriageItem } from "./triageModel";
 import {
   TriageCard,
   canReplyTo,
   canTrashItem,
   triageCardDomId,
+  type TriageCardHandle,
   type TriageCardHandlers,
 } from "./TriageCard";
+import { TriageRow } from "./TriageRow";
 
 /** Ages are minute-grained, as in Pilot. */
 const AGE_TICK_MS = 30_000;
-
-const SECTION_LABEL: Record<TriageSectionId, string> = {
-  "needs-you": "Needs you",
-  working: "Working",
-  quiet: "Quiet",
-};
 
 /** An error toast whose one recovery is the place the action can be done by hand. */
 function failToast(
@@ -118,7 +116,7 @@ export function TriageView() {
     return map;
   }, [projects, scratches]);
 
-  const sections = useMemo(() => {
+  const items = useMemo(() => {
     if (!fleet) return [];
     const groups = buildPilotGroups(fleet.runs, {
       workspaces,
@@ -126,18 +124,42 @@ export function TriageView() {
       nowMs,
     });
     const cards = new Map((triage?.cards ?? []).map((card) => [card.runId, card]));
-    return buildTriageSections(groups, cards, {
+    return buildTriageInbox(groups, cards, {
       // Unknown until main answers, which is still a read on its way.
       configured: triage?.configured ?? true,
       failed: (triage?.lastError ?? null) !== null,
     });
   }, [fleet, workspaces, nowMs, triage]);
 
-  const items = useMemo(() => sections.flatMap((section) => section.items), [sections]);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const focusedIndex = items.findIndex((item) => item.runId === focusedId);
   const activeIndex = focusedIndex === -1 ? 0 : focusedIndex;
   const bodyRef = useRef<HTMLDivElement>(null);
+  const detailRef = useRef<TriageCardHandle>(null);
+
+  // Where the keyboard goes when the panel closes: the terminal "Go to
+  // terminal" just focused, rather than whatever opened the panel.
+  const focusAfterCloseRef = useRef<HTMLElement | null>(null);
+  const reads = useTriageStore((s) => s.reads);
+  const markRead = useTriageStore((s) => s.markRead);
+  const pruneReads = useTriageStore((s) => s.pruneReads);
+  useEffect(() => {
+    // Only against a whole, current population: a degraded snapshot can leave
+    // runs out that are still running.
+    if (fleet && !fleet.degraded) pruneReads(new Set(fleet.runs.map((run) => run.runId)));
+  }, [fleet, pruneReads]);
+  const isUnread = useCallback(
+    (item: TriageItem) =>
+      itemNeedsAttention(item) &&
+      !isTriageRead(reads[item.runId], item.row.run.spawnedAt, item.card),
+    [reads]
+  );
+  // Opening a run — a click or the arrows onto it — reads it, as in a mail
+  // inbox. Landing on the first run when the panel opens does not.
+  const openedByUser = useCallback(
+    (item: TriageItem) => markRead(item.runId, item.row.run.spawnedAt),
+    [markRead]
+  );
 
   const focusCardNow = useCallback((runId: string) => {
     setFocusedId(runId);
@@ -156,6 +178,7 @@ export function TriageView() {
       setFocusedId(null);
       return;
     }
+    focusAfterCloseRef.current = null;
     if (landedRef.current || items.length === 0) return;
     const target = items[0]!.runId;
     let inner = 0;
@@ -195,49 +218,27 @@ export function TriageView() {
     focusCardNow(target.runId);
   }, [focusedIndex, focusedId, items, focusCardNow]);
 
-  // On the list's own wrapper rather than the palette body: the body only acts
-  // on keys aimed at itself, and here focus is always on a card or its controls.
-  const onNavigationKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (items.length === 0 || event.metaKey || event.ctrlKey || event.altKey) return;
-    if (event.target instanceof Element && event.target.closest("textarea, input")) return;
-    let next: number | null = null;
-    if (event.key === "ArrowDown" || event.key === "j") {
-      next = Math.min(items.length - 1, activeIndex + 1);
-    } else if (event.key === "ArrowUp" || event.key === "k") {
-      next = Math.max(0, activeIndex - 1);
-    } else if (event.key === "Home") {
-      next = 0;
-    } else if (event.key === "End") {
-      next = items.length - 1;
-    }
-    if (next !== null) {
-      event.preventDefault();
-      focusCardNow(items[next]!.runId);
-    }
-  };
-
-  // The pointer moves the same cursor the arrows do — but never out of a reply
-  // being typed, and without a ring, which belongs to the keyboard.
-  const onPointerCursor = useCallback((element: HTMLElement) => {
-    const active = document.activeElement;
-    if (active instanceof Element && active.closest("textarea, input")) return;
-    element.focus({ preventScroll: true, focusVisible: false } as FocusOptions);
-  }, []);
-
   // Answered: the agent goes back to work, so the cursor goes on to whatever
   // is still waiting rather than following it out of the queue.
   const advancePast = useCallback(
     (runId: string) => {
       const card = document.getElementById(triageCardDomId(runId));
+      const pane = document.getElementById(`triage-detail-${runId}`);
       const active = document.activeElement;
-      if (active !== null && active !== document.body && !card?.contains(active)) return;
+      if (
+        active !== null &&
+        active !== document.body &&
+        !card?.contains(active) &&
+        !pane?.contains(active)
+      )
+        return;
       // Onward first, then back round to anything left above; never to a prompt
       // this panel has already answered while main catches up.
       const acks = useTriageStore.getState().acks;
       const index = items.findIndex((item) => item.runId === runId);
       const waiting = (item: TriageItem) =>
         item.runId !== runId &&
-        TRIAGE_ATTENTION_CATEGORIES.has(item.kind) &&
+        itemNeedsAttention(item) &&
         item.kind !== "finished" &&
         !(item.card !== null && acks[item.runId]?.promptKey === triagePromptKey(item.card));
       const next =
@@ -261,7 +262,14 @@ export function TriageView() {
       // focus-restore suppression on success, so the close can't hand focus
       // back to whatever opened the panel.
       void actionService.dispatch("pilot.openRun", args, { source: "user" }).then((result) => {
-        if (result.ok) close();
+        if (!result.ok) return;
+        // `pilot.openRun` arms the palettes' one-shot restore suppression; this
+        // is a dialog, which hands focus on by its own target instead, so the
+        // flag is taken here rather than left for the next palette to close.
+        consumePaletteFocusRestoreSuppression();
+        focusAfterCloseRef.current =
+          document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        close();
       });
     };
     // From the card the user acted on, so main refuses it once that card is stale.
@@ -281,15 +289,8 @@ export function TriageView() {
           throw error;
         }
       },
-      onReply: async (item, text) => {
-        try {
-          await window.electron.triage.reply(item.runId, text, target(item));
-          if (item.kind === "question") advancePast(item.runId);
-        } catch (error) {
-          failToast("Couldn't send message", error, goTo(item));
-          throw error;
-        }
-      },
+      onSent: (item) => openedByUser(item),
+      onSendFailed: (item, error) => failToast("Couldn't send to agent", error, goTo(item)),
       onTrash: (item) => {
         const runId = item.runId;
         safeFireAndForget(
@@ -316,21 +317,49 @@ export function TriageView() {
         );
       },
     };
-  }, [close, advancePast]);
+  }, [close, advancePast, openedByUser]);
 
-  const counts = useMemo(() => {
-    const byId = new Map(sections.map((section) => [section.id, section.items.length]));
-    return {
-      needsYou: byId.get("needs-you") ?? 0,
-      working: byId.get("working") ?? 0,
-      quiet: byId.get("quiet") ?? 0,
-    };
-  }, [sections]);
+  // On the list's own wrapper rather than the palette body: the body only acts
+  // on keys aimed at itself, and here focus is always on a card or its controls.
+  const onNavigationKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (items.length === 0 || event.metaKey || event.ctrlKey || event.altKey) return;
+    // Only from the list: the pane holds a live terminal and a composer, and
+    // every key there belongs to the agent.
+    if (!(event.target instanceof Element) || !event.target.closest("[data-triage-list]")) return;
+    let next: number | null = null;
+    if (event.key === "ArrowDown" || event.key === "j") {
+      next = Math.min(items.length - 1, activeIndex + 1);
+    } else if (event.key === "ArrowUp" || event.key === "k") {
+      next = Math.max(0, activeIndex - 1);
+    } else if (event.key === "Home") {
+      next = 0;
+    } else if (event.key === "End") {
+      next = items.length - 1;
+    }
+    if (next !== null) {
+      event.preventDefault();
+      focusCardNow(items[next]!.runId);
+      openedByUser(items[next]!);
+      return;
+    }
+    // Keys aimed at the list's selected row act on the selected agent.
+    const selected = items[activeIndex];
+    if (!selected) return;
+    if (event.key === "Enter") {
+      event.preventDefault();
+      handlers.onOpen(selected);
+      return;
+    }
+    detailRef.current?.handleKey(event);
+  };
+
+  const needsYou = items.filter(itemNeedsAttention).length;
 
   const busy = triage?.busy === true;
   const focusedItem = items[activeIndex] ?? null;
   // The footer speaks for whatever holds focus: inside a reply, Enter sends.
   const [typing, setTyping] = useState(false);
+  const unreadCount = items.filter(isUnread).length;
   const footerHints = useMemo(() => {
     if (!focusedItem) return [];
     if (typing) return [{ keys: ["⇧", "↵"], label: "New line" }];
@@ -347,144 +376,148 @@ export function TriageView() {
     return hints;
   }, [focusedItem, typing]);
 
-  return (
-    <AppPaletteDialog isOpen={isOpen} onClose={close} ariaLabel="Triage" tier="workspace">
-      <AppPaletteDialog.Header
-        label="Triage"
-        shortcut={shortcut}
-        isLoading={busy}
-        trailing={
-          triage?.refreshedAt ? (
-            <span className="text-xs text-text-secondary">
-              <TimeAgo timestamp={triage.refreshedAt} now={nowMs} prefix="Scanned " />
-            </span>
-          ) : null
-        }
-      >
-        <div className="flex items-center gap-3 px-1 pb-1">
-          <p className="min-w-0 flex-1 truncate text-sm text-text-secondary">
-            {fleet === null
-              ? "Reading agents…"
-              : items.length === 0
-                ? "No agents are running"
-                : [
-                    counts.needsYou > 0
-                      ? `${pluralize(counts.needsYou, "needs", "need")} you`
-                      : null,
-                    counts.working > 0 ? `${counts.working.toLocaleString()} working` : null,
-                    counts.quiet > 0 ? `${counts.quiet.toLocaleString()} quiet` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-          </p>
-          <Button
-            ref={refreshRef}
-            variant="ghost"
-            size="xs"
-            disabled={triage?.configured !== true}
-            onClick={() =>
-              safeFireAndForget(
-                window.electron.triage.refresh().catch((error: unknown) =>
-                  failToast("Couldn't refresh triage", error, {
-                    label: "Retry",
-                    onClick: () => safeFireAndForget(window.electron.triage.refresh()),
-                  })
-                )
-              )
-            }
-          >
-            <RefreshCw className={cn(busy && "animate-spin motion-reduce:animate-none")} />
-            Refresh
-          </Button>
-        </div>
-      </AppPaletteDialog.Header>
+  const summaryLine =
+    fleet === null
+      ? "Reading agents…"
+      : items.length === 0
+        ? "No agents are running"
+        : [
+            unreadCount > 0 ? `${unreadCount.toLocaleString()} unread` : null,
+            needsYou > 0 ? `${pluralize(needsYou, "needs", "need")} you` : null,
+            pluralize(items.length, "agent"),
+          ]
+            .filter(Boolean)
+            .join(" · ");
 
-      <AppPaletteDialog.Body
-        ariaLabel="Agents"
-        maxHeight="max-h-[70vh]"
-        scrollClassName="flex flex-col gap-4 p-2"
-        onNavigationKeyDown={onNavigationKeyDown}
-      >
-        <div
-          ref={bodyRef}
-          className="contents"
-          onKeyDown={onNavigationKeyDown}
-          onFocusCapture={(event) =>
-            setTyping(
-              event.target instanceof Element &&
-                event.target.closest("[data-triage-composer]") !== null
+  return (
+    <AppDialog
+      isOpen={isOpen}
+      onClose={close}
+      size="workspace"
+      maxHeight="h-[min(90vh,1100px)]"
+      // The first control takes focus at once — with no rows to land on, the
+      // keyboard would otherwise stay on whatever opened the panel.
+      initialFocus="first"
+      restoreFocusTo={() => focusAfterCloseRef.current}
+      preferRestoreFocusTo
+      data-testid="triage-dialog"
+    >
+      <AppDialog.Header>
+        <AppDialog.Title icon={<ScanEye />}>Triage</AppDialog.Title>
+        <span className="ml-3 min-w-0 flex-1 truncate text-sm text-text-secondary">
+          {summaryLine}
+        </span>
+        {triage?.refreshedAt ? (
+          <span className="shrink-0 text-xs text-text-secondary">
+            <TimeAgo timestamp={triage.refreshedAt} now={nowMs} prefix="Scanned " />
+          </span>
+        ) : null}
+        <Button
+          ref={refreshRef}
+          variant="ghost"
+          size="xs"
+          disabled={triage?.configured !== true}
+          onClick={() =>
+            safeFireAndForget(
+              window.electron.triage.refresh().catch((error: unknown) =>
+                failToast("Couldn't refresh triage", error, {
+                  label: "Retry",
+                  onClick: () => safeFireAndForget(window.electron.triage.refresh()),
+                })
+              )
             )
           }
-          onBlurCapture={() => setTyping(false)}
         >
-          {triage !== null && !triage.configured && (
-            <Callout
-              severity="neutral"
-              size="compact"
-              title="Screen reading is off"
-              action={
-                <Button
-                  variant="outline"
-                  size="xs"
-                  onClick={() => {
-                    close();
-                    window.dispatchEvent(
-                      new CustomEvent("daintree:open-settings-tab", { detail: { tab: "triage" } })
-                    );
-                  }}
-                >
-                  Add keys
-                </Button>
-              }
-            >
-              Add your TypeSafe and Cerebras keys in Settings to read each agent's screen. Until
-              then the cards show only what Daintree's own state tracking saw.
-            </Callout>
-          )}
-          {triage?.lastError && (
-            <Callout severity="warning" size="compact" title="Some cards couldn't be read">
-              {triage.lastError}. They'll be retried on the next scan.
-            </Callout>
-          )}
-          {sections.map((section) => (
-            <section key={section.id} className="flex flex-col gap-1">
-              <h3
-                id={`triage-section-${section.id}`}
-                className={cn(PALETTE_SECTION_LABEL_CLASS, "px-2.5")}
-              >
-                {SECTION_LABEL[section.id]}
-                <span className="ml-1.5 tabular-nums">{section.items.length}</span>
-              </h3>
-              <div
-                role="feed"
-                aria-labelledby={`triage-section-${section.id}`}
-                className="flex flex-col gap-0.5"
-              >
-                {section.items.map((item, index) => (
-                  <TriageCard
-                    key={item.runId}
-                    item={item}
-                    domId={triageCardDomId(item.runId)}
-                    isFocused={focusedItem?.runId === item.runId}
-                    position={index + 1}
-                    setSize={section.items.length}
-                    onFocusCard={() => setFocusedId(item.runId)}
-                    onPointerCursor={onPointerCursor}
-                    {...handlers}
-                  />
-                ))}
-              </div>
-            </section>
-          ))}
-          {fleet !== null && items.length === 0 && (
-            <p className="px-1 py-6 text-center text-sm text-text-secondary">
-              Launch an agent and it shows up here.
-            </p>
-          )}
-        </div>
-      </AppPaletteDialog.Body>
+          <RefreshCw className={cn(busy && "animate-spin motion-reduce:animate-none")} />
+          Refresh
+        </Button>
+        {shortcut && <KbdChord shortcut={shortcut} className="shrink-0" />}
+        <AppDialog.CloseButton />
+      </AppDialog.Header>
 
-      <AppPaletteDialog.Footer>
+      <div
+        ref={bodyRef}
+        className="flex min-h-0 flex-1 flex-col gap-3 p-3"
+        onKeyDown={onNavigationKeyDown}
+        onFocusCapture={(event) =>
+          setTyping(event.target instanceof Element && event.target.closest(".cm-editor") !== null)
+        }
+        onBlurCapture={() => setTyping(false)}
+      >
+        {triage !== null && !triage.configured && (
+          <Callout
+            severity="neutral"
+            size="compact"
+            title="Screen reading is off"
+            action={
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => {
+                  close();
+                  window.dispatchEvent(
+                    new CustomEvent("daintree:open-settings-tab", { detail: { tab: "triage" } })
+                  );
+                }}
+              >
+                Add keys
+              </Button>
+            }
+          >
+            Add your TypeSafe and Cerebras keys in Settings to read each agent's screen. Until then
+            the list shows only what Daintree's own state tracking saw.
+          </Callout>
+        )}
+        {triage?.lastError && (
+          <Callout severity="warning" size="compact" title="Some screens couldn't be read">
+            {triage.lastError}. Refresh to try them again.
+          </Callout>
+        )}
+        {items.length > 0 && (
+          // An inbox: what needs you down the left, most urgent first, and the
+          // selected agent's own terminal on the right to act in.
+          <div className="grid min-h-0 flex-1 grid-cols-[minmax(22rem,28rem)_minmax(0,1fr)] gap-3">
+            <div
+              role="listbox"
+              aria-label="Agents"
+              className="flex min-h-0 flex-col gap-0.5 overflow-y-auto pr-1"
+              data-triage-list=""
+            >
+              {items.map((item) => (
+                <TriageRow
+                  key={item.runId}
+                  item={item}
+                  domId={triageCardDomId(item.runId)}
+                  isSelected={focusedItem?.runId === item.runId}
+                  unread={isUnread(item)}
+                  onSelect={() => setFocusedId(item.runId)}
+                  onClick={() => openedByUser(item)}
+                  onOpen={() => handlers.onOpen(item)}
+                />
+              ))}
+            </div>
+            <div className="flex min-h-0 flex-col rounded-[var(--radius-lg)] border border-border-default bg-surface-panel p-3">
+              {focusedItem && (
+                <TriageCard
+                  key={focusedItem.runId}
+                  ref={detailRef}
+                  item={focusedItem}
+                  domId={`triage-detail-${focusedItem.runId}`}
+                  scanning={busy}
+                  {...handlers}
+                />
+              )}
+            </div>
+          </div>
+        )}
+        {fleet !== null && items.length === 0 && (
+          <p className="px-1 py-6 text-center text-sm text-text-secondary">
+            Launch an agent and it shows up here.
+          </p>
+        )}
+      </div>
+
+      <AppDialog.Footer>
         {focusedItem && (
           <PaletteFooterHints
             primaryHint={
@@ -498,7 +531,7 @@ export function TriageView() {
             AI summaries · {triage.describerModel}
           </span>
         )}
-      </AppPaletteDialog.Footer>
-    </AppPaletteDialog>
+      </AppDialog.Footer>
+    </AppDialog>
   );
 }

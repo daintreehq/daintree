@@ -182,7 +182,7 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
     // own event so the TERMINAL_DATA broadcast in ipc/handlers/terminal/events
     // never re-delivers it to renderers.
     case "data-mirror":
-      emitter.emit("data-mirror", event.id, event.data);
+      emitter.emit("data-mirror", event.id, event.data, event.streamEnd);
       return true;
 
     case "exit": {

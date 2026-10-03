@@ -331,6 +331,59 @@ describe("PtyClient Handshake Protocol", () => {
       });
     });
 
+    it("keeps a mirror on while any holder still wants it", () => {
+      const client = createClient();
+      client.spawn("test-terminal", {
+        cwd: "/repo",
+        cols: 80,
+        rows: 30,
+        restore: false,
+      } as any);
+      const mirrorMessages = () =>
+        mockChild.postMessage.mock.calls
+          .map((c: unknown[]) => c[0] as { type?: string; enabled?: boolean })
+          .filter((m) => m.type === "set-ipc-data-mirror")
+          .map((m) => m.enabled);
+      mockChild.postMessage.mockClear();
+
+      client.setIpcDataMirror("test-terminal", true);
+      const release = client.acquireIpcDataMirror("test-terminal");
+      release();
+      release();
+      // A viewer's lease coming and going must not switch off the explicit holder.
+      expect(mirrorMessages()).toEqual([true]);
+
+      const viewer = client.acquireIpcDataMirror("test-terminal");
+      client.setIpcDataMirror("test-terminal", false);
+      expect(mirrorMessages()).toEqual([true]);
+      viewer();
+      expect(mirrorMessages()).toEqual([true, false]);
+    });
+
+    it("never lets a lease from before a kill release one taken since", () => {
+      const client = createClient();
+      const spawn = () =>
+        client.spawn("test-terminal", {
+          cwd: "/repo",
+          cols: 80,
+          rows: 30,
+          restore: false,
+        } as any);
+      spawn();
+      const old = client.acquireIpcDataMirror("test-terminal");
+      client.kill("test-terminal");
+      spawn();
+      const current = client.acquireIpcDataMirror("test-terminal");
+      mockChild.postMessage.mockClear();
+      old();
+      const disabled = mockChild.postMessage.mock.calls.filter(
+        (c: unknown[]) =>
+          (c[0] as { type?: string; enabled?: boolean })?.type === "set-ipc-data-mirror"
+      );
+      expect(disabled).toEqual([]);
+      current();
+    });
+
     it("does not re-send mirror for killed terminals", () => {
       const client = createClient();
 

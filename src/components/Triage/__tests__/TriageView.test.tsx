@@ -36,6 +36,13 @@ afterAll(() => {
 
 const dispatchMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
+// The pane's live terminal needs a canvas and a PTY host; the list is what is tested here.
+vi.mock("../TriageTerminal", () => ({
+  TriageTerminal: ({ runId }: { runId: string }) => (
+    <div data-triage-terminal="" data-run={runId} />
+  ),
+}));
+vi.mock("@/components/Terminal/HybridInputBar", () => ({ HybridInputBar: () => null }));
 
 import { TriageView } from "../TriageView";
 import { useTriageStore } from "@/store/triageStore";
@@ -109,9 +116,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  useTriageStore.setState({ isOpen: false, snapshot: null, drafts: {}, acks: {} });
+  useTriageStore.setState({ isOpen: false, snapshot: null, acks: {}, reads: {} });
   vi.clearAllMocks();
 });
+
+function liveRun(container: HTMLElement) {
+  return container.ownerDocument.querySelector("[data-triage-terminal]")?.getAttribute("data-run");
+}
 
 function cards(container: HTMLElement) {
   return [...container.ownerDocument.querySelectorAll<HTMLElement>("[data-triage-card]")];
@@ -171,6 +182,9 @@ describe("TriageView", () => {
       revision: 1,
       category: "approval" as const,
       confidence: 0.9,
+      attentionProbability: 0.9,
+      attentionScore: null,
+      priority: 90,
       stage: "described" as const,
       describing: false,
       headline: null,
@@ -207,5 +221,23 @@ describe("TriageView", () => {
     await act(async () => {});
     expect(triage.choose).toHaveBeenCalledWith("first", "Yes", expect.anything());
     expect(document.activeElement).toBe(last);
+  });
+
+  it("opens a run's terminal on a click, not a hover, and marks it read", async () => {
+    installElectron();
+    const { container } = render(<TriageView />);
+    await frames();
+    const [first, second] = cards(container);
+    expect(liveRun(container)).toBe("waiting");
+    // Landing on the first run when the panel opens is not opening it.
+    expect(first!.getAttribute("data-unread")).toBe("true");
+
+    fireEvent.pointerMove(second!);
+    expect(liveRun(container)).toBe("waiting");
+
+    fireEvent.click(first!);
+    expect(first!.hasAttribute("data-unread")).toBe(false);
+    fireEvent.click(second!);
+    expect(liveRun(container)).toBe("working");
   });
 });

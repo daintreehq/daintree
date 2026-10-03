@@ -15,6 +15,26 @@ describe("prepareScreen", () => {
     expect(screen.lines).toEqual(["Do you want to proceed?", "❯ 1. Yes"]);
   });
 
+  it("drops an empty input box's placeholder suggestion", () => {
+    const screen = prepareScreen(
+      [
+        "⏺ Done. All tests pass.",
+        '> Try "fix typecheck errors"',
+        '❯ Try "refactor the auth module"',
+        "❯ ",
+        "› Find and fix a bug in @filename",
+        "  ⏵⏵ auto mode on (shift+tab to cycle)  ● high · /effort",
+        // The same bar once a shell is running, which drops the key hint.
+        "  ⏵⏵ auto mode on · 1 shell",
+      ].join("\n")
+    );
+    expect(screen.lines).toEqual(["⏺ Done. All tests pass."]);
+  });
+
+  it("keeps what the user actually typed into the box", () => {
+    expect(prepareScreen("> deploy it to staging").lines).toEqual(["> deploy it to staging"]);
+  });
+
   it("collapses blank runs and trims trailing blanks", () => {
     const screen = prepareScreen("one\n\n\n\ntwo\n\n\n");
     expect(screen.lines).toEqual(["one", "", "two"]);

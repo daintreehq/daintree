@@ -1,69 +1,55 @@
-import { useCallback, useRef, useState } from "react";
-import type { KeyboardEvent, PointerEvent } from "react";
-import {
-  Check,
-  CornerDownLeft,
-  KeyRound,
-  Reply,
-  SquareArrowOutUpRight,
-  Trash2,
-} from "lucide-react";
-import { cn } from "@/lib/utils";
-import { getProjectGradient } from "@/lib/colorUtils";
+import { Suspense, lazy, useImperativeHandle, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
+import { Check, KeyRound, SquareArrowOutUpRight, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { KbdChord } from "@/components/ui/Kbd";
-import { Textarea } from "@/components/ui/textarea";
-import { SkeletonBone } from "@/components/ui/Skeleton";
 import { TimeAgo } from "@/components/ui/TimeAgo";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PilotRunState } from "@/components/Pilot/PilotRunState";
-import type { TriageCategory } from "@shared/types/ipc/triage";
-import { triageDraftKey, triagePromptKey, useTriageStore } from "@/store/triageStore";
+import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
+import { isMac } from "@/lib/platform";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
+import { triagePromptKey, useTriageStore } from "@/store/triageStore";
 import type { TriageItem } from "./triageModel";
+import { KIND_LABEL } from "./TriageRow";
+import { TriageTerminal, type TriageStreamState } from "./TriageTerminal";
 
-const KIND_LABEL: Record<TriageCategory, string> = {
-  approval: "Wants approval",
-  question: "Asking you",
-  error: "Stopped on an error",
-  finished: "Finished",
-  working: "Working",
-  running: "Running",
-  idle: "Idle",
-};
+const LazyHybridInputBar = lazy(() =>
+  import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
+);
 
 export interface TriageCardHandlers {
   onOpen: (item: TriageItem) => void;
   onChoose: (item: TriageItem, label: string) => Promise<void>;
-  onReply: (item: TriageItem, text: string) => Promise<void>;
   onTrash: (item: TriageItem) => void;
+  /** Something was typed and sent to the run from the pane. */
+  onSent: (item: TriageItem) => void;
+  /** Main refused what the composer sent; the draft is already gone. */
+  onSendFailed: (item: TriageItem, error: unknown) => void;
+}
+
+/** What the list can ask of the pane for the agent it has selected. */
+export interface TriageCardHandle {
+  /** Handle a key aimed at the list's selected row; true when it was used. */
+  handleKey: (event: KeyboardEvent<HTMLElement>) => boolean;
 }
 
 interface TriageCardProps extends TriageCardHandlers {
   item: TriageItem;
   domId: string;
-  isFocused: boolean;
-  /** Position in the card's section, for the feed's article semantics. */
-  position: number;
-  setSize: number;
-  onFocusCard: () => void;
-  /** The pointer moved over the card: it becomes the list's one cursor. */
-  onPointerCursor: (element: HTMLElement) => void;
+  /** Main is scanning right now. */
+  scanning: boolean;
+  ref?: React.Ref<TriageCardHandle>;
 }
 
 /**
- * An inline reply is offered only on a card main has classified: before that,
- * nothing says the prompt isn't asking for a secret. Never on an approval,
- * where typed text lands on the menu rather than in a message.
+ * The composer is offered unless a secret is being asked for — by the card's
+ * reading or by the live screen itself, which covers a run not read yet. A
+ * composer keeps history, and a password must never land in it; a secret is
+ * typed straight into the live terminal instead, which keeps nothing.
  */
-export function canReplyTo(item: TriageItem): boolean {
-  return (
-    item.card !== null &&
-    !item.stale &&
-    (item.kind === "question" || item.kind === "finished") &&
-    !item.card.secretPrompt
-  );
+export function canReplyTo(item: TriageItem, liveSecretPrompt = false): boolean {
+  return !liveSecretPrompt && !(item.card?.secretPrompt === true && !item.stale);
 }
 
 /** Trash is offered where the run is done with or stuck: never on one at work. */
@@ -71,309 +57,36 @@ export function canTrashItem(item: TriageItem): boolean {
   return item.kind === "finished" || item.kind === "error" || item.kind === "idle";
 }
 
-/** A question's reply box is its answer, so it is always out; a follow-up is asked for. */
-export function composerAlwaysOpen(item: TriageItem): boolean {
-  return item.kind === "question";
-}
-
 export function triageCardDomId(runId: string): string {
   return `triage-card-${runId}`;
-}
-
-function WorkspaceTile({ workspace }: { workspace: TriageItem["workspace"] }) {
-  return (
-    <span
-      aria-hidden="true"
-      className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-4xs shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.3))]"
-      style={{
-        background: workspace.color
-          ? `var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), ${getProjectGradient(workspace.color)}`
-          : "var(--color-surface-sidebar)",
-      }}
-    >
-      {workspace.emoji ? <span className="leading-none select-none">{workspace.emoji}</span> : null}
-    </span>
-  );
-}
-
-function RowAction({
-  label,
-  onClick,
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label={label}
-          // The row's keys reach these; Tab stays on the controls that answer.
-          tabIndex={-1}
-          onClick={(event) => {
-            event.stopPropagation();
-            onClick();
-          }}
-        >
-          {children}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="top">{label}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-/**
- * Identity line shared by every row: state, agent, title, where, then the
- * row's actions and its age. The age is the last thing on the line on every
- * row, whatever actions it has, so the ages stand in one column.
- */
-function CardIdentity({
-  item,
-  strong,
-  actions,
-  showActions,
-}: {
-  item: TriageItem;
-  strong: boolean;
-  actions: React.ReactNode;
-  showActions: boolean;
-}) {
-  const { row } = item;
-  const where = `${item.workspace.name}${row.worktreeLabel ? ` · ${row.worktreeLabel}` : ""}`;
-  return (
-    <div className="flex h-6 min-w-0 items-center gap-2">
-      <span className="flex size-3.5 shrink-0 items-center justify-center">
-        {/* Daintree's own observation, never the classifier's reading. */}
-        <PilotRunState band={row.band} agentState={row.run.agentState} />
-      </span>
-      <span className="flex size-4 shrink-0 items-center justify-center">
-        <TerminalIcon
-          chrome={row.chrome}
-          className="h-4 w-4"
-          brandColor={row.presetColor ?? row.chrome.color}
-        />
-      </span>
-      <span
-        title={row.title}
-        className={cn(
-          "min-w-0 shrink truncate text-sm leading-tight text-text-primary",
-          strong && "font-medium"
-        )}
-      >
-        {row.title}
-      </span>
-      <span
-        title={where}
-        className="flex min-w-0 shrink-[2] items-center gap-1.5 text-xs text-text-secondary"
-      >
-        <WorkspaceTile workspace={item.workspace} />
-        <span className="truncate">{where}</span>
-      </span>
-      <span className="flex-1" />
-      <span
-        className={cn("flex shrink-0 items-center gap-0.5", !showActions && "invisible")}
-        onClick={(event) => event.stopPropagation()}
-      >
-        {actions}
-      </span>
-      <span
-        aria-hidden="true"
-        className="min-w-12 shrink-0 text-right text-2xs leading-none whitespace-nowrap text-text-secondary tabular-nums"
-      >
-        {row.age ?? ""}
-      </span>
-    </div>
-  );
-}
-
-/**
- * What the card says beyond its prompt. When the prompt is on screen it is the
- * ask, quoted, and the reading only adds the why; without one the reading's
- * headline carries the card.
- */
-function CardWords({
-  item,
-  hasQuote,
-  summaryId,
-}: {
-  item: TriageItem;
-  hasQuote: boolean;
-  summaryId: string;
-}) {
-  const headline = hasQuote ? null : (item.card?.headline ?? null);
-  const summary = item.card?.summary ?? null;
-  if (headline === null && summary === null) {
-    if (!item.pending || hasQuote) return null;
-    return (
-      <div className="flex flex-col gap-1.5 py-0.5" aria-hidden="true">
-        <SkeletonBone className="h-3.5 w-2/5 rounded-[var(--radius-sm)]" heightPx={14} />
-        <SkeletonBone className="h-3 w-3/5 rounded-[var(--radius-sm)]" heightPx={12} />
-      </div>
-    );
-  }
-  return (
-    <div className="flex min-w-0 flex-col gap-0.5">
-      {headline !== null && <p className="text-sm leading-snug text-text-primary">{headline}</p>}
-      {summary !== null && (
-        <p
-          id={summaryId}
-          title={summary}
-          className="line-clamp-2 text-xs leading-relaxed text-text-secondary"
-        >
-          {summary}
-        </p>
-      )}
-    </div>
-  );
-}
-
-/** The prompt being asked, quoted as it appears on screen. */
-function QuestionQuote({ question, id }: { question: string; id: string }) {
-  return (
-    <blockquote
-      id={id}
-      className="rounded-[var(--radius-sm)] border-l-2 border-state-waiting bg-surface-inset px-2.5 py-1.5 text-sm leading-snug text-text-primary"
-    >
-      {question}
-    </blockquote>
-  );
-}
-
-function Composer({
-  item,
-  placeholder,
-  onReply,
-  composerRef,
-  tabbable,
-  collapsible,
-  onEscape,
-  onSent,
-}: {
-  item: TriageItem;
-  placeholder: string;
-  onReply: TriageCardHandlers["onReply"];
-  composerRef: React.RefObject<HTMLTextAreaElement | null>;
-  tabbable: boolean;
-  collapsible: boolean;
-  onEscape: () => void;
-  onSent: (text: string) => void;
-}) {
-  const draftKey = triageDraftKey(item.runId, item.card?.spawnedAt ?? item.row.run.spawnedAt);
-  const text = useTriageStore((state) => state.drafts[draftKey] ?? "");
-  const setDraft = useTriageStore((state) => state.setDraft);
-  const setText = useCallback((next: string) => setDraft(draftKey, next), [setDraft, draftKey]);
-  const [sending, setSending] = useState(false);
-
-  const send = useCallback(async () => {
-    const message = text.trim();
-    if (message === "" || sending) return;
-    setSending(true);
-    try {
-      await onReply(item, message);
-      setText("");
-      onSent(message);
-    } catch {
-      // Already reported by the handler; the draft stays for another try.
-    } finally {
-      setSending(false);
-    }
-  }, [item, onReply, onSent, sending, text, setText]);
-
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    // An IME's own Escape cancels the composition, not the draft.
-    if (event.nativeEvent.isComposing) {
-      event.stopPropagation();
-      return;
-    }
-    if (event.key === "Escape") {
-      // Escape clears a draft first, then folds a follow-up box away; only an
-      // empty box that is always out lets it through to close the dialog.
-      if (text === "" && !collapsible) return;
-      event.stopPropagation();
-      event.preventDefault();
-      if (text !== "") setText("");
-      else onEscape();
-      return;
-    }
-    // The card's and the list's keys must not fire while typing.
-    event.stopPropagation();
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      void send();
-    }
-  };
-
-  return (
-    <div className="flex items-end gap-1.5" onClick={(event) => event.stopPropagation()}>
-      <Textarea
-        ref={composerRef}
-        rows={1}
-        density="compact"
-        resize="none"
-        value={text}
-        // Read-only rather than disabled while sending, so focus stays put.
-        readOnly={sending}
-        aria-busy={sending || undefined}
-        tabIndex={tabbable ? 0 : -1}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder={placeholder}
-        aria-label={`Message ${item.row.title}`}
-        data-triage-composer=""
-        className="field-sizing-content max-h-32 min-h-8"
-      />
-      <Button
-        variant="subtle"
-        size="icon"
-        aria-label="Send"
-        tabIndex={-1}
-        disabled={text.trim() === ""}
-        loading={sending}
-        onClick={() => void send()}
-      >
-        <CornerDownLeft />
-      </Button>
-    </div>
-  );
 }
 
 function OptionButtons({
   options,
   answered,
-  tabbable,
   onPick,
 }: {
   options: readonly string[];
   answered: { label: string; sent: boolean } | null;
-  tabbable: boolean;
   onPick: (label: string) => void;
 }) {
   const sent = answered?.sent === true;
   return (
     <>
       {!sent && (
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Answer">
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Answer">
           {options.map((label, index) => (
             <Button
               key={label}
-              variant="subtle"
+              variant="outline"
               size="sm"
-              tabIndex={tabbable ? 0 : -1}
               disabled={answered !== null && answered.label !== label}
               loading={answered?.label === label}
               aria-keyshortcuts={index < 9 ? String(index + 1) : undefined}
-              onClick={(event) => {
-                event.stopPropagation();
-                onPick(label);
-              }}
+              onClick={() => onPick(label)}
               // A permission's scope is often in its last words, so a long label
               // wraps under its digit rather than truncating them away.
-              className="h-auto min-h-7 max-w-full items-start justify-start py-1.5 text-left whitespace-normal"
+              className="h-auto min-h-8 max-w-full items-start justify-start py-1.5 text-left whitespace-normal"
             >
               {index < 9 && (
                 <KbdChord
@@ -381,7 +94,6 @@ function OptionButtons({
                   density="bare"
                   // The button says its key through aria-keyshortcuts already.
                   rootAttributes={{ "aria-hidden": "true" }}
-                  // One label line tall, so the digit centres on the first line of a wrapped label.
                   className="h-4 shrink-0"
                 />
               )}
@@ -390,7 +102,7 @@ function OptionButtons({
           ))}
         </div>
       )}
-      <AckLine text={sent ? answered.label : null} verb="Answered" />
+      <AckLine text={sent ? answered.label : null} />
     </>
   );
 }
@@ -399,7 +111,7 @@ function OptionButtons({
  * What main took from the panel. Mounted before there is anything to say, so
  * the acknowledgement is announced when it lands rather than inserted unheard.
  */
-function AckLine({ text, verb }: { text: string | null; verb: string }) {
+function AckLine({ text }: { text: string | null }) {
   return (
     <p
       role="status"
@@ -411,7 +123,7 @@ function AckLine({ text, verb }: { text: string | null; verb: string }) {
         <>
           <Check className="size-3.5 shrink-0" aria-hidden="true" />
           <span className="min-w-0 truncate">
-            {verb}: <span className="text-text-primary">{text}</span>
+            Answered: <span className="text-text-primary">{text}</span>
           </span>
         </>
       )}
@@ -420,34 +132,34 @@ function AckLine({ text, verb }: { text: string | null; verb: string }) {
 }
 
 /**
- * One run, drawn for what it needs. Runs blocked on the user get their prompt
- * and its controls; the rest a single line, because a working agent's whole
- * story is "still going" and the newest line on its screen. Every row is the
- * same object in the same list: one cursor, one fill, no card frames.
+ * The selected agent: what the readers made of its screen, quick answers for a
+ * menu, and then the terminal itself — live, on the WebGL renderer — with the
+ * real composer under it. Type, press Enter, and it goes to that agent, from
+ * whichever project it is in.
  */
 export function TriageCard({
   item,
   domId,
-  isFocused,
-  position,
-  setSize,
-  onFocusCard,
-  onPointerCursor,
+  scanning,
+  ref,
   onOpen,
   onChoose,
-  onReply,
   onTrash,
+  onSent,
+  onSendFailed,
 }: TriageCardProps) {
-  const composerRef = useRef<HTMLTextAreaElement>(null);
-  const cardRef = useRef<HTMLDivElement>(null);
+  const [stream, setStream] = useState<TriageStreamState>({
+    watchId: null,
+    ended: false,
+    secretPrompt: false,
+  });
+  const composerRef = useRef<HybridInputBarHandle>(null);
   const card = item.card;
-  const options = item.kind === "approval" ? (card?.options ?? []) : [];
-  const question =
-    item.kind === "approval" || item.kind === "question" ? (card?.question ?? null) : null;
-  const canReply = canReplyTo(item);
+  const { row } = item;
+  const run = row.run;
+  const options = item.kind === "approval" && !item.stale ? (card?.options ?? []) : [];
+  const canReply = canReplyTo(item, stream.secretPrompt);
   const canTrash = canTrashItem(item);
-  const quoteId = `${domId}-prompt`;
-  const summaryId = `${domId}-summary`;
 
   // One answer per prompt, from a click or a digit alike. Keyed on the prompt,
   // so the next menu — even one with the same labels — starts answerable.
@@ -458,8 +170,6 @@ export function TriageCard({
     ack !== undefined && ack.kind === "answer" && ack.promptKey === promptKey
       ? { label: ack.text, sent: ack.sent }
       : null;
-  const sentHere =
-    ack !== undefined && ack.kind === "reply" && ack.promptKey === promptKey ? ack.text : null;
   const pick = (label: string) => {
     if (answered) return;
     const key = promptKey;
@@ -477,191 +187,184 @@ export function TriageCard({
     );
   };
 
-  const [composerOpened, setComposerOpened] = useState(false);
-  const composerOpen = canReply && (composerAlwaysOpen(item) || composerOpened);
-  const openComposer = () => {
-    setComposerOpened(true);
-    // The box mounts this render; focus it once it is there.
-    requestAnimationFrame(() => composerRef.current?.focus());
-  };
-
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const fromCard = event.target === event.currentTarget;
-    const typing = event.target instanceof Element && event.target.closest("textarea, input");
-    if (typing) return;
-    if (event.key === "Enter" && fromCard) {
-      event.preventDefault();
-      onOpen(item);
-      return;
-    }
+  const handleKey = (event: KeyboardEvent<HTMLElement>): boolean => {
     if (/^[1-9]$/.test(event.key) && !event.metaKey && !event.ctrlKey && !event.altKey) {
       const label = options[Number(event.key) - 1];
-      if (label !== undefined) {
-        event.preventDefault();
-        // A held key auto-repeats; one press is one answer.
-        if (!event.repeat) pick(label);
-      }
-      return;
+      if (label === undefined) return false;
+      event.preventDefault();
+      // A held key auto-repeats; one press is one answer.
+      if (!event.repeat) pick(label);
+      return true;
     }
     if ((event.key === "r" || event.key === "R") && canReply && !event.metaKey && !event.ctrlKey) {
       event.preventDefault();
-      if (composerOpen) composerRef.current?.focus();
-      else openComposer();
-      return;
+      composerRef.current?.focus();
+      return true;
     }
     if (event.key === "Backspace" && (event.metaKey || event.ctrlKey) && canTrash) {
       event.preventDefault();
       onTrash(item);
+      return true;
     }
+    return false;
+  };
+  useImperativeHandle(ref, () => ({ handleKey }));
+
+  const question =
+    item.kind === "approval" || item.kind === "question" ? (card?.question ?? null) : null;
+  const headline = card?.headline ?? question;
+  const summary = card?.summary ?? null;
+  const reading = card?.describing === true || scanning;
+  const where = [item.workspace.name, row.worktreeLabel].filter(Boolean).join(" · ");
+  const agentId = isBuiltInAgentId(run.agentId) ? run.agentId : undefined;
+
+  // Through the open stream only, so main sends to the incarnation on screen
+  // or to nothing.
+  const send = (text: string, imagePaths?: string[]) => {
+    const watchId = stream.watchId;
+    if (watchId === null) return;
+    window.electron.triage.terminalSubmit(watchId, text, imagePaths).then(
+      () => onSent(item),
+      (error: unknown) => onSendFailed(item, error)
+    );
   };
 
-  const compact = item.kind === "working" || item.kind === "running" || item.kind === "idle";
-  // Without a reading or a prompt there is nothing under the identity line, and
-  // the row keeps the one-line height its working neighbours have.
-  const hasBody =
-    question !== null ||
-    options.length > 0 ||
-    card?.headline != null ||
-    card?.summary != null ||
-    item.pending ||
-    card?.secretPrompt === true ||
-    composerOpen ||
-    item.stale ||
-    sentHere !== null;
-  const oneLine = compact || !hasBody;
-  const accessibleName = [
-    item.row.title,
-    item.row.chrome.label,
-    item.workspace.name,
-    item.row.worktreeLabel,
-    KIND_LABEL[item.kind],
-    item.row.agePhrase,
-  ]
-    .filter((part): part is string => part !== null && part !== undefined && part !== "")
-    .join(", ");
-
-  const actions = (
-    <>
-      {canReply && !composerAlwaysOpen(item) && !composerOpen && (
-        <RowAction label="Send a follow-up" onClick={openComposer}>
-          <Reply />
-        </RowAction>
-      )}
-      {canTrash && (
-        <RowAction label="Trash terminal" onClick={() => onTrash(item)}>
-          <Trash2 />
-        </RowAction>
-      )}
-      <RowAction label="Go to terminal" onClick={() => onOpen(item)}>
-        <SquareArrowOutUpRight />
-      </RowAction>
-    </>
-  );
-
   return (
-    <div
-      ref={cardRef}
+    <section
       id={domId}
-      role="article"
-      tabIndex={isFocused ? 0 : -1}
-      aria-label={accessibleName}
-      // The whole reading, unclamped, for anyone who cannot hover the clamp.
-      aria-describedby={
-        [question !== null ? quoteId : null, card?.summary != null ? summaryId : null]
-          .filter(Boolean)
-          .join(" ") || undefined
-      }
-      aria-posinset={position}
-      aria-setsize={setSize}
-      data-triage-card=""
-      data-kind={item.kind}
-      data-selected={isFocused ? "true" : undefined}
-      // Focus anywhere in the card — a button, the composer — makes it the
-      // list's current card, so the arrows move on from where the user is.
-      onFocus={() => {
-        if (!isFocused) onFocusCard();
+      aria-label={`${row.title}, ${KIND_LABEL[item.kind]}`}
+      data-triage-detail=""
+      // Keys pressed on the pane's own buttons act on its agent too; keys in
+      // the terminal or the composer are theirs.
+      onKeyDown={(event) => {
+        if (
+          event.target instanceof Element &&
+          event.target.closest("textarea, input, [contenteditable], [data-triage-terminal]")
+        ) {
+          return;
+        }
+        handleKey(event);
       }}
-      onPointerMove={(event: PointerEvent<HTMLDivElement>) => {
-        if (!isFocused) onPointerCursor(event.currentTarget);
-      }}
-      onKeyDown={onKeyDown}
-      onClick={() => onOpen(item)}
-      className={cn(
-        PALETTE_ROW_CLASS,
-        "group cursor-pointer rounded-[var(--radius-md)] px-2.5",
-        // Inside the panel's scroller, so the ring sits inset rather than clipped.
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
-        oneLine ? "py-1" : "flex flex-col gap-1.5 py-1.5"
-      )}
+      className="flex h-full min-h-0 flex-col gap-2.5"
     >
-      <CardIdentity item={item} strong={!compact} actions={actions} showActions={isFocused} />
-
-      {!hasBody && !compact ? null : compact ? (
-        card?.activity ? (
-          <p className="-mt-0.5 truncate pb-1 pl-[46px] font-mono text-xs text-text-secondary">
-            {card.activity}
+      <header className="flex items-start gap-2.5">
+        <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center">
+          <TerminalIcon
+            chrome={row.chrome}
+            className="h-5 w-5"
+            brandColor={row.presetColor ?? row.chrome.color}
+          />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-medium break-words text-text-primary">
+            {row.title}
+            <span className="font-normal text-text-secondary"> · {where}</span>
+          </h3>
+          <p className="flex min-w-0 items-center gap-1.5 text-xs text-text-secondary">
+            <span className="flex size-3.5 shrink-0 items-center justify-center">
+              <PilotRunState band={row.band} agentState={run.agentState} />
+            </span>
+            <span className="shrink-0">{KIND_LABEL[item.kind]}</span>
+            {row.age !== null && <span className="shrink-0">· {row.age}</span>}
+            {item.stale && card !== null && (
+              <span className="truncate">
+                · read <TimeAgo timestamp={card.observedAt} />
+                {reading ? ", reading again…" : ", refresh to read again"}
+              </span>
+            )}
           </p>
-        ) : null
-      ) : (
-        <div className="flex min-w-0 flex-col gap-1.5 pb-0.5 pl-[46px]">
-          {question !== null && <QuestionQuote question={question} id={quoteId} />}
-          <CardWords item={item} hasQuote={question !== null} summaryId={summaryId} />
-          {options.length > 0 && (
-            <OptionButtons
-              options={options}
-              answered={answered}
-              tabbable={isFocused}
-              onPick={pick}
-            />
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {canTrash && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onTrash(item)}
+              aria-keyshortcuts={isMac() ? "Meta+Backspace" : "Control+Backspace"}
+            >
+              <Trash2 />
+              Trash
+            </Button>
           )}
-          {card?.secretPrompt === true ? (
-            <p className="flex items-center gap-1.5 text-xs text-text-secondary">
-              <KeyRound className="size-3.5 shrink-0" aria-hidden="true" />
-              It's asking for a secret, so answer it in the terminal
-            </p>
-          ) : composerOpen ? (
-            <Composer
-              item={item}
-              placeholder={item.kind === "finished" ? "Send a follow-up…" : "Reply…"}
-              onReply={onReply}
-              composerRef={composerRef}
-              tabbable={isFocused}
-              collapsible={!composerAlwaysOpen(item)}
-              onEscape={() => {
-                if (!composerAlwaysOpen(item)) setComposerOpened(false);
-                cardRef.current?.focus();
-              }}
-              onSent={(text) => {
-                const key = promptKey;
-                // Never over an answer given to a newer prompt while this was in flight.
-                setAck(item.runId, (current) =>
-                  current !== undefined && current.promptKey !== key && current.kind === "answer"
-                    ? current
-                    : { promptKey: key, kind: "reply", text, sent: true }
-                );
-                if (!composerAlwaysOpen(item)) {
-                  // Only when the keyboard is still here: the box is about to
-                  // unmount, and a send the user moved on from must not pull them back.
-                  const active = document.activeElement;
-                  const stayed =
-                    active === null ||
-                    active === document.body ||
-                    cardRef.current?.contains(active);
-                  setComposerOpened(false);
-                  if (stayed) cardRef.current?.focus();
-                }
-              }}
-            />
-          ) : null}
-          {item.stale && card !== null && (
-            <p className="text-2xs text-text-secondary">
-              Changed since it was read <TimeAgo timestamp={card.observedAt} />
-              {item.pending ? " · reading again…" : " · retried on the next scan"}
-            </p>
+          <Button variant="outline" size="sm" onClick={() => onOpen(item)}>
+            <SquareArrowOutUpRight />
+            Go to terminal
+          </Button>
+        </div>
+      </header>
+
+      {(headline !== null || summary !== null) && (
+        <div className="flex flex-col gap-0.5 pl-7.5">
+          {headline !== null && (
+            <p className="text-sm leading-snug text-text-primary">{headline}</p>
           )}
-          {canReply && <AckLine text={sentHere} verb="Sent" />}
+          {summary !== null && (
+            <p className="text-xs leading-relaxed text-text-secondary">{summary}</p>
+          )}
         </div>
       )}
-    </div>
+      {headline === null && summary === null && item.pending && (
+        // Nothing polls, so a screen that moved since the last scan stays unread
+        // until the user refreshes; only claim a read while one is in flight.
+        <p className="pl-7.5 text-xs text-text-secondary">
+          {reading ? "Reading the screen…" : "Changed since the last scan. Refresh to read it."}
+        </p>
+      )}
+
+      {options.length > 0 && (
+        <div className="pl-7.5">
+          <OptionButtons options={options} answered={answered} onPick={pick} />
+        </div>
+      )}
+
+      <div
+        className="flex min-h-0 flex-1 flex-col gap-2"
+        // Escape belongs to the agent here — it interrupts or backs out of a
+        // menu — so it must not also close the dialog around it.
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.stopPropagation();
+            event.preventDefault();
+          }
+        }}
+      >
+        <TriageTerminal
+          key={`${item.runId}:${run.spawnedAt}`}
+          runId={item.runId}
+          spawnedAt={run.spawnedAt}
+          onStreamChange={setStream}
+        />
+
+        {canReply ? (
+          <div data-keybindings-isolated="" className="contents">
+            <Suspense fallback={null}>
+              <LazyHybridInputBar
+                ref={composerRef}
+                isolated
+                terminalId={item.runId}
+                cwd={run.cwd ?? ""}
+                agentId={agentId}
+                agentState={run.agentState}
+                disabled={stream.watchId === null}
+                onSend={({ text, imagePaths }) => send(text, imagePaths)}
+                onSendKey={(key) => {
+                  const watchId = stream.watchId;
+                  if (watchId === null) return;
+                  window.electron.triage.terminalSendKey(watchId, key).then(
+                    () => onSent(item),
+                    (error: unknown) => onSendFailed(item, error)
+                  );
+                }}
+              />
+            </Suspense>
+          </div>
+        ) : (
+          <p className="flex items-center gap-1.5 text-xs text-text-secondary">
+            <KeyRound className="size-3.5 shrink-0" aria-hidden="true" />
+            It's asking for a secret: type it straight into the terminal above
+          </p>
+        )}
+      </div>
+    </section>
   );
 }

@@ -1,4 +1,8 @@
-import type { TriageSnapshot, TriageTarget } from "../../../shared/types/ipc/triage.js";
+import type {
+  TriageSnapshot,
+  TriageTarget,
+  TriageTerminalView,
+} from "../../../shared/types/ipc/triage.js";
 import { planChoice } from "../../../shared/utils/terminalChoice.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import { getFleetSnapshotService } from "./projectCrud/index.js";
@@ -21,6 +25,15 @@ import { checkRateLimit, typedBroadcast } from "../utils.js";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { TRIAGE_METHOD_CHANNELS } from "./triage.preload.js";
+import {
+  beginWatchRequest,
+  isCurrentWatchRequest,
+  stopAllTerminalWatches,
+  stopTerminalWatch,
+  watchTerminal,
+  watchedTerminal,
+} from "./triageTerminalWatch.js";
+import { isImageAttachmentPath } from "../../../shared/utils/imageAttachmentInput.js";
 
 const KEY_NAMES: Record<string, string> = {
   Up: "\x1b[A",
@@ -29,8 +42,11 @@ const KEY_NAMES: Record<string, string> = {
 };
 /** Same pacing as `terminal.sendKeys`: a TUI can read a burst as one sequence. */
 const KEY_GAP_MS = 80;
-const MAX_REPLY_LENGTH = 8_000;
 const MAX_LABEL_LENGTH = 200;
+const MAX_INPUT_LENGTH = 64_000;
+const MAX_SUBMIT_LENGTH = 100_000;
+const MAX_SUBMIT_IMAGES = 10;
+const MAX_KEY_LENGTH = 32;
 
 let service: TriageService | null = null;
 let keys: TriageKeys | null = null;
@@ -168,6 +184,14 @@ function normalizePrompt(text: string): string {
     .toLowerCase();
 }
 
+/** The terminal a view's current stream is for, or a refusal naming nothing on screen. */
+function requireWatched(viewId: number, watchId: unknown): { runId: string; spawnedAt: number } {
+  if (typeof watchId !== "number" || !Number.isInteger(watchId)) throw new Error("Invalid stream");
+  const watched = watchedTerminal(viewId, watchId);
+  if (!watched) throw new Error("That agent isn't running any more.");
+  return watched;
+}
+
 function requirePtyClient() {
   const ptyClient = getPtyClient();
   if (!ptyClient) throw new Error("The terminal host isn't available.");
@@ -180,6 +204,7 @@ function syncActive(): void {
 
 /** A view that stopped showing its panel without saying so (reload, crash, teardown). */
 function forgetView(id: number): void {
+  stopTerminalWatch(id);
   if (!activeViews.delete(id)) return;
   // Never builds a service: after cleanup there may be none, and none is wanted.
   service?.setActive(activeViews.size > 0);
@@ -232,6 +257,7 @@ export const triageNamespace = defineIpcNamespace({
           watchView(ctx.event.sender);
         } else {
           activeViews.delete(id);
+          stopTerminalWatch(id);
         }
         syncActive();
         return getService().getSnapshot();
@@ -288,31 +314,110 @@ export const triageNamespace = defineIpcNamespace({
         } finally {
           choosing.delete(runId);
         }
-        void service?.scan();
       }
     ),
 
-    /** Type a message into the run and submit it. */
-    reply: op(
-      TRIAGE_METHOD_CHANNELS.reply,
-      async (runId: string, text: string, target: TriageTarget): Promise<void> => {
-        checkRateLimit(TRIAGE_METHOD_CHANNELS.reply, 20, 10_000);
+    /**
+     * Stream the run's terminal to this view, for the panel's live pane. One
+     * per view: watching another run, closing the panel, a reload or the view
+     * going away all end it. Only ever the run the user selected, and only
+     * while its incarnation is the one the card was built from.
+     */
+    watchTerminal: op(
+      TRIAGE_METHOD_CHANNELS.watchTerminal,
+      async (ctx, runId: string, target: TriageTarget): Promise<TriageTerminalView> => {
+        checkRateLimit(TRIAGE_METHOD_CHANNELS.watchTerminal, 30, 10_000);
         assertRunId(runId);
-        if (typeof text !== "string" || text.trim() === "" || text.length > MAX_REPLY_LENGTH) {
+        assertTarget(target);
+        const viewId = ctx.webContentsId;
+        // Claimed before the first await, so an unwatch, a close or a newer
+        // selection arriving during validation cancels this one.
+        const ticket = beginWatchRequest(viewId);
+        // The pane's effect can run before the panel's own `setActive` lands,
+        // so a watch carries its own lifecycle cleanup rather than requiring it.
+        watchView(ctx.event.sender);
+        await assertSameTerminal(runId, target);
+        if (!isCurrentWatchRequest(viewId, ticket)) return { watchId: null, snapshot: null };
+        return watchTerminal(requirePtyClient(), ctx.event.sender, runId, target.spawnedAt, ticket);
+      },
+      { withContext: true }
+    ),
+
+    unwatchTerminal: op(
+      TRIAGE_METHOD_CHANNELS.unwatchTerminal,
+      async (ctx): Promise<void> => {
+        stopTerminalWatch(ctx.webContentsId);
+      },
+      { withContext: true }
+    ),
+
+    /** Raw keystrokes from the live view, for the terminal it is streaming. */
+    terminalInput: op(
+      TRIAGE_METHOD_CHANNELS.terminalInput,
+      async (ctx, watchId: number, data: string): Promise<void> => {
+        if (typeof data !== "string" || data.length === 0 || data.length > MAX_INPUT_LENGTH) {
+          throw new Error("Invalid input");
+        }
+        requirePtyClient().write(requireWatched(ctx.webContentsId, watchId).runId, data);
+      },
+      { withContext: true }
+    ),
+
+    /** A named key from the composer (Escape, an arrow), for the streamed terminal. */
+    terminalSendKey: op(
+      TRIAGE_METHOD_CHANNELS.terminalSendKey,
+      async (ctx, watchId: number, key: string): Promise<void> => {
+        if (typeof key !== "string" || key.length === 0 || key.length > MAX_KEY_LENGTH) {
+          throw new Error("Invalid key");
+        }
+        requirePtyClient().sendKey(requireWatched(ctx.webContentsId, watchId).runId, key);
+      },
+      { withContext: true }
+    ),
+
+    /** A message from the composer, submitted to the streamed terminal. */
+    terminalSubmit: op(
+      TRIAGE_METHOD_CHANNELS.terminalSubmit,
+      async (ctx, watchId: number, text: string, imagePaths?: string[]): Promise<void> => {
+        if (typeof text !== "string" || text.length > MAX_SUBMIT_LENGTH) {
           throw new Error("Invalid message");
         }
-        assertTarget(target);
-        if (choosing.has(runId)) throw new Error("An answer is already being sent to that agent.");
-        choosing.add(runId);
-        try {
-          await assertSameTerminal(runId, target);
-          await assertPromptStillShown(runId, target);
-          requirePtyClient().submit(runId, text);
-        } finally {
-          choosing.delete(runId);
+        if (
+          imagePaths !== undefined &&
+          (!Array.isArray(imagePaths) ||
+            imagePaths.length > MAX_SUBMIT_IMAGES ||
+            !imagePaths.every((path) => typeof path === "string" && isImageAttachmentPath(path)))
+        ) {
+          throw new Error("Invalid attachments");
         }
-        void service?.scan();
-      }
+        const watched = requireWatched(ctx.webContentsId, watchId);
+        // The stream ends on exit, but a submit is worth one more look at the
+        // host's own record: the message must reach this incarnation or none.
+        const record = await requirePtyClient()
+          .getTerminalAsync(watched.runId)
+          .catch(() => null);
+        if (
+          !record ||
+          record.spawnedAt !== watched.spawnedAt ||
+          record.isExited === true ||
+          watchedTerminal(ctx.webContentsId, watchId) === null
+        ) {
+          throw new Error("That agent isn't running any more.");
+        }
+        if (imagePaths !== undefined && imagePaths.length > 0) {
+          requirePtyClient().submit(
+            watched.runId,
+            text,
+            undefined,
+            undefined,
+            undefined,
+            imagePaths
+          );
+        } else {
+          requirePtyClient().submit(watched.runId, text);
+        }
+      },
+      { withContext: true }
     ),
 
     getKeys: op(TRIAGE_METHOD_CHANNELS.getKeys, async (): Promise<TriageKeysStatus> => {
@@ -378,6 +483,7 @@ export function registerTriageHandlers(): () => void {
     for (const unwatch of watchedViews.values()) unwatch();
     watchedViews.clear();
     activeViews.clear();
+    stopAllTerminalWatches();
     choosing.clear();
     service?.dispose();
     service = null;

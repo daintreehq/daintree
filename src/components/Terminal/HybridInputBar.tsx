@@ -130,7 +130,17 @@ export interface HybridInputBarProps {
   restartKey?: number;
   disabled?: boolean;
   className?: string;
+  /**
+   * A second composer for a terminal that may also be open in its own pane
+   * (the triage panel's live view). It sends only to this terminal: never a
+   * fleet broadcast or mirror, and it leaves the terminal's input controller
+   * to the pane that registered it.
+   */
+  isolated?: boolean;
 }
+
+/** The draft and history scope of an isolated composer, apart from every project's. */
+const ISOLATED_COMPOSER_SCOPE = "isolated-composer";
 
 interface LatestState {
   terminalId: string;
@@ -228,6 +238,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       restartKey = 0,
       disabled = false,
       className,
+      isolated = false,
     },
     ref
   ) => {
@@ -237,14 +248,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const addToHistory = useTerminalInputStore((s) => s.addToHistory);
     const navigateHistory = useTerminalInputStore((s) => s.navigateHistory);
     const resetHistoryIndex = useTerminalInputStore((s) => s.resetHistoryIndex);
-    const projectId = useProjectStore((s) => s.currentProject?.id);
+    const currentProjectId = useProjectStore((s) => s.currentProject?.id);
+    // An isolated composer types to a terminal that may live in another
+    // project, beside that terminal's own composer: its draft and history are
+    // its own, so neither leaks into the pane's (or, through it, the fleet's).
+    const projectId = isolated ? ISOLATED_COMPOSER_SCOPE : currentProjectId;
     const isInHistoryMode = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
       return (s.historyIndex.get(key) ?? -1) !== -1;
     });
     const stashEditorState = useTerminalInputStore((s) => s.stashEditorState);
     const popStashedEditorState = useTerminalInputStore((s) => s.popStashedEditorState);
-    const isFocusedTerminal = usePanelStore((s) => s.focusedId === terminalId);
+    const isFocusedTerminal = usePanelStore((s) => !isolated && s.focusedId === terminalId);
     const hasStash = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
       return s.stashedEditorStates.has(key);
@@ -405,7 +420,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     // Fleet hybrid-input mirroring
     const armedIds = useFleetArmingStore((s) => s.armedIds);
-    const isArmed = armedIds.has(terminalId);
+    const isArmed = !isolated && armedIds.has(terminalId);
     const fleetSize = armedIds.size;
     const isFleetPrimary = isFocusedTerminal && isArmed && fleetSize >= 2;
     const isFleetFollower = !isFocusedTerminal && isArmed && fleetSize >= 2;
@@ -420,6 +435,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isFleetFollower,
       disabled,
       lastEmittedValueRef,
+      isolated,
     });
 
     const placeholder = (() => {
@@ -602,7 +618,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     useEffect(() => {
       appliedExternalDraftRevisionRef.current = externalDraftRevision;
       if (externalDraftRevision === 0) return;
-      const draft = useTerminalInputStore.getState().getDraftInput(terminalId, currentProject?.id);
+      const draft = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
       const view = editorViewRef.current;
       if (!view) return;
       // Only the span that differs is replaced, so an append leaves the
@@ -618,7 +634,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           scrollIntoView: true,
         });
       }
-    }, [externalDraftRevision, terminalId, currentProject?.id]);
+    }, [externalDraftRevision, terminalId, projectId]);
 
     useVoiceDecorations({ terminalId, editorViewRef });
 
@@ -650,6 +666,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const text = view?.state.doc.toString() ?? latest?.value ?? "";
 
       if (
+        !isolated &&
         isFocusedTerminal &&
         useFleetArmingStore.getState().armedIds.has(terminalId) &&
         useFleetArmingStore.getState().armedIds.size >= 2
@@ -810,7 +827,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // is exactly what the rescue must never do. While a broadcast is live the
     // user typed to a fleet, not to one agent, so claim nothing.
     const recordTypedTarget = () => {
-      if (agentId === undefined) return;
+      // A triage view types to a terminal that may live in another project.
+      if (isolated || agentId === undefined) return;
       if (useFleetArmingStore.getState().armedIds.size >= 2) return;
       const workspaceId = getViewWorkspaceId();
       if (workspaceId === null) return;
@@ -915,9 +933,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     });
 
     useEffect(() => {
+      if (isolated) return;
       registerInputController(terminalId, { stash: handleStash, pop: handlePopStash });
       return () => unregisterInputController(terminalId);
-    }, [terminalId, handleStash, handlePopStash]);
+    }, [terminalId, handleStash, handlePopStash, isolated]);
 
     // --- Compartment reconfigure effects ---
 
@@ -1352,7 +1371,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             {isDragOverModal && <FileDropOverlay />}
           </div>
         </AppDialog>
-        {isFocusedTerminal && (
+        {(isFocusedTerminal || isolated) && (
           <PromptHistoryPalette
             terminalId={terminalId}
             projectId={projectId}

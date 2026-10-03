@@ -11,27 +11,34 @@ export interface TriageAck {
   sent: boolean;
 }
 
+/** When the user last opened a run in the panel, for its incarnation. */
+export interface TriageRead {
+  spawnedAt: number;
+  at: number;
+}
+
 interface TriageState {
   isOpen: boolean;
   /** Null until main has answered once — distinct from "no cards yet". */
   snapshot: TriageSnapshot | null;
-  /**
-   * Reply drafts by terminal incarnation. Here rather than in the card because
-   * a card remounts whenever its run changes section or goes stale, and a
-   * half-typed reply must survive both — and a close and reopen.
-   */
-  drafts: Record<string, string>;
   /** Answers and replies sent from the panel, by run, until the run's prompt moves on. */
   acks: Record<string, TriageAck>;
+  /**
+   * Runs the user has opened, like read mail: unread until opened, and unread
+   * again once the screen is read anew after that.
+   */
+  reads: Record<string, TriageRead>;
   open: () => void;
   close: () => void;
   toggle: () => void;
   applySnapshot: (snapshot: TriageSnapshot) => void;
-  setDraft: (key: string, text: string) => void;
   setAck: (
     runId: string,
     update: (current: TriageAck | undefined) => TriageAck | undefined
   ) => void;
+  markRead: (runId: string, spawnedAt: number, at?: number) => void;
+  /** Forget reads for runs no longer running. */
+  pruneReads: (live: ReadonlySet<string>) => void;
 }
 
 /** One prompt on one terminal incarnation: stable while it sits unanswered. */
@@ -39,8 +46,18 @@ export function triagePromptKey(card: Pick<TriageCard, "spawnedAt" | "revision">
   return `${card.spawnedAt}:${card.revision}`;
 }
 
-export function triageDraftKey(runId: string, spawnedAt: number): string {
-  return `${runId}:${spawnedAt}`;
+/**
+ * Read once the user opened this incarnation after the screen they were shown
+ * was read. A card that has not been read off the screen yet is read as soon
+ * as the run is opened at all.
+ */
+export function isTriageRead(
+  read: TriageRead | undefined,
+  spawnedAt: number,
+  card: Pick<TriageCard, "spawnedAt" | "observedAt"> | null
+): boolean {
+  if (read === undefined || read.spawnedAt !== spawnedAt) return false;
+  return card === null || card.spawnedAt !== spawnedAt || card.observedAt <= read.at;
 }
 
 /**
@@ -54,19 +71,12 @@ export function triageDraftKey(runId: string, spawnedAt: number): string {
 export const useTriageStore = create<TriageState>((set) => ({
   isOpen: false,
   snapshot: null,
-  drafts: {},
   acks: {},
+  reads: {},
   open: () => set({ isOpen: true }),
   close: () => set({ isOpen: false }),
   toggle: () => set((state) => ({ isOpen: !state.isOpen })),
   applySnapshot: (snapshot) => set({ snapshot }),
-  setDraft: (key, text) =>
-    set((state) => {
-      const drafts = { ...state.drafts };
-      if (text === "") delete drafts[key];
-      else drafts[key] = text;
-      return { drafts };
-    }),
   setAck: (runId, update) =>
     set((state) => {
       const next = update(state.acks[runId]);
@@ -74,5 +84,15 @@ export const useTriageStore = create<TriageState>((set) => ({
       if (next === undefined) delete acks[runId];
       else acks[runId] = next;
       return { acks };
+    }),
+  markRead: (runId, spawnedAt, at = Date.now()) =>
+    set((state) => ({ reads: { ...state.reads, [runId]: { spawnedAt, at } } })),
+  pruneReads: (live) =>
+    set((state) => {
+      const departed = Object.keys(state.reads).filter((runId) => !live.has(runId));
+      if (departed.length === 0) return state;
+      const reads = { ...state.reads };
+      for (const runId of departed) delete reads[runId];
+      return { reads };
     }),
 }));

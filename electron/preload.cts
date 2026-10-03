@@ -2226,6 +2226,10 @@ function buildElectronApi(): ElectronAPI {
       onSnapshotUpdated: (
         callback: (snapshot: import("../shared/types/ipc/triage.js").TriageSnapshot) => void
       ) => _typedOn(CHANNELS.TRIAGE_SNAPSHOT_UPDATED, callback),
+
+      onTerminalData: (
+        callback: (chunk: import("../shared/types/ipc/triage.js").TriageTerminalData) => void
+      ) => _typedOn(CHANNELS.TRIAGE_TERMINAL_DATA, callback),
     },
 
     // Scratch (one-off agent workspace) API

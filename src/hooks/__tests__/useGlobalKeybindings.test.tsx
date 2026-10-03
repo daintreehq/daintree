@@ -152,6 +152,57 @@ describe("useGlobalKeybindings — shortcut recorder owns the keyboard", () => {
   });
 });
 
+describe("useGlobalKeybindings — isolated surfaces", () => {
+  function pressIn(target: HTMLElement, init: KeyboardEventInit) {
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })
+    );
+  }
+
+  it("keeps pane and fleet shortcuts away from a terminal typed to outside the grid", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "fleet.armFocused" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const surface = document.createElement("div");
+    surface.setAttribute("data-keybindings-isolated", "");
+    surface.innerHTML = '<div class="xterm"><textarea></textarea></div>';
+    document.body.appendChild(surface);
+    try {
+      pressIn(surface.querySelector("textarea")!, { key: "j", metaKey: true });
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    } finally {
+      surface.remove();
+    }
+  });
+
+  it("still lets the surface's own toggle through", () => {
+    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) =>
+      id === "triage.toggle" ? "Cmd+Shift+O" : undefined
+    );
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "triage.toggle" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const surface = document.createElement("div");
+    surface.setAttribute("data-keybindings-isolated", "");
+    const field = document.createElement("textarea");
+    surface.appendChild(field);
+    document.body.appendChild(surface);
+    try {
+      pressIn(field, { key: "o", code: "KeyO", metaKey: true, shiftKey: true });
+      expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalled();
+    } finally {
+      surface.remove();
+    }
+  });
+});
+
 describe("useGlobalKeybindings — Cmd+W escape stack guard", () => {
   it("routes Cmd+W to escape stack when a dialog is open instead of dispatching terminal.close", () => {
     mocks.keybindingService.resolveKeybinding.mockReturnValue({

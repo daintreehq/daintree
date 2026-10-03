@@ -951,18 +951,30 @@ export interface GeneratedElectronAPI {
     refresh(
       ...args: IpcInvokeMap["triage:refresh"]["args"]
     ): Promise<IpcInvokeMap["triage:refresh"]["result"]>;
-    reply(
-      ...args: IpcInvokeMap["triage:reply"]["args"]
-    ): Promise<IpcInvokeMap["triage:reply"]["result"]>;
     saveKey(
       ...args: IpcInvokeMap["triage:save-key"]["args"]
     ): Promise<IpcInvokeMap["triage:save-key"]["result"]>;
     setActive(
       ...args: IpcInvokeMap["triage:set-active"]["args"]
     ): Promise<IpcInvokeMap["triage:set-active"]["result"]>;
+    terminalInput(
+      ...args: IpcInvokeMap["triage:terminal-input"]["args"]
+    ): Promise<IpcInvokeMap["triage:terminal-input"]["result"]>;
+    terminalSendKey(
+      ...args: IpcInvokeMap["triage:terminal-send-key"]["args"]
+    ): Promise<IpcInvokeMap["triage:terminal-send-key"]["result"]>;
+    terminalSubmit(
+      ...args: IpcInvokeMap["triage:terminal-submit"]["args"]
+    ): Promise<IpcInvokeMap["triage:terminal-submit"]["result"]>;
     trash(
       ...args: IpcInvokeMap["triage:trash"]["args"]
     ): Promise<IpcInvokeMap["triage:trash"]["result"]>;
+    unwatchTerminal(
+      ...args: IpcInvokeMap["triage:unwatch-terminal"]["args"]
+    ): Promise<IpcInvokeMap["triage:unwatch-terminal"]["result"]>;
+    watchTerminal(
+      ...args: IpcInvokeMap["triage:watch-terminal"]["args"]
+    ): Promise<IpcInvokeMap["triage:watch-terminal"]["result"]>;
   };
   webview: {
     captureScreenshot(

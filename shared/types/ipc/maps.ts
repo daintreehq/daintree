@@ -1723,6 +1723,7 @@ export interface IpcEventMap {
   "project:stats-updated": ProjectStatusMap;
   "fleet:snapshot-updated": FleetSnapshot;
   "triage:snapshot-updated": import("./triage.js").TriageSnapshot;
+  "triage:terminal-data": import("./triage.js").TriageTerminalData;
   "project:updated": Project;
   /**
    * A project was put to sleep. Carries the project id so a window showing it

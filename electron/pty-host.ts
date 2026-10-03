@@ -1346,7 +1346,11 @@ ptyManager.on("data", (id: string, data: string | Uint8Array, _routing, streamEn
   // skips it: that path is the pre-existing full-queue drop, where nothing
   // reaches Main at all.
   if (ipcDataMirrorTerminals.has(id) && !isSuspended && !ipcDataEmitted) {
-    sendEvent({ type: "data-mirror", id, data: toStringForIpc(data) });
+    sendEvent(
+      streamEnd === undefined
+        ? { type: "data-mirror", id, data: toStringForIpc(data) }
+        : { type: "data-mirror", id, data: toStringForIpc(data), streamEnd }
+    );
   }
 
   // PRIORITY 2: BACKGROUND TASKS (Deferred Processing)

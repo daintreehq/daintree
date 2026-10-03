@@ -1,6 +1,7 @@
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import {
   TRIAGE_ATTENTION_CATEGORIES,
+  TRIAGE_ATTENTION_THRESHOLD,
   type TriageCard,
   type TriageCategory,
 } from "@shared/types/ipc/triage";
@@ -22,13 +23,6 @@ export interface TriageItem {
    * but nothing that acts on a prompt is offered until it is read again.
    */
   stale: boolean;
-}
-
-export type TriageSectionId = "needs-you" | "working" | "quiet";
-
-export interface TriageSection {
-  id: TriageSectionId;
-  items: TriageItem[];
 }
 
 /** Worst first: a menu blocks a turn outright, a finished run only waits. */
@@ -92,11 +86,38 @@ export interface TriageReadState {
 
 const READING: TriageReadState = { configured: true, failed: false };
 
-export function buildTriageSections(
+/**
+ * Where a run sits before either model has read it, on the same 0–100 scale as
+ * a card's priority: what Daintree itself saw, ranked by how blocked it is.
+ */
+const OBSERVED_PRIORITY: Record<TriageCategory, number> = {
+  approval: 70,
+  question: 65,
+  error: 60,
+  finished: 45,
+  idle: 15,
+  working: 10,
+  running: 10,
+};
+
+export function itemPriority(item: TriageItem): number {
+  return item.card?.priority ?? OBSERVED_PRIORITY[item.kind];
+}
+
+/**
+ * The run likely needs a person: the classifier said so, or — before it has
+ * read the screen — Daintree's own state says the agent is waiting.
+ */
+export function itemNeedsAttention(item: TriageItem): boolean {
+  if (item.card !== null) return item.card.attentionProbability >= TRIAGE_ATTENTION_THRESHOLD;
+  return TRIAGE_ATTENTION_CATEGORIES.has(item.kind);
+}
+
+export function buildTriageInbox(
   groups: readonly PilotProjectGroup[],
   cards: ReadonlyMap<string, TriageCard>,
   read: TriageReadState = READING
-): TriageSection[] {
+): TriageItem[] {
   const items: TriageItem[] = [];
   for (const group of groups) {
     for (const row of group.rows) {
@@ -124,27 +145,17 @@ export function buildTriageSections(
     }
   }
 
+  // One list, most in need of a person first: the models' combined priority,
+  // or what Daintree observed for a run not read yet.
   items.sort((a, b) => {
+    const byPriority = itemPriority(b) - itemPriority(a);
+    if (byPriority !== 0) return byPriority;
     const byKind = KIND_RANK[a.kind] - KIND_RANK[b.kind];
     if (byKind !== 0) return byKind;
-    // Within a kind, whoever has been in that state longest leads.
+    // Then whoever has been in that state longest.
     return (
       (a.row.run.since ?? Number.MAX_SAFE_INTEGER) - (b.row.run.since ?? Number.MAX_SAFE_INTEGER)
     );
   });
-
-  const sections: TriageSection[] = [
-    { id: "needs-you", items: [] },
-    { id: "working", items: [] },
-    { id: "quiet", items: [] },
-  ];
-  for (const item of items) {
-    const section = TRIAGE_ATTENTION_CATEGORIES.has(item.kind)
-      ? sections[0]!
-      : item.kind === "working" || item.kind === "running"
-        ? sections[1]!
-        : sections[2]!;
-    section.items.push(item);
-  }
-  return sections.filter((section) => section.items.length > 0);
+  return items;
 }
