@@ -59,7 +59,7 @@ React Compiler is enabled (`babel-plugin-react-compiler`, `target: "19"`). A bai
 
 ## Definition of done
 
-1. Iterate with the narrowest useful test, then run the **full** `npm test` — scoped runs have repeatedly missed failures that cost a CI round trip.
+1. **During development on a branch, run only the tests relevant to what you changed** (`npm test -- <path>`) — never the full suite mid-work, however large the task. The **full** `npm test` is for final integration into `develop` (e.g. before merging the PR), where scoped runs have repeatedly missed failures that cost a CI round trip.
 2. Run `npm run check` for anything touching types, IPC, keybindings, plugin manifests, or lint-visible code.
 3. Scale verification to the change. A small edit does not need build + E2E + full check stacked on top.
 4. Report the commands actually run and their real results. `prettier` prints "All files formatted correctly" while exiting 1 — trust the exit code, not the summary.
