@@ -2325,6 +2325,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onPanelBadgesCleared(callback: (payload: { pluginId: string }) => void): () => void;
     /**
+     * Subscribe to a plugin's running actions: the callback fires with its
+     * COMPLETE set of action ids whose handlers are in flight, however they were
+     * dispatched; an empty list means none. Returns a cleanup.
+     */
+    onActionsRunningChanged(
+      callback: (payload: { pluginId: string; actionIds: string[] }) => void
+    ): () => void;
+    /**
      * Subscribe to `daintree://` deep-link intents (#9559). Fires when the OS
      * hands the app a deep link; the callback opens the Plugin Manager. Returns
      * a cleanup.

@@ -62,6 +62,10 @@ const IGNORE = [
 ];
 
 const BUILD_CONFIG = /^(?:vite|tsup|rollup|webpack|esbuild|rolldown)\.config\.[cm]?[jt]s$/;
+/** A hand-rolled build script, e.g. a project plugin's `build.mjs` run from the repo root. */
+const BUILD_SCRIPT = /^build\.[cm]?[jt]s$/;
+const OUTPUT_DIR = /^(?:dist|build|out)\//;
+const COMPILED_SOURCE_GLOB = "**/*.{ts,tsx,mts,cts,jsx}";
 
 /** Larger than this is a bundle, not something an author edits. */
 const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
@@ -97,9 +101,27 @@ async function readManifest(dir: string): Promise<Manifest | null> {
   }
 }
 
-async function hasBuildStep(dir: string): Promise<boolean> {
-  const entries = await fs.readdir(dir).catch(() => [] as string[]);
-  if (entries.some((name) => BUILD_CONFIG.test(name))) return true;
+/**
+ * A project plugin often has no build config or `build` script of its own: it
+ * is built by a `build.mjs`, or by a script in the enclosing repository's
+ * `package.json`. Source only a compiler can run (TypeScript, JSX) under `src/`,
+ * beside entries that all live in an output directory, says the same thing. A
+ * `src/` of plain `.js` does not: a zero-build plugin keeps its lazily imported
+ * command handlers there beside a hand-written `dist/`.
+ */
+async function hasBuildStep(dir: string, entries: readonly string[]): Promise<boolean> {
+  const names = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  if (names.some((entry) => BUILD_CONFIG.test(entry.name) || BUILD_SCRIPT.test(entry.name))) {
+    return true;
+  }
+  const hasSrc = names.some((entry) => entry.isDirectory() && entry.name === "src");
+  if (hasSrc && entries.length > 0 && entries.every((entry) => OUTPUT_DIR.test(entry))) {
+    const compiled = await globby(COMPILED_SOURCE_GLOB, {
+      cwd: path.join(dir, "src"),
+      ignore: ["**/node_modules/**", "**/*.d.{ts,mts,cts}"],
+    });
+    if (compiled.length > 0) return true;
+  }
   try {
     const pkg = JSON.parse(await fs.readFile(path.join(dir, "package.json"), "utf8")) as {
       scripts?: Record<string, unknown>;
@@ -150,7 +172,6 @@ async function discover(dir: string, manifest: Manifest | null): Promise<Candida
     found.set(rel, { rel, role: "source" });
   }
 
-  const buildStep = await hasBuildStep(dir);
   const main = isRelativeEntry(manifest?.main) ? path.posix.normalize(manifest.main) : null;
   const contributes = manifest?.contributes;
   // `experimental_views` is the host's deprecated alias, still loaded.
@@ -158,6 +179,7 @@ async function discover(dir: string, manifest: Manifest | null): Promise<Candida
     .map((view) => view?.componentPath)
     .filter(isRelativeEntry)
     .map((entry) => path.posix.normalize(entry));
+  const buildStep = await hasBuildStep(dir, main ? [main, ...views] : views);
 
   const inside = (rel: string) => !rel.startsWith("../") && rel !== "..";
   const exists = async (rel: string) =>

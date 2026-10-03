@@ -271,7 +271,11 @@ import {
   type PluginTourRemoteAudio,
 } from "./plugin/PluginTourRegistry.js";
 import { PluginRecipeMetadataStore } from "./plugin/PluginRecipeMetadataStore.js";
-import { broadcastToRenderer, broadcastToProjectRenderers } from "../ipc/utils.js";
+import {
+  broadcastToRenderer,
+  broadcastToProjectRenderers,
+  getProjectRendererTargets,
+} from "../ipc/utils.js";
 import { PLUGIN_INVOKE_MAX_RESULT_BYTES } from "../../shared/config/pluginBudgets.js";
 import { assertPayloadWithinLimit, estimatePayloadBytes } from "./plugin/pluginPayloadLimits.js";
 import { getPluginPushBatcher, routePluginPush } from "./plugin/pluginPushBatcher.js";
@@ -721,6 +725,14 @@ export class PluginService {
    * O(1) lookup at render time.
    */
   private pluginBadges = new Map<string, Map<string, PluginPanelBadge>>();
+  /**
+   * Action handlers in flight, keyed `pluginId → actionId → count`, so the host
+   * can draw a toolbar button busy and tell a view an action is running however
+   * it was dispatched (palette, menu, toolbar, keybinding, agent). Counted
+   * because two dispatches of one action can overlap. Ephemeral like badges:
+   * dropped on unload and replayed to a cold-restored view.
+   */
+  private runningActions = new Map<string, Map<string, number>>();
   /**
    * Per-plugin diagnostic log ring buffer, keyed by `pluginId` (= manifest
    * name). Written by `host.logger.*`, capped at {@link PLUGIN_LOG_BUFFER_MAX}
@@ -4624,6 +4636,9 @@ export class PluginService {
     if (!this.plugins.has(pluginId)) {
       throw new PluginInvokeOwnershipError(pluginId, channel);
     }
+    // Runs are tracked against the load that admitted this dispatch, so one
+    // that outlives an unload (or a reload) during the awaits below is not.
+    const generation = this.plugins.get(pluginId);
 
     // Start the clock before activation so a failure record carries the full
     // dispatch cost (cold activation included) the renderer actually waited on.
@@ -4699,6 +4714,7 @@ export class PluginService {
     // (which also defaults the empty case to `{}`).
     if (actionHandler) {
       let actionResult: unknown;
+      const endRun = this.beginActionRun(pluginId, channel, generation);
       try {
         actionResult = await actionHandler(args.length > 0 ? args[0] : {});
       } catch (err) {
@@ -4726,6 +4742,8 @@ export class PluginService {
         });
         markAuditedHandlerFailure(err);
         throw err;
+      } finally {
+        endRun();
       }
       // Size-checked before the success audit: an oversize result is a failed
       // dispatch, which the outer plugin:invoke catch records.
@@ -4787,6 +4805,11 @@ export class PluginService {
     }
 
     let result: unknown;
+    // An action may be backed by a channel handler registered under its id.
+    const endRun =
+      descriptor?.pluginId === pluginId
+        ? this.beginActionRun(pluginId, channel, generation)
+        : () => {};
     try {
       result = await handler(ctx, ...dispatchArgs);
     } catch (err) {
@@ -4819,6 +4842,8 @@ export class PluginService {
       });
       markAuditedHandlerFailure(err);
       throw err;
+    } finally {
+      endRun();
     }
 
     let finalResult: unknown = result;
@@ -5221,6 +5246,61 @@ export class PluginService {
           }
         : null,
     };
+  }
+
+  /**
+   * Mark one dispatch of `actionId` running and return its end. The end is
+   * bound to this load of the plugin: a handler that settles after an unload
+   * and reload must not clear a run of the replacement.
+   */
+  private beginActionRun(
+    pluginId: string,
+    actionId: string,
+    generation: LoadedPlugin | undefined
+  ): () => void {
+    if (generation === undefined || this.plugins.get(pluginId) !== generation) return () => {};
+    let byAction = this.runningActions.get(pluginId);
+    if (!byAction) {
+      byAction = new Map();
+      this.runningActions.set(pluginId, byAction);
+    }
+    const count = byAction.get(actionId) ?? 0;
+    byAction.set(actionId, count + 1);
+    if (count === 0) this.emitActionsRunning(pluginId);
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      if (this.plugins.get(pluginId) !== generation) return;
+      const current = this.runningActions.get(pluginId);
+      const remaining = (current?.get(actionId) ?? 0) - 1;
+      if (!current || remaining < 0) return;
+      if (remaining > 0) {
+        current.set(actionId, remaining);
+        return;
+      }
+      current.delete(actionId);
+      if (current.size === 0) this.runningActions.delete(pluginId);
+      this.emitActionsRunning(pluginId);
+    };
+  }
+
+  /**
+   * Publish the complete set of `pluginId`'s running actions, scoped like
+   * {@link emitRuntimeStatus}. An empty list means none are running.
+   */
+  private emitActionsRunning(pluginId: string): void {
+    if (this.disposed) return;
+    const event = {
+      name: "plugin:actions-running-changed" as const,
+      payload: { pluginId, actionIds: [...(this.runningActions.get(pluginId)?.keys() ?? [])] },
+    };
+    const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+    if (owningProjectId === null) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, event);
+      return;
+    }
+    broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
   }
 
   /**
@@ -6160,6 +6240,10 @@ export class PluginService {
     // Drop any live panel badges this plugin set and tell the renderer to clear
     // them (#10585). Only broadcast when the plugin actually had badges so an
     // unload of a non-badging plugin stays silent.
+    if (this.runningActions.delete(pluginId)) {
+      runUnloadStep(pluginId, "clearRunningActions", () => this.emitActionsRunning(pluginId));
+    }
+
     if (this.pluginBadges.delete(pluginId)) {
       runUnloadStep(pluginId, "clearPanelBadges", () => {
         broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
@@ -7243,6 +7327,23 @@ export class PluginService {
         webContents.send(CHANNELS.EVENTS_PUSH, {
           name: "plugin:panel-badges-changed",
           payload: { pluginId, badges: this.serializePluginBadges(pluginId) },
+        });
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+    for (const [pluginId, byAction] of this.runningActions) {
+      const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+      if (
+        owningProjectId !== null &&
+        !getProjectRendererTargets(owningProjectId).some((wc) => wc.id === webContents.id)
+      ) {
+        continue;
+      }
+      try {
+        webContents.send(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:actions-running-changed",
+          payload: { pluginId, actionIds: [...byAction.keys()] },
         });
       } catch {
         // Silently ignore send failures during window initialization/disposal.

@@ -39,6 +39,7 @@ import {
 import { WorktreeStoreProvider } from "./contexts/WorktreeStoreContext";
 import { installPluginDocumentRuntime } from "./services/plugin/pluginDocumentRuntime";
 import { installProjectSwitchStatusTiming } from "./services/projectSwitchStatusTiming";
+import { installRunningPluginActions } from "./services/plugin/runningPluginActions";
 import { getSafeBootPromise } from "./lib/bootPromise";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
@@ -99,6 +100,9 @@ async function bootstrap() {
   // Synchronous with module evaluation, so it is listening before main's
   // `did-finish-load` gate lets it send `project:on-switch` to a new view.
   installProjectSwitchStatusTiming();
+  // Same reason: main replays the running plugin actions at `did-finish-load`,
+  // and its events reach only a listener that already exists.
+  installRunningPluginActions();
 
   // Kick off the agent-settings store so `App.tsx`, `Toolbar`, and the tray
   // all read from a normalized snapshot on cold boot. The install-aware

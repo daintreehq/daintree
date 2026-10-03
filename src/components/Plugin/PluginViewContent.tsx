@@ -32,6 +32,7 @@ import {
   setViewUnsavedChanges,
 } from "@/services/plugin/pluginPanelLifecycle";
 import { registerPanelReloadHandler } from "@/services/plugin/pluginPanelReload";
+import { useAuthoredRunningActions } from "@/services/plugin/runningPluginActions";
 import { Package } from "lucide-react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { ErrorFallbackProps } from "@/components/ErrorBoundary/ErrorFallback";
@@ -1560,6 +1561,7 @@ export function makePluginViewContent(
           : undefined,
       [offerToolbar, setToolbarItemStateFor, retryCount]
     );
+    const runningActions = useAuthoredRunningActions(pluginId);
 
     // The user's reload reaches this mount through the lifecycle service, which
     // is how the menus and the action surface find a live view by panel id.
@@ -1813,6 +1815,7 @@ export function makePluginViewContent(
                           requestReload={requestReload}
                           setHasUnsavedChanges={setHasUnsavedChanges}
                           setToolbarItemState={setToolbarItemState}
+                          runningActions={runningActions}
                           worktreeId={worktreeId}
                           styleRootAttributes={styleRootProps}
                           {...(settingsContext ? { settingsContext } : {})}

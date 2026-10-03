@@ -185,7 +185,7 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 
 **Icon IDs** — one shared set backs every surface that renders a plugin icon (the panel palette, panel headers, tabs, the dock, toolbar buttons, and the toolbar overflow menu), so an ID looks the same everywhere it appears:
 
-`terminal`, `package`, `puzzle`, `globe`, `monitor`, `monitor-play`, `file-text`, `file-diff`, `folder-tree`, `git-branch`, `git-pull-request`, `sticky-note`, `gauge`, `list`, `sparkles`, `layout-panel-top`, `daintree`, `wallet`, `receipt`, `chart-column`, `chart-line`, `chart-pie`, `calendar`, `clock`, `kanban`, `check-square`, `list-todo`, `users`, `contact`, `handshake`, `briefcase`, `inbox`, `mail`, `image`, `palette`, `book-open`, `bookmark`, `notebook`, `newspaper`, `megaphone`, `target`, `heart-pulse`, `flame`, `dumbbell`, `utensils`, `tag`, `shopping-cart`, `boxes`, `database`, `table`, `layout-grid`, `map`, `star`, `rocket`, `lightbulb`, `flask`
+`terminal`, `package`, `puzzle`, `globe`, `monitor`, `monitor-play`, `file-text`, `file-diff`, `folder-tree`, `git-branch`, `git-pull-request`, `sticky-note`, `gauge`, `list`, `sparkles`, `layout-panel-top`, `daintree`, `wallet`, `receipt`, `chart-column`, `chart-line`, `chart-pie`, `calendar`, `clock`, `kanban`, `check-square`, `list-todo`, `users`, `contact`, `handshake`, `briefcase`, `inbox`, `mail`, `image`, `palette`, `book-open`, `bookmark`, `notebook`, `newspaper`, `megaphone`, `target`, `heart-pulse`, `flame`, `dumbbell`, `utensils`, `tag`, `shopping-cart`, `boxes`, `database`, `table`, `layout-grid`, `map`, `star`, `rocket`, `lightbulb`, `flask`, `refresh-cw`, `download`, `upload`, `filter`, `plus`, `search`, `play`, `settings`
 
 `shared/config/pluginIconIds.ts` is authoritative — run `daintree-plugin validate` to check a manifest against the set your installed host actually ships. Panel `iconId` also accepts a built-in agent ID (e.g. `claude`) to render that agent's brand mark.
 
@@ -283,7 +283,7 @@ Bump `stateVersion` when the shape changes incompatibly, never for an additive k
 - **Only your own actions**, by the same rules as `menu`: written `"{manifestId}.{id}"`, matching a declared command when you declare any (`action_id_undeclared_command`), never a built-in or another plugin's (`panel_toolbar_action_not_own`). A project plugin writes its manifest id; the host moves it into the instance's namespace.
 - **At most three**, each action once (`panel_toolbar_duplicate_action`). The same action may also sit in `menu`. A `hasPty: true` panel draws the terminal's header, so a `toolbar` on one is refused (`pty_panel_toolbar_unsupported`).
 - **When they appear.** A button shows only while its action is registered, in declared order, ahead of the window controls.
-- **Label and icon.** `label` (1–80 characters, trimmed) is the button's name and resting tooltip; leave it out to use the action's `title`. `iconId` takes the same generic plugin icon IDs as a panel's own `iconId`; leave it out and the label is drawn as a text button, cut short on a narrow header with the full label on hover. A `./…svg` path is accepted, but the host does not load SVG files referenced only from a toolbar entry yet, so it draws the generic plugin glyph unless the same file is also a panel, toolbar button or process tool icon.
+- **Label and icon.** `label` (1–80 characters, trimmed) is the button's name and resting tooltip; leave it out to use the action's `title`. `iconId` takes the same generic plugin icon IDs as a panel's own `iconId` (`refresh-cw`, `download`, `filter` and the other verbs are there for toolbar actions), or a [custom SVG](#custom-icons) path; leave it out and the label is drawn as a text button, cut short on a narrow header with the full label on hover.
 - **Status.** `status: true` draws a short status beside the button from its live state: the `text`, then "Updated 3h ago" from `updatedAt`, ticking on the host's shared clock. Without it those fields are ignored.
 - **Arguments.** A click dispatches the action with `{ panelId }`, as a menu entry does, and the action's own danger tier applies.
 
@@ -291,7 +291,7 @@ Bump `stateVersion` when the shape changes incompatibly, never for an additive k
 
 | Field | Effect |
 | --- | --- |
-| `busy` | A spinner on the button, which ignores clicks until it is cleared. |
+| `busy` | A spinner on the button, which ignores clicks until it is cleared. You rarely need it: the host already draws the button busy while its action's handler runs, whether the click came from the toolbar, the palette, a menu or a keybinding. Set it for work that outlives the handler. |
 | `disabled` | Announced unavailable and ignores clicks. The button keeps its place in the tab order. |
 | `text` | The status beside a `status: true` button ("2 prices kept from cache"). Cut to 120 characters. |
 | `updatedAt` | Epoch ms or an ISO string, drawn as "Updated 3h ago". |
@@ -299,21 +299,21 @@ Bump `stateVersion` when the shape changes incompatibly, never for an additive k
 | `tone` | `"warning"` or `"danger"` adds that glyph and colour to the status; colour is never the only signal. An explicit tone, `"default"` included, wins over the stale warning. |
 | `tooltip` | The button's tooltip when it says more than the label ("Prices fetched 14:02"). Cut to 120 characters. |
 
-State belongs to the panel: it survives your view unmounting and remounting (a dock move, a tab switch) and is cleared when the panel closes, the view reloads or the view crashes. The setter belongs to its attempt like `setHasUnsavedChanges`, so a refresh that settles after a reload does nothing. An `actionId` the manifest doesn't list is ignored. The setter is absent on project surfaces, settings views and a panel shown as a dialog, none of which draws the toolbar.
+State belongs to the panel: it survives your view unmounting and remounting (a dock move, a tab switch) and is cleared when the panel closes, the view reloads or the view crashes. The setter belongs to its attempt like `setHasUnsavedChanges`, so a refresh that settles after a reload does nothing. An `actionId` the manifest doesn't list is ignored. The setter is absent on project surfaces, settings views and a panel shown as a dialog, none of which draws the toolbar. That absence is the contract: a view that also renders on one of those surfaces and still wants the control draws it itself when `setToolbarItemState` is missing (or when `usePanelToolbarItem` returns `false`). Its presence says only that the panel has a header: a button still shows only while its action is registered.
 
-In React, `usePanelToolbarItem(props, actionId, state)` from `@daintreehq/plugin-sdk/react` keeps a button in step with your view. It sends the state on mount and whenever a field changes, resets the old button when `actionId` changes, leaves the state to the panel when the view unmounts (so it survives a tab switch or a move to the dock), and does nothing where the setter is absent:
+In React, `usePanelToolbarItem(props, actionId, state)` from `@daintreehq/plugin-sdk/react` keeps a button in step with your view. It sends the state on mount and whenever a field changes, resets the old button when `actionId` changes, leaves the state to the panel when the view unmounts (so it survives a tab switch or a move to the dock), and does nothing where the setter is absent. It returns `false` where the surface has no panel header, so the same view can fall back to an in-view control:
 
 ```tsx
 import { usePanelToolbarItem } from "@daintreehq/plugin-sdk/react";
 
 export default function LedgerView(props: PanelViewProps) {
-  const { refreshing, fetchedAt, cachedCount } = useQuotes();
-  usePanelToolbarItem(props, "acme.ledger.refresh-quotes", {
-    busy: refreshing,
+  const { fetchedAt, cachedCount } = useQuotes();
+  const inHeader = usePanelToolbarItem(props, "acme.ledger.refresh-quotes", {
     text: cachedCount > 0 ? `${cachedCount} prices kept from cache` : undefined,
     updatedAt: fetchedAt,
     staleAfterMs: 15 * 60_000,
   });
+  // On a project surface there is no header, so draw the control in the view.
   // …
 }
 ```
@@ -441,6 +441,7 @@ export default function Dashboard(props) {
 | `requestReload` | `() => void` \| `undefined` | Ask the host to discard this view attempt and mount a fresh one for the same panel, without restarting the backend. The current `disposeSignal` aborts and React cleanup runs; the next attempt gets a new `disposeSignal` and the latest accepted `persistState` bag as `initialArgs`, while `panelId`, `panelRemovedSignal` and the backend carry over. The module is reused, so module globals, document-wide registrations and anything on `window` survive — a reload frees only what your cleanup releases, and cannot rescue a blocked renderer. A request, not a command: the host may refuse it, reports no completion, and merges calls in the same tick. A callback held past its own attempt does nothing. A fourth reload within 30 seconds of three accepted ones stops the view until the user reloads the panel. Absent on project surfaces and settings views. See [Views → Reloading a view](./views.md#reloading-a-view). |
 | `setHasUnsavedChanges` | `(hasUnsavedChanges: boolean) => void` \| `undefined` | Tell the host whether the view holds work a reload would lose. The user and agents can reload a plugin panel without being asked, since persisted state comes back; while this is `true`, they are asked to confirm first. Your own `requestReload` is never held up by it. The setter belongs to its attempt, so one held past its teardown does nothing, and a new attempt starts with nothing unsaved. Absent where the host offers no reload. See [Views → Reloading a view](./views.md#reloading-a-view). |
 | `setToolbarItemState` | `(actionId: string, state: PluginPanelToolbarItemState \| null) => void` \| `undefined` | Set the live state of one of the panel's manifest `toolbar` buttons: busy, disabled, a status line, an "Updated" age and its tone. Each call replaces that button's state; `null` resets it. State survives the view remounting and is cleared when the panel closes or the view reloads. Belongs to its attempt, like `setHasUnsavedChanges`. Absent on project surfaces, settings views and a panel shown as a dialog. See [Panel toolbar](#panel-toolbar). |
+| `runningActions` | `readonly string[]` \| `undefined` | Your actions whose handlers are running now, by `actionId` as the manifest writes it, however they were dispatched (palette, menu, panel toolbar, keybinding, agent). A new array when the set changes, so the view re-renders as a run starts and ends, and a view mounting mid-run sees it at once. Read one action with `useActionRunning(props, actionId)` from `@daintreehq/plugin-sdk/react`. |
 | `styleRootAttributes` | `Readonly<Record<string, string>>` | Spread onto any container you render through `createPortal`, so the runtime-compiled Tailwind classes inside it still apply. See [Views → Styling](./views.md#styling). |
 | `settingsContext` | `{ scope: "user" \| "project"; projectId: string \| null }` \| `undefined` | Present only on a `location: "settings"` view: which settings home it is mounted in. `projectId` is `null` in the `"user"` home. See [A custom settings section](#a-custom-settings-section). |
 

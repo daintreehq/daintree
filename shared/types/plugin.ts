@@ -663,6 +663,16 @@ export interface PanelViewProps {
     state: PluginPanelToolbarItemState | null
   ) => void;
   /**
+   * Your actions whose handlers are running right now, by `actionId` as the
+   * manifest writes it — however they were dispatched: the palette, a menu,
+   * the panel toolbar, a keybinding or an agent. A new array when the set
+   * changes, so a view re-renders as a run starts and ends, and a view that
+   * mounts mid-run sees it at once. `useActionRunning` reads one action.
+   *
+   * Absent on a host that does not track runs, so read it optionally.
+   */
+  readonly runningActions?: readonly string[];
+  /**
    * The worktree the panel instance belongs to, as recorded on the panel at
    * spawn time. Lets a view reconstruct its own context without dispatching
    * `worktree.getCurrent` — which resolves the *visible* worktree, not the

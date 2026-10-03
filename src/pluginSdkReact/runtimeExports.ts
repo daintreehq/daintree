@@ -9,6 +9,7 @@ export const PLUGIN_SDK_REACT_RUNTIME_EXPORTS = [
   "loadDocumentPackage",
   "resetHostChannelCache",
   "shallowEqual",
+  "useActionRunning",
   "useAnimationFrame",
   "useCachedHostChannel",
   "useHostChannel",

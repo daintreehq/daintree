@@ -17,13 +17,15 @@ type ToolbarSetter = NonNullable<PanelViewProps["setToolbarItemState"]>;
  * Unmounting leaves the state alone: it belongs to the panel, so it survives
  * a tab switch or a move to the dock, and the host clears it when the panel
  * closes or the view reloads. Does nothing where the host offers no setter (a
- * project surface), so it is safe in a view that also renders there.
+ * project surface, a settings view, a panel shown as a dialog), so it is safe
+ * in a view that also renders there, and returns `false` there so the view
+ * can draw the control itself.
  *
  * ```tsx
  * export default function LedgerView(props: PanelViewProps) {
- *   const { refreshing, fetchedAt } = useQuotes();
+ *   const { fetchedAt } = useQuotes();
+ *   // No `busy`: the host draws the button busy while the action runs.
  *   usePanelToolbarItem(props, "acme.ledger.refresh-quotes", {
- *     busy: refreshing,
  *     updatedAt: fetchedAt,
  *     staleAfterMs: 15 * 60_000,
  *   });
@@ -34,12 +36,13 @@ type ToolbarSetter = NonNullable<PanelViewProps["setToolbarItemState"]>;
  * @param view The view's props, or any object carrying its `setToolbarItemState`.
  * @param actionId The button's `actionId` exactly as the manifest writes it.
  * @param state The button's live state; `null` leaves it at rest.
+ * @returns `false` where the surface has no panel header to draw the toolbar in.
  */
 export function usePanelToolbarItem(
   view: Pick<PanelViewProps, "setToolbarItemState">,
   actionId: string,
   state: PluginPanelToolbarItemState | null
-): void {
+): boolean {
   const setter = view.setToolbarItemState;
   const sentRef = useRef<{
     setter: ToolbarSetter;
@@ -66,4 +69,6 @@ export function usePanelToolbarItem(
     sentRef.current = { setter, actionId, state };
     setter(actionId, state);
   }, [setter, actionId, state]);
+
+  return setter !== undefined;
 }
