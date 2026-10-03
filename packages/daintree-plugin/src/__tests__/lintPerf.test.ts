@@ -383,6 +383,58 @@ export function record(host, event) {
   });
 });
 
+describe("whole-state-push: a project plugin built from outside its own directory", () => {
+  const BUNDLED_WORKER = `export async function activate(host) {
+  const issues = [];
+  host.onIssue((issue) => {
+    issues.push(issue);
+    void host.postToPanel("issues", issues);
+  });
+}
+`;
+  const MANIFEST = { name: "acme.ledger", version: "1.0.0", main: "dist/index.mjs" };
+  const SOURCE = { "src/index.ts": "export async function activate() {}\n" };
+
+  it("reads the bundle as build output when a build.mjs sits beside it", async () => {
+    const findings = await lintFor(
+      "whole-state-push",
+      { "build.mjs": "await build({});\n", "dist/index.mjs": BUNDLED_WORKER },
+      MANIFEST
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it("reads the bundle as build output when src/ sits beside an entry in dist/", async () => {
+    const findings = await lintFor(
+      "whole-state-push",
+      { ...SOURCE, "dist/index.mjs": BUNDLED_WORKER },
+      MANIFEST
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it("still reads dist/ as source beside a src/ of plain JS command handlers", async () => {
+    const findings = await lintFor(
+      "whole-state-push",
+      {
+        "src/plan-from-issue.js": "export default async () => {};\n",
+        "dist/index.mjs": BUNDLED_WORKER,
+      },
+      MANIFEST
+    );
+    expect(findings).toHaveLength(1);
+  });
+
+  it("still reads a zero-build entry in dist/ as source", async () => {
+    const findings = await lintFor(
+      "whole-state-push",
+      { "dist/index.mjs": BUNDLED_WORKER },
+      MANIFEST
+    );
+    expect(findings).toHaveLength(1);
+  });
+});
+
 describe("whole-state-push: buffers flushed and replaced", () => {
   it("accepts a buffer reassigned to a fresh array after it is posted", async () => {
     const findings = await lintFor("whole-state-push", {

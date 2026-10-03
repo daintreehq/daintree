@@ -5,6 +5,10 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 import type { PluginPanelToolbarItemConfig } from "@shared/config/panelKindRegistry";
 import { publishRegisteredPluginActions } from "@/services/plugin/registeredPluginActions";
+import {
+  _resetRunningPluginActionsForTest,
+  applyRunningPluginActions,
+} from "@/services/plugin/runningPluginActions";
 import { usePluginPanelToolbarStore } from "@/store/pluginPanelToolbarStore";
 import { PluginPanelToolbar } from "../PluginPanelToolbar";
 
@@ -66,6 +70,7 @@ describe("PluginPanelToolbar", () => {
     cleanup();
     unregisterPanelKind(KIND);
     publishRegisteredPluginActions([]);
+    _resetRunningPluginActionsForTest();
   });
 
   it("draws nothing for a kind that declares no toolbar", () => {
@@ -135,6 +140,32 @@ describe("PluginPanelToolbar", () => {
     fireEvent.click(refresh);
     fireEvent.click(exportButton);
     expect(mockDispatch).not.toHaveBeenCalled();
+  });
+
+  it("draws a button busy while its action runs, however it was dispatched", () => {
+    renderToolbar();
+    const refresh = screen.getByRole("button", { name: "Refresh prices" });
+    expect(refresh.getAttribute("aria-busy")).toBeNull();
+
+    act(() => applyRunningPluginActions("acme.ledger", [REFRESH]));
+    expect(refresh.getAttribute("aria-busy")).toBe("true");
+    fireEvent.click(refresh);
+    expect(mockDispatch).not.toHaveBeenCalled();
+
+    act(() => applyRunningPluginActions("acme.ledger", []));
+    expect(refresh.getAttribute("aria-busy")).toBeNull();
+    fireEvent.click(refresh);
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the view's own busy after the host's run ends", () => {
+    renderToolbar();
+    setState(REFRESH, { busy: true });
+    act(() => applyRunningPluginActions("acme.ledger", [REFRESH]));
+    act(() => applyRunningPluginActions("acme.ledger", []));
+
+    const refresh = screen.getByRole("button", { name: "Refresh prices" });
+    expect(refresh.getAttribute("aria-busy")).toBe("true");
   });
 
   it("draws the status text and age beside a status button, described by it", () => {

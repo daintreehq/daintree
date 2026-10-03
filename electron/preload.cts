@@ -3562,6 +3562,9 @@ function buildElectronApi(): ElectronAPI {
       ) => _eventBusOn("plugin:panel-badges-changed", callback),
       onPanelBadgesCleared: (callback: (payload: { pluginId: string }) => void) =>
         _eventBusOn("plugin:panel-badges-cleared", callback),
+      onActionsRunningChanged: (
+        callback: (payload: { pluginId: string; actionIds: string[] }) => void
+      ) => _eventBusOn("plugin:actions-running-changed", callback),
       onDeepLink: (callback: (intent: PluginDeepLinkIntent) => void) =>
         _eventBusOn("plugin:deep-link", callback),
       onArchiveInstallIntent: (callback: (intent: PluginArchiveInstallIntent) => void) =>

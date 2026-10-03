@@ -17,6 +17,11 @@ import {
   subscribeToRegisteredPluginActions,
 } from "@/services/plugin/registeredPluginActions";
 import {
+  getRunningPluginActionsSnapshot,
+  isPluginActionRunning,
+  subscribeToRunningPluginActions,
+} from "@/services/plugin/runningPluginActions";
+import {
   getPanelKindRegistrySnapshot,
   subscribeToPanelKindRegistry,
   type PanelKindConfig,
@@ -126,6 +131,11 @@ function PluginPanelToolbarRow({
   rovingEnabled: boolean;
 }) {
   const states = usePanelToolbarStates(panelId);
+  const running = useSyncExternalStore(
+    subscribeToRunningPluginActions,
+    getRunningPluginActionsSnapshot,
+    getRunningPluginActionsSnapshot
+  );
   const rootRef = useRef<HTMLDivElement | null>(null);
   const handleKeyDown = useToolbarRoving(rootRef, rovingEnabled);
   return (
@@ -146,6 +156,7 @@ function PluginPanelToolbarRow({
           panelId={panelId}
           button={button}
           state={states[button.stateKey]}
+          running={isPluginActionRunning(running, button.actionId)}
         />
       ))}
     </div>
@@ -156,11 +167,13 @@ interface PluginPanelToolbarItemProps {
   panelId: string;
   button: PluginPanelToolbarButton;
   state: PluginPanelToolbarItemLiveState | undefined;
+  /** The action's handler is in flight, however it was dispatched. */
+  running: boolean;
 }
 
-function PluginPanelToolbarItem({ panelId, button, state }: PluginPanelToolbarItemProps) {
+function PluginPanelToolbarItem({ panelId, button, state, running }: PluginPanelToolbarItemProps) {
   const statusId = useId();
-  const busy = state?.busy === true;
+  const busy = running || state?.busy === true;
   const disabled = state?.disabled === true;
   const tooltip = state?.tooltip ?? button.label;
   const showsStatus =

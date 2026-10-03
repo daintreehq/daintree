@@ -2055,6 +2055,14 @@ export interface IpcEventMap {
     pluginId: string;
   };
 
+  // The plugin's action handlers in flight (main → renderer): its COMPLETE set
+  // of running action ids, as dispatched (an instance's namespace for a project
+  // plugin). An empty list means none, and is what an unload sends.
+  "plugin:actions-running-changed": {
+    pluginId: string;
+    actionIds: string[];
+  };
+
   // Plugin provenance record changed (main → renderer). Signal-only — the
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
@@ -2255,6 +2263,8 @@ export type IpcEventBusMap = Pick<
   // Plugin panel-badge state (global broadcast)
   | "plugin:panel-badges-changed"
   | "plugin:panel-badges-cleared"
+  // Plugin action handlers in flight (project-scoped for a project instance)
+  | "plugin:actions-running-changed"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
   // Plugin stored settings changed (global broadcast for an app-global

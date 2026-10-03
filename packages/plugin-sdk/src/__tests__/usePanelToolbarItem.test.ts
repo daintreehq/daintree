@@ -66,6 +66,14 @@ describe("usePanelToolbarItem", () => {
     expect(first.mock.calls).toEqual([[ID, { busy: true }]]);
   });
 
+  it("says whether the surface draws the toolbar", () => {
+    const { result, rerender } = renderToolbarItem({ actionId: ID, state: null });
+    expect(result.current).toBe(false);
+
+    rerender({ setter: vi.fn(), actionId: ID, state: null });
+    expect(result.current).toBe(true);
+  });
+
   it("does nothing where the host offers no setter", () => {
     const { rerender, unmount } = renderToolbarItem({ actionId: ID, state: { busy: true } });
     expect(() => {
