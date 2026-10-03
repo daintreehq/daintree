@@ -29,96 +29,16 @@ async function waitForSamplePluginReady(page: Page): Promise<void> {
     .toContain("daintree.hello.greet");
 }
 
-async function isNotificationInboxVisible(notificationInbox: Locator): Promise<boolean> {
-  return notificationInbox.isVisible({ timeout: 500 }).catch(() => false);
-}
-
-async function waitForNotificationInboxVisible(
-  notificationInbox: Locator,
-  timeout = T_SHORT
-): Promise<boolean> {
-  return expect(notificationInbox)
-    .toBeVisible({ timeout })
-    .then(() => true)
-    .catch(() => false);
-}
-
-async function waitForNotificationInboxHidden(
-  notificationInbox: Locator,
-  timeout = T_SHORT
-): Promise<boolean> {
-  return expect(notificationInbox)
-    .not.toBeVisible({ timeout })
-    .then(() => true)
-    .catch(() => false);
-}
-
-async function clickVisibleNotificationToolbarButton(page: Page): Promise<boolean> {
-  return page.evaluate(() => {
-    const isVisibleElement = (element: Element): boolean => {
-      const rect = element.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) return false;
-      if (
-        rect.bottom <= 0 ||
-        rect.right <= 0 ||
-        rect.top >= window.innerHeight ||
-        rect.left >= window.innerWidth
-      ) {
-        return false;
-      }
-
-      let current: Element | null = element;
-      while (current) {
-        if (current.hasAttribute("hidden") || current.getAttribute("aria-hidden") === "true") {
-          return false;
-        }
-        const style = window.getComputedStyle(current);
-        if (style.display === "none" || style.visibility === "hidden") return false;
-        current = current.parentElement;
-      }
-
-      return true;
-    };
-
-    const selectors = [
-      '[role="toolbar"][aria-label="Main toolbar"] [data-toolbar-button-id="notification-center"] button',
-      '[role="toolbar"][aria-label="Main toolbar"] button[aria-label^="Notifications"]',
-    ];
-
-    for (const selector of selectors) {
-      const button = Array.from(document.querySelectorAll<HTMLElement>(selector)).find(
-        isVisibleElement
-      );
-      if (button) {
-        button.click();
-        return true;
-      }
-    }
-
-    return false;
-  });
-}
-
+// The inbox has a real keybinding (notifications.toggle, Cmd/Ctrl+Shift+N), so
+// drive it by keyboard instead of hunting the toolbar button through overflow.
 async function openNotificationInbox(page: Page): Promise<Locator> {
   const notificationInbox = page.getByRole("button", { name: "Pause notifications" });
-  if (await isNotificationInboxVisible(notificationInbox)) return notificationInbox;
-
-  if (await clickVisibleNotificationToolbarButton(page)) {
-    if (await waitForNotificationInboxVisible(notificationInbox)) return notificationInbox;
-  }
-
   await page.keyboard.press(`${mod}+Shift+N`);
   await expect(notificationInbox).toBeVisible({ timeout: T_SHORT });
   return notificationInbox;
 }
 
 async function closeNotificationInbox(page: Page, notificationInbox: Locator): Promise<void> {
-  if (!(await isNotificationInboxVisible(notificationInbox))) return;
-
-  if (await clickVisibleNotificationToolbarButton(page)) {
-    if (await waitForNotificationInboxHidden(notificationInbox)) return;
-  }
-
   await page.keyboard.press(`${mod}+Shift+N`);
   await expect(notificationInbox).not.toBeVisible({ timeout: T_SHORT });
 }

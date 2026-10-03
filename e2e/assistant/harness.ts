@@ -617,7 +617,7 @@ export function registerScenarios(scenarios: readonly Scenario[]): void {
             delete process.env[key];
           }
         }
-        ctx = await launchApp({ env });
+        ctx = await launchApp({ env, isolateHome: false });
         const page = await openAndOnboardProject(ctx.app, ctx.window, repo.dir, scenario.id);
         ctx.window = page;
         log(`app up; runbooks ${env.DAINTREE_RUNBOOKS_MCP_URL ?? "(production default)"}`);

@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import { Loader2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import type { RootAttributes } from "@/components/ui/rootAttributes";
 
 const SIZE_CLASSES = {
   xs: "w-3 h-3",
@@ -22,6 +23,8 @@ interface SpinnerProps {
    * which is how `InlineStatusBanner` tints an `icon` to the band's severity.
    */
   style?: CSSProperties;
+  /** `id`, `data-*` or `aria-*` on the root; the component's own attributes win. */
+  rootAttributes?: RootAttributes;
 }
 
 /**
@@ -31,9 +34,10 @@ interface SpinnerProps {
  * visible (#12584). Size, placement and colour classes land on the wrapper,
  * which is block-level like the svg it replaces; the glyph fills it.
  */
-export function Spinner({ size = "md", className, style }: SpinnerProps) {
+export function Spinner({ size = "md", className, style, rootAttributes }: SpinnerProps) {
   return (
     <span
+      {...rootAttributes}
       className={cn(
         "flex shrink-0 items-center justify-center animate-spin motion-reduce:animate-none",
         SIZE_CLASSES[size],

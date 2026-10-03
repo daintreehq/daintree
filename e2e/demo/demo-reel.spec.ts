@@ -11,7 +11,7 @@
  *
  * Run locally:
  *   npm run build:e2e
- *   npx playwright test e2e/demo/demo-reel.spec.ts --project=demo
+ *   npx playwright test --config=playwright.demo.config.ts e2e/demo/demo-reel.spec.ts
  *
  * The scene needs NO ANTHROPIC_API_KEY — it shows the worktree dashboard,
  * which is fully populated by the brush-cms fixture.
@@ -23,7 +23,6 @@ import { execFileSync } from "child_process";
 import ffmpegPath from "ffmpeg-static";
 import path from "path";
 import { launchApp, closeApp, mockOpenDialog, refreshActiveWindow } from "../helpers/launch";
-import { dismissTelemetryConsent } from "../helpers/project";
 import { dismissBlockingPalette } from "../helpers/overlays";
 import { SEL } from "../helpers/selectors";
 import { createBrushCmsRepo, type DemoRepo } from "../helpers/screenshotFixtures";
@@ -132,7 +131,6 @@ async function bootDemoProject(repo: DemoRepo): Promise<{
   await ctx.window.getByRole("button", { name: "Open project", exact: true }).click();
 
   let page = await refreshActiveWindow(ctx.app, ctx.window);
-  await dismissTelemetryConsent(page);
   await dismissBlockingPalette(page);
 
   // The project view can reload once after open as state hydrates, which

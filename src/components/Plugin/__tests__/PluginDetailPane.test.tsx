@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { PluginDetailPane } from "../PluginDetailPane";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -38,7 +38,28 @@ const pluginMcpListMock = vi.hoisted(() => vi.fn(() => Promise.resolve([])));
 const getDiagnosticsSnapshotMock = vi.hoisted(() =>
   vi.fn(() => Promise.resolve({ plugins: [] as unknown[] }))
 );
+const projectTargetingMock = vi.hoisted(() => ({
+  getProjectTargeting: vi.fn((_input: { pluginId: string }) => Promise.resolve(false)),
+  setProjectTargeting: vi.fn((input: { pluginId: string; enabled: boolean }) =>
+    Promise.resolve(input.enabled)
+  ),
+}));
+
+// The Performance tab is earned by main having a snapshot for the plugin.
+const getPerfSnapshotsMock = vi.hoisted(() => vi.fn(() => Promise.resolve([] as unknown[])));
+const perfUnsubscribeMock = vi.hoisted(() => vi.fn());
+const onPerfSnapshotsChangedMock = vi.hoisted(() => vi.fn(() => perfUnsubscribeMock));
 beforeEach(() => {
+  projectTargetingMock.getProjectTargeting.mockReset();
+  projectTargetingMock.getProjectTargeting.mockResolvedValue(false);
+  projectTargetingMock.setProjectTargeting.mockReset();
+  projectTargetingMock.setProjectTargeting.mockImplementation((input) =>
+    Promise.resolve(input.enabled)
+  );
+  getPerfSnapshotsMock.mockClear();
+  getPerfSnapshotsMock.mockResolvedValue([]);
+  perfUnsubscribeMock.mockClear();
+  onPerfSnapshotsChangedMock.mockClear();
   pluginMcpListMock.mockClear();
   getDiagnosticsSnapshotMock.mockClear();
   getDiagnosticsSnapshotMock.mockResolvedValue({ plugins: [] });
@@ -58,7 +79,10 @@ beforeEach(() => {
       revealSecretSetting: vi.fn(() => Promise.resolve(null)),
       pathExists: vi.fn(() => Promise.resolve(true)),
       getDiagnosticsSnapshot: getDiagnosticsSnapshotMock,
+      getPerfSnapshots: getPerfSnapshotsMock,
+      onPerfSnapshotsChanged: onPerfSnapshotsChangedMock,
     },
+    pluginCapability: projectTargetingMock,
   } as unknown as Window["electron"];
 });
 
@@ -157,6 +181,132 @@ function withAuthors(
   const base = makePlugin();
   return { ...base, manifest: { ...base.manifest, authors } };
 }
+
+describe("PluginDetailPane project targeting switch (#13119)", () => {
+  function targetingSwitch(): HTMLElement {
+    return screen.getByTestId("plugin-project-targeting-switch");
+  }
+
+  it("is off by default and turns the grant on for this plugin", async () => {
+    renderPane(withCapabilities(["project:dispatch"]));
+    expect(screen.getByText("Run actions in other projects")).toBeTruthy();
+    await vi.waitFor(() => expect(targetingSwitch().hasAttribute("disabled")).toBe(false));
+    expect(targetingSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(projectTargetingMock.getProjectTargeting).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+    });
+
+    fireEvent.click(targetingSwitch());
+    await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(projectTargetingMock.setProjectTargeting).toHaveBeenCalledWith({
+      pluginId: "acme.demo",
+      enabled: true,
+    });
+  });
+
+  it("shows the persisted state and reports a failed save on the row", async () => {
+    projectTargetingMock.getProjectTargeting.mockResolvedValue(true);
+    projectTargetingMock.setProjectTargeting.mockRejectedValue(new Error("disk full"));
+    renderPane(withCapabilities(["project:dispatch"]));
+    await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
+
+    fireEvent.click(targetingSwitch());
+    await vi.waitFor(() => expect(screen.getByText(/Couldn't save turning this off/)).toBeTruthy());
+    // Re-read from main rather than guessing what is in force after a failed write.
+    await vi.waitFor(() =>
+      expect(projectTargetingMock.getProjectTargeting).toHaveBeenCalledTimes(2)
+    );
+    expect(targetingSwitch().getAttribute("aria-checked")).toBe("true");
+    expect(targetingSwitch().getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("names the switch by its visible label and describes it", async () => {
+    renderPane(withCapabilities(["project:dispatch"]));
+    const control = screen.getByRole("switch", { name: "Allow project targeting" });
+    const describedBy = control.getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(describedBy)?.textContent).toMatch(/audit log/);
+
+    await vi.waitFor(() => expect(control.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(screen.getByText("Allow project targeting"));
+    await vi.waitFor(() => expect(control.getAttribute("aria-checked")).toBe("true"));
+  });
+
+  it("offers a retry when the setting can't be read, and recovers", async () => {
+    projectTargetingMock.getProjectTargeting.mockRejectedValueOnce(new Error("ipc down"));
+    projectTargetingMock.getProjectTargeting.mockResolvedValueOnce(true);
+    renderPane(withCapabilities(["project:dispatch"]));
+
+    await vi.waitFor(() => expect(screen.getByText("Couldn't read this setting.")).toBeTruthy());
+    expect(targetingSwitch().hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(screen.queryByText("Couldn't read this setting.")).toBeNull();
+  });
+
+  it("holds the row disabled while it re-reads after a failed save", async () => {
+    projectTargetingMock.setProjectTargeting.mockRejectedValueOnce(new Error("disk full"));
+    renderPane(withCapabilities(["project:dispatch"]));
+    await vi.waitFor(() => expect(targetingSwitch().hasAttribute("disabled")).toBe(false));
+
+    let finishRead!: (value: boolean) => void;
+    projectTargetingMock.getProjectTargeting.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        finishRead = resolve;
+      })
+    );
+    fireEvent.click(targetingSwitch());
+    await vi.waitFor(() => expect(screen.getByText("Couldn't turn this on.")).toBeTruthy());
+    // Nothing can race the recovery read: the switch and Retry wait for it.
+    expect(targetingSwitch().hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled")).toBe(true);
+
+    finishRead(false);
+    await vi.waitFor(() => expect(targetingSwitch().hasAttribute("disabled")).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(screen.queryByText("Couldn't turn this on.")).toBeNull();
+  });
+
+  it("keeps the unsaved-off warning when the recovery read also fails, and retries the write", async () => {
+    projectTargetingMock.getProjectTargeting.mockResolvedValueOnce(true);
+    projectTargetingMock.getProjectTargeting.mockRejectedValueOnce(new Error("ipc down"));
+    projectTargetingMock.setProjectTargeting.mockRejectedValueOnce(new Error("disk full"));
+    renderPane(withCapabilities(["project:dispatch"]));
+    await vi.waitFor(() => expect(targetingSwitch().getAttribute("aria-checked")).toBe("true"));
+
+    fireEvent.click(targetingSwitch());
+    await vi.waitFor(() =>
+      expect(projectTargetingMock.getProjectTargeting).toHaveBeenCalledTimes(2)
+    );
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled")).toBe(false)
+    );
+    expect(screen.getByText(/Couldn't save turning this off/)).toBeTruthy();
+    expect(screen.queryByText("Couldn't read this setting.")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await vi.waitFor(() => expect(screen.queryByText(/Couldn't save turning this off/)).toBeNull());
+    expect(projectTargetingMock.setProjectTargeting).toHaveBeenLastCalledWith({
+      pluginId: "acme.demo",
+      enabled: false,
+    });
+    expect(targetingSwitch().getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("is absent when the plugin does not declare project:dispatch", () => {
+    renderPane(withCapabilities(["fs:project-read"]));
+    expect(screen.queryByTestId("plugin-project-targeting-switch")).toBeNull();
+    expect(projectTargetingMock.getProjectTargeting).not.toHaveBeenCalled();
+  });
+
+  it("is absent for a project plugin, which can only reach its own project", () => {
+    renderPane(
+      withCapabilities(["project:dispatch"], { origin: "project", projectId: "project-a" })
+    );
+    expect(screen.queryByTestId("plugin-project-targeting-switch")).toBeNull();
+  });
+});
 
 describe("PluginDetailPane capabilities", () => {
   it("renders a labelled row for each declared capability", () => {
@@ -611,5 +761,125 @@ describe("PluginDetailPane settings deep link", () => {
     );
     fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
     expect(screen.getByText("Available when the plugin is enabled")).toBeTruthy();
+  });
+});
+
+describe("PluginDetailPane performance and styles tabs", () => {
+  function perfSnapshot(pluginId: string) {
+    return {
+      pluginId,
+      isolation: "worker",
+      activation: { lastMs: 120, count: 1, at: Date.now() },
+      viewLoads: [],
+      viewCommits: null,
+      invokes: {
+        count: 0,
+        p50Ms: 0,
+        p95Ms: 0,
+        maxMs: 0,
+        lastMs: 0,
+        errors: 0,
+        timeouts: 0,
+        oversized: 0,
+      },
+      pushes: { messages: 0, bytes: 0, perSecond: 0, bytesPerSecond: 0, oversized: 0 },
+      longFrames: { count: 0, totalBlockingMs: 0, lastAt: null },
+      workerMemory: null,
+      overBudget: [],
+      since: Date.now(),
+    };
+  }
+
+  function withPanel(overrides: Partial<LoadedPluginInfo> = {}, hasPty = false): LoadedPluginInfo {
+    const base = makePlugin(overrides);
+    return {
+      ...base,
+      manifest: {
+        ...base.manifest,
+        contributes: {
+          ...base.manifest.contributes,
+          panels: [
+            {
+              id: "main",
+              name: "Main",
+              iconId: "box",
+              color: "#000",
+              hasPty,
+              canRestart: false,
+              canConvert: false,
+              showInPalette: true,
+            },
+          ],
+          views: [{ id: "main", componentPath: "dist/main.js", location: "panel" }],
+        },
+      },
+    };
+  }
+
+  function renderDetail(plugin: LoadedPluginInfo) {
+    return render(
+      <TooltipProvider>
+        <PluginDetailPane
+          plugin={plugin}
+          checkingUpdate={false}
+          upToDate={false}
+          onUninstall={vi.fn()}
+          onCheckForUpdate={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  it("offers no Performance tab until main has a snapshot for this plugin", async () => {
+    getPerfSnapshotsMock.mockResolvedValue([perfSnapshot("someone.else")]);
+    renderDetail(makePlugin());
+    await act(async () => {});
+    expect(screen.queryByRole("tab", { name: "Performance" })).toBeNull();
+  });
+
+  it("earns a Performance tab from the instance's snapshot and renders it", async () => {
+    getPerfSnapshotsMock.mockResolvedValue([perfSnapshot("acme.demo")]);
+    renderDetail(makePlugin());
+    fireEvent.click(await screen.findByRole("tab", { name: "Performance" }));
+    expect(screen.getByText("Activation")).toBeTruthy();
+    expect(screen.getByText("120ms")).toBeTruthy();
+  });
+
+  it("subscribes while the pane is open and unsubscribes when it closes", async () => {
+    const { unmount } = renderDetail(makePlugin());
+    await act(async () => {});
+    expect(onPerfSnapshotsChangedMock).toHaveBeenCalledTimes(1);
+    unmount();
+    expect(perfUnsubscribeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Styles for an enabled plugin with a rendered panel, not a terminal one", async () => {
+    const { unmount } = renderDetail(withPanel());
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("tab", { name: "Styles" }));
+    expect(
+      await screen.findByText("Open one of this plugin\u2019s panels to check its styles.")
+    ).toBeTruthy();
+    unmount();
+
+    renderDetail(withPanel({}, true));
+    await act(async () => {});
+    expect(screen.queryByRole("tab", { name: "Styles" })).toBeNull();
+  });
+
+  it("offers no Styles tab for a panel with no matching view", async () => {
+    const base = withPanel();
+    renderDetail({
+      ...base,
+      manifest: { ...base.manifest, contributes: { ...base.manifest.contributes, views: [] } },
+    });
+    await act(async () => {});
+    expect(screen.queryByRole("tab", { name: "Styles" })).toBeNull();
+  });
+
+  it("offers no Styles tab while the plugin is disabled", async () => {
+    renderDetail(withPanel({ disabled: true }));
+    await act(async () => {});
+    expect(screen.queryByRole("tab", { name: "Styles" })).toBeNull();
   });
 });

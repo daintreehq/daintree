@@ -2,11 +2,11 @@
 
 This is the path from an empty plugin to a merged forge provider — GitLab, Gitea, Bitbucket, or anything else that sits on top of git. It assumes you've read [Forge provider abstraction](../architecture/forge-provider-abstraction.md), which covers _why_ the interface is shaped the way it is. This page covers _what to touch_.
 
-The first-party GitHub plugin (`plugins/builtin/github/`) is the canonical worked example. Every pattern below points at the file that does it for real.
+The first-party GitHub plugin (`plugins/builtin/github/`) is the canonical worked example. Every pattern below points at the file that does it for real. GitLab is not hypothetical either: `daintree.gitlab` (`plugins/builtin/gitlab/`) ships as a built-in and is the example to follow for `credentialFields`, a provider-owned setting (`instanceUrl`) and self-hosted instances.
 
 ## Before you start
 
-- **A forge provider must be a built-in (in-process) plugin.** External `.dntr` plugins run in a worker process where every host call crosses an async `MessagePort`, but `ForgeProviderImpl`'s routing gate (`parseRemote`), URL builders, and `classifyPushError` are **synchronous** — the host calls them and uses the return value immediately. A worker can't satisfy that contract, so `host.registerForgeProvider` from a worker plugin logs a warning and returns a no-op disposer (`electron/services/plugin/pluginDevWorkerHostProxy.ts`). This is a permanent architectural gap, identical in dev and prod; a fix would require the forge API's synchronous surface to change. Everything below assumes a built-in under `plugins/builtin/`.
+- **A forge provider must be a built-in (in-process) plugin.** Installed plugins run in a worker process where every host call crosses an async `MessagePort`, but `ForgeProviderImpl`'s routing gate (`parseRemote`), URL builders, and `classifyPushError` are **synchronous** — the host calls them and uses the return value immediately. A worker can't satisfy that contract, so `host.registerForgeProvider` from a worker plugin logs a warning and returns a no-op disposer (`electron/services/plugin/pluginDevWorkerHostProxy.ts`). The manifest rejects `contributes.forgeProviders` only for a `"scope": "project"` plugin. An installed plugin's providers are still registered from its manifest and show in Settings → Code forge, but they stay unbacked: a project that resolves to one gets a "not activated" error instead of forge data. This is a permanent architectural gap, identical in dev and prod; a fix would require the forge API's synchronous surface to change. Everything below assumes a built-in under `plugins/builtin/`.
 - Read the [architecture reference](../architecture/forge-provider-abstraction.md). It explains the thin-interface-plus-capabilities model, the `rawData` escape hatch, and the state-normalization rule. The rest of this page assumes that context.
 - Skim `shared/types/forge.ts`. It is the source of truth for every signature — `ForgeProviderImpl`, the domain objects (`Issue`, `PR`, `RepoRef`, …), the capability sub-interfaces, and the manifest types. When the prose here and `forge.ts` disagree, `forge.ts` wins.
 
@@ -17,15 +17,20 @@ A forge provider lives under `plugins/builtin/{forge}/` and mirrors the GitHub l
 ```
 plugins/builtin/gitea/
 ├── plugin.json
-└── main/
-    ├── index.ts          # activate() — registers the provider
-    ├── forgeProvider.ts  # the ForgeProviderImpl object
-    ├── GiteaAuth.ts       # token storage, client construction
-    ├── GiteaQueries.ts    # transport (REST/GraphQL) calls
-    └── __tests__/         # unit tests, mirroring github's
+├── main/
+│   ├── index.ts          # activate() — registers the provider
+│   ├── forgeProvider.ts  # assembles the ForgeProviderImpl object
+│   ├── mappers.ts        # transport nodes → Issue, PR, …
+│   ├── readOps.ts        # read methods
+│   ├── mutations.ts      # mutation methods
+│   ├── GiteaAuth.ts      # token storage, client construction
+│   └── __tests__/        # unit tests, mirroring github's
+├── renderer/
+│   └── index.tsx         # optional — registers view slots (settings tab, icon, …)
+└── shared/               # optional — types shared by main and renderer
 ```
 
-Keep transport, auth, and normalization in their own modules. `forgeProvider.ts` should read as a thin adapter from your transport to the typed surface — the GitHub provider's `forgeProvider.ts` is ~1200 lines and almost entirely shape-mapping helpers.
+Keep transport, auth, and normalization in their own modules. `forgeProvider.ts` should be a thin assembly of those modules into the typed surface — the GitHub provider's `forgeProvider.ts` is about 480 lines that wire `readOps.ts`, `mutations.ts` and the capability modules together, while the shape mapping lives in `mappers.ts`. The GitLab provider follows the same split.
 
 ## Builtin plugin wiring
 
@@ -35,7 +40,7 @@ Plugin renderer code must use only relative, `@/` (host `src/`), and `@shared` i
 
 ## Declare the manifest entry
 
-Add a `forgeProviders` contribution to `plugin.json`. Daintree reads this eagerly at startup, before any plugin code runs, so the provider shows up in Preferences and the remote-routing table even if its `activate()` never fires.
+Add a `forgeProviders` contribution to `plugin.json`. Daintree reads this eagerly at startup, before any plugin code runs, so the provider shows up in Settings → Code forge and the remote-routing table even if its `activate()` never fires.
 
 ```json
 {
@@ -61,13 +66,46 @@ Add a `forgeProviders` contribution to `plugin.json`. Daintree reads this eagerl
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. The built-in GitHub plugin uses the bare `github`. Must match the `descriptor.id` you pass to `registerForgeProvider`. |
-| `name` | yes | Display label in Preferences → Forge Integrations. |
-| `matches` | yes | List of exact hostnames. The host extracts the hostname from the project's git remote (HTTPS, SSH, and SCP-form `git@host:owner/repo.git` URLs all handled), lowercases and trims it, then matches it for **exact string equality** against each entry. Matching is case-insensitive and strips a leading `www.` from both the remote hostname and each pattern before comparing — but there is still no glob, wildcard, or suffix matching. List every distinct hostname your forge serves (e.g. a self-hosted instance and its CI mirror) as separate entries. First matching provider wins. |
-| `capabilities` | no | Informational hints driving the Preferences "supports: …" display only. The host does **not** gate behavior on this array — see [Add optional capabilities](#add-optional-capabilities). |
-| `settingsScopeRef` | no | ID prefix in this plugin's `settings` contributions, used to group provider settings. |
-| `viewRefs` | no | IDs of `views` contributions shown under this provider's panel section. |
+| `name` | yes | Display label in Settings → Code forge. |
+| `matches` | yes | List of exact hostnames, at least one. The host extracts the hostname from the project's git remote (HTTPS, SSH, and SCP-form `git@host:owner/repo.git` URLs all handled), lowercases and trims it, then matches it for **exact string equality** against each entry. Matching is case-insensitive and strips a leading `www.` from both the remote hostname and each pattern before comparing — but there is still no glob, wildcard, or suffix matching. List every distinct hostname your forge serves (e.g. a self-hosted instance and its CI mirror) as separate entries. First matching provider wins, subject to the user's choices — see [Provider resolution](#provider-resolution). |
+| `kind` | no | `"network"` (the default) or `"local"`. Display-only — see [Local / offline providers](#local--offline-providers). |
+| `capabilities` | no | Informational hints driving the "Supports" row in the provider's Settings → Code forge page only. The host does **not** gate behavior on this array — see [Add optional capabilities](#add-optional-capabilities). |
+| `credentialFields` | no | Credential inputs the host renders a settings form from. See [Credential fields](#credential-fields). |
+| `settingsScopeRef` | no | Must exactly equal the `id` of one of this plugin's `contributes.settings[]` entries (not a prefix); anything else fails manifest parsing with `forge_settings_scope_ref_unknown`. No host code reads it today. |
+| `viewRefs` | no | Each entry must exactly equal a `contributes.views[].id`; anything else fails manifest parsing with `forge_view_ref_unknown`. No host code reads it today. |
+| `slots` | no | Renderer view-slot refs for provider-owned UI. See [View slots](#view-slots). |
 
 The `forgeProviders` contribution point is also documented in [Contribution points](./contribution-points.md#forge-providers--shipped).
+
+### Credential fields
+
+`credentialFields[]` declares the inputs the host renders in the provider's Settings → Code forge page, each `{ id, label, type, placeholder?, helpText? }`. `type: "password"` masks the input; any other value renders plain text. Every entered value is stored in the credential record under its `id`, but only the **primary** field's value is ever passed to your provider: `validateToken` and `setCredentials` receive that one value. The primary is the first `"password"` field, or the first field when none is `"password"`. A provider that needs more than one value to authenticate — a self-hosted instance URL plus a token, say — reads the rest from its own settings and validates the assembled credential in `validateCredentials`. GitLab does exactly this: its one `token` field is the credential, and the instance URL is the plugin's `instanceUrl` setting (`plugins/builtin/gitlab/plugin.json`, `main/GitLabAuth.ts`).
+
+With no `credentialFields`, the page shows no form: it says the provider needs no credentials, or, for `kind: "local"`, that it works locally with nothing to sign in to.
+
+### View slots
+
+`slots` names builtin views your renderer entry registers with `registerBuiltinView`, so the host can render the active provider's UI at fixed seams without knowing any plugin's view ids. All are optional:
+
+| Slot                       | Seam                                                          |
+| -------------------------- | ------------------------------------------------------------- |
+| `settingsTab`              | The provider's panel in Settings → Code forge                 |
+| `icon`                     | Brand icon beside the provider's name                         |
+| `statsDropdown`            | Content of the toolbar stats dropdown (issues, PRs, commits)  |
+| `bulkCreateWorktreeDialog` | The bulk create-worktrees-from-issues dialog                  |
+| `issueSelector`            | The issue picker used by the worktree attach and create flows |
+
+Refs are checked for shape only (a non-empty string) when the manifest is parsed; a ref that resolves to nothing renders a neutral fallback. `plugins/builtin/github/plugin.json` fills all five, and `plugins/builtin/github/renderer/index.tsx` registers them.
+
+### Provider resolution
+
+For each project the host picks one active provider (`electron/services/forgeProviderResolver.ts`):
+
+1. **Per-project override.** If the project names a provider, that provider wins whatever the remote's hostname, as long as it is registered. If it isn't, the project has no provider.
+2. **Global default.** Otherwise, if a global default is set, it wins when it is one of the providers whose `matches` contain the remote's hostname. If it isn't among them, the project has no provider.
+3. **First hostname match.** Otherwise the first provider whose `matches` contain the hostname.
+
+Because an override ignores hostnames, `parseRemote` can receive remote URLs from hosts that are not in your `matches` — a self-hosted GitLab instance whose hostname isn't listed is reached this way. Parse them on their merits and return `null` only for URLs you genuinely can't read.
 
 ## Register in activate()
 
@@ -78,44 +116,85 @@ The `forgeProviders` contribution point is also documented in [Contribution poin
 import type { PluginHostApi } from "../../../../shared/types/plugin.js";
 import { giteaForgeProvider } from "./forgeProvider.js";
 
-export function activate(host: PluginHostApi): () => void {
-  return host.registerForgeProvider({ id: "gitea" }, giteaForgeProvider);
+export async function activate(host: PluginHostApi): Promise<() => void> {
+  return await host.registerForgeProvider({ id: "gitea" }, giteaForgeProvider);
 }
 ```
 
-Return the disposer `registerForgeProvider` hands back. `descriptor.id` must match a `contributes.forgeProviders[].id` in `plugin.json` — an undeclared id is rejected so the impl can't drift away from the manifest's routing table. The descriptor mirrors the manifest entry; you can omit anything already declared statically, so `{ id }` alone is enough. All bindings are removed automatically on plugin unload. See [Host API → `registerForgeProvider`](./host-api.md#registerforgeprovider).
+`registerForgeProvider` returns `Promise<() => void>`; await it and return the disposer it resolves to (the GitHub and GitLab built-ins both do). `descriptor.id` must match a `contributes.forgeProviders[].id` in `plugin.json` — an undeclared id is rejected so the impl can't drift away from the manifest's routing table. The descriptor mirrors the manifest entry; you can omit anything already declared statically, so `{ id }` alone is enough. All bindings are removed automatically on plugin unload. See [Host API → `registerForgeProvider`](./host-api.md#registerforgeprovider).
 
 ## Implement ForgeProviderImpl
 
-`forgeProvider.ts` exports one object satisfying `ForgeProviderImpl`. Every provider implements the base methods; capabilities are optional sibling fields (next section). Signatures live in `shared/types/forge.ts` — this table is the map, not a substitute for reading them.
+`forgeProvider.ts` exports one object satisfying `ForgeProviderImpl`. Every provider implements the base methods; capabilities are optional sibling fields (see [Add optional capabilities](#add-optional-capabilities)). Signatures live in `shared/types/forge.ts` — these tables are the map, not a substitute for reading them.
 
 | Method | Returns | Key behavior |
 | --- | --- | --- |
 | `getCredentials()` | `Promise<Credentials \| null>` | `null` when no token is stored. The host passes credentials through without inspecting them. |
 | `setCredentials?(creds)` | `void` | Optional. Accept an in-memory credential override; ignore kinds your forge doesn't support. |
 | `validateCredentials()` | `Promise<AuthValidation>` | Validate the stored token against the provider. Return `{ valid, scopes?, expiresAt?, error?, account? }`. Set `account` to the login the token authenticates as when validation learns it — Settings shows it next to the saved credential. It is display-only. |
-| `parseRemote(url)` | `RepoRef \| null` | Return `null` for URLs that aren't yours — the registry only dispatches to you after a hostname match, but defensive `null` keeps you composable. |
+| `parseRemote(url)` | `RepoRef \| null` | Return `null` for URLs you can't read. Don't assume the hostname is one of your `matches`: a per-project override routes any remote to you (see [Provider resolution](#provider-resolution)). |
 | `listIssues(repo, opts)` | `Promise<Page<Issue>>` | Page through the provider's native query. No client-side filtering across pages — push filters into `ListOptions`. |
 | `listPRs(repo, opts)` | `Promise<Page<PR>>` | Same paging contract as `listIssues`. |
-| `getIssue(repo, n)` | `Promise<Issue \| null>` | `null` when the issue doesn't exist. |
-| `getPR(repo, n)` | `Promise<PR \| null>` | `null` when the PR doesn't exist. |
+| `getIssue(repo, n, opts?)` | `Promise<Issue \| null>` | `null` when the issue doesn't exist. `opts` is `FetchOptions`. |
+| `getPR(repo, n, opts?)` | `Promise<PR \| null>` | `null` when the PR doesn't exist. `opts` is `FetchOptions`. |
 | `findPRByBranch(repo, branch)` | `Promise<PR \| null>` | Resolve the open PR for a head branch. Escape branch names before interpolating into a search query. |
-| `getCIStatus(repo, prN)` | `Promise<CIStatus \| null>` | Roll checks up to one `CIStatusState`. The host renders a summary; it does not graph individual checks. Implement the optional `checks` capability if you can also serve the checks behind the verdict. |
-| `getRepoMetadata(repo)` | `Promise<RepoMetadata>` | Default branch, visibility, fork/archive flags, license, topics. |
+| `getCIStatus(repo, prN, opts?)` | `Promise<CIStatus \| null>` | Roll checks up to one `CIStatusState`. The host renders a summary; it does not graph individual checks. Implement the optional `checks` capability if you can also serve the checks behind the verdict. |
+| `getRepoMetadata(repo, opts?)` | `Promise<RepoMetadata>` | Default branch, visibility, fork/archive flags, license, topics. |
 | `buildIssueUrl(repo, n)` | `string` | You own your URL shape. |
 | `buildPRUrl(repo, n)` | `string` | — |
 | `buildIssuesUrl(repo, opts?)` | `string` | Optional `{ query, state }` filter. |
 | `buildPRsUrl(repo, opts?)` | `string` | — |
 | `buildCommitsUrl(repo, branch?)` | `string` | — |
 | `buildRepoUrl?(repo)` | `string` | Optional. The repository's home page. Omit it and the host leaves "View repository" out of the toolbar's forge stats menu, and `forge.openRepo` rejects. |
-| `assignIssue(repo, n, user)` | `Promise<ForgeUser[]>` | Return the issue's resulting assignee list — a forge that silently drops an assignee it won't accept must report the list without them. Reject (throw) if your forge can't assign. |
-| `unassignIssue(repo, n, user)` | `Promise<ForgeUser[]>` | Base method, paired with `assignIssue`. Returns the resulting assignee list. Reject (throw) if your forge can't unassign. |
-| `validateToken(token)` | `Promise<AuthValidation>` | Validate an arbitrary token (used by the token-entry UI before storing it). |
+| `validateToken(token)` | `Promise<AuthValidation>` | Validate a freshly entered credential before it is stored. `token` is the value of the primary [credential field](#credential-fields), never the whole record. |
 | `getRateLimit?()` | `Promise<RateLimitInfo>` | Optional. Project your transport's rate-limit signal into the uniform shape. `null` per dimension the provider doesn't report. |
 
-Beyond the base surface, `forge.ts` declares several optional performance/resilience hooks worth opting into: `findPRsByBranches?` (batch variant of `findPRByBranch` for many-branch sweeps), `clearPullRequestCaches?` (provider-owned cache invalidation on explicit refresh), `getRepoActivityProbe?` (cheap freshness token to skip expensive list refreshes), and `classifyPushError?` (map raw `git push` stderr to a provider-stable error code). Read `shared/types/forge.ts` for their full contracts.
+### Mutations
 
-The shape-mapping is the bulk of the work. Mirror the GitHub provider's `toForgeIssue` / `toForgePR` helpers (`plugins/builtin/github/main/forgeProvider.ts`): one pure function per domain object, defensively reading untyped transport nodes and producing the typed shape.
+The mutations are base methods too: every provider implements all of them. A forge that can't perform one rejects with a clear error (see [Error handling](#error-handling)). Methods that return the updated resource return the normalized shape, not your transport's.
+
+| Method | Returns | Key behavior |
+| --- | --- | --- |
+| `createIssue(repo, input: CreateIssueInput)` | `Promise<Issue>` | The host clears its issue caches after a successful create. |
+| `assignIssue(repo, n, username)` | `Promise<ForgeUser[]>` | Return the issue's resulting assignee list — a forge that silently drops an assignee it won't accept must report the list without them. |
+| `unassignIssue(repo, n, username)` | `Promise<ForgeUser[]>` | Paired with `assignIssue`. Returns the resulting assignee list. |
+| `closeIssue(repo, n, stateReason?: IssueCloseReason)` | `Promise<Issue>` | `stateReason` records why (GitHub's `completed` / `not_planned`); ignore it if your forge has no such notion. |
+| `reopenIssue(repo, n)` | `Promise<Issue>` | — |
+| `editIssue(repo, n, input: EditIssueInput)` | `Promise<Issue>` | Title and/or body; at least one is present. |
+| `addIssueComment(repo, n, body)` | `Promise<IssueComment>` | Returns the created comment. |
+| `addIssueLabel(repo, n, label)` | `Promise<ForgeLabel[]>` | Additive, by label name. Returns the issue's full label set afterwards. |
+| `removeIssueLabel(repo, n, label)` | `Promise<ForgeLabel[]>` | Returns the remaining label set. Throws when the label isn't on the issue. |
+| `createPR(repo, input: CreatePRInput)` | `Promise<PR>` | Opens a PR from `input.head` into `input.base`. The host clears its PR caches after a successful create. |
+| `closePR(repo, prN)` | `Promise<PR>` | Close without merging. |
+| `reopenPR(repo, prN)` | `Promise<PR>` | — |
+| `mergePR(repo, prN, input?: MergePRInput)` | `Promise<MergePRResult>` | Irreversible. Surface unmergeable states (draft, conflicts, failing required checks, stale head) as errors. |
+| `convertPRToDraft(repo, prN)` | `Promise<PRDraftStateResult>` | Returns the resulting draft state. |
+| `markPRReadyForReview(repo, prN)` | `Promise<PRDraftStateResult>` | Returns the resulting draft state. |
+| `commentOnPR(repo, prN, body)` | `Promise<IssueComment>` | Returns the created comment. |
+| `editPR(repo, prN, input: EditPRInput)` | `Promise<PR>` | Title and/or body. |
+
+### Optional hooks
+
+Beyond the base surface, `forge.ts` declares optional hooks worth opting into:
+
+- `findPRsByBranches?(repo, branches)` — batch variant of `findPRByBranch` for many-branch sweeps.
+- `clearPullRequestCaches?()` — provider-owned cache invalidation on an explicit refresh.
+- `getRepoActivityProbe?(repo)` — a cheap freshness token that lets the host skip an expensive list refresh.
+- `classifyPushError?(stderr)` — map raw `git push` stderr to a provider-stable error code.
+- `buildPRFileUrl?(repo, n, path)` — a deep link to one file on a PR's changed-files view. You own the anchor algorithm; `path` arrives raw and repository-relative, not URL-encoded.
+- `buildPRHeadRefspec?(prN, headRefName)` — the `src:dst` refspec that fetches a PR's head for checkout when the branch isn't known locally. Omit it to accept the default `pull/<n>/head:<headRefName>` (which Gitea and Forgejo also serve); return `null` when your forge exposes no fetchable PR-head ref. The destination must be exactly `headRefName` or `refs/heads/<headRefName>`, or the host falls back to the default.
+
+Read `shared/types/forge.ts` for their full contracts.
+
+### Fetch and list options
+
+`getIssue`, `getPR`, `getCIStatus` and `getRepoMetadata` take an optional `FetchOptions`, whose one field, `ifNotChangedSince`, is an opaque freshness token you returned earlier. The host only byte-compares tokens: pack an ETag, a timestamp tuple or whatever suits your transport into `freshnessToken` on the response, and when you honor `ifNotChangedSince` and nothing changed, set `notModified: true` and the host keeps its cached copy. It is advisory — ignore it if probing costs as much as fetching. A `null` return still means the resource doesn't exist; it is never a "not modified".
+
+`ListOptions` carries the same token as `ifNotChangedSince` for `listIssues` / `listPRs` (answered through `Page.freshnessToken` and `Page.notModified`), plus `bypassCache`: skip your in-memory list cache and any in-flight coalescing and fetch fresh, still populating the cache with the result. Every `ListOptions` field is advisory.
+
+### Shape mapping
+
+The shape-mapping is the bulk of the work. Mirror the GitHub provider's `toForgeIssue` / `toForgePR` helpers (`plugins/builtin/github/main/mappers.ts`): one pure function per domain object, defensively reading untyped transport nodes and producing the typed shape.
 
 ## Normalize state, preserve rawState
 
@@ -141,13 +220,19 @@ When you submit state back to the provider's API, send `rawState`, never the nor
 
 ## The rawData escape hatch
 
-Every returned shape has a `rawData: unknown` field. Put the verbatim transport node there. Plugin-shipped views may read it to render provider-specific detail; the host never inspects it.
+The domain objects (`Issue`, `PR`, `ForgeUser` and the rest) carry a `rawData: unknown` field; the `Page<T>` envelope and `ForgeLabel` do not. Put the verbatim transport node there. Plugin-shipped views may read it to render provider-specific detail; the host never inspects it.
 
 A first-party read of `rawData` is an interface-review signal — it means a field is missing from the typed surface and should be promoted there (or behind a capability), not papered over by reaching into `rawData`. Treat that as feedback on the interface, not a workaround.
 
 ## Error handling
 
 The host is a thin dispatcher — it does **no retry, backoff, or circuit-breaking** around provider calls. Every method runs once; if it throws, the rejection surfaces to the caller (and ultimately the user) as-is. Own auth, network, and rate-limit handling inside your transport: retry transient failures yourself, project the provider's rate-limit signal through `getRateLimit`, and let definitive failures reject.
+
+Calls that reach your provider from the workspace host (PR detection and the other background work) pass through main's forge RPC server (`electron/services/forgeRpcServer.ts`), which shapes them in three ways:
+
+- **Identical concurrent calls are coalesced.** Calls with the same method, provider and arguments share one in-flight call to your provider, and every caller gets its result or error. Nothing is cached once it settles.
+- **Each call has a 35 s ceiling.** A call that hasn't settled by then is rejected as timed out. Put your own, shorter timeout on network requests — the GitHub built-in uses 15 s.
+- **Results must be structured-cloneable.** They cross a process boundary. A result that can't be cloned — a `rawData` holding functions or proxies, say — reaches the caller as an error.
 
 A few conventions keep behavior predictable across providers:
 
@@ -170,7 +255,28 @@ export const giteaForgeProvider: ForgeProviderImpl = {
 };
 ```
 
-The capability sub-interfaces are `ReviewCapability`, `IssueCommentCapability`, `ChecksCapability`, `ApprovalCapability`, `ReleaseCapability`, `ProjectBoardCapability`, `MilestoneCapability`, and `BatchLookupCapability`. Omitting the field is how you declare non-support — the base interface never changes when a capability is added.
+The capability fields and their sub-interfaces:
+
+| Field | Interface | What it serves |
+| --- | --- | --- |
+| `reviews` | `ReviewCapability` | PR review threads, and optionally approving a PR |
+| `issueComments` | `IssueCommentCapability` | Issue comment listing |
+| `checks` | `ChecksCapability` | Per-check results behind `getCIStatus` |
+| `approvals` | `ApprovalCapability` | A PR's approval state |
+| `releases` | `ReleaseCapability` | Releases |
+| `projectBoards` | `ProjectBoardCapability` | Project boards |
+| `milestones` | `MilestoneCapability` | Milestones |
+| `batchLookups` | `BatchLookupCapability` | Batched CI status, PR and issue lookups by number |
+| `identity` | `IdentityCapability` | `getCurrentUser()` — the signed-in viewer, for flows like "assign to me"; `null` when there is none |
+| `tooltips` | `TooltipCapability` | Issue and PR hover cards, best-effort (`null` on failure) |
+| `repoStats` | `RepoStatsCapability` | The toolbar's issue and PR counts and dropdown priming |
+| `projectHealth` | `ProjectHealthCapability` | The project pulse card |
+| `avatars` | `AvatarCapability` | Commit-author avatar URLs by email |
+| `healthEvents` | `HealthEventsCapability` | Token-health and rate-limit change events the host relays to every window |
+| `clone` | `CloneCapability` | Authenticated cloning; without it the host clones anonymously with plain `git clone` |
+| `credentialImport` | `CredentialImportCapability` | Importing a credential from your forge's CLI — see [Credential import](#credential-import) |
+
+Omitting the field is how you declare non-support — the base interface never changes when a capability is added.
 
 `ChecksCapability.getChecks(repo, prN)` is the per-check counterpart to `getCIStatus`: it returns every check on a PR as a `CheckRun` (`name`, `status`, `conclusion?`, `required?`, `detailsUrl?`), so an agent diagnosing a red PR can name the failing check and follow `detailsUrl` to its log. Return the complete list or reject — a silently truncated list is a wrong answer, not a partial one — and page your forge's API to the end rather than serving only its first page. `null` means the PR doesn't exist; a PR with no checks is `{ checks: [] }`.
 
@@ -194,17 +300,17 @@ The contract exists to keep the secret on one side of one boundary:
 
 **Probe with truthiness, not `in`.** The host checks capability presence with `if (provider.reviews)`, not `"reviews" in provider`. An optional property explicitly set to `undefined` still satisfies the `in` operator, so `in` would falsely report the capability as available. Do the same in any code that consumes a provider.
 
-The manifest's `capabilities` array is informational only — it drives the Preferences "supports: …" label. Actual behavior gates on whether the capability field is present at runtime, which keeps the displayed claim honest even if the manifest is stale.
+The manifest's `capabilities` array is informational only — it drives the "Supports" row in the provider's Settings → Code forge page. Actual behavior gates on whether the capability field is present at runtime, which keeps the displayed claim honest even if the manifest is stale.
 
 ## Local / offline providers
 
 Not every provider talks to a network forge. A provider backed by on-disk files or a local CLI has no token to store and no remote to authenticate against — the auth surface (`getCredentials` / `validateCredentials` / `validateToken`) is dead weight you still have to satisfy. Two pieces make that ergonomic:
 
-- **`kind: "local"` on the manifest contribution.** A display-only signal — the host never gates auth or routing on it. Preferences uses it to label the provider "No configuration needed" rather than showing it as unconfigured. (`kind` defaults to `"network"`; it is frozen at 1.0 and otherwise inert.)
-- **`localAuthStubs` from `@daintreehq/plugin-sdk`.** Spread it into your impl to satisfy the three auth methods with no-ops: `getCredentials → null`, `validateCredentials → { valid: true }`, `validateToken → { valid: true }`.
+- **`kind: "local"` on the manifest contribution.** A display-only signal — the host never gates auth or routing on it. When the provider declares no `credentialFields`, Settings → Code forge uses it to say the provider works locally with nothing to sign in to, rather than that it needs no credentials. (`kind` defaults to `"network"`; it is frozen at 1.0 and otherwise inert.)
+- **`localAuthStubs` from `shared/utils/forgeProviderHelpers.ts`.** Spread it into your impl to satisfy the three auth methods with no-ops: `getCredentials → null`, `validateCredentials → { valid: true }`, `validateToken → { valid: true }`. A built-in imports it by relative path like any other `shared/` module; `@daintreehq/plugin-sdk` re-exports the same binding, but a forge provider is never an SDK-built plugin.
 
 ```ts
-import { localAuthStubs } from "@daintreehq/plugin-sdk";
+import { localAuthStubs } from "../../../../shared/utils/forgeProviderHelpers.js";
 
 export const localNotesProvider: ForgeProviderImpl = {
   ...localAuthStubs, // getCredentials / validateCredentials / validateToken
@@ -238,8 +344,8 @@ Forge providers are built-in only, so their tests follow the existing `plugins/b
 ## Ship checklist
 
 - [ ] `contributes.forgeProviders[]` entry in `plugin.json`, with `matches` listing every exact hostname your forge serves
-- [ ] `activate()` returns `host.registerForgeProvider({ id }, impl)`
-- [ ] All base `ForgeProviderImpl` methods implemented; unsupported mutations reject with a clear error
+- [ ] `activate()` returns the disposer from `await host.registerForgeProvider({ id }, impl)`
+- [ ] All base `ForgeProviderImpl` methods implemented, mutations included; unsupported mutations reject with a clear error
 - [ ] `state` normalized and `rawState` preserved on every `Issue`/`PR`
 - [ ] Verbatim transport node in `rawData`; no first-party reads of it
 - [ ] Optional capabilities present only when supported; consumers probe with truthiness
@@ -253,3 +359,4 @@ Forge providers are built-in only, so their tests follow the existing `plugins/b
 - [Host API → `registerForgeProvider`](./host-api.md#registerforgeprovider) — registration signature and rules
 - `shared/types/forge.ts` — the typed contract, source of truth
 - `plugins/builtin/github/` — the canonical worked example
+- `plugins/builtin/gitlab/` — credential fields, a provider setting and self-hosted instances

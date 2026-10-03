@@ -884,3 +884,108 @@ describe("FleetSnapshotService", () => {
     service.stop();
   });
 });
+
+describe("FleetSnapshotService.subscribe", () => {
+  it("tells a subscriber about each publication, with the retained snapshot already updated", async () => {
+    const client = makePtyClient([terminal({ id: "t1" })]);
+    const service = new FleetSnapshotService(client as never);
+    const seen: Array<{ snapshot: FleetSnapshot; retained: FleetSnapshot | null }> = [];
+    service.subscribe((snapshot) => seen.push({ snapshot, retained: service.getLastBroadcast() }));
+
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].snapshot.runs.map((r) => r.runId)).toEqual(["t1"]);
+    expect(seen[0].retained).toBe(seen[0].snapshot);
+    service.stop();
+  });
+
+  it("stays quiet on an unchanged poll and does not replay on subscribe", async () => {
+    const client = makePtyClient([terminal({ id: "t1" })]);
+    const service = new FleetSnapshotService(client as never);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    const listener = vi.fn();
+    service.subscribe(listener);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(listener).not.toHaveBeenCalled();
+    service.stop();
+  });
+
+  it("is told about degradation, not only healthy changes", async () => {
+    const client = makePtyClient([terminal({ id: "t1" })]);
+    const service = new FleetSnapshotService(client as never);
+    const listener = vi.fn();
+    service.subscribe(listener);
+    client.setFleet([], true);
+
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect((listener.mock.calls[0][0] as FleetSnapshot).degraded).toBe(true);
+    service.stop();
+  });
+
+  it("isolates a throwing listener from its siblings and from the read", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const client = makePtyClient([terminal({ id: "t1" })]);
+    const service = new FleetSnapshotService(client as never);
+    const sibling = vi.fn();
+    service.subscribe(() => {
+      throw new Error("boom");
+    });
+    service.subscribe(sibling);
+
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(sibling).toHaveBeenCalledTimes(1);
+    expect(lastSnapshot().degraded).toBe(false);
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+    service.stop();
+    errorSpy.mockRestore();
+  });
+
+  it("stops telling a listener once it unsubscribes, including mid-delivery", async () => {
+    const client = makePtyClient([terminal({ id: "t1" })]);
+    const service = new FleetSnapshotService(client as never);
+    const second = vi.fn();
+    let unsubscribeSecond = (): void => {};
+    // Registered first, so it unsubscribes `second` before `second` is reached.
+    service.subscribe(() => unsubscribeSecond());
+    unsubscribeSecond = service.subscribe(second);
+
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    // Snapshotted before delivery: the sibling unsubscribed mid-loop is still told this once.
+    expect(second).toHaveBeenCalledTimes(1);
+
+    client.setFleet([terminal({ id: "t2" })]);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(second).toHaveBeenCalledTimes(1);
+    service.stop();
+  });
+
+  it("drops every listener on stop", async () => {
+    const client = makePtyClient([terminal({ id: "t1" })]);
+    const service = new FleetSnapshotService(client as never);
+    service.start();
+    const listener = vi.fn();
+    service.subscribe(listener);
+    service.stop();
+
+    service.start();
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(listener).not.toHaveBeenCalled();
+    service.stop();
+  });
+});

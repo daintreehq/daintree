@@ -1,4 +1,4 @@
-import { Switch } from "@/components/ui/switch";
+import { Switch, type SwitchProps } from "@/components/ui/switch";
 
 // The settings layer named these after colours; the primitive names them after
 // what they mean. Mapping here keeps every existing call site untouched rather
@@ -11,7 +11,17 @@ const TONE_BY_COLOR_SCHEME = {
 
 type ColorScheme = keyof typeof TONE_BY_COLOR_SCHEME;
 
-interface SettingsSwitchProps {
+/**
+ * Everything but the look: the plugin kit's `Switch` forwards the DOM props a
+ * plugin passes (ref, handlers, data attributes) through here, so a plugin
+ * switch is this switch.
+ */
+type SettingsSwitchDomProps = Omit<
+  SwitchProps,
+  "size" | "tone" | "checked" | "defaultChecked" | "onCheckedChange"
+>;
+
+interface SettingsSwitchProps extends SettingsSwitchDomProps {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
   disabled?: boolean;
@@ -40,9 +50,11 @@ export function SettingsSwitch({
   name,
   colorScheme = "accent",
   className,
+  ...rest
 }: SettingsSwitchProps) {
   return (
     <Switch
+      {...rest}
       id={id}
       name={name}
       checked={checked}

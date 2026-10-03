@@ -1,4 +1,13 @@
-import { existsSync, realpathSync, watch as fsWatch, type FSWatcher } from "fs";
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  openSync,
+  realpathSync,
+  statSync,
+  watch as fsWatch,
+  type FSWatcher,
+} from "fs";
 import { basename, dirname, isAbsolute, relative, resolve as pathResolve, sep } from "path";
 import PQueue from "p-queue";
 import { MutableDisposable } from "../utils/lifecycle.js";
@@ -86,13 +95,21 @@ export interface TopologyWatcherHost {
  */
 export class TopologyWatcher {
   private subscription = new MutableDisposable();
-  // Cheap fs.watch on the common git dir, armed only while `.git/worktrees/`
-  // doesn't exist (project with zero linked worktrees). Without it the first
-  // external `git worktree add` of a session is only discovered by the 90s
-  // safety reconcile — startWatcher() no-ops on an absent dir and nothing
-  // re-invoked it. Fires once when the dir appears, then hands off to the
-  // real parcel watcher and an immediate reconcile.
+  // Watch the stable common git dir across deletion and recreation of
+  // `.git/worktrees/`. A watcher rooted in that metadata dir can go silent
+  // when the last linked worktree is removed, especially on Windows.
   private metadataSentinel: FSWatcher | null = null;
+  private metadataRootIdentity: string | null = null;
+  // Linux hands a freed inode straight back out, so a root removed and
+  // recreated between two sentinel callbacks can carry the old dev:ino. An
+  // open fd keeps the subscribed root's inode allocated while we compare.
+  private metadataRootFd: number | null = null;
+  // The last subscription teardown and the latest subscribe attempt, which
+  // settles only after a superseded subscription has been torn down. A pin
+  // outlives both: freeing the inode first makes the kernel drop the inotify
+  // watch, and parcel's own removal of that watch then fails with EINVAL.
+  private rootTeardown: Promise<unknown> = Promise.resolve();
+  private pendingArm: Promise<unknown> = Promise.resolve();
   // No constructor `timeout` here: this queue's task wraps runReconcile in
   // withTimeout itself (and always resolves via its own try/catch/finally),
   // so it can never pin the single slot. A p-queue constructor timeout would
@@ -169,6 +186,46 @@ export class TopologyWatcher {
     return `${commonDir}/worktrees`;
   }
 
+  private rootIdentity(metadataDir: string): string | null {
+    try {
+      const stat = statSync(metadataDir);
+      return `${stat.dev}:${stat.ino}`;
+    } catch {
+      return null;
+    }
+  }
+
+  private pinMetadataRoot(metadataDir: string): void {
+    this.releaseMetadataRoot();
+    if (process.platform === "linux") {
+      try {
+        const fd = openSync(metadataDir, "r");
+        this.metadataRootFd = fd;
+        const stat = fstatSync(fd);
+        this.metadataRootIdentity = `${stat.dev}:${stat.ino}`;
+        return;
+      } catch {
+        this.releaseMetadataRoot();
+      }
+    }
+    this.metadataRootIdentity = this.rootIdentity(metadataDir);
+  }
+
+  private releaseMetadataRoot(): void {
+    this.metadataRootIdentity = null;
+    if (this.metadataRootFd === null) return;
+    const fd = this.metadataRootFd;
+    this.metadataRootFd = null;
+    const close = (): void => {
+      try {
+        closeSync(fd);
+      } catch {
+        // Already closed — nothing left to release.
+      }
+    };
+    void Promise.allSettled([this.rootTeardown, this.pendingArm]).then(close);
+  }
+
   // Idempotent: a second call while the timer is live is a no-op, so the two
   // call sites (load-project path + setPollingEnabled resume) can both invoke
   // it unconditionally. Cleared in stop() (which dispose() and the pause path
@@ -205,16 +262,14 @@ export class TopologyWatcher {
     ) {
       return;
     }
+    this.armMetadataSentinel(metadataDir);
     if (!existsSync(metadataDir)) {
       // No linked worktrees yet — `.git/worktrees/` is created by the first
       // `git worktree add`. Watch for it so that add is discovered in
       // milliseconds instead of by the 90s safety reconcile.
-      this.armMetadataSentinel(metadataDir);
       return;
     }
-    // The real watcher takes over from here; a sentinel left over from an
-    // earlier no-dir phase would just fire redundantly.
-    this.disarmMetadataSentinel();
+    this.pinMetadataRoot(metadataDir);
 
     const generation = ++this.generation;
     const drain = () => this.drainEventBuffer();
@@ -228,7 +283,7 @@ export class TopologyWatcher {
       // Unresolvable now — events outside the lexical root stay relevant.
     }
 
-    subscribeParcelWatcher(
+    this.pendingArm = subscribeParcelWatcher(
       metadataDir,
       (err, events) => {
         if (err) {
@@ -268,18 +323,17 @@ export class TopologyWatcher {
       },
       {}
     )
-      .then((subscription) => {
-        if (generation !== this.generation) {
-          // stop() incremented the generation — discard.
-          subscription.unsubscribe();
-          return;
-        }
-        if (this.subscription.value) {
-          subscription.unsubscribe();
+      .then(async (subscription) => {
+        if (generation !== this.generation || this.subscription.value) {
+          // Superseded by a stop or restart, or a concurrent start already
+          // holds the watcher. The backend logs a failed teardown.
+          await subscription.unsubscribe().catch(() => {});
           return;
         }
         this.subscription.value = {
-          dispose: () => subscription.unsubscribe(),
+          dispose: () => {
+            this.rootTeardown = subscription.unsubscribe();
+          },
         };
       })
       .catch((err) => {
@@ -287,6 +341,7 @@ export class TopologyWatcher {
           // A stop/restart superseded this attempt — the failure is moot.
           return;
         }
+        this.releaseMetadataRoot();
         console.warn(
           `[WorkspaceHost] topology watcher subscribe failed for ${metadataDir}: ${(err as Error).message}`
         );
@@ -298,7 +353,8 @@ export class TopologyWatcher {
   }
 
   /**
-   * Arm the fs.watch sentinel that waits for `.git/worktrees/` to appear.
+   * Arm the fs.watch sentinel that tracks `.git/worktrees/` appearing and
+   * disappearing while the project is open.
    * Non-persistent and filtered to the single directory entry, so it costs
    * one watch handle on the common git dir. On failure (exotic filesystems,
    * watch limits) discovery falls back to the 90s safety reconcile.
@@ -313,8 +369,25 @@ export class TopologyWatcher {
         // so fall through to the existence check.
         if (name && name.toString().replaceAll("\\", "/") !== "worktrees") return;
         if (this.metadataSentinel !== sentinel) return;
-        if (!existsSync(metadataDir)) return;
-        this.disarmMetadataSentinel();
+        if (!this.enabled || !this.host.pollingEnabled) return;
+        const currentIdentity = this.rootIdentity(metadataDir);
+        // fs.watch on the parent can also report child metadata churn as a
+        // `worktrees` rename. Keep the subscription when its root inode is
+        // unchanged; only a removed or replaced root invalidates it.
+        const replaced = currentIdentity !== this.metadataRootIdentity;
+        if (this.subscription.value && !replaced) return;
+        if (this.subscription.value || replaced) {
+          // Bumping the generation also discards a subscribe still in flight
+          // for the old root, so it can't land after its pin is released.
+          this.generation++;
+          this.subscription.value = undefined;
+          this.releaseMetadataRoot();
+        }
+        this.metadataRootIdentity = currentIdentity;
+        if (currentIdentity === null) {
+          this.scheduleReconcile();
+          return;
+        }
         void this.startWatcher();
         this.scheduleReconcile();
       });
@@ -358,6 +431,7 @@ export class TopologyWatcher {
       // to re-arm via the sentinel path.
       this.generation++;
       this.subscription.value = undefined;
+      this.releaseMetadataRoot();
     }
     await this.startWatcher();
   }
@@ -370,6 +444,7 @@ export class TopologyWatcher {
     this.handleRecovered();
     this.generation++;
     this.subscription.value = undefined;
+    this.releaseMetadataRoot();
     this.disarmMetadataSentinel();
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);

@@ -1,7 +1,6 @@
 import { useEffect } from "react";
-import { useErrorStore, useDiagnosticsStore, usePerformanceModeStore } from "@/store";
+import { useErrorStore } from "@/store";
 import { useRecipeConflictStore } from "@/store/recipeConflictStore";
-import { usePerfMetricsStore } from "@/store/perfMetricsStore";
 import {
   requestMcpConfirmation,
   useMcpConfirmStore,
@@ -96,25 +95,6 @@ export function useE2EBridges(): void {
         usePluginMcpConfirmStore.getState().reset();
       };
 
-      // Per-window store accessors for the multi-window isolation spec (#9599).
-      // Each project view is its own V8 context, so these Zustand singletons are
-      // per-window — mutating one window's store must not leak into another's.
-      window.__DAINTREE_E2E_DIAGNOSTICS_STATE__ = () => ({
-        isOpen: useDiagnosticsStore.getState().isOpen,
-      });
-      window.__DAINTREE_E2E_OPEN_DIAGNOSTICS__ = () => useDiagnosticsStore.getState().openDock();
-      window.__DAINTREE_E2E_PERF_METRICS_STATE__ = () => {
-        const s = usePerfMetricsStore.getState();
-        return { fps: s.fps, lafCount30s: s.lafCount30s, cls30s: s.cls30s };
-      };
-      window.__DAINTREE_E2E_SET_PERF_METRIC__ = (fps: number) =>
-        usePerfMetricsStore.getState().setLiveMetrics({ fps, lafCount30s: 0, cls30s: 0 });
-      window.__DAINTREE_E2E_PERF_MODE_STATE__ = () => ({
-        performanceMode: usePerformanceModeStore.getState().performanceMode,
-      });
-      window.__DAINTREE_E2E_SET_PERF_MODE__ = (enabled: boolean) =>
-        usePerformanceModeStore.getState().setPerformanceMode(enabled);
-
       // Lazy-load the notification backdoor only under E2E so its module closure
       // stays out of the production first-paint chunk. Fire-and-forget: the helper
       // side in e2e/helpers/notifications.ts waits for __daintreeNotificationsE2E
@@ -137,12 +117,6 @@ export function useE2EBridges(): void {
       delete window.__DAINTREE_E2E_RESET_MCP_CONFIRM__;
       delete window.__DAINTREE_E2E_ENQUEUE_PLUGIN_MCP_CONFIRM__;
       delete window.__DAINTREE_E2E_RESET_PLUGIN_MCP_CONFIRM__;
-      delete window.__DAINTREE_E2E_DIAGNOSTICS_STATE__;
-      delete window.__DAINTREE_E2E_OPEN_DIAGNOSTICS__;
-      delete window.__DAINTREE_E2E_PERF_METRICS_STATE__;
-      delete window.__DAINTREE_E2E_SET_PERF_METRIC__;
-      delete window.__DAINTREE_E2E_PERF_MODE_STATE__;
-      delete window.__DAINTREE_E2E_SET_PERF_MODE__;
       delete window.__daintreeNotificationsE2E;
     };
   }, []);

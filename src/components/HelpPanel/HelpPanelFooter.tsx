@@ -42,9 +42,10 @@ export function formatPinnedBinding(context: PinnedActionContextSnapshot): strin
 /**
  * How far the row has had to compact to stay on one line. Each step gives up
  * the least useful remaining detail: 1 hides the model, 2 the agent name
- * (its icon stays), 3 the live tool id (its glyph stays), 4 the binding text.
+ * (its icon stays), 3 the watch item's noun (its count stays), 4 the live
+ * tool id (its glyph stays), 5 the binding text.
  */
-export const MAX_FOOTER_DENSITY = 4;
+export const MAX_FOOTER_DENSITY = 5;
 
 /**
  * Measures the row after each layout and steps the density up until nothing
@@ -57,16 +58,20 @@ export const MAX_FOOTER_DENSITY = 4;
  *
  * Telling those outside changes from the row's own compaction is done by
  * measurement, not by flagging commits: once a generation settles, the width
- * of every item in the row is recorded, and a later DOM change only restarts
- * if one of them moved or the row overflows. Every item, not just the spacer:
+ * of every item in the row is recorded, along with whether the row still
+ * overflows, and a later DOM change only restarts if that snapshot changed.
+ * Overflow is part of the snapshot, not a trigger on its own: a row that still
+ * overflows at the last step would otherwise restart on its own compaction's
+ * text changes, forever. Every item, not just the spacer:
  * space a child gives up is often absorbed by a truncated sibling growing
  * back, with the spacer still at its minimum. The row's own steps are already
  * part of the recorded layout, so they can never re-trigger a restart.
  */
 function measureItems(row: HTMLElement): string {
-  return Array.from(row.children, (child) =>
+  const widths = Array.from(row.children, (child) =>
     child instanceof HTMLElement ? child.offsetWidth : 0
   ).join(",");
+  return `${widths}|${row.scrollWidth > row.clientWidth ? "overflow" : "fits"}`;
 }
 
 export function useFooterDensity(contentKey: string) {
@@ -92,9 +97,7 @@ export function useFooterDensity(contentKey: string) {
     if (!row) return;
     const restart = () => setEpoch((e) => e + 1);
     const mutations = new MutationObserver(() => {
-      if (measureItems(row) !== settledLayout.current || row.scrollWidth > row.clientWidth) {
-        restart();
-      }
+      if (measureItems(row) !== settledLayout.current) restart();
     });
     mutations.observe(row, { childList: true, subtree: true, characterData: true });
     let lastWidth = row.clientWidth;
@@ -190,7 +193,7 @@ export function HelpPanelFooter({
     ].join("|")
   );
   const bindingText = (
-    <span className={density < 4 ? "truncate min-w-0" : "sr-only"}>{binding}</span>
+    <span className={density < 5 ? "truncate min-w-0" : "sr-only"}>{binding}</span>
   );
 
   return (
@@ -204,17 +207,22 @@ export function HelpPanelFooter({
       <div
         ref={rowRef}
         // Items carry their own `px-1.5` hover chip, so the strip insets by
-        // that much less and the ink still sits on the 12px line.
+        // that much less and the ink still sits on the 12px line. 2px above
+        // and below keeps every hover and focus chip off the row's edges, and
+        // the wider right inset keeps the last one clear of the rounded
+        // window corner the panel usually sits in.
         className={cn(
           PANE_STATUS_FOOTER_CLASS,
-          "gap-1 px-1.5 py-0 whitespace-nowrap overflow-hidden"
+          "gap-1 pl-1.5 pr-2.5 py-0.5 whitespace-nowrap overflow-hidden"
         )}
       >
-        <McpActivityStrip sessionId={sessionId} activity={activity} compact={density >= 3} />
+        <McpActivityStrip sessionId={sessionId} activity={activity} compact={density >= 4} />
         <TurnOutcomePip outcome={outcomeAlert} onDismiss={onDismissOutcome} />
         {/* This lane's pending terminal notices: self-gating, and where the
             user stops Daintree from typing into the assistant. */}
-        {terminalId && <TerminalNotifyChip terminalId={terminalId} />}
+        {terminalId && (
+          <TerminalNotifyChip terminalId={terminalId} variant="footer" compact={density >= 3} />
+        )}
         <span aria-hidden className="flex-1 min-w-2" />
         {binding !== null &&
           // A diverged worktree is recoverable in one click — switch focus back
@@ -232,7 +240,7 @@ export function HelpPanelFooter({
                   className={cn(
                     FOOTER_ITEM_CLASS,
                     "shrink-[4] text-status-warning",
-                    density < 4 ? "min-w-[4.5rem]" : "min-w-0"
+                    density < 5 ? "min-w-[4.5rem]" : "min-w-0"
                   )}
                 >
                   <ArrowLeftRight aria-hidden className="w-3 h-3 shrink-0" />
@@ -248,7 +256,7 @@ export function HelpPanelFooter({
             <StatusItem
               data-footer-binding="neutral"
               tip={`Tool calls run in ${binding}`}
-              className={cn("shrink-[4]", density < 4 ? "min-w-[4.5rem]" : "min-w-0")}
+              className={cn("shrink-[4]", density < 5 ? "min-w-[4.5rem]" : "min-w-0")}
             >
               <FolderGit2 aria-hidden className="w-3 h-3 shrink-0" />
               <span className="sr-only">Pinned worktree: </span>

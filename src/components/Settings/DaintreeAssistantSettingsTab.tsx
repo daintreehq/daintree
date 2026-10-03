@@ -50,6 +50,7 @@ import {
 } from "@shared/config/agentRegistry";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { DAINTREE_CONFIRMATION_OPTIONS } from "@/config/assistantDaintreeConfirmations";
 import {
   assistantSkipsDaintreeConfirmations,
   isHelpAssistantDaintreeConfirmations,
@@ -223,8 +224,8 @@ const TIER_CHOICES: { value: HelpAssistantTier; label: string; description: stri
 ];
 
 const TIER_DETAILS: Record<HelpAssistantTier, string> = {
-  core: "The assistant can create worktrees, launch agents and send them prompts, read and wait on terminals, and move, rename or close them. It can delete a worktree it created, which asks you to confirm unless Daintree confirmations says otherwise. This covers most orchestration and keeps the tool list the model rereads every turn short.",
-  full: "Adds recipes and project checks, starting work on an issue, forge PR, issue and CI reads, git activity, CopyTree context, deleting any worktree and managing its resources, and diagnostics. Deletions and teardowns ask you to confirm unless Daintree confirmations says otherwise. Git and forge writes and file edits aren't available in either tool set.",
+  core: "The assistant can create worktrees, launch agents and send them prompts, read and wait on terminals, and move, rename or close them. It can delete worktrees, including ones an earlier session created, which asks you to confirm unless Daintree confirmations says otherwise. This covers most orchestration and keeps the tool list the model rereads every turn short.",
+  full: "Adds recipes and project checks, starting work on an issue, forge PR, issue and CI reads, git activity, CopyTree context, managing worktree resources, and diagnostics. Teardowns ask you to confirm unless Daintree confirmations says otherwise. Git and forge writes and file edits aren't available in either tool set.",
 };
 
 const TIER_SHORT_LABEL: Record<HelpAssistantTier, string> = {
@@ -300,14 +301,6 @@ const tierBoundsNewSessions = (tier: HelpAssistantTier, confirmationsSkipped: bo
       ? "Daintree's own confirmations, closing panels included, are skipped as well, as set by Daintree confirmations below."
       : "Actions that need confirmation still open Daintree's own prompt unless an automation grant covers them."
   }`;
-
-// The live value lives in the row's description, where the select's narrow
-// rail cannot clip it.
-const DAINTREE_CONFIRMATION_OPTIONS = [
-  { value: "inherit", label: "Follow global setting" },
-  { value: "always-ask", label: "Always ask" },
-  { value: "never-ask", label: "Never ask" },
-];
 
 /**
  * Per-agent wording for the one stored `bypassPermissions` preference. The
@@ -1269,6 +1262,8 @@ export function DaintreeAssistantSettingsTab() {
             </div>
           )}
 
+          {/* The live value lives in the row's description, where the select's narrow
+              rail cannot clip it. */}
           <SettingsSelect
             id="assistant-daintree-confirmations"
             label="Daintree confirmations"

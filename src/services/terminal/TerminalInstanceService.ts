@@ -17,6 +17,7 @@ import {
   TerminalLink,
   TerminalResyncOptions,
 } from "./types";
+import { NO_PADDING_PAINT, type TerminalPaddingPaint } from "./terminalPaddingPaint";
 import { tallyScrollbackRestoreStates } from "./scrollbackRestoreAggregate";
 import {
   setupTerminalAddons,
@@ -606,6 +607,7 @@ class TerminalInstanceService {
   private makeListenerInstallDeps(): TerminalListenerInstallDeps {
     return {
       onBufferModeChange: (id, isAltBuffer) => this.handleBufferModeChange(id, isAltBuffer),
+      onPaddingPaintChange: (id, paint) => this.handlePaddingPaintChange(id, paint),
       isWebGLActive: (id) => this.webGLManager.isActive(id),
       notifyParsed: (id) => this.dataBuffer.notifyParsed(id),
       scrollToBottomSafe: (managed) => this.scrollToBottomSafe(managed),
@@ -3134,6 +3136,41 @@ class TerminalInstanceService {
     return managed?.isAltBuffer ?? false;
   }
 
+  private handlePaddingPaintChange(id: string, paint: TerminalPaddingPaint): void {
+    const managed = this.instances.get(id);
+    if (!managed?.paddingPaintListeners) return;
+    for (const callback of managed.paddingPaintListeners) {
+      try {
+        callback(paint);
+      } catch (err) {
+        logError("Padding paint callback error", err);
+      }
+    }
+  }
+
+  /**
+   * Subscribes to the app-painted padding colours (#13160). Fires immediately
+   * with the last sample, then only when the sampled result changes.
+   */
+  addPaddingPaintListener(id: string, callback: (paint: TerminalPaddingPaint) => void): () => void {
+    const managed = this.instances.get(id);
+    if (!managed) return () => {};
+
+    managed.paddingPaintListeners ??= new Set();
+    const listeners = managed.paddingPaintListeners;
+    listeners.add(callback);
+
+    try {
+      callback(managed.paddingPaint ?? NO_PADDING_PAINT);
+    } catch (err) {
+      logError("Padding paint callback error", err);
+    }
+
+    return () => {
+      listeners.delete(callback);
+    };
+  }
+
   /**
    * Returns whether DEC private mode 2026 (Synchronized Output / BSU+ESU) is
    * currently open on the terminal. Returns `null` when the terminal is
@@ -3830,6 +3867,7 @@ class TerminalInstanceService {
     managed.exitSubscribers.clear();
     managed.agentStateSubscribers.clear();
     managed.altBufferListeners.clear();
+    managed.paddingPaintListeners?.clear();
 
     managed.parserHandler?.dispose();
 
@@ -4179,7 +4217,7 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
   };
 
   // Test-only: hand the live xterm Terminal instance to the interactivity perf
-  // probe (e2e/full/terminal/interactivity-perf.spec.ts) so it can hook
+  // probe (e2e/perf/interactivity-perf.spec.ts) so it can hook
   // onData/onWriteParsed/onRender and read the buffer without a bridge per
   // event. Same-realm only — the instance never crosses a serialization
   // boundary. Object.assign keeps it off the type-assertion lint ratchet.

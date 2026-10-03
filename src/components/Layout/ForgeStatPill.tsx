@@ -110,20 +110,15 @@ export function ForgeStatPill({
                 onPointerLeave={onPointerLeave}
                 onClick={onClick}
                 className={cn(
-                  // `scale` is in the set so the base cva's `active:scale-[0.98]
-                  // active:duration-[1ms]` press snap has a transitioned property to
-                  // act on — a bare `transition-opacity` here replaces the cva's
-                  // `transition` outright under tailwind-merge, which left both the
-                  // hover tint and the press scale uninterpolated.
-                  // `bg-clip-padding` keeps the hover and open tints off the
-                  // segment's divider, which would otherwise brighten on one
-                  // side of the lit segment only. The ring is inset: the
-                  // container's overflow-hidden clips an outward one. The open
-                  // state's inset edge is drawn in toolbar.css.
-                  "toolbar-stat-pill h-full flex-1 justify-center gap-1.5 rounded-none bg-clip-padding px-2 text-text-primary transition-[opacity,background-color,scale] hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary focus-visible:-outline-offset-2",
+                  // Press, transition and the open state's fill and inset edge
+                  // all come from toolbar.css, shared with the toolbar's other
+                  // controls. `bg-clip-padding` keeps the hover, press and open
+                  // tints off the segment's divider, which would otherwise
+                  // brighten on one side of the lit segment only. The ring is
+                  // inset: the container's overflow-hidden clips an outward one.
+                  "toolbar-stat-pill h-full flex-1 justify-center gap-1.5 rounded-none bg-clip-padding px-2 text-text-primary hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary focus-visible:-outline-offset-2",
                   activityChip != null && "relative",
-                  className,
-                  open && "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))]"
+                  className
                 )}
                 id={triggerId}
                 aria-label={ariaLabel}

@@ -358,6 +358,19 @@ describe("TerminalProcess rate-limit observation (#12797)", () => {
     terminal.dispose();
   });
 
+  it("sees Claude's weekly-limit banner under the tool-result gutter (#13127)", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!(
+      "  ⎿  You’ve hit your weekly limit · resets Oct 2 at 9pm (Europe/Lisbon)\r\n"
+    );
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
   it("ignores a plain shell with no agent", async () => {
     const seen = collect();
     const terminal = createTerminal();

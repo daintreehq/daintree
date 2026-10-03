@@ -14,7 +14,11 @@ vi.mock("../../../utils/logger.js", () => ({
 
 import { PluginDevWorkerMainBridge } from "../PluginDevWorkerMainBridge.js";
 import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
+import { PluginInvokeTimeoutError, runWithInvokeDeadline } from "../pluginInvokeDeadline.js";
+import type { PluginIpcContext } from "../../../../shared/types/plugin.js";
 import { databaseBackupApprovers } from "../pluginInternalApprovers.js";
+import { parseWorkerToHostMessage } from "../../../schemas/pluginDevWorker.js";
+import { PLUGIN_PUSH_MAX_PAYLOAD_BYTES } from "../../../../shared/config/pluginBudgets.js";
 
 class FakeWorkerHost extends EventEmitter {
   sent: any[] = [];
@@ -59,6 +63,15 @@ function makeHost() {
     sendToAgent: vi.fn(async (): Promise<unknown> => ({ status: "drafted", terminalId: "t-1" })),
     agents: {
       list: vi.fn(async () => [{ terminalId: "t-1", canDraft: true }]),
+      listAll: vi.fn(async () => ({ agents: [], degraded: false, lastSuccessfulAt: 1 })),
+    },
+    terminals: {
+      readScreen: vi.fn(async (): Promise<unknown> => ({
+        status: "ok",
+        text: "Waiting",
+        lineCount: 1,
+        truncated: false,
+      })),
     },
     showInputBox: vi.fn(async (): Promise<unknown> => undefined),
     showConfirm: vi.fn(async () => false),
@@ -188,6 +201,7 @@ function makeBridge(
   const clear = overrides?.clear ?? vi.fn();
   const onActivationResult = overrides?.onActivationResult ?? vi.fn();
   const onTerminalFailure = vi.fn();
+  const onPushRejected = vi.fn();
   const bridge = new PluginDevWorkerMainBridge({
     pluginId: overrides?.pluginId ?? "acme.demo",
     host: host as any,
@@ -196,8 +210,9 @@ function makeBridge(
     clearPriorRegistrations: clear,
     onActivationResult,
     onTerminalFailure,
+    onPushRejected,
   });
-  return { host, workerHost, bridge, clear, onActivationResult, onTerminalFailure };
+  return { host, workerHost, bridge, clear, onActivationResult, onTerminalFailure, onPushRejected };
 }
 
 const flush = () => new Promise((r) => setImmediate(r));
@@ -222,6 +237,30 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(host.getWorktrees).toHaveBeenCalled();
     const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c1");
     expect(result).toMatchObject({ ok: true, result: [{ id: "w1" }] });
+  });
+
+  it("relays dispatch options to the real host, and omits nothing when absent (#13119)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-d1",
+      method: "dispatch",
+      params: { actionId: "agent.launch", args: { a: 1 }, options: { projectId: "p-b" } },
+    });
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-d2",
+      method: "dispatch",
+      params: { actionId: "terminal.focus" },
+    });
+    await flush();
+    expect(host.dispatch).toHaveBeenNthCalledWith(
+      1,
+      "agent.launch",
+      { a: 1 },
+      { projectId: "p-b" }
+    );
+    expect(host.dispatch).toHaveBeenNthCalledWith(2, "terminal.focus", undefined, undefined);
   });
 
   it("relays db.resolve with only the database id", async () => {
@@ -467,6 +506,23 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(workerHost.sent.find((m) => m.requestId === "g2")).toMatchObject({
       ok: true,
       result: { status: "drafted", terminalId: "t-1" },
+    });
+  });
+
+  it("routes terminals.readScreen with its id and options to the real host", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "s1",
+      method: "terminals.readScreen",
+      params: { terminalId: "t-1", options: { lines: 5 } },
+    });
+    await flush();
+
+    expect(host.terminals.readScreen).toHaveBeenCalledWith("t-1", { lines: 5 });
+    expect(workerHost.sent.find((m) => m.requestId === "s1")).toMatchObject({
+      ok: true,
+      result: { status: "ok", text: "Waiting" },
     });
   });
 
@@ -2344,5 +2400,244 @@ describe("sendToAgent cancelled from the worker after main has acted", () => {
     controller.abort();
 
     await expect(result).resolves.toEqual({ status: "cancelled" });
+  });
+});
+
+describe("PluginDevWorkerMainBridge handler invoke deadline", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.useRealTimers());
+
+  const ctx: PluginIpcContext = {
+    projectId: null,
+    worktreeId: null,
+    webContentsId: 1,
+    pluginId: "acme.demo",
+  };
+
+  it("forwards a declared timeoutMs to the host registration", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerHandler",
+      params: { channel: "slow", hasSchema: false, timeoutMs: 0 },
+    });
+    await flush();
+    expect(host.registerHandler).toHaveBeenCalledWith("slow", expect.any(Function), {
+      timeoutMs: 0,
+    });
+  });
+
+  it("cancels the worker invoke when the deadline's signal aborts", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerHandler",
+      params: { channel: "slow", hasSchema: false },
+    });
+    await flush();
+    const handler = host.registerHandler.mock.calls[0][1] as (
+      c: PluginIpcContext,
+      ...args: unknown[]
+    ) => Promise<unknown>;
+
+    vi.useFakeTimers();
+    // What the host's deadline wrapper does around a registered handler.
+    const pending = runWithInvokeDeadline("acme.demo", "slow", 100, ctx, (scoped) =>
+      handler(scoped, "arg")
+    ) as Promise<unknown>;
+    const outcome = pending.catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const invoke = workerHost.sent.find((m: any) => m.type === "invoke" && m.kind === "handler");
+    expect(invoke).toMatchObject({ channel: "slow", args: ["arg"], ctx });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await outcome).toBeInstanceOf(PluginInvokeTimeoutError);
+    expect(workerHost.sent).toContainEqual({ type: "invoke-cancel", requestId: invoke.requestId });
+
+    // A late result for the cancelled id has nothing left to settle.
+    workerHost.emit("worker-message", {
+      type: "invoke-result",
+      requestId: invoke.requestId,
+      ok: true,
+      result: "late",
+    });
+  });
+});
+
+describe("PluginDevWorkerMainBridge app-wide agent list (#13154)", () => {
+  it("routes agents.listAll to the real host", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "la1",
+      method: "agents.listAll",
+      params: undefined,
+    });
+    await flush();
+
+    expect(host.agents.listAll).toHaveBeenCalledTimes(1);
+    expect(workerHost.sent.find((m) => m.requestId === "la1")).toMatchObject({
+      ok: true,
+      result: { agents: [], degraded: false, lastSuccessfulAt: 1 },
+    });
+  });
+
+  it("subscribes all-agents through the real host and pushes each snapshot", async () => {
+    const { host, workerHost } = makeBridge({ capabilities: ["agent:read"] });
+    let deliver: ((snapshot: unknown) => void) | undefined;
+    (host as any).onDidChangeAllAgents = vi.fn(async (cb: (snapshot: unknown) => void) => {
+      deliver = cb;
+      return vi.fn();
+    });
+    workerHost.emit("worker-message", {
+      type: "subscribe",
+      subscriptionId: "s-all",
+      kind: "all-agents",
+      debounceMs: 250,
+    });
+    await flush();
+
+    expect((host as any).onDidChangeAllAgents).toHaveBeenCalledWith(expect.any(Function), {
+      debounceMs: 250,
+    });
+    const snapshot = { agents: [{ terminalId: "t-1" }], degraded: false, lastSuccessfulAt: 2 };
+    deliver?.(snapshot);
+    const evt = workerHost.sent.find(
+      (m: any) => m.type === "subscription-event" && m.subscriptionId === "s-all"
+    );
+    expect(evt.payload).toEqual(snapshot);
+  });
+});
+
+describe("PluginDevWorkerMainBridge coalesced subscriptions and readFiles", () => {
+  it("passes an absent debounceMs through as undefined so the host default applies", async () => {
+    const { host, workerHost } = makeBridge({ capabilities: ["agent:read"] });
+    (host as any).onDidChangeAgentState = vi.fn(async () => vi.fn());
+    for (const [id, kind] of [
+      ["s-w", "worktrees"],
+      ["s-a", "active-worktree"],
+      ["s-g", "agent-state"],
+    ]) {
+      workerHost.emit("worker-message", { type: "subscribe", subscriptionId: id, kind });
+    }
+    await flush();
+    expect(host.onDidChangeWorktrees).toHaveBeenCalledWith(expect.any(Function), {
+      debounceMs: undefined,
+    });
+    expect(host.onDidChangeActiveWorktree).toHaveBeenCalledWith(expect.any(Function), {
+      debounceMs: undefined,
+    });
+    expect((host as any).onDidChangeAgentState).toHaveBeenCalledWith(expect.any(Function), {
+      debounceMs: undefined,
+    });
+  });
+
+  it("forwards an explicit debounceMs: 0 opt-out", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "subscribe",
+      subscriptionId: "s-w0",
+      kind: "worktrees",
+      debounceMs: 0,
+    });
+    await flush();
+    expect(host.onDidChangeWorktrees).toHaveBeenCalledWith(expect.any(Function), {
+      debounceMs: 0,
+    });
+  });
+
+  it("pushes the worktree list together with its change set", async () => {
+    const { host, workerHost } = makeBridge();
+    let deliver: ((list: unknown[], change: unknown) => void) | undefined;
+    host.onDidChangeWorktrees.mockImplementation((cb: any) => {
+      deliver = cb;
+      return vi.fn();
+    });
+    workerHost.emit("worker-message", {
+      type: "subscribe",
+      subscriptionId: "s-d",
+      kind: "worktrees",
+    });
+    await flush();
+    const change = { added: ["w1"], removed: [], changed: [] };
+    deliver?.([{ id: "w1" }], change);
+    const evt = workerHost.sent.find(
+      (m: any) => m.type === "subscription-event" && m.subscriptionId === "s-d"
+    );
+    expect(evt.payload).toEqual({ snapshots: [{ id: "w1" }], change });
+  });
+
+  it("relays fs.readFiles with the call's signal and the worker's options", async () => {
+    const { host, workerHost } = makeBridge();
+    const result = [{ path: "/repo/a", ok: true, content: "a" }];
+    (host.fs as any).readFiles = vi.fn(async () => result);
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "rf1",
+      method: "fs.readFiles",
+      params: { paths: ["/repo/a"], encoding: "bytes" },
+    });
+    await flush();
+    expect((host.fs as any).readFiles).toHaveBeenCalledWith(
+      ["/repo/a"],
+      expect.objectContaining({ encoding: "bytes", signal: expect.anything() })
+    );
+    const res = workerHost.sent.find((m: any) => m.type === "host-result" && m.requestId === "rf1");
+    expect(res).toMatchObject({ ok: true, result });
+  });
+});
+
+describe("PluginDevWorkerMainBridge push rejections", () => {
+  function makeConnected() {
+    const pair = makeBridge();
+    const wire: any[] = [];
+    const proxy = new PluginDevWorkerHostProxy(
+      "acme.demo",
+      (msg) => {
+        // What the real port does: structured clone, then main's schema gate.
+        const cloned = structuredClone(msg);
+        wire.push(cloned);
+        const parsed = parseWorkerToHostMessage(cloned);
+        if (!parsed.ok) throw new Error(`schema rejected: ${parsed.issues}`);
+        pair.workerHost.emit("worker-message", parsed.message);
+      },
+      {
+        instanceId: "acme.demo",
+        manifestId: "acme.demo",
+        origin: "global",
+        projectId: null,
+        projectRoot: null,
+      }
+    );
+    return { ...pair, proxy, wire };
+  }
+
+  it("reports a push the worker refused before the port, without its payload", async () => {
+    const { host, proxy, onPushRejected, wire } = makeConnected();
+    const huge = { blob: "x".repeat(PLUGIN_PUSH_MAX_PAYLOAD_BYTES) };
+    expect(() => proxy.host.broadcastToRenderer("tick", huge)).toThrow(/PLUGIN_PAYLOAD_TOO_LARGE/);
+    await expect(proxy.host.postToPanel("tick", huge, "panel-a")).rejects.toThrow(
+      /PLUGIN_PAYLOAD_TOO_LARGE/
+    );
+    await flush();
+    expect(onPushRejected).toHaveBeenCalledTimes(2);
+    expect(host.broadcastToRenderer).not.toHaveBeenCalled();
+    expect(wire.every((m) => JSON.stringify(m).length < 1_000)).toBe(true);
+  });
+
+  it("reports a push structured clone refuses at the port", async () => {
+    const { proxy, onPushRejected } = makeConnected();
+    await expect(proxy.host.postToPanel("tick", { run: () => 1 }, "panel-a")).rejects.toThrow();
+    await flush();
+    expect(onPushRejected).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report an accepted push", async () => {
+    const { host, proxy, onPushRejected } = makeConnected();
+    await proxy.host.broadcastToRenderer("tick", { a: 1 });
+    await flush();
+    expect(host.broadcastToRenderer).toHaveBeenCalledWith("tick", { a: 1 });
+    expect(onPushRejected).not.toHaveBeenCalled();
   });
 });

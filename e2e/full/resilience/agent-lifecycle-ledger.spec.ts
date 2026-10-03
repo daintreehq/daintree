@@ -7,23 +7,37 @@
  * scrollback. Then closes it and asserts the main-process lifecycle ledger's
  * diagnostics section carries the launch facts (env provenance as key names,
  * never values) and no stale-generation / duplicate-journal anomalies.
+ *
+ * The same three-project, cache=2 launch then covers ordinary terminals and
+ * worktree state across repeated eviction and revival.
  */
 
 import { test, expect } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
+import { execSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo, createFixtureRepoWithRecipes } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { addAndSwitchToProject, selectExistingProjectAndRefresh } from "../../helpers/workflows";
+import {
+  addAndSwitchToProject,
+  selectExistingProjectAndRefresh,
+  spawnTerminalAndVerify,
+} from "../../helpers/workflows";
+import { dispatchAction } from "../../helpers/actions";
+import { getPtyPid, isPidAlive } from "../../helpers/stress";
 import {
   runTerminalCommand,
   waitForTerminalText,
   getTerminalTextById,
+  getTerminalViewport,
+  typeTerminalCommand,
 } from "../../helpers/terminal";
-import { getGridPanelIds, getPanelById } from "../../helpers/panels";
+import { getGridPanelCount, getGridPanelIds, getPanelById } from "../../helpers/panels";
 import { dismissBlockingPalette } from "../../helpers/overlays";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 // Project name stems — waitForActiveProject matches against the
 // `daintree-e2e-<stem>-XXXX` fixture directory basename via substring, so
@@ -40,6 +54,7 @@ const CACHE_LIMIT = 2;
 
 let ctx: AppContext;
 let fixtureCleanups: Array<() => void> = [];
+let repoADir = "";
 let repoABasename = "";
 let projectIdA = "";
 let projectIdC = "";
@@ -105,27 +120,6 @@ async function requireActiveProjectId(app: AppContext["app"], label: string): Pr
   return state.activeProjectId;
 }
 
-async function dispatchAction(window: Page, actionId: string, args?: unknown): Promise<void> {
-  await window.evaluate(
-    (payload) => {
-      const dispatch = (
-        window as unknown as {
-          __daintreeDispatchAction?: (
-            id: string,
-            a?: unknown,
-            opts?: { source?: string; confirmed?: boolean }
-          ) => Promise<unknown>;
-        }
-      ).__daintreeDispatchAction;
-      if (typeof dispatch !== "function") {
-        throw new Error("__daintreeDispatchAction is not available");
-      }
-      return dispatch(payload.actionId, payload.args, { source: "menu", confirmed: true });
-    },
-    { actionId, args }
-  );
-}
-
 // Opens and closes the project-settings Recipes tab — the canonical trigger
 // for recipeStore.loadRecipes so the in-repo recipe is available to run.
 async function loadRecipesViaSettings(window: Page): Promise<void> {
@@ -136,7 +130,9 @@ async function loadRecipesViaSettings(window: Page): Promise<void> {
   await palette.locator(SEL.projectSwitcher.projectSettings).click();
   await expect(window.locator(SEL.projectSettings.heading)).toBeVisible({ timeout: T_MEDIUM });
   await window.locator(SEL.projectSettings.recipesTab).click();
-  await window.waitForTimeout(T_SETTLE);
+  await expect(window.getByText(RECIPE_NAME, { exact: true }).first()).toBeVisible({
+    timeout: T_MEDIUM,
+  });
   await window.locator(SEL.projectSettings.closeButton).click();
   await expect(window.locator(SEL.projectSettings.heading)).not.toBeVisible({ timeout: T_SHORT });
 }
@@ -162,8 +158,40 @@ async function findPanelContaining(window: Page, text: string): Promise<string> 
   return foundId;
 }
 
-test.describe
-  .serial("Agent lifecycle ledger: recipe launch → LRU eviction → revive → close", () => {
+async function waitForProjectAToBeEvictedWithCActive(app: AppContext["app"]): Promise<void> {
+  // webContents.close() is async — poll until A is no longer represented in
+  // the PVM so the return to A is a genuine cold start. ResourceProfileService
+  // may legitimately collapse the cache below the limit under CI pressure, so
+  // assert boundedness instead of exact size.
+  await expect
+    .poll(
+      async () => {
+        const state = await readPvmState(app);
+        return (
+          state.activeProjectId === projectIdC &&
+          !state.projectIds.includes(projectIdA) &&
+          state.viewCount >= 1 &&
+          state.viewCount <= CACHE_LIMIT
+        );
+      },
+      { timeout: T_LONG, intervals: [200, 400, 800, 1600] }
+    )
+    .toBe(true);
+}
+
+async function fetchAllWorktreesJson(window: Page): Promise<string> {
+  return window.evaluate(() => {
+    const api = (
+      window as unknown as {
+        electron?: { worktree?: { getAll: () => Promise<unknown[]> } };
+      }
+    ).electron?.worktree;
+    if (typeof api?.getAll !== "function") return "[]";
+    return api.getAll().then((wts) => JSON.stringify(wts));
+  });
+}
+
+test.describe.serial("Agent lifecycle ledger and LRU project-view eviction", () => {
   test.beforeAll(async () => {
     test.setTimeout(300_000);
 
@@ -188,6 +216,7 @@ test.describe
     fixtureCleanups = [repoA.cleanup, repoB.cleanup, repoC.cleanup];
     // The fixture dir carries a random mkdtemp suffix — derive the expected
     // `basename $PWD` from the real path instead of assuming the stem.
+    repoADir = repoA.dir;
     repoABasename = repoA.dir.split("/").pop() ?? "";
 
     ctx = await launchApp();
@@ -216,7 +245,13 @@ test.describe
     test.slow();
 
     await loadRecipesViaSettings(ctx.window);
-    await dispatchAction(ctx.window, "recipe.run", { recipeId: RECIPE_ID });
+    const run = await dispatchAction(
+      ctx.window,
+      "recipe.run",
+      { recipeId: RECIPE_ID },
+      { source: "menu", confirmed: true }
+    );
+    expect(run.ok, JSON.stringify(run)).toBe(true);
 
     recipePanelId = await findPanelContaining(ctx.window, "LEDGER_RECIPE_READY");
     const panel: Locator = getPanelById(ctx.window, recipePanelId);
@@ -238,20 +273,7 @@ test.describe
     // return is a genuine cold start.
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_B);
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_C);
-    await expect
-      .poll(
-        async () => {
-          const state = await readPvmState(ctx.app);
-          return (
-            state.activeProjectId === projectIdC &&
-            !state.projectIds.includes(projectIdA) &&
-            state.viewCount >= 1 &&
-            state.viewCount <= CACHE_LIMIT
-          );
-        },
-        { timeout: T_LONG, intervals: [200, 400, 800, 1600] }
-      )
-      .toBe(true);
+    await waitForProjectAToBeEvictedWithCActive(ctx.app);
 
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
 
@@ -277,10 +299,13 @@ test.describe
 
     // Hard kill so the close reaches the PTY (trash would keep it alive under
     // the TTL) — the exit event is what stamps the main ledger's close.
-    await dispatchAction(ctx.window, "terminal.kill", {
-      terminalId: recipePanelId,
-      confirmed: true,
-    });
+    const kill = await dispatchAction(
+      ctx.window,
+      "terminal.kill",
+      { terminalId: recipePanelId, confirmed: true },
+      { source: "menu", confirmed: true }
+    );
+    expect(kill.ok, JSON.stringify(kill)).toBe(true);
     await expect
       .poll(async () => (await getGridPanelIds(ctx.window)).includes(recipePanelId), {
         timeout: T_LONG,
@@ -331,5 +356,156 @@ test.describe
     expect(entry?.facts.env?.keys).toContain(ENV_KEY);
     expect(JSON.stringify(ledger)).not.toContain(ENV_VALUE);
     expect(ledger.anomalies.filter((a) => a.terminalId === recipePanelId)).toEqual([]);
+  });
+
+  test("terminal stays usable after its project view is evicted and revived", async () => {
+    test.slow();
+
+    // Re-anchor on A — selectExistingProjectAndRefresh is the only call that
+    // returns a fresh Page bound to the active view.
+    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
+
+    // Markers are assembled at runtime by node (the same under POSIX shells and
+    // PowerShell), so the echoed command line alone never contains them.
+    const nonce = Date.now().toString(36);
+    const beforeMarker = `LRU_BEFORE_${nonce}_42`;
+    const afterMarker = `LRU_AFTER_${nonce}_42`;
+
+    const initialPanel: Locator = await spawnTerminalAndVerify(ctx.window);
+    await runTerminalCommand(
+      ctx.window,
+      initialPanel,
+      `node -e "console.log('LRU_BEFORE_'+'${nonce}'+'_'+(40+2))"`
+    );
+    await waitForTerminalText(initialPanel, beforeMarker);
+    // Push the marker well above the screen, so the revive has to bring back
+    // scrollback history and not merely the visible rows.
+    const lastFill = "LRU_FILL_119";
+    await runTerminalCommand(
+      ctx.window,
+      initialPanel,
+      `node -e "for(let i=0;i<120;i++)console.log('LRU_FILL_'+i)"`
+    );
+    await waitForTerminalText(initialPanel, lastFill);
+    await expect
+      .poll(
+        async () =>
+          (
+            await getTerminalViewport(
+              ctx.window,
+              (await initialPanel.getAttribute("data-panel-id")) ?? ""
+            )
+          )?.text ?? "",
+        {
+          timeout: T_MEDIUM,
+          message: "pre-eviction marker should have scrolled off screen",
+        }
+      )
+      .not.toContain(beforeMarker);
+    const ptyPidBefore = await getPtyPid(ctx.window, initialPanel);
+
+    // A→B→C with cache=2: B's switch caches A; C's switch caches B and evicts
+    // A as the LRU. After this sequence A's WebContentsView is gone.
+    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_B);
+    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_C);
+    await waitForProjectAToBeEvictedWithCActive(ctx.app);
+
+    // Return to A — cold-start: new WebContentsView, fresh renderer, must
+    // re-broker PTY and worktree MessagePorts.
+    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
+
+    // Guard against #5009 — panel state must be flushed before view teardown.
+    await expect
+      .poll(() => getGridPanelCount(ctx.window), {
+        timeout: T_LONG,
+        intervals: [200, 400, 800, 1600],
+      })
+      .toBeGreaterThanOrEqual(1);
+
+    // History written before the eviction must survive it, on the same live
+    // process — not a respawned shell with a blank screen.
+    const revivedId = await findPanelContaining(ctx.window, beforeMarker);
+    const revivedPanel = getPanelById(ctx.window, revivedId);
+    expect(await getPtyPid(ctx.window, revivedPanel)).toBe(ptyPidBefore);
+    expect(isPidAlive(ptyPidBefore)).toBe(true);
+
+    // The older marker came back as scrollback (findPanelContaining reads the
+    // whole buffer); the screen shows the newest pre-eviction output.
+    await expect
+      .poll(async () => (await getTerminalViewport(ctx.window, revivedId))?.text ?? "", {
+        timeout: T_LONG,
+        message: "revived terminal should show its latest pre-eviction output on screen",
+      })
+      .toContain(lastFill);
+
+    // Real keystrokes into the revived view reach the same shell and come back.
+    await typeTerminalCommand(
+      ctx.window,
+      revivedId,
+      `node -e "console.log('LRU_AFTER_'+'${nonce}'+'_'+(40+2))"`,
+      {
+        expectOutput: afterMarker,
+        timeout: T_LONG,
+      }
+    );
+  });
+
+  test("worktree state reflects git changes made while the view was evicted", async () => {
+    test.slow();
+
+    // Start on A so the upcoming A→B→C cycle evicts A again.
+    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
+    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_B);
+    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_C);
+
+    await waitForProjectAToBeEvictedWithCActive(ctx.app);
+
+    // Commit a new file in A's repo while A's view is destroyed. After cold-
+    // start the WorktreePortBroker re-brokering must pick this up; a stale
+    // pre-eviction snapshot would mean the port handoff missed.
+    const markerSuffix = Date.now().toString(36);
+    const markerFile = `lru-marker-${markerSuffix}.txt`;
+    const markerMsg = `lru-marker-commit-${markerSuffix}`;
+    writeFileSync(join(repoADir, markerFile), `${markerMsg}\n`);
+    execSync(`git add ${JSON.stringify(markerFile)}`, { cwd: repoADir, stdio: "pipe" });
+    execSync(`git commit -m ${JSON.stringify(markerMsg)}`, {
+      cwd: repoADir,
+      stdio: "pipe",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Daintree Test",
+        GIT_AUTHOR_EMAIL: "test@daintree.dev",
+        GIT_COMMITTER_NAME: "Daintree Test",
+        GIT_COMMITTER_EMAIL: "test@daintree.dev",
+      },
+    });
+
+    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
+
+    // The marker may surface via `summary` (last-commit message) or
+    // `worktreeChanges.lastCommitMessage`; containment over JSON tolerates both.
+    await expect
+      .poll(() => fetchAllWorktreesJson(ctx.window), {
+        timeout: T_LONG,
+        intervals: [500, 1000, 2000],
+      })
+      .toContain(markerMsg);
+  });
+
+  test("PVM cache stays bounded across repeated project switches", async () => {
+    test.slow();
+
+    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
+    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_B);
+    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_C);
+
+    await waitForProjectAToBeEvictedWithCActive(ctx.app);
+
+    const state = await readPvmState(ctx.app);
+    expect(state.viewCount).toBeGreaterThanOrEqual(1);
+    expect(state.viewCount).toBeLessThanOrEqual(CACHE_LIMIT);
+    expect(state.activeProjectId).toBe(projectIdC);
+    expect(state.projectIds).toContain(projectIdC);
+    expect(state.projectIds).not.toContain(projectIdA);
   });
 });

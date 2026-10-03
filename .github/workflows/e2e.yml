@@ -7,17 +7,15 @@ name: E2E Tests
 run-name: ${{ inputs.suite || 'core' }} · ${{ inputs.platform || 'all' }}${{ inputs.test_file && format(' · {0}', inputs.test_file) || '' }}${{ inputs.shard && inputs.shard_total && format(' · shard {0}/{1}', inputs.shard, inputs.shard_total) || '' }}
 
 # Unified runner for every E2E suite: core smoke, the seven full-* domain
-# buckets, online (agent integration), and nightly (memory-leak detection).
-# Pick the suite via the `suite` input; everything else (OpenCode install,
-# ANTHROPIC_API_KEY, --workers=1 for nightly) is conditional on that choice.
+# buckets, and nightly (memory-leak detection). Pick the suite via the `suite`
+# input; everything else (--workers=1 for nightly) is conditional on that choice.
 # Single-file runs are supported via `test_file`.
 #
 # Internally, `suite` is passed to Playwright as `--project=<suite>` because
 # that's Playwright's term for the same concept (an entry in the `projects:`
-# array of playwright.config.ts).
-#
-# Callers that pass `suite: online` MUST use `secrets: inherit` so
-# ANTHROPIC_API_KEY is reachable inside the called workflow.
+# array of playwright.config.ts). `demo` is the exception: it lives in its own
+# playwright.demo.config.ts so a bare `npx playwright test` never records
+# screencasts, and is selected with `--config` instead.
 
 on:
   workflow_dispatch:
@@ -51,7 +49,6 @@ on:
           - full-panels
           - full-resilience
           - full-plugins
-          - online
           - nightly
           - demo
       shard:
@@ -77,7 +74,7 @@ on:
         type: string
         default: ""
       suite:
-        description: "Suite to run (full meta-suite, core, any full-* bucket, online, or nightly)"
+        description: "Suite to run (full meta-suite, core, any full-* bucket, or nightly)"
         type: string
         default: "full"
       shard:
@@ -114,10 +111,6 @@ concurrency:
 
 env:
   NODE_VERSION: "22"
-  # Without this the pinned CLI self-updates on first launch and the online
-  # release gate silently runs whatever version npm published today — see
-  # scripts/ci/install-opencode.mjs.
-  OPENCODE_DISABLE_AUTOUPDATE: "1"
 
 jobs:
   # Determine which platforms to run on, and fan each one out into N shards.
@@ -128,8 +121,8 @@ jobs:
   # wall-time, and a hung shard takes out 1/N of the bucket instead of the
   # whole thing. The heaviest Windows full-platform/full-worktree/full-resilience/full-panels buckets use
   # extra slices so restart/persistence-heavy shards do not own enough serial
-  # tests to hit the job timeout. core/online/nightly stay unsharded —
-  # online hits real APIs (3 specs), and nightly's leak heuristic depends on serialized launches
+  # tests to hit the job timeout. core/nightly stay unsharded —
+  # nightly's leak heuristic depends on serialized launches
   # (--workers=1); cross-runner sharding there would just add noise. A
   # single-file run (`test_file`) is one spec — no point sharding it.
   matrix-setup:
@@ -421,17 +414,13 @@ jobs:
         if: inputs.prebuilt_artifact == ''
         run: npm run build:e2e
         env:
-          NODE_OPTIONS: --max-old-space-size=4096
+          NODE_OPTIONS: --max-old-space-size=8192
 
       - name: Install Claude Code
         run: node scripts/ci/npm-install-retry.mjs -g @anthropic-ai/claude-code
 
       - name: Repair Claude Code native binary
         run: node scripts/ci/repair-claude-code-install.mjs
-
-      - name: Install OpenCode
-        if: inputs.suite == 'online'
-        run: node scripts/ci/install-opencode.mjs
 
       - name: Configure Claude Code (macOS/Linux)
         if: runner.os != 'Windows'
@@ -458,12 +447,14 @@ jobs:
           # Single-bucket / single-test runs use one --project flag instead.
           if [ "$SUITE" = "full" ]; then
             PROJECT_ARGS="--project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=full-plugins"
+          elif [ "$SUITE" = "demo" ]; then
+            PROJECT_ARGS="--config=playwright.demo.config.ts"
           else
             PROJECT_ARGS="--project=$SUITE"
           fi
           # The `nightly` suite's leak heuristic depends on serialized
-          # launches; --workers=1 is mandatory. The `demo` project already bakes
-          # workers:1 into its config, but we pass the flag too as a guard.
+          # launches; --workers=1 is mandatory. playwright.demo.config.ts already
+          # bakes workers:1 in, but we pass the flag too as a guard.
           EXTRA=""
           if [ "$SUITE" = "nightly" ] || [ "$SUITE" = "demo" ]; then
             EXTRA="--workers=1"
@@ -522,13 +513,11 @@ jobs:
              && [ -f failed-specs.txt ] \
              && [ -s failed-specs.txt ] \
              && [ "$SUITE" != "nightly" ] \
-             && [ "$SUITE" != "online" ] \
              && [ -z "${{ inputs.test_file }}" ]; then
             RETRY_ARGS="--test-list failed-specs.txt"
             echo "[e2e] Retry attempt $RUN_ATTEMPT — running with --test-list ($(wc -l < failed-specs.txt) specs)"
           elif [ "$RUN_ATTEMPT" -gt 1 ] \
              && [ "$SUITE" != "nightly" ] \
-             && [ "$SUITE" != "online" ] \
              && [ -z "${{ inputs.test_file }}" ]; then
             echo "::warning::Retry attempt but no failed-specs artifact found — falling back to full suite rerun"
           fi
@@ -555,11 +544,7 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         env:
-          # Required for `online`; harmless empty string for other projects
-          # when secrets aren't inherited.
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
-          FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
+          FAIL_ON_FLAKY_TESTS: ${{ inputs.suite == 'core' && 'true' || 'false' }}
           # Always emit the JSON report so the failed-specs extractor below has
           # something to read on retry. Stabilize triage (`inputs.json_report`)
           # piggybacks on the same file via `PLAYWRIGHT_JSON_REPORT`.
@@ -577,9 +562,7 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
-          FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
+          FAIL_ON_FLAKY_TESTS: ${{ inputs.suite == 'core' && 'true' || 'false' }}
           PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/report.json
           PLAYWRIGHT_JSON_REPORT: ${{ inputs.json_report && '1' || '' }}
           PLAYWRIGHT_BLOB_REPORT: ${{ inputs.enable_blob_report && '1' || '' }}
@@ -608,9 +591,7 @@ jobs:
           DEBUG_COLORS: "0"
           E2E_LAUNCH_TELEMETRY: "1"
           E2E_LAUNCH_TELEMETRY_FILE: ${{ runner.temp }}/e2e-launch-telemetry-${{ matrix.shard }}.jsonl
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENCODE_E2E_ENABLED: ${{ inputs.suite == 'online' && '1' || '' }}
-          FAIL_ON_FLAKY_TESTS: ${{ (inputs.suite == 'core' || inputs.suite == 'online') && 'true' || 'false' }}
+          FAIL_ON_FLAKY_TESTS: ${{ inputs.suite == 'core' && 'true' || 'false' }}
           PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/report.json
           PLAYWRIGHT_JSON_REPORT: ${{ inputs.json_report && '1' || '' }}
           PLAYWRIGHT_BLOB_REPORT: ${{ inputs.enable_blob_report && '1' || '' }}
@@ -635,7 +616,7 @@ jobs:
           rm -f failed-specs.txt
           if [ -f test-results/report.json ] && [ -s test-results/report.json ]; then
             # Flaky specs report spec.ok === true but still fail the job under
-            # FAIL_ON_FLAKY_TESTS (core/online), so a `.ok == false` filter
+            # FAIL_ON_FLAKY_TESTS (core), so a `.ok == false` filter
             # dropped them from the retry list. The extractor includes flaky
             # specs too — see scripts/ci/extract-failed-specs.mjs (#10039).
             node scripts/ci/extract-failed-specs.mjs test-results/report.json failed-specs.txt

@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from "electron";
+import { BrowserWindow, ipcMain, type WebContents } from "electron";
 import { z } from "zod";
 import {
   getWindowForWebContents,
@@ -49,7 +49,8 @@ function parseIpcPayload<S extends z.ZodTypeAny>(
 
 const rateLimitTimestamps = new Map<string, number[]>();
 
-export type IpcChannelCategory = "fileOps" | "artifactOps" | "gitOps" | "terminalSpawn";
+export type IpcChannelCategory =
+  "fileOps" | "artifactOps" | "gitOps" | "terminalSpawn" | "pluginInvoke";
 
 export const channelToCategory: Record<string, IpcChannelCategory> = {
   "copytree:generate": "fileOps",
@@ -65,6 +66,7 @@ export const channelToCategory: Record<string, IpcChannelCategory> = {
   "git:get-project-pulse": "gitOps",
   "git:list-commits": "gitOps",
   "terminal:spawn": "terminalSpawn",
+  "plugin:invoke": "pluginInvoke",
 };
 
 export function checkRateLimit(channel: string, maxCalls: number, windowMs: number): void {
@@ -409,6 +411,17 @@ export function broadcastToProjectRenderers(
   ...args: unknown[]
 ): void {
   broadcastToProjectRenderersExcept(projectId, null, channel, ...args);
+}
+
+/**
+ * The live renderers {@link broadcastToProjectRenderers} would reach, for
+ * callers that deliver per renderer themselves (the plugin push batcher).
+ */
+export function getProjectRendererTargets(projectId: string | null): WebContents[] {
+  if (projectId !== null && hasRegisteredProjectViews()) {
+    return getWebContentsForProject(projectId);
+  }
+  return getAllAppWebContents().filter((wc) => !wc.isDestroyed());
 }
 
 /**

@@ -137,6 +137,23 @@ describe("findEntryKey", () => {
     ).toBe("src/main.tsx");
   });
 
+  it("skips the raw-view SDK hooks facade entry, by name or by file", () => {
+    const facade = {
+      file: "assets/host-daintreehq-plugin-sdk-react-Qr1st2Uv.js",
+      isEntry: true,
+      imports: ["_plugin-sdk-react.js"],
+      dynamicImports: [],
+    };
+    const key = "\0virtual:daintree-host/@daintreehq/plugin-sdk/react";
+    expect(
+      findEntryKey({
+        [key]: { ...facade, name: "host-daintreehq-plugin-sdk-react" },
+        ...makeManifest(),
+      })
+    ).toBe("src/main.tsx");
+    expect(findEntryKey({ [key]: facade, ...makeManifest() })).toBe("src/main.tsx");
+  });
+
   it("does not treat a lookalike name as a plugin-ui facade", () => {
     const manifest = {
       "src/pluginUiExtra.ts": {

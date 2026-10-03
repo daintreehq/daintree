@@ -7,7 +7,10 @@ import {
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { logDebug, logInfo, logWarn, logError } from "../../utils/logger.js";
 import {
+  AUDIO_BUFFER_MAX_BYTES,
+  AUDIO_BUFFER_MAX_CHUNKS,
   STUB_CONFIDENCE,
+  createAudioBufferOverflowError,
   type TranscriptionProvider,
   type VoiceStartResult,
   type VoiceTranscriptionEvent,
@@ -23,14 +26,13 @@ const CONNECT_TIMEOUT_MS = 10_000;
 // remaining transcripts and closes. If it never closes (network hiccup), force
 // the stop through after this long rather than hanging.
 const DRAIN_TIMEOUT_MS = 3_000;
+// How long a graceful stop that lands before the socket opens waits for it, so
+// the buffered audio can still be transcribed. Past this it's discarded.
+const STOP_CONNECT_TIMEOUT_MS = 3_000;
 // Deepgram drops an idle connection after ~10s of no audio with a NET-0001
 // error. A periodic KeepAlive text frame resets that timer; well under 10s
 // gives margin even if a tick is delayed.
 const KEEPALIVE_INTERVAL_MS = 5_000;
-const PRE_CONNECT_BUFFER_MAX = 100;
-// 24kHz mono PCM16 ≈ 48KB/s, so ~150KB ≈ 3s of audio — past which voice
-// context is lost anyway. Matches the OpenAI provider's ceiling.
-const PRE_CONNECT_BUFFER_MAX_BYTES = 150_000;
 
 // Deepgram caps Nova-3 keyterms at 100 terms and 500 aggregate tokens. The
 // tokenizer is syllable-based (~5 tokens per single-word term), so the term
@@ -108,6 +110,12 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private preConnectBufferBytes = 0;
   private isReady = false;
 
+  // Start-path timings on the main-process clock, so a log can show whether
+  // lost opening words sat behind the socket, the handshake, or the model.
+  private sessionStartedAt = 0;
+  private connectStartedAt = 0;
+  private firstTranscriptLogged = false;
+
   private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
   // Set on graceful/fatal teardown so the trailing `close` event isn't treated
@@ -118,6 +126,9 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private drainTimeout: ReturnType<typeof setTimeout> | null = null;
   private drainPromise: Promise<void> | null = null;
   private isDraining = false;
+  // A graceful stop arrived before the socket opened; the drain is waiting on
+  // `open` to flush the buffered audio and send CloseStream (#13108).
+  private stopPendingReady = false;
 
   private audioChunkCount = 0;
   private staleChunkWarned = false;
@@ -154,6 +165,19 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         message: event.error.message,
       });
     }
+    if (
+      !this.firstTranscriptLogged &&
+      (event.type === "delta" || event.type === "complete") &&
+      event.text.trim()
+    ) {
+      this.firstTranscriptLogged = true;
+      logInfo(`${P} First transcript`, {
+        sessionId: this.sessionId,
+        eventType: event.type,
+        length: event.text.length,
+        sinceStartMs: this.sinceStartMs(),
+      });
+    }
     for (const listener of this.listeners) {
       listener(event);
     }
@@ -173,6 +197,10 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     resolve(result);
   }
 
+  private sinceStartMs(): number {
+    return Math.round(performance.now() - this.sessionStartedAt);
+  }
+
   async start(settings: VoiceInputSettings): Promise<VoiceStartResult> {
     if (!settings.deepgramApiKey) {
       logWarn(`${P} No Deepgram API key configured`);
@@ -183,6 +211,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     logInfo(`${P} Starting session ${mySessionId}`, { language: settings.language });
     this.cleanupPreviousSession();
     this.sessionId = mySessionId;
+    this.sessionStartedAt = performance.now();
+    this.firstTranscriptLogged = false;
     this.isReady = false;
     this.preConnectBuffer = [];
     this.preConnectBufferBytes = 0;
@@ -201,6 +231,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     settings: VoiceInputSettings,
     retryWithoutKeyterms = false
   ): void {
+    this.connectStartedAt = performance.now();
     // On a keyterm-overflow retry, strip keyterms from the URL but keep every
     // other setting identical.
     const effectiveSettings = retryWithoutKeyterms
@@ -223,6 +254,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       });
       this.emit({ type: "status", status: "error" });
       this.settlePendingStart(mySessionId, { ok: false, error: message });
+      this.settleDrain("connect-failed");
       return;
     }
 
@@ -252,6 +284,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       });
       this.emit({ type: "status", status: "error" });
       this.settlePendingStart(mySessionId, { ok: false, error: "Connection timed out" });
+      this.settleDrain("connection-timeout");
     }, CONNECT_TIMEOUT_MS);
 
     // A non-101 HTTP response to the WebSocket upgrade surfaces here (not via
@@ -306,7 +339,12 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       // model config lives in the URL query string, so there's no session
       // handshake to await (unlike OpenAI's `session.update`).
       this.clearConnectTimeout();
-      logInfo(`${P} WebSocket opened — session ready`);
+      logInfo(`${P} WebSocket opened — session ready`, {
+        sessionId: mySessionId,
+        connectMs: Math.round(performance.now() - this.connectStartedAt),
+        sinceStartMs: this.sinceStartMs(),
+        bufferedChunks: this.preConnectBuffer.length,
+      });
       if (this.preConnectBuffer.length > 0) {
         logInfo(`${P} Flushing ${this.preConnectBuffer.length} buffered audio chunks`);
         const buffered = this.preConnectBuffer;
@@ -317,6 +355,13 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         }
       }
       this.isReady = true;
+      if (this.isDraining) {
+        // Stopped while connecting: the mic is already released, so skip
+        // KeepAlive and "recording" — close the stream and drain.
+        this.settlePendingStart(mySessionId, { ok: true });
+        if (this.stopPendingReady) this.closeStreamAfterLateReady();
+        return;
+      }
       this.startKeepAlive(connection, mySessionId);
       this.emit({ type: "status", status: "recording" });
       this.settlePendingStart(mySessionId, { ok: true });
@@ -535,17 +580,18 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
 
   private bufferPreConnectChunk(chunk: ArrayBuffer): void {
     if (
-      this.preConnectBuffer.length >= PRE_CONNECT_BUFFER_MAX ||
-      this.preConnectBufferBytes + chunk.byteLength > PRE_CONNECT_BUFFER_MAX_BYTES
+      this.preConnectBuffer.length >= AUDIO_BUFFER_MAX_CHUNKS ||
+      this.preConnectBufferBytes + chunk.byteLength > AUDIO_BUFFER_MAX_BYTES
     ) {
       if (!this.preConnectBufferOverflowWarned) {
         this.preConnectBufferOverflowWarned = true;
         logWarn(`${P} Pre-connect buffer full, dropping audio`, {
           chunks: this.preConnectBuffer.length,
           bytes: this.preConnectBufferBytes,
-          maxChunks: PRE_CONNECT_BUFFER_MAX,
-          maxBytes: PRE_CONNECT_BUFFER_MAX_BYTES,
+          maxChunks: AUDIO_BUFFER_MAX_CHUNKS,
+          maxBytes: AUDIO_BUFFER_MAX_BYTES,
         });
+        this.emit({ type: "error", error: createAudioBufferOverflowError() });
       }
       return;
     }
@@ -577,6 +623,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.clearKeepAlive();
     this.isExpectedClose = false;
     this.isDraining = false;
+    this.stopPendingReady = false;
     if (this.drainResolve) {
       this.drainResolve();
       this.drainResolve = null;
@@ -605,6 +652,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private settleDrain(reason: string): void {
     this.clearDrainTimeout();
     this.isDraining = false;
+    this.stopPendingReady = false;
     this.drainPromise = null;
     if (this.drainResolve) {
       logInfo(`${P} Drain completed`, { reason });
@@ -628,6 +676,13 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     }
 
     this.isExpectedClose = true;
+
+    // Audio captured while connecting sits in the pre-connect buffer until the
+    // socket opens. If the connection attempt is still live, wait for it rather
+    // than discarding what the user already said.
+    if (!this.isReady && this.connection && this.preConnectBufferBytes > 0) {
+      return this.stopAfterConnect();
+    }
 
     if (!this.connection || !this.isReady) {
       this.cleanupPreviousSession();
@@ -669,6 +724,63 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       this.cleanupPreviousSession();
       this.emit({ type: "status", status: "idle" });
     }
+  }
+
+  /**
+   * Graceful stop before the socket opens. The drain promise first waits
+   * (bounded by STOP_CONNECT_TIMEOUT_MS) for `open`, which flushes the buffer
+   * and calls `closeStreamAfterLateReady()`; from there it's the normal
+   * CloseStream drain. Connect failures settle the drain via the close/fatal
+   * paths. Audio arriving meanwhile is dropped by `sendAudioChunk`.
+   */
+  private async stopAfterConnect(): Promise<void> {
+    logInfo(`${P} Stop before socket open — waiting to flush buffered audio`, {
+      bufferedChunks: this.preConnectBuffer.length,
+      bufferedBytes: this.preConnectBufferBytes,
+    });
+    this.isDraining = true;
+    this.stopPendingReady = true;
+    this.emit({ type: "status", status: "finishing" });
+
+    const sessionIdBeforeDrain = this.sessionId;
+    this.drainPromise = new Promise<void>((resolve) => {
+      this.drainResolve = resolve;
+      this.drainTimeout = setTimeout(() => {
+        logWarn(
+          `${P} Socket not open ${STOP_CONNECT_TIMEOUT_MS}ms after stop — discarding buffered audio`,
+          { bufferedBytes: this.preConnectBufferBytes }
+        );
+        this.settleDrain("connect-timeout");
+      }, STOP_CONNECT_TIMEOUT_MS);
+    });
+    await this.drainPromise;
+
+    if (this.sessionId === sessionIdBeforeDrain) {
+      this.cleanupPreviousSession();
+      this.emit({ type: "status", status: "idle" });
+    }
+  }
+
+  /**
+   * Second half of `stopAfterConnect()`, run from `open` once the buffered
+   * audio has been flushed: send CloseStream and re-arm the drain backstop for
+   * the server's final Results and close.
+   */
+  private closeStreamAfterLateReady(): void {
+    this.stopPendingReady = false;
+    this.clearDrainTimeout();
+    try {
+      this.connection?.send(JSON.stringify({ type: "CloseStream" }));
+      logInfo(`${P} → CloseStream (after late open)`);
+    } catch {
+      logWarn(`${P} Failed to send CloseStream after late open`);
+      this.settleDrain("close-stream-failed");
+      return;
+    }
+    this.drainTimeout = setTimeout(() => {
+      logWarn(`${P} Drain timed out after ${DRAIN_TIMEOUT_MS}ms, force closing`);
+      this.settleDrain("timeout");
+    }, DRAIN_TIMEOUT_MS);
   }
 
   stop(): void {

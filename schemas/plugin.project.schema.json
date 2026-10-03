@@ -104,13 +104,15 @@
           "agent:read",
           "agent:register",
           "agent:input",
+          "terminal:read",
           "git:read",
           "git:write",
           "clipboard:read",
           "clipboard:write",
           "shell:exec",
           "socket:connect",
-          "mcp:expose"
+          "mcp:expose",
+          "project:dispatch"
         ]
       }
     },
@@ -245,6 +247,37 @@
                       "type": "string",
                       "minLength": 1,
                       "maxLength": 80
+                    }
+                  },
+                  "required": [
+                    "actionId"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "toolbar": {
+                "maxItems": 3,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "actionId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    },
+                    "iconId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "status": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -504,13 +537,15 @@
                     "agent:read",
                     "agent:register",
                     "agent:input",
+                    "terminal:read",
                     "git:read",
                     "git:write",
                     "clipboard:read",
                     "clipboard:write",
                     "shell:exec",
                     "socket:connect",
-                    "mcp:expose"
+                    "mcp:expose",
+                    "project:dispatch"
                   ]
                 }
               }

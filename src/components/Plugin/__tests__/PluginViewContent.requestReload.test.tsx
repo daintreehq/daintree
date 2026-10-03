@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { StrictMode, useEffect, useState } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   PanelViewProps,
@@ -10,6 +10,7 @@ import type {
 } from "@shared/types/plugin";
 import type { PluginViewContentConfig, PluginViewContentProps } from "../PluginViewContent";
 import type { ReactNode } from "react";
+import { settlePluginViewLoad } from "./settlePluginViewLoad";
 
 // The app root supplies the TooltipProvider. Triggers render inline; the
 // content is left out so a disclosed label is not counted twice.
@@ -23,15 +24,28 @@ vi.mock("@/components/ui/tooltip", () => ({
 /**
  * A plugin view asking the host to remount it (#12609).
  *
- * Every view here is ONE component identity across every `lazy()` wrapper the
- * content builds. A double that minted a new component per wrapper would
+ * Every view here is ONE component identity across every attempt the content
+ * builds. A double that minted a new component per attempt would
  * remount on its own and hide a reload that only re-rendered — the boundary's
  * `key` is the thing under test.
  */
 
+vi.mock("@/pluginUi", () => ({ whenPluginUiReady: () => Promise.resolve() }));
+vi.mock("@/services/plugin/pluginStyleContract", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/plugin/pluginStyleContract")>()),
+  preparePluginStyles: () => Promise.resolve(),
+  registerPluginStyleRoot: () => () => {},
+}));
 vi.mock("@/components/ui/Skeleton", () => ({
   Skeleton: ({ label }: { label?: string }) => <div data-testid="skeleton">{label}</div>,
   SkeletonHint: () => null,
+}));
+// A settled load renders its view at once; the gate is loadPath's subject.
+// See settlePluginViewLoad for why it is off here.
+vi.mock("@/hooks/useDeferredLoading", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useDeferredLoading")>()),
+  useSkeletonGate: () => false,
+  useSkeletonFloor: (isShowing: boolean) => isShowing,
 }));
 // Forwards the focus handlers and the ref: they are how the content learns focus
 // was inside the view, which decides whether a reload moves focus to the host.
@@ -73,9 +87,9 @@ vi.mock("@/components/ErrorBoundary", async () => {
   return { ErrorBoundary: FakeBoundary };
 });
 
-// The status layer lazy-loads its banner, and this suite stubs React's `lazy`
-// wholesale — so mount the real banner directly. It renders nothing unless
-// there is something to report.
+// The status layer lazy-loads its banner; mount the real banner directly so it
+// is there synchronously. It renders nothing unless there is something to
+// report.
 vi.mock("@/components/Plugin/PluginViewRuntimeStatus", async () => {
   const { PluginViewRuntimeBanner } = await import("../PluginViewRuntimeBanner");
   type Props = Parameters<typeof PluginViewRuntimeBanner>[0];
@@ -129,11 +143,13 @@ const reportPanelLifecycle = vi.fn<(events: PluginPanelLifecycleEvent[]) => Prom
   Promise.resolve()
 );
 
+const VIEW_MODULE = "plugin://acme/dashboard.js";
+
 function makeContentConfig(): PluginViewContentConfig {
   return {
     id: "acme.dashboard",
     name: "Dashboard",
-    componentPath: "plugin://acme/dashboard.js",
+    componentPath: VIEW_MODULE,
     extensionId: "acme",
   };
 }
@@ -197,26 +213,22 @@ afterEach(async () => {
   const { _resetPluginRuntimeStatusStoreForTest } =
     await import("@/store/pluginRuntimeStatusStore");
   _resetPluginRuntimeStatusStoreForTest();
+  vi.doUnmock(VIEW_MODULE);
   vi.resetModules();
   Reflect.deleteProperty(window, "electron");
 });
 
 /**
- * Load the content with `lazy` resolving straight to {@link StableView}, plus
- * the lifecycle module instance that content shares — the budget lives there.
+ * Load the content with its view module resolving straight to
+ * {@link StableView}, plus the lifecycle module instance that content shares —
+ * the budget lives there. The module stays mocked until the test ends, since
+ * every attempt imports it.
  */
 async function loadContent() {
-  vi.doMock("react", async () => {
-    const actual = await vi.importActual<typeof import("react")>("react");
-    return { ...actual, lazy: () => StableView };
-  });
-  try {
-    const { makePluginViewContent } = await import("../PluginViewContent");
-    const lifecycle = await import("@/services/plugin/pluginPanelLifecycle");
-    return { Content: makePluginViewContent(makeContentConfig()), lifecycle };
-  } finally {
-    vi.doUnmock("react");
-  }
+  vi.doMock(VIEW_MODULE, () => ({ default: StableView }));
+  const { makePluginViewContent } = await import("../PluginViewContent");
+  const lifecycle = await import("@/services/plugin/pluginPanelLifecycle");
+  return { Content: makePluginViewContent(makeContentConfig()), lifecycle };
 }
 
 async function mountContent(
@@ -227,7 +239,7 @@ async function mountContent(
   const { Content } = loaded;
   const element = <Content panelId="panel-1" offerRequestReload {...props} />;
   const utils = render(strict ? <StrictMode>{element}</StrictMode> : element);
-  await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+  await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
   return { ...loaded, ...utils };
 }
 
@@ -237,11 +249,25 @@ function latest(): PanelViewProps {
   return props;
 }
 
-/** Ask for a reload the way a view would, and let the host act on it. */
+/**
+ * Ask for a reload the way a view would, and let the host act on it. A request
+ * that retired the attempt returns once the replacement is on screen or the
+ * loop breaker stopped the view, so a run of reloads charges one per call
+ * however slow the load.
+ */
 async function requestReload(from: PanelViewProps = latest()): Promise<void> {
+  const wasLive = !from.disposeSignal.aborted;
   await act(async () => {
     from.requestReload?.();
   });
+  if (wasLive && from.disposeSignal.aborted) await settleReload();
+}
+
+/** Wait out whatever reload is in flight: until a live view or the block shows. */
+async function settleReload(): Promise<void> {
+  await settlePluginViewLoad(() =>
+    expect(blockedBanner() !== null || !latest().disposeSignal.aborted).toBe(true)
+  );
 }
 
 /** Every distinct attempt the view has been rendered for, in order. */
@@ -259,7 +285,7 @@ describe("requestReload (#12609)", () => {
     expect(typeof latest().requestReload).toBe("function");
 
     render(<Content panelId="surface-1" />);
-    await waitFor(() =>
+    await settlePluginViewLoad(() =>
       expect(h.renders.some((props) => props.panelId === "surface-1")).toBe(true)
     );
     const surfaceProps = h.renders.filter((props) => props.panelId === "surface-1");
@@ -280,7 +306,7 @@ describe("requestReload (#12609)", () => {
 
     await requestReload();
 
-    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
     const after = latest();
     const newNode = screen.getByTestId("plugin-view");
     // A new component instance, not a re-render of the old one.
@@ -306,7 +332,7 @@ describe("requestReload (#12609)", () => {
     accepted = { state: { tab: "logs" }, version: 3 };
     await requestReload();
 
-    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
     // Read when the reload ran, not cached from the mount.
     expect(latest().initialArgs).toEqual({ tab: "logs" });
     expect(latest().stateVersion).toBe(3);
@@ -321,7 +347,7 @@ describe("requestReload (#12609)", () => {
       props.requestReload?.();
       props.requestReload?.();
     });
-    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
 
     // The burst cost exactly one unit: the rest of the budget is still there,
     // and not a unit more.
@@ -339,7 +365,7 @@ describe("requestReload (#12609)", () => {
     const stale = latest();
 
     await requestReload();
-    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
 
     await requestReload(stale);
     await requestReload(stale);
@@ -364,7 +390,7 @@ describe("requestReload (#12609)", () => {
       };
       await mountContent();
 
-      await waitFor(() => expect(h.mounts).toHaveLength(2));
+      await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
       // Setting host state from inside the view's render is exactly what React
       // warns about.
       const renderPhaseUpdates = consoleError.mock.calls.filter((args) =>
@@ -400,7 +426,7 @@ describe("requestReload (#12609)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Reload panel" }));
 
-    await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+    await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
     expect(blockedBanner()).toBeNull();
     expect(latest().disposeSignal.aborted).toBe(false);
     // The user's reload is free and starts the budget over.
@@ -464,7 +490,9 @@ describe("requestReload (#12609)", () => {
       boundaryCallbacks.onError?.(new Error("view threw"));
       boundaryCallbacks.onReset?.();
     });
-    await waitFor(() => expect(h.mounts).toHaveLength(lifecycle.VIEW_RELOAD_LIMIT + 2));
+    await settlePluginViewLoad(() =>
+      expect(h.mounts).toHaveLength(lifecycle.VIEW_RELOAD_LIMIT + 2)
+    );
 
     // A whole fresh budget, then a block.
     for (let i = 0; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
@@ -571,7 +599,7 @@ describe("requestReload under StrictMode (#12609, 1db069bf4d)", () => {
     };
     const { lifecycle } = await mountContent({}, { strict: true });
 
-    await waitFor(() => expect(attempts()).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(attempts()).toHaveLength(2));
     await act(async () => {});
     expect(calls).toBe(2);
     expect(attempts()).toHaveLength(2);
@@ -606,7 +634,7 @@ describe("requestReload racing a backend restart (#12609)", () => {
       emit({ pluginId: "acme", status: runtimeStatus(worker({ generation: 2 })) });
     });
 
-    await waitFor(() => expect(attempts()).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(attempts()).toHaveLength(2));
     await act(async () => {});
     expect(attempts()).toHaveLength(2);
 
@@ -628,7 +656,7 @@ describe("requestReload racing a backend restart (#12609)", () => {
 
     await pushStatus(worker({ generation: 2 }));
 
-    await waitFor(() => expect(attempts()).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(attempts()).toHaveLength(2));
     await act(async () => {});
     expect(attempts()).toHaveLength(2);
 
@@ -645,11 +673,11 @@ describe("requestReload racing a backend restart (#12609)", () => {
     await pushStatus(worker({ generation: 1 }));
 
     await requestReload();
-    await waitFor(() => expect(attempts()).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(attempts()).toHaveLength(2));
 
     await pushStatus(worker({ generation: 2 }));
 
-    await waitFor(() => expect(attempts()).toHaveLength(3));
+    await settlePluginViewLoad(() => expect(attempts()).toHaveLength(3));
   });
 });
 
@@ -660,6 +688,7 @@ describe("host.reloadPanel reaching a mounted view (#12610)", () => {
     await act(async () => {
       result = await reloadRegisteredPanel(panelId);
     });
+    if (result === "scheduled") await settleReload();
     return result;
   }
 
@@ -669,7 +698,7 @@ describe("host.reloadPanel reaching a mounted view (#12610)", () => {
 
     await expect(hostReload()).resolves.toBe("scheduled");
 
-    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
     expect(before.disposeSignal.aborted).toBe(true);
     expect(latest().disposeSignal.aborted).toBe(false);
     expect(latest().panelRemovedSignal).toBe(before.panelRemovedSignal);
@@ -678,12 +707,12 @@ describe("host.reloadPanel reaching a mounted view (#12610)", () => {
   it("reloads only the targeted panel", async () => {
     const { Content } = await mountContent();
     render(<Content panelId="panel-2" offerRequestReload />);
-    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
     const sibling = h.renders.filter((props) => props.panelId === "panel-2").at(-1);
 
     await expect(hostReload("panel-1")).resolves.toBe("scheduled");
 
-    await waitFor(() => expect(h.mounts).toHaveLength(3));
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(3));
     expect(sibling?.disposeSignal.aborted).toBe(false);
   });
 
@@ -723,7 +752,7 @@ describe("host.reloadPanel reaching a mounted view (#12610)", () => {
 
     // The restart's own rebind replaces the view, uncharged.
     await pushStatus(worker({ generation: 2 }));
-    await waitFor(() => expect(attempts()).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(attempts()).toHaveLength(2));
     for (let i = 0; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
       await expect(hostReload()).resolves.toBe("scheduled");
     }
@@ -742,7 +771,7 @@ describe("host.reloadPanel reaching a mounted view (#12610)", () => {
       results = [first, second];
     });
     expect(results).toEqual(["scheduled", "scheduled"]);
-    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
 
     for (let i = 1; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
       await expect(hostReload()).resolves.toBe("scheduled");
@@ -761,7 +790,7 @@ describe("host.reloadPanel reaching a mounted view (#12610)", () => {
       ]);
     });
     expect(results).toEqual(["scheduled", "scheduled"]);
-    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
 
     for (let i = 1; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
       await expect(hostReload()).resolves.toBe("scheduled");
@@ -772,7 +801,7 @@ describe("host.reloadPanel reaching a mounted view (#12610)", () => {
   it("is not offered where the host withholds requestReload", async () => {
     const { Content } = await mountContent();
     render(<Content panelId="surface-1" />);
-    await waitFor(() =>
+    await settlePluginViewLoad(() =>
       expect(h.renders.some((props) => props.panelId === "surface-1")).toBe(true)
     );
     await expect(hostReload("surface-1")).resolves.toBe("not-mounted");
@@ -792,7 +821,7 @@ describe("host.reloadPanel reaching a mounted view (#12610)", () => {
     outside.focus();
 
     await expect(hostReload()).resolves.toBe("scheduled");
-    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
     expect(document.activeElement).toBe(outside);
     outside.remove();
   });
@@ -816,7 +845,7 @@ describe("the user's Reload panel (#12611)", () => {
 
     expect(await userReload(lifecycle)).toBe(true);
 
-    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
     expect(first.disposeSignal.aborted).toBe(true);
     expect(latest().initialArgs).toEqual({ page: 7 });
     // Free: the whole budget is still there afterwards.
@@ -835,7 +864,7 @@ describe("the user's Reload panel (#12611)", () => {
 
     await userReload(lifecycle);
 
-    await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+    await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
     expect(blockedBanner()).toBeNull();
     expect(lifecycle.isViewReloadBlocked("panel-1")).toBe(false);
   });
@@ -843,7 +872,7 @@ describe("the user's Reload panel (#12611)", () => {
   it("is not offered by a host that offers no reload", async () => {
     const { Content, lifecycle } = await loadContent();
     render(<Content panelId="panel-1" />);
-    await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+    await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
 
     expect(await userReload(lifecycle)).toBe(false);
     expect(h.mounts).toHaveLength(1);
@@ -866,7 +895,7 @@ describe("the user's Reload panel (#12611)", () => {
     const content = screen.getByTestId("plugin-content");
 
     await userReload(lifecycle);
-    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
 
     expect(document.activeElement).not.toBe(document.body);
     expect(content.contains(document.activeElement)).toBe(false);
@@ -883,7 +912,7 @@ describe("the user's Reload panel (#12611)", () => {
       elsewhere.focus();
 
       await userReload(lifecycle);
-      await waitFor(() => expect(h.mounts).toHaveLength(2));
+      await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
 
       expect(document.activeElement).toBe(elsewhere);
     } finally {
@@ -917,7 +946,7 @@ describe("setHasUnsavedChanges (#12611)", () => {
     act(() => stale.setHasUnsavedChanges?.(true));
 
     await requestReload();
-    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
     expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
 
     const current = latest();
@@ -938,7 +967,7 @@ describe("setHasUnsavedChanges (#12611)", () => {
 
     await requestReload();
 
-    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
   });
 
   it("is lowered when the backend's host.reloadPanel replaces the view", async () => {
@@ -950,7 +979,7 @@ describe("setHasUnsavedChanges (#12611)", () => {
       await reloadRegisteredPanel("panel-1");
     });
 
-    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
     expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
   });
 
@@ -1011,5 +1040,97 @@ describe("setHasUnsavedChanges (#12611)", () => {
     await act(async () => {});
     expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
     expect(lifecycle.requestUserViewReload("panel-1")).toBe(false);
+  });
+});
+
+describe("setToolbarItemState", () => {
+  const REFRESH = "acme.refresh-quotes";
+
+  /** The kind declares one toolbar button; the store and registry are this load's. */
+  async function mountWithToolbar(props: Partial<PluginViewContentProps> = {}) {
+    const mounted = await mountContent({ offerToolbar: true, ...props });
+    const registry = await import("@shared/config/panelKindRegistry");
+    registry.registerPanelKind({
+      id: "acme.dashboard",
+      name: "Dashboard",
+      iconId: "gauge",
+      color: "#38bdf8",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme",
+      pluginToolbar: [{ actionId: REFRESH, stateKey: REFRESH, status: true }],
+    });
+    const { usePluginPanelToolbarStore } = await import("@/store/pluginPanelToolbarStore");
+    const stateOf = () => usePluginPanelToolbarStore.getState().statesByPanelId["panel-1"];
+    return { ...mounted, stateOf };
+  }
+
+  it("is withheld where the host draws no header toolbar", async () => {
+    await mountContent();
+    expect(latest().setToolbarItemState).toBeUndefined();
+  });
+
+  it("sets a declared button's state and ignores an undeclared one", async () => {
+    const { stateOf } = await mountWithToolbar();
+
+    act(() => latest().setToolbarItemState?.(REFRESH, { busy: true }));
+    act(() => latest().setToolbarItemState?.("acme.not-in-the-manifest", { busy: true }));
+
+    expect(stateOf()).toEqual({ [REFRESH]: { busy: true } });
+  });
+
+  it("keeps the state through an unmount, for the panel's next view", async () => {
+    const { stateOf, unmount } = await mountWithToolbar();
+    act(() => latest().setToolbarItemState?.(REFRESH, { text: "Fresh" }));
+
+    unmount();
+    await act(async () => {});
+
+    expect(stateOf()).toEqual({ [REFRESH]: { text: "Fresh" } });
+  });
+
+  it("ignores a write from the unmounting view's teardown", async () => {
+    const { stateOf, unmount } = await mountWithToolbar();
+    const view = latest();
+    act(() => view.setToolbarItemState?.(REFRESH, { text: "Fresh" }));
+
+    // The panel is closed: its state is pruned, then the view's own abort
+    // listener tries to say the refresh it was running has stopped.
+    unmount();
+    const { usePluginPanelToolbarStore } = await import("@/store/pluginPanelToolbarStore");
+    usePluginPanelToolbarStore.getState().clearPanel("panel-1");
+    view.setToolbarItemState?.(REFRESH, { busy: false, text: "Cancelled" });
+    await act(async () => {});
+
+    expect(stateOf()).toBeUndefined();
+  });
+
+  it("clears on a reload and ignores the old attempt's setter", async () => {
+    const { stateOf } = await mountWithToolbar();
+    const stale = latest();
+    act(() => stale.setToolbarItemState?.(REFRESH, { busy: true }));
+
+    await requestReload();
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
+    expect(stateOf()).toBeUndefined();
+
+    // A refresh the old view started settles after the reload: it must not
+    // repaint the fresh view's button.
+    act(() => stale.setToolbarItemState?.(REFRESH, { text: "Late" }));
+    expect(stateOf()).toBeUndefined();
+    act(() => latest().setToolbarItemState?.(REFRESH, { text: "Current" }));
+    expect(stateOf()).toEqual({ [REFRESH]: { text: "Current" } });
+  });
+
+  it("clears when the view crashes", async () => {
+    const { stateOf } = await mountWithToolbar();
+    act(() => latest().setToolbarItemState?.(REFRESH, { busy: true }));
+
+    await act(async () => {
+      boundaryCallbacks.onError?.(new Error("view threw"));
+    });
+
+    expect(stateOf()).toBeUndefined();
   });
 });

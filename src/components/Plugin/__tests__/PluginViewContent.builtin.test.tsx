@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { lazy, useEffect } from "react";
+import { lazy, useContext, useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelViewProps } from "@shared/types/plugin";
 import { makePluginViewContent, type PluginViewContentConfig } from "../PluginViewContent";
@@ -9,10 +9,12 @@ import {
   registerBuiltinView,
 } from "@/registry/builtinRendererRegistry";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { PluginKitOwnerContext } from "@/components/PluginKit/kitScope";
+import { PluginStyleScope } from "@/components/PluginKit/kitProps";
 
 /**
  * In-process resolution of built-in plugin panel views (#11244). Uses the real
- * `lazy` and the real registry — no React double — so a view that renders here
+ * load path and the real registry — no React double — so a view that renders here
  * genuinely did not come from a `plugin://` import, which jsdom cannot load.
  */
 
@@ -87,6 +89,9 @@ vi.mock("@/services/plugin/pluginStyleContract", async (importOriginal) => {
     },
   };
 });
+// The kit chunk takes seconds to transform under jsdom; readiness is the kit's
+// own suite's to prove.
+vi.mock("@/pluginUi", () => ({ whenPluginUiReady: () => Promise.resolve() }));
 vi.mock("@/services/plugin/pluginDocumentRuntime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/services/plugin/pluginDocumentRuntime")>();
   const runtime = actual.createPluginDocumentRuntime();
@@ -175,6 +180,56 @@ describe("built-in panel views", () => {
     expect(activateForView).toHaveBeenCalledWith(BUILTIN_KIND);
     expect(stylePrep.calls).toEqual([]);
     expect(documentViews.calls).toEqual([]);
+  });
+
+  it("shows a reopened builtin view as soon as its activation answers", async () => {
+    // Main publishes no runtime status for a builtin with no worker, so an
+    // absent status must not read as "backend unknown" for one. The reopen is
+    // warm, but it still activates before it renders (#10523).
+    function Inspector() {
+      return <div data-testid="builtin-view" />;
+    }
+    registerBuiltinView(BUILTIN_KIND, Inspector, { pluginId: BUILTIN_ID, label: "Site Inspector" });
+    const Content = makePluginViewContent(builtinConfig());
+
+    const first = render(<Content panelId="panel-reopen" worktreeId="wt-1" />);
+    await screen.findByTestId("builtin-view");
+    first.unmount();
+
+    let answer!: () => void;
+    activateForView.mockReturnValue(
+      new Promise<undefined>((resolve) => {
+        answer = () => resolve(undefined);
+      })
+    );
+    render(<Content panelId="panel-reopen" worktreeId="wt-1" />);
+    await act(async () => {});
+    expect(screen.queryByTestId("builtin-view")).toBeNull();
+    expect(activateForView).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      answer();
+    });
+    expect(screen.getByTestId("builtin-view")).toBeTruthy();
+  });
+
+  it("names the view's plugin to kit content it portals out of the view", async () => {
+    function Inspector() {
+      const owner = useContext(PluginKitOwnerContext);
+      return (
+        <PluginStyleScope>
+          <span data-testid="builtin-view">{owner}</span>
+        </PluginStyleScope>
+      );
+    }
+    registerBuiltinView(BUILTIN_KIND, Inspector, { pluginId: BUILTIN_ID, label: "Site Inspector" });
+
+    const Content = makePluginViewContent(builtinConfig());
+    render(<Content panelId="panel-owner" worktreeId="wt-1" />);
+
+    const view = await screen.findByTestId("builtin-view");
+    expect(view.textContent).toBe(BUILTIN_ID);
+    expect(view.parentElement?.getAttribute("data-daintree-plugin-owner")).toBe(BUILTIN_ID);
   });
 
   // SvelteKit Tools registers `lazy(() => import("./SiteInspectorView"))` to keep

@@ -117,6 +117,7 @@ const LAUNCH_IDENTITY = {
   worktreePath: "/repo/wt-1",
   branch: "feature/x",
   cwd: "/repo/wt-1",
+  cwdOutsideWorktree: false,
 };
 
 function makeCallbacks() {
@@ -513,6 +514,7 @@ describe("agentActions adversarial", () => {
       worktreePath: "/repo/wt-42",
       branch: "feature/parallel",
       cwd: "/repo/wt-42/packages/app",
+      cwdOutsideWorktree: false,
     });
     const actions = setupActions(callbacks);
 
@@ -529,7 +531,37 @@ describe("agentActions adversarial", () => {
       worktreePath: "/repo/wt-42",
       branch: "feature/parallel",
       cwd: "/repo/wt-42/packages/app",
+      cwdOutsideWorktree: false,
       reply: null,
+    });
+    expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
+  });
+
+  it("agent.launch reports a cwd outside the worktree it filed under (#13130)", async () => {
+    const callbacks = makeCallbacks();
+    // cwd is not a worktree selector: a launch into another repo still files
+    // under the active worktree, and the result has to say the two disagree.
+    callbacks.onLaunchAgent.mockResolvedValueOnce({
+      terminalId: "term-4",
+      location: "grid",
+      worktreeId: "wt-trackb",
+      worktreePath: "/work/bundle-trackb",
+      branch: "feature/trackb",
+      cwd: "/work/other-repo",
+      cwdOutsideWorktree: true,
+    });
+    const actions = setupActions(callbacks);
+
+    const result = await callAction(actions, "agent.launch", {
+      agentId: "claude",
+      cwd: "/work/other-repo",
+    });
+
+    expect(result).toMatchObject({
+      launched: true,
+      worktreeId: "wt-trackb",
+      cwd: "/work/other-repo",
+      cwdOutsideWorktree: true,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });
@@ -543,6 +575,7 @@ describe("agentActions adversarial", () => {
       worktreePath: null,
       branch: null,
       cwd: "/home/user/scratch",
+      cwdOutsideWorktree: null,
     });
     const actions = setupActions(callbacks);
 
@@ -556,6 +589,7 @@ describe("agentActions adversarial", () => {
       worktreePath: null,
       branch: null,
       cwd: "/home/user/scratch",
+      cwdOutsideWorktree: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });
@@ -606,6 +640,7 @@ describe("agentActions adversarial", () => {
       worktreePath: null,
       branch: null,
       cwd: null,
+      cwdOutsideWorktree: null,
       reply: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);

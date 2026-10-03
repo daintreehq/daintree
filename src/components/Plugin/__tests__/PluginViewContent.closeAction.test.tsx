@@ -7,8 +7,8 @@ import type { PluginViewContentConfig } from "../PluginViewContent";
  * The close-action seam (#11301), deliberately in its own file.
  *
  * Proving it requires a plugin view that actually reaches the error boundary,
- * which means a `lazy` double that THROWS. A throwing double is not safe to mix
- * into the main suite: `vi.doUnmock("react")` does not invalidate the already
+ * which means a view double that THROWS. A throwing double is not safe to mix
+ * into the main suite: `vi.doUnmock` does not invalidate the already
  * imported `PluginViewContent` graph that closed over it, so a later test's
  * dynamic import can still resolve the thrower and paint a second diagnostics
  * pane — which is exactly how it broke shard 1/4 while passing locally. A
@@ -70,19 +70,23 @@ vi.mock("@/components/ErrorBoundary", async () => {
 // A view that throws from an effect rather than from render: a render-time
 // throw trips React's concurrent-mount recovery, which discards the uncommitted
 // tree and replays it. A post-commit throw reaches the boundary deterministically.
-vi.mock("react", async () => {
-  const actual = await vi.importActual<typeof import("react")>("react");
+vi.mock("plugin://acme/__dtv-1/dashboard.js", async () => {
+  const { useEffect } = await import("react");
   return {
-    ...actual,
-    lazy: () =>
-      function ThrowingView() {
-        actual.useEffect(() => {
-          throw new Error("view exploded");
-        }, []);
-        return <div data-testid="plugin-view" />;
-      },
+    default: function ThrowingView() {
+      useEffect(() => {
+        throw new Error("view exploded");
+      }, []);
+      return <div data-testid="plugin-view" />;
+    },
   };
 });
+vi.mock("@/pluginUi", () => ({ whenPluginUiReady: () => Promise.resolve() }));
+vi.mock("@/services/plugin/pluginStyleContract", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/plugin/pluginStyleContract")>()),
+  preparePluginStyles: () => Promise.resolve(),
+  registerPluginStyleRoot: () => () => {},
+}));
 
 function makeContentConfig(): PluginViewContentConfig {
   return {

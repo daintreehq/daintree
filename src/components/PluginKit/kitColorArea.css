@@ -1,0 +1,36 @@
+/* The kit ColorPicker's saturation area and hue strip, drawn by react-colorful.
+   Its stylesheet is injected unlayered at runtime, so it beats every layered
+   Tailwind utility; these unlayered rules win on specificity instead. The
+   area and strip sit on the kit's radius, and each pointer is the Slider's
+   thumb: a field-coloured disc ringed in the primary ink, so it reads on any
+   colour under it. */
+
+.kit-color-area.react-colorful {
+  width: 100%;
+  height: auto;
+  gap: 0.75rem;
+}
+
+.kit-color-area .react-colorful__saturation {
+  flex: none;
+  height: 9rem;
+  border-bottom: 0;
+  border-radius: var(--radius-md);
+}
+
+.kit-color-area .react-colorful__hue {
+  height: 0.75rem;
+  border-radius: 9999px;
+}
+
+.kit-color-area .react-colorful__pointer {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid var(--color-surface-input);
+  box-shadow: 0 0 0 1px var(--color-text-primary);
+}
+
+.kit-color-area .react-colorful__interactive:focus-visible {
+  outline: 2px solid var(--color-accent-primary);
+  outline-offset: 2px;
+}

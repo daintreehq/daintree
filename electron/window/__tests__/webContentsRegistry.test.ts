@@ -71,6 +71,23 @@ describe("webContentsRegistry", () => {
     vi.clearAllMocks();
   });
 
+  it("notifies renderer scope listeners once per microtask of scope changes", async () => {
+    const { onRendererScopeChanged, registerProjectView, unregisterProjectView } =
+      await loadRegistry();
+    const listener = vi.fn();
+    const off = onRendererScopeChanged(listener);
+    const wc = createWebContents(150);
+    registerProjectView("project-a", wc as unknown as WebContents);
+    registerProjectView("project-b", wc as unknown as WebContents);
+    expect(listener).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(listener).toHaveBeenCalledTimes(1);
+    off();
+    unregisterProjectView(wc.id);
+    await Promise.resolve();
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
   it("does not add duplicate destroyed listeners when an app view is reactivated", async () => {
     const { getAppWebContents, registerAppView } = await loadRegistry();
     const win = createWindow(1);

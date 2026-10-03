@@ -195,6 +195,9 @@ export function registerTerminalInputActions(
     category: "terminal",
     kind: "command",
     danger: "safe",
+    // Copying a selection then reading the clipboard would hand a plugin
+    // terminal text without `terminal:read` and its consent prompt (#13155).
+    denyPluginDispatch: true,
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown, ctx) => {

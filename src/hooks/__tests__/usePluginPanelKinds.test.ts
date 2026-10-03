@@ -210,6 +210,15 @@ describe("usePluginPanelKinds", () => {
       { actionId: "acme.refresh", label: "Go" },
     ]);
 
+    // The same holds for the header toolbar: an edited label is a change.
+    const toolbarItem = { actionId: "acme.refresh", stateKey: "refresh", status: true };
+    act(() => emit!({ kinds: [{ ...base, pluginToolbar: [toolbarItem] }] }));
+    expect(getPanelKindConfig(base.id)?.pluginToolbar).toEqual([toolbarItem]);
+    act(() =>
+      emit!({ kinds: [{ ...base, pluginToolbar: [{ ...toolbarItem, label: "Refresh prices" }] }] })
+    );
+    expect(getPanelKindConfig(base.id)?.pluginToolbar?.[0]?.label).toBe("Refresh prices");
+
     act(() => emit!({ kinds: [{ ...base, hasPluginDatabases: true }] }));
     expect(getPanelKindConfig(base.id)?.pluginMenu).toBeUndefined();
     expect(getPanelKindConfig(base.id)?.hasPluginDatabases).toBe(true);

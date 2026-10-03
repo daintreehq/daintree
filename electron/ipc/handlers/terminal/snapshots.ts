@@ -12,6 +12,7 @@ import {
   buildTerminalInventory,
   consumeTerminalInventoryPrefetch,
 } from "../../../services/terminalInventoryPrefetch.js";
+import { locateTerminal } from "../../../services/terminalLocation.js";
 import { markPerformance } from "../../../utils/performance.js";
 import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import { getProjectIdFromSenderUrl } from "../../senderIdentity.js";
@@ -138,6 +139,15 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       const errorMessage = formatErrorMessage(error, "Failed to get terminal info");
       throw new Error(`Failed to get terminal info: ${errorMessage}`);
     }
+  };
+
+  const handleTerminalLocate = async (
+    id: string
+  ): Promise<import("../../../../shared/types/ipc.js").TerminalLocation> => {
+    if (typeof id !== "string" || !id) {
+      throw new Error("Invalid terminal ID: must be a non-empty string");
+    }
+    return locateTerminal(ptyClient, id);
   };
 
   const handleTerminalGetSharedBuffers = async (): Promise<{
@@ -524,6 +534,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         handleTerminalGetSerializedStates
       ),
       getInfo: op(CHANNELS.TERMINAL_GET_INFO, handleTerminalGetInfo),
+      locate: op(CHANNELS.TERMINAL_LOCATE, handleTerminalLocate),
       getSharedBuffers: op(CHANNELS.TERMINAL_GET_SHARED_BUFFERS, handleTerminalGetSharedBuffers),
       replayHistory: opValidated(
         CHANNELS.TERMINAL_REPLAY_HISTORY,

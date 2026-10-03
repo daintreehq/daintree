@@ -81,6 +81,15 @@ export const PLUGIN_ICON_IDS = [
   "rocket",
   "lightbulb",
   "flask",
+  // Verbs for the actions a panel `toolbar` button or toolbar button runs.
+  "refresh-cw",
+  "download",
+  "upload",
+  "filter",
+  "plus",
+  "search",
+  "play",
+  "settings",
 ] as const satisfies readonly string[];
 
 export type PluginIconId = (typeof PLUGIN_ICON_IDS)[number];

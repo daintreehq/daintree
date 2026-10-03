@@ -38,7 +38,7 @@ import type { TerminalSubmissionRecord } from "../../../shared/types/terminalSub
 import { AgentOutputForwarder } from "./AgentOutputForwarder.js";
 import { TerminalInputController } from "./TerminalInputController.js";
 import { HandbackTracker } from "./HandbackTracker.js";
-import { findHandback, rawHandbackText } from "./HandbackDetector.js";
+import { findHandback, keepFirstObservation, rawHandbackText } from "./HandbackDetector.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
@@ -72,6 +72,7 @@ import { getLiveAgentId } from "./terminalTitle.js";
 import {
   serializeTerminal,
   serializeTerminalAsync,
+  serializeTerminalTail,
   serializeForPersistence,
 } from "./terminalSerialization.js";
 import {
@@ -779,7 +780,7 @@ export class TerminalProcess {
       },
       readViewportLines: (n) => readLastNLines(this.terminalInfo.headlessTerminal, n),
       readCursorLine: () => readCursorLine(this.terminalInfo.headlessTerminal),
-      serialize: () => this.serializeLiveInThread(),
+      serialize: (options) => this.serializeLiveInThread(options),
       serializeForPersistence: () => this.serializeForPersistence(),
       captureFinalSnapshot: async (): Promise<AnalysisFinalCapture> => {
         const snapshot = await serializeTerminalAsync(this.id, this.terminalInfo);
@@ -1345,6 +1346,10 @@ export class TerminalProcess {
    * `handbackCode` is the code minted for a submission that asked for a
    * handback (#12488); its instruction is already in `text`. A terminal that
    * never asked keeps no tracker, so its submits pay one property read.
+   *
+   * A submission that reaches the pty drops the last handback: it answered an
+   * earlier prompt, and the assistant's close reads its presence as the agent
+   * having finished the latest one (#13128).
    */
   submit(
     text: string,
@@ -1355,7 +1360,12 @@ export class TerminalProcess {
   ): void {
     const tracker =
       handbackCode !== undefined ? this.ensureHandbackTracker() : this.terminalInfo.handbackTracker;
-    const onPtyWritten = tracker?.noteSubmission(handbackCode, token);
+    const onTrackerWritten = tracker?.noteSubmission(handbackCode, token);
+    const onPtyWritten = (): void => {
+      this.terminalInfo.lastHandback = undefined;
+      this.terminalInfo.lastHandbackUnpublished = false;
+      onTrackerWritten?.();
+    };
     this.inputController.submit(text, token, onPtyWritten, guard, imagePaths);
   }
 
@@ -1767,16 +1777,24 @@ export class TerminalProcess {
    * later chunks had parsed, and the snapshot would cover bytes past the
    * offset it is stamped with.
    */
-  private serializeLiveInThread(): Promise<SerializedTerminalSnapshot | null> {
+  private serializeLiveInThread(
+    options?: SerializeReadOptions
+  ): Promise<SerializedTerminalSnapshot | null> {
     const terminal = this.terminalInfo;
     const headless = terminal.headlessTerminal;
     if (terminal.preservedSnapshot !== undefined || !headless || !terminal.serializeAddon) {
       return serializeTerminalAsync(this.id, terminal);
     }
+    const tailRows = options?.tailRows;
     return new Promise((resolve) => {
       headlessMirrorScheduler.flush(this.id, headless, () => {
         if (terminal.headlessTerminal !== headless) {
           resolve(serializeTerminal(this.id, terminal));
+          return;
+        }
+        // A capped read carries no continuation, matching the worker's.
+        if (tailRows !== undefined) {
+          resolve(serializeTerminalTail(this.id, terminal, tailRows));
           return;
         }
         const snapshot = serializeTerminal(this.id, terminal);
@@ -2161,11 +2179,12 @@ export class TerminalProcess {
     // reported, or the code would stay open until the next submission.
     if (t.agentState !== "working") tracker.retire(hit.code);
     if (!changed) return;
-    t.lastHandback = hit.handback;
+    const handback = keepFirstObservation(t.lastHandback, hit.handback);
+    t.lastHandback = handback;
     t.lastHandbackUnpublished = true;
     events.emit("agent:handback-observed", {
       terminalId: this.id,
-      handback: hit.handback,
+      handback,
       code: hit.code,
       timestamp: now,
     });

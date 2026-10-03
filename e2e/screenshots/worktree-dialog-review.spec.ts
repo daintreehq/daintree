@@ -384,7 +384,7 @@ test("new-worktree dialog review — rest and interactive states", async () => {
       });
       await settle(page, 300);
       await snap(page, "38-in-use-narrow", popover);
-      await narrow.evaluate((el) => el.remove());
+      await narrow.evaluate((el) => (el as ChildNode).remove());
       await closeDialog(page);
     });
 

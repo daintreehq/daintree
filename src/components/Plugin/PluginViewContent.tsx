@@ -1,20 +1,22 @@
 import {
+  Profiler,
   Suspense,
   createContext,
   createElement,
-  lazy,
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ComponentType,
-  type LazyExoticComponent,
+  type ProfilerOnRenderCallback,
 } from "react";
 import type {
   PanelReloadResult,
   PanelViewProps,
+  PluginPanelToolbarItemState,
   PluginSettingsViewContext,
 } from "@shared/types/plugin";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
@@ -30,6 +32,7 @@ import {
   setViewUnsavedChanges,
 } from "@/services/plugin/pluginPanelLifecycle";
 import { registerPanelReloadHandler } from "@/services/plugin/pluginPanelReload";
+import { useAuthoredRunningActions } from "@/services/plugin/runningPluginActions";
 import { Package } from "lucide-react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { ErrorFallbackProps } from "@/components/ErrorBoundary/ErrorFallback";
@@ -37,6 +40,7 @@ import { Skeleton, SkeletonHint } from "@/components/ui/Skeleton";
 import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
 import { PluginViewDiagnosticsFallback } from "@/components/Plugin/PluginViewDiagnosticsFallback";
 import { cn } from "@/lib/utils";
+import { useSkeletonFloor, useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import {
   usePluginRuntimeStatus,
@@ -46,7 +50,7 @@ import { PluginViewRuntimeStatus } from "@/components/Plugin/PluginViewRuntimeSt
 import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
 import { presentWorkerStatus, useWorkerStall } from "@/components/Plugin/pluginWorkerPresentation";
 import {
-  PLUGIN_STYLE_ROOT_PROPS,
+  pluginStyleRootPropsFor,
   preparePluginStyles,
   registerPluginStyleRoot,
 } from "@/services/plugin/pluginStyleContract";
@@ -54,6 +58,18 @@ import { useBuiltinPanelView } from "@/registry/builtinRendererRegistry";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { actionService } from "@/services/ActionService";
+import {
+  generationOfViewUrl,
+  measurePluginViewPhase,
+  pluginViewMetrics,
+  type PluginViewPhase,
+} from "@/services/plugin/pluginViewMetrics";
+import { markRendererPerformance } from "@/utils/performance";
+import { PERF_MARKS } from "@shared/perf/marks";
+import { PluginKitOwnerContext } from "@/components/PluginKit/kitScope";
+import { PluginKitViewHostContext } from "@/components/PluginKit/kitViewHost";
+import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
+import { usePluginPanelToolbarStore } from "@/store/pluginPanelToolbarStore";
 
 /**
  * The resolved subset of `PanelKindConfig` a plugin view actually needs. Both
@@ -153,6 +169,11 @@ export interface PluginViewContentProps {
    * a real panel — grid, dock, or dialog — can offer it. Project surfaces don't.
    */
   offerRequestReload?: boolean;
+  /**
+   * Hand the view `setToolbarItemState`, for a host that draws the panel's
+   * header and with it the kind's manifest `toolbar`. Project surfaces don't.
+   */
+  offerToolbar?: boolean;
   /** Forwarded as `PanelViewProps.settingsContext`, for a settings view's host only. */
   settingsContext?: PluginSettingsViewContext;
 }
@@ -210,6 +231,58 @@ function isImportStageFailure(err: unknown): boolean {
  */
 const PluginViewCloseContext = createContext<{ onRequestClose?: () => void }>({});
 
+/**
+ * One attempt's load timings, filled in by its load and completed by the paint
+ * reporter once the view has actually painted. Owned by the attempt, so the
+ * timings live exactly as long as it does.
+ */
+interface ViewLoadTiming {
+  openedAt: number;
+  retry: boolean;
+  activateMs: number;
+  importMs: number;
+  stylesMs: number;
+  /** Open → module imported and styles ready; the `view-load` phase. */
+  loadMs: number;
+  recorded: boolean;
+}
+
+/**
+ * One mount attempt of a plugin view. The view arrives through `run`, which the
+ * content calls from an effect and which settles into plain component state —
+ * never a Suspense retry, so nothing waits on React's reveal throttle. A warm
+ * attempt's `run` only waits on activation, so it shows within one IPC round
+ * trip. `run` is memoized per attempt.
+ */
+interface ViewAttempt {
+  timing: ViewLoadTiming;
+  run: () => Promise<ComponentType<PanelViewProps>>;
+}
+
+/** What an attempt's load settled to, tagged with the attempt it belongs to. */
+type SettledAttempt =
+  | { attempt: ViewAttempt; failed: false; view: ComponentType<PanelViewProps> }
+  | { attempt: ViewAttempt; failed: true; error: unknown };
+
+/**
+ * `markRendererPerformance` also lands a User Timing mark under capture, and
+ * these fire on every open, so the previous mark of the same name is cleared
+ * first to keep the browser's buffer at one per phase. The capture buffer
+ * itself is bounded by `markRendererPerformance`.
+ */
+function markPluginView(mark: string, meta: Record<string, unknown>): void {
+  try {
+    performance.clearMarks?.(mark);
+  } catch {
+    // Clearing is housekeeping; the mark below still matters more.
+  }
+  markRendererPerformance(mark, meta);
+}
+
+function roundMs(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
 function isPluginViewModule(mod: unknown): mod is { default: ComponentType<PanelViewProps> } {
   if (mod === null || typeof mod !== "object") return false;
   const candidate = (mod as { default?: unknown }).default;
@@ -222,7 +295,7 @@ function isPluginViewModule(mod: unknown): mod is { default: ComponentType<Panel
 }
 
 /**
- * Build the chrome-free half of a plugin panel: activation, lazy `plugin://`
+ * Build the chrome-free half of a plugin panel: activation, the `plugin://`
  * import, error boundary, and dispose-signal lifecycle. It still owns the UI
  * those duties imply — the loading skeleton, the fade-in, and the diagnostics
  * fallback — but none of the surrounding panel shell: no header, no focus
@@ -230,7 +303,7 @@ function isPluginViewModule(mod: unknown): mod is { default: ComponentType<Panel
  * for grid/dock panes today, a dialog shell later (#11240 / #11239).
  *
  * Call this ONCE per kind, at factory-construction scope — never inside a
- * render. `lazy()` and every piece of state below are keyed to the returned
+ * render. The loaded-module cache and every piece of state below are keyed to the returned
  * component's identity, so re-invoking the factory while rendering would remount
  * the plugin view (and restart its import) on every parent render. Callers must
  * cache the result per `(kindId, componentPath)`, as `usePluginPanelKinds` does.
@@ -241,17 +314,17 @@ function isPluginViewModule(mod: unknown): mod is { default: ComponentType<Panel
  *     microtask later, so a StrictMode effect replay can call it off), when
  *     "Try again" or an accepted `requestReload` swaps in a fresh attempt, and
  *     when the plugin's kind disappears from a `plugin:panel-kinds-changed`
- *     broadcast (that broadcast fires before the main process tears down plugin
- *     IPC handlers, so signal-driven cleanup runs while host APIs are still
- *     live). A temporary unmount — maximizing a sibling pane, leaving a dock
- *     tab — aborts it too.
+ *     broadcast (main sends that from a microtask after `unloadPlugin` has
+ *     already removed the plugin's IPC handlers and disposed its worker, so
+ *     signal-driven cleanup must tolerate host calls rejecting). A temporary
+ *     unmount — maximizing a sibling pane, leaving a dock tab — aborts it too.
  *   - `panelRemovedSignal` is per panel. It comes from `pluginPanelLifecycle`,
  *     which keys it by `panelId` so every mount of the same panel receives the
  *     same object, and aborts it only when the panel is permanently removed. A
  *     host whose content is not a panel record supplies its own instead — see
  *     {@link PluginViewContentProps.panelRemovedSignal}.
  *   - On render error the boundary's "Try again" button reloads the module — a
- *     fresh state-held ref produces a new `lazy()` call so `import()` is
+ *     fresh state-held attempt runs its own load, so `import()` is
  *     re-evaluated rather than returning the cached failed promise.
  *
  * `componentPath` is imported as given. It already carries a per-load generation
@@ -277,6 +350,13 @@ export function makePluginViewContent(
     name: displayName,
     standalone = false,
   } = config;
+  // The load this factory's views belong to. Every observation carries it, so
+  // one a replaced load's view makes after its successor mounted is dropped
+  // instead of being counted against the new load.
+  const viewGeneration = generationOfViewUrl(componentPath);
+  // Tagged with the owner so a portal the view spreads these onto can be
+  // traced back to this plugin (Styles check, long-frame input attribution).
+  const styleRootProps = pluginStyleRootPropsFor(pluginId);
 
   // Defined once per content factory, not inline in render: the boundary swaps
   // its fallback subtree whenever this component *type* changes identity, which
@@ -323,7 +403,7 @@ export function makePluginViewContent(
   }
 
   // Replacement specifier for `componentPath` once main has minted one, cached at
-  // factory scope so it outlives both the `lazy()` wrapper and the component
+  // factory scope so it outlives both the attempt and the component
   // instance (#11728). A remount that fell back to the poisoned original would
   // undo the recovery, and `usePluginPanelKinds` caches this factory per
   // (kindId, componentPath) — so every panel of this kind shares the one
@@ -331,152 +411,494 @@ export function makePluginViewContent(
   let recoveryComponentPath: string | undefined;
 
   /**
+   * The last module this factory's views loaded, and the worker it was
+   * activated against. Factory scope, like `recoveryComponentPath`, so a panel
+   * closed and reopened (or reloaded, or moved between hosts) can render the
+   * view in the commit that mounts it instead of waiting on an activation round
+   * trip that main answers immediately. Waiting is what cost every open React's
+   * 300 ms Suspense reveal throttle: the fallback committed, and the retry that
+   * revealed the view was held until 300 ms after it.
+   */
+  let loadedModule: { path: string; view: ComponentType<PanelViewProps> } | null = null;
+  const builtinViews = new WeakMap<ComponentType<PanelViewProps>, ComponentType<PanelViewProps>>();
+  /**
+   * The backend a settled activation left behind: the worker generation that
+   * was `ready` when it resolved, or `null` for a plugin with no worker (a
+   * builtin, which activates in-process). Absent means nothing is known to be
+   * live, and the next attempt activates before it renders (#10523).
+   */
+  let activatedAgainst: { worker: number | null } | undefined;
+
+  const forgetActivation = (): void => {
+    activatedAgainst = undefined;
+  };
+
+  const rememberActivation = (inProcess: boolean): void => {
+    const status = usePluginRuntimeStatusStore.getState().statusById.get(pluginId);
+    const worker = status?.worker;
+    // Main publishes no status at all for a builtin with no worker or dev
+    // session, so absence is its normal state. Its activation lives as long as
+    // this load: a disable unloads it, and the reload an enable performs mints a
+    // new view generation — a new `componentPath`, so a new factory.
+    if (!status) activatedAgainst = inProcess ? { worker: null } : undefined;
+    else if (worker === null) activatedAgainst = { worker: null };
+    else if (worker?.state === "ready") activatedAgainst = { worker: worker.generation };
+    // Settled while the pushed status still shows a transient state: which
+    // backend answered is unknown, so the next attempt waits for it again.
+    else activatedAgainst = undefined;
+  };
+
+  /**
+   * Whether the backend the last activation reached is still the one running.
+   * Read from the pushed runtime status, which is the only renderer-side
+   * account of a worker restart, an idle dispose (`stopped`), or a plugin reload
+   * that published this kind under a newer view generation. Anything it cannot
+   * confirm is treated as not live, so the cost of a wrong answer is one
+   * activation-first load. What it cannot see is a transition main has made
+   * but whose push is still in flight; a view opened inside that window
+   * renders ahead of the replacement's `activate()`, and the push that lands
+   * next either fails the view (a refused activation) or rebinds it onto the
+   * new worker, which remounts it.
+   */
+  const backendIsLive = (inProcess: boolean): boolean => {
+    if (!activatedAgainst) return false;
+    const status = usePluginRuntimeStatusStore.getState().statusById.get(pluginId);
+    if (!status) return inProcess && activatedAgainst.worker === null;
+    const publishedGeneration = viewGeneration?.order ?? null;
+    if (publishedGeneration !== null && status.viewGeneration !== publishedGeneration) return false;
+    const worker = status.worker;
+    if (activatedAgainst.worker === null) return worker === null;
+    return (
+      worker !== null && worker.state === "ready" && worker.generation === activatedAgainst.worker
+    );
+  };
+
+  /**
+   * Resolves once every kit primitive renders synchronously. Started alongside
+   * activation so the chunk loads in parallel with it, and awaited with the
+   * styles: a kit control that mounts before the chunk is in suspends inside
+   * its own boundary, and that boundary's reveal is throttled exactly like the
+   * one this load path avoids. A kit that fails to load is the kit's own
+   * boundary's problem, so this never rejects.
+   */
+  const whenKitReady = (): Promise<void> =>
+    import("@/pluginUi").then((kit) => kit.whenPluginUiReady()).catch(() => {});
+
+  const startTiming = (retry: boolean): ViewLoadTiming => {
+    const timing: ViewLoadTiming = {
+      openedAt: performance.now(),
+      retry,
+      activateMs: 0,
+      importMs: 0,
+      stylesMs: 0,
+      loadMs: 0,
+      recorded: false,
+    };
+    markPluginView(PERF_MARKS.PLUGIN_VIEW_LOAD_START, { pluginId, kindId, retry });
+    return timing;
+  };
+
+  const endPhase = (phase: PluginViewPhase, start: number): number => {
+    const end = performance.now();
+    measurePluginViewPhase(pluginId, phase, start, end, { kindId });
+    return end - start;
+  };
+
+  // Factory scope, so the Profiler sees one stable callback and the view's
+  // commits cost a single registry push each. Production react-dom never calls
+  // it (only development and profiling builds do); the rest of the load timing
+  // does not depend on it.
+  const onViewCommit: ProfilerOnRenderCallback = (
+    _id,
+    _phase,
+    actualDuration,
+    _baseDuration,
+    _startTime,
+    commitTime
+  ) => {
+    pluginViewMetrics.recordCommit(pluginId, actualDuration, commitTime, viewGeneration);
+  };
+
+  /**
+   * Race one attempt's activation and load against the import timeout. A wedged
+   * protocol load (handler hang, never-resolving fetch) would otherwise leave
+   * the pane loading forever — the ErrorBoundary only sees rejections, never a
+   * pending promise. Rejecting on timeout routes to the boundary's "Try again",
+   * and because the race is per attempt a retry restarts the timer cleanly
+   * (#10512). Activation and import share the one timeout so a stalled
+   * `activate()` surfaces the same recovery path as a stalled import.
+   */
+  const withLoadTimeout = <T,>(work: Promise<T>, timeoutError: () => unknown): Promise<T> => {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([
+      work.finally(() => {
+        if (timeoutId !== undefined) clearTimeout(timeoutId);
+      }),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(timeoutError()), PLUGIN_VIEW_IMPORT_TIMEOUT_MS);
+      }),
+    ]);
+  };
+
+  /**
+   * The view a builtin's registered component renders through. A builtin keeps
+   * its view out of the host bundle by registering a `lazy()` component, which
+   * suspends on its own chunk inside this content's boundary; rendering it from
+   * a plain component keeps that working. `createElement`, not JSX: the React
+   * Compiler folds a capitalised alias of a lowercase binding back into the
+   * binding, and `<component />` then renders an intrinsic element. One wrapper
+   * per registered component, so a warm attempt reuses the one already built.
+   */
+  const builtinViewFor = (
+    component: ComponentType<PanelViewProps>
+  ): ComponentType<PanelViewProps> => {
+    const existing = builtinViews.get(component);
+    if (existing) return existing;
+    const BuiltinPanelView = (props: PanelViewProps) => createElement(component, props);
+    builtinViews.set(component, BuiltinPanelView);
+    return BuiltinPanelView;
+  };
+
+  /**
    * A built-in plugin's panel view is compiled into the host bundle and
    * registered in-process under this kind id (#11244), so there is no module to
-   * fetch. It still goes through `lazy()` and the same activation + timeout, so
-   * the plugin's `activate()` has run before first render and the loading,
-   * failure, and retry paths are the ones an installed view gets. Recovery never
-   * asks main for a fresh `plugin://` generation: nothing was imported, so there
-   * is no poisoned specifier to replace.
+   * fetch. It still goes through the same activation + timeout, so the plugin's
+   * `activate()` has run before first render and the loading, failure, and
+   * retry paths are the ones an installed view gets. Recovery never asks main
+   * for a fresh `plugin://` generation: nothing was imported, so there is no
+   * poisoned specifier to replace.
    */
-  const createBuiltinLazyView = (
-    component: ComponentType<PanelViewProps>
-  ): LazyExoticComponent<ComponentType<PanelViewProps>> =>
-    lazy<ComponentType<PanelViewProps>>(async () => {
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([
-        (async () => {
+  const loadBuiltinView = async (
+    component: ComponentType<PanelViewProps>,
+    timing: ViewLoadTiming
+  ): Promise<ComponentType<PanelViewProps>> => {
+    const kitReady = whenKitReady();
+    await withLoadTimeout(
+      (async () => {
+        const activateStart = performance.now();
+        try {
           await window.electron?.plugin?.activateForView?.(kindId);
-        })().finally(() => {
-          if (timeoutId !== undefined) clearTimeout(timeoutId);
-        }),
-        new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => {
-            reject(
-              new Error(
-                `Plugin "${pluginId}" view activation timed out after ${PLUGIN_VIEW_IMPORT_TIMEOUT_MS}ms`
-              )
-            );
-          }, PLUGIN_VIEW_IMPORT_TIMEOUT_MS);
-        }),
-      ]);
-      // A builtin keeps its view out of the host bundle by registering a
-      // `lazy()` component, and React rejects a lazy that resolves to another
-      // lazy (#306). Rendering it from a plain component lets it suspend on its
-      // own chunk inside this same boundary. `createElement`, not JSX: the React
-      // Compiler folds a capitalised alias of a lowercase binding back into the
-      // binding, and `<component />` then renders an intrinsic element.
-      const BuiltinPanelView = (props: PanelViewProps) => createElement(component, props);
-      return { default: BuiltinPanelView };
-    });
+        } catch (err) {
+          forgetActivation();
+          throw err;
+        }
+        rememberActivation(true);
+        timing.activateMs = endPhase("activate", activateStart);
+        markPluginView(PERF_MARKS.PLUGIN_VIEW_ACTIVATED, { pluginId, kindId });
+        await kitReady;
+      })(),
+      () =>
+        new Error(
+          `Plugin "${pluginId}" view activation timed out after ${PLUGIN_VIEW_IMPORT_TIMEOUT_MS}ms`
+        )
+    );
+    const view = builtinViewFor(component);
+    timing.loadMs = endPhase("view-load", timing.openedAt);
+    markPluginView(PERF_MARKS.PLUGIN_VIEW_IMPORTED, { pluginId, kindId });
+    return view;
+  };
 
-  const createLazyView = (
-    requestRecoveryPath = false
-  ): LazyExoticComponent<ComponentType<PanelViewProps>> =>
-    lazy<ComponentType<PanelViewProps>>(async () => {
-      // Race the `plugin://` import against a timeout. A wedged protocol load
-      // (handler hang, never-resolving fetch) would otherwise sit behind
-      // Suspense forever — the ErrorBoundary only catches rejections, never a
-      // pending promise. Rejecting on timeout routes through Suspense to the
-      // boundary's "Try again", and because the race lives inside the factory a
-      // retry (a fresh `createLazyView()`) restarts the timer cleanly (#10512).
-      // The activation + import sequence shares one timeout so a stalled
-      // `activate()` surfaces the same recovery path as a stalled import.
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
-      const mod: unknown = await Promise.race([
-        (async () => {
-          // Implicit lazy activation (#10523): force the owning plugin to
-          // `activate()` before importing its module, so handlers it registers
-          // during activate() are live when the view first renders. Optional
-          // chaining keeps this working in test environments without
-          // `window.electron`. `activateForView` is a no-op once the plugin is
-          // already activated.
-          //
-          // On activation failure the IPC call now REJECTS with the real cause
-          // (#10618: the handler throws an AppError) — the `await` rethrows it
-          // here, before `import()`, so the ErrorBoundary shows why activation
-          // failed (e.g. a manifest collision or an activate() throw) instead of
-          // the generic import timeout the module load would otherwise produce
-          // once its handlers never bound.
-          //
-          // On a retry after an import-stage failure this also asks main for a
-          // replacement URL on a fresh view generation (#11728). The previous
-          // specifier is permanently poisoned — the module map never evicts a
-          // failed entry — so recovery needs a URL V8 has never seen. Main
-          // builds it from the loaded manifest and mints the generation once per
-          // plugin load, which caps the module map at two namespaces per plugin
-          // however many times the user retries. The first attempt keeps the
-          // single-argument call so it stays a pure activation request.
-          // Started before activation is awaited so the Tailwind chunk, the
-          // ~10ms compile, and the view's own source read all overlap the
-          // activation round trip rather than queueing behind it (#12220).
-          const initialPath = recoveryComponentPath ?? componentPath;
-          const stylesReady = preparePluginStyles(initialPath);
-          const recovered = requestRecoveryPath
+  const loadModuleView = async (
+    requestRecoveryPath: boolean,
+    timing: ViewLoadTiming
+  ): Promise<ComponentType<PanelViewProps>> => {
+    const mod: unknown = await withLoadTimeout(
+      (async () => {
+        // Implicit lazy activation (#10523): force the owning plugin to
+        // `activate()` before importing its module, so handlers it registers
+        // during activate() are live when the view first renders. Optional
+        // chaining keeps this working in test environments without
+        // `window.electron`. `activateForView` is a no-op once the plugin is
+        // already activated.
+        //
+        // On activation failure the IPC call now REJECTS with the real cause
+        // (#10618: the handler throws an AppError) — the `await` rethrows it
+        // here, before `import()`, so the ErrorBoundary shows why activation
+        // failed (e.g. a manifest collision or an activate() throw) instead of
+        // the generic import timeout the module load would otherwise produce
+        // once its handlers never bound.
+        //
+        // On a retry after an import-stage failure this also asks main for a
+        // replacement URL on a fresh view generation (#11728). The previous
+        // specifier is permanently poisoned — the module map never evicts a
+        // failed entry — so recovery needs a URL V8 has never seen. Main
+        // builds it from the loaded manifest and mints the generation once per
+        // plugin load, which caps the module map at two namespaces per plugin
+        // however many times the user retries. The first attempt keeps the
+        // single-argument call so it stays a pure activation request.
+        // Started before activation is awaited so the Tailwind chunk, the
+        // ~10ms compile, and the view's own source read all overlap the
+        // activation round trip rather than queueing behind it (#12220).
+        const initialPath = recoveryComponentPath ?? componentPath;
+        const trackStyles = (path: string): Promise<number> => {
+          const stylesStart = performance.now();
+          return preparePluginStyles(path).then(() => endPhase("styles", stylesStart));
+        };
+        const stylesReady = trackStyles(initialPath);
+        const kitReady = whenKitReady();
+        const activateStart = performance.now();
+        let recovered: string | undefined;
+        try {
+          recovered = requestRecoveryPath
             ? await window.electron?.plugin?.activateForView?.(kindId, true)
             : await window.electron?.plugin?.activateForView?.(kindId);
-          if (typeof recovered === "string" && recovered.length > 0) {
-            recoveryComponentPath = recovered;
+        } catch (err) {
+          forgetActivation();
+          throw err;
+        }
+        rememberActivation(false);
+        timing.activateMs = endPhase("activate", activateStart);
+        markPluginView(PERF_MARKS.PLUGIN_VIEW_ACTIVATED, { pluginId, kindId });
+        if (typeof recovered === "string" && recovered.length > 0) {
+          recoveryComponentPath = recovered;
+        }
+        const viewPath = recoveryComponentPath ?? componentPath;
+        pluginDocumentRuntime.registerView(pluginId, viewPath);
+        pluginViewMetrics.registerViewOrigin(pluginId, viewPath);
+        try {
+          const importStart = performance.now();
+          const module: unknown = await import(/* @vite-ignore */ viewPath);
+          timing.importMs = endPhase("import", importStart);
+          // Awaited AFTER the import, so the two run concurrently, but before
+          // the load resolves — which is what makes the view's first paint
+          // styled instead of flashing unstyled. `preparePluginStyles` never
+          // rejects: a plugin that renders unstyled beats one that will not
+          // render, so a styling failure must not reach the error boundary.
+          // A recovery generation minted during activation re-prepares under
+          // its own URL; it is the same file, so this is all but free.
+          // Assigned from the preparation actually awaited, so a recovery's
+          // speculative first preparation cannot overwrite the real one.
+          const [stylesMs] = await Promise.all([
+            viewPath === initialPath ? stylesReady : trackStyles(viewPath),
+            kitReady,
+          ]);
+          timing.stylesMs = stylesMs;
+          if (isPluginViewModule(module)) {
+            loadedModule = { path: viewPath, view: module.default };
           }
-          const viewPath = recoveryComponentPath ?? componentPath;
-          pluginDocumentRuntime.registerView(pluginId, viewPath);
-          try {
-            const module: unknown = await import(/* @vite-ignore */ viewPath);
-            // Awaited AFTER the import, so the two run concurrently, but before
-            // the factory resolves — which is what makes the view's first paint
-            // styled instead of flashing unstyled. `preparePluginStyles` never
-            // rejects: a plugin that renders unstyled beats one that will not
-            // render, so a styling failure must not reach the error boundary.
-            // A recovery generation minted during activation re-prepares under
-            // its own URL; it is the same file, so this is all but free.
-            await (viewPath === initialPath ? stylesReady : preparePluginStyles(viewPath));
-            return module;
-          } catch (err) {
-            throw markImportStageFailure(err);
-          }
-        })().finally(() => {
-          if (timeoutId !== undefined) clearTimeout(timeoutId);
-        }),
-        new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => {
-            // Counts as an import-stage failure: the losing `import()` keeps
-            // running after this rejects (dynamic import has no cancellation),
-            // so if it eventually fails it poisons this specifier behind our
-            // back. Retrying on a fresh generation sidesteps that entirely,
-            // which is why the timeout is safe to leave uncancelled (#11728).
-            //
-            // Deliberately conservative: a timeout can also mean activation
-            // stalled, in which case the specifier was never touched and the
-            // extra generation is unnecessary. Harmless — main mints at most one
-            // per plugin load either way. Not unit-tested, because driving the
-            // real timer needs fake timers around a live `lazy` factory, which
-            // leaves an unhandled rejection from the uncancelled loser; the
-            // marking is a superset that can only over-recover, never fail.
-            reject(
-              markImportStageFailure(
-                new Error(
-                  `Plugin "${pluginId}" view module at ${recoveryComponentPath ?? componentPath} timed out after ${PLUGIN_VIEW_IMPORT_TIMEOUT_MS}ms`
-                )
-              )
-            );
-          }, PLUGIN_VIEW_IMPORT_TIMEOUT_MS);
-        }),
-      ]);
-      if (!isPluginViewModule(mod)) {
-        throw new Error(
-          `Plugin "${pluginId}" view module at ${componentPath} did not export a default React component`
-        );
-      }
-      return { default: mod.default };
-    });
+          timing.loadMs = endPhase("view-load", timing.openedAt);
+          markPluginView(PERF_MARKS.PLUGIN_VIEW_IMPORTED, { pluginId, kindId });
+          return module;
+        } catch (err) {
+          throw markImportStageFailure(err);
+        }
+      })(),
+      // Counts as an import-stage failure: the losing `import()` keeps
+      // running after this rejects (dynamic import has no cancellation),
+      // so if it eventually fails it poisons this specifier behind our
+      // back. Retrying on a fresh generation sidesteps that entirely,
+      // which is why the timeout is safe to leave uncancelled (#11728).
+      //
+      // Deliberately conservative: a timeout can also mean activation
+      // stalled, in which case the specifier was never touched and the
+      // extra generation is unnecessary. Harmless — main mints at most one
+      // per plugin load either way. The marking is a superset that can only
+      // over-recover, never fail.
+      () =>
+        markImportStageFailure(
+          new Error(
+            `Plugin "${pluginId}" view module at ${recoveryComponentPath ?? componentPath} timed out after ${PLUGIN_VIEW_IMPORT_TIMEOUT_MS}ms`
+          )
+        )
+    );
+    if (!isPluginViewModule(mod)) {
+      throw new Error(
+        `Plugin "${pluginId}" view module at ${componentPath} did not export a default React component`
+      );
+    }
+    return mod.default;
+  };
 
-  const createAttempt = (
+  /**
+   * The view a warm attempt already holds, or null when this attempt has to
+   * load first. Warm means the module (or builtin
+   * component) is the one already loaded AND the backend that activation
+   * reached is still the one running — after an idle dispose, a worker restart
+   * or crash, or a reload that republished the kind, the attempt activates
+   * before its first render exactly as a cold open does (#10523).
+   */
+  const warmViewFor = (
     requestRecoveryPath: boolean,
     builtinComponent: ComponentType<PanelViewProps> | null
-  ): LazyExoticComponent<ComponentType<PanelViewProps>> =>
-    builtinComponent
-      ? createBuiltinLazyView(builtinComponent)
-      : createLazyView(requestRecoveryPath);
+  ): ComponentType<PanelViewProps> | null => {
+    if (requestRecoveryPath || !backendIsLive(builtinComponent !== null)) return null;
+    if (builtinComponent) return builtinViews.get(builtinComponent) ?? null;
+    const viewPath = recoveryComponentPath ?? componentPath;
+    return loadedModule?.path === viewPath ? loadedModule.view : null;
+  };
+
+  /**
+   * A warm view still activates before it renders (#10523): the renderer's
+   * status can report the previous backend as ready for a moment after a
+   * restart or reload, and a view mounted then would run its mount effects
+   * against a plugin that has not activated. Main answers at once for an
+   * activated plugin, so this costs one IPC round trip, and the call is what
+   * stamps the plugin's idle-dispose activity. A rejection reaches the boundary
+   * the way a cold open's would.
+   */
+  const activateWarmView = async (
+    view: ComponentType<PanelViewProps>,
+    builtin: boolean,
+    timing: ViewLoadTiming
+  ): Promise<ComponentType<PanelViewProps>> => {
+    if (!builtin) {
+      const viewPath = recoveryComponentPath ?? componentPath;
+      pluginDocumentRuntime.registerView(pluginId, viewPath);
+      pluginViewMetrics.registerViewOrigin(pluginId, viewPath);
+    }
+    await withLoadTimeout(
+      (async () => {
+        const activateStart = performance.now();
+        try {
+          await window.electron?.plugin?.activateForView?.(kindId);
+        } catch (err) {
+          forgetActivation();
+          throw err;
+        }
+        timing.activateMs = endPhase("activate", activateStart);
+        markPluginView(PERF_MARKS.PLUGIN_VIEW_ACTIVATED, { pluginId, kindId });
+      })(),
+      () =>
+        new Error(
+          `Plugin "${pluginId}" view activation timed out after ${PLUGIN_VIEW_IMPORT_TIMEOUT_MS}ms`
+        )
+    );
+    timing.loadMs = endPhase("view-load", timing.openedAt);
+    markPluginView(PERF_MARKS.PLUGIN_VIEW_IMPORTED, { pluginId, kindId });
+    return view;
+  };
+
+  /**
+   * `retry` marks an attempt that replaces one whose load or render failed, as
+   * opposed to a cold open, a user reload of a healthy view, or a backend rebind.
+   *
+   * Building an attempt has no side effects beyond its timing mark, so it is
+   * safe from a state initializer that StrictMode runs twice. The load itself
+   * starts from the content's effect through `run`, which is memoized, so a
+   * replayed effect shares the one activation and import.
+   */
+  const createAttempt = (
+    requestRecoveryPath: boolean,
+    builtinComponent: ComponentType<PanelViewProps> | null,
+    retry: boolean
+  ): ViewAttempt => {
+    const timing = startTiming(retry);
+    const warmView = warmViewFor(requestRecoveryPath, builtinComponent);
+    let started: Promise<ComponentType<PanelViewProps>> | null = null;
+    if (warmView) {
+      return {
+        timing,
+        run: () => (started ??= activateWarmView(warmView, builtinComponent !== null, timing)),
+      };
+    }
+    return {
+      timing,
+      run: () =>
+        (started ??= builtinComponent
+          ? loadBuiltinView(builtinComponent, timing)
+          : loadModuleView(requestRecoveryPath, timing)),
+    };
+  };
+
+  /**
+   * Hands a failed load to the boundary. The load settles outside render, so
+   * its rejection has to be rethrown from inside the boundary's subtree for the
+   * boundary to catch it — with the same error object, which is what keeps the
+   * import-stage classification (#11728) intact.
+   */
+  function PluginViewLoadFailure({ error }: { error: unknown }): never {
+    throw error;
+  }
+
+  /**
+   * Content-only bones: the presentation host already paints the real header,
+   * so a skeleton carrying its own (BrowserPaneSkeleton) would double it.
+   * Mirrors DevPreviewPaneFallback's quiet canvas — a plugin's content shape is
+   * unknowable, so bones must not imply one. No pulse to delay: every caller
+   * has already waited out the skeleton gate before rendering it.
+   */
+  function PluginViewLoadingSkeleton() {
+    return (
+      <div className="relative h-full">
+        <Skeleton label={`Loading ${displayName}`} className="h-full bg-surface-canvas" />
+        <SkeletonHint className="absolute bottom-8 inset-x-4 flex justify-center pointer-events-auto" />
+      </div>
+    );
+  }
+
+  /**
+   * For a view that suspends on its own after it has loaded — a builtin's
+   * registered `lazy()` chunk, or a plugin's own lazy child. The load path
+   * never suspends, so this is the only Suspense fallback left, and it is
+   * gated like the load path's skeleton.
+   */
+  function PluginViewSuspendedFallback() {
+    const show = useSkeletonGate(true);
+    return show ? <PluginViewLoadingSkeleton /> : null;
+  }
+
+  /**
+   * Schedules the first-frame sample for `timing`, returning its cancel. A
+   * factory-scope function rather than inline in the reporter's effect, since
+   * it marks the attempt's timing recorded and a component may not mutate what
+   * it was handed.
+   */
+  const scheduleFirstPaintSample = (timing: ViewLoadTiming): (() => void) => {
+    if (timing.recorded || typeof requestAnimationFrame !== "function") return () => {};
+    const committedAt = performance.now();
+    const frame = requestAnimationFrame((frameStart) => {
+      if (timing.recorded) return;
+      timing.recorded = true;
+      // The frame cannot have begun before the commit it paints; the max
+      // guards a clock that reports otherwise.
+      const paintedAt = Math.max(committedAt, frameStart);
+      const firstPaintMs = paintedAt - timing.openedAt;
+      measurePluginViewPhase(pluginId, "first-paint", timing.openedAt, paintedAt, { kindId });
+      markPluginView(PERF_MARKS.PLUGIN_VIEW_FIRST_PAINT, {
+        pluginId,
+        kindId,
+        retry: timing.retry,
+        firstPaintMs: roundMs(firstPaintMs),
+      });
+      pluginViewMetrics.recordViewLoad(
+        pluginId,
+        {
+          kindId,
+          activateMs: roundMs(timing.activateMs),
+          importMs: roundMs(timing.importMs),
+          stylesMs: roundMs(timing.stylesMs),
+          loadMs: roundMs(timing.loadMs),
+          firstPaintMs: roundMs(firstPaintMs),
+          retry: timing.retry,
+          at: Date.now(),
+        },
+        viewGeneration
+      );
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  };
+
+  /**
+   * Completes an attempt's load sample at the first frame that can show it.
+   * Rendered beside the view inside the same Suspense boundary, so its layout
+   * effect runs in the commit that reveals the loaded view (for a view that
+   * suspends on a nested chunk of its own, the commit that reveals that chunk),
+   * before the browser paints it. The next animation frame is the first that can show
+   * that commit, and its timestamp is when that frame began, before its paint:
+   * a first-frame figure, not a measured paint time.
+   *
+   * A layout effect and one frame, not a passive effect and two: a passive
+   * effect runs after the view's own mount effects, and a view that loads its
+   * data there pushed the second frame out behind that render, reporting the
+   * first frame 140-170 ms after the view was on screen. A view that throws while
+   * rendering unwinds this with it, so a failed load records no sample.
+   */
+  function PluginViewPaintReporter({ timing }: { timing: ViewLoadTiming }) {
+    useLayoutEffect(() => scheduleFirstPaintSample(timing), [timing]);
+    return null;
+  }
 
   /**
    * Reports "a view is live for this panel" as a commit-time effect. Rendered as
@@ -514,6 +936,7 @@ export function makePluginViewContent(
     panelRemovedSignal: panelRemovedSignalOverride,
     readRecoveryState,
     offerRequestReload = false,
+    offerToolbar = false,
     settingsContext,
   }: PluginViewContentProps) {
     // Resolved before any attempt is built so the first attempt already takes
@@ -546,23 +969,24 @@ export function makePluginViewContent(
     // Frozen with the bag it describes: a live version against a frozen bag
     // would tell the view its state had migrated when what it holds has not.
     const [mountStateVersion, setMountStateVersion] = useState(() => stateVersion);
-    // Store the lazy component in state so retries can swap in a fresh ref
-    // without a useMemo dependency array. Each `lazy()` wrapper caches its
-    // import result on its own payload, so a chunk-load failure is sticky for
-    // that wrapper — recovering requires constructing a genuinely new one, not
-    // re-invoking the old one. Using a state initializer (and
-    // `setLazyView(() => createLazyView())` on reset) keeps exhaustive-deps
-    // happy and lets the React Compiler optimize this component.
-    const [LazyView, setLazyView] = useState<LazyExoticComponent<ComponentType<PanelViewProps>>>(
-      () => createAttempt(false, builtinComponent)
+    // The current mount attempt, in state so a retry swaps in a fresh one
+    // without a useMemo dependency array. A failed load is sticky for its
+    // attempt — recovering requires a genuinely new one, never re-running the
+    // old one — and the state initializer keeps exhaustive-deps happy and lets
+    // the React Compiler optimize this component.
+    const [attempt, setAttempt] = useState<ViewAttempt>(() =>
+      createAttempt(false, builtinComponent, false)
     );
+    // What the current attempt's load settled to. Tagged with its attempt, so
+    // a result that lands after a replacement is simply never read.
+    const [settled, setSettled] = useState<SettledAttempt | null>(null);
     // Which path the held attempt was built for. Between a resolution change and
     // the effect that replaces the attempt there is one render where the two
     // disagree; rendering the stale attempt then would start a `plugin://`
     // import for a builtin (or mount a builtin for a kind that lost its slot).
     const [attemptBuiltin, setAttemptBuiltin] = useState(() => builtinComponent);
     // Drive the ErrorBoundary's `resetKeys` independently — the reset
-    // counter is observable to the boundary even though the lazy ref lives
+    // counter is observable to the boundary even though the attempt lives
     // in its own slot.
     const [retryCount, setRetryCount] = useState(0);
     /**
@@ -600,10 +1024,14 @@ export function makePluginViewContent(
     const initPluginRuntime = usePluginRuntimeStore((s) => s.init);
     useEffect(() => initPluginRuntime(), [initPluginRuntime]);
 
+    // Long frames are only attributed while a plugin view is mounted, so the
+    // monitor costs nothing once the last one closes.
+    useEffect(() => pluginViewMetrics.retainView(pluginId), []);
+
     // The dispose controller lives in state because its signal is consumed
     // during render (passed to the plugin view as `disposeSignal`), and refs
     // must not be read during render. A retry swaps in a fresh controller via
-    // handleReset so the new lazy import sees an unaborted signal.
+    // handleReset so the new attempt's view sees an unaborted signal.
     const [controller, setController] = useState<AbortController>(() => new AbortController());
 
     // Mirror the current controller into a ref so the long-lived (deps: [])
@@ -643,6 +1071,7 @@ export function makePluginViewContent(
             // `controllerRef.current` into a const at effect setup would leave
             // post-retry signals permanently un-aborted on plugin removal.
             controllerRef.current?.abort();
+            forgetActivation();
           }
         });
       }
@@ -694,6 +1123,17 @@ export function makePluginViewContent(
         unregister();
       };
     }, []);
+    // What the kit's hooks read about this view: the bag `usePersistentViewState`
+    // restores from and writes through, and the root view-scoped keys listen in.
+    const kitViewHost = useMemo(
+      () => ({
+        initialArgs: mountArgs,
+        persistState,
+        root: contentNodeRef,
+        keyEvents: new WeakSet<Event>(),
+      }),
+      [mountArgs, persistState]
+    );
     /** Focus lands here when the content it was inside goes inert. */
     const statusRef = useRef<HTMLDivElement | null>(null);
     /** Whether focus is currently somewhere inside the plugin's own content. */
@@ -722,6 +1162,15 @@ export function makePluginViewContent(
     }, [panelId]);
 
     /**
+     * Reset the header buttons when the view that set them is discarded. Not
+     * on unmount: their state belongs to the panel, and a view remounted by a
+     * dock or tab move picks up where it left off.
+     */
+    const clearToolbarState = useCallback((): void => {
+      if (offerToolbar) usePluginPanelToolbarStore.getState().clearPanel(panelId);
+    }, [offerToolbar, panelId]);
+
+    /**
      * Whether the boundary is currently showing its fallback.
      *
      * Tracked here because the boundary does not expose it, and the rebind path
@@ -740,6 +1189,7 @@ export function makePluginViewContent(
         // (#12611). Retired before the abort so no abort listener sees it live.
         attemptRef.current += 1;
         retireUnsavedOwner();
+        clearToolbarState();
         // Abort BEFORE reporting, and for the same reason `handleReset` does it
         // on retry: the thrown-away view instance is finished either way, so
         // anything it tied to `disposeSignal` has to cancel now rather than keep
@@ -749,7 +1199,7 @@ export function makePluginViewContent(
         controllerRef.current?.abort();
         reportViewRenderFailed(panelId, { kindId, pluginId });
       },
-      [panelId, retireUnsavedOwner]
+      [panelId, retireUnsavedOwner, clearToolbarState]
     );
 
     /**
@@ -768,6 +1218,10 @@ export function makePluginViewContent(
         // attempt stale.
         attemptRef.current += 1;
         retireUnsavedOwner();
+        // Header buttons describe the view that set them; a fresh view starts
+        // them at rest and says again what it knows.
+        clearToolbarState();
+        const replacesFailure = boundaryShowingError.current;
         // The attempt being built is new, so whatever the last one threw is no
         // longer on screen once it commits, and whatever focus the last one held
         // went with its DOM.
@@ -780,9 +1234,14 @@ export function makePluginViewContent(
         // the ref so the CURRENT controller is the one aborted even when a prior
         // attempt already swapped it.
         controllerRef.current?.abort();
-        // Fresh controller for the retry so the new lazy import sees an
-        // unaborted signal; the mirror effect propagates it to controllerRef.
-        setController(new AbortController());
+        // Fresh controller for the retry so the new attempt's view sees an
+        // unaborted signal. The ref is assigned here rather than left to the
+        // mirror effect: a replacement that throws in its first render reaches
+        // `handleRenderError` before any passive effect runs, and that abort
+        // must land on this attempt's signal, not the one already aborted.
+        const next = new AbortController();
+        controllerRef.current = next;
+        setController(next);
         // Restore what the panel most recently persisted rather than the bag it
         // was opened with — recovery is not supposed to cost the user their
         // work. Absent for hosts with no panel record, which keep the mount
@@ -793,11 +1252,11 @@ export function makePluginViewContent(
           setMountStateVersion(recovered.version);
         }
         // Ask main for a fresh view generation only when the module fetch is
-        // what failed (#11728) — a new `lazy()` wrapper alone cannot recover
+        // what failed (#11728) — a new attempt alone cannot recover
         // that, because the poisoned entry belongs to the specifier, not the
         // wrapper. Activation failures and render throws still just remount.
         const builtin = builtinComponentRef.current;
-        setLazyView(() => createAttempt(requestRecoveryPath, builtin));
+        setAttempt(createAttempt(requestRecoveryPath, builtin, replacesFailure));
         setAttemptBuiltin(() => builtin);
         setRetryCount(attemptRef.current);
         // The retry is under way, so the panel is no longer failed — it is
@@ -806,7 +1265,7 @@ export function makePluginViewContent(
         // takes.
         clearViewRenderFailure(panelId);
       },
-      [panelId, readRecoveryState, retireUnsavedOwner]
+      [panelId, readRecoveryState, retireUnsavedOwner, clearToolbarState]
     );
 
     const handleReset = (): void => {
@@ -1008,6 +1467,7 @@ export function makePluginViewContent(
             // leave the next one to the user.
             attemptRef.current += 1;
             retireUnsavedOwner();
+            clearToolbarState();
             controllerRef.current.abort();
             setReloadBlocked(true);
             settle?.("rate-limited");
@@ -1018,7 +1478,7 @@ export function makePluginViewContent(
         });
       },
       // `pluginId` is a factory-scope constant, not a reactive value.
-      [panelId, replaceAttempt, retireUnsavedOwner]
+      [panelId, replaceAttempt, retireUnsavedOwner, clearToolbarState]
     );
 
     // One callback per attempt, so a view can safely list it as a dependency.
@@ -1064,6 +1524,44 @@ export function makePluginViewContent(
           : undefined,
       [offerRequestReload, setHasUnsavedChangesFor, retryCount]
     );
+
+    /**
+     * A view's header-button state, bound to the attempt that set it like
+     * `setHasUnsavedChanges`, so a refresh that settles after a reload cannot
+     * repaint the fresh view's buttons. Keyed by the manifest's own `actionId`,
+     * and an id the kind's toolbar does not list is dropped.
+     */
+    /**
+     * Set the moment this mount's teardown runs, before the attempt is retired
+     * in a microtask: `disposeSignal` aborts in between, and a listener writing
+     * state there would otherwise recreate what closing the panel just pruned.
+     */
+    const toolbarClosedRef = useRef(false);
+    useEffect(() => {
+      toolbarClosedRef.current = false;
+      return () => {
+        toolbarClosedRef.current = true;
+      };
+    }, []);
+    const setToolbarItemStateFor = useCallback(
+      (attempt: number, actionId: unknown, state: unknown): void => {
+        if (toolbarClosedRef.current) return;
+        if (attempt !== attemptRef.current || typeof actionId !== "string") return;
+        const declared = getPanelKindConfig(kindId)?.pluginToolbar;
+        if (!declared?.some((item) => item.stateKey === actionId)) return;
+        usePluginPanelToolbarStore.getState().setItemState(panelId, actionId, state);
+      },
+      [panelId]
+    );
+    const setToolbarItemState = useMemo(
+      () =>
+        offerToolbar
+          ? (actionId: string, state: PluginPanelToolbarItemState | null) =>
+              setToolbarItemStateFor(retryCount, actionId, state)
+          : undefined,
+      [offerToolbar, setToolbarItemStateFor, retryCount]
+    );
+    const runningActions = useAuthoredRunningActions(pluginId);
 
     // The user's reload reaches this mount through the lifecycle service, which
     // is how the menus and the action surface find a live view by panel id.
@@ -1120,6 +1618,48 @@ export function makePluginViewContent(
       focusWasInsideContent.current = false;
       statusRef.current?.focus({ preventScroll: true });
     }, [contentUnavailable, focusIsInContent]);
+
+    // A disabled builtin's activation is gone with it, so whatever re-enables
+    // it has to activate before its view renders again.
+    useEffect(() => {
+      if (builtinDisabled) forgetActivation();
+    }, [builtinDisabled]);
+
+    // Whether the held attempt is the one to show. A stale attempt waits one
+    // commit for the rebind effect, and must not start a `plugin://` import for
+    // a builtin (or activate a kind that lost its slot) in the meantime.
+    const showAttempt = !builtinDisabled && !reloadBlocked && attemptBuiltin === builtinComponent;
+
+    // Start the attempt's load once it is the one on screen, and take its
+    // result as ordinary state. A resolved load is a plain update the next
+    // commit shows, where a Suspense retry would be held back to 300 ms after
+    // the fallback committed. `run` is memoized, so a StrictMode replay or a
+    // remount of this effect shares the one load; a result that lands after
+    // unmount or replacement is dropped by the guard and by its attempt tag.
+    useEffect(() => {
+      if (!showAttempt) return;
+      let current = true;
+      attempt.run().then(
+        (view) => {
+          if (current) setSettled({ attempt, failed: false, view });
+        },
+        (error: unknown) => {
+          if (current) setSettled({ attempt, failed: true, error });
+        }
+      );
+      return () => {
+        current = false;
+      };
+    }, [attempt, showAttempt]);
+
+    const settledHere = settled !== null && settled.attempt === attempt ? settled : null;
+    const loadFailure = settledHere?.failed ? settledHere : null;
+    const View = settledHere && !settledHere.failed ? settledHere.view : null;
+    // Nothing for the first 200 ms, then the skeleton, held for its floor once
+    // it has shown (design-system loading gates). Outside Suspense, so the gate
+    // and the floor are the only things standing between a load and its view.
+    const loadPending = showAttempt && View === null && loadFailure === null;
+    const showSkeleton = useSkeletonFloor(useSkeletonGate(loadPending));
 
     return (
       // Outside the boundary, not inside: the fallback is rendered BY the
@@ -1193,12 +1733,12 @@ export function makePluginViewContent(
             for the rebind effect. */}
         {/* A panel stopped for reloading too often renders no view at all —
             the banner above is the whole pane until the user reloads it. */}
-        {builtinDisabled || reloadBlocked || attemptBuiltin !== builtinComponent ? null : (
+        {!showAttempt ? null : (
           <ErrorBoundary
             // The attempt counter is the boundary's KEY, not its `resetKeys`.
             //
-            // A fresh `lazy()` wrapper alone does not remount anything: React
-            // compares the RESOLVED type, so a wrapper that resolves to the same
+            // A fresh attempt alone does not remount anything: React compares
+            // the view's component type, so an attempt that loads the same
             // module export reuses the existing fiber — the view keeps its state
             // and its `deps: []` subscriptions while `replaceAttempt` has already
             // aborted the `disposeSignal` those subscriptions were tied to. That
@@ -1219,63 +1759,79 @@ export function makePluginViewContent(
             onError={handleRenderError}
             onReset={handleReset}
           >
-            <Suspense
-              fallback={
-                // Content-only bones: the presentation host already paints the real
-                // header, so a skeleton carrying its own (BrowserPaneSkeleton) would
-                // double it. Mirrors DevPreviewPaneFallback's quiet canvas — a
-                // plugin's content shape is unknowable, so bones must not imply one.
-                <div className="relative h-full">
-                  <Skeleton label={`Loading ${displayName}`} className="h-full bg-surface-canvas" />
-                  <SkeletonHint className="absolute bottom-8 inset-x-4 flex justify-center pointer-events-auto" />
-                </div>
-              }
-            >
-              <ContentFadeIn
-                className={cn("flex flex-col flex-1 min-h-0 w-full", contentInert && "opacity-60")}
-                // Native `inert`, not `pointer-events-none` + `aria-hidden`: the
-                // CSS pair stops the mouse but leaves every control tabbable and
-                // Enter-activatable, and `aria-hidden` around a focused element is
-                // the exact shape Chromium refuses to hide. `inert` removes the
-                // subtree from focus, hit-testing and the accessibility tree in one
-                // go, which is the whole claim being made about stale content.
-                inert={contentInert}
-                onFocus={() => {
-                  focusWasInsideContent.current = true;
-                }}
-                onBlur={(e) => {
-                  // Not while going inert: applying the attribute is itself what
-                  // blurred the descendant, and clearing here would erase the very
-                  // fact the rescue above needs.
-                  if (contentInert) return;
-                  if (!e.currentTarget.contains(e.relatedTarget)) {
-                    focusWasInsideContent.current = false;
-                  }
-                }}
-                ref={styleRootRef}
-                {...PLUGIN_STYLE_ROOT_PROPS}
-              >
-                <LazyView
-                  panelId={panelId}
-                  pluginId={pluginId}
-                  disposeSignal={controller.signal}
-                  panelRemovedSignal={panelRemovedSignal}
-                  initialArgs={mountArgs}
-                  stateVersion={mountStateVersion}
-                  persistState={persistState}
-                  requestReload={requestReload}
-                  setHasUnsavedChanges={setHasUnsavedChanges}
-                  worktreeId={worktreeId}
-                  styleRootAttributes={PLUGIN_STYLE_ROOT_PROPS}
-                  {...(settingsContext ? { settingsContext } : {})}
-                />
-                <PluginViewMountReporter
-                  panelId={panelId}
-                  attempt={retryCount}
-                  onCommit={markAttemptCommitted}
-                />
-              </ContentFadeIn>
-            </Suspense>
+            {loadFailure ? (
+              <PluginViewLoadFailure error={loadFailure.error} />
+            ) : View === null || showSkeleton ? (
+              showSkeleton ? (
+                <PluginViewLoadingSkeleton />
+              ) : null
+            ) : (
+              // Only a view that suspends on its own reaches this fallback; the
+              // load above never suspends.
+              <Suspense fallback={<PluginViewSuspendedFallback />}>
+                <ContentFadeIn
+                  className={cn(
+                    "flex flex-col flex-1 min-h-0 w-full",
+                    contentInert && "opacity-60"
+                  )}
+                  // Native `inert`, not `pointer-events-none` + `aria-hidden`: the
+                  // CSS pair stops the mouse but leaves every control tabbable and
+                  // Enter-activatable, and `aria-hidden` around a focused element is
+                  // the exact shape Chromium refuses to hide. `inert` removes the
+                  // subtree from focus, hit-testing and the accessibility tree in one
+                  // go, which is the whole claim being made about stale content.
+                  inert={contentInert}
+                  onFocus={() => {
+                    focusWasInsideContent.current = true;
+                  }}
+                  onBlur={(e) => {
+                    // Not while going inert: applying the attribute is itself what
+                    // blurred the descendant, and clearing here would erase the very
+                    // fact the rescue above needs.
+                    if (contentInert) return;
+                    if (!e.currentTarget.contains(e.relatedTarget)) {
+                      focusWasInsideContent.current = false;
+                    }
+                  }}
+                  ref={styleRootRef}
+                  // Marks keys that reached this view through React, portals
+                  // included, for the kit's view-scoped hotkeys.
+                  onKeyDownCapture={(e) => kitViewHost.keyEvents.add(e.nativeEvent)}
+                  {...styleRootProps}
+                >
+                  <Profiler id={kindId} onRender={onViewCommit}>
+                    {/* Kit overlays portal out of the root above; this is how
+                          they still name the plugin that owns them. */}
+                    <PluginKitOwnerContext.Provider value={pluginId}>
+                      <PluginKitViewHostContext.Provider value={kitViewHost}>
+                        <View
+                          panelId={panelId}
+                          pluginId={pluginId}
+                          disposeSignal={controller.signal}
+                          panelRemovedSignal={panelRemovedSignal}
+                          initialArgs={mountArgs}
+                          stateVersion={mountStateVersion}
+                          persistState={persistState}
+                          requestReload={requestReload}
+                          setHasUnsavedChanges={setHasUnsavedChanges}
+                          setToolbarItemState={setToolbarItemState}
+                          runningActions={runningActions}
+                          worktreeId={worktreeId}
+                          styleRootAttributes={styleRootProps}
+                          {...(settingsContext ? { settingsContext } : {})}
+                        />
+                      </PluginKitViewHostContext.Provider>
+                    </PluginKitOwnerContext.Provider>
+                  </Profiler>
+                  <PluginViewPaintReporter timing={attempt.timing} />
+                  <PluginViewMountReporter
+                    panelId={panelId}
+                    attempt={retryCount}
+                    onCommit={markAttemptCommitted}
+                  />
+                </ContentFadeIn>
+              </Suspense>
+            )}
           </ErrorBoundary>
         )}
       </PluginViewCloseContext.Provider>

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 import { PROCESS_TOOL_REGISTRY } from "@shared/config/processToolRegistry";
+import { setPluginCustomIcons } from "@/components/icons/pluginCustomIconStore";
 import {
   deriveTerminalChrome,
   deriveTerminalRuntimeIdentity,
@@ -91,6 +92,24 @@ describe("deriveTerminalChrome", () => {
       ([iconId, config]) => `${iconId}=${config.label}`
     );
     expect(actual).toEqual(expected);
+  });
+
+  it("labels a plugin process tool with a custom icon by its plugin, never the key (#13143)", () => {
+    const key = "plugin-icon:acme.tools:./icons/acme.svg";
+    try {
+      setPluginCustomIcons([
+        { key, pluginId: "acme.tools", pluginName: "Acme Tools", svg: "<svg/>" },
+      ]);
+      expect(deriveTerminalChrome({ detectedProcessId: key })).toMatchObject({
+        iconId: key,
+        label: "Acme Tools",
+        runtimeKind: "process",
+      });
+      setPluginCustomIcons([]);
+      expect(deriveTerminalChrome({ detectedProcessId: key }).label).toBe("Terminal");
+    } finally {
+      setPluginCustomIcons([]);
+    }
   });
 
   it("returns generic terminal chrome for empty runtime state", () => {

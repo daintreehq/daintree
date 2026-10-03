@@ -27,6 +27,7 @@ import type {
 } from "../../../shared/types/ipc/pluginValidation.js";
 import { getPluginManifestSchema } from "../../schemas/plugin.js";
 import { collectManifestAdvisories } from "../../schemas/pluginManifestAdvisories.js";
+import { collectPluginIconIssues } from "../../services/plugin/pluginIconAssets.js";
 import { PLUGIN_METHOD_CHANNELS } from "./plugin.preload.js";
 import type * as PluginServiceModule from "../../services/PluginService.js";
 import { MAX_DNTR_BYTES } from "../../utils/pluginArchiveConstants.js";
@@ -62,7 +63,11 @@ import { sendToRendererContext } from "../utils.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
 import { getPluginKeybindings } from "../../services/pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../../services/pluginContextMenuRegistry.js";
-import { selectContributionsForProject } from "../../services/plugin/PluginContributionBroadcaster.js";
+import {
+  getPluginCustomIconsForProject,
+  selectContributionsForProject,
+} from "../../services/plugin/PluginContributionBroadcaster.js";
+import type { PluginCustomIconAsset } from "../../../shared/config/pluginCustomIcon.js";
 import { getProjectSurfaces } from "../../services/plugin/PluginSurfaceRegistry.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import type { AgentConfig } from "../../../shared/config/agentRegistry.js";
@@ -119,6 +124,12 @@ import type {
 } from "../../../shared/types/plugin.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
+import { PLUGIN_INVOKE_MAX_ARGS_BYTES } from "../../../shared/config/pluginBudgets.js";
+import {
+  assertPayloadWithinLimit,
+  isPluginPayloadTooLargeError,
+} from "../../services/plugin/pluginPayloadLimits.js";
+import { observeIpcEnvelopeRejections } from "../envelopeRejections.js";
 import {
   getProjectForWebContents,
   getWindowForWebContents,
@@ -1099,6 +1110,11 @@ async function handleToursGet(ctx: IpcContext): Promise<PluginTourDescriptor[]> 
   );
 }
 
+async function handleIconsGet(ctx: IpcContext): Promise<PluginCustomIconAsset[]> {
+  await (await getPluginService()).waitForInit();
+  return getPluginCustomIconsForProject(ctx.projectId);
+}
+
 async function handleRecipeRecordUse(recipeId: string, timestamp: number): Promise<TerminalRecipe> {
   const service = await getPluginService();
   await service.waitForInit();
@@ -1548,13 +1564,14 @@ async function handleValidateManifest(
     return { manifestPath, origin, originSource, valid: false, pluginId, errors, warnings: [] };
   }
 
+  const iconErrors = await collectPluginIconIssues(parsed.data.name, dir, parsed.data.contributes);
   return {
     manifestPath,
     origin,
     originSource,
-    valid: true,
+    valid: iconErrors.length === 0,
     pluginId: parsed.data.name,
-    errors: [],
+    errors: iconErrors,
     warnings: await collectManifestAdvisories({ dir, rawJson: json, manifest: parsed.data }),
   };
 }
@@ -2020,6 +2037,7 @@ export const pluginNamespace = defineIpcNamespace({
     getAgents: op(PLUGIN_METHOD_CHANNELS.getAgents, handleAgentsGet),
     getRecipes: op(PLUGIN_METHOD_CHANNELS.getRecipes, handleRecipesGet),
     getTours: op(PLUGIN_METHOD_CHANNELS.getTours, handleToursGet, { withContext: true }),
+    getIcons: op(PLUGIN_METHOD_CHANNELS.getIcons, handleIconsGet, { withContext: true }),
     recordRecipeUse: op(PLUGIN_METHOD_CHANNELS.recordRecipeUse, handleRecipeRecordUse),
     updateRecipeMetadata: op(
       PLUGIN_METHOD_CHANNELS.updateRecipeMetadata,
@@ -2079,8 +2097,45 @@ export const pluginNamespace = defineIpcNamespace({
   },
 });
 
+/**
+ * Count an invoke refused for oversize args against its plugin. Refused args
+ * never reach `dispatchHandler`, which meters every invoke that does. Applied
+ * only where the dispatch itself would have accepted the sender's scope, so a
+ * view cannot run up another project's plugin's numbers.
+ *
+ * Recorded synchronously, against whichever load is live at the refusal: a
+ * deferred record could land after an unload and same-id reload and count
+ * against the successor. Before this module has resolved the service there is
+ * nothing to count against — any plugin IPC call resolves it, and the
+ * renderer makes several at startup.
+ */
+function meterOversizeInvokeArgs(
+  pluginId: unknown,
+  senderProjectId: string | null,
+  durationMs: number
+): void {
+  if (typeof pluginId !== "string" || pluginId.length === 0) return;
+  const owner = projectIdFromPluginInstanceKey(pluginId);
+  if (owner !== null && owner !== senderProjectId) return;
+  try {
+    cachedPluginService?.metrics.recordInvoke(pluginId, durationMs, "oversized");
+  } catch {
+    // Metrics are best-effort.
+  }
+}
+
 export function registerPluginHandlers(): () => void {
   const cleanups: Array<() => void> = [pluginNamespace.register()];
+
+  // The security wrapper's coarse envelope cap refuses a payload far past the
+  // args cap before the handler below runs; meter those as oversized too. The
+  // wrapper has already required a trusted sender.
+  cleanups.push(
+    observeIpcEnvelopeRejections(CHANNELS.PLUGIN_INVOKE, (event, args, error) => {
+      if (!isPluginPayloadTooLargeError(error)) return;
+      meterOversizeInvokeArgs(args[0], getProjectForWebContents(event.sender.id), 0);
+    })
+  );
 
   // plugin:invoke intentionally stays on raw ipcMain.handle: its variadic
   // `...args: unknown[]` signature and senderFrame.url trust check can't be
@@ -2153,7 +2208,20 @@ export function registerPluginHandlers(): () => void {
         throw new Error("plugin:invoke rejected: plugin belongs to a different project");
       }
 
+      // Whether the args passed the size cap, so the failure audit below knows
+      // it may hash them: hashing sorts and serialises the whole payload, which
+      // is exactly the unbounded work the cap exists to refuse.
+      let argsWithinLimit = false;
       try {
+        // Before any dispatch work, so an oversize payload is never forwarded
+        // to a plugin worker (a second full structured clone).
+        assertPayloadWithinLimit(
+          pluginId,
+          `arguments to "${channel}"`,
+          args,
+          PLUGIN_INVOKE_MAX_ARGS_BYTES
+        );
+        argsWithinLimit = true;
         const service = await getPluginService();
         // No trustworthy window means no worktree — short-circuit rather than
         // query, so the invariant holds here regardless of what the service
@@ -2183,6 +2251,9 @@ export function registerPluginHandlers(): () => void {
         };
         return await service.dispatchHandler(pluginId, channel, ctx, args);
       } catch (err) {
+        if (!argsWithinLimit && isPluginPayloadTooLargeError(err)) {
+          meterOversizeInvokeArgs(pluginId, senderProjectId, Date.now() - start);
+        }
         // A throwing plugin handler is already audited at the dispatch
         // boundary (#10463); recording it again here would double-count the
         // failure. Errors that never reach a handler — schema/permission/
@@ -2193,12 +2264,18 @@ export function registerPluginHandlers(): () => void {
           // same, but distinct args produce distinct hashes. (A summary-based
           // hash via `summarizeMcpArgs` collapses arrays to a constant, which
           // would defeat forensic grouping.)
+          //
+          // Oversize args are recorded unhashed (`""`, the schema's "never
+          // validated" value); the error message carries the limit and the
+          // size measured.
           let argsHash = "";
-          try {
-            argsHash = stableArgsSha256(args);
-          } catch {
-            // Hashing is best-effort — a serialization throw here must not
-            // mask the original handler error.
+          if (argsWithinLimit) {
+            try {
+              argsHash = stableArgsSha256(args);
+            } catch {
+              // Hashing is best-effort — a serialization throw here must not
+              // mask the original handler error.
+            }
           }
           // An ownership rejection (#10462) is a denied invocation, not a
           // handler failure — record it as "restricted" so it groups with the

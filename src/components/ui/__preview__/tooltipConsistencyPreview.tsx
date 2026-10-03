@@ -481,6 +481,7 @@ function seedStores(): void {
   useVoiceRecordingStore.setState({
     isConfigured: true,
     status: "paused",
+    micSignal: "live",
     elapsedSeconds: 42,
     activeTarget: {
       panelId: "voice-elsewhere",

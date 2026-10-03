@@ -114,6 +114,13 @@ async function arm(fixture: Fixture): Promise<Probe> {
   const watcher = new TopologyWatcher(host);
   watchers.push(watcher);
   await watcher.startWatcher();
+  // startWatcher initiates the asynchronous Parcel subscription. Wait for
+  // installation before the first lock event, or a busy full-suite run can
+  // finish the git command before Parcel starts watching.
+  await waitFor(
+    () => Boolean((watcher as unknown as { subscription: { value?: unknown } }).subscription.value),
+    10_000
+  );
   // Prove the subscription is live before counting: a watcher that never
   // armed would otherwise pass the no-churn assertion vacuously.
   const calibrate = fixture.worktrees[0]!;

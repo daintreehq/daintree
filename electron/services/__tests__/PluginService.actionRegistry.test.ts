@@ -217,6 +217,7 @@ import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
 import { type PluginIpcContext } from "../../../shared/types/plugin.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import type { LoadedPlugin } from "../plugin/PluginServiceTypes.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
   return {
@@ -1294,6 +1295,147 @@ describe("createHost — registerAction", () => {
         [{}]
       )
     ).rejects.toThrow('plugin:invoke rejected: plugin "acme.act-test" is not loaded');
+  });
+
+  describe("running state", () => {
+    const ACTION = "acme.act-test.plan-from-issue";
+    const runningBroadcasts = () =>
+      broadcastToRendererMock.mock.calls
+        .map((call: unknown[]) => call[1] as { name?: unknown; payload?: unknown })
+        .filter((event) => event.name === "plugin:actions-running-changed")
+        .map((event) => event.payload);
+
+    function deferred() {
+      let resolve!: (value: unknown) => void;
+      let reject!: (err: unknown) => void;
+      const promise = new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    it("publishes a run when its first dispatch starts and its last one settles", async () => {
+      const runs = [deferred(), deferred()];
+      let call = 0;
+      const { host } = getHost("acme.act-test");
+      host.registerAction(descriptor(), () => runs[call++]!.promise);
+
+      const ctx = makeCtx("acme.act-test");
+      const first = service.dispatchHandler("acme.act-test", ACTION, ctx, [{}]);
+      await vi.waitFor(() => expect(call).toBe(1));
+      const second = service.dispatchHandler("acme.act-test", ACTION, ctx, [{}]);
+      await vi.waitFor(() => expect(call).toBe(2));
+      expect(runningBroadcasts()).toEqual([{ pluginId: "acme.act-test", actionIds: [ACTION] }]);
+
+      runs[0]!.resolve("one");
+      await first;
+      expect(runningBroadcasts()).toHaveLength(1);
+
+      runs[1]!.reject(new Error("two failed"));
+      await expect(second).rejects.toThrow("two failed");
+      expect(runningBroadcasts()).toEqual([
+        { pluginId: "acme.act-test", actionIds: [ACTION] },
+        { pluginId: "acme.act-test", actionIds: [] },
+      ]);
+    });
+
+    it("clears a run on unload, and a handler settling afterwards publishes nothing", async () => {
+      const run = deferred();
+      let started = false;
+      const { host } = getHost("acme.act-test");
+      host.registerAction(descriptor(), () => {
+        started = true;
+        return run.promise;
+      });
+
+      const pending = service.dispatchHandler("acme.act-test", ACTION, makeCtx("acme.act-test"), [
+        {},
+      ]);
+      await vi.waitFor(() => expect(started).toBe(true));
+      service.unloadPlugin("acme.act-test");
+      expect(runningBroadcasts()).toEqual([
+        { pluginId: "acme.act-test", actionIds: [ACTION] },
+        { pluginId: "acme.act-test", actionIds: [] },
+      ]);
+
+      run.resolve("late");
+      await pending.catch(() => undefined);
+      expect(runningBroadcasts()).toHaveLength(2);
+    });
+
+    it("leaves a reloaded plugin's run alone when the old load's run settles", async () => {
+      const oldRun = deferred();
+      const newRun = deferred();
+      let oldStarted = false;
+      let newStarted = false;
+      const first = getHost("acme.act-test");
+      first.host.registerAction(descriptor(), () => {
+        oldStarted = true;
+        return oldRun.promise;
+      });
+      const ctx = makeCtx("acme.act-test");
+      const pendingOld = service.dispatchHandler("acme.act-test", ACTION, ctx, [{}]);
+      await vi.waitFor(() => expect(oldStarted).toBe(true));
+
+      const loaded = (service as unknown as { plugins: Map<string, LoadedPlugin> }).plugins.get(
+        "acme.act-test"
+      )!;
+      service.unloadPlugin("acme.act-test");
+      service._registerFakePluginForTests({ ...loaded });
+      getHost("acme.act-test").host.registerAction(descriptor(), () => {
+        newStarted = true;
+        return newRun.promise;
+      });
+      const pendingNew = service.dispatchHandler("acme.act-test", ACTION, ctx, [{}]);
+      await vi.waitFor(() => expect(newStarted).toBe(true));
+      const beforeOldSettles = runningBroadcasts().length;
+
+      oldRun.resolve("old");
+      await pendingOld.catch(() => undefined);
+      expect(runningBroadcasts()).toHaveLength(beforeOldSettles);
+      expect(runningBroadcasts().at(-1)).toEqual({
+        pluginId: "acme.act-test",
+        actionIds: [ACTION],
+      });
+
+      newRun.resolve("new");
+      await pendingNew;
+      expect(runningBroadcasts().at(-1)).toEqual({ pluginId: "acme.act-test", actionIds: [] });
+    });
+
+    it("tracks an action backed by a channel handler registered under its id", async () => {
+      const run = deferred();
+      let started = false;
+      service.registerPluginAction("acme.act-test", {
+        id: ACTION,
+        title: "Plan from issue",
+        description: "Turn an issue into a session",
+        category: "Planner",
+        kind: "command",
+        danger: "safe",
+      });
+      service.registerHandler("acme.act-test", ACTION, () => {
+        started = true;
+        return run.promise;
+      });
+
+      const pending = service.dispatchHandler("acme.act-test", ACTION, makeCtx("acme.act-test"), [
+        {},
+      ]);
+      await vi.waitFor(() => expect(started).toBe(true));
+      expect(runningBroadcasts()).toEqual([{ pluginId: "acme.act-test", actionIds: [ACTION] }]);
+
+      run.resolve("done");
+      await pending;
+      expect(runningBroadcasts().at(-1)).toEqual({ pluginId: "acme.act-test", actionIds: [] });
+    });
+
+    it("does not count a plain channel that no action owns", async () => {
+      service.registerHandler("acme.act-test", "get-data", () => "data");
+      await service.dispatchHandler("acme.act-test", "get-data", makeCtx("acme.act-test"), []);
+      expect(runningBroadcasts()).toEqual([]);
+    });
   });
 });
 

@@ -10,6 +10,7 @@ import {
   Clock,
   Contact,
   Database,
+  Download,
   Dumbbell,
   FileDiff,
   FileText,
@@ -17,6 +18,7 @@ import {
   FlaskConical,
   FolderGit2,
   FolderTree,
+  Funnel,
   Gauge,
   GitPullRequest,
   Globe,
@@ -38,9 +40,14 @@ import {
   NotebookPen,
   Package,
   Palette,
+  Play,
+  Plus,
   Puzzle,
   Receipt,
+  RefreshCw,
   Rocket,
+  Search,
+  Settings,
   ShoppingCart,
   Sparkles,
   SquareCheckBig,
@@ -51,15 +58,18 @@ import {
   Table,
   Tag,
   Target,
+  Upload,
   Users,
   Utensils,
   Wallet,
 } from "lucide-react";
 import type { ComponentType, CSSProperties } from "react";
 import { PLUGIN_ICON_IDS, type PluginIconId } from "@shared/config/pluginIconIds";
+import { isPluginCustomIconKey } from "@shared/config/pluginCustomIcon";
 // Imported from the module rather than `@/components/icons` so the barrel can
 // keep importing this file's neighbours without a cycle.
 import { DaintreeIcon } from "./DaintreeIcon";
+import { getPluginCustomIconComponent } from "./PluginCustomIcon";
 
 export interface PluginIconProps {
   className?: string;
@@ -136,6 +146,14 @@ export const PLUGIN_ICON_COMPONENTS = {
   rocket: Rocket,
   lightbulb: Lightbulb,
   flask: FlaskConical,
+  "refresh-cw": RefreshCw,
+  download: Download,
+  upload: Upload,
+  filter: Funnel,
+  plus: Plus,
+  search: Search,
+  play: Play,
+  settings: Settings,
 } satisfies Record<PluginIconId, PluginIconComponent>;
 
 /**
@@ -174,11 +192,16 @@ export function getPluginIconComponent(
   return (PLUGIN_ICON_COMPONENTS as Record<string, PluginIconComponent>)[id];
 }
 
-/** The glyph for `id`, falling back to `fallback` when `id` isn't registered. */
+/**
+ * The glyph for `id`, falling back to `fallback` when `id` isn't registered.
+ * A plugin custom-icon key (#13143) resolves to a component that draws the
+ * plugin's SVG once this view holds it and `fallback` until then.
+ */
 export function resolvePluginIcon(
   id: string | null | undefined,
   fallback: PluginIconComponent = DEFAULT_PLUGIN_ICON
 ): PluginIconComponent {
+  if (isPluginCustomIconKey(id)) return getPluginCustomIconComponent(id, fallback);
   return getPluginIconComponent(id) ?? fallback;
 }
 

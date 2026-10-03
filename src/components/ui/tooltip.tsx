@@ -2,7 +2,11 @@ import * as React from "react";
 import type * as TooltipPrimitiveType from "@radix-ui/react-tooltip";
 import { Slot } from "@radix-ui/react-slot";
 import { cn } from "@/lib/utils";
-import { TOOLTIP_MOTION_CLASS } from "./overlayMotion";
+import {
+  OVERLAY_SIDE_OFFSET,
+  TOOLTIP_MOTION_CLASS,
+  TOOLTIP_PRESS_DISMISSED_MOTION_CLASS,
+} from "./overlayMotion";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { FixedDropdownVisibleContext } from "./fixed-dropdown";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
@@ -73,6 +77,19 @@ const TooltipTriggerNodeContext = React.createContext<((node: HTMLElement | null
   null
 );
 
+/**
+ * Whether this tooltip's last close came from pressing its own trigger, and
+ * the setter the trigger calls on pointerdown. A press hands the screen to
+ * whatever the trigger opens or does, so the caption leaves at once instead of
+ * fading out over the menu or palette arriving in its place; a hover-out still
+ * gets the exit fade.
+ */
+const TooltipPressDismissContext = React.createContext<{
+  open: boolean;
+  dismissedByPress: boolean;
+  markPressed: () => void;
+} | null>(null);
+
 const Tooltip = ({
   children,
   open,
@@ -101,6 +118,8 @@ const Tooltip = ({
   // controlled consumers it tracks their value so flipping between modes
   // (`open={cond || undefined}`) can't strand a stale open.
   const [managedOpen, setManagedOpen] = React.useState(defaultOpen ?? false);
+  const [dismissedByPress, setDismissedByPress] = React.useState(false);
+  const markPressed = React.useCallback(() => setDismissedByPress(true), []);
   const isControlled = open !== undefined;
   const resolvedOpen = isControlled ? open : managedOpen;
   const effectiveOpen = dropdownVisible ? resolvedOpen : false;
@@ -140,6 +159,18 @@ const Tooltip = ({
   React.useEffect(() => {
     effectiveOpenRef.current = effectiveOpen;
   });
+
+  // The mark describes one close. A caption that is showing — reopened by
+  // hover or by its owner, or held open through a press its owner ignored (a
+  // validation hint) — has not been dismissed, so its next close fades.
+  React.useEffect(() => {
+    if (effectiveOpen && dismissedByPress) setDismissedByPress(false);
+  }, [effectiveOpen, dismissedByPress]);
+
+  const pressDismiss = React.useMemo(
+    () => ({ open: effectiveOpen, dismissedByPress, markPressed }),
+    [effectiveOpen, dismissedByPress, markPressed]
+  );
 
   // Register with the global dismiss registry so dialog transitions can
   // force-close this tooltip (issue #11030). The callback is a stable
@@ -197,7 +228,9 @@ const Tooltip = ({
       onOpenChange={handleOpenChange}
     >
       <TooltipTriggerNodeContext.Provider value={setTriggerNode}>
-        {children}
+        <TooltipPressDismissContext.Provider value={pressDismiss}>
+          {children}
+        </TooltipPressDismissContext.Provider>
       </TooltipTriggerNodeContext.Provider>
     </Root>
   );
@@ -227,6 +260,7 @@ const TooltipTrigger = React.forwardRef<
     // Published to the Root so it can tell a focus restoration aimed at THIS
     // trigger from any other focus in the app.
     const publishTriggerNode = React.useContext(TooltipTriggerNodeContext);
+    const pressDismiss = React.useContext(TooltipPressDismissContext);
     const setTriggerRef = React.useCallback(
       (node: React.ElementRef<typeof TooltipPrimitiveType.Trigger> | null) => {
         publishTriggerNode?.(node);
@@ -275,6 +309,9 @@ const TooltipTrigger = React.forwardRef<
       pointerActiveRef.current = true;
       primeOnEvent();
       onPointerDown?.(event);
+      // Only a press on a showing caption dismisses it, and not one its owner
+      // cancelled (a disabled control explaining itself keeps its caption up).
+      if (pressDismiss?.open && !event.defaultPrevented) pressDismiss.markPressed();
     };
     const handlePointerUp: React.PointerEventHandler<HTMLButtonElement> = (event) => {
       onPointerUp?.(event);
@@ -351,7 +388,7 @@ const TooltipContent = React.forwardRef<
   (
     {
       className,
-      sideOffset = 4,
+      sideOffset = OVERLAY_SIDE_OFFSET,
       collisionPadding = 8,
       sticky = "partial",
       hideWhenDetached = true,
@@ -362,6 +399,7 @@ const TooltipContent = React.forwardRef<
   ) => {
     const radix = useRadixPrimitives();
     const isDockPopoverChild = useIsDockPopoverChild();
+    const pressDismiss = React.useContext(TooltipPressDismissContext);
     if (!radix) return null;
     const Portal = radix.TooltipPrimitive.Portal;
     const Content = radix.TooltipPrimitive.Content;
@@ -377,7 +415,9 @@ const TooltipContent = React.forwardRef<
           className={cn(
             "z-[var(--z-popover)] max-w-xs overflow-hidden rounded-[var(--radius-md)] surface-overlay shadow-overlay text-xs text-text-primary",
             TOOLTIP_CARD_PADDING,
-            TOOLTIP_MOTION_CLASS,
+            pressDismiss?.dismissedByPress
+              ? TOOLTIP_PRESS_DISMISSED_MOTION_CLASS
+              : TOOLTIP_MOTION_CLASS,
             className
           )}
           {...props}

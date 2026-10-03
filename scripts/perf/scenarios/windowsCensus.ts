@@ -350,7 +350,9 @@ export const windowsCensusScenarios: PerfScenario[] = [
       // cadence itself is PERF-092's subject, not this one's.
       const harness = await createProcessTreeHarness(SELF_POLL_DISABLED_MS);
       const children = Array.from({ length: FIXTURE_CHILDREN }, () =>
-        spawnProbeChild(FIXTURE_LIFETIME_MS)
+        // The CPU-tick oracle needs a child that actually used CPU. A fully
+        // idle setTimeout process may legitimately have zero Windows ticks.
+        spawnProbeChild(FIXTURE_LIFETIME_MS, 1_000)
       );
       const expected: FixtureExpectation[] = children
         .map((child) => child.pid)
@@ -394,6 +396,7 @@ export const windowsCensusScenarios: PerfScenario[] = [
         const baselineLatencies: number[] = [];
         const oracle: OracleReading = { fixtureDiscoveryMisses: 0, fixtureParentMisses: 0 };
         let fixtureCpuMisses = 0;
+        const fixtureCpuMissesByPid = new Map<number, number>();
         let helperFirstTicks: bigint | null = null;
         let helperLastTicks: bigint | null = null;
         let helperTickPid: number | null = null;
@@ -471,7 +474,19 @@ export const windowsCensusScenarios: PerfScenario[] = [
           // helper, out of the payload that enumerated the whole machine.
           // Graded unconditionally: an empty payload means the fixture children
           // were not found, which is a miss, not a reading to skip.
-          fixtureCpuMisses += gradeCpuTicks(rows, expected);
+          const cpuMisses = gradeCpuTicks(rows, expected);
+          fixtureCpuMisses += cpuMisses;
+          if (cpuMisses > 0) {
+            for (const child of expected) {
+              const ticks = cpuTicksForPid(rows, child.pid);
+              if (ticks === null || ticks <= 0n) {
+                fixtureCpuMissesByPid.set(
+                  child.pid,
+                  (fixtureCpuMissesByPid.get(child.pid) ?? 0) + 1
+                );
+              }
+            }
+          }
 
           if (helperPid !== null) {
             const ticks = rows.length > 0 ? cpuTicksForPid(rows, helperPid) : null;
@@ -577,7 +592,8 @@ export const windowsCensusScenarios: PerfScenario[] = [
             `over ${CENSUS_WINDOW_READS} refreshes; census CPU ` +
             `${censusCpuMsPerRefresh.toFixed(1)}ms per refresh against ` +
             `${baselineCpuMsPerRefresh.toFixed(1)}ms (the issue's bar is ` +
-            `${CENSUS_REQUIRED_CPU_REDUCTION}x)`,
+            `${CENSUS_REQUIRED_CPU_REDUCTION}x); fixture CPU misses by PID ` +
+            JSON.stringify(Object.fromEntries(fixtureCpuMissesByPid)),
         };
       } finally {
         harness.stop();

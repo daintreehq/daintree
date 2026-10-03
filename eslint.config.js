@@ -793,6 +793,17 @@ export default tseslint.config(
     rules: { "no-restricted-imports": "off" },
   },
 
+  // Allowlist — the plugin kit's CodeEditor and DiffView chunks. Each is
+  // reached only through React.lazy in PluginKitEditors.tsx, so the kit chunk
+  // itself never carries CodeMirror or react-diff-view.
+  {
+    files: [
+      "src/components/PluginKit/kitCodeEditor.tsx",
+      "src/components/PluginKit/kitDiffView.tsx",
+    ],
+    rules: { "no-restricted-imports": "off" },
+  },
+
   // Allowlist — radix-ui UI primitives (button, popover, tooltip, etc.) and
   // their direct consumers.
   {
@@ -1201,6 +1212,181 @@ export default tseslint.config(
       "component-contract/no-unpaired-outline-suppression": "warn",
     },
   },
+
+  // Builtin plugin renderers draw through the public `@daintreehq/plugin-ui`
+  // kit, the one third-party plugins get, so every gap in it shows up here
+  // first. Restricted by default: every host export the kit covers is listed,
+  // by export, so a module's other exports stay usable (Callout's tokens,
+  // TooltipProvider, avatarUrlAtSize, PopoverAnchor). A builtin that still
+  // needs a covered export for a recorded kit gap gets an exception scoped to
+  // that one file and those names, with the gap in the block's `name`; the
+  // contract test (src/components/ui/__tests__/bundledPluginPrimitives.contract.test.ts)
+  // reads these blocks and fails any exception the file no longer uses. The
+  // ignored file is in its plugin's eager entry graph, which must not reach the
+  // kit (the build fails if startup code statically imports it). Tests and
+  // preview harnesses are not the plugin's runtime.
+  ...(() => {
+    const kitCovered = [
+      ["@/components/ui/AppDialog", ["AppDialog"]],
+      ["@/components/ui/Avatar", ["Avatar"]],
+      ["@/components/ui/badge", ["Badge", "CountBadge", "COUNT_BADGE_CLASS"]],
+      ["@/components/ui/button", ["Button"]],
+      ["@/components/ui/Callout", ["Callout"]],
+      ["@/components/ui/checkbox", ["Checkbox"]],
+      ["@/components/ui/ConfirmDialog", ["ConfirmDialog"]],
+      ["@/components/ui/CopyButton", ["CopyButton"]],
+      ["@/components/ui/DismissButton", ["DismissButton"]],
+      [
+        "@/components/ui/dropdown-menu",
+        [
+          "DropdownMenu",
+          "DropdownMenuTrigger",
+          "DropdownMenuContent",
+          "DropdownMenuItem",
+          "DropdownMenuCheckboxItem",
+          "DropdownMenuRadioGroup",
+          "DropdownMenuRadioItem",
+          "DropdownMenuLabel",
+          "DropdownMenuSeparator",
+          "DropdownMenuShortcut",
+        ],
+      ],
+      ["@/components/ui/EmptyState", ["EmptyState"]],
+      ["@/components/ui/input", ["Input"]],
+      ["@/components/ui/Kbd", ["Kbd", "KbdChord", "KBD_CLASS", "KBD_COMPACT_CLASS"]],
+      ["@/components/ui/PaneState", ["PaneState"]],
+      ["@/components/ui/PathSegments", ["PathSegments"]],
+      ["@/components/ui/PathTail", ["PathTail"]],
+      ["@/components/ui/popover", ["Popover", "PopoverTrigger", "PopoverContent"]],
+      ["@/components/ui/PopoverSearchField", ["PopoverSearchField"]],
+      ["@/components/ui/ProgressBar", ["ProgressBar"]],
+      ["@/components/ui/ScrollShadow", ["ScrollShadow", "useScrollShadowOverlays"]],
+      ["@/components/ui/SearchField", ["SearchField"]],
+      ["@/components/ui/SegmentedRadioGroup", ["SegmentedRadioGroup"]],
+      [
+        "@/components/ui/select",
+        [
+          "Select",
+          "SelectTrigger",
+          "SelectValue",
+          "SelectContent",
+          "SelectItem",
+          "SelectGroup",
+          "SelectLabel",
+        ],
+      ],
+      ["@/components/ui/Skeleton", ["Skeleton", "SkeletonBone", "SkeletonText", "SkeletonHint"]],
+      ["@/components/ui/Spinner", ["Spinner"]],
+      ["@/components/ui/SpinningIcon", ["SpinningIcon"]],
+      ["@/components/ui/switch", ["Switch"]],
+      ["@/components/ui/textarea", ["Textarea"]],
+      ["@/components/ui/tooltip", ["Tooltip", "TooltipTrigger", "TooltipContent"]],
+      ["@/components/ui/TruncatedTooltip", ["TruncatedTooltip"]],
+      ["@/components/ui/UnderlineTabs", ["UnderlineTabs"]],
+      ["@/components/Settings/SettingsGroup", ["SettingsGroup", "SettingsRow", "SettingsActions"]],
+      ["@/components/Settings/SettingsLoadErrorBanner", ["SettingsLoadErrorBanner"]],
+      ["@/components/Settings/SettingsSection", ["SettingsSection"]],
+      ["@/components/Settings/SettingsSwitch", ["SettingsSwitch"]],
+      ["@/components/Terminal/InlineStatusBanner", ["InlineStatusBanner"]],
+    ];
+
+    // One entry per file that still needs a covered export, naming exactly
+    // the exports the kit cannot yet stand in for there.
+    const kitGaps = [
+      {
+        file: "plugins/builtin/github/renderer/components/IssueSelector.tsx",
+        allow: { "@/components/ui/popover": ["Popover", "PopoverTrigger", "PopoverContent"] },
+        gap: "the kit Popover has no anchor (the panel spans trigger and clear) and no onOpenAutoFocus or onEscapeKeyDown",
+      },
+      {
+        file: "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",
+        allow: {
+          "@/components/ui/ScrollShadow": ["useScrollShadowOverlays"],
+          "@/components/ui/dropdown-menu": [
+            "DropdownMenu",
+            "DropdownMenuTrigger",
+            "DropdownMenuContent",
+            "DropdownMenuItem",
+            "DropdownMenuLabel",
+            "DropdownMenuRadioGroup",
+            "DropdownMenuRadioItem",
+          ],
+        },
+        gap: "the rows are a Virtuoso list driven through its scroller ref and handle, which the kit VirtualList does not expose; the sort and selection menus size their panels, and the kit DropdownMenu takes no width",
+      },
+      {
+        file: "plugins/builtin/markdown-editor/renderer/MarkdownEditorView.tsx",
+        allow: { "@/components/Terminal/InlineStatusBanner": ["InlineStatusBanner"] },
+        gap: "the conflict strip's Compare must stay focusable while unavailable, and a kit Button can only be natively disabled",
+      },
+      {
+        file: "plugins/builtin/sveltekit-builder/renderer/AgentComposer.tsx",
+        allow: {
+          "@/components/ui/select": [
+            "Select",
+            "SelectTrigger",
+            "SelectValue",
+            "SelectContent",
+            "SelectItem",
+            "SelectGroup",
+            "SelectLabel",
+          ],
+        },
+        gap: "the kit Select's options cannot carry item markup (agent marks, two-line call sites) or a content width",
+      },
+      {
+        file: "plugins/builtin/sveltekit-builder/renderer/SiteBuilderSurfaces.tsx",
+        allow: {
+          "@/components/ui/select": [
+            "Select",
+            "SelectTrigger",
+            "SelectValue",
+            "SelectContent",
+            "SelectItem",
+          ],
+        },
+        gap: "the kit Select's options cannot carry a per-item class and title, or a content width",
+      },
+    ];
+
+    const restrict = (entries) => [
+      "error",
+      {
+        paths: entries.map(([name, importNames]) => ({
+          name,
+          importNames,
+          message: "Use the equivalent from @daintreehq/plugin-ui.",
+        })),
+      },
+    ];
+
+    return [
+      {
+        files: ["plugins/builtin/*/renderer/**/*.{ts,tsx}"],
+        ignores: [
+          "**/__tests__/**",
+          "**/__preview__/**",
+          "**/*.{test,spec}.{ts,tsx}",
+          "plugins/builtin/sveltekit-builder/renderer/SiteBuilderButton.tsx",
+        ],
+        rules: { "no-restricted-imports": restrict(kitCovered) },
+      },
+      ...kitGaps.map(({ file, allow, gap }) => ({
+        name: `builtin-kit-gap: ${gap}`,
+        files: [file],
+        rules: {
+          "no-restricted-imports": restrict(
+            kitCovered
+              .map(([name, importNames]) => [
+                name,
+                importNames.filter((importName) => !(allow[name] ?? []).includes(importName)),
+              ])
+              .filter(([, importNames]) => importNames.length > 0)
+          ),
+        },
+      })),
+    ];
+  })(),
 
   // Prettier must be last to override conflicting rules
   prettier,

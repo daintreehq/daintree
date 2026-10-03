@@ -87,6 +87,7 @@ export interface ActionCallbacks {
     worktreePath: string | null;
     branch: string | null;
     cwd: string | null;
+    cwdOutsideWorktree: boolean | null;
   } | null>;
   onInject: (worktreeId: string, terminalId?: string) => void;
   getDefaultCwd: () => string;

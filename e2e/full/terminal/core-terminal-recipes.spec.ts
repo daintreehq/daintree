@@ -3,7 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 import { dismissBlockingPalette } from "../../helpers/overlays";
 
 let ctx: AppContext;
@@ -24,7 +24,6 @@ test.describe.serial("Core: Terminal Recipes", () => {
       const { dir: fixtureDir, cleanup } = createFixtureRepo({ name: "terminal-recipes" });
       fixtureCleanup = cleanup;
       ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Recipes Test");
-      await ctx.window.waitForTimeout(T_SETTLE);
     });
 
     async function openRecipesTab() {
@@ -71,7 +70,16 @@ test.describe.serial("Core: Terminal Recipes", () => {
     async function ensureTestRecipeExists() {
       const { window } = ctx;
       const editButton = window.locator(SEL.projectSettings.editRecipeButton("E2E Test Recipe"));
-      if ((await editButton.count()) > 0) return;
+      await expect(window.locator(SEL.projectSettings.addRecipeButton)).toBeVisible({
+        timeout: T_MEDIUM,
+      });
+      // The saved list can land a beat after the tab renders; give it a bounded
+      // chance before concluding this test is running in isolation.
+      const exists = await editButton
+        .waitFor({ state: "attached", timeout: T_SHORT })
+        .then(() => true)
+        .catch(() => false);
+      if (exists) return;
 
       await window.locator(SEL.projectSettings.addRecipeButton).click();
       const editor = getRecipeEditor();
@@ -139,7 +147,6 @@ test.describe.serial("Core: Terminal Recipes", () => {
       // Verify project settings is still open, re-select recipes tab, and check recipe appears
       await expect(window.locator(SEL.projectSettings.heading)).toBeVisible({ timeout: T_MEDIUM });
       await window.locator(SEL.projectSettings.recipesTab).click();
-      await window.waitForTimeout(T_SETTLE);
       await expect(
         window.locator(SEL.projectSettings.editRecipeButton("E2E Test Recipe"))
       ).toBeAttached({ timeout: T_LONG });
@@ -151,7 +158,6 @@ test.describe.serial("Core: Terminal Recipes", () => {
       const { window } = ctx;
       await openRecipesTab();
       await ensureTestRecipeExists();
-      await window.waitForTimeout(300);
 
       // Click edit on the saved recipe (button is opacity-0 until hover)
       await window
@@ -209,7 +215,6 @@ test.describe.serial("Core: Terminal Recipes", () => {
 
     test("edit and save updates the recipe", async () => {
       const { window } = ctx;
-      await window.waitForTimeout(500);
       await openRecipesTab();
       await ensureTestRecipeExists();
 

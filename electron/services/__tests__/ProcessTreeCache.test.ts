@@ -575,6 +575,36 @@ describe("poll scheduling and adaptive backoff", () => {
     expect(refreshSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("a flapping poll interval never pushes the pending census out", async () => {
+    cache.start();
+    await vi.advanceTimersByTimeAsync(0);
+    refreshSpy.mockClear();
+
+    // Focus loss slows the census to 12.5s and refocus restores 2.5s. Each change
+    // used to re-arm the full interval from now, so a flap every 2s starved it.
+    for (let elapsed = 0; elapsed < 20_000; elapsed += 2_000) {
+      cache.setPollInterval(elapsed % 4_000 === 0 ? 12_500 : 2_500);
+      await vi.advanceTimersByTimeAsync(2_000);
+    }
+
+    expect(refreshSpy).toHaveBeenCalled();
+  });
+
+  it("catches up an overdue census with one sweep, then waits a full interval", async () => {
+    cache.setPollInterval(12_500);
+    cache.start();
+    await vi.advanceTimersByTimeAsync(0);
+    refreshSpy.mockClear();
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    cache.setPollInterval(2_500);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(cache.getCurrentIntervalMs() - 1);
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("setPollInterval is no-op when value unchanged", async () => {
     cache.start();
     await vi.advanceTimersByTimeAsync(0);

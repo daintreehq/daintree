@@ -4,7 +4,9 @@ A plugin can ship a narrated welcome tour that plays in the same dialog as the D
 
 For the manifest field table on its own, see [Contribution points → Tours](./contribution-points.md#tours--shipped-installed-plugins).
 
-To have Claude Code author the tour with you, use the bundled `daintree-tour` skill: plugins scaffolded with `daintree-plugin new` already include it in `.claude/skills/daintree-tour/`, and `npx daintree-plugin skill add` copies it into an existing plugin. Start Claude Code in the plugin directory and ask for a tour, or run `/daintree-tour`.
+To have Claude Code author the tour with you, use the bundled `daintree-tour` skill: plugins scaffolded with `daintree-plugin new` already include it in `.claude/skills/daintree-tour/`, and `npx daintree-plugin skill add` copies it into an existing plugin. Start Claude Code in the plugin directory and ask for a tour, or run `/daintree-tour`. The skill, and the `daintree-plugin skill` and `tour` commands this guide uses: Not in the 0.1.0 release on npm; it ships in the next one.
+
+Tours need Daintree 0.39.0 or later: `contributes.tours` and the `@daintreehq/tour` import-map specifiers first shipped in v0.39.0.
 
 ## Two shapes
 
@@ -56,14 +58,14 @@ my-plugin/
 
 A two-chapter plugin tour. Copy it, rename the ids, and run it through [Voicing](#voicing) and [Previewing](#previewing-and-testing).
 
-**`plugin.json`** — declare the tour with an empty `chapters` array. `daintree-plugin validate` refuses a tour with no chapters until the first `tour voice` or `tour align` fills them in.
+**`plugin.json`** — declare the tour with an empty `chapters` array. `daintree-plugin validate` refuses a tour with no chapters until the first `tour voice` or `tour align` fills them in. The 0.1.0 CLI on npm predates `contributes.tours` and refuses any manifest that declares one: Not in the 0.1.0 release on npm; it ships in the next one.
 
 ```json
 {
   "name": "acme.site-builder",
   "version": "0.1.0",
   "displayName": "Acme Site Builder",
-  "engines": { "daintree": ">=0.38.0" },
+  "engines": { "daintree": ">=0.39.0" },
   "contributes": {
     "tours": [
       {
@@ -174,7 +176,7 @@ export default {
 };
 ```
 
-**`vite.config.ts`** — build it with `@daintreehq/plugin-vite`, which leaves `react` and `@daintreehq/tour` external for the host to supply. Install `@daintreehq/tour` as a dev dependency for its types and for `tour preview`, plus `lucide-react`, which the kit's icons come from and the preview needs to draw them.
+**`vite.config.ts`** — build it with `@daintreehq/plugin-vite`, which leaves `react` and `@daintreehq/tour` external for the host to supply (leaving `@daintreehq/tour` external: Not in the 0.1.0 release on npm; it ships in the next one.) A scene never needs `@daintreehq/tour` installed to run: Daintree serves every `@daintreehq/tour` specifier from its import map. Installed as a dev dependency it gives you the types and is what `tour preview` plays your scenes against, alongside `lucide-react`, which the kit's icons come from and the preview needs to draw them. `@daintreehq/tour` is not published to npm yet, so type-checking a scene and running `tour preview` both wait for the next release.
 
 ```ts
 import { daintreePlugin } from "@daintreehq/plugin-vite";
@@ -236,6 +238,7 @@ From `@daintreehq/tour/react`. The host import map resolves it to the host's own
 | `useTimelineIndex(points)` | Index of the latest `{ cue, offset? }` point passed, or -1. `points` must be declared at module scope. |
 | `useSecondsSinceCue(id)` | Seconds since a cue, or `null`. Re-renders every frame; for typing only. |
 | `useTourTime()` | The current time. Every frame; use sparingly. |
+| `TourPlayerContext`, `useTourPlayer()`, `useTourPlayerState(player)` | The player the hooks above read. The dialog provides it through `TourPlayerContext`; `useTourPlayer()` returns it and throws outside one, and `useTourPlayerState(player)` subscribes to its playback state (`chapterIndex`, `status`, `muted`, `audioStatus`, and `silent` while the timeline runs without the voice). A scene rarely needs them. |
 
 Never use wall-clock literals (`setTimeout`, a fixed delay) for anything the narration talks about. Small `offset`s after a cue are fine for sequencing a beat, such as a click landing 0.6 seconds after the pointer arrives.
 
@@ -248,11 +251,11 @@ From `@daintreehq/tour/kit`: generic, timing-driven parts that know nothing abou
 | `reveal(visible, from?)` | Class names for a cue-driven entrance (`"below"`, `"above"`, `"left"`, `"none"`). Opacity survives reduced motion; the lift doesn't. |
 | `cn(...)` | Class-name joiner. |
 | `MockCursor`, `useMockCursor(start, steps)` | A pointer that glides between `CursorStep`s (`{ cue, offset?, at, click?, modifier? }`), where `at` is an anchor (`{ anchor, dx?, dy? }`) or a canvas point. Spread the hook's result onto the component. |
-| `MockTyping` | Text that types itself from a cue; `finishBy` guarantees it's done before a later cue at any narration pace. |
+| `MockTyping`, `typingRate(length, startAt, finishAt, floor)` | Text that types itself from a cue; `finishBy` guarantees it's done before a later cue at any narration pace. `typingRate` is the speed it uses, in characters per second: `floor`, or faster when the text must finish before `finishAt`. |
 | `MockLines`, `MockStreamingLines` | Grey placeholder lines for text, all at once or arriving line by line. |
 | `MockSpotlight` | Dims the scene and rings the named anchors. |
 | `MockFocusRing`, `MockCallout`, `MockLegend`, `MockPanel`, `MockKeys`, `MockMenu`, `MockSearchField`, `MockTooltip` | Focus ring, pinned label, glyph legend, floating panel, keycaps, context menu, search field, tooltip. |
-| `useTourShortcuts()` | How the host draws a shortcut (`keycaps`, `hint`), so a mocked keycap matches the real app. |
+| `useTourShortcuts()`, `TourShortcutsContext`, `PLAIN_TOUR_SHORTCUTS` | How the host draws a shortcut (`keycaps(shortcut)`, `hint(shortcut)`) and which keyboard the viewer has (`keyboard: "mac" \| "pc"`), so a mocked keycap matches the real app. The dialog provides it through `TourShortcutsContext`; without a provider, as in `tour preview`, it is `PLAIN_TOUR_SHORTCUTS`, which draws a shortcut as it was named, on a `"pc"` keyboard. |
 | `measureAnchor`, `TOUR_CANVAS`, `TourCanvas` | Anchor measurement, the canvas size, and the stage itself (the dialog provides it; you rarely need it). |
 
 ### The mock Daintree window
@@ -265,8 +268,11 @@ From `@daintreehq/tour/mock-app`: the whole Daintree window compressed onto the 
 | `MockGrid`, `MockPane`, `MockEmptyGrid` | The panel grid, a terminal pane (`agent`, `state`, `title`, `input`, …), and an empty grid. |
 | `MockWorktreeCard`, `MockWaitingPill` | A sidebar worktree card and the dock's waiting pill. |
 | `MockAgentIcon`, `MockStateGlyph`, `MockCIGlyph`, `MockAppMark` | Individual glyphs. |
+| `MockAgentGlyph` | An agent's bare glyph, uncoloured, as a menu row or a line of text draws it. |
 | `APP_LAYOUT`, `GRID_RECT`, `ANCHOR` | Layout constants for placing overlays in canvas pixels. |
-| `MockKitContext`, `EMPTY_MOCK_KIT`, `resolveMockAgent`, … | The data the frame draws from. |
+| `TOOLBAR_AGENTS` | The agents pinned in the toolbar, in order (`claude`, `codex`, `antigravity`): `MockApp`'s default `toolbarAgents`. |
+| `MockKitContext`, `EMPTY_MOCK_KIT`, `useMockKit()` | The data the frame draws from: the context the dialog fills with your `mockKit`, the kit it starts from, and the hook that reads it. |
+| `resolveMockAgent(kit, agent)`, `resolveMockState(kit, state)`, `resolveMockCI(kit, status)` | Look an id up in a kit, for a part of your own drawn beside the mock's. An agent the kit doesn't know still resolves, with its id as its name and no icon; an unknown state or CI status resolves to `undefined`. |
 
 The mock draws only what it is handed: agents, state glyphs and CI marks arrive as data, never from the running app. A plugin tour starts with an empty kit, so an agent id renders as a name without an icon and a state id without a glyph. Export a `mockKit` (`{ agents, states, statePriority, ci, assistantIcon }`) from your scene module to draw them, using any icon component that takes a `className`. Any agent id works, built-in or your own.
 
@@ -280,6 +286,10 @@ The cursor and the spotlight never target hand-placed coordinates. They target `
 - **The mock window names its own.** Toolbar: `sidebar-toggle`, `launcher`, `toolbar-agents`, `agent-<id>`, `terminal`, `file-browser`, `project`, `forge`, `forge-issues`, `forge-prs`, `notifications`, `copy-context`, `palette`, `settings`, `assistant`, `portal`. Sidebar: `sidebar-arm`, `sidebar-plus`, `worktree-list`, `worktree-<name>`, `worktree-<name>-branch`. Dock: `dock-launcher`, `dock-waiting`. A `MockPane` names `<prefix>-titlebar`, `-glyph`, `-body`, `-input` and `-armed`, where the prefix is its `anchor` prop or its agent id.
 - **An anchor that isn't rendered is skipped**, not an error: the spotlight rings the others and the cursor holds its last position. `tour preview` outlines every anchor on screen so you can see what's reachable.
 - The cursor and spotlight measure an anchor as soon as they target it and again 260 ms later, once the target's own entrance transition has settled.
+
+### The engine entry
+
+The root `@daintreehq/tour` entry is the engine the scenes run inside: `TourPlayer` (the playback clock, with the silent fallback described under [Where audio comes from](#where-audio-comes-from)), narration parsing and fingerprinting (`parseNarration`, `stripDirectionTags`, `narrationFingerprint`, `buildCaptions`, `estimateTiming`, …) and timing helpers (`resolveChapterTiming`, `resolveTourTimings`, `tourMinutes`). Daintree's tour dialog, `tour preview` and the `tour voice` and `align` timing are built on it. The import map serves it beside the other three specifiers, but a scene has no use for it: it reads the timeline through `@daintreehq/tour/react` and draws with `/kit` and `/mock-app`.
 
 ## Voicing
 

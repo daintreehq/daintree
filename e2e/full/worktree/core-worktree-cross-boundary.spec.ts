@@ -1,18 +1,12 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { launchApp, closeApp, refreshActiveWindow, type AppContext } from "../../helpers/launch";
-import { createFixtureRepo, createMultiProjectFixture } from "../../helpers/fixtures";
-import type { MultiProjectFixture } from "../../helpers/fixtures";
+import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import {
-  spawnTerminalAndVerify,
-  switchWorktree,
-  addAndSwitchToProject,
-  selectExistingProject,
-} from "../../helpers/workflows";
+import { spawnTerminalAndVerify, switchWorktree } from "../../helpers/workflows";
 import { runTerminalCommand, waitForTerminalText, getTerminalText } from "../../helpers/terminal";
 import { getGridPanelIds, getPanelById } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 const FEATURE = "feature/test-branch";
@@ -45,7 +39,7 @@ async function switchNamedWorktree(ctx: AppContext, branchName: string): Promise
   return refreshProjectWindow(ctx);
 }
 
-// ── Block 1: Terminal CWD, Content Isolation, Overview Modal ──
+// ── Block 1: Terminal CWD and Content Isolation ──
 
 test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
   let ctx: AppContext;
@@ -59,23 +53,6 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
     fixtureCleanup = cleanup;
 
     ctx = await launchApp();
-
-    // Disable two-pane split mode: the test spawns 2 terminals in the
-    // feature worktree, which triggers a race condition where the split
-    // layout momentarily activates and crashes the Electron process.
-    await ctx.window.evaluate(() => {
-      localStorage.setItem(
-        "daintree-two-pane-split",
-        JSON.stringify({
-          state: {
-            config: { enabled: false, defaultRatio: 0.5, preferPreview: false },
-            ratioByWorktreeId: {},
-          },
-          version: 1,
-        })
-      );
-    });
-
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture, "Cross Boundary");
   });
 
@@ -112,7 +89,6 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
       // differently after the worktree switch reorders DOM nodes.
       const stableMain = getPanelById(window, mainPanelId);
       await stableMain.click({ position: { x: 100, y: 50 } });
-      await window.waitForTimeout(T_SETTLE);
       await runTerminalCommand(window, stableMain, "echo MARKER_MAIN_AAA");
       await waitForTerminalText(stableMain, "MARKER_MAIN_AAA");
     });
@@ -127,7 +103,6 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
     await test.step("echo marker in feature terminal", async () => {
       const stableFeature = getPanelById(window, featurePanelId);
       await stableFeature.click({ position: { x: 100, y: 50 } });
-      await window.waitForTimeout(T_SETTLE);
       await runTerminalCommand(window, stableFeature, "echo MARKER_FEATURE_BBB");
       await waitForTerminalText(stableFeature, "MARKER_FEATURE_BBB");
     });
@@ -214,142 +189,9 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
       await expect(window.locator(SEL.panel.restore)).toHaveCount(0, { timeout: T_SHORT });
     });
   });
-
-  test("overview modal opens and shows worktree cards", async () => {
-    // Re-acquire the active window — worktree switches in the preceding
-    // test may have changed the active WebContentsView.
-    ctx.window = await refreshActiveWindow(ctx.app);
-    const { window } = ctx;
-
-    await window.keyboard.press(`${mod}+Alt+R`);
-
-    const modal = window.locator(SEL.worktree.overviewModal);
-    await expect(modal).toBeVisible({ timeout: T_LONG });
-    await expect(window.getByRole("dialog", { name: "Worktrees" })).toBeVisible();
-
-    const cards = modal.locator(SEL.worktree.overviewCell);
-    await expect(cards.first()).toBeVisible({ timeout: T_LONG });
-    await expect.poll(() => cards.count(), { timeout: T_MEDIUM }).toBeGreaterThanOrEqual(2);
-  });
-
-  test("search filtering narrows displayed worktrees in overview", async () => {
-    const { window } = ctx;
-    const modal = window.locator(SEL.worktree.overviewModal);
-
-    // Ensure the modal is still open from the previous test
-    await expect(modal).toBeVisible({ timeout: T_MEDIUM });
-
-    const cards = modal.locator(SEL.worktree.overviewCell);
-
-    // Wait for all cards to be rendered
-    await expect.poll(() => cards.count(), { timeout: T_LONG }).toBeGreaterThanOrEqual(2);
-
-    const initialCount = await cards.count();
-    expect(initialCount).toBeGreaterThanOrEqual(2);
-
-    const searchInput = modal.getByRole("textbox", { name: "Search worktrees" });
-    await expect(searchInput).toBeVisible({ timeout: T_MEDIUM });
-
-    // Search for feature branch — should narrow to 1 card
-    await searchInput.click();
-    await searchInput.fill("feature/test-branch");
-    await window.waitForTimeout(T_SETTLE);
-
-    await expect
-      .poll(() => cards.count(), {
-        timeout: T_MEDIUM,
-        message: "Search should narrow to feature worktree",
-      })
-      .toBeLessThan(initialCount);
-
-    // Clear search by emptying the input
-    await searchInput.clear();
-    await window.waitForTimeout(T_SETTLE);
-
-    await expect
-      .poll(() => cards.count(), { timeout: T_MEDIUM })
-      .toBeGreaterThanOrEqual(initialCount);
-
-    await window.keyboard.press("Escape");
-    await expect(modal).not.toBeVisible({ timeout: T_MEDIUM });
-  });
 });
 
-// ── Block 2: Active Worktree Persists Across Project Switch ──
-
-test.describe.serial("Core: Worktree Selection Persists Across Project Switch", () => {
-  let ctx: AppContext;
-  let fixture: MultiProjectFixture;
-
-  test.beforeAll(async () => {
-    fixture = createMultiProjectFixture(
-      { name: "project-A-cross", withFeatureBranch: true },
-      { name: "project-B-cross" }
-    );
-
-    ctx = await launchApp();
-    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture.repoA, "project-A-cross");
-  });
-
-  test.afterAll(async () => {
-    if (ctx?.app) await closeApp(ctx.app);
-    fixture?.cleanup();
-  });
-
-  test("active worktree persists after project switch round-trip", async () => {
-    test.fixme(
-      true,
-      "Worktree selection restore after project switch is unreliable — tracked as app bug"
-    );
-    test.slow();
-    const { window } = ctx;
-
-    // Select feature worktree in Project A
-    await test.step("select feature worktree in Project A", async () => {
-      await switchWorktree(window, FEATURE);
-      await expect(window.locator(SEL.worktree.row(FEATURE))).toHaveAttribute(
-        "aria-current",
-        "true",
-        { timeout: T_LONG }
-      );
-      // Allow time for the async worktree selection to persist to the main process
-      await window.waitForTimeout(T_SETTLE * 2);
-    });
-
-    // Switch to Project B
-    await test.step("switch to Project B", async () => {
-      await addAndSwitchToProject(ctx.app, window, fixture.repoB, "project-B-cross");
-      // Verify Project B loaded
-      await expect(window.locator("[data-worktree-branch]").first()).toBeVisible({
-        timeout: T_LONG,
-      });
-    });
-
-    // Switch back to Project A
-    await test.step("switch back to Project A", async () => {
-      await selectExistingProject(window, "project-A-cross");
-      await expect(window.locator("[data-worktree-branch]").first()).toBeVisible({
-        timeout: T_LONG,
-      });
-    });
-
-    // Verify feature worktree is still selected
-    await test.step("verify feature worktree still selected", async () => {
-      // Allow extra time for project hydration to restore worktree selection
-      await window.waitForTimeout(T_SETTLE);
-
-      const featureCard = window.locator(SEL.worktree.card(FEATURE));
-      await expect(featureCard).toBeVisible({ timeout: T_LONG });
-      await expect(window.locator(SEL.worktree.row(FEATURE))).toHaveAttribute(
-        "aria-current",
-        "true",
-        { timeout: T_LONG }
-      );
-    });
-  });
-});
-
-// ── Block 3: Creation Resilience & Quick-Create Palette ──
+// ── Block 2: Creation Resilience & Quick-Create Palette ──
 
 test.describe.serial("Core: Worktree Creation Resilience", () => {
   let ctx: AppContext;
@@ -440,11 +282,13 @@ test.describe.serial("Core: Worktree Creation Resilience", () => {
 
       const searchInput = window.locator(SEL.actionPalette.searchInput);
       await searchInput.fill("Quick Create Worktree");
-      await window.waitForTimeout(T_SETTLE);
 
-      const options = window.locator(SEL.actionPalette.options);
-      await expect(options.first()).toBeVisible({ timeout: T_SHORT });
-      await options.first().click();
+      const quickCreateOption = window
+        .locator(SEL.actionPalette.options)
+        .filter({ hasText: /Quick create worktree/i })
+        .first();
+      await expect(quickCreateOption).toBeVisible({ timeout: T_SHORT });
+      await quickCreateOption.click();
     });
 
     await test.step("verify quick-create palette is visible", async () => {

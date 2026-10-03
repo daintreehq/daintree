@@ -1144,9 +1144,17 @@ export interface GeneratedIpcInvokeMap {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityAcknowledgeConsentInput];
     result: void;
   };
+  "plugin-capability:get-project-targeting": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginProjectTargetingQuery];
+    result: boolean;
+  };
   "plugin-capability:resolve-consent": {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityResolveConsentInput];
     result: void;
+  };
+  "plugin-capability:set-project-targeting": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginProjectTargetingUpdate];
+    result: boolean;
   };
   "plugin-mcp:call-tool": {
     args: [input: import("./pluginMcp.js").PluginMcpCallToolInput];
@@ -1264,6 +1272,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./pluginDiagnostics.js").PluginDiagnosticsSnapshot;
   };
+  "plugin:icons-get": {
+    args: [];
+    result: import("../../config/pluginCustomIcon.js").PluginCustomIconAsset[];
+  };
   "plugin:install": {
     args: [archivePath: string, opts?: import("../plugin.js").PluginInstallOptions | undefined];
     result: import("../plugin.js").PluginInstallResult;
@@ -1299,6 +1311,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin:path-exists": {
     args: [pluginId: string, targetPath: string];
     result: boolean;
+  };
+  "plugin:perf-snapshots-get": {
+    args: [];
+    result: import("../pluginMetrics.js").PluginPerfSnapshot[];
   };
   "plugin:pick-path": {
     args: [pluginId: string, request: import("../plugin.js").PluginPickPathRequest];
@@ -1931,6 +1947,10 @@ export interface GeneratedIpcInvokeMap {
   "terminal:kill": {
     args: [id: string];
     result: void;
+  };
+  "terminal:locate": {
+    args: [id: string];
+    result: import("./terminal.js").TerminalLocation;
   };
   "terminal:reconnect": {
     args: [terminalId: string];

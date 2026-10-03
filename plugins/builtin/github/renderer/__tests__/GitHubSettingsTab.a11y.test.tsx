@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { GitHubSettingsTab } from "../components/GitHubSettingsTab";
 import { SettingsValidationProvider } from "@/components/Settings/SettingsValidationRegistry";
@@ -29,6 +30,8 @@ function setupStore(overrides: Record<string, unknown> = {}) {
     ...overrides,
   } as ReturnType<typeof useGitHubConfigStore>);
 }
+
+beforeAll(() => whenPluginUiReady(), 30_000);
 
 describe("GitHubSettingsTab accessibility", () => {
   beforeEach(() => {

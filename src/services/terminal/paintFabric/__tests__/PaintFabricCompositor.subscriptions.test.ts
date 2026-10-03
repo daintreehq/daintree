@@ -36,6 +36,20 @@ describe("PaintFabricCompositor subscription rebinding", () => {
     expect(b.addExitListener).toHaveBeenCalledWith("t1-b", callback);
   });
 
+  it("rebinds padding paint subscriptions with the terminal (#13160)", async () => {
+    const { compositor, a, b } = makeCompositor();
+    const unsubOnA = vi.fn();
+    a.addPaddingPaintListener.mockReturnValue(unsubOnA);
+
+    const callback = vi.fn();
+    compositor.addPaddingPaintListener("t1-b", callback);
+    expect(a.addPaddingPaintListener).toHaveBeenCalledWith("t1-b", callback);
+
+    await compositor.getOrCreate("t1-b", undefined, {});
+    expect(unsubOnA).toHaveBeenCalledTimes(1);
+    expect(b.addPaddingPaintListener).toHaveBeenCalledWith("t1-b", callback);
+  });
+
   it("does not rebind subscriptions for terminals placed on the default surface", async () => {
     const { compositor, a } = makeCompositor();
     const unsubOnA = vi.fn();

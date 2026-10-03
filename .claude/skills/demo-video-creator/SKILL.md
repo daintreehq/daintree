@@ -16,9 +16,9 @@ Two halves:
    - `src/components/Demo/DemoOverlay.tsx` — spotlight (blur + dim, masked cutout, 300ms fades) and captions (placement presets, size tiers, 200ms fades).
    - `src/components/Demo/DemoCaptureBridge.tsx` — `getDisplayMedia` + MediaRecorder → streams chunks to the main process.
    - `electron/ipc/handlers/demo.ts` + `electron/preload.cts` — the `window.electron.demo` API.
-2. **The Playwright driver** (the "scene"): `e2e/screenshots/demo-reel.spec.ts` is the **canonical template**. It boots a project with `--demo-mode`, then awaits `window.electron.demo.*` calls wrapped in `startCapture`/`stopCapture`.
+2. **The Playwright driver** (the "scene"): `e2e/demo/demo-reel.spec.ts` is the **canonical template**. It boots a project with `--demo-mode`, then awaits `window.electron.demo.*` calls wrapped in `startCapture`/`stopCapture`.
 
-Read `e2e/screenshots/demo-reel.spec.ts` first — copy/adapt it for each new video rather than starting from scratch.
+Read `e2e/demo/demo-reel.spec.ts` first — copy/adapt it for each new video rather than starting from scratch.
 
 ## Two modes
 
@@ -32,10 +32,10 @@ The boot flow is identical for both; only the folder dir differs.
 
 1. **Build** the e2e bundle (demo mode is stripped from prod but present in the test build):
    `npm run build:e2e`
-2. **Author the scene** — copy `demo-reel.spec.ts` to `e2e/screenshots/<name>.spec.ts` (or edit in place for iteration) and write the beats (see API below). Wrap the visible beats in `startCapture(...)` / `stopCapture()`, inside a `try/finally` so capture always finalizes; make each beat best-effort (`safe()` wrapper) so one missing selector doesn't abort the recording.
+2. **Author the scene** — copy `demo-reel.spec.ts` to `e2e/demo/<name>.spec.ts` (or edit in place for iteration) and write the beats (see API below). Wrap the visible beats in `startCapture(...)` / `stopCapture()`, inside a `try/finally` so capture always finalizes; make each beat best-effort (`safe()` wrapper) so one missing selector doesn't abort the recording.
 3. **Record:**
-   `npx playwright test e2e/screenshots/<name>.spec.ts --project=screenshots --reporter=line`
-   (The `screenshots` Playwright project has a 30-min timeout. A transient macOS launch flake auto-retries.)
+   `npx playwright test --config=playwright.demo.config.ts e2e/demo/<name>.spec.ts --reporter=line`
+   (`playwright.demo.config.ts` has a 30-min timeout and runs one worker. A transient macOS launch flake auto-retries inside `launchApp`.)
 4. **Post-process** (output lands in `artifacts/demo/`, which is gitignored):
    - Fix the WebM duration (MediaRecorder omits it during live muxing): `ffmpeg -i in.webm -c copy fixed.webm`
    - Optional QuickTime-friendly copy: `ffmpeg -i fixed.webm -c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p -movflags +faststart out.mp4`

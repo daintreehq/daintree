@@ -142,7 +142,10 @@ export function isCmdShell(shellPath: string): boolean {
 export function quoteCommandArg(value: string, shellPath: string): string {
   if (typeof process !== "undefined" && process.platform === "win32") {
     if (isPowerShellShell(shellPath)) {
-      return quotePowerShellArg(value);
+      // Windows PowerShell 5.1 and pwsh .cmd shims use legacy native argument
+      // passing. Preserve embedded quotes across that second boundary
+      // (notably Codex's TOML config overrides).
+      return quotePowerShellArg(value.replace(/"/g, '\\"'));
     }
     if (isCmdShell(shellPath)) {
       return escapeWindowsArg(value);

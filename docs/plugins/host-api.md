@@ -4,19 +4,21 @@ The host API is the runtime surface a plugin's `activate` function receives. It 
 
 The canonical import source is `@daintreehq/plugin-sdk` (`npm install --save-dev @daintreehq/plugin-sdk`). Types referenced here live in that package, which re-exports them from `shared/types/plugin-sdk.ts`; inside the Daintree repo the workspace link resolves the same imports to the local build.
 
+**What the npm release has.** `@daintreehq/plugin-sdk@0.1.0` on npm ships the root, `/react`, `/files` and `/testing` entries. Its `/react` exports `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent` and `loadDocumentPackage` only, and its root exports the types plus `PLUGIN_PROCESS_STREAM_CHANNEL`, `PLUGIN_STYLE_ROOT_ATTRIBUTE` and `localAuthStubs`; there is no `/data`, `/plugin-ui` or `/view-globals`. Everything else this page lists for the SDK — the performance hooks, `createViewScope`, `createSyncedCollection`, the agent-context drag helpers, `/data` and `/view-globals` — is marked where it is introduced. A raw, zero-build view is unaffected: it gets the host's copy of `/react` through the import map, and a zero-build worker gets the copy shipped with the app ([Data files](#data-files--daintreehqplugin-sdkdata)).
+
 This page is the reference: every member, its gates and its failure modes. For a walkthrough of building a plugin that is really an application, see [Building apps](./building-apps.md).
 
 ## Contents
 
 - Conventions: [Calling conventions](#calling-conventions) · [Activation](#activation) · [`PluginHostApi`](#pluginhostapi) · [Errors and error codes](#errors-and-error-codes) · [Capabilities and consent](#capabilities-and-consent) · [Identity](#identity--pluginid-plugininfo-panelkindid)
-- Registration: [`registerAction`](#registeraction) · [`registerHandler` and `broadcastToRenderer`](#registerhandler-and-broadcasttorenderer) · [`postToPanel`](#posttopanel) · [`registerForgeProvider`](#registerforgeprovider) · [File decorations](#registerfiledecorationprovider-and-invalidatefiledecorations) · [`mcp.registerTools`](#mcpregistertools)
+- Registration: [`registerAction`](#registeraction) · [`registerHandler` and `broadcastToRenderer`](#registerhandler-and-broadcasttorenderer) · [Deadlines and size limits](#deadlines-and-size-limits) · [`postToPanel`](#posttopanel) · [Push delivery](#push-delivery) · [Listener hints](#listener-hints--haslisteners-ondidchangelisteners) · [`registerForgeProvider`](#registerforgeprovider) · [File decorations](#registerfiledecorationprovider-and-invalidatefiledecorations) · [`mcp.registerTools`](#mcpregistertools)
 - Observation: [Worktrees](#worktree-observation) · [Agent state](#agent-observation) · [Panel lifecycle](#ondidchangepanellifecycle) · [`onDidWake`](#ondidwake)
 - Panels and actions: [`reloadPanel`](#reloadpanel) · [`setPanelBadge`](#setpanelbadge) · [`dispatch`](#dispatch) · [`actions`](#actions--built-in-action-catalog)
-- Agents: [`sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) · [`sendToAgent`](#sendtoagent--hand-work-to-an-agents-draft) · [`agents.list`](#agentslist--the-projects-agent-panes)
+- Agents: [`sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) · [`sendToAgent`](#sendtoagent--hand-work-to-an-agents-draft) · [`agents.list`](#agentslist--the-projects-agent-panes) · [`agents.listAll`](#agentslistall--every-agent-in-every-open-project)
 - State: [`settings`](#settings) · [`storage`](#storage--private-keyvalue-storage) · [`db`](#db--host-managed-sqlite)
 - UI: [`logger`](#logger) · [`showToast`](#showtoast) · [User prompts](#user-prompts--showquickpick-showinputbox-showconfirm)
 - System: [`process`](#process--managed-child-processes) · [`fs`](#fs--host-mediated-scope-contained-filesystem) · [`git`](#git--host-mediated-git-scoped-to-a-worktree) · [`clipboard`](#clipboard--host-mediated-os-clipboard) · [`system`](#system--open-and-reveal-files-in-your-own-scope) · [`documents`](#documents--render-html-to-pdf)
-- SDK entries: [React hooks](#react-hooks--daintreehqplugin-sdkreact) · [File listings](#file-listings--daintreehqplugin-sdkfiles) · [Data files](#data-files--daintreehqplugin-sdkdata)
+- SDK entries: [React hooks](#react-hooks--daintreehqplugin-sdkreact) · [Root entry](#root-entry-runtime-values--daintreehqplugin-sdk) · [File listings](#file-listings--daintreehqplugin-sdkfiles) · [Data files](#data-files--daintreehqplugin-sdkdata) · [UI kit](./ui-kit.md)
 - Lifecycle and testing: [Disposables](#disposables) · [Testing against a mock host](#testing-against-a-mock-host) · [What's not exposed](#whats-not-exposed) · [Process model](#process-model-and-memory)
 
 ## Calling conventions
@@ -26,12 +28,14 @@ Every callback a plugin hands the host has a fixed shape, and the one for `regis
 | You register | Your function receives | Notes |
 | --- | --- | --- |
 | `registerAction(descriptor, handler)` | `(args)` | The dispatched args payload only. No `host`, no context; close over `host` from `activate()` if the handler needs it. |
-| `registerHandler(channel, handler)` (untyped) | `(ctx, ...args)` | **Context first.** `ctx` is `{ projectId, worktreeId, webContentsId, pluginId }`; the arguments the view passed to `invoke(pluginId, channel, ...args)` follow it. Read the payload from the first parameter and you get the context object instead. |
-| `registerHandler(channel, schema, handler)` (typed) | `(ctx, args)` | Same order; `args` is the single, schema-parsed payload. |
-| `postToPanel(channel, payload)` | view: `on(pluginId, channel, cb)` receives `payload` | Broadcast. Subscriptions are keyed by plugin and channel only, so it reaches every `on` subscriber your plugin has on that channel, across all of its panel kinds. `usePluginEvent` in a bundled view. |
-| `postToPanel(channel, payload, panelId)` | view: `onPanel(pluginId, channel, panelId, cb)` receives `payload` | One instance only, disjoint from the broadcast. `usePluginPanelEvent` in a bundled view. |
-| `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange`, `storage.onDidChange` | `(event)` | One argument. A listener that throws is logged; see [Disposables](#disposables) for which ones are unsubscribed after three failures in a row. |
-| `db` handle `onDidChange(cb)` | `({ origin })` | Frozen. Returns its disposer synchronously, not a Promise. |
+| `registerHandler(channel, handler, options?)` (untyped) | `(ctx, ...args)` | **Context first.** `ctx` is `{ projectId, worktreeId, webContentsId, pluginId }`; the arguments the view passed to `invoke(pluginId, channel, ...args)` follow it. Read the payload from the first parameter and you get the context object instead. |
+| `registerHandler(channel, schema, handler, options?)` (typed) | `(ctx, args)` | Same order; `args` is the single, schema-parsed payload. `options.timeoutMs` sets the invoke deadline for either overload ([Deadlines and size limits](#deadlines-and-size-limits)). |
+| `postToPanel(channel, payload)` | view: `on(pluginId, channel, cb)` receives `payload` | Broadcast. Subscriptions are keyed by plugin and channel only, so it reaches every `on` subscriber your plugin has on that channel, across all of its panel kinds. `usePluginEvent` in a view. |
+| `postToPanel(channel, payload, panelId)` | view: `onPanel(pluginId, channel, panelId, cb)` receives `payload` | One instance only, disjoint from the broadcast. `usePluginPanelEvent` in a view. |
+| `onDidChangeActiveWorktree`, `onDidChangeAgentState`, `onDidChangeAllAgents`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange`, `storage.onDidChange` | `(event)` | One argument. A listener that throws is logged; see [Disposables](#disposables) for which ones are unsubscribed after three failures in a row. The first three coalesce bursts by default ([`PluginHostSubscriptionOptions`](#pluginhostapi)). |
+| `onDidChangeWorktrees` | `(snapshots, change)` | The full list, then `{ added, removed, changed }` snapshot ids since this subscription's previous delivery. Coalesced by default. |
+| `onDidChangeListeners(channel, cb)` | `(hasListeners)` | A boolean. Returns its disposer synchronously. |
+| `db` handle `onDidChange(cb)` | `({ origin })` | Frozen, and at most one per 50 ms window. Returns its disposer synchronously, not a Promise. |
 | `fs.watch(paths, cb, options?)` | `(changedPath)` | The absolute path that changed. |
 | Filesystem-convention command, `src/{id}.js` | `(args)` | Installed plugins only; a project plugin registers from `activate()` instead. |
 
@@ -72,7 +76,7 @@ export async function activate(host: PluginHostApi) {
 
 The returned cleanup function (if any) runs when the plugin is unloaded — during hot reload, uninstall, or Daintree shutdown. Anything you register via the host API is cleaned up automatically; the cleanup function is for resources you own outside the host (e.g., a subprocess you spawned directly).
 
-**Activation timeout:** 5 seconds. If `activate` doesn't resolve within the timeout, Daintree marks the plugin as failed and surfaces a toast. Keep activate fast; defer heavy work to command handlers.
+**Activation timeout:** 5 seconds. If `activate` doesn't resolve within the timeout, Daintree marks the plugin as failed and surfaces a toast. Keep activate fast; defer heavy work to command handlers. A plugin running in a worker (every installed and project plugin) has one 5-second budget shared by importing `main` and settling `activate()`, so a top-level `await` that never settles fails the plugin the same way. Built-ins, which load in-process, have separate 5-second limits for the import and for `activate()`.
 
 **Error handling:** if `activate` throws, the plugin fails to load and the error is logged to the main process console plus surfaced as a toast. Other plugins continue loading.
 
@@ -94,13 +98,21 @@ interface PluginHostApi {
   registerHandler<TArgs, TResult>(
     channel: string,
     schema: PluginChannelSchema<TArgs, TResult>,
-    handler: PluginTypedIpcHandler<TArgs, TResult>
+    handler: PluginTypedIpcHandler<TArgs, TResult>,
+    options?: PluginHandlerOptions // { timeoutMs?: number }
   ): Promise<void>;
-  registerHandler(channel: string, handler: PluginIpcHandler): Promise<void>;
+  registerHandler(
+    channel: string,
+    handler: PluginIpcHandler,
+    options?: PluginHandlerOptions
+  ): Promise<void>;
   broadcastToRenderer(channel: string, payload: unknown): Promise<void>;
 
   // Post-activation push into your panels
   postToPanel(channel: string, payload: unknown, panelId?: string | null): Promise<void>;
+  // Producer-side hint: may any renderer be subscribed to `channel`?
+  hasListeners?(channel: string): boolean;
+  onDidChangeListeners?(channel: string, callback: (hasListeners: boolean) => void): () => void;
 
   // Worktree observation
   getActiveWorktree(): Promise<PluginWorktreeSnapshot | null>;
@@ -111,16 +123,25 @@ interface PluginHostApi {
     options?: PluginHostCallOptions
   ): Promise<PluginWorktreeStatus | null>;
   onDidChangeActiveWorktree(
-    callback: (snapshot: PluginWorktreeSnapshot | null) => void
+    callback: (snapshot: PluginWorktreeSnapshot | null) => void,
+    options?: PluginHostSubscriptionOptions
   ): Promise<() => void>;
   onDidChangeWorktrees(
-    callback: (snapshots: PluginWorktreeSnapshot[]) => void,
+    callback: (snapshots: PluginWorktreeSnapshot[], change: PluginWorktreesChange) => void,
     options?: PluginHostSubscriptionOptions
   ): Promise<() => void>;
 
   // Agent observation — gated on the `agent:read` capability
   getAgentState(): Promise<PluginAgentSnapshot | null>;
-  onDidChangeAgentState(callback: (snapshot: PluginAgentSnapshot) => void): Promise<() => void>;
+  onDidChangeAgentState(
+    callback: (snapshot: PluginAgentSnapshot) => void,
+    options?: PluginHostSubscriptionOptions
+  ): Promise<() => void>;
+  // Every agent in every open project — `agent:read`, installed and built-in plugins only
+  onDidChangeAllAgents(
+    callback: (snapshot: PluginAllAgentsSnapshot) => void,
+    options?: PluginHostSubscriptionOptions
+  ): Promise<() => void>;
 
   // Panel lifecycle for this plugin's own contributed panels — no capability
   onDidChangePanelLifecycle(
@@ -151,7 +172,11 @@ interface PluginHostApi {
   reloadPanel(panelId: string): Promise<PanelReloadResult>;
 
   // Action dispatch + catalog
-  dispatch(actionId: ActionId, args?: unknown): Promise<ActionDispatchResult>;
+  dispatch(
+    actionId: ActionId,
+    args?: unknown,
+    options?: PluginDispatchOptions
+  ): Promise<ActionDispatchResult>;
   readonly actions: PluginHostActionsApi;
 
   // Agent input — gated on the `agent:input` capability
@@ -163,6 +188,8 @@ interface PluginHostApi {
   ): Promise<PluginSendToAgentResult>;
   // The project's agent panes — gated on `agent:read`
   readonly agents: PluginAgentsApi;
+  // What a terminal's screen shows, as plain text — gated on `terminal:read`
+  readonly terminals: PluginTerminalsApi;
 
   // Settings (user-facing, schema-declared; get/set/onDidChange/open/missingRequired)
   // + private storage (machine-owned)
@@ -210,13 +237,13 @@ interface PluginHostApi {
 
 The authoritative definition is `PluginHostApi` in `shared/types/plugin.ts`, re-exported through `shared/types/plugin-sdk.ts`. The block above is a readable summary — where it disagrees with the type, the type wins.
 
-Two option bags recur. `PluginHostCallOptions` is the trailing argument on long-running calls (`getWorktreeStatus`, `fs.*` except `writeFile`, `appendFile` and `mkdir`, all of `git.*`, `sendToAgent`, and the three prompts) and carries an optional `signal: AbortSignal` so a call whose consumer has gone away can be cancelled. An already-aborted signal rejects before any work and an abort mid-flight rejects with the signal's reason — except on the prompts, where an abort dismisses the dialog and resolves as a cancel (`undefined` / `false`), and `sendToAgent`, where it resolves `{ status: "cancelled" }` while the picker is still open. `PluginHostSubscriptionOptions` is the trailing argument on `onDidChangeWorktrees` and carries `debounceMs`, which coalesces a burst into one trailing callback — the host re-emits the worktree set on every git-status poll, so a UI-updating plugin should almost always pass one. A burst that never goes quiet still fires at least every four `debounceMs`, so sustained churn can't withhold the list indefinitely. Values under ~50 ms are clamped up; `0` or omitted means fire on every change.
+Two option bags recur. `PluginHostCallOptions` is the trailing argument on long-running calls (`getWorktreeStatus`, `fs.*` except `writeFile`, `appendFile` and `mkdir`, all of `git.*`, `sendToAgent`, and the three prompts) and carries an optional `signal: AbortSignal` so a call whose consumer has gone away can be cancelled. An already-aborted signal rejects before any work and an abort mid-flight rejects with the signal's reason — except on the prompts, where an abort dismisses the dialog and resolves as a cancel (`undefined` / `false`), and `sendToAgent`, where it resolves `{ status: "cancelled" }` while the picker is still open. `PluginHostSubscriptionOptions` is the trailing argument on the three bursty subscriptions — `onDidChangeWorktrees`, `onDidChangeActiveWorktree` and `onDidChangeAgentState` — and carries `debounceMs`. **They coalesce by default**: a burst becomes one trailing callback `debounceMs` after the last event, and a burst that never goes quiet still fires at least every `4 × debounceMs`, so sustained churn can't withhold the latest state indefinitely. Omitted (or not a number) means the 100 ms default; `0` or a negative number delivers every event raw; any other value is the window, clamped to 50–60,000 ms. The latest value is always delivered — what a coalesced callback carries is described under [Worktree observation](#worktree-observation) and [Agent observation](#agent-observation). The one other `debounceMs` in the API, on `fs.watch`, keeps the opposite default: omitted means every event.
 
-Nearly every host method now returns a Promise — the API became fully async in the move to the out-of-process worker model, so `registerAction`, `postToPanel`, `setPanelBadge`, and the rest resolve `Promise<void>`, and the subscription methods resolve `Promise<() => void>`. Always `await` a registration before assuming it took effect, and `await` the subscription methods to get the disposer. The synchronous exceptions are `logger` (its `info`/`warn`/`error` calls return `void`), `pluginInfo` and `panelKindId` (static data), and a database handle's `onDidChange`, which returns its disposer directly.
+Nearly every host method now returns a Promise — the API became fully async in the move to the out-of-process worker model, so `registerAction`, `postToPanel`, `setPanelBadge`, and the rest resolve `Promise<void>`, and the subscription methods resolve `Promise<() => void>`. Always `await` a registration before assuming it took effect, and `await` the subscription methods to get the disposer. The synchronous exceptions are `logger` (its `info`/`warn`/`error` calls return `void`), `pluginInfo` and `panelKindId` (static data), a database handle's `onDidChange`, which returns its disposer directly, and `hasListeners` / `onDidChangeListeners`, which answer and return their disposer synchronously and throw at the call on an invalid channel or callback.
 
-The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `mcp.registerTools`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange` and `storage.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. Everything else is deliberately NOT revoke-guarded — `postToPanel`, `setPanelBadge`, `reloadPanel`, the worktree and agent reads, `invalidateFileDecorations`, `showToast`, the prompts, `dispatch`, `actions.*`, `sendToActiveAgent`, `sendToAgent`, `agents.list`, `settings.get`/`set`/`open`/`missingRequired`, `storage.get`/`set`/`delete`, `db.*` (including a handle's `onDidChange`), `process.spawn`, `fs.*` (including `watch`), `git.*`, `clipboard.*`, `system.*`, `documents.renderPdf` and `logger`. Plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op or an empty answer after unload — except the ones that act on disk or on a process, which reject: new `fs.*`, `git.*`, `clipboard.*`, `system.*`, `documents.renderPdf` and `db.*` calls with a `PLUGIN_UNLOADED:` message, `process.spawn` and `settings.open` with a plain "plugin is no longer loaded" one. A database handle the host closed at unload rejects `DB_CLOSED`, and in a worker any call still outstanding when the worker is torn down rejects "Plugin dev worker disposed" (see [Worker and in-process differences](#worker-and-in-process-differences)). `pluginId`, `pluginInfo` and `panelKindId` are static data and keep working even after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
+The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `mcp.registerTools`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangeAllAgents`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange` and `storage.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. Everything else is deliberately NOT revoke-guarded — `postToPanel`, `hasListeners`, `onDidChangeListeners`, `setPanelBadge`, `reloadPanel`, the worktree and agent reads, `invalidateFileDecorations`, `showToast`, the prompts, `dispatch`, `actions.*`, `sendToActiveAgent`, `sendToAgent`, `agents.list`, `settings.get`/`set`/`open`/`missingRequired`, `storage.get`/`set`/`delete`, `db.*` (including a handle's `onDidChange`), `process.spawn`, `fs.*` (including `watch`), `git.*`, `clipboard.*`, `system.*`, `documents.renderPdf` and `logger`. Plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op or an empty answer after unload — except the ones that act on disk or on a process, which reject: new `fs.*`, `git.*`, `clipboard.*`, `system.*`, `documents.renderPdf` and `db.*` calls with a `PLUGIN_UNLOADED:` message, `process.spawn` and `settings.open` with a plain "plugin is no longer loaded" one. A database handle the host closed at unload rejects `DB_CLOSED`, and in a worker any call still outstanding when the worker is torn down rejects "Plugin dev worker disposed" (see [Worker and in-process differences](#worker-and-in-process-differences)). `pluginId`, `pluginInfo` and `panelKindId` are static data and keep working even after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
 
-**Where validation errors surface.** The two groups report errors differently. A revoke-guarded activation-window method (`registerAction`, `registerHandler`, the subscriptions) throws synchronously at the call site on a bad descriptor or a revoked host — wrap the `activate()` body in `try`/`catch` if you want to handle it. The post-activation runtime-surface methods (`postToPanel`, `setPanelBadge`, `invalidateFileDecorations`, `broadcastToRenderer` on an invalid channel) instead reject the returned Promise rather than throwing synchronously, so handle their validation errors with `await` + `.catch()`:
+**Where validation errors surface.** The two groups report errors differently. A revoke-guarded activation-window method (`registerAction`, `registerHandler`, the subscriptions) throws synchronously at the call site on a bad descriptor or a revoked host — wrap the `activate()` body in `try`/`catch` if you want to handle it. `broadcastToRenderer` is in that group and throws at the call for a channel that is not a string or contains a colon (an empty one is accepted), or a payload over the push cap. The post-activation runtime-surface methods (`postToPanel`, `setPanelBadge`, `invalidateFileDecorations`) instead reject the returned Promise rather than throwing synchronously — `postToPanel` on an invalid channel, an empty-string `panelId`, an oversize or uncloneable payload — so handle their validation errors with `await` + `.catch()` (the exception is the synchronous `hasListeners` / `onDidChangeListeners`, which throw on an invalid channel):
 
 ```ts
 await host.postToPanel("build-status", status).catch((err) => host.logger.error(String(err)));
@@ -249,14 +276,19 @@ Node's own filesystem errors (`ENOENT`, `ENOTDIR`, `EISDIR`, `EACCES`) reach you
 | `PATH_NOT_ALLOWED` | message (`fs`, `git`, `system`, `documents`); both (`db`) | path arguments, `git` pathspecs, a database's resolved location | Outside every declared root, a `..` or symlink escape, a git pathspec that is absolute, uses `..` or `:` magic, or a project database inside `.git`. Fix the path or `scopes.fs.allowedPaths`; not retryable. |
 | `REVISION_MISMATCH` | both, plus `currentRevision` | `fs.writeFile` with `expectedRevision` | The file changed since you read it. Enter a conflict state with `currentRevision`, or re-read, re-apply and retry ([`editFile`](./data-helpers.md#conflict-checked-edits) does this). |
 | `TARGET_EXISTS` | both | `fs.writeFile` with `expectedRevision: null`; `fs.mkdir` over a non-directory | Someone created it first. Re-read and decide. |
-| `TARGET_UNAVAILABLE` | both | `fs` reads and writes, `appendFile`, `mkdir`, `documents.renderPdf`, `db.open`, `db` reopen, `backup` | The target is missing where a revision was expected, moved or was replaced mid-call, or is not a regular file (a FIFO, device or directory). Usually a race with a replace: re-read and retry. |
+| `TARGET_UNAVAILABLE` | both | `fs` reads and writes, `appendFile`, `mkdir`, `walk`, `documents.renderPdf`, `db.open`, `db` reopen, `backup` | The target is missing where a revision was expected, or moved or was replaced mid-call; for `appendFile`, `mkdir`, a database or a backup, something other than a regular file (or directory) stands there. Usually a race with a replace: re-read and retry. `readFile`, `readFileBytes`, `readFileWithRevision` and `writeFile` aimed at a directory fail with Node's own error (`EISDIR`) instead. |
 | `TARGET_IS_SYMLINK` | both | `fs` reads and writes, `renderPdf` input and output, a database file, a backup destination | The leaf is, or became, a symlink. Refused by design. |
-| `INVALID_PATH` | message | `system.openPath` / `showItemInFolder`, `documents.renderPdf` | Inside your scope but missing, or the output's parent directory does not exist, or `htmlPath` is not a file. Create it first. |
+| `INVALID_PATH` | message; `code` only for an executable | `system.openPath` / `showItemInFolder`, `documents.renderPdf` | Inside your scope but missing, or the output's parent directory does not exist, or `htmlPath` is not a regular file. Create it first. `openPath` refusing an executable file type carries the code on `err.code` with the message `Refusing to open executable file type: .ext`. |
 | `VALIDATION` | message (`clipboard`, `renderPdf` options); both (`db`) | argument checks | An authoring mistake: wrong type, unknown option, a readonly open with `migrations`, a backup onto the database itself or a journal-named file. Fix the call. |
 | `PAYLOAD_TOO_LARGE` | message; both for a PDF over the cap | `clipboard.writeText` (8 MiB), `clipboard.writeImage` (20 MiB), `renderPdf` `htmlPath` (5 MiB) and output (50 MiB) | Send less. Inline `html` over 5 MiB is `VALIDATION`. |
+| `PLUGIN_INVOKE_TIMEOUT` | message (only the message reaches a view) | a view's `invoke` of a `registerHandler` channel | The handler did not settle within its deadline (five minutes unless it registered its own `timeoutMs`). The message names the plugin, channel and deadline. The handler may still be running; make it idempotent or give it a longer deadline. See [Deadlines and size limits](#deadlines-and-size-limits). |
+| `PLUGIN_PAYLOAD_TOO_LARGE` | message; also `code` on a rejected `postToPanel` / `broadcastToRenderer` | invoke arguments (4 MiB), invoke results (16 MiB), `postToPanel` / `broadcastToRenderer` payloads (1 MiB) | The serialized payload is over its transport cap. Send less, page it, or send deltas. |
+| `PLUGIN_PAYLOAD_UNCLONEABLE` | message and `code` | the same payloads | Structured clone refuses the value (a function, a symbol, a throwing getter). In a worker, a push the port cannot clone rejects with the port's own `DataCloneError` instead. |
 | `PLUGIN_UNLOADED` | message; `dispatch` result code | `fs`, `git`, `clipboard`, `system`, `documents`, `db` after unload | You are being torn down; stop. |
 | `PROJECT_VIEW_UNAVAILABLE` | `code` only | `dispatch` and the prompts from a project plugin; `settings.open` folds it into its message | Your project has no live window. Try again when it is open. (`agents.list` and `actions.*` answer empty instead, and `sendToAgent` refuses with `project-unavailable`.) |
-| `NO_ACTIVE_AGENT` | message | `sendToActiveAgent` | No agent terminal can take the input. Tell the user, or use `sendToAgent`. |
+| `RATE_LIMITED` | both | `terminals.readScreen` | More than 60 calls in a second. Nothing is queued; slow the poll and call again. |
+| `NO_ACTIVE_AGENT` | message | `sendToActiveAgent` | The terminal host is not available, or — for an app-global plugin only — no agent terminal can take the input. A project plugin with no eligible agent resolves silently instead and logs a warning. Tell the user, or use `sendToAgent`. |
+| `PROCESS_LIMIT_REACHED` | both | `process.spawn` | Eight of your processes are already running. Wait for one to exit, or kill one. |
 | `SCHEMA_ERROR` | message | a typed `registerHandler` channel | Args or result failed the schema; reaches the view's `useHostChannel` `error`. |
 | `COMMIT_MESSAGE_REQUIRED` | message | `git.commit` | Empty message. The host never derives one. |
 | `DB_NOT_DECLARED` | message | `db.resolve`, `db.open` | The id is not in `contributes.databases`. |
@@ -278,6 +310,8 @@ Node's own filesystem errors (`ENOENT`, `ENOTDIR`, `EISDIR`, `EACCES`) reach you
 | `RENDER_CANCELLED` | both | `documents.renderPdf` | The plugin unloaded while the call was queued or rendering. |
 | `FRONTMATTER_INVALID` | `code` (SDK) | `parseFrontmatter`, `updateFrontmatter` | See [Data helpers](./data-helpers.md#frontmatter); the error carries `line` and `column`. |
 
+`fs.readFiles` reports a refusal per entry rather than rejecting, with its own code set (`NOT_FOUND`, `NOT_A_FILE`, `TOO_LARGE`, `RESULT_TOO_LARGE`, `READ_FAILED` beside the shared ones) — see [`readFiles` and `walk`](#readfiles-and-walk--bulk-reads).
+
 `dispatch` does not throw for a refused action: it resolves `{ ok: false, error: { code } }` with an `ActionErrorCode` — see [`dispatch`](#dispatch). `sendToAgent` resolves a refusal too, with a `reason` rather than a code.
 
 ## Capabilities and consent
@@ -286,10 +320,11 @@ A capability is declared in `manifest.capabilities` and checked on every call �
 
 | Capability | Unlocks | Consent |
 | --- | --- | --- |
-| `agent:read` | `getAgentState`, `onDidChangeAgentState`, `agents.list` | — |
+| `agent:read` | `getAgentState`, `onDidChangeAgentState`, `agents.list`, `agents.listAll`, `onDidChangeAllAgents` | — |
 | `agent:input` | `sendToActiveAgent`, `sendToAgent` | First use |
+| `terminal:read` | `terminals.readScreen` | First use. Not granted by `agent:read`. |
 | `fs:project-read`, `fs:user-data-read` | `fs` reads, `readdir`, `stat`, `watch`; `renderPdf`'s `htmlPath`; `system.*` (read or write of the root class) | — |
-| `fs:project-write`, `fs:user-data-write` | `fs.writeFile`, `appendFile`, `mkdir`; `renderPdf`'s output; `db` handle `backup` destination | First write, per root class |
+| `fs:project-write`, `fs:user-data-write` | `fs.writeFile`, `appendFile`, `mkdir`; `renderPdf`'s output; `db` handle `backup` destination | First write. The prompt is keyed on the strongest write capability you declare (`fs:project-write` when declared, else `fs:user-data-write`), not on the target's root class, so one grant covers writes to every root, your data directory included. |
 | `fs:project-write` | A `location: "project"` database — required by the manifest check, which also limits it to `"scope": "project"` plugins | The first writable `db.open` / `db.resolve`: the same grant as `fs.writeFile`. A `"local"` database and a `readonly` open need none. |
 | `git:read` | `git.status`, `git.diff`, and `git.commit` (for its preview) | — |
 | `git:write` | `git.add`, `git.commit` | First mutation |
@@ -297,8 +332,9 @@ A capability is declared in `manifest.capabilities` and checked on every call �
 | `clipboard:read` | `clipboard.readText` | — |
 | `clipboard:write` | `clipboard.writeText`, `writeImage` | — |
 | `mcp:expose` | `mcp.registerTools` and `contributes.agentMcp` | — (the user sets the plugin's agent access per project) |
+| `project:dispatch` | `dispatch` with `options.projectId` from an installed plugin | — (the user turns on **Allow project targeting** in the plugin's Permissions; there is no prompt) |
 
-No capability: `settings`, `storage`, a `"local"` database, `logger`, `showToast`, the prompts, `postToPanel`, `setPanelBadge`, `reloadPanel`, `onDidChangePanelLifecycle`, `onDidWake`, the worktree reads and subscriptions, `dispatch` (the action's own `danger` still applies) and `actions`. How capabilities raise an action's effective danger is in the [trust model](./trust-model.md).
+No capability: `settings`, `storage`, a `"local"` database, `logger`, `showToast`, the prompts, `postToPanel`, `hasListeners`, `onDidChangeListeners`, `setPanelBadge`, `reloadPanel`, `onDidChangePanelLifecycle`, `onDidWake`, the worktree reads and subscriptions, `dispatch` (the action's own `danger` still applies) and `actions`. How capabilities raise an action's effective danger is in the [trust model](./trust-model.md).
 
 ## Identity — `pluginId`, `pluginInfo`, `panelKindId`
 
@@ -352,8 +388,10 @@ registerAction(
 
 **Rules:**
 
-- `descriptor.id` must NOT include the plugin prefix — Daintree adds it. The above registers as `acme.linear-planner.plan-from-issue` at runtime (assuming your plugin is `acme.linear-planner`).
-- `descriptor.danger` accepts `"safe"` or `"confirm"`. `"restricted"` is reserved for Daintree's internal use and rejected.
+- `descriptor.id` must NOT include the plugin prefix — Daintree adds it. The above registers as `acme.linear-planner.plan-from-issue` at runtime (assuming your plugin is `acme.linear-planner`). The bare id is non-empty and uses letters, digits, `.`, `_` and `-`; starting it with a lowercase letter keeps it consistent with built-in ids.
+- `title` and `category` are required non-empty strings, `description` a required string, and `kind` is `"command"` or `"query"`.
+- `descriptor.danger` accepts `"safe"` or `"confirm"`. `"restricted"` is reserved for Daintree's internal use and rejected. The host raises `"safe"` to `"confirm"`, never the reverse, when the plugin holds a high-risk capability or a risky pair of them ([trust model](./trust-model.md)).
+- `requires`, when given, is the capabilities this action exercises and must be a subset of `manifest.capabilities` — an undeclared one throws `PERMISSION_REQUIRED`. It narrows which capabilities the danger elevation consults (`[]` means none) and grants nothing; omitted, the whole manifest counts.
 - Calling `registerAction` with a previously-registered ID replaces the existing registration.
 
 Unregistered automatically on plugin unload.
@@ -374,9 +412,8 @@ host.broadcastToRenderer("sync-status", { status: "syncing" });
 ```
 
 ```ts
-// renderer side (in a view component) — useHostChannel resolves when the view is
-// bundled with @daintreehq/plugin-vite (the SDK is bundled into your output; it is
-// NOT served by the host import map). In a raw, un-bundled plugin:// view, call
+// renderer side (in a view component). A bundled view ships its own copy of the
+// SDK; a raw plugin:// view gets the host's through the import map. Either can call
 // window.electron.plugin.invoke(pluginId, "sync-now", args) directly. See "React hooks" below.
 import { useHostChannel } from "@daintreehq/plugin-sdk/react";
 
@@ -386,14 +423,39 @@ const result = await invoke({});
 
 **Channel naming rules:**
 
-- No colons (reserved for Daintree's internal namespacing). The host enforces this in two places: `registerHandler` throws `Plugin channel must not contain colons`, which fails `activate()` on its first registration, and `postToPanel` rejects the push. **`createMockHost` only enforces the second**, so a colon in a request channel passes every activation test and then breaks the first time the plugin runs in the app. Pin the rule with a test over your own channel constants.
+- No colons (reserved for Daintree's internal namespacing). The host enforces this everywhere a channel is named: `registerHandler` throws `Plugin channel must not contain colons`, which fails `activate()` on its first registration, and the push and listener methods refuse it too. `createMockHost` enforces it in the same places: its `registerHandler` throws the same `Plugin channel must not contain colons: <channel>` at the call, so an activation test that registers a colon channel fails rather than the app.
 - Plugin-registered channels are addressed as `{pluginId}:{channel}` internally; the SDK handles the prefix.
 
-Handlers are unregistered on plugin unload.
+Registering a channel again replaces its handler. An untyped re-registration of a typed channel also drops that channel's schema and `requires`, so nothing validates it afterwards. `ctx.projectId` and `ctx.worktreeId` are `string | null` — `null` when the calling view has no project or worktree. Handlers are unregistered on plugin unload.
 
 **Typed overload (preferred for new code):** pass a `PluginChannelSchema` with Zod `args`/`result` schemas and a `requires` capability list. The host rejects registration if any `requires` capability is missing from `manifest.capabilities` (fail-closed at the registration boundary). At dispatch, args are `safeParse`d before the handler runs and the result is `safeParse`d before returning to the renderer — schema failures throw with a `SCHEMA_ERROR:` prefix, missing capabilities throw with a `PERMISSION_REQUIRED:` prefix, and the renderer-side `useHostChannel` hook discriminates on those prefixes. The untyped overload above does no host-side validation and is retained only for plugins that haven't migrated to per-channel schemas.
 
 **The mock host does not validate typed channels.** `createMockHost().registerHandler` records the handler but neither keeps nor applies its schema, so a handler that returns a shape your own protocol rejects still passes. Wrap it in tests: keep the schema, parse args on the way in and the result on the way out, and invoke through that wrapper — then a schema mismatch fails in the test exactly as it would at the host boundary.
+
+### Deadlines and size limits
+
+Every `plugin:invoke` round trip is bounded. The limits live in `shared/config/pluginBudgets.ts`, and a call that breaks one fails with a named error rather than stalling or taking the app down with it.
+
+```ts
+// A build legitimately runs long: give it its own deadline.
+await host.registerHandler("build-site", buildSite, { timeoutMs: 20 * 60_000 });
+// A handler that waits on something unbounded by design opts out.
+await host.registerHandler("tail-log", tailLog, { timeoutMs: 0 });
+```
+
+**Deadlines.** `registerHandler(channel, handler, options?)` and `registerHandler(channel, schema, handler, options?)` take `PluginHandlerOptions { timeoutMs?: number }`. Omitted, the deadline is five minutes (`PLUGIN_INVOKE_DEFAULT_TIMEOUT_MS`); `0` disables it; anything that is not a number from `0` to `2147483647` throws at registration, so a typo fails `activate()` rather than the first call. When the deadline passes, the view's `invoke` rejects with `PLUGIN_INVOKE_TIMEOUT: plugin "<id>" handler "<channel>" did not settle within <ms> ms`, and `useHostChannel` surfaces that on `error`. The handler itself is not interrupted: an in-process builtin's keeps running with nobody waiting on it, and a worker plugin's keeps running but its result is dropped in the worker instead of being cloned back. Write handlers so a retry after a timeout is safe. Actions registered with `registerAction` have no invoke deadline; they are long-running by design.
+
+**Size limits.** Payloads are measured by an estimate of their structured-clone size (UTF-8 bytes for strings and keys, `byteLength` for binary data, a small fixed cost per other value), stopping as soon as a cap is passed, so an oversize payload costs about the cap in work however large it is:
+
+| Payload | Cap | Refused as |
+| --- | --- | --- |
+| Arguments of one invoke | 4 MiB (`PLUGIN_INVOKE_MAX_ARGS_BYTES`) | The view's `invoke` rejects before the handler runs, and before a worker plugin is sent a copy |
+| Result of one invoke, including an action result returned over `plugin:invoke` | 16 MiB (`PLUGIN_INVOKE_MAX_RESULT_BYTES`) | The view's `invoke` rejects; a worker refuses it before it crosses the port |
+| One `postToPanel` or `broadcastToRenderer` payload | 1 MiB (`PLUGIN_PUSH_MAX_PAYLOAD_BYTES`) | `postToPanel` rejects its Promise; `broadcastToRenderer` throws at the call |
+
+The error reads `PLUGIN_PAYLOAD_TOO_LARGE: plugin "<id>" <what> exceeds the <limit>-byte limit (at least <n> bytes)`, where `<what>` is `arguments to "<channel>"`, `result of "<channel>"` or `push payload on "<channel>"`, and `<n>` is how far the estimate had counted when it stopped — a lower bound, not the payload's size. A payload structured clone cannot carry fails with `PLUGIN_PAYLOAD_UNCLONEABLE: plugin "<id>" <what> cannot be cloned: <reason>`. The `plugin:invoke` IPC envelope itself admits the 4 MiB argument cap plus 64 KiB for the ids and channel, so a view can actually send what the cap allows; a message far past that is refused by the IPC layer before the handler runs.
+
+The caps are ceilings, not targets. A list the worker changes belongs in a synced collection (`createSyncedCollection` in the worker, `useSyncedCollection` in the view), which sends deltas and splits a large change set under the push cap by itself; a large read belongs behind paging or [`fs.readFiles`](#readfiles-and-walk--bulk-reads).
 
 ## `postToPanel`
 
@@ -408,9 +470,8 @@ setInterval(async () => {
 ```
 
 ```ts
-// renderer side (in a view component) — usePluginEvent resolves when the view is
-// bundled with @daintreehq/plugin-vite. In a raw, un-bundled plugin:// view, call
-// window.electron.plugin.on(pluginId, "build-status", cb) directly; it returns an
+// renderer side (in a view component), bundled or raw. The bridge underneath is
+// window.electron.plugin.on(pluginId, "build-status", cb), which returns an
 // unsubscribe function. See "React hooks" below.
 import { usePluginEvent } from "@daintreehq/plugin-sdk/react";
 
@@ -419,9 +480,45 @@ usePluginEvent<BuildStatus>(pluginId, "build-status", (status) => {
 });
 ```
 
-`postToPanel` is the post-activation sibling of `broadcastToRenderer`: it fans out over the exact same `plugin:{pluginId}:{channel}` transport, but unlike the revoke-guarded activation broadcast it stays callable for the plugin's whole lifetime. Use `broadcastToRenderer` for a one-shot push during `activate()`; use `postToPanel` for everything pushed afterward (the common case). `channel` must be a non-empty string without colons — an invalid channel rejects the returned Promise so authoring mistakes surface loudly (catch it with `await … .catch()`). It is membership-gated, not revoke-guarded: once the plugin is unloaded it becomes a silent no-op. There is no delivery acknowledgement — it is fire-and-forget; a panel that isn't mounted simply doesn't receive the payload. This is the push half of the renderer SDK; the pull half is `useHostChannel` (request/response over `registerHandler`).
+`postToPanel` is the post-activation sibling of `broadcastToRenderer`: it fans out over the exact same `plugin:{pluginId}:{channel}` transport, but unlike the revoke-guarded activation broadcast it stays callable for the plugin's whole lifetime. Use `broadcastToRenderer` for a one-shot push during `activate()`; use `postToPanel` for everything pushed afterward (the common case). `channel` must be a non-empty string without colons — an invalid channel rejects the returned Promise so authoring mistakes surface loudly (catch it with `await … .catch()`). It is membership-gated, not revoke-guarded: once the plugin is unloaded it becomes a silent no-op. A payload over 1 MiB rejects with `PLUGIN_PAYLOAD_TOO_LARGE` ([Deadlines and size limits](#deadlines-and-size-limits)). There is no delivery acknowledgement — it is fire-and-forget; a panel that isn't mounted simply doesn't receive the payload, and nothing is replayed to a subscriber that arrives later. This is the push half of the renderer SDK; the pull half is `useHostChannel` (request/response over `registerHandler`).
 
-**Targeting a single panel instance.** `postToPanel(channel, payload, panelId?)` takes an optional third argument. Omit it (or pass `null`) to broadcast to every open instance of the panel kind — every renderer subscribed via `window.electron.plugin.on(pluginId, channel, …)` / `usePluginEvent` receives the payload. Pass a non-empty `panelId` string to target one instance: only the renderer subscribed via `window.electron.plugin.onPanel(pluginId, channel, panelId, …)` (or the SDK's `usePluginPanelEvent`) receives it, so two open instances of the same panel kind no longer both get every push. An empty-string `panelId` is rejected. `usePluginEvent` does **not** filter by `panelId` — it is the broadcast subscription, and it never receives a targeted push. Use `usePluginPanelEvent(pluginId, channel, panelId, cb)` (or the raw `plugin.onPanel(pluginId, channel, panelId, cb)`) with the `panelId` prop your view was handed. The two are disjoint: a broadcast reaches only `usePluginEvent` subscribers, a targeted push only `usePluginPanelEvent` ones.
+**Targeting a single panel instance.** `postToPanel(channel, payload, panelId?)` takes an optional third argument. Omit it (or pass `null`) to broadcast to every open instance of the panel kind — every renderer subscribed via `window.electron.plugin.on(pluginId, channel, …)` / `usePluginEvent` receives the payload. Pass a non-empty `panelId` string to target one instance: only the renderer subscribed via `window.electron.plugin.onPanel(pluginId, channel, panelId, …)` (or the SDK's `usePluginPanelEvent`) receives it, so two open instances of the same panel kind no longer both get every push. An empty-string `panelId` rejects the returned Promise, like the channel check. `usePluginEvent` does **not** filter by `panelId` — it is the broadcast subscription, and it never receives a targeted push. Use `usePluginPanelEvent(pluginId, channel, panelId, cb)` (or the raw `plugin.onPanel(pluginId, channel, panelId, cb)`) with the `panelId` prop your view was handed. The two are disjoint: a broadcast reaches only `usePluginEvent` subscribers, a targeted push only `usePluginPanelEvent` ones.
+
+### Push delivery
+
+`postToPanel` and `broadcastToRenderer` share one transport, and what it promises is:
+
+- **Batched per macrotask, per renderer.** Pushes made in the same task reach a renderer as one IPC message (at most 256 entries and 1 MiB per message; a larger flush goes out as several consecutive messages). Batching only removes per-message overhead: nothing is merged, coalesced or dropped to save work, so a thousand pushes are a thousand callbacks. Coalescing is the producer's job, or the view's (`useThrottledCallback`, `useStreamBuffer`).
+- **Ordered.** A renderer sees pushes in the order they were made, across every plugin and channel on the transport. Anything else the host sends a renderer on your behalf — a toast, a prompt, a dispatch, a panel reload, a badge, a decoration invalidation — first delivers the pushes you made before it, so a toast never overtakes the panel update that preceded it.
+- **Snapshotted at the call.** The payload is size-checked and structured-cloned when you call, not when the batch flushes, so mutating and re-posting one object sends two distinct values. An uncloneable payload fails the call that made it rather than a whole batch later.
+- **Scoped, and targeted to the owner.** A broadcast goes to every renderer in your binding's scope — the bound project's views for a project plugin, every renderer for an app-global one. A targeted push goes only to the renderer that holds that panel, so other project views never deserialize it (the preload still filters by `panelId`). A panel not yet reported by its renderer falls back to the scope, never wider.
+- **Dropped only with nowhere to go.** A push is lost when no live renderer is in scope, when it targets a panel that was reported removed at least two seconds earlier and that no renderer holds (the grace covers a panel moving between renderers), or when IPC itself refuses to serialize that one entry, which is logged.
+- **No ordering against invoke results.** A push and an `invoke` reply travel different paths, so a view can receive a push the worker made after answering its pull before the answer itself, or the reverse. Subscribe first, then pull, and tag both with a revision so the view keeps the newest; `createSyncedCollection` and `useSyncedCollection` implement exactly that for a keyed list.
+
+Delivery never depends on [listener hints](#listener-hints--haslisteners-ondidchangelisteners): there is no replay, so a push filtered on a renderer's listener report — which always lags the renderer — would be lost for a subscriber that registered a moment later.
+
+### Listener hints — `hasListeners`, `onDidChangeListeners`
+
+```ts
+const produce = () => {
+  if (host.hasListeners?.("build-log") === false) return; // nobody is looking; a view pulls on mount
+  host.postToPanel("build-log", nextChunk());
+};
+const off = host.onDidChangeListeners?.("build-log", (listening) => {
+  if (listening) startTailing();
+  else stopTailing();
+});
+```
+
+`host.hasListeners(channel)` answers whether any renderer this host pushes to may currently be subscribed to `channel`, through `window.electron.plugin.on` / `onPanel` or the SDK hooks built on them. It is a hint for the producer only — the host delivers every push whatever it says — and it errs towards `true`: a renderer that has not reported its subscriptions yet counts as listening, and in a worker the first read for a channel answers `true` until main's first report for it arrives a moment later. It answers `false` once the plugin is unloaded, and it is synchronous and cheap enough to read on every produce. `channel` is validated like `postToPanel`'s, and an invalid one throws.
+
+A push you skip because it said `false` is gone for good, and a view can subscribe the moment after you read it. Only skip work a view can recover by pulling state when it mounts — the way a synced collection's snapshot does — never a one-off event.
+
+`host.onDidChangeListeners(channel, callback)` calls `callback(false)` when the last subscriber anywhere in scope goes away and `callback(true)` when one appears. It is not called with the current value; read that with `hasListeners`. It returns its disposer synchronously, and every registration is removed when the plugin unloads. Neither method is revoke-guarded or capability-gated.
+
+**Idle disposal.** A live `onDidChangeListeners` registration is an event subscription like `onDidChangeWorktrees`: while one exists, an idle worker is not disposed, because a disposed worker could not be called back. Reading `hasListeners` never holds the worker. So a plugin that only wants to pause work reads `hasListeners`; one that must resume on its own when a view opens registers the callback and accepts that its worker stays up.
+
+Both are optional in the type so hand-written `PluginHostApi` fakes keep compiling; Daintree's host, the worker host and `createMockHost` always provide them. A worker watches at most 256 channels this way; past that, `hasListeners` answers `true`.
 
 ## Worktree observation
 
@@ -548,11 +645,25 @@ interface PluginWorktreeStatusFile {
 type PluginWorktreeFileState = "added" | "modified" | "deleted" | "untracked" | "renamed";
 ```
 
-It projects the host's already-polled worktree changes (the same data driving the dashboard) — reading it does NOT shell out to a fresh `git status`. The internal git vocabulary is collapsed to the five states above (copied → `added`, conflicted → `modified`, ignored dropped); `files` is sorted by path and the whole projection is frozen. For richer ad-hoc status — staged vs. unstaged, diffs — use `host.git` (below), which runs a real query against the worktree.
+It projects the host's already-polled worktree changes (the same data driving the dashboard) — reading it does NOT shell out to a fresh `git status`. The internal git vocabulary is collapsed to the five states above (copied → `added`, conflicted → `modified`, ignored dropped); `files` is sorted by path and the whole projection is frozen. For a fresh status read or a diff, use `host.git` (below), which runs a real query against the worktree.
 
 All snapshots are frozen — attempting to mutate one throws. Fields are an explicit allowlist; adding a new field requires a Daintree SDK release.
 
 Subscriptions registered during `activate` — before Daintree's worktree service is ready — are queued and replayed once the service comes online. Your callback never misses events.
+
+**Both worktree subscriptions coalesce by default.** The host re-emits the worktree set on every git-status poll, so with no options a burst becomes one callback 100 ms after it goes quiet, and a burst that never does still delivers every 400 ms. `onDidChangeActiveWorktree` then delivers the worktree active at the end of the burst; `onDidChangeWorktrees` delivers the latest list. Pass `{ debounceMs: 0 }` to receive every event, or another window as described under [`PluginHostApi`](#pluginhostapi).
+
+`onDidChangeWorktrees` also hands its callback a second argument saying what changed since the previous delivery to that same subscription, as snapshot `id`s:
+
+```ts
+await host.onDidChangeWorktrees((worktrees, { added, removed, changed }) => {
+  if (added.length + removed.length + changed.length === 0) return; // the same set, re-sent
+  for (const id of removed) cache.delete(id);
+  for (const w of worktrees) if (added.includes(w.id) || changed.includes(w.id)) cache.set(w.id, w);
+});
+```
+
+The host computes it from the list it last delivered, so a coalesced burst reports its net change (a worktree added and removed within one window is in neither list), and the first delivery compares against an empty set, so every worktree is `added`. A worktree is `changed` when any field of its snapshot differs — branch, the current and main flags, ahead/behind counts, mood, activity and creation times, the linked issue/PR, or its status counts and changed files.
 
 ### `getWorktreeStatus`
 
@@ -586,15 +697,19 @@ export async function activate(host: PluginHostApi) {
 | Field | Notes |
 | --- | --- |
 | `agentId` | Stable session id, when the host could attribute the transition to one. Absent for detector-only flows that route by terminal. |
+| `terminalId` | The terminal the transition came from — the same id `agents.list()` reports and `sendToAgent` takes. Absent when the host could not attribute the transition to a terminal. |
+| `workspaceId` | The workspace (project or scratch) that owns that terminal. Opaque: compare it, don't parse it. A project plugin only ever sees its own project's id. Resolved when the transition arrives; absent when the host could not tell which workspace owned the terminal then, e.g. one already torn down. A project plugin never receives a transition it can't attribute to its own project. |
 | `state` / `previousState` | `idle` \| `working` \| `waiting` \| `directing` \| `completed` \| `exited`. |
 | `running` | Convenience flag — `true` while the session is doing in-flight work (`working` / `waiting` / `directing`). Derived from the host's own `ACTIVE_AGENT_STATES` set so you don't re-maintain the membership list. |
-| `waitingReason` | Present only when `state === "waiting"`. |
+| `waitingReason` | `prompt` \| `question` \| `approval` \| `error`. Present only when `state === "waiting"`. |
 | `sessionCost` / `sessionTokens` | Cumulative for the session. Present only on `completed` / `exited` transitions. |
 | `timestamp` | Epoch milliseconds when the transition was committed. |
 
-Two things this surface deliberately does **not** carry. It omits the internal routing ids (`terminalId`, `worktreeId`, `cwd`) and the detector internals (`trigger`, `confidence`, …): a plugin holding only `agent:read` has no declared capability reaching PTY or worktree internals, so exposing them here would let it cross-reference state it otherwise can't. And it is **observation only** — nothing here drives, pauses, or resumes a session.
+`terminalId` and `workspaceId` say where a transition came from, so an installed plugin, which observes every project, can tell which agent needs attention and join the event to an `agents.list()` entry. The ids add no targeting: `agents.list()` and `sendToAgent` still cover only the plugin's own project (the focused one for an installed plugin), so a transition from another workspace has no matching pane there, and neither does an agent that has exited. Nothing else about the terminal comes with them: the snapshot omits the worktree id, `cwd`, the detector internals (`trigger`, `confidence`, …) and all terminal content, so it is safe to send off the machine. And it is **observation only** — nothing here drives, pauses, or resumes a session.
 
 **Treat the state as an observation, not a fact.** Agent state comes from passive PTY output heuristics and is frequently wrong. Surface what the host saw; don't build a control flow that assumes it.
+
+**Coalesced by default, per terminal.** Agents change state many times a second, so within one window (100 ms unless you pass `debounceMs`) only each terminal's latest transition is delivered: one callback per terminal, in the order of those latest transitions. The final state of every terminal always arrives; the transitions in between may be skipped, so a delivered snapshot's `previousState` is the state just before that last transition, not necessarily the one you were last told about. Pass `{ debounceMs: 0 }` to receive every transition.
 
 `getAgentState` is NOT revoke-guarded (callable from timers, resolves `null` after unload); `onDidChangeAgentState` is — subscribe during `activate()`. A throwing listener is logged; see [Disposables](#disposables) for when it is unsubscribed.
 
@@ -614,6 +729,8 @@ export async function activate(host: PluginHostApi) {
   });
 }
 ```
+
+Each event is `{ panelId, panelKindId, pluginId, phase }`. `panelKindId` is the runtime kind id — the value [`panelKindId(bareId)`](#identity--pluginid-plugininfo-panelkindid) returns: `{manifestId}.{bareId}` for an installed or built-in plugin, `project:{projectId}/{manifestId}/{bareId}` for a project plugin. `pluginId` is always your own.
 
 | Phase | Meaning |
 | --- | --- |
@@ -815,7 +932,7 @@ await host.setPanelBadge(panelId, { kind: "label", text: "3", color: "error" });
 await host.setPanelBadge(panelId, null); // clear
 ```
 
-A badge is either `{ kind: "dot" }` or `{ kind: "label", text }`, each taking an optional `color` (`"default"` / `"success"` / `"warning"` / `"error"` — you pick intent, the theme picks the pixel) and an optional `tooltip`. Label text is capped host-side (`PLUGIN_PANEL_BADGE_LABEL_MAX`); a longer one rejects rather than being truncated.
+A badge is either `{ kind: "dot" }` or `{ kind: "label", text }`, each taking an optional `color` (`"default"` / `"success"` / `"warning"` / `"error"` — you pick intent, the theme picks the pixel) and an optional `tooltip`. Label `text` is trimmed and must then be 1 to 6 characters (`PLUGIN_PANEL_BADGE_LABEL_MAX`); a longer one rejects rather than being truncated. `tooltip` is trimmed and must then be 1 to 200 characters. Both shapes are strict: an unknown key rejects.
 
 Badges are keyed by `(pluginId, panelId)`, so two plugins never clobber each other's badge on the same panel, and all of a plugin's badges are cleared on unload. Not revoke-guarded — call it from timers and subscription callbacks; it becomes a silent no-op once the plugin unloads. An invalid `panelId` or badge shape rejects the returned Promise, so `await` it with a `.catch()` if you want the authoring mistake in your own logs.
 
@@ -830,7 +947,25 @@ if (!result.ok) {
 }
 ```
 
-Args are validated against the action's `argsSchema` by `ActionService`; the host does not re-validate. Actions classified `danger: "restricted"` reject with `RESTRICTED`; `danger: "confirm"` actions return `CONFIRMATION_REQUIRED` — plugins cannot bypass confirm-gating (there is no `confirmed` flag). `dispatch` is NOT revoke-guarded; once the plugin is unloaded it returns `{ ok: false, error: { code: "PLUGIN_UNLOADED" } }` without dispatching.
+Args are validated against the action's `argsSchema` by `ActionService`; the host does not re-validate. Actions classified `danger: "restricted"` reject with `RESTRICTED`; `danger: "confirm"` actions return `CONFIRMATION_REQUIRED` — plugins cannot bypass confirm-gating (there is no `confirmed` flag), and no dialog is shown, so a confirm-tier action can never be run through `host.dispatch`, your own included. Check [`actions.canDispatch`](#actions--built-in-action-catalog) first and route the user to the action instead. `dispatch` is NOT revoke-guarded; once the plugin is unloaded it returns `{ ok: false, error: { code: "PLUGIN_UNLOADED" } }` without dispatching. A renderer that does not answer within 30 seconds resolves `EXECUTION_ERROR` with the message `Plugin action dispatch timed out: <actionId>`.
+
+`error.code` is an `ActionErrorCode`: `NOT_FOUND`, `VALIDATION_ERROR`, `RESULT_VALIDATION_ERROR` (the action ran but its result failed its own schema), `DISABLED`, `RESTRICTED`, `CONFIRMATION_REQUIRED`, `EXECUTION_ERROR`, `USER_REJECTED`, `CONFIRMATION_TIMEOUT`, `BINDING_STALE`, `PLUGIN_UNLOADED`, `TIER_NOT_PERMITTED`, `RESOURCE_NOT_OWNED`, `PARTIAL_SUCCESS` (something real was created before a later step failed; `details` says what), `TERMINAL_IN_OTHER_PROJECT`, `INVALID_URL`, and the legacy `ELICITATION_FAILED`, which is no longer produced. `error.message` is prose and `error.details` is optional.
+
+### Targeting a project
+
+By default an installed plugin's dispatch runs in whichever project is in front. An installed plugin that serves several projects can name one instead with `options.projectId` — ids come from `host.dispatch("project.getAll")`:
+
+```ts
+await host.dispatch(
+  "agent.launch",
+  { agentId: "claude", cwd, focusPolicy: "preserve" },
+  { projectId }
+);
+```
+
+The plugin must declare `project:dispatch`, and the user must turn on **Allow project targeting** in the plugin's Permissions tab. It is off by default and never prompts, so an unattended plugin fails fast: without the declaration or the switch the call rejects with `PERMISSION_REQUIRED` naming what is missing, and nothing is dispatched. With both, the action runs in that project's view without switching to it, and each targeted dispatch is recorded in the plugin audit log (target and action id, with an args hash, never the args). A backgrounded project still counts, and its view is woken for the call if it was frozen; a project with no open view rejects with `PROJECT_VIEW_UNAVAILABLE` — nothing opens it for you, so `project.switch` first if you need one. An empty or non-string `projectId` is refused rather than read as "no target". A project plugin may pass only its own project's id; any other is refused whatever the user has granted. The switch changes where an action runs, not which actions a plugin can dispatch.
+
+A dispatch that times out is not cancelled: the action can still run after `dispatch` resolved with the timeout, so don't blindly retry a launch.
 
 ## `actions` — built-in action catalog
 
@@ -844,7 +979,9 @@ if ((await host.actions.canDispatch("git.commit")) === "confirm") {
 }
 ```
 
-`list()` and `get(id)` mirror `ActionService.list()`/`get()`: `danger: "restricted"` actions are filtered out, so a plugin only ever sees `"safe"` or `"confirm"` entries (`get` returns `null` for an unknown or restricted id). `canDispatch(id)` returns `"ok"` for a safe action, `"confirm"` for one `dispatch` would reject with `CONFIRMATION_REQUIRED`, and `"restricted"` for an unknown or restricted id — use it to warn before you trigger a confirm dialog. `actions` is NOT revoke-guarded; after unload `list()` resolves `[]` and `get()` resolves `null`.
+`list()` and `get(id)` mirror `ActionService.list()`/`get()`: `danger: "restricted"` actions are filtered out, so a plugin only ever sees `"safe"` or `"confirm"` entries (`get` returns `null` for an unknown or restricted id). `canDispatch(id)` returns `"ok"` for a safe action, `"confirm"` for one `dispatch` would reject with `CONFIRMATION_REQUIRED`, and `"restricted"` for an unknown or restricted id — use it to warn before you trigger a confirm dialog. `actions` is NOT revoke-guarded; after unload `list()` resolves `[]`, `get()` resolves `null` and `canDispatch()` resolves `"restricted"`.
+
+Each entry is a `PluginActionManifestEntry`: `id`, `title`, `description`, `category`, `kind` (`"command"` / `"query"`), `danger` (the base rating, `"safe"` or `"confirm"`), `inputSchema` (JSON Schema for the args, absent when it takes none), `requiresArgs` (the schema rejects `{}`), and, when the action declares them, `keywords`, `examples` and `dangerRationale`. The type is exported from `@daintreehq/plugin-sdk` and `/testing`.
 
 ## `sendToActiveAgent` — inject text into the active agent
 
@@ -858,9 +995,9 @@ await host.sendToActiveAgent("Summarize the failing test and propose a fix.");
 await host.sendToActiveAgent("/compact", { submit: true });
 ```
 
-The host resolves the target itself, preferring the focused/visible agent terminal, then a `waiting` agent, then the most recently active agent terminal in the active project. `options.submit` defaults to `false` — the **stage-only**, default-safe mode: the text is pasted into the agent's input for the user to review and submit, with no Enter appended. Pass `{ submit: true }` to append Enter and execute immediately.
+The host resolves the target itself among the agent terminals in scope — a project plugin's own project, or the focused project for an app-global one — ranking a visible terminal first, then a `waiting` one, then the one with the latest output. A `completed` or `exited` agent is never a target. `options.submit` defaults to `false` — the **stage-only**, default-safe mode: the text is pasted into the agent's input for the user to review and submit, with no Enter appended. Pass `{ submit: true }` to append Enter and execute immediately.
 
-First use raises a just-in-time consent prompt (like `shell:exec`); a remembered grant covers later calls. `sendToActiveAgent` is NOT revoke-guarded — call it from timers and subscription callbacks — but it becomes a no-op once the plugin is unloaded. It throws `PERMISSION_REQUIRED:` if the plugin did not declare `agent:input` or the user denies consent, and `NO_ACTIVE_AGENT:` if no agent terminal is available to receive the input.
+First use raises a just-in-time consent prompt (like `shell:exec`); a remembered grant covers later calls. `sendToActiveAgent` is NOT revoke-guarded — call it from timers and subscription callbacks — but it becomes a no-op once the plugin is unloaded. It throws `PERMISSION_REQUIRED:` if the plugin did not declare `agent:input` or the user denies consent, and throws on empty or whitespace-only text before the consent prompt. With no eligible agent, an app-global plugin's call throws `NO_ACTIVE_AGENT:`; a project plugin's resolves without sending anything and logs a warning, since it may only reach its own project's agents.
 
 For handing a piece of work to an agent the user chooses, use [`sendToAgent`](#sendtoagent--hand-work-to-an-agents-draft) instead: it drafts where the user can see it and never submits.
 
@@ -895,14 +1032,14 @@ It resolves:
 
 `reason` is one of: `unknown-terminal`, `not-agent` (a shell, or an agent Daintree has no input bar for), `exited`, `input-bar-off` (the user's input-bar setting is off), `backend-unavailable`, `input-locked`, `restarting`, `input-busy` (dictation is about to submit that draft), `not-in-grid` (docked or backgrounded), `fleet-armed` (Enter there would broadcast to a fleet), `launch-failed` (a new agent or its worktree didn't come up), `project-unavailable` (your project has no open view, or it didn't take a targeted call within 10 seconds — in which case nothing was drafted), `prompt-open` (you already have a picker or prompt open — one at a time, as with `showQuickPick`; a targeted call is never blocked by one), or `busy` (eight targeted calls from your plugin are already in flight). The user sees the reason for a refusal about their agent — every reason up to `launch-failed` — in the same moment; `project-unavailable`, `prompt-open` and `busy` are only reported to you, so tell the user yourself if it matters.
 
-It never moves focus: a small receipt names the agent the text went to. A project plugin only reaches its own project's panes; an installed plugin reaches the project the user is looking at. It throws `PERMISSION_REQUIRED:` without `agent:input` or on a denied consent, and throws on blank or oversized text, an over-long title, or an option of the wrong type — all checked before the consent prompt. NOT revoke-guarded.
+It never moves focus: a small receipt names the agent the text went to. A project plugin only reaches its own project's panes; an installed plugin reaches the project the user is looking at. It throws `PERMISSION_REQUIRED:` without `agent:input` or on a denied consent, and throws on blank or oversized text, an over-long title, a `terminalId` or `worktreeId` that is empty or longer than 512 characters, or an option of the wrong type — all checked before the consent prompt. NOT revoke-guarded.
 
 **From a view.** A view has no host object; add a handler in your worker and `invoke` it — the call is gated and bound on the worker's host, where your plugin's identity is not something a view asserts:
 
 ```js
 // worker
-host.registerHandler("sendToAgent", (_ctx, { text, title, worktreeId }) =>
-  host.sendToAgent(text, { title, worktreeId })
+host.registerHandler("sendToAgent", (_ctx, { text, title, worktreeId, terminalId }) =>
+  host.sendToAgent(text, { title, worktreeId, terminalId })
 );
 // view
 const result = await window.electron.plugin.invoke(pluginId, "sendToAgent", {
@@ -924,6 +1061,47 @@ const agents = await host.agents.list();
 
 The live agent panes in this plugin's project, in grid order — the same set the `sendToAgent` picker offers. Exited and demoted agents are left out; a docked or locked agent is listed with `canDraft: false` and its `draftRefusal`. `observedState` is the agent state Daintree last read off the terminal: an observation, often wrong, never a promise about what the agent is doing. Gated on `agent:read`; resolves `[]` when the project has no open view or the plugin has unloaded. NOT revoke-guarded.
 
+## `agents.listAll` — every agent in every open project
+
+```ts
+// Subscribe first, then read, so no change between the two is missed.
+await host.onDidChangeAllAgents((snapshot) => render(snapshot));
+render(await host.agents.listAll());
+// { agents: [{ workspaceId, workspaceKind: "project" | "scratch", terminalId,
+//              worktreeId?, title?, agentId?, observedState? }],
+//   degraded, lastSuccessfulAt }
+```
+
+Every agent run across every open project and scratch, answered by main — so a project whose view is not loaded still shows up, which `agents.list` cannot do. The same set the All agents view shows: exited and demoted agents are left out. `observedState` is the agent state Daintree last read off the terminal: an observation, often wrong, never a promise about what the agent is doing. `title` is the pane's own title, not the composed one its header shows; `worktreeId` is an id only. `terminalId` is what `sendToAgent` takes, but it is not a lasting identity — a restarted pane can come back under the same id.
+
+An empty list only means "no agents" when `degraded` is `false`. `degraded: true` means the host could not read every terminal, so `agents` is the last complete view — show it as stale. Before the first read, and after the plugin unloads, `listAll` answers `{ agents: [], degraded: true, lastSuccessfulAt: null }`: "can't tell", not "nothing running".
+
+Gated on `agent:read`, and only for installed and built-in plugins. A project plugin is scoped to its own project everywhere else, so both calls throw `PERMISSION_REQUIRED:` for one — in a worker, `listAll` rejects with it, while a refused `onDidChangeAllAgents` is logged by main and resolves a disposer that never fires, like every worker subscription. `listAll` is NOT revoke-guarded; subscribing is.
+
+`onDidChangeAllAgents` fires with the whole new snapshot, frozen, when a run is added or removed or one's state, title or worktree changes, and when the host loses or regains sight of the fleet. There is no initial callback. A callback can repeat the previous snapshot, when something the plugin cannot see changed. Coalesced to the latest snapshot by default ([`PluginHostSubscriptionOptions`](#pluginhostapi)). In process it throws `FLEET_UNAVAILABLE:` if the host is not tracking agents at all.
+
+## `terminals.readScreen` — what a terminal shows
+
+```ts
+const screen = await host.terminals.readScreen(terminalId, { lines: 12 });
+switch (screen.status) {
+  case "ok": // screen.text, screen.lineCount, screen.truncated
+  case "exited": // the process exited; the pane may still be open
+  case "not-found": // no terminal this plugin may read has that id
+  case "unavailable": // could not read it right now; try again later
+}
+```
+
+The terminal's current screen as plain text: its last `lines` lines (1–100, default 20; a line soft-wrapped across rows counts once) with blank padding trimmed and no ANSI, never its scrollback or the serialized buffer. A blank screen is `{ status: "ok", text: "", lineCount: 0 }`, so an empty screen is never confused with a missing terminal. `truncated` is `true` when lines above the returned ones, or text past the 16 KiB cap, were left out; the newest content is kept. Take ids from [`agents.list`](#agentslist--the-projects-agent-panes), or, for an installed plugin, from [`agents.listAll`](#agentslistall--every-agent-in-every-open-project).
+
+It is answered in main from the terminal host's own copy of the screen, so a terminal in a project whose view is closed still reads. A project plugin reads only its own project's terminals; an installed plugin may read any user terminal by id. An unknown id, one in another project and one that is not a user terminal all answer the same `not-found`. Nothing about the terminal changes: no input, no resize.
+
+Gated on `terminal:read`, which `agent:read` does not imply, with a first-use consent prompt telling the user the plugin can read what their terminals show. Arguments are checked before the prompt. Calls are limited to 60 a second per plugin — a grid polling twenty cards once a second uses a third of it — and a call past that throws `RATE_LIMITED:` at once rather than waiting. Resolves `unavailable` once the plugin is unloaded. NOT revoke-guarded, so poll from a timer.
+
+The host does not log or store the text. Treat it as a secret: terminals show tokens, env dumps and customer data, and once it reaches your plugin, keeping it on the machine is your code's job.
+
+The `terminal.getOutput` and `terminal.copy` actions, and `terminal.getStatus` with `includeOutput`, are closed to plugin dispatch; `readScreen` is the plugin path to terminal text.
+
 ## `logger`
 
 Structured diagnostic logger backed by a bounded per-plugin ring buffer (most recent ~500 entries) in the main process.
@@ -934,7 +1112,7 @@ host.logger.warn("Rate limited, backing off");
 host.logger.error("Token expired");
 ```
 
-Lines are mirrored to the host console prefixed with `[plugin:{pluginId}]` and retained so they can be folded into an error report on demand. Calls return `void` and never reject. In process an unserializable `fields` payload is coerced to a string rather than thrown; in a worker the call is posted over a `MessagePort`, so a `fields` value that cannot be structured-cloned (a function, a class instance with methods) throws `DataCloneError` synchronously — log plain data. `logger` is NOT revoke-guarded; writes become a silent no-op after unload.
+Lines are mirrored to the host console prefixed with `[plugin:{pluginId}]` and retained so they can be folded into an error report on demand; the retained lines are also listed in the plugin manager's detail pane. The ring keeps the newest 500 entries. Each line is the message plus its serialised `fields`, with secrets scrubbed, cut to 2048 code points. `warn` and `error` lines are also written to `daintree.log`, without `fields`, cut to 1000 characters and rate-limited per plugin; `info` stays in the ring. Calls return `void` and never reject. In process an unserializable `fields` payload is coerced to a string rather than thrown; in a worker the call is posted over a `MessagePort`, so a `fields` value that cannot be structured-cloned (a function, a class instance with methods) throws `DataCloneError` synchronously — log plain data. `logger` is NOT revoke-guarded; writes become a silent no-op after unload.
 
 ## `settings`
 
@@ -956,7 +1134,7 @@ if (missing.length > 0) await host.settings.open(missing[0]);
 | --- | --- |
 | `get(key, scope?)` | The stored value; while nothing is stored, the key's declared `default` (a fresh copy each call), or `undefined` when it declares none. A stored `null` reads as `null`. |
 | `set(key, value, scope?)` | Rejects `undefined` and anything `JSON.stringify` cannot represent; the value is stored as its JSON round-trip, so `NaN` becomes `null`. When the manifest declares any settings, an undeclared key is rejected. `set` does **not** check the declared `type`, `min`/`max` or enum `options` — the form enforces those, so validate your own writes. There is no delete: only the user can clear a value, from the form. |
-| `onDidChange(key, cb, scope?)` | Revoke-guarded. Fires after a `set` or a form edit that changes the stored JSON, with the new value — or with the declared `default` when the user clears it. An edit made to the file outside Daintree never fires it. |
+| `onDidChange(key, cb, scope?)` | Revoke-guarded. Fires after a `set` or a form edit that changes the stored JSON, with the new value — or with the declared `default` when the user clears it. A subscription is keyed by key and scope only, so an installed plugin's `"project"` or `"local"` subscriber also fires for a write made while another project was active. An edit made to the file outside Daintree never fires it. |
 | `open(key?)` | Shows your settings where they live and, when `key` names a declared setting, scrolls to it and highlights it briefly. See below. |
 | `missingRequired()` | Your declared `required: true` settings that are still unset, in manifest order. See below. |
 
@@ -970,7 +1148,7 @@ if (missing.length > 0) await host.settings.open(missing[0]);
 
 `{pluginId}` is the instance id (for a project plugin it encodes the project); the committed file uses the manifest id so no machine-local id reaches the repository. Files are written atomically with mode `0600` on POSIX.
 
-Leave `scope` out and `get`, `set` and `onDidChange` all use the key's declared scope — `"user"` for an undeclared key — so the manifest is the one place a scope is written down. An explicit scope that conflicts with the declaration throws. `get` and `onDidChange` accept an undeclared key; `set` refuses one once the manifest declares settings.
+Keys are non-empty strings; anything else throws. Leave `scope` out and `get`, `set` and `onDidChange` all use the key's declared scope — `"user"` for an undeclared key — so the manifest is the one place a scope is written down. An explicit scope that conflicts with the declaration throws. `get` and `onDidChange` accept an undeclared key; `set` refuses one once the manifest declares settings.
 
 A project plugin's `"project"` and `"local"` scopes always mean its own project. An installed plugin's resolve the active project at call time, so they follow project switches; with no project active, `get` returns the declared default and `set` throws.
 
@@ -997,7 +1175,9 @@ await host.storage.delete("lastSyncCursor");
 await host.storage.set("draft", text, "worktree");
 ```
 
-Three scopes — `"user"` (default), `"project"`, `"worktree"` — stored as plaintext JSON at `~/.daintree/plugin-storage/{pluginId}.json`, `<projectRoot>/.daintree/plugin-storage/{manifestId}.json`, or `<worktreePath>/.daintree/plugin-storage/{manifestId}.json` (`chmod 0o600` on POSIX). **No secret encryption — never store credentials here** (use a `type: "secret"` setting for those). The `"project"` / `"worktree"` scopes resolve at call time — for an installed plugin the active project and worktree, for a project plugin its own project and that project's active worktree: `get` and `delete` are a no-op (returning `undefined` / void) and `set` throws when no project / worktree is active. `set` rejects `undefined` and non-JSON-serializable values. `onDidChange(key, cb, scope?)` fires on in-process writes only and is the one revoke-guarded member — subscribe during `activate()`. The rest of `storage` is NOT revoke-guarded.
+Three scopes — `"user"` (default), `"project"`, `"worktree"` — stored as plaintext JSON at `~/.daintree/plugin-storage/{pluginId}.json`, `<projectRoot>/.daintree/plugin-storage/{manifestId}.json`, or `<worktreePath>/.daintree/plugin-storage/{manifestId}.json` (`chmod 0o600` on POSIX). **No secret encryption — never store credentials here** (use a `type: "secret"` setting for those). The `"project"` / `"worktree"` scopes resolve at call time — for an installed plugin the active project and worktree, for a project plugin its own project and that project's active worktree: `get` and `delete` are a no-op (returning `undefined` / void) and `set` throws when no project / worktree is active. Keys are non-empty strings. `set` rejects `undefined` and non-JSON-serializable values. `onDidChange(key, cb, scope?)` fires on in-process writes only — with the new value, or `undefined` after a `delete` — and is keyed by key and scope, not by project or worktree, so a `"worktree"` subscriber fires for that key in whichever worktree was written. It is the one revoke-guarded member — subscribe during `activate()`. The rest of `storage` is NOT revoke-guarded.
+
+**Changes on disk.** As with settings, every read checks the file's identity, so a `"project"` or `"worktree"` file rewritten by `git pull`, a branch switch or an agent is picked up by the next `get`, and the next `set` merges into the fresh file. No `onDidChange` fires for such a change.
 
 **Reads stay fresh across a scope switch.** Storage is read through a per-path cache, but the host keeps it coherent for you. When the active worktree changes, the host invalidates the cache for `"worktree"`-scoped entries, so the next `get` reads the new worktree's file rather than a stale value. `"project"` scope is implicitly fresh — a different project resolves to a different file path, hence a different cache entry — and `"user"` scope is process-global and never evicted. You never have to manage cache invalidation yourself.
 
@@ -1042,9 +1222,9 @@ The queries run in your plugin's own process, over the runtime's built-in `node:
 | `run(sql, params?)` | One statement that returns no rows; resolves `{ changes, lastInsertRowid }`. |
 | `exec(sql)` | One or more statements with no parameters. |
 | `columns(sql)` | The result columns (`name`, source `table` / `column`, declared `type`, each `null` for an expression) without running the statement — headers for a result with no rows. |
-| `transaction(fn)` | `BEGIN IMMEDIATE`, `fn(tx)`, `COMMIT` — rolled back if `fn` throws. Use the `tx` you are handed: calling the outer handle inside `fn` waits for the transaction and deadlocks. |
+| `transaction(fn)` | `BEGIN IMMEDIATE`, `fn(tx)`, `COMMIT` — rolled back if `fn` throws. Use the `tx` you are handed: calling the outer handle inside `fn` waits for the transaction and deadlocks. `tx` is a `PluginDatabaseStatements` — `query`, `get`, `run`, `exec` and `columns` only, so no nested `transaction`, `backup`, `onDidChange` or `close`. |
 | `backup(destPath)` | A consistent snapshot, resolved as `{ path, bytes }`. See [Backups](#backups). |
-| `onDidChange(cb)` | `cb({ origin: "self" \| "external" })`, coalesced. Returns a disposer. |
+| `onDidChange(cb)` | `cb({ origin: "self" \| "external" })`, at most once per 50 ms window. Returns a disposer. A `cb` that is not a function throws `VALIDATION`. |
 | `id`, `location`, `readonly` | The id, the frozen resolved location, and whether the handle is readonly. |
 | `close()` | Idempotent; waits for queued calls. Any later call rejects `DB_CLOSED`. |
 
@@ -1056,15 +1236,19 @@ The queries run in your plugin's own process, over the runtime's built-in `node:
 
 **`definitions`** is SQL applied after the migrations, in one transaction, whenever its text differs from what the file last received — the home for views and triggers, which you want to change freely without a numbered migration or a data wipe. Write it to be idempotent: `DROP VIEW IF EXISTS on_hand; CREATE VIEW on_hand AS …`. The host records a hash of the applied text in a small `_daintree_meta` table inside the database (created only when you use `definitions`), so an open with unchanged definitions never rewrites the file — a committed database does not show as modified just because a panel opened. The hash covers the schema version, so definitions are also re-applied on the first open after `user_version` changes — recreating a table in a migration drops its triggers — even when the process stopped between committing the migration and applying them. A view or trigger dropped by hand stays dropped until one of those happens. Tell agents in your data contract to leave `_daintree_meta` alone. A failure rolls back and rejects `DB_DEFINITIONS_FAILED`.
 
-**Change detection.** An agent writing the file with the `sqlite3` CLI is a different process, invisible to your connection's own bookkeeping. While any `onDidChange` listener is attached, the handle watches the file's directory and polls once a second; the watcher stops when the last listener is disposed. It compares `PRAGMA data_version`, which advances only when _another_ connection commits, and the file's device and inode, which change when the file is replaced by `git checkout`, `git stash` or a restore script. A replaced or deleted file is reopened transparently before the next statement — re-resolved and re-contained first, with the migrations run again (a deleted file is recreated) — and announced as `"external"`, so a long-lived handle never keeps reading an unlinked inode. Your own commits announce themselves as `"self"`: `run`, `exec`, committed transactions, a write made through `query` (`INSERT … RETURNING`), and schema changes such as `CREATE VIEW` that change no rows. A rolled-back transaction announces nothing. A listener that throws is logged and stays subscribed.
+**Change detection.** An agent writing the file with the `sqlite3` CLI is a different process, invisible to your connection's own bookkeeping. While any `onDidChange` listener is attached, the handle watches the file's directory (checking 75 ms after the last filesystem event) and polls once a second; the watcher stops when the last listener is disposed. It compares `PRAGMA data_version`, which advances only when _another_ connection commits, and the file's device and inode, which change when the file is replaced by `git checkout`, `git stash` or a restore script. A replaced or deleted file is reopened transparently before the next statement — re-resolved and re-contained first, with the migrations run again (a deleted file is recreated, except by a readonly handle, which rejects `DB_NOT_FOUND` instead) — and announced as `"external"`, so a long-lived handle never keeps reading an unlinked inode. Your own commits announce themselves as `"self"`: `run`, `exec`, committed transactions, a write made through `query` (`INSERT … RETURNING`), and schema changes such as `CREATE VIEW` that change no rows. A rolled-back transaction announces nothing. A listener that throws is logged and stays subscribed.
+
+**Changes are coalesced.** Every change within a 50 ms window — this handle's own commits and external ones alike — is delivered as one event at the end of the window, which opens at the first change rather than trailing the last, so a steady stream of writes still reports every 50 ms and 200 awaited inserts cost a handful of refetches rather than 200. A window that saw any external change reports `origin: "external"`; one that saw only this handle's commits reports `"self"`. The last change is always delivered, including one whose window is still open when the handle closes. Disposing the last listener drops a pending event.
 
 **One statement per call.** `query`, `get`, `run` and `columns` compile exactly one statement; SQL after it (other than whitespace, semicolons and comments) rejects with `DB_MULTIPLE_STATEMENTS` instead of being silently dropped. Use `exec` for a batch. Queries run synchronously in your plugin's process: a runaway query stalls your plugin (never Daintree) until it finishes, and cannot be interrupted.
 
 **One file per database.** SQL that would open or create another file is refused with `DB_STATEMENT_NOT_ALLOWED` on every handle, readonly included, and in `migrations`, `definitions` and `exec`: `ATTACH`, `DETACH`, `VACUUM INTO`, and `PRAGMA temp_store_directory` / `data_store_directory`. Those would reach files outside the declared location without the containment and consent the host applies to it. The connection also runs an authorizer that denies the same statements and the `load_extension()` function; a call to that function fails with SQLite's own "not authorized" error rather than a `DB_*` code, and `node:sqlite` never enables extension loading anyway. A plain `VACUUM` is fine. For a copy, use `backup`.
 
-**Integers are exact.** An integer that fits in a JavaScript number (up to `Number.MAX_SAFE_INTEGER`, 2^53 − 1) comes back as a `number`; one past that comes back as a `bigint`, in rows and in `run`'s `lastInsertRowid`, rather than being rounded. A `bigint` does not mix with `number` arithmetic and `JSON.stringify` throws on it, so convert deliberately before serialising one. Bind a `bigint` parameter to write one. Store money as integer cents.
+**Integers are exact.** An integer within ±(2^53 − 1) (`Number.MAX_SAFE_INTEGER`) comes back as a `number`; one outside that range comes back as a `bigint`, in rows and in `run`'s `lastInsertRowid`, rather than being rounded. A `bigint` does not mix with `number` arithmetic and `JSON.stringify` throws on it, so convert deliberately before serialising one. Bind a `bigint` parameter to write one. Store money as integer cents.
 
 **Calls are serialised per handle.** A statement issued while a transaction is running waits for it, so a panel refresh can never read half of a multi-row write. Separate handles to the same file are separate connections and are not serialised with each other — SQLite's own locking and the busy timeout apply.
+
+**`VALIDATION`** from `db` means an authoring mistake: empty `sql`, `params` that are neither an array nor an object, `migrations` that are not an array of strings, `definitions` that is not a string, a readonly open with either, a non-function `onDidChange` callback, an empty `backup` path, or a backup onto the database, its journal files or a journal-named file.
 
 ### Backups
 
@@ -1082,7 +1266,7 @@ It is the way to give a sync folder such as Dropbox a copy — never put the liv
 
 ### Agents read and write it too
 
-Agents reach a declared database three ways: they read it through the host's `database_schema` and `database_query` on the plugin's MCP server, they write it through your own [`agentMcp` tools](#mcpregistertools), which run through this same handle, and an agent without those tools — launched outside Daintree, or before the plugin's agent access was on — opens a `"project"` file directly with `sqlite3`. Offer the tools, and design the database so the direct route is safe too:
+Agents reach a declared database three ways: they read it through the host's `database_schema` and `database_query` on the plugin's MCP server, they write it through your own [`agentMcp` tools](#mcpregistertools), which run through this same handle, and an agent without those tools — launched outside Daintree, or before the plugin's agent access was on — opens a `"project"` file directly with `sqlite3`. The contract agents see for the database tools is in [Agent extensions](./agent-extensions.md). Offer the tools, and design the database so the direct route is safe too:
 
 - **Put integrity in the schema, not in your code.** Your tools are the validated path, but the `sqlite3` CLI does not enforce foreign keys unless a session asks for it, and agents never do, so a `REFERENCES` clause only binds your own writes. Use `CHECK` constraints and `BEFORE INSERT` / `BEFORE UPDATE` triggers with `RAISE(ABORT, '<what to do instead>')` — the agent sees the message and corrects itself.
 - **Describe the schema where the agent will read it.** Column comments in the `CREATE TABLE` survive into `database_schema` and `sqlite3 <file> .schema`, which is the first thing an agent runs. Point to the file from your plugin's `AGENTS.md` by its `projectRelativePath`.
@@ -1099,9 +1283,9 @@ await host.showToast({
 });
 ```
 
-The host prefixes `message` with your plugin id (`{pluginId}: {message}`) so users can tell which plugin raised the toast — you don't add the prefix yourself. `message` is a string only (max 2000 chars); `priority` and action buttons aren't exposed to plugins. `durationMs` must be a positive integer up to 60000 (60s). An empty message, an unknown `type`, or an out-of-range `durationMs` rejects.
+The host prefixes `message` with your plugin's display name (`{displayName}: {message}`, falling back to the manifest `name`) so users can tell which plugin raised the toast — you don't add the prefix yourself. `message` is a string only, trimmed and then 1 to 2000 characters; `priority` and action buttons aren't exposed to plugins. `durationMs` must be a positive integer up to 60000 (60s). An empty message, an unknown `type`, an out-of-range `durationMs` or any other key rejects.
 
-Toasts route through Daintree's standard `notify()` path, so quiet-hours and inbox-history semantics apply. The rate-limit bucket is scoped per plugin and type, so a noisy plugin can't suppress another plugin's toasts (or system toasts). Audit your toasts against the four-question checklist (timely, helpful, not already visible, ignorable) — the host delivers what you ask for, it doesn't second-guess. There's no "sticky" or "action required" toast type — for persistent UI, register a panel view instead.
+Toasts route through Daintree's standard `notify()` path, so quiet-hours and inbox-history semantics apply. The rate-limit bucket is scoped per plugin id and type (two plugins sharing a display name still get separate buckets), so a noisy plugin can't suppress another plugin's toasts (or system toasts). Audit your toasts against the four-question checklist (timely, helpful, not already visible, ignorable) — the host delivers what you ask for, it doesn't second-guess. There's no "sticky" or "action required" toast type — for persistent UI, register a panel view instead. A toast with an action button, or an Undo toast, comes from the view instead: [`useToast`](./ui-kit.md#hooks) in `@daintreehq/plugin-ui` routes through the same `notify()` path under the same limits, and its button calls straight back into the view.
 
 ## User prompts — `showQuickPick`, `showInputBox`, `showConfirm`
 
@@ -1138,13 +1322,15 @@ if (
 }
 ```
 
-**`showQuickPick(items, options?)`** resolves the chosen `PluginQuickPickItem`, or `undefined` on cancel. Each item is `{ id, label, description?, detail? }` — plain strings so it survives the structured-clone boundary; `description` renders dimmed after the label, `detail` on a second muted line. `matchOnDescription` widens fuzzy matching beyond `label`. Passing `canSelectMany: true` changes the resolved value to an array, and the overloads type that for you.
+**`showQuickPick(items, options?)`** resolves the chosen `PluginQuickPickItem`, or `undefined` on cancel. Each item is `{ id, label, description?, detail? }` — plain strings so it survives the structured-clone boundary; `description` renders dimmed after the label, `detail` on a second muted line. `matchOnDescription` widens fuzzy matching beyond `label`. Passing `canSelectMany: true` changes the resolved value to an array, and the overloads type that for you. Item ids must be non-empty and unique within the call; a duplicate throws. `options` also takes `title` and `placeholder`.
 
-**`showInputBox(options?)`** resolves the entered string, or `undefined` on cancel. `validationPattern` is a regex **source string** enforced client-side at submit time (no per-keystroke IPC); an invalid pattern is ignored rather than blocking the user, so test yours. `password: true` masks the field.
+**`showInputBox(options?)`** resolves the entered string, or `undefined` on cancel. Options are `title`, `prompt`, `placeholder`, `value` (prefilled text), `password`, `validationPattern` and `validationMessage`. `validationPattern` is a regex **source string** enforced client-side at submit time (no per-keystroke IPC); an invalid pattern is ignored rather than blocking the user, so test yours. `password: true` masks the field.
 
-**`showConfirm(options)`** resolves `true` on confirm, `false` on cancel, dismiss, or the plugin unloading while the dialog is open. For anything irreversible set `destructive: true` and give `confirmLabel` a verb-noun (`"Delete file"`), never a bare `OK` — the label is the last thing the user reads before committing.
+**`showConfirm(options)`** resolves `true` on confirm, `false` on cancel, dismiss, or the plugin unloading while the dialog is open. `title` is required and must be a string; `message`, `confirmLabel`, `cancelLabel` and `destructive` are optional. For anything irreversible set `destructive: true` and give `confirmLabel` a verb-noun (`"Delete file"`), never a bare `OK` — the label is the last thing the user reads before committing.
 
 **Where the dialog appears.** A project-bound plugin's prompt is delivered into that project's view, so the user finds it when they switch to that project — never wherever focus happens to be. If the bound project has no live renderer the call rejects with `PROJECT_VIEW_UNAVAILABLE` rather than landing somewhere else. See [Project-local plugins → Binding](./project-local.md#binding--which-project-a-host-call-reaches).
+
+**One dialog at a time.** A plugin has at most one dialog open — the three prompts and a `sendToAgent` picker share the slot. A second request while one is open is never shown: it resolves its cancel value (`undefined` / `false`) at once, so a loop of prompts does not stack dialogs.
 
 ## `process` — managed child processes
 
@@ -1169,7 +1355,18 @@ handle.kill();
 
 `host.process` lets a process- or task-orchestrator plugin (dev server, CI runner, watcher) spawn and supervise real child processes instead of hijacking a user terminal. It is **capability-gated twice**: a `spawn` from a plugin that did not declare `shell:exec` rejects with a `PERMISSION_REQUIRED:` error, and the first spawn a plugin actually makes raises a [just-in-time consent dialog](./trust-model.md#2-host-side-policy-input-load-bearing) the user must approve — a denial rejects with the same prefix. A remembered grant covers later spawns; built-in plugins skip the prompt. Concurrent first-use spawns coalesce onto one dialog rather than stacking. Argv is passed verbatim (no shell, so no shell-injection surface).
 
-The returned `PluginProcessHandle` carries `id`, `kill()` (clean `SIGTERM`, then `SIGKILL` after a grace period), `restart()` (respawns with the same command/args/cwd/env, reusing the id and bumping a restart counter), and `onExit`/`onCrash` lifecycle subscriptions carrying the real exit code/signal — `onCrash` fires only on an unexpected (non-zero / signalled) exit you did not request. The child's stdout/stderr stream to your panels over `postToPanel("process", …)` keyed by the handle id; subscribe with `plugin.on(pluginId, "process")` in your view and discriminate on the event `kind` (`stdout` / `stderr` / `exit` / `crash`, or `data` for the single merged stream a `"pty"` child produces).
+The returned `PluginProcessHandle` carries `id`, `kill()` (clean `SIGTERM`, then `SIGKILL` after a 3-second grace), `restart()` (respawns with the same command/args/cwd/env, reusing the id and bumping a restart counter), `onExit`/`onCrash` lifecycle subscriptions carrying the real exit code/signal — `onCrash` fires only on an unexpected (non-zero / signalled) exit you did not request — and `onData`, which hands your own code each output chunk as `{ stream, chunk }`. Each subscription returns its disposer. The child's stdout/stderr also stream to your panels over `postToPanel("process", …)` keyed by the handle id; subscribe with `plugin.on(pluginId, "process")` in your view and discriminate on the event `kind` (`stdout` / `stderr` / `exit` / `crash`, or `data` for the single merged stream a `"pty"` child produces).
+
+Output produced before the first `onData` subscriber attaches is buffered — up to 64 KiB, oldest chunks dropped first — and replayed to that subscriber, so a child that greets the moment it starts is not missed; after that, delivery is live only. A process that has already ended keeps that buffer for 30 seconds. `onExit` and `onCrash` registered after the process ended still fire, with the recorded outcome.
+
+| Spawn option | Notes |
+| --- | --- |
+| `args` | Passed verbatim. Entries that are not strings are dropped silently. |
+| `cwd` | Defaults to the active worktree, then the host's cwd. Not contained to your `fs` scope. |
+| `env` | Added to the minimal allowlist. Values that are not strings are dropped silently. |
+| `mode` | `"pipe"` (default), `"duplex"` or `"pty"` — see [Modes](#modes). |
+| `panelId` | Sends this process's panel events to one panel instead of broadcasting. `null` or omitted broadcasts; an empty string rejects. |
+| `cols`, `rows` | `"pty"` only. The initial size, default 80 × 24; each must be a positive integer. |
 
 ### Modes
 
@@ -1214,9 +1411,9 @@ rpc.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" })}\n`
 
 `write()` is fire-and-forget: it queues on the child's stdin and does not report backpressure, which suits the low-volume control-plane traffic this is built for. Don't stream bulk data through it — if you write faster than the child reads, that buffer grows unboundedly.
 
-One caveat inherited from the pipe-mode streaming path: output still in flight when the child exits can be dropped, because the handle settles on the process's `exit` rather than on its streams closing. That's a non-issue for a long-lived server you shut down yourself, but a one-shot command that writes its final reply and immediately exits may have that reply lost — don't build a request/response round trip on a child that exits to signal completion.
+**Output at exit.** In `"pipe"` and `"duplex"` mode the handle settles once the child's stdio has closed, or two seconds after it exits if the pipes stay open (a grandchild that inherited them), so the last lines a one-shot command prints arrive before `onExit` fires. A `"pty"` child settles on its own exit path.
 
-Every spawned process is tied to your plugin's lifetime: on unload/disable/revoke the host SIGTERMs (then SIGKILLs) every outstanding process — a dev server can't leak past a reload. A per-plugin concurrency cap bounds how many processes can run at once; a `spawn` past the cap rejects rather than queueing. `process.spawn` is NOT revoke-guarded — call it from timers and subscription callbacks — but once the plugin unloads it rejects rather than spawning. Spawns are recorded in the plugin audit trail so process execution stays observable. The child does **not** inherit Daintree's full environment — only an allowlist of essentials (`PATH`, locale, temp, OS basics) plus whatever you pass in `env`, so the main process's tokens never leak to a `shell:exec` child; pass anything else the command needs explicitly. `cwd` is a process concern, not an `fs` scope — it is not contained to `scopes.fs.allowedPaths` (it defaults to the active worktree).
+Every spawned process is tied to your plugin's lifetime: on unload/disable/revoke the host SIGTERMs (then SIGKILLs) every outstanding process — a dev server can't leak past a reload. A plugin may have at most eight processes running at once; a `spawn` past the cap rejects with `PROCESS_LIMIT_REACHED` rather than queueing, and an exited process frees its slot. `process.spawn` is NOT revoke-guarded — call it from timers and subscription callbacks — but once the plugin unloads it rejects rather than spawning. Spawns are recorded in the plugin audit trail so process execution stays observable. The child does **not** inherit Daintree's full environment — only an allowlist of essentials (`PATH`, locale, temp, OS basics) plus whatever you pass in `env`, so the main process's tokens never leak to a `shell:exec` child; pass anything else the command needs explicitly. `cwd` is a process concern, not an `fs` scope — it is not contained to `scopes.fs.allowedPaths` (it defaults to the active worktree).
 
 ## `fs` — host-mediated, scope-contained filesystem
 
@@ -1247,9 +1444,11 @@ const dispose = await host.fs.watch(
 
 `host.fs` is a sanctioned, contained, audited filesystem path. Every argument is resolved against your declared `scopes.fs.allowedPaths` and realpath-contained to one of those roots — a `..` traversal or a symlink that escapes a root is rejected with a `PATH_NOT_ALLOWED:` error, mirroring the `plugin://` protocol handler's discipline. This is the **runtime enforcement of `scopes.fs.allowedPaths`** (previously advisory). Reads gate on `fs:project-read` / `fs:user-data-read`, writes on `fs:project-write` / `fs:user-data-write`; a missing capability rejects with a `PERMISSION_REQUIRED:` error. The first write — `writeFile`, `appendFile` or `mkdir` — additionally raises a [just-in-time consent dialog](./trust-model.md#2-host-side-policy-input-load-bearing) — reads don't. Unlike the app's `files.read` IPC, `readFile` carries **no 500KB / binary cap** — it is a deliberate plugin API. Reads follow a symlink you name when it resolves inside a root, but once open the descriptor must be the entry standing at the contained path: a leaf swapped for a symlink after the check rejects with `TARGET_IS_SYMLINK`, and a descriptor that is not the file now at the path with `TARGET_UNAVAILABLE` (safe to retry). Writes are recorded in the audit trail, and `watch` watchers are torn down on unload. `host.fs` is NOT revoke-guarded — call it from timers and subscription callbacks.
 
-`readFile`, `readFileBytes`, `readFileWithRevision`, `readdir`, `stat`, and `watch` take a trailing options object carrying an optional `signal: AbortSignal`, so a read feeding a panel that has since unmounted can be cancelled — chain it off the view's `disposeSignal`. An already-aborted signal rejects before any I/O; aborting mid-flight rejects with the signal's reason. `writeFile`, `appendFile` and `mkdir` deliberately take none: half-written files are not a state worth offering.
+**Paths.** Every path is absolute; a relative one is refused with `PATH_NOT_ALLOWED` rather than resolved against some cwd. Besides your declared roots, your plugin data directory (`~/.daintree/plugin-data/{pluginId}`) is always an allowed root of the user-data class, declared or not. `readFileBytes` is `readFile` returning a `Uint8Array` of the raw bytes, with the same gates, containment, verified open and absence of a size cap. `stat` follows symlinks and resolves `{ isDirectory, isFile, isSymbolicLink, size, mtimeMs }` — so `isSymbolicLink` is always `false` — and a missing path rejects with Node's `ENOENT`.
 
-`writeFile(path, contents, options?)` resolves `{ revision }` — the sha256 hex of the bytes written — for every call. Every write is checked, with or without `options` (omitting them is the same as passing `{}`): the host serialises writes per resolved path, re-proves containment inside that critical section once the consent prompt and queue wait are over (a target that moved meanwhile rejects with `TARGET_UNAVAILABLE`), refuses a symlink leaf (`TARGET_IS_SYMLINK`), and replaces the file atomically through a sibling temp file, flush and rename with the original mode preserved — so a watcher sees a rename and the file gets a new inode. A create-new write (`expectedRevision: null`, below) is an exclusive create at the target instead. `options.expectedRevision` compares the file's current bytes before anything is touched: a mismatch rejects with `REVISION_MISMATCH` and the error carries `currentRevision` so the caller can enter a conflict state without a second read; a missing target rejects with `TARGET_UNAVAILABLE`; `expectedRevision: null` means the file must not exist yet (`TARGET_EXISTS` otherwise). The `code` (and, for a mismatch, `currentRevision`) ride on the error object whether the plugin runs in process or in its worker, and the code also prefixes the message. What the write does not promise is a lock against an uncooperative external process — a write that lands between the hash check and the rename is overwritten. The window is small, and callers that care keep their own copy of what they asked to write (the built-in Markdown editor keeps its draft until a save is verified).
+`readFile`, `readFileBytes`, `readFileWithRevision`, `readFiles`, `readdir`, `walk`, `stat`, and `watch` take a trailing options object carrying an optional `signal: AbortSignal`, so a read feeding a panel that has since unmounted can be cancelled — chain it off the view's `disposeSignal`. An already-aborted signal rejects before any I/O; aborting mid-flight rejects with the signal's reason. `writeFile`, `appendFile` and `mkdir` deliberately take none: half-written files are not a state worth offering.
+
+`writeFile(path, contents, options?)` resolves `{ revision }` — the sha256 hex of the bytes written — for every call. Every write is checked, with or without `options` (omitting them is the same as passing `{}`): the host serialises writes per resolved path, re-proves containment inside that critical section once the consent prompt and queue wait are over (a target that moved meanwhile rejects with `TARGET_UNAVAILABLE`), refuses a symlink leaf (`TARGET_IS_SYMLINK`), and replaces the file atomically through a sibling temp file, flush and rename with the original mode preserved — so a watcher sees a rename and the file gets a new inode. A create-new write (`expectedRevision: null`, below) is an exclusive create at the target instead. Outside your data directory the parent directory must already exist; inside it, missing parents are created after consent, each one audited. `options.expectedRevision` is 64 lowercase hex characters or `null` (anything else throws) and compares the file's current bytes before anything is touched: a mismatch rejects with `REVISION_MISMATCH` and the error carries `currentRevision` so the caller can enter a conflict state without a second read; a missing target rejects with `TARGET_UNAVAILABLE`; `expectedRevision: null` means the file must not exist yet (`TARGET_EXISTS` otherwise). The `code` (and, for a mismatch, `currentRevision`) ride on the error object whether the plugin runs in process or in its worker, and the code also prefixes the message. What the write does not promise is a lock against an uncooperative external process — a write that lands between the hash check and the rename is overwritten. The window is small, and callers that care keep their own copy of what they asked to write (the built-in Markdown editor keeps its draft until a save is verified).
 
 `readFileWithRevision(path)` resolves `{ contents, revision }`: the text exactly as `readFile` returns it, and the sha256 hex of the very bytes that were decoded — the same hash `writeFile` returns — so the revision can go straight into `expectedRevision` without hashing anything yourself. It has the same gates, containment and verified open as `readFile`.
 
@@ -1257,9 +1456,9 @@ const dispose = await host.fs.watch(
 
 `appendFile(path, text)` appends through one `O_APPEND` descriptor and resolves `void`. It creates the file when it is missing (the parent must exist, except inside your plugin data dir, which fills in parents exactly as `writeFile` does — after consent, each one audited), refuses a symlink leaf with `TARGET_IS_SYMLINK` and anything that is not a regular file — a FIFO, a device, a directory — with `TARGET_UNAVAILABLE`, and is serialised per path with `writeFile`, so an append never lands between a checked write's hash compare and its rename. Because the kernel positions every `O_APPEND` write at the end of the file, an agent appending to the same JSONL log from outside Daintree does not lose lines to your append, which a read-and-rewrite would. Each call is issued as a single `write()`; if that write comes up short, the remainder follows in further writes, and an append that fails after some bytes landed — a failed close included — is audited as an error carrying the number of bytes written. No revision comes back: computing one would mean reading the whole file again — call `readFileWithRevision` when you need it.
 
-`watch(paths, callback, options?)` takes three more options. `recursive: true` watches every directory beneath each path, including directories created after you subscribed, and calls back with the absolute path of whatever changed at any depth; a plain watch still reports only a directory's immediate children, and the two never share a native watcher. `debounceMs` coalesces a burst into one trailing callback per subscription, fired that long after the last change and carrying the most recent changed path; `0` or omitted delivers every event, and any other value is clamped to between 50 ms and 60 s. A `debounceMs` that is not a finite, non-negative number, or a `recursive` that is not a boolean, rejects the watch. A debounced callback is an invalidation hint — re-read what you care about rather than trusting the one path it names. A reported path that does not sit lexically inside the watched path is dropped rather than delivered. On Linux, Node implements a recursive watch in JavaScript: subscribing walks the whole tree synchronously and holds one inotify watch per file and directory, so point a recursive watch at your data directory, never at a whole worktree with `node_modules` in it. The Linux caveats are listed below.
+`watch(paths, callback, options?)` takes three more options. `recursive: true` watches every directory beneath each path, including directories created after you subscribed, and calls back with the absolute path of whatever changed at any depth; a plain watch still reports only a directory's immediate children, and the two never share a native watcher. `debounceMs` coalesces a burst into one trailing callback per subscription, fired that long after the last change and carrying the most recent changed path; `0` or omitted delivers every event, and any other value is clamped to between 50 ms and 60 s. An empty `paths` array, a `callback` that is not a function, a `debounceMs` that is not a finite, non-negative number, or a `recursive` or `allowMissing` that is not a boolean rejects the watch. The path a callback carries is the realpath — `/private/var/…` on macOS where you watched `/var/…` — so compare against realpaths. A debounced callback is an invalidation hint — re-read what you care about rather than trusting the one path it names. A reported path that does not sit lexically inside the watched path is dropped rather than delivered. On Linux, Node implements a recursive watch in JavaScript: subscribing walks the whole tree synchronously and holds one inotify watch per file and directory, so point a recursive watch at your data directory, never at a whole worktree with `node_modules` in it. The Linux caveats are listed below.
 
-`allowMissing: true` accepts a path that does not exist yet and keeps watching through a deletion: the host checks once a second, attaches when the path appears (proving containment again first, so a symlink created there cannot redirect the watch), detaches when it disappears or is replaced by a new directory, and calls back with the path each time. Without it a missing path rejects the watch and a deleted directory silently stops reporting — use it for a data folder that an agent or a first-run step creates later.
+`allowMissing: true` accepts a path that does not exist yet and keeps watching through a deletion: the host checks a missing path once a second, and an attached one every second for three seconds after it attaches or its watcher fires, then every ten seconds as a backstop. It attaches when the path appears (proving containment again first, so a symlink created there cannot redirect the watch), detaches when it disappears or is replaced by a new directory, and calls back with the path each time. Without it a missing path rejects the watch and a deleted directory silently stops reporting — use it for a data folder that an agent or a first-run step creates later.
 
 **Honest scope note:** `host.fs` gates the host-mediated path only. Your `main` is still un-sandboxed Node code (it runs in the plugin worker with full filesystem privileges) and can call raw `node:fs` directly, which the host cannot intercept without a real sandbox (see the [trust model](./trust-model.md)). `host.fs` gives a contained, audited path; it does not seal the un-mediated one.
 
@@ -1267,7 +1466,7 @@ const dispose = await host.fs.watch(
 
 These are not bugs, but each one has cost a plugin author a debugging cycle.
 
-- **Nine methods, no more.** `readFile`, `readFileBytes`, `readFileWithRevision`, `writeFile`, `appendFile`, `mkdir`, `readdir`, `stat`, `watch`. There is no `rm`, `rmdir`, `rename` or `copyFile`. Keep drafts, journals and caches in `host.storage` or under a user-data path rather than planning around deleting project files.
+- **Eleven methods, no more.** `readFile`, `readFileBytes`, `readFileWithRevision`, `readFiles`, `writeFile`, `appendFile`, `mkdir`, `readdir`, `walk`, `stat`, `watch`. There is no `rm`, `rmdir`, `rename` or `copyFile`. Keep drafts, journals and caches in `host.storage` or under a user-data path rather than planning around deleting project files.
 - **A write is contained at the leaf, not along the whole path.** `writeFile`, `appendFile` and `mkdir` prove containment, then prove it again inside their per-path critical section, and `mkdir` creates one component at a time and realpaths the result — but the final open or `mkdir` is still by pathname. An ancestor directory swapped for a symlink out of scope between that recheck and the syscall can land the mutation outside your roots; `O_NOFOLLOW` protects only the leaf. The checks shrink the window, they do not close it, and it is the same limit `writeFile` has always had. Closing it would need every path opened directory by directory, and since your `main` is unsandboxed Node that could reach the same place through raw `node:fs`, the host does not pretend to.
 - **Containment is to a declared root, not to the directory you meant.** A path is realpath-contained to one of your `scopes.fs.allowedPaths` roots. If your plugin works inside a narrower directory — an app inside a monorepo worktree — a symlinked directory inside that narrower directory can still reach elsewhere in the root, and the write's symlink refusal only looks at the leaf. Resolve the path on disk and check it against your own narrower root before reading or writing.
 - **A bare `readdir` reports a symlinked directory as neither a file nor a directory.** Code that walks a tree on `isFile`/`isDirectory` silently loses those subtrees. Either pass `{ detail: true }` or `stat` entries whose kind is unknown.
@@ -1312,6 +1511,55 @@ Two things to know about the detailed path:
 
 `createMockHost` honours `detail` too, supplying `size`, `mtimeMs` and the same ordering for its in-memory files — an in-memory filesystem has no links to classify, so `symlink` is never present there.
 
+### `readFiles` and `walk` — bulk reads
+
+A search, an index build or a tree of small config files costs one host round trip per `readFile` or `readdir`. These two do the same work in one:
+
+```ts
+const { entries, truncated } = await host.fs.walk!(worktreeRoot, {
+  include: ["**/*.md"],
+  exclude: ["node_modules", "**/dist"],
+  limit: 5_000,
+});
+const files = await host.fs.readFiles!(
+  entries.filter((e) => e.type === "file").map((e) => `${worktreeRoot}/${e.path}`),
+  { maxBytesPerFile: 256 * 1024, signal: disposeSignal }
+);
+for (const file of files) {
+  if (file.ok) index(file.path, file.content);
+  else if (file.error.code === "RESULT_TOO_LARGE") later.push(file.path);
+}
+```
+
+**`fs.readFiles(paths, options?)`** reads up to 1024 paths (more rejects the call) and resolves one entry per path, in request order: `{ path, ok: true, content }` or `{ path, ok: false, error: { code, message } }`. `encoding: "utf-8"` (the default) decodes each file as `readFile` does and `"bytes"` returns a `Uint8Array` as `readFileBytes` does; the overloads type `content` to match. Every path gets exactly the checks `readFile` applies — containment, the root's read capability, the verified open — but a refusal fails only its own entry:
+
+| Entry code | Meaning |
+| --- | --- |
+| `PATH_NOT_ALLOWED`, `PERMISSION_REQUIRED` | Outside every allowed root, or the read capability for that root's class is not declared |
+| `NOT_FOUND` | Nothing at the path |
+| `NOT_A_FILE` | A directory, FIFO, device or other non-regular file |
+| `TARGET_IS_SYMLINK`, `TARGET_UNAVAILABLE` | The verified-open refusals `readFile` documents |
+| `TOO_LARGE` | Bigger than `maxBytesPerFile` (a non-negative integer; the file is not read past it) |
+| `RESULT_TOO_LARGE` | The call's 8 MiB content budget, spent in request order and measured as returned, could not hold this file — usually because earlier entries spent it, so read the path in a later call. A file larger than 8 MiB by itself gets this code even first in the request, as does one whose remaining budget was smaller than `maxBytesPerFile`; retrying cannot help such a file, so read it with `readFileBytes`. The same request always defers the same entries |
+| `READ_FAILED` | Anything else; the `message` says what |
+
+The whole call rejects only when the plugin declares neither `fs:project-read` nor `fs:user-data-read`, when the plugin has unloaded, on invalid arguments (`VALIDATION:`), or when `signal` aborts. With one of them declared, a path in a root whose class needs the other fails only its own entry, with `PERMISSION_REQUIRED`.
+
+**`fs.walk(root, options?)`** lists a directory tree and resolves `{ entries, truncated }`, each entry `{ path, type: "file" | "dir", size? }` with `path` relative to `root`, `/`-separated and never starting with `/` or `./`. `root` gets the checks `readdir` applies, and the walk stays inside it: symbolic links are neither followed nor listed, FIFOs, sockets and devices are skipped, and a directory's listing is dropped unless it still resolves to where it was reached both before and after it is read. A subdirectory that vanishes or cannot be read is left out silently, without setting `truncated`; a root that cannot be read rejects, and one that moved while it was read rejects with `TARGET_UNAVAILABLE`.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `include` | every entry | Globs (`path.matchesGlob`: `*`, `**`, `?`, `[…]`, `{a,b}`) over the root-relative path; only matches are returned, but every directory is still walked, so `["**/*.ts"]` finds every TypeScript file. At most 64 patterns, each non-empty and at most 1024 characters |
+| `exclude` | none | Globs as above; a match is left out, and a matching directory is not descended into. Same limits as `include` |
+| `maxDepth` | 64 | `1` lists `root`'s own children, `2` their children too; an integer from 1 to 64 |
+| `limit` | 10,000 | Most entries returned, counted after `include`; an integer from 1 to 50,000 |
+| `respectGitignore` | `true` | Inside a git repository, leave out (and do not descend into) what git ignores and does not track, skip `.git`, and list a nested repository or submodule without entering it. No effect outside a repository |
+| `includeSize` | `false` | Report each file's size in bytes, at the cost of one stat per file. A size is omitted for a file whose directory no longer resolves to where the walk listed it |
+
+Entries come back sorted by path, each directory before the entries inside it. The walk is breadth-first, so when `limit` or the 8 MiB result budget cuts it short, `truncated` is `true` and what was kept is the shallowest part of the tree, the same way every time. The host also bounds a walk's cost at 200,000 directory entries examined and 1,000,000 glob tests; reaching either returns what it had with `truncated: true`. A single directory with more entries than the examine bound has left is read only that far, so what is kept from it is whichever entries the filesystem enumerated first — still sorted, but not necessarily the first by path and not guaranteed to repeat. On macOS and Windows, a repository that tracks a file matching its own ignore rules is walked without ignore filtering, since git can misreport such a file under a different letter case as ignored.
+
+Both are optional in the type (`readFiles?`, `walk?`) so hand-written `PluginFsApi` fakes keep compiling; Daintree's host, the worker host and `createMockHost` always provide them.
+
 ## `git` — host-mediated git, scoped to a worktree
 
 ```ts
@@ -1325,7 +1573,14 @@ const { commit, preview } = await host.git.commit("/Users/me/project", {
 // `preview` is the real staged diff the host computed before committing.
 ```
 
-`host.git` is scoped to a worktree your plugin may access — the `worktreePath` must resolve inside your `scopes.fs.allowedPaths` (same realpath containment as `host.fs`). It is implemented over Daintree's existing hardened git layer, not a reinvented one. Reads (`status`, `diff`) gate on `git:read`; mutations (`add`, `commit`) on `git:write` (and `commit` additionally requires `git:read`, since it returns the staged diff as its preview), with a [just-in-time consent dialog](./trust-model.md#2-host-side-policy-input-load-bearing) on the plugin's first mutation. Every method takes a trailing options object with an optional `signal: AbortSignal` to cancel the call. Any pathspec you pass to `add` or `diff` must be **worktree-relative** — an absolute path, a `..` segment, or `:`-prefixed git pathspec magic is rejected with a `PATH_NOT_ALLOWED:` error, because git would otherwise resolve those against the whole repository and escape the contained worktree. Paths are also matched **literally, not as globs**: the hardened git layer runs with `GIT_LITERAL_PATHSPECS`, so `src/*.ts` selects a file named exactly `src/*.ts` rather than expanding, and a legal filename containing `*`, `?`, or `[...]` (a Next.js route like `pages/[...slug].tsx`) resolves to itself instead of to whatever its wildmatch pattern happens to hit. Pass concrete paths and expand any pattern yourself — for example by filtering the entries `status` already returns. `commit` enforces the **change-preview safeguard at the host layer** (incident #7880 / destructive-action tier D2): it refuses without an explicit non-empty `message` — there is no silent fallback to a derived commit message — and it computes the real staged diff as a preview before mutating, returned on the result so your UI can surface it. Mutations are recorded in the audit trail. `host.git` is NOT revoke-guarded.
+| Method | Resolves |
+| --- | --- |
+| `status(worktreePath)` | `{ worktreePath, files, changedFileCount }`, each file `{ path, state }` in the five-state vocabulary of [`PluginWorktreeStatus`](#worktree-observation). A fresh read, not the polled snapshot — but there is no staged/unstaged split. |
+| `diff(worktreePath, filePath?)` | The unstaged diff — working tree against the index — as text, run with `--no-color --no-ext-diff --no-textconv`, optionally narrowed to one path. There is no staged-diff call; the staged diff appears only as `commit`'s `preview`. |
+| `add(worktreePath, paths?)` | `void`. With no paths (or an empty array) it stages every change in the worktree. |
+| `commit(worktreePath, { message })` | `{ commit, message, preview }`: the short SHA, your message echoed back, and the staged diff computed before committing. |
+
+`host.git` is scoped to a worktree your plugin may access — the `worktreePath` must resolve inside your `scopes.fs.allowedPaths` (same realpath containment as `host.fs`). Your plugin data directory is not a valid git root, even though `host.fs` accepts it. It is implemented over Daintree's existing hardened git layer, not a reinvented one. Reads (`status`, `diff`) gate on `git:read`; mutations (`add`, `commit`) on `git:write` (and `commit` additionally requires `git:read`, since it returns the staged diff as its preview), with a [just-in-time consent dialog](./trust-model.md#2-host-side-policy-input-load-bearing) on the plugin's first mutation. Every method takes a trailing options object with an optional `signal: AbortSignal` to cancel the call; the signal is checked between steps, so an abort cannot interrupt a git command already running. Any pathspec you pass to `add` or `diff` must be **worktree-relative** — an absolute path, a `..` segment, `:`-prefixed git pathspec magic, or a leading `-` (which git would read as an option) is rejected with a `PATH_NOT_ALLOWED:` error, because git would otherwise resolve those against the whole repository and escape the contained worktree. Paths are also matched **literally, not as globs**: the hardened git layer runs with `GIT_LITERAL_PATHSPECS`, so `src/*.ts` selects a file named exactly `src/*.ts` rather than expanding, and a legal filename containing `*`, `?`, or `[...]` (a Next.js route like `pages/[...slug].tsx`) resolves to itself instead of to whatever its wildmatch pattern happens to hit. Pass concrete paths and expand any pattern yourself — for example by filtering the entries `status` already returns. `commit` enforces the **change-preview safeguard at the host layer** (incident #7880 / destructive-action tier D2): it refuses without an explicit non-empty `message` — there is no silent fallback to a derived commit message — and it computes the real staged diff as a preview before mutating, returned on the result so your UI can surface it. Mutations are recorded in the audit trail. `host.git` is NOT revoke-guarded.
 
 ## `clipboard` — host-mediated OS clipboard
 
@@ -1341,7 +1596,7 @@ const text = await host.clipboard.readText(); // clipboard:read
 
 `writeImage` takes a `Uint8Array` of image bytes — PNG is the supported and tested input, though the underlying Electron decoder also accepts JPEG — and shares the `clipboard:write` token — putting an image on the clipboard is exactly as reversible as putting text there, so it needs no second capability and doesn't elevate your actions to `confirm`. It rejects with `PAYLOAD_TOO_LARGE:` above 20 MiB and `VALIDATION:` when the bytes don't decode to an image. Successful writes are audited by byte count (never the bytes). Decoding happens in the main process by necessity — a renderer-side `navigator.clipboard.write()` with binary PNG data crashes on Linux — so this is the supported path for image writes.
 
-**Reads stay text-only.** There is no `readImage`/`readHtml`/`readFiles`: the read side is where richer payload types would let a plugin pull out more than it declared. Writes carry no such risk, since you already have the bytes.
+**Reads stay text-only.** There is no `clipboard.readImage`, `readHtml` or `readFiles` (a copied file list; not to be confused with [`fs.readFiles`](#readfiles-and-walk--bulk-reads)): the read side is where richer payload types would let a plugin pull out more than it declared. Writes carry no such risk, since you already have the bytes.
 
 ## `system` — open and reveal files in your own scope
 
@@ -1357,7 +1612,15 @@ This exists because the built-in `system.openPath` action validates against the 
 
 Paths resolve against your declared `scopes.fs.allowedPaths` plus your implicit plugin-data namespace, with realpath containment (a symlink can't walk out of scope). Your plugin id is bound when the host is built rather than passed as an argument, so one plugin can never name another's namespace. Both methods are gated on the `fs:*` capability matching the resolved root's class — `fs:user-data-read` _or_ `fs:user-data-write` for the plugin-data namespace, `fs:project-*` for a project root — so a plugin that could legitimately create the file can always reveal it.
 
-Errors carry prefixes: `PATH_NOT_ALLOWED:` for a path that is relative, unresolvable, traversing, or outside your scope (the same containment error `host.fs` raises); `INVALID_PATH:` for a path that resolves inside your scope but doesn't exist; `PERMISSION_REQUIRED:` for a missing capability; `PLUGIN_UNLOADED:` after unload. `openPath` additionally refuses executable file types (`.app`, `.exe`, `.sh`, …), checked on both the path you passed and its realpath target so a benignly-named symlink can't become a launch primitive; `showItemInFolder` has no such deny-list, since revealing a file shows it rather than running it. Successful calls are audited (rejected ones are not — nothing reached the OS). `host.system` is NOT revoke-guarded.
+Errors carry prefixes: `PATH_NOT_ALLOWED:` for a path that is relative, unresolvable, traversing, or outside your scope (the same containment error `host.fs` raises); `INVALID_PATH:` for a path that resolves inside your scope but doesn't exist; `PERMISSION_REQUIRED:` for a missing capability; `PLUGIN_UNLOADED:` after unload. `openPath` additionally refuses executable file types, checked on both the path you passed and its realpath target so a benignly-named symlink can't become a launch primitive; `showItemInFolder` has no such deny-list, since revealing a file shows it rather than running it. The refusal carries `err.code === "INVALID_PATH"` with the message `Refusing to open executable file type: .ext` (no prefix), and the list depends on the platform:
+
+| Platform | Refused extensions |
+| --- | --- |
+| macOS | `.app` `.command` `.terminal` `.scpt` `.scptd` `.pkg` `.dmg` `.desktop` |
+| Linux | `.desktop` `.sh` `.appimage` `.run` |
+| Windows | `.exe` `.bat` `.cmd` `.com` `.scr` `.pif` `.vbs` `.ps1` `.msi` `.lnk` `.jar` `.reg` `.cpl` `.wsf` `.hta` |
+
+Matching is case-insensitive. When the OS cannot open the file (no default application, say), `openPath` rejects with `plugin "…" system.openPath failed: <reason>`, which carries no code. Successful calls are audited (rejected ones are not — nothing reached the OS). `host.system` is NOT revoke-guarded.
 
 ## `documents` — render HTML to PDF
 
@@ -1376,9 +1639,9 @@ const { path, bytes, revision } = await host.documents.renderPdf({
 await host.system.openPath(path);
 ```
 
-Pass exactly one of `html` or `htmlPath`. An unknown option, a wrong type, a margin outside 0–3 inches or a malformed `pageRanges` rejects with `VALIDATION:` rather than being ignored. CSS `@page size` is not honoured — the paper size is `pageSize` — while `page-break-*` rules apply as they do when printing from Chrome.
+Pass exactly one of `html` or `htmlPath`; `htmlPath` and `outputPath` must be absolute. An unknown option, a wrong type, a margin outside 0–3 inches or a malformed `pageRanges` rejects with `VALIDATION:` rather than being ignored. `pageRanges` is at most 200 characters of 1-based pages and ranges (`"1-3, 5"`), each range's end no lower than its start. A margin you leave out keeps Chromium's default of 1 cm. CSS `@page size` is not honoured — the paper size is `pageSize` — while `page-break-*` rules apply as they do when printing from Chrome.
 
-**The output** is gated exactly like [`fs.writeFile`](#fs--host-mediated-scope-contained-filesystem): `outputPath` must be absolute, end in `.pdf`, and resolve inside your declared roots (or your plugin-data namespace, which is created on first use); its parent directory must already exist (`INVALID_PATH:` otherwise). It needs `fs:project-write` or `fs:user-data-write` for the matched root's class, and the first write raises the same just-in-time consent prompt — one grant covers both surfaces. A symlink at the output leaf is refused with `TARGET_IS_SYMLINK`, containment is proven again once the render is done (`TARGET_UNAVAILABLE` if the target moved), and the file is replaced atomically with its mode preserved. The result's `revision` is the same sha256 `fs.writeFile` returns, so it can go straight back in as an `expectedRevision`. Writes are audited on the same trail as `fs.writeFile`.
+**The output** is gated exactly like [`fs.writeFile`](#fs--host-mediated-scope-contained-filesystem): `outputPath` must be absolute, end in `.pdf`, and resolve inside your declared roots (or your plugin-data namespace); its parent directory must already exist (`INVALID_PATH:` otherwise). The data directory itself is created on first use, after consent, but nothing below it is, so `mkdir` a subfolder before writing into it. The result's `path` is the realpath of the file written. It needs `fs:project-write` or `fs:user-data-write` for the matched root's class, and the first write raises the same just-in-time consent prompt — one grant covers both surfaces. A symlink at the output leaf is refused with `TARGET_IS_SYMLINK`, containment is proven again once the render is done (`TARGET_UNAVAILABLE` if the target moved), and the file is replaced atomically with its mode preserved. The result's `revision` is the same sha256 `fs.writeFile` returns, so it can go straight back in as an `expectedRevision`. Writes are audited on the same trail as `fs.writeFile`.
 
 **The input.** `htmlPath` is read-contained like `fs.readFile` and needs the read capability for its root class (`fs:project-read` / `fs:user-data-read`); it must be a regular file of at most 5 MiB, read as UTF-8. It is read once, after the consent prompt, through the same verified non-following read `fs.readFile` uses, and the window renders that snapshot rather than the path — a file swapped out while the call waited rejects with `TARGET_UNAVAILABLE` or `TARGET_IS_SYMLINK` instead of rendering. Relative images, stylesheets and fonts resolve against the file's directory, as long as they stay inside the same allowed root. Inline `html` (also at most 5 MiB) has no base URL — a relative reference resolves to nothing — so embed assets as `data:` URIs, or write the HTML to disk first and pass `htmlPath`. An absolute `file:` URL in inline HTML loads only inside the output's root, and only when you hold the read capability for it.
 
@@ -1392,7 +1655,9 @@ A call goes through two bounded phases. While the consent prompt is open it hold
 
 The `@daintreehq/plugin-sdk/react` subpath carries the renderer hooks for plugin view components. It is a separate import path so non-view code (your `main`) doesn't pull React into the main-process bundle. The runtime implementations live in the SDK package itself (`packages/plugin-sdk/src/react/`) and Daintree's own `src/hooks/` re-exports them, so plugin authors and the host run one implementation rather than two that can drift.
 
-**These hooks resolve only in a bundled view.** `@daintreehq/plugin-vite` bundles the SDK into your plugin output, so the hooks ship inside your bundle. The host import map serves only React, `@daintreehq/tour` and `@daintreehq/plugin-ui` specifiers — it has no `@daintreehq/plugin-sdk/react` entry — so a raw, un-bundled `plugin://` view that bare-imports this subpath fails at runtime with an unresolved specifier. For hand-authored views without the build preset, use the `window.electron.plugin` bridge directly ([Raw ESM views](#raw-esm-views--windowelectronplugin) below) — it is exactly what these hooks wrap.
+**Bundled and raw views both get them, from different copies.** A view built with `@daintreehq/plugin-vite` bundles the SDK version it was built against, so a Daintree upgrade never swaps its hooks out from under it. A raw, zero-build `plugin://` view has no bundler, so the host import map serves `@daintreehq/plugin-sdk/react` to it from the host's own copy — one module instance per document, shared by every raw view, so they share `useCachedHostChannel`'s cache and `useNow`'s timers. That specifier is raw-only: the preset deliberately does not externalize it (see [Architecture → Sharing strategy](./architecture.md#sharing-strategy)). The host copy tracks the running Daintree, so a raw view gets whatever that release's SDK does.
+
+The runtime names served are exactly the `/react` entry's: `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent`, `loadDocumentPackage`, `createViewScope`, `lazyWithPreload`, `usePreloadOnIntent`, `useProgressiveList`, `useVirtualList`, `useHostStore`, `usePluginEventSelector`, `shallowEqual`, `useCachedHostChannel`, `HOST_CHANNEL_CACHE_LIMIT`, `resetHostChannelCache`, `useThrottledCallback`, `useAnimationFrame`, `useNow`, `useStreamBuffer` and `useSyncedCollection`. The hooks are thin wrappers over the `window.electron.plugin` bridge ([Raw ESM views](#raw-esm-views--windowelectronplugin) below), which stays available to either kind of view.
 
 ```ts
 import { useHostChannel, usePluginEvent, usePluginPanelEvent } from "@daintreehq/plugin-sdk/react";
@@ -1407,7 +1672,7 @@ const { invoke, loading, error } = useHostChannel<SyncArgs, SyncResult>(pluginId
 const result = await invoke({ team: "engineering" });
 ```
 
-`useHostChannel(pluginId, channel)` binds a single-flight `invoke(args)` to your plugin's `registerHandler(channel, …)`. It resolves with the validated channel result on success, or `undefined` when the host rejected the call (the rejection surfaces on `error`, never throws out of `invoke`). `loading` reflects the latest call only; if you fire a second `invoke` before the first resolves, the stale earlier call is dropped so concurrent invocations stay coherent. When the typed `registerHandler` overload rejects with a `SCHEMA_ERROR:` / `PERMISSION_REQUIRED:` prefix, that surfaces on `error` for the renderer to discriminate.
+`useHostChannel(pluginId, channel)` binds a single-flight `invoke(args)` to your plugin's `registerHandler(channel, …)`. It resolves with the validated channel result on success, or `undefined` when the host rejected the call (the rejection surfaces on `error`, never throws out of `invoke`). `invoke` forwards exactly one argument to the handler, so a handler expecting `(ctx, a, b)` never sees `b`. `loading` reflects the latest call only; if you fire a second `invoke` before the first resolves, the earlier call is superseded and resolves `undefined`, so concurrent invocations stay coherent — and a fan-out of loads through one hook loses all but the last, so queue them or use one hook per load. When the typed `registerHandler` overload rejects with a `SCHEMA_ERROR:` / `PERMISSION_REQUIRED:` prefix, that surfaces on `error` for the renderer to discriminate.
 
 ### `usePluginEvent` — subscription (the push half)
 
@@ -1433,9 +1698,46 @@ The two are **disjoint, not nested**: a broadcast (`postToPanel` with no `panelI
 
 Together these are the two halves of the panel ↔ main channel: `useHostChannel` pulls on demand, `usePluginEvent` / `usePluginPanelEvent` receive pushes. All three follow standard React rules — call them at the top of a component, never conditionally.
 
+### Performance hooks
+
+The rest of the entry packages the patterns behind Daintree's own fast panels. Each is dependency-free and takes `react` from the view's module graph. Not in the 0.1.0 release on npm; it ships in the next one. That covers every export in this section except `loadDocumentPackage`, and only bundled views: a raw view already gets them from the host's copy.
+
+| Export | Use it when |
+| --- | --- |
+| `lazyWithPreload(load, pick?)`, `usePreloadOnIntent(Component)` | A dialog, tab or editor lives in its own chunk. Preload on hover or focus so it renders in the first frame instead of behind a Suspense fallback. |
+| `useProgressiveList(items, { initial, step, resetKey, minIndex })` | Up to a few hundred rows: the first screenful paints at once, the rest arrives in transitions that never block input. |
+| `useVirtualList({ count, estimateSize, overscan, getScrollElement })` | Thousands of rows with fixed or known heights: only the rows in view are mounted. The kit's `VirtualList` is the component form. |
+| `usePluginEventSelector(pluginId, channel, selector, { initial, isEqual, panelId })`, `useHostStore(subscribe, getSnapshot, selector, isEqual)`, `shallowEqual` | A pushed snapshot is large and the component shows one slice; it re-renders only when the selected value changes. |
+| `useCachedHostChannel(pluginId, channel, args, { staleMs, cacheKey, signal, enabled, invalidateOn, debounceMs })` | A read repeated on every open. The cached result paints first and revalidates in the background; concurrent mounts share one request. The cache aims for `HOST_CHANNEL_CACHE_LIMIT` (50) entries in total by dropping unused entries, least recently used first; entries a mounted view shows, or with a request in flight, are never dropped, so the total can exceed 50. `invalidateOn` takes one push channel or an array of them; a burst of pushes across them costs one refetch after `debounceMs` (default 100) of quiet. In tests, call `resetHostChannelCache()` in `beforeEach`: the cache is module-global, so one test's results otherwise paint first in the next. |
+| `useThrottledCallback(callback, { ms })` | A replaceable value (progress, latest status) arrives faster than a frame. Keeps only the latest arguments per window, so never use it for appended data. |
+| `useStreamBuffer({ maxItems, flush })` | Appended data — log lines, events. Lossless up to `maxItems` (default 1000, older items dropped and counted), committing at most once per frame or per `flush` ms. |
+| `useSyncedCollection(pluginId, channel, { signal, enabled })` | A keyed list the worker owns, mirrored from `createSyncedCollection` in the worker: subscribe, pull a revisioned snapshot, apply deltas, resync on a gap or a worker restart. |
+| `useNow({ intervalMs, align })` | Relative times ("5m ago"). One shared timer per interval that pauses while the view is hidden or cached. |
+| `useAnimationFrame(callback, { enabled, signal })` | A canvas or simulation loop that pauses while the document is hidden or the project view is cached. |
+| `createViewScope(disposeSignal, options?)` | Listeners, timers, observers, workers and WebGL contexts that must be released with the mount. See [Views → Resources your view owns](./views.md#resources-your-view-owns). |
+| `loadDocumentPackage(import.meta.url, descriptor)` | Loading a shared editor adapter once per document. See [Document packages](./document-packages.md). In 0.1.0. |
+
+What each hook returns, and the defaults that matter:
+
+| Hook | Returns | Defaults and behaviour |
+| --- | --- | --- |
+| `useProgressiveList` | `{ visible, isComplete }` | `initial` 30. |
+| `useVirtualList` | `{ rows, totalSize, scrollToIndex(index, align?) }`, each row `{ index, start, size }` | `overscan` 4 rows beyond each edge. |
+| `useCachedHostChannel` | `{ data, error, validating, updatedAt, revalidate }` | `staleMs` 0 (always revalidate on mount, never wait to paint), `debounceMs` 100. `data` keeps the last good result beside an `error`; `revalidate()` supersedes a request in flight and resolves `undefined` if it failed or was superseded. |
+| `useThrottledCallback` | The throttled function, stable for the component's life, with `.cancel()` | Without `ms`, one trailing call per animation frame with the latest arguments. With `ms`, the first call runs at once and later ones in the window collapse into one trailing call. |
+| `useStreamBuffer` | `{ items, dropped, push, pushMany, clear }` | `maxItems` 1000, `flush` `"frame"` (or a number of ms). `clear()` resets `dropped` too. |
+| `useSyncedCollection` | `{ items, revision, loading, error, resync }` | `revision` is 0 until the first snapshot; `resync()` pulls again and retries after an `error`. |
+| `usePluginEventSelector` | The selected value | The options object is required, and so is its `initial` payload: it is what `selector` reads until the first push, and what the store resets to when `pluginId`, `channel` or `panelId` changes. `isEqual` defaults to `Object.is`. |
+
+`createSyncedCollection(host, channel, { key, initial?, flushMs?, maxDeltaBytes? })` and `syncedCollectionSnapshotChannel(channel)` (the `<channel>-snapshot` handler it registers) come from the SDK's root entry, which zero-build workers are served too. Not in the 0.1.0 release on npm; it ships in the next one — a bundled worker needs a later SDK, while a zero-build worker already gets it from the copy shipped with the app, unless an installed `@daintreehq/plugin-sdk` beside it or in an ancestor `node_modules` resolves first (an installed 0.1.0 wins over the shipped copy and lacks it). It is async — `await` it during `activate()`, since it registers a handler. The collection gathers changes for `flushMs` (default 16) into one delta, splits a change set larger than `maxDeltaBytes` (default 512 KiB, half the push cap) across consecutive revisions, and sends a `resync` delta when one item alone is too large. Apart from one empty delta announcing its epoch (so a view left over from a previous worker resyncs), it sends no deltas until a view has pulled, and afterwards only while [`hasListeners`](#listener-hints--haslisteners-ondidchangelisteners) reports a listener; a view that opens later pulls the changes it missed from the snapshot. A push that fails is retried up to three times, with backoff, while it is still the newest delta; one refused as too large is replaced by a `resync` delta.
+
+The returned `SyncedCollection` has `channel`, `snapshotChannel`, `revision` (the collection's latest revision, which advances even when a push was skipped because no view has pulled or is listening) and `size`; reads `get(key)`, `has(key)` and `values()` (a new array in order); writes `upsert(item)`, `upsertMany(items)`, `remove(key)` (returns whether it was present), `removeMany(keys)`, `replace(items)` (one `reset` delta) and `clear()`; `flush()`, which processes pending changes now and resolves once the first attempt to post them has settled (it does not wait for retries, and does not guarantee delivery); and `dispose()`, which stops deltas while the snapshot channel keeps answering until unload.
+
+For controls rather than hooks — buttons, lists, dialogs, the theme — see the [UI kit](./ui-kit.md).
+
 ### Raw ESM views — `window.electron.plugin`
 
-A hand-authored `plugin://` view that doesn't go through `@daintreehq/plugin-vite` can't bare-import `@daintreehq/plugin-sdk/react` (the host import map doesn't serve it). Use the host bridge directly — it is the same transport the hooks above wrap.
+A hand-authored `plugin://` view can import `@daintreehq/plugin-sdk/react` through the host import map (above), or talk to the host bridge directly — the same transport the hooks wrap. `@daintreehq/plugin-sdk/view-globals` declares exactly this bridge (`invoke`, `on`, `onPanel`) for TypeScript: add it to `compilerOptions.types`. Nothing else on `window.electron` is declared, on purpose. `/view-globals` is types only: Not in the 0.1.0 release on npm; it ships in the next one.
 
 ```ts
 // Subscription (the push half) — mirrors usePluginEvent. Returns a () => void
@@ -1449,7 +1751,11 @@ const off = window.electron.plugin.on(pluginId, "build-status", (status) => {
 const result = await window.electron.plugin.invoke(pluginId, "sync-now", { team: "engineering" });
 ```
 
-`window.electron.plugin.on(pluginId, channel, callback)` subscribes to every payload your `main` pushes via `host.postToPanel(channel, payload)` (or a one-shot `broadcastToRenderer` during activation) and returns a `() => void` disposer. `window.electron.plugin.invoke(pluginId, channel, ...args)` calls your `registerHandler(channel, …)` and resolves with its result. Payloads and results arrive untyped over IPC — cast at the call site (the bundled hooks do the same; the plugin owns the shape it pushes). Prefer the hooks when you bundle with `@daintreehq/plugin-vite`; reach for this bridge only when authoring a raw ESM module.
+`window.electron.plugin.on(pluginId, channel, callback)` subscribes to every payload your `main` pushes via `host.postToPanel(channel, payload)` (or a one-shot `broadcastToRenderer` during activation) and returns a `() => void` disposer. `window.electron.plugin.invoke(pluginId, channel, ...args)` calls your `registerHandler(channel, …)` and resolves with its result. Payloads and results arrive untyped over IPC — cast at the call site (the bundled hooks do the same; the plugin owns the shape it pushes). The hooks add what the bridge lacks — ref-stable handlers, unmount teardown, caching and coalescing — so prefer them in either kind of view.
+
+## Root entry runtime values — `@daintreehq/plugin-sdk`
+
+The root entry is types plus a handful of runtime values: `PLUGIN_PROCESS_STREAM_CHANNEL` (`"process"`, see [`process`](#process--managed-child-processes)), `PLUGIN_STYLE_ROOT_ATTRIBUTE`, `localAuthStubs` for a local forge provider, the [synced collection](#performance-hooks) (`createSyncedCollection`, `syncedCollectionSnapshotChannel`), and the agent-context drag contract a view uses to hand work to an agent by drag: `AGENT_CONTEXT_DRAG_MIME`, the limits `AGENT_CONTEXT_MAX_TEXT_LENGTH` (32,768), `AGENT_CONTEXT_MAX_TITLE_LENGTH` (120) and `AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH` (80), `encodeAgentContextDragPayload(payload)`, which returns the serialised payload and throws a `TypeError` on one the drop would refuse, and `setAgentContextDragData(dataTransfer, payload)`, which sets it plus `text/plain` at `dragstart`. See [Views → Handing work to an agent by drag](./views.md#handing-work-to-an-agent-by-drag). For the synced collection and the drag contract in a bundled view or worker: Not in the 0.1.0 release on npm; it ships in the next one.
 
 ## File listings — `@daintreehq/plugin-sdk/files`
 
@@ -1475,12 +1781,35 @@ What it gives you:
 | Sorting | `DEFAULT_FILE_SORT`, `isDefaultFileSort`, and the `FileBrowserSortOrder` shape — name/modified/size/type, ascending or descending |
 | Hidden entries | `createVisibilityFilter`, `countHiddenRows`, `isRowPathVisible`, `NO_HIDDEN_ROWS` — dotfiles plus a caller-supplied always-hidden pattern list, with the counts a "N hidden" affordance needs |
 | Keyboard | `resolveTypeahead`, `resolveTreeKey`, `TYPEAHEAD_RESET_MS` — type-to-select and arrow/expand/collapse resolution over the flat rows |
+| Paths | `parentDirectoryOf`, `canonicalizeRootPath`, `parentRootPath`, `ancestorDirectories` — lexical helpers over `/`-separated root-relative paths; none touches the filesystem |
 | Changed files | `buildFileBrowserGitStatusIndex`, `getFileBrowserRowGitStatus` — per-row status plus the folder roll-up, so a collapsed directory can show that something under it changed |
 | Classification | `getFileTypeCategory` — several hundred curated extensions and basenames, plus the patterns that catch `.eslintrc.json`, `Dockerfile.dev` and `compose.override.yaml`, resolved most-specific-first |
 
+The signatures most code calls, schematically (parameters with a default are shown with it):
+
+```ts
+flattenTree(listings, expandedPaths, loadingPaths, rootPath = "", isVisible?, sort = DEFAULT_FILE_SORT): FlatTreeRow[];
+countHiddenRows(listings, expandedPaths, rootPath = "", visibility): HiddenRowCounts; // { dotfiles, alwaysHidden }
+resolveTypeahead(buffer: string, rows: readonly FlatTreeRow[], cursorPath: string | null): string | null;
+resolveTreeKey(key: string, rows: readonly FlatTreeRow[], cursorPath: string | null): TreeKeyIntent | null;
+// TreeKeyIntent: { type: "select" | "expand" | "collapse" | "activate"; path: string }
+buildFileBrowserGitStatusIndex(changes: readonly { relativePath: string; status: GitStatus }[]): FileBrowserGitStatusIndex;
+```
+
+`listings` is a `DirectoryListings`: a `Map` keyed by root-relative directory, `""` for the root, each value that directory's nodes. `GitStatus` has eight states (`added`, `modified`, `deleted`, `renamed`, `copied`, `untracked`, `ignored`, `conflicted`); the five a plugin's `{ path, state }` status files use are all among them, so map `files.map((f) => ({ relativePath: f.path, status: f.state }))`.
+
 **It is headless on purpose.** No components, no icons, no styling. A plugin building its own browser wants its own chrome, and exporting Daintree's would freeze the app's internal component contract into the plugin API — the mistake that made Obsidian's CodeMirror upgrade an ecosystem break. `getFileTypeCategory` returns a category name, not an icon, so you map it to whatever glyph set you already ship.
 
-**Nothing here performs I/O.** Feed it listings from [`host.fs.readdir(dir, { detail: true })`](#readdir-and-the-detailed-listing), which returns exactly the shape the model consumes — that pairing is the point of the two features. A view gets those listings the ordinary way: register a channel in `main` that calls `readdir`, and `useHostChannel` it from the view.
+**Nothing here performs I/O.** Feed it listings from [`host.fs.readdir(dir, { detail: true })`](#readdir-and-the-detailed-listing), which returns everything a node needs except its `path` — a `readdir` only knows the directory it read, while the model keys every node from the browse root. Add it as you store each listing:
+
+```ts
+next.set(
+  dir,
+  entries.map((entry) => ({ ...entry, path: dir === "" ? entry.name : `${dir}/${entry.name}` }))
+);
+```
+
+A view gets those listings the ordinary way: register a channel in `main` that calls `readdir`, and `useHostChannel` it from the view.
 
 Daintree's own file browser imports the same modules from the same package, so this is not a parallel implementation that can quietly drift from the one we maintain — it is the one we maintain.
 
@@ -1499,13 +1828,13 @@ For plugins whose data is files in the repository. Everything here runs in a wor
 | `contentRevision` | The revision `fs.writeFile` compares, computed with Web Crypto. |
 | `editFile(host, path, transform)` | The read → transform → `writeFile({ expectedRevision })` → retry-on-conflict loop. |
 
-A zero-build worker imports it with no install — the plugin worker serves this entry, `/files` and the root from a copy shipped with the app when the plugin has none of its own. Signatures and behaviour are in [Data helpers](./data-helpers.md).
+A zero-build worker imports it with no install — the plugin worker serves this entry, `/files` and the root from a copy shipped with the app when the plugin has none of its own. For bundled code: Not in the 0.1.0 release on npm; it ships in the next one. Signatures and behaviour are in [Data helpers](./data-helpers.md).
 
 ## Disposables
 
 Anything that takes a callback and returns a cleanup function follows the VS Code-style Disposable pattern. You can safely ignore the return value — the plugin's disposal cascade cleans everything up on unload. If you need explicit control (e.g., unsubscribe from a worktree change listener after a one-shot reaction), keep the reference and call it.
 
-**Throwing listeners are quarantined in process.** A listener you pass to `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange` or `storage.onDidChange` runs inside the host's event dispatch. If it throws (synchronously or by rejecting), an in-process host logs the failure with a running counter (`1/3`, `2/3`, …) and keeps the subscription alive; after three _consecutive_ failures it unsubscribes the listener so a broken callback can't spam the log forever. A single successful invocation resets the counter, so a listener that fails only intermittently is never removed. The worktree subscriptions, `fs.watch` callbacks and database `onDidChange` listeners are only logged, and so is every listener in a worker plugin, which never quarantines. Either way dispatch is fire-and-forget — a throw never propagates back into the host's own work or another plugin's listeners.
+**Throwing listeners are quarantined in process.** A listener you pass to `onDidChangeAgentState`, `onDidChangeAllAgents`, `onDidChangePanelLifecycle`, `onDidWake`, `onDidChangeListeners`, `settings.onDidChange` or `storage.onDidChange` runs inside the host's event dispatch. If it throws (synchronously or by rejecting), an in-process host logs the failure with a running counter (`1/3`, `2/3`, …) and keeps the subscription alive; after three _consecutive_ failures it unsubscribes the listener so a broken callback can't spam the log forever. A single successful invocation resets the counter, so a listener that fails only intermittently is never removed. The worktree subscriptions, `fs.watch` callbacks and database `onDidChange` listeners are only logged, and so is every listener in a worker plugin, which never quarantines. Either way dispatch is fire-and-forget — a throw never propagates back into the host's own work or another plugin's listeners.
 
 See [Architecture → Lifecycle](./architecture.md#lifecycle) for how disposal works internally.
 
@@ -1527,7 +1856,7 @@ expect(host.postToPanelCalls[0]).toMatchObject({ channel: "build-status" });
 await expect(host.sendToActiveAgent("hi")).rejects.toThrow(/PERMISSION_REQUIRED/);
 ```
 
-It validates argument shapes the way the real host does — `registerAction` descriptors (id grammar, kind, danger, required strings), `showToast` message/type/`durationMs` bounds, `setPanelBadge` shape, `postToPanel` channel format, `showQuickPick` item arrays, `fs.watch` options, `sendToAgent` text, title and ids, `documents.renderPdf` options (with the host's own validator), and `git.commit`'s non-empty message — so a malformed call fails the test the way it would fail in the app.
+It validates argument shapes the way the real host does — `registerAction` descriptors (id grammar, kind, danger, required strings), `showToast` message/type/`durationMs` bounds and unknown keys, `setPanelBadge` shape and unknown keys, the channel format of `postToPanel`, `broadcastToRenderer`, `hasListeners` and `onDidChangeListeners` (only `registerHandler` skips it), `showConfirm`'s string `title`, `showQuickPick` item arrays, `fs.watch` options, `sendToAgent` text, title and ids, `documents.renderPdf` options (with the host's own validator), and `git.commit`'s non-empty message — so a malformed call fails the test the way it would fail in the app.
 
 ### Options
 
@@ -1535,16 +1864,18 @@ It validates argument shapes the way the real host does — `registerAction` des
 | --- | --- | --- |
 | `pluginId` | `"test.mock"` | `host.pluginId`. A `project__{projectId}__{manifestId}` key makes it a project plugin, and `pluginInfo` / `panelKindId` follow from it with the real parsers. |
 | `projectRoot` | `/projects/{projectId}` | `pluginInfo.projectRoot` for a project `pluginId`; ignored for a global one. |
-| `pluginDataDir` | `~/.daintree/plugin-data/{pluginId}` | Inside it, `fs.writeFile` and `fs.appendFile` create missing parents, as the host does for your data directory. |
+| `pluginDataDir` | `~/.daintree/plugin-data/{pluginId}` | Inside it, `fs.appendFile` creates missing parents, as the host does for your data directory. `fs.writeFile` never checks or creates parents anywhere: a stored file implies its directories. |
 | `capabilities` | `["agent:read", "agent:input"]` | The declared set the agent APIs check. |
 | `hasActiveAgent` | `true` | `false` makes `sendToActiveAgent` reject `NO_ACTIVE_AGENT`. |
 | `agents` | `[]` | The panes `agents.list()` returns and `sendToAgent({ terminalId })` resolves against. |
-| `activeWorktree`, `worktrees`, `worktreesResult` | `null`, `[]`, derived | What the worktree reads return. Worktree roots also count as existing directories in the mock `fs`, and the active one keys `"worktree"` storage. |
+| `allAgents` | `{ agents: [], degraded: false, lastSuccessfulAt: 0 }` | What `agents.listAll()` returns, reduced to the allowlist and frozen as production does. |
+| `terminalScreens` | `{}` | What `terminals.readScreen` finds, by terminal id; an unlisted id reads `not-found`. An `ok` screen is trimmed to the call's `lines`. There is no rate limit and no byte cap. |
+| `activeWorktree`, `worktrees`, `worktreesResult` | `null`, `[]`, derived | What the worktree reads return. Without `worktreesResult`, `getWorktreesResult()` answers `{ status: "ok", projectId: "test-project", worktrees }`; with one, it also drives `getWorktrees()` (`[]` unless `ok`) and `getActiveWorktree()` (the `isCurrent` entry). Worktree roots also count as existing directories in the mock `fs`, and the active one keys `"worktree"` storage. |
 | `manifestSettings` | none | Your `contributes.settings` declarations. With them, `get`, `set` and `onDidChange` follow declared scopes (a conflicting scope throws), `get` returns declared defaults, and `missingRequired` works; without them, scopes are whatever you pass and nothing is required. |
-| `settings`, `storage` | empty | Starting values per scope (`user` / `project` / `local`; `user` / `project` / `worktree`). |
+| `settings`, `storage` | empty | Starting values per scope (`user` / `project` / `local`; `user` / `project` / `worktree`). A `storage.worktree` seed goes to the initial active worktree, and is dropped when there is none. |
 | `databases` | temp directory, any id | `{ directory?, declared?, journalMode? }` for `host.db`. Each id is a real SQLite file run through the same handle code as production, so migrations, `definitions`, readonly, `DB_*` codes and `onDidChange` behave for real. Pass `declared` to get `DB_NOT_DECLARED` for anything else. |
-| `dispatch` | built-in routing | A resolver for `host.dispatch`. By default a dispatch reaches your own registered actions and answers `NOT_FOUND` otherwise. |
-| `reloadPanel` | lifecycle-derived | A resolver for `host.reloadPanel`. By default the answer follows the phases you pushed with `simulatePanelLifecycleChange`. |
+| `dispatch` | built-in routing | A resolver for `host.dispatch`. By default a dispatch reaches your own registered actions by their namespaced id (`{pluginId}.{id}`) only, answers `NOT_FOUND` otherwise, and turns a handler that throws into `EXECUTION_ERROR`. It never answers `RESTRICTED`, `CONFIRMATION_REQUIRED` or `PROJECT_VIEW_UNAVAILABLE`, runs a `confirm` action's handler anyway, and ignores `options.projectId`, so none of those gates is tested. |
+| `reloadPanel` | lifecycle-derived | A resolver for `host.reloadPanel`. By default the answer follows the last phase you pushed for that panel with `simulatePanelLifecycleChange`: `mounted` → `scheduled`, `render-failed` → `unavailable`, any other phase or an unknown panel → `not-mounted`, and a panel reported for another plugin rejects. |
 
 There is no option to seed files; write them with `host.fs.writeFile` (which records the call in `fsWriteCalls`).
 
@@ -1553,22 +1884,26 @@ There is no option to seed files; write them with `host.fs.writeFile` (which rec
 All are read-only arrays in call order.
 
 - **Current registrations**, not a history — re-registering the same id replaces the entry in place, and disposing a provider or MCP roster removes it: `registeredActions`, `registeredForgeProviders`, `registeredFileDecorationProviders`, `registeredMcpTools` (with each tool's `execute`, so a test can call a tool directly).
+- **Subscription windows:** `subscriptionOptions` has one `{ kind, debounceMs }` per `onDidChangeWorktrees` (`"worktrees"`), `onDidChangeActiveWorktree` (`"active-worktree"`), `onDidChangeAgentState` (`"agent-state"`) and `onDidChangeAllAgents` (`"all-agents"`) subscription, with the window the host would apply — 100 for an omitted option, `0` for raw, otherwise clamped to 50–60,000 — so a test can assert a plugin kept the default or opted out.
 - **Append-only call records:** `registeredHandlers`, `broadcastCalls`, `postToPanelCalls` (`panelId` is `null` for a broadcast), `shownToasts`, `dispatchedActions` (every call, including `settings.open`, recorded as `plugin.openSettings`), `sentToActiveAgentCalls`, `sentToAgentCalls` (`{ text, options, result }`), `invalidationCalls`, `setPanelBadgeCalls`, `reloadPanelCalls`, `showQuickPickCalls`, `showInputBoxCalls`, `showConfirmCalls`, `spawnCalls`, `fsWriteCalls`, `fsAppendCalls` (the appended text only), `fsMkdirCalls`, `gitCommitCalls`, `clipboardWriteCalls`, `clipboardWriteImageCalls` (byte lengths), `systemOpenPathCalls`, `systemShowItemCalls`, `documentsRenderPdfCalls`.
 
-Calls that fail validation, and prompts or `sendToAgent` calls whose signal was already aborted, are not recorded.
+Calls that fail validation, and prompts or `sendToAgent` calls whose signal was already aborted, are not recorded. `/testing` exports some record types by name (`RegisteredActionRecord`, `RegisteredHandlerRecord`, `ShownToastRecord`, `ShowConfirmRecord`, …) but not all: the elements of `postToPanelCalls`, `spawnCalls`, `setPanelBadgeCalls`, `fsWriteCalls`, `gitCommitCalls`, `sentToActiveAgentCalls` and `subscriptionOptions` have no importable type, so infer them from the array — `MockHostState["postToPanelCalls"][number]`.
 
 ### Driving it
 
 | Method | Effect |
 | --- | --- |
 | `simulateActiveWorktreeChange(snapshot \| null)` | Sets the active worktree and notifies `onDidChangeActiveWorktree`. |
-| `simulateWorktreesChange(snapshots)` | Replaces the list and notifies `onDidChangeWorktrees` (the mock ignores `debounceMs`). |
+| `simulateWorktreesChange(snapshots)` | Replaces the list and notifies `onDidChangeWorktrees` at once, with the same `{ added, removed, changed }` change argument the host computes per subscription. |
 | `simulateWorktreesResult(result \| null)` | Forces what `getWorktreesResult()` answers; `null` goes back to deriving it. Notifies nobody. |
 | `simulateAgentStateChange(snapshot)` | Sets what `getAgentState()` returns and notifies `onDidChangeAgentState`. |
 | `simulateAgentsChange(panes)` | Replaces what `agents.list()` returns. |
+| `simulateAllAgentsChange(snapshot)` | Replaces what `agents.listAll()` returns and notifies `onDidChangeAllAgents` at once, ignoring its window. |
+| `simulateTerminalScreen(terminalId, screen \| null)` | Sets what `terminals.readScreen(terminalId)` finds; `null` forgets the terminal, so it reads `not-found`. Every call that passes validation lands in `readScreenCalls` as `{ terminalId, lines, result }`. |
 | `simulateSendToAgentPick(terminalId \| null)` | What the picker "chooses" when `sendToAgent` has no `terminalId`; `null` (the default) cancels. A pane with `canDraft: false` refuses with its `draftRefusal`, an unknown one with `unknown-terminal`. |
 | `simulatePanelLifecycleChange(event)` | Notifies `onDidChangePanelLifecycle` and updates the phases `reloadPanel` reads. |
 | `simulateSystemWake(event)` | Notifies `onDidWake`. |
+| `simulateListenersChange(channel, hasListeners)` | Sets what `hasListeners(channel)` answers and, when that changes it, calls that channel's `onDidChangeListeners` callbacks. Every channel starts out listened to, as on a real host that has not heard from a renderer. |
 | `simulateFsWatch(changedPath)` | Fires the watchers whose path is `changedPath` or its parent — or any ancestor, for a `recursive` watch. A `debounceMs` watcher gets one trailing callback on a real timer, so drive it with fake timers. |
 | `simulateQuickPickResponse(result)`, `simulateInputBoxResponse(result)`, `simulateConfirmResponse(result)` | What the next prompts resolve (`undefined`, `undefined`, `false` by default). |
 | `setDispatchResult(actionId, result)` | A fixed `dispatch` answer for one id, ahead of the `dispatch` option. |
@@ -1578,14 +1913,19 @@ Calls that fail validation, and prompts or `sendToAgent` calls whose signal was 
 
 It has no manifest model and no processes behind it, so a test that passes against it is not proof the real host will accept the plugin. The gaps, from `shared/testing/createMockHost.ts`:
 
-- **Capabilities and consent.** Only `getAgentState`, `agents.list`, `sendToActiveAgent` and `sendToAgent` check `capabilities`. `onDidChangeAgentState` subscribes without `agent:read`, and `fs`, `git`, `process`, `clipboard`, `system`, `documents`, `db` and `mcp` run without their capabilities. No just-in-time consent is modelled anywhere, and `sendToAgent` draws no picker.
+- **Capabilities and consent.** Only `getAgentState`, `agents.list`, `agents.listAll`, `onDidChangeAllAgents`, `sendToActiveAgent`, `sendToAgent` and `terminals.readScreen` check `capabilities`. `onDidChangeAgentState` subscribes without `agent:read`, and `fs`, `git`, `process`, `clipboard`, `system`, `documents`, `db` and `mcp` run without their capabilities. No just-in-time consent is modelled anywhere, and `sendToAgent` draws no picker.
 - **`fs`** is an in-memory map of text with no containment and no symlinks. A directory exists when `mkdir` made it (with every ancestor), when something stored sits beneath it, or when it is a worktree root; a path holding a file is never a directory. `appendFile` refuses a directory target and a missing parent (outside `pluginDataDir`); `writeFile` does not check parents. A missing file rejects with an `ENOENT:` message but no `err.code`. `stat` reports `isDirectory` only for `mkdir`-made directories and never throws; `readdir` of a missing directory resolves `[]`; `size` in a detailed listing is the string length, not bytes, and `mtimeMs` is `0`. `watch` validates `allowMissing` but otherwise ignores it.
 - **`db`** always reports `location: "local"`, and `backup` approves any absolute destination — the fs gate is not modelled.
 - **`documents.renderPdf`** renders nothing: it validates the options, requires an in-memory `htmlPath`, and writes a small `%PDF-1.4` placeholder to `outputPath` so a plugin that reads or lists its export sees a file. That write is not in `fsWriteCalls`, and the parent directory is not checked.
 - **`process.spawn`** records the call and returns an inert handle: `kill`, `restart`, `write` and `resize` are no-ops, and `onData` / `onExit` / `onCrash` never fire.
 - **`git.status`** returns no files, `git.diff` returns `""`, `git.add` does nothing, and `git.commit` answers a synthetic `mock-N` hash.
-- **Registration gates.** The typed `registerHandler(channel, schema, handler)` overload discards the schema, so nothing validates a payload against it. `registerHandler` does not refuse a colon in the channel (only `postToPanel` does), so pin that rule with your own test. `registerForgeProvider`, `registerFileDecorationProvider` and `mcp.registerTools` skip the manifest-declaration gates; `mcp.registerTools` neither enforces the roster budget nor compiles the schemas, and does not reject a tool's `annotations`, including a read-only or other safety claim; `invalidateFileDecorations` accepts any non-empty scope.
-- **Subscriptions.** Nothing is replayed on subscribe, `onDidChangeWorktrees` ignores `debounceMs`, and a throwing listener is never quarantined.
+- **Settings and storage.** `settings.set` neither refuses an undeclared key nor checks that the value survives JSON (`NaN` is kept as `NaN`), and `onDidChange` fires when the new value is not `Object.is` the old one rather than when the stored JSON changes. A `secret` is held in plain memory, not encrypted, so a keychain failure is never simulated.
+- **`clipboard` and `system`** check no capability and no containment; `system` records paths and opens nothing, and the clipboard starts empty with no option to seed it.
+- **Snapshots** you pass in (worktrees, agent state) are handed back as they are, not frozen, so a plugin that mutates one passes here and throws in the app.
+- **Registration gates.** `registerHandler` checks only the channel name, refusing a colon as the host does: the typed overload discards the schema, so nothing validates a payload against it. `broadcastToRenderer` rejects a bad channel where the real host throws at the call. `registerForgeProvider`, `registerFileDecorationProvider` and `mcp.registerTools` skip the manifest-declaration gates; `mcp.registerTools` neither enforces the roster budget nor compiles the schemas, and does not reject a tool's `annotations`, including a read-only or other safety claim; `invalidateFileDecorations` accepts any non-empty scope.
+- **Subscriptions.** Nothing is replayed on subscribe, a throwing listener is never quarantined, and nothing is coalesced: the mock records the window each subscription would get (`subscriptionOptions`) but delivers every simulated event synchronously. A database handle's `onDidChange` is the exception, since `host.db` runs the production handle code.
+- **Transport limits.** No invoke deadline runs, and no payload cap or clone snapshot applies to handlers, results or pushes; `postToPanelCalls` holds the payload object you passed. Push batching and ordering are not modelled. Test a large payload's path against the caps in `shared/config/pluginBudgets.ts` yourself.
+- **`fs.walk` and `fs.readFiles`** run the host's validation, ordering, pruning, truncation and budgets over the in-memory files. There is no git and there are no symlinks, so `respectGitignore` is accepted with nothing to act on.
 - **`logger`** calls are no-ops: nothing is printed and nothing is recorded.
 - **Lifecycle.** Registrations made before a throwing `activate()` are not rolled back, and no revoke ever runs, so a handle keeps working after the point at which the real host would have cut it off.
 
@@ -1615,13 +1955,15 @@ The one behavior to design around: **`registerForgeProvider` is a no-op out-of-p
 The worker host implements the same `PluginHostApi`, but some checks run in main, across the port, rather than at your call site. What a worker plugin sees differently from a built-in:
 
 - **Registration errors arrive late.** A worker checks only the shape of a registration locally (non-empty ids and channels, function handlers, the MCP roster). The deeper checks — a colon in a `registerHandler` channel, a typed channel's `requires` capabilities, an action descriptor's grammar, an undeclared file-decoration provider or `agentMcp` endpoint, `mcp:expose` — run in main and fail the activation by name instead of throwing where you called. A `try`/`catch` around the `await` does not see them.
-- **Some runtime validation only logs.** An invalid `setPanelBadge` shape or an undeclared `invalidateFileDecorations` scope resolves in a worker and is logged in main; in process it rejects. An empty `panelId` rejects on both.
+- **Some runtime validation only logs.** An invalid `setPanelBadge` shape or an undeclared `invalidateFileDecorations` scope resolves in a worker and is logged in main; in process it rejects. An empty `panelId` on `postToPanel` or `setPanelBadge` rejects on both, like the channel check.
 - **A failed subscription is silent.** `settings.onDidChange` / `storage.onDidChange` with a conflicting scope, or `onDidChangeAgentState` without `agent:read`, throws synchronously in process. In a worker only the revoked-host check throws; the rest is logged in main and you get a disposer whose callback never fires.
-- **Arguments must structured-clone.** A worker sends every call over a `MessagePort`. A call that returns a Promise rejects with `DataCloneError` on an uncloneable argument, but the fire-and-forget ones — `logger.*`, `postToPanel`, `broadcastToRenderer`, `setPanelBadge`, the `register*` calls — throw it synchronously, `logger` included. In process, `logger` coerces an unserializable `fields` payload to a string and `showQuickPick` narrows items to their declared fields.
+- **Arguments must structured-clone.** A worker sends every call over a `MessagePort`. A call that returns a Promise rejects with `DataCloneError` on an uncloneable argument, but the fire-and-forget ones — `logger.*`, `broadcastToRenderer`, `setPanelBadge`, the `register*` calls — throw it synchronously, `logger` included. `postToPanel` rejects its Promise instead, and both push methods check the 1 MiB cap in the worker before the payload crosses, so an oversize push fails at your call either way. An in-process push that structured clone refuses fails with `PLUGIN_PAYLOAD_UNCLONEABLE` instead of `DataCloneError`. In process, `logger` coerces an unserializable `fields` payload to a string and `showQuickPick` narrows items to their declared fields.
 - **Errors are rebuilt.** Only `message`, `code` and `currentRevision` survive the port (see [Errors](#errors-and-error-codes)); a failed `appendFile`'s bytes-written count does not. In the other direction, an error your action, handler or provider throws reaches main as its message only.
 - **Aborts settle locally.** For `fs.*`, `git.*` and `getWorktreeStatus` the worker rejects with an `AbortError` the moment the signal fires, while main may still finish the operation — a `git.add` or `git.commit` can land after you saw the abort. A prompt aborted in a worker resolves its dismiss value at once. `sendToAgent` is the exception: an abort only asks main to dismiss an unanswered picker, and the call resolves with what actually happened. An already-aborted signal short-circuits in a worker before any validation, capability check or consent; in process those still run first.
 - **After unload.** A worker's pending and later calls reject with `Plugin dev worker disposed`, except the ones with documented fallbacks (`getWorktreesResult`, `reloadPanel`, `actions.*`, `agents.list`, `sendToAgent`, the prompts), which answer them on both hosts. In process, the reads degrade to `null` / `[]` and `showToast` / `sendToActiveAgent` become no-ops.
 - **Listeners are never quarantined** in a worker; each throw is logged ([Disposables](#disposables)).
+- **A timed-out invoke keeps running.** When a handler's [deadline](#deadlines-and-size-limits) passes, main rejects the view's call and tells the worker; the handler is not interrupted, but its result is dropped in the worker rather than cloned back. An in-process builtin's handler runs on with nobody waiting.
+- **`hasListeners`** reads a per-channel value main keeps the worker told about, so the first read for a channel answers `true` until main's first report arrives. A worker watches at most 256 channels; past that it answers `true`.
 - **`pluginInfo`** is a structured-cloned copy in a worker, not frozen.
 - **`host.db`** resolves the location and approves a backup destination in main, but opens `node:sqlite` in the worker, so queries, `transaction`, `onDidChange` and the backup's snapshot never cross the port.
 - **`host.fs.watch`** runs the watcher in main and delivers events over the port.

@@ -6,7 +6,7 @@ import {
   getWebContentsForProject,
   getWindowForWebContents,
 } from "../../window/webContentsRegistry.js";
-import { unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
+import { thawThenSend } from "../../utils/thawThenSend.js";
 import type { WorkspaceViewLeaseRegistry } from "./workspaceViewLease.js";
 import type { ActionContext, ActionManifestEntry } from "../../../shared/types/actions.js";
 import type {
@@ -15,6 +15,7 @@ import type {
   McpSessionOrigin,
 } from "../../../shared/types/ipc/mcpServer.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { maskTerminalInOtherProject } from "../../../shared/utils/terminalInOtherProject.js";
 import type {
   PendingRequest,
   DispatchEnvelope,
@@ -152,49 +153,6 @@ function routeTimeoutSuffix(route: BridgeRoute | undefined, timeoutMs: number): 
       ? `workspace ${route.workspaceId}`
       : `pinned view ${route.webContentsId}`;
   return ` — the view bound to ${target} did not answer within ${Math.round(timeoutMs / 1000)}s`;
-}
-
-/**
- * Thaw a routed target, then send — the fix for the stranded-dispatch half of
- * #11790.
- *
- * Under the efficiency profile a cached background view is CDP-frozen, and a
- * frozen renderer cannot run JS: the dispatch IPC queues in Mojo and nothing
- * ever answers it, so the caller waits out the full bridge deadline for what
- * looks like an execution failure. Chromium never auto-resumes a frozen
- * renderer on focus or re-attach, so an explicit `"active"` is the only thing
- * that rescues it.
- *
- * Awaited, unlike the fire-and-forget `void unfreezeWebContents(...)` at the
- * lifecycle call sites: those only need the view running again eventually,
- * whereas the IPC queued here is precisely what the thaw has to precede.
- *
- * Thaw only, matching `unfreezeActiveAgentViews`: the view stays cached, so its
- * renderer keeps demoting its own periodic work. Nothing here attaches, shows,
- * focuses, or activates the view either: a bound session driving project A must
- * never disturb what the user is looking at.
- */
-function thawThenSend(
-  webContents: Electron.WebContents,
-  isStillPending: () => boolean,
-  send: () => void
-): void {
-  void unfreezeWebContents(webContents)
-    .catch(() => {
-      // `unfreezeWebContents` already swallows the expected teardown/navigation
-      // CDP errors, so anything landing here is unexpected. Refusing to send
-      // would convert a thaw hiccup into a guaranteed deadline failure; sending
-      // anyway leaves a genuinely-still-frozen view failing exactly as it did
-      // before this path existed, and costs nothing when the thaw did work.
-    })
-    .then(() => {
-      // The deadline may have fired, or the view may have been destroyed, while
-      // the CDP round trip was outstanding. Either way the request is already
-      // settled and its lease released, so sending now would emit an IPC for a
-      // requestId nothing is waiting on.
-      if (!isStillPending() || webContents.isDestroyed()) return;
-      send();
-    });
 }
 
 export function createRendererBridge(
@@ -688,7 +646,12 @@ export function createRendererBridge(
       const releaseLease = route ? (viewLeases?.acquire(webContentsId) ?? null) : null;
 
       pendingDispatches.set(requestId, {
-        resolve,
+        // A routed session is bound to one view, so a terminal in another
+        // project reads as the ordinary miss, as for a bound plugin (#13120).
+        resolve: route
+          ? (envelope: DispatchEnvelope) =>
+              resolve({ ...envelope, result: maskTerminalInOtherProject(envelope.result) })
+          : resolve,
         reject,
         timer,
         webContentsId,

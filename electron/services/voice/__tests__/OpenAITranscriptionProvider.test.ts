@@ -817,8 +817,10 @@ describe("OpenAITranscriptionProvider", () => {
     ]);
   });
 
-  it("caps the pre-connect buffer at 100 chunks and warns once on overflow", async () => {
+  it("caps the pre-connect buffer at 100 chunks and reports the overflow once", async () => {
     const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
     void service.start(BASE_SETTINGS);
     await Promise.resolve();
 
@@ -834,6 +836,11 @@ describe("OpenAITranscriptionProvider", () => {
       .sentJson()
       .filter((p) => p.type === "input_audio_buffer.append").length;
     expect(audioCount).toBe(100);
+    const overflows = events.filter(
+      (e) => e.type === "error" && e.error.code === "audio_buffer_overflow"
+    );
+    expect(overflows).toHaveLength(1);
+    expect(overflows[0]).toMatchObject({ error: { severity: "transient" } });
     service.stop();
   });
 
@@ -1397,6 +1404,231 @@ describe("OpenAITranscriptionProvider", () => {
     await drainPromise;
   });
 
+  it("keeps draining past an empty conversation.item.done and settles on the item's .completed", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const completes: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "complete") completes.push(e.text);
+    });
+
+    const { socket } = await bringSessionReady(service);
+    feedCommittableAudio(service);
+    const drainPromise = service.stopGracefully();
+
+    let settled = false;
+    void drainPromise.then(() => {
+      settled = true;
+    });
+
+    // The intent=transcription endpoint's real ordering: an empty `done` for
+    // the item, then deltas, then the authoritative `.completed`.
+    socket.simulateMessage("conversation.item.done", {
+      item: { id: "item-final", content: [{ type: "input_audio", transcript: "" }] },
+    });
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      item_id: "item-final",
+      delta: "final words",
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(completes).toEqual([]);
+
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-final",
+      transcript: "final words",
+    });
+    await drainPromise;
+    expect(completes).toEqual(["final words"]);
+  });
+
+  it("falls back to the drain timeout when a segment only ever gets an empty conversation.item.done", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    feedCommittableAudio(service);
+    const drainPromise = service.stopGracefully();
+
+    let settled = false;
+    void drainPromise.then(() => {
+      settled = true;
+    });
+
+    socket.simulateMessage("conversation.item.done", {
+      item: { id: "item-ws", content: [{ type: "input_audio", transcript: "   " }] },
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    vi.advanceTimersByTime(3_000);
+    await expect(drainPromise).resolves.toBeUndefined();
+  });
+
+  it("an empty conversation.item.done for one item does not settle the drain for another", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const completes: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "complete") completes.push(e.text);
+    });
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    feedCommittableAudio(service);
+    const drainPromise = service.stopGracefully(); // two outstanding commits
+
+    let settled = false;
+    void drainPromise.then(() => {
+      settled = true;
+    });
+
+    socket.simulateMessage("conversation.item.done", {
+      item: { id: "item-A", content: [{ type: "input_audio", transcript: "" }] },
+    });
+    socket.simulateMessage("conversation.item.done", {
+      item: { id: "item-B", content: [{ type: "input_audio", transcript: "" }] },
+    });
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-A",
+      transcript: "alpha",
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-B",
+      transcript: "beta",
+    });
+    await drainPromise;
+    expect(completes).toEqual(["alpha", "beta"]);
+  });
+
+  it("an empty .completed is terminal: counts its commit without emitting text and dedupes a later done", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const completes: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "complete") completes.push(e.text);
+    });
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    feedCommittableAudio(service);
+    const drainPromise = service.stopGracefully(); // two outstanding commits
+
+    let settled = false;
+    void drainPromise.then(() => {
+      settled = true;
+    });
+
+    // Silence: the server's authoritative verdict is an empty transcript.
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-silent",
+      transcript: "",
+    });
+    // A contradictory later `done` for the same item must neither emit nor
+    // count against the other outstanding commit.
+    socket.simulateMessage("conversation.item.done", {
+      item: { id: "item-silent", content: [{ type: "input_audio", transcript: "late" }] },
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    // An identified empty completion carries no text; it only retires the
+    // item's preview in the renderer.
+    expect(completes).toEqual([""]);
+
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-B",
+      transcript: "beta",
+    });
+    await drainPromise;
+    expect(completes).toEqual(["", "beta"]);
+  });
+
+  it("a text-bearing conversation.item.done counts, and the item's later .completed is deduped", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const completes: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "complete") completes.push(e.text);
+    });
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    feedCommittableAudio(service);
+    const drainPromise = service.stopGracefully(); // two outstanding commits
+
+    let settled = false;
+    void drainPromise.then(() => {
+      settled = true;
+    });
+
+    socket.simulateMessage("conversation.item.done", {
+      item: { id: "item-A", content: [{ type: "input_audio", transcript: "alpha" }] },
+    });
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-A",
+      transcript: "alpha",
+    });
+    await Promise.resolve();
+    // The duplicate `.completed` must not count against item B's commit.
+    expect(settled).toBe(false);
+    expect(completes).toEqual(["alpha"]);
+
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-B",
+      transcript: "beta",
+    });
+    await drainPromise;
+    expect(completes).toEqual(["alpha", "beta"]);
+  });
+
+  it("treats transcription.failed as terminal for its item without emitting text", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const completes: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "complete") completes.push(e.text);
+    });
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    feedCommittableAudio(service);
+    const drainPromise = service.stopGracefully(); // two outstanding commits
+
+    let settled = false;
+    void drainPromise.then(() => {
+      settled = true;
+    });
+
+    socket.simulateMessage("conversation.item.done", {
+      item: { id: "item-A", content: [{ type: "input_audio", transcript: "" }] },
+    });
+    // A failure without an item id can't be matched to a commit — ignored.
+    socket.simulateMessage("conversation.item.input_audio_transcription.failed", {
+      error: { code: "transcription_failed" },
+    });
+    socket.simulateMessage("conversation.item.input_audio_transcription.failed", {
+      item_id: "item-A",
+      error: { code: "transcription_failed", message: "secret dictated words" },
+    });
+    // A repeated failure frame must not count twice.
+    socket.simulateMessage("conversation.item.input_audio_transcription.failed", {
+      item_id: "item-A",
+      error: { code: "transcription_failed" },
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-B",
+      transcript: "beta",
+    });
+    await drainPromise;
+    // The failed item retires once with an empty completion; the id-less and
+    // repeated failure frames add nothing.
+    expect(completes).toEqual(["", "beta"]);
+    expect(loggedText()).not.toContain("secret dictated words");
+  });
+
   it("repeated stopGracefully calls share a single in-flight drain", async () => {
     const service = new OpenAITranscriptionProvider();
     const { socket } = await bringSessionReady(service);
@@ -1424,6 +1656,299 @@ describe("OpenAITranscriptionProvider", () => {
 
     await service.stopGracefully();
     expect(statuses).toEqual(["idle"]);
+  });
+
+  // ── Graceful stop while connecting (#13108) ──────────────────────────────
+
+  describe("stopGracefully before the session is ready", () => {
+    function appendedBytes(socket: MockWebSocket): number {
+      return socket
+        .sentJson()
+        .filter((p) => p.type === "input_audio_buffer.append")
+        .reduce((sum, p) => sum + Buffer.from(p.audio as string, "base64").byteLength, 0);
+    }
+
+    function commitCount(socket: MockWebSocket): number {
+      return socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit").length;
+    }
+
+    it.each([
+      ["before the socket opens", false],
+      ["after open but before session.updated", true],
+    ])(
+      "flushes, commits and transcribes buffered audio when stopped %s",
+      async (_label, openFirst) => {
+        const service = new OpenAITranscriptionProvider();
+        const statuses: string[] = [];
+        const completes: string[] = [];
+        service.onEvent((e) => {
+          if (e.type === "status") statuses.push(e.status);
+          if (e.type === "complete") completes.push(e.text);
+        });
+
+        const startPromise = service.start(BASE_SETTINGS);
+        await Promise.resolve();
+        const socket = latestInstance();
+        if (openFirst) socket.simulateOpen();
+        service.sendAudioChunk(new Uint8Array(2_400).buffer);
+        service.sendAudioChunk(new Uint8Array(2_400).buffer);
+
+        const stopPromise = service.stopGracefully();
+        expect(statuses.at(-1)).toBe("finishing");
+        expect(socket.closeCalls).toBe(0);
+
+        // Audio after the stop (mic already released) must not be kept.
+        service.sendAudioChunk(new Uint8Array(2_400).buffer);
+
+        if (!openFirst) socket.simulateOpen();
+        socket.simulateMessage("session.updated");
+        await expect(startPromise).resolves.toEqual({ ok: true });
+
+        expect(appendedBytes(socket)).toBe(4_800);
+        expect(socket.sentJson().map((p) => p.type)).toEqual([
+          "session.update",
+          "input_audio_buffer.append",
+          "input_audio_buffer.append",
+          "input_audio_buffer.commit",
+        ]);
+        expect(statuses).not.toContain("recording");
+        expect(vadWorkers).toHaveLength(0);
+
+        socket.simulateMessage("conversation.item.done", {
+          item: { id: "item-1", content: [{ type: "input_audio", transcript: "yes do that" }] },
+        });
+        await stopPromise;
+
+        expect(completes).toEqual(["yes do that"]);
+        expect(statuses.at(-1)).toBe("idle");
+        expect(socket.closeCalls).toBe(1);
+      }
+    );
+
+    it("stops immediately when the buffered audio is below the commit floor", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      service.sendAudioChunk(new Uint8Array(4_798).buffer);
+
+      await service.stopGracefully();
+      expect(statuses).toEqual(["connecting", "idle"]);
+      expect(socket.closeCalls).toBe(1);
+      expect(commitCount(socket)).toBe(0);
+    });
+
+    it("gives up after the connect wait if the session never becomes ready", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      const startPromise = service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      vi.advanceTimersByTime(2_999);
+      expect(socket.closeCalls).toBe(0);
+      vi.advanceTimersByTime(1);
+      await stopPromise;
+
+      expect(statuses.at(-1)).toBe("idle");
+      expect(socket.closeCalls).toBe(1);
+      await expect(startPromise).resolves.toMatchObject({ ok: false });
+
+      // A late session.updated on the abandoned socket does nothing.
+      socket.simulateOpen();
+      socket.simulateMessage("session.updated");
+      expect(commitCount(socket)).toBe(0);
+    });
+
+    it("bounds the transcript wait with the drain timeout once ready", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      vi.advanceTimersByTime(2_500);
+      socket.simulateOpen();
+      socket.simulateMessage("session.updated");
+      expect(commitCount(socket)).toBe(1);
+
+      // The connect-wait deadline no longer applies; the drain backstop does.
+      vi.advanceTimersByTime(2_999);
+      expect(statuses.at(-1)).toBe("finishing");
+      vi.advanceTimersByTime(1);
+      await stopPromise;
+      expect(statuses.at(-1)).toBe("idle");
+    });
+
+    it("stop() while waiting discards the buffered audio", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      service.stop();
+      await stopPromise;
+      expect(statuses.filter((s) => s === "idle")).toHaveLength(1);
+
+      socket.simulateOpen();
+      socket.simulateMessage("session.updated");
+      expect(appendedBytes(socket)).toBe(0);
+      expect(commitCount(socket)).toBe(0);
+    });
+
+    it("repeated stops while waiting join the same stop", async () => {
+      const service = new OpenAITranscriptionProvider();
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      feedCommittableAudio(service);
+
+      const first = service.stopGracefully();
+      const second = service.stopGracefully();
+      socket.simulateOpen();
+      socket.simulateMessage("session.updated");
+      expect(commitCount(socket)).toBe(1);
+
+      socket.simulateMessage("conversation.item.done", {
+        item: { id: "item-1", content: [{ type: "input_audio", transcript: "ok" }] },
+      });
+      await Promise.all([first, second]);
+    });
+
+    it("a transport error and trailing close while waiting settle the stop once", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      socket.simulateError(new Error("ECONNREFUSED"));
+      socket.simulateClose(1006);
+      await stopPromise;
+      expect(statuses.at(-1)).toBe("idle");
+      expect(statuses.filter((s) => s === "idle")).toHaveLength(1);
+      vi.advanceTimersByTime(10_000);
+      expect(instances).toHaveLength(1);
+    });
+
+    it("a server error before session.updated settles the stop", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      socket.simulateOpen();
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      socket.simulateMessage("error", {
+        error: { type: "invalid_request_error", code: "invalid_api_key", message: "bad key" },
+      });
+      await stopPromise;
+      expect(statuses.at(-1)).toBe("idle");
+      expect(commitCount(socket)).toBe(0);
+    });
+
+    it("the original connect timeout firing during the wait settles the stop", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      const startPromise = service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      vi.advanceTimersByTime(8_000);
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      vi.advanceTimersByTime(2_000);
+      await stopPromise;
+      expect(statuses.at(-1)).toBe("idle");
+      await expect(startPromise).resolves.toMatchObject({ ok: false });
+    });
+
+    it("start() while waiting does not tear down the new session", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      feedCommittableAudio(service);
+      const stopPromise = service.stopGracefully();
+
+      const { socket: secondSocket, result } = await bringSessionReady(service);
+      await stopPromise;
+
+      expect(result).toEqual({ ok: true });
+      expect(secondSocket.closeCalls).toBe(0);
+      expect(statuses.at(-1)).toBe("recording");
+      service.stop();
+    });
+
+    it("flushes buffered audio from a reconnect window when stopped during backoff", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const completes: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "complete") completes.push(e.text);
+      });
+
+      const { socket } = await bringSessionReady(service);
+      socket.simulateClose(1006);
+      // Reconnect is scheduled; audio captured in the gap is buffered.
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      vi.advanceTimersByTime(1_000);
+      const reconnectSocket = latestInstance();
+      expect(reconnectSocket).not.toBe(socket);
+      reconnectSocket.simulateOpen();
+      reconnectSocket.simulateMessage("session.updated");
+      expect(commitCount(reconnectSocket)).toBe(1);
+
+      reconnectSocket.simulateMessage("conversation.item.done", {
+        item: { id: "item-1", content: [{ type: "input_audio", transcript: "after drop" }] },
+      });
+      await stopPromise;
+      expect(completes).toEqual(["after drop"]);
+    });
   });
 
   it("start() during an in-flight drain resolves the old drain and reaches recording", async () => {
@@ -1933,5 +2458,585 @@ describe("summarizeEchoedSession", () => {
 
   it("degrades safely when audio.input is missing", () => {
     expect(summarizeEchoedSession({ id: "sess_1" })).toEqual({ sessionShape: "(no audio.input)" });
+  });
+});
+
+describe("OpenAITranscriptionProvider start timing diagnostics", () => {
+  let now = 0;
+
+  beforeEach(() => {
+    instances.length = 0;
+    throwOnConstruct = false;
+    constructError = null;
+    vadWorkers.length = 0;
+    throwOnVadConstruct = false;
+    logCalls.length = 0;
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.useFakeTimers();
+    now = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+  });
+
+  afterEach(() => {
+    for (const worker of vadWorkers) worker.emitExit(0);
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function logDetails(fragment: string): Record<string, unknown>[] {
+    return logCalls
+      .filter(([message]) => typeof message === "string" && message.includes(fragment))
+      .map(([, details]) => details as Record<string, unknown>);
+  }
+
+  it("times socket open and session.updated from provider start", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const startPromise = service.start(BASE_SETTINGS);
+    await Promise.resolve();
+    const socket = latestInstance();
+    now = 1_250;
+    socket.simulateOpen();
+    now = 1_400;
+    socket.simulateMessage("session.updated");
+    await startPromise;
+
+    expect(logDetails("WebSocket opened")).toEqual([
+      expect.objectContaining({ connectMs: 250, sinceStartMs: 250 }),
+    ]);
+    expect(logDetails("session.updated — session ready")).toEqual([
+      expect.objectContaining({ sinceStartMs: 400 }),
+    ]);
+    service.stop();
+  });
+
+  it("logs the first transcript once per session, by length only", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+
+    now = 3_000;
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", { delta: " " });
+    expect(logDetails("First transcript")).toHaveLength(0);
+
+    now = 3_100;
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      delta: "PRIVATE_DICTATION",
+    });
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      delta: " more",
+    });
+
+    expect(logDetails("First transcript")).toEqual([
+      expect.objectContaining({ eventType: "delta", length: 17, sinceStartMs: 2_100 }),
+    ]);
+    expect(loggedText()).not.toContain("PRIVATE_DICTATION");
+
+    const { socket: nextSocket } = await bringSessionReady(service);
+    nextSocket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      delta: "again",
+    });
+    expect(logDetails("First transcript")).toHaveLength(2);
+    service.stop();
+  });
+
+  it("keeps session timing and the first-transcript marker across a reconnect", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", { delta: "one" });
+
+    now = 10_000;
+    socket.simulateClose(1006, Buffer.from("abnormal"));
+    vi.advanceTimersByTime(3_000);
+    const socket2 = latestInstance();
+    expect(socket2).not.toBe(socket);
+    now = 10_200;
+    socket2.simulateOpen();
+    socket2.simulateMessage("session.updated");
+    socket2.simulateMessage("conversation.item.input_audio_transcription.delta", { delta: "two" });
+
+    expect(logDetails("WebSocket opened").at(-1)).toMatchObject({
+      connectMs: 200,
+      sinceStartMs: 9_200,
+    });
+    expect(logDetails("First transcript")).toHaveLength(1);
+    service.stop();
+  });
+});
+
+describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", () => {
+  beforeEach(() => {
+    instances.length = 0;
+    throwOnConstruct = false;
+    constructError = null;
+    vadWorkers.length = 0;
+    throwOnVadConstruct = false;
+    logCalls.length = 0;
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    for (const worker of vadWorkers) worker.emitExit(0);
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function done(itemId: string, transcript: string): Record<string, unknown> {
+    return { item: { id: itemId, content: [{ type: "input_audio", transcript }] } };
+  }
+
+  function completions(events: VoiceTranscriptionEvent[]) {
+    return events.flatMap((e) =>
+      e.type === "complete" ? [{ text: e.text, itemId: e.itemId }] : []
+    );
+  }
+
+  it("forwards the item id on deltas", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      item_id: "item-A",
+      delta: "hello",
+    });
+
+    expect(events.find((e) => e.type === "delta")).toEqual({
+      type: "delta",
+      text: "hello",
+      itemId: "item-A",
+    });
+  });
+
+  it("releases completions in commit order when a later item finishes first", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", {
+      item_id: "item-B",
+      previous_item_id: "item-A",
+    });
+
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+    expect(completions(events)).toEqual([]);
+
+    socket.simulateMessage("conversation.item.done", done("item-A", "first"));
+    expect(completions(events)).toEqual([
+      { text: "first", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+    ]);
+  });
+
+  it("emits an in-order completion immediately", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.done", done("item-A", "first"));
+
+    expect(completions(events)).toEqual([{ text: "first", itemId: "item-A" }]);
+  });
+
+  it("emits a completion for an unacknowledged item without waiting", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("conversation.item.done", done("item-X", "orphan"));
+
+    expect(completions(events)).toEqual([{ text: "orphan", itemId: "item-X" }]);
+  });
+
+  it("retires an identified empty completion and unblocks later items", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-A",
+      transcript: "   ",
+    });
+
+    expect(completions(events)).toEqual([
+      { text: "", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+    ]);
+  });
+
+  it("an empty conversation.item.done neither completes nor unblocks its item", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+    // The transcription endpoint's placeholder `done` precedes the real result.
+    socket.simulateMessage("conversation.item.done", done("item-A", ""));
+    expect(completions(events)).toEqual([]);
+
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-A",
+      transcript: "first",
+    });
+    expect(completions(events)).toEqual([
+      { text: "first", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+    ]);
+  });
+
+  it("releases held completions when the drain times out on a missing predecessor", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    feedCommittableAudio(service);
+    const drainPromise = service.stopGracefully();
+
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+    expect(completions(events)).toEqual([]);
+
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      item_id: "item-A",
+      delta: "partial first",
+    });
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    await drainPromise;
+    // A never reported back: it is settled with its interim text in its own
+    // slot, so the draft still reads A before B.
+    expect(completions(events)).toEqual([
+      { text: "partial first", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+    ]);
+  });
+
+  it("settles a stuck predecessor after the hold timeout while recording", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-C" });
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(completions(events)).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    // Only the stuck head is settled; C is still genuinely in flight.
+    expect(completions(events)).toEqual([
+      { text: "", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+    ]);
+
+    // A's real completion arriving late is a duplicate and is ignored.
+    socket.simulateMessage("conversation.item.done", done("item-A", "late"));
+    socket.simulateMessage("conversation.item.done", done("item-C", "third"));
+    expect(completions(events)).toEqual([
+      { text: "", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+      { text: "third", itemId: "item-C" },
+    ]);
+  });
+
+  it("does not let later completions postpone the hold deadline", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-C" });
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+    await vi.advanceTimersByTimeAsync(4_000);
+    socket.simulateMessage("conversation.item.done", done("item-C", "third"));
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(completions(events)).toEqual([
+      { text: "", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+      { text: "third", itemId: "item-C" },
+    ]);
+  });
+
+  it("settles the drain when a failed predecessor releases the last outstanding commit", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    vadCommitSegment(service, worker);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+
+    const drainPromise = service.stopGracefully();
+    let settled = false;
+    void drainPromise.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    socket.simulateMessage("conversation.item.input_audio_transcription.failed", {
+      item_id: "item-A",
+    });
+    await drainPromise;
+    expect(completions(events)).toEqual([
+      { text: "", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+    ]);
+  });
+
+  it("treats a failed transcription as an empty completion that unblocks later items", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+    socket.simulateMessage("conversation.item.input_audio_transcription.failed", {
+      item_id: "item-A",
+      error: { code: "transcription_failed", message: "boom" },
+    });
+
+    expect(completions(events)).toEqual([
+      { text: "", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+    ]);
+    expect(loggedText()).not.toContain("boom");
+  });
+
+  it("ignores an id-less transcription.failed on the ordered path", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+    socket.simulateMessage("conversation.item.input_audio_transcription.failed", {
+      error: { code: "transcription_failed" },
+    });
+    expect(completions(events)).toEqual([]);
+
+    socket.simulateMessage("conversation.item.done", done("item-A", "first"));
+    expect(completions(events)).toEqual([
+      { text: "first", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+    ]);
+  });
+
+  it("drops a delta for an item that already completed", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("conversation.item.done", done("item-A", "first"));
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      item_id: "item-A",
+      delta: "late",
+    });
+
+    expect(events.filter((e) => e.type === "delta")).toEqual([]);
+  });
+
+  it("releases held completions when stopping with nothing left to drain", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+
+    await service.stopGracefully();
+    expect(completions(events)).toEqual([
+      { text: "", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+    ]);
+  });
+
+  it("releases held completions in order when the connection drops", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      item_id: "item-A",
+      delta: "partial",
+    });
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+    socket.simulateClose(1006);
+
+    expect(completions(events)).toEqual([
+      { text: "partial", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+    ]);
+  });
+
+  it("keeps dictated text out of logs on the ordered path", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      item_id: "item-B",
+      delta: "SECRET-DELTA",
+    });
+    socket.simulateMessage("conversation.item.done", done("item-B", "SECRET-B"));
+    socket.simulateMessage("conversation.item.done", done("item-A", "SECRET-A"));
+
+    expect(loggedText()).not.toContain("SECRET");
+  });
+
+  describe("stop while connecting (#13108)", () => {
+    function track(service: OpenAITranscriptionProviderInstance) {
+      const events: VoiceTranscriptionEvent[] = [];
+      const order: string[] = [];
+      service.onEvent((e) => {
+        events.push(e);
+        if (e.type === "complete") order.push(`complete:${e.itemId}`);
+        if (e.type === "status") order.push(`status:${e.status}`);
+      });
+      return { events, order };
+    }
+
+    it("routes the late-ready final commit through commit order and releases it before idle", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { events, order } = track(service);
+
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      socket.simulateOpen();
+      socket.simulateMessage("session.updated");
+      socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-L" });
+      socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+        item_id: "item-L",
+        delta: "late",
+      });
+      socket.simulateMessage("conversation.item.done", done("item-L", "late words"));
+      await stopPromise;
+
+      expect(completions(events)).toEqual([{ text: "late words", itemId: "item-L" }]);
+      expect(order.indexOf("complete:item-L")).toBeLessThan(order.lastIndexOf("status:idle"));
+    });
+
+    it("settles an unreported late-ready item with its interim text before the drain ends", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { events, order } = track(service);
+
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      const socket = latestInstance();
+      feedCommittableAudio(service);
+
+      const stopPromise = service.stopGracefully();
+      socket.simulateOpen();
+      socket.simulateMessage("session.updated");
+      socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-L" });
+      socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+        item_id: "item-L",
+        delta: "interim words",
+      });
+
+      vi.advanceTimersByTime(3_000);
+      await stopPromise;
+
+      expect(completions(events)).toEqual([{ text: "interim words", itemId: "item-L" }]);
+      expect(order.indexOf("complete:item-L")).toBeLessThan(order.lastIndexOf("status:idle"));
+    });
+
+    it("keeps items from before a drop ahead of the late-ready commit on the reconnect", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { events } = track(service);
+
+      const { socket } = await bringSessionReady(service);
+      socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+      socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+      socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+        item_id: "item-A",
+        delta: "first",
+      });
+      socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+      expect(completions(events)).toEqual([]);
+
+      socket.simulateClose(1006);
+      expect(completions(events)).toEqual([
+        { text: "first", itemId: "item-A" },
+        { text: "second", itemId: "item-B" },
+      ]);
+
+      feedCommittableAudio(service);
+      const stopPromise = service.stopGracefully();
+      vi.advanceTimersByTime(1_000);
+      const reconnect = latestInstance();
+      expect(reconnect).not.toBe(socket);
+      reconnect.simulateOpen();
+      reconnect.simulateMessage("session.updated");
+      reconnect.simulateMessage("input_audio_buffer.committed", { item_id: "item-C" });
+      reconnect.simulateMessage("conversation.item.done", done("item-C", "third"));
+      await stopPromise;
+
+      expect(completions(events)).toEqual([
+        { text: "first", itemId: "item-A" },
+        { text: "second", itemId: "item-B" },
+        { text: "third", itemId: "item-C" },
+      ]);
+    });
+
+    it("stop() during the connect wait leaves no ordering state for the next session", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { events } = track(service);
+
+      void service.start(BASE_SETTINGS);
+      await Promise.resolve();
+      feedCommittableAudio(service);
+      const stopPromise = service.stopGracefully();
+      service.stop();
+      await stopPromise;
+
+      const { socket } = await bringSessionReady(service);
+      socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-N" });
+      socket.simulateMessage("conversation.item.done", done("item-N", "next session"));
+      expect(completions(events)).toEqual([{ text: "next session", itemId: "item-N" }]);
+    });
   });
 });

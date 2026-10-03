@@ -12,6 +12,7 @@ import type {
   BroadcastWriteResultPayload,
   SpawnResult,
   SerializedTerminalSnapshot,
+  TerminalLocation,
 } from "@shared/types";
 import type { PaneNotifyState } from "@shared/types/terminalNotify";
 import type {
@@ -546,6 +547,8 @@ export const terminalClient = {
     settleWorkerPortRequest(id, null);
     return window.electron.terminal.kill(id);
   },
+
+  locate: (id: string): Promise<TerminalLocation> => window.electron.terminal.locate(id),
 
   gracefulKill: (id: string): Promise<string | null> => {
     markClosed(id);

@@ -518,7 +518,7 @@ export function BrowserToolbar({
   );
 
   // The compact layout's menu row closes on select, so it confirms like every
-  // other menu copy: with a toast.
+  // other menu copy, through copyWithToast.
   const handleMenuCopy = useCallback(() => {
     copyWithToast("URL", address, {
       write: (text) =>
@@ -960,8 +960,9 @@ export function BrowserToolbar({
                     <PopoverContent
                       align="end"
                       className="w-auto p-1"
-                      onInteractOutside={() => {
-                        zoomClosedOutsideRef.current = true;
+                      onInteractOutside={(event) => {
+                        // A vetoed interaction leaves the popover open.
+                        if (!event.defaultPrevented) zoomClosedOutsideRef.current = true;
                       }}
                       onCloseAutoFocus={() => {
                         // Back at 100% the chip unmounts with the popover, so the

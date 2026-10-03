@@ -327,10 +327,17 @@ export interface ProbeChild {
  * the probe fault has PATH pointed at a shim directory, and it exists on every
  * platform the harness runs on.
  */
-export function spawnProbeChild(lifetimeMs = 120_000): ProbeChild {
-  const child = spawn(process.execPath, ["-e", `setTimeout(() => {}, ${lifetimeMs})`], {
-    stdio: "ignore",
-  });
+export function spawnProbeChild(lifetimeMs = 120_000, startupCpuMs = 0): ProbeChild {
+  const child = spawn(
+    process.execPath,
+    [
+      "-e",
+      `const until = Date.now() + ${startupCpuMs}; while (Date.now() < until) Math.sqrt(12345); setTimeout(() => {}, ${lifetimeMs})`,
+    ],
+    {
+      stdio: "ignore",
+    }
+  );
   child.unref();
   const pid = child.pid ?? null;
   return {

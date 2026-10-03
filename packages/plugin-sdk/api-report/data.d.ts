@@ -247,6 +247,99 @@ interface PluginFsReadWithRevisionResult {
      */
     revision: string;
 }
+/**
+ * Options for {@link PluginFsApi.readFiles}. `encoding` picks the content type:
+ * `"utf-8"` (the default) decodes each file as {@link PluginFsApi.readFile}
+ * does, `"bytes"` returns raw bytes as {@link PluginFsApi.readFileBytes} does.
+ */
+interface PluginFsReadFilesOptions<E extends PluginFsReadFilesEncoding = PluginFsReadFilesEncoding> extends PluginHostCallOptions {
+    encoding?: E;
+    /**
+     * Per-file ceiling in bytes. A larger file is not read past the ceiling and
+     * comes back as `{ ok: false, error: { code: "TOO_LARGE" } }`. Must be a
+     * non-negative integer; omitted means only the call's total budget applies.
+     */
+    maxBytesPerFile?: number;
+}
+/** Content type of a {@link PluginFsApi.readFiles} call. */
+type PluginFsReadFilesEncoding = "utf-8" | "bytes";
+/**
+ * Why one path in a {@link PluginFsApi.readFiles} call was not read.
+ *
+ * - `PATH_NOT_ALLOWED` / `PERMISSION_REQUIRED` — the same refusals
+ *   {@link PluginFsApi.readFile} rejects with (outside every allowed root, or
+ *   the root's read capability is not declared)
+ * - `NOT_FOUND` — nothing at the path
+ * - `NOT_A_FILE` — a directory, FIFO, device or other non-regular file
+ * - `TARGET_IS_SYMLINK` / `TARGET_UNAVAILABLE` — the verified-open refusals
+ *   {@link PluginFsApi.readFile} documents
+ * - `TOO_LARGE` — bigger than `maxBytesPerFile`
+ * - `RESULT_TOO_LARGE` — the call's total byte budget was spent on earlier
+ *   entries; read this path in a later call
+ * - `READ_FAILED` — anything else (the `message` says what)
+ */
+type PluginFsReadFilesErrorCode = "PATH_NOT_ALLOWED" | "PERMISSION_REQUIRED" | "NOT_FOUND" | "NOT_A_FILE" | "TARGET_IS_SYMLINK" | "TARGET_UNAVAILABLE" | "TOO_LARGE" | "RESULT_TOO_LARGE" | "READ_FAILED";
+/** One entry of a {@link PluginFsApi.readFiles} result, in request order. */
+type PluginFsReadFilesEntry<C = string> = {
+    readonly path: string;
+    readonly ok: true;
+    readonly content: C;
+} | {
+    readonly path: string;
+    readonly ok: false;
+    readonly error: {
+        readonly code: PluginFsReadFilesErrorCode;
+        readonly message: string;
+    };
+};
+/** Options for {@link PluginFsApi.walk}. */
+interface PluginFsWalkOptions extends PluginHostCallOptions {
+    /**
+     * Globs (the `path.matchesGlob` dialect: `*`, `**`, `?`, `[…]`, `{a,b}`)
+     * matched against each entry's root-relative path. When given, only entries
+     * matching at least one are returned; directories are still walked, so
+     * `["**\/*.ts"]` finds every TypeScript file. At most 64 patterns.
+     */
+    include?: readonly string[];
+    /**
+     * Globs, as for `include`. A matching entry is left out, and a matching
+     * directory is not descended into — `["node_modules", "**\/dist"]` prunes
+     * both. At most 64 patterns.
+     */
+    exclude?: readonly string[];
+    /**
+     * How deep to go: `1` lists `root`'s own children (like {@link PluginFsApi.readdir}),
+     * `2` their children too, and so on. An integer from 1 to 64; omitted means
+     * 64.
+     */
+    maxDepth?: number;
+    /**
+     * Most entries to return, counted after `include` filtering. An integer from
+     * 1 to 50,000; default 10,000. Past it the result is `truncated`.
+     */
+    limit?: number;
+    /** Leave out what git ignores (see {@link PluginFsApi.walk}). Default `true`. */
+    respectGitignore?: boolean;
+    /** Report each file's size in bytes. Default `false`; it costs one stat per file. */
+    includeSize?: boolean;
+}
+/** One entry of a {@link PluginFsApi.walk} result. */
+interface PluginFsWalkEntry {
+    /** Relative to the walk's root, `/`-separated, never starting with `/` or `./`. */
+    readonly path: string;
+    readonly type: "file" | "dir";
+    /** Size in bytes, for a file, when {@link PluginFsWalkOptions.includeSize} was set. */
+    readonly size?: number;
+}
+/** What a {@link PluginFsApi.walk} call returns. */
+interface PluginFsWalkResult {
+    readonly entries: PluginFsWalkEntry[];
+    /**
+     * True when the walk stopped at `limit`, the result budget or one of the
+     * host's cost bounds with entries left unlisted.
+     */
+    readonly truncated: boolean;
+}
 /** Options for {@link PluginFsApi.watch}. */
 interface PluginFsWatchOptions extends PluginHostCallOptions {
     /**
@@ -338,6 +431,33 @@ interface PluginFsApi {
      */
     readFileWithRevision(filePath: string, options?: PluginHostCallOptions): Promise<PluginFsReadWithRevisionResult>;
     /**
+     * Read many files in one host round trip — the bulk counterpart to
+     * {@link readFile} for a search, an index build, or a tree of small config
+     * files, where one call per file costs a round trip each.
+     *
+     * Every path gets exactly the checks {@link readFile} applies — containment
+     * against `scopes.fs.allowedPaths`, the root's read capability, and the
+     * verified open — but a refusal fails only that entry: the result has one
+     * {@link PluginFsReadFilesEntry} per path, in request order, each either
+     * `{ ok: true, content }` or `{ ok: false, error: { code, message } }`.
+     *
+     * Bounded so the result always fits one host reply: at most 1024 paths per
+     * call (more rejects the call), and at most 8 MiB of content in total,
+     * measured as returned (decoded UTF-8 text, or bytes) and spent in request
+     * order — entries past the budget come back `RESULT_TOO_LARGE` for a
+     * follow-up call, and the same request always defers the same entries.
+     * The whole call rejects only on a missing read capability for every root,
+     * an unloaded plugin, invalid arguments, or `options.signal` aborting.
+     *
+     * Optional in the type so existing hand-written {@link PluginFsApi} fakes
+     * keep compiling; Daintree's host, the worker host and `createMockHost`
+     * always provide it.
+     */
+    readFiles?: {
+        (paths: readonly string[], options?: PluginFsReadFilesOptions<"utf-8">): Promise<PluginFsReadFilesEntry<string>[]>;
+        (paths: readonly string[], options: PluginFsReadFilesOptions<"bytes">): Promise<PluginFsReadFilesEntry<Uint8Array>[]>;
+    };
+    /**
      * Create a directory and any missing ancestors. Creating a directory that
      * already exists is a no-op; a non-directory at the path rejects. Gated and
      * consented like {@link writeFile}, and both happen before anything is
@@ -396,6 +516,48 @@ interface PluginFsApi {
      * browser uses — see {@link PluginFsReaddirOptions.detail}.
      */
     readdir(dirPath: string, options?: PluginFsReaddirOptions): Promise<PluginFsDirEntry[]>;
+    /**
+     * List a directory tree in one host round trip — the recursive counterpart
+     * to {@link readdir} for a file search or an index build, where one
+     * `readdir` per directory costs a round trip each.
+     *
+     * `root` gets exactly the checks {@link readdir} applies (containment
+     * against `scopes.fs.allowedPaths` and the root's read capability), and the
+     * walk stays inside it: symbolic links are neither followed nor listed, and
+     * a directory's listing is dropped unless it still resolves to where it was
+     * reached both before and after it is read. (Like {@link readdir}, reads are
+     * by pathname, so a directory swapped for a link and back between those two
+     * checks is not excluded.)
+     *
+     * Entries carry the path relative to `root`, with `/` separators, and come
+     * back sorted by path, directories before the entries inside them. The walk
+     * is breadth-first, so when `limit` (or the host's result budget) cuts it
+     * short, `truncated` is `true` and what was kept is the shallowest part of
+     * the tree; the same tree always truncates the same way. Besides `limit`,
+     * the host bounds a walk's cost — at most 200,000 directory entries
+     * examined and 1,000,000 glob tests — and a walk that reaches either bound
+     * returns what it had with `truncated: true`. A directory is read only as
+     * far as the examine bound allows, so when one directory alone holds more
+     * entries than the bound has left, the entries kept from it are whichever
+     * the filesystem enumerated first — still sorted, but not necessarily the
+     * first by path, and not guaranteed to repeat.
+     *
+     * With `includeSize`, a size is omitted for a file whose directory no
+     * longer resolves to where the walk listed it when its size is read.
+     *
+     * With `respectGitignore` (the default), inside a git repository an entry
+     * git ignores — and not tracked — is left out and not descended into,
+     * `.git` itself is skipped, and a nested repository or submodule is listed
+     * but not entered. Outside a repository the option has no effect. On macOS
+     * and Windows, a repository that tracks a file matching its own ignore rules
+     * is walked without ignore filtering, since git can misreport such a file
+     * under a different letter case as ignored.
+     *
+     * Optional in the type so hand-written {@link PluginFsApi} fakes keep
+     * compiling; Daintree's host, the worker host and `createMockHost` always
+     * provide it.
+     */
+    walk?(root: string, options?: PluginFsWalkOptions): Promise<PluginFsWalkResult>;
     /** Stat a path. Rejects on a missing read capability or an out-of-scope path. */
     stat(targetPath: string, options?: PluginHostCallOptions): Promise<PluginFsStat>;
     /**

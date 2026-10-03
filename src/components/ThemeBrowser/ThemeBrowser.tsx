@@ -101,14 +101,17 @@ function ThemeRow({
       // plain click would drop focus on document.body and the next arrow key
       // would go nowhere.
       onPointerDown={(e) => e.preventDefault()}
-      // The pointer moves the same cursor the arrow keys do — which previews,
-      // exactly as arrowing does — so the lit row is always the one Enter saves.
-      onPointerMove={isActive ? undefined : () => onSelect(scheme.id)}
       onClick={() => onSelect(scheme.id)}
       className={cn(
         PALETTE_ROW_CLASS,
         "w-full flex items-center gap-2.5 px-3 py-2 text-left cursor-pointer",
-        "duration-150 ease-out"
+        "duration-150 ease-out",
+        // The cursor here repaints the whole app, so only a click or an arrow
+        // key may move it — a hover that previewed would retarget "Set theme"
+        // on the pointer's way to the button. That makes this a list-detail
+        // selection, and hover stays a separate, lighter step well under the
+        // highlight fill so the two can never be mistaken.
+        !isActive && "hover:bg-overlay-subtle"
       )}
     >
       {scheme.heroImage && !error ? (

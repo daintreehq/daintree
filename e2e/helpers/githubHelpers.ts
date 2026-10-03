@@ -61,7 +61,7 @@ export async function clearGitHubToken(app: ElectronApplication): Promise<void> 
 /** Refresh the renderer's GitHub config store so it picks up `hasToken: true`. */
 export async function refreshGitHubConfig(window: Page): Promise<void> {
   await window.evaluate(async () => {
-    const refresh = window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__;
+    const refresh = globalThis.window.__DAINTREE_E2E_REFRESH_GITHUB_CONFIG__;
     if (!refresh) throw new Error("E2E GitHub config refresh hook not available");
     await refresh();
   });
@@ -195,7 +195,9 @@ export async function stubRepoStats(
   // immediately — needed by tests that assert on pill state right away rather
   // than waiting out a re-poll.
   if (window) {
-    const project = (await window.evaluate(() => window.electron.project.getCurrent())) as {
+    const project = (await window.evaluate(() =>
+      globalThis.window.electron.project.getCurrent()
+    )) as {
       path: string;
     } | null;
     if (project) {
@@ -211,7 +213,7 @@ export async function stubRepoStats(
     // token-error snapshot had an equal-or-newer timestamp, but the refresh
     // event re-reads the stubbed handler and clears `isTokenError`.
     await window.evaluate(() => {
-      window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
+      globalThis.window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
     });
   }
 }
@@ -245,7 +247,7 @@ export function makeFixtureIssue(
     state: "open",
     rawState: "OPEN",
     url: `https://github.com/daintreehq/daintree/issues/${number}`,
-    author: { login: "e2e-user", avatarUrl: "" },
+    author: { login: "e2e-user", avatarUrl: "", rawData: null },
     assignees: [],
     labels: [],
     commentCount: 0,

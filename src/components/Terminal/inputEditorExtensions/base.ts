@@ -373,7 +373,13 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
   let lastMultiline: boolean | null = null;
 
   return EditorView.updateListener.of((update) => {
-    if (!update.docChanged && !update.viewportChanged && !update.geometryChanged) return;
+    // Interim dictation is an effect-only change to a widget on an otherwise
+    // empty doc, so none of the layout flags fire for it (#13103).
+    const interimChanged =
+      update.startState.field(interimWidgetField, false) !==
+      update.state.field(interimWidgetField, false);
+    if (!update.docChanged && !update.viewportChanged && !update.geometryChanged && !interimChanged)
+      return;
 
     const view = update.view;
 
@@ -385,7 +391,9 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
             : view.defaultLineHeight > 0
               ? view.defaultLineHeight
               : LINE_HEIGHT_PX;
-        const isEmpty = view.state.doc.length === 0;
+        // Interim dictation renders as a widget while the doc stays empty; it
+        // hides the placeholder and has real height, so it counts as content.
+        const isEmpty = view.state.doc.length === 0 && !view.state.field(interimWidgetField, false);
         return {
           ...computeAutoSize(view.contentHeight, lineHeight, maxHeightPx, isEmpty),
           lineHeight,

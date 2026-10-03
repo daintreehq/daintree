@@ -57,8 +57,19 @@ vi.mock("../../window/windowRef.js", () => ({
   getMainWindow: vi.fn(() => null),
   setProjectViewManager: vi.fn(),
 }));
+// Plugin pushes are batched per renderer; the fake renderer unpacks each batch
+// back into one broadcastToRenderer-shaped call per push, so assertions read
+// the same as for unbatched sends once `flushPushes()` has run.
+const fakePushRenderer = vi.hoisted(() => ({
+  id: 1,
+  isDestroyed: () => false,
+  send: (_channel: string, batch: Array<[string, unknown]>) => {
+    for (const [channel, envelope] of batch) broadcastToRendererMock(channel, envelope);
+  },
+}));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
+  getProjectRendererTargets: () => [fakePushRenderer],
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,
@@ -213,6 +224,9 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
+import { getPluginPushBatcher } from "../plugin/pluginPushBatcher.js";
+
+const flushPushes = (): void => getPluginPushBatcher().flush();
 import { PluginProcessManager, type ManagedChildProcess } from "../plugin/PluginProcessManager.js";
 import {
   getPluginCapabilityConsentService,
@@ -220,6 +234,12 @@ import {
 } from "../plugin-capability/instances.js";
 import { type PluginIpcContext } from "../../../shared/types/plugin.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { z } from "zod";
+import {
+  PLUGIN_INVOKE_DEFAULT_TIMEOUT_MS,
+  PLUGIN_INVOKE_MAX_RESULT_BYTES,
+  PLUGIN_PUSH_MAX_PAYLOAD_BYTES,
+} from "../../../shared/config/pluginBudgets.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
   return {
@@ -300,6 +320,7 @@ describe("createHost (plugin activation API)", () => {
 
     broadcastToRendererMock.mockClear();
     host.broadcastToRenderer("status", { ok: true });
+    flushPushes();
     // Wrapped in the per-instance envelope (panelId: null = broadcast) so the
     // preload dispatcher sees the same shape for every push over this transport.
     expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.bcast-test:status", {
@@ -374,6 +395,7 @@ describe("createHost (plugin activation API)", () => {
 
     broadcastToRendererMock.mockClear();
     host.postToPanel("tick", { count: 3 });
+    flushPushes();
     // Same transport as the renderer-side window.electron.plugin.on subscription
     // (`plugin:${pluginId}:${channel}`), so a subscribed panel receives the push.
     // No panelId → broadcast envelope (panelId: null).
@@ -394,6 +416,7 @@ describe("createHost (plugin activation API)", () => {
 
     broadcastToRendererMock.mockClear();
     host.postToPanel("tick", { count: 7 }, "panel-a");
+    flushPushes();
     // The panelId rides in the envelope so the preload dispatcher fans out only
     // to the onPanel("panel-a") subscriber, not to sibling instances (#10618).
     expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.post-target:tick", {
@@ -414,10 +437,17 @@ describe("createHost (plugin activation API)", () => {
     broadcastToRendererMock.mockClear();
     // An empty string would silently match no subscriber — surface it loudly
     // rather than coercing to a broadcast.
-    expect(() => host.postToPanel("tick", { n: 1 }, "")).toThrow(/postToPanel: panelId/);
+    // Rejected, not thrown, so a non-awaited call's `.catch()` sees it (#10617).
+    let result: Promise<void> | undefined;
+    expect(() => {
+      result = host.postToPanel("tick", { n: 1 }, "");
+    }).not.toThrow();
+    await expect(result).rejects.toThrow(/postToPanel: panelId/);
+    flushPushes();
     expect(broadcastToRendererMock).not.toHaveBeenCalled();
     // null is an explicit broadcast and must NOT throw.
     expect(() => host.postToPanel("tick", { n: 2 }, null)).not.toThrow();
+    flushPushes();
     expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.post-bad-panel:tick", {
       panelId: null,
       payload: { n: 2 },
@@ -441,6 +471,7 @@ describe("createHost (plugin activation API)", () => {
 
     broadcastToRendererMock.mockClear();
     expect(() => host.postToPanel("tick", { n: 1 })).not.toThrow();
+    flushPushes();
     expect(broadcastToRendererMock).toHaveBeenCalledWith("plugin:acme.post-postact:tick", {
       panelId: null,
       payload: { n: 1 },
@@ -470,6 +501,7 @@ describe("createHost (plugin activation API)", () => {
     });
     await pending;
     expect(caught).toBeInstanceOf(Error);
+    flushPushes();
     expect(broadcastToRendererMock).not.toHaveBeenCalled();
   });
 
@@ -486,6 +518,7 @@ describe("createHost (plugin activation API)", () => {
 
     broadcastToRendererMock.mockClear();
     expect(() => host.postToPanel("tick", { n: 1 })).not.toThrow();
+    flushPushes();
     expect(broadcastToRendererMock).not.toHaveBeenCalled();
   });
 
@@ -1257,5 +1290,186 @@ describe("createHost — showToast", () => {
       (call: unknown[]) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
     );
     expect(toastBroadcasts).toHaveLength(0);
+  });
+});
+
+describe("createHost — invoke deadline and payload caps", () => {
+  type RegisterWithOptions = (
+    channel: string,
+    a: unknown,
+    b?: unknown,
+    c?: { timeoutMs?: number }
+  ) => Promise<void>;
+
+  async function hostFor(id: string) {
+    await writePlugin(id, { name: `acme.${id}`, version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      `acme.${id}`
+    );
+    return {
+      service,
+      host,
+      register: host.registerHandler as unknown as RegisterWithOptions,
+      pluginId: `acme.${id}`,
+    };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("rejects a hung handler with PLUGIN_INVOKE_TIMEOUT after the default deadline", async () => {
+    const { service, register, pluginId } = await hostFor("deadline-default");
+    await register("hang", () => new Promise(() => {}));
+
+    vi.useFakeTimers();
+    const outcome = service
+      .dispatchHandler(pluginId, "hang", makeCtx(pluginId), [])
+      .catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(PLUGIN_INVOKE_DEFAULT_TIMEOUT_MS - 1);
+    let settled = false;
+    void outcome.then(() => (settled = true));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const error = (await outcome) as Error;
+    expect(error.message).toMatch(/^PLUGIN_INVOKE_TIMEOUT: /);
+    expect(error.message).toContain(`"${pluginId}"`);
+    expect(error.message).toContain('"hang"');
+  });
+
+  it("honours a handler's own timeoutMs, legacy and typed", async () => {
+    const { service, register, pluginId } = await hostFor("deadline-own");
+    const schema = {
+      args: z.unknown(),
+      result: z.unknown(),
+    };
+    await register("legacy", () => new Promise(() => {}), { timeoutMs: 50 });
+    await register("typed", schema, () => new Promise(() => {}), { timeoutMs: 80 });
+
+    vi.useFakeTimers();
+    const legacy = service
+      .dispatchHandler(pluginId, "legacy", makeCtx(pluginId), [])
+      .catch((err: unknown) => err);
+    const typed = service
+      .dispatchHandler(pluginId, "typed", makeCtx(pluginId), [{}])
+      .catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(80);
+    expect(((await legacy) as Error).message).toContain("within 50 ms");
+    expect(((await typed) as Error).message).toContain("within 80 ms");
+  });
+
+  it("applies no deadline with timeoutMs: 0", async () => {
+    const { service, register, pluginId } = await hostFor("deadline-off");
+    let release: (value: string) => void = () => {};
+    await register("long", () => new Promise<string>((resolve) => (release = resolve)), {
+      timeoutMs: 0,
+    });
+
+    vi.useFakeTimers();
+    const result = service.dispatchHandler(pluginId, "long", makeCtx(pluginId), []);
+    await vi.advanceTimersByTimeAsync(PLUGIN_INVOKE_DEFAULT_TIMEOUT_MS * 2);
+    release("done");
+    await expect(result).resolves.toBe("done");
+  });
+
+  it("rejects an invalid timeoutMs at registration", async () => {
+    const { register } = await hostFor("deadline-bad");
+    expect(() => register("bad", () => null, { timeoutMs: -1 })).toThrow(
+      /timeoutMs must be a number/
+    );
+  });
+
+  it("rejects an oversize handler result with PLUGIN_PAYLOAD_TOO_LARGE", async () => {
+    const { service, register, pluginId } = await hostFor("result-cap");
+    await register("big", () => "x".repeat(PLUGIN_INVOKE_MAX_RESULT_BYTES + 1));
+    await expect(service.dispatchHandler(pluginId, "big", makeCtx(pluginId), [])).rejects.toThrow(
+      /^PLUGIN_PAYLOAD_TOO_LARGE: .*result of "big"/
+    );
+  });
+
+  it("rejects an oversize postToPanel payload and sends nothing", async () => {
+    const { host } = await hostFor("push-cap");
+    broadcastToRendererMock.mockClear();
+    await expect(
+      host.postToPanel("tick", "x".repeat(PLUGIN_PUSH_MAX_PAYLOAD_BYTES + 1), "panel-a")
+    ).rejects.toThrow(/^PLUGIN_PAYLOAD_TOO_LARGE: /);
+    flushPushes();
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("delivers queued pushes before a following direct send", async () => {
+    const { host } = await hostFor("push-order");
+    broadcastToRendererMock.mockClear();
+    await host.postToPanel("tick", { n: 1 }, "panel-a");
+    await host.setPanelBadge("panel-a", { kind: "dot" });
+    const channels = broadcastToRendererMock.mock.calls.map((call) => call[0]);
+    expect(channels).toEqual(["plugin:acme.push-order:tick", CHANNELS.EVENTS_PUSH]);
+  });
+
+  it("snapshots a push when it is made, so later mutation cannot change it", async () => {
+    const { host } = await hostFor("push-snapshot");
+    broadcastToRendererMock.mockClear();
+    const state = { n: 1 };
+    await host.postToPanel("tick", state, "panel-a");
+    state.n = 2;
+    await host.postToPanel("tick", state, "panel-a");
+    state.n = 3;
+    flushPushes();
+    expect(broadcastToRendererMock.mock.calls.map((call) => call[1])).toEqual([
+      { panelId: "panel-a", payload: { n: 1 } },
+      { panelId: "panel-a", payload: { n: 2 } },
+    ]);
+  });
+
+  it("rejects an uncloneable push to its caller and still delivers everyone else's", async () => {
+    const { host } = await hostFor("push-uncloneable");
+    const { host: other } = await hostFor("push-bystander");
+    broadcastToRendererMock.mockClear();
+    await other.postToPanel("tick", { ok: true }, "panel-b");
+    await expect(host.postToPanel("tick", { fn: () => 1 }, "panel-a")).rejects.toThrow(
+      /^PLUGIN_PAYLOAD_UNCLONEABLE: plugin "acme\.push-uncloneable" push payload on "tick"/
+    );
+    expect(() => host.broadcastToRenderer("tick", { fn: () => 1 })).toThrow(
+      /^PLUGIN_PAYLOAD_UNCLONEABLE: /
+    );
+    flushPushes();
+    expect(broadcastToRendererMock.mock.calls).toEqual([
+      ["plugin:acme.push-bystander:tick", { panelId: "panel-b", payload: { ok: true } }],
+    ]);
+  });
+
+  it("delivers queued pushes before a panel reload reaches the renderer", async () => {
+    const { service, host } = await hostFor("push-reload-order");
+    const dispatcher = (
+      service as unknown as {
+        panelReloadDispatcher: { reload: (...args: unknown[]) => Promise<unknown> };
+      }
+    ).panelReloadDispatcher;
+    const order: string[] = [];
+    broadcastToRendererMock.mockClear();
+    broadcastToRendererMock.mockImplementation((channel: string) => order.push(channel));
+    const reload = vi.spyOn(dispatcher, "reload").mockImplementation(async () => {
+      order.push("reload");
+      return "reloaded";
+    });
+    try {
+      await host.postToPanel("tick", { n: 1 }, "panel-a");
+      await host.reloadPanel("panel-a");
+    } finally {
+      reload.mockRestore();
+      broadcastToRendererMock.mockImplementation(() => {});
+    }
+    expect(order).toEqual(["plugin:acme.push-reload-order:tick", "reload"]);
+  });
+
+  it("throws on an oversize broadcastToRenderer payload", async () => {
+    const { host } = await hostFor("bcast-cap");
+    expect(() =>
+      host.broadcastToRenderer("tick", { blob: "x".repeat(PLUGIN_PUSH_MAX_PAYLOAD_BYTES) })
+    ).toThrow(/PLUGIN_PAYLOAD_TOO_LARGE/);
   });
 });

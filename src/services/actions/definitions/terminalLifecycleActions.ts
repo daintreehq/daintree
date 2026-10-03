@@ -23,6 +23,11 @@ import {
 } from "@/utils/destructiveSessionConfirm";
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import {
+  TerminalInOtherProjectError,
+  formatNoPanelMessage,
+} from "@shared/utils/terminalInOtherProject";
 import { isForegroundDispatch } from "./dispatchSource";
 import { logWarn } from "@/utils/logger";
 import {
@@ -166,6 +171,31 @@ function settleCloseForDispatch(ids: readonly string[], ctx: { dispatchSource?: 
   flushOptimisticCloses();
   return { closedIds: closedPanelIds(ids) };
 }
+
+/**
+ * Fail a named terminal that is not in this view, saying whether it is running
+ * in another project's instead of reporting every miss as gone (#13120). Only
+ * the miss path pays for the lookup, and it only ever throws: nothing outside
+ * this view is acted on. The receiving workspace is read before the await, and
+ * an unknown one or a same-workspace owner keeps the ordinary miss — the code
+ * claims another project, never a local/backend discrepancy. Callers bound to
+ * one view get the ordinary miss either way; main masks the code for them.
+ */
+async function throwTerminalMiss(actionId: string, terminalId: string): Promise<never> {
+  const ownWorkspaceId = getViewWorkspaceId();
+  if (ownWorkspaceId) {
+    const location = await terminalClient.locate(terminalId).catch(() => null);
+    if (location?.found && location.projectId !== ownWorkspaceId) {
+      throw new TerminalInOtherProjectError(actionId, {
+        terminalId,
+        projectId: location.projectId,
+        viewResident: location.viewResident,
+      });
+    }
+  }
+  throw new Error(formatNoPanelMessage(actionId, terminalId));
+}
+
 export function registerTerminalLifecycleActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -206,9 +236,7 @@ export function registerTerminalLifecycleActions(
       // "constructor" would otherwise resolve off the prototype and get trashed
       // as if it were a real panel.
       if (terminalId !== undefined && !Object.hasOwn(state.panelsById, terminalId)) {
-        throw new Error(
-          `terminal.close: no panel with id "${terminalId}" — pass an \`id\` from the terminal listing.`
-        );
+        return throwTerminalMiss("terminal.close", terminalId);
       }
       const targetId =
         terminalId ??

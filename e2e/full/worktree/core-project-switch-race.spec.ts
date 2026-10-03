@@ -8,11 +8,12 @@ import {
   type AppContext,
 } from "../../helpers/launch";
 import { createFixtureRepos } from "../../helpers/fixtures";
-import { openAndOnboardProject, dismissTelemetryConsent } from "../../helpers/project";
+import { openAndOnboardProject } from "../../helpers/project";
 import { injectDelay, clearAllFaults } from "../../helpers/ipcFaults";
-import { getGridPanelCount, openTerminal } from "../../helpers/panels";
+import { getGridPanelIds, getPanelById, openTerminal } from "../../helpers/panels";
+import { waitForTerminalPty, waitForTerminalReady } from "../../helpers/terminal";
 import { SEL } from "../../helpers/selectors";
-import { T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 let ctx: AppContext;
 let fixtureCleanups: Array<() => void> = [];
@@ -21,6 +22,12 @@ const PROJECT_B_NAME = "project-B";
 
 /** Injected terminal:spawn delay, wide enough that a project switch lands mid-spawn. */
 const SPAWN_DELAY_MS = 3000;
+
+/**
+ * How long ownership keeps being sampled once the delayed spawn has resolved,
+ * so a Project-B stamp that lands just after the spawn returns is still seen.
+ */
+const POST_RESOLVE_SAMPLE_MS = 3000;
 
 interface TerminalInfo {
   id: string;
@@ -58,7 +65,9 @@ async function switchToProject(
   await page.locator(SEL.toolbar.projectSwitcherTrigger).click();
   const palette = page.locator(SEL.projectSwitcher.palette);
   await expect(palette).toBeVisible({ timeout: T_MEDIUM });
-  await page.waitForTimeout(T_SETTLE);
+  await expect(palette.getByRole("option").filter({ hasText: projectName }).first()).toBeVisible({
+    timeout: T_MEDIUM,
+  });
 
   // Use evaluate to click — immune to DOM detachment from React re-renders
   await page.evaluate((name) => {
@@ -83,7 +92,12 @@ async function switchToProject(
   // Re-acquire the now-active project view's CDP page so subsequent
   // locator queries don't go to the cached outgoing view.
   const refreshed = await refreshActiveWindow(ctx.app, page);
-  await refreshed.waitForTimeout(T_SETTLE);
+  await expect(refreshed.locator(SEL.toolbar.projectSwitcherTrigger)).toContainText(projectName, {
+    timeout: T_LONG,
+  });
+  await expect
+    .poll(async () => (await getCurrentProject(refreshed))?.name ?? "", { timeout: T_LONG })
+    .toContain(projectName);
   ctx.window = refreshed;
   return refreshed;
 }
@@ -129,10 +143,8 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
     await expect(palette).toBeVisible({ timeout: T_MEDIUM });
     await ctx.window.locator(SEL.projectSwitcher.addButton).click({ force: true });
 
-    // Re-acquire window after the WebContentsView swap, then dismiss the
-    // telemetry consent dialog if it appears.
+    // Re-acquire window after the WebContentsView swap.
     ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
-    await dismissTelemetryConsent(ctx.window);
 
     // Switch back to Project A as the starting baseline
     await switchToProject(ctx.window, PROJECT_A_NAME);
@@ -155,11 +167,13 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
     const projectA = await getCurrentProject(ctx.window);
     expect(projectA).not.toBeNull();
 
-    // Open a terminal in Project A to confirm normal flow works
+    // Open a terminal in Project A to confirm normal flow works, and let its
+    // PTY finish spawning so only the delayed spawn below is in flight.
     await openTerminal(ctx.window);
-    await expect(ctx.window.locator(SEL.panel.gridPanel).first()).toBeVisible({
-      timeout: T_LONG,
-    });
+    const firstPanel = ctx.window.locator(SEL.panel.gridPanel).first();
+    await expect(firstPanel).toBeVisible({ timeout: T_LONG });
+    await waitForTerminalPty(ctx.window, firstPanel, T_LONG);
+    const firstPanelIds = new Set(await getGridPanelIds(ctx.window));
 
     // Inject a delay on terminal:spawn so the switch below lands mid-spawn
     await injectDelay(ctx.app, "terminal:spawn", SPAWN_DELAY_MS);
@@ -178,6 +192,8 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
     await expect(ctx.window.locator(SEL.panel.gridPanel)).toHaveCount(2, {
       timeout: T_LONG,
     });
+    const delayedId = (await getGridPanelIds(ctx.window)).find((id) => !firstPanelIds.has(id));
+    expect(delayedId, "the delayed spawn's pane should be in the grid").toBeTruthy();
 
     // Immediately switch to Project B — the spawn is still in-flight
     await switchToProject(ctx.window, PROJECT_B_NAME);
@@ -195,22 +211,34 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
     // contended macOS release runners.
     //
     // The invariant that must hold either way is ownership: no terminal may
-    // ever be stamped with Project B. Assert that on every sample across the
-    // whole settle window rather than once at the end, so a late Project-B
-    // stamp landing after the delayed spawn resolves cannot slip through.
+    // ever be stamped with Project B. Assert that on every sample rather than
+    // once at the end, and keep sampling for a bounded window after the
+    // delayed spawn resolves so a late Project-B stamp cannot slip through.
+    // When the spawn survives, its own terminal id shows up stamped; when it
+    // is killed there is nothing to observe, so the fallback deadline spans
+    // the injected delay plus a full spawn budget from the switch.
     const readActiveTerminals = async () =>
       (await getAllTerminals(ctx.window)).filter((t: TerminalInfo) => !t.isTrashed);
 
-    const settleDeadline = Date.now() + SPAWN_DELAY_MS + T_LONG;
+    const fallbackDeadline = Date.now() + SPAWN_DELAY_MS + T_LONG;
+    let sampleDeadline = fallbackDeadline;
     let sawResolvedTerminal = false;
-    while (Date.now() < settleDeadline) {
+    let resolvedAt: number | null = null;
+    while (Date.now() < sampleDeadline) {
       const withProject = (await readActiveTerminals()).filter(
         (t: TerminalInfo) => t.projectId !== undefined
       );
       for (const t of withProject) {
-        expect(t.projectId).toBe(projectA!.id);
+        expect(t.projectId, `terminal ${t.id} was stamped with the wrong project`).toBe(
+          projectA!.id
+        );
       }
       if (withProject.length > 0) sawResolvedTerminal = true;
+      if (resolvedAt === null && withProject.some((t: TerminalInfo) => t.id === delayedId)) {
+        resolvedAt = Date.now();
+        sampleDeadline = Math.min(fallbackDeadline, resolvedAt + POST_RESOLVE_SAMPLE_MS);
+      }
+      // timer: ownership sampling interval across the bounded post-spawn window
       await ctx.window.waitForTimeout(250);
     }
 
@@ -223,51 +251,71 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
 
     // Ensure faults are cleared from previous test before spawning
     await clearAllFaults(ctx.app);
-    // The prior `delayed spawn` test leaves an in-flight terminal
-    // that may still be settling into the cached Project A view when
-    // this test starts. Give the main process time to drain queued
-    // PTY-attach IPCs against the cached view before reactivating it
-    // — without this, the cached view's IPC handlers race with
-    // unregister-on-deactivate and the renderer can crash uncaughtly.
-    const drainMs = 2_000 * (process.env.CI ? (process.platform === "win32" ? 5 : 3) : 1);
-    await ctx.window.waitForTimeout(drainMs);
 
     // Ensure we're on Project A with a fresh terminal fully spawned
     await switchToProject(ctx.window, PROJECT_A_NAME);
+    const idsBeforeSpawn = new Set(await getGridPanelIds(ctx.window));
     await openTerminal(ctx.window);
-    const panel = ctx.window.locator(SEL.panel.gridPanel).first();
-    // CI VMs are slow after fault-injection tests; double T_LONG for headroom
-    await expect(panel).toBeVisible({ timeout: T_LONG * 2 });
-    // Wait for shell prompt so the terminal is fully initialized
-    await ctx.window.waitForTimeout(3000);
+    let freshId = "";
+    await expect
+      .poll(
+        async () => {
+          freshId = (await getGridPanelIds(ctx.window)).find((id) => !idsBeforeSpawn.has(id)) ?? "";
+          return freshId;
+        },
+        // CI VMs are slow after fault-injection tests; double T_LONG for headroom
+        { timeout: T_LONG * 2 }
+      )
+      .not.toBe("");
+    await waitForTerminalReady(ctx.window, getPanelById(ctx.window, freshId), T_LONG * 2);
 
-    // Verify grid has at least 1 panel before switching
-    const countBeforeSwitch = await getGridPanelCount(ctx.window);
-    expect(countBeforeSwitch).toBeGreaterThanOrEqual(1);
+    const panelIdsA = await getGridPanelIds(ctx.window);
+    expect(panelIdsA).toContain(freshId);
 
-    // Switch to Project B then back — the key invariant is that A's panels survive
+    // Project B's grid must not render any of Project A's panels. Give B a
+    // panel of its own and wait for it to be live, so the grid read below is
+    // a hydrated one rather than an empty grid that has not rendered yet.
     await switchToProject(ctx.window, PROJECT_B_NAME);
-    // The previous test (`delayed spawn`) left a terminal mid-spawn that
-    // arrives in Project A AFTER its WebContentsView was deactivated. The
-    // cached view's IPC handlers continue draining queued messages for a
-    // short period — switching back too soon races handler unregistration
-    // against the activation flow and the renderer crashes uncaughtly. Wait
-    // long enough for those messages to drain before reactivating A.
-    await ctx.window.waitForTimeout(drainMs);
+    const idsBeforeB = new Set(await getGridPanelIds(ctx.window));
+    await openTerminal(ctx.window);
+    let bPanelId = "";
+    await expect
+      .poll(
+        async () => {
+          bPanelId = (await getGridPanelIds(ctx.window)).find((id) => !idsBeforeB.has(id)) ?? "";
+          return bPanelId;
+        },
+        { timeout: T_LONG * 2 }
+      )
+      .not.toBe("");
+    await waitForTerminalReady(ctx.window, getPanelById(ctx.window, bPanelId), T_LONG * 2);
+    const panelIdsB = await getGridPanelIds(ctx.window);
+    expect(panelIdsB).toContain(bPanelId);
+    expect(panelIdsB.filter((id) => panelIdsA.includes(id))).toEqual([]);
 
-    // Switch back to Project A — its panels should reappear
+    // Switch straight back to Project A — every one of its panels reappears.
     await switchToProject(ctx.window, PROJECT_A_NAME);
     await expect
-      .poll(() => getGridPanelCount(ctx.window), { timeout: T_LONG })
-      .toBeGreaterThanOrEqual(1);
+      .poll(async () => (await getGridPanelIds(ctx.window)).sort().join(","), {
+        timeout: T_LONG,
+      })
+      .toBe([...panelIdsA].sort().join(","));
   });
 
   test("no orphaned terminals after rapid switching", async () => {
     test.slow();
 
-    // Record baseline terminal count
-    const baselineTerminals = await getAllTerminals(ctx.window);
-    const baselineCount = baselineTerminals.filter((t: TerminalInfo) => !t.isTrashed).length;
+    // Record baseline terminals. Project B legitimately owns the terminal the
+    // previous test opened there, so ownership is checked on new terminals only.
+    const baselineTerminals = (await getAllTerminals(ctx.window)).filter(
+      (t: TerminalInfo) => !t.isTrashed
+    );
+    const baselineCount = baselineTerminals.length;
+    const baselineIds = new Set(baselineTerminals.map((t) => t.id));
+    const readNewTerminals = async () =>
+      (await getAllTerminals(ctx.window)).filter(
+        (t: TerminalInfo) => !t.isTrashed && !baselineIds.has(t.id)
+      );
 
     // Switch to Project A to spawn from there
     await switchToProject(ctx.window, PROJECT_A_NAME);
@@ -278,43 +326,32 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
     await injectDelay(ctx.app, "terminal:spawn", 2000);
     await openTerminal(ctx.window);
 
-    // Rapid switch: A -> B -> A (settle between switches to avoid palette detach)
+    // Rapid switch: A -> B -> A
     await switchToProject(ctx.window, PROJECT_B_NAME);
-    await ctx.window.waitForTimeout(T_SETTLE);
     await switchToProject(ctx.window, PROJECT_A_NAME);
 
     await clearAllFaults(ctx.app);
 
     // Poll until the delayed spawn has landed and its projectId is resolved.
-    // Gate on count first, then on at least one resolved projectId.
-    await expect
-      .poll(() => getAllTerminals(ctx.window).then((ts) => ts.filter((t) => !t.isTrashed).length), {
-        timeout: T_LONG,
-      })
-      .toBeGreaterThanOrEqual(baselineCount + 1);
     await expect
       .poll(
-        () =>
-          getAllTerminals(ctx.window).then(
-            (ts) => ts.filter((t) => !t.isTrashed && t.projectId !== undefined).length
-          ),
+        async () =>
+          (await readNewTerminals()).filter((t: TerminalInfo) => t.projectId !== undefined).length,
         { timeout: T_LONG }
       )
       .toBeGreaterThanOrEqual(1);
 
-    // Re-query for assertions after the poll gates have passed.
-    const finalTerminals = await getAllTerminals(ctx.window);
-    const activeTerminals = finalTerminals.filter((t: TerminalInfo) => !t.isTrashed);
-
-    // Should have exactly baseline + 1 (the one we spawned), not more
+    // Exactly one new terminal (the one we spawned), not more — and the
+    // pre-existing ones are all still there.
+    const activeTerminals = (await getAllTerminals(ctx.window)).filter(
+      (t: TerminalInfo) => !t.isTrashed
+    );
     expect(activeTerminals.length).toBe(baselineCount + 1);
+    const newTerminals = await readNewTerminals();
+    expect(newTerminals).toHaveLength(1);
 
-    // Every resolved terminal must belong to Project A — none must have leaked.
-    const withProject = activeTerminals.filter((t: TerminalInfo) => t.projectId !== undefined);
-    expect(withProject.length).toBeGreaterThanOrEqual(1);
-    for (const t of withProject) {
-      expect(t.projectId).toBe(projectA!.id);
-    }
+    // It must belong to Project A — it must not have leaked to B.
+    expect(newTerminals[0]!.projectId).toBe(projectA!.id);
   });
 
   test("backgrounded view's file browser queries its own project (#11366)", async () => {

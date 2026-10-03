@@ -288,6 +288,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const currentProject = useProjectStore((s) => s.currentProject);
     const voiceStatus = useVoiceRecordingStore((s) => s.status);
     const activeVoicePanelId = useVoiceRecordingStore((s) => s.activeTarget?.panelId ?? null);
+    const voiceMicSignal = useVoiceRecordingStore((s) => s.micSignal);
     const externalDraftRevision = useTerminalInputStore((s) => s.externalDraftRevision);
     const panelWorktreeId = usePanelStore((s) => s.panelsById[terminalId]?.worktreeId);
     // Selects the drawn label, not the snapshot: the agent's own git-status
@@ -307,6 +308,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isVoiceReconnecting ||
       isVoiceFinishing ||
       isVoicePaused;
+    // The session is open (and key handling treats it as such) before the mic
+    // delivers real audio, but the listening chrome waits for it (#13105).
+    const isVoiceMicStarting =
+      (isVoiceRecording || isVoiceConnecting || isVoiceReconnecting) && voiceMicSignal !== "live";
+    const isVoiceListeningChrome = isVoiceActiveForPanel && voiceMicSignal === "live";
     const isVoiceSubmitting = useTerminalInputStore((s) => s.voiceSubmittingPanels.has(terminalId));
 
     const commandContext = { terminalId, cwd, projectId };
@@ -418,6 +424,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const placeholder = (() => {
       if (isVoicePaused) return "Paused · Resume to continue.";
+      if (isVoiceMicStarting) {
+        return voiceMicSignal === "silent" ? "No audio from microphone" : "Starting microphone…";
+      }
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
       return agentName ? `Ask ${agentName}` : "Ask anything";
     })();
@@ -986,11 +995,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const isDragOverCompact = isDragOverFiles && !isExpanded;
     const isDragOverModal = isDragOverFiles && isExpanded;
 
-    const isSpecialState = isVoiceActiveForPanel || isDragOverCompact || isFleetPrimary;
+    const isSpecialState = isVoiceListeningChrome || isDragOverCompact || isFleetPrimary;
 
     // Fleet-primary uses the same amber family as FleetDraftingPill so the
     // shell itself says "Enter broadcasts" at the point of typing.
-    const specialStyle: React.CSSProperties | undefined = isVoiceActiveForPanel
+    const specialStyle: React.CSSProperties | undefined = isVoiceListeningChrome
       ? {
           borderColor: `color-mix(in oklab, ${inputBarColors.accent} 60%, transparent)`,
           backgroundColor: `color-mix(in oklab, ${inputBarColors.accent} 12%, ${inputBarColors.background})`,
@@ -1041,7 +1050,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               // picker at 60%), so the row stops reading as one family.
               disabled && "opacity-50"
             )}
-            data-voice-active={isVoiceActiveForPanel ? "true" : undefined}
+            data-voice-active={isVoiceListeningChrome ? "true" : undefined}
             data-fleet-armed={isFleetPrimary ? "true" : undefined}
             style={specialStyle}
             onDragEnter={handleDragEnter}
@@ -1049,7 +1058,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
             aria-disabled={disabled}
-            aria-busy={isInitializing || isVoiceConnecting}
+            aria-busy={
+              isInitializing ||
+              isVoiceConnecting ||
+              (isVoiceMicStarting && voiceMicSignal === "pending")
+            }
           >
             <AutocompleteMenu
               ref={menuRef}

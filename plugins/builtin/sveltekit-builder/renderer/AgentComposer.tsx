@@ -16,14 +16,18 @@ import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import { actionService } from "@/services/ActionService";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { Textarea } from "@/components/ui/textarea";
-import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
-import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
+import {
+  Button,
+  Kbd,
+  SegmentedControl,
+  Textarea,
+  Tooltip,
+  TruncatedTooltip,
+} from "@daintreehq/plugin-ui";
 import { cn } from "@/lib/utils";
 import { PropertyRow } from "./InspectorSection.js";
+// The host Select: these items carry their own markup (agent marks, two-line
+// call sites), which the kit Select's `options` cannot.
 import {
   Select,
   SelectContent,
@@ -533,7 +537,7 @@ export function AgentComposer({
             // the control does not shrink; the wrapper keeps any overflow
             // inside the column instead of past the drawer's edge.
             <div className="flex w-fit min-w-0 max-w-full overflow-hidden">
-              <SegmentedRadioGroup
+              <SegmentedControl
                 // Default density is 28px, matching the destination picker in the
                 // footer and the property rows above: a 24px track read as a
                 // different kind of control sitting in the same column.
@@ -546,7 +550,7 @@ export function AgentComposer({
                   ...(scope.kind === "component" && scope.file ? { tooltip: scope.file } : {}),
                 }))}
                 value={String(subject.scope)}
-                onChange={(value) => chooseScope(Number(value))}
+                onValueChange={(value) => chooseScope(Number(value))}
                 className="min-w-0 max-w-full shrink"
               />
             </div>
@@ -606,7 +610,7 @@ export function AgentComposer({
         maxLength={MAX_INSTRUCTION_CHARS}
         value={draft}
         disabled={destinations.length === 0}
-        onChange={(event) => onDraftChange(event.target.value)}
+        onValueChange={onDraftChange}
         onKeyDown={onKeyDown}
         className="placeholder:text-text-secondary"
       />
@@ -686,25 +690,22 @@ export function AgentComposer({
         ) : (
           <span />
         )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="contrast"
-              size="xs"
-              disabled={!canSend}
-              onClick={() => send()}
-              aria-label="Send to agent"
-              // Disabled is quiet, not faded: a faded contrast fill is still the
-              // heaviest object in the drawer (and white-on-grey on a light theme).
-              className="gap-1.5 disabled:bg-overlay-subtle disabled:text-text-secondary disabled:opacity-100 disabled:shadow-none disabled:ring-0"
-            >
-              Send
-              <kbd className={cn(KBD_COMPACT_CLASS, "bg-transparent text-inherit opacity-70")}>
-                ⏎
-              </kbd>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">Send to agent</TooltipContent>
+        <Tooltip side="top" content="Send to agent">
+          <Button
+            variant="contrast"
+            size="xs"
+            disabled={!canSend}
+            onClick={() => send()}
+            aria-label="Send to agent"
+            // Disabled is quiet, not faded: a faded contrast fill is still the
+            // heaviest object in the drawer (and white-on-grey on a light theme).
+            className="gap-1.5 disabled:bg-overlay-subtle disabled:text-text-secondary disabled:opacity-100 disabled:shadow-none disabled:ring-0"
+          >
+            Send
+            <Kbd density="compact" className="bg-transparent text-inherit opacity-70">
+              ⏎
+            </Kbd>
+          </Button>
         </Tooltip>
       </div>
 
@@ -730,18 +731,15 @@ export function AgentComposer({
           {intents.map((intent) => (
             // The words that will actually land in the draft, for anyone who
             // wants them before committing.
-            <Tooltip key={intent.label}>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="pill"
-                  size="xs"
-                  className="min-w-0 justify-start font-normal text-text-secondary"
-                  onClick={() => applyIntent(intent.prompt)}
-                >
-                  <span className="truncate">{intent.label}</span>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{intent.prompt}</TooltipContent>
+            <Tooltip key={intent.label} side="bottom" content={intent.prompt}>
+              <Button
+                variant="pill"
+                size="xs"
+                className="min-w-0 justify-start font-normal text-text-secondary"
+                onClick={() => applyIntent(intent.prompt)}
+              >
+                <span className="truncate">{intent.label}</span>
+              </Button>
             </Tooltip>
           ))}
         </div>

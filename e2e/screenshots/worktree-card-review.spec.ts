@@ -742,7 +742,7 @@ test("sidebar worktree card review — states and themes", async () => {
         content: "[data-worktree-row-drag-handle] { opacity: 1 !important; }",
       });
       await snap(page, "75-card-collapsed-grip", plain);
-      await revealGrip.evaluate((node) => node.remove());
+      await revealGrip.evaluate((node) => (node as ChildNode).remove());
       // The defect this shot exists for was a 4px offset between the grip and
       // the line it sits beside, which is small enough to survive a glance at
       // the PNG — so the harness measures it rather than trusting the reader.
@@ -855,10 +855,12 @@ test("sidebar worktree card review — states and themes", async () => {
         }
       };
 
+      // Success is a brief flash beside the menu row, not a toast.
+      const copyFlash = page.locator("[data-copy-flash]");
       await copyRow("Path");
-      await toastFrame("88-copy-path-toast", "Path copied");
+      await snap(page, "88-copy-path-flash", copyFlash, "Copied");
       await copyRow("Branch name");
-      await toastFrame("89-copy-branch-toast", "Branch name copied");
+      await snap(page, "89-copy-branch-flash", copyFlash, "Copied");
 
       await page.evaluate(() => {
         navigator.clipboard.writeText = () => Promise.reject(new Error("denied"));

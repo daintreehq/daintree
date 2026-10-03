@@ -6,7 +6,10 @@ import type {
   MonitorStartOptions,
 } from "./AnalysisBackend.js";
 import type { AnalysisChunkFlags } from "../analysisWorkerProtocol.js";
-import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
+import type {
+  SerializeReadOptions,
+  SerializedTerminalSnapshot,
+} from "../../../../shared/types/terminal.js";
 
 /**
  * The legacy single-threaded analysis path, adapted to the AnalysisBackend
@@ -28,7 +31,7 @@ export interface InThreadAnalysisHost {
   setScrollback(lines: number): boolean;
   readViewportLines(n: number): string[];
   readCursorLine(): string | null;
-  serialize(): Promise<SerializedTerminalSnapshot | null>;
+  serialize(options?: SerializeReadOptions): Promise<SerializedTerminalSnapshot | null>;
   serializeForPersistence(): SerializedTerminalSnapshot | null;
   captureFinalSnapshot(): Promise<AnalysisFinalCapture>;
   releaseHeadless(): void;
@@ -99,8 +102,8 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     return this.host.readCursorLine();
   }
 
-  serialize(): Promise<SerializedTerminalSnapshot | null> {
-    return this.host.serialize();
+  serialize(options?: SerializeReadOptions): Promise<SerializedTerminalSnapshot | null> {
+    return this.host.serialize(options);
   }
 
   serializeForPersistence(): Promise<SerializedTerminalSnapshot | null> {

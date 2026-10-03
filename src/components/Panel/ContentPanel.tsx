@@ -32,7 +32,7 @@ import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/ter
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { tabDomId } from "./TabButton";
-import { isPtyPanel } from "@shared/types/panel";
+import { isBuiltInPanelKind, isPtyPanel } from "@shared/types/panel";
 
 /**
  * Base props for all panel types.
@@ -66,7 +66,10 @@ export interface ContentPanelProps extends BasePanelProps {
 
   // Slots
   headerContent?: ReactNode;
+  /** Rows appended to the header's overflow menu. */
   headerActions?: ReactNode;
+  /** Buttons drawn in the header itself, ahead of the window controls. */
+  headerToolbar?: ReactNode;
   toolbar?: ReactNode;
 
   // Container customization
@@ -212,6 +215,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     children,
     headerContent,
     headerActions,
+    headerToolbar,
     toolbar,
     className,
     onClick,
@@ -386,13 +390,17 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // Per-worktree color identity
   const worktreeColorMap = useWorktreeColorMap();
   const worktreeAccentColor = worktreeId ? worktreeColorMap?.[worktreeId] : undefined;
+  // A plugin's panel is about whatever the plugin says it is, not the branch
+  // it happened to open in, so its header names no branch. The worktree colour
+  // and the binding itself stay.
+  const namesWorktreeBranch = isBuiltInPanelKind(kind);
   const worktreeBranch = useWorktreeStore(
     useCallback(
       (state) => {
-        if (!worktreeId || !worktreeAccentColor) return undefined;
+        if (!worktreeId || !worktreeAccentColor || !namesWorktreeBranch) return undefined;
         return state.worktrees.get(worktreeId)?.branch;
       },
-      [worktreeId, worktreeAccentColor]
+      [worktreeId, worktreeAccentColor, namesWorktreeBranch]
     )
   );
 
@@ -729,6 +737,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           headerStatus={resolvedHeaderStatus}
           agentIndicator={resolvedAgentIndicator}
           headerActions={headerActions}
+          headerToolbar={headerToolbar}
           tabs={tabs}
           groupId={groupId}
           onTabClick={onTabClick}

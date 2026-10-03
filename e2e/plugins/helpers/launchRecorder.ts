@@ -47,11 +47,14 @@ const grab = (p) => { try { if (p && fs.statSync(p).isFile()) files[p] = fs.read
 argv.forEach((arg, i) => { if (arg === "--mcp-config" || arg === "--additional-mcp-config") grab(String(argv[i + 1]).replace(/^@/, "")); });
 for (const value of Object.values(env)) if (value.startsWith("/") || /^[A-Za-z]:\\\\/.test(value)) grab(value);
 const pane = String(process.env.DAINTREE_PANE_ID || "unknown").replace(/[^A-Za-z0-9_-]/g, "_");
+// Published by rename, so a reader polling the dir never parses a half-written record.
+const record = path.join(__dirname, "launch.${agent}." + pane + ".json");
 fs.writeFileSync(
-  path.join(__dirname, "launch.${agent}." + pane + ".json"),
+  record + ".tmp",
   JSON.stringify({ agent: ${JSON.stringify(agent)}, paneId: process.env.DAINTREE_PANE_ID || null, argv, env, files, at: Date.now() }),
   { mode: 0o600 }
 );
+fs.renameSync(record + ".tmp", record);
 console.log(${JSON.stringify(RECORDER_READY)} + " ${agent}");
 process.stdin.resume();
 setInterval(() => {}, 1000);
@@ -60,6 +63,13 @@ process.on("SIGHUP", () => process.exit(0));
 `
     );
     chmodSync(file, 0o755);
+    // Windows resolves commands by PATHEXT, never by shebang.
+    if (process.platform === "win32") {
+      writeFileSync(
+        path.join(binDir, `${agent}.cmd`),
+        ["@echo off", `"${process.execPath}" "%~dp0${agent}" %*`, ""].join("\r\n")
+      );
+    }
   }
   return binDir;
 }

@@ -2,7 +2,11 @@ import * as React from "react";
 import type * as PopoverPrimitiveType from "@radix-ui/react-popover";
 import { Slot } from "@radix-ui/react-slot";
 import { cn } from "@/lib/utils";
-import { OVERLAY_DROP_MOTION_CLASS, OVERLAY_MOTION_CLASS } from "./overlayMotion";
+import {
+  OVERLAY_DROP_MOTION_CLASS,
+  OVERLAY_MOTION_CLASS,
+  OVERLAY_SIDE_OFFSET,
+} from "./overlayMotion";
 import { BrandSurfaceReset } from "@/components/icons/BrandSurface";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import {
@@ -10,6 +14,7 @@ import {
   useOverlayFocusRestore,
   useOverlayFocusRestoreValue,
 } from "./overlay-focus-restore";
+import { useLayerPressFocusGuard } from "./layer-press-focus-guard";
 
 let portalBoundary: HTMLDivElement | null = null;
 
@@ -32,6 +37,26 @@ function getPortalBoundary() {
   document.body.appendChild(boundary);
   portalBoundary = boundary;
   return boundary;
+}
+
+// PopoverContent's default collisionPadding; the menu-family contract reads that literal.
+const DEFAULT_COLLISION_PADDING = 8;
+
+/**
+ * The width a `PopoverContent` on the default collision boundary can take:
+ * the window less the native panel on the right and the collision padding.
+ * Radix shifts the content along the anchor's axis to stay inside that
+ * boundary, so this is its `--radix-popover-content-available-width` once it
+ * is placed, known before it is. The window, without layout to measure.
+ *
+ * Reads layout and mounts the boundary on first use, so call it from a layout
+ * effect or an event handler, never during render.
+ */
+function getPopoverAvailableWidth(collisionPadding = DEFAULT_COLLISION_PADDING): number {
+  if (typeof window === "undefined") return Number.POSITIVE_INFINITY;
+  const measured = getPortalBoundary()?.getBoundingClientRect().width ?? 0;
+  const width = measured > 0 ? measured : window.innerWidth;
+  return Math.max(0, width - 2 * collisionPadding);
 }
 
 const PopoverIntentContext = React.createContext<((next: boolean) => void) | null>(null);
@@ -242,13 +267,15 @@ const PopoverContent = React.forwardRef<
     {
       className,
       align = "center",
-      sideOffset = 4,
+      sideOffset = OVERLAY_SIDE_OFFSET,
       collisionPadding = 8,
       collisionBoundary,
       style,
       onPointerDown,
+      onPointerDownCapture,
       onPointerDownOutside,
       onInteractOutside,
+      onFocusOutside,
       onKeyDown,
       onClick,
       onCloseAutoFocus,
@@ -265,6 +292,11 @@ const PopoverContent = React.forwardRef<
     // stale position. Observe the boundary and bump a tick to re-run Radix's positioning.
     const [repositionTick, setRepositionTick] = React.useState(0);
     const focusRestore = useOverlayFocusRestore();
+    const {
+      ref: guardedRef,
+      onPointerDownCapture: claimPress,
+      onFocusOutside: guardFocusOutside,
+    } = useLayerPressFocusGuard(ref);
 
     React.useEffect(() => {
       const element = getPortalBoundary();
@@ -298,6 +330,16 @@ const PopoverContent = React.forwardRef<
       onInteractOutside?.(event);
       focusRestore?.onContentInteractOutside(event);
     };
+    // A press inside the popover must not lose it to an ancestor that pulls
+    // focus on pointerdown (see `layer-press-focus-guard.ts`).
+    const handlePointerDownCapture: React.PointerEventHandler<HTMLDivElement> = (event) => {
+      onPointerDownCapture?.(event);
+      claimPress();
+    };
+    const handleFocusOutside: NonNullable<PopoverContentProps["onFocusOutside"]> = (event) => {
+      onFocusOutside?.(event);
+      guardFocusOutside(event);
+    };
     const handleKeyDown: React.KeyboardEventHandler<HTMLDivElement> = (event) => {
       onKeyDown?.(event);
       focusRestore?.onContentKeyDown();
@@ -321,7 +363,7 @@ const PopoverContent = React.forwardRef<
             marks against the toolbar's surface instead of this floating one. */}
         <BrandSurfaceReset>
           <Content
-            ref={ref}
+            ref={guardedRef}
             align={align}
             sideOffset={sideOffset}
             collisionPadding={collisionPadding}
@@ -336,8 +378,10 @@ const PopoverContent = React.forwardRef<
             )}
             {...props}
             onPointerDown={handlePointerDown}
+            onPointerDownCapture={handlePointerDownCapture}
             onPointerDownOutside={handlePointerDownOutside}
             onInteractOutside={handleInteractOutside}
+            onFocusOutside={handleFocusOutside}
             onKeyDown={handleKeyDown}
             onClick={handleClick}
             onCloseAutoFocus={handleCloseAutoFocus}
@@ -351,4 +395,4 @@ const PopoverContent = React.forwardRef<
 );
 PopoverContent.displayName = "PopoverContent";
 
-export { Popover, PopoverTrigger, PopoverContent, PopoverAnchor };
+export { Popover, PopoverTrigger, PopoverContent, PopoverAnchor, getPopoverAvailableWidth };

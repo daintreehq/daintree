@@ -13,6 +13,7 @@ vi.mock("@/store/voiceRecordingStore", () => {
     isConfigured: false,
     lockedTarget: null as { panelId: string } | null,
     recentTargets: [] as Array<unknown>,
+    micSignal: "pending" as string,
   };
   const fns = {
     setLastError: vi.fn(),
@@ -26,6 +27,9 @@ vi.mock("@/store/voiceRecordingStore", () => {
     beginSession: vi.fn(),
     finishSession: vi.fn(),
     setAudioLevel: vi.fn(),
+    setMicSignal: vi.fn((signal: string) => {
+      state.micSignal = signal;
+    }),
     setElapsedSeconds: vi.fn(),
     appendDelta: vi.fn(),
     completeSegment: vi.fn(),
@@ -42,6 +46,8 @@ vi.mock("@/store/voiceRecordingStore", () => {
   const subscribe = vi.fn(() => () => {});
   return {
     useVoiceRecordingStore: Object.assign(getState, { getState, subscribe }),
+    isVoiceMicPending: (s: { status: string; micSignal: string }) =>
+      ["connecting", "recording", "reconnecting"].includes(s.status) && s.micSignal !== "live",
     __state: state,
   };
 });
@@ -384,6 +390,27 @@ describe("VoiceRecordingService — background recording", () => {
     expect(audioContextCtor.mock.invocationCallOrder[0]).toBeLessThan(
       getUserMedia.mock.invocationCallOrder[0]!
     );
+  });
+
+  it("reads settings and microphone permission together rather than in series", async () => {
+    const electronStub = buildElectronStub();
+    let resolveSettings: (value: unknown) => void = () => {};
+    electronStub.voiceInput.getSettings.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSettings = resolve;
+      })
+    );
+    setupGlobals(electronStub);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const starting = voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Terminal" });
+
+    await vi.waitFor(() => expect(electronStub.voiceInput.checkMicPermission).toHaveBeenCalled());
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+
+    resolveSettings({ enabled: true, openaiApiKey: "sk-key", correctionEnabled: false });
+    await starting;
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
   });
 
   it("closes the pre-built AudioContext when the microphone can't be opened", async () => {
@@ -1245,7 +1272,7 @@ describe("VoiceRecordingService — pause/resume (#9191)", () => {
 
   async function getVoiceMockState() {
     const mod = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: { activeTarget: { panelId: string } | null; status: string };
+      __state: { activeTarget: { panelId: string } | null; status: string; micSignal: string };
     };
     return mod.__state;
   }
@@ -1310,6 +1337,7 @@ describe("VoiceRecordingService — pause/resume (#9191)", () => {
     const voiceState = await getVoiceMockState();
     voiceState.activeTarget = { panelId: "panel-1" };
     voiceState.status = "paused";
+    voiceState.micSignal = "live";
 
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
@@ -1324,6 +1352,28 @@ describe("VoiceRecordingService — pause/resume (#9191)", () => {
     expect(node.port.postMessage).toHaveBeenCalledWith({ type: "setPaused", value: false });
     expect(useVoiceRecordingStore.getState().setStatus).toHaveBeenCalledWith("recording");
     expect(useVoiceRecordingStore.getState().announce).toHaveBeenCalledWith("Dictation resumed.");
+  });
+
+  it("resume() before the mic went live defers the announcement to real audio (#13105)", async () => {
+    setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "paused";
+    voiceState.micSignal = "pending";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    vi.mocked(useVoiceRecordingStore.getState().announce).mockClear();
+
+    voiceRecordingService.resume();
+
+    expect(useVoiceRecordingStore.getState().setStatus).toHaveBeenCalledWith("recording");
+    expect(useVoiceRecordingStore.getState().announce).not.toHaveBeenCalledWith(
+      "Dictation resumed."
+    );
+    voiceRecordingService.destroy();
   });
 
   it("resume() is a no-op when status is not paused", async () => {
@@ -1396,12 +1446,12 @@ describe("VoiceRecordingService — interim delta handling (#9172)", () => {
 
   it("does not write to the draft store or bump the voice revision on interim deltas", async () => {
     const { electronStub } = setupGlobals();
-    let deltaCallback: ((delta: string) => void) | null = null;
+    let deltaCallback: ((payload: { text: string }) => void) | null = null;
     // Cast through unknown because the stub's vi.fn is initialised with a
-    // zero-arg shape; the real handler takes a (delta:string)=>void.
+    // zero-arg shape; the real handler takes a (payload)=>void.
     (
       electronStub.voiceInput.onTranscriptionDelta as unknown as {
-        mockImplementation: (impl: (cb: (delta: string) => void) => () => void) => void;
+        mockImplementation: (impl: (cb: (payload: { text: string }) => void) => () => void) => void;
       }
     ).mockImplementation((cb) => {
       deltaCallback = cb;
@@ -1420,9 +1470,9 @@ describe("VoiceRecordingService — interim delta handling (#9172)", () => {
     voiceRecordingService.initialize();
 
     expect(deltaCallback).not.toBeNull();
-    deltaCallback!("hello");
-    deltaCallback!(" world");
-    deltaCallback!(" again");
+    deltaCallback!({ text: "hello" });
+    deltaCallback!({ text: " world" });
+    deltaCallback!({ text: " again" });
 
     // The interim path must not mutate the draft store — that's the entire fix.
     expect(inputStore.setDraftInput).not.toHaveBeenCalled();
@@ -1433,11 +1483,11 @@ describe("VoiceRecordingService — interim delta handling (#9172)", () => {
 
   it("commits exactly one draft write per onTranscriptionComplete (one undo step)", async () => {
     const { electronStub } = setupGlobals();
-    let deltaCallback: ((delta: string) => void) | null = null;
+    let deltaCallback: ((payload: { text: string }) => void) | null = null;
     let completeCallback: ((payload: { text: string }) => void) | null = null;
     (
       electronStub.voiceInput.onTranscriptionDelta as unknown as {
-        mockImplementation: (impl: (cb: (delta: string) => void) => () => void) => void;
+        mockImplementation: (impl: (cb: (payload: { text: string }) => void) => () => void) => void;
       }
     ).mockImplementation((cb) => {
       deltaCallback = cb;
@@ -1468,11 +1518,11 @@ describe("VoiceRecordingService — interim delta handling (#9172)", () => {
     voiceRecordingService.initialize();
 
     // Five interim deltas — none should commit to the draft.
-    deltaCallback!("hel");
-    deltaCallback!("lo");
-    deltaCallback!(" wor");
-    deltaCallback!("ld");
-    deltaCallback!("!");
+    deltaCallback!({ text: "hel" });
+    deltaCallback!({ text: "lo" });
+    deltaCallback!({ text: " wor" });
+    deltaCallback!({ text: "ld" });
+    deltaCallback!({ text: "!" });
 
     // Simulate insertPoint being captured by the first delta. The test stub
     // for setInsertPoint is a no-op, so seed the buffer manually.

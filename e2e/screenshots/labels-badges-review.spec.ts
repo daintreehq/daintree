@@ -241,33 +241,35 @@ const bulkRemoveShots: Shot[] = ["mixed", "long"].map((fixture) => ({
   viewport: { width: 1100, height: 900 },
 }));
 
-const fleetShots: Shot[] = [
-  {
-    source: "fleet",
-    fixture: "armed-cross-worktree",
-    url: "/fleet-preview.html?theme={theme}&fixture=armed-cross-worktree&width=1100",
-    ready: (page) => page.getByTestId("fleet-armed-count-chip"),
-    surface: (page) => page.getByTestId("fleet-arming-ribbon"),
-  },
-  {
-    source: "fleet",
-    fixture: "count-chip-popover",
-    url: "/fleet-preview.html?theme={theme}&fixture=armed-cross-worktree&width=1100",
-    ready: (page) => page.getByTestId("fleet-armed-count-chip"),
-    drive: async (page) => {
-      await page.getByTestId("fleet-armed-count-chip").click();
-      await page.mouse.move(0, 0);
+const fleetShots: Shot[] = (
+  [
+    {
+      source: "fleet",
+      fixture: "armed-cross-worktree",
+      url: "/fleet-preview.html?theme={theme}&fixture=armed-cross-worktree&width=1100",
+      ready: (page) => page.getByTestId("fleet-armed-count-chip"),
+      surface: (page) => page.getByTestId("fleet-arming-ribbon"),
     },
-    surface: (page) => page.getByTestId("fleet-armed-list"),
-  },
-  {
-    source: "fleet",
-    fixture: "drafting-pill-open",
-    url: "/fleet-preview.html?theme={theme}&fixture=drafting-pill-open&width=1100",
-    ready: (page) => page.locator("[data-preview-frame]").first(),
-    surface: (page) => page.getByTestId("fleet-resolution-popover"),
-  },
-].map((shot) => ({ ...shot, viewport: { width: 1100, height: 680 } }));
+    {
+      source: "fleet",
+      fixture: "count-chip-popover",
+      url: "/fleet-preview.html?theme={theme}&fixture=armed-cross-worktree&width=1100",
+      ready: (page) => page.getByTestId("fleet-armed-count-chip"),
+      drive: async (page) => {
+        await page.getByTestId("fleet-armed-count-chip").click();
+        await page.mouse.move(0, 0);
+      },
+      surface: (page) => page.getByTestId("fleet-armed-list"),
+    },
+    {
+      source: "fleet",
+      fixture: "drafting-pill-open",
+      url: "/fleet-preview.html?theme={theme}&fixture=drafting-pill-open&width=1100",
+      ready: (page) => page.locator("[data-preview-frame]").first(),
+      surface: (page) => page.getByTestId("fleet-resolution-popover"),
+    },
+  ] satisfies Shot[]
+).map((shot) => ({ ...shot, viewport: { width: 1100, height: 680 } }));
 
 const SHOTS: Shot[] = [
   ...sheetShots,

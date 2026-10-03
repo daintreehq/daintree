@@ -51,6 +51,7 @@ export const CHANNELS = {
   TERMINAL_GET_SERIALIZED_STATES: "terminal:get-serialized-states",
   TERMINAL_GET_SHARED_BUFFERS: "terminal:get-shared-buffers",
   TERMINAL_GET_INFO: "terminal:get-info",
+  TERMINAL_LOCATE: "terminal:locate",
   TERMINAL_ACKNOWLEDGE_DATA: "terminal:acknowledge-data",
   TERMINAL_FORCE_RESUME: "terminal:force-resume",
   TERMINAL_GET_HOST_MEMORY_PAUSE: "terminal:get-host-memory-pause",
@@ -1068,6 +1069,17 @@ export const CHANNELS = {
   PLUGIN_REPORT_PANEL_LIFECYCLE: "plugin:report-panel-lifecycle",
   /** Renderer reports its live non-plugin panel ids, so `host.reloadPanel` can refuse them (#12610). */
   PLUGIN_REPORT_PANEL_INVENTORY: "plugin:report-panel-inventory",
+  /** Renderer → main, fire-and-forget: batched plugin view cost observations. */
+  PLUGIN_REPORT_VIEW_METRICS: "plugin:report-view-metrics",
+  /** Renderer → main, fire-and-forget: the plugin push channels this renderer has subscribers for. */
+  PLUGIN_REPORT_PUSH_LISTENERS: "plugin:report-push-listeners",
+  /** Every tracked plugin's `PluginPerfSnapshot`. */
+  PLUGIN_PERF_SNAPSHOTS_GET: "plugin:perf-snapshots-get",
+  /** Renderer → main, fire-and-forget: start receiving `PLUGIN_PERF_SNAPSHOTS_CHANGED`. */
+  PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE: "plugin:perf-snapshots-subscribe",
+  PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE: "plugin:perf-snapshots-unsubscribe",
+  /** Main → subscribed renderers, at most once a second: every tracked plugin's snapshot. */
+  PLUGIN_PERF_SNAPSHOTS_CHANGED: "plugin:perf-snapshots-changed",
   /** Per-instance runtime health snapshot, for a renderer store hydrating after it subscribed. */
   PLUGIN_RUNTIME_STATUSES_GET: "plugin:runtime-statuses-get",
   /** Retire a plugin's backend generation and start a fresh one (panel recovery). */
@@ -1076,6 +1088,8 @@ export const CHANNELS = {
   PLUGIN_RECIPES_GET: "plugin:recipes-get",
   /** Plugin tours visible in the sender's project (#12773). */
   PLUGIN_TOURS_GET: "plugin:tours-get",
+  /** Plugin-shipped custom icons visible in the sender's project (#13143). */
+  PLUGIN_ICONS_GET: "plugin:icons-get",
   /** Append one run timestamp to a plugin recipe's sidecar metadata (#11860). */
   PLUGIN_RECIPE_RECORD_USE: "plugin:recipe-record-use",
   /** Patch the user-owned half of a plugin recipe (empty-state pin, auto-assign). */
@@ -1167,6 +1181,11 @@ export const CHANNELS = {
   // silent no-op, so without an explicit receipt an undeliverable prompt is
   // indistinguishable from an ignored one until the five-minute timeout.
   PLUGIN_CAPABILITY_ACKNOWLEDGE_CONSENT: "plugin-capability:acknowledge-consent",
+  // The per-plugin "Allow project targeting" switch (#13119): the
+  // `project:dispatch` grant that lets an app-wide plugin name a target project
+  // on `host.dispatch`. Set only from the Plugin Manager, never by a prompt.
+  PLUGIN_CAPABILITY_GET_PROJECT_TARGETING: "plugin-capability:get-project-targeting",
+  PLUGIN_CAPABILITY_SET_PROJECT_TARGETING: "plugin-capability:set-project-targeting",
 
   // Plugin managed-process channels (#9234) — child processes spawned by a
   // plugin via `host.process.spawn` (gated on `shell:exec`). `list` is the

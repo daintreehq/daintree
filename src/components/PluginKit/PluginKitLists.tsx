@@ -1,0 +1,962 @@
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  type Ref,
+} from "react";
+import { ArrowDown, ArrowUp } from "lucide-react";
+import {
+  TableVirtuoso,
+  Virtuoso,
+  type ItemProps,
+  type ListProps,
+  type ListRange,
+  type ScrollerProps,
+  type TableBodyProps,
+  type TableProps,
+  type TableVirtuosoHandle,
+  type VirtuosoHandle,
+} from "react-virtuoso";
+import type {
+  PluginDataTableProps,
+  PluginDataTableSort,
+  PluginLogViewProps,
+  PluginVirtualListProps,
+} from "@shared/types/plugin-sdk-react";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+  stopContextMenuPropagation,
+} from "@/components/ui/context-menu";
+import {
+  LIST_ROW_HOVER_CLASS,
+  PALETTE_ROW_CLASS,
+  ROW_MENU_TARGET_CLASS,
+} from "@/components/ui/paletteRowStyles";
+import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
+import { pluralize } from "@/lib/pluralize";
+import { cn } from "@/lib/utils";
+import {
+  field,
+  fn,
+  node,
+  nonEmpty,
+  oneOf,
+  pickDomProps,
+  pickRootProps,
+  positive,
+  str,
+  useKitOwnerAttributes,
+  rowCount,
+} from "./kitProps";
+import { CONTEXT_MENU_PARTS, isMenuKey, renderMenuEntries } from "./kitMenu";
+import { useKitOverlayZClass } from "./kitScope";
+import { severityGlyph } from "./PluginKitPatterns";
+import { formatNumeric, readNumericFormat, sumField, type NumericFormat } from "./kitNumericFormat";
+import { readTotals, type TotalSpec } from "./kitDataTableModel";
+
+export const DEFAULT_ROW_PX = 28;
+export const DEFAULT_OVERSCAN_ROWS = 8;
+
+export type TableDensity = "compact" | "default" | "comfortable";
+
+export function readDensity(value: unknown): TableDensity {
+  return oneOf(value, ["compact", "default", "comfortable"] as const) ?? "default";
+}
+
+/** A DataTable row's height at each density: the virtualiser's estimate. */
+export const DENSITY_ROW_PX: Record<TableDensity, number> = {
+  compact: 24,
+  default: DEFAULT_ROW_PX,
+  comfortable: 32,
+};
+
+export const DENSITY_TEXT_CLASS: Record<TableDensity, string> = {
+  compact: "text-xs",
+  default: "text-xs",
+  comfortable: "text-sm",
+};
+
+/** A header or body cell's padding: with the type size, it sets the row height. */
+export const DENSITY_CELL_CLASS: Record<TableDensity, string> = {
+  compact: "px-3 py-1",
+  default: "px-3 py-1.5",
+  comfortable: "px-3 py-1.5",
+};
+
+/**
+ * Clicks and keys on a control inside a cell belong to the control, not to the
+ * row it sits in.
+ */
+export const IN_CELL_CONTROL_SELECTOR =
+  "button, a, input, select, textarea, label, [role=button], [role=link], [role=checkbox], [role=switch], [role=combobox], [contenteditable]:not([contenteditable=false])";
+
+export function fromCellControl(event: { target: EventTarget | null; currentTarget: Element }) {
+  const target = event.target instanceof Element ? event.target : null;
+  const control = target?.closest(IN_CELL_CONTROL_SELECTOR);
+  return (
+    control !== null &&
+    control !== undefined &&
+    control !== event.currentTarget &&
+    event.currentTarget.contains(control)
+  );
+}
+
+/** A drawn row's rules: a hairline above every row but the first, and a fill on every other one. */
+export function rowRuleClass(index: number, dividers: boolean, striped: boolean): string {
+  return cn(
+    dividers && index > 0 && "border-t border-divider",
+    striped && index % 2 === 1 && "bg-overlay-subtle"
+  );
+}
+
+// A focused list must not point `aria-activedescendant` at a row the reader
+// scrolled out of the mounted window; the next arrow key scrolls it back.
+export function activeMounted(index: number, range: ListRange | null): boolean {
+  return index >= 0 && (range === null || (index >= range.startIndex && index <= range.endIndex));
+}
+
+function count(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
+export function reactKey(value: unknown, fallback: number): string | number {
+  return typeof value === "string" || (typeof value === "number" && Number.isFinite(value))
+    ? value
+    : fallback;
+}
+
+// A scroller that takes focus fills its pane edge to edge, so the global
+// `*:focus-visible` ring is drawn inset rather than into the pane's clip.
+export const SCROLLER_RING_INSET = "focus-visible:-outline-offset-2";
+
+// The grid is as tall as all its rows, so a ring of its own would be clipped
+// away by the scroller. Its focus indicator is the cursor row instead: the one
+// accent in the grid, painted only while the grid itself holds keyboard focus.
+// Selection stays the neutral `aria-selected` fill, so the two never compete.
+export const GRID_FOCUS_RING =
+  "outline-hidden focus-visible:[&_tr[data-active=true]]:outline focus-visible:[&_tr[data-active=true]]:outline-2 focus-visible:[&_tr[data-active=true]]:-outline-offset-2 focus-visible:[&_tr[data-active=true]]:outline-accent-primary";
+
+interface ListContext {
+  listProps: Record<string, unknown>;
+  /**
+   * A focusable list takes the keyboard on the scroller, which is the size of
+   * the viewport, so the global ring frames what the reader can see; the list
+   * element is as tall as all its rows and its own ring would be clipped away.
+   */
+  listFocusable: boolean;
+  itemRole: "listitem" | "none";
+  /**
+   * The plugin's `id` and `data-*`, re-applied after the virtualiser's props
+   * on a focusable scroller: Virtuoso stamps its own `data-testid` there, which
+   * would otherwise overwrite a plugin's test id without a word.
+   */
+  identity: Record<string, string | number | boolean>;
+}
+
+function ListScroller({
+  context,
+  ref,
+  ...props
+}: ScrollerProps & { context: ListContext; ref?: Ref<HTMLDivElement> }) {
+  if (!context.listFocusable) return <div {...props} ref={ref} tabIndex={0} />;
+  // The virtualiser's own props go after the plugin's so its scroll wiring and
+  // sizing win; only the plugin's identity goes after those.
+  return <div {...context.listProps} {...props} {...context.identity} ref={ref} />;
+}
+
+function ListElement({
+  context,
+  ref,
+  style,
+  children,
+}: ListProps & { context: ListContext; ref?: Ref<HTMLDivElement> }) {
+  // A focusable list's role and keyboard live on the scroller, and this element
+  // is a plain wrapper its options are still owned through.
+  const listProps = context.listFocusable ? undefined : context.listProps;
+  return (
+    <div {...listProps} ref={ref} style={style}>
+      {children}
+    </div>
+  );
+}
+
+// Virtuoso puts a wrapper round each row. It is the `listitem` of a plain list;
+// in a listbox it steps aside so the plugin's `option` rows are owned directly.
+function ListItem({
+  context,
+  item: _item,
+  ...props
+}: ItemProps<unknown> & { context: ListContext }) {
+  return <div {...props} role={context.itemRole} />;
+}
+
+const LIST_COMPONENTS = { Scroller: ListScroller, List: ListElement, Item: ListItem };
+
+function KitVirtualList(props: PluginVirtualListProps) {
+  const {
+    items,
+    count: rowCount,
+    renderItem,
+    itemKey,
+    estimatedItemSize,
+    overscan,
+    onEndReached,
+    activeIndex,
+    shadows,
+    className,
+    ...rest
+  } = props;
+  const data = Array.isArray(items) ? items : undefined;
+  const total = data ? data.length : count(rowCount);
+  const render = fn(renderItem);
+  const keyOf = fn(itemKey);
+  const endReached = fn(onEndReached);
+  const rowPx = positive(estimatedItemSize, 10_000) ?? DEFAULT_ROW_PX;
+  const overscanRows = typeof overscan === "number" ? count(overscan) : DEFAULT_OVERSCAN_ROWS;
+  // Plugin style and ref would fight the virtualiser's own on this element.
+  const { style: _style, ref: _ref, ...dom } = pickDomProps(rest);
+  const role = str(dom.role);
+  const [range, setRange] = useState<ListRange | null>(null);
+  const target =
+    typeof activeIndex === "number" &&
+    Number.isInteger(activeIndex) &&
+    activeIndex >= 0 &&
+    activeIndex < total
+      ? activeIndex
+      : -1;
+  const descendant =
+    target >= 0 && !activeMounted(target, range) ? { "aria-activedescendant": undefined } : {};
+  const context: ListContext = {
+    listProps: { ...dom, role: role ?? "list", ...descendant },
+    listFocusable: typeof dom.tabIndex === "number" && dom.tabIndex >= 0,
+    itemRole: role ? "none" : "listitem",
+    identity: pickRootProps(dom),
+  };
+
+  const handle = useRef<VirtuosoHandle>(null);
+  useEffect(() => {
+    if (target >= 0) handle.current?.scrollIntoView({ index: target });
+  }, [target]);
+
+  // Called either way (hooks), but only wired to the scroller when asked for.
+  const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays();
+  const withShadows = shadows === true;
+
+  const list = (
+    <Virtuoso
+      ref={handle}
+      scrollerRef={
+        withShadows ? (el) => shadowRef(el instanceof HTMLElement ? el : null) : undefined
+      }
+      className={cn(SCROLLER_RING_INSET, str(className))}
+      style={{ height: "100%" }}
+      context={context}
+      components={LIST_COMPONENTS}
+      {...(data ? { data } : { totalCount: total })}
+      defaultItemHeight={rowPx}
+      increaseViewportBy={overscanRows * rowPx}
+      computeItemKey={(index, item) => (keyOf ? reactKey(keyOf(index, item), index) : index)}
+      itemContent={(index, item) => node(render?.(index, item))}
+      endReached={endReached ? (index) => endReached(index) : undefined}
+      rangeChanged={setRange}
+    />
+  );
+  if (!withShadows) return list;
+  return (
+    <div className="relative h-full min-h-0">
+      {topShadow}
+      {bottomShadow}
+      {list}
+    </div>
+  );
+}
+
+export interface TableColumn {
+  id: string;
+  header: ReactNode;
+  width: number | string | undefined;
+  grow: boolean;
+  align: "start" | "center" | "end";
+  /** A figure column: tabular digits, end-aligned unless `align` says otherwise. */
+  numeric: boolean;
+  /** Formats a number cell that has no `render`. */
+  format: NumericFormat | null;
+  sortable: boolean;
+  render: ((row: unknown, index: number) => unknown) | undefined;
+}
+
+export function readColumns(columns: unknown): TableColumn[] {
+  if (!Array.isArray(columns)) return [];
+  const seen = new Set<string>();
+  const out: TableColumn[] = [];
+  for (const entry of columns) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const id = nonEmpty(field(entry, "id"));
+    if (id === undefined || seen.has(id)) continue;
+    seen.add(id);
+    const width = field(entry, "width");
+    const render = field(entry, "render");
+    const numeric = field(entry, "numeric");
+    const format = readNumericFormat(numeric);
+    const isNumeric = numeric === true || format !== null;
+    out.push({
+      id,
+      header: node(field(entry, "header")),
+      width:
+        typeof width === "string"
+          ? width
+          : typeof width === "number"
+            ? positive(width, 10_000)
+            : undefined,
+      align:
+        oneOf(field(entry, "align"), ["start", "center", "end"] as const) ??
+        (isNumeric ? "end" : "start"),
+      numeric: isNumeric,
+      format,
+      grow: field(entry, "grow") === true,
+      sortable: field(entry, "sortable") === true,
+      render:
+        typeof render === "function"
+          ? (row, index): unknown => Reflect.apply(render, undefined, [row, index])
+          : undefined,
+    });
+  }
+  return out;
+}
+
+/** The widest a column without a `width` grows before the rest is left as trailing space. */
+export const FLEX_COLUMN_MAX_PX = 480;
+
+interface ColumnLayout {
+  widths: (number | string | undefined)[];
+  /** A trailing, unlabelled column that takes the width no column claims. */
+  filler: boolean;
+}
+
+/** A column width in px: 0 for none, null for a length that cannot be summed. */
+function pxWidth(width: number | string | undefined): number | null {
+  if (width === undefined) return 0;
+  if (typeof width === "number") return width;
+  const match = /^\s*(\d+(?:\.\d+)?)px\s*$/.exec(width);
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * How wide each column is drawn. The table is fixed-layout and full-width, so
+ * whatever the sized columns leave goes to the unsized ones; alone, one of
+ * them would stretch across the pane and push every column after it to the
+ * far edge. Unsized columns stop at FLEX_COLUMN_MAX_PX instead and a filler
+ * takes the remainder, and a table of sized columns keeps exactly the widths
+ * it asked for. A `grow` column opts back into taking everything. Exported for
+ * tests.
+ */
+export function layoutColumns(
+  columns: readonly { width: number | string | undefined; grow: boolean }[],
+  available: number | null
+): ColumnLayout {
+  const widths = columns.map((column) => column.width);
+  // `grow` means "take the leftover", which only an unsized column can do.
+  if (columns.length === 0 || columns.some((column) => column.grow && column.width === undefined)) {
+    return { widths, filler: false };
+  }
+  const flexible = columns.filter((column) => column.width === undefined).length;
+  if (flexible === 0) return { widths, filler: true };
+  // Only px can be summed against the measured width; a relative length (a
+  // percentage, `rem`, `ch`) or an unmeasured table keeps the plain share.
+  const px = columns.map((column) => pxWidth(column.width));
+  if (available === null || px.some((value) => value === null)) {
+    return { widths, filler: false };
+  }
+  const sized = px.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+  if ((available - sized) / flexible <= FLEX_COLUMN_MAX_PX) return { widths, filler: false };
+  return { widths: widths.map((width) => width ?? FLEX_COLUMN_MAX_PX), filler: true };
+}
+
+export const ALIGN_CLASS = { start: "text-start", center: "text-center", end: "text-end" } as const;
+
+/** A number as a column draws it: formatted when the column has a `numeric` format. */
+export function columnFigure(value: number, column: TableColumn): string | number {
+  return column.format ? formatNumeric(value, column.format) : value;
+}
+
+export function cellValue(row: unknown, column: TableColumn, index: number): ReactNode {
+  if (column.render) return node(column.render(row, index));
+  if (typeof row !== "object" || row === null) return null;
+  const value = field(row, column.id);
+  if (typeof value === "number") return columnFigure(value, column);
+  return typeof value === "string" ? value : null;
+}
+
+/** A totals or subtotal cell over `rows`: the column's sum drawn like its cells, or the plugin's own. */
+export function totalContent(
+  spec: TotalSpec,
+  rows: readonly unknown[],
+  column: TableColumn
+): ReactNode {
+  if (spec !== "sum") return node(spec(rows));
+  const sum = sumField(rows, column.id);
+  return sum === null ? null : columnFigure(sum, column);
+}
+
+/** The totals row's label, or null when no shown column is free to hold it. */
+export function totalsLabelFor(
+  columns: readonly TableColumn[],
+  totals: ReadonlyMap<string, TotalSpec>,
+  label: unknown
+): { columnId: string; label: ReactNode } | null {
+  const free = columns.find((column) => !totals.has(column.id));
+  if (!free) return null;
+  return { columnId: free.id, label: label === undefined ? "Total" : node(label) };
+}
+
+/**
+ * A totals cell: under a strong rule, in semibold, with a fill of its own so
+ * the rows a pinned footer is held over do not show through it.
+ */
+export const TOTALS_CELL_CLASS =
+  "kit-dt-foot border-t border-border-strong bg-surface-canvas font-semibold";
+
+/** A header cell's box and type, shared by both tables. */
+export function headerCellClass(column: TableColumn, density: TableDensity): string {
+  return cn(
+    "border-b border-divider bg-surface-canvas font-medium text-text-secondary",
+    DENSITY_CELL_CLASS[density],
+    ALIGN_CLASS[column.align],
+    column.numeric && "tabular-nums"
+  );
+}
+
+/** A body cell's box and type, shared by both tables. */
+export function bodyCellClass(column: TableColumn, density: TableDensity): string {
+  return cn(
+    "overflow-hidden text-ellipsis whitespace-nowrap text-text-primary",
+    DENSITY_CELL_CLASS[density],
+    ALIGN_CLASS[column.align],
+    column.numeric && "tabular-nums"
+  );
+}
+
+interface TableContext {
+  columns: TableColumn[];
+  interactive: boolean;
+  activeIndex: number;
+  selectedKey: string | number | undefined;
+  keyOf: (row: unknown, index: number) => string | number;
+  rowId: (index: number) => string;
+  tableProps: Record<string, unknown>;
+  activate: (index: number) => void;
+  /** The row whose `rowMenu` is open, else -1. */
+  menuIndex: number;
+  /** Set when the table has a `rowMenu`: the body is then the menu's trigger. */
+  openRowMenu: ((event: MouseEvent<HTMLElement>) => void) | undefined;
+  density: TableDensity;
+}
+
+function TableScroller({
+  context,
+  ref,
+  ...props
+}: ScrollerProps & { context: TableContext; ref?: Ref<HTMLDivElement> }) {
+  return <div {...props} ref={ref} tabIndex={context.interactive ? -1 : 0} />;
+}
+
+function TableElement({ context, style, children }: TableProps & { context: TableContext }) {
+  return (
+    <table
+      {...context.tableProps}
+      style={{ ...style, tableLayout: "fixed", width: "100%", borderCollapse: "collapse" }}
+      className={cn(DENSITY_TEXT_CLASS[context.density], context.interactive && GRID_FOCUS_RING)}
+    >
+      {children}
+    </table>
+  );
+}
+
+// The body, not the table, is the row menu's trigger: a right-click on the
+// header or the empty space under the rows is left to whatever encloses it.
+function TableBody({
+  context,
+  ref,
+  ...props
+}: TableBodyProps & { context: TableContext; ref?: Ref<HTMLTableSectionElement> }) {
+  if (!context.openRowMenu) return <tbody {...props} ref={ref} />;
+  return (
+    <ContextMenuTrigger asChild onContextMenu={context.openRowMenu}>
+      <tbody {...props} ref={ref} />
+    </ContextMenuTrigger>
+  );
+}
+
+function TableRow({ context, item, ...props }: ItemProps<unknown> & { context: TableContext }) {
+  const index = props["data-index"];
+  const key = context.keyOf(item, index);
+  const selected = context.selectedKey !== undefined && key === context.selectedKey;
+  const { interactive } = context;
+  return (
+    <tr
+      {...props}
+      id={interactive ? context.rowId(index) : undefined}
+      aria-rowindex={index + 2}
+      // `aria-selected` belongs to grid rows; a static table marks its row for the CSS only.
+      aria-selected={interactive ? selected : undefined}
+      data-selected={!interactive && selected ? "true" : undefined}
+      data-active={interactive && index === context.activeIndex ? "true" : undefined}
+      // The same marker Radix writes on a row that is its own menu trigger.
+      data-state={index === context.menuIndex ? "open" : undefined}
+      onClick={
+        interactive
+          ? (event: MouseEvent<HTMLTableRowElement>) => {
+              if (!fromCellControl(event)) context.activate(index);
+            }
+          : undefined
+      }
+      className={cn(
+        PALETTE_ROW_CLASS,
+        interactive && [LIST_ROW_HOVER_CLASS, "cursor-pointer"],
+        context.openRowMenu && ROW_MENU_TARGET_CLASS
+      )}
+    />
+  );
+}
+
+const TABLE_COMPONENTS = { Scroller: TableScroller, Table: TableElement, TableBody, TableRow };
+
+export function readSort(sort: unknown): PluginDataTableSort | null {
+  if (typeof sort !== "object" || sort === null) return null;
+  const columnId = nonEmpty(field(sort, "columnId"));
+  const direction = oneOf(field(sort, "direction"), ["asc", "desc"] as const);
+  return columnId && direction ? { columnId, direction } : null;
+}
+
+export function SortGlyph({ direction }: { direction: "asc" | "desc" | undefined }) {
+  if (!direction) return null;
+  const Glyph = direction === "asc" ? ArrowUp : ArrowDown;
+  return <Glyph className="h-3 w-3 shrink-0" aria-hidden="true" />;
+}
+
+function KitDataTable({
+  columns,
+  rows,
+  rowKey,
+  sort,
+  onSortChange,
+  onRowClick,
+  rowMenu,
+  selectedRowKey,
+  empty,
+  estimatedRowSize,
+  onEndReached,
+  "aria-label": ariaLabel,
+  className,
+  density,
+  rowDividers,
+  striped,
+  totals,
+  totalsLabel,
+  ...rest
+}: PluginDataTableProps) {
+  // `aria-*` belongs on the grid inside, which names itself; the root takes `id` and `data-*`.
+  const rootAttributes = pickRootProps(rest);
+  const cols = readColumns(columns);
+  const data: readonly unknown[] = Array.isArray(rows) ? rows : [];
+  const current = readSort(sort);
+  const handleSort = fn(onSortChange);
+  const rowClick = fn(onRowClick);
+  const menuFor = fn(rowMenu);
+  const endReached = fn(onEndReached);
+  // A row menu needs a row the keyboard can stand on, so it makes the table a grid.
+  const interactive = rowClick !== undefined || menuFor !== undefined;
+  const overlayZ = useKitOverlayZClass();
+  const owner = useKitOwnerAttributes();
+  const size = readDensity(density);
+  const dividers = rowDividers === true;
+  const stripes = striped === true;
+  const footTotals = readTotals(totals);
+  const rowPx = positive(estimatedRowSize, 10_000) ?? DENSITY_ROW_PX[size];
+  const keyField = typeof rowKey === "string" ? rowKey : undefined;
+  const keyFn = typeof rowKey === "function" ? rowKey : undefined;
+  const keyOf = (row: unknown, index: number): string | number => {
+    if (keyFn) return reactKey(keyFn(row, index), index);
+    if (keyField && typeof row === "object" && row !== null) {
+      return reactKey(field(row, keyField), index);
+    }
+    return index;
+  };
+  const selectedKey =
+    typeof selectedRowKey === "string" || typeof selectedRowKey === "number"
+      ? selectedRowKey
+      : undefined;
+
+  const [cursor, setCursor] = useState(-1);
+  const activeIndex = data.length === 0 ? -1 : Math.min(cursor, data.length - 1);
+  const baseId = useId();
+  const rowId = (index: number) => `${baseId}row-${index}`;
+  const handle = useRef<TableVirtuosoHandle>(null);
+  const [revealIndex, setRevealIndex] = useState(-1);
+  useEffect(() => {
+    if (revealIndex >= 0) handle.current?.scrollIntoView({ index: revealIndex });
+  }, [revealIndex]);
+
+  const activate = (index: number) => {
+    setCursor(index);
+    const row = data[index];
+    if (index >= 0 && index < data.length) rowClick?.(row, index);
+  };
+
+  const [range, setRange] = useState<ListRange | null>(null);
+
+  // The entries outlive the close so the menu does not empty while it animates out.
+  const [menu, setMenu] = useState<{ index: number; items: readonly unknown[]; open: boolean }>({
+    index: -1,
+    items: [],
+    open: false,
+  });
+  const openRowMenu = (event: MouseEvent<HTMLElement>) => {
+    const target = event.target instanceof Element ? event.target.closest("tr[data-index]") : null;
+    const index =
+      target !== null && target.parentElement === event.currentTarget
+        ? Number(target.getAttribute("data-index"))
+        : -1;
+    const items =
+      Number.isInteger(index) && index >= 0 && index < data.length
+        ? menuFor?.(data[index], index)
+        : undefined;
+    // No entries is no menu: preventing the event stands Radix's own open down.
+    if (!Array.isArray(items) || items.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    stopContextMenuPropagation(event);
+    setCursor(index);
+    setMenu({ index, items, open: true });
+  };
+
+  const [scroller, setScroller] = useState<HTMLElement | null>(null);
+  const [available, setAvailable] = useState<number | null>(null);
+  useEffect(() => {
+    if (scroller === null || typeof ResizeObserver === "undefined") return;
+    const measure = () => setAvailable(scroller.clientWidth || null);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(scroller);
+    return () => observer.disconnect();
+  }, [scroller]);
+  const layout = layoutColumns(cols, available);
+
+  const onKeyDown = (event: KeyboardEvent<HTMLTableElement>) => {
+    // Keys on a header's sort button are the button's, not the grid cursor's.
+    if (event.target !== event.currentTarget) return;
+    // Shift+F10 and the Menu key open the cursor row's menu, replayed as a
+    // `contextmenu` on the row: Radix's context menu has no imperative open.
+    if (menuFor && isMenuKey(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      const row = activeIndex >= 0 ? document.getElementById(rowId(activeIndex)) : null;
+      if (row === null) return;
+      const rect = row.getBoundingClientRect();
+      row.dispatchEvent(
+        new globalThis.MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: rect.left + 8,
+          clientY: rect.top + rect.height / 2,
+        })
+      );
+      return;
+    }
+    if (event.metaKey || event.ctrlKey || event.altKey || data.length === 0) return;
+    const last = data.length - 1;
+    const from = activeIndex;
+    let next: number | null = null;
+    if (event.key === "ArrowDown") next = from < 0 ? 0 : Math.min(from + 1, last);
+    else if (event.key === "ArrowUp") next = from < 0 ? last : Math.max(from - 1, 0);
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = last;
+    if (next !== null) {
+      event.preventDefault();
+      setCursor(next);
+      setRevealIndex(next);
+      return;
+    }
+    if ((event.key === "Enter" || event.key === " ") && from >= 0) {
+      event.preventDefault();
+      activate(from);
+    }
+  };
+
+  const label = str(ariaLabel) ?? "";
+  // The header, the rows, and the totals row.
+  const rowTotal = data.length + 1 + (footTotals ? 1 : 0);
+  const tableProps: Record<string, unknown> = interactive
+    ? {
+        role: "grid",
+        "aria-label": label,
+        "aria-rowcount": rowTotal,
+        tabIndex: 0,
+        "aria-activedescendant": activeMounted(activeIndex, range) ? rowId(activeIndex) : undefined,
+        // Tells the global Shift+F10 handler to stand down for the grid's own menu.
+        ...(menuFor ? { "data-row-menu": "" } : {}),
+        onKeyDown,
+        // The first arrow press should not be the one that finds the cursor.
+        // The cursor row is the grid's focus indicator, so focus arriving
+        // must find it on screen: the first row when there is no cursor yet,
+        // else the cursor scrolled back into the mounted window.
+        onFocus: (event: FocusEvent<HTMLTableElement>) => {
+          if (event.target !== event.currentTarget || data.length === 0) return;
+          const at = cursor < 0 ? 0 : activeIndex;
+          if (cursor < 0) setCursor(0);
+          if (!activeMounted(at, range)) handle.current?.scrollIntoView({ index: at });
+        },
+      }
+    : { "aria-label": label, "aria-rowcount": rowTotal };
+
+  const context: TableContext = {
+    columns: cols,
+    interactive,
+    activeIndex,
+    selectedKey,
+    keyOf,
+    rowId,
+    tableProps,
+    activate,
+    menuIndex: menu.open ? menu.index : -1,
+    openRowMenu: menuFor ? openRowMenu : undefined,
+    density: size,
+  };
+
+  if (data.length === 0 && empty !== undefined && empty !== null) {
+    return (
+      <div {...rootAttributes} className={cn("h-full", str(className))}>
+        {node(empty)}
+      </div>
+    );
+  }
+
+  const header = () => (
+    <tr aria-rowindex={1}>
+      {cols.map((column, columnIndex) => {
+        const width = layout.widths[columnIndex];
+        const direction = current?.columnId === column.id ? current.direction : undefined;
+        return (
+          <th
+            key={column.id}
+            scope="col"
+            aria-sort={
+              column.sortable
+                ? direction === "asc"
+                  ? "ascending"
+                  : direction === "desc"
+                    ? "descending"
+                    : "none"
+                : undefined
+            }
+            style={width === undefined ? undefined : { width }}
+            className={headerCellClass(column, size)}
+          >
+            {column.sortable && handleSort ? (
+              <button
+                type="button"
+                onClick={() =>
+                  handleSort({
+                    columnId: column.id,
+                    direction: direction === "asc" ? "desc" : "asc",
+                  })
+                }
+                className={cn(
+                  "inline-flex max-w-full items-center gap-1 rounded-[var(--radius-sm)] transition-colors duration-150 ease-out hover:text-text-primary",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
+                  direction && "text-text-primary",
+                  column.align === "end" && "flex-row-reverse"
+                )}
+              >
+                <span className="truncate">{column.header}</span>
+                <SortGlyph direction={direction} />
+              </button>
+            ) : (
+              <span className="block truncate">{column.header}</span>
+            )}
+          </th>
+        );
+      })}
+      {layout.filler ? (
+        <th aria-hidden="true" className="border-b border-divider bg-surface-canvas p-0" />
+      ) : null}
+    </tr>
+  );
+
+  const totalsLabelAt = footTotals ? totalsLabelFor(cols, footTotals, totalsLabel) : null;
+  const footer = footTotals
+    ? () => (
+        <tr aria-rowindex={rowTotal} data-totals-row="">
+          {cols.map((column) => {
+            const spec = footTotals.get(column.id);
+            return (
+              <td key={column.id} className={cn(bodyCellClass(column, size), TOTALS_CELL_CLASS)}>
+                {spec
+                  ? totalContent(spec, data, column)
+                  : column.id === totalsLabelAt?.columnId
+                    ? totalsLabelAt.label
+                    : null}
+              </td>
+            );
+          })}
+          {layout.filler ? (
+            <td aria-hidden="true" className={cn(TOTALS_CELL_CLASS, "p-0")} />
+          ) : null}
+        </tr>
+      )
+    : undefined;
+
+  const table = (
+    <TableVirtuoso
+      {...rootAttributes}
+      ref={handle}
+      scrollerRef={(element) => setScroller(element instanceof HTMLElement ? element : null)}
+      className={cn(SCROLLER_RING_INSET, str(className))}
+      style={{ height: "100%" }}
+      data={data}
+      context={context}
+      components={TABLE_COMPONENTS}
+      defaultItemHeight={rowPx}
+      increaseViewportBy={DEFAULT_OVERSCAN_ROWS * rowPx}
+      computeItemKey={(index, row) => keyOf(row, index)}
+      fixedHeaderContent={header}
+      fixedFooterContent={footer}
+      rangeChanged={setRange}
+      itemContent={(index, row) => {
+        const rules = rowRuleClass(index, dividers, stripes);
+        return [
+          ...cols.map((column) => (
+            <td key={column.id} className={cn(bodyCellClass(column, size), rules)}>
+              {cellValue(row, column, index)}
+            </td>
+          )),
+          ...(layout.filler
+            ? [<td key={"\u0000filler"} aria-hidden="true" className={cn("p-0", rules)} />]
+            : []),
+        ];
+      }}
+      endReached={endReached ? (index) => endReached(index) : undefined}
+    />
+  );
+  if (!menuFor) return table;
+  return (
+    <ContextMenu
+      onOpenChange={(open) => {
+        if (!open) setMenu((current) => ({ ...current, open: false }));
+      }}
+    >
+      {table}
+      <ContextMenuContent {...owner} className={overlayZ}>
+        {renderMenuEntries(CONTEXT_MENU_PARTS, menu.items)}
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+const DEFAULT_MAX_LINES = 5000;
+const MAX_LINES_CEILING = 100_000;
+
+function LogLine({
+  entry,
+  monospace,
+  wrap,
+}: {
+  entry: unknown;
+  monospace: boolean;
+  wrap: boolean;
+}) {
+  const text =
+    typeof entry === "string"
+      ? entry
+      : typeof entry === "object" && entry !== null
+        ? str(field(entry, "text"))
+        : undefined;
+  const severity =
+    typeof entry === "object" && entry !== null ? field(entry, "severity") : undefined;
+  const glyph = severityGlyph(severity, "mt-0.5 h-3 w-3");
+  return (
+    <div
+      className={cn(
+        "flex gap-1.5 px-3 text-xs leading-5 text-text-primary",
+        monospace && "font-mono",
+        wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"
+      )}
+    >
+      {glyph}
+      {glyph ? <span className="sr-only">{`${String(severity)}: `}</span> : null}
+      <span className="min-w-0">{text ?? ""}</span>
+    </div>
+  );
+}
+
+/** Above the kept lines, as TerminalOutput says it: the view is not the whole log. */
+function LogDroppedNote({ context }: { context: { dropped: number } }) {
+  if (context.dropped === 0) return null;
+  return (
+    <div data-log-dropped="" className="px-3 pb-1 text-xs tabular-nums text-text-secondary">
+      {`${pluralize(context.dropped, "earlier line")} not kept`}
+    </div>
+  );
+}
+
+const LOG_COMPONENTS = { Header: LogDroppedNote };
+
+function KitLogView({
+  lines,
+  maxLines,
+  follow,
+  monospace,
+  wrap,
+  "aria-label": ariaLabel,
+  className,
+  ...rest
+}: PluginLogViewProps) {
+  const all: readonly unknown[] = Array.isArray(lines) ? lines : [];
+  const max = rowCount(maxLines, MAX_LINES_CEILING) ?? DEFAULT_MAX_LINES;
+  const dropped = all.length > max ? all.length - max : 0;
+  const visible = dropped > 0 ? all.slice(dropped) : all;
+  const following = follow !== false;
+  const mono = monospace !== false;
+  const wrapped = wrap !== false;
+  return (
+    <Virtuoso
+      {...pickRootProps(rest, { aria: true })}
+      // A live region would read out every line of a busy job; the log is
+      // there to be read on demand, from the keyboard as well as the wheel.
+      role="log"
+      aria-live="off"
+      aria-label={str(ariaLabel) ?? ""}
+      tabIndex={0}
+      className={cn(
+        "py-1 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
+        str(className)
+      )}
+      style={{ height: "100%" }}
+      data={visible}
+      context={{ dropped }}
+      components={LOG_COMPONENTS}
+      // Keyed by line number in `lines`, so a line keeps its row as older ones drop.
+      computeItemKey={(index) => dropped + index}
+      defaultItemHeight={20}
+      increaseViewportBy={400}
+      atBottomThreshold={24}
+      initialTopMostItemIndex={following ? Math.max(0, visible.length - 1) : 0}
+      followOutput={(atBottom) => (following && atBottom ? "auto" : false)}
+      itemContent={(_index, entry) => <LogLine entry={entry} monospace={mono} wrap={wrapped} />}
+    />
+  );
+}
+
+export const pluginKitLists = {
+  VirtualList: KitVirtualList,
+  DataTable: KitDataTable,
+  LogView: KitLogView,
+};

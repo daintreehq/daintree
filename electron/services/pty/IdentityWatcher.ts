@@ -89,7 +89,7 @@ const UNAMBIGUOUS_SHELL_PROMPT_PATTERNS = [
 ] as const;
 
 const ACTIVE_AGENT_PROMPT_PATTERN =
-  /(?:welcome to claude code|claude code v\d|tips for getting started|\?\s+for\s+shortcuts|welcome\s+back!)/i;
+  /(?:welcome to claude code|claude code v\d|openai codex|tips for getting started|\?\s+for\s+shortcuts|welcome\s+back!)/i;
 
 function findLastNonBlankLine(lines: readonly string[]): string | undefined {
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -238,6 +238,9 @@ export class IdentityWatcher {
   private committed = false;
   private promptStreak = 0;
   private sawPtyDescendant = false;
+  // A prompt already on screen when the next command is submitted is stale.
+  // Only a prompt emitted afterward can cancel an uncommitted process badge.
+  private sawPromptAfterSubmit = false;
   // A returned shell prompt can be emitted just before the foreground-PGID
   // probe observes ownership moving back to the shell. Remember that output
   // across poll ticks so a lingering background helper cannot hide the
@@ -400,6 +403,7 @@ export class IdentityWatcher {
     this.committed = false;
     this.promptStreak = 0;
     this.sawPtyDescendant = false;
+    this.sawPromptAfterSubmit = false;
     this.sawReturnedShellPromptOutput = false;
     this.resetForegroundCandidate();
     this.unreadPeakDescendantCount = 0;
@@ -474,6 +478,10 @@ export class IdentityWatcher {
     return (
       knownAgentPrompt.test(recent) ||
       knownAgentPrompt.test(visibleTail) ||
+      // Codex paints its bare composer above a separate context-status row.
+      // The last visible line is then not the prompt, but the glyph still
+      // belongs to the live agent rather than a returned shell.
+      /^\s*[>❯›]\s*$/m.test(visibleTail) ||
       /^\s*[>❯›]\s+\d+\./m.test(visibleTail) ||
       AGENT_ONLY_SINGLE_CHAR_PROMPT_PATTERN.test(currentVisibleLine ?? "") ||
       (/^\s*>\s*$/m.test(visibleTail) && /\?\s+for\s+shortcuts/i.test(visibleTail)) ||
@@ -499,6 +507,15 @@ export class IdentityWatcher {
   }
 
   observeOutput(data: string): void {
+    if (
+      !this.stopped &&
+      this.submittedAt !== null &&
+      this.identity?.processIconId &&
+      !this.identity.agentType &&
+      this.hasUnambiguousShellPromptInText(data, true)
+    ) {
+      this.sawPromptAfterSubmit = true;
+    }
     if (
       this.stopped ||
       (!this.identity?.agentType && !this.delegate.detectedAgentId) ||
@@ -590,6 +607,7 @@ export class IdentityWatcher {
     this.committed = false;
     this.promptStreak = 0;
     this.sawPtyDescendant = false;
+    this.sawPromptAfterSubmit = false;
     this.sawReturnedShellPromptOutput = false;
   }
 
@@ -843,7 +861,20 @@ export class IdentityWatcher {
         return;
       }
 
-      if (promptVisible && !this.identity.agentType && ptyDescendantCount === 0) {
+      // The cursor can lag behind newer output on Windows. A cached shell
+      // prompt must not cancel a live process when the descendant scan misses it.
+      const lastVisibleLine = findLastNonBlankLine(
+        this.delegate.getLastNLines(SHELL_IDENTITY_FALLBACK_SCAN_LINES)
+      );
+      const currentPromptVisible = isUnambiguousShellPromptLine(
+        lastVisibleLine ?? this.delegate.getCursorLine() ?? undefined
+      );
+      if (
+        currentPromptVisible &&
+        this.sawPromptAfterSubmit &&
+        !this.identity.agentType &&
+        ptyDescendantCount === 0
+      ) {
         console.log(
           `[IdentityDebug] shell-fallback-stop term=${this.delegate.terminalId.slice(-8)} ` +
             `reason=prompt-before-commit icon=${this.identity.processIconId ?? "<none>"}`
@@ -886,7 +917,10 @@ export class IdentityWatcher {
     const signals: CommittedPollSignals = {
       identity: this.identity,
       ptyDescendantCount,
-      promptVisible,
+      // An icon-only command can inherit the previous shell prompt in the
+      // visible buffer. Do not treat it as this command's return until a new
+      // prompt has arrived in output since submission.
+      promptVisible: agentIdentity || this.sawPromptAfterSubmit ? promptVisible : false,
       unambiguousShellPromptVisible,
       hasRecentCommandFailureOutput: this.hasRecentCommandFailureOutput(),
     };

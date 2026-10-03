@@ -12,6 +12,11 @@ import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { PluginGlyphTile } from "@/components/Plugin/pluginIcons";
 import { PluginDatabasesSection } from "@/components/Plugin/PluginDatabasesSection";
 import {
+  PluginPerformanceSection,
+  PluginStylesSection,
+} from "@/components/Plugin/PluginPerformanceTab";
+import { usePluginPerfSnapshot } from "@/hooks/usePluginPerfSnapshot";
+import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   type ProjectPluginInfo,
   type ProjectPluginState,
@@ -210,6 +215,13 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
   // by manifest id *and* owning project: the hook resolves the instance key the
   // plugin runs under, and another open project can ship the same manifest id.
   const logs = usePluginLogs(plugin.id, plugin.projectId);
+  // Main records metrics under the instance key, the same as for an installed
+  // plugin. An invalid manifest has none, and "" matches no snapshot.
+  const instanceId = plugin.instanceId ?? "";
+  const perfSnapshot = usePluginPerfSnapshot(instanceId);
+  // The manager has no panel list for a project plugin, so the Styles check is
+  // earned by a view having loaded this session rather than by a declaration.
+  const hasLoadedViews = plugin.state === "active" && (perfSnapshot?.viewLoads.length ?? 0) > 0;
 
   return (
     <div className="space-y-6">
@@ -303,6 +315,20 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
         <div className="space-y-2">
           <h4 className={SECTION_LABEL_CLASS}>Logs</h4>
           <PluginLogsSection {...logs} />
+        </div>
+      )}
+
+      {perfSnapshot && (
+        <div className="space-y-2">
+          <h4 className={SECTION_LABEL_CLASS}>Performance</h4>
+          <PluginPerformanceSection snapshot={perfSnapshot} />
+        </div>
+      )}
+
+      {hasLoadedViews && (
+        <div className="space-y-2">
+          <h4 className={SECTION_LABEL_CLASS}>Styles</h4>
+          <PluginStylesSection pluginId={instanceId} />
         </div>
       )}
 

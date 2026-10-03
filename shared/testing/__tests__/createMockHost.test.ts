@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import { createMockHost } from "../createMockHost.js";
 import type {
   PluginActionContribution,
@@ -272,6 +273,19 @@ describe("createMockHost", () => {
     expect(host.registeredHandlers[0]).toEqual({ channel: "ping", handler });
   });
 
+  it("refuses a registerHandler channel with a colon, as the host does", () => {
+    const host = createMockHost();
+    const handler = vi.fn();
+    expect(() => host.registerHandler("ledger:list", handler)).toThrow(
+      "Plugin channel must not contain colons: ledger:list"
+    );
+    const schema = { args: z.null(), result: z.null() };
+    expect(() => host.registerHandler("ledger:totals", schema, async () => null)).toThrow(
+      "Plugin channel must not contain colons: ledger:totals"
+    );
+    expect(host.registeredHandlers).toEqual([]);
+  });
+
   it("records broadcastToRenderer calls", async () => {
     const host = createMockHost();
     await host.broadcastToRenderer("evt", { foo: 1 });
@@ -435,7 +449,11 @@ describe("createMockHost", () => {
     const cb = vi.fn();
     await host.onDidChangeWorktrees(cb);
     host.simulateWorktreesChange([sampleSnapshot]);
-    expect(cb).toHaveBeenCalledWith([sampleSnapshot]);
+    expect(cb).toHaveBeenCalledWith([sampleSnapshot], {
+      added: [sampleSnapshot.id],
+      removed: [],
+      changed: [],
+    });
   });
 
   it("getAgentState returns null until a state change is simulated", async () => {
@@ -449,6 +467,8 @@ describe("createMockHost", () => {
     const dispose = await host.onDidChangeAgentState(cb);
     const snapshot = {
       agentId: "a1",
+      terminalId: "term-1",
+      workspaceId: "project-1",
       state: "working" as const,
       previousState: "idle" as const,
       running: true,
@@ -916,6 +936,22 @@ describe("createMockHost", () => {
       expect(dispatch).toHaveBeenCalledWith("anything", { x: 1 });
       expect(result).toEqual({ ok: true, result: 42 });
     });
+
+    it("records and forwards a dispatch target (#13119)", async () => {
+      const dispatch = vi.fn(async () => ({ ok: true as const, result: 1 }));
+      const host = createMockHost({ dispatch });
+      await host.dispatch("agent.launch", { agentId: "claude" }, { projectId: "p-b" });
+      expect(dispatch).toHaveBeenCalledWith(
+        "agent.launch",
+        { agentId: "claude" },
+        { projectId: "p-b" }
+      );
+      expect(host.dispatchedActions.at(-1)).toEqual({
+        actionId: "agent.launch",
+        args: { agentId: "claude" },
+        options: { projectId: "p-b" },
+      });
+    });
   });
 
   describe("actions catalog", () => {
@@ -1288,6 +1324,64 @@ describe("createMockHost production-parity validation (#10617)", () => {
       await expect(host.agents.list()).resolves.toEqual(panes);
       host.simulateAgentsChange([]);
       await expect(host.agents.list()).resolves.toEqual([]);
+    });
+
+    it("agents.listAll and onDidChangeAllAgents mirror production's gates and shape", async () => {
+      await expect(
+        createMockHost({ capabilities: ["agent:input"] }).agents.listAll()
+      ).rejects.toThrow(/PERMISSION_REQUIRED/);
+      const projectHost = createMockHost({ pluginId: `project__${"a".repeat(64)}__acme.board` });
+      await expect(projectHost.agents.listAll()).rejects.toThrow(/project plugin/);
+      expect(() => projectHost.onDidChangeAllAgents(() => {})).toThrow(/project plugin/);
+
+      const host = createMockHost();
+      await expect(host.agents.listAll()).resolves.toEqual({
+        agents: [],
+        degraded: false,
+        lastSuccessfulAt: 0,
+      });
+
+      const received: unknown[] = [];
+      const dispose = await host.onDidChangeAllAgents((s) => received.push(s), { debounceMs: 0 });
+      expect(host.subscriptionOptions.at(-1)).toEqual({ kind: "all-agents", debounceMs: 0 });
+
+      host.simulateAllAgentsChange({
+        agents: [
+          {
+            workspaceId: "12345678-1234-4abc-8def-123456789abc",
+            workspaceKind: "project",
+            terminalId: "t-1",
+            observedState: "waiting",
+            cwd: "/leak",
+          } as never,
+        ],
+        degraded: false,
+        lastSuccessfulAt: 9,
+      });
+      const listed = await host.agents.listAll();
+      expect(listed.agents).toEqual([
+        {
+          workspaceId: "12345678-1234-4abc-8def-123456789abc",
+          workspaceKind: "scratch",
+          terminalId: "t-1",
+          observedState: "waiting",
+        },
+      ]);
+      expect(Object.isFrozen(listed.agents[0])).toBe(true);
+      expect(received).toEqual([listed]);
+
+      dispose();
+      dispose();
+      host.simulateAllAgentsChange({ agents: [], degraded: true, lastSuccessfulAt: null });
+      expect(received).toHaveLength(1);
+
+      // The same callback twice is two subscriptions; disposing one keeps the other.
+      const twice = vi.fn();
+      const first = await host.onDidChangeAllAgents(twice);
+      await host.onDidChangeAllAgents(twice);
+      first();
+      host.simulateAllAgentsChange({ agents: [], degraded: false, lastSuccessfulAt: 1 });
+      expect(twice).toHaveBeenCalledTimes(1);
     });
 
     it("sendToAgent gates on agent:input and validates like production", async () => {
@@ -1718,5 +1812,156 @@ describe("createMockHost settings follow the declarations", () => {
     expect(() => host.settings.onDidChange("channel", () => {}, "local")).toThrow(
       /declared in "project"/
     );
+  });
+});
+
+describe("createMockHost fs.readFiles", () => {
+  it("reads what was written, per path and in order, with NOT_FOUND for the rest", async () => {
+    const host = createMockHost();
+    await host.fs.writeFile("/repo/a.txt", "alpha");
+    const results = await host.fs.readFiles!(["/repo/missing", "/repo/a.txt"]);
+    expect(results).toEqual([
+      {
+        path: "/repo/missing",
+        ok: false,
+        error: { code: "NOT_FOUND", message: expect.stringContaining("ENOENT") },
+      },
+      { path: "/repo/a.txt", ok: true, content: "alpha" },
+    ]);
+  });
+
+  it("mirrors the host's encoding, per-file cap and validation", async () => {
+    const host = createMockHost();
+    await host.fs.writeFile("/repo/big.txt", "x".repeat(20));
+    const [bytes] = await host.fs.readFiles!(["/repo/big.txt"], { encoding: "bytes" });
+    expect(bytes?.ok === true && bytes.content instanceof Uint8Array).toBe(true);
+    const [capped] = await host.fs.readFiles!(["/repo/big.txt"], { maxBytesPerFile: 5 });
+    expect(capped).toMatchObject({ ok: false, error: { code: "TOO_LARGE" } });
+    const call = host.fs.readFiles as (p: unknown, o?: unknown) => Promise<unknown>;
+    await expect(call(new Array(1025).fill("/a"))).rejects.toThrow(/at most 1024/);
+    await expect(call(["/a"], { encoding: "latin1" })).rejects.toThrow(/encoding/);
+  });
+});
+
+describe("createMockHost listener signal", () => {
+  it("reports every channel listened to until a test says otherwise", () => {
+    const host = createMockHost();
+    const seen: boolean[] = [];
+    const dispose = host.onDidChangeListeners!("tick", (has) => seen.push(has));
+    expect(host.hasListeners!("tick")).toBe(true);
+    host.simulateListenersChange("tick", false);
+    host.simulateListenersChange("tick", false);
+    expect(host.hasListeners!("tick")).toBe(false);
+    expect(host.hasListeners!("other")).toBe(true);
+    host.simulateListenersChange("tick", true);
+    dispose();
+    host.simulateListenersChange("tick", false);
+    expect(seen).toEqual([false, true]);
+  });
+
+  it("validates the channel like the host", () => {
+    const host = createMockHost();
+    expect(() => host.hasListeners!("a:b")).toThrow(/channel/);
+    expect(() => host.onDidChangeListeners!("", () => {})).toThrow(/channel/);
+  });
+});
+
+describe("createMockHost fs.walk", () => {
+  async function seeded() {
+    const host = createMockHost();
+    await host.fs.mkdir("/root/empty");
+    await host.fs.mkdir("/root/src/deep");
+    await host.fs.writeFile("/root/src/deep/x.ts", "xx");
+    await host.fs.writeFile("/root/src/y.js", "y");
+    await host.fs.writeFile("/root/z.ts", "zzz");
+    await host.fs.writeFile("/elsewhere/q.ts", "q");
+    return host;
+  }
+
+  it("lists the tree under the root in the host's order", async () => {
+    const host = await seeded();
+    const result = await host.fs.walk!("/root");
+    expect(result).toEqual({
+      entries: [
+        { path: "empty", type: "dir" },
+        { path: "src", type: "dir" },
+        { path: "src/deep", type: "dir" },
+        { path: "src/deep/x.ts", type: "file" },
+        { path: "src/y.js", type: "file" },
+        { path: "z.ts", type: "file" },
+      ],
+      truncated: false,
+    });
+  });
+
+  it("applies include, exclude, maxDepth, limit and includeSize", async () => {
+    const host = await seeded();
+    const paths = async (options: Parameters<NonNullable<typeof host.fs.walk>>[1]) =>
+      (await host.fs.walk!("/root", options)).entries.map((e) => e.path);
+    expect(await paths({ include: ["**/*.ts"] })).toEqual(["src/deep/x.ts", "z.ts"]);
+    expect(await paths({ exclude: ["src"] })).toEqual(["empty", "z.ts"]);
+    expect(await paths({ maxDepth: 1 })).toEqual(["empty", "src", "z.ts"]);
+    const limited = await host.fs.walk!("/root", { limit: 2 });
+    expect(limited.truncated).toBe(true);
+    expect(limited.entries.map((e) => e.path)).toEqual(["empty", "src"]);
+    const sized = await host.fs.walk!("/root", { include: ["z.ts"], includeSize: true });
+    expect(sized.entries).toEqual([{ path: "z.ts", type: "file", size: 3 }]);
+  });
+
+  it("rejects bad options and a missing root", async () => {
+    const host = await seeded();
+    await expect(host.fs.walk!("/root", { limit: 0 })).rejects.toThrow(/VALIDATION/);
+    await expect(host.fs.walk!("/nope")).rejects.toThrow(/ENOENT/);
+  });
+});
+
+describe("createMockHost terminals.readScreen", () => {
+  it("gates on terminal:read, not agent:read", async () => {
+    await expect(
+      createMockHost({ capabilities: ["agent:read"] }).terminals.readScreen("t-1")
+    ).rejects.toThrow(/PERMISSION_REQUIRED: .*"terminal:read"/);
+  });
+
+  it("validates arguments like production", async () => {
+    const host = createMockHost({ capabilities: ["terminal:read"] });
+    await expect(host.terminals.readScreen("")).rejects.toThrow(/terminalId/);
+    await expect(host.terminals.readScreen("t-1", { lines: 0 })).rejects.toThrow(/lines/);
+    await expect(host.terminals.readScreen("t-1", { lines: 101 })).rejects.toThrow(/lines/);
+    await expect(
+      host.terminals.readScreen("t-1", { lines: null as unknown as number })
+    ).rejects.toThrow(/lines/);
+    expect(host.readScreenCalls).toEqual([]);
+  });
+
+  it("reports configured screens, trimmed to the requested lines, and records each call", async () => {
+    const host = createMockHost({
+      capabilities: ["terminal:read"],
+      terminalScreens: {
+        "t-1": { status: "ok", text: "a\nb\nc", lineCount: 3, truncated: false },
+        "t-2": { status: "exited" },
+      },
+    });
+
+    await expect(host.terminals.readScreen("t-1", { lines: 2 })).resolves.toEqual({
+      status: "ok",
+      text: "b\nc",
+      lineCount: 2,
+      truncated: true,
+    });
+    await expect(host.terminals.readScreen("t-2")).resolves.toEqual({ status: "exited" });
+    await expect(host.terminals.readScreen("t-3")).resolves.toEqual({ status: "not-found" });
+    expect(host.readScreenCalls.map((c) => [c.terminalId, c.lines])).toEqual([
+      ["t-1", 2],
+      ["t-2", 20],
+      ["t-3", 20],
+    ]);
+
+    host.simulateTerminalScreen("t-3", { status: "ok", text: "", lineCount: 0, truncated: false });
+    await expect(host.terminals.readScreen("t-3")).resolves.toMatchObject({
+      status: "ok",
+      text: "",
+    });
+    host.simulateTerminalScreen("t-1", null);
+    await expect(host.terminals.readScreen("t-1")).resolves.toEqual({ status: "not-found" });
   });
 });

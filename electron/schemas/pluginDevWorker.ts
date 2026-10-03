@@ -42,6 +42,8 @@ const HOST_CALL_METHODS = {
   getAgentState: true,
   sendToActiveAgent: true,
   "agents.list": true,
+  "agents.listAll": true,
+  "terminals.readScreen": true,
   sendToAgent: true,
   showToast: true,
   dispatch: true,
@@ -60,10 +62,12 @@ const HOST_CALL_METHODS = {
   "fs.readFile": true,
   "fs.readFileBytes": true,
   "fs.readFileWithRevision": true,
+  "fs.readFiles": true,
   "fs.writeFile": true,
   "fs.mkdir": true,
   "fs.appendFile": true,
   "fs.readdir": true,
+  "fs.walk": true,
   "fs.stat": true,
   "fs.watch": true,
   "git.status": true,
@@ -100,6 +104,7 @@ const HOST_NOTIFY_METHODS = {
   "process.kill": true,
   "process.write": true,
   "process.resize": true,
+  pushRejected: true,
 } as const satisfies Record<PluginHostNotifyMethod, true>;
 
 const SUBSCRIPTION_KINDS = {
@@ -108,8 +113,11 @@ const SUBSCRIPTION_KINDS = {
   settings: true,
   storage: true,
   "agent-state": true,
+  "all-agents": true,
   "panel-lifecycle": true,
   "system-wake": true,
+  "push-listeners": true,
+  "push-listeners-observe": true,
   "process-exit": true,
   "process-crash": true,
   "process-data": true,
@@ -139,7 +147,7 @@ const SubscriptionScopeSchema = z.enum(["user", "project", "local", "worktree"])
 
 /**
  * Any number, `NaN` and infinities included. Zod v4's `z.number()` rejects
- * those, but the host already normalizes a nonsense `debounceMs` to zero — so
+ * those, but the host already normalizes a nonsense `debounceMs` itself — so
  * treating one as a terminal violation would kill a plugin whose call the
  * pre-schema path served without complaint.
  */

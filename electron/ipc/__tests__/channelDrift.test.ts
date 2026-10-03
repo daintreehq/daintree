@@ -81,6 +81,16 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   // `host.reloadPanel()` request (#12610). Paired with the
   // `plugin:panel-reload-request` event declared in IpcEventMap.
   "plugin:panel-reload-response",
+  // fire-and-forget — renderer→main `ipcRenderer.send` batches of plugin view
+  // cost observations, and the subscribe/unsubscribe edges of the perf snapshot
+  // feed (paired with `plugin:perf-snapshots-changed` in IpcEventMap).
+  "plugin:report-view-metrics",
+  "plugin:perf-snapshots-subscribe",
+  "plugin:perf-snapshots-unsubscribe",
+  // fire-and-forget — renderer→main `ipcRenderer.send` of the full set of
+  // plugin push channels the renderer has subscribers for, so main skips
+  // pushes nothing there would receive.
+  "plugin:report-push-listeners",
 
   // fire-and-forget — main→renderer broadcast for in-app demo command
   // forwarding (`sendCommandAndAwait` in handlers/demo.ts). The renderer

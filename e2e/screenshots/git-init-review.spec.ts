@@ -44,7 +44,6 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync 
 import { tmpdir } from "os";
 import path from "path";
 import { launchApp, closeApp, mockOpenDialog, type AppContext } from "../helpers/launch";
-import { dismissTelemetryConsent } from "../helpers/project";
 import { dismissBlockingPalette } from "../helpers/overlays";
 import { injectDelay, injectFault, clearAllFaults } from "../helpers/ipcFaults";
 import { SEL } from "../helpers/selectors";
@@ -339,7 +338,6 @@ test("git init dialog review — configuration, progress, recovery and success",
     const app = ctx.app;
     const page = ctx.window;
 
-    await dismissTelemetryConsent(page);
     await dismissBlockingPalette(page);
     await page.locator(SEL.welcome.openFolder).waitFor({ state: "visible", timeout: T_LONG });
     if (THEME) await setWelcomeTheme(page, THEME);

@@ -182,7 +182,6 @@ type ShotPayload = {
 };
 
 const EXTERNAL_CALLER = { token4LastChars: "8f3a", userAgent: "Claude Code 2.4.1 (darwin)" };
-const EXTERNAL_ORIGIN = "external" as const;
 
 /** Mirrors CONFIRM_COOLDOWN_MS in src/components/McpConfirmDialog.tsx. */
 const CONFIRM_COOLDOWN_MS = 1_200;

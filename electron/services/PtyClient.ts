@@ -811,6 +811,15 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
+   * OS pid of the pty-host serving `windowId` (the default shard unless the
+   * fabric placed the window elsewhere), or null when no host is live. Lets a
+   * fault-mode E2E hook really kill the host rather than simulate its death.
+   */
+  getHostPidForWindow(windowId: number): number | null {
+    return this.shardForWindow(windowId).getHostPid();
+  }
+
+  /**
    * Mark the host fork as a project-restoring boot: the host skips its
    * boot-time homedir pool warm because the set-active-project sent right
    * after ready drains the pool to the project path anyway (#10393). The

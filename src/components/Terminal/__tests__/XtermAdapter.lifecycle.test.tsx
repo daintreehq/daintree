@@ -2,17 +2,19 @@
  * @vitest-environment jsdom
  */
 import React, { Suspense } from "react";
-import { render, waitFor, cleanup } from "@testing-library/react";
+import { act, render, waitFor, cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import type { KeybindingResolutionResult } from "@/services/keybindingUtils";
+import type { TerminalPaddingPaint } from "@/services/terminal/terminalPaddingPaint";
 import { XtermAdapter } from "../XtermAdapter";
 
 const mocks = vi.hoisted(() => {
   let keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
   let exitHandler: ((exitCode: number) => void) | null = null;
+  let paddingPaintHandler: ((paint: TerminalPaddingPaint) => void) | null = null;
   const platform = { isMac: true };
 
   const defaultAppearance = {
@@ -73,6 +75,12 @@ const mocks = vi.hoisted(() => {
     applyRendererPolicy: vi.fn(),
     boostRefreshRate: vi.fn(),
     addAltBufferListener: vi.fn(() => vi.fn()),
+    addPaddingPaintListener: vi.fn(
+      (_id: string, handler: (paint: TerminalPaddingPaint) => void) => {
+        paddingPaintHandler = handler;
+        return vi.fn();
+      }
+    ),
     fetchAndRestore: vi.fn(() => Promise.resolve(false)),
     notifyUserInput: vi.fn(),
     notifyEnterPressed: vi.fn(),
@@ -92,9 +100,11 @@ const mocks = vi.hoisted(() => {
     useTerminalFileTransfer,
     getKeyHandler: () => keyHandler,
     getExitHandler: () => exitHandler,
+    getPaddingPaintHandler: () => paddingPaintHandler,
     resetRuntime: () => {
       keyHandler = null;
       exitHandler = null;
+      paddingPaintHandler = null;
       managed.isInputLocked = false;
       managed.isAttaching = false;
       (managed as { keyHandlerInstalled?: boolean }).keyHandlerInstalled = false;
@@ -1043,6 +1053,77 @@ describe("XtermAdapter lifecycle", () => {
         const [, withoutOwner] = mocks.useTerminalFileTransfer.mock.calls.at(-1)!;
         expect(withoutOwner.onDropSelect).toBeUndefined();
       });
+    });
+  });
+
+  describe("padding paint (#13160)", () => {
+    const painted: TerminalPaddingPaint = {
+      top: "#141414",
+      right: "#141414",
+      bottom: "#191919",
+      left: null,
+      gridWidth: 720,
+      gridHeight: 408,
+    };
+
+    async function mountWithScrollable() {
+      const view = renderAdapter();
+      await waitFor(() => expect(mocks.getPaddingPaintHandler()).not.toBeNull());
+      const host = view.container.querySelector<HTMLElement>('[aria-label="Terminal output"]')!;
+      const scrollable = document.createElement("div");
+      scrollable.className = "xterm-scrollable-element";
+      host.appendChild(scrollable);
+      const wrapper = host.parentElement!;
+      return { view, wrapper, scrollable };
+    }
+
+    it("extends app-painted edges into the padding and the grid remainder", async () => {
+      const { wrapper, scrollable } = await mountWithScrollable();
+      expect(wrapper.style.backgroundImage).toBe("");
+
+      act(() => mocks.getPaddingPaintHandler()!(painted));
+
+      expect(wrapper.style.backgroundColor).toBe("rgb(0, 0, 0)");
+      // jsdom normalises the colours to rgb().
+      expect(wrapper.style.backgroundImage).toContain("rgb(20, 20, 20)");
+      expect(wrapper.style.backgroundImage).toContain("rgb(25, 25, 25)");
+      expect(wrapper.className).toContain("pl-3");
+      // The right remainder sits on xterm's scrollable element, past the grid.
+      expect(scrollable.style.backgroundImage).toContain("rgb(20, 20, 20)");
+      expect(scrollable.style.backgroundPosition).toContain("720px");
+
+      // Back to the default background: every layer clears.
+      act(() =>
+        mocks.getPaddingPaintHandler()!({
+          top: null,
+          right: null,
+          bottom: null,
+          left: null,
+          gridWidth: 0,
+          gridHeight: 0,
+        })
+      );
+      expect(wrapper.style.backgroundImage).toBe("");
+      expect(scrollable.style.backgroundImage).toBe("");
+    });
+
+    it("leaves the alt buffer's unpadded layout untouched", async () => {
+      mocks.terminalInstanceService.getAltBufferState.mockReturnValue(true);
+      const { wrapper, scrollable } = await mountWithScrollable();
+
+      act(() => mocks.getPaddingPaintHandler()!(painted));
+
+      expect(wrapper.className).toContain("terminal-alt-buffer");
+      expect(wrapper.style.backgroundImage).toBe("");
+      expect(scrollable.style.backgroundImage).toBe("");
+    });
+
+    it("unsubscribes on unmount", async () => {
+      const { view } = await mountWithScrollable();
+      const unsubscribe =
+        mocks.terminalInstanceService.addPaddingPaintListener.mock.results[0]!.value;
+      view.unmount();
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
     });
   });
 });

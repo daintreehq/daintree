@@ -15,7 +15,9 @@
  *   over IPC; it lives only in the renderer voice store and is overwritten
  *   by `beginSession()` once `connecting` arrives.
  * - connecting: WebSocket to OpenAI Realtime is being established.
- * - recording: Connected and receiving audio; live transcription in progress.
+ * - recording: The transcription backend is ready; live transcription in
+ *   progress. Says nothing about whether the mic is delivering real audio —
+ *   that is the renderer-only `micSignal` in the voice store (#13105).
  * - paused: Session alive (WebSocket open) but audio capture suspended;
  *   the PCM worklet stops forwarding chunks until the user resumes. An
  *   auto-stop timer terminates the session if pause exceeds 60s.

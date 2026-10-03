@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
+import { openTerminal } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
 
@@ -94,7 +95,7 @@ async function openEventsDock(window: Page): Promise<void> {
     .toBe(true);
 }
 
-test.describe.serial("Core: Event Inspector", () => {
+test.describe.serial("Core: Event Inspector and Diagnostics dock", () => {
   test.beforeAll(async () => {
     const { dir, cleanup } = createFixtureRepo({ name: "event-inspector" });
     fixtureDir = dir;
@@ -120,6 +121,19 @@ test.describe.serial("Core: Event Inspector", () => {
   test.afterAll(async () => {
     if (ctx?.app) await closeApp(ctx.app);
     fixtureCleanup?.();
+  });
+
+  // Runs before any terminal exists in this project: the real action registry
+  // and focus context must report the missing terminal as the disabled reason.
+  test("worktree.inject with no focused terminal is DISABLED with its reason", async () => {
+    const result = (await ctx.window.evaluate(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__daintreeDispatchAction("worktree.inject", {}, { source: "agent" })
+    )) as { ok: boolean; error?: { code: string; message: string } };
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("DISABLED");
+    expect(result.error?.message).toContain("No focused terminal");
   });
 
   test("search and trace filters accept input and clear", async () => {
@@ -166,6 +180,9 @@ test.describe.serial("Core: Event Inspector", () => {
     await test.step("Type a query into the events search", async () => {
       await search.fill("agent");
       await expect(search).toHaveValue("agent");
+      // The query reaches the event store only after the input's debounce, and
+      // switching tabs unmounts the input.
+      // timer: EventFilters search debounce (200ms)
       await window.waitForTimeout(T_SETTLE);
     });
 
@@ -237,17 +254,11 @@ test.describe.serial("Core: Event Inspector", () => {
         .toBe(3);
     });
 
-    await test.step("When the timeline paints, selecting a row populates the detail pane", async () => {
-      // Opportunistic UI coverage of the real selection → detail path. When the
-      // virtualized list does not materialize a row in this headless session,
-      // the capture/filter assertion above stands as the guarantee of record.
-      if (
-        !(await rows
-          .first()
-          .isVisible({ timeout: T_SHORT })
-          .catch(() => false))
-      )
-        return;
+    await test.step("The timeline paints the seeded rows and selecting one fills the detail pane", async () => {
+      // openEventsDock grew the dock to its max height, so the virtualized
+      // timeline has room to materialize rows; no row is a failure.
+      await expect(rows.first()).toBeVisible({ timeout: T_MEDIUM });
+      await expect(rows).toHaveCount(3, { timeout: T_MEDIUM });
       await expect(panel.locator(SEL.events.detailPlaceholder)).toBeVisible({ timeout: T_SHORT });
       await rows.first().click();
       await expect(panel.locator(SEL.events.detailPlaceholder)).toHaveCount(0, {
@@ -262,5 +273,44 @@ test.describe.serial("Core: Event Inspector", () => {
       await window.locator(SEL.diagnostics.closeButton).click();
       await expect(window.locator(SEL.diagnostics.dock)).not.toBeVisible({ timeout: T_SHORT });
     });
+  });
+
+  // Last, so the dock was left closed on the Events tab: the Problems tab being
+  // selected afterwards proves the error auto-promoted it.
+  test("auto-promotion to Problems tab does not steal terminal focus", async () => {
+    const { window } = ctx;
+    const dock = window.locator(SEL.diagnostics.dock);
+    const problemsTab = window.locator(SEL.diagnostics.tab("problems"));
+
+    await expect(dock).not.toBeVisible({ timeout: T_SHORT });
+
+    await openTerminal(window);
+    const textarea = window.locator(SEL.terminal.xtermHelperTextarea);
+    await expect(textarea.first()).toBeVisible({ timeout: T_MEDIUM });
+
+    await textarea.first().focus();
+    await expect(textarea.first()).toBeFocused({ timeout: T_SHORT });
+
+    await window.evaluate(() => {
+      globalThis.window.__DAINTREE_E2E_ADD_ERROR__?.("E2E focus preservation test error");
+    });
+
+    await expect(dock).toBeVisible({ timeout: T_MEDIUM });
+    await expect(problemsTab).toHaveAttribute("aria-selected", "true", {
+      timeout: T_SHORT,
+    });
+    await expect(window.locator(SEL.diagnostics.panel("problems"))).toContainText(
+      "E2E focus preservation test error",
+      { timeout: T_MEDIUM }
+    );
+
+    await expect(textarea.first()).toBeFocused({ timeout: T_SHORT });
+
+    await window.evaluate(() => {
+      globalThis.window.__DAINTREE_E2E_CLEAR_ERRORS__?.();
+    });
+
+    await window.locator(SEL.diagnostics.closeButton).click();
+    await expect(dock).not.toBeVisible({ timeout: T_SHORT });
   });
 });

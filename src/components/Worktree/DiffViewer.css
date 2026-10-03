@@ -72,7 +72,9 @@
   left: 0;
   z-index: 2;
   background: var(--color-surface-sidebar);
-  color: var(--color-state-idle);
+  /* Secondary ink, not the idle-activity hue it borrowed: line numbers are
+     coordinates people read, and idle sits under 4.5:1 on several themes. */
+  color: var(--color-text-secondary);
   padding: 0 8px;
   /* width acts as a hint under table-layout:auto; min-width keeps it from
      shrinking under content-heavy code columns. */
@@ -401,6 +403,17 @@
   opacity: 1;
 }
 
+/* A host's own hunk controls (the plugin kit's Stage, Revert, Comment). Always
+   drawn, unlike the copy button: they are what the hunk is for, not a spare.
+   Pulled into the row's height as the copy button is (its -my-1), so a header
+   carrying actions keeps the host's rhythm while each target stays 24px. */
+.diff-viewer .diff-hunk-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-block: -4px;
+}
+
 /* Keyboard hunk nav target: keep the hunk header clear of the sticky dialog
    header when scrollIntoView lands a hunk at block: "start". */
 .diff-viewer tbody.diff-hunk {
@@ -473,76 +486,6 @@
 
 .light .diff-scroll-root::-webkit-scrollbar-thumb:active {
   background: var(--scrollbar-thumb-active);
-}
-
-/* refractor's grammars tag syntax tokens with bare class names that collide
-   with Tailwind's display utilities — most importantly the Markdown table
-   grammar, which puts class="token table …" on every cell/punctuation token of
-   a table row. Tailwind's `.table { display: table }` utility then turns those
-   inline token spans into block-level table boxes, so each token stacks on its
-   own line and a one-line Markdown table row balloons to ~18 rows (looks like
-   the whole diff "collapses" once syntax highlighting lands — the second,
-   post-paint token pass). Other grammars can collide the same way (`hidden`,
-   `block`, `inline-block`, `table-cell`, …). Syntax tokens are always inline, so
-   pin them back to inline to be immune to any Tailwind display-utility name
-   clash. The reset is unlayered (DiffViewer.css isn't in a Tailwind @layer), so
-   it outranks the layered utility regardless of specificity. */
-.diff-viewer .diff-code .token {
-  display: inline;
-}
-
-/* Syntax highlighting overrides for Tokyo Night palette */
-.diff-viewer .token.comment,
-.diff-viewer .token.prolog,
-.diff-viewer .token.doctype,
-.diff-viewer .token.cdata {
-  color: var(--color-syntax-comment);
-}
-
-.diff-viewer .token.punctuation {
-  color: var(--color-syntax-punctuation);
-}
-
-.diff-viewer .token.property,
-.diff-viewer .token.tag,
-.diff-viewer .token.boolean,
-.diff-viewer .token.number,
-.diff-viewer .token.constant,
-.diff-viewer .token.symbol {
-  color: var(--color-syntax-number);
-}
-
-.diff-viewer .token.selector,
-.diff-viewer .token.attr-name,
-.diff-viewer .token.string,
-.diff-viewer .token.char,
-.diff-viewer .token.builtin {
-  color: var(--color-syntax-string);
-}
-
-.diff-viewer .token.operator,
-.diff-viewer .token.entity,
-.diff-viewer .token.url,
-.diff-viewer .language-css .token.string,
-.diff-viewer .style .token.string {
-  color: var(--color-syntax-operator);
-}
-
-.diff-viewer .token.atrule,
-.diff-viewer .token.attr-value,
-.diff-viewer .token.keyword {
-  color: var(--color-syntax-keyword);
-}
-
-.diff-viewer .token.function,
-.diff-viewer .token.class-name {
-  color: var(--color-syntax-function);
-}
-
-.diff-viewer .token.regex,
-.diff-viewer .token.important,
-.diff-viewer .token.variable {
-  color: var(--color-syntax-number);
 }
 
 /* border-collapse: collapse breaks position: sticky cells in Chromium (cell

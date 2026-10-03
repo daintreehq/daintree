@@ -39,17 +39,6 @@ const errorStoreState = vi.hoisted(() => ({
 const requestConflictMock = vi.hoisted(() => vi.fn());
 const requestMcpConfirmationMock = vi.hoisted(() => vi.fn(() => Promise.resolve("rejected")));
 const mcpConfirmState = vi.hoisted(() => ({ setPreview: vi.fn(), reset: vi.fn() }));
-const diagnosticsState = vi.hoisted(() => ({ isOpen: false, openDock: vi.fn() }));
-const perfMetricsState = vi.hoisted(() => ({
-  fps: 60,
-  lafCount30s: 0,
-  cls30s: 0,
-  setLiveMetrics: vi.fn(),
-}));
-const performanceModeState = vi.hoisted(() => ({
-  performanceMode: false,
-  setPerformanceMode: vi.fn(),
-}));
 const worktreeStoreState = vi.hoisted(() => ({
   worktrees: new Map([
     [
@@ -65,8 +54,6 @@ const worktreeStoreState = vi.hoisted(() => ({
 
 vi.mock("@/store", () => ({
   useErrorStore: { getState: () => errorStoreState },
-  useDiagnosticsStore: { getState: () => diagnosticsState },
-  usePerformanceModeStore: { getState: () => performanceModeState },
 }));
 vi.mock("@/store/recipeConflictStore", () => ({
   useRecipeConflictStore: { getState: () => ({ requestConflict: requestConflictMock }) },
@@ -74,9 +61,6 @@ vi.mock("@/store/recipeConflictStore", () => ({
 vi.mock("@/store/mcpConfirmStore", () => ({
   requestMcpConfirmation: requestMcpConfirmationMock,
   useMcpConfirmStore: { getState: () => mcpConfirmState },
-}));
-vi.mock("@/store/perfMetricsStore", () => ({
-  usePerfMetricsStore: { getState: () => perfMetricsState },
 }));
 vi.mock("@/store/createWorktreeStore", () => ({
   getCurrentViewStore: () => ({ getState: () => worktreeStoreState }),
@@ -101,12 +85,6 @@ const E2E_GLOBAL_KEYS = [
   "__DAINTREE_E2E_RESET_MCP_CONFIRM__",
   "__DAINTREE_E2E_ENQUEUE_PLUGIN_MCP_CONFIRM__",
   "__DAINTREE_E2E_RESET_PLUGIN_MCP_CONFIRM__",
-  "__DAINTREE_E2E_DIAGNOSTICS_STATE__",
-  "__DAINTREE_E2E_OPEN_DIAGNOSTICS__",
-  "__DAINTREE_E2E_PERF_METRICS_STATE__",
-  "__DAINTREE_E2E_SET_PERF_METRIC__",
-  "__DAINTREE_E2E_PERF_MODE_STATE__",
-  "__DAINTREE_E2E_SET_PERF_MODE__",
 ] as const;
 
 describe("useE2EBridges", () => {

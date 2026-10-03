@@ -1,14 +1,14 @@
 # Views: what you get in the DOM
 
-A plugin view is a React component the renderer mounts inside a panel, or in the plugin's settings. This page is what that component can rely on, what it can't, and how to make it look like it belongs. It applies equally to a project plugin's hand-written `dist/panel.js` and to a bundled `@daintreehq/plugin-vite` view; the differences are called out where they exist. The manifest side is [Contribution points → Views](./contribution-points.md#views--shipped).
+A plugin view is a React component the renderer mounts inside a panel, or in the plugin's settings. This page is what that component can rely on, what it can't, and how to make it look like it belongs. It applies equally to a project plugin's hand-written `dist/panel.js` and to a bundled `@daintreehq/plugin-vite` view; the differences are called out where they exist. The short version: draw with [the kit](#host-ui-components), style the rest with [Daintree's tokens](#styling), get data with [the SDK's hooks](#the-sdks-react-hooks), and read [Performance](#performance) before you render a list. The manifest side is [Contribution points → Views](./contribution-points.md#views--shipped).
 
 ## Where you render
 
 Views render **inline** in Daintree's React tree, not in an iframe. Same document, same CSS cascade, same `:root` custom properties, same React instance. That is what makes the styling below possible, and it is also why a view has the same reach as Daintree's own UI, including the full `window.electron` bridge. The [trust model](./trust-model.md) covers what that means; this page covers what to do with it.
 
-The host mounts your default export under an error boundary and a `Suspense` boundary, inside a container that is `flex flex-col flex-1 min-h-0 w-full`. Make your root element fill it: `height: 100%` with `display: flex; flex-direction: column; min-height: 0` is the shape that scrolls correctly, because `min-height: 0` is what lets a flex child shrink below its content and hand the overflow to an inner scroller. A root that is only `height: 100%` will push the panel's own scrollbar around instead of owning it.
+The host mounts your default export under an error boundary and a `Suspense` boundary, inside a container that is `flex flex-col flex-1 min-h-0 w-full`. Make your root element fill it: `height: 100%` with `display: flex; flex-direction: column; min-height: 0` is the shape that scrolls correctly, because `min-height: 0` is what lets a flex child shrink below its content and hand the overflow to an inner scroller. A root that is only `height: 100%` will push the panel's own scrollbar around instead of owning it. The kit's [`PaneLayout`](./ui-kit.md#page-structure) is that shape already, with the header, toolbar and status strip at the host panes' own heights and the body as the one scroller.
 
-You receive [`PanelViewProps`](./contribution-points.md#views--shipped): `panelId`, `pluginId`, `worktreeId`, `disposeSignal`, `panelRemovedSignal`, `initialArgs`, `stateVersion`, `persistState`, `requestReload`, `setHasUnsavedChanges`, `styleRootAttributes`, and on a settings view `settingsContext`. Two of these are misread in every first plugin. `pluginId` is your host-side id, which for a project plugin is the instance key, not your manifest name; pass it through to the bridge as given. `disposeSignal` aborts on every unmount, including the temporary ones (a sibling pane maximised, a dock tab left), so it is for cancelling fetches, never for deciding something is finished. `stateVersion` says which shape `initialArgs` holds, and is only meaningful once you declare `stateVersion` on the panel contribution — see [panel state versioning](./contribution-points.md#panels--shipped).
+You receive [`PanelViewProps`](./contribution-points.md#views--shipped): `panelId`, `pluginId`, `worktreeId`, `disposeSignal`, `panelRemovedSignal`, `initialArgs`, `stateVersion`, `persistState`, `requestReload`, `setHasUnsavedChanges`, `setToolbarItemState`, `runningActions`, `styleRootAttributes`, and on a settings view `settingsContext`. Two of these are misread in every first plugin. `pluginId` is your host-side id, which for a project plugin is the instance key, not your manifest name; pass it through to the bridge as given. `disposeSignal` aborts on every unmount, including the temporary ones (a sibling pane maximised, a dock tab left), so it is for cancelling fetches, never for deciding something is finished. `stateVersion` says which shape `initialArgs` holds, and is only meaningful once you declare `stateVersion` on the panel contribution — see [panel state versioning](./contribution-points.md#panels--shipped).
 
 A render error shows the host's diagnostics pane with a Try again that re-imports the module, Close panel, Copy diagnostics and View logs. The rest of Daintree keeps working.
 
@@ -26,37 +26,51 @@ The user can reload the panel too, from Reload panel in its menus and dialog hea
 
 ## A settings section
 
-A view with `location: "settings"` is your plugin's custom settings section, for what the generated [settings fields](./contribution-points.md#settings-schema--shipped) can't express — a sign-in, a list editor, a connection test. Declare at most one, with an `id` no panel uses:
+A view with `location: "settings"` is your plugin's custom settings section, for what the generated [settings fields](./contribution-points.md#settings-schema--shipped) can't express — a sign-in, a list or a table of pairs (the kit's `ListEditor` and `KeyValueEditor`), a connection test. Declare at most one, with an `id` no panel uses:
 
 ```json
 { "id": "connection", "componentPath": "dist/settings.js", "location": "settings" }
 ```
 
-The host mounts it in your settings home, below the generated fields, inside a settings group it draws; the section's heading and spacing are the host's. Render **rows**, not a page: no heading, no card, no Save button — apply each change as it is made, like every other settings row.
+The 0.1.0 CLI on npm accepts only `location: "panel"` views, so its `validate` and `package` refuse this entry: Not in the 0.1.0 release on npm; it ships in the next one.
+
+The host mounts it in your settings home, below the generated fields. The section heading is the home's own, and the host draws one `SettingsGroup` around your view, so the view renders **rows** and nothing else: kit `SettingsRow`s under one root, with no heading, no card, and no `SettingsSection` or `SettingsGroup` of its own. There is no Save either — apply each change as it is made, like every other settings row — so a `SettingsActions` Save row does not belong in a `location: "settings"` view.
 
 **Which home, which scope.** It receives `settingsContext: { scope, projectId }`. An installed plugin's section mounts twice — `{ scope: "user", projectId: null }` in the plugin manager, `{ scope: "project", projectId }` in Project settings — so render the rows for the scope you're given; each mount has its own `panelId`. A project plugin's section mounts only in Project settings, with `scope: "project"`.
 
 **What it doesn't get.** There is no panel record behind it, so `initialArgs`, `persistState`, `stateVersion`, `worktreeId`, `requestReload` and `setHasUnsavedChanges` are absent. `pluginId`, `panelId`, `disposeSignal`, `panelRemovedSignal` and `styleRootAttributes` behave as they do in a panel.
 
-**Containment.** The surface is contained like a project surface (`contain: layout paint`, overflow clipped, its own stacking context), so a `position: fixed` descendant stays inside it; portal anything that has to float, spreading `styleRootAttributes` onto the portal container.
+**Containment.** The surface is contained like a project surface (`contain: layout paint`, overflow clipped, its own stacking context), so a `position: fixed` descendant stays inside it; portal anything that has to float with the kit's `Portal`, which marks its container as your style root.
 
 **Lifecycle.** Mounting the section activates a loaded plugin that hasn't activated yet, as opening a panel does; it never starts a stopped one. While the plugin is disabled or stopped, the section shows as a single row saying it's available once the plugin runs. When the plugin stops, is muted or reloads, the section is unmounted and its `disposeSignal` and `panelRemovedSignal` abort. After a reload an open settings page shows "Reloading…" until the new module is being served, then mounts it — it never runs the retired one. A render error shows the same diagnostics pane with Try again that a panel gets.
 
 **Fields it owns.** Mark a declared setting `editor: "view"` when this section is where it is edited — a credential behind a sign-in button, a table stored as `json`. The generated form then leaves it out, and a deep link to that key (`host.settings.open(key)`, the setup strip's **Open plugin settings**) lands on your section instead of a field. The setting keeps everything else a declaration gives it: `required` still drives the setup strip, and `host.settings.get` still reads it.
 
 ```jsx
-// One root whose children are rows; the hairlines match the host's own.
+import { Button, SettingsRow } from "@daintreehq/plugin-ui";
+
+// One root whose children are rows. The host's group splits only its own direct
+// children, so the root draws the hairlines between yours, in the group's own ink.
 <div className="divide-y divide-border-subtle">
-  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3">
-    <div className="min-w-0 flex-1">
-      <div className="text-sm font-medium text-text-primary">Connected account</div>
-      <div className="mt-0.5 text-xs text-text-secondary">Signed in as ada@example.com</div>
-    </div>
-    <button className="rounded-md border border-border-default px-3 py-1.5 text-xs hover:bg-surface-hover">
-      Sign out
-    </button>
-  </div>
-</div>
+  <SettingsRow
+    label="Connected account"
+    description="Signed in as ada@example.com"
+    control={
+      <Button variant="outline" size="sm" onClick={signOut}>
+        Sign out
+      </Button>
+    }
+  />
+  <SettingsRow
+    label="Connection"
+    description="Checks the account can reach the bank."
+    control={
+      <Button variant="outline" size="sm" loading={testing} onClick={testConnection}>
+        Test connection
+      </Button>
+    }
+  />
+</div>;
 ```
 
 A view has no `host`, so the section reads and writes through your worker, like any other view:
@@ -74,9 +88,11 @@ host.registerHandler("saveToken", async (_ctx, token) => {
 const { connected } = await window.electron.plugin.invoke(pluginId, "connection");
 ```
 
-Store what the section edits with your worker: credentials as a declared `type: "secret"` setting (`host.settings.set`), everything else in `host.storage` or a `host.db` database (declare it `location: "local"` to keep it on this machine and out of the repository). Never put a credential in `host.storage` or a database.
+Store what the section edits with your worker: credentials as a declared `type: "secret"` setting (`host.settings.set`), everything else in `host.storage` or a `host.db` database (declare it `location: "local"` to keep it on this machine and out of the repository). Never put a credential in `host.storage` or a database. In the section, a kit `SecretInput` with `stored` shows that one is saved, with Replace and Clear, without the view ever holding it.
 
 ## Styling
+
+**Draw with the kit first.** Buttons, inputs, selects, lists, tables, dialogs, empty and loading states, icons and the settings grammar are [`@daintreehq/plugin-ui`](#host-ui-components) components, already styled and themed; `daintree-plugin lint` points at a hand-rolled one. Tailwind is for the layout around them and for anything bespoke — and nothing below is locked down for that.
 
 **Tailwind utility classes are how you style a plugin view.** Write `className="flex gap-2 p-4 bg-surface-panel"` and it works — in a hand-written `dist/panel.js` exactly as in a bundled view, with no build step and no configuration on your side.
 
@@ -89,53 +105,69 @@ Semantic colours resolve to live theme variables, so a panel built on them follo
 
 **Not part of the vocabulary:** stock palette colours (`bg-red-500`, `text-blue-600`); `dark:` — Daintree themes are runtime tokens, not a class, so a semantic token is already theme-aware and `dark:` is never the answer; `prose` (`@tailwindcss/typography` is not in the plugin contract; for rendered Markdown use [`Markdown`](#host-ui-components), which brings the host's document styles with it); `@apply`, which needs a build step this path does not have.
 
-Prefer **container queries** (`@container`, `@sm:`, `@md:`) over viewport breakpoints (`sm:`, `md:`). A breakpoint describes the whole window; your panel is one pane in a grid and can be narrow while the window is wide.
+Prefer **container queries** (`@container`, `@sm:`, `@md:`) over viewport breakpoints (`sm:`, `md:`). A breakpoint describes the whole window; your panel is one pane in a grid and can be narrow while the window is wide. The container has to be an **ancestor**: `@md:` answers to the nearest enclosing `@container`, never to the element carrying it, so `@container @md:grid-cols-4` on one element never applies (lint: `self-container-query`). Put `@container` on the wrapper and the variants on its children. When the structure itself has to change with the pane — a list beside its detail when wide, stacked when narrow — read the width with the kit's `useContainerSize` or `useBreakpoint`, which answer to the element you hand them, and lay the grid out with `AutoGrid`, which reflows with its own width.
 
 ### The vocabulary
 
 <!-- BEGIN generated: plugin-style-vocabulary -->
 
-**Surfaces** — `bg-`, `border-`, `text-`
+**Surfaces** — shown with `bg-`; `border-` and `text-` take the same names
 
-`surface-canvas` `surface-sidebar` `surface-toolbar` `surface-panel` `surface-panel-elevated` `surface-dialog` `surface-grid` `surface-input` `surface-inset` `surface-hover` `surface-active` `surface-disabled` `surface-highlight`
+`bg-surface-canvas` `bg-surface-sidebar` `bg-surface-toolbar` `bg-surface-panel` `bg-surface-panel-elevated` `bg-surface-dialog` `bg-surface-grid` `bg-surface-input` `bg-surface-inset` `bg-surface-hover` `bg-surface-active` `bg-surface-disabled` `bg-surface-highlight`
 
-**Text** — `text-`
+**Text**
 
-`text-primary` `text-secondary` `text-muted` `text-placeholder` `text-inverse` `text-link`
+`text-text-primary` `text-text-secondary` `text-text-muted` `text-text-placeholder` `text-text-inverse` `text-text-link`
 
-**Borders** — `border-`, `divide-`, `ring-`
+**Borders** — shown with `border-`; `divide-` and `ring-` take the same names
 
-`border-default` `border-subtle` `border-strong` `border-divider` `border-interactive` `border-input`
+`border-border-default` `border-border-subtle` `border-border-strong` `border-border-divider` `border-border-interactive` `border-border-input`
 
-**Status** — `bg-`, `text-`, `border-`
+**Status** — shown with `bg-`; `text-` and `border-` take the same names
 
-`status-success` `status-warning` `status-danger` `status-info` `status-danger-surface` `status-success-surface` `status-warning-surface` `status-info-surface` `status-error` `status-error-surface`
+`bg-status-success` `bg-status-warning` `bg-status-danger` `bg-status-info` `bg-status-danger-surface` `bg-status-success-surface` `bg-status-warning-surface` `bg-status-info-surface` `bg-status-error` `bg-status-error-surface`
 
-**Accent** — `bg-`, `text-`, `border-`
+**Accent** — shown with `bg-`; `text-` and `border-` take the same names
 
-`accent-primary` `accent-hover` `accent-foreground` `accent-primary-foreground` `accent-soft` `accent-muted` `accent-secondary` `accent-secondary-soft` `accent-secondary-muted`
+`bg-accent-primary` `bg-accent-hover` `bg-accent-foreground` `bg-accent-primary-foreground` `bg-accent-soft` `bg-accent-muted` `bg-accent-secondary` `bg-accent-secondary-soft` `bg-accent-secondary-muted`
 
-**Radii** — `rounded-`
+**Overlays** — shown with `bg-`; `border-` takes the same names
 
-`xs` `sm` `md` `lg` `xl` `2xl` `3xl` `4xl`
+`bg-overlay-base` `bg-overlay-subtle` `bg-overlay-soft` `bg-overlay-medium` `bg-overlay-strong` `bg-overlay-emphasis` `bg-overlay-hover` `bg-overlay-active` `bg-overlay-selected` `bg-overlay-elevated` `bg-overlay-raised` `bg-overlay-highlight`
 
-**Type scale below Tailwind's floor** — `text-`
+**Radii**
 
-`2xs` `3xs` `4xs`
+`rounded-xs` `rounded-sm` `rounded-md` `rounded-lg` `rounded-xl` `rounded-2xl` `rounded-3xl` `rounded-4xl`
 
-**Durations** — `duration-`
+**Shadows**
 
-`75` `100` `120` `150` `200` `250` `300`
+`shadow-ambient` `shadow-floating` `shadow-dialog`
 
-**Easings** — `ease-`
+**Type scale below Tailwind's floor**
 
-`snappy` `spring-critical` `out-expo` `exit` `panel-minimize`
+`text-2xs` `text-3xs` `text-4xs`
 
-**Category hues** — `bg-`, `text-`, `border-`, as `category-<hue>` plus a variant suffix
+**Fonts**
+
+`font-mono`
+
+**Durations**
+
+`duration-75` `duration-100` `duration-120` `duration-150` `duration-200` `duration-250` `duration-300`
+
+**Easings**
+
+`ease-snappy` `ease-spring-critical` `ease-out-expo` `ease-exit` `ease-panel-minimize`
+
+**Category hues** — `bg-`, `text-` or `border-`, then `category-<hue>` and a variant suffix: `bg-category-blue-subtle`, `text-category-teal-text`
 
 hues: `blue` `purple` `cyan` `green` `amber` `orange` `teal` `indigo` `rose` `pink` `violet` `slate`
 
 variants: `(bare)` `-subtle` `-text` `-border`
+
+**SVG paint** — `fill-` and `stroke-` take every colour name above, and `fill-current` / `stroke-current` paint with the element's text colour
+
+`fill-text-muted` `stroke-border-default` `fill-status-danger` `fill-category-blue`
 
 **Custom variants** — write as `variant:utility`
 
@@ -148,40 +180,61 @@ Everything else Tailwind ships that does not name a colour works too — this li
 ### Copy-ready shapes
 
 ```jsx
-// Panel root. `flex flex-col flex-1 min-h-0` is what makes an inner scroller own
-// the overflow instead of pushing the panel's own scrollbar around.
+// Panel root, when the kit's PaneLayout doesn't fit. `flex flex-col flex-1 min-h-0`
+// is what makes an inner scroller own the overflow instead of pushing the
+// panel's own scrollbar around.
 <div className="flex flex-col flex-1 min-h-0 bg-surface-panel text-text-primary">
 
-// Row
+// A bespoke row the kit's ListRow doesn't fit
 <div className="flex items-center gap-2 px-3 py-2 hover:bg-surface-hover">
 
-// Subtle button
-<button className="rounded-md border border-border-subtle px-3 py-1.5 text-xs hover:bg-surface-hover">
-
-// Badge
-<span className="rounded-full bg-surface-inset px-2 py-0.5 text-2xs text-text-muted">
+// Section label
+<div className="px-3 pt-3 pb-1 text-2xs font-medium uppercase text-text-muted">
 ```
+
+Buttons, badges, inputs and spinners are not on this list on purpose: they are `Button`, `Badge`, `Input` and `Spinner` in the kit (and text sizes and colours are `Text` and `Heading`, status dots `StatusDot`), and a hand-rolled copy is what the `raw-button`, `hand-rolled-badge`, `raw-form-control` and `hand-rolled-spinner` lint rules report.
 
 **Conditional classes must be complete strings.** `isActive ? "bg-surface-active" : ""` works. `` `bg-surface-${tone}` `` does not — the compiler sees the class in your source or in the DOM, and a name assembled from fragments exists in neither until it is too late to matter. The same rule applies to a lookup table, which is fine, and to string concatenation, which is not.
 
-**Portals need a marked container.** Anything you render with `createPortal` leaves your style root, so its classes generate CSS that never matches. Spread `styleRootAttributes` from `PanelViewProps` onto the container:
+**Portals need a marked container.** Anything you render with `createPortal` leaves your style root, so its classes generate CSS that never matches. Kit overlays — `Dialog`, `ConfirmDialog`, `Popover`, `DropdownMenu`, `Tooltip` — portal for you and re-mark the content you pass them, so your classes still apply inside a dialog body. For a portal of your own, use the kit's `Portal`, which marks its container for you:
 
 ```jsx
-createPortal(
-  <div {...styleRootAttributes} className="p-4 bg-surface-dialog">
-    …
-  </div>,
-  document.body
-);
+import { Portal } from "@daintreehq/plugin-ui";
+
+<Portal>
+  <div className="fixed right-4 bottom-4 p-4 bg-surface-dialog">…</div>
+</Portal>;
 ```
+
+A raw `plugin://` view that renders without the kit spreads `styleRootAttributes` from `PanelViewProps` onto its own `createPortal` container instead.
 
 **A `<style>` element still works**, for the things utilities do not cover — a keyframe, a complex selector, a third-party widget's stylesheet. Scope your selectors under a class on your root so you don't restyle the host. Do not ship compiled Tailwind CSS: `@daintreehq/plugin-vite` fails the build if you wire Tailwind into it, because two independently-compiled copies of the same utilities lose Tailwind's own ordering rules.
 
-**Custom properties are still there** if you prefer to write plain CSS on tokens. Every `--theme-*` and `--color-*` the host defines is readable from your view; `src/styles/design-contract.css` in the Daintree repo is the authoritative list.
+**Custom properties are still there** if you prefer to write plain CSS on tokens. Every `--theme-*` and `--color-*` the host defines is readable from your view; `src/styles/design-contract.css` in the Daintree repo is the authoritative list. Canvas and WebGL code, which cannot use a CSS variable, reads resolved colours from the kit's [theme API](#theme-api-for-canvas-and-webgl) instead of `getComputedStyle`, so it follows a theme switch.
 
-Two rules from the design contract that apply to plugins as much as to the host: accent colour is at most one load-bearing signal per region, so in doubt use no accent; and a plugin panel that reads as native copies the host's own treatments for rows, chips, section labels and subtle buttons rather than inventing new ones. The components under `src/components/ui/` and the file browser are the reference.
+One rule from the design contract applies to plugins as much as to the host: accent colour is at most one load-bearing signal per region, so in doubt use no accent (a kit `Button` with no `variant` is the accent-filled primary, so give it to one action per region and `secondary`, `outline`, `ghost` or `subtle` to the rest).
 
-**Icons.** There is no icon component to import in a raw view. Inline SVG (lucide's paths are what Daintree uses) with `currentColor` is the portable answer; the `iconId` in your manifest covers the panel tab and toolbar, not the inside of your view.
+### Native behaviour, your identity
+
+The kit and the design contract guarantee how a view behaves: keyboard models, focus, overlays, every theme and the colour-vision overrides, and chart colours that stay apart. That part is not optional, and it is why controls, forms, menus, dialogs, toasts and lists of things always come from the kit. How the view looks beyond that is yours: what the answer is, what is supporting and what is fine print, which card leads, which colour means what. A dashboard is not a list pane, and the kit does not ask it to look like one.
+
+The kit gives you the pieces for that hierarchy rather than a fixed look: `Card`'s `elevated` and `feature` variants (with a `capColor` cap in one of the category colours), `Figure` for the page's answer at display size, `StatCard`'s `filled` tiles with units and wrapping hints, `Meter` marks and `SegmentedBar` for readings against a reference, chart category colours and annotations, and `DataTable` as a ledger. A colour that carries meaning across a view ("teal is the safe money") is a decision only you can make: keep one map from your categories to the category hues and use it for every bar, badge, legend and chart, writing each class out whole.
+
+### When the kit doesn't fit
+
+| Situation | Use |
+| --- | --- |
+| Controls, forms, settings, dialogs, menus, toasts, tooltips, lists of things | The kit, always. This is where the behaviour lives. |
+| Shell, tabs, status | The kit: `PaneLayout`, `Tabs` (with a `trailing` slot for a refresh and its age), `StatusBar`; and the panel's own header buttons through the manifest's [`panels[].toolbar`](./contribution-points.md#panel-toolbar). |
+| A section frame | `Card`, `elevated` where it should read as an object on the page. |
+| The page's answer: a hero figure, a feature card | `Card variant="feature"` around a `Figure size="display"`, or a bare `Figure` closed by a rule. One per view. See [Leading with a figure](./ui-kit.md#leading-with-a-figure). |
+| Readings against a target, parts of a whole | `Meter` with `marks`, `SegmentedBar`. |
+| Ledgers, statements, schedules | `DataTable` with `virtualize={false}` and the ledger props. See [Ledgers](./ui-kit.md#ledgers). |
+| A domain visualisation the charts do not draw | Your own `<svg>` on tokens: `fill-`/`stroke-` utilities or `currentColor`, the category hues in the chart order, and `font-mono` with tabular digits for figures. |
+
+Four shells are equally at home: a **pane** (`PaneLayout` with `Tabs`), a **dashboard** (a feature card leading a responsive `AutoGrid` of cards), **master–detail** (`MasterDetail`), and a **canvas** (the raw panel root above, laid out with tokens). When you build something of your own, model it on the nearest kit component: its spacing, type steps and colour roles are the reference, and the kit's source lives in `src/components/PluginKit/` in the Daintree repo.
+
+**Icons.** Use `Icon` from the kit: `createElement(Icon, { name: "git-branch" })` draws one of Daintree's own icons, sized 16 px by default and coloured by `currentColor`. Every kit prop that takes an icon (`Button`'s `icon`, `ListRow`, `PaneHeader`, `EmptyState`, `Tabs` items, `Select` options, menu entries, …) accepts the same names, any other Lucide name (loaded the first time it is drawn) or your own element, such as an inline `<svg>`. See [UI kit → Icons](./ui-kit.md#icons). Don't copy Lucide paths by hand or bundle `lucide-react` (lint: `inline-svg-icon`, `lucide-react-import`). The `iconId` in your manifest covers the panel tab and toolbar, not the inside of your view.
 
 ## Getting data in
 
@@ -193,13 +246,17 @@ Nothing reaches a view unless the worker sends it. The bridge is `window.electro
 | `on(pluginId, channel, cb)` | Worker pushes to every `on` subscriber for this plugin and channel — across all its panel kinds, not one kind | `host.postToPanel(channel, payload)` |
 | `onPanel(pluginId, channel, panelId, cb)` | Worker pushes to one instance | `host.postToPanel(channel, payload, panelId)` |
 
-`on` and `onPanel` return an unsubscribe function; return it from your effect. Pushes are not buffered: a push during `activate()` is gone before any view mounts, so the shape that works is pull on mount, then subscribe to pushes for updates. [Patterns](./patterns.md#pull-on-mount-then-push) has the code.
+`on` and `onPanel` return an unsubscribe function; return it from your effect. Pushes are not buffered: a push during `activate()` is gone before any view mounts. They are also not ordered against `invoke` results — a push can land before or after the answer to a pull made at the same moment — so the shape that works is subscribe first, then pull, with a revision on both to keep whichever is newer. [Patterns → Subscribe, then pull](./patterns.md#subscribe-then-pull) has the code, and `useSyncedCollection` does it for a keyed list ([Push deltas](./patterns.md#push-deltas-not-the-whole-state)).
+
+The host delivers pushes batched, one IPC message per task per renderer, in order and never merged; each payload is copied when you post it, and a targeted push to a panel that has closed is dropped. A push is at most 1 MiB, an `invoke`'s arguments 4 MiB and its result 16 MiB; past that the call fails with a `PLUGIN_PAYLOAD_TOO_LARGE:` error naming the limit. A handler has five minutes to settle by default, after which the view's `invoke` rejects with `PLUGIN_INVOKE_TIMEOUT:`; pass `registerHandler(channel, handler, { timeoutMs })` to change it (`0` for none). [Host API](./host-api.md) is the reference.
 
 ### Zero-build views and the import map
 
-A view is served exactly as written; nothing compiles it. Its bare imports resolve through the host's import map, which serves exactly the five React specifiers (`react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, `react-dom/client`), the tour's four (`@daintreehq/tour`, `@daintreehq/tour/react`, `@daintreehq/tour/kit`, `@daintreehq/tour/mock-app`) and [`@daintreehq/plugin-ui`](#host-ui-components), and nothing else. Each resolves to the host's own instance, so your view shares the app's React rather than bringing a second copy. Everything else a raw view imports is a relative module you ship. So a hand-written view uses `createElement` instead of JSX, the `window.electron.plugin` bridge above instead of the SDK hooks, and the [SDK's documented JSON](#handing-work-to-an-agent-by-drag) instead of its helpers.
+A view is served exactly as written; nothing compiles it. Its bare imports resolve through the host's import map, which serves exactly the five React specifiers (`react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, `react-dom/client`), the tour's four (`@daintreehq/tour`, `@daintreehq/tour/react`, `@daintreehq/tour/kit`, `@daintreehq/tour/mock-app`), [`@daintreehq/plugin-ui`](#host-ui-components) and [`@daintreehq/plugin-sdk/react`](#the-sdks-react-hooks), and nothing else. Each resolves to the host's own instance, so your view shares the app's React rather than bringing a second copy. Everything else a raw view imports is a relative module you ship. So a hand-written view uses `createElement` instead of JSX, the kit for its controls, the SDK's hooks (or the `window.electron.plugin` bridge above) for its data, and the [SDK's documented JSON](#handing-work-to-an-agent-by-drag) instead of its root-entry helpers.
 
-The worker is the other way round: it is Node, and it can import `@daintreehq/plugin-sdk`, `/files` and `/data` with no install, because the plugin worker serves a copy that ships with Daintree ([data helpers](./data-helpers.md)). The view cannot. Do data work in the worker and hand the view results over a channel.
+`@daintreehq/plugin-sdk/react` is served to zero-build views only. A view bundled with `@daintreehq/plugin-vite` keeps bundling the SDK version its author pinned, so a Daintree upgrade never swaps its hooks out from under it.
+
+The worker is the other way round: it is Node, and it can import `@daintreehq/plugin-sdk`, `/files` and `/data` with no install, because the plugin worker serves a copy that ships with Daintree ([data helpers](./data-helpers.md)). The view cannot import those three, and the worker cannot import `/react`. Do data work in the worker and hand the view results over a channel.
 
 ### Sharing a module between worker and view
 
@@ -220,27 +277,171 @@ import { formatCents } from "../shared/money.mjs";
 
 The module has to run in both places: relative imports with their file extensions only, no bare specifiers (the view cannot resolve an npm package, the worker cannot resolve `react`), no Node built-ins and no DOM. The view's copy resolves inside the same view generation as the view itself, so a plugin reload picks up edits to it along with the view.
 
-### The SDK in a bundled view
+### The SDK's React hooks
 
-A view built with `@daintreehq/plugin-vite` bundles the SDK, so it can import:
+`@daintreehq/plugin-sdk/react` works in every view: a bundled view bundles it, and a zero-build view imports it through the import map. Its hooks are the bridge calls above done properly — subscriptions released with the mount, races handled, renders batched — so prefer them to calling the bridge by hand.
 
-| Import | From | What it is |
-| --- | --- | --- |
-| `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent` | `@daintreehq/plugin-sdk/react` | The three bridge calls above as hooks. See [Host API → React hooks](./host-api.md#react-hooks--daintreehqplugin-sdkreact). |
-| `createViewScope` | `@daintreehq/plugin-sdk/react` | Releases listeners, timers, observers, workers and WebGL contexts with the mount. See [Resources your view owns](#resources-your-view-owns). |
-| `loadDocumentPackage` | `@daintreehq/plugin-sdk/react` | Loads a library the host document keeps across reloads. See [Document packages](./document-packages.md). |
-| `setAgentContextDragData` | `@daintreehq/plugin-sdk` | Writes a drag-to-agent payload. See [Handing work to an agent by drag](#handing-work-to-an-agent-by-drag). |
-| `Markdown` | `@daintreehq/plugin-ui` | Left external by the preset and served by the host. See [Host UI components](#host-ui-components). |
+| Import | What it is |
+| --- | --- |
+| `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent` | The three bridge calls above as hooks. See [Host API → React hooks](./host-api.md#react-hooks--daintreehqplugin-sdkreact). |
+| `useSyncedCollection`, `useCachedHostChannel`, `useStreamBuffer`, `useThrottledCallback`, `usePluginEventSelector`, `useHostStore`, `shallowEqual` | Getting data in without over-rendering: a keyed list mirrored by deltas, a cached read revalidated in the background, appended lines, replaceable values, one slice of a large push. See [Performance](#performance). |
+| `useVirtualList`, `useProgressiveList` | Headless windowing and progressive rendering for lists you draw yourself. |
+| `useNow`, `useAnimationFrame` | A shared clock and a frame loop, both paused while nobody can see the view. |
+| `useActionRunning` | Whether one of your actions is running, however it was dispatched — for an in-view control that shows busy (or refuses a second click) while a menu- or toolbar-started run is in flight, with no start and end pushes of your own. |
+| `usePanelToolbarItem` | Keeps one of the panel's manifest `toolbar` buttons in step with the view: busy, disabled, a status and its "Updated" age. Returns `false` where the surface has no panel header. See [Panel toolbar](./contribution-points.md#panel-toolbar). |
+| `lazyWithPreload`, `usePreloadOnIntent` | A split chunk preloaded on hover or focus, so it renders in its first frame. |
+| `createViewScope` | Releases listeners, timers, observers, workers and WebGL contexts with the mount. See [Resources your view owns](#resources-your-view-owns). |
+| `loadDocumentPackage` | Loads a library the host document keeps across reloads. See [Document packages](./document-packages.md). |
+
+A zero-build view gets every hook here from the host. A bundled view gets them from the SDK it installs, and 0.1.0 on npm has only the first row and `loadDocumentPackage`; for everything else in this table: Not in the 0.1.0 release on npm; it ships in the next one.
+
+A bundled view can also import `setAgentContextDragData` from the root `@daintreehq/plugin-sdk` entry ([Handing work to an agent by drag](#handing-work-to-an-agent-by-drag)); a zero-build view writes the same JSON by hand. The helper: Not in the 0.1.0 release on npm; it ships in the next one. `@daintreehq/plugin-ui` is never bundled: the preset leaves it external and the host serves it. That externals rule in the preset: Not in the 0.1.0 release on npm; it ships in the next one.
 
 There are no hooks for worktrees, settings or commands. A view reads its own worktree from the `worktreeId` prop and gets everything else from the worker.
 
+**Types.** A scaffolded plugin's `tsconfig.json` already lists `"types": ["@daintreehq/plugin-sdk/view-globals", "@daintreehq/plugin-sdk/plugin-ui"]`. The first declares `window.electron.plugin` (`invoke`, `on`, `onPanel` — and nothing else on `window.electron`, on purpose); the second declares the kit. Without them a view that calls the bridge fails `tsc` with `Property 'electron' does not exist on type 'Window'` even though Vite builds it. Add both to a hand-made tsconfig. The two type entries: Not in the 0.1.0 release on npm; it ships in the next one.
+
 ## Host UI components
 
-`@daintreehq/plugin-ui` is Daintree's own UI, served to your view through the same import map as React: the host's components running from the host's code, styled with the host's tokens, so they look like the app in every theme without you shipping or styling anything. A zero-build view imports it like `react`; a `@daintreehq/plugin-vite` build leaves it external, because there is no package to bundle — the implementation only exists inside the running app. Nothing of it loads at startup: the module itself, a few hundred bytes, loads when your view imports it, and each component's implementation the first time the component renders.
+`@daintreehq/plugin-ui` is Daintree's own UI kit, served to your view through the same import map as React: the host's components running from the host's code, styled with the host's tokens, so they look and behave like the app in every theme without you shipping or styling anything. They carry the keyboard and screen-reader behaviour of the host's own controls, and the ones that open over the page (dialogs, menus, tooltips, select lists) sit in the host's overlay layer. A zero-build view imports it like `react`; a `@daintreehq/plugin-vite` build leaves it external, because there is no package to bundle — the implementation only exists inside the running app.
 
-It exports one component today.
+**Reach for it first.** A hand-rolled button, input, badge, spinner, dialog or inline icon is what makes a plugin look foreign, and `daintree-plugin lint` names the kit component for each one it finds. In the lab, ten plugins written without the kit hand-rolled 117 such pieces between them; the same plugins ported to it kept 12, the things the kit has no component for. The token vocabulary under [Styling](#styling) stays available for exactly those.
 
-**`Markdown`** is the renderer behind Daintree's file viewer and Markdown panels: GFM (tables, task lists, strikethrough, autolinks), highlighted code fences, and the app's document typography. Raw HTML in the source is dropped, never rendered, so it is safe for text you did not write.
+```js
+// dist/panel.js — zero build: the kit, the SDK hooks and react all come from the host.
+import { createElement, useState } from "react";
+import { useCachedHostChannel } from "@daintreehq/plugin-sdk/react";
+import { Button, ConfirmDialog, EmptyState, PaneHeader, PaneState } from "@daintreehq/plugin-ui";
+
+export default function Notes({ pluginId, disposeSignal }) {
+  const { data, error, revalidate } = useCachedHostChannel(pluginId, "notes", null, {
+    signal: disposeSignal,
+    invalidateOn: "notes-changed",
+  });
+  const [discarding, setDiscarding] = useState(false);
+
+  if (error && !data)
+    return createElement(PaneState, {
+      kind: "error",
+      title: "Couldn't load notes",
+      onRetry: revalidate,
+    });
+  if (!data) return createElement(PaneState, { kind: "loading", title: "Loading notes" });
+
+  return createElement(
+    "div",
+    { className: "flex flex-col flex-1 min-h-0" },
+    // The panel's own title and icon are already in the host's chrome above
+    // this view; the header says what only the view knows.
+    createElement(PaneHeader, {
+      title: `${data.length} notes`,
+      actions: createElement(
+        Button,
+        { variant: "ghost", size: "sm", onClick: () => setDiscarding(true) },
+        "Discard draft"
+      ),
+    }),
+    data.length === 0
+      ? createElement(EmptyState, {
+          title: "No notes yet",
+          description: "Ask an agent to add one.",
+        })
+      : createElement(NoteList, { notes: data }), // your own component, or a kit VirtualList
+    createElement(ConfirmDialog, {
+      open: discarding,
+      onClose: () => setDiscarding(false),
+      onConfirm: () => discardDraft(), // yours: e.g. invoke a worker channel, then close
+      title: "Discard this draft?",
+      confirmLabel: "Discard draft",
+      variant: "destructive",
+    })
+  );
+}
+```
+
+### What it has
+
+`plugin-ui.d.ts` in `@daintreehq/plugin-sdk` is the full, current list with every prop, and the [UI kit reference](./ui-kit.md) documents each export; these are the groups.
+
+| For | Components |
+| --- | --- |
+| Actions | `Button` (variants `default` — the accent primary, and the default — `secondary`, `outline`, `ghost`, `subtle`, `contrast`, `destructive`, `ghost-danger`, `link`, `pill`), `IconButton`, `SplitButton` (a primary action with a menu of alternatives), `ToggleGroup` (toggle buttons, any number or at most one on), `CopyButton`, `DismissButton`, `DropdownMenu`, `ContextMenu` (the same rows on a right-click or Shift+F10; both nest submenus and take a description line per row) |
+| Forms | `Input` (text, search, email, url, password, number, tel, date, time, datetime-local), `Textarea`, `Select` (an `options` array; `value={null}` shows the placeholder again), `Combobox` (a `Select` with a search, for long or fetched lists), `MultiSelect` (several choices, as chips), `TagInput` (free-text tags), `Checkbox`, `Switch`, `RadioGroup`, `SegmentedControl`, `NumberInput` (steppers, units, clamping), `Slider`, `RangeSlider` (a low and a high value), `ColorPicker` and `ColorSwatch` (label and tag colours), `SearchField`, `FilterChip` (a toggle or removable filter in a filter bar), `FileDropzone` (drop or choose files; you get `File` objects, never paths), `FormField` (label, description and error wired to the control), `FormFieldGroup` (one label over a set of controls), `Form` with `useForm` (dirty tracking, sync and async checks, submit and reset) and `FormStatus`, `SchemaForm` (a settings group generated from a JSON Schema) |
+| Text inputs | `MentionTextarea` (a growing field with `@` and `/` suggestions), `Composer` (the agent composer: text, attachments and Send or Stop), `InlineEdit` (a name renamed in place), `KeyValueEditor` (environment variables, headers), `ListEditor` (hosts, globs, scopes), `SecretInput` (a token or key, saved without the view holding it), `ShortcutRecorder` (a keyboard shortcut in the app's notation) |
+| Lists and tables | `VirtualList`, `DataTable` (with checkbox selection, groups, expandable rows, resizable and hideable columns, a pinned first column and inline editing when you ask for them), `LogView`, `ListRow` with `useListNavigation`, `ScrollShadow`, `FileTree`, `TreeView` (a tree of anything: lazy children, checkboxes, drag to reorder), `ObjectInspector` (an API response or tool result as a collapsible value), `Timeline` (an activity feed or audit log), `HighlightedText` (search matches in a row) |
+| Figures | `StatCard` (a labelled figure with an optional change), `Sparkline`, `Meter` (usage against a limit, with warning and danger thresholds), `DiffStat` ("+12 -3") |
+| Dates | `Calendar` (an inline month grid, one day or a range), `DatePicker` and `DateRangePicker` (typed or picked ISO `"YYYY-MM-DD"` days, range presets), `TimePicker` and `DateTimePicker` (kit-drawn `"HH:mm"` times and `"YYYY-MM-DDTHH:mm"` date-times, with the zone named), `TimeAgo` (an age that keeps itself current) |
+| Charts | `BarChart` (grouped or stacked, upright or across), `LineChart` (numeric or time x, optional area), `DonutChart` (parts of a whole), `StackedAreaChart` (series piled to a total or 100%), `ScatterChart` (points by two numbers), `Histogram` (a distribution), `Heatmap` (a value per pair of categories), `ContributionGrid` (a calendar of daily counts), `Gauge` (one number against its range) — all with a tooltip anchored to the point under the pointer or the arrow keys |
+| Rich display | `TerminalOutput` (CLI output in the terminal's colours, with progress-bar rewrites and OSC 8 links) and `AnsiText` (a short run of it inline), `HoverCard` (a preview of a person, issue or commit), `ImageViewer` (zoom, pan and step through screenshots, in a pane or a lightbox), `TableOfContents` (a long document's sticky, scroll-tracking outline) |
+| Type and status marks | `Text` and `Heading` (the type ramp and colour roles), `Link`, `InlineCode`, `CodeBlock` (a highlighted read-only snippet), `PathLabel` (a path that ellipsises in the middle), `VisuallyHidden`, `LiveRegion` and `useAnnounce` (spoken updates), `Portal`, `StatusDot` and `StateGlyph` (running, waiting, idle, error, success), `ColoredLabel` (a label in a colour the user chose), `UnreadDot` and `CountIndicator` (an unread pip or a capped count, alone or on a control's corner) |
+| Pane chrome | `PaneHeader`, `Toolbar`, `ToolbarButton`, `OverflowToolbar` (a toolbar that folds what doesn't fit into a menu), `Tabs`, `StatusBar` (the strip along a pane's edge) |
+| Navigation | `NavList` (an app's left rail), `Breadcrumbs`, `Stepper` (a wizard's progress), `CommandPalette` (a quick switcher or "jump to…") |
+| Page structure | `PaneLayout` (a panel's shell: header, toolbar, one scrolling body, footer and status strip), `Stack`, `Inline`, `Cluster`, `Grid`, `AutoGrid` (as many columns as fit), `ScrollArea` (a scroller on either axis, fading the edges with more) |
+| Layout | `Card` (header, body and footer; clickable with `onClick`), `Divider`, `SectionLabel`, `ResizableSplit` (two panes with a draggable divider), `Accordion`, `Disclosure`, `DescriptionList` with `DescriptionListItem` (a record's label and value rows) |
+| Editors | `CodeEditor` (Daintree's CodeMirror editor, with the file viewer's theme and find bar), `DiffView` (two texts or a patch, unified or split, with your own hunk actions; `revertHunk` undoes one), `MarkdownEditor` (a comment or notes field with a toolbar and Write and Preview) |
+| Panes | `MasterDetail` (a list and its record, one pane when narrow), `SplitGroup` (three or more resizable, collapsible panes), `Inspector` with `InspectorSection` and `PropertyRow` (a compact property panel), `Drawer` and `DrawerToggle` (a panel that slides in within the pane), `GroupedVirtualList` (sticky group headers with counts), `BulkActionBar`, `LoadMoreFooter`, `TaskList` (a queue of jobs), `RefreshOverlay` and `StaleIndicator` (refreshing and old data) |
+| Workflows and agent work | `AttachmentChip` and `AttachmentList`, `EntityChip` (a reference to one of your records, deleted and no-access included), `RepeaterField` (structured items edited in place, keyed), `FormErrorSummary` and `UnsavedChangesBar`, `ConnectionCard` (an outside service and its state), `OperationStatus` (queued through partial and unknown), `ToolCallCard`, `StructuredDiff` and `SuggestedValue` (proposed changes, reviewed before they apply), `SourceCitation` and `SourceList`, `DecisionRequest` (a question a run is waiting on) |
+| Git and forge | `WorktreePicker`, `WorktreeBadge` and `BranchBadge` (take `host.getWorktrees()` snapshots as they come), `FileIcon`, `FileLink` (opens in the file viewer at a line), `GitStatusBadge` (the change list's M/A/D/R/?/! letters), `CommitRow` and `CommitList`, `IssueRow`, `PullRequestRow` and `ForgeStateBadge` (one forge-neutral look for any provider), `ChecksList` (CI checks by workflow), `DevServerStatus` and `PortLink` |
+| Drag and drop | `SortableList` (a list reordered by pointer or keyboard), `Kanban` (columns of cards moved between and within columns, with counts and WIP limits), and `DragDropProvider` with `useDraggable` and `useDroppable` for anything else |
+| States and status | `PaneState` (a whole pane's `loading`, `empty` or `error`), `EmptyState`, `Callout` (an inline message; `severity="error"` with a Retry `action` is the error banner, `variant="strip"` the pane-wide band), `Badge`, `Spinner`, `SpinningIcon`, `ProgressBar`, `Skeleton`, `SkeletonBone`, `SkeletonText`, `SkeletonHint`, `SeverityIcon` |
+| Overlays | `Dialog`, `ConfirmDialog` (including the destructive typed-name gate), `ConfirmPopover` (an inline confirm on its trigger), `Sheet` (a record's detail or edit form against the window's edge), `Popover`, `PopoverSearchField`, `EmojiPicker`, `Tooltip`, `TruncatedTooltip` |
+| Settings | `SettingsSection`, `SettingsGroup`, `SettingsRow`, `SettingsActions` — the host's section → group → row grammar, for settings drawn inside a panel. A [`location: "settings"` view](#a-settings-section) renders `SettingsRow`s only: the host draws the heading and the group, and there is no Save row |
+| Behaviour | Hooks: `useSelection` (single, multi and range selection), `useHotkeys` (view-scoped shortcuts that never shadow the app's), `useUndoRedo`, `useDisclosure`, `useDebouncedValue` and `useDebouncedCallback`, `usePersistentViewState` (a remembered tab or split size, through `persistState`), `useToast` (toasts and Undo toasts from the view), `useForm` (form state for `Form`), `useContainerSize` and `useBreakpoint` (layout that answers to the pane's width, not the window's) |
+| Daintree-native | `ActionButton` and the menus' `action` entry (run one of Daintree's actions with its own title, binding and availability), `AgentAvatar`, `AgentBadge`, `AgentStateIndicator` (an agent's mark and what was observed on its terminal), `AgentPicker` (the project's agent panes by worktree), `SendToAgentButton` and `ContextDragSource` (hand work to an agent), `TerminalSnapshot` (a still of a terminal's last lines), `ShortcutHint` and `KeyHints` (keys as the app draws them) |
+| Everything else | `Markdown`, `Icon`, `Avatar`, `AvatarGroup`, `Kbd`, `KbdChord`; formatters `formatTimeAgo`, `formatRelativeTime`, `formatDuration`, `formatBytes`, `formatCount`; day helpers `formatIsoDate`, `isoToday`, `isoFromDate`, `isoAddDays` for the date fields' `"YYYY-MM-DD"` values; the theme API below (`useDaintreeTheme`, `getDaintreeTheme`, `onDidChangeDaintreeTheme`); `preloadPluginUi` and `whenPluginUiReady` ([Loading and the first frame](#loading-and-the-first-frame)); `PLUGIN_UI_VERSION` ([Versioning](#versioning)) |
+
+One status vocabulary runs through `Badge` `tone`, `Callout` `severity` and `SeverityIcon`: `error` (the same colour as `danger`, which `Badge` also accepts), `warning`, `success`, `info` and `neutral`.
+
+Not in the kit, so draw them with tokens: other chart forms (a graph of nodes, a treemap, a sankey), and a point tooltip on a canvas of your own; the kit charts carry theirs. Read the series colours from the `category-*` tokens with a fallback, in the kit charts' order (`blue`, `amber`, `indigo`, `orange`, `violet`, `teal`), so your chart and theirs agree.
+
+**Never `window.confirm`, `alert` or `prompt` in a view.** A native dialog ignores the theme, blocks the whole window and takes focus from every other panel. `ConfirmDialog` is the view-side confirm, and `ConfirmPopover` the small inline one for an action that is cheap to undo; `host.showConfirm` is the worker's. For feedback after the fact, `useToast` puts a toast (or an Undo toast) in the app's toaster straight from the view.
+
+### Loading and the first frame
+
+Nothing of the kit loads at startup. Importing `@daintreehq/plugin-ui` costs a few hundred bytes and starts fetching the kit's one chunk; until that chunk is in, most components render nothing, so the first kit view in a session can paint one frame late. Fifteen draw a fallback instead, so what they wrap is there from the first frame and only their own behaviour waits:
+
+- **Their trigger:** `Popover`, `EmojiPicker`, `ConfirmPopover`, `AgentPicker`.
+- **Their child:** `Tooltip`, `TruncatedTooltip`, `HoverCard`, `ContextMenu`.
+- **Their content:** `DragDropProvider`, `Drawer`, `RefreshOverlay`, `ContextDragSource`.
+- **The wrapped child:** `UnreadDot`, `CountIndicator`.
+- **Its fields:** `Form`.
+
+It is a local chunk, requested at import, and normally in before your view first renders. Two calls control it:
+
+- `preloadPluginUi()` starts loading without waiting — for code that knows a view is about to open.
+- `whenPluginUiReady()` resolves once every component renders on its first frame, and rejects if the chunk fails to load (calling again retries). Await it in tests, or before measuring kit output.
+
+### Versioning
+
+`PLUGIN_UI_VERSION` is the kit's semver contract, `"1.0.0"` today. A minor version adds components, optional props, icon names and theme token keys; within a major version no export, prop, accepted value or core token key is removed or narrowed. Every component validates its props at runtime, so a value outside the types — from an older or newer plugin — is ignored rather than thrown on. The kit comes from the running app, so check `PLUGIN_UI_VERSION` before relying on a component a later minor added, and declare an `engines.daintree` that has it: `>=0.41.0` for anything beyond `Markdown`, which is all Daintree 0.40 serves. `engines` is advisory (an unmet range warns and still loads), so read the version through a namespace import rather than trusting the range ([UI kit → Feature detection](./ui-kit.md#versioning-and-stability)).
+
+### Styling kit components
+
+Pass `className` to a kit component to place it — margins, width, flex — and it goes through the same runtime Tailwind as the rest of your view. The parts a kit component opens in a host overlay (a tooltip body, a menu, a select list, a dialog frame) take no `className`: they render outside your style root, where your classes do not apply. The content you put inside them does keep your classes, because the kit re-marks it as yours.
+
+### Icons
+
+`Icon` draws an icon by name, and every kit prop that takes an icon takes the same names or an element of your own. The kit's own names (lucide-style kebab-case such as `git-branch`, `wallet` or `refresh`, plus Daintree's `worktree` and `daintree`) draw at once. Any other [Lucide](https://lucide.dev/icons) name (`"chart-candlestick"`, `"hand-coins"`) is loaded the first time it is drawn, holding its square empty until it lands, so you never need to bundle `lucide-react`. Your own inline `<svg>` works anywhere an icon does. `size` defaults to 16 px, colour follows `currentColor`, and an icon is decorative unless you pass `aria-label`. A name Lucide does not have renders nothing and warns in development. See [UI kit → Icons](./ui-kit.md#icons).
+
+### Theme API for canvas and WebGL
+
+DOM styled with token classes follows a theme switch on its own. Code that paints pixels needs the colours as values, and a theme-change signal:
+
+| Call | Returns |
+| --- | --- |
+| `useDaintreeTheme()` | `{ colorMode: "dark" \| "light", themeId, tokens }`, and re-renders the component on a theme change |
+| `getDaintreeTheme()` | The same, outside React. Cheap to call often: the same frozen object until the theme changes |
+| `onDidChangeDaintreeTheme(listener)` | Calls `listener(theme)` after every theme change; returns the unsubscribe |
+
+`tokens` maps each key listed in [UI kit → Theme](./ui-kit.md#theme) (`surface-panel`, `text-primary`, `border-subtle`, `accent-primary`, `status-danger`, `category-blue`, `terminal-red`, `syntax-keyword`, …) to a concrete sRGB colour, `#rrggbb` or `rgba(r, g, b, a)`. It is a fixed set, not every `--theme-*` the host defines: tokens that exist only as CSS — `surface-toolbar`, `surface-dialog`, `surface-disabled`, `border-input`, `accent-secondary` and its variants, the `status-*-surface` fills — are not keys and read as absent, so draw with the nearest key instead. The core groups — surfaces, text, borders, accent, `focus-ring`, status — are stable within the major version; `terminal-*` (with the ANSI colours), `syntax-*`, `activity-*` and `category-*` are best effort and may be renamed in a minor with a release note, so read those with a fallback. Reading `--theme-*` once with `getComputedStyle` is the bug this replaces. [Patterns → Draw on a canvas](./patterns.md#draw-on-a-canvas) puts it together with `useAnimationFrame`.
+
+### Types
+
+For TypeScript, `@daintreehq/plugin-sdk` ships the kit's declaration: `"types": ["@daintreehq/plugin-sdk/plugin-ui"]` in `compilerOptions` (a scaffolded plugin already has it), and every component's props type comes with it (`ButtonProps`, `DataTableProps`, …). The `plugin-ui` type entry: Not in the 0.1.0 release on npm; it ships in the next one.
+
+### `Markdown`
+
+`Markdown` is the renderer behind Daintree's file viewer and Markdown panels: GFM (tables, task lists, strikethrough, autolinks), highlighted code fences, and the app's document typography. Raw HTML in the source is dropped, never rendered, so it is safe for text you did not write.
 
 | Prop | Meaning |
 | --- | --- |
@@ -249,6 +450,7 @@ It exports one component today.
 | `rootPath` | Absolute directory local images and relative links must stay inside. Defaults to the directory `basePath` resolves to. |
 | `className` | Classes for the document's root element. |
 | `fontSize` | A rung of the type scale: `2xs` `xs` `sm` `base` `lg` `xl` `2xl` `3xl`. Omitted, the document renders at Daintree's default Markdown size. |
+| `align` | `"center"` (the default) centres the document's reading measure in its container, as Daintree's own document views do; `"start"` keeps the measure but sets it against the leading edge, in line with the controls above it — for a preview inside a form or an editor. |
 
 Relative images load from disk over `daintree-file://`, contained to `rootPath`; one that climbs out of it is not requested at all. Relative links open in Daintree's file viewer when they stay inside `rootPath` and do nothing otherwise, and the viewer holds its read to `rootPath` on the real path, so a symlinked directory cannot carry a link outside it; `http(s)` and `mailto` links open in the browser. With neither `basePath` nor `rootPath` — or with a relative one, which is ignored rather than resolved against a renderer with no working directory — the text still renders and relative references resolve nowhere. Select All (Cmd/Ctrl+A) selects the block you last clicked or selected in, so several blocks in one view never compete for it. When a note links to images elsewhere in the project, pass the project root as `rootPath`.
 
@@ -278,17 +480,23 @@ export default function Notes({ pluginId }) {
 }
 ```
 
-The first `Markdown` in a session renders nothing while the async renderer loads, then the document; later ones render at once. For TypeScript, `@daintreehq/plugin-sdk` ships the module's declaration: add `"types": ["@daintreehq/plugin-sdk/plugin-ui"]` to `compilerOptions`, and `MarkdownProps` comes with it.
+The first `Markdown` in a session renders nothing while the async renderer loads, then the document; later ones render at once.
 
 ## Handing work to an agent by drag
 
-A card, a message or a row in your view can be dragged onto an agent terminal — its input bar or the terminal itself — and it lands in that agent's draft for the user to instruct it about. Nothing is submitted. The drag carries one app-internal type, `application/x-daintree-agent-context`, holding JSON:
+A card, a message or a row in your view can be dragged onto an agent terminal — its input bar or the terminal itself — and it lands in that agent's draft for the user to instruct it about. Nothing is submitted. The kit's [`ContextDragSource`](./ui-kit.md#daintree-native-actions-agents-terminals-and-keys) does all of this for you: wrap the card's grip or a chip in it with the text, and it writes the payload below, checks it as the drop will, and keeps clear of kit drags.
+
+```js
+createElement(ContextDragSource, { text: card.body, title: card.title, sourceLabel: "Kanban" });
+```
+
+Underneath, the drag carries one app-internal type, `application/x-daintree-agent-context`, holding JSON:
 
 ```ts
 { v: 1, text: string, title?: string, source?: { label?: string } }
 ```
 
-`text` is required, non-blank and at most 32,768 characters; `title` at most 120; `source.label` at most 80 (say `"Kanban"`). Set `text/plain` to the same text too, so a drop anywhere else — an editor, another app — still gets something sensible. In a hand-written view, with no build step:
+`text` is required, non-blank and at most 32,768 characters; `title` at most 120; `source.label` at most 80 (say `"Kanban"`). Set `text/plain` to the same text too, so a drop anywhere else — an editor, another app — still gets something sensible. Without the kit, in a hand-written view with no build step:
 
 ```js
 createElement(
@@ -314,16 +522,25 @@ import { setAgentContextDragData } from "@daintreehq/plugin-sdk";
 onDragStart={(event) => setAgentContextDragData(event.dataTransfer, { v: 1, title, text })}
 ```
 
+Kit drags (`SortableList`, `Kanban`, `DragDropProvider`) never carry this payload: they move with pointer events and stay inside the view, so a card on a kit board is reordered, not handed off. To offer both, keep the handoff on a separate element inside the card — a `ContextDragSource` chip, or your own element that sets `draggable` and the payload — and offer **Send to agent…** beside it for the keyboard.
+
 What lands is the same block `host.sendToAgent` drafts: one fenced block tagged `daintree-context`, holding your `source.label` and `title` as a heading (`Kanban: Fix login redirect`) and then the text, appended after whatever the user already typed and kept literal on submit — `@diff` and the other tokens inside it are never expanded. Control characters other than tab and newline are stripped. The drop selects the pane and puts the caret in its input bar, exactly like dropping a file there. Only an agent pane whose input bar can take a draft shows the drop affordance; a plain shell, an exited, docked, locked or restarting agent, one in an armed fleet, or any pane while the input bar is switched off refuses the drag outright, and nothing is ever typed into a terminal. The payload is data, not instructions — anything can start a drag carrying this type, so the host validates it in full at the drop and drops anything malformed: a wrong `v`, blank or oversized text, an over-long `title` or label, or a non-string where a string belongs. Unknown extra keys are ignored.
 
 ## Sending work to an agent from a view
 
-A drag is one route; a **Send to agent…** button or menu entry is the other, and the one keyboard users get. It goes through [`host.sendToAgent`](./host-api.md#sendtoagent--hand-work-to-an-agents-draft), which only your worker can call — it is gated on `agent:input` and bound to your plugin's identity, which a view cannot assert. So the view asks the worker over a channel:
+A drag is one route; a **Send to agent…** button or menu entry is the other, and the one keyboard users get. It goes through [`host.sendToAgent`](./host-api.md#sendtoagent--hand-work-to-an-agents-draft), which only your worker can call — it is gated on `agent:input` and bound to your plugin's identity, which a view cannot assert. So the view asks the worker over a channel. Register the handler below in the worker, and the kit's [`SendToAgentButton`](./ui-kit.md#daintree-native-actions-agents-terminals-and-keys) is the whole view side — label, busy state and the refusals only you hear about:
+
+```js
+// view
+createElement(SendToAgentButton, { text: card.body, title: card.title, worktreeId });
+```
+
+Written by hand, the same thing is:
 
 ```js
 // worker (activate)
-host.registerHandler("sendToAgent", (_ctx, { text, title, worktreeId }) =>
-  host.sendToAgent(text, { title, worktreeId })
+host.registerHandler("sendToAgent", (_ctx, { text, title, worktreeId, terminalId }) =>
+  host.sendToAgent(text, { title, worktreeId, terminalId })
 );
 
 // view
@@ -340,7 +557,7 @@ if (
 }
 ```
 
-Without a `terminalId` the user picks the agent — or starts one, here or in a new worktree — and the text lands in its draft as the same block a drop makes, headed with your plugin's display name rather than a label you choose, and never submitted. The call resolves `drafted`, `cancelled` or `refused`; the user already sees why their agent refused, so a view only needs to speak up for the three reasons that concern the plugin. Label the control **Send to agent…**: the ellipsis says a picker comes first. To put it on the panel's ⋯ and right-click menus instead, declare an action in the panel's [`menu`](./contribution-points.md#panel-menu) — it is dispatched with `{ panelId }`, so the worker knows which panel asked.
+To pick the agent inside your own view instead of the host's picker, pass the panes your worker reads with `host.agents.list()` (it needs `agent:read`) to the kit's `AgentPicker`, and send the chosen `terminalId` back to the worker. Without a `terminalId` the user picks the agent — or starts one, here or in a new worktree — and the text lands in its draft as the same block a drop makes, headed with your plugin's display name rather than a label you choose, and never submitted. The call resolves `drafted`, `cancelled` or `refused`; the user already sees why their agent refused, so a view only needs to speak up for the three reasons that concern the plugin. Label the control **Send to agent…**: the ellipsis says a picker comes first. To put it on the panel's ⋯ and right-click menus instead, declare an action in the panel's [`menu`](./contribution-points.md#panel-menu) — it is dispatched with `{ panelId }`, so the worker knows which panel asked.
 
 ## Resources your view owns
 
@@ -378,22 +595,68 @@ useEffect(() => {
 
 Disposal is idempotent and never throws: a cleanup that throws is logged and the rest still run. Anything registered after disposal, typically from an `await` that settled after the view went away, is released on arrival and logged once, so check `scope.signal.aborted` before a continuation starts new work. Create a fresh scope in each effect setup; a disposed one stays disposed.
 
-`scope.stats()`, and the `onReport` option called once after disposal, count what the scope released, which cleanups threw and what arrived late. They see only what went through the scope, so zero proves nothing about what else the view kept alive; a heap snapshot is the tool for that. Nothing durable belongs here, for the reason `disposeSignal` exists: it belongs in the worker. A raw `plugin://` view cannot import the SDK and releases these by hand.
+`scope.stats()`, and the `onReport` option called once after disposal, count what the scope released, which cleanups threw and what arrived late. They see only what went through the scope, so zero proves nothing about what else the view kept alive; a heap snapshot is the tool for that. Nothing durable belongs here, for the reason `disposeSignal` exists: it belongs in the worker. A zero-build view imports `createViewScope` from `@daintreehq/plugin-sdk/react` like a bundled one.
+
+## Performance
+
+A plugin view shares the renderer — and the main thread — with the whole app, so a slow view is a slow Daintree. The host does its part: views mount only once activation has resolved and without React's Suspense reveal delay, pushes travel batched, and the bursty host subscriptions coalesce by default. What is left is what your view renders and how often. These are the patterns that mattered when naive plugins were measured against ported ones (one machine, one run each — read the numbers as orders of magnitude):
+
+| Instead of | Do | Measured |
+| --- | --- | --- |
+| `rows.map(…)` over a large result | `DataTable` or `VirtualList` from the kit; `useProgressiveList` for a few hundred rows of your own markup | 10,000 rows: 1.5 s to first paint and 130,027 DOM nodes naive; 490 nodes and a 19 ms sort with `DataTable` |
+| One push per item, `setState([...prev, line])` per push | Batch in the worker on a timer; `useStreamBuffer` in the view; `LogView` to render | 20,000 pushes and 20,000 log rows in the DOM naive; 7 pushes and 180 log nodes ported |
+| Re-pushing the whole list on every change | `createSyncedCollection` in the worker, `useSyncedCollection` in the view; items that hold what the row shows, a large field fetched on open | 100 tool calls: 1.1 MB in 200 pushes naive; 23 KB in 13 |
+| Refetching everything on each change push | `useCachedHostChannel(…, { invalidateOn })`: one refetch per burst | 200 database writes: about 200 full refetches naive |
+| A `setInterval` per timestamp | `useNow` and the kit's `formatTimeAgo`; for a seconds tick, `useNow({ intervalMs: 1000 })` and `formatDuration` | — |
+| `"activationEvents": ["onStartupFinished"]` for a panel plugin | No `activationEvents`: the worker starts when the panel first opens | an eager dashboard's worker: 72 MB from boot, with no panel open |
+| A `requestAnimationFrame` loop and colours read once | `useAnimationFrame` and `useDaintreeTheme` | the naive canvas kept its old background after a theme switch |
+| A `readdir` and `readFile` per entry | `host.fs.walk` and `host.fs.readFiles` in the worker | a 2,045-file search: 960 ms naive, 335 ms ported |
+
+The rest of the toolbox, all in `@daintreehq/plugin-sdk/react`:
+
+- **`usePluginEventSelector(pluginId, channel, selector, { initial, isEqual, panelId })`** re-renders only when your slice of a large push changes; `useHostStore` is the same for any store, and `shallowEqual` pairs with selectors that build objects.
+- **`useThrottledCallback(callback, { ms })`** commits a replaceable value at most once per frame (or per `ms`), keeping only the latest arguments. Never for lines — they would be dropped; that is `useStreamBuffer`.
+- **`useCachedHostChannel(pluginId, channel, args, { staleMs, cacheKey, signal, enabled, invalidateOn, debounceMs })`** paints the cached result first when one is still cached (the 50 least recently used unwatched entries are kept) and revalidates behind it; concurrent mounts share one request. `invalidateOn` takes one push channel or an array of them; a burst across them still costs one refetch. The cache is module-global, so call `resetHostChannelCache()` in a test's `beforeEach`.
+- **`lazyWithPreload(load)` with `usePreloadOnIntent(Component)`** for a dialog, tab or editor split into its own chunk: preload on hover or focus and it renders in its first frame instead of flashing a fallback.
+
+**First frame.** What the user waits for when a panel opens is activation, the view module's import, style preparation and then your first commit. Keep `activate()` to registrations and start scans without awaiting them; render a shell at once and let data arrive into it (`PaneState kind="loading"` stays blank for its first 400 ms, so a fast load never flashes); keep the first commit small, which is what windowed lists are for. A kit component can paint one frame late the first time the kit loads in a session ([Loading and the first frame](#loading-and-the-first-frame)).
+
+**Lifecycle.** A backgrounded project keeps its views mounted and its timers and frames running ([Project switches and staleness](#project-switches-and-staleness)). `useNow` and `useAnimationFrame` pause while nobody can see the view; anything else periodic belongs in the worker, or needs the cache edges from [Patterns → Refresh when the user comes back](./patterns.md#refresh-when-the-user-comes-back). On the worker side, `host.hasListeners` says whether any view is subscribed to a channel, so a producer can stop while every panel is closed ([Patterns → Subscribe, then pull](./patterns.md#subscribe-then-pull)).
+
+### Measuring your plugin
+
+Daintree measures every plugin as it runs and shows it in two places:
+
+- **The Performance tab** on the plugin's page in Settings → Plugins (a project plugin's entry in Project settings → Plugins has the same section): activation time, the latest view load and first paint (split into activate, import and styles), invoke latency with errors and timeouts, pushes per second and bytes, long frames that coincided with the plugin's activity, and worker memory — each beside its budget. The tab appears once something has been measured. A **Styles** tab lists the classes in your open panels that produced no CSS.
+- **`daintree-plugin dev`**, the installed-plugin dev loop, prints the same measurements against the same budgets every two seconds while it watches (`--no-metrics` turns it off). See [Development loop → `daintree-plugin dev`](./dev-loop.md#daintree-plugin-dev). A project plugin, built with its own watcher, reads them in Project settings.
+
+The budgets: activation 500 ms, view load 300 ms, first paint 500 ms, commit p95 16 ms, invoke p95 250 ms, 60 pushes and 1 MiB per second sustained, worker memory 256 MiB. They are observations for this session, not a verdict: a plugin that was active during a slow frame didn't necessarily cause it, invokes that waited on a consent prompt are left out of the latency, and Daintree never slows or stops a plugin for going over a budget. Use them to find what to look at, then profile it in DevTools.
+
+Before shipping, run **`npx daintree-plugin lint`** in the plugin folder (the command: Not in the 0.1.0 release on npm; it ships in the next one.) It reads your view and worker source and flags the patterns above — interval polling in a view, whole-state pushes, a render per event, a subscription never disposed, a bundled copy of React (an error) — and the consistency ones: stock palette colours (an error), `dark:`, raw shadows, radii and text sizes, a hand-rolled button, form control, spinner, badge or icon, a native dialog, a container query on its own container, and classes that compile to nothing. `--strict` fails on warnings too; `daintree-plugin doctor` runs it as part of its checks.
 
 ## Media and binary files
 
-`host.fs.readFile` returns UTF-8 text and nothing else. For an image, an audio file or anything binary, don't route the bytes through the worker at all: the renderer can fetch the file itself over the `daintree-file://` protocol, which is how Daintree's own audio and video previews work (`useMediaBlobUrl` in the repo).
+`host.fs.readFile` returns UTF-8 text and nothing else. For an image, an audio file or anything binary, don't route the bytes through the worker at all: the renderer reads the file itself over Daintree's file protocols, as the file viewer does. Both take the same query — an absolute `path` and an absolute `root` — and realpath-contain `path` under `root`, answering 404 for anything outside it; the project root is the natural `root` for a project plugin.
+
+**Audio and video: point the element at `daintree-media://`.** It is the scheme Daintree's own audio and video previews play from: media only (a file that isn't audio or video is a 404), served in byte ranges, so the element streams and seeks rather than downloading the whole file first.
 
 ```js
-// In the view. `root` must be a root the protocol may serve from: the project
-// root is the one a project plugin has. The handler realpath-contains `path`
-// under `root` and refuses anything outside it.
-const url = `daintree-file://load?path=${encodeURIComponent(absPath)}&root=${encodeURIComponent(projectRoot)}`;
-const blob = await (await fetch(url, { signal: disposeSignal })).blob();
-const objectUrl = URL.createObjectURL(blob); // <audio src={objectUrl}>; revoke it on cleanup, or use scope.objectURL(blob)
+// In the view: the same URL shape the file viewer builds.
+const src = `daintree-media://load/?path=${encodeURIComponent(absPath)}&root=${encodeURIComponent(projectRoot)}`;
+createElement("video", { src, controls: true });
 ```
 
-Fetch into a blob rather than pointing an element's `src` at the URL directly; the blob path is the one the host has verified against Electron's media pipeline. This works because views are inline; it is not part of the host API, and a future move to an isolated view host would replace it with one.
+The scheme has no `fetch()` surface, only element loads, so a failure shows up as the element's `error` event. To check the file first — that it exists, or its size — send a `HEAD` to the same `path` and `root` on `daintree-file://load?…`, which answers with its `Content-Length` without reading it; the file viewer does exactly that before it mounts a player. A file rewritten in place needs a new URL to play its new bytes, since the element keeps what it has buffered; add a query parameter of your own (`&v=2`), which both schemes ignore.
+
+**Any other binary: fetch from `daintree-file://` into a blob.**
+
+```js
+const url = `daintree-file://load?path=${encodeURIComponent(absPath)}&root=${encodeURIComponent(projectRoot)}`;
+const blob = await (await fetch(url, { signal: disposeSignal })).blob();
+const objectUrl = URL.createObjectURL(blob); // revoke it on cleanup, or use scope.objectURL(blob)
+```
+
+An `<img>` can take the `daintree-file://` URL as its `src` directly. Both schemes work because views are inline in Daintree's own document; they are not part of the host API, and a future move to an isolated view host would replace them with one.
 
 ## Project switches and staleness
 
@@ -503,7 +766,7 @@ A dev preview tool is one registration — `registerDevPreviewTool({ id, pluginI
 
 ## What doesn't work inline
 
-- Bare npm imports in a raw view. Only the five React specifiers above, the tour's four (`@daintreehq/tour`, `@daintreehq/tour/react`, `@daintreehq/tour/kit`, `@daintreehq/tour/mock-app`) and [`@daintreehq/plugin-ui`](#host-ui-components) resolve through the host import map; everything else must be a relative module you ship in `dist/`, or you bundle. The tour specifiers resolve to the host's own tour instance, so a scene's `useCue` sees the host's player — `@daintreehq/plugin-vite` leaves them external for the same reason. Install `@daintreehq/tour` as a dev dependency for its types; its runtime always comes from the host. The tour module loads when a scene first imports it, not at startup.
+- Bare npm imports in a raw view. Only the five React specifiers above, the tour's four (`@daintreehq/tour`, `@daintreehq/tour/react`, `@daintreehq/tour/kit`, `@daintreehq/tour/mock-app`), [`@daintreehq/plugin-ui`](#host-ui-components) and [`@daintreehq/plugin-sdk/react`](#the-sdks-react-hooks) resolve through the host import map; everything else must be a relative module you ship in `dist/`, or you bundle. The tour specifiers resolve to the host's own tour instance, so a scene's `useCue` sees the host's player — `@daintreehq/plugin-vite` leaves them external for the same reason. Install `@daintreehq/tour` as a dev dependency for its types; its runtime always comes from the host. The tour module loads when a scene first imports it, not at startup.
 - TypeScript, JSX or CSS files without a build. Hand-written views use `createElement` and a `<style>` string.
 - Reaching into Daintree's React components. Only what [`@daintreehq/plugin-ui`](#host-ui-components) exports is served to plugins; the ones you can find by path are internal and will move.
-- Module-scope state surviving a plugin reload. Each full plugin load mints a fresh view generation for the next import; keep anything worth keeping in `persistState` (survives remounts and reloads) or `host.storage` (survives everything). A `daintree-plugin dev` rebuild is a full load, so it drops module-scope state and picks up view edits like any other reload (#12277); see [Contribution points → Worker reload vs. view-module replacement](./contribution-points.md#worker-reload-vs-view-module-replacement) for the mechanism.
+- Module-scope state surviving a plugin reload. Each full plugin load mints a fresh view generation for the next import; keep anything worth keeping in `persistState` (survives remounts and reloads; `usePersistentViewState` from the kit is the `useState`-shaped way to use it) or `host.storage` (survives everything). A `daintree-plugin dev` rebuild is a full load, so it drops module-scope state and picks up view edits like any other reload (#12277); see [Contribution points → Worker reload vs. view-module replacement](./contribution-points.md#worker-reload-vs-view-module-replacement) for the mechanism.

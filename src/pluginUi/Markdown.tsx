@@ -7,14 +7,22 @@ import type { PluginMarkdownProps } from "@shared/types/plugin-sdk-react";
 // in the chunks the host's own Markdown surfaces already share.
 const PluginMarkdown = lazy(() => import("@/components/Markdown/PluginMarkdown"));
 
-export function Markdown(props: PluginMarkdownProps) {
+// The document stylesheet centres its measure with an unlayered
+// `margin-inline: auto`, which a plain utility cannot override; an important
+// one can. A whole literal so the Tailwind scanner emits it.
+const START_ALIGN_CLASS = "mx-0!";
+
+export function Markdown({ align, className, ...props }: PluginMarkdownProps) {
+  const own = typeof className === "string" ? className : undefined;
+  const classes =
+    align === "start" ? (own ? `${START_ALIGN_CLASS} ${own}` : START_ALIGN_CLASS) : own;
   // Nothing, not a loading state: the renderer is a local app:// chunk, well
   // under the 400ms Doherty gate, and a document-sized block has no shape
   // worth a skeleton. A deferred indicator would also pull app modules into
   // this chunk's static graph, which must stay React-only.
   return (
     <Suspense fallback={null}>
-      <PluginMarkdown {...props} />
+      <PluginMarkdown {...props} className={classes} />
     </Suspense>
   );
 }

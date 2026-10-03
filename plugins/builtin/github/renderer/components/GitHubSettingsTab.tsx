@@ -1,6 +1,15 @@
 import { useState, useEffect } from "react";
-import { Button } from "@/components/ui/button";
-import { Check, FlaskConical, ExternalLink, Import, CheckCircle2 } from "lucide-react";
+import {
+  Button,
+  Callout,
+  ConfirmDialog,
+  Icon,
+  Input,
+  SettingsActions,
+  SettingsGroup,
+  SettingsRow,
+  SettingsSection,
+} from "@daintreehq/plugin-ui";
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
 import { actionService } from "@/services/ActionService";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
@@ -11,11 +20,6 @@ import {
   describeImportFailure,
   useGitHubCliAvailable,
 } from "./GitHubCliImport";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
-import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsActions, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
-import { SettingsInput } from "@/components/Settings/SettingsInput";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
 import { logError } from "@/utils/logger";
@@ -258,12 +262,12 @@ export function GitHubSettingsTab() {
   const tokenStatus =
     validationResult === "success" ? (
       <span className="flex items-center gap-1">
-        <CheckCircle2 className="w-3 h-3 shrink-0" aria-hidden="true" />
+        <Icon name="circle-check" className="w-3 h-3 shrink-0" />
         Checked and saved
       </span>
     ) : validationResult === "test-success" ? (
       <span className="flex items-center gap-1">
-        <Check className="w-3 h-3 shrink-0" aria-hidden="true" />
+        <Icon name="check" className="w-3 h-3 shrink-0" />
         Token works — not saved yet
       </span>
     ) : tokenError ? (
@@ -273,7 +277,19 @@ export function GitHubSettingsTab() {
 
   return (
     <div className="space-y-8">
-      {loadError && <SettingsLoadErrorBanner message={loadError} onRetry={retryAction} />}
+      {loadError && (
+        <Callout
+          severity="error"
+          role="alert"
+          action={
+            <Button variant="outline" size="sm" onClick={retryAction}>
+              Retry
+            </Button>
+          }
+        >
+          <p className="select-text">{loadError}</p>
+        </Callout>
+      )}
 
       <SettingsSection
         id="github-token"
@@ -286,7 +302,7 @@ export function GitHubSettingsTab() {
               label="Status"
               control={
                 <span className="flex items-center gap-1 text-xs text-text-secondary">
-                  {githubConfig.hasToken && <Check className="w-3 h-3" aria-hidden="true" />}
+                  {githubConfig.hasToken && <Icon name="check" className="w-3 h-3" />}
                   {!githubConfig.hasToken
                     ? "No token saved"
                     : githubConfig.username
@@ -296,19 +312,34 @@ export function GitHubSettingsTab() {
               }
             />
           )}
-          <SettingsInput
+          <SettingsRow
             label="Personal access token"
-            type="password"
-            value={githubToken}
-            onChange={(e) => handleTokenChange(e.target.value)}
-            error={tokenError}
             description="Test checks a token without saving it; Save checks it, then stores it"
-            placeholder={
-              githubConfig?.hasToken ? "Enter new token to replace" : "ghp_... or github_pat_..."
-            }
-            aria-label="GitHub personal access token"
-            autoComplete="new-password"
+            layout="stacked"
             disabled={isValidating || isTesting || isImporting}
+            error={tokenError}
+            control={({ labelId, descriptionId, disabled: rowDisabled }) => (
+              <div className="relative">
+                <Input
+                  type="password"
+                  value={githubToken}
+                  onValueChange={handleTokenChange}
+                  placeholder={
+                    githubConfig?.hasToken
+                      ? "Enter new token to replace"
+                      : "ghp_... or github_pat_..."
+                  }
+                  aria-label="GitHub personal access token"
+                  aria-labelledby={labelId}
+                  aria-describedby={descriptionId}
+                  aria-invalid={tokenError ? true : undefined}
+                  invalid={Boolean(tokenError)}
+                  autoComplete="new-password"
+                  disabled={rowDisabled}
+                  className="w-full"
+                />
+              </div>
+            )}
           />
           <SettingsActions status={tokenStatus}>
             <Button
@@ -318,8 +349,8 @@ export function GitHubSettingsTab() {
               variant="outline"
               size="sm"
               aria-label="Test token"
+              icon="flask"
             >
-              <FlaskConical aria-hidden="true" />
               Test
             </Button>
             <Button
@@ -373,13 +404,17 @@ export function GitHubSettingsTab() {
                     loading={cliImportPhase === "previewing"}
                     variant="outline"
                     size="sm"
+                    icon="import"
                   >
-                    <Import aria-hidden="true" />
                     Import from GitHub CLI
                   </Button>
                 )}
-                <Button onClick={openGitHubTokenPage} variant="outline" size="sm">
-                  <ExternalLink aria-hidden="true" />
+                <Button
+                  onClick={openGitHubTokenPage}
+                  variant="outline"
+                  size="sm"
+                  icon="external-link"
+                >
                   Create token on GitHub
                 </Button>
               </div>
@@ -409,27 +444,28 @@ export function GitHubSettingsTab() {
         )}
       </SettingsSection>
 
+      {/* `nested`: this tab renders inside the Settings modal. */}
       <ConfirmDialog
-        isOpen={confirmingClear}
+        open={confirmingClear}
         variant="destructive"
         onConfirm={() => void handleClearToken()}
         onClose={() => setConfirmingClear(false)}
         title="Clear the GitHub token?"
         description="Daintree's copy is deleted. Issues, pull requests and repository stats stop until you add a token again."
         confirmLabel="Clear token"
-        zIndex="nested"
+        layer="nested"
       />
 
       <ConfirmDialog
-        isOpen={cliImportPhase === "confirming" || cliImportPhase === "committing"}
+        open={cliImportPhase === "confirming" || cliImportPhase === "committing"}
         onClose={() => setCliImportPhase("idle")}
         title={`Import token for @${cliImportPreview?.account ?? ""}?`}
         description="Daintree saves its own copy of the token the GitHub CLI holds for this account, stored in plain text in Daintree's settings."
         confirmLabel="Import token"
         onConfirm={handleConfirmCliImport}
-        isConfirmLoading={cliImportPhase === "committing"}
+        loading={cliImportPhase === "committing"}
         variant="default"
-        zIndex="nested"
+        layer="nested"
       >
         {cliImportPreview && (
           <GitHubCliImportDetails

@@ -1,6 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
+import {
+  PLUGIN_INVOKE_MAX_RESULT_BYTES,
+  PLUGIN_PUSH_MAX_PAYLOAD_BYTES,
+} from "../../../../shared/config/pluginBudgets.js";
 
 const flush = () => new Promise((r) => setImmediate(r));
 
@@ -153,6 +157,28 @@ function resolveCall(proxy: any, sent: any[], method: string, result: unknown): 
   proxy.handleMessage({ type: "host-result", requestId: call.requestId, ok: true, result });
 }
 
+describe("PluginDevWorkerHostProxy dispatch target (#13119)", () => {
+  it("relays the options argument to main, and leaves it off when absent", async () => {
+    const { proxy, sent } = makeProxy();
+
+    const targeted = proxy.host.dispatch("agent.launch", { a: 1 }, { projectId: "p-b" });
+    expect([...sent].reverse().find((m) => m.method === "dispatch").params).toEqual({
+      actionId: "agent.launch",
+      args: { a: 1 },
+      options: { projectId: "p-b" },
+    });
+    resolveCall(proxy, sent, "dispatch", { ok: true, result: "done" });
+    await expect(targeted).resolves.toEqual({ ok: true, result: "done" });
+
+    const ambient = proxy.host.dispatch("terminal.focus");
+    const params = [...sent].reverse().find((m) => m.method === "dispatch").params;
+    expect(params).toEqual({ actionId: "terminal.focus", args: undefined });
+    expect("options" in params).toBe(false);
+    resolveCall(proxy, sent, "dispatch", { ok: true, result: null });
+    await ambient;
+  });
+});
+
 describe("PluginDevWorkerHostProxy getWorktreesResult (#12174)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());
@@ -215,6 +241,90 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
     });
     resolveCall(proxy, sent, "sendToAgent", { status: "drafted", terminalId: "t-1" });
     await expect(promise).resolves.toEqual({ status: "drafted", terminalId: "t-1" });
+  });
+
+  it("relays agents.listAll and re-freezes the allowlisted snapshot after the clone", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.agents.listAll();
+    expect(sent.find((m) => m.type === "host-call" && m.method === "agents.listAll")).toBeDefined();
+    resolveCall(proxy, sent, "agents.listAll", {
+      agents: [
+        {
+          workspaceId: "p1",
+          workspaceKind: "project",
+          terminalId: "t-1",
+          observedState: "working",
+          cwd: "/leaked",
+        },
+      ],
+      degraded: false,
+      lastSuccessfulAt: 5,
+    });
+    const result = await promise;
+    expect(result).toEqual({
+      agents: [
+        {
+          workspaceId: "p1",
+          workspaceKind: "project",
+          terminalId: "t-1",
+          observedState: "working",
+        },
+      ],
+      degraded: false,
+      lastSuccessfulAt: 5,
+    });
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.agents[0])).toBe(true);
+  });
+
+  it("answers an unavailable app-wide list when disposed mid-call", async () => {
+    const { proxy } = makeProxy();
+    const listAll = proxy.host.agents.listAll();
+    proxy.dispose();
+    await expect(listAll).resolves.toEqual({ agents: [], degraded: true, lastSuccessfulAt: null });
+  });
+
+  it("subscribes all-agents with its debounce and delivers frozen snapshots", async () => {
+    const { proxy, sent } = makeProxy();
+    const callback = vi.fn();
+    await proxy.host.onDidChangeAllAgents(callback, { debounceMs: 0 });
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "all-agents");
+    expect(sub).toMatchObject({ debounceMs: 0 });
+
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: {
+        agents: [{ workspaceId: "p1", terminalId: "t-1" }],
+        degraded: true,
+        lastSuccessfulAt: null,
+      },
+    });
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    const snapshot = callback.mock.calls[0][0];
+    expect(snapshot.agents[0]).toEqual({
+      workspaceId: "p1",
+      workspaceKind: "project",
+      terminalId: "t-1",
+    });
+    expect(Object.isFrozen(snapshot)).toBe(true);
+  });
+
+  it("relays terminals.readScreen and resolves with the screen", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.terminals.readScreen("t-1", { lines: 5 });
+    const call = sent.find((m) => m.type === "host-call" && m.method === "terminals.readScreen");
+    expect(call).toMatchObject({ params: { terminalId: "t-1", options: { lines: 5 } } });
+    resolveCall(proxy, sent, "terminals.readScreen", { status: "exited" });
+    await expect(promise).resolves.toEqual({ status: "exited" });
+  });
+
+  it("answers unavailable for a screen read when the proxy is disposed mid-call", async () => {
+    const { proxy } = makeProxy();
+    const read = proxy.host.terminals.readScreen("t-1");
+    proxy.dispose();
+    await expect(read).resolves.toEqual({ status: "unavailable" });
   });
 
   it("answers the host's own unload values when the proxy is disposed mid-call", async () => {
@@ -906,7 +1016,12 @@ describe("PluginDevWorkerHostProxy host.postToPanel (#10618)", () => {
   it("rejects an empty-string panelId before posting", async () => {
     const { proxy, post } = makeProxy();
 
-    expect(() => proxy.host.postToPanel("tick", { n: 1 }, "")).toThrow(/postToPanel: panelId/);
+    // Rejected, not thrown, so a non-awaited call's `.catch()` sees it (#10617).
+    let result: Promise<void> | undefined;
+    expect(() => {
+      result = proxy.host.postToPanel("tick", { n: 1 }, "");
+    }).not.toThrow();
+    await expect(result).rejects.toThrow(/postToPanel: panelId/);
     expect(post).not.toHaveBeenCalled();
   });
 });
@@ -1208,5 +1323,212 @@ describe("PluginDevWorkerHostProxy reloadPanel (#12610)", () => {
     const promise = proxy.host.reloadPanel("p1");
     proxy.dispose();
     await expect(promise).resolves.toBe("unavailable");
+  });
+});
+
+describe("PluginDevWorkerHostProxy transport limits", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const schema = {
+    args: { safeParse: (v: unknown) => ({ success: true, data: v }) },
+    result: { safeParse: (v: unknown) => ({ success: true, data: v }) },
+  } as any;
+
+  it("forwards a legacy handler's timeoutMs to main", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.registerHandler("slow", () => null, { timeoutMs: 0 });
+    expect(sent.find((m) => m.method === "registerHandler")).toMatchObject({
+      params: { channel: "slow", hasSchema: false, timeoutMs: 0 },
+    });
+  });
+
+  it("forwards a typed handler's timeoutMs to main", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.registerHandler("typed", schema, () => null, { timeoutMs: 30_000 });
+    expect(sent.find((m) => m.method === "registerHandler")).toMatchObject({
+      params: { channel: "typed", hasSchema: true, timeoutMs: 30_000 },
+    });
+  });
+
+  it("omits timeoutMs when the handler declares none", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.registerHandler("plain", () => null);
+    const params = sent.find((m) => m.method === "registerHandler").params;
+    expect("timeoutMs" in params).toBe(false);
+  });
+
+  it("throws at the call site for an invalid timeoutMs", () => {
+    const { proxy, sent } = makeProxy();
+    expect(() => proxy.host.registerHandler("bad", () => null, { timeoutMs: -5 })).toThrow(
+      /timeoutMs must be a number/
+    );
+    expect(sent.some((m) => m.method === "registerHandler")).toBe(false);
+  });
+
+  it("rejects an oversize postToPanel payload before it crosses the port", async () => {
+    const { proxy, sent } = makeProxy();
+    const huge = "x".repeat(PLUGIN_PUSH_MAX_PAYLOAD_BYTES + 1);
+    await expect(proxy.host.postToPanel("tick", huge, "panel-a")).rejects.toThrow(
+      /^PLUGIN_PAYLOAD_TOO_LARGE: /
+    );
+    expect(sent.some((m) => m.method === "postToPanel")).toBe(false);
+  });
+
+  it("throws on an oversize broadcastToRenderer payload without notifying main", () => {
+    const { proxy, sent } = makeProxy();
+    const huge = { blob: "x".repeat(PLUGIN_PUSH_MAX_PAYLOAD_BYTES) };
+    expect(() => proxy.host.broadcastToRenderer("tick", huge)).toThrow(/PLUGIN_PAYLOAD_TOO_LARGE/);
+    expect(sent.some((m) => m.method === "broadcastToRenderer")).toBe(false);
+  });
+});
+
+describe("PluginDevWorkerHostProxy invoke results", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const ctx = { projectId: null, worktreeId: null, webContentsId: 1, pluginId: "acme.demo" };
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+  it("refuses an oversize handler result in the worker, before it crosses the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.registerHandler("big", () => "x".repeat(PLUGIN_INVOKE_MAX_RESULT_BYTES + 1));
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i1",
+      kind: "handler",
+      channel: "big",
+      ctx,
+      args: [],
+    } as any);
+    await tick();
+    const result = sent.find((m) => m.type === "invoke-result");
+    expect(result).toMatchObject({ requestId: "i1", ok: false });
+    expect(result.error).toMatch(/^PLUGIN_PAYLOAD_TOO_LARGE: .*result of "big"/);
+  });
+
+  it("posts nothing for an invoke main cancelled while it ran", async () => {
+    const { proxy, sent } = makeProxy();
+    let release: (value: string) => void = () => {};
+    await proxy.host.registerHandler("slow", () => new Promise((resolve) => (release = resolve)));
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i2",
+      kind: "handler",
+      channel: "slow",
+      ctx,
+      args: [],
+    } as any);
+    await tick();
+    proxy.handleMessage({ type: "invoke-cancel", requestId: "i2" } as any);
+    release("late");
+    await tick();
+    expect(sent.some((m) => m.type === "invoke-result" && m.requestId === "i2")).toBe(false);
+  });
+
+  it("releases a cancelled invoke's entry at once, even if its handler never settles", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.registerHandler("hang", () => new Promise(() => {}));
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i4",
+      kind: "handler",
+      channel: "hang",
+      ctx,
+      args: [],
+    } as any);
+    await tick();
+    expect(proxy.runningInvokeCount()).toBe(1);
+    proxy.handleMessage({ type: "invoke-cancel", requestId: "i4" } as any);
+    expect(proxy.runningInvokeCount()).toBe(0);
+    expect(sent.some((m) => m.type === "invoke-result" && m.requestId === "i4")).toBe(false);
+  });
+
+  it("forgets running invokes on dispose", async () => {
+    const { proxy } = makeProxy();
+    await proxy.host.registerHandler("hang", () => new Promise(() => {}));
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i5",
+      kind: "handler",
+      channel: "hang",
+      ctx,
+      args: [],
+    } as any);
+    await tick();
+    expect(proxy.runningInvokeCount()).toBe(1);
+    proxy.dispose();
+    expect(proxy.runningInvokeCount()).toBe(0);
+  });
+
+  it("still answers an invoke that was not cancelled", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.registerHandler("fast", () => "ok");
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i3",
+      kind: "handler",
+      channel: "fast",
+      ctx,
+      args: [],
+    } as any);
+    await tick();
+    expect(sent.find((m) => m.type === "invoke-result")).toMatchObject({
+      requestId: "i3",
+      ok: true,
+      result: "ok",
+    });
+  });
+});
+
+describe("PluginDevWorkerHostProxy coalesced subscriptions and readFiles", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("leaves debounceMs absent when the plugin passed none, so main applies its default", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.onDidChangeWorktrees(vi.fn());
+    await proxy.host.onDidChangeActiveWorktree(vi.fn());
+    await proxy.host.onDidChangeAgentState(vi.fn());
+    const subs = sent.filter((m) => m.type === "subscribe");
+    expect(subs.map((m) => m.kind)).toEqual(["worktrees", "active-worktree", "agent-state"]);
+    for (const sub of subs) expect(sub.debounceMs).toBeUndefined();
+  });
+
+  it("forwards an explicit debounceMs on every coalesced kind", async () => {
+    const { proxy, sent } = makeProxy();
+    await proxy.host.onDidChangeWorktrees(vi.fn(), { debounceMs: 0 });
+    await proxy.host.onDidChangeActiveWorktree(vi.fn(), { debounceMs: 250 });
+    await proxy.host.onDidChangeAgentState(vi.fn(), { debounceMs: 0 });
+    const subs = sent.filter((m) => m.type === "subscribe");
+    expect(subs.map((m) => m.debounceMs)).toEqual([0, 250, 0]);
+  });
+
+  it("unpacks the worktrees event into the list and the change set", async () => {
+    const { proxy, sent } = makeProxy();
+    const callback = vi.fn();
+    await proxy.host.onDidChangeWorktrees(callback);
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "worktrees");
+    const change = { added: ["w1"], removed: [], changed: [] };
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { snapshots: [{ id: "w1" }], change },
+    });
+    expect(callback).toHaveBeenCalledWith([{ id: "w1" }], change);
+  });
+
+  it("relays readFiles in one host call, forwarding only the options that were set", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.fs.readFiles!(["/repo/a", "/repo/b"]);
+    void proxy.host.fs.readFiles!(["/repo/c"], { encoding: "bytes", maxBytesPerFile: 10 });
+    const calls = sent.filter((m) => m.type === "host-call" && m.method === "fs.readFiles");
+    expect(calls).toHaveLength(2);
+    expect(calls[0].params).toEqual({ paths: ["/repo/a", "/repo/b"] });
+    expect(calls[1].params).toEqual({ paths: ["/repo/c"], encoding: "bytes", maxBytesPerFile: 10 });
+    const result = [
+      { path: "/repo/a", ok: true, content: "a" },
+      { path: "/repo/b", ok: false, error: { code: "NOT_FOUND", message: "x" } },
+    ];
+    proxy.handleMessage({ type: "host-result", requestId: calls[0].requestId, ok: true, result });
+    await expect(promise).resolves.toEqual(result);
   });
 });

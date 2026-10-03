@@ -86,6 +86,7 @@ export interface PluginGuestAdapterContribution {
 export interface PanelContribution {
   id: string;
   name: string;
+  /** A generic plugin icon id, or a `./…svg` path to the plugin's own icon (#13143). */
   iconId: string;
   color: string;
   hasPty: boolean;
@@ -105,10 +106,69 @@ export interface PanelContribution {
    * panel the menu was opened on.
    */
   menu?: PanelMenuItemContribution[];
+  /**
+   * Up to three of your own actions drawn as buttons in this panel's header,
+   * in the order given. Each is dispatched with `{ panelId }` naming the panel
+   * it was clicked on. The view sets a button's live state (busy, disabled,
+   * tone, a status line, an "Updated" age) with `setToolbarItemState`.
+   */
+  toolbar?: PanelToolbarItemContribution[];
 }
 
 /** Most entries one panel's `menu` may declare. */
 export const PANEL_MENU_MAX_ITEMS = 5;
+
+/** Most entries one panel's `toolbar` may declare. */
+export const PANEL_TOOLBAR_MAX_ITEMS = 3;
+
+/** One entry of a panel's `toolbar`: a button in the panel header. */
+export interface PanelToolbarItemContribution {
+  /**
+   * One of your own actions, in your plugin's namespace (`"{manifestId}.{id}"`),
+   * from `contributes.commands` or `host.registerAction`. The button appears
+   * while that action is registered.
+   */
+  actionId: string;
+  /** The button's name, and its tooltip. Defaults to the action's title. */
+  label?: string;
+  /** A generic plugin icon id, or a `./…svg` path to the plugin's own icon. Omitted, the label is drawn as text. */
+  iconId?: string;
+  /**
+   * Draws a status beside the button: the state's `text` and `updatedAt` age,
+   * and its `tone`. Omitted (false), only the button is drawn and those
+   * fields are ignored.
+   */
+  status?: boolean;
+}
+
+/**
+ * The live state of one panel `toolbar` button, set by the view with
+ * `setToolbarItemState`. Every field is optional; an omitted field is the
+ * button's resting value.
+ */
+export interface PluginPanelToolbarItemState {
+  /** Draws a spinner on the button and ignores clicks until it is cleared. */
+  busy?: boolean;
+  /** Announced unavailable and ignores clicks. */
+  disabled?: boolean;
+  /**
+   * `warning` or `danger` colours the status and adds its glyph; colour is
+   * never the only signal. Needs `status: true`. An explicit tone wins over
+   * the age's own stale warning.
+   */
+  tone?: "default" | "warning" | "danger";
+  /** A short status beside the button ("2 prices kept from cache"). Needs `status: true`. */
+  text?: string;
+  /** Epoch ms or an ISO string: drawn as "Updated 3h ago" on the host's shared clock. Needs `status: true`. */
+  updatedAt?: number | string;
+  /** Once `updatedAt` is older than this many ms the age reads as stale (warning glyph and colour) without another update. */
+  staleAfterMs?: number;
+  /** The button's tooltip, when it says more than the label ("Prices fetched 14:02"). */
+  tooltip?: string;
+}
+
+/** Most characters a toolbar item's `text` or `tooltip` may carry; longer values are cut. */
+export const PLUGIN_PANEL_TOOLBAR_TEXT_MAX = 120;
 
 /** One entry of a panel's `menu`. */
 export interface PanelMenuItemContribution {
@@ -125,6 +185,7 @@ export interface PanelMenuItemContribution {
 export interface ToolbarButtonContribution {
   id: string;
   label: string;
+  /** A generic plugin icon id, or a `./…svg` path to the plugin's own icon (#13143). */
   iconId: string;
   actionId: ActionId;
   priority?: 1 | 2 | 3 | 4 | 5;
@@ -172,6 +233,10 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   "agent:read",
   "agent:register",
   "agent:input",
+  // Read a terminal's current screen as plain text (`host.terminals.readScreen`).
+  // Separate from `agent:read` on purpose: what a terminal shows routinely
+  // includes tokens and env dumps, so it carries its own first-use consent.
+  "terminal:read",
   "git:read",
   "git:write",
   "clipboard:read",
@@ -190,6 +255,12 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   // listener. Declaring it exposes nothing by itself: each endpoint stays dark
   // until the user enables it for a specific project.
   "mcp:expose",
+  // Name a target project on `host.dispatch(actionId, args, { projectId })`
+  // (#13119). Declaring it enables nothing: targeting stays off until the user
+  // turns on "Allow project targeting" for this plugin in the Plugin Manager.
+  // Not confirm-triggering — it changes where a dispatch lands, not which
+  // actions a plugin can reach.
+  "project:dispatch",
 ] as const;
 
 export type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
@@ -208,6 +279,16 @@ export function isBuiltInPluginCapability(value: unknown): value is BuiltInPlugi
 }
 
 export type PluginCapability = BuiltInPluginCapability;
+
+/** Third argument to {@link PluginHostApi.dispatch} (#13119). */
+export interface PluginDispatchOptions {
+  /**
+   * Run the action in this project's view rather than the focused one. Needs
+   * the `project:dispatch` capability and the user's per-plugin switch. Ids
+   * come from `host.dispatch("project.getAll")`.
+   */
+  projectId?: string;
+}
 
 export interface MenuItemContribution {
   label: string;
@@ -563,6 +644,34 @@ export interface PanelViewProps {
    * Absent where the host offers no reload, so call it optionally.
    */
   readonly setHasUnsavedChanges?: (hasUnsavedChanges: boolean) => void;
+  /**
+   * Sets the live state of one of this panel's manifest `toolbar` buttons by
+   * its `actionId` (as written in the manifest). Each call replaces that
+   * button's state; `null` resets it. State belongs to the panel, so it
+   * survives the view re-rendering, unmounting and remounting, and is cleared
+   * when the panel closes or the view reloads. An `actionId` the manifest
+   * does not list is ignored.
+   *
+   * Like {@link setHasUnsavedChanges}, the setter belongs to the attempt that
+   * received it: a call held past this attempt's teardown (a refresh that
+   * settles after a reload) does nothing.
+   *
+   * Absent where the panel has no header (a surface), so call it optionally.
+   */
+  readonly setToolbarItemState?: (
+    actionId: string,
+    state: PluginPanelToolbarItemState | null
+  ) => void;
+  /**
+   * Your actions whose handlers are running right now, by `actionId` as the
+   * manifest writes it — however they were dispatched: the palette, a menu,
+   * the panel toolbar, a keybinding or an agent. A new array when the set
+   * changes, so a view re-renders as a run starts and ends, and a view that
+   * mounts mid-run sees it at once. `useActionRunning` reads one action.
+   *
+   * Absent on a host that does not track runs, so read it optionally.
+   */
+  readonly runningActions?: readonly string[];
   /**
    * The worktree the panel instance belongs to, as recorded on the panel at
    * spawn time. Lets a view reconstruct its own context without dispatching
@@ -1110,9 +1219,10 @@ export interface PluginAgentContribution {
  *
  * `iconId` uses the generic plugin icon namespace ({@link PLUGIN_ICON_IDS} in
  * `shared/config/pluginIconIds.ts`), the same one `contributes.panels[].iconId`
- * and `contributes.toolbarButtons[].iconId` use — plugins cannot ship bundled
- * brand marks. Advisory, like those siblings: an unrecognized id renders a
- * fallback glyph rather than failing the load.
+ * and `contributes.toolbarButtons[].iconId` use, or — like those siblings — a
+ * `./…svg` path to the plugin's own icon file (#13143). Advisory: an
+ * unrecognized id or unloadable file renders a fallback glyph rather than
+ * failing the load.
  *
  * Inert declarative data, so no capability is required. A command that collides
  * with a built-in tool or agent is rejected at parse time; a cross-plugin
@@ -1539,17 +1649,48 @@ export interface PluginHostCallOptions {
 }
 
 /**
- * Options accepted by high-frequency event subscriptions (today
- * {@link PluginActivationApi.onDidChangeWorktrees}). `debounceMs` coalesces a
- * burst of change events into a single trailing callback fired `debounceMs`
- * after the last event — the host re-emits the worktree set on every git-status
- * poll, so a UI-updating plugin can opt into far fewer callbacks. A burst that
- * never goes quiet still fires at least every few `debounceMs`. Values below a
- * small floor (~50ms) are clamped up; `0` / omitted means no debounce (fire on
- * every change). The coalesced callback receives the most recent snapshot list.
+ * Options accepted by the bursty host subscriptions —
+ * {@link PluginActivationApi.onDidChangeWorktrees},
+ * {@link PluginActivationApi.onDidChangeActiveWorktree},
+ * {@link PluginActivationApi.onDidChangeAgentState} and
+ * {@link PluginActivationApi.onDidChangeAllAgents}. These coalesce by default:
+ * a burst of events becomes one trailing callback fired `debounceMs` after the
+ * last event (the host re-emits the worktree set on every git-status poll, and
+ * agents change state many times a second). A burst that never goes quiet
+ * still fires at least every `4 × debounceMs`, so a busy project never
+ * withholds its latest state indefinitely.
+ *
+ * - omitted (or not a number) — the default window, 100ms
+ * - `0` (or a negative number) — no coalescing: every event is delivered
+ * - any other value — used as the window, clamped to 50–60000ms
+ *
+ * What a coalesced callback receives is documented on each subscription; the
+ * common rule is that the most recent value is always delivered.
  */
 export interface PluginHostSubscriptionOptions {
   debounceMs?: number;
+}
+
+/**
+ * What changed in the worktree set since the previous
+ * {@link PluginActivationApi.onDidChangeWorktrees} delivery to the same
+ * subscription, as snapshot `id`s. Computed by the host from the list it last
+ * delivered, so a coalesced burst reports the net change across the whole
+ * burst (a worktree added and removed within one window appears in neither
+ * list). The first delivery compares against an empty set: every worktree is
+ * `added`.
+ *
+ * A worktree is `changed` when any field of its {@link PluginWorktreeSnapshot}
+ * differs — branch, current/main flags, ahead/behind counts, mood, activity
+ * and creation times, the linked issue/PR projection, or its status (the
+ * per-state counts and the path + state of every changed file). A delivery
+ * whose three lists are all empty re-sends an unchanged set; a plugin that
+ * only cares about changes can return early on it.
+ */
+export interface PluginWorktreesChange {
+  readonly added: readonly string[];
+  readonly removed: readonly string[];
+  readonly changed: readonly string[];
 }
 
 /**
@@ -1817,8 +1958,16 @@ export interface PluginDatabase extends PluginDatabaseStatements {
   transaction<T>(fn: (tx: PluginDatabaseStatements) => Promise<T> | T): Promise<T>;
   /**
    * Fire after the database changes, including commits by other processes —
-   * the usual case being an agent writing with the `sqlite3` CLI. Coalesced:
-   * a burst of external commits delivers one event. Returns a disposer.
+   * the usual case being an agent writing with the `sqlite3` CLI. Returns a
+   * disposer.
+   *
+   * Coalesced: every change within a 50ms window — this handle's own commits
+   * and external ones alike — is delivered as one event at the end of the
+   * window, so 200 inserts awaited one after another cost a handful of
+   * refetches rather than 200. The last change is always delivered, including
+   * one whose window is still open when the handle closes. A window
+   * that saw any external change reports `origin: "external"`; one that saw
+   * only this handle's commits reports `"self"`.
    */
   onDidChange(callback: (event: PluginDatabaseChangeEvent) => void): () => void;
   /**
@@ -2365,6 +2514,19 @@ export interface PluginChannelSchema<TArgs, TResult> {
 }
 
 /**
+ * Per-channel options for {@link PluginHostApi.registerHandler}.
+ */
+export interface PluginHandlerOptions {
+  /**
+   * Deadline, in milliseconds, for one invoke of this channel. When it passes,
+   * the renderer's `invoke` rejects with a `PLUGIN_INVOKE_TIMEOUT:` error and a
+   * worker-hosted handler's invoke is cancelled. Defaults to five minutes;
+   * `0` disables the deadline for handlers that legitimately run longer.
+   */
+  timeoutMs?: number;
+}
+
+/**
  * Provider-agnostic projection of a worktree's linked forge resources (issue
  * and/or PR), exposed on {@link PluginWorktreeSnapshot.linked}. Replaces the
  * GitHub-shaped flat fields that previously leaked onto the snapshot —
@@ -2540,11 +2702,11 @@ export type PluginWorktreesResult =
  * plugins. Observation only: nothing on this surface can drive, pause, resume,
  * or inject into an agent session.
  *
- * Deliberately omits the internal routing ids (`terminalId`, `worktreeId`,
- * `cwd`) and the activity-detector internals (`trigger`, `confidence`,
- * `temperature`, …): a plugin holding only `agent:read` has no declared
- * capability to access PTY/worktree internals, so exposing them here would let
- * it cross-reference state it can't otherwise reach.
+ * Carries the terminal and workspace a transition came from, so a plugin can
+ * say where an agent needs attention and join the event to
+ * {@link PluginAgentsApi.list}. Deliberately omits `worktreeId`, `cwd` and the
+ * activity-detector internals (`trigger`, `confidence`, `temperature`, …), so
+ * the snapshot stays safe to send off the machine.
  */
 export interface PluginAgentSnapshot {
   /**
@@ -2553,6 +2715,22 @@ export interface PluginAgentSnapshot {
    * terminal rather than a resolved agent id.
    */
   readonly agentId?: string;
+  /**
+   * The terminal the transition came from — the same id
+   * {@link PluginAgentPane.terminalId} reports and
+   * {@link PluginHostApi.sendToAgent} takes. Those two only reach the plugin's
+   * own (or the focused) project, so a transition from another workspace has no
+   * pane to join. Absent when the host could not attribute the transition to a
+   * terminal.
+   */
+  readonly terminalId?: string;
+  /**
+   * The workspace (project or scratch) that owns the terminal. Opaque: compare
+   * it, don't parse it. A project plugin only ever sees its own project's id.
+   * Resolved when the transition arrives; absent when the host could not tell
+   * which workspace owned the terminal then, e.g. one already torn down.
+   */
+  readonly workspaceId?: string;
   /** Coarse lifecycle state: idle | working | waiting | directing | completed | exited. */
   readonly state: AgentState;
   /** The state the session transitioned away from. */
@@ -2647,6 +2825,58 @@ export interface PluginAgentPane {
   readonly draftRefusal?: PluginSendToAgentRefusalReason;
 }
 
+/**
+ * One agent run anywhere in the app, as {@link PluginAgentsApi.listAll}
+ * reports it — any open project or scratch, including ones whose view is not
+ * loaded.
+ *
+ * `observedState` is what the host last read off the agent's own terminal
+ * output — a heuristic that is often wrong, never a guarantee the agent is
+ * doing (or done doing) anything. Show it as "last seen working", not as fact.
+ */
+export interface PluginAgentRun {
+  /** The project or scratch the run belongs to. */
+  readonly workspaceId: string;
+  /** Whether {@link workspaceId} names a project or a scratch workspace. */
+  readonly workspaceKind: "project" | "scratch";
+  /**
+   * The run's terminal id. Not a lasting identity: a restarted pane can come
+   * back under the same id.
+   */
+  readonly terminalId: string;
+  /** The worktree the run belongs to, when it has one. An id only — no name or branch. */
+  readonly worktreeId?: string;
+  /** The pane's own title, when it has one. Not the composed title the pane header shows. */
+  readonly title?: string;
+  /** The agent detected in the run (`claude`, `codex`, …), once detection has committed. */
+  readonly agentId?: string;
+  /** Last observed agent state, when there is one. An observation, not a fact. */
+  readonly observedState?: AgentState;
+}
+
+/**
+ * Every agent run across every open project and scratch, as
+ * {@link PluginAgentsApi.listAll} and
+ * {@link PluginActivationApi.onDidChangeAllAgents} report it.
+ *
+ * An empty `agents` list only means "no agents" when `degraded` is `false`.
+ */
+export interface PluginAllAgentsSnapshot {
+  readonly agents: readonly PluginAgentRun[];
+  /**
+   * The host could not read every terminal behind this answer, so `agents` is
+   * the last complete view rather than the current one — show it as stale,
+   * never as clear. Also `true`, with `agents` empty and `lastSuccessfulAt`
+   * `null`, before the host has read the fleet even once.
+   */
+  readonly degraded: boolean;
+  /**
+   * When a complete read last succeeded (epoch ms), or `null` if none has. Only
+   * updated when the answer changes, so it is not a heartbeat.
+   */
+  readonly lastSuccessfulAt: number | null;
+}
+
 /** `host.agents` — the agent panes in the plugin's project. */
 export interface PluginAgentsApi {
   /**
@@ -2661,6 +2891,87 @@ export interface PluginAgentsApi {
    * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare `agent:read`.
    */
   list(): Promise<PluginAgentPane[]>;
+  /**
+   * Every agent run across every open project and scratch, answered by the
+   * host's main process — so projects whose view is not loaded are included.
+   * Exited and demoted agents are left out. Gated on `agent:read`, and only
+   * for installed and built-in plugins: a project plugin is scoped to its own
+   * project and is refused.
+   *
+   * Resolves an empty, `degraded` snapshot before the host has read the fleet
+   * once and after the plugin is unloaded. Subscribe with
+   * {@link PluginActivationApi.onDidChangeAllAgents} before the first call so
+   * no change between the two is missed.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+   *   `agent:read`, or is a project plugin.
+   */
+  listAll(): Promise<PluginAllAgentsSnapshot>;
+}
+
+/** Options for {@link PluginTerminalsApi.readScreen}. */
+export interface PluginTerminalReadScreenOptions {
+  /**
+   * How many of the screen's last lines to return: an integer from 1 to 100.
+   * Defaults to 20. Fewer come back when the screen holds fewer. A line the
+   * terminal soft-wrapped across rows counts once.
+   */
+  lines?: number;
+}
+
+/**
+ * What {@link PluginTerminalsApi.readScreen} found.
+ *
+ * - `ok`: the terminal's current screen, as plain text with no ANSI. `text` is
+ *   `""` (and `lineCount` `0`) when the screen is blank — an empty screen, not a
+ *   missing terminal. `truncated` is `true` when lines above the returned ones,
+ *   or bytes past the 16 KiB cap, were left out; the newest content is kept.
+ * - `exited`: the terminal is still listed but its process has exited.
+ * - `not-found`: no terminal this plugin may read has that id. One answer for
+ *   an unknown id, one in another project, and one that is not a user terminal.
+ * - `unavailable`: the terminal exists but its screen could not be read right
+ *   now (the terminal host is down or did not answer). Worth retrying later.
+ */
+export type PluginTerminalScreenResult =
+  | {
+      readonly status: "ok";
+      readonly text: string;
+      readonly lineCount: number;
+      readonly truncated: boolean;
+    }
+  | { readonly status: "exited" }
+  | { readonly status: "not-found" }
+  | { readonly status: "unavailable" };
+
+/** `host.terminals` — read-only access to what terminals show. */
+export interface PluginTerminalsApi {
+  /**
+   * Read the current screen of one terminal as plain text: its last
+   * `options.lines` non-padding lines, never its scrollback. Answered by the
+   * terminal host, so it works for terminals in projects whose view is not
+   * open. Take ids from {@link PluginAgentsApi.list}, or, for an installed
+   * plugin, {@link PluginAgentsApi.listAll}. A project plugin reads only its own
+   * project's terminals; an installed plugin may read any user terminal by id.
+   *
+   * Gated on `terminal:read`, with a first-use consent prompt that tells the
+   * user the plugin can read what their terminals show. Rate limited to 60
+   * calls per second per plugin — enough for a grid polling a few dozen cards
+   * once a second. Never touches the terminal's input or size. The host neither
+   * logs nor stores the text; once returned, it is the plugin's to protect.
+   *
+   * Resolves `{ status: "unavailable" }` once the plugin is unloaded.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+   *   `terminal:read`, or the user denies the consent prompt.
+   * @throws {Error} `RATE_LIMITED:` when the plugin exceeds 60 calls a second.
+   *   Nothing is queued; call again later.
+   * @throws {Error} If `terminalId` is not a non-empty string or `options.lines`
+   *   is not an integer from 1 to 100.
+   */
+  readScreen(
+    terminalId: string,
+    options?: PluginTerminalReadScreenOptions
+  ): Promise<PluginTerminalScreenResult>;
 }
 
 /** Options for {@link PluginHostApi.sendToAgent}. */
@@ -3155,6 +3466,112 @@ export interface PluginFsReadWithRevisionResult {
   revision: string;
 }
 
+/**
+ * Options for {@link PluginFsApi.readFiles}. `encoding` picks the content type:
+ * `"utf-8"` (the default) decodes each file as {@link PluginFsApi.readFile}
+ * does, `"bytes"` returns raw bytes as {@link PluginFsApi.readFileBytes} does.
+ */
+export interface PluginFsReadFilesOptions<
+  E extends PluginFsReadFilesEncoding = PluginFsReadFilesEncoding,
+> extends PluginHostCallOptions {
+  encoding?: E;
+  /**
+   * Per-file ceiling in bytes. A larger file is not read past the ceiling and
+   * comes back as `{ ok: false, error: { code: "TOO_LARGE" } }`. Must be a
+   * non-negative integer; omitted means only the call's total budget applies.
+   */
+  maxBytesPerFile?: number;
+}
+
+/** Content type of a {@link PluginFsApi.readFiles} call. */
+export type PluginFsReadFilesEncoding = "utf-8" | "bytes";
+
+/**
+ * Why one path in a {@link PluginFsApi.readFiles} call was not read.
+ *
+ * - `PATH_NOT_ALLOWED` / `PERMISSION_REQUIRED` — the same refusals
+ *   {@link PluginFsApi.readFile} rejects with (outside every allowed root, or
+ *   the root's read capability is not declared)
+ * - `NOT_FOUND` — nothing at the path
+ * - `NOT_A_FILE` — a directory, FIFO, device or other non-regular file
+ * - `TARGET_IS_SYMLINK` / `TARGET_UNAVAILABLE` — the verified-open refusals
+ *   {@link PluginFsApi.readFile} documents
+ * - `TOO_LARGE` — bigger than `maxBytesPerFile`
+ * - `RESULT_TOO_LARGE` — the call's total byte budget was spent on earlier
+ *   entries; read this path in a later call
+ * - `READ_FAILED` — anything else (the `message` says what)
+ */
+export type PluginFsReadFilesErrorCode =
+  | "PATH_NOT_ALLOWED"
+  | "PERMISSION_REQUIRED"
+  | "NOT_FOUND"
+  | "NOT_A_FILE"
+  | "TARGET_IS_SYMLINK"
+  | "TARGET_UNAVAILABLE"
+  | "TOO_LARGE"
+  | "RESULT_TOO_LARGE"
+  | "READ_FAILED";
+
+/** One entry of a {@link PluginFsApi.readFiles} result, in request order. */
+export type PluginFsReadFilesEntry<C = string> =
+  | { readonly path: string; readonly ok: true; readonly content: C }
+  | {
+      readonly path: string;
+      readonly ok: false;
+      readonly error: { readonly code: PluginFsReadFilesErrorCode; readonly message: string };
+    };
+
+/** Options for {@link PluginFsApi.walk}. */
+export interface PluginFsWalkOptions extends PluginHostCallOptions {
+  /**
+   * Globs (the `path.matchesGlob` dialect: `*`, `**`, `?`, `[…]`, `{a,b}`)
+   * matched against each entry's root-relative path. When given, only entries
+   * matching at least one are returned; directories are still walked, so
+   * `["**\/*.ts"]` finds every TypeScript file. At most 64 patterns.
+   */
+  include?: readonly string[];
+  /**
+   * Globs, as for `include`. A matching entry is left out, and a matching
+   * directory is not descended into — `["node_modules", "**\/dist"]` prunes
+   * both. At most 64 patterns.
+   */
+  exclude?: readonly string[];
+  /**
+   * How deep to go: `1` lists `root`'s own children (like {@link PluginFsApi.readdir}),
+   * `2` their children too, and so on. An integer from 1 to 64; omitted means
+   * 64.
+   */
+  maxDepth?: number;
+  /**
+   * Most entries to return, counted after `include` filtering. An integer from
+   * 1 to 50,000; default 10,000. Past it the result is `truncated`.
+   */
+  limit?: number;
+  /** Leave out what git ignores (see {@link PluginFsApi.walk}). Default `true`. */
+  respectGitignore?: boolean;
+  /** Report each file's size in bytes. Default `false`; it costs one stat per file. */
+  includeSize?: boolean;
+}
+
+/** One entry of a {@link PluginFsApi.walk} result. */
+export interface PluginFsWalkEntry {
+  /** Relative to the walk's root, `/`-separated, never starting with `/` or `./`. */
+  readonly path: string;
+  readonly type: "file" | "dir";
+  /** Size in bytes, for a file, when {@link PluginFsWalkOptions.includeSize} was set. */
+  readonly size?: number;
+}
+
+/** What a {@link PluginFsApi.walk} call returns. */
+export interface PluginFsWalkResult {
+  readonly entries: PluginFsWalkEntry[];
+  /**
+   * True when the walk stopped at `limit`, the result budget or one of the
+   * host's cost bounds with entries left unlisted.
+   */
+  readonly truncated: boolean;
+}
+
 /** Options for {@link PluginFsApi.watch}. */
 export interface PluginFsWatchOptions extends PluginHostCallOptions {
   /**
@@ -3269,6 +3686,39 @@ export interface PluginFsApi {
     options?: PluginHostCallOptions
   ): Promise<PluginFsReadWithRevisionResult>;
   /**
+   * Read many files in one host round trip — the bulk counterpart to
+   * {@link readFile} for a search, an index build, or a tree of small config
+   * files, where one call per file costs a round trip each.
+   *
+   * Every path gets exactly the checks {@link readFile} applies — containment
+   * against `scopes.fs.allowedPaths`, the root's read capability, and the
+   * verified open — but a refusal fails only that entry: the result has one
+   * {@link PluginFsReadFilesEntry} per path, in request order, each either
+   * `{ ok: true, content }` or `{ ok: false, error: { code, message } }`.
+   *
+   * Bounded so the result always fits one host reply: at most 1024 paths per
+   * call (more rejects the call), and at most 8 MiB of content in total,
+   * measured as returned (decoded UTF-8 text, or bytes) and spent in request
+   * order — entries past the budget come back `RESULT_TOO_LARGE` for a
+   * follow-up call, and the same request always defers the same entries.
+   * The whole call rejects only on a missing read capability for every root,
+   * an unloaded plugin, invalid arguments, or `options.signal` aborting.
+   *
+   * Optional in the type so existing hand-written {@link PluginFsApi} fakes
+   * keep compiling; Daintree's host, the worker host and `createMockHost`
+   * always provide it.
+   */
+  readFiles?: {
+    (
+      paths: readonly string[],
+      options?: PluginFsReadFilesOptions<"utf-8">
+    ): Promise<PluginFsReadFilesEntry<string>[]>;
+    (
+      paths: readonly string[],
+      options: PluginFsReadFilesOptions<"bytes">
+    ): Promise<PluginFsReadFilesEntry<Uint8Array>[]>;
+  };
+  /**
    * Create a directory and any missing ancestors. Creating a directory that
    * already exists is a no-op; a non-directory at the path rejects. Gated and
    * consented like {@link writeFile}, and both happen before anything is
@@ -3331,6 +3781,48 @@ export interface PluginFsApi {
    * browser uses — see {@link PluginFsReaddirOptions.detail}.
    */
   readdir(dirPath: string, options?: PluginFsReaddirOptions): Promise<PluginFsDirEntry[]>;
+  /**
+   * List a directory tree in one host round trip — the recursive counterpart
+   * to {@link readdir} for a file search or an index build, where one
+   * `readdir` per directory costs a round trip each.
+   *
+   * `root` gets exactly the checks {@link readdir} applies (containment
+   * against `scopes.fs.allowedPaths` and the root's read capability), and the
+   * walk stays inside it: symbolic links are neither followed nor listed, and
+   * a directory's listing is dropped unless it still resolves to where it was
+   * reached both before and after it is read. (Like {@link readdir}, reads are
+   * by pathname, so a directory swapped for a link and back between those two
+   * checks is not excluded.)
+   *
+   * Entries carry the path relative to `root`, with `/` separators, and come
+   * back sorted by path, directories before the entries inside them. The walk
+   * is breadth-first, so when `limit` (or the host's result budget) cuts it
+   * short, `truncated` is `true` and what was kept is the shallowest part of
+   * the tree; the same tree always truncates the same way. Besides `limit`,
+   * the host bounds a walk's cost — at most 200,000 directory entries
+   * examined and 1,000,000 glob tests — and a walk that reaches either bound
+   * returns what it had with `truncated: true`. A directory is read only as
+   * far as the examine bound allows, so when one directory alone holds more
+   * entries than the bound has left, the entries kept from it are whichever
+   * the filesystem enumerated first — still sorted, but not necessarily the
+   * first by path, and not guaranteed to repeat.
+   *
+   * With `includeSize`, a size is omitted for a file whose directory no
+   * longer resolves to where the walk listed it when its size is read.
+   *
+   * With `respectGitignore` (the default), inside a git repository an entry
+   * git ignores — and not tracked — is left out and not descended into,
+   * `.git` itself is skipped, and a nested repository or submodule is listed
+   * but not entered. Outside a repository the option has no effect. On macOS
+   * and Windows, a repository that tracks a file matching its own ignore rules
+   * is walked without ignore filtering, since git can misreport such a file
+   * under a different letter case as ignored.
+   *
+   * Optional in the type so hand-written {@link PluginFsApi} fakes keep
+   * compiling; Daintree's host, the worker host and `createMockHost` always
+   * provide it.
+   */
+  walk?(root: string, options?: PluginFsWalkOptions): Promise<PluginFsWalkResult>;
   /** Stat a path. Rejects on a missing read capability or an out-of-scope path. */
   stat(targetPath: string, options?: PluginHostCallOptions): Promise<PluginFsStat>;
   /**
@@ -3680,7 +4172,8 @@ export interface PluginActivationApi {
   registerHandler<TArgs, TResult>(
     channel: string,
     schema: PluginChannelSchema<TArgs, TResult>,
-    handler: PluginTypedIpcHandler<TArgs, TResult>
+    handler: PluginTypedIpcHandler<TArgs, TResult>,
+    options?: PluginHandlerOptions
   ): Promise<void>;
   /**
    * Legacy untyped overload: a variadic handler with no host-side validation.
@@ -3688,7 +4181,11 @@ export interface PluginActivationApi {
    * typed overload above is preferred for new code. Also revoke-guarded — must
    * be called during `activate()`.
    */
-  registerHandler(channel: string, handler: PluginIpcHandler): Promise<void>;
+  registerHandler(
+    channel: string,
+    handler: PluginIpcHandler,
+    options?: PluginHandlerOptions
+  ): Promise<void>;
   /**
    * Push a fire-and-forget payload to all renderers listening on `channel`.
    * Intended for the activation window — wiring up the renderer-side view of a
@@ -3745,6 +4242,10 @@ export interface PluginActivationApi {
    * calling it more than once is a no-op. All subscriptions are automatically
    * disposed when the plugin is unloaded.
    *
+   * Coalesced by default: a burst of activations becomes one callback with
+   * the worktree active at the end of it. Pass `{ debounceMs: 0 }` to receive
+   * every activation — see {@link PluginHostSubscriptionOptions}.
+   *
    * Subscribing is revoke-guarded — call it during `activate()`. The callback
    * itself fires for the plugin's whole lifetime; only the act of subscribing
    * is restricted to the activation window.
@@ -3753,17 +4254,21 @@ export interface PluginActivationApi {
    *   is revoked and the subscription is rejected.
    */
   onDidChangeActiveWorktree(
-    callback: (snapshot: PluginWorktreeSnapshot | null) => void
+    callback: (snapshot: PluginWorktreeSnapshot | null) => void,
+    options?: PluginHostSubscriptionOptions
   ): Promise<() => void>;
   /**
    * Subscribe to the worktree set changing. The callback fires with the full
-   * current list on any worktree add/update/remove. Resolves to a disposer;
+   * current list on any worktree add/update/remove, and a second argument
+   * naming which worktrees were added, removed or changed since the previous
+   * delivery — see {@link PluginWorktreesChange}. Resolves to a disposer;
    * calling it more than once is a no-op. All subscriptions are automatically
    * disposed when the plugin is unloaded.
    *
-   * Pass `options.debounceMs` to coalesce bursts (the host re-emits on every
-   * git-status poll) into a single trailing callback — see
-   * {@link PluginHostSubscriptionOptions}. Omitted means fire on every change.
+   * Coalesced by default (the host re-emits on every git-status poll): a burst
+   * becomes one trailing callback carrying the latest list, and the change
+   * describes the whole burst. Pass `{ debounceMs: 0 }` to receive every
+   * event — see {@link PluginHostSubscriptionOptions}.
    *
    * Subscribing is revoke-guarded — call it during `activate()`. The callback
    * itself fires for the plugin's whole lifetime; only the act of subscribing
@@ -3773,17 +4278,26 @@ export interface PluginActivationApi {
    *   is revoked and the subscription is rejected.
    */
   onDidChangeWorktrees(
-    callback: (snapshots: PluginWorktreeSnapshot[]) => void,
+    callback: (snapshots: PluginWorktreeSnapshot[], change: PluginWorktreesChange) => void,
     options?: PluginHostSubscriptionOptions
   ): Promise<() => void>;
   /**
    * Subscribe to agent-session state changes, gated on the `agent:read`
    * capability. The callback fires with a frozen {@link PluginAgentSnapshot}
-   * on every accepted agent state transition across all sessions (unscoped,
+   * for accepted agent state transitions across all sessions (unscoped,
    * like {@link onDidChangeWorktrees} — a plugin filters by `snapshot.agentId`
    * if it cares about one session). Resolves to a disposer; calling it more
    * than once is a no-op. All subscriptions are automatically disposed when the
    * plugin is unloaded.
+   *
+   * Coalesced by default, per terminal: within one window only each
+   * terminal's latest transition is delivered, one callback per terminal, in
+   * the order of those latest transitions. The final state of every terminal
+   * is always delivered; the transitions in between may be skipped, so a
+   * delivered snapshot's `previousState` is the state immediately before that
+   * last transition, not necessarily the state you were last told about. Pass
+   * `{ debounceMs: 0 }` to receive every transition — see
+   * {@link PluginHostSubscriptionOptions}.
    *
    * Observation only — there is no companion method to drive, pause, resume, or
    * inject into a session.
@@ -3796,7 +4310,33 @@ export interface PluginActivationApi {
    *   `agent:read` capability, or if called after activation resolves or times
    *   out (the host is revoked).
    */
-  onDidChangeAgentState(callback: (snapshot: PluginAgentSnapshot) => void): Promise<() => void>;
+  onDidChangeAgentState(
+    callback: (snapshot: PluginAgentSnapshot) => void,
+    options?: PluginHostSubscriptionOptions
+  ): Promise<() => void>;
+  /**
+   * Subscribe to changes in the app-wide agent list that
+   * {@link PluginAgentsApi.listAll} returns: a run added or removed, or one's
+   * observed state, title or worktree changing, in any open project or scratch.
+   * The callback receives the whole new {@link PluginAllAgentsSnapshot},
+   * frozen. Gated on `agent:read`, and refused for project plugins like
+   * `listAll`. Resolves to a disposer; calling it more than once is a no-op.
+   * Disposed automatically when the plugin is unloaded.
+   *
+   * There is no initial callback — call `listAll()` after subscribing. A
+   * callback can repeat the previous snapshot when something the plugin cannot
+   * see changed. Coalesced by default to the latest snapshot; see
+   * {@link PluginHostSubscriptionOptions}.
+   *
+   * Subscribing is revoke-guarded — call it during `activate()`.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+   *   `agent:read`, is a project plugin, or the host is revoked.
+   */
+  onDidChangeAllAgents(
+    callback: (snapshot: PluginAllAgentsSnapshot) => void,
+    options?: PluginHostSubscriptionOptions
+  ): Promise<() => void>;
   /**
    * Subscribe to panel lifecycle transitions for this plugin's own contributed
    * panels (#11301). No capability is required — a plugin only ever sees events
@@ -4009,6 +4549,44 @@ export interface PluginHostApi extends PluginActivationApi {
    */
   postToPanel(channel: string, payload: unknown, panelId?: string | null): Promise<void>;
   /**
+   * Whether any renderer this host pushes to may currently be subscribed to
+   * `channel` — through `window.electron.plugin.on` / `onPanel` or the SDK
+   * hooks built on them. Use it to stop producing pushes nobody will receive.
+   * It is a hint for the producer only: the host delivers every push to every
+   * renderer in scope whatever this answers, because a renderer's report is
+   * always a moment behind its subscribers.
+   *
+   * Errs towards `true`: a renderer that has not reported its subscriptions
+   * yet (one just created) counts as listening, and in a worker the first
+   * call for a channel answers `true` until the host's first report for it
+   * arrives a moment later. `false` once the plugin is unloaded. Synchronous
+   * and cheap — read it on every produce.
+   *
+   * A push you skip because this said `false` is gone for good, and a view
+   * can subscribe the moment after you read it. So only skip work a view can
+   * recover by pulling state when it mounts (as a synced collection's snapshot
+   * does), never a one-off event.
+   *
+   * Optional in the type so hand-written {@link PluginHostApi} fakes keep
+   * compiling; Daintree's host, the worker host and `createMockHost` always
+   * provide it. `channel` is validated like {@link postToPanel}'s.
+   */
+  hasListeners?(channel: string): boolean;
+  /**
+   * Call `callback` whenever {@link hasListeners} for `channel` changes —
+   * with `false` when the last subscriber anywhere in scope goes away, `true`
+   * when one appears. Not called with the current value; read that with
+   * {@link hasListeners}. Returns a disposer; every registration is also
+   * removed when the plugin unloads. Not revoke-guarded — callable any time
+   * after activation, like {@link postToPanel}.
+   *
+   * A live registration is an event subscription like `onDidChangeWorktrees`:
+   * while one exists, an idle worker is not disposed, since a disposed worker
+   * could not be called back. Reading {@link hasListeners} alone never holds
+   * the worker.
+   */
+  onDidChangeListeners?(channel: string, callback: (hasListeners: boolean) => void): () => void;
+  /**
    * Returns the currently-active worktree (`isCurrent === true`) of the project
    * this host reads for, as a frozen snapshot, or `null` if none is active.
    *
@@ -4104,6 +4682,11 @@ export interface PluginHostApi extends PluginActivationApi {
    * Gated on `agent:read`. See {@link PluginAgentsApi}.
    */
   readonly agents: PluginAgentsApi;
+  /**
+   * Read what a terminal's screen shows, as plain text. Gated on
+   * `terminal:read`. See {@link PluginTerminalsApi}.
+   */
+  readonly terminals: PluginTerminalsApi;
   /**
    * Hand `text` to an agent: it is appended to that agent's visible draft,
    * below anything the user already typed, as a fenced block headed by
@@ -4221,8 +4804,19 @@ export interface PluginHostApi extends PluginActivationApi {
    * and timers. Once the plugin is unloaded it returns
    * `{ ok: false, error: { code: "PLUGIN_UNLOADED" } }` without attempting a
    * dispatch.
+   *
+   * `options.projectId` sends the dispatch to that project's view instead of
+   * the focused one (#13119). An installed plugin must declare
+   * `project:dispatch` and the user must turn on "Allow project targeting" for
+   * it, or the call rejects with `PERMISSION_REQUIRED`. A project-bound plugin
+   * may only name its own project. A project with no live view rejects with
+   * `PROJECT_VIEW_UNAVAILABLE` — nothing opens or wakes a closed project.
    */
-  dispatch(actionId: ActionId, args?: unknown): Promise<ActionDispatchResult>;
+  dispatch(
+    actionId: ActionId,
+    args?: unknown,
+    options?: PluginDispatchOptions
+  ): Promise<ActionDispatchResult>;
   /**
    * Built-in action catalog: discover what `dispatch()` accepts (ids, arg
    * schemas, danger) and pre-flight a dispatch. Projects the app's

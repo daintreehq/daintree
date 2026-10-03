@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { detectHandback, findHandback, rawHandbackText } from "../HandbackDetector.js";
+import {
+  detectHandback,
+  findHandback,
+  keepFirstObservation,
+  rawHandbackText,
+} from "../HandbackDetector.js";
 import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
 import { HANDBACK_MESSAGE_MAX_CHARS } from "../../../../shared/types/handback.js";
 
@@ -245,5 +250,30 @@ describe("findHandback", () => {
       1
     );
     expect(hit?.handback.message).toBe("done");
+  });
+});
+
+describe("keepFirstObservation (#13128)", () => {
+  const held = { message: "draft", observedAt: 1_000, submissionToken: "tok-1", truncated: false };
+
+  it("records the fresh capture when nothing is held", () => {
+    const next = { ...held, observedAt: 2_000 };
+    expect(keepFirstObservation(undefined, next)).toBe(next);
+  });
+
+  it("keeps the held object for an unchanged capture", () => {
+    expect(keepFirstObservation(held, { ...held, observedAt: 2_000 })).toBe(held);
+  });
+
+  it("takes a changed capture but keeps the first observation", () => {
+    expect(keepFirstObservation(held, { ...held, message: "final", observedAt: 2_000 })).toEqual({
+      ...held,
+      message: "final",
+    });
+  });
+
+  it("treats a capture for another submission as fresh", () => {
+    const next = { ...held, submissionToken: "tok-2", observedAt: 2_000 };
+    expect(keepFirstObservation(held, next)).toBe(next);
   });
 });

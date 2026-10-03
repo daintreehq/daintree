@@ -9,7 +9,7 @@ import {
 } from "../../helpers/workflows";
 import { getGridPanelCount } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 const PROJECT_A = "lifecycle-a";
 const PROJECT_B = "lifecycle-b";
@@ -180,7 +180,6 @@ test.describe.serial("Core: Project Lifecycle", () => {
 
     // Verify recipe appears in the list
     await window.locator(SEL.projectSettings.recipesTab).click();
-    await window.waitForTimeout(T_SETTLE);
     await expect(window.locator(SEL.projectSettings.editRecipeButton(RECIPE_NAME))).toBeAttached({
       timeout: T_LONG,
     });
@@ -219,7 +218,7 @@ test.describe.serial("Core: Project Lifecycle", () => {
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
 
     // Verify Project B is gone from the palette
-    await window.waitForTimeout(T_SETTLE);
+    await expect(palette).toBeHidden({ timeout: T_MEDIUM });
     await window.locator(SEL.toolbar.projectSwitcherTrigger).click();
     await expect(palette).toBeVisible({ timeout: T_MEDIUM });
     await expect(palette.getByText(PROJECT_B, { exact: false })).not.toBeVisible({

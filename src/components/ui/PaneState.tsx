@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { cn } from "@/lib/utils";
+import type { RootAttributes } from "@/components/ui/rootAttributes";
 
 /**
  * The pane-filling frame every non-content state of a pane shares — no URL,
@@ -19,6 +20,7 @@ export function PaneState({
   live = "status",
   inFlow = false,
   className,
+  rootAttributes,
 }: {
   icon?: ReactNode;
   title: string;
@@ -31,9 +33,12 @@ export function PaneState({
    */
   inFlow?: boolean;
   className?: string;
+  /** `id`, `data-*` or `aria-*` on the root; the component's own attributes win. */
+  rootAttributes?: RootAttributes;
 }) {
   return (
     <div
+      {...rootAttributes}
       className={cn(
         inFlow ? "relative w-full" : "absolute inset-0",
         "overflow-y-auto bg-surface-canvas",

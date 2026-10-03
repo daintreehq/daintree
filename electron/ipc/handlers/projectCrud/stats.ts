@@ -17,9 +17,12 @@ import { CompletionAcknowledgementService } from "../../../services/CompletionAc
 import { getWindowRegistry } from "../../../window/windowRef.js";
 import { getPowerPolicy, subscribePowerPolicy } from "../../../window/powerPolicy.js";
 import { BrowserWindow } from "electron";
+import {
+  getFleetSnapshotServiceRef,
+  setFleetSnapshotServiceRef,
+} from "../../../window/serviceRefs.js";
 
 let projectStatsServiceInstance: ProjectStatsService | null = null;
-let fleetSnapshotServiceInstance: FleetSnapshotService | null = null;
 let runAttentionServiceInstance: RunAttentionService | null = null;
 
 export function getProjectStatsService(): ProjectStatsService | null {
@@ -27,7 +30,7 @@ export function getProjectStatsService(): ProjectStatsService | null {
 }
 
 export function getFleetSnapshotService(): FleetSnapshotService | null {
-  return fleetSnapshotServiceInstance;
+  return getFleetSnapshotServiceRef();
 }
 
 export function getRunAttentionService(): RunAttentionService | null {
@@ -92,7 +95,7 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
   // one lifecycle owns both. They sample independently, so a surface reading
   // runs and one reading counts can differ across a single transition.
   const fleetSnapshotService = new FleetSnapshotService(deps.ptyClient, runAttentionService);
-  fleetSnapshotServiceInstance = fleetSnapshotService;
+  setFleetSnapshotServiceRef(fleetSnapshotService);
   fleetSnapshotService.start();
   registerDeferredTask({
     name: "fleet-snapshot-initial-compute",
@@ -102,8 +105,8 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
   });
   handlers.push(() => {
     fleetSnapshotService.stop();
-    if (fleetSnapshotServiceInstance === fleetSnapshotService) {
-      fleetSnapshotServiceInstance = null;
+    if (getFleetSnapshotServiceRef() === fleetSnapshotService) {
+      setFleetSnapshotServiceRef(null);
     }
   });
 

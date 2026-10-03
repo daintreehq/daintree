@@ -73,6 +73,12 @@ export const CAPABILITY_META = {
     description: "Type and submit text into running agent sessions",
     severity: "warning",
   },
+  "terminal:read": {
+    label: "Read your terminals",
+    description:
+      "Read what your terminals show, which can include passwords, tokens, and other secrets",
+    severity: "warning",
+  },
   "git:read": {
     label: "Read git status",
     description: "View branch and change information",
@@ -112,6 +118,11 @@ export const CAPABILITY_META = {
   "mcp:expose": {
     label: "Serve tools to agents",
     description: "Offer tools to agents in projects where you turn it on",
+    severity: "warning",
+  },
+  "project:dispatch": {
+    label: "Run actions in other projects",
+    description: "Send actions to a project you're not looking at, once you turn it on",
     severity: "warning",
   },
 } satisfies Record<BuiltInPluginCapability, CapabilityMeta>;

@@ -85,13 +85,16 @@ vi.mock("../../../window/windowRef.js", () => ({
 
 import {
   handleAcknowledgeConsent,
+  handleGetProjectTargeting,
   handleResolveConsent,
+  handleSetProjectTargeting,
   registerPluginCapabilityHandlers,
   _resetCapabilityConsentBridgeForTest,
 } from "../pluginCapability.js";
 import { registerAppView, unregisterAppView } from "../../../window/webContentsRegistry.js";
 import {
   getPluginCapabilityConsentService,
+  getPluginCapabilityConsentStore,
   _resetPluginCapabilityServicesForTest,
 } from "../../../services/plugin-capability/instances.js";
 import {
@@ -579,5 +582,51 @@ describe("pluginCapability consent bridge — decisions", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("pluginCapability project targeting switch (#13119)", () => {
+  it("is off until turned on, and off again once turned off", async () => {
+    expect(await handleGetProjectTargeting({ pluginId: "acme.orchestrator" })).toBe(false);
+
+    expect(await handleSetProjectTargeting({ pluginId: "acme.orchestrator", enabled: true })).toBe(
+      true
+    );
+    expect(await handleGetProjectTargeting({ pluginId: "acme.orchestrator" })).toBe(true);
+    expect(
+      getPluginCapabilityConsentStore().hasGrant({
+        pluginId: "acme.orchestrator",
+        capability: "project:dispatch",
+        scopeKey: "global",
+      })
+    ).toBe(true);
+    // Per plugin: another plugin is untouched.
+    expect(await handleGetProjectTargeting({ pluginId: "acme.other" })).toBe(false);
+
+    expect(await handleSetProjectTargeting({ pluginId: "acme.orchestrator", enabled: false })).toBe(
+      false
+    );
+    expect(await handleGetProjectTargeting({ pluginId: "acme.orchestrator" })).toBe(false);
+  });
+
+  it("is purged with the plugin's other grants on uninstall", async () => {
+    await handleSetProjectTargeting({ pluginId: "acme.orchestrator", enabled: true });
+    getPluginCapabilityConsentService().revokeAllForPlugin("acme.orchestrator");
+    expect(await handleGetProjectTargeting({ pluginId: "acme.orchestrator" })).toBe(false);
+  });
+
+  it("rejects when the switch could not be saved, instead of reporting it as set", async () => {
+    vi.spyOn(getPluginCapabilityConsentStore(), "setGrant").mockReturnValue(false);
+    await expect(
+      handleSetProjectTargeting({ pluginId: "acme.orchestrator", enabled: false })
+    ).rejects.toThrow(/could not be saved/);
+  });
+
+  it("rejects malformed input rather than writing a grant", async () => {
+    await expect(handleGetProjectTargeting({ pluginId: "" })).rejects.toThrow(/pluginId/);
+    await expect(
+      handleSetProjectTargeting({ pluginId: "acme.orchestrator", enabled: "yes" as never })
+    ).rejects.toThrow(/enabled/);
+    expect(await handleGetProjectTargeting({ pluginId: "acme.orchestrator" })).toBe(false);
   });
 });

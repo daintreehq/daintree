@@ -106,18 +106,19 @@ export function ResizeHandle({
         className={cn(
           "rounded-full duration-150 delay-100",
           vertical ? "h-8 transition-[width]" : "w-8 transition-[height]",
-          // The ink ladder: /20 rest, /35 hover, /50 focus and drag, each a step up on
-          // light themes where low-alpha ink fades into the near-white track. The grip
-          // stays neutral on focus; the outline is the accent.
+          // The ink ladder: rest, hover, then focus and drag, each a solid neutral token
+          // the theme tunes, so the step holds on every palette. Rest is
+          // `selection-outline`, the neutral indicator ink the theme contract holds to
+          // 3:1, because a splitter's grip is a UI component under WCAG 1.4.11. Hover
+          // skips `text-muted`: on some dark themes it is dimmer than the outline.
+          // The grip stays neutral on focus; the outline is the accent.
           isResizing
-            ? cn(vertical ? "w-0.5" : "h-0.5", "bg-text-primary/50 [.light_&]:bg-text-primary/55")
+            ? cn(vertical ? "w-0.5" : "h-0.5", "bg-text-primary")
             : cn(
                 vertical
                   ? "w-px group-hover/resize:w-0.5 group-focus-visible/resize:w-0.5"
                   : "h-px group-hover/resize:h-0.5 group-focus-visible/resize:h-0.5",
-                "bg-text-primary/20 group-hover/resize:bg-text-primary/35 group-focus-visible/resize:bg-text-primary/50",
-                "[.light_&]:bg-text-primary/25 [.light_&]:group-hover/resize:bg-text-primary/45",
-                "[.light_&]:group-focus-visible/resize:bg-text-primary/55"
+                "bg-selection-outline group-hover/resize:bg-text-secondary group-focus-visible/resize:bg-text-primary"
               )
         )}
       />

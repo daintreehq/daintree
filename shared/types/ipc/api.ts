@@ -64,6 +64,7 @@ import type {
   TerminalReconnectResult,
   BackendTerminalInfo,
   TerminalInfoPayload,
+  TerminalLocation,
   TerminalActivityPayload,
   SemanticSearchMatch,
 } from "./terminal.js";
@@ -345,6 +346,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       signalBuffer: SharedArrayBuffer | null;
     }>;
     getInfo(id: string): Promise<TerminalInfoPayload>;
+    locate(id: string): Promise<TerminalLocation>;
     onData(
       id: string,
       callback: (data: string | Uint8Array, streamEnd?: number) => void
@@ -1976,9 +1978,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     stop(): Promise<{ rawText: string | null }>;
     flushParagraph(): Promise<{ rawText: string | null }>;
     sendAudioChunk(chunk: ArrayBuffer): void;
-    onTranscriptionDelta(callback: (delta: string) => void): () => void;
+    onTranscriptionDelta(
+      callback: (payload: { text: string; itemId?: string }) => void
+    ): () => void;
     onTranscriptionComplete(
-      callback: (payload: { text: string; willCorrect: boolean }) => void
+      callback: (payload: { text: string; willCorrect: boolean; itemId?: string }) => void
     ): () => void;
     onParagraphBoundary(callback: (payload: { rawText: string | null }) => void): () => void;
     onError(callback: (error: VoiceInputError) => void): () => void;
@@ -2321,6 +2325,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onPanelBadgesCleared(callback: (payload: { pluginId: string }) => void): () => void;
     /**
+     * Subscribe to a plugin's running actions: the callback fires with its
+     * COMPLETE set of action ids whose handlers are in flight, however they were
+     * dispatched; an empty list means none. Returns a cleanup.
+     */
+    onActionsRunningChanged(
+      callback: (payload: { pluginId: string; actionIds: string[] }) => void
+    ): () => void;
+    /**
      * Subscribe to `daintree://` deep-link intents (#9559). Fires when the OS
      * hands the app a deep link; the callback opens the Plugin Manager. Returns
      * a cleanup.
@@ -2333,6 +2345,29 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onArchiveInstallIntent(
       callback: (intent: import("../plugin.js").PluginArchiveInstallIntent) => void
     ): () => void;
+    /**
+     * Fire-and-forget: hand main a batch of plugin view cost observations
+     * drained from this renderer's `pluginViewMetrics` registry, each tagged
+     * with the plugin load it was observed against. Main validates, clamps and
+     * drops reports for plugins it has not loaded or for a load it has retired.
+     */
+    reportViewMetrics(reports: import("./pluginMetrics.js").PluginRendererMetricsEnvelope[]): void;
+    /**
+     * Subscribe to per-plugin perf snapshots, pushed at most once a second and
+     * only while at least one listener is attached (worker memory is sampled
+     * only then). Each push carries every tracked plugin; read
+     * `getPerfSnapshots()` for the initial state. Returns a cleanup.
+     */
+    onPerfSnapshotsChanged(
+      callback: (snapshots: import("../pluginMetrics.js").PluginPerfSnapshot[]) => void
+    ): () => void;
+    /**
+     * Plugins that had a host push delivered to their listeners in this
+     * renderer with a dispatch overlapping `[start, end]`, both on this page's
+     * `performance.now()` clock. A local read of the last deliveries the
+     * preload recorded, for long-frame attribution; no IPC.
+     */
+    pluginsWithPushDeliveriesDuring(start: number, end: number): string[];
     /** Subscribe to plugin panel kind registry changes. Returns a cleanup. */
     onPanelKindsChanged(
       callback: (payload: {
@@ -2356,6 +2391,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Subscribe to plugin tour registry changes (#12773). Returns a cleanup. */
     onToursChanged(
       callback: (payload: { tours: import("../plugin.js").PluginTourDescriptor[] }) => void
+    ): () => void;
+    /** Subscribe to plugin custom-icon snapshot changes (#13143). Returns a cleanup. */
+    onIconsChanged(
+      callback: (payload: {
+        icons: import("../../config/pluginCustomIcon.js").PluginCustomIconAsset[];
+      }) => void
     ): () => void;
     /** Subscribe to plugin toolbar button registry changes. Returns a cleanup. */
     onToolbarButtonsChanged(

@@ -4,6 +4,7 @@ import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { makePluginViewContent } from "@/components/Plugin/PluginViewContent";
 import { PluginSetupStrip } from "@/components/Plugin/PluginSetupStrip";
+import { PluginPanelToolbar } from "@/components/Panel/PluginPanelToolbar";
 import { XCircle } from "lucide-react";
 import { PaneState } from "@/components/ui/PaneState";
 import { Button } from "@/components/ui/button";
@@ -161,7 +162,22 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
       // untyped; forwarding it would pin a stale descriptor when a disabled
       // plugin's persisted panel re-enables (the panelProps memo doesn't depend
       // on the kind registry).
-      <ContentPanel {...panelProps} kind={kindId} chrome={undefined}>
+      //
+      // The kind's manifest `toolbar` goes in the header itself. It reads the
+      // live registry rather than this factory's `config`, which is cached per
+      // component path and would keep a reload's toolbar edits off the header.
+      <ContentPanel
+        {...panelProps}
+        kind={kindId}
+        chrome={undefined}
+        headerToolbar={
+          <PluginPanelToolbar
+            panelId={panelId}
+            kind={kindId}
+            rovingEnabled={panelProps.location !== "dock"}
+          />
+        }
+      >
         {/* Above the view and outside its box, so no plugin layout can cover
             the way to finish setting the plugin up. */}
         {hasRequiredSettings && <PluginSetupStrip pluginId={ownerPluginId} />}
@@ -184,6 +200,10 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
             onRequestClose={handleRequestClose}
             worktreeId={panelProps.worktreeId}
             offerRequestReload
+            // The dialog presentation draws its own header, without this
+            // toolbar, so a view there is not handed a setter for buttons the
+            // user cannot see.
+            offerToolbar={panelProps.location !== "dialog"}
           />
         ) : (
           <PluginViewLoadError

@@ -403,8 +403,7 @@ A toggle keeps one name, and a glyph shows the state rather than the action: the
 "outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary";
 isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft [.light_&]:hover:bg-overlay-medium";
 // grip: 32px long, 1px thick at rest, 2px on hover, focus and drag
-("bg-text-primary/20 group-hover/resize:bg-text-primary/35 group-focus-visible/resize:bg-text-primary/50"); // drag: /50
-("[.light_&]:bg-text-primary/25 [.light_&]:group-hover/resize:bg-text-primary/45 [.light_&]:group-focus-visible/resize:bg-text-primary/55"); // drag: /55
+("bg-selection-outline group-hover/resize:bg-text-secondary group-focus-visible/resize:bg-text-primary"); // drag: bg-text-primary
 ```
 
 **Usage:**
@@ -412,7 +411,7 @@ isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft [.light_&]:hover:bg-ov
 - **Target:** 12px across the drag axis. Edge handles (`edge="left" | "right"`) straddle the border as a `w-3` strip; a top handle (`edge="top"`) lines the inside of the edge as `h-3`; an in-flow horizontal splitter is an `h-3` row. The two-pane divider keeps the 6px track its grid template reserves and reaches 3px past each side with a `::before`, so its target is 12px too.
 - **Keyboard:** arrows step and Shift+arrow takes the large step, in the direction that grows the pane (`growKey`). Home and End jump to the pane's smallest and largest size. Enter and Space reset. Arrows on the other axis are left alone. A horizontal splitter also takes PageUp/PageDown as the large step; a vertical one has no direction for them and ignores them. `aria-keyshortcuts` is generated from the same table.
 - **Reset:** double-click, Enter or Space. The accessible name always ends "(double-click to reset)" — the primitive appends it, so a caller passes only "Resize sidebar".
-- **Ink:** the grip is neutral in every state, with each step raised on light themes where low-alpha ink fades into the near-white track. Hover styling is dropped while a drag is held, or the hover variant outranks the drag state and the two render identically.
+- **Ink:** the grip is neutral in every state and every step is a solid theme token, never slash-alpha text ink. A grip is a user-interface component under WCAG 1.4.11, so it rests on `selection-outline` — the neutral indicator ink the theme contract holds to 3:1 against palette surfaces, which also clears 3:1 against the splitter surfaces on every built-in theme but three (`arashiyama` and `highlands` on `surface-panel-elevated`, `hokkaido` on `surface-grid`, 2.8–3.0:1) — and steps to `text-secondary` on hover and `text-primary` on focus and drag. `text-muted` is not a hover step: on `namib` and `redwoods` it is dimmer than the outline, so hover would read as a step down. `border-input` and `border-strong` are not substitutes: `border-input` reaches 3:1 only on the themes that opt in, and `border-strong` is a separation value (about 1.5:1 on `daintree`, 1.3:1 on `svalbard`). Hover styling is dropped while a drag is held, or the hover variant outranks the drag state and the two render identically.
 - **Focus:** one solid 2px inset accent outline on the track, on every handle, including those in regions that spend accent elsewhere (dev-preview drawer, dock popovers). A focused handle is the active element of its region, so its outline is that region's one accent mark; the neutral lift alone was invisible in forced-colors and failed WCAG 2.4.7.
 
 ---
@@ -467,7 +466,7 @@ One treatment per state, owned by `Button` (`src/components/ui/button.tsx`). A s
 - **Destructive** — `ghost-danger` (red at rest) for inline and row actions, filled `destructive` for a confirmation's footer. The exception is sidebar chrome (worktree cards, deleted-worktree rows), which stays neutral at rest and turns red on hover and focus: the sidebar repeats these on every card, and its red belongs to the interaction and the confirm. A fix action on an error band (Retry, Restart) is not destructive and is `outline`, like `InlineStatusBanner`'s.
 - **Icon gap** — the size carries it (`default` 8px, `sm` 6px, `xs` 4px). Never add `mr-*`/`ml-*` to an icon inside a Button, and let the size set the glyph too.
 - **Size** — pick the size whose height you want. `sm` forced to `h-6` is `xs`; `icon` forced to `h-7 w-7` is `icon-sm`. A row action under 24px fails WCAG 2.5.8: use `icon-xs` with a negative margin when the row cannot grow.
-- **Copied** — `CopyButton` for any copy button, labelled or icon-only; it owns the check glyph, the "Copied" label swap, the dwell and the announcement. The check is neutral, never `text-status-success`. Menu-row copies confirm with a toast instead. See [Copy feedback](./component-contract.md#copy-feedback).
+- **Copied** — `CopyButton` for any copy button, labelled or icon-only; it owns the check glyph, the "Copied" label swap, the dwell and the announcement. The check is neutral, never `text-status-success`. Menu-row copies confirm with `copyWithToast`'s brief "Copied" flash instead. See [Copy feedback](./component-contract.md#copy-feedback).
 
 ---
 

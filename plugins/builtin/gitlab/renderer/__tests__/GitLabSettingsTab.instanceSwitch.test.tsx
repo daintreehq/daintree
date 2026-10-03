@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { GitLabSettingsTab } from "../components/GitLabSettingsTab";
+import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn(async () => ({ ok: true, result: { valid: true } })) },
@@ -25,6 +26,8 @@ const clearCredential = vi.fn(async () => {
   tokenStored = false;
 });
 const setCredential = vi.fn(async () => ({ valid: true }));
+
+beforeAll(() => whenPluginUiReady(), 30_000);
 
 beforeEach(() => {
   vi.clearAllMocks();

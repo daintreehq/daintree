@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { Eye, EyeOff, FolderOpen } from "lucide-react";
-import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import {
-  SETTINGS_CONTROL_WIDTH,
   SettingsGroup,
   SettingsRow,
+  type SettingsRowControlIds,
 } from "@/components/Settings/SettingsGroup";
+import {
+  INLINE_STRING_MAX,
+  PATH_FIELD_TYPES,
+  parseSettingDraft,
+  SettingFieldControl,
+  settingDraft as toDraft,
+  settingFieldLabel as fieldLabel,
+  settingFieldType as effectiveType,
+  settingRowLayout,
+} from "@/components/Settings/pluginSettingFields";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { landOnSettingsElement } from "@/components/Settings/settingsLanding";
 import { PluginSettingsView } from "@/components/Plugin/PluginSettingsView";
@@ -15,15 +24,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useProjectStore } from "@/store/projectStore";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -37,9 +37,6 @@ import type {
   SettingDefinition,
   SettingFieldType,
 } from "@shared/types/plugin";
-
-/** Path-backed field types — rendered as a read-only input plus a Browse button. */
-const PATH_FIELD_TYPES: ReadonlySet<SettingFieldType> = new Set(["path", "directory", "file"]);
 
 /** Per-scope at-rest tier for secret settings, plus which stored secrets are still plaintext. */
 interface SecretTierInfo {
@@ -70,15 +67,6 @@ function settingScope(def: SettingDefinition): PluginSettingsScope {
   return def.scope ?? "user";
 }
 
-function effectiveType(def: SettingDefinition): SettingFieldType {
-  if (def.secret === true) return "secret";
-  return def.type ?? "string";
-}
-
-function fieldLabel(def: SettingDefinition): string {
-  return def.label ?? def.id;
-}
-
 /**
  * A required text or number field with nothing stored starts empty. A default
  * never satisfies a required setting, so showing it as the field's value made
@@ -98,37 +86,6 @@ function unsetDraft(def: SettingDefinition, type: SettingFieldType): string {
  * store and what the field does once it lands, or a reset back to the default.
  */
 type FailedWrite = { kind: "write"; value: unknown; onSaved?: () => void } | { kind: "reset" };
-
-/** Longest default a plain string field shows on the rail rather than full width. */
-const INLINE_STRING_MAX = 24;
-
-/** Stringify a stored/default value for a text, number, or JSON input. */
-function toDraft(value: unknown, type: SettingFieldType): string {
-  if (value === undefined || value === null) return "";
-  if (type === "json") {
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return "";
-    }
-  }
-  return String(value);
-}
-
-/**
- * An enum this small, with labels this short, is a segmented control on the rail
- * rather than a select — the same control-choice rule every other settings page follows.
- */
-const SEGMENTED_MAX_OPTIONS = 5;
-const SEGMENTED_MAX_LABEL = 12;
-
-function fitsSegmented(options: readonly string[]): boolean {
-  return (
-    options.length >= 2 &&
-    options.length <= SEGMENTED_MAX_OPTIONS &&
-    options.every((opt) => opt.length <= SEGMENTED_MAX_LABEL)
-  );
-}
 
 /**
  * One scope's loaded values. `values === null` means "not loaded": still loading, or
@@ -429,47 +386,17 @@ function SettingField({
       setDraft(attempted);
       setCommitted(attempted);
     };
-    if (type === "number") {
-      const trimmed = draft.trim();
-      if (trimmed === "") {
-        // Empty clears the field back to default — drop the stored override.
-        await handleReset();
-        return;
-      }
-      const num = Number(trimmed);
-      if (!Number.isFinite(num)) {
-        showError("Enter a valid number");
-        return;
-      }
-      if (def.min !== undefined && num < def.min) {
-        showError(`Must be at least ${def.min}`);
-        return;
-      }
-      if (def.max !== undefined && num > def.max) {
-        showError(`Must be at most ${def.max}`);
-        return;
-      }
-      await writeValue(num, landed);
+    const outcome = parseSettingDraft(def, type, draft);
+    if (outcome.kind === "reset") {
+      // An empty number or JSON field goes back to the default — drop the stored override.
+      await handleReset();
       return;
     }
-    if (type === "json") {
-      const trimmed = draft.trim();
-      if (trimmed === "") {
-        await handleReset();
-        return;
-      }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(trimmed);
-      } catch {
-        showError("Enter valid JSON");
-        return;
-      }
-      await writeValue(parsed, landed);
+    if (outcome.kind === "error") {
+      showError(outcome.message);
       return;
     }
-    // string
-    await writeValue(draft, landed);
+    await writeValue(outcome.value, landed);
   };
 
   const handleReveal = async () => {
@@ -669,124 +596,40 @@ function SettingField({
     ),
   };
 
+  // The plain fields draw their control through the shared generator; paths
+  // and secrets below need the host's chooser and keychain.
+  const renderControl = (ids: SettingsRowControlIds) => (
+    <SettingFieldControl
+      def={def}
+      type={type}
+      ids={ids}
+      label={label}
+      draft={draft}
+      onDraftChange={setDraft}
+      onCommit={() => void commitText()}
+      onChoose={chooseEnum}
+      checked={boolValue}
+      onCheckedChange={toggleBool}
+      invalid={invalid}
+      busy={saving}
+      enumOpen={enumListOpen}
+      onEnumOpenChange={setEnumOpen}
+    />
+  );
+
   if (type === "boolean") {
     return (
       <SettingsRow
         {...rowProps}
         onRowClick={saving ? undefined : () => toggleBool(!boolValue)}
-        control={({ labelId, descriptionId, disabled }) => (
-          <SettingsSwitch
-            checked={boolValue}
-            disabled={disabled || saving}
-            aria-labelledby={labelId}
-            aria-describedby={descriptionId}
-            aria-invalid={invalid}
-            onCheckedChange={toggleBool}
-          />
-        )}
+        control={renderControl}
       />
     );
   }
 
-  if (type === "enum") {
-    const options = def.options ?? [];
-    const wide = options.some((opt) => opt.length > 24);
-    if (fitsSegmented(options)) {
-      return (
-        <SettingsRow
-          {...rowProps}
-          control={({ descriptionId, disabled }) => (
-            <SegmentedRadioGroup
-              aria-label={label}
-              aria-describedby={descriptionId}
-              aria-invalid={invalid}
-              options={options.map((opt) => ({ value: opt, label: opt }))}
-              value={draft}
-              onChange={chooseEnum}
-              disabled={disabled || saving}
-            />
-          )}
-        />
-      );
-    }
+  if (type === "enum" || type === "number" || type === "json") {
     return (
-      <SettingsRow
-        {...rowProps}
-        control={({ labelId, descriptionId, disabled }) => (
-          <Select
-            open={enumListOpen}
-            onOpenChange={setEnumOpen}
-            value={draft}
-            disabled={disabled || saving}
-            onValueChange={chooseEnum}
-          >
-            <SelectTrigger
-              aria-labelledby={labelId}
-              aria-describedby={descriptionId}
-              aria-invalid={invalid || undefined}
-              className={SETTINGS_CONTROL_WIDTH[wide ? "wide" : "select"]}
-            >
-              {/* An unset enum shows the placeholder rather than silently adopting the first option. */}
-              <SelectValue placeholder="Select…" />
-            </SelectTrigger>
-            <SelectContent>
-              {options.map((opt) => (
-                <SelectItem key={opt} value={opt}>
-                  {opt}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-      />
-    );
-  }
-
-  if (type === "number") {
-    return (
-      <SettingsRow
-        {...rowProps}
-        control={({ labelId, descriptionId, disabled }) => (
-          // Text, not type=number: the draft is validated on commit, and a number input
-          // reports anything it can't parse as "" — which would read as "clear to default".
-          <Input
-            type="text"
-            inputMode="decimal"
-            value={draft}
-            aria-required={def.required === true || undefined}
-            disabled={disabled || saving}
-            aria-labelledby={labelId}
-            aria-describedby={descriptionId}
-            invalid={invalid}
-            className={SETTINGS_CONTROL_WIDTH.number}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => void commitText()}
-          />
-        )}
-      />
-    );
-  }
-
-  if (type === "json") {
-    return (
-      <SettingsRow
-        {...rowProps}
-        layout="stacked"
-        control={({ labelId, descriptionId, disabled }) => (
-          <Textarea
-            variant="code"
-            value={draft}
-            disabled={disabled || saving}
-            aria-labelledby={labelId}
-            aria-describedby={descriptionId}
-            invalid={invalid}
-            rows={4}
-            spellCheck={false}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => void commitText()}
-          />
-        )}
-      />
+      <SettingsRow {...rowProps} layout={settingRowLayout(def, type)} control={renderControl} />
     );
   }
 
@@ -807,7 +650,9 @@ function SettingField({
               invalid={invalid}
               placeholder={type === "file" ? "No file selected" : "No folder selected"}
               // The value is a path, so mono; the placeholder is a sentence, so not.
-              className="min-w-0 flex-1 font-mono text-xs placeholder:font-sans"
+              // The smaller face keeps the text-sm line box, so the field stays
+              // the height of the other inputs in its group.
+              className="min-w-0 flex-1 font-mono text-xs leading-5 placeholder:font-sans"
             />
             <Button
               type="button"
@@ -885,7 +730,9 @@ function SettingField({
                     variant="ghost"
                     size="icon-sm"
                     disabled={disabled || saving}
-                    aria-label={revealed ? `Hide ${label}` : `Reveal ${label}`}
+                    // A toggle: one name, its state carried by `pressed`.
+                    aria-label={`Show ${label}`}
+                    pressed={revealed}
                     // Toggle reveal without firing the input's blur-commit.
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
@@ -916,32 +763,7 @@ function SettingField({
     );
   }
 
-  // string — a short declared default says the value is a word or two, which
-  // sits on the rail; anything else could be a URL or a command, so full width.
-  const inlineString =
-    typeof def.default === "string" &&
-    def.default.length > 0 &&
-    def.default.length <= INLINE_STRING_MAX;
-  return (
-    <SettingsRow
-      {...rowProps}
-      layout={inlineString ? "inline" : "stacked"}
-      control={({ labelId, descriptionId, disabled }) => (
-        <Input
-          type="text"
-          value={draft}
-          disabled={disabled || saving}
-          aria-labelledby={labelId}
-          aria-describedby={descriptionId}
-          aria-required={def.required === true || undefined}
-          invalid={invalid}
-          className={inlineString ? SETTINGS_CONTROL_WIDTH.wide : undefined}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => void commitText()}
-        />
-      )}
-    />
-  );
+  return <SettingsRow {...rowProps} layout={settingRowLayout(def, type)} control={renderControl} />;
 }
 
 /** A deep link's "land on this setting" request; `nonce` makes a repeat land again. */

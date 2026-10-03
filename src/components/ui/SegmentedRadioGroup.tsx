@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import type { RootAttributes } from "@/components/ui/rootAttributes";
 
 export interface SegmentedRadioOption<T extends string> {
   value: T;
@@ -48,6 +49,8 @@ interface SegmentedRadioGroupProps<T extends string> {
    * `shrink`.
    */
   className?: string;
+  /** `id`, `data-*` or `aria-*` on the root; the component's own attributes win. */
+  rootAttributes?: RootAttributes;
 }
 
 /**
@@ -88,6 +91,7 @@ export function SegmentedRadioGroup<T extends string>({
   density = "default",
   testId,
   className,
+  rootAttributes,
 }: SegmentedRadioGroupProps<T>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -220,6 +224,7 @@ export function SegmentedRadioGroup<T extends string>({
 
   return (
     <div
+      {...rootAttributes}
       ref={containerRef}
       className={cn(
         // Compact keeps its 24px footprint by giving the segments the full
@@ -231,7 +236,7 @@ export function SegmentedRadioGroup<T extends string>({
         className
       )}
       role="radiogroup"
-      data-testid={testId}
+      {...(testId === undefined ? {} : { "data-testid": testId })}
       aria-label={ariaLabel}
       aria-describedby={ariaDescribedBy}
       aria-invalid={ariaInvalid || undefined}

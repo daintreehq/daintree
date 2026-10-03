@@ -326,6 +326,46 @@ describe("TerminalProcess handback requests (#12488)", () => {
     terminal.dispose();
   });
 
+  it("drops the last handback once a later plain submission reaches the pty (#13128)", async () => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    const terminal = createTerminal({ launchAgentId: "claude", handbackCode: "k7f3qa" });
+    terminal.getInfo().agentState = "waiting";
+
+    ptyOnDataCallback!("DAINTREE-DONE-k7f3qa: reviewed END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(terminal.getInfo().lastHandback?.message).toBe("reviewed");
+    // The hit retired the only request, so the tracker has nothing left to retire.
+    expect(terminal.getInfo().handbackTracker?.hasRequests()).toBe(false);
+
+    terminal.submit("one more thing", "tok-2");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(terminal.getSubmission("tok-2")?.phase).toBe("pty_written");
+    expect(terminal.getInfo().lastHandback).toBeUndefined();
+    expect(terminal.getInfo().lastHandbackUnpublished).toBe(false);
+    vi.useRealTimers();
+    terminal.dispose();
+  });
+
+  it("keeps the last handback until a later submission's Enter reaches the pty", async () => {
+    vi.useFakeTimers();
+    const terminal = createTerminal();
+    const handback = { message: "done", observedAt: 1, truncated: false };
+    terminal.getInfo().lastHandback = handback;
+
+    terminal.submit("follow up", "tok-1");
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("writing");
+    expect(terminal.getInfo().lastHandback).toBe(handback);
+
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("pty_written");
+    expect(terminal.getInfo().lastHandback).toBeUndefined();
+    vi.useRealTimers();
+    terminal.dispose();
+  });
+
   it("reports a done marker the moment it is complete on screen, without waiting for a settle", async () => {
     vi.useFakeTimers();
     ptyOnDataCallback = null;
@@ -368,6 +408,7 @@ describe("TerminalProcess handback requests (#12488)", () => {
     await vi.advanceTimersByTimeAsync(300);
     expect(seen).toEqual(["Voted A"]);
     expect(terminal.getInfo().handbackTracker?.deliveredRequests()).toHaveLength(1);
+    const firstObservedAt = terminal.getInfo().lastHandback?.observedAt;
 
     // The same screen sampled again reports nothing new.
     ptyOnDataCallback!("\r\n");
@@ -378,6 +419,8 @@ describe("TerminalProcess handback requests (#12488)", () => {
     await vi.advanceTimersByTimeAsync(300);
     expect(seen).toEqual(["Voted A", "Voted A, runner-up C."]);
     expect(terminal.getInfo().lastHandback?.message).toBe("Voted A, runner-up C.");
+    // Input typed between the two captures must still read as after the handback (#13128).
+    expect(terminal.getInfo().lastHandback?.observedAt).toBe(firstObservedAt);
 
     // Out of `working`, the same capture retires the code without reporting again.
     terminal.getInfo().agentState = "waiting";

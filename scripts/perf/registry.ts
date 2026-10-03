@@ -111,12 +111,19 @@ function npmScript(name: string): Promise<number> {
   return spawnNode([npmCli, "run", name]);
 }
 
+/**
+ * Every Playwright-hosted benchmark lives under `e2e/perf/` and runs through
+ * its own config, which a bare `npx playwright test` never loads — so none of
+ * them rides along with a correctness bucket.
+ */
+export const PERF_PLAYWRIGHT_CONFIG = "playwright.perf.config.ts";
+export const PERF_PLAYWRIGHT_PROJECT = "perf";
+export const PERF_SPEC_DIR = "e2e/perf";
+
 interface PlaywrightBench {
   summary: string;
   kind: BenchmarkKind;
-  /** Playwright project the spec belongs to. */
-  project: string;
-  /** Spec path, repo-relative. */
+  /** Spec path, repo-relative, under PERF_SPEC_DIR. */
   spec: string;
   /** Env var the spec's opt-in gate reads; always set to "1". */
   gate: string;
@@ -132,7 +139,7 @@ interface PlaywrightBench {
  * runner uses, so the metadata `perf list` prints and the coverage test reads
  * cannot drift from what actually runs.
  */
-function playwrightBench({ summary, kind, project, spec, gate, build }: PlaywrightBench): Command {
+function playwrightBench({ summary, kind, spec, gate, build }: PlaywrightBench): Command {
   return {
     summary,
     kind,
@@ -150,7 +157,8 @@ function playwrightBench({ summary, kind, project, spec, gate, build }: Playwrig
             "playwright"
           ),
           "test",
-          `--project=${project}`,
+          `--config=${PERF_PLAYWRIGHT_CONFIG}`,
+          `--project=${PERF_PLAYWRIGHT_PROJECT}`,
           "--workers=1",
           spec,
           ...rest,
@@ -233,48 +241,42 @@ export const REGISTRY: Record<string, Command> = {
   "recipe-fanout": playwrightBench({
     summary: "Cold recipe fanout through worktree, PTY host, and xterm",
     kind: "journey",
-    project: "full-worktree",
-    spec: "e2e/full/worktree/recipe-fanout-perf.spec.ts",
+    spec: "e2e/perf/recipe-fanout-perf.spec.ts",
     gate: "RUN_PERF_RECIPE_FANOUT",
     build: "build:e2e:bench",
   }),
   "bulk-issue-worktrees": playwrightBench({
     summary: "Fake issue selection through bulk worktree recipes and real PTYs",
     kind: "journey",
-    project: "full-panels",
-    spec: "e2e/full/panels/bulk-issue-worktree-recipe-perf.spec.ts",
+    spec: "e2e/perf/bulk-issue-worktree-recipe-perf.spec.ts",
     gate: "RUN_PERF_BULK_ISSUE_WORKTREES",
     build: "build:e2e:bench",
   }),
   interactivity: playwrightBench({
     summary: "Keystroke-to-paint latency under fleet load (PERF-120..122, opt-in)",
     kind: "journey",
-    project: "full-terminal",
-    spec: "e2e/full/terminal/interactivity-perf.spec.ts",
+    spec: "e2e/perf/interactivity-perf.spec.ts",
     gate: "RUN_PERF_INTERACTIVITY",
     build: "build:e2e",
   }),
   scroll: playwrightBench({
     summary: "Wheel-to-paint latency for mouse-reporting TUIs (PERF-125..127, opt-in)",
     kind: "journey",
-    project: "full-terminal",
-    spec: "e2e/full/terminal/scroll-perf.spec.ts",
+    spec: "e2e/perf/scroll-perf.spec.ts",
     gate: "RUN_PERF_SCROLL",
     build: "build:e2e",
   }),
   interactions: playwrightBench({
     summary: "Input-to-painted-result latency for ~60 everyday UI interactions (opt-in)",
     kind: "journey",
-    project: "full-resilience",
-    spec: "e2e/full/resilience/interaction-latency-perf.spec.ts",
+    spec: "e2e/perf/interaction-latency-perf.spec.ts",
     gate: "RUN_PERF_INTERACTIONS",
     build: "build:e2e",
   }),
   "project-switch": playwrightBench({
     summary: "Switch round-trip and on-screen reveal latency, cold (LRU-evicted) and warm",
     kind: "journey",
-    project: "full-resilience",
-    spec: "e2e/full/resilience/project-switch-perf.spec.ts",
+    spec: "e2e/perf/project-switch-perf.spec.ts",
     gate: "RUN_PERF_SWITCH",
     build: "build:e2e",
   }),
@@ -282,9 +284,16 @@ export const REGISTRY: Record<string, Command> = {
     summary:
       "Real-UI switch rotation: intent → focused pane paints a typed nonce, per LRU depth and cache cap, plus memory",
     kind: "journey",
-    project: "full-resilience",
-    spec: "e2e/full/resilience/project-switch-rotation-perf.spec.ts",
+    spec: "e2e/perf/project-switch-rotation-perf.spec.ts",
     gate: "RUN_PERF_SWITCH_ROTATION",
+    build: "build:e2e",
+  }),
+  "project-switch-stress": playwrightBench({
+    summary:
+      "Cold/warm project-switch churn across many projects: switch latency, FD and memory growth per round",
+    kind: "journey",
+    spec: "e2e/perf/project-switch-stress.spec.ts",
+    gate: "RUN_PERF_STRESS",
     build: "build:e2e",
   }),
   "project-switch-rotation-compare": {
@@ -295,16 +304,14 @@ export const REGISTRY: Record<string, Command> = {
   "agent-launch": playwrightBench({
     summary: "agent.launch dispatch to panel, xterm and first agent output",
     kind: "journey",
-    project: "full-terminal",
-    spec: "e2e/full/terminal/agent-launch-perf.spec.ts",
+    spec: "e2e/perf/agent-launch-perf.spec.ts",
     gate: "RUN_PERF_AGENT_LAUNCH",
     build: "build:e2e",
   }),
   "worktree-agent-ready": playwrightBench({
     summary: "Create a worktree, switch to it, launch an agent, tear it down — single and burst",
     kind: "journey",
-    project: "full-worktree",
-    spec: "e2e/full/worktree/worktree-agent-ready-perf.spec.ts",
+    spec: "e2e/perf/worktree-agent-ready-perf.spec.ts",
     gate: "RUN_PERF_WORKTREE_AGENT_READY",
     build: "build:e2e",
   }),
@@ -312,26 +319,49 @@ export const REGISTRY: Record<string, Command> = {
     summary:
       "React re-renders and render-ms per git tick, agent flip and activity flush, as worktrees scale",
     kind: "mechanism",
-    project: "full-panels",
-    spec: "e2e/full/panels/store-fanout-perf.spec.ts",
+    spec: "e2e/perf/store-fanout-perf.spec.ts",
     gate: "RUN_PERF_STORE_FANOUT",
     // The probe this spec reads (window.__DAINTREE_RENDER_PROBE__) only exists
     // in a DAINTREE_RENDER_PROBE=1 build, so an ordinary e2e bundle measures
     // nothing and reports zeros.
     build: "build:e2e:bench",
   }),
+  "background-energy": playwrightBench({
+    summary:
+      "Renderer, xterm and process CPU while hidden worktree agents stream, plus retained output on reveal",
+    kind: "mechanism",
+    spec: "e2e/perf/background-energy-perf.spec.ts",
+    gate: "RUN_BACKGROUND_ENERGY",
+    // React commit counters come from the render probe, which only a bench
+    // build carries; a production-mode run must not measure the probe itself.
+    build: process.env.BACKGROUND_ENERGY_PRODUCTION === "1" ? "build:e2e" : "build:e2e:bench",
+  }),
+  "list-mount": playwrightBench({
+    summary:
+      "DOM-node delta and long-animation-frame count for ReviewHub mounting a 1000-file list",
+    kind: "journey",
+    spec: "e2e/perf/list-mount-budget-perf.spec.ts",
+    gate: "RUN_PERF_LIST_MOUNT",
+    build: "build:e2e",
+  }),
+  "agent-state-latency": playwrightBench({
+    summary: "Working↔waiting transition latency for a hidden agent pane against the quiet window",
+    kind: "journey",
+    spec: "e2e/perf/agent-state-latency-perf.spec.ts",
+    gate: "RUN_PERF_AGENT_STATE_LATENCY",
+    build: "build:e2e",
+  }),
   memory: playwrightBench({
     summary: "Memory kitchen-sink soak spec via Playwright",
     kind: "journey",
-    project: "full-resilience",
-    spec: "e2e/full/resilience/memory-kitchen-sink.spec.ts",
+    spec: "e2e/perf/memory-kitchen-sink.spec.ts",
     gate: "RUN_PERF_MEMORY",
+    build: "build:e2e",
   }),
   "memory-growth": playwrightBench({
     summary: "Single-session retained-memory growth benchmark via Playwright",
     kind: "journey",
-    project: "full-resilience",
-    spec: "e2e/full/resilience/memory-growth-perf.spec.ts",
+    spec: "e2e/perf/memory-growth-perf.spec.ts",
     gate: "RUN_PERF_MEMORY_GROWTH",
     build: "build:e2e",
   }),
@@ -348,8 +378,7 @@ export const REGISTRY: Record<string, Command> = {
   "memory-pressure": playwrightBench({
     summary: "Renderer responsiveness during sustained synthetic memory pressure",
     kind: "journey",
-    project: "full-resilience",
-    spec: "e2e/full/resilience/memory-pressure-responsiveness-perf.spec.ts",
+    spec: "e2e/perf/memory-pressure-responsiveness-perf.spec.ts",
     gate: "RUN_PERF_MEMORY_PRESSURE",
     build: "build:e2e:bench",
   }),
@@ -363,8 +392,9 @@ export const REGISTRY: Record<string, Command> = {
 /**
  * Performance specs that deliberately have no `npm run perf` command, and why.
  *
- * The coverage test treats any spec under `e2e/` whose name ends `-perf.spec.ts`
- * or mentions memory as a benchmark that must be reachable from the dispatcher.
+ * The coverage test treats every spec under `e2e/perf/`, and any spec elsewhere
+ * under `e2e/` whose name ends `-perf.spec.ts` or mentions memory, as a
+ * benchmark that must be reachable from the dispatcher.
  * A spec listed here is an explicit decision; one that is neither registered nor
  * listed fails the test, which is the point — the five specs that prompted this
  * (project switch, store fan-out, agent launch, worktree-agent-ready) existed
@@ -373,7 +403,7 @@ export const REGISTRY: Record<string, Command> = {
  */
 export const UNREGISTERED_PERF_SPECS: Readonly<Record<string, string>> = {
   "e2e/full/resilience/core-perf-list-mount-budget.spec.ts":
-    "not opt-in: a mount-count budget assertion that runs with the ordinary full-resilience suite, so it is a test rather than a measurement harness",
+    "not a benchmark despite the name: the functional ReviewHub virtualization journey that runs with full-resilience; its DOM-delta and long-animation-frame budgets are `npm run perf list-mount`",
   "e2e/nightly/nightly-memory-leaks.spec.ts":
     "belongs to the `nightly` Playwright project, run as a lane by `npm run test:e2e:nightly` rather than one benchmark at a time",
   "e2e/nightly/nightly-multiproject-memory-leak.spec.ts":

@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const context = vi.hoisted(() => ({
   current: { projectId: "p1", worktreeId: "wt-1", worktreePath: "/repo" },
 }));
 
 import { SiteBuilderDrawer, SiteBuilderToolbar } from "../SiteBuilderSurfaces";
-import { createBuilderSession, type InspectorController } from "../inspectorController";
+import {
+  createBuilderSession,
+  HMR_SETTLE_MS,
+  type InspectorController,
+} from "../inspectorController";
 import {
   __resetDevPreviewToolSessionsForTests,
   peekDevPreviewToolSession,
@@ -38,6 +42,8 @@ import { usePanelStore } from "@/store/panelStore";
 // The plugin renders inside the app's TooltipProvider (App.tsx); its segmented
 // controls carry Radix tooltips, so the harness supplies the same ancestor.
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 import {
   FILE,
   OBSERVATION,
@@ -131,6 +137,8 @@ async function mountSelected() {
 function text(): string {
   return document.body.textContent ?? "";
 }
+
+beforeAll(() => whenPluginUiReady(), 30_000);
 
 beforeEach(() => {
   context.current = { projectId: "p1", worktreeId: "wt-1", worktreePath: "/repo" };
@@ -549,21 +557,44 @@ describe("a location the page got wrong", () => {
       mismatch: { file: FILE, line: 6, column: 2, reported: "button", found: "p" },
     }));
     await mountBound();
-    await act(async () =>
-      host.pushPlugin(PUSH_CHANNELS.sourceChanged, {
-        workspaceSessionId: "ws-1",
-        file: FILE,
-        revision: REVISION,
-      })
-    );
-    await act(async () => host.select(0));
-    // The click is kept and asked for again once the page has caught up…
-    await screen.findByText("Waiting for the preview to update");
-    expect(text()).not.toContain("neighbour");
-    // …and is the user's to repeat only when the page still can't vouch for it.
-    await screen.findByText("This file just changed — select again", {}, { timeout: 4000 });
-    expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1);
-    expect(text()).not.toContain("neighbour");
+    // One clock for the settle window's timer and the change's age. On real
+    // timers the change and the click land in the same instant, so the ask
+    // fires exactly on the window's edge, and a timer that fires a few
+    // milliseconds ahead of Date.now reads the file as still just changed and
+    // asks a second time.
+    vi.useFakeTimers();
+    const elapse = (ms: number) =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    try {
+      await act(async () =>
+        host.pushPlugin(PUSH_CHANNELS.sourceChanged, {
+          workspaceSessionId: "ws-1",
+          file: FILE,
+          revision: REVISION,
+        })
+      );
+      await act(async () => host.select(0));
+      // The click is kept and asked for again once the page has caught up…
+      await elapse(UI_DOHERTY_THRESHOLD);
+      expect(screen.getByText("Waiting for the preview to update")).toBeTruthy();
+      expect(host.sitePreview.reselect).not.toHaveBeenCalled();
+      expect(text()).not.toContain("neighbour");
+      await elapse(HMR_SETTLE_MS - UI_DOHERTY_THRESHOLD);
+      expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1);
+      // …and is the user's to repeat only when the page still can't vouch for
+      // it. The page's answer arrives a tick after the ask.
+      await elapse(10);
+      expect(screen.getByText("This file just changed — select again")).toBeTruthy();
+      expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1);
+      // Nothing is left scheduled to ask again.
+      await elapse(HMR_SETTLE_MS * 10);
+      expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1);
+      expect(text()).not.toContain("neighbour");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("still reports a plain stale resolve as the page having moved on", async () => {

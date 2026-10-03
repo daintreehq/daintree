@@ -48,17 +48,32 @@ const DAINTREE_ENGINE_RANGE = ">=0.11.0";
  * same `id`. The runtime (`PluginService.loadPlugin`) only registers a panel
  * kind while iterating declared `panels`, attaching the view's `componentPath`
  * when ids match; a view with no matching panel is ignored, so the scaffold
- * must emit both for a generated view to render. `iconId: "puzzle"` and the
- * plugin brand color are the canonical defaults for plugin-contributed panels.
+ * must emit both for a generated view to render. The panel points at the
+ * plugin's own {@link PANEL_ICON_PATH} so a new author starts from the custom
+ * icon form (#13143); swapping it for a generic id like `"puzzle"` still works.
  */
 function viewPanelContribution(ctx: ScaffoldContext): Record<string, unknown> {
   return {
     id: "main",
     name: ctx.displayName,
-    iconId: "puzzle",
+    iconId: `./${PANEL_ICON_PATH}`,
     color: "var(--theme-category-orange)",
   };
 }
+
+/** Where the view templates put their panel icon, relative to the plugin root. */
+const PANEL_ICON_PATH = "icons/panel.svg";
+
+/**
+ * A monochrome 24×24 starter glyph. The host draws a custom icon as a mask in
+ * the current text colour, so only the shape matters — its stroke colour is
+ * ignored.
+ */
+const PANEL_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3" y="3" width="18" height="18" rx="2" />
+  <path d="M8 12h8M12 8v8" />
+</svg>
+`;
 
 /** A safely-quoted JS/TS string literal for embedding author text in source. */
 function q(value: string): string {
@@ -183,7 +198,16 @@ function tsconfig(jsx: boolean): string {
     isolatedModules: true,
     esModuleInterop: true,
   };
-  if (jsx) compilerOptions.jsx = "react-jsx";
+  if (jsx) {
+    compilerOptions.jsx = "react-jsx";
+    // A view reaches its worker through `window.electron.plugin` and draws with
+    // the host-served `@daintreehq/plugin-ui`; neither has a module to import,
+    // so without these ambient declarations the first `invoke` fails `tsc`.
+    compilerOptions.types = [
+      "@daintreehq/plugin-sdk/view-globals",
+      "@daintreehq/plugin-sdk/plugin-ui",
+    ];
+  }
   return JSON.stringify({ compilerOptions, include: ["src"] }, null, 2) + "\n";
 }
 
@@ -339,6 +363,27 @@ ${devLine}
 
 The **${recipeName}** recipe in \`.daintree/recipes/\` starts the same watcher, so
 Daintree can bring it up alongside the rest of the project environment.
+
+## Building a view
+
+If the plugin has a view, draw it with \`@daintreehq/plugin-ui\`, Daintree's
+own components served by the host: \`Button\`, \`Input\`, \`Select\`,
+\`DataTable\` and \`VirtualList\` for lists, \`Dialog\` and \`ConfirmDialog\`,
+\`EmptyState\` and \`PaneState\`, \`Icon\`. Get data with the hooks in \`@daintreehq/plugin-sdk/react\` —
+\`useSyncedCollection\` for a list the worker changes, \`useStreamBuffer\` for
+progress and logs, \`useNow\` for relative times. Style anything else with
+Tailwind classes on Daintree's tokens.
+
+Before committing, run:
+
+\`\`\`bash
+npx daintree-plugin lint
+\`\`\`
+
+It flags the patterns that make a panel slow or look foreign — a list pushed
+whole on every change, polling in the view, hand-rolled buttons and inputs,
+stock Tailwind colours — and names the fix. The plugin's Performance section
+in Project settings → Plugins shows what Daintree measured while it ran.
 `;
 }
 
@@ -406,7 +451,10 @@ function panelComponent(ctx: ScaffoldContext): string {
 
 /**
  * Panel view for ${c(ctx.displayName)}. Rendered by Daintree when the user opens
- * the contributed view.
+ * the contributed view. Draw it with \`@daintreehq/plugin-ui\` (Button, Input,
+ * DataTable, PaneState, Icon, …) and get data with the hooks in
+ * \`@daintreehq/plugin-sdk/react\`. tsconfig's \`types\` declares the kit and
+ * \`window.electron.plugin\`.
  */
 export default function Panel(): React.ReactElement {
   return <div style={{ padding: 16 }}>{${q(`Hello from ${ctx.displayName}`)}}</div>;
@@ -530,6 +578,7 @@ function templateFiles(ctx: ScaffoldContext): Record<string, string> {
         ".dntrignore": DNTRIGNORE,
         "src/index.ts": viewEntry(ctx),
         "src/panel.tsx": panelComponent(ctx),
+        [PANEL_ICON_PATH]: PANEL_ICON_SVG,
       };
     }
     case "mcp": {
@@ -596,6 +645,7 @@ function templateFiles(ctx: ScaffoldContext): Record<string, string> {
         ".dntrignore": DNTRIGNORE,
         "src/index.ts": commandEntry(ctx),
         "src/panel.tsx": panelComponent(ctx),
+        [PANEL_ICON_PATH]: PANEL_ICON_SVG,
         "src/server.ts": mcpServer(ctx),
       };
     }

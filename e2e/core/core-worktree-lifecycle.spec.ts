@@ -4,11 +4,7 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { spawnTerminalAndVerify } from "../helpers/workflows";
-import {
-  runTerminalCommand,
-  waitForTerminalText,
-  waitForTerminalTextIgnoringLineBreaks,
-} from "../helpers/terminal";
+import { runTerminalCommand, waitForTerminalTextIgnoringLineBreaks } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
 import { ensureWindowFocused } from "../helpers/focus";

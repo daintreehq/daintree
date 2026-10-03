@@ -213,4 +213,60 @@ describe("PluginCapabilityConsentStore", () => {
     expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(true);
     expect(store.list()).toHaveLength(1);
   });
+
+  describe("setGrant — the project targeting switch (#13119)", () => {
+    const identity = {
+      pluginId: "acme.orchestrator",
+      capability: "project:dispatch",
+      scopeKey: "global",
+    } as const;
+
+    function reopen(config: Record<string, unknown>) {
+      return new PluginCapabilityConsentStore(
+        () => {},
+        () => config
+      );
+    }
+
+    it("persists an enable and a disable", () => {
+      const { store, getConfig } = makeStore();
+      expect(store.setGrant(identity, true)).toBe(true);
+      expect(reopen(getConfig()).hasGrant(identity)).toBe(true);
+      expect(store.setGrant(identity, false)).toBe(true);
+      expect(reopen(getConfig()).hasGrant(identity)).toBe(false);
+    });
+
+    it("reports a failed disable, stays revoked in memory, and re-writes on retry", () => {
+      const { store, saveConfig, getConfig } = makeStore();
+      store.setGrant(identity, true);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      saveConfig.mockImplementationOnce(() => {
+        throw new Error("disk full");
+      });
+      saveConfig.mockImplementationOnce(() => {
+        throw new Error("disk full");
+      });
+
+      expect(store.setGrant(identity, false)).toBe(false);
+      expect(store.hasGrant(identity)).toBe(false);
+      // Disk still holds the grant — which is exactly why the failure is surfaced.
+      expect(reopen(getConfig()).hasGrant(identity)).toBe(true);
+
+      // Nothing left to delete, but the retry must still write the snapshot.
+      expect(store.setGrant(identity, false)).toBe(true);
+      expect(reopen(getConfig()).hasGrant(identity)).toBe(false);
+    });
+
+    it("rolls back a failed enable so memory matches disk", () => {
+      const { store, saveConfig, getConfig } = makeStore();
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      saveConfig.mockImplementation(() => {
+        throw new Error("disk full");
+      });
+
+      expect(store.setGrant(identity, true)).toBe(false);
+      expect(store.hasGrant(identity)).toBe(false);
+      expect(reopen(getConfig()).hasGrant(identity)).toBe(false);
+    });
+  });
 });

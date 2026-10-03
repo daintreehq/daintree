@@ -4,7 +4,10 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { logDebug, logInfo, logWarn, logError } from "../../utils/logger.js";
 import {
+  AUDIO_BUFFER_MAX_BYTES,
+  AUDIO_BUFFER_MAX_CHUNKS,
   STUB_CONFIDENCE,
+  createAudioBufferOverflowError,
   type TranscriptionProvider,
   type VoiceStartResult,
   type VoiceTranscriptionEvent,
@@ -61,15 +64,18 @@ const OPENAI_TRANSCRIPTION_MODEL = "gpt-live-transcribe";
 // VAD_MAX_SEGMENT_MS below (client-side segmentation), and the two do not fight.
 const OPENAI_TRANSCRIPTION_DELAY: OpenAITranscriptionDelay = "low";
 const CONNECT_TIMEOUT_MS = 10_000;
-// Backstop for the drain: if a committed segment's `conversation.item.done`
-// never arrives (server error, dropped frame), force-close after this long
-// rather than hanging the stop.
+// Backstop for the drain: if a committed segment never reports a terminal
+// result (server error, dropped frame, or only an empty `conversation.item.done`),
+// force-close after this long rather than hanging the stop.
 const DRAIN_TIMEOUT_MS = 3_000;
-const PRE_CONNECT_BUFFER_MAX = 100;
-// Hard byte ceiling for buffered-but-not-yet-sent audio (pre-connect and during
-// a reconnect window). 24kHz mono PCM16 ≈ 48KB/s, so ~150KB ≈ 3s — the point
-// past which voice context is lost anyway. Caps memory if chunks are large.
-const PRE_CONNECT_BUFFER_MAX_BYTES = 150_000;
+// How long a graceful stop that lands before `session.updated` waits for the
+// session to become ready so the buffered audio can still be transcribed.
+// Connecting normally takes ~1.5-2s; past this the audio is discarded.
+const STOP_CONNECT_TIMEOUT_MS = 3_000;
+// How long a completed segment may wait behind an earlier one that hasn't
+// reported back before the earlier one is settled with its interim text, so a
+// lost or failed transcription can't hold later dictation back indefinitely.
+const HELD_COMPLETION_TIMEOUT_MS = 5_000;
 // Client-side ping/pong heartbeat. The OpenAI Realtime server sends its own
 // pings (auto-ponged by `ws`), but a half-open TCP connection on our side —
 // server alive, our socket silently dead — is only detectable by us pinging
@@ -239,6 +245,12 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private preConnectBufferBytes = 0;
   private isReady = false;
 
+  // Start-path timings on the main-process clock, so a log can show whether
+  // lost opening words sat behind the socket, the handshake, or the model.
+  private sessionStartedAt = 0;
+  private connectStartedAt = 0;
+  private firstTranscriptLogged = false;
+
   // Heartbeat (half-open detection) for the current connection. `isAlive` is
   // set on every pong and on open; the interval terminates the socket if a full
   // cycle elapses with no pong.
@@ -264,6 +276,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private drainTimeout: ReturnType<typeof setTimeout> | null = null;
   private drainPromise: Promise<void> | null = null;
   private isDraining = false;
+  // A graceful stop arrived before the session was ready; the drain is waiting
+  // on `session.updated` to flush and commit the buffered audio (#13108).
+  private stopPendingReady = false;
 
   // VAD side-chain. A utility process runs Silero v5 and reports
   // speech-start/speech-end events that drive commits. Its handlers are tagged
@@ -290,15 +305,30 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private preRollChunks: ArrayBuffer[] = [];
   private preRollBytes = 0;
   private bytesSinceCommit = 0;
-  // Commits sent (interval, paragraph-boundary, or final) whose
-  // `conversation.item.done` we haven't seen yet. Each commit yields exactly
-  // one completion, so the drain is finished precisely when this hits zero —
-  // no timing heuristic needed.
+  // Commits sent (interval, paragraph-boundary, or final) whose terminal result
+  // we haven't seen yet — a `...transcription.completed`/`.failed`, or a
+  // `conversation.item.done` that actually carries text. Each commit yields
+  // exactly one, so the drain is finished precisely when this hits zero — no
+  // timing heuristic needed.
   private pendingCommits = 0;
   // Item ids already counted toward `pendingCommits` — guards against a
   // completion being counted twice (e.g. a `.completed` and a `.done` for the
   // same item).
   private completedItemIds = new Set<string>();
+  // Item ids in the order the server acknowledged their commits. Transcription
+  // runs per item, so completions can arrive out of commit order; a completion
+  // whose predecessors are still in flight waits in `heldCompletions` and is
+  // released in commit order, so the renderer can append each final transcript
+  // to the draft without tracking per-segment offsets.
+  private commitOrder: string[] = [];
+  private heldCompletions = new Map<string, string>();
+  // Interim text per in-flight item, used to settle an item that never reports
+  // back in its commit-order slot rather than after the text that follows it.
+  private itemDeltaText = new Map<string, string>();
+  private heldCompletionTimer: ReturnType<typeof setTimeout> | null = null;
+  // The item the hold timer is waiting on. The deadline belongs to that item,
+  // so later completions queuing behind it don't keep pushing it back.
+  private heldCompletionTimerItemId: string | null = null;
 
   /** Cumulative delta text since the last complete event — used for incremental diffs. */
   private liveText = "";
@@ -334,6 +364,19 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         message: event.error.message,
       });
     }
+    if (
+      !this.firstTranscriptLogged &&
+      (event.type === "delta" || event.type === "complete") &&
+      event.text.trim()
+    ) {
+      this.firstTranscriptLogged = true;
+      logInfo(`${P} First transcript`, {
+        sessionId: this.sessionId,
+        eventType: event.type,
+        length: event.text.length,
+        sinceStartMs: this.sinceStartMs(),
+      });
+    }
     for (const listener of this.listeners) {
       listener(event);
     }
@@ -357,6 +400,10 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     resolve(result);
   }
 
+  private sinceStartMs(): number {
+    return Math.round(performance.now() - this.sessionStartedAt);
+  }
+
   async start(settings: VoiceInputSettings): Promise<VoiceStartResult> {
     if (!settings.openaiApiKey) {
       logWarn(`${P} No OpenAI API key configured`);
@@ -370,6 +417,8 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     });
     this.cleanupPreviousSession();
     this.sessionId = mySessionId;
+    this.sessionStartedAt = performance.now();
+    this.firstTranscriptLogged = false;
     this.isReady = false;
     this.preConnectBuffer = [];
     this.preConnectBufferBytes = 0;
@@ -395,6 +444,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
    * construct/timeout failure reschedules instead of surfacing a fatal error.
    */
   private connect(mySessionId: number, settings: VoiceInputSettings): void {
+    this.connectStartedAt = performance.now();
     let connection: WebSocket;
     try {
       connection = new WebSocket(OPENAI_REALTIME_URL, {
@@ -407,7 +457,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     } catch (err) {
       const message = formatErrorMessage(err, "Failed to open WebSocket");
       logError(`${P} ${message}`);
-      if (this.isReconnecting) {
+      if (this.isDraining) {
+        this.settleDrain("connect-failed");
+      } else if (this.isReconnecting) {
         this.scheduleReconnect(mySessionId, settings);
       } else {
         this.emitError({ severity: "fatal", code: "ws_construct_failed", message });
@@ -456,6 +508,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       });
       this.emit({ type: "status", status: "error" });
       this.settlePendingStart(mySessionId, { ok: false, error: "Connection timed out" });
+      this.settleDrain("connection-timeout");
     }, CONNECT_TIMEOUT_MS);
 
     connection.on("pong", () => {
@@ -475,7 +528,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         return;
       }
       this.startHeartbeat(connection, mySessionId);
-      logInfo(`${P} WebSocket opened, sending session.update`);
+      logInfo(`${P} WebSocket opened, sending session.update`, {
+        sessionId: mySessionId,
+        connectMs: Math.round(performance.now() - this.connectStartedAt),
+        sinceStartMs: this.sinceStartMs(),
+      });
       // Keyterm biasing, assembled at session start and frozen on the settings
       // snapshot, so a reconnect deterministically rebuilds the same fields.
       // `keywords` takes the literal terms; `prompt` carries the same terms as
@@ -798,7 +855,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         // Log the session config the server actually applied — this is ground
         // truth for whether `turn_detection`, model, and format took effect.
         // Summarized, not raw: the echo replays our `prompt`/`keywords`.
-        logInfo(`${P} ← session.updated — session ready`, summarizeEchoedSession(payload.session));
+        logInfo(`${P} ← session.updated — session ready`, {
+          ...summarizeEchoedSession(payload.session),
+          sinceStartMs: this.sinceStartMs(),
+          bufferedChunks: this.preConnectBuffer.length,
+        });
         if (this.preConnectBuffer.length > 0 && this.connection) {
           logInfo(`${P} Flushing ${this.preConnectBuffer.length} buffered audio chunks`);
           // Detach the buffer before flushing so its state stays consistent even
@@ -816,19 +877,29 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         this.isReconnecting = false;
         this.lastReconnectError = null;
         this.isReady = true;
+        if (this.isDraining) {
+          // Stopped while connecting: the mic is already released, so skip the
+          // VAD and "recording" — just commit what was flushed and drain.
+          this.settlePendingStart(mySessionId, { ok: true });
+          if (this.stopPendingReady) this.commitAfterLateReady();
+          return;
+        }
         this.startVadWorker(mySessionId);
         this.emit({ type: "status", status: "recording" });
         this.settlePendingStart(mySessionId, { ok: true });
         return;
 
-      case "input_audio_buffer.committed":
+      case "input_audio_buffer.committed": {
         // Server ack that our commit landed. A transcription item
         // (`conversation.item.added` then `.done`) should follow within ~1s; if
         // it never does, the session config or the commit cadence is wrong.
-        logDebug(`${P} ← input_audio_buffer.committed`, {
-          itemId: typeof payload.item_id === "string" ? payload.item_id : undefined,
-        });
+        const itemId = typeof payload.item_id === "string" ? payload.item_id : undefined;
+        logDebug(`${P} ← input_audio_buffer.committed`, { itemId });
+        if (itemId && !this.completedItemIds.has(itemId) && !this.commitOrder.includes(itemId)) {
+          this.commitOrder.push(itemId);
+        }
         return;
+      }
 
       case "input_audio_buffer.speech_started":
       case "input_audio_buffer.speech_stopped":
@@ -840,23 +911,48 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
       case "conversation.item.input_audio_transcription.delta": {
         const delta = typeof payload.delta === "string" ? payload.delta : "";
+        const itemId = typeof payload.item_id === "string" ? payload.item_id : undefined;
         // Length only — dictated text is user content, kept out of logs.
-        logDebug(`${P} ← transcription.delta`, { length: delta.length });
+        logDebug(`${P} ← transcription.delta`, { itemId, length: delta.length });
         if (!delta) return;
-        this.emit({ type: "delta", text: delta });
+        if (itemId) {
+          // A delta for an item already finalized would resurrect its preview.
+          if (this.completedItemIds.has(itemId)) return;
+          this.itemDeltaText.set(itemId, (this.itemDeltaText.get(itemId) ?? "") + delta);
+        }
+        this.emit({ type: "delta", text: delta, ...(itemId ? { itemId } : {}) });
         this.liveText += delta;
         return;
       }
 
       case "conversation.item.input_audio_transcription.completed": {
-        // Side-channel transcription event used by conversation-style sessions.
-        // The `?intent=transcription` endpoint reports completions via
-        // `conversation.item.done` instead (handled below) — this case stays so
-        // a session that does emit it still works.
+        // The authoritative final transcript for a committed item. The
+        // `?intent=transcription` endpoint sends it after an empty
+        // `conversation.item.done` for the same item, so it must count even
+        // though a `done` was already seen. An empty transcript here is the
+        // server's verdict of silence — still terminal, just nothing to emit.
         const transcript = typeof payload.transcript === "string" ? payload.transcript : "";
         const itemId = typeof payload.item_id === "string" ? payload.item_id : undefined;
         logInfo(`${P} ← transcription.completed`, { itemId, length: transcript.length });
         this.handleTranscriptComplete(transcript, itemId);
+        return;
+      }
+
+      case "conversation.item.input_audio_transcription.failed": {
+        // Terminal for the item: no transcript is coming, so settle it as empty
+        // — releasing its commit-order slot and counting the commit — rather
+        // than making the stop wait out DRAIN_TIMEOUT_MS. Without an item id we
+        // can't tell which commit failed, so leave the hold and drain backstops
+        // in charge. The error payload may echo user content — log its code only.
+        const itemId = typeof payload.item_id === "string" ? payload.item_id : undefined;
+        const failure = payload.error as { code?: string; type?: string } | undefined;
+        logWarn(`${P} ← transcription.failed`, {
+          itemId,
+          code: failure?.code,
+          errorType: failure?.type,
+        });
+        if (!itemId) return;
+        this.handleTranscriptComplete("", itemId);
         return;
       }
 
@@ -873,10 +969,10 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       }
 
       case "conversation.item.done": {
-        // The `?intent=transcription` endpoint reports each committed segment's
-        // final transcript via `conversation.item.done`, not via
-        // `...input_audio_transcription.completed`. The text lives on the
-        // item's `input_audio` content part.
+        // Some servers put a committed segment's final transcript on the item's
+        // `input_audio` content part here. The `?intent=transcription` endpoint
+        // instead sends this with an empty transcript *before* the deltas and
+        // `...transcription.completed`, so only a `done` carrying text counts.
         const item = payload.item as
           { id?: string; content?: Array<{ type?: string; transcript?: string }> } | undefined;
         const audioPart = item?.content?.find((part) => part.type === "input_audio");
@@ -892,6 +988,15 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           // outstanding commit, or a stray `done` could settle the drain early.
           logWarn(`${P} conversation.item.done carried no input_audio content part — not counted`, {
             contentTypes: item?.content?.map((part) => part.type),
+          });
+          return;
+        }
+        if (!transcript.trim()) {
+          // A placeholder, not a result: claiming the item id or decrementing
+          // here would drop the real `.completed` as a duplicate and settle the
+          // drain before the final transcript lands.
+          logDebug(`${P} conversation.item.done had an empty transcript — awaiting completion`, {
+            itemId: item?.id,
           });
           return;
         }
@@ -943,14 +1048,14 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   }
 
   /**
-   * Handles one committed segment's transcript: emits it to the renderer and
-   * decrements the outstanding-commit counter. While draining, settles the
-   * drain the moment every committed segment has reported back. Shared by the
-   * `...input_audio_transcription.completed` and `conversation.item.done`
-   * paths since both report a committed segment.
+   * Handles one committed segment's terminal result: emits any transcript to
+   * the renderer and decrements the outstanding-commit counter. While draining,
+   * settles the drain the moment every committed segment has reported back.
+   * Callers only route terminal results here — `.completed`, `.failed`, or a
+   * `conversation.item.done` that carries text.
    *
-   * `itemId` is deduped: a completion already counted (e.g. a `.completed` and
-   * a `.done` for the same item, or a repeated frame) is ignored entirely, so
+   * `itemId` is deduped: a result already counted (e.g. a text-bearing `.done`
+   * followed by `.completed` for the same item, or a repeated frame) is ignored entirely, so
    * it can't drop `pendingCommits` below the number genuinely in flight and
    * settle the drain before the final transcript lands.
    */
@@ -968,11 +1073,12 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     if (this.pendingCommits > 0) {
       this.pendingCommits--;
     }
-    if (transcript) {
-      logDebug(`${P} Emitting complete transcript to renderer`, { length: transcript.length });
-      this.emit({ type: "complete", text: transcript, confidence: { ...STUB_CONFIDENCE } });
+    if (itemId) this.itemDeltaText.delete(itemId);
+    if (itemId && this.commitOrder.includes(itemId)) {
+      this.heldCompletions.set(itemId, transcript);
+      this.releaseHeldCompletions(false);
     } else {
-      logDebug(`${P} Completion had an empty transcript — nothing emitted`);
+      this.emitCompletion(transcript, itemId);
     }
     // Each commit yields exactly one completion. Once every committed segment
     // has reported back the drain is genuinely finished — no grace timer, no
@@ -980,6 +1086,78 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     if (this.isDraining && this.pendingCommits === 0) {
       logDebug(`${P} All committed segments transcribed — settling drain`);
       this.settleDrain("all-segments-transcribed");
+    }
+  }
+
+  /**
+   * Emits held completions in commit order, stopping at the first item still in
+   * flight. `force` settles every unresolved item with its interim text instead
+   * (drain end, connection loss, stop); `settleHead` settles only the first one
+   * (the hold timeout). Settling in place keeps the draft in commit order even
+   * when a predecessor never reports back.
+   */
+  private releaseHeldCompletions(force: boolean, settleHead = false): void {
+    for (let itemId = this.commitOrder[0]; itemId !== undefined; itemId = this.commitOrder[0]) {
+      let transcript = this.heldCompletions.get(itemId);
+      if (transcript === undefined) {
+        if (!force && !settleHead) break;
+        settleHead = false;
+        transcript = (this.itemDeltaText.get(itemId) ?? "").trim();
+        this.completedItemIds.add(itemId);
+        this.itemDeltaText.delete(itemId);
+        if (this.pendingCommits > 0) this.pendingCommits--;
+        logWarn(`${P} Settling unreported item with its interim text`, {
+          itemId,
+          length: transcript.length,
+        });
+      }
+      this.commitOrder.shift();
+      this.heldCompletions.delete(itemId);
+      this.emitCompletion(transcript, itemId);
+    }
+    const blockingItemId = this.heldCompletions.size > 0 ? (this.commitOrder[0] ?? null) : null;
+    if (this.heldCompletionTimer && this.heldCompletionTimerItemId === blockingItemId) return;
+    this.clearHeldCompletionTimer();
+    if (blockingItemId) {
+      this.heldCompletionTimerItemId = blockingItemId;
+      this.heldCompletionTimer = setTimeout(() => {
+        this.heldCompletionTimer = null;
+        this.heldCompletionTimerItemId = null;
+        this.releaseHeldCompletions(false, true);
+        if (this.isDraining && this.pendingCommits === 0) {
+          this.settleDrain("held-completion-timeout");
+        }
+      }, HELD_COMPLETION_TIMEOUT_MS);
+    }
+  }
+
+  private clearHeldCompletionTimer(): void {
+    if (this.heldCompletionTimer) {
+      clearTimeout(this.heldCompletionTimer);
+      this.heldCompletionTimer = null;
+    }
+    this.heldCompletionTimerItemId = null;
+  }
+
+  private emitCompletion(transcript: string, itemId?: string): void {
+    if (transcript) {
+      logDebug(`${P} Emitting complete transcript to renderer`, {
+        itemId,
+        length: transcript.length,
+      });
+      this.emit({
+        type: "complete",
+        text: transcript,
+        confidence: { ...STUB_CONFIDENCE },
+        ...(itemId ? { itemId } : {}),
+      });
+    } else if (itemId) {
+      // An identified empty completion still reaches the renderer so it can
+      // drop that item's interim preview.
+      logDebug(`${P} Completion had an empty transcript — retiring item`, { itemId });
+      this.emit({ type: "complete", text: "", confidence: { ...STUB_CONFIDENCE }, itemId });
+    } else {
+      logDebug(`${P} Completion had an empty transcript — nothing emitted`);
     }
   }
 
@@ -1059,22 +1237,23 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   /**
    * Appends a chunk to the pre-connect / reconnect buffer, enforcing both a
    * chunk-count cap and a byte cap. Oldest-wins: once either ceiling is hit the
-   * chunk is dropped (warned once) — a voice gap past ~3s is unrecoverable
+   * chunk is dropped (warned and reported once) — a voice gap past ~3s is unrecoverable
    * anyway, so there's no value in retaining unbounded audio.
    */
   private bufferPreConnectChunk(chunk: ArrayBuffer): void {
     if (
-      this.preConnectBuffer.length >= PRE_CONNECT_BUFFER_MAX ||
-      this.preConnectBufferBytes + chunk.byteLength > PRE_CONNECT_BUFFER_MAX_BYTES
+      this.preConnectBuffer.length >= AUDIO_BUFFER_MAX_CHUNKS ||
+      this.preConnectBufferBytes + chunk.byteLength > AUDIO_BUFFER_MAX_BYTES
     ) {
       if (!this.preConnectBufferOverflowWarned) {
         this.preConnectBufferOverflowWarned = true;
         logWarn(`${P} Pre-connect buffer full, dropping audio`, {
           chunks: this.preConnectBuffer.length,
           bytes: this.preConnectBufferBytes,
-          maxChunks: PRE_CONNECT_BUFFER_MAX,
-          maxBytes: PRE_CONNECT_BUFFER_MAX_BYTES,
+          maxChunks: AUDIO_BUFFER_MAX_CHUNKS,
+          maxBytes: AUDIO_BUFFER_MAX_BYTES,
         });
+        this.emitError(createAudioBufferOverflowError());
       }
       return;
     }
@@ -1099,6 +1278,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.isAlive = false;
     this.bytesSinceCommit = 0;
     this.pendingCommits = 0;
+    // Item ids are per connection; release what arrived so a reconnect starts a
+    // fresh ordering chain without dropping finished transcripts.
+    this.releaseHeldCompletions(true);
     this.completedItemIds.clear();
   }
 
@@ -1116,6 +1298,10 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.bytesSinceCommit = 0;
     this.pendingCommits = 0;
     this.completedItemIds.clear();
+    this.commitOrder = [];
+    this.heldCompletions.clear();
+    this.itemDeltaText.clear();
+    this.clearHeldCompletionTimer();
     this.preConnectBuffer = [];
     this.preConnectBufferBytes = 0;
     this.clearConnectTimeout();
@@ -1130,6 +1316,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.isExpectedClose = false;
     this.isAlive = false;
     this.isDraining = false;
+    this.stopPendingReady = false;
     this.liveText = "";
     if (this.drainResolve) {
       this.drainResolve();
@@ -1338,8 +1525,10 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   }
 
   private settleDrain(reason: string): void {
+    this.releaseHeldCompletions(true);
     this.clearDrainTimeout();
     this.isDraining = false;
+    this.stopPendingReady = false;
     this.drainPromise = null;
     if (this.drainResolve) {
       logInfo(`${P} Drain completed`, { reason });
@@ -1362,13 +1551,25 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       return this.drainPromise;
     }
 
-    // A graceful stop is an expected close — cancel any pending reconnect and
-    // stop the close handler from retrying.
+    // Audio captured while (re)connecting sits in the pre-connect buffer until
+    // `session.updated`. If a live connection attempt — or an already scheduled
+    // reconnect — could still deliver it, wait for it rather than discarding.
+    const canFlushBufferedAudio =
+      !this.isReady &&
+      this.preConnectBufferBytes >= MIN_COMMIT_BYTES &&
+      (this.connection !== null || this.reconnectTimer !== null);
+
+    // A graceful stop is an expected close — stop the close handler from
+    // retrying, and cancel any pending reconnect we aren't waiting on.
     this.isExpectedClose = true;
+    if (canFlushBufferedAudio) {
+      return this.stopAfterConnect();
+    }
     this.isReconnecting = false;
     this.clearReconnectTimer();
 
     if (!this.connection || !this.isReady) {
+      this.releaseHeldCompletions(true);
       this.cleanupPreviousSession();
       this.emit({ type: "status", status: "idle" });
       return;
@@ -1394,6 +1595,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         this.bytesSinceCommit = 0;
       } catch {
         logWarn(`${P} Failed to send final commit, closing immediately`);
+        this.releaseHeldCompletions(true);
         this.cleanupPreviousSession();
         this.emit({ type: "status", status: "idle" });
         return;
@@ -1424,6 +1626,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       await this.drainPromise;
     } else {
       logInfo(`${P} Nothing to drain — no outstanding transcriptions`);
+      this.releaseHeldCompletions(true);
       this.isDraining = false;
     }
 
@@ -1433,6 +1636,79 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       this.cleanupPreviousSession();
       this.emit({ type: "status", status: "idle" });
     }
+  }
+
+  /**
+   * Graceful stop before the session is ready. The drain promise first waits
+   * (bounded by STOP_CONNECT_TIMEOUT_MS) for `session.updated`, which flushes
+   * the buffer and calls `commitAfterLateReady()`; from there it's the normal
+   * commit-and-drain. Connect failures settle the drain via the close/fatal
+   * paths. Audio arriving meanwhile is dropped by `sendAudioChunk`.
+   */
+  private async stopAfterConnect(): Promise<void> {
+    logInfo(`${P} Stop before session ready — waiting to flush buffered audio`, {
+      bufferedChunks: this.preConnectBuffer.length,
+      bufferedBytes: this.preConnectBufferBytes,
+      hasConnection: !!this.connection,
+      isReconnecting: this.isReconnecting,
+    });
+    this.isDraining = true;
+    this.stopPendingReady = true;
+    this.emit({ type: "status", status: "finishing" });
+
+    const sessionIdBeforeDrain = this.sessionId;
+    this.drainPromise = new Promise<void>((resolve) => {
+      this.drainResolve = resolve;
+      this.drainTimeout = setTimeout(() => {
+        logWarn(
+          `${P} Session not ready ${STOP_CONNECT_TIMEOUT_MS}ms after stop — discarding buffered audio`,
+          { bufferedBytes: this.preConnectBufferBytes }
+        );
+        this.settleDrain("connect-timeout");
+      }, STOP_CONNECT_TIMEOUT_MS);
+    });
+    await this.drainPromise;
+
+    if (this.sessionId === sessionIdBeforeDrain) {
+      this.cleanupPreviousSession();
+      this.emit({ type: "status", status: "idle" });
+    }
+  }
+
+  /**
+   * Second half of `stopAfterConnect()`, run from `session.updated` once the
+   * buffered audio has been flushed: send the final commit and re-arm the drain
+   * backstop for its transcript, or settle now if too little audio made it.
+   */
+  private commitAfterLateReady(): void {
+    this.stopPendingReady = false;
+    this.clearDrainTimeout();
+    if (!this.connection || this.bytesSinceCommit < MIN_COMMIT_BYTES) {
+      logInfo(`${P} Late-ready stop with sub-threshold buffer — no final commit`, {
+        bytesSinceCommit: this.bytesSinceCommit,
+      });
+      this.settleDrain("nothing-to-commit");
+      return;
+    }
+    try {
+      this.connection.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+    } catch {
+      logWarn(`${P} Failed to send final commit after late ready`);
+      this.settleDrain("final-commit-failed");
+      return;
+    }
+    this.pendingCommits++;
+    logInfo(`${P} → input_audio_buffer.commit (final, after late ready)`, {
+      bytes: this.bytesSinceCommit,
+      pendingCommits: this.pendingCommits,
+    });
+    this.bytesSinceCommit = 0;
+    this.drainTimeout = setTimeout(() => {
+      logWarn(`${P} Drain timed out after ${DRAIN_TIMEOUT_MS}ms, force closing`, {
+        pendingCommits: this.pendingCommits,
+      });
+      this.settleDrain("timeout");
+    }, DRAIN_TIMEOUT_MS);
   }
 
   stop(): void {

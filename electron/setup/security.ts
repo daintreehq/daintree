@@ -10,10 +10,16 @@ import {
 } from "../../shared/utils/ipcErrorSerialization.js";
 import { FAULT_MODE_ENABLED, applyInvokeFault, initFaultRegistry } from "../ipc/faultRegistry.js";
 import { markIpcSecurityReady } from "../ipc/ipcGuard.js";
+import { notifyIpcEnvelopeRejected } from "../ipc/envelopeRejections.js";
 import { channelToCategory, type IpcChannelCategory } from "../ipc/utils.js";
 import { AppError } from "../utils/errorTypes.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { getCurrentCorrelationId } from "../services/TelemetryService.js";
+import { PLUGIN_INVOKE_MAX_ARGS_BYTES } from "../../shared/config/pluginBudgets.js";
+import {
+  PluginPayloadTooLargeError,
+  estimatePayloadBytes,
+} from "../services/plugin/pluginPayloadLimits.js";
 
 /**
  * Coarse cap on the number of arguments a renderer may pass to a handler in a
@@ -23,6 +29,9 @@ import { getCurrentCorrelationId } from "../services/TelemetryService.js";
  * to overwhelm the handler with thousands of args.
  */
 export const MAX_IPC_ARG_COUNT = 8;
+
+/** Bounded allowance over the plugin args cap for `plugin:invoke`'s own metadata. */
+export const PLUGIN_INVOKE_ENVELOPE_HEADROOM_BYTES = 64 * 1024;
 
 /**
  * Per-category byte budgets enforced after sender-frame validation, before
@@ -40,6 +49,10 @@ export const PAYLOAD_BUDGETS: Record<IpcChannelCategory, number> = {
   // (3–8 KiB each) plus accumulated PATH/HOME/PROXY entries; 256 KiB keeps
   // the budget tight while accommodating realistic project env overrides.
   terminalSpawn: 256 * 1024,
+  // The plugin's own args cap plus room for the plugin id, channel name and
+  // envelope. The handler enforces the exact args cap; this only stops a
+  // payload far past it before the handler runs.
+  pluginInvoke: PLUGIN_INVOKE_MAX_ARGS_BYTES + PLUGIN_INVOKE_ENVELOPE_HEADROOM_BYTES,
 };
 
 export const DEFAULT_PAYLOAD_BUDGET = 1 * 1024 * 1024;
@@ -216,6 +229,11 @@ export function validateIpcInvokeEnvelope(channel: string, args: unknown[]): voi
   const category = channelToCategory[channel];
   const budget = category !== undefined ? PAYLOAD_BUDGETS[category] : DEFAULT_PAYLOAD_BUDGET;
 
+  if (category === "pluginInvoke") {
+    validatePluginInvokeEnvelope(args, budget);
+    return;
+  }
+
   // Structured-clone payloads are almost always small plain data; a bounded
   // walk proves most of them fit without building the JSON string. When it
   // cannot, the exact measurement below runs exactly as before.
@@ -249,6 +267,31 @@ export function validateIpcInvokeEnvelope(channel: string, args: unknown[]): voi
   }
 }
 
+/** Longest plugin id or channel name echoed back in an envelope rejection. */
+const MAX_ECHOED_NAME_LENGTH = 256;
+
+function echoedName(value: unknown): string {
+  return typeof value === "string" && value.length <= MAX_ECHOED_NAME_LENGTH ? value : "<unknown>";
+}
+
+/**
+ * `plugin:invoke` is measured with the same structural estimator the handler
+ * applies to the plugin's args (bounded work, binary data counted rather than
+ * skipped), and rejected with the error plugin code already handles: an
+ * `AppError` would reach the plugin as the renderer's encoded
+ * `[AppError|PAYLOAD_TOO_LARGE|…]` prefix, while this message is readable as is.
+ */
+function validatePluginInvokeEnvelope(args: unknown[], budget: number): void {
+  const bytes = estimatePayloadBytes(args, budget);
+  if (bytes <= budget) return;
+  throw new PluginPayloadTooLargeError(
+    echoedName(args[0]),
+    `arguments to "${echoedName(args[1])}"`,
+    budget,
+    bytes
+  );
+}
+
 function sanitizePaths(msg: string): string {
   return msg
     .replace(/\/(?:Users|home|tmp|private|var)\/[^\s:]+/gi, "<path>")
@@ -268,6 +311,20 @@ export function sanitizeErrorForRenderer(msg: string): string {
 
 // Wrap ipcMain.handle globally to enforce sender validation on ALL IPC handlers
 // This must run before any handlers are registered
+/** {@link validateIpcInvokeEnvelope}, telling the channel's rejection observer when it refuses. */
+function validateEnvelopeObserved(
+  channel: string,
+  event: IpcMainInvokeEvent,
+  args: unknown[]
+): void {
+  try {
+    validateIpcInvokeEnvelope(channel, args);
+  } catch (error) {
+    notifyIpcEnvelopeRejected(channel, event, args, error);
+    throw error;
+  }
+}
+
 export function enforceIpcSenderValidation(): void {
   if (FAULT_MODE_ENABLED) initFaultRegistry();
 
@@ -288,7 +345,7 @@ export function enforceIpcSenderValidation(): void {
         );
       }
       try {
-        validateIpcInvokeEnvelope(channel, args);
+        validateEnvelopeObserved(channel, event, args);
         if (FAULT_MODE_ENABLED) {
           const stub = await applyInvokeFault(channel);
           if (stub) return wrapSuccess(stub.value);
@@ -334,7 +391,7 @@ export function enforceIpcSenderValidation(): void {
           );
         }
         try {
-          validateIpcInvokeEnvelope(channel, args);
+          validateEnvelopeObserved(channel, event, args);
           if (FAULT_MODE_ENABLED) {
             const stub = await applyInvokeFault(channel);
             if (stub) return wrapSuccess(stub.value);

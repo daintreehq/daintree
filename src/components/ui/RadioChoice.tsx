@@ -45,7 +45,7 @@ export const CHOICE_SELECTED =
   "border-border-strong bg-overlay-selected outline outline-2 outline-transparent";
 
 export const CHOICE_UNSELECTED =
-  "border-border-default hover:bg-overlay-soft hover:border-daintree-text/30";
+  "border-border-default hover:bg-overlay-soft hover:border-border-strong";
 
 /** Control (~13px) + `gap-3`, so a nested control lines up with the label column. */
 export const CHOICE_LABEL_INSET = "ml-[25px]";
@@ -90,6 +90,8 @@ interface RadioChoiceRowProps {
   /** What the user ends up with. Announced as a description, not part of the name. */
   description?: string;
   disabled?: boolean;
+  /** Native `required`, so an empty group fails form validation. */
+  required?: boolean;
   /** Lands on the `<input>`, never on the shell — clicking a wrapper misses the control. */
   testId?: string;
   /**
@@ -109,6 +111,7 @@ export function RadioChoiceRow({
   label,
   description,
   disabled,
+  required,
   testId,
   bare,
   className,
@@ -135,6 +138,7 @@ export function RadioChoiceRow({
         checked={checked}
         onChange={onChange}
         disabled={disabled}
+        required={required}
         data-testid={testId}
         aria-labelledby={labelId}
         aria-describedby={description ? descriptionId : undefined}

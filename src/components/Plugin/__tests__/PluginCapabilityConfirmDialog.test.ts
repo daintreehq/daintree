@@ -8,6 +8,7 @@ const GATED: BuiltInPluginCapability[] = [
   "fs:project-write",
   "fs:user-data-write",
   "git:write",
+  "terminal:read",
 ];
 
 describe("PluginCapabilityConfirmDialog microcopy", () => {
@@ -33,6 +34,13 @@ describe("PluginCapabilityConfirmDialog microcopy", () => {
     const title = titleFor("Acme Tools", "shell:exec");
     expect(title).toContain("Acme Tools");
     expect(title.endsWith("?")).toBe(true);
+  });
+
+  it("tells the user plainly that terminal:read reads what their terminals show", () => {
+    expect(titleFor("Agent Grid", "terminal:read")).toBe(
+      "Allow 'Agent Grid' to read what your terminals show?"
+    );
+    expect(CAPABILITY_META["terminal:read"].description).toMatch(/secrets/);
   });
 
   it("falls back to a generic phrase for any non-gated capability without throwing", () => {

@@ -319,6 +319,18 @@ export interface TerminalReconnectResult {
 }
 
 /**
+ * Where a terminal lives, answered by main from the pty-host record (#13120).
+ *
+ * `found` means a running PTY attributed to a workspace, trashed or not — never
+ * the owner map alone, which outlives the process. A failed host query folds
+ * into `found: false`, so a miss means "nothing live was observed", not proof
+ * the terminal is gone. `viewResident` is whether any window still holds a live
+ * view of `projectId`; an evicted view keeps its PTYs running without one.
+ */
+export type TerminalLocation =
+  { found: false } | { found: true; projectId: string; viewResident: boolean };
+
+/**
  * Terminal information payload for diagnostic display.
  * Consumed exclusively by `TerminalInfoDialog.tsx`.
  */

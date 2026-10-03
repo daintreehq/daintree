@@ -97,11 +97,12 @@ function makeCallbacks(): MockCallbacks & Pick<ActionCallbacks, "onLaunchAgent">
       terminalId: "term-1",
       location: "grid",
       // The launcher reports where it landed (#11547) — a real non-null result
-      // always carries all four identity fields.
+      // always carries every identity field.
       worktreeId: "wt-new",
       worktreePath: "/repo/feature/issue-6609-add-tools",
       branch: "feature/issue-6609-add-tools",
       cwd: "/repo/feature/issue-6609-add-tools",
+      cwdOutsideWorktree: false,
     }),
   };
 }
@@ -1274,6 +1275,7 @@ describe("workflow.startWorkOnIssue", () => {
       worktreePath: "/repo/feature/issue-6609-add-tools",
       branch: "feature/issue-6609-add-tools",
       cwd: "/repo/feature/issue-6609-add-tools",
+      cwdOutsideWorktree: false,
     });
     const def = setupActions(callbacks)("workflow.startWorkOnIssue");
     try {

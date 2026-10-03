@@ -30,6 +30,7 @@ import {
   projectStoreMock,
   recipientIdsOf,
   resetTwoProjectFixture,
+  setPendingPushFlusher,
   type FakeWebContents,
 } from "./twoProjectHarness.js";
 
@@ -96,8 +97,18 @@ vi.mock("../../fileDecorationRegistry.js", () => ({
 vi.mock("../../PluginActionAuditService.js", () => ({
   getPluginActionAuditService: vi.fn(() => ({ append: vi.fn(), getRecords: vi.fn(() => []) })),
 }));
+// The "Allow project targeting" grant store (#13119): off unless a test turns it on.
+const projectTargetingGrant = vi.hoisted(() => ({ granted: false }));
 vi.mock("../../plugin-capability/instances.js", () => ({
   getPluginCapabilityConsentService: vi.fn(() => ({ ensureAllowed: vi.fn(async () => undefined) })),
+  getPluginCapabilityConsentStore: vi.fn(() => ({
+    hasGrant: vi.fn(() => projectTargetingGrant.granted),
+  })),
+}));
+// Every dispatch thaws its target before sending (#13119); the fakes have no
+// debugger, so the thaw resolves at once and each send is one drain away.
+vi.mock("../../../utils/webContentsLifecycle.js", () => ({
+  unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../../forge/forgeCredentialUtils.js", () => ({
   buildStoredCredentials: vi.fn(() => null),
@@ -154,6 +165,11 @@ vi.mock("../PluginProcessManager.js", async (importOriginal) => {
 
 import { CHANNELS } from "../../../ipc/channels.js";
 import { createHost, type PluginHostFactoryDeps } from "../PluginHostFactory.js";
+import { getPluginPushBatcher } from "../pluginPushBatcher.js";
+
+// Plugin pushes are batched to the next macrotask; deliver them before any
+// recipient assertion reads the fake renderers.
+setPendingPushFlusher(() => getPluginPushBatcher().flush());
 import { PluginRendererDispatcher } from "../PluginRendererDispatcher.js";
 import { PluginUIPromptDispatcher } from "../PluginUIPromptDispatcher.js";
 import { PluginSettingsManager } from "../PluginSettingsManager.js";
@@ -170,6 +186,7 @@ import type { WorktreeSnapshot } from "../../../../shared/types/workspace-host.j
 const PLUGIN_ID = "acme.project-plugin";
 
 let tmpDir: string;
+let declaredCapabilities: string[];
 let dispatcher: PluginRendererDispatcher;
 let promptDispatcher: PluginUIPromptDispatcher;
 let wcA: FakeWebContents;
@@ -180,6 +197,11 @@ let ambientWorktreeFetch: ReturnType<typeof vi.fn>;
 let projectWorktreeFetch: ReturnType<typeof vi.fn>;
 /** The app-global worktree lookup storage falls back to for an UNBOUND host. */
 let ambientWorktreePathLookup: Mock<() => Promise<string | undefined>>;
+
+/** Let a dispatch's awaited thaw settle so its send has run. */
+async function flushThaw(): Promise<void> {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+}
 
 /** Assert a promise rejected with the frozen `PROJECT_VIEW_UNAVAILABLE` AppError. */
 async function expectProjectViewUnavailable(promise: Promise<unknown>): Promise<void> {
@@ -248,7 +270,7 @@ function makeHostDeps(): PluginHostFactoryDeps {
     storage: storageManager,
     getHostGitFactory: () => undefined,
     getProcessManager: vi.fn(),
-    declaredCapabilities: () => new Set(["agent:input", "agent:read"]),
+    declaredCapabilities: () => new Set(declaredCapabilities),
     fetchWorktreeSnapshotsResult: ambientWorktreeFetch,
     fetchWorktreeSnapshotsForProjectResult: projectWorktreeFetch,
     recordPluginLog: vi.fn(),
@@ -291,6 +313,8 @@ function answerPrompt(webContents: FakeWebContents, result: unknown): void {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  declaredCapabilities = ["agent:input", "agent:read"];
+  projectTargetingGrant.granted = false;
   ipcMainMock._reset();
   resetTwoProjectFixture();
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-confused-deputy-"));
@@ -335,6 +359,8 @@ describe("a host bound to A while B is focused", () => {
     const host = hostBoundTo(boundToA);
 
     const promise = host.dispatch("terminal.focus", { pane: 1 });
+
+    await flushThaw();
 
     expect(recipientIdsOf(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST)).toEqual([wcA.id]);
     answerDispatch(wcA, { ok: true, result: "ran-in-a" });
@@ -426,6 +452,8 @@ describe("a host bound to A while B is focused", () => {
     const host = hostBoundTo(boundToA);
 
     const dispatched = host.dispatch("terminal.focus");
+
+    await flushThaw();
     const confirmed = host.showConfirm({ title: "Sure?" });
 
     expect(recipientIdsOf(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST)).toEqual([cachedA.id]);
@@ -460,6 +488,7 @@ describe("a malformed binding fails closed", () => {
 
     // The renderer surfaces still resolve by project id…
     const promise = host.dispatch("terminal.focus");
+    await flushThaw();
     expect(recipientIdsOf(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST)).toEqual([wcA.id]);
     answerDispatch(wcA, { ok: true });
     await promise;
@@ -516,6 +545,8 @@ describe("an unbound host keeps its ambient behaviour", () => {
 
     const promise = host.dispatch("terminal.focus");
 
+    await flushThaw();
+
     expect(recipientIdsOf(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST)).toEqual([wcB.id]);
     answerDispatch(wcB, { ok: true, result: "ran-in-focus" });
     await expect(promise).resolves.toEqual({ ok: true, result: "ran-in-focus" });
@@ -546,10 +577,108 @@ describe("an unbound host keeps its ambient behaviour", () => {
 
     focusProject(PROJECT_A);
     const promise = host.dispatch("terminal.focus");
+    await flushThaw();
 
     expect(recipientIdsOf(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST)).toEqual([wcA.id]);
     answerDispatch(wcA, { ok: true });
     await promise;
+  });
+});
+
+describe("an explicit dispatch target (#13119)", () => {
+  async function rejection(promise: Promise<unknown>): Promise<string> {
+    const error = await promise.then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(error).toBeInstanceOf(Error);
+    return (error as Error).message;
+  }
+
+  it("refuses a bound host naming another project, even with the grant on", async () => {
+    declaredCapabilities.push("project:dispatch");
+    projectTargetingGrant.granted = true;
+    const host = hostBoundTo({ projectId: PROJECT_A, projectRoot: projectRootOf(PROJECT_A) });
+
+    expect(
+      await rejection(host.dispatch("terminal.focus", null, { projectId: PROJECT_B }))
+    ).toMatch(/^PERMISSION_REQUIRED: .*bound to its own project/);
+    await flushThaw();
+    expect(wcA.send).not.toHaveBeenCalled();
+    expect(wcB.send).not.toHaveBeenCalled();
+  });
+
+  it("lets a bound host restate its own project without any grant", async () => {
+    const host = hostBoundTo({ projectId: PROJECT_A, projectRoot: projectRootOf(PROJECT_A) });
+
+    const promise = host.dispatch("terminal.focus", null, { projectId: PROJECT_A });
+    await flushThaw();
+
+    expect(recipientIdsOf(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST)).toEqual([wcA.id]);
+    answerDispatch(wcA, { ok: true });
+    await expect(promise).resolves.toEqual({ ok: true });
+  });
+
+  it("refuses an unbound host that has not declared project:dispatch", async () => {
+    projectTargetingGrant.granted = true;
+    const host = hostBoundTo(UNBOUND_PLUGIN_HOST_BINDING);
+
+    expect(
+      await rejection(host.dispatch("terminal.focus", null, { projectId: PROJECT_A }))
+    ).toMatch(/^PERMISSION_REQUIRED: .*"project:dispatch"/);
+    await flushThaw();
+    expect(wcA.send).not.toHaveBeenCalled();
+    expect(wcB.send).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unbound host whose switch is off, naming the switch", async () => {
+    declaredCapabilities.push("project:dispatch");
+    const host = hostBoundTo(UNBOUND_PLUGIN_HOST_BINDING);
+
+    expect(
+      await rejection(host.dispatch("terminal.focus", null, { projectId: PROJECT_A }))
+    ).toMatch(/^PERMISSION_REQUIRED: .*"Allow project targeting"/);
+    await flushThaw();
+    expect(wcA.send).not.toHaveBeenCalled();
+    expect(wcB.send).not.toHaveBeenCalled();
+  });
+
+  it("reaches the named project while another is focused once the switch is on", async () => {
+    declaredCapabilities.push("project:dispatch");
+    projectTargetingGrant.granted = true;
+    const host = hostBoundTo(UNBOUND_PLUGIN_HOST_BINDING);
+
+    const promise = host.dispatch("agent.launch", { agentId: "claude" }, { projectId: PROJECT_A });
+    await flushThaw();
+
+    expect(recipientIdsOf(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST)).toEqual([wcA.id]);
+    answerDispatch(wcA, { ok: true, result: "ran-in-a" });
+    await expect(promise).resolves.toEqual({ ok: true, result: "ran-in-a" });
+  });
+
+  it("rejects PROJECT_VIEW_UNAVAILABLE for a target with no view, never falling back", async () => {
+    declaredCapabilities.push("project:dispatch");
+    projectTargetingGrant.granted = true;
+    closeProjectViews(PROJECT_A);
+    const host = hostBoundTo(UNBOUND_PLUGIN_HOST_BINDING);
+
+    await expectProjectViewUnavailable(
+      host.dispatch("terminal.focus", null, { projectId: PROJECT_A })
+    );
+    await flushThaw();
+    expect(wcB.send).not.toHaveBeenCalled();
+  });
+
+  it("refuses an empty project id rather than reading it as ambient", async () => {
+    declaredCapabilities.push("project:dispatch");
+    projectTargetingGrant.granted = true;
+    const host = hostBoundTo(UNBOUND_PLUGIN_HOST_BINDING);
+
+    expect(await rejection(host.dispatch("terminal.focus", null, { projectId: "" }))).toMatch(
+      /options\.projectId must be a non-empty string/
+    );
+    await flushThaw();
+    expect(wcB.send).not.toHaveBeenCalled();
   });
 });
 

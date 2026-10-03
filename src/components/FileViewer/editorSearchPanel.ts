@@ -69,6 +69,9 @@ class EditorSearchPanel implements Panel {
   private readonly field: HTMLDivElement;
   private readonly searchField: HTMLInputElement;
   private readonly replaceField: HTMLInputElement;
+  /** The replace row's nodes: in the panel exactly while the editor is editable. */
+  private readonly replaceRow: HTMLElement[];
+  private readonly closeButton: HTMLButtonElement;
   private readonly caseField: HTMLInputElement;
   private readonly reField: HTMLInputElement;
   private readonly wordField: HTMLInputElement;
@@ -130,6 +133,13 @@ class EditorSearchPanel implements Panel {
       "×",
     ]);
     close.addEventListener("click", () => closeSearchPanel(view));
+    this.closeButton = close;
+    this.replaceRow = [
+      el("br", {}),
+      this.replaceField,
+      button("replace", replaceNext, "replace"),
+      button("replaceAll", replaceAll, "replace all"),
+    ];
 
     this.dom = el("div", { class: "cm-search" }, [
       this.field,
@@ -139,14 +149,7 @@ class EditorSearchPanel implements Panel {
       el("label", {}, [this.caseField, phrase("match case")]),
       el("label", {}, [this.reField, phrase("regexp")]),
       el("label", {}, [this.wordField, phrase("by word")]),
-      ...(view.state.readOnly
-        ? []
-        : [
-            el("br", {}),
-            this.replaceField,
-            button("replace", replaceNext, "replace"),
-            button("replaceAll", replaceAll, "replace all"),
-          ]),
+      ...(view.state.readOnly ? [] : this.replaceRow),
       close,
     ]);
     this.dom.addEventListener("keydown", (event) => this.keydown(event));
@@ -190,6 +193,18 @@ class EditorSearchPanel implements Panel {
   }
 
   update(update: ViewUpdate): void {
+    // An editor that turns read-only (or editable) while find is open keeps
+    // the panel, so the replace row follows it here, as it would on reopen.
+    if (update.startState.readOnly !== update.state.readOnly) {
+      if (update.state.readOnly) {
+        if (this.replaceRow.some((node) => node.contains(document.activeElement))) {
+          this.searchField.focus();
+        }
+        for (const node of this.replaceRow) node.remove();
+      } else {
+        for (const node of this.replaceRow) this.dom.insertBefore(node, this.closeButton);
+      }
+    }
     for (const tr of update.transactions) {
       for (const effect of tr.effects) {
         // Identity, not `eq()`: `eq()` ignores `literal`, and the panel's own

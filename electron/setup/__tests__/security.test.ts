@@ -93,6 +93,9 @@ import {
 } from "../security.js";
 import { assertIpcSecurityReady, _resetIpcGuardForTesting } from "../../ipc/ipcGuard.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { PLUGIN_INVOKE_MAX_ARGS_BYTES } from "../../../shared/config/pluginBudgets.js";
+import { deserializeError } from "../../../shared/utils/ipcErrorSerialization.js";
+import { observeIpcEnvelopeRejections } from "../../ipc/envelopeRejections.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockWebContents = {} as any;
@@ -1038,6 +1041,97 @@ describe("enforceIpcSenderValidation envelope guards", () => {
     // context is stripped in packaged builds — must not leak budget/bytes
     expect(envelope.error?.context).toBeUndefined();
     errSpy.mockRestore();
+  });
+
+  it("lets plugin:invoke carry args up to the plugin args cap, past the default budget", async () => {
+    const handler = vi.fn().mockReturnValue("ok");
+    const args = "x".repeat(PLUGIN_INVOKE_MAX_ARGS_BYTES - 1024);
+    expect(args.length).toBeGreaterThan(DEFAULT_PAYLOAD_BUDGET);
+    const envelope = await invokeWrappedHandle("handle", "plugin:invoke", handler, [
+      "acme.demo",
+      "save",
+      args,
+    ]);
+    expect(envelope.ok).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])(
+    "rejects a plugin:invoke envelope far past the cap with a readable plugin error (packaged: %s)",
+    async (packaged) => {
+      appMock.isPackaged = packaged;
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const handler = vi.fn();
+        const oversize = "x".repeat(PAYLOAD_BUDGETS.pluginInvoke + 1024);
+        const envelope = (await invokeWrappedHandle("handle", "plugin:invoke", handler, [
+          "acme.demo",
+          "save",
+          oversize,
+        ])) as { ok: boolean; error?: Parameters<typeof deserializeError>[0] };
+        expect(envelope.ok).toBe(false);
+        expect(handler).not.toHaveBeenCalled();
+        // Not an AppError, so the preload rethrows it through deserializeError
+        // rather than the encoded `[AppError|…]` prefix.
+        expect(envelope.error?.name).toBe("PluginPayloadTooLargeError");
+        const error = deserializeError(envelope.error!);
+        expect(error.message).toMatch(
+          new RegExp(
+            `^PLUGIN_PAYLOAD_TOO_LARGE: plugin "acme\\.demo" arguments to "save" exceeds the ${PAYLOAD_BUDGETS.pluginInvoke}-byte limit \\(at least \\d+ bytes\\)$`
+          )
+        );
+      } finally {
+        errSpy.mockRestore();
+      }
+    }
+  );
+
+  it("tells the channel's observer about an envelope it refused, and only that", async () => {
+    const observer = vi.fn();
+    const stopObserving = observeIpcEnvelopeRejections("plugin:invoke", observer);
+    try {
+      const oversize = "x".repeat(PAYLOAD_BUDGETS.pluginInvoke + 1024);
+      const refused = await invokeWrappedHandle("handle", "plugin:invoke", vi.fn(), [
+        "acme.demo",
+        "save",
+        oversize,
+      ]);
+      expect(refused.ok).toBe(false);
+      expect(observer).toHaveBeenCalledTimes(1);
+      const [event, args, error] = observer.mock.calls[0]!;
+      expect(event).toMatchObject({ senderFrame: { url: "http://localhost:3000" } });
+      expect((args as unknown[]).slice(0, 2)).toEqual(["acme.demo", "save"]);
+      expect((error as Error).name).toBe("PluginPayloadTooLargeError");
+    } finally {
+      stopObserving();
+    }
+  });
+
+  it("leaves a failure inside the handler to the handler, not the envelope observer", async () => {
+    const observer = vi.fn();
+    const stopObserving = observeIpcEnvelopeRejections("plugin:invoke", observer);
+    try {
+      const failing = vi.fn(() => {
+        throw new Error("handler failed");
+      });
+      await invokeWrappedHandle("handleOnce", "plugin:invoke", failing, ["acme.demo", "save"]);
+      expect(failing).toHaveBeenCalledTimes(1);
+      expect(observer).not.toHaveBeenCalled();
+    } finally {
+      stopObserving();
+    }
+  });
+
+  it("never echoes an oversized plugin id or channel back in the rejection", async () => {
+    const handler = vi.fn();
+    const hugeName = "n".repeat(PAYLOAD_BUDGETS.pluginInvoke + 1024);
+    const envelope = (await invokeWrappedHandle("handle", "plugin:invoke", handler, [
+      hugeName,
+      hugeName,
+    ])) as { ok: boolean; error?: { message: string } };
+    expect(envelope.ok).toBe(false);
+    expect(envelope.error!.message.length).toBeLessThan(512);
+    expect(envelope.error!.message).toContain('plugin "<unknown>" arguments to "<unknown>"');
   });
 
   it("rejects oversized payloads on ipcMain.handleOnce", async () => {

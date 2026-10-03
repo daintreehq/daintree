@@ -26,6 +26,39 @@ test.describe.serial("Core: Font Preload Dedupe (#10072)", () => {
     if (ctx?.app) await closeApp(ctx.app);
   });
 
+  test("Latin 400 woff2 is requested at most once on cold boot (preload dedupes with @font-face)", async () => {
+    // Runs first on the shared launch, before anything else in this file has
+    // touched the renderer. The listener sits on the BrowserContext so it sees
+    // requests from the page mid-navigation; a page-level listener bound after
+    // boot misses the preload entirely.
+    const { app, window } = ctx;
+    const requests: string[] = [];
+    app.context().on("request", (req) => {
+      if (/jetbrains-mono-latin-400.*\.woff2/.test(req.url())) {
+        requests.push(req.url());
+      }
+    });
+
+    // The boot load may already have populated the memory cache, so the
+    // reload gives a deterministic, no-cache fetch sequence to assert against.
+    await window.reload();
+    await window.waitForLoadState("domcontentloaded");
+
+    await expect.poll(() => requests.length, { timeout: T_LONG }).toBeGreaterThanOrEqual(1);
+
+    // A duplicate fetch has nothing to poll for; the second @font-face request
+    // fires in the same style recalc as the first, well inside this window.
+    // timer: negative-assertion dwell for a duplicate font request
+    await window.waitForTimeout(T_SETTLE);
+
+    // Contract: exactly 1 request. 2+ means the preload no longer dedupes with
+    // the @font-face fetch and the woff2 is double-fetched.
+    expect(
+      requests.length,
+      `expected exactly 1 request for the Latin 400 woff2; got ${requests.length} (${requests.join(", ")})`
+    ).toBeLessThanOrEqual(1);
+  });
+
   test("preload link carries crossorigin=anonymous for the Latin 400 woff2", async () => {
     const { window } = ctx;
 
@@ -73,53 +106,5 @@ test.describe.serial("Core: Font Preload Dedupe (#10072)", () => {
       "No @font-face rule found for jetbrains-mono-latin-400 — sheet may be cross-origin or asset path changed"
     ).toBeTruthy();
     expect(parity.preloadUrl).toBe(parity.cssUrl);
-  });
-
-  test("Latin 400 woff2 is requested at most once on cold boot (preload dedupes with @font-face)", async () => {
-    // Launch a separate Electron instance so the test sees a true cold boot
-    // in the BrowserContext — any prior test in this file would otherwise
-    // warm the memory cache and mask a duplicate request.
-    const freshCtx = await launchApp();
-    try {
-      // Attach the request listener at the BrowserContext level BEFORE the
-      // page re-evaluates `main.tsx`. Page-level listeners (added in the first
-      // revision of this test) attached after `launchApp()` returned, so the
-      // preload request had already fired and resolved before the listener
-      // was bound. The BrowserContext catches requests from every page in
-      // the context, including pages mid-navigation.
-      const requests: string[] = [];
-      freshCtx.app.context().on("request", (req) => {
-        if (/jetbrains-mono-latin-400.*\.woff2/.test(req.url())) {
-          requests.push(req.url());
-        }
-      });
-
-      // Reload to force a fresh cold-boot path. The first page load (which
-      // happened during `launchApp()`) may have already populated the memory
-      // cache, so the reload gives us a deterministic, no-cache fetch
-      // sequence we can assert against.
-      await freshCtx.window.reload();
-      await freshCtx.window.waitForLoadState("domcontentloaded");
-
-      // Wait until the @font-face / preload request has actually been captured.
-      // Polling here prevents both a fast-machine vacuous-pass (assertion fires
-      // before the network request is recorded) and a slow-CI false-negative
-      // (sleep expires before the request arrives).
-      await expect.poll(() => requests.length, { timeout: T_LONG }).toBeGreaterThanOrEqual(1);
-
-      // Brief settle to let any duplicate request arrive before the upper-bound
-      // check. T_SETTLE is short enough not to introduce meaningful latency but
-      // long enough to catch a regression where two fetches fire in quick succession.
-      await freshCtx.window.waitForTimeout(T_SETTLE);
-
-      // Contract: exactly 1 request. The preload should have deduped with the
-      // @font-face fetch. 2+ means the bug regressed and we are double-fetching.
-      expect(
-        requests.length,
-        `expected exactly 1 request for the Latin 400 woff2; got ${requests.length} (${requests.join(", ")})`
-      ).toBeLessThanOrEqual(1);
-    } finally {
-      await closeApp(freshCtx.app);
-    }
   });
 });

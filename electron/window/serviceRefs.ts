@@ -18,6 +18,7 @@ import type { autoUpdaterService as AutoUpdaterServiceType } from "../services/A
 import type { agentNotificationService as AgentNotificationServiceType } from "../services/AgentNotificationService.js";
 import type { windowsStoreNotifierService as WindowsStoreNotifierServiceType } from "../services/WindowsStoreNotifierService.js";
 import type { mcpServerService as McpServerServiceType } from "../services/McpServerService.js";
+import type { FleetSnapshotService } from "../services/FleetSnapshotService.js";
 
 // Guard: process.argv CLI path should only be consumed by the first window
 let processArgvCliHandled = false;
@@ -51,6 +52,9 @@ let stopDiskSpaceMonitor: (() => void) | null = null;
 let resourceProfileService: ResourceProfileService | null = null;
 let worktreePortBroker: WorktreePortBroker | null = null;
 let ccrConfigService: CcrConfigService | null = null;
+// Owned by the project stats handlers, which create and stop it; held here so
+// the plugin host can read the fleet without importing the IPC handler graph.
+let fleetSnapshotService: FleetSnapshotService | null = null;
 
 // Singletons resolved by deferred tasks. Held here so dispose paths can clean
 // them up safely if the task ran. If the window closes before the task runs
@@ -73,6 +77,12 @@ export function getPtyClient(): PtyClient | null {
 }
 export function setPtyClientRef(v: PtyClient | null): void {
   ptyClient = v;
+}
+export function getFleetSnapshotServiceRef(): FleetSnapshotService | null {
+  return fleetSnapshotService;
+}
+export function setFleetSnapshotServiceRef(v: FleetSnapshotService | null): void {
+  fleetSnapshotService = v;
 }
 export function getMainProcessWatchdogClientRef(): MainProcessWatchdogClient | null {
   return mainProcessWatchdogClient;

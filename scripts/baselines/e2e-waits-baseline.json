@@ -1,0 +1,61 @@
+{
+  "totals": {
+    "waitForTimeout": 28,
+    "isVisibleTimeout": 17
+  },
+  "files": {
+    "e2e/core/core-terminal-agent-promotion.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/panels/core-palette-specialized.spec.ts": {
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/panels/notification-toasts.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/platform/core-persistence-advanced.spec.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/full/platform/core-resource-settings-persistence.spec.ts": {
+      "waitForTimeout": 6,
+      "isVisibleTimeout": 1
+    },
+    "e2e/full/terminal/terminal-agent-state-latency.spec.ts": {
+      "waitForTimeout": 2
+    },
+    "e2e/full/worktree/new-worktree-dialog.spec.ts": {
+      "isVisibleTimeout": 1
+    },
+    "e2e/helpers/dragDrop.ts": {
+      "waitForTimeout": 4
+    },
+    "e2e/helpers/launch.ts": {
+      "isVisibleTimeout": 3
+    },
+    "e2e/helpers/overlays.ts": {
+      "isVisibleTimeout": 1
+    },
+    "e2e/helpers/panels.ts": {
+      "waitForTimeout": 1,
+      "isVisibleTimeout": 8
+    },
+    "e2e/helpers/presets.ts": {
+      "waitForTimeout": 3
+    },
+    "e2e/helpers/stress.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/helpers/switchFixture.ts": {
+      "waitForTimeout": 1
+    },
+    "e2e/helpers/terminal.ts": {
+      "waitForTimeout": 4,
+      "isVisibleTimeout": 1
+    },
+    "e2e/helpers/workflows.ts": {
+      "waitForTimeout": 3,
+      "isVisibleTimeout": 1
+    }
+  },
+  "updatedAt": "2026-10-01T13:28:33.820Z"
+}

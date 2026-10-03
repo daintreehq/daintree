@@ -17,6 +17,8 @@ import { launchWithSamplePlugin, waitForSamplePluginReady } from "../helpers/plu
 import { SEL } from "../helpers/selectors";
 import { T_LONG, T_MEDIUM } from "../helpers/timeouts";
 import { measureMainMemory } from "../helpers/stress";
+import { dispatchAction } from "../helpers/actions";
+import { waitForTerminalPty } from "../helpers/terminal";
 
 const WARMUP_CYCLES = 2;
 const CHURN_CYCLES = 10;
@@ -50,11 +52,53 @@ async function measureUtilityMemory(app: AppContext["app"]): Promise<number> {
 }
 
 async function getActiveWorktreeId(window: AppContext["window"]): Promise<string> {
-  const res: any = await window.evaluate(() =>
-    (window as any).__daintreeDispatchAction("actions.getContext")
+  const res = await dispatchAction<{ activeWorktreeId?: string | null }>(
+    window,
+    "actions.getContext"
   );
-  return res?.result?.activeWorktreeId ?? "";
+  return res.ok ? (res.result?.activeWorktreeId ?? "") : "";
 }
+
+/** Terminals whose PTY is still alive in the pty-host. */
+async function getLivePtyCount(window: AppContext["window"]): Promise<number> {
+  return window.evaluate(async () => {
+    const terminals = await globalThis.window.electron.terminal.getAllTerminals();
+    return terminals.filter((t) => t.hasPty === true).length;
+  });
+}
+
+/**
+ * Closed terminals the pty-host still has registered. A killed PTY's entry is
+ * dropped only once its process has exited, so an empty list is the exit
+ * barrier `hasPty` is not: that flag flips at kill time, before the exit.
+ */
+async function getUnexitedTerminals(
+  window: AppContext["window"],
+  ids: string[]
+): Promise<string[]> {
+  return window.evaluate(async (closed) => {
+    const terminals = await globalThis.window.electron.terminal.getAllTerminals();
+    return terminals.filter((t) => closed.includes(t.id)).map((t) => t.id);
+  }, ids);
+}
+
+/**
+ * Wait until every terminal the churn closed has actually exited. Readings
+ * taken while teardown is still in flight measure the teardown, not a leak.
+ */
+async function waitForPtysToSettle(window: AppContext["window"], expected: number): Promise<void> {
+  await expect
+    .poll(
+      async () => ({
+        live: await getLivePtyCount(window),
+        unexited: await getUnexitedTerminals(window, closedTerminalIds),
+      }),
+      { message: "closed terminals never exited", timeout: T_LONG }
+    )
+    .toEqual({ live: expected, unexited: [] });
+}
+
+const closedTerminalIds: string[] = [];
 
 async function openAndCloseTerminal(window: AppContext["window"]): Promise<void> {
   const idsBefore = await getGridPanelIds(window);
@@ -67,9 +111,11 @@ async function openAndCloseTerminal(window: AppContext["window"]): Promise<void>
   const newId = idsAfter.find((id) => !idsBefore.includes(id));
   const panel = newId ? getPanelById(window, newId) : window.locator(SEL.panel.gridPanel).last();
   await expect(panel).toBeVisible({ timeout: T_MEDIUM });
+  await waitForTerminalPty(window, panel, T_LONG);
   const closeBtn = panel.locator(SEL.panel.close);
   await closeBtn.click({ modifiers: ["Alt"], force: true, timeout: T_MEDIUM });
   await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(idsBefore.length);
+  if (newId) closedTerminalIds.push(newId);
 }
 
 async function togglePluginOffOn(window: AppContext["window"]): Promise<void> {
@@ -101,6 +147,8 @@ async function generateContext(window: AppContext["window"], worktreeId: string)
 }
 
 async function waitForFileOpsRateLimitWindow(window: AppContext["window"]): Promise<void> {
+  // copytree.generate is refused, not queued, once the window is spent.
+  // timer: fileOps IPC rate-limit window (5 calls per 10 s)
   await window.waitForTimeout(FILE_OPS_RATE_LIMIT_WINDOW_MS + 250);
 }
 
@@ -130,16 +178,16 @@ test.describe.serial("Nightly: Worker governance memory bounds", () => {
       })
       .toBeTruthy();
     const worktreeId = await getActiveWorktreeId(window);
+    const idlePtys = await getLivePtyCount(window);
 
     await test.step("warmup cycles", async () => {
       for (let i = 0; i < WARMUP_CYCLES; i++) {
         await togglePluginOffOn(window);
         await generateContext(window, worktreeId);
         await openAndCloseTerminal(window);
-        await window.waitForTimeout(500);
       }
       await waitForFileOpsRateLimitWindow(window);
-      await window.waitForTimeout(2000);
+      await waitForPtysToSettle(window, idlePtys);
     });
 
     const baseline = await measureMainMemory(app, { forceGc: true });
@@ -156,11 +204,10 @@ test.describe.serial("Nightly: Worker governance memory bounds", () => {
         if ((i + 1) % FILE_OPS_RATE_LIMIT_MAX_CALLS === 0 && i + 1 < CHURN_CYCLES) {
           await waitForFileOpsRateLimitWindow(window);
         }
-        await window.waitForTimeout(300);
       }
     });
 
-    await window.waitForTimeout(3000);
+    await waitForPtysToSettle(window, idlePtys);
     const final = await measureMainMemory(app, { forceGc: true });
     const finalUtility = await measureUtilityMemory(app);
     const heapGrowthMB = toMB(final.heapUsed - baseline.heapUsed);

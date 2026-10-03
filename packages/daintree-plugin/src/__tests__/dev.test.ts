@@ -181,6 +181,18 @@ describe("runDev", () => {
     expect(calls[calls.length - 1]).toEqual(["plugin.dev.stop", { pluginId: "acme.demo" }]);
   });
 
+  it("never asks for metrics with metrics disabled, and stops polling before unloading", async () => {
+    for (const metrics of [false, undefined]) {
+      vi.mocked(sendCliRequest).mockClear();
+      const controller = new AbortController();
+      controller.abort();
+      await runDev({ dir: pluginDir, pluginsRoot, keepAliveSignal: controller.signal, metrics });
+      const methods = vi.mocked(sendCliRequest).mock.calls.map((c) => c[0]);
+      expect(methods).not.toContain("plugin.dev.metrics");
+      expect(methods[methods.length - 1]).toBe("plugin.dev.stop");
+    }
+  });
+
   it("unloads and cleans up when the build watcher fails to start", async () => {
     spawnViteWatchMock.mockImplementationOnce(() => {
       throw new Error("Couldn't find Vite");

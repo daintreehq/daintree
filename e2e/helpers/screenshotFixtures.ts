@@ -91,6 +91,7 @@ export function createDemoRepo(opts: DemoRepoOptions): DemoRepo {
   git("init -b main", dir);
   git('config user.email "demo@daintree.dev"', dir);
   git('config user.name "Daintree Demo"', dir);
+  git("config commit.gpgsign false", dir);
 
   // Always include a README. Other files come from opts.files.
   if (!opts.files["README.md"]) {

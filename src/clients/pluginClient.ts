@@ -2,6 +2,7 @@ import type { LoadedPluginInfo, ProjectPluginInfo } from "@shared/types/plugin";
 import type { PluginDiagnosticsSnapshot } from "@shared/types/ipc/pluginDiagnostics";
 import type { PluginManifestValidationResult } from "@shared/types/ipc/pluginValidation";
 import type { PluginDataBackupOutcome } from "@shared/types/ipc/pluginDataBackup";
+import type { PluginPerfSnapshot } from "@shared/types/pluginMetrics";
 
 /**
  * Renderer surface for the plugin-authoring feedback loop (#12214) — the reads
@@ -31,4 +32,14 @@ export const pluginClient = {
 
   /** Every plugin the host is running, with the instance key each is addressed by. */
   list: (): Promise<LoadedPluginInfo[]> => window.electron.plugin.list(),
+
+  /** Every tracked plugin's cost observations, as main has them now. */
+  getPerfSnapshots: (): Promise<PluginPerfSnapshot[]> => window.electron.plugin.getPerfSnapshots(),
+
+  /**
+   * Snapshots pushed at most once a second while subscribed; pair with
+   * {@link getPerfSnapshots} for the initial state. Returns the unsubscribe.
+   */
+  onPerfSnapshotsChanged: (callback: (snapshots: PluginPerfSnapshot[]) => void): (() => void) =>
+    window.electron.plugin.onPerfSnapshotsChanged(callback),
 } as const;

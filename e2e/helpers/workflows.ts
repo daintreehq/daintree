@@ -7,7 +7,6 @@ import {
   refreshActiveWindow,
   waitForActiveProject,
 } from "./launch";
-import { dismissTelemetryConsent } from "./project";
 import { waitForTerminalPty, waitForTerminalReady, waitForTerminalText } from "./terminal";
 import { getGridPanelIds, getPanelById, openTerminal } from "./panels";
 import { SEL } from "./selectors";
@@ -88,7 +87,6 @@ export async function addAndSwitchToProject(
     { box: true }
   );
   await dismissProjectSwitcherPalette(newWindow);
-  await dismissTelemetryConsent(newWindow);
   return newWindow;
 }
 
@@ -127,7 +125,9 @@ export async function selectExistingProject(window: Page, projectName: string): 
       let selected = false;
       for (let attempt = 0; attempt < 3 && !selected; attempt++) {
         const option = palette.getByRole("option").filter({ hasText: projectName }).first();
-        await expect(option).toBeVisible({ timeout: T_MEDIUM });
+        // The project list loads asynchronously after the palette opens; under
+        // load that alone can exceed T_MEDIUM.
+        await expect(option).toBeVisible({ timeout: T_LONG });
         try {
           await option.click({ force: true, noWaitAfter: true, timeout: T_SHORT });
           selected = true;

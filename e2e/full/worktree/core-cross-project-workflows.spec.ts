@@ -12,7 +12,7 @@ import {
 import { runTerminalCommand, waitForTerminalText } from "../../helpers/terminal";
 import { getGridPanelCount, getGridPanelIds, getPanelById } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
-import { T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 import type { Locator } from "@playwright/test";
 
 const PROJECT_A = "project-A";
@@ -39,7 +39,12 @@ async function expectActiveProjectReady(projectName: string): Promise<void> {
     .locator('[data-grid-container="true"]')
     .first()
     .waitFor({ state: "attached", timeout: T_LONG });
-  await ctx.window.waitForTimeout(T_SETTLE * 2);
+  await expect(ctx.window.locator(SEL.toolbar.projectSwitcherTrigger)).toContainText(projectName, {
+    timeout: T_LONG,
+  });
+  await expect(ctx.window.locator("[data-worktree-branch]").first()).toBeVisible({
+    timeout: T_LONG,
+  });
 }
 
 test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
@@ -240,11 +245,8 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
       "switch A -> B -> C to establish MRU order",
       async () => {
         ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
-        await ctx.window.waitForTimeout(T_SETTLE);
         ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_B);
-        await ctx.window.waitForTimeout(T_SETTLE);
         ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_C);
-        await ctx.window.waitForTimeout(T_SETTLE);
       },
       { box: true }
     );
@@ -254,14 +256,20 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
       async () => {
         const page = ctx.window;
         const palette = await openProjectSwitcherPalette(page);
-        await page.waitForTimeout(T_SETTLE);
 
-        const optionTexts = await page.evaluate(() => {
-          const el = document.querySelector('[data-testid="project-switcher-palette"]');
-          if (!el) return [];
-          const options = el.querySelectorAll('[role="option"]');
-          return Array.from(options).map((o) => o.textContent ?? "");
-        });
+        const options = palette.getByRole("option");
+        await expect
+          .poll(
+            async () => {
+              const texts = await options.allTextContents();
+              return [PROJECT_A, PROJECT_B, PROJECT_C].every((name) =>
+                texts.some((t) => t.includes(name))
+              );
+            },
+            { timeout: T_MEDIUM, message: "Switcher should list every project" }
+          )
+          .toBe(true);
+        const optionTexts = await options.allTextContents();
 
         const posC = optionTexts.findIndex((t) => t.includes(PROJECT_C));
         const posB = optionTexts.findIndex((t) => t.includes(PROJECT_B));
@@ -294,7 +302,7 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
       "start on project A with at least 1 panel",
       async () => {
         ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
-        await ctx.window.waitForTimeout(T_SETTLE * 2);
+        await expectActiveProjectReady(PROJECT_A);
         // Earlier tests may have closed panels; spawn a fresh one if needed
         const count = await getGridPanelCount(ctx.window);
         if (count === 0) {
@@ -314,7 +322,6 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
         ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
         ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_B);
         ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
-        await ctx.window.waitForTimeout(T_SETTLE * 4);
       },
       { box: true }
     );
@@ -324,10 +331,21 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
       async () => {
         // The key invariant after rapid switching is that we land on the
         // correct project. Panels may be lost during the rapid transitions.
-        const current = await ctx.window.evaluate(async () => {
-          return await (window as any).electron.project.getCurrent();
-        });
-        expect(current.name).toContain(PROJECT_A);
+        await expect(ctx.window.locator(SEL.toolbar.projectSwitcherTrigger)).toContainText(
+          PROJECT_A,
+          { timeout: T_LONG }
+        );
+        await expect
+          .poll(
+            async () =>
+              (
+                await ctx.window.evaluate(async () => {
+                  return await (window as any).electron.project.getCurrent();
+                })
+              )?.name ?? "",
+            { timeout: T_LONG }
+          )
+          .toContain(PROJECT_A);
       },
       { box: true }
     );

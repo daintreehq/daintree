@@ -1,5 +1,76 @@
 # Changelog
 
+## [0.41.0] - 2026-10-03
+
+Plugins get a native UI kit, per-plugin performance and style tabs, a faster worker transport, and new host APIs for agents, terminals and cross-project dispatch. Dictation is reworked so the first words are no longer lost, Mermaid diagrams render in Markdown, and the assistant can close its finished panes and clean up worktrees at the core tier.
+
+### Features
+
+**Plugins**
+
+- `@daintreehq/plugin-ui` 1.0.0 grows from one component to a full kit, served lazily and themed automatically: form controls, dialogs, menus, DataTable, VirtualList, charts, date pickers, a command palette and about 34 app components for dashboard- and settings-style plugins (#13125)
+- Kit cards, display figures, stat tiles, ledger tables, meters and chart options let plugin views build real hierarchy, panel headers take plugin actions, and any Lucide icon can be used by name (#13149)
+- Settings → Plugins has Performance and Styles tabs for each plugin, `daintree-plugin dev` prints the same numbers against budgets, and `daintree-plugin lint` adds perf and consistency rules (#13125)
+- Plugin invokes get a deadline and payload caps with readable errors, pushes are batched and delivered only to the window hosting the panel, and worktree and agent-state subscriptions coalesce by default (pass `debounceMs: 0` for every event) (#13125)
+- Plugins can ship their own SVG icons for panels, toolbar buttons and process tools (#13144)
+- A plugin action's header button shows busy while its handler runs, however it was triggered (#13163)
+- New host APIs: `host.dispatch` into a specific project behind a `project:dispatch` permission (#13123), `host.agents.listAll()` across every open project (#13158), terminal and workspace ids on agent state events (#13159), and `host.terminals.readScreen()` behind a new `terminal:read` consent (#13161)
+
+**Markdown**
+
+- `mermaid` fences render as diagrams in the file viewer, file browser and rendered Markdown diff, sanitized, themed from Daintree tokens, and loaded only when a diagram appears (#13126)
+
+**Daintree Assistant and MCP**
+
+- The assistant can close a pane it launched without an approval prompt once the agent has handed back and nothing has been typed since (#13134)
+- The assistant can delete any eligible worktree at the core tier, still behind its confirmation (#13138)
+- The MCP confirm dialog can change the assistant's Daintree confirmations policy in place (#13139)
+- `agent.launch` reports `cwdOutsideWorktree` when the cwd is outside the worktree the pane was filed under (#13133)
+- `terminal.close` on a terminal that lives in another project says so instead of "no panel with id" (#13122)
+- API-key callers are told their ownership is session-scoped, on refusals and when they create resources (#13100)
+
+**Interface**
+
+- Terminal padding takes on a TUI's own background when every edge cell is painted, so normal-buffer apps like Grok are no longer framed in the theme colour (#13162)
+- Menu copies confirm with a brief "Copied" card where you clicked instead of a 6 s corner toast (#13151)
+- The high system memory reading moves from a sidebar bar to a quiet row in the sidebar footer (#13110)
+
+### Bug Fixes
+
+**Dictation**
+
+- The mic opens immediately and audio is held until the session and transcription provider are ready, so the first words are kept (#13113, #13116)
+- "Listening" shows only once the mic delivers real audio, so Bluetooth headsets like AirPods no longer swallow the opening words, and a silent mic is called out after 3 s (#13114)
+- Stopping while still connecting keeps the captured audio, and an empty OpenAI `item.done` no longer drops the final transcript (#13112, #13115)
+- Out-of-order completions land per transcription item instead of overwriting each other (#13118)
+- The composer grows with interim dictation text (#13111)
+
+**Terminals and agents**
+
+- File paths containing spaces link as a whole (#13140)
+- Claude Code's weekly and model-specific limit banners are detected as rate limits (#13131)
+- Process badges survive stale prompts on Windows, and a flapping window focus no longer postpones the process census that drives agent detection
+
+**Workspace**
+
+- The workspace host no longer crashes on Linux when the last linked worktree is deleted, and a recreated worktrees root is no longer missed through inode reuse
+- Dev preview re-detects project scripts when it opens, so a newly added `package.json` shows up (#13153)
+
+**MCP**
+
+- A help session retries a stale Daintree MCP session after a restart instead of giving up (#13132)
+
+**Interface**
+
+- File browser row menu Copy items work again, and menus and popovers no longer close when an ancestor takes focus mid-press (#13121)
+- Moving the pointer across the theme browser no longer changes which theme Set theme saves (#13148)
+- Every toolbar control presses the same way, with no size change and a fill that lands on the first frame, dropdowns sit 4 px below their trigger, and pressing a tooltip's trigger drops the caption at once (#13145)
+- The assistant footer's terminal watch item says what it counts, and a failed Stop offers a retry (#13142)
+
+### Performance
+
+- Plugin views open without waiting out React's 300 ms Suspense throttle: first open 342 → 129 ms, warm opens about 31 ms (#13125)
+
 ## [0.40.0] - 2026-09-30
 
 A third consistency pass brings rows, lists, keyboard handling, resize handles, icons, headers, popovers, drag and drop, wording and number formats down to one pattern each, and a 50-PR performance sweep stops terminals, the sidebar, dock and toolbar re-rendering on unrelated activity while cutting git and IPC work in the workspace host. Notifications now lead back to their source, and PR lists show merge conflicts.

@@ -93,6 +93,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:agents-changed": "external",
   "plugin:recipes-changed": "external",
   "plugin:tours-changed": "external",
+  "plugin:icons-changed": "external",
   "plugin:decorations-changed": "external",
   "plugin:panel-badges-changed": "external",
   "plugin:panel-badges-cleared": "external",
@@ -102,6 +103,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   // PluginService sends this itself, scoped to the owning project for a
   // project-local instance and globally for an app-global one.
   "plugin:runtime-status-changed": "external",
+  // PluginService sends this itself, scoped like runtime status.
+  "plugin:actions-running-changed": "external",
   // Project-local plugin events: ProjectPluginController sends them itself via
   // `broadcastToProjectRenderers`, so only that project's views receive them.
   // Relaying here would fan them out to every window.

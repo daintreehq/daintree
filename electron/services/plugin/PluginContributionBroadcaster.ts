@@ -12,6 +12,7 @@ import { getPluginContextMenuItems } from "../pluginContextMenuRegistry.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import { getPluginRecipes } from "./PluginRecipeRegistry.js";
 import { getPluginTours, notifyPluginToursVisibilityChanged } from "./PluginTourRegistry.js";
+import { getPluginCustomIcons } from "../../../shared/config/pluginCustomIconRegistry.js";
 import {
   hasProjectPluginVisibilityOverrides,
   isPluginVisibleInProject,
@@ -200,6 +201,11 @@ export function getPluginToursForProject(projectId: string | null | undefined) {
   return selectContributionsForProject(getPluginTours(), (tour) => tour.pluginId, projectId);
 }
 
+/** Plugin-shipped custom icons visible in a view of `projectId` (#13143). */
+export function getPluginCustomIconsForProject(projectId: string | null | undefined) {
+  return selectContributionsForProject(getPluginCustomIcons(), (icon) => icon.pluginId, projectId);
+}
+
 /** Plugin context-menu items visible in a view of `projectId`. */
 export function getPluginContextMenuItemsForProject(projectId: string | null | undefined) {
   return selectContributionsForProject(
@@ -297,6 +303,8 @@ export class PluginContributionBroadcaster {
    * and keeps no preference to sweep, so every snapshot replaces wholesale.
    */
   private toursBroadcastPending = false;
+  /** Same as {@link toursBroadcastPending}: icon snapshots replace wholesale. */
+  private iconsBroadcastPending = false;
   /**
    * Same coalescing rationale as {@link panelKindsBroadcastPending}. A plugin's
    * `activate()` typically calls `host.registerAction` many times in one
@@ -389,6 +397,7 @@ export class PluginContributionBroadcaster {
     this.scheduleKeybindingsBroadcast(true);
     this.scheduleContextMenuItemsBroadcast(true);
     this.scheduleToursBroadcast();
+    this.schedulePluginIconsBroadcast();
     // The native Help menu lists tours per project too; rebuild it.
     notifyPluginToursVisibilityChanged();
   }
@@ -640,6 +649,20 @@ export class PluginContributionBroadcaster {
     });
   }
 
+  /** Coalesce custom-icon registry mutations into one scoped snapshot per tick. */
+  schedulePluginIconsBroadcast(): void {
+    if (this.deps.isDisposed()) return;
+    if (this.iconsBroadcastPending) return;
+    this.iconsBroadcastPending = true;
+    this.defer(() => {
+      this.iconsBroadcastPending = false;
+      if (this.deps.isDisposed()) return;
+      this.emitScoped("plugin:icons-changed", (projectId) => ({
+        icons: forProject(getPluginCustomIcons(), (icon) => icon.pluginId, projectId),
+      }));
+    });
+  }
+
   /**
    * Replay the current actions / panel-kinds / toolbar-button snapshots to a
    * single target webContents. Used by the cold-start view-ready hook so a
@@ -725,6 +748,10 @@ export class PluginContributionBroadcaster {
       {
         name: "plugin:tours-changed",
         payload: { tours: forProject(getPluginTours(), (tour) => tour.pluginId, target) },
+      },
+      {
+        name: "plugin:icons-changed",
+        payload: { icons: forProject(getPluginCustomIcons(), (icon) => icon.pluginId, target) },
       },
       // Narrowed by instance ownership, not by `forProject`: a runtime status is
       // health metadata about a backend, so what governs it is which project the

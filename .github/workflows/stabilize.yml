@@ -10,7 +10,7 @@ name: Stabilize
 # intelligent re-runs (job re-run with `--test-list`, or `e2e-single.yml`).
 #
 # What it runs: check (typecheck/lint/format), unit, integration, build + smoke,
-# and the full Playwright surface — core, all seven full-* buckets, online, and
+# and the full Playwright surface — core, all seven full-* buckets, and
 # the nightly memory-leak suite — across the platforms selected by `platform`.
 # Nightly BINARY publishing has moved to `nightly-publish.yml`; this workflow
 # never publishes. knip is NOT here: it is a static, OS-agnostic report the
@@ -43,7 +43,7 @@ on:
           - non-windows
           - macos
       only:
-        description: "Scoped re-run: space- or comma-separated pieces to run; empty = everything. Pieces: check test build integration core full-terminal full-worktree full-presets full-platform full-panels full-resilience full-plugins online nightly. Aliases: full (all seven full-* buckets), e2e (every E2E suite). Example: `test full-terminal`."
+        description: "Scoped re-run: space- or comma-separated pieces to run; empty = everything. Pieces: check test build integration core full-terminal full-worktree full-presets full-platform full-panels full-resilience full-plugins nightly. Aliases: full (all seven full-* buckets), e2e (every E2E suite). Example: `test full-terminal`."
         type: string
         default: ""
 
@@ -87,7 +87,7 @@ jobs:
         run: |
           set -euo pipefail
           ALL_FULL="full-terminal full-worktree full-presets full-platform full-panels full-resilience full-plugins"
-          ALL="check test build integration core $ALL_FULL online nightly"
+          ALL="check test build integration core $ALL_FULL nightly"
           # No globbing: tokens are compared as literals, never expanded.
           set -f
           TOKENS=$(tr -s ',[:space:]' ' ' <<< "$ONLY")
@@ -101,7 +101,7 @@ jobs:
           for t in $TOKENS; do
             case "$t" in
               full) SELECTED="$SELECTED $ALL_FULL" ;;
-              e2e)  SELECTED="$SELECTED core $ALL_FULL online nightly" ;;
+              e2e)  SELECTED="$SELECTED core $ALL_FULL nightly" ;;
               *)
                 case " $ALL " in
                   *" $t "*) SELECTED="$SELECTED $t" ;;
@@ -125,16 +125,16 @@ jobs:
           FULL_SUITES=$(for s in $ALL_FULL; do if [ "$(has "$s")" = true ]; then echo "$s"; fi; done | jq -R . | jq -sc .)
           RUN_FULL=$(jq 'length > 0' <<< "$FULL_SUITES")
           RUN_E2E=false
-          if [ "$RUN_FULL" = true ] || [ "$(has core)" = true ] || [ "$(has online)" = true ] || [ "$(has nightly)" = true ]; then
+          if [ "$RUN_FULL" = true ] || [ "$(has core)" = true ] || [ "$(has nightly)" = true ]; then
             RUN_E2E=true
           fi
 
           EXPECTED=$(jq -nc \
             --argjson check "$(has check)" --argjson test "$(has test)" --argjson build "$(has build)" \
             --argjson integration "$INTEGRATION" --argjson e2ebuild "$RUN_E2E" --argjson core "$(has core)" \
-            --argjson full "$RUN_FULL" --argjson online "$(has online)" --argjson nightly "$(has nightly)" \
+            --argjson full "$RUN_FULL" --argjson nightly "$(has nightly)" \
             '{"matrix-setup": true, check: $check, test: $test, build: $build, "integration-test": $integration,
-              "e2e-build": $e2ebuild, "e2e-core": $core, "e2e-full": $full, "e2e-online": $online, "e2e-nightly": $nightly}')
+              "e2e-build": $e2ebuild, "e2e-core": $core, "e2e-full": $full, "e2e-nightly": $nightly}')
 
           # A selection that resolves to nothing (e.g. `only=integration` on a
           # Windows-only run) would otherwise sail through the gate green
@@ -436,7 +436,7 @@ jobs:
       - name: Build app
         run: npm run build:e2e
         env:
-          NODE_OPTIONS: --max-old-space-size=4096
+          NODE_OPTIONS: --max-old-space-size=8192
 
       # One tarball, not a directory upload: thousands of small files are slow
       # to upload and slower to download on Windows.
@@ -491,17 +491,6 @@ jobs:
       json_report: true
       enable_blob_report: true
       prebuilt_artifact: e2e-build
-
-  e2e-online:
-    needs: [matrix-setup, e2e-build]
-    if: ${{ !cancelled() && needs.matrix-setup.result == 'success' && fromJSON(needs.matrix-setup.outputs.expected)['e2e-online'] }}
-    uses: ./.github/workflows/e2e.yml
-    with:
-      suite: online
-      platform: ${{ inputs.platform || 'linux-windows' }}
-      json_report: true
-      prebuilt_artifact: e2e-build
-    secrets: inherit
 
   # Memory-leak detection — the `nightly` E2E suite (serialized, --workers=1,
   # forced by e2e.yml). It legitimately runs long, especially on Windows. macOS
@@ -582,7 +571,6 @@ jobs:
         e2e-build,
         e2e-core,
         e2e-full,
-        e2e-online,
         e2e-nightly,
       ]
     runs-on: ubuntu-22.04

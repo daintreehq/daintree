@@ -570,12 +570,18 @@ export interface GeneratedElectronAPI {
     getForgeProviders(
       ...args: IpcInvokeMap["plugin:forge-providers-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:forge-providers-get"]["result"]>;
+    getIcons(
+      ...args: IpcInvokeMap["plugin:icons-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:icons-get"]["result"]>;
     getLatestBackgroundUpdateCheck(
       ...args: IpcInvokeMap["plugin:bg-update-check-latest"]["args"]
     ): Promise<IpcInvokeMap["plugin:bg-update-check-latest"]["result"]>;
     getPanelKinds(
       ...args: IpcInvokeMap["plugin:panel-kinds-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:panel-kinds-get"]["result"]>;
+    getPerfSnapshots(
+      ...args: IpcInvokeMap["plugin:perf-snapshots-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:perf-snapshots-get"]["result"]>;
     getProjectPlugins(
       ...args: IpcInvokeMap["plugin:project-list"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-list"]["result"]>;
@@ -712,9 +718,15 @@ export interface GeneratedElectronAPI {
     acknowledgeConsent(
       ...args: IpcInvokeMap["plugin-capability:acknowledge-consent"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:acknowledge-consent"]["result"]>;
+    getProjectTargeting(
+      ...args: IpcInvokeMap["plugin-capability:get-project-targeting"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:get-project-targeting"]["result"]>;
     resolveConsent(
       ...args: IpcInvokeMap["plugin-capability:resolve-consent"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:resolve-consent"]["result"]>;
+    setProjectTargeting(
+      ...args: IpcInvokeMap["plugin-capability:set-project-targeting"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:set-project-targeting"]["result"]>;
   };
   pluginMcp: {
     callTool(

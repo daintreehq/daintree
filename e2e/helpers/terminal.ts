@@ -251,6 +251,12 @@ async function runWindowsEchoGuardedCommand(
   return false;
 }
 
+/**
+ * Submit a command to a terminal over IPC (`terminal.submit`). For SETUP only:
+ * it bypasses the keyboard, xterm's `onData` and the input pipeline entirely,
+ * so it proves nothing about typing into a terminal. A test whose subject is
+ * terminal input uses {@link typeTerminalCommand}.
+ */
 export async function runTerminalCommand(
   page: Page,
   panelLocator: Locator,
@@ -290,6 +296,117 @@ export async function runTerminalCommand(
   if (process.platform === "win32") {
     await page.waitForTimeout(WINDOWS_COMMAND_SUBMIT_SETTLE_MS);
   }
+}
+
+export interface TypeTerminalCommandOptions {
+  /** Per-key delay, so input arrives as separate keystrokes the way a person types. */
+  delayMs?: number;
+  /** Press Enter after typing. Default true. */
+  submit?: boolean;
+  /** Wait until the terminal buffer contains this (string) or matches it (RegExp). */
+  expectOutput?: string | RegExp;
+  timeout?: number;
+}
+
+/**
+ * Type a command into a terminal with real keystrokes: focus the pane's xterm
+ * input, prove it holds focus, then drive `page.keyboard` so the bytes travel
+ * keyboard → xterm `onData` → PTY, the path a user's typing takes.
+ */
+export async function typeTerminalCommand(
+  page: Page,
+  panelId: string,
+  command: string,
+  options: TypeTerminalCommandOptions = {}
+): Promise<void> {
+  const { delayMs = 15, submit = true, expectOutput, timeout = 30_000 } = options;
+  const panel = page.locator(`[data-panel-id="${panelId}"]`);
+  await expect(panel).toBeVisible({ timeout: T_SHORT });
+  await waitForTerminalPty(page, panel);
+  await activateTerminal(page, panelId);
+
+  const input = panel.locator(".xterm-helper-textarea");
+  await expect(input).toBeAttached({ timeout: T_SHORT });
+  await expect
+    .poll(
+      async () => {
+        await input.focus().catch(() => undefined);
+        return input.evaluate((el) => el === document.activeElement).catch(() => false);
+      },
+      { timeout: T_SHORT, message: `xterm input of ${panelId} should hold keyboard focus` }
+    )
+    .toBe(true);
+
+  await page.keyboard.type(command, { delay: delayMs });
+  if (submit) await page.keyboard.press("Enter");
+
+  if (expectOutput !== undefined) {
+    const poll = expect.poll(() => getTerminalTextById(page, panelId), {
+      timeout,
+      intervals: [100, 250, 500],
+      message: `terminal ${panelId} should show the output of the typed command`,
+    });
+    if (typeof expectOutput === "string") await poll.toContain(expectOutput);
+    else await poll.toMatch(expectOutput);
+  }
+}
+
+/** Rows `[viewportY, viewportY + rows)` of a buffer dump whose lines are joined by `\n`. */
+export function sliceViewportLines(bufferText: string, viewportY: number, rows: number): string[] {
+  if (rows <= 0) return [];
+  const lines = bufferText.split("\n");
+  const start = Math.max(0, Math.min(viewportY, lines.length));
+  return lines.slice(start, start + rows);
+}
+
+export interface TerminalViewport {
+  /** Exactly the rows on screen, top to bottom. */
+  lines: string[];
+  /** `lines` joined by newlines. */
+  text: string;
+  /** Buffer index of the top visible row. */
+  viewportY: number;
+  /** Buffer index of the top row when scrolled fully down. */
+  baseY: number;
+  rows: number;
+  isUserScrolledBack: boolean;
+}
+
+/**
+ * What the terminal shows right now — the visible rows only, unlike
+ * {@link getTerminalText}, which returns the whole buffer and so cannot tell
+ * the viewport's position. Null while the pane has no mounted terminal.
+ */
+export async function getTerminalViewport(
+  page: Page,
+  panelId: string
+): Promise<TerminalViewport | null> {
+  const snapshot = await page.evaluate((id) => {
+    const w = window as unknown as Record<string, unknown>;
+    const readBuffer = w.__daintreeReadTerminalBuffer;
+    const readScroll = w.__daintreeGetTerminalScrollState;
+    if (typeof readBuffer !== "function" || typeof readScroll !== "function") return null;
+    // One synchronous read of both, so output landing between them can't skew the slice.
+    const scroll = readScroll(id) as {
+      viewportY: number;
+      baseY: number;
+      rows: number;
+      isUserScrolledBack: boolean;
+    } | null;
+    if (!scroll) return null;
+    return { scroll, buffer: readBuffer(id) as string };
+  }, panelId);
+  if (!snapshot) return null;
+  const { scroll, buffer } = snapshot;
+  const lines = sliceViewportLines(buffer, scroll.viewportY, scroll.rows);
+  return {
+    lines,
+    text: lines.join("\n"),
+    viewportY: scroll.viewportY,
+    baseY: scroll.baseY,
+    rows: scroll.rows,
+    isUserScrolledBack: scroll.isUserScrolledBack,
+  };
 }
 
 export async function getTerminalBufferLength(panelLocator: Locator): Promise<number> {

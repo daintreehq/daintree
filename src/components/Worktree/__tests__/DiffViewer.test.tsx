@@ -1033,15 +1033,15 @@ describe("DiffViewer wrap CSS contract (#10623)", () => {
 // table row stacks to one token per line once the (post-paint) token pass lands
 // — the whole diff appears to "collapse". jsdom can't lay out row heights, but it
 // DOES resolve the `display` cascade, so render the colliding token and assert
-// the real DiffViewer.css pins it back to inline against a present `.table`
+// the real shared syntax-tokens.css pins it back to inline against a present `.table`
 // utility. The no-reset render proves the harness exercises the real collision,
 // so the positive case can't silently false-pass.
 describe("DiffViewer token CSS contract (Tailwind display-utility collision)", () => {
-  function computeTokenDisplay(diffViewerCss: string): string {
+  function computeTokenDisplay(tokenCss: string): string {
     const style = document.createElement("style");
     // `.table { display: table }` is Tailwind's colliding utility; refractor puts
     // `class="token table …"` on Markdown table tokens.
-    style.textContent = `.table { display: table; }\n${diffViewerCss}`;
+    style.textContent = `.table { display: table; }\n${tokenCss}`;
     document.head.appendChild(style);
     document.body.innerHTML =
       '<div class="diff-viewer"><table class="diff"><tbody><tr>' +
@@ -1055,11 +1055,14 @@ describe("DiffViewer token CSS contract (Tailwind display-utility collision)", (
   }
 
   it("keeps Markdown table tokens inline despite Tailwind's .table utility", () => {
-    // Sanity: with no DiffViewer reset, Tailwind's `.table` wins and the token
+    // Sanity: with no reset, Tailwind's `.table` wins and the token
     // computes block-level `table` — the bug, and proof the harness hits it.
     expect(computeTokenDisplay("")).toBe("table");
     // With the real stylesheet the reset pins the token back to inline.
-    const css = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
+    const css = readFileSync(
+      join(__dirname, "..", "..", "..", "styles", "components", "syntax-tokens.css"),
+      "utf8"
+    );
     expect(computeTokenDisplay(css)).toBe("inline");
   });
 });

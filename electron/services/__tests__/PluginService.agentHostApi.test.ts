@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -243,7 +243,10 @@ describe("Plugin agent-state host API (#10521)", () => {
   type AgentHost = {
     pluginId: string;
     getAgentState: () => Promise<unknown>;
-    onDidChangeAgentState: (cb: (s: unknown) => void) => Promise<() => void>;
+    onDidChangeAgentState: (
+      cb: (s: unknown) => void,
+      options?: { debounceMs?: number }
+    ) => Promise<() => void>;
   };
 
   /**
@@ -310,7 +313,9 @@ describe("Plugin agent-state host API (#10521)", () => {
   it("onDidChangeAgentState delivers a frozen projected snapshot on state-changed", async () => {
     const { host } = await setupAgentHost(["agent:read"]);
     const received: Array<Record<string, unknown>> = [];
-    await host.onDidChangeAgentState((s) => received.push(s as Record<string, unknown>));
+    await host.onDidChangeAgentState((s) => received.push(s as Record<string, unknown>), {
+      debounceMs: 0,
+    });
 
     emitState({
       agentId: "agent-1",
@@ -333,7 +338,7 @@ describe("Plugin agent-state host API (#10521)", () => {
 
   it("getAgentState returns the last projected snapshot after a state change", async () => {
     const { host } = await setupAgentHost(["agent:read"]);
-    await host.onDidChangeAgentState(() => {});
+    await host.onDidChangeAgentState(() => {}, { debounceMs: 0 });
 
     emitState({ agentId: "agent-2", state: "completed", previousState: "working", timestamp: 99 });
 
@@ -347,7 +352,9 @@ describe("Plugin agent-state host API (#10521)", () => {
   it("derives running=true only for working/waiting/directing", async () => {
     const { host } = await setupAgentHost(["agent:read"]);
     const received: Array<Record<string, unknown>> = [];
-    await host.onDidChangeAgentState((s) => received.push(s as Record<string, unknown>));
+    await host.onDidChangeAgentState((s) => received.push(s as Record<string, unknown>), {
+      debounceMs: 0,
+    });
 
     for (const state of ["idle", "working", "waiting", "directing", "completed", "exited"]) {
       emitState({ state, previousState: "idle" });
@@ -362,10 +369,16 @@ describe("Plugin agent-state host API (#10521)", () => {
     expect(byState.get("exited")).toBe(false);
   });
 
-  it("the snapshot omits internal routing ids and activity-detector internals", async () => {
+  it("the snapshot carries the terminal and workspace ids and nothing else internal", async () => {
+    setPtyClientRef({
+      getTerminalProjectId: (id: string) => (id === "term-internal" ? "workspace-1" : null),
+    } as never);
+    onTestFinished(() => setPtyClientRef(null));
     const { host } = await setupAgentHost(["agent:read"]);
     const received: Array<Record<string, unknown>> = [];
-    await host.onDidChangeAgentState((s) => received.push(s as Record<string, unknown>));
+    await host.onDidChangeAgentState((s) => received.push(s as Record<string, unknown>), {
+      debounceMs: 0,
+    });
 
     events.emit("agent:state-changed", {
       agentId: "agent-3",
@@ -383,8 +396,9 @@ describe("Plugin agent-state host API (#10521)", () => {
     } as never);
 
     const snap = received[0];
+    expect(snap.terminalId).toBe("term-internal");
+    expect(snap.workspaceId).toBe("workspace-1");
     for (const leaked of [
-      "terminalId",
       "worktreeId",
       "cwd",
       "trigger",
@@ -400,14 +414,17 @@ describe("Plugin agent-state host API (#10521)", () => {
       "previousState",
       "running",
       "state",
+      "terminalId",
       "timestamp",
+      "workspaceId",
     ]);
+    expect(await host.getAgentState()).toEqual(snap);
   });
 
   it("the disposer stops further callbacks and is safe to call twice", async () => {
     const { host } = await setupAgentHost(["agent:read"]);
     const received: unknown[] = [];
-    const dispose = await host.onDidChangeAgentState((s) => received.push(s));
+    const dispose = await host.onDidChangeAgentState((s) => received.push(s), { debounceMs: 0 });
 
     emitState({ state: "working" });
     expect(received).toHaveLength(1);
@@ -421,7 +438,7 @@ describe("Plugin agent-state host API (#10521)", () => {
   it("unloading the plugin disposes the subscription and stops callbacks", async () => {
     const { service, host } = await setupAgentHost(["agent:read"]);
     const received: unknown[] = [];
-    await host.onDidChangeAgentState((s) => received.push(s));
+    await host.onDidChangeAgentState((s) => received.push(s), { debounceMs: 0 });
 
     emitState({ state: "working" });
     expect(received).toHaveLength(1);
@@ -434,7 +451,7 @@ describe("Plugin agent-state host API (#10521)", () => {
 
   it("getAgentState returns null (not an error) after the plugin is unloaded", async () => {
     const { service, host } = await setupAgentHost(["agent:read"]);
-    await host.onDidChangeAgentState(() => {});
+    await host.onDidChangeAgentState(() => {}, { debounceMs: 0 });
     emitState({ agentId: "a-pre", state: "working", previousState: "idle" });
     expect(await host.getAgentState()).not.toBeNull();
 
@@ -456,9 +473,12 @@ describe("Plugin agent-state host API (#10521)", () => {
   it("getAgentState inside the callback observes the just-delivered snapshot", async () => {
     const { host } = await setupAgentHost(["agent:read"]);
     let insidePromise: Promise<unknown> | null = null;
-    await host.onDidChangeAgentState(() => {
-      insidePromise = host.getAgentState();
-    });
+    await host.onDidChangeAgentState(
+      () => {
+        insidePromise = host.getAgentState();
+      },
+      { debounceMs: 0 }
+    );
 
     emitState({ agentId: "a9", state: "working", previousState: "idle" });
 
@@ -471,8 +491,8 @@ describe("Plugin agent-state host API (#10521)", () => {
     const { host } = await setupAgentHost(["agent:read"]);
     const a: unknown[] = [];
     const b: unknown[] = [];
-    const disposeA = await host.onDidChangeAgentState((s) => a.push(s));
-    await host.onDidChangeAgentState((s) => b.push(s));
+    const disposeA = await host.onDidChangeAgentState((s) => a.push(s), { debounceMs: 0 });
+    await host.onDidChangeAgentState((s) => b.push(s), { debounceMs: 0 });
 
     emitState({ state: "working" });
     expect(a).toHaveLength(1);

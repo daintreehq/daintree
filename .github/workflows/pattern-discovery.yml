@@ -9,7 +9,7 @@ on:
       agents:
         description: "Comma-separated agent IDs to analyze (default: all)"
         type: string
-        default: "claude,gemini,codex,opencode"
+        default: "gemini,codex,opencode"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -56,18 +56,16 @@ jobs:
       - name: Install agent CLIs
         continue-on-error: true
         run: |
-          npm install -g @anthropic-ai/claude-code || echo "::warning::Claude CLI install failed"
           npm install -g @google/gemini-cli || echo "::warning::Gemini CLI install failed"
           npm install -g @openai/codex || echo "::warning::Codex CLI install failed"
 
       - name: Run session runner per agent
         continue-on-error: true
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          IFS=',' read -ra AGENTS <<< "${{ inputs.agents || 'claude,gemini,codex,opencode' }}"
+          IFS=',' read -ra AGENTS <<< "${{ inputs.agents || 'gemini,codex,opencode' }}"
           for agent in "${AGENTS[@]}"; do
             echo "::group::Running session for $agent"
             npx tsx scripts/pattern-discovery/runner.ts --agent "$agent" --out .tmp/corpus --timeout 90000 || echo "::warning::Session runner failed for $agent"
@@ -78,7 +76,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_PATTERN_ANALYSIS }}
         run: |
-          IFS=',' read -ra AGENTS <<< "${{ inputs.agents || 'claude,gemini,codex,opencode' }}"
+          IFS=',' read -ra AGENTS <<< "${{ inputs.agents || 'gemini,codex,opencode' }}"
           for agent in "${AGENTS[@]}"; do
             if ls .tmp/corpus/${agent}_*.jsonl 1>/dev/null 2>&1; then
               echo "::group::Analyzing $agent"

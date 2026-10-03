@@ -40,4 +40,31 @@ describe("formatElapsedDuration", () => {
     expect(formatElapsedDuration(2 * 86_400_000 + 5 * 3600_000)).toBe("2d 5h");
     expect(formatElapsedDuration(7 * 86_400_000 + 12 * 3600_000)).toBe("7d 12h");
   });
+
+  describe("subSecond", () => {
+    const precise = (ms: number) => formatElapsedDuration(ms, { subSecond: true });
+
+    it("keeps one decimal under 10ms and whole milliseconds under a second", () => {
+      expect(precise(0)).toBe("0.0ms");
+      expect(precise(3.24)).toBe("3.2ms");
+      expect(precise(9.94)).toBe("9.9ms");
+      expect(precise(812.4)).toBe("812ms");
+      expect(precise(999.4)).toBe("999ms");
+    });
+
+    it("switches to tenths of a second before rounding would print 1000ms", () => {
+      expect(precise(999.6)).toBe("1.0s");
+      expect(precise(1540)).toBe("1.5s");
+      expect(precise(9.96)).toBe("10ms");
+      expect(precise(59_940)).toBe("59.9s");
+      expect(precise(59_960)).toBe("59s");
+    });
+
+    it("matches the default output from a minute up and for invalid input", () => {
+      expect(precise(60_000)).toBe("1m");
+      expect(precise(2 * 3600_000 + 14 * 60_000)).toBe("2h 14m");
+      expect(precise(-5)).toBe("0s");
+      expect(precise(NaN)).toBe("0s");
+    });
+  });
 });

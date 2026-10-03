@@ -62,13 +62,16 @@ const baseConfig: KnipConfig = {
 
     // why: bench-only classic script inlined by vite.config.ts via readFileSync
     // when DAINTREE_RENDER_PROBE=1 (`npm run build:e2e:bench`). Knip cannot
-    // follow filesystem reads, but e2e/full/panels/store-fanout-perf.spec.ts
+    // follow filesystem reads, but e2e/perf/store-fanout-perf.spec.ts
     // consumes the global it installs.
     "scripts/perf/render-fanout-probe.js",
 
     // Playwright discovers specs by filesystem glob; knip has no visibility
     // into the test runner, so tests appear unused without these roots.
     "e2e/**/*.spec.ts",
+    // Loaded by `--config` from the perf dispatcher; Knip's Playwright plugin
+    // only discovers playwright.config.*.
+    "playwright.perf.config.ts",
 
     // Standalone visual-review harnesses loaded from root HTML files via
     // <script type="module">. Knip does not follow HTML module-script edges,

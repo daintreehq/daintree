@@ -374,7 +374,9 @@ async function worktreeId(page: Page, branch: string): Promise<string> {
 async function dispatch(page: Page, actionId: string, args: unknown): Promise<void> {
   await page.evaluate(
     async ([a, payload]) => {
-      await window.__daintreeDispatchAction(a, payload, { source: "test" });
+      const dispatchAction = window.__daintreeDispatchAction;
+      if (!dispatchAction) throw new Error("__daintreeDispatchAction is not installed");
+      await dispatchAction(a, payload, { source: "test" });
     },
     [actionId, args] as const
   );

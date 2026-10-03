@@ -9,7 +9,7 @@
 // walks the fiber tree counting component fibers that performed work plus
 // their self durations (requires the react-dom/profiling bundle, which the
 // bench build aliases in). Consumed by
-// e2e/full/panels/store-fanout-perf.spec.ts via window.__DAINTREE_RENDER_PROBE__.
+// e2e/perf/store-fanout-perf.spec.ts via window.__DAINTREE_RENDER_PROBE__.
 (function installRenderFanoutProbe() {
   "use strict";
   if (window.__REACT_DEVTOOLS_GLOBAL_HOOK__) return;

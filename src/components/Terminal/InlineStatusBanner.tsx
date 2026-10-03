@@ -129,6 +129,11 @@ interface BaseInlineStatusBannerProps {
    */
   descriptionExtras?: React.ReactNode;
   "data-testid"?: string;
+  /**
+   * Identity and ARIA attributes (`id`, `aria-*`, `data-*`) for the root, from
+   * an adapter that forwards its caller's. The banner's own attributes win.
+   */
+  rootAttributes?: Record<string, string | number | boolean>;
 }
 
 /**
@@ -236,8 +241,8 @@ const BUTTON_VARIANT: Record<ButtonVariant, NonNullable<ButtonProps["variant"]>>
 function ContextLine({ text, truncate }: { text: string; truncate: "end" | "middle" }) {
   // The middle form clips in either of two spans and never in the <p> that
   // hosts the tooltip, so each span reports its own overflow.
-  const head = useTruncationDetection();
-  const tail = useTruncationDetection();
+  const { ref: headRef, isTruncated: isHeadTruncated } = useTruncationDetection();
+  const { ref: tailRef, isTruncated: isTailTruncated } = useTruncationDetection();
   const split = truncate === "middle" ? text.replace(/[\\/]+$/, "").search(/[\\/][^\\/]*$/) : -1;
   if (split <= 0) {
     return (
@@ -247,12 +252,12 @@ function ContextLine({ text, truncate }: { text: string; truncate: "end" | "midd
     );
   }
   return (
-    <TruncatedTooltip content={text} isTruncated={head.isTruncated || tail.isTruncated}>
+    <TruncatedTooltip content={text} isTruncated={isHeadTruncated || isTailTruncated}>
       <p className="text-xs font-mono mt-1 flex min-w-0 text-text-secondary">
-        <span ref={head.ref} className="truncate">
+        <span ref={headRef} className="truncate">
           {text.slice(0, split)}
         </span>
-        <span ref={tail.ref} className="shrink-0 max-w-[75%] truncate">
+        <span ref={tailRef} className="shrink-0 max-w-[75%] truncate">
           {text.slice(split)}
         </span>
       </p>
@@ -314,6 +319,7 @@ export function InlineStatusBanner({
   descriptionExtras,
   autoDismissAfter,
   "data-testid": testId,
+  rootAttributes,
 }: InlineStatusBannerProps) {
   // Non-null only in the global banner host, where this banner owns the
   // window's title-bar band: it has to supply the drag region and top-edge
@@ -625,6 +631,7 @@ export function InlineStatusBanner({
 
   return (
     <div
+      {...rootAttributes}
       ref={rootRef}
       className={cn(
         stacked

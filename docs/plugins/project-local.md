@@ -70,7 +70,7 @@ Most repositories ignore `dist/` at the root, and that pattern covers this direc
 
 Both lines are there deliberately. `!dist/` re-includes the directory, which is what makes git descend into it at all; `!dist/**` re-includes the files against any parent rule that matches the contents rather than the directory (`dist/*`, `**/dist/**`, even `*.js`). Whether you need the second one depends on how the repository's own ignore rules are written, and getting it wrong looks correct in the file while silently breaking the load contract — so keep both.
 
-One case no rule inside the plugin can fix: if the project ignores `.daintree/` itself, git never descends far enough to read this `.gitignore`. Un-ignore `.daintree/plugins/` at the project root instead. `git check-ignore -v .daintree/plugins/acme.dashboard/dist/index.js` settles the ignore half in one command — no output means nothing is ignoring the file, which is necessary but not sufficient; `git ls-files` tells you whether it is actually tracked.
+One case no rule inside the plugin can fix: if the project ignores `.daintree/` itself, git never descends far enough to read this `.gitignore`. Un-ignore `.daintree/plugins/` at the project root instead. `git check-ignore --no-index .daintree/plugins/acme.dashboard/dist/index.js` settles the ignore half — no output and exit 1 means nothing is ignoring the file, which is necessary but not sufficient — and `git ls-files --error-unmatch .daintree/plugins/acme.dashboard/dist/index.js` the tracked half. Leave `-v` off the first: it prints a matching negation too, so a correctly rescued file shows `!dist/**` and exits 0. `npx daintree-plugin doctor <projectRoot>` runs both for every plugin under `.daintree/plugins/`, along with the manifest and ESM checks — see [Development loop → `doctor`](./dev-loop.md#daintree-plugin-doctor-projectroot).
 
 Two more things about how the host reads that directory. **`main` is realpath-contained**: a `dist/index.js` that resolves outside the plugin directory through a symlink is ignored rather than executed, matching what the `plugin://` handler does for view modules. And **activation is still lazy**: a trusted project plugin without `"onStartupFinished"` in `activationEvents` registers its contributions at load but does not import `main` or run `activate()` until one of those contributions is actually used, exactly like an installed plugin.
 
@@ -205,7 +205,7 @@ A project plugin's host object is bound to its project at construction, and ever
 
 There is no fallback to the focused view. `host.dispatch` and the UI prompts reject with `PROJECT_VIEW_UNAVAILABLE` when the bound project has no live renderer, rather than landing somewhere else — handing project A's plugin project B's renderer is the confused-deputy bug the binding exists to prevent. The read-only catalog surfaces (`host.actions.list` / `get` / `canDispatch`) never throw by contract, so they answer empty in the same situation. A project view that has been backgrounded and cached still counts as live: the project is open, just not on screen. A renderer actually reclaimed under memory pressure does not — there is nothing to target until the user opens that project's view again.
 
-Installed and builtin plugins keep their existing ambient behaviour — they have no project of their own, so the focused view is the only thing their calls can mean.
+Installed and builtin plugins keep their existing ambient behaviour — they have no project of their own, so the focused view is what their calls mean unless one declares `project:dispatch`, the user turns on **Allow project targeting** for it, and it names a project with `host.dispatch(actionId, args, { projectId })` ([host API → Targeting a project](./host-api.md#targeting-a-project)). A project plugin can only name its own project.
 
 ## Settings and storage
 
@@ -265,7 +265,7 @@ A project plugin's panel kind is qualified at runtime as `project:{projectId}/{m
 
 ## Gotchas
 
-- **`dist/` not committed.** The single most common failure, and it is invisible on the machine that built it. Check with `git check-ignore -v` before you assume the loader is broken.
+- **`dist/` not committed.** The single most common failure, and it is invisible on the machine that built it. Run `npx daintree-plugin doctor <projectRoot>` before you assume the loader is broken: it reports any `main` or view `componentPath` that is git-ignored or untracked. By hand, `git check-ignore --no-index <path>` should print nothing and exit 1, and `git ls-files --error-unmatch <path>` should succeed.
 - **The first negation without the second.** `!dist/` alone makes git descend into the directory and still excludes every file in it. Both lines, always.
 - **A manifest without `"scope": "project"`** under `.daintree/plugins/` is rejected (`project_scope_required`), and a manifest _with_ it installed into the user directory is rejected the other way (`project_scope_not_allowed`). The guard runs in both directions so a plugin cannot quietly load under assumptions its author never made.
 - **Editing `src/` and expecting a reload.** Only `plugin.json` and `dist/` are watched. Keep the watcher running.

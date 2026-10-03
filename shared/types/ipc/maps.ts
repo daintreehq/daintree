@@ -1752,6 +1752,10 @@ export interface IpcEventMap {
   // install, not a global broadcast, so it is NOT an event-bus channel.
   "plugin:install-progress": import("../plugin.js").PluginInstallProgressEvent;
 
+  // Per-plugin perf snapshots, pushed only to renderers that subscribed and at
+  // most once a second. Carries every tracked plugin, not just the changed ones.
+  "plugin:perf-snapshots-changed": import("../pluginMetrics.js").PluginPerfSnapshot[];
+
   // System events
   "system:wake": SystemWakePayload;
   // Sustained system memory pressure opened or cleared (window-scoped)
@@ -1884,8 +1888,8 @@ export interface IpcEventMap {
   };
 
   // Voice input events
-  "voice-input:transcription-delta": string;
-  "voice-input:transcription-complete": { text: string; willCorrect: boolean };
+  "voice-input:transcription-delta": { text: string; itemId?: string };
+  "voice-input:transcription-complete": { text: string; willCorrect: boolean; itemId?: string };
   "voice-input:paragraph-boundary": { rawText: string | null };
   "voice-input:file-token-resolved": {
     description: string;
@@ -2022,6 +2026,12 @@ export interface IpcEventMap {
     tours: import("../plugin.js").PluginTourDescriptor[];
   };
 
+  // Plugin-shipped custom icons visible to this view (#13143). A full
+  // snapshot every time; the renderer replaces its copy wholesale.
+  "plugin:icons-changed": {
+    icons: import("../../config/pluginCustomIcon.js").PluginCustomIconAsset[];
+  };
+
   // Plugin file-decoration invalidation (main → renderer). Carries only the
   // changed scope (optionally narrowed to `paths`) — never decoration data.
   // The renderer re-pulls fresh decorations via `plugin:file-decorations-get`.
@@ -2043,6 +2053,14 @@ export interface IpcEventMap {
   // Plugin unloaded — drop all of its panel badges (main → renderer, #10585).
   "plugin:panel-badges-cleared": {
     pluginId: string;
+  };
+
+  // The plugin's action handlers in flight (main → renderer): its COMPLETE set
+  // of running action ids, as dispatched (an instance's namespace for a project
+  // plugin). An empty list means none, and is what an unload sends.
+  "plugin:actions-running-changed": {
+    pluginId: string;
+    actionIds: string[];
   };
 
   // Plugin provenance record changed (main → renderer). Signal-only — the
@@ -2239,11 +2257,14 @@ export type IpcEventBusMap = Pick<
   // Plugin recipe registry (global broadcast)
   | "plugin:recipes-changed"
   | "plugin:tours-changed"
+  | "plugin:icons-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
   // Plugin panel-badge state (global broadcast)
   | "plugin:panel-badges-changed"
   | "plugin:panel-badges-cleared"
+  // Plugin action handlers in flight (project-scoped for a project instance)
+  | "plugin:actions-running-changed"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
   // Plugin stored settings changed (global broadcast for an app-global

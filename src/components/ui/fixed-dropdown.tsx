@@ -11,6 +11,7 @@ import {
 } from "@/lib/animationUtils";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useUIStore } from "@/store/uiStore";
+import { OVERLAY_SIDE_OFFSET } from "./overlayMotion";
 
 // Grace window after the dropdown opens during which overlay-count rises are
 // treated as in-flight modals (e.g. cold-start AgentSetupWizard) rather than
@@ -56,7 +57,7 @@ export function FixedDropdown({
   anchorRef,
   children,
   className,
-  sideOffset = 8,
+  sideOffset = OVERLAY_SIDE_OFFSET,
   persistThroughChildOverlays = false,
   keepMounted = false,
 }: FixedDropdownProps) {
@@ -269,6 +270,9 @@ export function FixedDropdown({
         // Enter "from" state: @starting-style covers both a fresh mount and
         // the Activity display:none → shown flip of a keepMounted reopen.
         "starting:opacity-0 starting:-translate-y-1 starting:scale-[0.97]",
+        // The panel hangs right-aligned under its trigger, so it grows from
+        // that corner, the way the anchored Radix overlays grow from theirs.
+        "origin-top-right",
         isVisible ? "opacity-100 translate-y-0 scale-100" : "opacity-0 -translate-y-1 scale-[0.97]",
         className
       )}

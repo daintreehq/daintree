@@ -9,7 +9,6 @@ import {
   mockOpenDialog,
   refreshActiveWindow,
 } from "../../helpers/launch";
-import { dismissTelemetryConsent } from "../../helpers/project";
 import { dismissBlockingPalette } from "../../helpers/overlays";
 import { addAndSwitchToProject, selectExistingProjectAndRefresh } from "../../helpers/workflows";
 import { getTerminalTextById } from "../../helpers/terminal";
@@ -46,9 +45,7 @@ export class Director {
   projects = new Map<string, ProjectRef>();
   current = "";
   private t0 = 0;
-  private sceneStart = 0;
   private sceneName = "";
-  private sceneEnd = 0;
   private sceneMeta: Record<string, unknown> = {};
   /** Audio second `audioStart` plays from file second `fileStart`; beats after a cut time from here. */
   private anchor = { audioStart: 0, fileStart: 0 };
@@ -74,6 +71,7 @@ export class Director {
     const userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-intro-ud-"));
     const ctx = await launchApp({
       userDataDir,
+      isolateHome: false,
       extraArgs: ["--demo-mode"],
       env: {
         ...(REAL_CLAUDE ? {} : fakeClaudeEnv(bin)),
@@ -113,7 +111,6 @@ export class Director {
     for (let i = 0; i < 15; i++) {
       try {
         this.page = await refreshActiveWindow(this.app, this.page);
-        await dismissTelemetryConsent(this.page);
         await this.page.waitForTimeout(800);
         await dismissBlockingPalette(this.page);
         await this.page.waitForFunction(
@@ -549,8 +546,6 @@ export class Director {
 
   async beginScene(name: string, start: number, end: number): Promise<void> {
     this.sceneName = name;
-    this.sceneStart = start;
-    this.sceneEnd = end;
     this.anchor = { audioStart: start, fileStart: LEAD };
     this.edl = [{ audioStart: start, fileStart: LEAD, label: "start" }];
     if (RECORD) {

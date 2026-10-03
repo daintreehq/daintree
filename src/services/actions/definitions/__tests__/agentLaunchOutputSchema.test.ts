@@ -98,6 +98,7 @@ describe("agent.launch emits a manifest outputSchema (#11547)", () => {
     worktreePath: "/repo/wt-1",
     branch: "feature/x",
     cwd: "/repo/wt-1",
+    cwdOutsideWorktree: false,
   };
 
   it("generates an object-typed outputSchema", () => {

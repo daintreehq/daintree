@@ -9,6 +9,8 @@ import { PluginIconTile } from "./pluginIcons";
 import { CapabilityRow } from "./capabilityMeta";
 import { PluginMcpServersSection } from "./PluginMcpServersSection";
 import { PluginLogsSection, usePluginLogs } from "./PluginLogsSection";
+import { PluginPerformanceSection, PluginStylesSection } from "./PluginPerformanceTab";
+import { usePluginPerfSnapshot } from "@/hooks/usePluginPerfSnapshot";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
 import { pluginHasSettings } from "@/services/plugin/pluginSettingsHome";
 import { Button } from "@/components/ui/button";
@@ -113,6 +115,123 @@ function PluginCapabilityList({
           />
         ))}
       </ul>
+      {plugin.origin === "global" && granted.includes("project:dispatch") && (
+        <ProjectTargetingSwitch pluginId={plugin.instanceId} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The "Allow project targeting" switch (#13119). Declaring `project:dispatch`
+ * only lets a plugin ask; this is the grant, off until the user turns it on.
+ * Deliberately not a first-use prompt: the plugins that want it orchestrate
+ * agents unattended, and a dialog at 3am would stall every launch behind it.
+ * Only for app-wide plugins — a project plugin can only ever reach its own
+ * project, so there is nothing to grant.
+ */
+function ProjectTargetingSwitch({ pluginId }: { pluginId: string }) {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(true);
+  const [readFailed, setReadFailed] = useState(false);
+  // The value a write failed to persist. Kept until a write succeeds: a failed
+  // "off" is still revoked in memory but comes back after a restart, so a later
+  // successful read must not quietly clear the warning.
+  const [unsaved, setUnsaved] = useState<boolean | null>(null);
+  // Only the latest request may settle the row, so a slow read can't overwrite
+  // the result of a save that started after it.
+  const requestSeq = useRef(0);
+
+  const [readNonce, setReadNonce] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const seq = ++requestSeq.current;
+    const current = () => !cancelled && seq === requestSeq.current;
+    setBusy(true);
+    window.electron.pluginCapability
+      .getProjectTargeting({ pluginId })
+      .then((value) => {
+        if (!current()) return;
+        setEnabled(value);
+        setReadFailed(false);
+      })
+      .catch(() => {
+        if (current()) setReadFailed(true);
+      })
+      .finally(() => {
+        if (current()) setBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pluginId, readNonce]);
+
+  const save = (next: boolean) => {
+    const seq = ++requestSeq.current;
+    setBusy(true);
+    window.electron.pluginCapability
+      .setProjectTargeting({ pluginId, enabled: next })
+      .then((persisted) => {
+        if (seq !== requestSeq.current) return;
+        setEnabled(persisted);
+        setUnsaved(null);
+        setBusy(false);
+      })
+      .catch(() => {
+        if (seq !== requestSeq.current) return;
+        setUnsaved(next);
+        // Show what main has in force now rather than guessing.
+        setReadNonce((n) => n + 1);
+      });
+  };
+
+  const switchId = `plugin-project-targeting-${pluginId}`;
+  const descriptionId = `${switchId}-description`;
+  const errorId = `${switchId}-error`;
+  const errorText =
+    unsaved === false
+      ? "Couldn't save turning this off, so it will be back on after a restart."
+      : unsaved === true
+        ? "Couldn't turn this on."
+        : readFailed
+          ? "Couldn't read this setting."
+          : null;
+
+  return (
+    <div className="flex items-start justify-between gap-3 pt-2 border-t border-border-default">
+      <div className="min-w-0">
+        <label htmlFor={switchId} className="block text-xs text-text-primary">
+          Allow project targeting
+        </label>
+        <div id={descriptionId} className="text-2xs text-text-secondary">
+          Lets this plugin run actions in any open project, not just the one in front. Each targeted
+          action is recorded in the plugin audit log.
+        </div>
+        {errorText && (
+          <div id={errorId} className="flex items-center gap-2 mt-0.5">
+            <XCircle className="w-3 h-3 shrink-0 text-status-error" aria-hidden="true" />
+            <span className="text-2xs text-text-secondary">{errorText}</span>
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={busy}
+              onClick={() => (unsaved !== null ? save(unsaved) : setReadNonce((n) => n + 1))}
+            >
+              Retry
+            </Button>
+          </div>
+        )}
+      </div>
+      <SettingsSwitch
+        id={switchId}
+        checked={enabled === true}
+        onCheckedChange={save}
+        disabled={enabled === null || busy}
+        aria-describedby={errorText ? `${descriptionId} ${errorId}` : descriptionId}
+        aria-invalid={unsaved !== null}
+        data-testid="plugin-project-targeting-switch"
+      />
     </div>
   );
 }
@@ -258,7 +377,8 @@ function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
   );
 }
 
-type PluginDetailTab = "overview" | "settings" | "capabilities" | "mcp-servers" | "logs";
+type PluginDetailTab =
+  "overview" | "settings" | "capabilities" | "mcp-servers" | "logs" | "performance" | "styles";
 
 interface PluginDetailPaneProps {
   plugin: LoadedPluginInfo;
@@ -341,6 +461,24 @@ export function PluginDetailPane({
   // No owning project to pass: `LoadedPluginInfo` carries only the manifest id.
   // The project-owned pane is `ProjectPluginDetailPane`, and it does scope.
   const logs = usePluginLogs(plugin.manifest.name);
+  // Subscribed for as long as the pane is open, not just while the tab is: the
+  // tab is earned by a snapshot existing, so the pane has to know first. Keyed
+  // by the instance id, which is what main records metrics under.
+  const perfSnapshot = usePluginPerfSnapshot(plugin.instanceId);
+  // Styles are read from the plugin's mounted views, so only a running plugin
+  // with a rendered panel has anything to check: not a terminal panel, and not
+  // one with no matching panel view (that renders the host's missing-view
+  // placeholder). Builtins bind their views in the renderer registry instead
+  // of `contributes.views`.
+  const panelViewIds = new Set(
+    (plugin.manifest.contributes.views ?? [])
+      .filter((view) => view.location !== "settings")
+      .map((view) => view.id)
+  );
+  const hasViewPanels =
+    plugin.disabled !== true &&
+    !blocklisted &&
+    panels.some((panel) => !panel.hasPty && (plugin.isBuiltin || panelViewIds.has(panel.id)));
 
   // URL-installed plugins have an upstream to re-fetch and compare against;
   // file-installed plugins and built-ins don't, so the button stays disabled
@@ -374,6 +512,9 @@ export function PluginDetailPane({
     // Same rule, applied to the log buffer: a plugin that has logged nothing
     // offers no Logs tab rather than an empty one (#12214).
     ...(logs.lines && logs.lines.length > 0 ? [{ id: "logs", label: "Logs" }] : []),
+    // Earned the same way: no tab until main has measured something.
+    ...(perfSnapshot ? [{ id: "performance", label: "Performance" }] : []),
+    ...(hasViewPanels ? [{ id: "styles", label: "Styles" }] : []),
   ];
 
   // Selecting a *different* plugin remounts this subtree (the scroll wrapper is
@@ -708,6 +849,14 @@ export function PluginDetailPane({
         )}
 
         {currentTab === "logs" && <PluginLogsSection {...logs} />}
+
+        {currentTab === "performance" && perfSnapshot && (
+          <PluginPerformanceSection snapshot={perfSnapshot} />
+        )}
+
+        {currentTab === "styles" && hasViewPanels && (
+          <PluginStylesSection pluginId={plugin.instanceId} />
+        )}
       </div>
     </div>
   );

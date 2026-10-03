@@ -11,6 +11,10 @@ import {
   daintreePlugin,
   HOST_IMPORTMAP_SPECIFIERS,
 } from "../index.js";
+import {
+  HOST_IMPORTMAP_RAW_ONLY_SPECIFIERS,
+  HOST_IMPORTMAP_SERVED_SPECIFIERS,
+} from "../hostImportMap.js";
 
 function matchesHostExternal(specifier: string): boolean {
   return [...reactExternals, ...tourExternals, ...pluginUiExternals].some((re) =>
@@ -293,6 +297,46 @@ describe("@daintreehq/plugin-vite — HOST_IMPORTMAP_SPECIFIERS", () => {
 
   it("has no duplicate entries", () => {
     expect(new Set(HOST_IMPORTMAP_SPECIFIERS).size).toBe(HOST_IMPORTMAP_SPECIFIERS.length);
+  });
+});
+
+describe("@daintreehq/plugin-vite — raw-only import-map specifiers", () => {
+  type ExternalFn = (id: string, importer?: string, isResolved?: boolean) => boolean;
+  function externalOf(plugin: ReturnType<typeof daintreePlugin>): ExternalFn {
+    const configFn = plugin.config as unknown as (config: unknown) => {
+      build: { rollupOptions: { external: ExternalFn } };
+    };
+    return configFn({}).build.rollupOptions.external;
+  }
+
+  it("serves the SDK's React hooks to raw views", () => {
+    expect([...HOST_IMPORTMAP_RAW_ONLY_SPECIFIERS]).toEqual(["@daintreehq/plugin-sdk/react"]);
+  });
+
+  it("serves the externals contract plus the raw-only entries, with no overlap", () => {
+    const externalized = new Set<string>(HOST_IMPORTMAP_SPECIFIERS);
+    for (const specifier of HOST_IMPORTMAP_RAW_ONLY_SPECIFIERS) {
+      expect(externalized.has(specifier)).toBe(false);
+    }
+    expect([...HOST_IMPORTMAP_SERVED_SPECIFIERS]).toEqual([
+      ...HOST_IMPORTMAP_SPECIFIERS,
+      ...HOST_IMPORTMAP_RAW_ONLY_SPECIFIERS,
+    ]);
+    expect(new Set(HOST_IMPORTMAP_SERVED_SPECIFIERS).size).toBe(
+      HOST_IMPORTMAP_SERVED_SPECIFIERS.length
+    );
+  });
+
+  it("never externalizes a raw-only specifier, so a bundled view keeps its pinned copy", () => {
+    // Version skew: a bundled view was built against the SDK its author pinned.
+    // Externalizing it would swap in whatever SDK the running host ships.
+    const external = externalOf(daintreePlugin());
+    const resolveId = daintreePlugin().resolveId as unknown as (id: string) => string | null;
+    for (const specifier of HOST_IMPORTMAP_RAW_ONLY_SPECIFIERS) {
+      expect(matchesHostExternal(specifier)).toBe(false);
+      expect(external(specifier)).toBe(false);
+      expect(resolveId(specifier)).toBeNull();
+    }
   });
 });
 

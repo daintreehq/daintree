@@ -194,7 +194,7 @@ import type {
 } from "./plugin/PluginServiceTypes.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { toPluginWorktreeStatus } from "../../shared/utils/pluginWorktreeSnapshot.js";
-import { getPtyClient } from "../window/serviceRefs.js";
+import { getFleetSnapshotServiceRef, getPtyClient } from "../window/serviceRefs.js";
 import { getWindowForWebContents } from "../window/webContentsRegistry.js";
 import { makePluginTourId } from "../../shared/utils/tourIds.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
@@ -244,6 +244,15 @@ import {
   registerPluginProcessTools,
   unregisterPluginProcessTools,
 } from "../../shared/config/pluginProcessToolRegistry.js";
+import {
+  makePluginCustomIconKey,
+  type PluginCustomIconAsset,
+} from "../../shared/config/pluginCustomIcon.js";
+import {
+  registerPluginCustomIcons,
+  unregisterPluginCustomIcons,
+} from "../../shared/config/pluginCustomIconRegistry.js";
+import { loadPluginCustomIcons } from "./plugin/pluginIconAssets.js";
 import { registerPluginSkills, unregisterPluginSkills } from "./plugin/PluginSkillRegistry.js";
 import {
   getPluginRecipe,
@@ -262,7 +271,20 @@ import {
   type PluginTourRemoteAudio,
 } from "./plugin/PluginTourRegistry.js";
 import { PluginRecipeMetadataStore } from "./plugin/PluginRecipeMetadataStore.js";
-import { broadcastToRenderer, broadcastToProjectRenderers } from "../ipc/utils.js";
+import {
+  broadcastToRenderer,
+  broadcastToProjectRenderers,
+  getProjectRendererTargets,
+} from "../ipc/utils.js";
+import { PLUGIN_INVOKE_MAX_RESULT_BYTES } from "../../shared/config/pluginBudgets.js";
+import { assertPayloadWithinLimit, estimatePayloadBytes } from "./plugin/pluginPayloadLimits.js";
+import { getPluginPushBatcher, routePluginPush } from "./plugin/pluginPushBatcher.js";
+import {
+  PluginMetricsService,
+  classifyInvokeFailure,
+  type InvokePromptMark,
+} from "./plugin/PluginMetricsService.js";
+import { markPerformance } from "../utils/performance.js";
 import { deepFreeze } from "../utils/deepFreeze.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo, PluginRequiredSettingsStatus } from "../../shared/types/plugin.js";
@@ -704,6 +726,14 @@ export class PluginService {
    */
   private pluginBadges = new Map<string, Map<string, PluginPanelBadge>>();
   /**
+   * Action handlers in flight, keyed `pluginId → actionId → count`, so the host
+   * can draw a toolbar button busy and tell a view an action is running however
+   * it was dispatched (palette, menu, toolbar, keybinding, agent). Counted
+   * because two dispatches of one action can overlap. Ephemeral like badges:
+   * dropped on unload and replayed to a cold-restored view.
+   */
+  private runningActions = new Map<string, Map<string, number>>();
+  /**
    * Per-plugin diagnostic log ring buffer, keyed by `pluginId` (= manifest
    * name). Written by `host.logger.*`, capped at {@link PLUGIN_LOG_BUFFER_MAX}
    * lines (FIFO eviction), and cleared in {@link unloadPlugin} so a reload of
@@ -1008,6 +1038,8 @@ export class PluginService {
    */
   private readonly broadcaster: PluginContributionBroadcaster;
   private readonly panelLifecycleBroker: PluginPanelLifecycleBroker;
+  /** Per-plugin cost observations, read by the perf IPC and the dev CLI. */
+  readonly metrics: PluginMetricsService;
   /** sourceId → detach its `destroyed` listener. See `watchPanelLifecycleSource`. */
   private readonly panelLifecycleSourceCleanups = new Map<number, () => void>();
   private disposed = false;
@@ -1094,6 +1126,20 @@ export class PluginService {
     this.initPromise = new Promise<void>((resolve) => {
       this.resolveInit = resolve;
     });
+
+    this.metrics = new PluginMetricsService({
+      host: {
+        isKnownPlugin: (pluginId) => this.plugins.has(pluginId),
+        isCurrentGeneration: (pluginId, generation) =>
+          this.pluginAuthorities.get(pluginId) === generation,
+        isolationOf: (pluginId) =>
+          this.plugins.get(pluginId)?.isBuiltin === true ? "in-process" : "worker",
+        workerPids: () => this.liveWorkerPids(),
+      },
+    });
+    getPluginPushBatcher().setFlushObserver((pluginId, messages, bytes) =>
+      this.metrics.recordPushes(pluginId, messages, bytes)
+    );
 
     this.broadcaster = new PluginContributionBroadcaster({
       isDisposed: () => this.disposed,
@@ -1281,6 +1327,7 @@ export class PluginService {
    */
   dispose(): void {
     this.disposed = true;
+    this.metrics.dispose();
     // Native watchers go first: a settled burst arriving mid-teardown would
     // otherwise queue a reload into a service that is going away.
     this.projectPluginWatcherRegistry?.dispose();
@@ -2089,6 +2136,39 @@ export class PluginService {
       }
     }
 
+    // Custom SVG icons (#13143) are read before any contribution registers so
+    // each `iconId: "./icons/x.svg"` can be rewritten to its runtime key. A
+    // reference that fails to load keeps its authored value, which the
+    // renderer treats as an unknown id and draws the fallback glyph for — the
+    // plugin itself still loads. The assets are only published once the plugin
+    // commits below, so a load that fails part-way leaves none behind.
+    const customIconAssets: PluginCustomIconAsset[] = [];
+    const customIconKeys = new Map<string, string>();
+    try {
+      const icons = await loadPluginCustomIcons(pluginId, pluginDir, manifest.contributes);
+      for (const issue of icons.issues) {
+        console.warn(
+          `[PluginService] Plugin "${manifest.name}": ${issue.path} ${issue.message} — rendering the fallback icon`
+        );
+      }
+      for (const [ref, svg] of icons.loaded) {
+        const key = makePluginCustomIconKey(pluginId, ref);
+        customIconKeys.set(ref, key);
+        customIconAssets.push({
+          key,
+          pluginId,
+          pluginName: manifest.displayName ?? manifest.name,
+          svg,
+        });
+      }
+    } catch (err) {
+      console.warn(
+        `[PluginService] Plugin "${manifest.name}": failed to load custom icons — rendering fallbacks`,
+        err
+      );
+    }
+    const resolveIconId = (iconId: string): string => customIconKeys.get(iconId) ?? iconId;
+
     // Scope the contribution registries to this plugin's project BEFORE a
     // single contribution is registered. The registries are module-level
     // singletons filtered at read/broadcast time by owning plugin id, so a
@@ -2118,7 +2198,7 @@ export class PluginService {
       registerToolbarButton({
         id: buttonId,
         label: btn.label,
-        iconId: btn.iconId,
+        iconId: resolveIconId(btn.iconId),
         actionId: qualifyActionId(btn.actionId),
         priority: btn.priority ?? 3,
         pluginId,
@@ -2209,7 +2289,13 @@ export class PluginService {
     }
 
     if (manifest.contributes.processTools.length > 0) {
-      registerPluginProcessTools(pluginId, manifest.contributes.processTools);
+      registerPluginProcessTools(
+        pluginId,
+        manifest.contributes.processTools.map((tool) => ({
+          ...tool,
+          iconId: resolveIconId(tool.iconId),
+        }))
+      );
       // Mirror into the pty-host, where `ProcessDetector` runs — the renderer
       // needs no broadcast because the detected icon id already reaches it on
       // the terminal identity event (#11613).
@@ -2226,6 +2312,10 @@ export class PluginService {
     // authority is resolvable the instant the plugin is addressable.
     const authority = this.mintPluginAuthority(pluginId, plugin.dir);
     this.plugins.set(pluginId, plugin);
+    if (customIconAssets.length > 0) {
+      registerPluginCustomIcons(pluginId, customIconAssets);
+      this.broadcaster.schedulePluginIconsBroadcast();
+    }
 
     // The host's read-only database endpoint, bound with the plugin rather than
     // at activation: agents read the data without the plugin's code running.
@@ -2336,7 +2426,7 @@ export class PluginService {
         ...pluginSettingsKindFlags,
         id: panelId,
         name: panel.name,
-        iconId: panel.iconId,
+        iconId: resolveIconId(panel.iconId),
         color: panel.color,
         hasPty: panel.hasPty,
         canRestart: panel.canRestart,
@@ -2359,6 +2449,19 @@ export class PluginService {
               pluginMenu: panel.menu.map((item) => ({
                 actionId: qualifyActionId(item.actionId),
                 ...(item.label !== undefined ? { label: item.label } : {}),
+              })),
+            }
+          : {}),
+        // The manifest's own id rides along as `stateKey`: it is what the view
+        // names when it sets a button's state, so it must not be rewritten.
+        ...(panel.toolbar !== undefined && panel.toolbar.length > 0
+          ? {
+              pluginToolbar: panel.toolbar.map((item) => ({
+                actionId: qualifyActionId(item.actionId),
+                stateKey: item.actionId,
+                ...(item.label !== undefined ? { label: item.label } : {}),
+                ...(item.iconId !== undefined ? { iconId: resolveIconId(item.iconId) } : {}),
+                ...(item.status === true ? { status: true } : {}),
               })),
             }
           : {}),
@@ -2927,6 +3030,11 @@ export class PluginService {
       host,
       workerHost,
       getCapabilities: () => this.plugins.get(pluginId)?.manifest.capabilities ?? [],
+      // Only while this load is live: a straggler from a replaced instance
+      // must not count against its same-id successor.
+      onPushRejected: () => {
+        if (this.plugins.get(pluginId) === plugin) this.metrics.recordPushOversized(pluginId);
+      },
       clearPriorRegistrations: () => {
         // Drop the prior generation's activate-time registrations before the
         // reloaded worker re-registers, so a handler the new code stopped
@@ -3193,6 +3301,7 @@ export class PluginService {
     // contribution broadcasts; what it dispatches must find them published.
     this.broadcaster.interruptHolds();
 
+    const activationStart = performance.now();
     const promise = this._doActivate(pluginId).then(
       () => {
         // Guard against an unload — or a disable→re-enable that reloaded the id
@@ -3203,6 +3312,7 @@ export class PluginService {
         // #10887). Identity-compare the loaded object, not just presence.
         if (this.plugins.get(pluginId) === plugin) {
           this.activatedPlugins.add(pluginId);
+          this.recordActivationMetric(pluginId, performance.now() - activationStart);
         }
       },
       () => {
@@ -3218,6 +3328,22 @@ export class PluginService {
     );
     this.activationPromises.set(pluginId, promise);
     return promise;
+  }
+
+  /**
+   * Call to settled, including worker boot for worker plugins. Only successful
+   * activations are recorded; a failure already has its own provenance record.
+   */
+  private recordActivationMetric(pluginId: string, durationMs: number): void {
+    this.metrics.recordActivation(pluginId, durationMs);
+    markPerformance("plugin-activated", { pluginId, durationMs: Math.round(durationMs) });
+  }
+
+  private *liveWorkerPids(): Iterable<readonly [string, number]> {
+    for (const [pluginId, entry] of this.pluginWorkers) {
+      const pid = entry.workerHost.pid;
+      if (pid !== null) yield [pluginId, pid];
+    }
   }
 
   /**
@@ -3641,6 +3767,7 @@ export class PluginService {
       getHostGitFactory: () => this.hostGitFactory,
       getProcessManager: () => this.getProcessManager(),
       declaredCapabilities: (pluginId) => this.declaredCapabilities(pluginId),
+      getFleetSnapshotService: () => getFleetSnapshotServiceRef(),
       fetchWorktreeSnapshotsResult: () => this.fetchAllWorktreeSnapshotsResult(),
       fetchWorktreeSnapshotsForProjectResult: (projectId, projectRoot) =>
         this.fetchWorktreeSnapshotsForProjectResult(projectId, projectRoot),
@@ -3670,6 +3797,8 @@ export class PluginService {
         this.validateAndBuildActionDescriptor(pluginId, contribution),
       safeAppendAudit,
       safeArgsHash,
+      recordPushRejected: (pluginId) => this.metrics.recordPushOversized(pluginId),
+      trackPromptWait: (pluginId) => this.metrics.beginPromptWait(pluginId),
     };
   }
 
@@ -3744,13 +3873,19 @@ export class PluginService {
           // A bound plugin's process output reaches only its own project's
           // views; an unbound one deliberately reaches all of them, as its
           // panels can live in any project.
-          const channel = `plugin:${pluginId}:${PLUGIN_PROCESS_STREAM_CHANNEL}`;
-          const projectId = this.hostBindings.get(pluginId)?.projectId ?? null;
-          if (projectId === null) {
-            broadcastToRenderer(channel, { panelId, payload: event });
-            return;
-          }
-          broadcastToProjectRenderers(projectId, channel, { panelId, payload: event });
+          //
+          // Routed through the same per-renderer batcher as postToPanel, so a
+          // process's output and the plugin's own pushes on this transport keep
+          // one FIFO order per renderer. Host-generated chunks are not capped.
+          routePluginPush({
+            pluginId,
+            projectId: this.hostBindings.get(pluginId)?.projectId ?? null,
+            channel: `plugin:${pluginId}:${PLUGIN_PROCESS_STREAM_CHANNEL}`,
+            panelId,
+            payload: event,
+            bytes: estimatePayloadBytes(event),
+            locatePanel: (target, owner) => this.panelLifecycleBroker.pushTargetsFor(target, owner),
+          });
         },
         ptySpawner: (config, context) =>
           this.getPluginPtyTransport().spawn(context.id, context.generation, {
@@ -3812,8 +3947,21 @@ export class PluginService {
    * Deliberately narrower than `dispose()`: quit wants the OS children gone,
    * not a full registry teardown with its contribution broadcasts and a second
    * best-effort MCP shutdown that `shutdown.ts` already runs on its own.
+   *
+   * Plugin workers are stopped here too. They die with the app either way, and
+   * a supervisor that was not told first reads that exit as a crash: it logged
+   * "Worker crashed (code 0)" for every worker on every quit and tried to
+   * respawn it. Disposing the supervisor marks the exit as expected and sends
+   * the worker its cooperative shutdown.
    */
   async shutdownManagedProcesses(): Promise<void> {
+    for (const { workerHost } of this.pluginWorkers.values()) {
+      try {
+        workerHost.dispose();
+      } catch {
+        // One worker failing to stop must not keep the others running.
+      }
+    }
     await this.processManager?.shutdownAll();
   }
 
@@ -4432,6 +4580,50 @@ export class PluginService {
     ctx: PluginIpcContext,
     args: unknown[]
   ): Promise<unknown> {
+    // Metered here rather than from the audit log, which can be disabled and is
+    // capped. Timed from after activation: a cold start is recorded as the
+    // activation it is, not as a slow first invoke.
+    // `promptMark` is taken with `handlerStart`, after activation: a prompt
+    // the plugin raised while activating did not overlap the handler.
+    const timing: { handlerStart: number; promptMark?: InvokePromptMark } = {
+      handlerStart: Number.NaN,
+    };
+    // A call that outlives an unload+reload of the id describes the old
+    // generation; it must not land in the replacement's fresh entry.
+    const generation = this.plugins.get(pluginId);
+    const sameGeneration = (): boolean =>
+      generation !== undefined && this.plugins.get(pluginId) === generation;
+    try {
+      const result = await this.dispatchHandlerUnmetered(pluginId, channel, ctx, args, timing);
+      if (sameGeneration()) {
+        this.metrics.recordInvoke(
+          pluginId,
+          performance.now() - timing.handlerStart,
+          "ok",
+          timing.promptMark
+        );
+      }
+      return result;
+    } catch (err) {
+      if (!Number.isNaN(timing.handlerStart) && sameGeneration()) {
+        this.metrics.recordInvoke(
+          pluginId,
+          performance.now() - timing.handlerStart,
+          classifyInvokeFailure(err),
+          timing.promptMark
+        );
+      }
+      throw err;
+    }
+  }
+
+  private async dispatchHandlerUnmetered(
+    pluginId: string,
+    channel: string,
+    ctx: PluginIpcContext,
+    args: unknown[],
+    timing: { handlerStart: number; promptMark?: InvokePromptMark }
+  ): Promise<unknown> {
     // Ownership guard (#10462): the renderer is a single shared WebContents in
     // which every plugin runs in the same realm, so a caller can pass an
     // arbitrary `pluginId`. Reject any id the host has not actually loaded
@@ -4444,6 +4636,9 @@ export class PluginService {
     if (!this.plugins.has(pluginId)) {
       throw new PluginInvokeOwnershipError(pluginId, channel);
     }
+    // Runs are tracked against the load that admitted this dispatch, so one
+    // that outlives an unload (or a reload) during the awaits below is not.
+    const generation = this.plugins.get(pluginId);
 
     // Start the clock before activation so a failure record carries the full
     // dispatch cost (cold activation included) the renderer actually waited on.
@@ -4452,6 +4647,10 @@ export class PluginService {
     // its `activate()` to run if it hasn't yet, so handlers registered during
     // activation are available on the very first call. No-op once activated.
     await this.activatePlugin(pluginId);
+    timing.handlerStart = performance.now();
+    // A handler awaiting the user's answer to a prompt is not slow; the mark
+    // lets the metrics keep such a call out of the latency stats.
+    timing.promptMark = this.metrics.markInvokeStart(pluginId);
 
     const key = `${pluginId}:${channel}`;
     const descriptor = this.pluginActions.get(channel);
@@ -4515,6 +4714,7 @@ export class PluginService {
     // (which also defaults the empty case to `{}`).
     if (actionHandler) {
       let actionResult: unknown;
+      const endRun = this.beginActionRun(pluginId, channel, generation);
       try {
         actionResult = await actionHandler(args.length > 0 ? args[0] : {});
       } catch (err) {
@@ -4542,7 +4742,17 @@ export class PluginService {
         });
         markAuditedHandlerFailure(err);
         throw err;
+      } finally {
+        endRun();
       }
+      // Size-checked before the success audit: an oversize result is a failed
+      // dispatch, which the outer plugin:invoke catch records.
+      assertPayloadWithinLimit(
+        pluginId,
+        `result of "${channel}"`,
+        actionResult,
+        PLUGIN_INVOKE_MAX_RESULT_BYTES
+      );
       // Audit the success path too (#10517). A plugin calling its own
       // registered action handler from its view must leave the same durable
       // trail on success as on failure — otherwise a benign-looking action can
@@ -4595,6 +4805,11 @@ export class PluginService {
     }
 
     let result: unknown;
+    // An action may be backed by a channel handler registered under its id.
+    const endRun =
+      descriptor?.pluginId === pluginId
+        ? this.beginActionRun(pluginId, channel, generation)
+        : () => {};
     try {
       result = await handler(ctx, ...dispatchArgs);
     } catch (err) {
@@ -4627,6 +4842,8 @@ export class PluginService {
       });
       markAuditedHandlerFailure(err);
       throw err;
+    } finally {
+      endRun();
     }
 
     let finalResult: unknown = result;
@@ -4639,6 +4856,12 @@ export class PluginService {
       }
       finalResult = parsedResult.data;
     }
+    assertPayloadWithinLimit(
+      pluginId,
+      `result of "${channel}"`,
+      finalResult,
+      PLUGIN_INVOKE_MAX_RESULT_BYTES
+    );
 
     // Audit the success path too (#10517). The catch above records IPC-handler
     // failures; without this, a plugin invoking its own registered handler via
@@ -5023,6 +5246,61 @@ export class PluginService {
           }
         : null,
     };
+  }
+
+  /**
+   * Mark one dispatch of `actionId` running and return its end. The end is
+   * bound to this load of the plugin: a handler that settles after an unload
+   * and reload must not clear a run of the replacement.
+   */
+  private beginActionRun(
+    pluginId: string,
+    actionId: string,
+    generation: LoadedPlugin | undefined
+  ): () => void {
+    if (generation === undefined || this.plugins.get(pluginId) !== generation) return () => {};
+    let byAction = this.runningActions.get(pluginId);
+    if (!byAction) {
+      byAction = new Map();
+      this.runningActions.set(pluginId, byAction);
+    }
+    const count = byAction.get(actionId) ?? 0;
+    byAction.set(actionId, count + 1);
+    if (count === 0) this.emitActionsRunning(pluginId);
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      if (this.plugins.get(pluginId) !== generation) return;
+      const current = this.runningActions.get(pluginId);
+      const remaining = (current?.get(actionId) ?? 0) - 1;
+      if (!current || remaining < 0) return;
+      if (remaining > 0) {
+        current.set(actionId, remaining);
+        return;
+      }
+      current.delete(actionId);
+      if (current.size === 0) this.runningActions.delete(pluginId);
+      this.emitActionsRunning(pluginId);
+    };
+  }
+
+  /**
+   * Publish the complete set of `pluginId`'s running actions, scoped like
+   * {@link emitRuntimeStatus}. An empty list means none are running.
+   */
+  private emitActionsRunning(pluginId: string): void {
+    if (this.disposed) return;
+    const event = {
+      name: "plugin:actions-running-changed" as const,
+      payload: { pluginId, actionIds: [...(this.runningActions.get(pluginId)?.keys() ?? [])] },
+    };
+    const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+    if (owningProjectId === null) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, event);
+      return;
+    }
+    broadcastToProjectRenderers(owningProjectId, CHANNELS.EVENTS_PUSH, event);
   }
 
   /**
@@ -5834,6 +6112,9 @@ export class PluginService {
     runUnloadStep(pluginId, "syncPluginAgentRegistryToPtyHost", () =>
       getPtyClient()?.syncPluginAgentRegistry()
     );
+    runUnloadStep(pluginId, "unregisterPluginCustomIcons", () => {
+      if (unregisterPluginCustomIcons(pluginId)) this.broadcaster.schedulePluginIconsBroadcast();
+    });
     runUnloadStep(pluginId, "unregisterPluginProcessTools", () =>
       unregisterPluginProcessTools(pluginId)
     );
@@ -5934,6 +6215,7 @@ export class PluginService {
     this.invalidatePluginAuthority(pluginId);
     this.plugins.delete(pluginId);
     this.pluginWorkerActivity.delete(pluginId);
+    this.metrics.evict(pluginId);
     this.hostBindings.delete(pluginId);
     // Every unload emits, worker or not: a plugin with only views has no
     // worker status, yet a renderer holding one of its settings views needs
@@ -5958,6 +6240,10 @@ export class PluginService {
     // Drop any live panel badges this plugin set and tell the renderer to clear
     // them (#10585). Only broadcast when the plugin actually had badges so an
     // unload of a non-badging plugin stays silent.
+    if (this.runningActions.delete(pluginId)) {
+      runUnloadStep(pluginId, "clearRunningActions", () => this.emitActionsRunning(pluginId));
+    }
+
     if (this.pluginBadges.delete(pluginId)) {
       runUnloadStep(pluginId, "clearPanelBadges", () => {
         broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
@@ -7041,6 +7327,23 @@ export class PluginService {
         webContents.send(CHANNELS.EVENTS_PUSH, {
           name: "plugin:panel-badges-changed",
           payload: { pluginId, badges: this.serializePluginBadges(pluginId) },
+        });
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+    for (const [pluginId, byAction] of this.runningActions) {
+      const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+      if (
+        owningProjectId !== null &&
+        !getProjectRendererTargets(owningProjectId).some((wc) => wc.id === webContents.id)
+      ) {
+        continue;
+      }
+      try {
+        webContents.send(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:actions-running-changed",
+          payload: { pluginId, actionIds: [...byAction.keys()] },
         });
       } catch {
         // Silently ignore send failures during window initialization/disposal.

@@ -4,7 +4,11 @@ import { isPtyPanel } from "@shared/types/panel";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
-import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
+import {
+  isVoiceMicPending,
+  useVoiceRecordingStore,
+  type VoiceRecordingTarget,
+} from "@/store/voiceRecordingStore";
 import { isActiveVoiceSession, type VoiceInputError, type VoiceRecordingMode } from "@shared/types";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -13,8 +17,25 @@ import { keybindingService } from "@/services/KeybindingService";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { notify } from "@/lib/notify";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import {
+  OPENING_CHUNK_WINDOW,
+  hasRealSignal,
+  isMicLive,
+  measurePcm16Chunk,
+  summarizeOpeningChunks,
+  type PcmChunkStats,
+} from "@/services/voiceStartDiagnostics";
 
 const LOG_PREFIX = "[VoiceRecording]";
+
+type StartStepLogger = (step: string, details?: Record<string, unknown>) => void;
+
+interface OpeningAudio {
+  startRequestId: number;
+  chunks: PcmChunkStats[];
+  logged: boolean;
+}
 
 function formatTargetLabel(target: VoiceRecordingTarget): string {
   const project = target.projectName?.trim();
@@ -36,16 +57,33 @@ function getVoiceInsertMetadata(draft: string): { separator: string; insertStart
   };
 }
 
+// ~15s of 100ms PCM chunks. Covers a retarget drain plus a slow backend
+// connect; past it the oldest audio is dropped rather than failing the session.
+const MAX_QUEUED_CHUNKS = 150;
+
+interface CaptureAttempt {
+  audioContext: AudioContext;
+  keepAliveOscillator: OscillatorNode | null;
+  keepAliveGain: GainNode | null;
+  stream: MediaStream | null;
+  workletNode: AudioWorkletNode | null;
+  // PCM captured before the backend session is ready, flushed in order once it
+  // is. `null` once chunks forward live, or after the attempt is discarded.
+  queue: ArrayBuffer[] | null;
+  droppedChunks: number;
+}
+
 class VoiceRecordingService {
   private initialized = false;
   private generation = 0;
   private startRequestId = 0;
   private audioContext: AudioContext | null = null;
-  // Built by start() before the microphone opens and not yet handed over to
-  // `audioContext`. Held here so a cancel or supersede can close it while
-  // getUserMedia is still pending (an unanswered permission prompt can leave
-  // it pending indefinitely).
-  private pendingAudioContext: AudioContext | null = null;
+  // Capture graph built by an in-flight start() and not yet promoted to the
+  // session fields below. Held here so a cancel or supersede can release it
+  // while getUserMedia is pending (an unanswered permission prompt can leave it
+  // pending indefinitely) or while a retarget waits on the previous session's
+  // drain with the new microphone already recording into its queue.
+  private pendingCapture: CaptureAttempt | null = null;
   private workletNode: AudioWorkletNode | null = null;
   private keepAliveOscillator: OscillatorNode | null = null;
   private keepAliveGain: GainNode | null = null;
@@ -68,6 +106,9 @@ class VoiceRecordingService {
   private sessionPeakRms = 0;
   private sessionRmsSum = 0;
   private sessionChunkCount = 0;
+  // Per-chunk stats for the first ~2s, which is where lost opening words hide
+  // (Bluetooth profile switches, Chromium zero-filling an underrunning FIFO).
+  private openingAudio: OpeningAudio | null = null;
   // Pause-state tracking. The worklet suppresses PCM emission while paused, the
   // elapsed counter freezes, and a 60s auto-stop terminates the session if the
   // user never resumes — prevents idle Realtime keep-alive charges.
@@ -75,6 +116,20 @@ class VoiceRecordingService {
   private totalPausedMs = 0;
   private pauseTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private static readonly PAUSE_AUTO_STOP_MS = 60_000;
+  // An open stream is not proof of capture: a Bluetooth mic switching to HFP
+  // hands Web Audio zeros for a while (#13105). The UI only claims it is
+  // listening once a chunk clears the mic-liveness floor (`isMicLive`, not the
+  // diagnostics' speech-level `hasRealSignal`), and flags the mic as silent if
+  // nothing does within the grace window of unpaused capture. Neither gates PCM
+  // forwarding — the leading audio is still captured and held or sent either
+  // way.
+  private static readonly MIC_SILENCE_GRACE_MS = 3_000;
+  private micSilenceTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  // Owner of the silence countdown, so resume can re-arm it for the same
+  // capture after a pause cancelled it.
+  private micSilenceSession: { generation: number; startRequestId: number } | null = null;
+  // performance.now() when the live session's capture was attached.
+  private micCaptureAttachedAt = 0;
 
   initialize(): void {
     if (this.initialized) return;
@@ -88,8 +143,8 @@ class VoiceRecordingService {
     }
 
     this.unsubscribers.push(
-      voiceInput.onTranscriptionDelta((delta) => {
-        logDebug(`${LOG_PREFIX} Received transcription delta`, { length: delta.length });
+      voiceInput.onTranscriptionDelta(({ text: delta, itemId }) => {
+        logDebug(`${LOG_PREFIX} Received transcription delta`, { itemId, length: delta.length });
         const voiceState = useVoiceRecordingStore.getState();
         const target = voiceState.activeTarget;
         if (target) {
@@ -104,9 +159,13 @@ class VoiceRecordingService {
             // Snapshot where dictated text will begin once the final commit runs,
             // including any leading separator inserted between existing draft and
             // the first dictated token. Stable for the lifetime of the utterance.
-            useVoiceRecordingStore
-              .getState()
-              .setDraftLengthAtSegmentStart(target.panelId, insertStart);
+            // Identified items skip it: the provider releases their completions
+            // in commit order, so each one appends to the current draft.
+            if (!itemId) {
+              useVoiceRecordingStore
+                .getState()
+                .setDraftLengthAtSegmentStart(target.panelId, insertStart);
+            }
             // Track paragraph start for the first utterance in a new paragraph.
             useVoiceRecordingStore.getState().setActiveParagraphStart(target.panelId, insertStart);
           }
@@ -114,19 +173,19 @@ class VoiceRecordingService {
           // decoration renders them outside the doc model so the editor's
           // history records a single transaction per utterance (#9172).
         }
-        useVoiceRecordingStore.getState().appendDelta(delta);
+        useVoiceRecordingStore.getState().appendDelta(delta, itemId);
       })
     );
 
     this.unsubscribers.push(
-      voiceInput.onTranscriptionComplete(({ text }) => {
-        logDebug(`${LOG_PREFIX} Received transcription complete`, { text });
+      voiceInput.onTranscriptionComplete(({ text, itemId }) => {
+        logDebug(`${LOG_PREFIX} Received transcription complete`, { itemId, length: text.length });
         const voiceState = useVoiceRecordingStore.getState();
         const panelId = voiceState.activeTarget?.panelId;
         const projectId = voiceState.activeTarget?.projectId;
         if (panelId) {
           const buffer = voiceState.panelBuffers[panelId];
-          const segmentStart = buffer?.draftLengthAtSegmentStart ?? -1;
+          const segmentStart = itemId ? -1 : (buffer?.draftLengthAtSegmentStart ?? -1);
           const finalText = text.trim();
           if (finalText) {
             const inputStore = useTerminalInputStore.getState();
@@ -143,7 +202,7 @@ class VoiceRecordingService {
             inputStore.bumpExternalDraftRevision();
           }
         }
-        useVoiceRecordingStore.getState().completeSegment(text);
+        useVoiceRecordingStore.getState().completeSegment(text, itemId);
       })
     );
 
@@ -459,10 +518,10 @@ class VoiceRecordingService {
       status: state.status,
     });
 
-    // A second press during the pre-audio arming window aborts back to idle.
-    // No microphone has been opened yet, so there is nothing for stop() to
-    // unwind — incrementing startRequestId via cancelArming() is enough to
-    // make the in-flight start() bail at its next staleness check.
+    // A second press during the arming window aborts back to idle. No session
+    // exists yet, so there is nothing for stop() to drain — cancelArming()
+    // releases whatever the in-flight start() has opened and makes it bail at
+    // its next staleness check, discarding any audio it already queued.
     if (isActiveTarget && state.status === "arming") {
       this.cancelArming();
       return;
@@ -486,7 +545,7 @@ class VoiceRecordingService {
   }
 
   /**
-   * Abort an in-flight arming window before audio init begins. Bumping
+   * Abort an in-flight arming window before a session begins. Bumping
    * startRequestId invalidates any pending start() so it bails at its next
    * staleness check; finishSession() returns the store to idle without
    * touching panel buffers (no transcript exists yet).
@@ -500,20 +559,34 @@ class VoiceRecordingService {
   }
 
   /**
-   * Make any in-flight start() stale and close the AudioContext it built ahead
-   * of getUserMedia, so a start stuck on a pending permission prompt doesn't
-   * hold an output stream open after the user has moved on.
+   * Make any in-flight start() stale and release the capture graph it built
+   * ahead of its session, so a start stuck on a pending permission prompt or a
+   * retarget drain doesn't hold the microphone or an output stream open after
+   * the user has moved on.
    */
   private invalidatePendingStart(): void {
     this.startRequestId++;
-    this.releasePendingAudioContext();
+    this.releasePendingCapture();
   }
 
-  private releasePendingAudioContext(): void {
-    const pending = this.pendingAudioContext;
+  private releasePendingCapture(): void {
+    const pending = this.pendingCapture;
     if (!pending) return;
-    this.pendingAudioContext = null;
-    void pending.close().catch(() => {});
+    this.pendingCapture = null;
+    pending.queue = null;
+    void this.cleanupCaptureResources(pending).catch(() => {});
+  }
+
+  private enqueueCapturedChunk(capture: CaptureAttempt, chunk: ArrayBuffer): void {
+    const queue = capture.queue;
+    if (!queue) return;
+    queue.push(chunk);
+    if (queue.length > MAX_QUEUED_CHUNKS) {
+      queue.shift();
+      if (++capture.droppedChunks === 1) {
+        logWarn(`${LOG_PREFIX} Startup audio queue full, dropping oldest audio`);
+      }
+    }
   }
 
   /**
@@ -521,23 +594,65 @@ class VoiceRecordingService {
    * an error and is about to return. Without this, the store would stay
    * `{ status: "arming", activeTarget: T }` indefinitely — the toolbar and
    * panel border would keep showing the pre-recording cue with no mic to
-   * back it up.
+   * back it up. A failed retarget also ends the session it was replacing:
+   * the store is about to report an error with no target, and that session's
+   * microphone must not keep recording behind it.
    */
-  private failArming(): void {
+  private async failArming(): Promise<void> {
+    if (this.stream) {
+      await this.stop(undefined, {
+        nextStatus: "error",
+        announce: false,
+        preservePendingStart: true,
+      });
+      return;
+    }
+    // A stop still draining would otherwise finish afterwards and overwrite
+    // the error with "idle".
+    if (this.stopPromise) await this.stopPromise;
     useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
   }
 
   async start(target: VoiceRecordingTarget): Promise<void> {
     this.initialize();
-    this.releasePendingAudioContext();
+    this.releasePendingCapture();
     const startRequestId = ++this.startRequestId;
+    // toggle() reaches here with no await after the hotkey/click, so start()
+    // entry stands in for the gesture. Renderer-local clock only — main's
+    // timings use their own origin.
+    const startedAt = performance.now();
+    const logStep: StartStepLogger = (step, details) => {
+      try {
+        logInfo(`${LOG_PREFIX} Start step`, {
+          startRequestId,
+          step,
+          elapsedMs: Math.round(performance.now() - startedAt),
+          ...details,
+        });
+      } catch {
+        // Diagnostics must never abort start() or drop a chunk.
+      }
+    };
     logDebug(`${LOG_PREFIX} start() called`, {
       panelId: target.panelId,
       generation: this.generation,
       startRequestId,
     });
+    logStep("start");
 
+    // The settings read and the permission-status read are independent IPCs,
+    // so both go out together rather than paying two round trips in series.
+    // The permission result is settled into a value so an early return on the
+    // settings side never leaves a rejection unhandled.
+    const micStatusPromise = window.electron.voiceInput.checkMicPermission().then(
+      (status) => {
+        logStep("permission_check", { micStatus: status });
+        return { ok: true as const, status };
+      },
+      (error: unknown) => ({ ok: false as const, error })
+    );
     const isConfigured = await this.refreshConfiguration().catch(() => false);
+    logStep("settings", { configured: isConfigured });
     if (!isConfigured || this.isStartRequestStale(startRequestId)) {
       logWarn(`${LOG_PREFIX} Not configured, aborting start`);
       if (!this.isStartRequestStale(startRequestId)) {
@@ -549,34 +664,32 @@ class VoiceRecordingService {
         useVoiceRecordingStore
           .getState()
           .announce("Voice dictation is not configured. Open Voice settings to continue.");
-        this.failArming();
+        await this.failArming();
       }
       return;
     }
 
     // Check and request OS-level microphone permission (macOS requires this
     // from the main process before getUserMedia will succeed in the renderer).
-    // The IPC call is wrapped so a rejection (main-process crash, channel
-    // teardown) doesn't leak past start() and leave the store armed forever.
-    logDebug(`${LOG_PREFIX} Checking microphone permission`);
-    let micStatus: Awaited<ReturnType<typeof window.electron.voiceInput.checkMicPermission>>;
-    try {
-      micStatus = await window.electron.voiceInput.checkMicPermission();
-    } catch (err) {
-      logError(`${LOG_PREFIX} checkMicPermission IPC rejected`, err);
+    // A rejection (main-process crash, channel teardown) must not leak past
+    // start() and leave the store armed forever.
+    const micStatusResult = await micStatusPromise;
+    if (!micStatusResult.ok) {
+      logError(`${LOG_PREFIX} checkMicPermission IPC rejected`, micStatusResult.error);
       if (!this.isStartRequestStale(startRequestId)) {
         useVoiceRecordingStore.getState().setLastError({
           severity: "fatal",
           code: "mic_permission_check_failed",
           message: "Could not check microphone permission. Try again.",
         });
-        this.failArming();
+        await this.failArming();
       }
       return;
     }
     if (this.isStartRequestStale(startRequestId)) {
       return;
     }
+    const micStatus = micStatusResult.status;
     logDebug(`${LOG_PREFIX} Microphone permission status`, { micStatus });
 
     if (micStatus === "denied" || micStatus === "restricted") {
@@ -586,7 +699,7 @@ class VoiceRecordingService {
         .getState()
         .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
       useVoiceRecordingStore.getState().announce(message);
-      this.failArming();
+      await this.failArming();
       safeFireAndForget(window.electron.voiceInput.openMicSettings(), {
         context: "Opening OS microphone settings",
       });
@@ -608,7 +721,7 @@ class VoiceRecordingService {
             code: "mic_permission_request_failed",
             message: "Could not request microphone permission. Try again.",
           });
-          this.failArming();
+          await this.failArming();
         }
         return;
       }
@@ -616,13 +729,14 @@ class VoiceRecordingService {
         return;
       }
       logDebug(`${LOG_PREFIX} Native microphone preflight result`, { canAttemptCapture });
+      logStep("permission_request", { canAttemptCapture });
       if (!canAttemptCapture) {
         const message = "Microphone permission denied. Enable it in System Settings and try again.";
         useVoiceRecordingStore
           .getState()
           .setLastError({ severity: "fatal", code: "mic_permission_denied", message });
         useVoiceRecordingStore.getState().announce(message);
-        this.failArming();
+        await this.failArming();
         return;
       }
     }
@@ -636,11 +750,69 @@ class VoiceRecordingService {
     // lookup lands on an idle audio service and costs a few milliseconds.
     logDebug(`${LOG_PREFIX} Creating AudioContext (24kHz) — eager capture`);
     const audioContext = new AudioContext({ sampleRate: 24000 });
-    this.pendingAudioContext = audioContext;
-    // A context no longer pending was already closed by a cancel or supersede.
-    const discardAudioContext = () => {
-      if (this.pendingAudioContext === audioContext) this.releasePendingAudioContext();
+    logStep("audio_context_create", {
+      state: audioContext.state,
+      sampleRate: audioContext.sampleRate,
+    });
+    this.observeAudioContextState(audioContext, logStep);
+    const capture: CaptureAttempt = {
+      audioContext,
+      keepAliveOscillator: null,
+      keepAliveGain: null,
+      stream: null,
+      workletNode: null,
+      queue: [],
+      droppedChunks: 0,
     };
+    this.pendingCapture = capture;
+    // Owned by the attempt until promotion, so a previous session's stop can't
+    // flush this attempt's window as its own.
+    const openingAudio: OpeningAudio = { startRequestId, chunks: [], logged: false };
+    // An attempt no longer pending was already released by a cancel or
+    // supersede; the stream is stopped directly in case it arrived afterwards.
+    const abandonCapture = (stream?: MediaStream) => {
+      if (this.pendingCapture === capture) this.releasePendingCapture();
+      this.flushOpeningAudio(openingAudio);
+      for (const track of stream?.getTracks() ?? []) {
+        track.stop();
+      }
+    };
+
+    // Build the rest of the graph while the microphone is still opening, so it
+    // is ready to attach the moment the stream arrives. Observed immediately so
+    // a bail before it is awaited can't surface as an unhandled rejection.
+    const graphReady = (async () => {
+      // Keep the AudioContext in "running" state while backgrounded. Chromium
+      // suspends capture-only contexts (no output to destination) when the
+      // window loses focus. Connecting a silent oscillator to the destination
+      // tricks the engine into treating the context as audible so
+      // AudioWorkletNode keeps firing.
+      const keepAliveGain = audioContext.createGain();
+      capture.keepAliveGain = keepAliveGain;
+      keepAliveGain.gain.value = 0;
+      const keepAliveOscillator = audioContext.createOscillator();
+      keepAliveOscillator.connect(keepAliveGain);
+      keepAliveGain.connect(audioContext.destination);
+      keepAliveOscillator.start();
+      // Recorded only once started: cleanup calls stop(), which throws on an
+      // oscillator that never started.
+      capture.keepAliveOscillator = keepAliveOscillator;
+
+      logDebug(`${LOG_PREFIX} Loading pcm-processor worklet`);
+      await Promise.all([
+        audioContext.state === "suspended"
+          ? audioContext
+              .resume()
+              .then(() => logStep("audio_context_resume", { state: audioContext.state }))
+          : undefined,
+        audioContext.audioWorklet
+          .addModule("/pcm-processor.js")
+          .then(() => logStep("worklet_load")),
+      ]);
+    })().then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error })
+    );
 
     // Acquire microphone stream. On macOS the preflight above already settled
     // permission; on Windows/Linux this call IS the permission gate, so a denial
@@ -653,7 +825,7 @@ class VoiceRecordingService {
         : { audio: true, video: false };
       stream = await navigator.mediaDevices.getUserMedia(constraints);
     } catch (error) {
-      discardAudioContext();
+      abandonCapture();
       const message =
         error instanceof DOMException && error.name === "NotAllowedError"
           ? "Microphone permission denied. Enable it in System Settings and try again."
@@ -661,6 +833,7 @@ class VoiceRecordingService {
       logError(`${LOG_PREFIX} getUserMedia failed`, {
         name: error instanceof DOMException ? error.name : "unknown",
         message,
+        elapsedMs: Math.round(performance.now() - startedAt),
       });
       if (!this.isStartRequestStale(startRequestId)) {
         const micCode =
@@ -671,10 +844,11 @@ class VoiceRecordingService {
           .getState()
           .setLastError({ severity: "fatal", code: micCode, message });
         useVoiceRecordingStore.getState().announce(message);
-        this.failArming();
+        await this.failArming();
       }
       return;
     }
+    if (this.pendingCapture === capture) capture.stream = stream;
 
     // Log which mic and capture settings the OS handed us — a wrong/dead device
     // or unexpected sample rate is a real failure mode. Kept out of the
@@ -714,22 +888,131 @@ class VoiceRecordingService {
     } catch (err) {
       logDebug(`${LOG_PREFIX} Could not read microphone track settings`, { err });
     }
+    logStep("get_user_media");
+    this.observeTrackState(stream, logStep);
 
     if (this.isStartRequestStale(startRequestId)) {
-      for (const track of stream.getTracks()) {
-        track.stop();
-      }
-      discardAudioContext();
+      abandonCapture(stream);
       return;
     }
+
+    const graphResult = await graphReady;
+    if (this.isStartRequestStale(startRequestId)) {
+      abandonCapture(stream);
+      return;
+    }
+    const failCaptureSetup = async (error: unknown) => {
+      abandonCapture(stream);
+      logError(`${LOG_PREFIX} Failed to set up the audio graph`, error);
+      useVoiceRecordingStore.getState().setLastError({
+        severity: "fatal",
+        code: "renderer_error",
+        message: "Failed to load the audio processor.",
+      });
+      useVoiceRecordingStore.getState().announce("Voice dictation failed to initialize.");
+      await this.failArming();
+    };
+    if (!graphResult.ok) {
+      await failCaptureSetup(graphResult.error);
+      return;
+    }
+    logDebug(`${LOG_PREFIX} pcm-processor worklet loaded`);
+
+    // Attach capture now, ahead of any retarget drain and the backend start.
+    // Until the session is promoted, chunks only land in this attempt's queue:
+    // they must not reach the previous session's send path or its meters.
+    let workletNode: AudioWorkletNode;
+    let sessionGeneration: number | null = null;
+    let arrivedChunks = 0;
+    let firstNonZeroChunk = 0;
+    let firstSignalChunk = 0;
+    let firstLiveChunk = 0;
+    const observeArrivingChunk = (data: ArrayBuffer): PcmChunkStats | null => {
+      try {
+        arrivedChunks++;
+        const stats = measurePcm16Chunk(new Int16Array(data));
+        if (arrivedChunks === 1) {
+          logStep("first_chunk", { samples: stats.samples, held: capture.queue !== null });
+        }
+        // Steady chunks don't prove a live mic: exact zeros come from a muted
+        // track or Chromium zero-filling an underrunning input FIFO. Separate
+        // "any sample moved" from "above the signal floor".
+        if (!firstNonZeroChunk && stats.zeroFraction < 1 && stats.samples > 0) {
+          firstNonZeroChunk = arrivedChunks;
+          logStep("first_nonzero_chunk", {
+            chunk: arrivedChunks,
+            peak: Number(stats.peak.toFixed(4)),
+          });
+        }
+        if (!firstSignalChunk && hasRealSignal(stats)) {
+          firstSignalChunk = arrivedChunks;
+          logStep("first_signal_chunk", {
+            chunk: arrivedChunks,
+            peak: Number(stats.peak.toFixed(4)),
+          });
+        }
+        if (!firstLiveChunk && isMicLive(stats)) firstLiveChunk = arrivedChunks;
+        if (!openingAudio.logged) {
+          openingAudio.chunks.push(stats);
+          if (openingAudio.chunks.length >= OPENING_CHUNK_WINDOW) {
+            this.flushOpeningAudio(openingAudio);
+          }
+        }
+        return stats;
+      } catch {
+        // Diagnostics must never drop a chunk.
+        return null;
+      }
+    };
+    try {
+      const source = audioContext.createMediaStreamSource(stream);
+      workletNode = new AudioWorkletNode(audioContext, "pcm-processor");
+      capture.workletNode = workletNode;
+      workletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+        if (sessionGeneration !== null && this.generation !== sessionGeneration) return;
+        // Measured on arrival, held or not, so the timings show when audio
+        // actually reached the renderer. Read before sendAudioChunk() hands
+        // the buffer to IPC.
+        const stats = observeArrivingChunk(event.data);
+        if (sessionGeneration === null) {
+          this.enqueueCapturedChunk(capture, event.data);
+          return;
+        }
+        this.meterAudioChunk(event.data, stats ?? undefined);
+        // Held chunks count too: the user may be speaking before the backend
+        // is connected, and the cue should follow the mic, not the socket.
+        if (
+          stats &&
+          isMicLive(stats) &&
+          !this.isStartRequestStale(startRequestId) &&
+          isVoiceMicPending(useVoiceRecordingStore.getState())
+        ) {
+          this.markMicLive(target, arrivedChunks);
+        }
+        if (capture.queue) {
+          this.enqueueCapturedChunk(capture, event.data);
+        } else {
+          window.electron.voiceInput.sendAudioChunk(event.data);
+        }
+      };
+      source.connect(workletNode);
+    } catch (error) {
+      await failCaptureSetup(error);
+      return;
+    }
+    logDebug(`${LOG_PREFIX} Eager audio capture started`);
+    logStep("source_attach");
+    const captureAttachedAt = performance.now();
+    let micSilenceGraceMs = VoiceRecordingService.MIC_SILENCE_GRACE_MS;
 
     // Only an actually-started session (open mic stream) needs to be torn
     // down here. `this.stream` is the canonical "audio is open" flag and is
     // independent of store status — using store.activeTarget here would
     // false-positive during the arming window (we seeded it ourselves) and
     // status alone would miss a cross-panel switch where the new "arming"
-    // status has already overwritten the prior session's "recording".
-    if (this.stream) {
+    // status has already overwritten the prior session's "recording". A stop
+    // already draining is joined too, so the new session never begins under it.
+    if (this.stream || this.stopPromise) {
       logDebug(`${LOG_PREFIX} Stopping existing session before starting new one`);
       await this.stop(undefined, {
         preserveLiveText: true,
@@ -737,13 +1020,14 @@ class VoiceRecordingService {
         preservePendingStart: true,
         skipCorrection: true,
       });
+      logStep("previous_session_stop");
       if (this.isStartRequestStale(startRequestId)) {
-        for (const track of stream.getTracks()) {
-          track.stop();
-        }
-        discardAudioContext();
+        abandonCapture(stream);
         return;
       }
+      // The new mic has been capturing through the drain, so that time counts
+      // against its grace window.
+      micSilenceGraceMs = Math.max(0, micSilenceGraceMs - (performance.now() - captureAttachedAt));
     }
 
     const generation = ++this.generation;
@@ -753,178 +1037,138 @@ class VoiceRecordingService {
     this.clearPauseTimeout();
     useVoiceRecordingStore.getState().beginSession(target);
 
+    // Promote the attempt to the session. From here stop() owns its teardown.
+    if (this.pendingCapture === capture) this.pendingCapture = null;
     this.stream = stream;
-
-    // Start audio capture IMMEDIATELY — don't wait for WebSocket.
-    // Chunks are buffered in the main process until the connection is ready.
     this.audioContext = audioContext;
-    if (this.pendingAudioContext === audioContext) this.pendingAudioContext = null;
+    this.keepAliveOscillator = capture.keepAliveOscillator;
+    this.keepAliveGain = capture.keepAliveGain;
+    this.workletNode = workletNode;
+    sessionGeneration = generation;
     logInfo(`${LOG_PREFIX} AudioContext created`, {
       requestedSampleRate: 24000,
       actualSampleRate: audioContext.sampleRate,
       state: audioContext.state,
       baseLatency: audioContext.baseLatency,
     });
-    const captureResources: {
-      keepAliveOscillator?: OscillatorNode | null;
-      keepAliveGain?: GainNode | null;
-      workletNode?: AudioWorkletNode | null;
-    } = {};
-
-    if (audioContext.state === "suspended") {
-      logDebug(`${LOG_PREFIX} AudioContext suspended, resuming`);
-      await audioContext.resume();
-    }
-
-    if (this.generation !== generation || this.isStartRequestStale(startRequestId)) {
-      logWarn(`${LOG_PREFIX} Generation mismatch after AudioContext setup`);
-      await this.cleanupCaptureResources({
-        audioContext,
-        keepAliveGain: captureResources.keepAliveGain,
-        keepAliveOscillator: captureResources.keepAliveOscillator,
-        stream,
-      });
-      return;
-    }
-
-    // Keep the AudioContext in "running" state while backgrounded. Chromium
-    // suspends capture-only contexts (no output to destination) when the window
-    // loses focus. Connecting a silent oscillator to the destination tricks the
-    // engine into treating the context as audible so AudioWorkletNode keeps firing.
-    const keepAliveGain = audioContext.createGain();
-    keepAliveGain.gain.value = 0;
-    const keepAliveOscillator = audioContext.createOscillator();
-    keepAliveOscillator.connect(keepAliveGain);
-    keepAliveGain.connect(audioContext.destination);
-    keepAliveOscillator.start();
-    captureResources.keepAliveGain = keepAliveGain;
-    captureResources.keepAliveOscillator = keepAliveOscillator;
-    this.keepAliveOscillator = keepAliveOscillator;
-    this.keepAliveGain = keepAliveGain;
-
-    logDebug(`${LOG_PREFIX} Loading pcm-processor worklet`);
-    try {
-      await audioContext.audioWorklet.addModule("/pcm-processor.js");
-      logDebug(`${LOG_PREFIX} pcm-processor worklet loaded`);
-    } catch (err) {
-      if (this.generation !== generation || this.isStartRequestStale(startRequestId)) return;
-      logError(`${LOG_PREFIX} Failed to load pcm-processor worklet`, err);
-      useVoiceRecordingStore.getState().setLastError({
-        severity: "fatal",
-        code: "renderer_error",
-        message: "Failed to load the audio processor.",
-      });
-      await this.stop(undefined, { nextStatus: "error", announce: false });
-      useVoiceRecordingStore.getState().announce("Voice dictation failed to initialize.");
-      return;
-    }
-
-    if (this.generation !== generation || this.isStartRequestStale(startRequestId)) {
-      logWarn(`${LOG_PREFIX} Generation mismatch after worklet load`);
-      await this.cleanupCaptureResources({
-        audioContext,
-        keepAliveGain: captureResources.keepAliveGain,
-        keepAliveOscillator: captureResources.keepAliveOscillator,
-        stream,
-      });
-      return;
-    }
-
-    const source = audioContext.createMediaStreamSource(stream);
-    const workletNode = new AudioWorkletNode(audioContext, "pcm-processor");
-    captureResources.workletNode = workletNode;
-    this.workletNode = workletNode;
+    if (!openingAudio.logged) this.openingAudio = openingAudio;
 
     this.sessionPeakRms = 0;
     this.sessionRmsSum = 0;
     this.sessionChunkCount = 0;
-    workletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
-      if (this.generation !== generation) return;
-      this.sessionChunkCount++;
-      const chunkCount = this.sessionChunkCount;
+    for (const chunk of capture.queue ?? []) {
+      this.meterAudioChunk(chunk);
+    }
 
-      // Compute RMS audio level from PCM16 samples for the UI glow.
-      const samples = new Int16Array(event.data);
-      let sumSq = 0;
-      for (let i = 0; i < samples.length; i++) {
-        const n = samples[i]! / 32768;
-        sumSq += n * n;
-      }
-      const rms = Math.sqrt(sumSq / samples.length);
-      this.sessionPeakRms = Math.max(this.sessionPeakRms, rms);
-      this.sessionRmsSum += rms;
-      this.pendingLevel = Math.min(1, rms * 6);
-
-      if (chunkCount <= 3 || chunkCount % 100 === 0) {
-        // Include RMS stats so a captured log can distinguish "mic was silent"
-        // (peak/avg near 0) from "user spoke but no transcription came back".
-        logDebug(`${LOG_PREFIX} Audio chunk #${chunkCount}`, {
-          bytes: event.data.byteLength,
-          rms: Number(rms.toFixed(4)),
-          peakRms: Number(this.sessionPeakRms.toFixed(4)),
-          avgRms: Number((this.sessionRmsSum / chunkCount).toFixed(4)),
-        });
-      }
-
-      if (this.levelRaf === null) {
-        this.levelRaf = requestAnimationFrame(() => {
-          this.levelRaf = null;
-          useVoiceRecordingStore.getState().setAudioLevel(this.pendingLevel);
-        });
-      }
-
-      // Chunks sent during "connecting" are buffered in the main process.
-      window.electron.voiceInput.sendAudioChunk(event.data);
-    };
-
-    source.connect(workletNode);
-
-    // Start the timer and announce immediately — user is already speaking.
+    // The "Dictation started" announcement waits for real audio (markMicLive);
+    // announcing here would tell the user to speak into a mic still delivering
+    // zeros.
     this.sessionStartedAt = Date.now();
     this.startElapsedTimer();
-    logDebug(`${LOG_PREFIX} Eager audio capture started, connecting to backend...`);
-    useVoiceRecordingStore
-      .getState()
-      .announce(`Dictation started in ${formatTargetLabel(target)}.`);
+    this.micCaptureAttachedAt = captureAttachedAt;
+    // Real audio that arrived while a previous session drained already counts.
+    if (firstLiveChunk) {
+      this.markMicLive(target, firstLiveChunk);
+    } else {
+      this.startMicSilenceTimer(generation, startRequestId, micSilenceGraceMs);
+    }
 
-    // Connect in parallel — audio is already flowing.
+    // Connect in parallel — audio keeps queueing until the backend is ready.
+    // Chunks can't go out earlier: main only swaps in this session's provider
+    // once its own async setup finishes, so anything sent before start()
+    // resolves could land on the previous provider or be dropped.
     logDebug(`${LOG_PREFIX} Calling voiceInput.start() IPC`);
-    const result = await window.electron.voiceInput.start();
+    const result = await window.electron.voiceInput
+      .start()
+      .catch((error: unknown): { ok: false; error: string } => ({
+        ok: false,
+        error: formatErrorMessage(error, "Voice input failed to start."),
+      }));
     logDebug(`${LOG_PREFIX} voiceInput.start() returned`, {
       ok: result.ok,
       error: !result.ok ? result.error : undefined,
     });
+    logStep("backend_start", { ok: result.ok });
 
     if (this.generation !== generation || this.isStartRequestStale(startRequestId)) {
       logWarn(`${LOG_PREFIX} Generation mismatch after IPC start`);
+      this.clearMicSilenceTimerFor(generation, startRequestId);
+      capture.queue = null;
+      this.flushOpeningAudio(openingAudio);
       await this.cleanupCaptureResources({
         audioContext,
-        keepAliveGain: captureResources.keepAliveGain,
-        keepAliveOscillator: captureResources.keepAliveOscillator,
+        keepAliveGain: capture.keepAliveGain,
+        keepAliveOscillator: capture.keepAliveOscillator,
         stream,
-        workletNode: captureResources.workletNode,
+        workletNode,
       });
       return;
     }
 
     if (!result.ok) {
       logError(`${LOG_PREFIX} Backend start failed`, { error: result.error });
+      capture.queue = null;
+      this.flushOpeningAudio(openingAudio);
+      await this.cleanupAudioCapture();
+      // A newer start may have taken over while the teardown awaited.
+      if (this.generation !== generation || this.isStartRequestStale(startRequestId)) return;
       useVoiceRecordingStore
         .getState()
         .setLastError({ severity: "fatal", code: "backend_start_failed", message: result.error });
-      await this.cleanupAudioCapture();
       useVoiceRecordingStore.getState().finishSession({ nextStatus: "error" });
       useVoiceRecordingStore.getState().announce("Voice dictation failed to start.");
       return;
     }
 
-    if (this.generation !== generation || this.isStartRequestStale(startRequestId)) {
-      logWarn(`${LOG_PREFIX} Generation mismatch after IPC start (late check)`);
-      return;
+    // Flush synchronously, oldest first, so no live chunk can interleave.
+    const queued = capture.queue ?? [];
+    capture.queue = null;
+    for (const chunk of queued) {
+      window.electron.voiceInput.sendAudioChunk(chunk);
     }
+    logDebug(`${LOG_PREFIX} Flushed startup audio`, {
+      chunks: queued.length,
+      droppedChunks: capture.droppedChunks,
+    });
+    logStep("startup_audio_flush", {
+      chunks: queued.length,
+      droppedChunks: capture.droppedChunks,
+    });
 
     // Backend is connected — status transitions to "recording" via the onStatus listener.
     logDebug(`${LOG_PREFIX} Recording started successfully`);
+  }
+
+  private meterAudioChunk(
+    data: ArrayBuffer,
+    stats: PcmChunkStats = measurePcm16Chunk(new Int16Array(data))
+  ): void {
+    this.sessionChunkCount++;
+    const chunkCount = this.sessionChunkCount;
+
+    // RMS audio level from PCM16 samples for the UI glow.
+    const rms = stats.rms;
+    this.sessionPeakRms = Math.max(this.sessionPeakRms, rms);
+    this.sessionRmsSum += rms;
+    this.pendingLevel = Math.min(1, rms * 6);
+
+    if (chunkCount <= 3 || chunkCount % 100 === 0) {
+      // Include RMS stats so a captured log can distinguish "mic was silent"
+      // (peak/avg near 0) from "user spoke but no transcription came back".
+      logDebug(`${LOG_PREFIX} Audio chunk #${chunkCount}`, {
+        bytes: data.byteLength,
+        rms: Number(rms.toFixed(4)),
+        peakRms: Number(this.sessionPeakRms.toFixed(4)),
+        avgRms: Number((this.sessionRmsSum / chunkCount).toFixed(4)),
+      });
+    }
+
+    if (this.levelRaf === null) {
+      this.levelRaf = requestAnimationFrame(() => {
+        this.levelRaf = null;
+        useVoiceRecordingStore.getState().setAudioLevel(this.pendingLevel);
+      });
+    }
   }
 
   async stop(
@@ -981,6 +1225,9 @@ class VoiceRecordingService {
         currentStatus: storeState.status,
         hasActiveTarget: !!storeState.activeTarget,
       });
+
+      // A session shorter than the opening window still reports what it had.
+      if (this.openingAudio) this.flushOpeningAudio(this.openingAudio);
 
       // Session audio summary — a near-zero peak means the mic captured no
       // speech, which explains an empty transcript without it being a bug.
@@ -1441,9 +1688,62 @@ class VoiceRecordingService {
     this.pauseTimeoutId = null;
   }
 
+  private markMicLive(target: VoiceRecordingTarget, chunkCount: number): void {
+    this.clearMicSilenceTimer();
+    const state = useVoiceRecordingStore.getState();
+    logInfo(`${LOG_PREFIX} Microphone delivering audio`, {
+      chunk: chunkCount,
+      msSinceCaptureAttach: Math.round(performance.now() - this.micCaptureAttachedAt),
+      wasSilent: state.micSignal === "silent",
+    });
+    state.setMicSignal("live");
+    state.announce(`Dictation started in ${formatTargetLabel(target)}.`);
+  }
+
+  private startMicSilenceTimer(
+    generation: number,
+    startRequestId: number,
+    delayMs: number = VoiceRecordingService.MIC_SILENCE_GRACE_MS
+  ): void {
+    this.clearMicSilenceTimer();
+    this.micSilenceSession = { generation, startRequestId };
+    this.micSilenceTimeoutId = setTimeout(() => {
+      this.micSilenceTimeoutId = null;
+      if (this.generation !== generation || this.isStartRequestStale(startRequestId)) return;
+      const state = useVoiceRecordingStore.getState();
+      // Paused (or finishing) before the mic came up: the worklet isn't
+      // forwarding, so the absence of audio says nothing about the mic.
+      if (state.micSignal !== "pending" || !isVoiceMicPending(state)) return;
+      logWarn(`${LOG_PREFIX} No audio from microphone after grace window`, {
+        graceMs: VoiceRecordingService.MIC_SILENCE_GRACE_MS,
+        chunkCount: this.sessionChunkCount,
+        peakRms: Number(this.sessionPeakRms.toFixed(4)),
+      });
+      state.setMicSignal("silent");
+      state.announce("No audio from the microphone yet.");
+    }, delayMs);
+  }
+
+  private clearMicSilenceTimer(): void {
+    if (this.micSilenceTimeoutId === null) return;
+    clearTimeout(this.micSilenceTimeoutId);
+    this.micSilenceTimeoutId = null;
+  }
+
+  // A superseded start must not cancel a newer session's countdown.
+  private clearMicSilenceTimerFor(generation: number, startRequestId: number): void {
+    const owner = this.micSilenceSession;
+    if (!owner || owner.generation !== generation || owner.startRequestId !== startRequestId) {
+      return;
+    }
+    this.clearMicSilenceTimer();
+    this.micSilenceSession = null;
+  }
+
   private clearTimers(): void {
     this.clearElapsedTimer();
     this.clearPauseTimeout();
+    this.clearMicSilenceTimer();
     useVoiceRecordingStore.getState().setElapsedSeconds(0);
   }
 
@@ -1465,6 +1765,9 @@ class VoiceRecordingService {
     this.workletNode?.port.postMessage({ type: "setPaused", value: true });
     this.pauseStartedAt = Date.now();
     this.clearElapsedTimer();
+    // The worklet stops forwarding while paused, so no audio says nothing
+    // about the mic — the grace window only counts unpaused capture.
+    this.clearMicSilenceTimer();
     state.setStatus("paused");
     state.announce("Dictation paused.");
     this.clearPauseTimeout();
@@ -1503,8 +1806,21 @@ class VoiceRecordingService {
     }
     this.workletNode?.port.postMessage({ type: "setPaused", value: false });
     state.setStatus("recording");
-    state.announce("Dictation resumed.");
     this.startElapsedTimer();
+    // Resuming before the mic ever went live must not invite the user to speak
+    // into zeros; the first real chunk announces the start instead.
+    if (state.micSignal === "live") {
+      state.announce("Dictation resumed.");
+    } else {
+      const silenceSession = this.micSilenceSession;
+      if (
+        state.micSignal === "pending" &&
+        silenceSession &&
+        silenceSession.generation === this.generation
+      ) {
+        this.startMicSilenceTimer(silenceSession.generation, silenceSession.startRequestId);
+      }
+    }
   }
 
   /**
@@ -1528,11 +1844,65 @@ class VoiceRecordingService {
     // timers must be cleared or they fire against the new singleton's state.
     this.clearPauseTimeout();
     this.clearElapsedTimer();
+    this.clearMicSilenceTimer();
     for (const unsub of this.unsubscribers) {
       unsub();
     }
     this.unsubscribers = [];
     this.initialized = false;
+  }
+
+  // Idempotent and identity-scoped: a late flush of an old attempt never
+  // clears a newer session's window.
+  private flushOpeningAudio(openingAudio: OpeningAudio): void {
+    if (this.openingAudio === openingAudio) this.openingAudio = null;
+    if (openingAudio.logged) return;
+    openingAudio.logged = true;
+    if (openingAudio.chunks.length === 0) return;
+    try {
+      logInfo(`${LOG_PREFIX} Opening audio`, {
+        startRequestId: openingAudio.startRequestId,
+        ...summarizeOpeningChunks(openingAudio.chunks),
+      });
+    } catch {
+      // Diagnostics must never abort a stop or drop a chunk.
+    }
+  }
+
+  // Listeners live as long as the context/track this start owns; both are
+  // closed or stopped and dropped on teardown, and the final "closed"
+  // transition is itself worth logging. Diagnostics must never abort start().
+  private observeAudioContextState(audioContext: AudioContext, logStep: StartStepLogger): void {
+    try {
+      if (typeof audioContext.addEventListener !== "function") return;
+      audioContext.addEventListener("statechange", () => {
+        logStep("audio_context_statechange", { state: audioContext.state });
+      });
+    } catch (err) {
+      logDebug(`${LOG_PREFIX} Could not observe AudioContext state`, { err });
+    }
+  }
+
+  // A local track.stop() fires no "ended", so an "ended" here means the
+  // device or OS pulled the track.
+  private observeTrackState(stream: MediaStream, logStep: StartStepLogger): void {
+    try {
+      const tracks = typeof stream.getAudioTracks === "function" ? stream.getAudioTracks() : [];
+      tracks.forEach((track, trackIndex) => {
+        if (typeof track.addEventListener !== "function") return;
+        for (const event of ["mute", "unmute", "ended"] as const) {
+          track.addEventListener(event, () => {
+            logStep(`track_${event}`, {
+              trackIndex,
+              muted: track.muted,
+              readyState: track.readyState,
+            });
+          });
+        }
+      });
+    } catch (err) {
+      logDebug(`${LOG_PREFIX} Could not observe microphone track state`, { err });
+    }
   }
 
   private async cleanupAudioCapture(): Promise<void> {
@@ -1565,6 +1935,10 @@ class VoiceRecordingService {
       this.levelRaf = null;
     }
 
+    if (resources.workletNode && this.workletNode === resources.workletNode) {
+      this.clearMicSilenceTimer();
+    }
+
     if (resources.workletNode) {
       resources.workletNode.port.onmessage = null;
       resources.workletNode.disconnect();
@@ -1588,19 +1962,21 @@ class VoiceRecordingService {
       }
     }
 
-    if (resources.audioContext) {
-      await resources.audioContext.close().catch(() => {});
-      if (this.audioContext === resources.audioContext) {
-        this.audioContext = null;
-      }
-    }
-
+    // Tracks stop before the context closes: close() can be slow, and the OS
+    // microphone indicator must go out the moment capture is released.
     if (resources.stream) {
       for (const track of resources.stream.getTracks()) {
         track.stop();
       }
       if (this.stream === resources.stream) {
         this.stream = null;
+      }
+    }
+
+    if (resources.audioContext) {
+      await resources.audioContext.close().catch(() => {});
+      if (this.audioContext === resources.audioContext) {
+        this.audioContext = null;
       }
     }
   }

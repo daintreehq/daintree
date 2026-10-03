@@ -10,6 +10,8 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
+import { describeKeyCap } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -132,6 +134,12 @@ export interface AppPaletteDialogProps {
    * one material for the whole family is the point.
    */
   className?: string;
+  /**
+   * The stacking layer. `"nested"` lifts the palette above a nested dialog,
+   * for one opened from inside it: at the modal tier it would take the
+   * keyboard while drawn behind the dialog that opened it.
+   */
+  zIndex?: "modal" | "nested";
 }
 
 export function AppPaletteDialog({
@@ -142,6 +150,7 @@ export function AppPaletteDialog({
   tier,
   initialFocusRef,
   className,
+  zIndex = "modal",
 }: AppPaletteDialogProps) {
   const closeOnEscape = useCallback(() => onClose("escape"), [onClose]);
   useEscapeStack(isOpen, closeOnEscape);
@@ -353,7 +362,8 @@ export function AppPaletteDialog({
   return createPortal(
     <div
       className={cn(
-        "fixed inset-0 z-[var(--z-modal)] flex items-start justify-center pt-[15vh] bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur-palette)] backdrop-saturate-[var(--theme-material-saturation)]",
+        "fixed inset-0 flex items-start justify-center pt-[15vh] bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur-palette)] backdrop-saturate-[var(--theme-material-saturation)]",
+        zIndex === "nested" ? "z-[calc(var(--z-nested-dialog)+1)]" : "z-[var(--z-modal)]",
         // Opacity-only, so reduced motion leaves it alone: a scrim fade is not
         // spatial motion. WCAG 2.3.3.
         "transition-opacity starting:opacity-0",
@@ -768,8 +778,13 @@ function HintChip({
     <span
       className={cn("inline-flex items-baseline", truncate ? "min-w-0" : "shrink-0", className)}
     >
+      {/* The caps are glyphs ("↵", "↑"), which a screen reader names as symbols
+          or skips; the keys are spoken by name instead. */}
+      <span className="sr-only">
+        {hint.keys.map((key) => describeKeyCap(key, isMac())).join(" ")}
+      </span>
       {hint.keys.map((key, i) => (
-        <kbd key={key} className={cn(KBD_CLASS, "shrink-0", i > 0 && "ml-1")}>
+        <kbd key={key} aria-hidden="true" className={cn(KBD_CLASS, "shrink-0", i > 0 && "ml-1")}>
           {key}
         </kbd>
       ))}

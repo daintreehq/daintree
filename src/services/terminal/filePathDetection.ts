@@ -16,6 +16,138 @@ export const FILE_PATH_REGEX =
 
 const WINDOWS_ABS = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
 
+// A path token that contains spaces. FILE_PATH_REGEX treats a space as a token
+// boundary, so `/Users/me/Library/Application Support/x.md` offers only its
+// `Support/x.md` tail — which resolves against the cwd and links nothing real.
+export interface SpacedFilePathCandidate {
+  /** Span to underline, in the scanned text's coordinates. */
+  startIndex: number;
+  endIndex: number;
+  /** The path as the filesystem spells it: quotes dropped, `\ ` decoded. */
+  path: string;
+  /**
+   * The syntax alone can't settle it: an unquoted space is as likely to
+   * separate two tokens as to sit inside a directory name. Such candidates
+   * are only links once `probeDir` is confirmed to exist.
+   */
+  probeDir?: string;
+}
+
+// Quoted and shell-escaped forms carry their own boundaries, so they need no
+// filesystem confirmation. Only space-containing spellings are taken here —
+// a space-free quoted path stays the business of FILE_PATH_REGEX. A quoted
+// path must open with a root or `./`/`../`: quotes bound text, not paths, and
+// `'cat src/a.ts'` would otherwise swallow the real `src/a.ts` link.
+const QUOTED_PATH_REGEX = /(?:^|[\s(=:])(["'`])([^"'`\s][^"'`]*?)\1/g;
+const QUOTED_PATH_SHAPE = /^(?:[a-zA-Z]:[\\/]|\.{0,2}[\\/])[\w./\\ -]*\.\w+(?::\d+(?::\d+)?)?$/;
+const ESCAPED_PATH_REGEX = /(?:^|[\s(])((?:[\w./-]|\\ )+\.\w+(?::\d+(?::\d+)?)?)/g;
+
+// Unquoted: anchored on an absolute root and grown word by word, each word
+// joined by exactly one space. Bounded because the scan runs on every hover.
+const SPACED_ANCHOR_REGEX = /(?:^|[\s(])((?:\/|[a-zA-Z]:[\\/])[\w./\\-]*)/g;
+const SPACED_WORD_REGEX = /[\w./\\-]+(?::\d+(?::\d+)?)?/y;
+const SPACED_TAIL_REGEX = /^[\w./\\-]*[\\/][\w./\\-]*\.\w+(?::\d+(?::\d+)?)?/;
+const ABSOLUTE_WORD = /^(?:\/|[a-zA-Z]:[\\/])/;
+// Sentence punctuation after the name still ends it: `/a/b.ts. See foo/x.ts`.
+const COMPLETE_FILE_WORD = /\.\w+(?::\d+(?::\d+)?)?\.?$/;
+const MAX_SPACED_WORDS = 8;
+// Two leading separators in any mix is a UNC root on Windows. Probing one
+// (or opening it on click) makes the OS dial SMB to that host and hand it
+// the user's NTLM credentials, so hovered terminal text never gets to name one.
+const UNC_PREFIX = /^[\\/]{2}/;
+
+function stripLocationSuffix(path: string): string {
+  return path.replace(/(?::\d+(?::\d+)?)$/, "");
+}
+
+/**
+ * Find path tokens that contain spaces: quoted (`"/a b/c.md"`), shell-escaped
+ * (`/a\ b/c.md`), and unquoted absolute paths whose space sits in a directory
+ * component (`/a b/c.md`). Unquoted candidates carry `probeDir`, the parent
+ * directory that must exist before the candidate is a link.
+ */
+export function findSpacedFilePathCandidates(text: string): SpacedFilePathCandidate[] {
+  const candidates: SpacedFilePathCandidate[] = [];
+  const explicit: Array<[number, number]> = [];
+
+  for (const match of text.matchAll(QUOTED_PATH_REGEX)) {
+    const inner = match[2]!;
+    if (!inner.includes(" ") || inner.endsWith(" ") || !QUOTED_PATH_SHAPE.test(inner)) continue;
+    if (isPathExcluded(inner) || UNC_PREFIX.test(inner)) continue;
+    const startIndex = match.index + match[0].length - inner.length - 1;
+    const endIndex = startIndex + inner.length;
+    candidates.push({ startIndex, endIndex, path: inner });
+    explicit.push([startIndex - 1, endIndex + 1]);
+  }
+
+  for (const match of text.matchAll(ESCAPED_PATH_REGEX)) {
+    const raw = match[1]!;
+    if (!raw.includes("\\ ") || !raw.includes("/") || UNC_PREFIX.test(raw)) continue;
+    const startIndex = match.index + match[0].length - raw.length;
+    const endIndex = startIndex + raw.length;
+    if (overlaps(explicit, startIndex, endIndex)) continue;
+    candidates.push({ startIndex, endIndex, path: raw.replace(/\\ /g, " ") });
+    explicit.push([startIndex, endIndex]);
+  }
+
+  for (const match of text.matchAll(SPACED_ANCHOR_REGEX)) {
+    const first = match[1]!;
+    if (UNC_PREFIX.test(first)) continue;
+    const startIndex = match.index + match[0].length - first.length;
+    if (overlaps(explicit, startIndex, startIndex + first.length)) continue;
+
+    const wordEnds: number[] = [];
+    let pos = startIndex + first.length;
+    let current = first;
+    // A word that already ends like a whole file (`/a/b.ts in foo/bar.ts`)
+    // closes the token: growing past it would hold two real links hostage to
+    // a probe of `/a/b.ts in foo`.
+    while (
+      wordEnds.length < MAX_SPACED_WORDS - 1 &&
+      text[pos] === " " &&
+      !COMPLETE_FILE_WORD.test(current)
+    ) {
+      SPACED_WORD_REGEX.lastIndex = pos + 1;
+      const word = SPACED_WORD_REGEX.exec(text);
+      // A word that starts its own absolute path is the next token, not a
+      // continuation of this one.
+      if (!word || ABSOLUTE_WORD.test(word[0])) break;
+      current = word[0];
+      pos += 1 + word[0].length;
+      wordEnds.push(pos);
+    }
+
+    // Growth stops after a file-shaped word, so only the last word can end
+    // the path. It has to carry a separator too, which puts every space in the
+    // candidate inside a directory component — the one thing a single stat of
+    // the parent directory can then confirm.
+    if (wordEnds.length === 0) continue;
+    const lastWordStart = pos - current.length;
+    const tail = SPACED_TAIL_REGEX.exec(current);
+    if (!tail) continue;
+    const endIndex = lastWordStart + tail[0].length;
+    if (overlaps(explicit, startIndex, endIndex)) continue;
+    const path = text.slice(startIndex, endIndex);
+    candidates.push({
+      startIndex,
+      endIndex,
+      path,
+      probeDir: parentDirectory(stripLocationSuffix(path)),
+    });
+  }
+
+  return candidates;
+}
+
+function parentDirectory(path: string): string {
+  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return path.slice(0, cut);
+}
+
+function overlaps(spans: ReadonlyArray<[number, number]>, start: number, end: number): boolean {
+  return spans.some(([s, e]) => start < e && end > s);
+}
+
 // Matches a `file://` URL token inside arbitrary text — agent CLIs print
 // generated images this way (`file:///Users/me/.codex/generated_images/x.png`).
 // The body class is deliberately permissive about `|`, `\` and brackets: real
@@ -203,6 +335,16 @@ export function resolveSelectedFilePath(selection: string, cwd: string): Resolve
   }
 
   if (isPathExcluded(trimmed)) return null;
+
+  // The user selected exactly this span, so an unquoted spaced path needs no
+  // probe here — the selection itself is the evidence of where it ends.
+  const spaced = findSpacedFilePathCandidates(trimmed).find((candidate) => {
+    const quoted = candidate.startIndex === 1 && candidate.endIndex === trimmed.length - 1;
+    const whole = candidate.startIndex === 0 && candidate.endIndex === trimmed.length;
+    return whole || (quoted && trimmed[0] === trimmed[trimmed.length - 1]);
+  });
+  if (spaced) return resolveFilePathCandidate(spaced.path, cwd);
+
   const matches = [...trimmed.matchAll(FILE_PATH_REGEX)];
   if (matches.length !== 1) return null;
   const [match] = matches;

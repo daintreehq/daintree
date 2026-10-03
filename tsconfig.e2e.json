@@ -1,0 +1,54 @@
+{
+  /*
+   * Type-checks the Playwright suites and configs, which no other project
+   * includes.
+   *
+   * Same regime as tsconfig.perf.json: specs import renderer `__preview__`
+   * fixtures and shared modules through the `@/` and `@shared/` aliases, so
+   * this uses bundler resolution with DOM and JSX, and keeps
+   * `noUncheckedIndexedAccess` off to match electron/ and shared/, which make
+   * up most of the transitive graph. `src/types` and `electron/types` supply
+   * the `window.electron` ambient globals that `page.evaluate` bodies use;
+   * `electron/ipc/faultRegistry.ts` declares the main-process fault registry
+   * global that `app.evaluate` bodies reach.
+   */
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "types": ["node"],
+    "skipLibCheck": true,
+
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false,
+    "forceConsistentCasingInFileNames": true,
+
+    "paths": {
+      "@/*": ["./src/*"],
+      "@shared/*": ["./shared/*"]
+    }
+  },
+  "include": [
+    "e2e/**/*.ts",
+    "e2e/perf/**/*.ts",
+    "playwright*.config.ts",
+    "src/types",
+    "src/vite-env.d.ts",
+    "electron/types",
+    "electron/ipc/faultRegistry.ts"
+  ]
+}

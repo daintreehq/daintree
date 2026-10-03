@@ -378,6 +378,9 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         cwd: {
           type: ["string", "null"],
         },
+        cwdOutsideWorktree: {
+          type: ["boolean", "null"],
+        },
         reply: {
           anyOf: [
             {
@@ -436,6 +439,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         "worktreePath",
         "branch",
         "cwd",
+        "cwdOutsideWorktree",
         "reply",
       ],
       additionalProperties: false,

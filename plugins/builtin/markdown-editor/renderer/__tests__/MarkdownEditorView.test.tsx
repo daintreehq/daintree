@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoreApi, UseBoundStore } from "zustand";
 import { EditorView } from "@codemirror/view";
 
@@ -9,7 +9,6 @@ const { dispatchMock } = vi.hoisted(() => ({
 }));
 vi.mock("@/utils/logger", () => ({ logError: vi.fn(), logWarn: vi.fn() }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
-vi.mock("@/hooks/useActiveAppScheme", () => ({ useActiveAppScheme: () => ({ type: "dark" }) }));
 vi.mock("@/components/Worktree/DiffViewer", () => ({
   DiffViewer: (props: { diff: string }) => (
     <div data-testid="diff-viewer-mock" data-diff={props.diff} />
@@ -34,6 +33,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CHANNELS, identityKey } from "../../shared/protocol";
 import { createFakeMain, type FakeMain } from "./testHost";
+import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 
 const FILE = "/repo/docs/plan.md";
 
@@ -76,6 +76,8 @@ let uninstall: () => void;
 // The real store, spied: the dialogs render the app's announcer, which needs
 // the hook itself, not a getState() stub.
 let announceMock: ReturnType<typeof vi.spyOn>;
+
+beforeAll(() => whenPluginUiReady(), 30_000);
 
 beforeEach(() => {
   main = createFakeMain();

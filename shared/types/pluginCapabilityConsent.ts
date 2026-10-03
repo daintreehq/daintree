@@ -189,3 +189,17 @@ export interface PluginCapabilityResolveConsentInput {
   requestId: string;
   decision: PluginCapabilityConsentDecision;
 }
+
+/**
+ * Renderer → main read of an app-wide plugin's "Allow project targeting"
+ * switch (#13119) — the `project:dispatch` grant in the `"global"` scope.
+ */
+export interface PluginProjectTargetingQuery {
+  pluginId: string;
+}
+
+/** Renderer → main write of the "Allow project targeting" switch (#13119). */
+export interface PluginProjectTargetingUpdate {
+  pluginId: string;
+  enabled: boolean;
+}

@@ -19,13 +19,34 @@ export interface SegmentConfidence {
 }
 
 export type VoiceTranscriptionEvent =
-  | { type: "delta"; text: string }
-  | { type: "complete"; text: string; confidence?: SegmentConfidence }
+  // `itemId` identifies the committed audio segment a delta/completion belongs
+  // to. Providers without per-segment identity (Deepgram) omit it, and the
+  // renderer falls back to strictly sequential reconciliation.
+  | { type: "delta"; text: string; itemId?: string }
+  | { type: "complete"; text: string; confidence?: SegmentConfidence; itemId?: string }
   | { type: "paragraph_boundary" }
   | { type: "error"; error: VoiceInputError }
   | { type: "status"; status: VoiceInputStatus };
 
 export type VoiceStartResult = { ok: true } | { ok: false; error: string };
+
+// Ceiling for audio held before it can be sent — both in the IPC handler while
+// the provider is being brought up, and in each provider while its socket
+// connects. 24kHz mono PCM16 ≈ 48KB/s, so ~150KB ≈ 3s, the point past which
+// voice context is lost anyway. Caps memory if chunks are large.
+export const AUDIO_BUFFER_MAX_CHUNKS = 100;
+export const AUDIO_BUFFER_MAX_BYTES = 150_000;
+
+export const AUDIO_BUFFER_OVERFLOW_CODE = "audio_buffer_overflow";
+
+/** Transient: the session keeps running, only audio past the cap was lost. */
+export function createAudioBufferOverflowError(): VoiceInputError {
+  return {
+    severity: "transient",
+    code: AUDIO_BUFFER_OVERFLOW_CODE,
+    message: "Connecting took too long, so some audio from the start of dictation was lost.",
+  };
+}
 
 // Providers emit a neutral, fully-confident stub: the real word-level
 // confidence/correction pass lives in VoiceCorrectionService, not the

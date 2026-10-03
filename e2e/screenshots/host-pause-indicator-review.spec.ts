@@ -94,7 +94,10 @@ async function settle(page: Page, ms = 300): Promise<void> {
 /** Writes the store exactly as `useHostMemoryPauseSync` does once the display gate clears. */
 async function writePause(page: Page, state: PauseState): Promise<void> {
   await page.evaluate(async (s) => {
-    const mod = await import(/* @vite-ignore */ "/src/store/hostMemoryPauseStore.ts");
+    const url = "/src/store/hostMemoryPauseStore.ts";
+    const mod = (await import(
+      /* @vite-ignore */ url
+    )) as typeof import("@/store/hostMemoryPauseStore");
     mod.useHostMemoryPauseStore.setState(
       s === "none"
         ? { snapshot: { active: false, paused: false, stalled: false }, visible: false }

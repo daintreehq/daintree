@@ -145,11 +145,11 @@ export function RecipeManager({
   };
 
   // The menu has closed by the time the copy settles, so it confirms like
-  // every menu copy: a toast naming the recipe, and a Retry when refused.
+  // every menu copy: a brief "Copied" flash, and a Retry toast when refused.
   const handleExportRecipe = useCallback(
     (recipe: TerminalRecipe) => {
       const json = exportRecipe(recipe.id);
-      if (json !== null) copyWithToast("Recipe", json, { message: recipe.name });
+      if (json !== null) copyWithToast("Recipe", json);
     },
     [exportRecipe]
   );

@@ -10,6 +10,7 @@ import { ACTIVE_AGENT_STATES } from "../types/agent.js";
  */
 export interface AgentStateChangePayload {
   agentId?: string;
+  terminalId?: string;
   state: AgentState;
   previousState: AgentState;
   waitingReason?: WaitingReason;
@@ -18,21 +19,34 @@ export interface AgentStateChangePayload {
   timestamp: number;
 }
 
+/** Host-resolved context the payload itself does not carry. */
+export interface PluginAgentSnapshotContext {
+  /** Owning workspace of the payload's terminal, as the PTY layer records it. */
+  workspaceId?: string | null;
+}
+
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0;
+
 /**
  * Project an internal `agent:state-changed` payload down to the read-only
  * {@link PluginAgentSnapshot} allowlist, then freeze it.
  *
- * Explicit field assignment — do NOT spread. Internal routing identifiers
- * (`terminalId`, `worktreeId`, `cwd`) and activity-detector internals
- * (`trigger`, `confidence`, `temperature`, `heatAdded`, `changedChars`) are
- * deliberately omitted: a plugin holding only `agent:read` must not be able to
- * cross-reference PTY/worktree internals it has no capability to access.
- * Optional fields are only assigned when present so the frozen shape mirrors the
- * payload (no `undefined`-valued keys).
+ * Explicit field assignment — do NOT spread. The terminal id and the owning
+ * workspace id are exposed so a plugin can tell where a transition came from
+ * and join it to `agents.list()`; `worktreeId`, `cwd` and the activity-detector
+ * internals (`trigger`, `confidence`, `temperature`, `heatAdded`,
+ * `changedChars`) stay out. Optional fields are only assigned when present so
+ * the frozen shape mirrors the payload (no `undefined`-valued keys).
  */
-export function toPluginAgentSnapshot(payload: AgentStateChangePayload): PluginAgentSnapshot {
+export function toPluginAgentSnapshot(
+  payload: AgentStateChangePayload,
+  context: PluginAgentSnapshotContext = {}
+): PluginAgentSnapshot {
   const projection: {
     agentId?: string;
+    terminalId?: string;
+    workspaceId?: string;
     state: AgentState;
     previousState: AgentState;
     running: boolean;
@@ -48,6 +62,8 @@ export function toPluginAgentSnapshot(payload: AgentStateChangePayload): PluginA
   };
 
   if (payload.agentId !== undefined) projection.agentId = payload.agentId;
+  if (isNonEmptyString(payload.terminalId)) projection.terminalId = payload.terminalId;
+  if (isNonEmptyString(context.workspaceId)) projection.workspaceId = context.workspaceId;
   if (payload.waitingReason !== undefined) projection.waitingReason = payload.waitingReason;
   if (payload.sessionCost !== undefined) projection.sessionCost = payload.sessionCost;
   if (payload.sessionTokens !== undefined) projection.sessionTokens = payload.sessionTokens;

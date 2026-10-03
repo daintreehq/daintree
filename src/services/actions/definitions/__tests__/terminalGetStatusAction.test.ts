@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
+import type { ActionContext } from "@shared/types/actions";
 
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const terminalClientMock = vi.hoisted(() => ({
@@ -1331,5 +1332,30 @@ describe("terminal.getStatus output activity (#12495)", () => {
     expect(result.terminals[0]?.error).toBe(
       "submission lookup died; output fetch died; activity died"
     );
+  });
+});
+
+describe("terminal.getStatus output for plugin dispatch (#13155)", () => {
+  const pluginCtx: ActionContext = { dispatchSource: "plugin" };
+
+  function getStatusDef(): AnyActionDefinition {
+    return setupActions().get("terminal.getStatus")!() as AnyActionDefinition;
+  }
+
+  it("refuses includeOutput for a plugin dispatch, before reading anything", async () => {
+    panelStoreMock.getState.mockReturnValue({ panelsById: {}, panelIds: [] });
+    await expect(getStatusDef().run({ includeOutput: true }, pluginCtx)).rejects.toThrow(
+      /host\.terminals\.readScreen/
+    );
+    await expect(getStatusDef().run({ includeOutput: { lines: 5 } }, pluginCtx)).rejects.toThrow(
+      /terminal:read/
+    );
+    expect(getSerializedStatesMock).not.toHaveBeenCalled();
+    expect(panelStoreMock.getState).not.toHaveBeenCalled();
+  });
+
+  it("keeps status without output open to plugins", async () => {
+    panelStoreMock.getState.mockReturnValue({ panelsById: {}, panelIds: [] });
+    await expect(getStatusDef().run({ includeOutput: false }, pluginCtx)).resolves.toBeDefined();
   });
 });

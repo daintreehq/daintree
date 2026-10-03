@@ -175,7 +175,7 @@ test.describe.serial("Plugin agent data: launch wiring", () => {
   test.afterAll(async () => {
     if (ctx?.app) await closeApp(ctx.app);
     cleanup?.();
-    removeExpensesPluginData(projectIdForCleanup);
+    if (ctx) removeExpensesPluginData(projectIdForCleanup, ctx.homeDir);
   });
 
   test.afterEach(async () => {

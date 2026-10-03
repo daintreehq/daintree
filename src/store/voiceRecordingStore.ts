@@ -135,8 +135,33 @@ function mergeVoiceRecordingPersistedWrite({
   return { version: incoming.version, state: { recentTargets } };
 }
 
+interface VoiceLiveItem {
+  itemId: string;
+  text: string;
+}
+
+/**
+ * Joins per-item interim text into the single ghost preview. Items are kept in
+ * first-delta order; a space is inserted only where neither side already
+ * carries whitespace, so a lone item renders exactly as its raw deltas.
+ */
+function joinLiveItems(items: VoiceLiveItem[]): string {
+  let joined = "";
+  for (const { text } of items) {
+    if (!text) continue;
+    joined += joined && !/\s$/.test(joined) && !/^\s/.test(text) ? ` ${text}` : text;
+  }
+  return joined;
+}
+
 interface VoiceTranscriptBuffer {
   liveText: string;
+  /**
+   * Interim text per identified item (OpenAI `item_id`), in first-delta order.
+   * When non-empty, `liveText` is derived from it so one item's completion
+   * retires only its own preview. Unidentified deltas (Deepgram) bypass it.
+   */
+  liveItems: VoiceLiveItem[];
   completedSegments: string[];
   projectId?: string;
   /** Draft length snapshot taken before the first delta of the session. */
@@ -161,6 +186,18 @@ interface VoiceTranscriptBuffer {
    */
   sessionCorrectedText: string | null;
 }
+
+/**
+ * What the microphone is actually delivering, independent of the transcription
+ * backend's `status`. Bluetooth mics (AirPods switching A2DP→HFP) hand Web Audio
+ * zeros for a while after `getUserMedia` resolves, so an open stream is not
+ * proof of capture (#13105).
+ *
+ * - pending: stream open (or opening), no real samples seen yet.
+ * - live: a PCM chunk above the noise floor has arrived; latched for the session.
+ * - silent: still no real samples after the grace window.
+ */
+export type VoiceMicSignal = "pending" | "live" | "silent";
 
 interface VoiceAnnouncement {
   id: number;
@@ -195,6 +232,7 @@ interface VoiceRecordingState {
   recentTargets: RecentDictationTarget[];
   elapsedSeconds: number;
   audioLevel: number;
+  micSignal: VoiceMicSignal;
   panelBuffers: Record<string, VoiceTranscriptBuffer>;
   announcement: VoiceAnnouncement | null;
   setConfigured: (isConfigured: boolean) => void;
@@ -202,15 +240,16 @@ interface VoiceRecordingState {
   setLearnFromCorrections: (enabled: boolean) => void;
   setSessionCorrectedText: (panelId: string, text: string | null) => void;
   setAudioLevel: (level: number) => void;
+  setMicSignal: (signal: VoiceMicSignal) => void;
   setArming: (target: VoiceRecordingTarget) => void;
   beginSession: (target: VoiceRecordingTarget) => void;
   setStatus: (status: VoiceInputStatus) => void;
   setLastError: (error: VoiceInputError | null) => void;
   setElapsedSeconds: (seconds: number) => void;
-  appendDelta: (delta: string) => void;
+  appendDelta: (delta: string, itemId?: string) => void;
   setSessionDraftStart: (panelId: string, length: number) => void;
   setDraftLengthAtSegmentStart: (panelId: string, length: number) => void;
-  completeSegment: (text: string) => void;
+  completeSegment: (text: string, itemId?: string) => void;
   setCorrectionRange: (panelId: string, range: { from: number; to: number } | null) => void;
   setActiveParagraphStart: (panelId: string, length: number) => void;
   resetParagraphState: (panelId: string) => void;
@@ -234,6 +273,7 @@ function getBuffer(
   return (
     panelBuffers[panelId] ?? {
       liveText: "",
+      liveItems: [],
       completedSegments: [],
       sessionDraftStart: -1,
       draftLengthAtSegmentStart: -1,
@@ -258,6 +298,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       recentTargets: [],
       elapsedSeconds: 0,
       audioLevel: 0,
+      micSignal: "pending",
       panelBuffers: {},
       announcement: null,
 
@@ -283,6 +324,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
       setAudioLevel: (audioLevel) => set({ audioLevel }),
 
+      setMicSignal: (micSignal) => set({ micSignal }),
+
       // Atomic single-set transition into the pre-audio confirmation phase.
       // Fires synchronously before any await in start() so the target panel
       // and toolbar can paint the arming cue before microphone init begins.
@@ -291,6 +334,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           activeTarget: target,
           status: "arming",
           lastError: null,
+          micSignal: "pending",
         }),
 
       beginSession: (target) =>
@@ -299,11 +343,13 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           status: "connecting",
           lastError: null,
           elapsedSeconds: 0,
+          micSignal: "pending",
           panelBuffers: {
             ...state.panelBuffers,
             [target.panelId]: {
               ...getBuffer(state.panelBuffers, target.panelId),
               liveText: "",
+              liveItems: [],
               completedSegments: [],
               projectId: target.projectId,
               sessionDraftStart: -1,
@@ -320,11 +366,31 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
       setElapsedSeconds: (elapsedSeconds) => set({ elapsedSeconds }),
 
-      appendDelta: (delta) =>
+      appendDelta: (delta, itemId) =>
         set((state) => {
           const panelId = state.activeTarget?.panelId;
           if (!panelId || !delta) return state;
           const buffer = getBuffer(state.panelBuffers, panelId);
+          if (itemId) {
+            const index = buffer.liveItems.findIndex((item) => item.itemId === itemId);
+            const liveItems =
+              index >= 0
+                ? buffer.liveItems.map((item, i) =>
+                    i === index ? { itemId, text: item.text + delta } : item
+                  )
+                : [...buffer.liveItems, { itemId, text: delta }];
+            return {
+              panelBuffers: {
+                ...state.panelBuffers,
+                [panelId]: {
+                  ...buffer,
+                  liveItems,
+                  liveText: joinLiveItems(liveItems),
+                  transcriptPhase: "interim" as VoiceTranscriptPhase,
+                },
+              },
+            };
+          }
           return {
             panelBuffers: {
               ...state.panelBuffers,
@@ -361,12 +427,41 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           };
         }),
 
-      completeSegment: (text) =>
+      completeSegment: (text, itemId) =>
         set((state) => {
           const panelId = state.activeTarget?.panelId;
           if (!panelId) return state;
 
           const buffer = getBuffer(state.panelBuffers, panelId);
+          if (itemId) {
+            // Retire only this item's preview; other items still streaming keep
+            // theirs. The completion text is authoritative — an empty final
+            // never falls back to the item's interim deltas.
+            const liveItems = buffer.liveItems.filter((item) => item.itemId !== itemId);
+            const liveText = joinLiveItems(liveItems);
+            const finalText = text.trim();
+            return {
+              panelBuffers: {
+                ...state.panelBuffers,
+                [panelId]: {
+                  ...buffer,
+                  liveItems,
+                  liveText,
+                  // Any legacy anchor from an unidentified delta is consumed here;
+                  // leaving it would let a later stop flush slice at a stale offset.
+                  draftLengthAtSegmentStart: -1,
+                  completedSegments: finalText
+                    ? [...buffer.completedSegments, finalText]
+                    : buffer.completedSegments,
+                  transcriptPhase: (liveText
+                    ? "interim"
+                    : finalText
+                      ? "utterance_final"
+                      : "idle") as VoiceTranscriptPhase,
+                },
+              },
+            };
+          }
           const normalized = text.trim() || buffer.liveText.trim();
           if (!normalized) {
             return {
@@ -375,6 +470,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
                 [panelId]: {
                   ...buffer,
                   liveText: "",
+                  liveItems: [],
                   draftLengthAtSegmentStart: -1,
                   transcriptPhase: "idle" as VoiceTranscriptPhase,
                 },
@@ -388,6 +484,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               [panelId]: {
                 ...buffer,
                 liveText: "",
+                liveItems: [],
                 draftLengthAtSegmentStart: -1,
                 completedSegments: [...buffer.completedSegments, normalized],
                 transcriptPhase: "utterance_final" as VoiceTranscriptPhase,
@@ -428,11 +525,15 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               ...state.panelBuffers,
               [panelId]: {
                 ...buffer,
-                liveText: "",
+                // Identified items still streaming belong to later segments —
+                // a paragraph break inside an earlier item must not erase them.
+                liveText: joinLiveItems(buffer.liveItems),
                 completedSegments: [],
                 draftLengthAtSegmentStart: -1,
                 activeParagraphStart: -1,
-                transcriptPhase: "idle" as VoiceTranscriptPhase,
+                transcriptPhase: (buffer.liveItems.some((item) => item.text)
+                  ? "interim"
+                  : "idle") as VoiceTranscriptPhase,
               },
             },
           };
@@ -447,6 +548,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
               status: nextStatus,
               elapsedSeconds: 0,
               audioLevel: 0,
+              micSignal: "pending" as VoiceMicSignal,
             };
           }
 
@@ -462,11 +564,13 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
             status: nextStatus,
             elapsedSeconds: 0,
             audioLevel: 0,
+            micSignal: "pending" as VoiceMicSignal,
             panelBuffers: {
               ...state.panelBuffers,
               [panelId]: {
                 ...buffer,
                 liveText: "",
+                liveItems: [],
                 completedSegments,
                 transcriptPhase: "idle" as VoiceTranscriptPhase,
               },
@@ -576,6 +680,23 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
     }
   )
 );
+
+/**
+ * True while a session is open but the mic hasn't delivered real audio yet —
+ * the window in which the UI must not claim it is listening. Independent of
+ * whether the transcription backend is still connecting.
+ */
+export function isVoiceMicPending(state: {
+  status: VoiceInputStatus;
+  micSignal: VoiceMicSignal;
+}): boolean {
+  return (
+    (state.status === "connecting" ||
+      state.status === "recording" ||
+      state.status === "reconnecting") &&
+    state.micSignal !== "live"
+  );
+}
 
 registerPersistedStore({
   storeId: "voiceRecordingStore",

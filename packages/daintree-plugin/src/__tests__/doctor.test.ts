@@ -232,6 +232,41 @@ describe("runDoctor", () => {
     expect(result.plugins[0].warnings.some((w) => w.includes("Not a git repository"))).toBe(true);
   });
 
+  it("folds lint findings into the plugin's warnings without failing the load check", async () => {
+    await writePlugin("acme.demo", VALID_MANIFEST, {
+      "dist/index.mjs": WORKER_ENTRY,
+      "dist/panel.js":
+        'export default function Panel() {\n  setInterval(() => {}, 1000);\n  return createElement("div", { className: "bg-red-500" });\n}\n',
+    });
+
+    const result = await runDoctor(projectRoot, { offline: true });
+    const [plugin] = result.plugins;
+    expect(plugin.lint.map((f) => f.ruleId).sort()).toEqual([
+      "interval-polling-in-view",
+      "stock-palette-colour",
+    ]);
+    expect(
+      plugin.warnings.some((w) =>
+        w.startsWith("lint warn dist/panel.js:2 [interval-polling-in-view]")
+      )
+    ).toBe(true);
+    expect(
+      plugin.warnings.some((w) => w.startsWith("lint error dist/panel.js:3 [stock-palette-colour]"))
+    ).toBe(true);
+    expect(plugin.errors).toEqual([]);
+  });
+
+  it("skips the lint when asked", async () => {
+    await writePlugin("acme.demo", VALID_MANIFEST, {
+      "dist/index.mjs": WORKER_ENTRY,
+      "dist/panel.js": "export default function Panel() {\n  setInterval(() => {}, 1000);\n}\n",
+    });
+
+    const result = await runDoctor(projectRoot, { offline: true, lint: false });
+    expect(result.plugins[0].lint).toEqual([]);
+    expect(result.plugins[0].warnings.some((w) => w.startsWith("lint "))).toBe(false);
+  });
+
   it("reports that the host was not consulted when offline", async () => {
     const result = await runDoctor(projectRoot, { offline: true });
     expect(result.host.reachable).toBe(false);

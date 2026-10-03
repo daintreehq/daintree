@@ -8,6 +8,7 @@ import {
   backstopAlreadyConsumedEscape,
   markEscapeYieldedToDialog,
   escapeWasYieldedToDialog,
+  ESCAPE_RADIX_LAYER_ATTR,
   _resetForTests,
 } from "../dialogEscapeBackstop";
 
@@ -62,6 +63,35 @@ describe("dialogEscapeBackstop — capture-phase Radix probe", () => {
   it("ignores modal dialogs (aria-modal=true) — those are AppDialog territory", () => {
     const el = addRadixLayer("dialog");
     el.setAttribute("aria-modal", "true");
+    fireEscape();
+    expect(radixLayerWasOpenWhenEscapePressed()).toBe(false);
+  });
+
+  function addPopoverDialog(dataState = "open", optedIn = true): HTMLElement {
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute("data-radix-popper-content-wrapper", "");
+    document.body.appendChild(wrapper);
+    const el = addRadixLayer("dialog", dataState);
+    el.setAttribute("aria-modal", "true");
+    if (optedIn) el.setAttribute(ESCAPE_RADIX_LAYER_ATTR, "");
+    wrapper.appendChild(el);
+    return el;
+  }
+
+  it("counts a modal popover dialog that opts in as a Radix layer", () => {
+    addPopoverDialog();
+    fireEscape();
+    expect(radixLayerWasOpenWhenEscapePressed()).toBe(true);
+  });
+
+  it("does not count an unmarked modal popover dialog (a modal palette popover)", () => {
+    addPopoverDialog("open", false);
+    fireEscape();
+    expect(radixLayerWasOpenWhenEscapePressed()).toBe(false);
+  });
+
+  it("does not count a closing opted-in modal popover dialog as open", () => {
+    addPopoverDialog("closed");
     fireEscape();
     expect(radixLayerWasOpenWhenEscapePressed()).toBe(false);
   });

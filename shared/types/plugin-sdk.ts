@@ -68,6 +68,7 @@ export type { PluginManifest, PluginAuthor } from "./plugin.js";
 export type {
   PluginActivate,
   PluginHostApi,
+  PluginDispatchOptions,
   PluginIdentity,
   PluginHostActionsApi,
   PluginActivationApi,
@@ -77,6 +78,7 @@ export type {
   PluginToastOptions,
   PluginPanelBadge,
   PluginPanelBadgeColor,
+  PluginPanelToolbarItemState,
   PluginQuickPickItem,
   PluginQuickPickOptions,
   PluginInputBoxOptions,
@@ -95,7 +97,14 @@ export type {
   PluginFsDirEntry,
   PluginFsStat,
   PluginFsReadWithRevisionResult,
+  PluginFsReadFilesOptions,
+  PluginFsReadFilesEncoding,
+  PluginFsReadFilesEntry,
+  PluginFsReadFilesErrorCode,
   PluginFsWatchOptions,
+  PluginFsWalkOptions,
+  PluginFsWalkEntry,
+  PluginFsWalkResult,
   PluginGitApi,
   PluginGitStatus,
   PluginGitStatusFile,
@@ -158,6 +167,7 @@ export type {
   PluginIpcHandler,
   PluginChannelSchema,
   PluginTypedIpcHandler,
+  PluginHandlerOptions,
 } from "./plugin.js";
 
 // ── Worktree observability ──────────────────────────────────────────
@@ -165,6 +175,7 @@ export type {
 export type {
   PluginWorktreeSnapshot,
   PluginWorktreesResult,
+  PluginWorktreesChange,
   PluginWorktreesUnavailableReason,
   PluginWorktreeLinked,
   PluginWorktreeLinkedIssue,
@@ -179,13 +190,23 @@ export type {
 export type { PluginAgentSnapshot } from "./plugin.js";
 export type { AgentState, WaitingReason } from "./agent.js";
 
+// ── Reading terminal screens (host.terminals) ───────────────────────
+
+export type {
+  PluginTerminalsApi,
+  PluginTerminalReadScreenOptions,
+  PluginTerminalScreenResult,
+} from "./plugin.js";
+
 // ── Handing work to agents (host.agents, host.sendToAgent, drag) ────
 // The drag contract is runtime values a view needs at `dragstart`, so the
 // constants and the helper are value exports.
 
 export type {
   PluginAgentPane,
+  PluginAgentRun,
   PluginAgentsApi,
+  PluginAllAgentsSnapshot,
   PluginSendToAgentOptions,
   PluginSendToAgentResult,
   PluginSendToAgentRefusalReason,

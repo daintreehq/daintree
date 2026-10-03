@@ -1,22 +1,27 @@
 import { useState, useEffect, useRef } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useListboxCursor } from "@/hooks/useListboxCursor";
-import { Check, ChevronsUpDown, CircleDot, RefreshCw, X, XCircle } from "lucide-react";
+import {
+  Button,
+  Callout,
+  EmptyState,
+  Icon,
+  PopoverSearchField,
+  ScrollShadow,
+  Tooltip,
+} from "@daintreehq/plugin-ui";
 import { cn } from "@/lib/utils";
 import { forgeClient } from "@/clients/forgeClient";
 import type { Issue } from "@shared/types/forge";
 import type { ForgeIssueSelectorProps } from "@/types/forgeSlotProps";
+// The host popover: the panel anchors to the whole compound field (trigger and
+// clear), not the trigger alone, and it owns its open focus and Escape. The kit
+// Popover has no anchor and neither handler.
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
-import { EmptyState } from "@/components/ui/EmptyState";
-import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { FIELD_SURFACE } from "@/components/Worktree/views/WorktreeFormLayout";
 import { FORGE_OPTION_ROW, ForgeOptionRowsSkeleton } from "./GitHubDropdownSkeletons";
 import { logError } from "@/utils/logger";
-import { Button } from "@/components/ui/button";
 
 /** Conforms to the host's issue-selector slot contract (forge-normalized shapes). */
 export type IssueSelectorProps = ForgeIssueSelectorProps;
@@ -166,7 +171,7 @@ export function IssueSelector({
             >
               {selectedIssue ? (
                 <span className="flex items-center gap-2 truncate">
-                  <CircleDot className="w-3 h-3 text-pr-open shrink-0" aria-hidden="true" />
+                  <Icon name="circle-dot" className="w-3 h-3 text-pr-open shrink-0" />
                   <span className="truncate">
                     #{selectedIssue.number} {selectedIssue.title}
                   </span>
@@ -174,33 +179,30 @@ export function IssueSelector({
               ) : (
                 <span className="text-text-secondary">Select an issue (optional)</span>
               )}
-              <ChevronsUpDown className="h-4 w-4 text-text-secondary shrink-0" aria-hidden="true" />
+              <Icon name="chevrons-up-down" className="h-4 w-4 text-text-secondary shrink-0" />
             </button>
           </PopoverTrigger>
           {selectedIssue && !disabled && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  aria-label="Clear the linked issue"
-                  onClick={() => {
-                    onSelect(null);
-                    // This button unmounts with the selection it clears, so hand
-                    // focus to the control that survives rather than dropping it
-                    // on <body>.
-                    triggerRef.current?.focus();
-                  }}
-                  className={cn(
-                    "flex h-full w-8 shrink-0 items-center justify-center border-l border-border-subtle",
-                    "text-text-secondary transition-colors duration-150 ease-out",
-                    "hover:bg-overlay-hover hover:text-text-primary",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
-                  )}
-                >
-                  <X className="h-3.5 w-3.5" aria-hidden="true" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="left">Clear selection</TooltipContent>
+            <Tooltip content="Clear selection" side="left">
+              <button
+                type="button"
+                aria-label="Clear the linked issue"
+                onClick={() => {
+                  onSelect(null);
+                  // This button unmounts with the selection it clears, so hand
+                  // focus to the control that survives rather than dropping it
+                  // on <body>.
+                  triggerRef.current?.focus();
+                }}
+                className={cn(
+                  "flex h-full w-8 shrink-0 items-center justify-center border-l border-border-subtle",
+                  "text-text-secondary transition-colors duration-150 ease-out",
+                  "hover:bg-overlay-hover hover:text-text-primary",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                )}
+              >
+                <Icon name="x" className="h-3.5 w-3.5" />
+              </button>
             </Tooltip>
           )}
         </div>
@@ -220,7 +222,7 @@ export function IssueSelector({
           ref={inputRef}
           placeholder="Search issues"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onValueChange={setQuery}
           onKeyDown={handleKeyDown}
           role="combobox"
           aria-label="Search issues"
@@ -233,21 +235,29 @@ export function IssueSelector({
           // Component-owned: the signal and its recovery both live here, so this
           // is a banner rather than a toast. It sits above the rows so a failed
           // refetch cannot leave the previous list reading as current.
-          <InlineStatusBanner
+          // A strip across the popover, even when the popover opens from a
+          // dialog body: the kit's strip never takes the dialog's inset box.
+          <Callout
+            variant="strip"
             severity="error"
-            // A strip across the popover, even when the popover opens from a
-            // dialog body, whose inset context would otherwise make it a box.
-            inset={false}
-            icon={XCircle}
             title="Couldn't load issues"
-            description="The forge didn't answer."
-            action={{
-              id: "retry-issues",
-              label: "Retry",
-              icon: RefreshCw,
-              onClick: () => setRetryTick((tick) => tick + 1),
-            }}
-          />
+            actionPlacement="below"
+            action={
+              <Button
+                variant="outline"
+                size="sm"
+                icon="refresh"
+                // The banner's own mark for its recommended action, which the
+                // forced-colours rules draw with the heavier border.
+                data-notification-action="primary"
+                onClick={() => setRetryTick((tick) => tick + 1)}
+              >
+                Retry
+              </Button>
+            }
+          >
+            {"The forge didn't answer."}
+          </Callout>
         )}
         <ScrollShadow
           ref={listRef}
@@ -297,13 +307,13 @@ export function IssueSelector({
                 onClick={() => handleSelect(issue)}
                 className={cn(PALETTE_ROW_CLASS, FORGE_OPTION_ROW, "cursor-pointer")}
               >
-                <CircleDot className="w-3 h-3 text-pr-open shrink-0" aria-hidden="true" />
+                <Icon name="circle-dot" className="w-3 h-3 text-pr-open shrink-0" />
                 <span className="truncate flex-1 min-w-0">
                   #{issue.number} {issue.title}
                 </span>
                 {selectedIssue?.number === issue.number && (
                   <>
-                    <Check className="h-4 w-4 shrink-0 text-text-primary" aria-hidden="true" />
+                    <Icon name="check" className="h-4 w-4 shrink-0 text-text-primary" />
                     <span className="sr-only">Currently selected</span>
                   </>
                 )}

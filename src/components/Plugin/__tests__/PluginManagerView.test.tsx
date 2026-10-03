@@ -255,6 +255,22 @@ describe("PluginManagerView", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("true");
   });
 
+  it("lists a loaded project plugin only in its project section, not as an installed row", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([
+      makePlugin(),
+      makePlugin({
+        instanceId: "project__p1__acme.demo",
+        origin: "project",
+        projectId: "p1",
+        manifest: { ...makePlugin().manifest, displayName: "Project Copy" },
+      }),
+    ]);
+    renderDialog();
+    await screen.findAllByText("Acme Demo");
+    expect(screen.queryByText("Project Copy")).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Enable Project Copy" })).toBeNull();
+  });
+
   it("renders a disabled plugin with the switch off", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
       makePlugin({ disabled: true }),

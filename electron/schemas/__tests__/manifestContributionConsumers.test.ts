@@ -20,6 +20,7 @@ import {
   MenuItemContributionSchema,
   PanelContributionObjectSchema,
   PanelMenuItemSchema,
+  PanelToolbarItemSchema,
   PreviewToolContributionSchema,
   GuestAdapterContributionSchema,
   ProcessToolContributionSchema,
@@ -99,6 +100,7 @@ const PLUGIN_TOURS = "src/components/Tour/pluginTours.tsx";
 const RECIPE_SANITIZER = "shared/utils/recipeSanitizer.ts";
 const ARCHIVE_INSTALL_INTENT = "electron/setup/archiveInstallIntent.ts";
 const PROCESS_TOOL_REGISTRY = "shared/config/pluginProcessToolRegistry.ts";
+const PLUGIN_ICON_ASSETS = "electron/services/plugin/pluginIconAssets.ts";
 const PROCESS_DETECTOR_REGISTRIES = "electron/services/ProcessDetector/registries.ts";
 const AGENT_MCP_DECLARED = "electron/services/pluginAgentMcp/declaredEndpoints.ts";
 const DEV_PREVIEW_TOOL_REGISTRY = "src/registry/devPreviewToolRegistry.ts";
@@ -109,6 +111,7 @@ const PLUGIN_DATABASE_HANDLE = "shared/utils/pluginDatabaseHandle.ts";
 const PLUGIN_HOST_FACTORY = "electron/services/plugin/PluginHostFactory.ts";
 const PLUGIN_DATABASES_SECTION = "src/components/Plugin/PluginDatabasesSection.tsx";
 const GENERIC_PANEL_MENU = "src/components/Panel/genericPanelMenu.ts";
+const PLUGIN_PANEL_TOOLBAR = "src/components/Panel/PluginPanelToolbar.tsx";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -140,6 +143,7 @@ const SWEPT_SCHEMAS = {
   databases: DatabaseContributionSchema,
   surfaces: SurfaceContributionsSchema,
   "panels.menu": PanelMenuItemSchema,
+  "panels.toolbar": PanelToolbarItemSchema,
   "agents.detection": AgentDetectionConfigSchema,
   "surfaces.emptyCanvas": SurfaceViewSlotSchema,
   "recipes.terminals": RecipeContributionTerminalSchema,
@@ -227,6 +231,7 @@ type FieldConsumerCoverage = {
   databases: Record<keyof z.infer<typeof DatabaseContributionSchema>, ConsumerDescriptor>;
   surfaces: Record<keyof z.infer<typeof SurfaceContributionsSchema>, ConsumerDescriptor>;
   "panels.menu": Record<keyof z.infer<typeof PanelMenuItemSchema>, ConsumerDescriptor>;
+  "panels.toolbar": Record<keyof z.infer<typeof PanelToolbarItemSchema>, ConsumerDescriptor>;
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
   "surfaces.emptyCanvas": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
   "recipes.terminals": Record<
@@ -256,9 +261,12 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       note: "Registered as the panel kind's display name.",
     },
     iconId: {
-      mode: "verbatim",
-      consumers: [{ file: "shared/config/panelKindRegistry.ts", symbol: "registerPanelKind" }],
-      note: "Registered as the panel kind icon.",
+      mode: "derived-input",
+      consumers: [
+        { file: "shared/config/panelKindRegistry.ts", symbol: "registerPanelKind" },
+        { file: PLUGIN_ICON_ASSETS, symbol: "loadPluginCustomIcons" },
+      ],
+      note: "Registered as the panel kind icon; a `./…svg` reference is loaded and rewritten to its custom-icon runtime key first (#13143).",
     },
     color: {
       mode: "verbatim",
@@ -303,6 +311,51 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Registered on the panel kind and drawn by both panel menus, above the plugin's own entries, once each action is registered.",
     },
+    toolbar: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SERVICE,
+          symbol: "loadPlugin (panels loop → PanelKindConfig.pluginToolbar)",
+        },
+        { file: PLUGIN_PANEL_TOOLBAR, symbol: "resolvePluginToolbarButtons" },
+      ],
+      note: "Registered on the panel kind and drawn as buttons in the panel header once each action is registered.",
+    },
+  },
+  "panels.toolbar": {
+    actionId: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SCHEMA, symbol: "manifest superRefine (panel_toolbar_action_not_own)" },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (qualifyActionId → pluginToolbar)" },
+        { file: PLUGIN_PANEL_TOOLBAR, symbol: "PluginPanelToolbarItem (dispatch)" },
+      ],
+      note: "Checked to be the plugin's own action, qualified to the instance namespace and dispatched with { panelId }; the authored id is kept as the stateKey the view's setToolbarItemState names.",
+    },
+    label: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_PANEL_TOOLBAR,
+          symbol: "resolvePluginToolbarButtons (label ?? action title)",
+        },
+      ],
+      note: "The button's accessible name and resting tooltip; the action's registered title when absent.",
+    },
+    iconId: {
+      mode: "derived-input",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (resolveIconId → pluginToolbar)" },
+        { file: PLUGIN_PANEL_TOOLBAR, symbol: "PluginPanelToolbarItem (resolvePluginIcon)" },
+      ],
+      note: "Drawn as the button's glyph, resolved like a panel's own iconId; absent, the label is drawn as text.",
+    },
+    status: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_PANEL_TOOLBAR, symbol: "PluginPanelToolbarStatus" }],
+      note: "Draws the live state's text, updatedAt age and tone beside the button.",
+    },
   },
   "panels.menu": {
     actionId: {
@@ -339,11 +392,12 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       note: "Registered as the toolbar button label.",
     },
     iconId: {
-      mode: "verbatim",
+      mode: "derived-input",
       consumers: [
         { file: "shared/config/toolbarButtonRegistry.ts", symbol: "registerToolbarButton" },
+        { file: PLUGIN_ICON_ASSETS, symbol: "loadPluginCustomIcons" },
       ],
-      note: "Registered as the toolbar button icon.",
+      note: "Registered as the toolbar button icon; a `./…svg` reference is loaded and rewritten to its custom-icon runtime key first (#13143).",
     },
     actionId: {
       mode: "verbatim",
@@ -793,8 +847,9 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [
         { file: PROCESS_TOOL_REGISTRY, symbol: "registerPluginProcessTools (snapshot value)" },
         { file: "src/components/Terminal/TerminalIcon.tsx", symbol: "getPluginIconComponent" },
+        { file: PLUGIN_ICON_ASSETS, symbol: "loadPluginCustomIcons" },
       ],
-      note: "Collapsed to the generic `terminal` glyph unless it names a PLUGIN_ICON_ID, then emitted as the detected process icon id — the id doubles as process identity, so an unsanitized value could borrow a built-in agent's mark or a built-in tool's detection priority.",
+      note: "Collapsed to the generic `terminal` glyph unless it names a PLUGIN_ICON_ID or the plugin's own loaded custom-icon key (#13143), then emitted as the detected process icon id — the id doubles as process identity, so an unsanitized value could borrow a built-in agent's mark or a built-in tool's detection priority.",
     },
   },
   settings: {

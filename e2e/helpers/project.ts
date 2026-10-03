@@ -16,14 +16,6 @@ export async function openProject(
   await openFolder.click();
 }
 
-export async function dismissTelemetryConsent(window: Page): Promise<void> {
-  const dialog = window.getByRole("dialog", { name: "Help improve Daintree" });
-  if (await dialog.isVisible().catch(() => false)) {
-    await dialog.getByRole("button", { name: "Disable" }).click();
-    await expect(dialog).not.toBeVisible({ timeout: 3_000 });
-  }
-}
-
 export async function openAndOnboardProject(
   app: ElectronApplication,
   window: Page,
@@ -38,6 +30,5 @@ export async function openAndOnboardProject(
     projectBasename
   );
   await dismissBlockingPalette(newWindow);
-  await dismissTelemetryConsent(newWindow);
   return newWindow;
 }

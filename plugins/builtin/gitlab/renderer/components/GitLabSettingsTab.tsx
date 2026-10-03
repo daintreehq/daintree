@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Check, FlaskConical, ExternalLink, CheckCircle2 } from "lucide-react";
+import {
+  Button,
+  Callout,
+  ConfirmDialog,
+  Icon,
+  Input,
+  SettingsActions,
+  SettingsGroup,
+  SettingsRow,
+  SettingsSection,
+} from "@daintreehq/plugin-ui";
 import { actionService } from "@/services/ActionService";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
-import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsActions, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
-import { SettingsInput } from "@/components/Settings/SettingsInput";
 import { BUILTIN_GITLAB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import type { GitLabTokenValidation } from "../../shared/types.js";
 import { logError } from "@/utils/logger";
@@ -321,12 +325,12 @@ export function GitLabSettingsTab() {
   const tokenStatus =
     validationResult === "success" ? (
       <span className="flex items-center gap-1">
-        <CheckCircle2 className="w-3 h-3 shrink-0" aria-hidden="true" />
+        <Icon name="circle-check" className="w-3 h-3 shrink-0" />
         Checked and saved
       </span>
     ) : validationResult === "test-success" ? (
       <span className="flex items-center gap-1">
-        <Check className="w-3 h-3 shrink-0" aria-hidden="true" />
+        <Icon name="check" className="w-3 h-3 shrink-0" />
         Token works — not saved yet
       </span>
     ) : tokenError ? (
@@ -337,7 +341,19 @@ export function GitLabSettingsTab() {
   return (
     <div className="space-y-8">
       {loadError && (
-        <SettingsLoadErrorBanner message={loadError} onRetry={() => setLoadAttempt((n) => n + 1)} />
+        // The kit Callout takes no `role`, so the alert lives on a wrapper.
+        <div role="alert">
+          <Callout
+            severity="error"
+            action={
+              <Button variant="outline" size="sm" onClick={() => setLoadAttempt((n) => n + 1)}>
+                Retry
+              </Button>
+            }
+          >
+            <p className="select-text">{loadError}</p>
+          </Callout>
+        </div>
       )}
 
       <SettingsSection
@@ -345,60 +361,82 @@ export function GitLabSettingsTab() {
         description="Used for repository statistics, issue and merge request detection, and linking worktrees to GitLab"
       >
         <SettingsGroup>
-          <SettingsInput
-            rowId="gitlab-instance"
+          <SettingsRow
+            id="gitlab-instance"
             label="Instance URL"
             description={
               instancePending
                 ? `Not switched yet. Save a token for ${hostOf(normalizeInstanceUrl(instanceUrl))} to switch; that replaces the saved token for ${hostOf(savedInstanceUrl)}.`
                 : "The instance your token authenticates against. A self-hosted project whose hostname isn't a known GitLab domain also needs its forge provider set to GitLab in Project settings → Code forge."
             }
-            type="text"
-            value={instanceUrl}
-            onChange={(e) => {
-              instanceUrlDirtyRef.current = true;
-              setInstanceUrl(e.target.value);
-              setUrlError(null);
-              clearStaleResult();
-            }}
-            onBlur={handleInstanceUrlBlur}
+            layout="stacked"
             error={urlError ?? undefined}
-            // The blur persists the URL and can clear the credential, so it
-            // takes the same lock every other credential write does.
-            readOnly={credentialOpInFlight()}
-            placeholder={DEFAULT_INSTANCE_URL}
-            aria-label="GitLab instance URL"
-            autoComplete="off"
             disabled={isValidating || isTesting}
+            control={({ labelId, descriptionId, disabled }) => (
+              <Input
+                type="text"
+                value={instanceUrl}
+                onValueChange={(value) => {
+                  instanceUrlDirtyRef.current = true;
+                  setInstanceUrl(value);
+                  setUrlError(null);
+                  clearStaleResult();
+                }}
+                onBlur={handleInstanceUrlBlur}
+                // The blur persists the URL and can clear the credential, so it
+                // takes the same lock every other credential write does.
+                readOnly={credentialOpInFlight()}
+                placeholder={DEFAULT_INSTANCE_URL}
+                aria-label="GitLab instance URL"
+                aria-labelledby={labelId}
+                aria-describedby={descriptionId}
+                aria-invalid={urlError ? true : undefined}
+                invalid={urlError !== null}
+                autoComplete="off"
+                disabled={disabled}
+                className="w-full"
+              />
+            )}
           />
           {credentialKnown && (
             <SettingsRow
               label="Status"
               control={
                 <span className="flex items-center gap-1 text-xs text-text-secondary">
-                  {hasToken && <Check className="w-3 h-3" aria-hidden="true" />}
+                  {hasToken && <Icon name="check" className="w-3 h-3" />}
                   {hasToken ? `Token saved for ${hostOf(savedInstanceUrl)}` : "No token saved"}
                 </span>
               }
             />
           )}
-          <SettingsInput
-            rowId="gitlab-token"
+          <SettingsRow
+            id="gitlab-token"
             label="Personal access token"
             description={
               notice ?? "Test checks a token without saving it; Save checks it, then stores it"
             }
+            layout="stacked"
             error={tokenError}
-            type="password"
-            value={token}
-            onChange={(e) => {
-              setToken(e.target.value);
-              clearStaleResult();
-            }}
-            placeholder={hasToken ? "Enter new token to replace" : "glpat-…"}
-            aria-label="GitLab personal access token"
-            autoComplete="new-password"
             disabled={isValidating || isTesting}
+            control={({ labelId, descriptionId, disabled }) => (
+              <Input
+                type="password"
+                value={token}
+                onValueChange={(value) => {
+                  setToken(value);
+                  clearStaleResult();
+                }}
+                placeholder={hasToken ? "Enter new token to replace" : "glpat-…"}
+                aria-label="GitLab personal access token"
+                aria-labelledby={labelId}
+                aria-describedby={descriptionId}
+                aria-invalid={tokenError ? true : undefined}
+                invalid={tokenError !== undefined}
+                autoComplete="new-password"
+                disabled={disabled}
+                className="w-full"
+              />
+            )}
           />
           {/* The result clears itself after 5s; the actions row's status slot is a
               polite live region, so a screen reader still hears whether Save worked. */}
@@ -412,8 +450,8 @@ export function GitLabSettingsTab() {
               variant="outline"
               size="sm"
               aria-label="Test token"
+              icon="flask"
             >
-              <FlaskConical aria-hidden="true" />
               Test
             </Button>
             <Button
@@ -445,8 +483,7 @@ export function GitLabSettingsTab() {
             layout="stacked"
             control={
               <div className="flex flex-wrap gap-2">
-                <Button onClick={openTokenPage} variant="outline" size="sm">
-                  <ExternalLink aria-hidden="true" />
+                <Button onClick={openTokenPage} variant="outline" size="sm" icon="external-link">
                   Create token on GitLab
                 </Button>
               </div>
@@ -476,8 +513,9 @@ export function GitLabSettingsTab() {
         )}
       </SettingsSection>
 
+      {/* `nested`: this tab renders inside the Settings modal. */}
       <ConfirmDialog
-        isOpen={pendingSwitch !== null}
+        open={pendingSwitch !== null}
         variant="destructive"
         onConfirm={() => {
           const action = pendingSwitch;
@@ -493,18 +531,18 @@ export function GitLabSettingsTab() {
             : "The new token is then checked and saved."
         }`}
         confirmLabel="Switch instance"
-        zIndex="nested"
+        layer="nested"
       />
 
       <ConfirmDialog
-        isOpen={confirmingClear}
+        open={confirmingClear}
         variant="destructive"
         onConfirm={() => void handleClearToken()}
         onClose={() => setConfirmingClear(false)}
         title="Clear the GitLab token?"
         description={`Daintree's copy is deleted. GitLab issues, merge requests and repository stats stop until you add a token again.`}
         confirmLabel="Clear token"
-        zIndex="nested"
+        layer="nested"
       />
     </div>
   );

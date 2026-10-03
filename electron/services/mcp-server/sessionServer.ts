@@ -26,7 +26,11 @@ import {
   type BatchItemOutcome,
   type TerminalCloseManyArgs,
 } from "../../../shared/types/mcpBatch.js";
-import { ASSISTANT_CLOSE_CONFIRM_AGENT_STATES } from "../../../shared/types/agent.js";
+import {
+  ASSISTANT_CLOSE_CONFIRM_AGENT_STATES,
+  type AgentState,
+} from "../../../shared/types/agent.js";
+import type { TerminalHandback } from "../../../shared/types/handback.js";
 import { dispatchCarriesRecipeId } from "../../../shared/utils/dispatchRecipeId.js";
 import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
 import {
@@ -72,6 +76,7 @@ import {
   MCP_DEDUP_TTL_MS,
   MCP_DEDUP_MAX_ENTRIES_PER_SESSION,
   MCP_DEDUP_KEY_COLLISION_CODE,
+  MCP_SSE_IDLE_TIMEOUT_MS,
   minimumPermittingTier,
   EXECUTION_ERROR_CODE,
   SESSION_BINDING_GONE,
@@ -246,6 +251,19 @@ const HAND_OVER_HINT =
   "If the user started that terminal, they can right-click it, choose 'Hand to orchestrator', " +
   "and select this agent's pane.";
 const HAND_OVER_GRANT_PATH = "context-menu:hand-to-orchestrator";
+
+/**
+ * Told to a caller no pane or help bearer bound (#12987) — an api-key client —
+ * on an ownership refusal and alongside what it creates, since its records die
+ * with its MCP session and nothing else would say so. Fixed text, for the same
+ * reason as {@link HAND_OVER_HINT}.
+ */
+const SESSION_OWNERSHIP_NOTE =
+  "This credential only owns what it creates in the current MCP session: a new session does not " +
+  `inherit it, and ${MCP_SSE_IDLE_TIMEOUT_MS / 60_000} minutes without MCP calls ends one. To keep ` +
+  "ownership across reconnects, turn on Agent integrations for the project and launch the " +
+  "orchestrator from Daintree; its credential owns what it creates until that pane exits or is " +
+  "relaunched.";
 
 type OwnedResourceTool = {
   // `resourceKind`, not `kind`: this repo uses a bare `kind` for panel kinds
@@ -830,6 +848,26 @@ export function validateDisplayImageUrl(
   return { valid: true };
 }
 
+/** The pty-host's observations about one terminal that decide the assistant's close. */
+export interface TerminalCloseContext {
+  /** Absent for a terminal with no agent attached. */
+  agentState?: AgentState;
+  lastHandback?: Pick<TerminalHandback, "observedAt">;
+  lastTypedInputAt?: number;
+}
+
+/**
+ * Whether the agent printed the handback it was asked for and nothing has been
+ * typed into it since (#13128). A tie asks: a millisecond clock cannot order
+ * the two.
+ */
+export function isHandedBackUntouched(context: TerminalCloseContext): boolean {
+  const observedAt = context.lastHandback?.observedAt;
+  if (typeof observedAt !== "number" || !Number.isFinite(observedAt)) return false;
+  const typedAt = context.lastTypedInputAt;
+  return typedAt === undefined || typedAt < observedAt;
+}
+
 export interface SessionServerDeps extends OwnedMainExecutors {
   sessionStore: SessionStore;
   /**
@@ -959,15 +997,14 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   isTerminalIdInUse: (terminalId: string) => boolean;
   /**
-   * The pty-host's own agent state for a terminal (#12881): `null` for an id
-   * it does not track, such as a browser panel. Rejects when the state cannot
-   * be read. Asked rather than the AgentAvailabilityStore mirror, which each
-   * window's startup replaces with an empty one, so a missing entry there says
-   * nothing about the agent. Absent, every close of a busy-capable panel asks.
+   * What the pty-host itself observed about a terminal, for the assistant's
+   * close (#12881, #13128): `null` for an id it does not track, such as a
+   * browser panel. Rejects when the terminal cannot be read. Asked rather than
+   * the AgentAvailabilityStore mirror, which each window's startup replaces
+   * with an empty one, so a missing entry there says nothing about the agent.
+   * Absent, every close of a busy-capable panel asks.
    */
-  readTerminalAgentState?: (
-    terminalId: string
-  ) => Promise<import("../../../shared/types/agent.js").AgentState | null>;
+  readTerminalCloseContext?: (terminalId: string) => Promise<TerminalCloseContext | null>;
   /**
    * Whether a terminal belongs to the workspace of this session's pinned view,
    * re-resolved on every call (#12883). What admits Daintree's own assistant to
@@ -1195,7 +1232,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     resolveOwnPane,
     requestApproval,
     requestCloseApproval,
-    readTerminalAgentState,
+    readTerminalCloseContext,
   } = deps;
 
   /**
@@ -1422,6 +1459,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // completes after the transport dropped still lands with the principal the
     // call was authorized under, where the pane's next session finds it.
     const ownershipOwner = sessionStore.resourceOwnership.ownerOf(sessionId);
+    // An api-key client (#12987): no bearer bound it, so its records are held
+    // by the session and die with it. Asked of the owner, not the origin — a
+    // pane's session has an `external` origin too.
+    const sessionScopedOwner = !sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner);
     const boundWorkspaceId = sessionStore.sessionWorkspaceMap.get(sessionId);
     /**
      * The record that gives this call authority over a resource it created,
@@ -1494,13 +1535,21 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
      * A hand-over does not count as creation: it lends the right to drive an
      * agent, not to discard it. Anything unknown asks: no ownership record, or
      * an agent state that could not be read.
+     *
+     * One `waiting` agent is finished rather than mid-conversation (#13128):
+     * it printed the handback this session asked for, and nothing has been
+     * typed into it since. The pty-host drops the handback when a later prompt
+     * is submitted, so one still present answers the latest submission.
      */
     const closeNeedsApproval = async (terminalId: string): Promise<boolean> => {
       if (ownedRecordFor("terminal", terminalId) === undefined) return true;
-      if (readTerminalAgentState === undefined) return true;
+      if (readTerminalCloseContext === undefined) return true;
       try {
-        const state = await readTerminalAgentState(terminalId);
-        return state !== null && ASSISTANT_CLOSE_CONFIRM_AGENT_STATES.has(state);
+        const context = await readTerminalCloseContext(terminalId);
+        const state = context?.agentState;
+        if (context === null || state === undefined) return false;
+        if (!ASSISTANT_CLOSE_CONFIRM_AGENT_STATES.has(state)) return false;
+        return !(state === "waiting" && isHandedBackUntouched(context));
       } catch {
         return true;
       }
@@ -1815,7 +1864,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // session", so beyond widening the floor it also stands in for the
     // confirmation that approval replaced (#12692). That second job is why a
     // pane consults it even for a tool its tier already permits — the
-    // `full`-tier `worktree.delete` a user has allowed for the session.
+    // `worktree.deleteOwned` a user has allowed for the session.
     if (!tierPermitted || paneApproval) {
       const grant = sessionStore.grantCache.check(sessionId, actionId);
       if (grant.granted) {
@@ -1833,7 +1882,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // (#11878). It used to sit inside the tier-denied branch, behind the
     // per-tool check — which left the grant unreachable both for a tool the
     // tier already permitted (`worktree.delete` is `danger: "confirm"` and sits
-    // in `full`) and for one a per-tool grant had just
+    // in core) and for one a per-tool grant had just
     // admitted.
     // Either way the modal still fired on every call despite an explicit
     // Settings pre-authorisation.
@@ -2156,8 +2205,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // When the grant WAS the authorization, losing it fails closed. When the
     // floor or a per-tool grant already admitted it, the grant only bought a
     // confirmation bypass — so drop the bypass and let the normal modal
-    // decide. Refusing there would answer a `full`-tier `worktree.delete`
-    // with "not permitted for the 'full' tier", which is simply untrue.
+    // decide. Refusing there would answer a tier-permitted `worktree.delete`
+    // with "not permitted for the 'core' tier", which is simply untrue.
     //
     // Accounting note: a matching call spends a use even when the tool is not
     // confirm-gated, so the grant buys it nothing. Charging only where the
@@ -2594,6 +2643,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               !readsByPinnedView &&
               !rendererOwnedOrigin &&
               sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner);
+            const sessionOwnershipNote = sessionScopedOwner && !readsByPinnedView;
             const refusal = readsByPinnedView
               ? `No agent ${ownedResource.resourceKind} with id '${resourceId}' is in the project this ` +
                 `assistant is open in, so '${actionId}' will not read it. Take the id from ` +
@@ -2612,7 +2662,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   message: `${refusal} ${HAND_OVER_HINT}`,
                   details: { grantPath: HAND_OVER_GRANT_PATH },
                 }
-              : { code: RESOURCE_NOT_OWNED_CODE, message: refusal };
+              : {
+                  code: RESOURCE_NOT_OWNED_CODE,
+                  message: sessionOwnershipNote ? `${refusal} ${SESSION_OWNERSHIP_NOTE}` : refusal,
+                };
             outcome = { kind: "result", value: { ok: false, error } };
             return buildToolError(error);
           }
@@ -3760,12 +3813,35 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
 
     // A waited call's answer is the dispatch plus its reply, so that is what a
     // duplicate shares and what the cache keeps: never a bare receipt.
-    const answerPromise: Promise<CallToolResultLike> =
+    const repliedPromise: Promise<CallToolResultLike> =
       replyWait === undefined
         ? dispatchPromise
         : dispatchPromise.then((result) =>
             attachReply(result as CallToolResult, replyWait!, releaseNotice)
           );
+    // An api-key client learns its ownership is session-scoped from what it
+    // creates, before a refusal tells it (#12987). A trailing text block, so
+    // the declared result and `content[0]` are untouched; added after the
+    // reply, which rebuilds the result, and before the cache keeps it, so a
+    // duplicate reads it too.
+    const notesOwnership =
+      sessionScopedOwner &&
+      (actionId === AGENT_LAUNCH_TOOL ||
+        actionId === "agent.launchMany" ||
+        (actionId === "terminal.list" && ownedOnly));
+    const answerPromise: Promise<CallToolResultLike> = notesOwnership
+      ? repliedPromise.then((result) =>
+          result.isError === true || outcome?.kind !== "result" || !outcome.value.ok
+            ? result
+            : {
+                ...result,
+                content: [
+                  ...result.content,
+                  { type: "text" as const, text: SESSION_OWNERSHIP_NOTE },
+                ],
+              }
+        )
+      : repliedPromise;
 
     if (dedupKey !== undefined) {
       let inFlight = sessionStore.dedupInFlight.get(sessionId);

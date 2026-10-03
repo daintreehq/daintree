@@ -1,6 +1,6 @@
 /**
  * Pure analysis for the project-switch rotation benchmark
- * (`e2e/full/resilience/project-switch-rotation-perf.spec.ts`).
+ * (`e2e/perf/project-switch-rotation-perf.spec.ts`).
  *
  * Nothing here touches Playwright or Electron: the spec feeds it the NDJSON
  * perf-mark file and gets back per-sample timings and aggregates, so the

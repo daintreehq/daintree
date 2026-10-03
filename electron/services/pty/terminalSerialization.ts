@@ -44,6 +44,31 @@ export function serializeTerminal(
   }
 }
 
+/**
+ * The newest `tailRows` scrollback rows plus the screen, for a capped read —
+ * the in-thread twin of `AnalysisSession.serializeTail`. `partial` is set when
+ * rows were left out, so a caller whose tail came up short can read in full.
+ */
+export function serializeTerminalTail(
+  id: string,
+  terminalInfo: TerminalInfo,
+  tailRows: number
+): SerializedTerminalSnapshot | null {
+  if (terminalInfo.preservedSnapshot !== undefined) return serializeTerminal(id, terminalInfo);
+  const addon = terminalInfo.serializeAddon;
+  const headless = terminalInfo.headlessTerminal;
+  if (!addon || !headless) return null;
+  try {
+    const rows = Math.max(0, Math.floor(tailRows));
+    const partial = headless.buffer.normal.length > rows + headless.rows;
+    const snapshot = withGeometry(addon.serialize({ scrollback: rows }), headless);
+    return snapshot && partial ? { ...snapshot, partial: true } : snapshot;
+  } catch (error) {
+    console.error(`[TerminalProcess] Failed to serialize terminal ${id}:`, error);
+    return null;
+  }
+}
+
 export async function serializeTerminalAsync(
   id: string,
   terminalInfo: TerminalInfo

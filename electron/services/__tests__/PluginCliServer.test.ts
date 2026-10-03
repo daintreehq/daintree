@@ -40,6 +40,7 @@ function noopHandlers(): PluginCliServerHandlers {
     uninstall: vi.fn(async () => {}),
     devStart: vi.fn(async () => {}),
     devStop: vi.fn(async () => {}),
+    devMetrics: vi.fn(async () => null),
     projectStatus: vi.fn(async () => ({ known: false, projectId: null, trust: null, plugins: [] })),
   };
 }
@@ -110,6 +111,40 @@ describe("createPluginCliServer", () => {
       await expect(fs.access(socketPath)).resolves.toBeUndefined();
     }
     await expect(fs.access(controlFilePath)).resolves.toBeUndefined();
+  });
+
+  it("routes plugin.dev.metrics to the devMetrics handler, wrapping the snapshot", async () => {
+    const handlers = noopHandlers();
+    const snapshot = { pluginId: "acme.demo", overBudget: [] };
+    handlers.devMetrics = vi.fn(async () => snapshot);
+    server = makeServer(handlers);
+    await server.listen();
+
+    const res = await request({
+      id: 7,
+      method: "plugin.dev.metrics",
+      params: { pluginId: "acme.demo" },
+    });
+    expect(res).toEqual({ id: 7, result: { snapshot } });
+    expect(handlers.devMetrics).toHaveBeenCalledWith({ pluginId: "acme.demo" });
+  });
+
+  it("answers plugin.dev.metrics for an unloaded plugin with a null snapshot", async () => {
+    server = makeServer(noopHandlers());
+    await server.listen();
+    const res = await request({
+      id: 8,
+      method: "plugin.dev.metrics",
+      params: { pluginId: "acme.gone" },
+    });
+    expect(res).toEqual({ id: 8, result: { snapshot: null } });
+  });
+
+  it("rejects plugin.dev.metrics without a pluginId", async () => {
+    server = makeServer(noopHandlers());
+    await server.listen();
+    const res = await request({ id: 9, method: "plugin.dev.metrics", params: {} });
+    expect(res.error).toBeTruthy();
   });
 
   it("routes plugin.install to the install handler and returns the result", async () => {
@@ -416,6 +451,7 @@ describe("createPluginCliServer", () => {
       uninstall: vi.fn(async () => {}),
       devStart: vi.fn(async () => {}),
       devStop: vi.fn(async () => {}),
+      devMetrics: vi.fn(async () => null),
       projectStatus: vi.fn(async () => ({
         known: false,
         projectId: null,
@@ -439,6 +475,7 @@ describe("createPluginCliServer", () => {
       uninstall: vi.fn(async () => {}),
       devStart: vi.fn(async () => {}),
       devStop: vi.fn(async () => {}),
+      devMetrics: vi.fn(async () => null),
       projectStatus: vi.fn(async () => ({
         known: false,
         projectId: null,

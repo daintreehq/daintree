@@ -13,6 +13,7 @@ import {
   type ExtraProps,
   type Options,
 } from "react-markdown";
+import type { ElementContent, Element as HastElement } from "hast";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import { refractor } from "refractor/core";
@@ -21,10 +22,13 @@ import {
   isLanguageFailed,
   isLanguageRegistered,
 } from "@/components/Worktree/diffRefractor";
-import { dirname, isAbsolute, isPathInside, join, normalize } from "@shared/utils/path";
+import { isPathInside } from "@shared/utils/path";
 import { buildDaintreeFileUrl } from "@/components/FileViewer/filePreviewKinds";
-import { actionService } from "@/services/ActionService";
-import { logError } from "@/utils/logger";
+import { MermaidDiagram } from "./mermaid/MermaidDiagram";
+import { canonicalLang } from "./fenceLanguage";
+import { activateMarkdownLink, HTTPish, resolveAgainstFile } from "./markdownLinkPolicy";
+
+export { activateMarkdownLink };
 
 /**
  * Everything that decides how one rendered Markdown document treats untrusted
@@ -37,38 +41,14 @@ import { logError } from "@/utils/logger";
  * boundary both surfaces are held to.
  *
  * Note what is NOT here: raw HTML handling. Both callers pass `skipHtml` and
- * neither adds `rehype-raw`, so embedded markup is dropped before it can reach
- * the DOM. That absence is the reason this can render arbitrary repo files
- * inside an Electron renderer without a sanitizer — do not add it.
+ * neither adds `rehype-raw`, so markup authored in the document is dropped
+ * before it can reach the DOM. That absence is what lets this render arbitrary
+ * repo files inside an Electron renderer — do not add it.
+ *
+ * The one piece of markup this pipeline does insert is generated, not
+ * authored: a ```mermaid fence becomes SVG, which goes through
+ * `sanitizeMermaidSvg` before it touches the DOM (see `mermaid/`).
  */
-
-/**
- * Fence-info aliases → the grammar keys diffRefractor's loaders know.
- * refractor registers Prism's own aliases (ts, py, …) once the grammar is
- * loaded; this map only bridges the *loader* lookup for grammars that are
- * still cold.
- */
-const FENCE_LANG_ALIASES: Record<string, string> = {
-  ts: "typescript",
-  js: "javascript",
-  py: "python",
-  rb: "ruby",
-  sh: "bash",
-  shell: "bash",
-  zsh: "bash",
-  yml: "yaml",
-  md: "markdown",
-  "c++": "cpp",
-  cs: "csharp",
-  dockerfile: "docker",
-  html: "markup",
-  xml: "markup",
-};
-
-function canonicalLang(lang: string): string {
-  const lower = lang.toLowerCase();
-  return FENCE_LANG_ALIASES[lower] ?? lower;
-}
 
 /**
  * Highlighted fences, shared across instances. The per-instance memo alone
@@ -166,12 +146,28 @@ export function HighlightedCode({ language, code }: { language: string; code: st
   return <code className={`language-${lang}`}>{highlighted ?? code}</code>;
 }
 
-/** Resolve a link/image target against the document's directory. */
-function resolveAgainstFile(filePath: string, target: string): string {
-  return isAbsolute(target) ? normalize(target) : normalize(join(dirname(filePath), target));
+function hastText(nodes: readonly ElementContent[]): string {
+  let text = "";
+  for (const child of nodes) {
+    if (child.type === "text") text += child.value;
+    else if (child.type === "element") text += hastText(child.children);
+  }
+  return text;
 }
 
-const HTTPish = /^(https?|mailto):/i;
+/** The source of a ```mermaid fence, or null when `pre` holds anything else. */
+function mermaidFenceSource(pre: HastElement | undefined): string | null {
+  const code = pre?.children.length === 1 ? pre.children[0] : undefined;
+  if (code?.type !== "element" || code.tagName !== "code") return null;
+  const className = code.properties.className;
+  if (
+    !Array.isArray(className) ||
+    !className.some((name) => String(name).toLowerCase() === "language-mermaid")
+  ) {
+    return null;
+  }
+  return hastText(code.children).replace(/\n$/, "");
+}
 
 export interface MarkdownRenderPolicyOptions {
   /** Absolute path of the document, used to resolve relative links and images. */
@@ -216,43 +212,6 @@ export interface MarkdownRenderPolicy {
   urlTransform: NonNullable<Options["urlTransform"]>;
 }
 
-/**
- * The host's link policy for Markdown documents, shared by the rendered
- * document and the Markdown editor's Mod+click (#12323). External links open
- * in the browser; repo links resolve against the document and open only when
- * the document's own root contains them. Markdown is untrusted content, so a
- * link must never become a lever for browsing outside the project.
- */
-export function activateMarkdownLink(
-  href: string | undefined,
-  { filePath, rootPath }: { filePath: string; rootPath: string }
-): void {
-  // Same-document anchors: headings carry no ids (no rehype-slug), so
-  // there is nothing to scroll to — swallow instead of navigating.
-  if (!href || href.startsWith("#")) return;
-  if (HTTPish.test(href)) {
-    actionService
-      .dispatch("browser.openExternal", { url: href }, { source: "user" })
-      .catch((err) => logError("[markdownRenderPolicy] openExternal failed", err));
-    return;
-  }
-  // Protocol-relative ("//host/…") and other non-http schemes survive to
-  // here only as untrusted oddities — never treat them as local paths.
-  if (href.startsWith("//")) return;
-  // Repo link — strip any query/fragment, resolve against the document,
-  // and only open files the document's own root contains.
-  const pathPart = href.split(/[?#]/, 1)[0];
-  if (!pathPart) return;
-  const absolute = resolveAgainstFile(filePath, pathPart);
-  if (!isPathInside(absolute, rootPath)) return;
-  // The check above is lexical; a directory symlink inside the root can still
-  // point anywhere. `confineToRoot` makes the viewer hold every read to this
-  // root on the real path.
-  actionService
-    .dispatch("file.view", { path: absolute, rootPath, confineToRoot: true }, { source: "user" })
-    .catch((err) => logError("[markdownRenderPolicy] file.view failed", err));
-}
-
 export function useMarkdownRenderPolicy({
   filePath,
   rootPath,
@@ -286,6 +245,15 @@ export function useMarkdownRenderPolicy({
   const components = useMemo<Components>(
     () => ({
       img: MarkdownImage,
+      pre: ({ node, children, ...props }) => {
+        const mermaidSource = mermaidFenceSource(node);
+        if (mermaidSource !== null) {
+          return (
+            <MermaidDiagram source={mermaidSource} fallback={<pre {...props}>{children}</pre>} />
+          );
+        }
+        return <pre {...props}>{children}</pre>;
+      },
       code: ({ node: _node, className: codeClassName, children, ...props }) => {
         const language = /language-([\w+-]+)/.exec(codeClassName ?? "")?.[1];
         if (language) {

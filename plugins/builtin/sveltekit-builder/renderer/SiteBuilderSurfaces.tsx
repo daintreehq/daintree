@@ -23,16 +23,22 @@ import {
 } from "lucide-react";
 import type { DevPreviewToolSurfaceProps } from "@/registry/devPreviewToolRegistry";
 import type { SelectedNode } from "../shared/model.js";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { DismissButton } from "@/components/ui/DismissButton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import {
+  Badge,
+  Button,
+  DismissButton,
+  IconButton,
+  Kbd,
+  KbdChord,
+  ScrollShadow,
+  SegmentedControl,
+  Tooltip,
+  TruncatedTooltip,
+} from "@daintreehq/plugin-ui";
 import { cn } from "@/lib/utils";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
-import { KBD_COMPACT_CLASS, KbdChord } from "@/components/ui/Kbd";
-import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
+// The host Select: this one's items take their own class and title, which the
+// kit Select's `options` cannot carry.
 import {
   Select,
   SelectContent,
@@ -76,6 +82,12 @@ const MODE_OPTIONS = [
   { value: "browse" as const, label: "Browse" },
   { value: "select" as const, label: "Inspect" },
 ];
+
+type CanvasMode = (typeof MODE_OPTIONS)[number]["value"];
+
+function isCanvasMode(value: string): value is CanvasMode {
+  return MODE_OPTIONS.some((option) => option.value === value);
+}
 
 /**
  * The builder for the dev preview hosting it: the host's session for this
@@ -241,12 +253,14 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
       onKeyDown={onStripKeyDown}
       className="@container/strip flex h-8 shrink-0 items-center gap-2 border-b border-overlay bg-surface px-2"
     >
-      <SegmentedRadioGroup
+      <SegmentedControl
         density="compact"
         aria-label="Canvas mode"
         options={MODE_OPTIONS}
         value={state.mode}
-        onChange={(mode) => void controller.setMode(mode)}
+        onValueChange={(mode) => {
+          if (isCanvasMode(mode)) void controller.setMode(mode);
+        }}
       />
       <div aria-hidden="true" className="toolbar-divider h-4 w-px shrink-0" />
       <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-text-secondary">
@@ -281,38 +295,32 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
 function DrawerToggle({ panelId, expanded }: { panelId: string; expanded: boolean }) {
   const collapsed = useDrawerCollapsed(panelId);
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Site Builder details"
-          aria-expanded={expanded}
-          onClick={() => setDrawerCollapsed(panelId, !collapsed)}
-        >
-          {collapsed ? (
-            <PanelRightOpen aria-hidden="true" />
-          ) : (
-            <PanelRightClose aria-hidden="true" />
-          )}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">Site Builder details</TooltipContent>
-    </Tooltip>
+    <IconButton
+      icon={
+        collapsed ? <PanelRightOpen aria-hidden="true" /> : <PanelRightClose aria-hidden="true" />
+      }
+      size="xs"
+      tooltipSide="bottom"
+      aria-label="Site Builder details"
+      aria-expanded={expanded}
+      onClick={() => setDrawerCollapsed(panelId, !collapsed)}
+    />
   );
 }
 
 /** How to walk the page from the keyboard once something is selected. */
 function KeyHints() {
   return (
-    // `KBD_COMPACT_CLASS`, not a hand-rolled box: the product already has one
+    // The compact key cap, not a hand-rolled box: the product already has one
     // key-cap grammar and this row is exactly the dense case it was tightened
     // for. Unstyled, the two hints and the file path beside them read as one
     // running sentence.
     <span className="ml-auto hidden shrink-0 items-center gap-2 text-3xs text-text-secondary @[640px]/strip:flex">
       <span className="flex items-center gap-1">
         {/* Sans, as KbdChord sets its arrows: the mono face has no arrow glyphs. */}
-        <kbd className={KBD_COMPACT_CLASS.replace("font-mono", "font-sans")}>↑↓←→</kbd>
+        <Kbd density="compact" className="font-sans">
+          ↑↓←→
+        </Kbd>
         move
       </span>
       <span className="flex items-center gap-1">
@@ -516,11 +524,8 @@ function StripMessage({
   );
   if (!title) return message;
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>{message}</TooltipTrigger>
-      <TooltipContent side="bottom" align="start">
-        {title}
-      </TooltipContent>
+    <Tooltip content={title} side="bottom" align="start">
+      {message}
     </Tooltip>
   );
 }
@@ -755,26 +760,19 @@ function SiteSourceBody({
               const relative = relativeTo(worktreePath, appRoot);
               return (
                 <li key={appRoot}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-full justify-between gap-2 px-2 font-mono text-xs font-normal"
-                        onClick={() => void controller.openWorkspace(appRoot)}
-                      >
-                        <span className="min-w-0 truncate">
-                          {relative === "." ? "./" : relative}
-                        </span>
-                        <ChevronRight
-                          className="h-3.5 w-3.5 shrink-0 text-text-secondary"
-                          aria-hidden="true"
-                        />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" align="start">
-                      {appRoot}
-                    </TooltipContent>
+                  <Tooltip content={appRoot} side="bottom" align="start">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-full justify-between gap-2 px-2 font-mono text-xs font-normal"
+                      onClick={() => void controller.openWorkspace(appRoot)}
+                    >
+                      <span className="min-w-0 truncate">{relative === "." ? "./" : relative}</span>
+                      <ChevronRight
+                        className="h-3.5 w-3.5 shrink-0 text-text-secondary"
+                        aria-hidden="true"
+                      />
+                    </Button>
                   </Tooltip>
                 </li>
               );
