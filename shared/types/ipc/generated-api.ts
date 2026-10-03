@@ -936,9 +936,6 @@ export interface GeneratedElectronAPI {
     checkKey(
       ...args: IpcInvokeMap["triage:check-key"]["args"]
     ): Promise<IpcInvokeMap["triage:check-key"]["result"]>;
-    choose(
-      ...args: IpcInvokeMap["triage:choose"]["args"]
-    ): Promise<IpcInvokeMap["triage:choose"]["result"]>;
     clearKey(
       ...args: IpcInvokeMap["triage:clear-key"]["args"]
     ): Promise<IpcInvokeMap["triage:clear-key"]["result"]>;

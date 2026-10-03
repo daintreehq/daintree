@@ -131,12 +131,12 @@ export interface TriageSnapshot {
 }
 
 /**
- * Which card an action came from, so main can refuse it once that card is
- * stale: the terminal's incarnation, and the prompt the card was showing.
+ * The run an action is meant for: the terminal incarnation the panel showed,
+ * so main refuses one respawned under the same id since. A host will join it
+ * when runs on remote hosts are triaged too.
  */
 export interface TriageTarget {
   spawnedAt: number;
-  question?: string | null;
 }
 
 /** The two provider keys the triage panel uses until it moves to Daintree's backend. */

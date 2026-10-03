@@ -1,15 +1,17 @@
 import { Suspense, lazy, useImperativeHandle, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { Check, KeyRound, SquareArrowOutUpRight, Trash2 } from "lucide-react";
+import { KeyRound, SquareArrowOutUpRight, Trash2 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { KbdChord } from "@/components/ui/Kbd";
-import { TimeAgo } from "@/components/ui/TimeAgo";
+import { SURFACE_HEADER_FOCUS_LIFT_CLASS, SurfaceHeader } from "@/components/ui/SurfaceHeader";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
-import { PilotRunState } from "@/components/Pilot/PilotRunState";
+import { AgentStateChip } from "@/components/Terminal/TerminalAgentIndicator";
+import { getEffectiveStateLabel } from "@/components/Worktree/terminalStateConfig";
+import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
 import { isMac } from "@/lib/platform";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
-import { triagePromptKey, useTriageStore } from "@/store/triageStore";
 import type { TriageItem } from "./triageModel";
 import { KIND_LABEL } from "./TriageRow";
 import { TriageTerminal, type TriageStreamState } from "./TriageTerminal";
@@ -18,9 +20,11 @@ const LazyHybridInputBar = lazy(() =>
   import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
 );
 
+/** A grid pane's header control: a ghost icon button with a 14px glyph. */
+const CONTROL_ICON = "[&_svg]:size-3.5";
+
 export interface TriageCardHandlers {
   onOpen: (item: TriageItem) => void;
-  onChoose: (item: TriageItem, label: string) => Promise<void>;
   onTrash: (item: TriageItem) => void;
   /** Something was typed and sent to the run from the pane. */
   onSent: (item: TriageItem) => void;
@@ -37,8 +41,6 @@ export interface TriageCardHandle {
 interface TriageCardProps extends TriageCardHandlers {
   item: TriageItem;
   domId: string;
-  /** Main is scanning right now. */
-  scanning: boolean;
   ref?: React.Ref<TriageCardHandle>;
 }
 
@@ -61,89 +63,54 @@ export function triageCardDomId(runId: string): string {
   return `triage-card-${runId}`;
 }
 
-function OptionButtons({
-  options,
-  answered,
-  onPick,
+function HeaderControl({
+  label,
+  shortcut,
+  onClick,
+  destructive = false,
+  children,
 }: {
-  options: readonly string[];
-  answered: { label: string; sent: boolean } | null;
-  onPick: (label: string) => void;
+  label: string;
+  shortcut?: string;
+  onClick: () => void;
+  destructive?: boolean;
+  children: React.ReactNode;
 }) {
-  const sent = answered?.sent === true;
   return (
-    <>
-      {!sent && (
-        <div className="flex flex-wrap gap-2" role="group" aria-label="Answer">
-          {options.map((label, index) => (
-            <Button
-              key={label}
-              variant="outline"
-              size="sm"
-              disabled={answered !== null && answered.label !== label}
-              loading={answered?.label === label}
-              aria-keyshortcuts={index < 9 ? String(index + 1) : undefined}
-              onClick={() => onPick(label)}
-              // A permission's scope is often in its last words, so a long label
-              // wraps under its digit rather than truncating them away.
-              className="h-auto min-h-8 max-w-full items-start justify-start py-1.5 text-left whitespace-normal"
-            >
-              {index < 9 && (
-                <KbdChord
-                  shortcut={String(index + 1)}
-                  density="bare"
-                  // The button says its key through aria-keyshortcuts already.
-                  rootAttributes={{ "aria-hidden": "true" }}
-                  className="h-4 shrink-0"
-                />
-              )}
-              <span className="min-w-0 leading-4">{label}</span>
-            </Button>
-          ))}
-        </div>
-      )}
-      <AckLine text={sent ? answered.label : null} />
-    </>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={label}
+          aria-keyshortcuts={shortcut}
+          onClick={onClick}
+          className={cn(
+            CONTROL_ICON,
+            destructive &&
+              "hover:bg-status-error/15 hover:text-status-error focus-visible:bg-status-error/15 focus-visible:text-status-error focus-visible:outline-status-error"
+          )}
+        >
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{label}</TooltipContent>
+    </Tooltip>
   );
 }
 
 /**
- * What main took from the panel. Mounted before there is anything to say, so
- * the acknowledgement is announced when it lands rather than inserted unheard.
- */
-function AckLine({ text }: { text: string | null }) {
-  return (
-    <p
-      role="status"
-      className={
-        text === null ? "sr-only" : "flex items-center gap-1.5 text-xs text-text-secondary"
-      }
-    >
-      {text === null ? null : (
-        <>
-          <Check className="size-3.5 shrink-0" aria-hidden="true" />
-          <span className="min-w-0 truncate">
-            Answered: <span className="text-text-primary">{text}</span>
-          </span>
-        </>
-      )}
-    </p>
-  );
-}
-
-/**
- * The selected agent: what the readers made of its screen, quick answers for a
- * menu, and then the terminal itself — live, on the WebGL renderer — with the
- * real composer under it. Type, press Enter, and it goes to that agent, from
+ * The selected agent, drawn the way its own pane draws it in the grid: the
+ * panel frame, a compact header with the terminal's title and its controls,
+ * then the terminal itself — live, on the WebGL renderer — with the real
+ * composer flush beneath. Type, press Enter, and it goes to that agent, from
  * whichever project it is in.
  */
 export function TriageCard({
   item,
   domId,
-  scanning,
   ref,
   onOpen,
-  onChoose,
   onTrash,
   onSent,
   onSendFailed,
@@ -154,48 +121,14 @@ export function TriageCard({
     secretPrompt: false,
   });
   const composerRef = useRef<HybridInputBarHandle>(null);
-  const card = item.card;
+  // The pane the keyboard is in lifts its title bar, as a focused grid pane does.
+  const [focused, setFocused] = useState(false);
   const { row } = item;
   const run = row.run;
-  const options = item.kind === "approval" && !item.stale ? (card?.options ?? []) : [];
   const canReply = canReplyTo(item, stream.secretPrompt);
   const canTrash = canTrashItem(item);
 
-  // One answer per prompt, from a click or a digit alike. Keyed on the prompt,
-  // so the next menu — even one with the same labels — starts answerable.
-  const promptKey = card === null ? "" : triagePromptKey(card);
-  const ack = useTriageStore((state) => state.acks[item.runId]);
-  const setAck = useTriageStore((state) => state.setAck);
-  const answered =
-    ack !== undefined && ack.kind === "answer" && ack.promptKey === promptKey
-      ? { label: ack.text, sent: ack.sent }
-      : null;
-  const pick = (label: string) => {
-    if (answered) return;
-    const key = promptKey;
-    const runId = item.runId;
-    setAck(runId, () => ({ promptKey: key, kind: "answer", text: label, sent: false }));
-    onChoose(item, label).then(
-      () =>
-        setAck(runId, (current) =>
-          current?.promptKey === key && current.text === label
-            ? { ...current, sent: true }
-            : current
-        ),
-      // A failure frees only its own prompt, never a newer one answered since.
-      () => setAck(runId, (current) => (current?.promptKey === key ? undefined : current))
-    );
-  };
-
   const handleKey = (event: KeyboardEvent<HTMLElement>): boolean => {
-    if (/^[1-9]$/.test(event.key) && !event.metaKey && !event.ctrlKey && !event.altKey) {
-      const label = options[Number(event.key) - 1];
-      if (label === undefined) return false;
-      event.preventDefault();
-      // A held key auto-repeats; one press is one answer.
-      if (!event.repeat) pick(label);
-      return true;
-    }
     if ((event.key === "r" || event.key === "R") && canReply && !event.metaKey && !event.ctrlKey) {
       event.preventDefault();
       composerRef.current?.focus();
@@ -210,13 +143,19 @@ export function TriageCard({
   };
   useImperativeHandle(ref, () => ({ handleKey }));
 
-  const question =
-    item.kind === "approval" || item.kind === "question" ? (card?.question ?? null) : null;
-  const headline = card?.headline ?? question;
-  const summary = card?.summary ?? null;
-  const reading = card?.describing === true || scanning;
   const where = [item.workspace.name, row.worktreeLabel].filter(Boolean).join(" · ");
   const agentId = isBuiltInAgentId(run.agentId) ? run.agentId : undefined;
+  // The grid's chip rules: nothing while idle, and a settled agent keeps its
+  // glyph only to explain a session cost, which the panel does not have.
+  const agentState = run.agentState;
+  const showState =
+    agentState !== undefined &&
+    agentState !== "idle" &&
+    agentState !== "completed" &&
+    agentState !== "exited";
+  const brandSurface: BrandMarkSurface = focused
+    ? { surface: "surface-panel", extension: "panel-header-focus-bg", lift: "overlay-medium" }
+    : { surface: "surface-panel", extension: "panel-header-bg" };
 
   // Through the open stream only, so main sends to the incarnation on screen
   // or to nothing.
@@ -234,91 +173,78 @@ export function TriageCard({
       id={domId}
       aria-label={`${row.title}, ${KIND_LABEL[item.kind]}`}
       data-triage-detail=""
-      // Keys pressed on the pane's own buttons act on its agent too; keys in
-      // the terminal or the composer are theirs.
-      onKeyDown={(event) => {
-        if (
-          event.target instanceof Element &&
-          event.target.closest("textarea, input, [contenteditable], [data-triage-terminal]")
-        ) {
-          return;
-        }
-        handleKey(event);
+      onFocusCapture={() => setFocused(true)}
+      onBlurCapture={(event) => {
+        const next = event.relatedTarget;
+        if (!(next instanceof Node) || !event.currentTarget.contains(next)) setFocused(false);
       }}
-      className="flex h-full min-h-0 flex-col gap-2.5"
+      className="group/panel flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-overlay bg-surface shadow-[var(--theme-shadow-ambient)] transition-colors duration-150 hover:border-tint/[0.08]"
     >
-      <header className="flex items-start gap-2.5">
-        <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center">
-          <TerminalIcon
-            chrome={row.chrome}
-            className="h-5 w-5"
-            brandColor={row.presetColor ?? row.chrome.color}
-          />
-        </span>
-        <div className="min-w-0 flex-1">
-          <h3 className="text-sm font-medium break-words text-text-primary">
-            {row.title}
-            <span className="font-normal text-text-secondary"> · {where}</span>
-          </h3>
-          <p className="flex min-w-0 items-center gap-1.5 text-xs text-text-secondary">
-            <span className="flex size-3.5 shrink-0 items-center justify-center">
-              <PilotRunState band={row.band} agentState={run.agentState} />
-            </span>
-            <span className="shrink-0">{KIND_LABEL[item.kind]}</span>
-            {row.age !== null && <span className="shrink-0">· {row.age}</span>}
-            {item.stale && card !== null && (
-              <span className="truncate">
-                · read <TimeAgo timestamp={card.observedAt} />
-                {reading ? ", reading again…" : ", refresh to read again"}
-              </span>
-            )}
-          </p>
+      <SurfaceHeader
+        density="compact"
+        brandSurface={brandSurface}
+        className={cn(
+          "relative overflow-hidden text-xs transition-colors select-none",
+          focused ? SURFACE_HEADER_FOCUS_LIFT_CLASS : "bg-[var(--panel-header-bg,transparent)]"
+        )}
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-2 self-stretch">
+          <span
+            className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-text-primary"
+            data-brand-active={focused || undefined}
+          >
+            <TerminalIcon
+              chrome={row.chrome}
+              className="h-3.5 w-3.5"
+              brandColor={row.presetColor ?? row.chrome.color}
+            />
+          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <h3 className="min-w-[6ch] shrink truncate font-sans text-xs leading-6 font-medium text-text-primary">
+                {row.title}
+              </h3>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{row.title}</TooltipContent>
+          </Tooltip>
+          <span className="min-w-0 shrink-[2] truncate text-xs leading-6 text-text-secondary">
+            {where}
+          </span>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div
+          role="toolbar"
+          aria-label="Terminal"
+          className="ml-1.5 flex shrink-0 items-center gap-1"
+        >
           {canTrash && (
-            <Button
-              variant="ghost"
-              size="sm"
+            <HeaderControl
+              label="Trash terminal"
+              shortcut={isMac() ? "Meta+Backspace" : "Control+Backspace"}
               onClick={() => onTrash(item)}
-              aria-keyshortcuts={isMac() ? "Meta+Backspace" : "Control+Backspace"}
+              destructive
             >
-              <Trash2 />
-              Trash
-            </Button>
+              <Trash2 aria-hidden="true" />
+            </HeaderControl>
           )}
-          <Button variant="outline" size="sm" onClick={() => onOpen(item)}>
-            <SquareArrowOutUpRight />
-            Go to terminal
-          </Button>
+          <HeaderControl label="Go to terminal" onClick={() => onOpen(item)}>
+            <SquareArrowOutUpRight aria-hidden="true" />
+          </HeaderControl>
         </div>
-      </header>
-
-      {(headline !== null || summary !== null) && (
-        <div className="flex flex-col gap-0.5 pl-7.5">
-          {headline !== null && (
-            <p className="text-sm leading-snug text-text-primary">{headline}</p>
-          )}
-          {summary !== null && (
-            <p className="text-xs leading-relaxed text-text-secondary">{summary}</p>
-          )}
-        </div>
-      )}
-      {headline === null && summary === null && item.pending && (
-        // Nothing polls, so a screen that moved since the last scan stays unread
-        // until the user refreshes; only claim a read while one is in flight.
-        <p className="pl-7.5 text-xs text-text-secondary">
-          {reading ? "Reading the screen…" : "Changed since the last scan. Refresh to read it."}
-        </p>
-      )}
-
-      {options.length > 0 && (
-        <div className="pl-7.5">
-          <OptionButtons options={options} answered={answered} onPick={pick} />
-        </div>
-      )}
+        {/* The agent's state chip, in the reserved box at the far right where every agent pane keeps it. */}
+        {agentId !== undefined && (
+          <span className="ml-2 flex h-5 w-5 shrink-0 items-center justify-center">
+            {showState && (
+              <AgentStateChip
+                agentState={agentState}
+                ariaLabel={`Agent state: ${getEffectiveStateLabel(agentState)}`}
+              />
+            )}
+          </span>
+        )}
+      </SurfaceHeader>
 
       <div
-        className="flex min-h-0 flex-1 flex-col gap-2"
+        className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas"
         // Escape belongs to the agent here — it interrupts or backs out of a
         // menu — so it must not also close the dialog around it.
         onKeyDown={(event) => {
@@ -334,7 +260,6 @@ export function TriageCard({
           spawnedAt={run.spawnedAt}
           onStreamChange={setStream}
         />
-
         {canReply ? (
           <div data-keybindings-isolated="" className="contents">
             <Suspense fallback={null}>
@@ -359,7 +284,7 @@ export function TriageCard({
             </Suspense>
           </div>
         ) : (
-          <p className="flex items-center gap-1.5 text-xs text-text-secondary">
+          <p className="flex shrink-0 items-center gap-1.5 px-3.5 py-3 text-xs text-text-secondary">
             <KeyRound className="size-3.5 shrink-0" aria-hidden="true" />
             It's asking for a secret: type it straight into the terminal above
           </p>

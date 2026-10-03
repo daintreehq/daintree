@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
-import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { CountBadge } from "@/components/ui/badge";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PilotRunState } from "@/components/Pilot/PilotRunState";
 import type { TriageCategory } from "@shared/types/ipc/triage";
@@ -38,8 +39,9 @@ interface TriageRowProps {
 }
 
 /**
- * One agent in the inbox: who and where, what it needs or is doing, and the
- * readers' summary under that. A click opens its terminal beside the list.
+ * One agent in the inbox, laid out like Pilot's run rows: state and agent on
+ * the left; who and where, what it needs, and the readers' summary under that;
+ * its priority and age on the right. A click opens its terminal beside the list.
  */
 export function TriageRow({
   item,
@@ -53,12 +55,15 @@ export function TriageRow({
   const { row } = item;
   const status = rowStatus(item);
   const summary = item.card?.summary ?? null;
+  // Only the models' reading is a priority; a run not read yet shows none.
+  const priority = item.card?.priority ?? null;
   const where = [item.workspace.name, row.worktreeLabel].filter(Boolean).join(" · ");
   const accessibleName = [
     row.title,
     where,
     status,
     summary,
+    priority === null ? null : `priority ${priority}`,
     row.agePhrase,
     unread ? "unread" : null,
   ]
@@ -75,7 +80,6 @@ export function TriageRow({
       data-triage-card=""
       data-kind={item.kind}
       data-unread={unread ? "true" : undefined}
-      data-selected={isSelected ? "true" : undefined}
       onFocus={() => {
         if (!isSelected) onSelect();
       }}
@@ -85,8 +89,8 @@ export function TriageRow({
       }}
       onDoubleClick={onOpen}
       className={cn(
-        PALETTE_ROW_CLASS,
-        "flex shrink-0 cursor-pointer items-start gap-2 rounded-[var(--radius-md)] px-2 py-2",
+        LIST_DETAIL_ROW_CLASS,
+        "flex w-full shrink-0 cursor-pointer items-start gap-2 rounded-[var(--radius-md)] py-2 pr-3 pl-3 text-left",
         // The neutral menu-row ring, inset because the list scrolls: never the
         // accent on a list that holds focus the whole time the panel is open.
         "outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:-outline-offset-2"
@@ -107,16 +111,13 @@ export function TriageRow({
         <span className="flex min-w-0 items-baseline gap-1.5 text-sm leading-5">
           <span
             className={cn(
-              "shrink-0",
+              "min-w-0 shrink truncate",
               unread ? "font-semibold text-text-primary" : "text-text-secondary"
             )}
           >
             {row.title}
           </span>
-          <span className="min-w-0 truncate text-text-secondary">{where}</span>
-          <span className="ml-auto shrink-0 pl-2 text-2xs whitespace-nowrap text-text-secondary tabular-nums">
-            {row.age ?? ""}
-          </span>
+          <span className="min-w-0 shrink-[2] truncate text-xs text-text-secondary">{where}</span>
         </span>
         <span
           className={cn(
@@ -129,6 +130,15 @@ export function TriageRow({
         {summary !== null && summary !== status && (
           <span className="line-clamp-2 text-xs leading-4 text-text-secondary">{summary}</span>
         )}
+      </span>
+      <span
+        aria-hidden="true"
+        className="flex min-w-[3.5rem] shrink-0 flex-col items-end gap-1 pt-0.5 text-right"
+      >
+        <span className="text-2xs leading-none whitespace-nowrap text-text-secondary tabular-nums">
+          {row.age ?? ""}
+        </span>
+        {priority !== null && <CountBadge>{priority}</CountBadge>}
       </span>
     </div>
   );

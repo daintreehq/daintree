@@ -140,58 +140,13 @@ describe("triage IPC", () => {
     expect(active(await invoke(TRIAGE_METHOD_CHANNELS.getSnapshot, a))).toBe(false);
   });
 
-  it("answers a menu option by moving to it and pressing Enter", async () => {
-    const result = await outcome(
-      invoke(TRIAGE_METHOD_CHANNELS.choose, fakeSender(1), "run-1", "No, and tell Claude", {
-        spawnedAt: 100,
-        question: "Do you want to proceed?",
-      })
-    );
-    expect(result.ok).toBe(true);
-    expect(state.writes).toEqual(["\x1b[B", "\r"]);
-  });
-
-  it("refuses to answer once the question on screen has changed", async () => {
-    state.screen = "Deploy to production?\n❯ 1. Yes\n  2. No";
-    const result = await outcome(
-      invoke(TRIAGE_METHOD_CHANNELS.choose, fakeSender(1), "run-1", "Yes", {
-        spawnedAt: 100,
-        question: "Do you want to proceed?",
-      })
-    );
-    expect(result.ok).toBe(false);
-    expect(state.writes).toEqual([]);
-  });
-
-  it("refuses a terminal respawned under the same id", async () => {
+  it("won't trash a terminal respawned under the same id", async () => {
     state.record = { spawnedAt: 200 };
     const result = await outcome(
-      invoke(TRIAGE_METHOD_CHANNELS.choose, fakeSender(1), "run-1", "Yes", { spawnedAt: 100 })
+      invoke(TRIAGE_METHOD_CHANNELS.trash, fakeSender(1), "run-1", { spawnedAt: 100 })
     );
     expect(result.ok).toBe(false);
-    expect(state.writes).toEqual([]);
-  });
-
-  it("refuses a second answer while the first is still being typed", async () => {
-    const sender = fakeSender(1);
-    const target = { spawnedAt: 100, question: "Do you want to proceed?" };
-    const first = invoke(TRIAGE_METHOD_CHANNELS.choose, sender, "run-1", "No, and tell", target);
-    const second = await outcome(
-      invoke(TRIAGE_METHOD_CHANNELS.choose, sender, "run-1", "No, and tell", target)
-    );
-    expect(second.ok).toBe(false);
-    await first;
-    expect(state.writes).toEqual(["\x1b[B", "\r"]);
-  });
-
-  it("never repeats the option label in an error", async () => {
-    const result = await outcome(
-      invoke(TRIAGE_METHOD_CHANNELS.choose, fakeSender(1), "run-1", "Ship customer-data-export", {
-        spawnedAt: 100,
-      })
-    );
-    expect(result.ok).toBe(false);
-    expect(result.message).not.toContain("customer-data-export");
+    expect(ptyClient.trash).not.toHaveBeenCalled();
   });
 
   it("streams a run's terminal only for the incarnation the card was built from", async () => {

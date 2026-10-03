@@ -3,7 +3,7 @@ import type { KeyboardEvent } from "react";
 import { RefreshCw } from "lucide-react";
 import { ScanEye } from "@/components/icons";
 import { cn } from "@/lib/utils";
-import { isTriageRead, triagePromptKey, useTriageStore } from "@/store/triageStore";
+import { isTriageRead, useTriageStore } from "@/store/triageStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -218,36 +218,6 @@ export function TriageView() {
     focusCardNow(target.runId);
   }, [focusedIndex, focusedId, items, focusCardNow]);
 
-  // Answered: the agent goes back to work, so the cursor goes on to whatever
-  // is still waiting rather than following it out of the queue.
-  const advancePast = useCallback(
-    (runId: string) => {
-      const card = document.getElementById(triageCardDomId(runId));
-      const pane = document.getElementById(`triage-detail-${runId}`);
-      const active = document.activeElement;
-      if (
-        active !== null &&
-        active !== document.body &&
-        !card?.contains(active) &&
-        !pane?.contains(active)
-      )
-        return;
-      // Onward first, then back round to anything left above; never to a prompt
-      // this panel has already answered while main catches up.
-      const acks = useTriageStore.getState().acks;
-      const index = items.findIndex((item) => item.runId === runId);
-      const waiting = (item: TriageItem) =>
-        item.runId !== runId &&
-        itemNeedsAttention(item) &&
-        item.kind !== "finished" &&
-        !(item.card !== null && acks[item.runId]?.promptKey === triagePromptKey(item.card));
-      const next =
-        items.slice(index + 1).find(waiting) ?? items.slice(0, Math.max(index, 0)).find(waiting);
-      if (next) focusCardNow(next.runId);
-    },
-    [items, focusCardNow]
-  );
-
   const handlers = useMemo<TriageCardHandlers>(() => {
     const openRun = (item: TriageItem) => {
       const args = { runId: item.runId, workspaceId: item.workspaceId };
@@ -272,23 +242,11 @@ export function TriageView() {
         close();
       });
     };
-    // From the card the user acted on, so main refuses it once that card is stale.
-    const target = (item: TriageItem) => ({
-      spawnedAt: item.card?.spawnedAt ?? item.row.run.spawnedAt,
-      question: item.card?.question ?? null,
-    });
+    // The incarnation on screen, so main refuses a terminal respawned since.
+    const target = (item: TriageItem) => ({ spawnedAt: item.row.run.spawnedAt });
     const goTo = (item: TriageItem) => ({ label: "Go to terminal", onClick: () => openRun(item) });
     return {
       onOpen: openRun,
-      onChoose: async (item, label) => {
-        try {
-          await window.electron.triage.choose(item.runId, label, target(item));
-          advancePast(item.runId);
-        } catch (error) {
-          failToast("Couldn't answer agent", error, goTo(item));
-          throw error;
-        }
-      },
       onSent: (item) => openedByUser(item),
       onSendFailed: (item, error) => failToast("Couldn't send to agent", error, goTo(item)),
       onTrash: (item) => {
@@ -317,15 +275,21 @@ export function TriageView() {
         );
       },
     };
-  }, [close, advancePast, openedByUser]);
+  }, [close, openedByUser]);
 
   // On the list's own wrapper rather than the palette body: the body only acts
   // on keys aimed at itself, and here focus is always on a card or its controls.
   const onNavigationKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (items.length === 0 || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (items.length === 0) return;
     // Only from the list: the pane holds a live terminal and a composer, and
     // every key there belongs to the agent.
     if (!(event.target instanceof Element) || !event.target.closest("[data-triage-list]")) return;
+    // The selected run's own chords (Trash is ⌘⌫) go to it before the
+    // modifier guard below, which keeps app shortcuts out of plain navigation.
+    if ((event.metaKey || event.ctrlKey) && event.key === "Backspace") {
+      if (detailRef.current?.handleKey(event)) return;
+    }
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
     let next: number | null = null;
     if (event.key === "ArrowDown" || event.key === "j") {
       next = Math.min(items.length - 1, activeIndex + 1);
@@ -364,9 +328,6 @@ export function TriageView() {
     if (!focusedItem) return [];
     if (typing) return [{ keys: ["⇧", "↵"], label: "New line" }];
     const hints = [{ keys: ["↑", "↓"], label: "Move" }];
-    if (focusedItem.kind === "approval" && (focusedItem.card?.options.length ?? 0) > 0) {
-      hints.push({ keys: ["1–9"], label: "Answer" });
-    }
     if (canReplyTo(focusedItem)) {
       hints.push({ keys: ["R"], label: "Reply" });
     }
@@ -437,50 +398,56 @@ export function TriageView() {
 
       <div
         ref={bodyRef}
-        className="flex min-h-0 flex-1 flex-col gap-3 p-3"
+        className="flex min-h-0 flex-1 flex-col"
         onKeyDown={onNavigationKeyDown}
         onFocusCapture={(event) =>
           setTyping(event.target instanceof Element && event.target.closest(".cm-editor") !== null)
         }
         onBlurCapture={() => setTyping(false)}
       >
-        {triage !== null && !triage.configured && (
-          <Callout
-            severity="neutral"
-            size="compact"
-            title="Screen reading is off"
-            action={
-              <Button
-                variant="outline"
-                size="xs"
-                onClick={() => {
-                  close();
-                  window.dispatchEvent(
-                    new CustomEvent("daintree:open-settings-tab", { detail: { tab: "triage" } })
-                  );
-                }}
+        {((triage !== null && !triage.configured) || triage?.lastError) && (
+          <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
+            {triage !== null && !triage.configured && (
+              <Callout
+                severity="neutral"
+                size="compact"
+                title="Screen reading is off"
+                action={
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    onClick={() => {
+                      close();
+                      window.dispatchEvent(
+                        new CustomEvent("daintree:open-settings-tab", {
+                          detail: { tab: "triage" },
+                        })
+                      );
+                    }}
+                  >
+                    Add keys
+                  </Button>
+                }
               >
-                Add keys
-              </Button>
-            }
-          >
-            Add your TypeSafe and Cerebras keys in Settings to read each agent's screen. Until then
-            the list shows only what Daintree's own state tracking saw.
-          </Callout>
-        )}
-        {triage?.lastError && (
-          <Callout severity="warning" size="compact" title="Some screens couldn't be read">
-            {triage.lastError}. Refresh to try them again.
-          </Callout>
+                Add your TypeSafe and Cerebras keys in Settings to read each agent's screen. Until
+                then the list shows only what Daintree's own state tracking saw.
+              </Callout>
+            )}
+            {triage?.lastError && (
+              <Callout severity="warning" size="compact" title="Some screens couldn't be read">
+                {triage.lastError}. Refresh to try them again.
+              </Callout>
+            )}
+          </div>
         )}
         {items.length > 0 && (
-          // An inbox: what needs you down the left, most urgent first, and the
-          // selected agent's own terminal on the right to act in.
-          <div className="grid min-h-0 flex-1 grid-cols-[minmax(22rem,28rem)_minmax(0,1fr)] gap-3">
+          // An inbox: what needs you down a sidebar, most urgent first, and the
+          // selected agent's own terminal beside it, drawn as its pane.
+          <div className="flex min-h-0 flex-1">
             <div
               role="listbox"
               aria-label="Agents"
-              className="flex min-h-0 flex-col gap-0.5 overflow-y-auto pr-1"
+              className="flex min-h-0 w-[26rem] shrink-0 flex-col gap-0.5 self-stretch overflow-y-auto border-r border-border-default bg-surface-sidebar p-1.5 select-none"
               data-triage-list=""
             >
               {items.map((item) => (
@@ -496,14 +463,13 @@ export function TriageView() {
                 />
               ))}
             </div>
-            <div className="flex min-h-0 flex-col rounded-[var(--radius-lg)] border border-border-default bg-surface-panel p-3">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas p-2">
               {focusedItem && (
                 <TriageCard
                   key={focusedItem.runId}
                   ref={detailRef}
                   item={focusedItem}
                   domId={`triage-detail-${focusedItem.runId}`}
-                  scanning={busy}
                   {...handlers}
                 />
               )}
@@ -511,27 +477,24 @@ export function TriageView() {
           </div>
         )}
         {fleet !== null && items.length === 0 && (
-          <p className="px-1 py-6 text-center text-sm text-text-secondary">
+          <p className="px-1 py-10 text-center text-sm text-text-secondary">
             Launch an agent and it shows up here.
           </p>
         )}
       </div>
 
-      <AppDialog.Footer>
-        {focusedItem && (
+      {focusedItem && (
+        // The palettes' hint band, not a dialog's button footer: keyboard hints
+        // at palette scale.
+        <AppDialog.Footer className="gap-4 px-3 py-2 text-xs text-text-secondary">
           <PaletteFooterHints
             primaryHint={
               typing ? { keys: ["↵"], label: "Send" } : { keys: ["↵"], label: "Go to terminal" }
             }
             hints={footerHints}
           />
-        )}
-        {triage?.configured && (
-          <span className="ml-auto shrink-0 whitespace-nowrap text-2xs text-text-secondary">
-            AI summaries · {triage.describerModel}
-          </span>
-        )}
-      </AppDialog.Footer>
+        </AppDialog.Footer>
+      )}
     </AppDialog>
   );
 }

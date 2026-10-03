@@ -4,7 +4,6 @@ export const TRIAGE_METHOD_CHANNELS = {
   getSnapshot: "triage:get-snapshot",
   setActive: "triage:set-active",
   refresh: "triage:refresh",
-  choose: "triage:choose",
   trash: "triage:trash",
   watchTerminal: "triage:watch-terminal",
   unwatchTerminal: "triage:unwatch-terminal",

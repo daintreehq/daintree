@@ -37,6 +37,7 @@ async function makeHarness(options: {
   describe?: (input: TriageScreenInput, says: TriageCategory) => Promise<DescriberResult>;
   missingKeys?: string[];
   now?: () => number;
+  closeGraceMs?: number;
 }): Promise<Harness> {
   const screens = new Map<string, string>();
   const runs: FleetRunRow[] = [];
@@ -74,6 +75,7 @@ async function makeHarness(options: {
     describe: (input, says) => describe(input, says),
     broadcast: (snapshot) => snapshots.push(snapshot),
     ...(options.now ? { now: options.now } : {}),
+    closeGraceMs: options.closeGraceMs ?? 0,
   };
   harness = { service: new TriageService(deps), screens, runs, classify, describe, snapshots };
   harness.service.setActive(true);
@@ -218,6 +220,28 @@ describe("TriageService", () => {
       vi.useRealTimers();
     }
     expect(h.classify).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the scan an open started when the panel bounces closed and open again", async () => {
+    const h = await makeHarness({ closeGraceMs: 300 });
+    h.service.setActive(false);
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    h.runs.push(run("a"));
+    h.screens.set("a", "screen");
+    h.service.setActive(true);
+    // React's development replay: close and reopen inside one tick.
+    h.service.setActive(false);
+    h.service.setActive(true);
+    await settle();
+    await settle();
+    expect(h.classify).toHaveBeenCalledTimes(1);
+    expect(h.service.getSnapshot().active).toBe(true);
+  });
+
+  it("closes at once for a view that went away, with no reopen grace", async () => {
+    const h = await makeHarness({ closeGraceMs: 300 });
+    h.service.setActive(false, true);
+    expect(h.service.getSnapshot().active).toBe(false);
   });
 
   it("judges an unchanged screen again once it has sat long enough to look stuck", async () => {

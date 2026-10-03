@@ -78,7 +78,6 @@ function installElectron(snapshot: TriageSnapshot = triageSnapshot) {
     onSnapshotUpdated: vi.fn(() => () => {}),
     setActive: vi.fn(async () => snapshot),
     refresh: vi.fn(async () => {}),
-    choose: vi.fn(async () => {}),
     reply: vi.fn(async () => {}),
     trash: vi.fn(async () => {}),
   };
@@ -116,7 +115,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  useTriageStore.setState({ isOpen: false, snapshot: null, acks: {}, reads: {} });
+  useTriageStore.setState({ isOpen: false, snapshot: null, reads: {} });
   vi.clearAllMocks();
 });
 
@@ -169,58 +168,15 @@ describe("TriageView", () => {
     delete (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__;
   });
 
-  it("moves on from an answer to the next prompt this panel hasn't answered", async () => {
-    const approval = (runId: string, minutes: number) =>
-      run(runId, {
-        agentState: "waiting",
-        waitingReason: "approval",
-        since: NOW - minutes * 60_000,
-      });
-    const menu = (runId: string) => ({
-      runId,
-      spawnedAt: NOW - 3_600_000,
-      revision: 1,
-      category: "approval" as const,
-      confidence: 0.9,
-      attentionProbability: 0.9,
-      attentionScore: null,
-      priority: 90,
-      stage: "described" as const,
-      describing: false,
-      headline: null,
-      summary: null,
-      question: "Proceed?",
-      options: ["Yes", "No"],
-      secretPrompt: false,
-      activity: null,
-      observedAt: NOW,
-    });
-    useFleetSnapshotStore.setState({
-      snapshot: {
-        // Oldest first, so the queue reads first, answered, last.
-        runs: [approval("first", 3), approval("answered", 2), approval("last", 1)],
-        changedAt: NOW,
-        degraded: false,
-        lastSuccessfulAt: NOW,
-      },
-    });
-    const snapshot = { ...triageSnapshot, cards: ["first", "answered", "last"].map(menu) };
-    useTriageStore.setState({
-      snapshot,
-      acks: {
-        answered: { promptKey: `${NOW - 3_600_000}:1`, kind: "answer", text: "Yes", sent: true },
-      },
-    });
-    const triage = installElectron(snapshot);
+  it("reads a run the arrow keys move onto, as a click would", async () => {
+    installElectron();
     const { container } = render(<TriageView />);
     await frames();
-    const [first, , last] = cards(container);
-    expect(document.activeElement).toBe(first);
-
-    fireEvent.keyDown(first!, { key: "1" });
-    await act(async () => {});
-    expect(triage.choose).toHaveBeenCalledWith("first", "Yes", expect.anything());
-    expect(document.activeElement).toBe(last);
+    const [first, second] = cards(container);
+    fireEvent.keyDown(first!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(second);
+    expect(second!.hasAttribute("data-unread")).toBe(false);
+    expect(liveRun(container)).toBe("working");
   });
 
   it("opens a run's terminal on a click, not a hover, and marks it read", async () => {
@@ -239,5 +195,21 @@ describe("TriageView", () => {
     expect(first!.hasAttribute("data-unread")).toBe(false);
     fireEvent.click(second!);
     expect(liveRun(container)).toBe("working");
+  });
+
+  it("trashes the selected run from the list with its chord", async () => {
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        runs: [run("done", { agentState: "completed", since: NOW - 60_000 })],
+        changedAt: NOW,
+        degraded: false,
+        lastSuccessfulAt: NOW,
+      },
+    });
+    const triage = installElectron();
+    const { container } = render(<TriageView />);
+    await frames();
+    fireEvent.keyDown(cards(container)[0]!, { key: "Backspace", metaKey: true, ctrlKey: true });
+    expect(triage.trash).toHaveBeenCalledWith("done", { spawnedAt: NOW - 3_600_000 });
   });
 });

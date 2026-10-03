@@ -2056,10 +2056,6 @@ export interface GeneratedIpcInvokeMap {
     args: [id: import("./triage.js").TriageKeyId, key: string];
     result: import("./triage.js").TriageKeyCheck;
   };
-  "triage:choose": {
-    args: [runId: string, label: string, target: import("./triage.js").TriageTarget];
-    result: void;
-  };
   "triage:clear-key": {
     args: [id: import("./triage.js").TriageKeyId];
     result: import("./triage.js").TriageKeysStatus;

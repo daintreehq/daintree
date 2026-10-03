@@ -34,6 +34,56 @@ const TRIGGER_LABELS: Record<AgentStateChangeTrigger, string> = {
   title: "Title",
 };
 
+/**
+ * The chip itself: the state's glyph in its tinted circle. Shared with the
+ * triage panel's pane header, which draws a terminal the way its own pane does
+ * without that pane's store entry.
+ */
+export function AgentStateChip({
+  agentState,
+  ariaLabel,
+}: {
+  agentState: AgentState;
+  ariaLabel: string;
+}) {
+  const StateIcon = getEffectiveStateIcon(agentState);
+  if (!StateIcon) return null;
+  const chipStyle =
+    agentState === "working"
+      ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-state-working/40"
+      : agentState === "directing"
+        ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
+        : // Settled: finished and exited share one neutral chip. Completion is
+          // not asking for anything, so it does not get a hue of its own
+          // (#12002) — and the two stay apart on the channels that survive
+          // without one, `CheckCircle2` against `ExitedCircle` in slate
+          // against secondary.
+          agentState === "completed" || agentState === "exited"
+          ? "bg-overlay-soft border-divider"
+          : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
+  return (
+    <div
+      className={cn(
+        "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
+        "transition-[background-color,border-color,color] duration-150 ease-out reduce-motion:transition-none",
+        chipStyle,
+        getEffectiveStateColor(agentState)
+      )}
+      role="status"
+      aria-label={ariaLabel}
+    >
+      <StateIcon
+        className={cn(
+          "w-3 h-3",
+          agentState === "working" && "animate-spin-slow",
+          "motion-reduce:animate-none"
+        )}
+        aria-hidden="true"
+      />
+    </div>
+  );
+}
+
 export interface TerminalAgentIndicatorProps {
   id: string;
   agentState?: AgentState;
@@ -103,24 +153,7 @@ export function TerminalAgentIndicator({
     return null;
   }
 
-  const StateIcon = getEffectiveStateIcon(agentState);
-  if (!StateIcon) return null;
-
-  const effectiveColor = getEffectiveStateColor(agentState);
-
-  const chipStyle =
-    agentState === "working"
-      ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-state-working/40"
-      : agentState === "directing"
-        ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
-        : // Settled: finished and exited share one neutral chip. Completion is
-          // not asking for anything, so it does not get a hue of its own
-          // (#12002) — and the two stay apart on the channels that survive
-          // without one, `CheckCircle2` against `ExitedCircle` in slate
-          // against secondary.
-          agentState === "completed" || agentState === "exited"
-          ? "bg-overlay-soft border-divider"
-          : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
+  if (!getEffectiveStateIcon(agentState)) return null;
 
   const headline = activity?.headline?.trim() || `Agent ${agentState}`;
   const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;
@@ -143,25 +176,7 @@ export function TerminalAgentIndicator({
     <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
         <div className="relative inline-flex items-center shrink-0">
-          <div
-            className={cn(
-              "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
-              "transition-[background-color,border-color,color] duration-150 ease-out reduce-motion:transition-none",
-              chipStyle,
-              effectiveColor
-            )}
-            role="status"
-            aria-label={chipAriaLabel}
-          >
-            <StateIcon
-              className={cn(
-                "w-3 h-3",
-                agentState === "working" && "animate-spin-slow",
-                "motion-reduce:animate-none"
-              )}
-              aria-hidden="true"
-            />
-          </div>
+          <AgentStateChip agentState={agentState} ariaLabel={chipAriaLabel} />
           {errorCount > 0 && (
             <span
               className="status-mark absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-error"

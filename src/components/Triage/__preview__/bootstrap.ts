@@ -30,7 +30,6 @@ installPreviewShims({
     setActive: () => Promise.resolve(current),
     getSnapshot: () => Promise.resolve(current),
     refresh: () => record("refresh", null),
-    choose: (runId: string, label: string) => record("choose", { runId, label }),
     trash: (runId: string) => record("trash", { runId }),
     // The live pane: a still screen for whichever run is selected, and the
     // input it would send, recorded like the rest.

@@ -3,11 +3,10 @@ import type {
   TriageTarget,
   TriageTerminalView,
 } from "../../../shared/types/ipc/triage.js";
-import { planChoice } from "../../../shared/utils/terminalChoice.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import { getFleetSnapshotService } from "./projectCrud/index.js";
 import { readPluginTerminalScreen } from "../../services/plugin/pluginTerminalScreenRead.js";
-import { TriageService, TRIAGE_SCREEN_LINES } from "../../services/triage/TriageService.js";
+import { TriageService } from "../../services/triage/TriageService.js";
 import {
   checkProviderKey,
   classifyScreen,
@@ -20,7 +19,6 @@ import type {
   TriageKeyId,
   TriageKeysStatus,
 } from "../../../shared/types/ipc/triage.js";
-import { planYesNoKeys } from "../../services/triage/triageScreen.js";
 import { checkRateLimit, typedBroadcast } from "../utils.js";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
@@ -35,14 +33,6 @@ import {
 } from "./triageTerminalWatch.js";
 import { isImageAttachmentPath } from "../../../shared/utils/imageAttachmentInput.js";
 
-const KEY_NAMES: Record<string, string> = {
-  Up: "\x1b[A",
-  Down: "\x1b[B",
-  Enter: "\r",
-};
-/** Same pacing as `terminal.sendKeys`: a TUI can read a burst as one sequence. */
-const KEY_GAP_MS = 80;
-const MAX_LABEL_LENGTH = 200;
 const MAX_INPUT_LENGTH = 64_000;
 const MAX_SUBMIT_LENGTH = 100_000;
 const MAX_SUBMIT_IMAGES = 10;
@@ -54,27 +44,6 @@ let unsubscribeFleet: (() => void) | null = null;
 const activeViews = new Set<number>();
 /** Views that already carry lifecycle listeners, with the way to take them off. */
 const watchedViews = new Map<number, () => void>();
-/** Runs with an answer or a reply being sent, so two can't interleave keys. */
-const choosing = new Set<string>();
-
-/** The card's prompt is still on screen; a card that quoted none has nothing to check. */
-async function assertPromptStillShown(runId: string, target: TriageTarget): Promise<string> {
-  const screen = await readPluginTerminalScreen(
-    requirePtyClient(),
-    runId,
-    null,
-    TRIAGE_SCREEN_LINES
-  );
-  if (screen.status !== "ok") throw new Error("Couldn't read that terminal's screen.");
-  if (
-    typeof target.question === "string" &&
-    target.question.trim() !== "" &&
-    !normalizePrompt(screen.text).includes(normalizePrompt(target.question))
-  ) {
-    throw new Error("The agent has moved on from that question. Nothing was sent.");
-  }
-  return screen.text;
-}
 
 function getKeys(): TriageKeys {
   keys ??= new TriageKeys();
@@ -145,13 +114,6 @@ function assertTarget(value: unknown): asserts value is TriageTarget {
   if (typeof target.spawnedAt !== "number" || !Number.isFinite(target.spawnedAt)) {
     throw new Error("Invalid target");
   }
-  if (
-    target.question !== undefined &&
-    target.question !== null &&
-    (typeof target.question !== "string" || target.question.length > 2_000)
-  ) {
-    throw new Error("Invalid target");
-  }
 }
 
 /**
@@ -174,14 +136,6 @@ async function assertSameTerminal(runId: string, target: TriageTarget): Promise<
   if (!record || record.spawnedAt !== target.spawnedAt || record.isExited === true) {
     throw new Error("That agent isn't running any more.");
   }
-}
-
-function normalizePrompt(text: string): string {
-  return text
-    .replace(/[│▌❯›>▶●]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
 }
 
 /** The terminal a view's current stream is for, or a refusal naming nothing on screen. */
@@ -207,7 +161,8 @@ function forgetView(id: number): void {
   stopTerminalWatch(id);
   if (!activeViews.delete(id)) return;
   // Never builds a service: after cleanup there may be none, and none is wanted.
-  service?.setActive(activeViews.size > 0);
+  // A view that went away will not bounce back, so no reopen grace either.
+  service?.setActive(activeViews.size > 0, true);
 }
 
 function watchView(sender: Electron.WebContents): void {
@@ -269,53 +224,6 @@ export const triageNamespace = defineIpcNamespace({
       checkRateLimit(TRIAGE_METHOD_CHANNELS.refresh, 6, 10_000);
       await getService().refresh();
     }),
-
-    /**
-     * Pick an option in the run's on-screen menu by its label.
-     *
-     * Bound to the card the user acted on: the same terminal incarnation, and —
-     * when the card quoted one — the same prompt still on screen, so a click on
-     * a card that has gone stale can't answer whatever menu came next. Errors
-     * say what went wrong without repeating any screen text, because IPC
-     * failures reach the logs.
-     */
-    choose: op(
-      TRIAGE_METHOD_CHANNELS.choose,
-      async (runId: string, label: string, target: TriageTarget): Promise<void> => {
-        checkRateLimit(TRIAGE_METHOD_CHANNELS.choose, 20, 10_000);
-        assertRunId(runId);
-        if (typeof label !== "string" || label.trim() === "" || label.length > MAX_LABEL_LENGTH) {
-          throw new Error("Invalid option");
-        }
-        assertTarget(target);
-        if (choosing.has(runId)) throw new Error("An answer is already being sent to that agent.");
-        choosing.add(runId);
-        try {
-          await assertSameTerminal(runId, target);
-          const ptyClient = requirePtyClient();
-          const screen = { text: await assertPromptStillShown(runId, target) };
-
-          const plan = planChoice(screen.text, label);
-          // The plain-text y/n fallback is only for prompts with no list at all,
-          // never a way round a list that made the label ambiguous.
-          const noList = !plan.ok && !/more than one/i.test(plan.reason);
-          const keys = plan.ok
-            ? plan.keys.map((key) => KEY_NAMES[key] ?? key)
-            : noList
-              ? planYesNoKeys(screen.text, label)
-              : null;
-          if (keys === null) {
-            throw new Error("That option isn't on screen any more. Nothing was pressed.");
-          }
-          for (const [index, key] of keys.entries()) {
-            if (index > 0) await new Promise((resolve) => setTimeout(resolve, KEY_GAP_MS));
-            ptyClient.write(runId, key);
-          }
-        } finally {
-          choosing.delete(runId);
-        }
-      }
-    ),
 
     /**
      * Stream the run's terminal to this view, for the panel's live pane. One
@@ -484,7 +392,6 @@ export function registerTriageHandlers(): () => void {
     watchedViews.clear();
     activeViews.clear();
     stopAllTerminalWatches();
-    choosing.clear();
     service?.dispose();
     service = null;
     keys = null;

@@ -14,7 +14,7 @@ const FRAME = /^[\s│▌╭╮╰╯─┃┏┓┗┛║]+|[\s│▌╭╮╰�
  * anything" as the question being asked on a third of finished runs.
  */
 const CHROME =
-  /^(?:>|›|❯)\s*(?:Ask Codex to do anything|Type your message or @path\/to\/file)?\s*$|accept edits on \(shift\+tab|\d+% context left|Context left(?: until auto-compact)?: \d+%|\? for shortcuts|no sandbox\s+\S|bypass permissions on|⏵⏵\s*(?:auto mode|accept edits|bypass permissions|plan mode) on\b|auto mode on \(shift\+tab/;
+  /^(?:>|›|❯)\s*(?:Ask Codex to do anything|Type your message or @path\/to\/file)?\s*$|accept edits on \(shift\+tab|\d+% context left|Context left(?: until auto-compact)?: \d+%|\? for shortcuts|no sandbox\s+\S|bypass permissions on|⏵⏵\s*(?:auto mode|accept edits|bypass permissions|plan mode) on\b|auto mode on \(shift\+tab|Transcript saving is off\b/;
 
 /**
  * The suggestion an empty input box shows as placeholder text: Claude Code's
@@ -133,29 +133,3 @@ function findActivity(lines: readonly string[], extraSecrets: readonly string[])
 }
 
 export { isSecretPrompt } from "../../../shared/utils/secretPrompt.js";
-
-/**
- * The answer letters a plain-text prompt at the bottom of the screen offers:
- * `[y/N]` offers y and n, `(Y)es/(N)o/(D)on't ask again` offers y, n and d.
- */
-function offeredLetters(tail: string): Set<string> {
-  const letters = new Set<string>();
-  for (const match of tail.matchAll(/\[([a-z])\/([a-z])\]/gi)) {
-    letters.add(match[1]!.toLowerCase());
-    letters.add(match[2]!.toLowerCase());
-  }
-  for (const match of tail.matchAll(/\(([A-Z])\)[a-z']+/g)) letters.add(match[1]!.toLowerCase());
-  return letters;
-}
-
-/**
- * Keys for a plain-text y/n prompt (`[y/N]`, `(Y)es/(N)o/…`), which has no
- * highlighted list for `planChoice` to walk. The label's first letter is what
- * such prompts read, and it must be one the prompt on screen offers.
- */
-export function planYesNoKeys(screen: string, label: string): string[] | null {
-  const tail = screen.split("\n").slice(-3).join("\n");
-  const letter = label.trim().charAt(0).toLowerCase();
-  if (!/^[a-z]$/.test(letter) || !offeredLetters(tail).has(letter)) return null;
-  return [letter, "\r"];
-}

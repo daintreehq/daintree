@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { cn } from "@/lib/utils";
 import { Terminal } from "@xterm/xterm";
 import type { WebglAddon } from "@xterm/addon-webgl";
 import type { TriageTerminalData, TriageTerminalView } from "@shared/types/ipc/triage";
@@ -12,12 +13,13 @@ import {
 } from "@/store/terminalColorSchemeStore";
 import { streamRangeOf, stripCoveredOutput } from "@/services/terminal/streamFence";
 import { logWarn } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 /** The smallest the viewer shrinks its font to make a wide PTY fit. */
 const MIN_FONT_SIZE = 8;
 const SCROLLBACK = 2_000;
-/** The frame's padding, which the grid cannot use. */
-const FRAME_PADDING_PX = 16;
+/** The frame's padding — a grid pane's xterm inset — which the grid cannot use. */
+const FRAME_PADDING_PX = 24;
 /** DOM events in which xterm turns what the user did into terminal input. */
 const GESTURE_EVENTS = [
   "keydown",
@@ -69,6 +71,9 @@ export function TriageTerminal({ runId, spawnedAt, onStreamChange }: TriageTermi
     onStreamChangeRef.current = onStreamChange;
   });
   const [status, setStatus] = useState<"opening" | "live" | "failed" | "ended">("opening");
+  // A full-screen TUI runs on the alternate buffer: like a grid pane, the view
+  // then drops its inset and hides the scrollbar that buffer has no use for.
+  const [altBuffer, setAltBuffer] = useState(false);
   // The terminal's own canvas colour, so the frame reads as the terminal itself.
   const background = useTerminalColorSchemeStore(selectWrapperBackground);
 
@@ -120,10 +125,17 @@ export function TriageTerminal({ runId, spawnedAt, onStreamChange }: TriageTermi
       (error: unknown) => logWarn("[Triage] couldn't load the WebGL renderer", { error })
     );
 
+    let inset = FRAME_PADDING_PX;
+    const bufferChange = terminal.buffer.onBufferChange((buffer) => {
+      const alternate = buffer.type === "alternate";
+      inset = alternate ? 0 : FRAME_PADDING_PX;
+      setAltBuffer(alternate);
+    });
+
     // Shrink the font, never the grid, until the PTY's width fits the frame.
     const fit = () => {
       const screen = host.querySelector<HTMLElement>(".xterm-screen");
-      const available = frame.clientWidth - FRAME_PADDING_PX;
+      const available = frame.clientWidth - inset;
       if (!screen || available <= 0) return;
       const current = terminal.options.fontSize ?? fontSize;
       const width = screen.getBoundingClientRect().width;
@@ -243,13 +255,16 @@ export function TriageTerminal({ runId, spawnedAt, onStreamChange }: TriageTermi
       disposed = true;
       offData();
       input.dispose();
+      bufferChange.dispose();
       for (const type of GESTURE_EVENTS) frame.removeEventListener(type, markGesture, true);
       if (gestureTimer !== null) clearTimeout(gestureTimer);
       resizeObserver.disconnect();
       webgl?.dispose();
       terminal.dispose();
       onStreamChangeRef.current?.({ watchId: null, ended: false, secretPrompt: false });
-      void window.electron.triage.unwatchTerminal().catch(() => {});
+      safeFireAndForget(window.electron.triage.unwatchTerminal(), {
+        context: "Ending the triage terminal stream",
+      });
     };
   }, [runId, spawnedAt]);
 
@@ -259,7 +274,12 @@ export function TriageTerminal({ runId, spawnedAt, onStreamChange }: TriageTermi
       data-triage-terminal=""
       data-keybindings-isolated=""
       style={{ background }}
-      className="relative flex min-h-0 flex-1 flex-col justify-end overflow-hidden rounded-[var(--radius-md)] p-2"
+      // A grid pane's terminal body: the terminal's own background, inset p-3
+      // on the normal buffer and flush on the alternate one.
+      className={cn(
+        "relative flex min-h-0 flex-1 flex-col justify-end overflow-hidden",
+        altBuffer ? "terminal-alt-buffer" : "p-3"
+      )}
     >
       <div ref={hostRef} className="min-w-0 shrink-0" />
       {(status === "failed" || status === "ended") && (

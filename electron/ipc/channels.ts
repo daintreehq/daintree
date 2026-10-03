@@ -259,7 +259,6 @@ export const CHANNELS = {
   TRIAGE_GET_SNAPSHOT: "triage:get-snapshot",
   TRIAGE_SET_ACTIVE: "triage:set-active",
   TRIAGE_REFRESH: "triage:refresh",
-  TRIAGE_CHOOSE: "triage:choose",
   TRIAGE_TRASH: "triage:trash",
   TRIAGE_WATCH_TERMINAL: "triage:watch-terminal",
   TRIAGE_UNWATCH_TERMINAL: "triage:unwatch-terminal",

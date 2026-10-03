@@ -14,7 +14,10 @@ const xterm = vi.hoisted(() => ({
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     options: Record<string, unknown>;
-    buffer = { active: { baseY: 0, cursorY: 0, getLine: () => ({ translateToString: () => "" }) } };
+    buffer = {
+      active: { baseY: 0, cursorY: 0, getLine: () => ({ translateToString: () => "" }) },
+      onBufferChange: () => ({ dispose() {} }),
+    };
     private onDataListener: ((data: string) => void) | null = null;
     constructor(options: Record<string, unknown>) {
       this.options = { ...options };
@@ -51,11 +54,16 @@ let openStream: (view: TriageTerminalView) => void = () => {};
 const terminalInput = vi.fn(async () => {});
 
 beforeAll(() => {
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  } as unknown as typeof ResizeObserver;
+  if (typeof globalThis.ResizeObserver === "undefined") {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+  }
 });
 
 beforeEach(() => {

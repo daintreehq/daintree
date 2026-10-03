@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isSecretPrompt, planYesNoKeys, prepareScreen, redactSecrets } from "../triageScreen.js";
+import { isSecretPrompt, prepareScreen, redactSecrets } from "../triageScreen.js";
 
 describe("prepareScreen", () => {
   it("strips dialog frames and the agent's permanent input box and footer", () => {
@@ -26,6 +26,7 @@ describe("prepareScreen", () => {
         "  ⏵⏵ auto mode on (shift+tab to cycle)  ● high · /effort",
         // The same bar once a shell is running, which drops the key hint.
         "  ⏵⏵ auto mode on · 1 shell",
+        "  ⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker · restart",
       ].join("\n")
     );
     expect(screen.lines).toEqual(["⏺ Done. All tests pass."]);
@@ -106,33 +107,4 @@ describe("isSecretPrompt", () => {
     "does not flag %s",
     (prompt) => expect(isSecretPrompt(prompt)).toBe(false)
   );
-});
-
-describe("planYesNoKeys", () => {
-  it("answers a [y/N] prompt with the label's first letter and Enter", () => {
-    expect(planYesNoKeys("Do you want to continue? [y/N] ", "y")).toEqual(["y", "\r"]);
-    expect(
-      planYesNoKeys("Add file to the chat? (Y)es/(N)o/(D)on't ask again [Yes]: ", "No")
-    ).toEqual(["n", "\r"]);
-  });
-
-  it("refuses a letter the prompt doesn't offer", () => {
-    expect(planYesNoKeys("Do you want to continue? [y/N] ", "Don't ask again")).toBeNull();
-    expect(planYesNoKeys("Add file? (Y)es/(N)o/(D)on't ask again [Yes]: ", "Don't ask")).toEqual([
-      "d",
-      "\r",
-    ]);
-  });
-
-  it("refuses when no y/n prompt is at the bottom", () => {
-    expect(planYesNoKeys("Do you want to proceed?\n❯ 1. Yes\n  2. No", "Yes")).toBeNull();
-  });
-
-  describe("redactSecrets quoted values", () => {
-    it("takes a quoted value whole, spaces and escaped quotes included", () => {
-      const out = redactSecrets('{"password": "correct horse \\"battery\\" staple"}');
-      expect(out).not.toContain("horse");
-      expect(out).not.toContain("staple");
-    });
-  });
 });

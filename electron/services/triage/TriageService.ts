@@ -24,6 +24,8 @@ import {
 export const TRIAGE_SCREEN_LINES = 50;
 /** An unchanged screen read longer ago than this is judged again on the next scan. */
 export const TRIAGE_REJUDGE_AFTER_MS = 120_000;
+/** A close this soon after an open is a bounce, not the panel going away. */
+export const TRIAGE_CLOSE_GRACE_MS = 300;
 const CLASSIFIER_CONCURRENCY = 16;
 const DESCRIBER_CONCURRENCY = 12;
 const SCREEN_READ_CONCURRENCY = 8;
@@ -43,6 +45,8 @@ export interface TriageServiceDeps {
   ) => Promise<DescriberResult>;
   broadcast: (snapshot: TriageSnapshot) => void;
   now?: () => number;
+  /** How long a close waits for a reopen before it abandons the scan; 0 closes at once. */
+  closeGraceMs?: number;
 }
 
 interface RunEntry {
@@ -68,6 +72,8 @@ interface RunEntry {
 export class TriageService {
   private readonly entries = new Map<string, RunEntry>();
   private readonly now: () => number;
+  private readonly closeGraceMs: number;
+  private closeTimer: ReturnType<typeof setTimeout> | null = null;
   private active = false;
   private scanning: Promise<void> | null = null;
   private rescanRequested = false;
@@ -90,6 +96,7 @@ export class TriageService {
 
   constructor(private readonly deps: TriageServiceDeps) {
     this.now = deps.now ?? Date.now;
+    this.closeGraceMs = deps.closeGraceMs ?? TRIAGE_CLOSE_GRACE_MS;
     this.config = deps.config;
   }
 
@@ -146,15 +153,51 @@ export class TriageService {
    * changed screen costs a provider call, and a panel left open would otherwise
    * keep paying for screens nobody is reading.
    */
-  setActive(active: boolean): void {
-    if (this.disposed || active === this.active) return;
-    this.active = active;
+  /**
+   * `immediate` is for a view that went away (crashed, reloaded, destroyed)
+   * rather than a panel the user closed: nothing will reopen it, so there is
+   * no bounce to wait out.
+   */
+  setActive(active: boolean, immediate = false): void {
+    if (this.disposed) return;
     if (active) {
+      if (this.closeTimer !== null) {
+        // Reopened before the close took effect: the scan under way carries on.
+        clearTimeout(this.closeTimer);
+        this.closeTimer = null;
+        return;
+      }
+      if (this.active) return;
+      this.active = true;
       void this.scan();
-    } else {
-      // Closing means nothing more is sent, including work already queued.
-      this.invalidateInFlight();
+      this.scheduleBroadcast();
+      return;
     }
+    if (!this.active) return;
+    if (immediate) {
+      if (this.closeTimer !== null) clearTimeout(this.closeTimer);
+      this.closeTimer = null;
+      this.deactivate();
+      return;
+    }
+    if (this.closeTimer !== null) return;
+    // A close straight followed by an open — React replaying the panel's
+    // effect in development, or the user reopening it — must not abort the
+    // scan the open started and then start a second one.
+    if (this.closeGraceMs <= 0) {
+      this.deactivate();
+      return;
+    }
+    this.closeTimer = setTimeout(() => {
+      this.closeTimer = null;
+      this.deactivate();
+    }, this.closeGraceMs);
+  }
+
+  private deactivate(): void {
+    this.active = false;
+    // Closing means nothing more is sent, including work already queued.
+    this.invalidateInFlight();
     this.scheduleBroadcast();
   }
 
@@ -178,6 +221,8 @@ export class TriageService {
   dispose(): void {
     this.disposed = true;
     this.active = false;
+    if (this.closeTimer !== null) clearTimeout(this.closeTimer);
+    this.closeTimer = null;
     this.abort.abort();
     if (this.broadcastTimer !== null) clearTimeout(this.broadcastTimer);
     this.broadcastTimer = null;

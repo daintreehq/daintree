@@ -161,11 +161,12 @@ for (const theme of THEMES) {
     await expect(cards(page).nth(6)).not.toHaveAttribute("data-unread", "true");
     written.push(await snap(page, `${theme}--03-keyboard-down-the-inbox.png`, FLEET_CARDS));
 
-    // Answer the first menu with its key, then start a reply on the question.
+    // Answer the first menu in its own live terminal, then start a reply on the question.
     await load(page, theme, "fleet");
     await expect(cards(page).first()).toBeFocused();
+    await dialog(page).locator("[data-triage-terminal] textarea").focus();
     await page.keyboard.press("1");
-    await expect(page.locator("body")).toHaveAttribute("data-triage-last", /"choose"/);
+    await expect(page.locator("body")).toHaveAttribute("data-triage-last", /"input"/);
     // The reply goes in the selected agent's own composer, in the pane.
     await dialog(page).locator('[data-triage-card][data-kind="question"]').first().click();
     const composer = dialog(page).locator("[data-triage-detail] .cm-content");
