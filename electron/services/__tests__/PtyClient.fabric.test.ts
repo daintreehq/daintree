@@ -190,6 +190,34 @@ describe("PtyClient fabric", () => {
     });
   });
 
+  describe("dispose (#13167)", () => {
+    it("waits for every shard's host to exit before settling", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shards = [defaultShard(), projectShard("project-a")];
+
+      let settled = false;
+      client.dispose();
+      void client.waitForHostsExited().then(() => {
+        settled = true;
+      });
+      for (const shard of shards) {
+        expect(messagesOfType(shard.child, "dispose")).toHaveLength(1);
+      }
+
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(settled).toBe(false);
+
+      shards[0].child.emit("exit", 0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+
+      shards[1].child.emit("exit", 0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(true);
+    });
+  });
+
   describe("placement", () => {
     it("gives each project its own shard and routes terminal ops to the owner", () => {
       const client = createFabricClient();
@@ -734,10 +762,9 @@ describe("PtyClient fabric", () => {
       shardA.child.emit("message", { type: "exit", id: "t1", exitCode: 0 });
       await vi.advanceTimersByTimeAsync(fabricConfig.PTY_SHARD_IDLE_LINGER_MS + 1);
 
-      // Retirement disposes the shard: host asked to dispose, then force-killed.
+      // Retirement disposes the shard: the host is asked to dispose and exits.
       expect(messagesOfType(shardA.child, "dispose")).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(1_100);
-      expect(shardA.child.kill).toHaveBeenCalled();
+      shardA.child.emit("exit", 0);
 
       // A later spawn for the project gets a fresh shard.
       const forkCount = forks.length;

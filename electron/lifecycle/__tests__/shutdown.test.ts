@@ -1299,9 +1299,43 @@ describe("registerShutdownHandler", () => {
         getAllTerminalsAsync: vi.fn(async () => []),
         finishAgentSessionCaptures: vi.fn(async () => ({ complete: true, pending: 0 })),
         dispose: vi.fn(),
+        waitForHostsExited: vi.fn(async () => undefined),
         ...overrides,
       } as never;
     }
+
+    it("waits for the PTY hosts to exit before finishing the chain (#13167)", async () => {
+      let hostsExited!: () => void;
+      const order: string[] = [];
+      const ptyClient = makePtyClient({
+        dispose: vi.fn(() => order.push("pty-dispose")),
+        waitForHostsExited: vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              hostsExited = () => {
+                order.push("hosts-exited");
+                resolve();
+              };
+            })
+        ),
+      });
+      const cleanupIpc = vi.fn(() => order.push("ipc-cleanup"));
+      const { beforeQuitCb } = await setup({
+        getPtyClient: () => ptyClient,
+        getCleanupIpcHandlers: () => cleanupIpc,
+      });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(hostsExited).toBeTypeOf("function"));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(cleanupIpc).not.toHaveBeenCalled();
+      expect(closeSharedDbMock.closeSharedDb).not.toHaveBeenCalled();
+      expect(appMock.exit).not.toHaveBeenCalled();
+
+      hostsExited();
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+      expect(order).toEqual(["pty-dispose", "hosts-exited", "ipc-cleanup"]);
+    });
 
     const agentTerminal = {
       id: "t1",

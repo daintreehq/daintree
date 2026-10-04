@@ -3,6 +3,7 @@ import { EventEmitter } from "events";
 import type { HostLogEvent } from "../../../../shared/types/host-log.js";
 import {
   classifyCrash,
+  DISPOSE_EXIT_TIMEOUT_MS,
   mapGoneReasonToCrashType,
   PtyHostLifecycle,
   type PtyHostLifecycleCallbacks,
@@ -942,6 +943,87 @@ describe("PtyHostLifecycle", () => {
     expect(shared.appMock.listenerCount("child-process-gone")).toBe(1);
     lifecycle.dispose();
     expect(shared.appMock.listenerCount("child-process-gone")).toBe(0);
+  });
+
+  describe("dispose waits for the host to finish its teardown (#13167)", () => {
+    function trackSettled(promise: Promise<void>): { settled: boolean } {
+      const state = { settled: false };
+      void promise.then(() => {
+        state.settled = true;
+      });
+      return state;
+    }
+
+    it("posts dispose and settles when the host exits on its own", async () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+      callbacks.log.isDisposed.current = true;
+
+      const exit = trackSettled(lifecycle.dispose());
+      expect(mockChild.postMessage).toHaveBeenCalledWith({ type: "dispose" });
+
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(exit.settled).toBe(false);
+      expect(mockChild.kill).not.toHaveBeenCalled();
+
+      mockChild.emit("exit", 0);
+      await Promise.resolve();
+      expect(exit.settled).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(DISPOSE_EXIT_TIMEOUT_MS);
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(mockChild.kill).not.toHaveBeenCalled();
+    });
+
+    it("gives the host longer than the teardown probe budget before killing it", async () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+
+      const exit = trackSettled(lifecycle.dispose());
+      await vi.advanceTimersByTimeAsync(DISPOSE_EXIT_TIMEOUT_MS - 1);
+      expect(DISPOSE_EXIT_TIMEOUT_MS).toBeGreaterThan(2_000);
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(exit.settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      // Raw SIGKILL, never the blocking UtilityProcess.kill() (#11069).
+      expect(killSpy).toHaveBeenCalledWith(321, "SIGKILL");
+      expect(mockChild.kill).not.toHaveBeenCalled();
+      expect(exit.settled).toBe(true);
+      // The exit event stays the authority on process death.
+      expect(lifecycle.child).toBe(mockChild);
+    });
+
+    it("settles even when the backstop finds the host already gone", async () => {
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+      });
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+
+      const exit = trackSettled(lifecycle.dispose());
+      await vi.advanceTimersByTimeAsync(DISPOSE_EXIT_TIMEOUT_MS);
+      expect(exit.settled).toBe(true);
+    });
+
+    it("returns the same pending wait when dispose runs again", () => {
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+
+      const first = lifecycle.dispose();
+      const second = lifecycle.dispose();
+      expect(second).toBe(first);
+      expect(
+        mockChild.postMessage.mock.calls.filter(([msg]) => msg?.type === "dispose")
+      ).toHaveLength(1);
+    });
+
+    it("settles immediately when no host is running", async () => {
+      const { lifecycle } = makeLifecycle();
+      await expect(lifecycle.dispose()).resolves.toBeUndefined();
+    });
   });
 
   it("postMessage forwards to the child", () => {

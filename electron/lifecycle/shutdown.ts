@@ -653,9 +653,14 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
           } catch (err) {
             console.warn("[MAIN] disposeAgentAvailabilityStore failed:", err);
           }
+          // The chain waits on the hosts' own exit: each one is still tree-killing
+          // its terminals, trashed ones included, and is SIGKILLed only past its
+          // dispose deadline (#13167).
+          let ptyHostsExited: Promise<void> = Promise.resolve();
           if (ptyClient) {
             try {
               ptyClient.dispose();
+              ptyHostsExited = ptyClient.waitForHostsExited();
             } catch (err) {
               console.warn("[MAIN] PtyClient.dispose failed:", err);
             }
@@ -699,7 +704,10 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
           } catch (err) {
             console.warn("[MAIN] disposeMainProcessWatchdog failed:", err);
           }
-          resolve();
+          void ptyHostsExited.then(resolve, (err: unknown) => {
+            console.warn("[MAIN] Waiting for PTY hosts to exit failed:", err);
+            resolve();
+          });
         }),
       ])
     )

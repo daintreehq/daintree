@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { EventEmitter } from "events";
 import type { PtyHostSpawnOptions, SpawnResult } from "../../../shared/types/pty-host.js";
+import { DISPOSE_EXIT_TIMEOUT_MS } from "../pty/PtyHostLifecycle.js";
 
 const shared = vi.hoisted(() => {
   // vi.hoisted runs before module imports resolve, so use require() to load
@@ -978,8 +979,14 @@ describe("PtyClient adversarial", () => {
     expect(pendingPort.close).toHaveBeenCalledTimes(1);
     expect(mockChild.postMessage).toHaveBeenCalledWith({ type: "dispose" });
 
-    vi.advanceTimersByTime(1000);
-    expect(mockChild.kill).toHaveBeenCalledTimes(1);
+    // The host gets its full teardown window, then a raw SIGKILL (#13167).
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.advanceTimersByTime(DISPOSE_EXIT_TIMEOUT_MS - 1);
+    expect(killSpy).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(killSpy).toHaveBeenCalledWith(321, "SIGKILL");
+    expect(mockChild.kill).not.toHaveBeenCalled();
+    killSpy.mockRestore();
   });
 
   const MAX_PENDING_SPAWNS = 250;

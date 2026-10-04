@@ -193,14 +193,16 @@ export class PtyShard {
 
   /**
    * Tear the shard down: watchdog first (no force-kill races the dispose),
-   * then the lifecycle (posts `dispose` to the host, force-kills after 1s),
-   * pending ports, and the broker (rejects this shard's pending requests).
+   * then the lifecycle (posts `dispose` to the host), pending ports, and the
+   * broker (rejects this shard's pending requests). Settles when the host has
+   * exited or been force-killed.
    */
-  dispose(): void {
+  dispose(): Promise<void> {
     this.retired = true;
     this.watchdog.dispose();
-    this.lifecycle.dispose();
+    const exited = this.lifecycle.dispose();
     this.closePendingPorts();
     this.broker.dispose();
+    return exited;
   }
 }
