@@ -13,9 +13,8 @@ vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
 }));
 
-const { reconnectWithTimeout, RECONNECT_TIMEOUT_MS, RECONNECT_GRACE_MS } = await import(
-  "../reconnectManager"
-);
+const { reconnectWithTimeout, RECONNECT_TIMEOUT_MS, RECONNECT_GRACE_MS } =
+  await import("../reconnectManager");
 
 const noopLog = () => {};
 

@@ -940,7 +940,9 @@ describe("hydrateAppState", () => {
       terminalClientMock.getForProject.mockResolvedValue([]);
       terminalClientMock.reconnect.mockResolvedValue(reconnectResult);
 
-      const addPanel = vi.fn().mockResolvedValue("term-new");
+      const addPanel = vi.fn(
+        async (_args: { requestedId?: string; command?: string }) => "term-new"
+      );
 
       await hydrateAppState({
         addPanel,
@@ -950,9 +952,9 @@ describe("hydrateAppState", () => {
       });
 
       expect(addPanel).toHaveBeenCalledTimes(1);
-      const args = addPanel.mock.calls[0]?.[0] as { requestedId?: string; command?: string };
-      expect(args.requestedId).toBe(expected.requestedId);
-      expect(args.command).toBe(expected.command);
+      const args = addPanel.mock.calls[0]?.[0];
+      expect(args?.requestedId).toBe(expected.requestedId);
+      expect(args?.command).toBe(expected.command);
     });
   });
 });
