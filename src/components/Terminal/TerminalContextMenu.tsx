@@ -405,12 +405,19 @@ function TerminalContextMenuBody({
     setHandOverRequest((current) => (current?.id === request.id ? null : current));
   }, []);
 
+  // Captured on every open (right-click or long-press): a menu opened before
+  // the home dir arrived re-resolves `~/` next time, even for an unchanged
+  // selection.
+  const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
   const handleMenuOpenChange = useCallback(
     (open: boolean) => {
       // A menu reopened inside its exit animation never unmounts, so the close
       // hook never runs for that close; drop the intent rather than let it open
       // the picker on some later, unrelated close.
       if (open) {
+        // Only when it changed: an unconditional set costs every open a render.
+        const cachedHomeDir = systemClient.getCachedHomeDir();
+        if (cachedHomeDir !== homeDir) setHomeDir(cachedHomeDir);
         pendingMovePickerRef.current = null;
         pendingHandOverRef.current = null;
         pendingMenuDispatchRef.current = null;
@@ -420,7 +427,7 @@ function TerminalContextMenuBody({
         }
       }
     },
-    [refreshOrchestratorCandidates, terminal]
+    [homeDir, refreshOrchestratorCandidates, terminal]
   );
 
   const captureMovePickerAnchor = useCallback(
@@ -552,9 +559,6 @@ function TerminalContextMenuBody({
   const [hoveredFilePath, setHoveredFilePath] = useState<string | null>(null);
   const [hoveredFileKind, setHoveredFileKind] = useState<"file" | "directory" | null>(null);
   const [selectedText, setSelectedText] = useState<string | null>(null);
-  // Captured with the selection: a menu opened before the home dir arrived
-  // re-resolves `~/` on the next open even when the selection is unchanged.
-  const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
   const suppressNextCloseAutoFocusRef = useRef(false);
   // Local confirm dialog for single-terminal kill/restart when an agent
   // session is mid-work. Bare PTY terminals skip this gate and run
@@ -621,7 +625,7 @@ function TerminalContextMenuBody({
       const selection = managed.terminal.getSelection();
       setHasSelection(!!selection);
       setSelectedText(selection || null);
-      setHomeDir(selection ? systemClient.getCachedHomeDir() : undefined);
+      setHomeDir(systemClient.getCachedHomeDir());
       setHoveredUrl(terminalInstanceService.getHoveredLinkText(terminalId));
       setHoveredFilePath(terminalInstanceService.getHoveredFilePath(terminalId));
       setHoveredFileKind(terminalInstanceService.getHoveredFileKind(terminalId));
