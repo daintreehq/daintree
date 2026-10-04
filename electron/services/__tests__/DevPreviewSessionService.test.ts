@@ -1878,10 +1878,48 @@ describe("DevPreviewSessionService", () => {
       expect(remount.status).toBe("stopped");
     });
 
-    it("drops intent when the panel is closed", async () => {
+    it("keeps intent through stopByPanel, which also serves reversible trash/background", async () => {
       await service.ensure(baseRequest);
       await service.stop(sessionRequest);
       await service.stopByPanel({ panelId: baseRequest.panelId });
+
+      expect(service.getState(sessionRequest).userStopped).toBe(true);
+      const restored = await service.ensure(baseRequest);
+      expect(restored.status).toBe("stopped");
+    });
+
+    it("a refused ensure still records the latest config, so restart launches it", async () => {
+      await service.ensure(baseRequest);
+      await service.stop(sessionRequest);
+      await service.ensure({ ...baseRequest, cwd: "/repo-edited" });
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+
+      await service.restart(sessionRequest);
+
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+      expect(ptyClient.spawn.mock.calls[1]?.[1]).toMatchObject({ cwd: "/repo-edited" });
+    });
+
+    it("restart works after hibernation once a refused ensure recreated the session", async () => {
+      await service.ensure(baseRequest);
+      await service.stop(sessionRequest);
+      await service.stopByProject(baseRequest.projectId);
+      expect(await service.restart(sessionRequest)).toMatchObject({ userStopped: true });
+
+      await service.ensure(baseRequest);
+      const restarted = await service.restart(sessionRequest);
+
+      expect(restarted.userStopped).toBeUndefined();
+      expect(restarted.terminalId).toBeTruthy();
+    });
+
+    it("a repeated stop keeps the worktree attribution for later cleanup", async () => {
+      await service.ensure({ ...baseRequest, worktreeId: "wt-1" });
+      await service.stop(sessionRequest);
+      await service.stopByProject(baseRequest.projectId);
+      await service.stop(sessionRequest);
+
+      await service.stopByWorktree("wt-1");
 
       expect(service.getState(sessionRequest).userStopped).toBeUndefined();
     });

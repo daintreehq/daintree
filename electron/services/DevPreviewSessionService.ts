@@ -443,10 +443,12 @@ export class DevPreviewSessionService {
     let state: DevPreviewSessionState | undefined;
     await this.runLocked(key, async () => {
       if (this.disposed) return;
-      if (this.userStopped.has(key)) {
-        if (!request.resumeUserStopped) return;
-        this.clearUserStopped(key);
-      }
+      // A user-stopped panel still takes the latest config (so a later restart
+      // from the dashboard or palette launches current settings, and a
+      // session exists for it after relaunch) but only an explicit resume
+      // launches it.
+      const refused = this.userStopped.has(key) && !request.resumeUserStopped;
+      if (!refused) this.clearUserStopped(key);
       const session = this.getOrCreateSession(request.projectId, request.panelId);
       const envChanged = !envEquals(session.env, request.env);
       const nextTurbopackEnabled = request.turbopackEnabled ?? true;
@@ -486,6 +488,8 @@ export class DevPreviewSessionService {
         const sessionKey = createSessionKey(session.projectId, session.panelId);
         this.worktreeToSession.set(session.worktreeId, sessionKey);
       }
+
+      if (refused) return;
 
       const commandError = getInvalidCommandMessage(session.devCommand);
       if (commandError) {
@@ -727,7 +731,10 @@ export class DevPreviewSessionService {
       // Recorded before the terminal is torn down so an ensure queued behind
       // this lock (a remount mid-stop) already sees the intent.
       if (isUserStop) {
-        const worktreeId = session?.worktreeId ?? this.restoredEntries.get(key)?.worktreeId;
+        const worktreeId =
+          session?.worktreeId ??
+          this.restoredEntries.get(key)?.worktreeId ??
+          this.userStopped.get(key)?.worktreeId;
         this.userStopped.set(key, {
           projectId: request.projectId,
           panelId: request.panelId,
@@ -877,8 +884,8 @@ export class DevPreviewSessionService {
         });
       })
     );
-    // A closed panel never comes back, so its stop intent goes with it.
-    this.clearUserStoppedWhere((record) => record.panelId === request.panelId);
+    // Stop intent survives: this path also serves reversible teardown (trash,
+    // background), and the panel can come back.
     this.persistManifest();
   }
 

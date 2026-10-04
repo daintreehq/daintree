@@ -229,15 +229,15 @@ export function useDevServer({
 
   // `resume` marks an explicit Start: only that may lift a user Stop in Main.
   // Automatic ensures (mount, remount, config edits) leave a stopped panel
-  // stopped, so it must ride along with the queued request rather than be
-  // dropped when the key matches the in-flight one.
+  // stopped, so a queued Start keeps its resume through later config changes
+  // and always drains; only a Stop cancels it.
   const ensureLatestConfig = useCallback(
     async (configKey: string, resume = false) => {
       if (isEnsuringRef.current) {
         const pending = pendingEnsureRef.current;
         pendingEnsureRef.current = {
           configKey,
-          resume: resume || (pending?.configKey === configKey && pending.resume),
+          resume: resume || (pending?.resume ?? false),
         };
         return;
       }
@@ -279,7 +279,7 @@ export function useDevServer({
         isEnsuringRef.current = false;
         const pending = pendingEnsureRef.current;
         pendingEnsureRef.current = null;
-        if (pending && (pending.configKey !== configKey || (pending.resume && !resume))) {
+        if (pending && (pending.configKey !== configKey || pending.resume)) {
           safeFireAndForget(ensureLatestConfig(pending.configKey, pending.resume), {
             context: "Re-running queued dev preview ensure",
           });
@@ -317,6 +317,8 @@ export function useDevServer({
     if (!latest.projectId) return;
     persistedEnsureCache.delete(latest.panelId);
     lastEnsureConfigRef.current = "";
+    // A Start queued behind an in-flight ensure must not resume after this Stop.
+    pendingEnsureRef.current = null;
     const requestVersion = requestVersionRef.current;
     const requestProjectId = latest.projectId;
     const requestPanelId = latest.panelId;

@@ -1543,7 +1543,7 @@ describe("useDevServer adversarial races", () => {
     await waitFor(() => {
       expect(ensureMock).toHaveBeenCalledTimes(2);
     });
-    expect(ensureMock.mock.calls[1][0]).not.toHaveProperty("resumeUserStopped");
+    expect(ensureMock.mock.calls[1]?.[0]).not.toHaveProperty("resumeUserStopped");
     await waitFor(() => {
       expect(remount.result.current.status).toBe("stopped");
     });
@@ -1552,7 +1552,7 @@ describe("useDevServer adversarial races", () => {
       await remount.result.current.start();
     });
     expect(ensureMock).toHaveBeenCalledTimes(3);
-    expect(ensureMock.mock.calls[2][0]).toMatchObject({ resumeUserStopped: true });
+    expect(ensureMock.mock.calls[2]?.[0]).toMatchObject({ resumeUserStopped: true });
     expect(remount.result.current.status).toBe("running");
   });
 
@@ -1584,7 +1584,7 @@ describe("useDevServer adversarial races", () => {
 
     expect(restartMock).not.toHaveBeenCalled();
     expect(ensureMock).toHaveBeenCalledTimes(2);
-    expect(ensureMock.mock.calls[1][0]).toMatchObject({
+    expect(ensureMock.mock.calls[1]?.[0]).toMatchObject({
       devCommand: "pnpm dev",
       resumeUserStopped: true,
     });
@@ -1622,7 +1622,68 @@ describe("useDevServer adversarial races", () => {
     await waitFor(() => {
       expect(ensureMock).toHaveBeenCalledTimes(2);
     });
-    expect(ensureMock.mock.calls[1][0]).toMatchObject({ resumeUserStopped: true });
+    expect(ensureMock.mock.calls[1]?.[0]).toMatchObject({ resumeUserStopped: true });
+  });
+
+  it("a stop() cancels a start() queued behind an in-flight ensure (#13169)", async () => {
+    const firstEnsure = createDeferred<DevPreviewSessionState>();
+    ensureMock.mockImplementationOnce(() => firstEnsure.promise);
+
+    const { result } = renderHook(() =>
+      useDevServer({ panelId: "panel-1", devCommand: "npm run dev", cwd: "/repo" })
+    );
+    await waitFor(() => {
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      await result.current.start();
+    });
+    act(() => {
+      result.current.stop();
+    });
+
+    await act(async () => {
+      firstEnsure.resolve(buildState({ projectId: "project-1", status: "stopped" }));
+      await firstEnsure.promise;
+    });
+    await waitFor(() => {
+      expect(stopMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(ensureMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a queued start() keeps its resume through a config change (#13169)", async () => {
+    const firstEnsure = createDeferred<DevPreviewSessionState>();
+    ensureMock.mockImplementationOnce(() => firstEnsure.promise);
+
+    const { result, rerender } = renderHook(
+      ({ devCommand }: { devCommand: string }) =>
+        useDevServer({ panelId: "panel-1", devCommand, cwd: "/repo" }),
+      { initialProps: { devCommand: "npm run dev" } }
+    );
+    await waitFor(() => {
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      await result.current.start();
+    });
+    rerender({ devCommand: "pnpm dev" });
+
+    await act(async () => {
+      firstEnsure.resolve(buildState({ projectId: "project-1", status: "stopped" }));
+      await firstEnsure.promise;
+    });
+
+    await waitFor(() => {
+      expect(ensureMock).toHaveBeenCalledTimes(2);
+    });
+    expect(ensureMock.mock.calls[1]?.[0]).toMatchObject({
+      devCommand: "pnpm dev",
+      resumeUserStopped: true,
+    });
   });
 
   it("re-ensures on remount after crash via onStateChanged", async () => {
