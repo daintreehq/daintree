@@ -1253,6 +1253,41 @@ describe("DevPreviewSessionService", () => {
       expect(ptyClient.kill).not.toHaveBeenCalled();
     });
 
+    it("labels the stop with the caller's context for an external removal (#13171)", async () => {
+      const session = await service.ensure({
+        ...baseRequest,
+        worktreeId: "wt-removed",
+      });
+
+      await service.stopByWorktree("wt-removed", "worktree-removed");
+
+      expect(ptyClient.kill).toHaveBeenCalledWith(
+        session.terminalId,
+        "dev-preview:worktree-removed"
+      );
+    });
+
+    it("skips the manifest write and broadcast when nothing matches (#13171)", async () => {
+      service.dispose();
+      const persistManifest = vi.fn();
+      const onAllSessionsChanged = vi.fn();
+      service = new DevPreviewSessionService(
+        ptyClient as unknown as PtyClient,
+        onStateChanged,
+        [],
+        persistManifest,
+        onAllSessionsChanged
+      );
+      await service.ensure({ ...baseRequest, worktreeId: "wt-other" });
+      persistManifest.mockClear();
+      onAllSessionsChanged.mockClear();
+
+      await service.stopByWorktree("wt-missing", "worktree-removed");
+
+      expect(persistManifest).not.toHaveBeenCalled();
+      expect(onAllSessionsChanged).not.toHaveBeenCalled();
+    });
+
     it("rejects when the underlying terminal kill fails", async () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 

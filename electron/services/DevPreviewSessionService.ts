@@ -285,6 +285,22 @@ export class DevPreviewSessionService {
     }
   }
 
+  /**
+   * Whether anything — any live session or restore placeholder — claims this
+   * worktree. Unlike `getByWorktree` this scans every session rather than the
+   * single `worktreeToSession` mapping, which a panel moving between worktrees
+   * can drop while another session still runs there.
+   */
+  hasWorktreeSessions(worktreeId: string): boolean {
+    for (const session of this.sessions.values()) {
+      if (session.worktreeId === worktreeId) return true;
+    }
+    for (const entry of this.restoredEntries.values()) {
+      if (entry.worktreeId === worktreeId) return true;
+    }
+    return false;
+  }
+
   getByWorktree(worktreeId: string): DevPreviewSessionState | null {
     const key = this.worktreeToSession.get(worktreeId);
     if (key) {
@@ -838,7 +854,7 @@ export class DevPreviewSessionService {
    */
   private async stopAndRemoveSession(
     session: DevPreviewSession,
-    context: "panel-closed" | "project-hibernated" | "worktree-delete"
+    context: "panel-closed" | "project-hibernated" | "worktree-delete" | "worktree-removed"
   ): Promise<void> {
     const key = createSessionKey(session.projectId, session.panelId);
     this.recordSessionDiagnostic(session, { type: "stop-requested", context });
@@ -1005,18 +1021,28 @@ export class DevPreviewSessionService {
   // remove` runs. On Windows the dev server holds a directory lock — if the
   // session isn't stopped first, the removal fails outright (#9084). The
   // first stop failure rejects so the caller can abort the delete before
-  // git removal makes a partial mess.
-  async stopByWorktree(worktreeId: string): Promise<void> {
+  // git removal makes a partial mess. Also called with "worktree-removed"
+  // once a worktree has vanished outside Daintree (#13171), by which point
+  // the UI path has usually already stopped everything — so a call with
+  // nothing to stop must not write the manifest or broadcast.
+  async stopByWorktree(
+    worktreeId: string,
+    context: "worktree-delete" | "worktree-removed" = "worktree-delete"
+  ): Promise<void> {
     const targets = [...this.sessions.entries()].filter(
       ([, session]) => session.worktreeId === worktreeId
     );
+    const hasRestoreMatch = [...this.restoredEntries.values()].some(
+      (entry) => entry.worktreeId === worktreeId
+    );
+    if (targets.length === 0 && !hasRestoreMatch) return;
 
     const errors: unknown[] = [];
     await Promise.all(
       targets.map(async ([key, session]) => {
         await this.runLocked(key, async () => {
           try {
-            await this.stopAndRemoveSession(session, "worktree-delete");
+            await this.stopAndRemoveSession(session, context);
           } catch (err) {
             const message = formatErrorMessage(err, "Failed to stop dev preview");
             console.warn("[DevPreviewSessionService] stopByWorktree failed for session", {
