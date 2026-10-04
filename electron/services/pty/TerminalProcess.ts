@@ -1154,6 +1154,10 @@ export class TerminalProcess {
       this.processTreeKiller.reapAfterRootExit();
     } else {
       this.processTreeKiller.abort();
+      // Every non-natural teardown is followed by a kill, and destroyPty()
+      // below hangs up the foreground job first. Read the tree while the
+      // detached work under it is still reachable from the shell (#13165).
+      this.processTreeKiller.captureTree();
     }
 
     // Release the master /dev/ptmx fd on Unix. Pooled terminals already do this

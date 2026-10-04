@@ -32,9 +32,11 @@ import {
   currentBootEpochSec,
   endTeardownProbeWindow,
   lineageFilePath,
+  parseKillCensus,
   probeStartTimes,
   probeStartTimesSync,
   reapPersistedLineages,
+  takeKillCensusSync,
   type LineageCensus,
 } from "../TerminalLineageLedger.js";
 
@@ -1050,6 +1052,110 @@ describe("TerminalLineageLedger", () => {
 
       expect(result.get(333)).toBe(startTimeFor(333));
       expect(result.has(444)).toBe(false);
+    });
+  });
+  describe.skipIf(isWindows)("kill census", () => {
+    function censusOutput(rows: Array<[number, number]>): string {
+      return (
+        rows.map(([pid, ppid]) => `  ${pid}  ${ppid} ${startTimeFor(pid)}`).join("\n") +
+        `\n  ${process.pid}     1 ${startTimeFor(process.pid)}\n`
+      );
+    }
+
+    it("parses ancestry and identity from one table", () => {
+      const census = parseKillCensus(
+        censusOutput([
+          [100, 1],
+          [200, 100],
+          [300, 100],
+          [400, 200],
+        ])
+      );
+
+      expect(census).not.toBeNull();
+      expect(census!.childrenOf(100)).toEqual([200, 300]);
+      expect(census!.childrenOf(200)).toEqual([400]);
+      expect(census!.childrenOf(400)).toEqual([]);
+      // Same string the per-PID probe records, so ledger identities compare equal.
+      expect(census!.startTimeOf(400)).toBe(startTimeFor(400));
+      expect(census!.startTimeOf(999)).toBeUndefined();
+    });
+
+    it("rejects a table that is missing our own row as truncated", () => {
+      expect(parseKillCensus(`  100     1 ${startTimeFor(100)}\n`)).toBeNull();
+      expect(parseKillCensus("")).toBeNull();
+    });
+
+    it("ignores malformed lines and duplicate rows", () => {
+      const census = parseKillCensus(
+        `garbage\n  100 1\n  200   1 ${startTimeFor(200)}\n  200   5 Mon Feb  2 00:00:00 2026\n` +
+          `  ${process.pid} 1 ${startTimeFor(process.pid)}\n`
+      );
+
+      expect(census!.startTimeOf(100)).toBeUndefined();
+      expect(census!.startTimeOf(200)).toBe(startTimeFor(200));
+      expect(census!.childrenOf(5)).toEqual([]);
+    });
+
+    it("reads pid, ppid and lstart only, bounded and pinned to UTC", () => {
+      mockSpawnSync.mockImplementation(() => ({ status: 0, stdout: censusOutput([[100, 1]]) }));
+
+      expect(takeKillCensusSync()?.startTimeOf(100)).toBe(startTimeFor(100));
+      const [file, args, opts] = mockSpawnSync.mock.calls[0] as [
+        string,
+        string[],
+        { timeout: number; env: Record<string, string>; killSignal: string },
+      ];
+      expect(file).toBe("ps");
+      expect(args).toEqual(["-A", "-o", "pid=,ppid=,lstart="]);
+      expect(opts.timeout).toBeLessThanOrEqual(1000);
+      expect(opts.env.TZ).toBe("UTC");
+      expect(opts.killSignal).toBe("SIGKILL");
+    });
+
+    it("returns null when ps fails, times out, or exits non-zero", () => {
+      mockSpawnSync.mockImplementation(() => ({ status: null, error: new Error("ETIMEDOUT") }));
+      expect(takeKillCensusSync()).toBeNull();
+      mockSpawnSync.mockImplementation(() => ({ status: 1, stdout: censusOutput([[100, 1]]) }));
+      expect(takeKillCensusSync()).toBeNull();
+      mockSpawnSync.mockImplementation(() => {
+        throw new Error("spawn failed");
+      });
+      expect(takeKillCensusSync()).toBeNull();
+    });
+
+    it("spends nothing once the teardown budget is exhausted", () => {
+      beginTeardownProbeWindow(0);
+      expect(takeKillCensusSync()).toBeNull();
+      expect(mockSpawnSync).not.toHaveBeenCalled();
+    });
+
+    it("verifies ledger orphans against the census without a second probe", async () => {
+      mockSpawnSync.mockImplementation((_file: string, args: string[]) => ({
+        status: 0,
+        stdout: psOutput(readRequestedPids(args)),
+      }));
+      const ledger = new TerminalLineageLedger(null);
+      const tree = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+        { pid: 300, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(tree);
+      await flush();
+      ledger.reconcile(tree);
+      mockSpawnSync.mockClear();
+
+      // 200 is alive with its recorded identity; 300's PID now belongs to a
+      // different process; nothing else is listed.
+      const census = parseKillCensus(
+        `  200   1 ${startTimeFor(200)}\n  300   1 Mon Feb  2 00:00:00 2026\n` +
+          `  ${process.pid} 1 ${startTimeFor(process.pid)}\n`
+      );
+
+      expect(ledger.getVerifiedOrphanPids(100, [], census)).toEqual([200]);
+      expect(mockSpawnSync).not.toHaveBeenCalled();
     });
   });
 });
