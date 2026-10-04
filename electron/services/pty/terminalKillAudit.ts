@@ -54,7 +54,7 @@ async function probeProcesses(pids: number[]): Promise<Map<number, ProcessRow> |
     ));
   } catch (err) {
     // `ps` exits 1 when a requested PID does not exist — an answer, not a failure.
-    if ((err as NodeJS.ErrnoException).code !== 1) return null;
+    if ((err as { code?: unknown }).code !== 1) return null;
     stdout = (err as { stdout?: string }).stdout ?? "";
   }
   return parseProcessRows(stdout);
