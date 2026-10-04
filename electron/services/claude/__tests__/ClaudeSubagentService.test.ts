@@ -1,13 +1,19 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { setPtyClientRef } from "../../../window/serviceRefs.js";
+import type { PtyClient } from "../../PtyClient.js";
 import { mkdtemp, mkdir, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 
 const getTerminalAsync = vi.fn();
 
-vi.mock("../../PtyClient.js", () => ({
-  getPtyClient: () => ({ getTerminalAsync }),
-}));
+beforeEach(() => {
+  setPtyClientRef({ getTerminalAsync } as unknown as PtyClient);
+});
+
+afterEach(() => {
+  setPtyClientRef(null);
+});
 
 const { deriveProjectSlug, __resetClaudeSubagentProbeCache } =
   await import("../ClaudeSubagentReader.js");
@@ -94,6 +100,15 @@ describe("listClaudeSubagents", () => {
       status: "unavailable",
       reason: "terminal-unknown",
     });
+  });
+
+  it("reports terminal-unknown before the pty client exists, without building one", async () => {
+    setPtyClientRef(null);
+    await expect(listClaudeSubagents("t1")).resolves.toEqual({
+      status: "unavailable",
+      reason: "terminal-unknown",
+    });
+    expect(getTerminalAsync).not.toHaveBeenCalled();
   });
 
   it("reports no-session for a terminal that never had a session id assigned", async () => {

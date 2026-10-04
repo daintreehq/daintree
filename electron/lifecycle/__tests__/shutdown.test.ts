@@ -86,10 +86,6 @@ vi.mock("../../services/AgentAvailabilityStore.js", () => ({
   disposeAgentAvailabilityStore: vi.fn(),
 }));
 
-vi.mock("../../services/PtyClient.js", () => ({
-  disposePtyClient: vi.fn(),
-}));
-
 vi.mock("../../services/WorkspaceClient.js", () => ({
   disposeWorkspaceClient: vi.fn(),
 }));
