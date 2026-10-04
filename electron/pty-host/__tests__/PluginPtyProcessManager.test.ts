@@ -656,4 +656,19 @@ describe("PluginPtyProcessManager process-tree teardown (#13173)", () => {
       expect(fake.kills).toHaveLength(before);
     });
   });
+
+  it("never repeats a completed Windows tree kill at host disposal", () => {
+    withPlatform("win32", () => {
+      const fake = makeFakePty();
+      (fake.pty as unknown as { _agent: object })._agent = {};
+      spawnMock.mockReturnValue(fake.pty);
+      const { manager, killer } = makeTreeManager();
+      manager.spawn("p1", 0, options());
+      manager.kill("p1", 0, "SIGTERM");
+      fake.emitExit(0);
+      manager.disposeAll();
+      // taskkill /T /F already was the whole kill; the PID may be recycled.
+      expect(killer.execute).toHaveBeenCalledTimes(1);
+    });
+  });
 });

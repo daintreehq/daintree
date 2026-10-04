@@ -333,6 +333,9 @@ export class PluginPtyProcessManager {
         );
       }
     }
+    // A Windows graceful kill was the whole kill — taskkill /T /F is not
+    // escalated — so a second pass would only taskkill a recycled PID.
+    if (entry.treeKill === "graceful" && process.platform === "win32") return;
     this.lingeringKillers.set(killer, {
       mode: entry.treeKill === "none" ? "reap" : "escalate",
       untilMs: now + PLUGIN_PROCESS_KILL_GRACE_MS,

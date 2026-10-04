@@ -862,7 +862,7 @@ export class PluginProcessManager {
       managed.childExited = true;
       // A requested kill already owns the tree's escalation. A child that
       // ended on its own still leaves whatever it backgrounded in its group.
-      if (!managed.killRequested) reapChildTreeAfterExit(child, this.killGraceMs);
+      if (!managed.killRequested) reapChildTreeAfterExit(child, "process", this.killGraceMs);
       // The exit code/signal are only ever authoritative here — `close` carries
       // its own arguments in Node, but this interface deliberately doesn't take
       // them, so the values are captured on the way past.
@@ -984,7 +984,7 @@ export class PluginProcessManager {
     managed.killTimer.unref?.();
     // The timer above dies with the direct child's exit; grandchildren that
     // ignored SIGTERM must not.
-    scheduleChildTreeEscalation(child, this.killGraceMs);
+    scheduleChildTreeEscalation(child, "process", this.killGraceMs);
   }
 
   /**
@@ -1058,7 +1058,7 @@ export class PluginProcessManager {
         if (!oldExited) signalChildTree(oldChild, "SIGKILL");
       }, this.killGraceMs);
       escalation.unref?.();
-      scheduleChildTreeEscalation(old, this.killGraceMs);
+      scheduleChildTreeEscalation(old, "process", this.killGraceMs);
     }
     managed.restartCount++;
     managed.killRequested = false;
@@ -1175,7 +1175,7 @@ export class PluginProcessManager {
 
     if (targets.length === 0) {
       for (const managed of ptys) this.signalPtyForShutdown(managed);
-      reapPendingChildTrees();
+      reapPendingChildTrees("process");
       return;
     }
 
@@ -1257,7 +1257,7 @@ export class PluginProcessManager {
         finish();
       }, this.killGraceMs);
     });
-    reapPendingChildTrees();
+    reapPendingChildTrees("process");
   }
 
   /**

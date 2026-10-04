@@ -2,9 +2,16 @@ import { spawn } from "node:child_process";
 
 const TASKKILL_TIMEOUT_MS = 3000;
 
+/**
+ * Which subsystem armed a pending escalation. Quit reaps per owner, so one
+ * manager finishing early cannot cut short another's grace window.
+ */
+export type ChildTreeOwner = "process" | "mcp";
+
 interface PendingTree {
   timer: ReturnType<typeof setTimeout>;
   shouldEscalate: () => boolean;
+  owner: ChildTreeOwner;
 }
 
 /** Trees SIGTERMed whose escalation has not yet run — what quit still owes a SIGKILL. */
@@ -105,6 +112,7 @@ export function isChildTreeAlive(child: TreeKillableChild): boolean {
  */
 export function scheduleChildTreeEscalation(
   child: TreeKillableChild,
+  owner: ChildTreeOwner,
   delayMs: number,
   shouldEscalate: () => boolean = () => true
 ): void {
@@ -117,7 +125,7 @@ export function scheduleChildTreeEscalation(
     signalChildTree(child, "SIGKILL");
   }, delayMs);
   timer.unref?.();
-  pendingTrees.set(child, { timer, shouldEscalate });
+  pendingTrees.set(child, { timer, shouldEscalate, owner });
 }
 
 /**
@@ -128,13 +136,14 @@ export function scheduleChildTreeEscalation(
  */
 export function reapChildTreeAfterExit(
   child: TreeKillableChild,
+  owner: ChildTreeOwner,
   graceMs: number,
   shouldEscalate?: () => boolean
 ): void {
   liveTrees.delete(child);
   if (!isChildTreeAlive(child)) return;
   signalChildTree(child, "SIGTERM");
-  scheduleChildTreeEscalation(child, graceMs, shouldEscalate);
+  scheduleChildTreeEscalation(child, owner, graceMs, shouldEscalate);
 }
 
 /**
@@ -169,8 +178,9 @@ function signalTrackedTreesOnExit(): void {
  * group torn down by an unload or restart moments before quit would otherwise
  * outlive the app.
  */
-export function reapPendingChildTrees(): void {
+export function reapPendingChildTrees(owner?: ChildTreeOwner): void {
   for (const [child, pending] of [...pendingTrees]) {
+    if (owner !== undefined && pending.owner !== owner) continue;
     clearTimeout(pending.timer);
     pendingTrees.delete(child);
     if (pending.shouldEscalate() && isChildTreeAlive(child)) signalChildTree(child, "SIGKILL");
@@ -183,14 +193,15 @@ export function reapPendingChildTrees(): void {
  * SIGKILL to an unref'd timer that will never fire. Referenced on purpose.
  */
 export async function drainPendingChildTrees(
+  owner: ChildTreeOwner,
   deadlineMs: number,
   pollMs: number = 50
 ): Promise<void> {
   const until = Date.now() + deadlineMs;
   while (Date.now() < until) {
     let anyAlive = false;
-    for (const child of pendingTrees.keys()) {
-      if (isChildTreeAlive(child)) {
+    for (const [child, pending] of pendingTrees) {
+      if (pending.owner === owner && isChildTreeAlive(child)) {
         anyAlive = true;
         break;
       }
@@ -198,7 +209,7 @@ export async function drainPendingChildTrees(
     if (!anyAlive) break;
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
-  reapPendingChildTrees();
+  reapPendingChildTrees(owner);
 }
 
 function signalGroup(pid: number, signal: NodeJS.Signals): boolean {

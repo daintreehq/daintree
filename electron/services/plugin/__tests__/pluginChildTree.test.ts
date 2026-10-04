@@ -129,7 +129,7 @@ describe("pluginChildTree (#13173)", () => {
   it("SIGKILLs group survivors after the grace window even once the leader is gone", () => {
     vi.useFakeTimers();
     const child = makeChild({ ownsProcessTree: true });
-    scheduleChildTreeEscalation(child, 3_000);
+    scheduleChildTreeEscalation(child, "process", 3_000);
     vi.advanceTimersByTime(2_999);
     expect(killSpy).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
@@ -142,7 +142,7 @@ describe("pluginChildTree (#13173)", () => {
   it("skips the escalation when the group is already empty or the fence says no", () => {
     vi.useFakeTimers();
     const fenced = makeChild({ ownsProcessTree: true, pid: 600 });
-    scheduleChildTreeEscalation(fenced, 100, () => false);
+    scheduleChildTreeEscalation(fenced, "process", 100, () => false);
     vi.advanceTimersByTime(100);
     expect(killSpy).not.toHaveBeenCalled();
 
@@ -150,7 +150,7 @@ describe("pluginChildTree (#13173)", () => {
       throw errno("ESRCH");
     });
     const gone = makeChild({ ownsProcessTree: true, pid: 601 });
-    scheduleChildTreeEscalation(gone, 100);
+    scheduleChildTreeEscalation(gone, "process", 100);
     vi.advanceTimersByTime(100);
     expect(killSpy).toHaveBeenCalledTimes(1);
     expect(killSpy).toHaveBeenCalledWith(-601, 0);
@@ -159,7 +159,7 @@ describe("pluginChildTree (#13173)", () => {
   it("lets quit SIGKILL trees still inside their grace window", () => {
     vi.useFakeTimers();
     const child = makeChild({ ownsProcessTree: true, pid: 700 });
-    scheduleChildTreeEscalation(child, 3_000);
+    scheduleChildTreeEscalation(child, "process", 3_000);
     reapPendingChildTrees();
     expect(killSpy).toHaveBeenCalledWith(-700, "SIGKILL");
     killSpy.mockClear();
@@ -171,7 +171,7 @@ describe("pluginChildTree (#13173)", () => {
   it("reaps what a root that exited on its own left in its group", () => {
     vi.useFakeTimers();
     const child = makeChild({ ownsProcessTree: true, pid: 800 });
-    reapChildTreeAfterExit(child, 1_000);
+    reapChildTreeAfterExit(child, "process", 1_000);
     expect(killSpy.mock.calls).toEqual([
       [-800, 0],
       [-800, "SIGTERM"],
@@ -186,7 +186,7 @@ describe("pluginChildTree (#13173)", () => {
       throw errno("ESRCH");
     });
     const child = makeChild({ ownsProcessTree: true, pid: 801 });
-    reapChildTreeAfterExit(child, 1_000);
+    reapChildTreeAfterExit(child, "process", 1_000);
     expect(killSpy).toHaveBeenCalledTimes(1);
     expect(child.kill).not.toHaveBeenCalled();
   });
@@ -194,7 +194,7 @@ describe("pluginChildTree (#13173)", () => {
   it("honours the escalation fence at quit as well as on the timer", () => {
     vi.useFakeTimers();
     const child = makeChild({ ownsProcessTree: true, pid: 900 });
-    scheduleChildTreeEscalation(child, 3_000, () => false);
+    scheduleChildTreeEscalation(child, "process", 3_000, () => false);
     reapPendingChildTrees();
     expect(killSpy).not.toHaveBeenCalled();
   });
@@ -207,9 +207,9 @@ describe("pluginChildTree (#13173)", () => {
       return true;
     }) as typeof process.kill);
     const quitting = makeChild({ ownsProcessTree: true, pid: 951 });
-    scheduleChildTreeEscalation(quitting, 10_000);
+    scheduleChildTreeEscalation(quitting, "process", 10_000);
     let drained = false;
-    const done = drainPendingChildTrees(3_000).then(() => {
+    const done = drainPendingChildTrees("process", 3_000).then(() => {
       drained = true;
     });
     await vi.advanceTimersByTimeAsync(1_000);
@@ -221,11 +221,24 @@ describe("pluginChildTree (#13173)", () => {
 
     alive = true;
     const stubborn = makeChild({ ownsProcessTree: true, pid: 952 });
-    scheduleChildTreeEscalation(stubborn, 10_000);
-    const bounded = drainPendingChildTrees(3_000);
+    scheduleChildTreeEscalation(stubborn, "process", 10_000);
+    const bounded = drainPendingChildTrees("process", 3_000);
     await vi.advanceTimersByTimeAsync(3_050);
     await bounded;
     expect(killSpy).toHaveBeenCalledWith(-952, "SIGKILL");
+  });
+
+  it("reaps only the asking owner's trees, leaving another's grace window intact", () => {
+    vi.useFakeTimers();
+    const mine = makeChild({ ownsProcessTree: true, pid: 960 });
+    const theirs = makeChild({ ownsProcessTree: true, pid: 961 });
+    scheduleChildTreeEscalation(mine, "process", 3_000);
+    scheduleChildTreeEscalation(theirs, "mcp", 3_000);
+    reapPendingChildTrees("process");
+    expect(killSpy).toHaveBeenCalledWith(-960, "SIGKILL");
+    expect(killSpy).not.toHaveBeenCalledWith(-961, "SIGKILL");
+    vi.advanceTimersByTime(3_000);
+    expect(killSpy).toHaveBeenCalledWith(-961, "SIGKILL");
   });
 
   describe("on Windows", () => {
@@ -271,7 +284,7 @@ describe("pluginChildTree (#13173)", () => {
     it("never schedules a group escalation", () => {
       vi.useFakeTimers();
       const child = makeChild({ ownsProcessTree: true });
-      scheduleChildTreeEscalation(child, 100);
+      scheduleChildTreeEscalation(child, "process", 100);
       vi.advanceTimersByTime(100);
       reapPendingChildTrees();
       expect(spawnMock).not.toHaveBeenCalled();

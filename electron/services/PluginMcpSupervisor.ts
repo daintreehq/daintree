@@ -612,6 +612,7 @@ export class PluginMcpSupervisor {
     if (exited && state.pid !== null) {
       reapChildTreeAfterExit(
         exited,
+        "mcp",
         SHUTDOWN_GRACE_MS,
         this.escalationFence(stateKey(state.pluginId, state.serverId), state.pid, state.spawnGeneration)
       );
@@ -933,6 +934,7 @@ export class PluginMcpSupervisor {
     if (pid !== null) {
       scheduleChildTreeEscalation(
         subprocess,
+        "mcp",
         SHUTDOWN_GRACE_MS,
         this.escalationFence(key, pid, killGeneration)
       );
@@ -966,7 +968,7 @@ export class PluginMcpSupervisor {
     await Promise.all([...pluginIds].map((pluginId) => this.shutdown({ pluginId })));
     // Quit cannot leave the SIGKILL to the unref'd escalation timers, which
     // never fire once the app exits.
-    await drainPendingChildTrees(SHUTDOWN_GRACE_MS);
+    await drainPendingChildTrees("mcp", SHUTDOWN_GRACE_MS);
   }
 
   /**
