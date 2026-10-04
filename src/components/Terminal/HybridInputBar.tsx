@@ -83,6 +83,7 @@ import {
 import { useHostReparent } from "./hooks/useHostReparent";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
+import { systemClient } from "@/clients/systemClient";
 import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
 import { composeDraftWithInstruction } from "@/services/terminal/worktreeMoveInstruction";
 import { isScratchpadElement } from "@/lib/terminalScratchpad";
@@ -887,7 +888,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           const { from, to } = view.state.selection.main;
           if (from !== to) {
             resolvedPath =
-              resolveSelectedFilePath(view.state.sliceDoc(from, to), cwd)?.absolutePath ?? null;
+              resolveSelectedFilePath(
+                view.state.sliceDoc(from, to),
+                cwd,
+                systemClient.getCachedHomeDir()
+              )?.absolutePath ?? null;
           }
         }
         setSelectionFilePath(resolvedPath);

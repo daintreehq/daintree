@@ -656,3 +656,108 @@ describe("FileLinksAddon paths containing spaces", () => {
     expect(systemClient.checkDirectory).not.toHaveBeenCalled();
   });
 });
+
+// Agents print home-relative paths; they link as their absolute spelling,
+// with the printed `~` kept in the underlined text (#13177).
+describe("FileLinksAddon home-relative paths", () => {
+  let homeCounter = 0;
+  const nextHome = (): string => `/Users/tilde${++homeCounter}`;
+  const flat = (rows: string[]): Terminal =>
+    makeTerminal(
+      rows,
+      rows.map(() => false)
+    );
+  const texts = (links: ILink[] | undefined): string[] => (links ?? []).map((link) => link.text);
+  const absolutePath = (link: ILink | undefined): unknown =>
+    link && "absolutePath" in link ? link.absolutePath : undefined;
+
+  beforeEach(() => {
+    vi.mocked(systemClient.checkDirectory).mockReset();
+    vi.mocked(fileBrowserClient.statPaths).mockReset();
+    bindWorktrees(new Map());
+  });
+
+  it("links a ~/ file outside the project by its expanded absolute path", async () => {
+    const home = nextHome();
+    const line = "- Quickest: ~/Library/Caches/drafts/draft-v008.mp4 and ~/src/a.ts:12:3";
+
+    const links = await provide(
+      new FileLinksAddon(
+        flat([line]),
+        () => "/repo",
+        undefined,
+        () => home
+      )
+    );
+
+    expect(texts(links)).toEqual(["~/Library/Caches/drafts/draft-v008.mp4", "~/src/a.ts:12:3"]);
+    expect(links!.map(absolutePath)).toEqual([
+      `${home}/Library/Caches/drafts/draft-v008.mp4`,
+      `${home}/src/a.ts`,
+    ]);
+    expect(links![0]!.range.start.x).toBe(line.indexOf("~") + 1);
+  });
+
+  it("links nothing while the home dir is unknown, then links once it arrives", async () => {
+    const home = nextHome();
+    const known: { home?: string } = {};
+    const addon = new FileLinksAddon(
+      flat(["see ~/src/a.ts"]),
+      () => "/repo",
+      undefined,
+      () => known.home
+    );
+
+    expect(texts(await provide(addon))).toEqual([]);
+    known.home = home;
+    expect(absolutePath((await provide(addon))?.[0])).toBe(`${home}/src/a.ts`);
+  });
+
+  it("probes the expanded parent of an unquoted spaced ~/ path", async () => {
+    const home = nextHome();
+    vi.mocked(systemClient.checkDirectory).mockImplementation(
+      async (dir) => dir === `${home}/Application Support`
+    );
+
+    const links = await provide(
+      new FileLinksAddon(
+        flat(["see ~/Application Support/x.md"]),
+        () => "/repo",
+        undefined,
+        () => home
+      )
+    );
+
+    expect(systemClient.checkDirectory).toHaveBeenCalledWith(`${home}/Application Support`);
+    expect(texts(links)).toEqual(["~/Application Support/x.md"]);
+    expect(absolutePath(links?.[0])).toBe(`${home}/Application Support/x.md`);
+  });
+
+  it("neither probes nor links a spaced ~/ path's tail while home is unknown", async () => {
+    const links = await provide(
+      new FileLinksAddon(flat(["see ~/Application Support/x.md"]), () => "/repo")
+    );
+
+    expect(systemClient.checkDirectory).not.toHaveBeenCalled();
+    expect(texts(links)).toEqual([]);
+  });
+
+  it("links a ~/ directory inside a bound worktree", async () => {
+    const home = nextHome();
+    const root = `${home}/Projects/app`;
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    vi.mocked(fileBrowserClient.statPaths).mockResolvedValue(["directory"]);
+
+    const links = await provide(
+      new FileLinksAddon(
+        flat(["cd ~/Projects/app/src now"]),
+        () => "/repo",
+        undefined,
+        () => home
+      )
+    );
+
+    expect(texts(links)).toEqual(["~/Projects/app/src"]);
+    expect(fileBrowserClient.statPaths).toHaveBeenCalledWith({ worktreeId: root, paths: ["src"] });
+  });
+});

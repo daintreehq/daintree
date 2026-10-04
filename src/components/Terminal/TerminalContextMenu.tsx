@@ -56,6 +56,7 @@ import {
 } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
+import { systemClient } from "@/clients/systemClient";
 import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
 import { resolveWorktreePathScope } from "@shared/utils/path";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
@@ -633,7 +634,11 @@ function TerminalContextMenuBody({
   const selectionFilePath = useMemo(
     () =>
       selectedText
-        ? (resolveSelectedFilePath(selectedText, terminalPty?.cwd ?? "")?.absolutePath ?? null)
+        ? (resolveSelectedFilePath(
+            selectedText,
+            terminalPty?.cwd ?? "",
+            systemClient.getCachedHomeDir()
+          )?.absolutePath ?? null)
         : null,
     [selectedText, terminalPty?.cwd]
   );

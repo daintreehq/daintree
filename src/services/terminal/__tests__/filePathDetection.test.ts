@@ -522,3 +522,107 @@ describe("resolveSelectedFilePath with spaced paths", () => {
     expect(resolveSelectedFilePath("see /a b/c.md now", "/cwd")).toBeNull();
   });
 });
+
+describe("home-relative paths (#13177)", () => {
+  const HOME = "/Users/me";
+  const pathsIn = (text: string) => [...text.matchAll(FILE_PATH_REGEX)].map((m) => m[1]);
+
+  it("matches ~/ paths on a token boundary", () => {
+    const line =
+      "- Quickest: ~/Library/Caches/DaintreeVideo/drafts/NEVER-PRODUCTION-draft-v008.mp4";
+    expect(pathsIn(line)).toEqual([
+      "~/Library/Caches/DaintreeVideo/drafts/NEVER-PRODUCTION-draft-v008.mp4",
+    ]);
+    expect(pathsIn("(~/src/a.ts:12:3)")).toEqual(["~/src/a.ts:12:3"]);
+    expect(pathsIn("~/a.ts")).toEqual(["~/a.ts"]);
+  });
+
+  it("does not match tildes that are not a home prefix", () => {
+    expect(pathsIn("git show HEAD~1/x.ts")).toEqual([]);
+    expect(pathsIn("see foo~/x.ts")).toEqual([]);
+    expect(pathsIn("~~x.ts~~ and ~ alone")).toEqual([]);
+    expect(pathsIn("~user/x.ts")).toEqual([]);
+  });
+
+  it("leaves non-home matches unchanged", () => {
+    expect(pathsIn("see /a/b.ts and src/c.ts:4 and ./d.ts")).toEqual([
+      "/a/b.ts",
+      "src/c.ts:4",
+      "./d.ts",
+    ]);
+  });
+
+  it("expands against the home dir independent of cwd, keeping line and col", () => {
+    expect(resolveFilePathCandidate("~/src/a.ts:12:3", "", HOME)).toEqual({
+      absolutePath: "/Users/me/src/a.ts",
+      line: 12,
+      col: 3,
+    });
+    expect(resolveFilePathCandidate("~/a/../b.ts", "/elsewhere", HOME)?.absolutePath).toBe(
+      "/Users/me/b.ts"
+    );
+  });
+
+  it("returns null rather than resolving against cwd when home is unknown", () => {
+    expect(resolveFilePathCandidate("~/src/a.ts", "/cwd")).toBeNull();
+    expect(resolveFilePathCandidate("~/src/a.ts", "/cwd", "relative/home")).toBeNull();
+    expect(resolveDirPathCandidate("~/src", "/cwd")).toBeNull();
+  });
+
+  it("rejects a UNC home", () => {
+    expect(resolveFilePathCandidate("~/a.ts", "", "\\\\server\\share")).toBeNull();
+    expect(resolveFilePathCandidate("~/a.ts", "", "//server/share")).toBeNull();
+  });
+
+  it("joins with a Windows home's separator and accepts ~\\ only there", () => {
+    expect(resolveFilePathCandidate("~\\src\\a.ts:4", "", "C:\\Users\\me")).toEqual({
+      absolutePath: "C:\\Users\\me\\src\\a.ts",
+      line: 4,
+      col: undefined,
+    });
+    expect(resolveFilePathCandidate("~/src/a.ts", "", "C:\\Users\\me")?.absolutePath).toBe(
+      "C:\\Users\\me\\src\\a.ts"
+    );
+    expect(resolveFilePathCandidate("~\\src\\a.ts", "", HOME)).toBeNull();
+  });
+
+  it("matches and resolves directory tokens", () => {
+    const dirs = [..."cd ~/Projects/app/ then".matchAll(DIR_PATH_REGEX)].map((m) => m[1]);
+    expect(dirs).toEqual(["~/Projects/app/"]);
+    expect(resolveDirPathCandidate("~/Projects/app/", "/cwd", HOME)).toBe("/Users/me/Projects/app");
+    expect([..."HEAD~1/src".matchAll(DIR_PATH_REGEX)].map((m) => m[1])).toEqual([]);
+  });
+
+  it("finds quoted, escaped and unquoted spaced home paths", () => {
+    const text = `open "~/My Docs/a.md" or ~/Other\\ Dir/b.ts or ~/Videos/Crisp Vector/c.mp4.`;
+    const found = findSpacedFilePathCandidates(text).map(({ path, probeDir }) => ({
+      path,
+      probeDir,
+    }));
+    expect(found).toEqual([
+      { path: "~/My Docs/a.md", probeDir: undefined },
+      { path: "~/Other Dir/b.ts", probeDir: undefined },
+      { path: "~/Videos/Crisp Vector/c.mp4", probeDir: "~/Videos/Crisp Vector" },
+    ]);
+    const quoted = findSpacedFilePathCandidates(text)[0]!;
+    expect(text.slice(quoted.startIndex, quoted.endIndex)).toBe("~/My Docs/a.md");
+  });
+
+  it("stops spaced growth at a following ~/ word", () => {
+    const [candidate] = findSpacedFilePathCandidates("/a b/x ~/c/d.ts");
+    expect(candidate).toBeUndefined();
+  });
+
+  it("resolves a selected home path", () => {
+    expect(resolveSelectedFilePath("  ~/src/a.ts:3 ", "/cwd", HOME)).toEqual({
+      absolutePath: "/Users/me/src/a.ts",
+      line: 3,
+      col: undefined,
+    });
+    expect(resolveSelectedFilePath("~/My Docs/a.md", "/cwd", HOME)?.absolutePath).toBe(
+      "/Users/me/My Docs/a.md"
+    );
+    expect(resolveSelectedFilePath("~/src/a.ts", "/cwd")).toBeNull();
+    expect(resolveSelectedFilePath("see ~/src/a.ts here", "/cwd", HOME)).toBeNull();
+  });
+});
