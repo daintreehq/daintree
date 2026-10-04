@@ -28,6 +28,7 @@ import {
 import type { Terminal } from "@xterm/xterm";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { FileLinksAddon } from "../FileLinksAddon";
+import { systemClient } from "@/clients/systemClient";
 
 function createMockTerminal() {
   return {
@@ -170,7 +171,18 @@ describe("TerminalAddonManager", () => {
 
       createFileLinksAddon(terminal, getCwd, onHover);
 
-      expect(FileLinksAddon).toHaveBeenCalledWith(terminal, getCwd, onHover);
+      expect(FileLinksAddon).toHaveBeenCalledWith(terminal, getCwd, onHover, expect.any(Function));
+    });
+
+    it("hands FileLinksAddon a live home-dir getter backed by the client cache", () => {
+      const spy = vi.spyOn(systemClient, "getCachedHomeDir").mockReturnValue("/Users/me");
+
+      createFileLinksAddon(createMockTerminal(), () => "/tmp");
+
+      const getHomeDir = vi.mocked(FileLinksAddon).mock.calls.at(-1)?.[3];
+      expect(spy).not.toHaveBeenCalled();
+      expect(getHomeDir?.()).toBe("/Users/me");
+      spy.mockRestore();
     });
   });
 });

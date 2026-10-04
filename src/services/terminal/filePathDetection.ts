@@ -9,10 +9,13 @@ export interface ResolvedFilePath {
 // Matches a file-path-like token inside arbitrary text. Every alternative
 // requires a path separator ('/' or '\') and a trailing `.ext`, so bare words
 // and slash-commands (`/help`, `/api/v1`) never match. Global so the terminal
-// link scanner can walk every match on a line. Kept byte-for-byte identical to
-// the historical FileLinksAddon regex so link-scanning behavior is unchanged.
+// link scanner can walk every match on a line. Home-relative `~/` (and `~\`)
+// is the only addition to the historical FileLinksAddon regex; every other
+// token matches exactly as it always has. The tilde must sit on a token
+// boundary and be followed by a separator, so `HEAD~1/x.ts`, `foo~/x.ts` and
+// `~user/x.ts` stay unlinked.
 export const FILE_PATH_REGEX =
-  /(?:^|[\s(])((?:\\\\wsl(?:\$|\.localhost)\\[^\\]+(?:\\[\w.-]+)+|\/[\w./-]+|[a-zA-Z]:[\\/][\w./\\-]+|(?:\.\.?[\\/])+[\w./\\-]+|[\w-]+[\\/][\w./\\-]+)\.[\w]+(?::\d+(?::\d+)?)?)/g;
+  /(?:^|[\s(])((?:\\\\wsl(?:\$|\.localhost)\\[^\\]+(?:\\[\w.-]+)+|\/[\w./-]+|~[\\/][\w./\\-]+|[a-zA-Z]:[\\/][\w./\\-]+|(?:\.\.?[\\/])+[\w./\\-]+|[\w-]+[\\/][\w./\\-]+)\.[\w]+(?::\d+(?::\d+)?)?)/g;
 
 const WINDOWS_ABS = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
 
@@ -39,12 +42,13 @@ export interface SpacedFilePathCandidate {
 // path must open with a root or `./`/`../`: quotes bound text, not paths, and
 // `'cat src/a.ts'` would otherwise swallow the real `src/a.ts` link.
 const QUOTED_PATH_REGEX = /(?:^|[\s(=:])(["'`])([^"'`\s][^"'`]*?)\1/g;
-const QUOTED_PATH_SHAPE = /^(?:[a-zA-Z]:[\\/]|\.{0,2}[\\/])[\w./\\ -]*\.\w+(?::\d+(?::\d+)?)?$/;
-const ESCAPED_PATH_REGEX = /(?:^|[\s(])((?:[\w./-]|\\ )+\.\w+(?::\d+(?::\d+)?)?)/g;
+const QUOTED_PATH_SHAPE =
+  /^(?:[a-zA-Z]:[\\/]|\.{0,2}[\\/]|~[\\/])[\w./\\ -]*\.\w+(?::\d+(?::\d+)?)?$/;
+const ESCAPED_PATH_REGEX = /(?:^|[\s(])((?:~(?=\/))?(?:[\w./-]|\\ )+\.\w+(?::\d+(?::\d+)?)?)/g;
 
 // Unquoted: anchored on an absolute root and grown word by word, each word
 // joined by exactly one space. Bounded because the scan runs on every hover.
-const SPACED_ANCHOR_REGEX = /(?:^|[\s(])((?:\/|[a-zA-Z]:[\\/])[\w./\\-]*)/g;
+const SPACED_ANCHOR_REGEX = /(?:^|[\s(])((?:\/|[a-zA-Z]:[\\/]|~[\\/])[\w./\\-]*)/g;
 const SPACED_WORD_REGEX = /[\w./\\-]+(?::\d+(?::\d+)?)?/y;
 const SPACED_TAIL_REGEX = /^[\w./\\-]*[\\/][\w./\\-]*\.\w+(?::\d+(?::\d+)?)?/;
 const ABSOLUTE_WORD = /^(?:\/|[a-zA-Z]:[\\/])/;
@@ -55,6 +59,28 @@ const MAX_SPACED_WORDS = 8;
 // (or opening it on click) makes the OS dial SMB to that host and hand it
 // the user's NTLM credentials, so hovered terminal text never gets to name one.
 const UNC_PREFIX = /^[\\/]{2}/;
+const HOME_PREFIX = /^~[\\/]/;
+
+/**
+ * Expand a leading `~/` (or `~\`) against `homeDir`. Non-home paths come back
+ * untouched; a home path with no usable home comes back null, because
+ * resolving it any other way (against the cwd, say) links a different file.
+ */
+export function expandHomePath(path: string, homeDir: string | undefined): string | null {
+  if (!HOME_PREFIX.test(path)) return path;
+  if (!homeDir || !isAbsolute(homeDir) || UNC_PREFIX.test(homeDir)) return null;
+  const rest = path.slice(2);
+  // A shell only expands `~\` where `\` is a separator.
+  if (!WINDOWS_ABS.test(homeDir) && path[1] === "\\") return null;
+  if (WINDOWS_ABS.test(homeDir)) {
+    const sep = homeDir.includes("\\") ? "\\" : "/";
+    const base = homeDir.replace(/[\\/]+$/, "");
+    return rest ? `${base}${sep}${rest.replace(/[\\/]+/g, sep)}` : base;
+  }
+  // Joined as printed, never normalized: an absolute path links exactly as
+  // written, and collapsing `..` here would skip a symlink the OS follows.
+  return rest ? `${homeDir.replace(/\/+$/, "")}/${rest}` : homeDir;
+}
 
 function stripLocationSuffix(path: string): string {
   return path.replace(/(?::\d+(?::\d+)?)$/, "");
@@ -182,7 +208,7 @@ const WINDOWS_DRIVE_ONLY = /^[A-Za-z]:$/;
 // FILE_PATH_REGEX's envelope (POSIX-absolute, drive-absolute, dot-relative,
 // bare-relative) minus the `.ext` requirement.
 export const DIR_PATH_REGEX =
-  /(?:^|[\s(])((?:\/[\w./-]+|[a-zA-Z]:[\\/][\w./\\-]+|(?:\.\.?[\\/])+[\w./\\-]+|[\w.-]+[\\/][\w./\\-]+)[\\/]?)(?=$|[\s):,'"])/g;
+  /(?:^|[\s(])((?:\/[\w./-]+|~[\\/][\w./\\-]+|[a-zA-Z]:[\\/][\w./\\-]+|(?:\.\.?[\\/])+[\w./\\-]+|[\w.-]+[\\/][\w./\\-]+)[\\/]?)(?=$|[\s):,'"])/g;
 
 /**
  * Resolve a directory-shaped token to an absolute path. No `:line[:col]`
@@ -190,7 +216,15 @@ export const DIR_PATH_REGEX =
  * the file regex's business. A trailing slash is stripped so `src/panels/`
  * and `src/panels` resolve identically.
  */
-export function resolveDirPathCandidate(text: string, cwd: string): string | null {
+export function resolveDirPathCandidate(
+  text: string,
+  cwd: string,
+  homeDir?: string
+): string | null {
+  if (HOME_PREFIX.test(text)) {
+    const expanded = expandHomePath(text, homeDir);
+    return expanded === null ? null : expanded.replace(/(?<=.)[\\/]+$/, "");
+  }
   const trimmed = text.replace(/[\\/]+$/, "");
   if (!trimmed) return null;
 
@@ -214,7 +248,11 @@ export function isPathExcluded(text: string): boolean {
  * token can't be resolved and returns null. Windows cwds join with the drive's
  * separator so a POSIX-style relative token still lands under the drive root.
  */
-export function resolveFilePathCandidate(text: string, cwd: string): ResolvedFilePath | null {
+export function resolveFilePathCandidate(
+  text: string,
+  cwd: string,
+  homeDir?: string
+): ResolvedFilePath | null {
   const match = /^(.*\.[^\s:]+?)(?::(\d+)(?::(\d+))?)?$/.exec(text);
   if (!match) return null;
   const pathPart = match[1];
@@ -223,7 +261,11 @@ export function resolveFilePathCandidate(text: string, cwd: string): ResolvedFil
   const col = match[3] ? Number(match[3]) : undefined;
 
   let absolutePath: string;
-  if (isAbsolute(pathPart)) {
+  if (HOME_PREFIX.test(pathPart)) {
+    const expanded = expandHomePath(pathPart, homeDir);
+    if (expanded === null) return null;
+    absolutePath = expanded;
+  } else if (isAbsolute(pathPart)) {
     absolutePath = pathPart;
   } else {
     if (!cwd) return null;
@@ -320,7 +362,11 @@ export function resolveFileUrlCandidate(text: string): ResolvedFilePath | null {
  * prose ("see src/foo.ts for details") is intentionally rejected so the "View
  * file" menu section only appears when the user selected exactly a path.
  */
-export function resolveSelectedFilePath(selection: string, cwd: string): ResolvedFilePath | null {
+export function resolveSelectedFilePath(
+  selection: string,
+  cwd: string,
+  homeDir?: string
+): ResolvedFilePath | null {
   const trimmed = selection.trim();
   if (!trimmed) return null;
 
@@ -343,11 +389,11 @@ export function resolveSelectedFilePath(selection: string, cwd: string): Resolve
     const whole = candidate.startIndex === 0 && candidate.endIndex === trimmed.length;
     return whole || (quoted && trimmed[0] === trimmed[trimmed.length - 1]);
   });
-  if (spaced) return resolveFilePathCandidate(spaced.path, cwd);
+  if (spaced) return resolveFilePathCandidate(spaced.path, cwd, homeDir);
 
   const matches = [...trimmed.matchAll(FILE_PATH_REGEX)];
   if (matches.length !== 1) return null;
   const [match] = matches;
   if (!match || match[1] !== trimmed) return null;
-  return resolveFilePathCandidate(trimmed, cwd);
+  return resolveFilePathCandidate(trimmed, cwd, homeDir);
 }

@@ -71,3 +71,53 @@ describe("systemClient.getTmpDir", () => {
     expect(result).toBe("/tmp");
   });
 });
+
+describe("systemClient.getCachedHomeDir", () => {
+  let getHomeDirMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    getHomeDirMock = vi.fn();
+    typedGlobal.window = { electron: { system: { getHomeDir: getHomeDirMock } } };
+    systemClient = (await import("../systemClient")).systemClient;
+  });
+
+  afterEach(() => {
+    delete typedGlobal.window;
+  });
+
+  it("starts one fetch while unknown and serves the value once it lands", async () => {
+    getHomeDirMock.mockResolvedValue("/Users/me");
+
+    expect(systemClient.getCachedHomeDir()).toBeUndefined();
+    expect(systemClient.getCachedHomeDir()).toBeUndefined();
+    await vi.waitFor(() => expect(systemClient.getCachedHomeDir()).toBe("/Users/me"));
+    expect(getHomeDirMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("is filled by any getHomeDir caller", async () => {
+    getHomeDirMock.mockResolvedValue("/Users/me");
+
+    await systemClient.getHomeDir();
+
+    expect(systemClient.getCachedHomeDir()).toBe("/Users/me");
+    expect(getHomeDirMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries after a failed fetch", async () => {
+    getHomeDirMock.mockRejectedValueOnce(new Error("bridge gone"));
+    getHomeDirMock.mockResolvedValue("/Users/me");
+
+    systemClient.getCachedHomeDir();
+    await vi.waitFor(() => expect(getHomeDirMock).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    systemClient.getCachedHomeDir();
+    await vi.waitFor(() => expect(systemClient.getCachedHomeDir()).toBe("/Users/me"));
+  });
+
+  it("survives a missing bridge without throwing", () => {
+    delete typedGlobal.window;
+    expect(() => systemClient.getCachedHomeDir()).not.toThrow();
+  });
+});

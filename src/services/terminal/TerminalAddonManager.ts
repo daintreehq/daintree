@@ -4,6 +4,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import type { ImageAddon } from "@xterm/addon-image";
 import type { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { systemClient } from "@/clients/systemClient";
 import { FileLinksAddon, HoverCallback } from "./FileLinksAddon";
 import { ImageLinksAddon, OnActivateFigure } from "./ImageLinksAddon";
 
@@ -161,7 +162,9 @@ export function createFileLinksAddon(
   getCwd: () => string,
   onHover?: HoverCallback
 ): IDisposable {
-  const addon = new FileLinksAddon(terminal, getCwd, onHover);
+  const addon = new FileLinksAddon(terminal, getCwd, onHover, () =>
+    systemClient.getCachedHomeDir()
+  );
   const registration = terminal.registerLinkProvider(addon);
   // Composed, not just the registration: the addon defers link replies across
   // an async validation, and its dispose() is what tells an in-flight reply
