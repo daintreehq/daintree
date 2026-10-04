@@ -8,14 +8,23 @@ import { probeStartTimesSync, takeKillCensusSync } from "../TerminalLineageLedge
 describe.skipIf(process.platform === "win32")("takeKillCensusSync against the real ps", () => {
   let child: ChildProcess | null = null;
 
-  afterEach(() => {
-    child?.kill("SIGKILL");
+  afterEach(async () => {
+    const running = child;
     child = null;
+    if (!running || running.exitCode !== null || running.signalCode !== null) return;
+    const exited = new Promise((resolve) => running.once("exit", resolve));
+    running.kill("SIGKILL");
+    await exited;
   });
 
-  it("sees a just-spawned child with the identity the ledger probe records", () => {
+  it("sees a just-spawned child with the identity the ledger probe records", async () => {
     child = spawn("sleep", ["30"], { stdio: "ignore" });
-    const pid = child.pid!;
+    const spawned = child;
+    await new Promise<void>((resolve, reject) => {
+      spawned.once("spawn", () => resolve());
+      spawned.once("error", reject);
+    });
+    const pid = spawned.pid!;
 
     const census = takeKillCensusSync(5000);
 

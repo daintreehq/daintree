@@ -362,7 +362,7 @@ export function probeStartTimesSync(
  * thread, and a census that cannot finish in this long is no fresher than the
  * cached one the caller falls back to.
  */
-const KILL_CENSUS_TIMEOUT_MS = 1000;
+const KILL_CENSUS_TIMEOUT_MS = 500;
 const KILL_CENSUS_MAX_BUFFER = 16 * 1024 * 1024;
 
 /**

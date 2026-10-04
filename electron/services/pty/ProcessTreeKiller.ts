@@ -63,7 +63,14 @@ export interface LineageKillSource {
 export class ProcessTreeKiller {
   private killTreeTimer: NodeJS.Timeout | null = null;
   private registeredRootPid: number | null = null;
-  private capturedCensus: { census: KillCensus; atMs: number } | null = null;
+  /** `census: null` records a capture that failed, so the kill does not retry it. */
+  private capturedCensus: { census: KillCensus | null; atMs: number } | null = null;
+  /**
+   * The shell's identity from the first census that saw it. A later kill on
+   * this killer (dispose after a completed kill) must not mistake whatever now
+   * holds the PID for our shell and walk an unrelated tree.
+   */
+  private shellIdentity: string | null = null;
   private escalation: EscalationState | null = null;
 
   constructor(
@@ -100,13 +107,15 @@ export class ProcessTreeKiller {
   captureTree(): void {
     this.capturedCensus = null;
     if (process.platform === "win32" || !(this.ptyProcess.pid > 0)) return;
-    const census = this.lineage?.takeKillCensus?.() ?? null;
-    this.capturedCensus = census ? { census, atMs: Date.now() } : null;
+    const atMs = Date.now();
+    this.capturedCensus = { census: this.lineage?.takeKillCensus?.() ?? null, atMs };
   }
 
   private takeCensus(): KillCensus | null {
     const captured = this.capturedCensus;
     this.capturedCensus = null;
+    // A capture that failed moments ago would fail again, and the shared
+    // teardown budget cannot afford a second timeout.
     if (captured && Date.now() - captured.atMs <= CAPTURED_CENSUS_MAX_AGE_MS) {
       return captured.census;
     }
@@ -238,7 +247,14 @@ export class ProcessTreeKiller {
     // cached one is seconds stale, so it has never heard of anything spawned
     // since its last sweep. Without one, fall back to the cached walk.
     const census = this.takeCensus();
-    const shellStartTime = census?.startTimeOf(shellPid);
+    let shellStartTime = census?.startTimeOf(shellPid);
+    if (shellStartTime !== undefined) {
+      if (this.shellIdentity === null) this.shellIdentity = shellStartTime;
+      else if (this.shellIdentity !== shellStartTime) shellStartTime = undefined;
+    }
+    // A fresh census without our shell means the PID is free for reuse, so
+    // nothing below may signal it — including node-pty's SIGHUP.
+    const shellGone = census !== null && shellStartTime === undefined;
     let descendants: number[];
     if (census) {
       const live = shellStartTime !== undefined ? walkDescendants(census, shellPid) : [];
@@ -282,10 +298,12 @@ export class ProcessTreeKiller {
       }
     }
 
-    try {
-      this.ptyProcess.kill();
-    } catch {
-      // Process may already be dead
+    if (!shellGone) {
+      try {
+        this.ptyProcess.kill();
+      } catch {
+        // Process may already be dead
+      }
     }
 
     // node-pty's IPty.kill() sends SIGHUP to the shell, which also queues
@@ -293,7 +311,7 @@ export class ProcessTreeKiller {
     // outside the ptyProcess.kill() try/catch so it still fires if that
     // throws (already-dead shell → ESRCH here, silent). A fresh census that
     // lacks the shell means it is already gone and its PID is up for reuse.
-    if (!census || shellStartTime !== undefined) {
+    if (!shellGone) {
       try {
         process.kill(shellPid, "SIGCONT");
       } catch (err) {
@@ -312,19 +330,22 @@ export class ProcessTreeKiller {
       ? {
           shellPid,
           shellStartTime,
-          targets: new Map(
-            descendants.flatMap((pid) => {
+          targets: new Map([
+            // A repeated kill keeps what the first one signalled: those targets
+            // may have reparented out of reach of this pass's walk.
+            ...(pending?.shellPid === shellPid ? pending.targets : []),
+            ...descendants.flatMap((pid) => {
               const startTime = census.startTimeOf(pid);
               return startTime === undefined ? [] : [[pid, startTime] as const];
-            })
-          ),
+            }),
+          ]),
         }
       : null;
 
     if (immediate) {
-      // Microseconds after the SIGTERM pass, in a context that cannot afford
-      // another `ps`: the snapshot just taken is still the current one.
-      if (state) this.escalate(state, census);
+      // Re-read even here: a snapshot taken before the SIGTERM pass cannot
+      // prove that a target survived it rather than exiting and being replaced.
+      if (state) this.escalate(state, this.lineage?.takeKillCensus?.() ?? null);
       else this.sigkillSweep(shellPid);
       return;
     }
@@ -403,6 +424,7 @@ export class ProcessTreeKiller {
    */
   reapAfterRootExit(immediate: boolean = false, escalationDelayMs?: number): void {
     this.abort();
+    this.capturedCensus = null;
 
     const shellPid = this.ptyProcess.pid;
     if (shellPid === undefined || shellPid <= 0) return;
