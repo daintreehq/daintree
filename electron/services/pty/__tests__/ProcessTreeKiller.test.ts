@@ -1256,6 +1256,22 @@ describe.skipIf(process.platform === "win32")("ProcessTreeKiller — kill identi
     expect(killer.getKillIdentities().has(P(1000))).toBe(false);
   });
 
+  it("never records a recycled shell PID on a repeated kill", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(tree),
+      makeCensus([]),
+      makeCensus([[P(1000), 1, "someone-else"]]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(false);
+    vi.advanceTimersByTime(500);
+    const targets = killer.execute(true);
+
+    expect(targets).not.toContain(P(1000));
+    expect(killer.getKillIdentities().get(P(1000))).toBe("shell");
+  });
+
   it("records nothing without a census", () => {
     const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([P(2001)]));
 

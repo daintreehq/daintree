@@ -367,8 +367,8 @@ export class ProcessTreeKiller {
         ? pending
         : null;
 
-    if (census) this.recordIdentities(census, [...descendants, shellPid]);
     const targets = shellGone ? descendants : [...descendants, shellPid];
+    if (census) this.recordIdentities(census, targets);
 
     if (immediate) {
       // Re-read even here: a snapshot taken before the SIGTERM pass cannot
@@ -468,7 +468,7 @@ export class ProcessTreeKiller {
     // children has already been reparented. Asking the ledger for its whole set
     // also means each PID is start-time verified before it is signalled, which a
     // stale live-walk entry would not be.
-    const orphans = this.resolveOrphans(shellPid, []);
+    let orphans = this.resolveOrphans(shellPid, []);
     if (orphans.length === 0) return [];
 
     if (process.platform === "win32") {
@@ -476,11 +476,14 @@ export class ProcessTreeKiller {
       return orphans;
     }
 
-    // Identities for the survivor check. Skipped on the exit path, whose
-    // budget belongs to the kill itself and whose check could never run.
-    if (!immediate) {
-      const census = this.lineage?.takeKillCensus?.() ?? null;
-      if (census) this.recordIdentities(census, orphans);
+    // With orphans to signal, re-verify them against one fresh census so the
+    // identities recorded for the survivor check are the processes signalled
+    // below. Skipped on the exit path, whose budget belongs to the kill itself
+    // and whose check could never run.
+    const census = immediate ? null : (this.lineage?.takeKillCensus?.() ?? null);
+    if (census) {
+      orphans = this.resolveOrphans(shellPid, [], census);
+      this.recordIdentities(census, orphans);
     }
 
     for (const pid of orphans) {

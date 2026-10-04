@@ -62,7 +62,7 @@ const MAX_UNSEEN_SWEEPS_BEFORE_CLOSE = 5;
  * persisted ledger compares those strings across app launches — an unpinned
  * locale or a timezone change would silently invalidate every entry.
  */
-const PROBE_ENV = {
+export const PROBE_ENV = {
   ...process.env,
   LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8",
   TZ: "UTC",
@@ -131,7 +131,7 @@ interface PersistedLineageFile {
 }
 
 /** A probe result that distinguishes "gone" from "could not tell". */
-export interface ProbeResult {
+interface ProbeResult {
   startTimes: Map<number, string>;
   /**
    * PIDs the probe could not resolve because the probe itself failed, as
@@ -214,7 +214,7 @@ function windowsStartTimeScript(pids: number[]): string {
  * produce dozens of new descendants per sweep, and a spawn each would cost more
  * than the census itself.
  */
-export async function probeStartTimesDetailed(pids: number[]): Promise<ProbeResult> {
+async function probeStartTimesDetailed(pids: number[]): Promise<ProbeResult> {
   const startTimes = new Map<number, string>();
   const unresolved = new Set<number>();
   if (pids.length === 0) return { startTimes, unresolved };

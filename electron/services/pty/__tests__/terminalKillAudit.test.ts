@@ -6,35 +6,26 @@ vi.mock("../../../utils/logger.js", () => ({
   createLogger: () => ({ info: infoMock, warn: warnMock, error: vi.fn(), debug: vi.fn() }),
 }));
 
-vi.mock("../../TerminalLineageLedger.js", () => ({
-  probeStartTimesDetailed: vi.fn(),
-}));
+vi.mock("../../TerminalLineageLedger.js", () => ({ PROBE_ENV: {} }));
 
 import {
   findSurvivors,
   logTerminalExit,
   logTerminalKill,
-  parseProcessNames,
+  parseProcessRows,
   runSurvivorCheck,
   scheduleSurvivorCheck,
-  type KillAuditProbes,
-  type ProcessName,
+  type ProcessRow,
 } from "../terminalKillAudit.js";
 
-function makeProbes(
-  startTimes: Record<number, string>,
-  names: Record<number, ProcessName> | null,
-  unresolved: number[] = []
-): KillAuditProbes & { probeNames: ReturnType<typeof vi.fn> } {
-  return {
-    probeStartTimes: vi.fn(async () => ({
-      startTimes: new Map(Object.entries(startTimes).map(([k, v]) => [Number(k), v])),
-      unresolved: new Set(unresolved),
-    })),
-    probeNames: vi.fn(async () =>
-      names ? new Map(Object.entries(names).map(([k, v]) => [Number(k), v])) : null
-    ),
-  };
+function row(startTime: string | null, name: string | null = null, zombie = false): ProcessRow {
+  return { startTime, name, zombie };
+}
+
+function makeProbe(rows: Record<number, ProcessRow> | null) {
+  return vi.fn(async (_pids: number[]) =>
+    rows ? new Map(Object.entries(rows).map(([k, v]) => [Number(k), v])) : null
+  );
 }
 
 beforeEach(() => {
@@ -42,14 +33,20 @@ beforeEach(() => {
   warnMock.mockReset();
 });
 
-describe("parseProcessNames", () => {
-  it("reads the base name and zombie state, never more than comm", () => {
-    const parsed = parseProcessNames(
-      "  101 S    /usr/local/bin/node\n  102 Z+   (sh)\n  103 Ss   /Applications/My App.app/Contents/MacOS/My App\n"
+describe("parseProcessRows", () => {
+  it("reads state, the census-form start time and the base name", () => {
+    const parsed = parseProcessRows(
+      "  101 S    Sun Oct  4 15:31:06 2026     node\n" +
+        "  102 Z+   Mon Sep 28 09:00:00 2026     sh\n" +
+        "  103 Ss   Sun Oct  4 15:31:06 2026     My App\n"
     );
-    expect(parsed.get(101)).toEqual({ name: "node", zombie: false });
-    expect(parsed.get(102)).toEqual({ name: "(sh)", zombie: true });
-    expect(parsed.get(103)).toEqual({ name: "My App", zombie: false });
+    expect(parsed.get(101)).toEqual(row("Sun Oct  4 15:31:06 2026", "node"));
+    expect(parsed.get(102)).toEqual(row("Mon Sep 28 09:00:00 2026", "sh", true));
+    expect(parsed.get(103)?.name).toBe("My App");
+  });
+
+  it("keeps a row whose start time cannot be read as unidentified", () => {
+    expect(parseProcessRows("  101 S    garbled\n").get(101)).toEqual(row(null));
   });
 });
 
@@ -61,44 +58,32 @@ describe("findSurvivors", () => {
   ]);
 
   it("counts only PIDs whose start time still matches", async () => {
-    const probes = makeProbes(
-      { 11: "t-npm", 12: "someone-else" },
-      {
-        11: { name: "npm", zombie: false },
-      }
-    );
+    const probe = makeProbe({ 11: row("t-npm", "npm"), 12: row("someone-else", "bash") });
 
-    const result = await findSurvivors(identities, probes);
-
-    expect(result.survivors).toEqual([{ pid: 11, name: "npm" }]);
-    expect(probes.probeNames).toHaveBeenCalledWith([11]);
+    expect(await findSurvivors(identities, probe)).toEqual({
+      survivors: [{ pid: 11, name: "npm" }],
+      unresolved: [],
+    });
+    expect(probe).toHaveBeenCalledWith([10, 11, 12]);
   });
 
-  it("drops zombies and processes the name probe no longer lists", async () => {
-    const probes = makeProbes(
-      { 10: "t-shell", 11: "t-npm" },
-      {
-        10: { name: "zsh", zombie: true },
-      }
-    );
+  it("drops zombies", async () => {
+    const probe = makeProbe({ 10: row("t-shell", "zsh", true) });
 
-    expect((await findSurvivors(identities, probes)).survivors).toEqual([]);
+    expect((await findSurvivors(identities, probe)).survivors).toEqual([]);
   });
 
-  it("keeps a verified survivor with an unknown name when the name probe fails", async () => {
-    const probes = makeProbes({ 12: "t-vite" }, null);
-
-    expect((await findSurvivors(identities, probes)).survivors).toEqual([{ pid: 12, name: null }]);
-  });
-
-  it("reports PIDs the start-time probe could not resolve", async () => {
-    const probes = makeProbes({}, {}, [10, 11, 12]);
-
-    expect(await findSurvivors(identities, probes)).toEqual({
+  it("treats every target as unverified when the probe cannot run", async () => {
+    expect(await findSurvivors(identities, makeProbe(null))).toEqual({
       survivors: [],
       unresolved: [10, 11, 12],
     });
-    expect(probes.probeNames).not.toHaveBeenCalled();
+  });
+
+  it("treats an unparseable row as unverified rather than gone", async () => {
+    const probe = makeProbe({ 12: row(null) });
+
+    expect(await findSurvivors(identities, probe)).toEqual({ survivors: [], unresolved: [12] });
   });
 });
 
@@ -124,9 +109,9 @@ describe("kill records", () => {
   });
 
   it("warns with pid and name for every survivor", async () => {
-    const probes = makeProbes({ 11: "t-npm" }, { 11: { name: "npm", zombie: false } });
+    const probe = makeProbe({ 11: row("t-npm", "npm") });
 
-    await runSurvivorCheck("t1", "project-closed", new Map([[11, "t-npm"]]), probes);
+    await runSurvivorCheck("t1", "project-closed", new Map([[11, "t-npm"]]), probe);
 
     expect(warnMock).toHaveBeenCalledWith(
       "Terminal t1 left processes running after kill (reason: project-closed): 11(npm)"
@@ -134,9 +119,7 @@ describe("kill records", () => {
   });
 
   it("records a clean kill", async () => {
-    const probes = makeProbes({}, {});
-
-    await runSurvivorCheck("t1", "kill", new Map([[11, "t-npm"]]), probes);
+    await runSurvivorCheck("t1", "kill", new Map([[11, "t-npm"]]), makeProbe({}));
 
     expect(warnMock).not.toHaveBeenCalled();
     expect(infoMock).toHaveBeenCalledWith(
@@ -144,15 +127,21 @@ describe("kill records", () => {
     );
   });
 
-  it("warns instead of throwing when a probe fails", async () => {
-    const probes: KillAuditProbes = {
-      probeStartTimes: vi.fn(async () => {
-        throw new Error("ps missing");
-      }),
-      probeNames: vi.fn(),
-    };
+  it("does not claim a clean kill when targets could not be verified", async () => {
+    await runSurvivorCheck("t1", "kill", new Map([[11, "t-npm"]]), makeProbe(null));
 
-    await expect(runSurvivorCheck("t1", "kill", new Map([[11, "x"]]), probes)).resolves.toBe(
+    expect(infoMock).not.toHaveBeenCalled();
+    expect(warnMock).toHaveBeenCalledWith(
+      "Survivor check incomplete for terminal t1 (reason: kill): no survivors confirmed, unverified: 11"
+    );
+  });
+
+  it("warns instead of throwing when a probe fails", async () => {
+    const probe = vi.fn(async () => {
+      throw new Error("ps missing");
+    });
+
+    await expect(runSurvivorCheck("t1", "kill", new Map([[11, "x"]]), probe)).resolves.toBe(
       undefined
     );
     expect(warnMock.mock.calls[0]?.[0]).toContain("Survivor check failed for terminal t1");
@@ -165,22 +154,16 @@ describe("scheduleSurvivorCheck", () => {
 
   it("reads identities at check time so escalation targets are included", async () => {
     const identities = new Map([[11, "t-npm"]]);
-    const probes = makeProbes(
-      { 11: "t-npm", 12: "t-vite" },
-      {
-        11: { name: "npm", zombie: false },
-        12: { name: "vite", zombie: false },
-      }
-    );
+    const probe = makeProbe({ 11: row("t-npm", "npm"), 12: row("t-vite", "vite") });
 
-    scheduleSurvivorCheck("t1", "kill", () => identities, 4000, probes);
+    scheduleSurvivorCheck("t1", "kill", () => identities, 4000, probe);
     identities.set(12, "t-vite");
     await vi.advanceTimersByTimeAsync(3999);
-    expect(probes.probeStartTimes).not.toHaveBeenCalled();
+    expect(probe).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(probes.probeStartTimes).toHaveBeenCalledWith([11, 12]);
+    expect(probe).toHaveBeenCalledWith([11, 12]);
     expect(warnMock.mock.calls[0]?.[0]).toContain("11(npm),12(vite)");
   });
 });

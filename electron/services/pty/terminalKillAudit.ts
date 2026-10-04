@@ -2,27 +2,24 @@ import { execFile } from "node:child_process";
 import { basename } from "node:path";
 import { promisify } from "node:util";
 import { createLogger } from "../../utils/logger.js";
-import { probeStartTimesDetailed } from "../TerminalLineageLedger.js";
+import { PROBE_ENV } from "../TerminalLineageLedger.js";
 
 const logger = createLogger("pty-host:TerminalKill");
 const execFileAsync = promisify(execFile);
 
 /** How long after a kill its targets are re-checked for survivors. */
 export const SURVIVOR_CHECK_DELAY_MS = 4000;
-const NAME_PROBE_TIMEOUT_MS = 2000;
+const PROBE_TIMEOUT_MS = 2000;
 
-export interface ProcessName {
+export interface ProcessRow {
+  /** `lstart` in the kill census's form, or null when the row could not be parsed. */
+  startTime: string | null;
   name: string | null;
   zombie: boolean;
 }
 
-export interface KillAuditProbes {
-  probeStartTimes(
-    pids: number[]
-  ): Promise<{ startTimes: Map<number, string>; unresolved: Set<number> }>;
-  /** Null when the probe could not run; otherwise only PIDs that still exist. */
-  probeNames(pids: number[]): Promise<Map<number, ProcessName> | null>;
-}
+/** Rows for the PIDs that still exist, or null when the probe could not run. */
+export type ProcessProbe = (pids: number[]) => Promise<Map<number, ProcessRow> | null>;
 
 export interface Survivor {
   pid: number;
@@ -31,51 +28,57 @@ export interface Survivor {
 
 export interface SurvivorCheckResult {
   survivors: Survivor[];
-  /** PIDs whose liveness could not be established either way. */
+  /** PIDs whose identity could not be established either way. */
   unresolved: number[];
 }
 
 /**
- * Process names for a survivor report. Reads only the kernel's accounting
- * name (`comm`) — never `args`/`command`, whose argv can carry secrets.
+ * Identity, state and name from one process-table read, so a name can never
+ * come from a process that took the PID after its identity was checked.
+ * `ucomm` is the kernel's accounting name; macOS `comm` is argv[0], which a
+ * process controls and which can carry command text.
  */
-async function probeProcessNames(pids: number[]): Promise<Map<number, ProcessName> | null> {
+async function probeProcesses(pids: number[]): Promise<Map<number, ProcessRow> | null> {
   if (process.platform === "win32" || pids.length === 0) return null;
   let stdout: string;
   try {
-    ({ stdout } = await execFileAsync("ps", ["-o", "pid=,stat=,comm=", "-p", pids.join(",")], {
-      encoding: "utf8",
-      shell: false,
-      signal: AbortSignal.timeout(NAME_PROBE_TIMEOUT_MS),
-    }));
+    ({ stdout } = await execFileAsync(
+      "ps",
+      ["-o", "pid=,stat=,lstart=,ucomm=", "-p", pids.join(",")],
+      {
+        encoding: "utf8",
+        shell: false,
+        env: PROBE_ENV,
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      }
+    ));
   } catch (err) {
-    // `ps` exits 1 when none of the PIDs exist — an answer, not a failure.
-    if (typeof (err as NodeJS.ErrnoException).code !== "number") return null;
+    // `ps` exits 1 when a requested PID does not exist — an answer, not a failure.
+    if ((err as NodeJS.ErrnoException).code !== 1) return null;
     stdout = (err as { stdout?: string }).stdout ?? "";
   }
-  return parseProcessNames(stdout);
+  return parseProcessRows(stdout);
 }
 
-export function parseProcessNames(stdout: string): Map<number, ProcessName> {
-  const out = new Map<number, ProcessName>();
+const PROCESS_ROW =
+  /^\s*(\d+)\s+(\S+)(?:\s+(\S+\s+\S+\s+\d+\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s*(.*?)|\s.*?)?\s*$/;
+
+export function parseProcessRows(stdout: string): Map<number, ProcessRow> {
+  const out = new Map<number, ProcessRow>();
   for (const line of stdout.split("\n")) {
-    const match = line.match(/^\s*(\d+)\s+(\S+)\s*(.*?)\s*$/);
+    const match = line.match(PROCESS_ROW);
     if (!match) continue;
     const pid = parseInt(match[1], 10);
     if (!Number.isInteger(pid) || pid <= 0) continue;
-    const comm = match[3];
+    const name = match[4];
     out.set(pid, {
-      name: comm ? basename(comm).slice(0, 64) : null,
+      startTime: match[3] ?? null,
+      name: name ? basename(name).slice(0, 64) : null,
       zombie: match[2].startsWith("Z"),
     });
   }
   return out;
 }
-
-const defaultProbes: KillAuditProbes = {
-  probeStartTimes: (pids) => probeStartTimesDetailed(pids),
-  probeNames: (pids) => probeProcessNames(pids),
-};
 
 /**
  * Which of the recorded targets are still running as the same process. A PID
@@ -85,25 +88,27 @@ const defaultProbes: KillAuditProbes = {
  */
 export async function findSurvivors(
   identities: ReadonlyMap<number, string>,
-  probes: KillAuditProbes = defaultProbes
+  probe: ProcessProbe = probeProcesses
 ): Promise<SurvivorCheckResult> {
   const pids = [...identities.keys()];
   if (pids.length === 0) return { survivors: [], unresolved: [] };
 
-  const { startTimes, unresolved } = await probes.probeStartTimes(pids);
-  const alive = pids.filter((pid) => startTimes.get(pid) === identities.get(pid));
-  if (alive.length === 0) return { survivors: [], unresolved: [...unresolved] };
+  const rows = await probe(pids);
+  if (!rows) return { survivors: [], unresolved: pids };
 
-  const names = await probes.probeNames(alive);
   const survivors: Survivor[] = [];
-  for (const pid of alive) {
-    const info = names?.get(pid);
-    // A completed name probe that no longer lists the PID means it exited in between.
-    if (names && !info) continue;
-    if (info?.zombie) continue;
-    survivors.push({ pid, name: info?.name ?? null });
+  const unresolved: number[] = [];
+  for (const pid of pids) {
+    const row = rows.get(pid);
+    if (!row) continue;
+    if (row.startTime === null) {
+      unresolved.push(pid);
+      continue;
+    }
+    if (row.startTime !== identities.get(pid) || row.zombie) continue;
+    survivors.push({ pid, name: row.name });
   }
-  return { survivors, unresolved: [...unresolved] };
+  return { survivors, unresolved };
 }
 
 function formatPids(pids: readonly number[]): string {
@@ -149,10 +154,10 @@ export function scheduleSurvivorCheck(
   reason: string,
   getIdentities: () => ReadonlyMap<number, string>,
   delayMs: number = SURVIVOR_CHECK_DELAY_MS,
-  probes: KillAuditProbes = defaultProbes
+  probe: ProcessProbe = probeProcesses
 ): NodeJS.Timeout {
   const timer = setTimeout(() => {
-    void runSurvivorCheck(terminalId, reason, new Map(getIdentities()), probes);
+    void runSurvivorCheck(terminalId, reason, new Map(getIdentities()), probe);
   }, delayMs);
   timer.unref?.();
   return timer;
@@ -162,11 +167,11 @@ export async function runSurvivorCheck(
   terminalId: string,
   reason: string,
   identities: ReadonlyMap<number, string>,
-  probes: KillAuditProbes = defaultProbes
+  probe: ProcessProbe = probeProcesses
 ): Promise<void> {
   let result: SurvivorCheckResult;
   try {
-    result = await findSurvivors(identities, probes);
+    result = await findSurvivors(identities, probe);
   } catch (err) {
     logger.warn(
       `Survivor check failed for terminal ${terminalId} (reason: ${reason}): ${(err as Error).message}`
@@ -180,10 +185,15 @@ export async function runSurvivorCheck(
       `Terminal ${terminalId} left processes running after kill (reason: ${reason}): ` +
         `${formatSurvivors(survivors)}${unresolvedNote}`
     );
+  } else if (unresolved.length > 0) {
+    logger.warn(
+      `Survivor check incomplete for terminal ${terminalId} (reason: ${reason}): ` +
+        `no survivors confirmed${unresolvedNote}`
+    );
   } else {
     logger.info(
       `Terminal ${terminalId} kill verified, no survivors among ${identities.size} ` +
-        `target(s) (reason: ${reason}${unresolvedNote})`
+        `target(s) (reason: ${reason})`
     );
   }
 }
