@@ -131,7 +131,7 @@ interface PersistedLineageFile {
 }
 
 /** A probe result that distinguishes "gone" from "could not tell". */
-interface ProbeResult {
+export interface ProbeResult {
   startTimes: Map<number, string>;
   /**
    * PIDs the probe could not resolve because the probe itself failed, as
@@ -214,7 +214,7 @@ function windowsStartTimeScript(pids: number[]): string {
  * produce dozens of new descendants per sweep, and a spawn each would cost more
  * than the census itself.
  */
-async function probeStartTimesDetailed(pids: number[]): Promise<ProbeResult> {
+export async function probeStartTimesDetailed(pids: number[]): Promise<ProbeResult> {
   const startTimes = new Map<number, string>();
   const unresolved = new Set<number>();
   if (pids.length === 0) return { startTimes, unresolved };

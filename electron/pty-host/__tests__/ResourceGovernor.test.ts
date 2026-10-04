@@ -3,7 +3,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // Shared mock state that tests can reconfigure
 let mockSample: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
 let mockFdMonitorSupported: boolean;
-const mockIsProcessAlive = vi.hoisted(() => vi.fn<(pid: number) => boolean>());
 
 vi.mock("../FdMonitor.js", () => {
   return {
@@ -13,7 +12,6 @@ vi.mock("../FdMonitor.js", () => {
       }
       sample = (...args: unknown[]) => mockSample(...args);
     },
-    isProcessAlive: (pid: number) => mockIsProcessAlive(pid),
   };
 });
 
@@ -82,7 +80,6 @@ describe("ResourceGovernor", () => {
     vi.useFakeTimers();
     mockFdMonitorSupported = true;
     mockSample = vi.fn().mockReturnValue({ ...defaultFdSample });
-    mockIsProcessAlive.mockReset().mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -193,7 +190,6 @@ describe("ResourceGovernor", () => {
     const deps = createMockDeps({ getFdOwners });
     const governor = new ResourceGovernor(deps);
     governor.start();
-    governor.trackKilledPid(1357);
 
     expect(() => vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS * 3)).not.toThrow();
     expect(getFdOwners).toHaveBeenCalledTimes(3);
@@ -203,8 +199,6 @@ describe("ResourceGovernor", () => {
       String(c[0]).includes("FD owner accounting failed")
     );
     expect(accountingWarnings).toHaveLength(1);
-    // The 2s resource tick is unaffected.
-    expect(mockIsProcessAlive).toHaveBeenCalledWith(1357);
 
     getFdOwners.mockReturnValue(defaultOwners);
     vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS);
@@ -2643,100 +2637,6 @@ describe("ResourceGovernor", () => {
     });
   });
 
-  describe("trackKilledPid", () => {
-    it("probes killed PIDs once they pass the grace period", () => {
-      const deps = createMockDeps();
-      const governor = new ResourceGovernor(deps);
-      governor.start();
-
-      governor.trackKilledPid(5678);
-
-      // First tick — grace period not elapsed yet (only 2s, need 4s)
-      vi.advanceTimersByTime(2000);
-      expect(mockIsProcessAlive).not.toHaveBeenCalled();
-
-      // After grace period (6s total from start, 4s from trackKilledPid)
-      vi.advanceTimersByTime(4000);
-      expect(mockIsProcessAlive).toHaveBeenCalledTimes(1);
-      expect(mockIsProcessAlive).toHaveBeenCalledWith(5678);
-
-      // Probed once, then dropped.
-      vi.advanceTimersByTime(4000);
-      expect(mockIsProcessAlive).toHaveBeenCalledTimes(1);
-
-      governor.dispose();
-    });
-
-    it("warns about a killed PID that is still alive after the grace period", () => {
-      mockIsProcessAlive.mockImplementation((pid) => pid === 4321);
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const deps = createMockDeps();
-      const governor = new ResourceGovernor(deps);
-      governor.start();
-
-      governor.trackKilledPid(4321);
-      governor.trackKilledPid(8765);
-      vi.advanceTimersByTime(6000);
-
-      const orphanWarnings = warn.mock.calls.filter((c) =>
-        String(c[0]).includes("Orphaned PTY PIDs")
-      );
-      expect(orphanWarnings).toHaveLength(1);
-      expect(String(orphanWarnings[0]?.[0])).toContain("4321");
-      expect(String(orphanWarnings[0]?.[0])).not.toContain("8765");
-
-      governor.dispose();
-    });
-
-    it("prunes killed PIDs even when FD monitoring is unsupported (Windows)", () => {
-      // Regression for #10842: the orphan sweep used to sit behind the
-      // `if (!supported) return` guard, so on Windows (no /proc/fd) killedPids
-      // grew unbounded until dispose(). Prove the entry is swept while
-      // unsupported by flipping support on afterward and asserting the pid is
-      // never probed — if it had leaked, the next tick would probe it.
-      mockFdMonitorSupported = false;
-
-      const deps = createMockDeps();
-      const governor = new ResourceGovernor(deps);
-      governor.start();
-
-      governor.trackKilledPid(9999);
-
-      // Past the 4s grace window — the unconditional sweep deletes the entry
-      // without probing it while unsupported.
-      vi.advanceTimersByTime(6000);
-      expect(mockIsProcessAlive).not.toHaveBeenCalled();
-
-      mockFdMonitorSupported = true;
-      vi.advanceTimersByTime(2000);
-      expect(mockIsProcessAlive).not.toHaveBeenCalled();
-
-      governor.dispose();
-    });
-
-    it("only sweeps PIDs past the grace window, keeping younger ones", () => {
-      const deps = createMockDeps();
-      const governor = new ResourceGovernor(deps);
-      governor.start();
-
-      // PID A killed at t=0, PID B killed at t=3000. Grace is a strict
-      // `age > ORPHAN_GRACE_MS` (4000), evaluated each 2s tick.
-      governor.trackKilledPid(1111);
-      vi.advanceTimersByTime(3000);
-      governor.trackKilledPid(2222);
-
-      // Tick at t=6000: A is 6s old (swept), B is 3s old (kept).
-      vi.advanceTimersByTime(3000);
-      expect(mockIsProcessAlive.mock.calls).toEqual([[1111]]);
-
-      // Tick at t=8000: B is now 5s old (swept).
-      vi.advanceTimersByTime(2000);
-      expect(mockIsProcessAlive.mock.calls).toEqual([[1111], [2222]]);
-
-      governor.dispose();
-    });
-  });
-
   describe("worker isolate memory accounting", () => {
     // Worker threads are separate V8 isolates: the governor's own
     // process.memoryUsage() cannot see their heap/external, so these samples
@@ -2927,7 +2827,7 @@ describe("ResourceGovernor", () => {
 
     it("survives a throwing accounting dep and completes the tick on host-only signal", () => {
       // A bad pool snapshot must not abort the whole resource tick — the
-      // killed-PID sweep at its tail and the host-only memory signal still run.
+      // host-only memory signal still runs.
       mockMemoryUsage(400); // 400/512 = 78.1% heap-bound > 70% warning
       const deps = createMockDeps({
         getWorkerMemoryAccounting: vi.fn().mockImplementation(() => {
@@ -2937,10 +2837,8 @@ describe("ResourceGovernor", () => {
 
       const governor = new ResourceGovernor(deps);
       governor.start();
-      governor.trackKilledPid(2468);
       expect(() => vi.advanceTimersByTime(6000)).not.toThrow();
 
-      expect(mockIsProcessAlive).toHaveBeenCalledWith(2468);
       const event = findWarningEvent(deps);
       expect(event?.isWarning).toBe(true);
       expect(event?.workerHeapMb).toBe(0);
@@ -3140,22 +3038,6 @@ describe("ResourceGovernor", () => {
       vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS);
 
       expect(fdGrowthEvents(deps)[0]?.sampleIntervalMs).toBe(FD_SAMPLE_INTERVAL_MS * 2);
-      governor.dispose();
-    });
-
-    it("keeps the orphan-PID sweep on every tick whatever the level", () => {
-      mockMemoryUsage(100);
-      mockIsProcessAlive.mockReturnValue(true);
-      const governor = new ResourceGovernor(createMockDeps());
-      governor.setPowerLevel("deep");
-      governor.start();
-
-      governor.trackKilledPid(4242);
-      // Grace is 4s, so the 6s tick is the first that sees the PID past it.
-      vi.advanceTimersByTime(6_000);
-
-      expect(mockIsProcessAlive.mock.calls).toEqual([[4242]]);
-      expect(mockSample).not.toHaveBeenCalled();
       governor.dispose();
     });
   });
