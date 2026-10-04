@@ -10,6 +10,7 @@ const SIGKILL_ESCALATION_DELAY_MS = 500;
  * to a kill that never happened.
  */
 const CAPTURED_CENSUS_MAX_AGE_MS = 1000;
+const SHELL_GONE = Symbol("shell-gone");
 
 /** Identities recorded at SIGTERM time, re-checked before anything is SIGKILLed. */
 interface EscalationState {
@@ -68,9 +69,10 @@ export class ProcessTreeKiller {
   /**
    * The shell's identity from the first census that saw it. A later kill on
    * this killer (dispose after a completed kill) must not mistake whatever now
-   * holds the PID for our shell and walk an unrelated tree.
+   * holds the PID for our shell and walk an unrelated tree. `SHELL_GONE` once a
+   * census has shown the shell missing: nothing that later takes the PID is ours.
    */
-  private shellIdentity: string | null = null;
+  private shellIdentity: string | typeof SHELL_GONE | null = null;
   private escalation: EscalationState | null = null;
 
   constructor(
@@ -248,8 +250,9 @@ export class ProcessTreeKiller {
     // since its last sweep. Without one, fall back to the cached walk.
     const census = this.takeCensus();
     let shellStartTime = census?.startTimeOf(shellPid);
-    if (shellStartTime !== undefined) {
-      if (this.shellIdentity === null) this.shellIdentity = shellStartTime;
+    if (census) {
+      if (shellStartTime === undefined) this.shellIdentity = SHELL_GONE;
+      else if (this.shellIdentity === null) this.shellIdentity = shellStartTime;
       else if (this.shellIdentity !== shellStartTime) shellStartTime = undefined;
     }
     // A fresh census without our shell means the PID is free for reuse, so
@@ -340,7 +343,11 @@ export class ProcessTreeKiller {
             }),
           ]),
         }
-      : null;
+      : // Without a census nothing new is learned, but what an earlier kill
+        // recorded is still the best evidence of what to SIGKILL.
+        pending?.shellPid === shellPid
+        ? pending
+        : null;
 
     if (immediate) {
       // Re-read even here: a snapshot taken before the SIGTERM pass cannot

@@ -941,6 +941,41 @@ describe.skipIf(process.platform === "win32")("ProcessTreeKiller — kill-time c
     expect(pty.kill).not.toHaveBeenCalled();
   });
 
+  it("never adopts a PID reused after a census found the shell missing", () => {
+    const lineage = makeCensusLineage([
+      makeCensus([]),
+      makeCensus([]),
+      makeCensus([
+        [P(1000), 1, "stranger"],
+        [P(2020), P(1000), "strangers-child"],
+      ]),
+      makeCensus([
+        [P(1000), 1, "stranger"],
+        [P(2020), P(1000), "strangers-child"],
+      ]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(false);
+    vi.advanceTimersByTime(500);
+    killSpy.mockClear();
+    killer.execute(true);
+
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it("a repeated kill whose census fails keeps the earlier identities", () => {
+    const lineage = makeCensusLineage([makeCensus(tree), null, makeCensus([[P(2002), 1, "zsh"]])]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(false);
+    killer.execute(false);
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(signalsOf(killSpy, "SIGKILL")).toEqual([P(2002)]);
+  });
+
   it("does not retry a capture that just failed", () => {
     const lineage = makeCensusLineage([null, makeCensus(tree)]);
     const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([P(2001)]), lineage);
