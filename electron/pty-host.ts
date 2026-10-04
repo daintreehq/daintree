@@ -1820,7 +1820,7 @@ port.on("message", async (rawMsg: any) => {
 
   try {
     if (msg?.type === "dispose") {
-      cleanup();
+      shutdownHost();
       return;
     }
     await dispatchMessage(msg, ports);
@@ -1829,12 +1829,16 @@ port.on("message", async (rawMsg: any) => {
   }
 });
 
+let cleanedUp = false;
+
 function cleanup(): void {
+  if (cleanedUp) return;
+  cleanedUp = true;
   console.log("[PtyHost] Disposing resources...");
 
   // One synchronous `ps` budget for the whole teardown. Every terminal's
-  // disposal below can run two verification passes, and Main force-kills this
-  // host about a second after it asks for the exit.
+  // disposal below can run two verification passes, and Main SIGKILLs this
+  // host if it has not exited a few seconds after asking.
   beginTeardownProbeWindow();
 
   // Disconnect all renderer windows
@@ -1889,9 +1893,34 @@ function cleanup(): void {
   console.log("[PtyHost] Disposed");
 }
 
+/**
+ * Finish the teardown, then exit. The explicit exit is load-bearing: the
+ * message port keeps the event loop alive, so a host that only cleans up never
+ * exits and Main is left waiting on its force-kill deadline. Main treats a
+ * clean exit as proof every terminal was reached (#13167).
+ */
+function shutdownHost(exitCode = 0): void {
+  try {
+    cleanup();
+  } catch (error) {
+    // Main reads a clean exit as "every terminal was reached"; a teardown that
+    // threw part way must not claim that.
+    console.error("[PtyHost] Teardown failed:", error);
+    exitCode = exitCode || 1;
+  }
+  process.exit(exitCode);
+}
+
 // Handle process exit
 process.on("exit", () => {
   cleanup();
+});
+
+// Node's default SIGTERM action skips the `exit` handler, so a terminate
+// request would otherwise abandon every terminal teardown had not reached.
+// Exits with the conventional 128 + 15 so Main still classifies it as signalled.
+process.on("SIGTERM", () => {
+  shutdownHost(143);
 });
 
 // Initialize pool asynchronously

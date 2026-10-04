@@ -293,6 +293,7 @@ import {
   CAPTURE_DELIVERY_BUDGET_MS,
   CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS,
   CLEANUP_TIMEOUT_MS,
+  POST_PTY_TEARDOWN_RESERVE_MS,
   PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
   SHUTDOWN_DEADLINE_MS,
   SHUTDOWN_TAIL_TIMEOUT_MS,
@@ -1299,9 +1300,102 @@ describe("registerShutdownHandler", () => {
         getAllTerminalsAsync: vi.fn(async () => []),
         finishAgentSessionCaptures: vi.fn(async () => ({ complete: true, pending: 0 })),
         dispose: vi.fn(),
+        waitForHostsExited: vi.fn(async () => true),
         ...overrides,
       } as never;
     }
+
+    describe("PTY host exit barrier (#13167)", () => {
+      const spies: Array<{ mockRestore: () => void }> = [];
+
+      async function quitWith(waitForHostsExited: () => Promise<boolean>) {
+        const { helpSessionJobService } = await import("../../services/HelpSessionJobService.js");
+        const order: string[] = [];
+        const disarm = vi
+          .spyOn(helpSessionJobService, "dispose")
+          .mockImplementation(() => void order.push("supervisor-disarm"));
+        spies.push(disarm);
+        const ptyClient = makePtyClient({
+          dispose: vi.fn(() => order.push("pty-dispose")),
+          waitForHostsExited: vi.fn(waitForHostsExited),
+        });
+        const cleanupIpc = vi.fn(() => order.push("ipc-cleanup"));
+        const { beforeQuitCb } = await setup({
+          getPtyClient: () => ptyClient,
+          getCleanupIpcHandlers: () => cleanupIpc,
+        });
+        await beforeQuitCb(makeEvent());
+        return { order, disarm, cleanupIpc };
+      }
+
+      afterEach(() => {
+        for (const spy of spies.splice(0)) spy.mockRestore();
+      });
+
+      it("holds the chain until the hosts exit, then disarms the supervisor", async () => {
+        let hostsExited!: () => void;
+        const { order, cleanupIpc } = await quitWith(
+          () =>
+            new Promise<boolean>((resolve) => {
+              hostsExited = () => {
+                order.push("hosts-exited");
+                resolve(true);
+              };
+            })
+        );
+
+        await vi.waitFor(() => expect(hostsExited).toBeTypeOf("function"));
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(cleanupIpc).not.toHaveBeenCalled();
+        expect(closeSharedDbMock.closeSharedDb).not.toHaveBeenCalled();
+        expect(appMock.exit).not.toHaveBeenCalled();
+        expect(order).toEqual(["pty-dispose"]);
+
+        hostsExited();
+        await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+        expect(order).toEqual(["pty-dispose", "hosts-exited", "supervisor-disarm", "ipc-cleanup"]);
+      });
+
+      it("leaves the supervisor armed when a host had to be force-killed", async () => {
+        const { order, disarm } = await quitWith(async () => false);
+
+        await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+        expect(disarm).not.toHaveBeenCalled();
+        expect(order).toEqual(["pty-dispose", "ipc-cleanup"]);
+      });
+
+      it("stops waiting on a wedged host before the hard timeout and still exits clean", async () => {
+        vi.useFakeTimers();
+        try {
+          const { disarm, cleanupIpc } = await quitWith(() => new Promise<boolean>(() => {}));
+
+          await vi.advanceTimersByTimeAsync(CLEANUP_TIMEOUT_MS - POST_PTY_TEARDOWN_RESERVE_MS);
+          // Short of the hard timeout: the chain finishes on its own budget.
+          await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+          expect(appMock.exit).toHaveBeenCalledWith(0);
+          expect(cleanupIpc).toHaveBeenCalledTimes(1);
+          expect(disarm).not.toHaveBeenCalled();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("finishes the chain without disarming when the wait itself fails", async () => {
+        const warn = vi.spyOn(console, "warn");
+        spies.push(warn);
+        const { disarm, cleanupIpc } = await quitWith(async () => {
+          throw new Error("broken wait");
+        });
+
+        await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+        expect(warn).toHaveBeenCalledWith(
+          "[MAIN] Waiting for PTY hosts to exit failed:",
+          expect.any(Error)
+        );
+        expect(disarm).not.toHaveBeenCalled();
+        expect(cleanupIpc).toHaveBeenCalledTimes(1);
+      });
+    });
 
     const agentTerminal = {
       id: "t1",

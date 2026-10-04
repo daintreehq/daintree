@@ -106,6 +106,16 @@ const HOST_LOG_LINE_LIMIT = 4_000;
 const RESTART_FLOOR_MS = 100;
 const RESTART_CAP_BASE_MS = 1_000;
 const RESTART_CAP_MAX_MS = 10_000;
+/**
+ * How long a disposing host gets to finish its own teardown and exit before
+ * the backstop SIGKILLs it. Teardown tree-kills every terminal, trashed ones
+ * included, inside one 2s `ps` probe window (`SYNC_PROBE_BUDGET_MS`), and
+ * killing the host part way through leaves every terminal it had not reached
+ * alive (#13167). Sized to clear that window while keeping the quit chain's
+ * worst case — graceful kills, capture delivery and drain, then this wait —
+ * inside `CLEANUP_TIMEOUT_MS`.
+ */
+export const DISPOSE_EXIT_TIMEOUT_MS = 3_000;
 
 // Time-windowed crash-loop guard. Mirrors the constants in
 // `CrashLoopGuardService` and `WorkspaceHostProcess` so the three guards
@@ -212,8 +222,14 @@ export class PtyHostLifecycle {
   crashTimestamps: number[] = [];
   /** Active restart timer; cleared on dispose / start / manualRestart. */
   restartTimer: NodeJS.Timeout | null = null;
-  /** Force-kill backstop timer scheduled by dispose(); cleared if dispose runs again. */
+  /** Force-kill backstop timer scheduled by dispose(); cleared by the child's `exit`. */
   private disposeTimer: NodeJS.Timeout | null = null;
+  /**
+   * Settles once a disposing host is gone: `true` when it exited cleanly on its
+   * own, `false` when it crashed or the backstop had to SIGKILL it.
+   */
+  private disposeExit: Promise<boolean> | null = null;
+  private resolveDisposeExit: ((exitedOnItsOwn: boolean) => void) | null = null;
   /**
    * Authoritative crash reason captured from `app.on("child-process-gone")`.
    * Consumed by the next `exit` handler via `setImmediate` deferral, since
@@ -451,34 +467,15 @@ export class PtyHostLifecycle {
 
   /**
    * Tear down the lifecycle. Called from PtyClient.dispose() — clears timers,
-   * removes the child-process-gone listener, asks the host to dispose, then
-   * force-kills after 1s if it hasn't exited.
+   * removes the child-process-gone listener and asks the host to dispose. The
+   * returned promise settles `true` when the host exits cleanly on its own, or
+   * `false` when it dies otherwise or the backstop SIGKILLs it after
+   * {@link DISPOSE_EXIT_TIMEOUT_MS}.
    */
-  dispose(): void {
+  dispose(): Promise<boolean> {
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
-    }
-
-    if (this.disposeTimer) {
-      clearTimeout(this.disposeTimer);
-      this.disposeTimer = null;
-    }
-
-    if (this.child) {
-      this.postMessage({ type: "dispose" });
-      // Give the host a moment to clean up, then force kill. Unref'd so the
-      // pending backstop never holds the Electron event loop alive after
-      // app.quit when the host has already cooperated.
-      this.disposeTimer = setTimeout(() => {
-        this.disposeTimer = null;
-        if (this.child) {
-          noteTerminationIntent({ serviceName: this.serviceName }, "dispose backstop");
-          this.child.kill();
-          this.child = null;
-        }
-      }, 1000);
-      this.disposeTimer.unref?.();
     }
 
     if (this.childProcessGoneHandler) {
@@ -486,6 +483,56 @@ export class PtyHostLifecycle {
       this.childProcessGoneHandler = null;
     }
     this.pendingChildProcessGoneReason = null;
+
+    if (this.disposeExit) return this.disposeExit;
+    if (!this.child) return Promise.resolve(true);
+
+    this.disposeExit = new Promise<boolean>((resolve) => {
+      this.resolveDisposeExit = resolve;
+    });
+    // Armed before the request goes out so an immediate exit finds it in place.
+    // Unref'd so the backstop never holds the Electron event loop alive.
+    this.disposeTimer = setTimeout(() => {
+      this.disposeTimer = null;
+      this.forceKillDisposingHost();
+      this.settleDisposeExit(false);
+    }, DISPOSE_EXIT_TIMEOUT_MS);
+    this.disposeTimer.unref?.();
+    this.postMessage({ type: "dispose" });
+    return this.disposeExit;
+  }
+
+  /**
+   * Deliberately NOT `child.kill()` (#11069): on macOS `UtilityProcess.kill()`
+   * blocks main for up to 2s waiting for the child to die, and on POSIX its
+   * SIGTERM would cut the host's terminal teardown short anyway. A raw SIGKILL
+   * is non-blocking. `this.child` stays set — the `exit` event nulls it.
+   */
+  private forceKillDisposingHost(): void {
+    const pid = this.child?.pid;
+    if (!pid) return;
+    noteTerminationIntent({ serviceName: this.serviceName }, "dispose backstop");
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+        console.warn("[PtyClient] Failed to kill host during dispose:", error);
+      }
+      return;
+    }
+    console.warn(
+      `[PtyClient] ${this.serviceName} did not exit ${DISPOSE_EXIT_TIMEOUT_MS}ms after dispose; sent SIGKILL`
+    );
+  }
+
+  private settleDisposeExit(exitedOnItsOwn: boolean): void {
+    if (this.disposeTimer) {
+      clearTimeout(this.disposeTimer);
+      this.disposeTimer = null;
+    }
+    const resolve = this.resolveDisposeExit;
+    this.resolveDisposeExit = null;
+    resolve?.(exitedOnItsOwn);
   }
 
   /**
@@ -516,6 +563,9 @@ export class PtyHostLifecycle {
   }
 
   private handleExit(code: number | null): void {
+    // Only a clean exit means the host finished its teardown; a crash, signal
+    // or failed cleanup mid-dispose did not.
+    this.settleDisposeExit(code === 0);
     this.flushHostOutputBuffers();
     // UtilityProcess exit event doesn't provide signal, but we can infer from
     // the POSIX exit-code convention (`code = 128 + signum`). On Windows, exit

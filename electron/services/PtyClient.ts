@@ -330,6 +330,9 @@ function withCurrentWindowsPath(options: PtyHostSpawnOptions): PtyHostSpawnOptio
 export class PtyClient extends EventEmitter {
   private config: ResolvedPtyClientConfig;
   private isDisposed = false;
+  private hostsExited: Promise<boolean> = Promise.resolve(true);
+  /** Retired shards whose hosts are still tearing down; quit waits on them too. */
+  private readonly retiringHostExits = new Set<Promise<boolean>>();
 
   /** Whether the PTY fabric (per-project host shards) is active. */
   private readonly fabricEnabled: boolean;
@@ -1252,7 +1255,7 @@ export class PtyClient extends EventEmitter {
       this.onPortRefresh?.(windowId);
     }
 
-    shard.dispose();
+    this.trackRetiringHost(shard.dispose());
     this.dropShardSignals(shard.key);
   }
 
@@ -1295,7 +1298,7 @@ export class PtyClient extends EventEmitter {
       if (!shard) return;
       console.log(`[PtyClient] Retiring idle PTY shard '${key}'`);
       this.shards.delete(key);
-      shard.dispose();
+      this.trackRetiringHost(shard.dispose());
       this.dropShardSignals(key);
     }, PTY_SHARD_IDLE_LINGER_MS);
     timer.unref?.();
@@ -3020,11 +3023,13 @@ export class PtyClient extends EventEmitter {
     this.shardRetirementTimers.clear();
 
     // Per shard: watchdog, lifecycle (posts `dispose` to the host, force-kills
-    // after 1s), pending ports, and the broker (rejects pending promises with
-    // "Broker disposed"; callers convert to sentinel values via .catch()).
-    for (const shard of this.shards.values()) {
-      shard.dispose();
-    }
+    // if it has not exited in time), pending ports, and the broker (rejects
+    // pending promises with "Broker disposed"; callers convert to sentinel
+    // values via .catch()).
+    this.hostsExited = Promise.all([
+      ...Array.from(this.shards.values(), (shard) => shard.dispose()),
+      ...this.retiringHostExits,
+    ]).then((exits) => exits.every(Boolean));
     this.shards.clear();
 
     this.pendingSpawns.clear();
@@ -3042,6 +3047,21 @@ export class PtyClient extends EventEmitter {
     this.removeAllListeners();
 
     console.log("[PtyClient] Disposed");
+  }
+
+  /**
+   * Settles once every host disposed by {@link dispose}, or still retiring, is
+   * gone: `true` when all of them exited on their own, `false` when any had to
+   * be force-killed. Quit awaits this so a host finishes reaping its terminals,
+   * trashed ones included, before the app goes away (#13167).
+   */
+  waitForHostsExited(): Promise<boolean> {
+    return this.hostsExited;
+  }
+
+  private trackRetiringHost(exit: Promise<boolean>): void {
+    this.retiringHostExits.add(exit);
+    void exit.finally(() => this.retiringHostExits.delete(exit));
   }
 
   /** Check if the (default-shard) host is running and initialized */

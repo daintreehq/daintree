@@ -15,8 +15,8 @@ const PROBE_TIMEOUT_MS = 3000;
 /**
  * Total wall-clock budget for one synchronous verification pass. Teardown runs
  * on the pty-host's only thread — and the `immediate` path runs inside
- * `process.on("exit")`, which Main force-kills after ~1s — so an unresponsive
- * `ps` must not be able to stall it for chunks x PROBE_TIMEOUT_MS. PIDs left
+ * `process.on("exit")`, which Main force-kills after a few seconds — so an
+ * unresponsive `ps` must not be able to stall it for chunks x PROBE_TIMEOUT_MS. PIDs left
  * unverified when the budget runs out are simply not signalled.
  */
 const SYNC_PROBE_BUDGET_MS = 2000;
@@ -289,7 +289,7 @@ let teardownProbeDeadlineMs: number | null = null;
  * {@link SYNC_PROBE_BUDGET_MS} is per invocation, but teardown disposes every
  * terminal in turn on the host's only thread and each disposal can run two
  * verification passes — up to 2N `ps` spawns, each otherwise entitled to the
- * full budget, inside the ~1s Main allows before it force-kills the host. One
+ * full budget, inside the deadline Main allows before it force-kills the host. One
  * deadline for the whole sequence is what the budget was always meant to be.
  */
 export function beginTeardownProbeWindow(budgetMs: number = SYNC_PROBE_BUDGET_MS): void {
