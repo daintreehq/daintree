@@ -31,20 +31,51 @@ function collectSources(dir: string, out: string[]): void {
   }
 }
 
+function isPtyClientModule(specifier: ts.Expression): boolean {
+  return ts.isStringLiteral(specifier) && /(^|\/)PtyClient(\.js)?$/.test(specifier.text);
+}
+
 function constructsPtyClient(file: string): boolean {
   const text = fs.readFileSync(file, "utf8");
   if (!text.includes("PtyClient")) return false;
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+
+  // Follow renames: `import { PtyClient as Pty }` and `import * as pty` both
+  // reach the constructor without the literal `new PtyClient`.
+  const classNames = new Set(["PtyClient"]);
+  const namespaces = new Set<string>();
+  for (const statement of source.statements) {
+    if (!ts.isImportDeclaration(statement) || !isPtyClientModule(statement.moduleSpecifier)) {
+      continue;
+    }
+    const bindings = statement.importClause?.namedBindings;
+    if (!bindings) continue;
+    if (ts.isNamespaceImport(bindings)) {
+      namespaces.add(bindings.name.text);
+    } else {
+      for (const element of bindings.elements) {
+        if ((element.propertyName ?? element.name).text === "PtyClient") {
+          classNames.add(element.name.text);
+        }
+      }
+    }
+  }
+
   let found = false;
   const visit = (node: ts.Node): void => {
     if (found) return;
-    if (
-      ts.isNewExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === "PtyClient"
-    ) {
-      found = true;
-      return;
+    if (ts.isNewExpression(node)) {
+      const callee = node.expression;
+      if (
+        (ts.isIdentifier(callee) && classNames.has(callee.text)) ||
+        (ts.isPropertyAccessExpression(callee) &&
+          callee.name.text === "PtyClient" &&
+          ts.isIdentifier(callee.expression) &&
+          namespaces.has(callee.expression.text))
+      ) {
+        found = true;
+        return;
+      }
     }
     ts.forEachChild(node, visit);
   };

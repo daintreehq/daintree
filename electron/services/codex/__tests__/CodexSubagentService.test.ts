@@ -288,6 +288,7 @@ describe("listCodexSubagents", () => {
       reason: "terminal-unknown",
     });
     expect(getTerminalAsync).not.toHaveBeenCalled();
+    expect(runSession).not.toHaveBeenCalled();
   });
 
   it("queries both the recorded cwd and its realpath so a symlinked worktree matches", async () => {
