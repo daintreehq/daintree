@@ -24,7 +24,7 @@
  */
 
 import { realpath } from "fs/promises";
-import { getPtyClient } from "../PtyClient.js";
+import { getPtyClient } from "../../window/serviceRefs.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
@@ -297,7 +297,7 @@ interface ResolvedTerminal {
 async function resolveTerminal(
   terminalId: string
 ): Promise<ResolvedTerminal | { status: "unavailable"; reason: AgentSubagentUnavailableReason }> {
-  const info = await getPtyClient().getTerminalAsync(terminalId);
+  const info = await getPtyClient()?.getTerminalAsync(terminalId);
   if (!info) return { status: "unavailable", reason: "terminal-unknown" };
   // Live detection wins over the launch hint, matching the renderer. A pane
   // relaunched onto another agent keeps its original `launchAgentId`, and an

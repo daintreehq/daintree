@@ -3012,19 +3012,3 @@ class ShardEventEmitter extends EventEmitter {
     return this.forward(String(event), args);
   }
 }
-
-let ptyClientInstance: PtyClient | null = null;
-
-export function getPtyClient(config?: PtyClientConfig): PtyClient {
-  if (!ptyClientInstance) {
-    ptyClientInstance = new PtyClient(config);
-  }
-  return ptyClientInstance;
-}
-
-export function disposePtyClient(): void {
-  if (ptyClientInstance) {
-    ptyClientInstance.dispose();
-    ptyClientInstance = null;
-  }
-}

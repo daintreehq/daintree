@@ -1,11 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setPtyClientRef } from "../../../window/serviceRefs.js";
+import type { PtyClient } from "../../PtyClient.js";
 
 const getTerminalAsync = vi.hoisted(() => vi.fn());
 const runSession = vi.hoisted(() => vi.fn());
 
-vi.mock("../../PtyClient.js", () => ({
-  getPtyClient: () => ({ getTerminalAsync }),
-}));
+beforeEach(() => {
+  setPtyClientRef({ getTerminalAsync } as unknown as PtyClient);
+});
+
+afterEach(() => {
+  setPtyClientRef(null);
+});
 
 vi.mock("../CodexAppServerClient.js", async () => {
   const actual = await vi.importActual<typeof import("../CodexAppServerClient.js")>(
@@ -273,6 +279,15 @@ describe("listCodexSubagents", () => {
       status: "unavailable",
       reason: "terminal-unknown",
     });
+  });
+
+  it("reports terminal-unknown before the pty client exists, without building one", async () => {
+    setPtyClientRef(null);
+    await expect(listCodexSubagents("ghost")).resolves.toEqual({
+      status: "unavailable",
+      reason: "terminal-unknown",
+    });
+    expect(getTerminalAsync).not.toHaveBeenCalled();
   });
 
   it("queries both the recorded cwd and its realpath so a symlinked worktree matches", async () => {

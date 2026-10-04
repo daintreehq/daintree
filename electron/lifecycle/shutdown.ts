@@ -13,7 +13,6 @@ import {
   getAgentAvailabilityStore,
 } from "../services/AgentAvailabilityStore.js";
 import { disposePowerSaveBlockerService } from "../services/PowerSaveBlockerService.js";
-import { disposePtyClient } from "../services/PtyClient.js";
 import { helpSessionJobService } from "../services/HelpSessionJobService.js";
 import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
 import { disposeMainProcessWatchdog } from "../services/MainProcessWatchdogClient.js";
@@ -661,11 +660,6 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
               console.warn("[MAIN] PtyClient.dispose failed:", err);
             }
             deps.setPtyClient(null);
-          }
-          try {
-            disposePtyClient();
-          } catch (err) {
-            console.warn("[MAIN] disposePtyClient failed:", err);
           }
           // Disarm the POSIX crash-safe supervisor only after PTY teardown.
           // DISARM tells the supervisor this is a clean quit and it should not
