@@ -2280,6 +2280,7 @@ export class PtyClient extends EventEmitter {
     projectId: string,
     options?: { preserveSession?: boolean }
   ): Promise<GracefulKillByProjectOutcome> {
+    this.emitProjectKillRequested(projectId);
     const shard = this.shardForProjectQuery(projectId);
     const inFlight: {
       requestId: string | null;
@@ -2361,7 +2362,24 @@ export class PtyClient extends EventEmitter {
       .catch(() => []);
   }
 
+  /**
+   * Fired synchronously before a project-wide kill is sent, so Main-side owners
+   * of service-managed PTYs (the dev preview) can cancel work that would revive
+   * them. The `exit` events that follow arrive too late to stop a respawn
+   * already queued behind the kill.
+   */
+  private emitProjectKillRequested(projectId: string): void {
+    try {
+      this.emit("project-kill-requested", projectId);
+    } catch (err) {
+      logWarn("[PtyClient] project-kill-requested listener threw", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   async killByProject(projectId: string): Promise<number> {
+    this.emitProjectKillRequested(projectId);
     const shard = this.shardForProjectQuery(projectId);
     const promise = sendPtyHostRpc<number>(
       shard,

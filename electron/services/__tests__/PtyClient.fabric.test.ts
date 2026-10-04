@@ -284,6 +284,30 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
+    // The dev preview cancels revival work on this announcement (#13170): the
+    // exits that follow the kill arrive too late to stop a queued respawn.
+    it("announces a project-wide kill before sending either kill request", () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      const sentAtAnnouncement: number[] = [];
+      client.on("project-kill-requested", (projectId: string) => {
+        expect(projectId).toBe("project-a");
+        sentAtAnnouncement.push(
+          messagesOfType(shardA.child, "kill-by-project").length +
+            messagesOfType(shardA.child, "graceful-kill-by-project").length
+        );
+      });
+
+      void client.killByProject("project-a");
+      void client.gracefulKillByProjectConfirmed("project-a");
+
+      expect(sentAtAnnouncement).toEqual([0, 1]);
+      client.dispose();
+    });
+
     it("pins projects beyond the shard cap to the default shard", () => {
       const client = createFabricClient({ maxProjectShards: 1 });
       client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
