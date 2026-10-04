@@ -361,6 +361,41 @@ describe.skipIf(process.platform === "win32")(
       expect(touched).toContain(9001);
     });
 
+    it("reads the kill-time census before the PTY is released (#13165)", () => {
+      // destroyPty() hangs up the foreground job; a census taken after it can
+      // find detached work already reparented away from the shell.
+      const pty = createControllablePty();
+      const order: string[] = [];
+      pty.destroy.mockImplementation(() => order.push("destroy"));
+      const lineageLedger = {
+        ...ledgerFor([]),
+        takeKillCensus: vi.fn(() => {
+          order.push("census");
+          return {
+            startTimeOf: (pid: number) => (pid === 123 || pid === 7001 ? `t${pid}` : undefined),
+            childrenOf: (pid: number) => (pid === 123 ? [7001] : []),
+          };
+        }),
+      };
+      const terminal = createTerminal(pty, undefined, { lineageLedger });
+
+      terminal.kill();
+
+      expect(order.slice(0, 2)).toEqual(["census", "destroy"]);
+      expect(lineageLedger.takeKillCensus).toHaveBeenCalledTimes(1);
+      expect(killSpy).toHaveBeenCalledWith(7001, "SIGTERM");
+    });
+
+    it("takes no census on a natural exit", () => {
+      const pty = createControllablePty();
+      const lineageLedger = { ...ledgerFor([]), takeKillCensus: vi.fn(() => null) };
+      createTerminal(pty, undefined, { lineageLedger });
+
+      pty.emitExit(0);
+
+      expect(lineageLedger.takeKillCensus).not.toHaveBeenCalled();
+    });
+
     it("natural exit without a ledger behaves exactly as before", () => {
       const pty = createControllablePty();
       createTerminal(pty);

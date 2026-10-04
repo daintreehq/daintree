@@ -357,6 +357,83 @@ export function probeStartTimesSync(
 }
 
 /**
+ * Upper bound on one kill-time census. Shorter than {@link PROBE_TIMEOUT_MS}
+ * because a kill pays it twice (SIGTERM pass and escalation) on the host's only
+ * thread, and a census that cannot finish in this long is no fresher than the
+ * cached one the caller falls back to.
+ */
+const KILL_CENSUS_TIMEOUT_MS = 500;
+const KILL_CENSUS_MAX_BUFFER = 16 * 1024 * 1024;
+
+/**
+ * One atomic process-table read taken at kill time: ancestry and identity
+ * from the same `ps` invocation, so a parent/child link and the start time that
+ * proves who the child is can never come from different moments.
+ */
+export interface KillCensus {
+  /** `lstart` in the same form {@link probeStartTimesSync} records, or undefined if absent. */
+  startTimeOf(pid: number): string | undefined;
+  childrenOf(pid: number): readonly number[];
+}
+
+/**
+ * Fresh, lean census for the kill path (#13165). The periodic
+ * {@link ProcessTreeCache} snapshot is seconds stale — and stale indefinitely
+ * while its `ps` keeps timing out — so anything spawned since its last sweep
+ * would otherwise get no signal at all. Only pid, ppid and lstart are read: no
+ * command strings or CPU columns, which are what made the periodic census
+ * expensive (#12513), and it runs only when a terminal is actually killed.
+ *
+ * Returns null on any doubt — failure, timeout, overflow, or output missing
+ * our own row (a truncated table) — so callers fall back rather than treat an
+ * incomplete table as proof that a process is gone.
+ */
+export function takeKillCensusSync(budgetMs: number = KILL_CENSUS_TIMEOUT_MS): KillCensus | null {
+  if (process.platform === "win32") return null;
+  const deadline = Math.min(Date.now() + budgetMs, teardownProbeDeadlineMs ?? Infinity);
+  const timeout = deadline - Date.now();
+  if (timeout <= 0) return null;
+
+  let stdout: string;
+  try {
+    const spawned = spawnSync("ps", ["-A", "-o", "pid=,ppid=,lstart="], {
+      encoding: "utf8",
+      env: PROBE_ENV,
+      timeout,
+      killSignal: "SIGKILL",
+      maxBuffer: KILL_CENSUS_MAX_BUFFER,
+    });
+    if (!spawned || spawned.error || spawned.status !== 0) return null;
+    stdout = typeof spawned.stdout === "string" ? spawned.stdout : "";
+  } catch {
+    return null;
+  }
+  return parseKillCensus(stdout);
+}
+
+export function parseKillCensus(stdout: string): KillCensus | null {
+  const startTimes = new Map<number, string>();
+  const children = new Map<number, number[]>();
+  for (const line of stdout.split("\n")) {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\S.*?)\s*$/);
+    if (!match) continue;
+    const pid = parseInt(match[1], 10);
+    const ppid = parseInt(match[2], 10);
+    if (!Number.isInteger(pid) || pid <= 0 || startTimes.has(pid)) continue;
+    startTimes.set(pid, match[3]);
+    if (pid === ppid) continue;
+    const siblings = children.get(ppid);
+    if (siblings) siblings.push(pid);
+    else children.set(ppid, [pid]);
+  }
+  if (!startTimes.has(process.pid)) return null;
+  return {
+    startTimeOf: (pid) => startTimes.get(pid),
+    childrenOf: (pid) => children.get(pid) ?? [],
+  };
+}
+
+/**
  * True when a process with this start time could be the descendant observed at
  * `observedAtMs`. A process born *after* we saw the ancestry is a different
  * process that inherited the PID, so anchoring to it would make the ledger
@@ -503,15 +580,28 @@ export class TerminalLineageLedger {
    * cached census read: the census can be seconds stale, which is exactly long
    * enough for a PID to have been recycled.
    */
-  getVerifiedOrphanPids(rootPid: number, alreadyCovered: readonly number[]): number[] {
+  getVerifiedOrphanPids(
+    rootPid: number,
+    alreadyCovered: readonly number[],
+    census?: KillCensus | null
+  ): number[] {
     const covered = new Set(alreadyCovered);
     const candidates = this.getTrackedPids(rootPid).filter(
       (c) => !covered.has(c.pid) && !isForbiddenTarget(c.pid)
     );
     if (candidates.length === 0) return [];
 
+    // A complete kill-time census is itself a live OS read, so it verifies
+    // without spawning a second `ps`.
+    if (census) {
+      return candidates.filter((c) => census.startTimeOf(c.pid) === c.startTime).map((c) => c.pid);
+    }
     const current = probeStartTimesSync(candidates.map((c) => c.pid));
     return candidates.filter((c) => current.get(c.pid) === c.startTime).map((c) => c.pid);
+  }
+
+  takeKillCensus(): KillCensus | null {
+    return takeKillCensusSync();
   }
 
   /**
