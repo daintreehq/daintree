@@ -8,6 +8,7 @@ import type { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
 import type { SessionSnapshotter } from "./SessionSnapshotter.js";
 import { captureAgentEndSession } from "./agentEndCapture.js";
 import { computeDefaultTitle } from "./terminalTitle.js";
+import { logTerminalExit } from "./terminalKillAudit.js";
 
 export interface TerminalExitHandlerHost {
   readonly id: string;
@@ -34,6 +35,13 @@ export class TerminalExitHandler {
     if (terminal.ptyProcess !== ptyProcess) {
       return;
     }
+
+    logTerminalExit(
+      this.host.id,
+      exitCode,
+      signal,
+      this.host.lifecycle.getExitReason() ?? "natural"
+    );
 
     // dispose() may have already emitted terminal:exited and notified
     // the registry via callbacks.onExit. A late OS-delivered exit must

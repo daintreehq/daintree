@@ -17,13 +17,7 @@ function isValidPid(pid: number | undefined): pid is number {
 const PID_RETRY_MAX_ATTEMPTS = 20;
 
 export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
-  const {
-    ptyManager,
-    pauseCoordinators,
-    resourceGovernor,
-    sendEvent,
-    getOrCreatePauseCoordinator,
-  } = ctx;
+  const { ptyManager, pauseCoordinators, sendEvent, getOrCreatePauseCoordinator } = ctx;
 
   // Poll the live PTY object across event-loop turns for a terminal that
   // spawned with an invalid PID (Windows ConPTY). Once a positive PID lands,
@@ -152,15 +146,10 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
     },
 
     kill: (msg) => {
-      const termInfo = ptyManager.getTerminal(msg.id);
-      const killedPid = termInfo?.ptyProcess.pid;
       if (msg.escalationDelayMs !== undefined) {
         ptyManager.kill(msg.id, msg.reason, { escalationDelayMs: msg.escalationDelayMs });
       } else {
         ptyManager.kill(msg.id, msg.reason);
-      }
-      if (isValidPid(killedPid)) {
-        resourceGovernor.trackKilledPid(killedPid);
       }
     },
 
@@ -173,25 +162,12 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
     },
 
     "kill-by-project": (msg) => {
-      const terminalIds = ptyManager.getTerminalsForProject(msg.projectId);
-      const pids: number[] = [];
-      for (const id of terminalIds) {
-        const pid = ptyManager.getTerminal(id)?.ptyProcess.pid;
-        if (isValidPid(pid)) pids.push(pid);
-      }
       const killed = ptyManager.killByProject(msg.projectId);
-      for (const pid of pids) {
-        resourceGovernor.trackKilledPid(pid);
-      }
       sendEvent({ type: "kill-by-project-result", requestId: msg.requestId, killed });
     },
 
     "graceful-kill": async (msg) => {
-      const killedPid = ptyManager.getTerminal(msg.id)?.ptyProcess.pid;
       const { sessionId } = await ptyManager.gracefulKill(msg.id);
-      if (isValidPid(killedPid)) {
-        resourceGovernor.trackKilledPid(killedPid);
-      }
       sendEvent({
         type: "graceful-kill-result",
         requestId: msg.requestId,
@@ -201,12 +177,6 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
     },
 
     "graceful-kill-by-project": async (msg) => {
-      const terminalIds = ptyManager.getTerminalsForProject(msg.projectId);
-      const pids: number[] = [];
-      for (const id of terminalIds) {
-        const pid = ptyManager.getTerminal(id)?.ptyProcess.pid;
-        if (isValidPid(pid)) pids.push(pid);
-      }
       const results = await ptyManager.gracefulKillByProject(
         msg.projectId,
         { preserveSession: msg.preserveSession },
@@ -224,9 +194,6 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
           });
         }
       );
-      for (const pid of pids) {
-        resourceGovernor.trackKilledPid(pid);
-      }
       sendEvent({
         type: "graceful-kill-by-project-result",
         requestId: msg.requestId,

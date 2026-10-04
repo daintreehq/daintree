@@ -62,7 +62,7 @@ const MAX_UNSEEN_SWEEPS_BEFORE_CLOSE = 5;
  * persisted ledger compares those strings across app launches — an unpinned
  * locale or a timezone change would silently invalidate every entry.
  */
-const PROBE_ENV = {
+export const PROBE_ENV = {
   ...process.env,
   LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8",
   TZ: "UTC",

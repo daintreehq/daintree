@@ -74,6 +74,12 @@ export class ProcessTreeKiller {
    */
   private shellIdentity: string | typeof SHELL_GONE | null = null;
   private escalation: EscalationState | null = null;
+  /**
+   * Every process a kill on this killer has signalled, by start time, kept past
+   * escalation so a later survivor check can tell a lingering target from a
+   * stranger that inherited its PID.
+   */
+  private readonly killIdentities = new Map<number, string>();
 
   constructor(
     private readonly ptyProcess: pty.IPty,
@@ -177,14 +183,26 @@ export class ProcessTreeKiller {
     return ordered;
   }
 
+  getKillIdentities(): ReadonlyMap<number, string> {
+    return this.killIdentities;
+  }
+
+  private recordIdentities(census: KillCensus, pids: Iterable<number>): void {
+    for (const pid of pids) {
+      const startTime = census.startTimeOf(pid);
+      if (startTime !== undefined) this.killIdentities.set(pid, startTime);
+    }
+  }
+
   /**
    * Kill the entire process tree rooted at the PTY shell.
    * Sends SIGTERM to all descendants bottom-up (leaves first), then kills the shell.
    * @param immediate If true, SIGKILL is sent synchronously (for process.on("exit") context
    *   where timers don't fire). If false, SIGKILL escalation fires after 500ms and re-reads
    *   the descendant list to catch processes spawned during the grace window.
+   * @returns The PIDs this pass targeted, shell included.
    */
-  execute(immediate: boolean, escalationDelayMs?: number): void {
+  execute(immediate: boolean, escalationDelayMs?: number): number[] {
     const pending = this.escalation;
     this.abort();
 
@@ -197,7 +215,7 @@ export class ProcessTreeKiller {
       } catch {
         // Process may already be dead
       }
-      return;
+      return [];
     }
 
     this.lineage?.markRootClosing(shellPid);
@@ -217,15 +235,15 @@ export class ProcessTreeKiller {
       // Unix walk below — reparented descendants need their own pass. Exclude
       // what the walk already covered so the taskkill above isn't repeated
       // once per live descendant.
-      this.taskkillOrphans(
-        this.resolveOrphans(shellPid, this.processTreeCache?.getDescendantPids(shellPid) ?? [])
-      );
+      const live = this.processTreeCache?.getDescendantPids(shellPid) ?? [];
+      const orphans = this.resolveOrphans(shellPid, live);
+      this.taskkillOrphans(orphans);
       try {
         this.ptyProcess.kill();
       } catch {
         // Process may already be dead
       }
-      return;
+      return [...orphans, ...live, shellPid];
     }
 
     // A kill already mid-way through its grace window (kill() then dispose())
@@ -234,7 +252,7 @@ export class ProcessTreeKiller {
     if (immediate && pending && pending.shellPid === shellPid) {
       this.capturedCensus = null;
       this.escalate(pending, this.lineage?.takeKillCensus?.() ?? null);
-      return;
+      return [...pending.targets.keys(), shellPid];
     }
 
     // Unix: SIGTERM descendants bottom-up, then kill the shell.
@@ -349,12 +367,15 @@ export class ProcessTreeKiller {
         ? pending
         : null;
 
+    const targets = shellGone ? descendants : [...descendants, shellPid];
+    if (census) this.recordIdentities(census, targets);
+
     if (immediate) {
       // Re-read even here: a snapshot taken before the SIGTERM pass cannot
       // prove that a target survived it rather than exiting and being replaced.
       if (state) this.escalate(state, this.lineage?.takeKillCensus?.() ?? null);
       else this.sigkillSweep(shellPid);
-      return;
+      return targets;
     }
 
     const delay = escalationDelayMs ?? SIGKILL_ESCALATION_DELAY_MS;
@@ -371,6 +392,7 @@ export class ProcessTreeKiller {
       else this.sigkillSweep(shellPid);
     }, delay);
     this.killTreeTimer.unref?.();
+    return targets;
   }
 
   /**
@@ -414,6 +436,7 @@ export class ProcessTreeKiller {
       ordered.push(state.shellPid);
     }
 
+    this.recordIdentities(census, ordered);
     for (const pid of ordered) this.signal(pid, "SIGKILL");
   }
 
@@ -428,13 +451,14 @@ export class ProcessTreeKiller {
    *
    * @param immediate SIGKILL synchronously instead of after the grace window,
    *   for the `process.on("exit")` context where timers never fire.
+   * @returns The orphaned descendants this pass targeted.
    */
-  reapAfterRootExit(immediate: boolean = false, escalationDelayMs?: number): void {
+  reapAfterRootExit(immediate: boolean = false, escalationDelayMs?: number): number[] {
     this.abort();
     this.capturedCensus = null;
 
     const shellPid = this.ptyProcess.pid;
-    if (shellPid === undefined || shellPid <= 0) return;
+    if (shellPid === undefined || shellPid <= 0) return [];
 
     this.lineage?.markRootClosing(shellPid);
 
@@ -444,12 +468,22 @@ export class ProcessTreeKiller {
     // children has already been reparented. Asking the ledger for its whole set
     // also means each PID is start-time verified before it is signalled, which a
     // stale live-walk entry would not be.
-    const orphans = this.resolveOrphans(shellPid, []);
-    if (orphans.length === 0) return;
+    let orphans = this.resolveOrphans(shellPid, []);
+    if (orphans.length === 0) return [];
 
     if (process.platform === "win32") {
       this.taskkillOrphans(orphans);
-      return;
+      return orphans;
+    }
+
+    // With orphans to signal, re-verify them against one fresh census so the
+    // identities recorded for the survivor check are the processes signalled
+    // below. Skipped on the exit path, whose budget belongs to the kill itself
+    // and whose check could never run.
+    const census = immediate ? null : (this.lineage?.takeKillCensus?.() ?? null);
+    if (census) {
+      orphans = this.resolveOrphans(shellPid, [], census);
+      this.recordIdentities(census, orphans);
     }
 
     for (const pid of orphans) {
@@ -460,7 +494,7 @@ export class ProcessTreeKiller {
     if (immediate) {
       // `process.on("exit")` context — no timer will ever fire, so escalate now.
       this.sigkillSweep(shellPid, { includeShell: false, includeLiveWalk: false });
-      return;
+      return orphans;
     }
 
     this.killTreeTimer = setTimeout(() => {
@@ -468,6 +502,7 @@ export class ProcessTreeKiller {
       this.sigkillSweep(shellPid, { includeShell: false, includeLiveWalk: false });
     }, escalationDelayMs ?? SIGKILL_ESCALATION_DELAY_MS);
     this.killTreeTimer.unref?.();
+    return orphans;
   }
 
   /**

@@ -1183,3 +1183,110 @@ describe("ProcessTreeKiller — Windows takes no census", () => {
     );
   });
 });
+
+// #13168: the survivor check needs every process a kill signalled, by identity.
+describe.skipIf(process.platform === "win32")("ProcessTreeKiller — kill identities", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let killSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    killSpy?.mockRestore();
+    warnSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  const tree: CensusRow[] = [
+    [P(1000), 1, "shell"],
+    [P(2001), P(1000), "agent"],
+    [P(2002), P(2001), "npm"],
+  ];
+
+  it("returns the targets and records the shell and descendants by start time", () => {
+    const killer = new ProcessTreeKiller(
+      makePty(P(1000)),
+      makeTreeCache([]),
+      makeCensusLineage([makeCensus(tree)])
+    );
+
+    const targets = killer.execute(false);
+
+    expect(targets).toEqual([P(2002), P(2001), P(1000)]);
+    expect([...killer.getKillIdentities()]).toEqual(
+      expect.arrayContaining([
+        [P(1000), "shell"],
+        [P(2001), "agent"],
+        [P(2002), "npm"],
+      ])
+    );
+  });
+
+  it("adds what escalation found forked in the grace window", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(tree),
+      makeCensus([
+        [P(2002), 1, "npm"],
+        [P(2003), P(2002), "vite"],
+      ]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(false);
+    vi.advanceTimersByTime(500);
+
+    expect(killer.getKillIdentities().get(P(2003))).toBe("vite");
+    expect(killer.getKillIdentities().size).toBe(4);
+  });
+
+  it("leaves the shell out of the targets once the census shows it gone", () => {
+    const killer = new ProcessTreeKiller(
+      makePty(P(1000)),
+      makeTreeCache([]),
+      makeCensusLineage([makeCensus([[P(2002), 1, "npm"]])], { [P(1000)]: [[P(2002), "npm"]] })
+    );
+
+    const targets = killer.execute(false);
+
+    expect(targets).toEqual([P(2002)]);
+    expect(killer.getKillIdentities().has(P(1000))).toBe(false);
+  });
+
+  it("never records a recycled shell PID on a repeated kill", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(tree),
+      makeCensus([]),
+      makeCensus([[P(1000), 1, "someone-else"]]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(false);
+    vi.advanceTimersByTime(500);
+    const targets = killer.execute(true);
+
+    expect(targets).not.toContain(P(1000));
+    expect(killer.getKillIdentities().get(P(1000))).toBe("shell");
+  });
+
+  it("records nothing without a census", () => {
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([P(2001)]));
+
+    expect(killer.execute(false)).toEqual([P(2001), P(1000)]);
+    expect(killer.getKillIdentities().size).toBe(0);
+  });
+
+  it("identifies the orphans a root-exit reap targets", () => {
+    const lineage = {
+      ...makeLineage({ [P(1000)]: [P(2002)] }),
+      takeKillCensus: () => makeCensus([[P(2002), 1, "npm"]]),
+    };
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    expect(killer.reapAfterRootExit()).toEqual([P(2002)]);
+    expect(killer.getKillIdentities().get(P(2002))).toBe("npm");
+  });
+});
