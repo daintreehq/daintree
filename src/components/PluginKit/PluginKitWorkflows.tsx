@@ -211,7 +211,13 @@ function KitAttachmentChip({
  * Focus for a removal, taken before the parent drops the item: the next X,
  * else the one before, else the list's root, which stays when it empties.
  */
-function focusNeighbour(root: HTMLElement | null, index: number, button: HTMLButtonElement) {
+/**
+ * The list's root, found from the button pressed rather than held in a ref: a
+ * ref read inside the handlers the item map builds is, to the compiler, a ref
+ * read during render.
+ */
+function focusNeighbour(index: number, button: HTMLButtonElement) {
+  const root = button.closest<HTMLElement>("[data-attachment-list]");
   if (!root || button.ownerDocument.activeElement !== button) return;
   const buttons = root.querySelectorAll<HTMLButtonElement>("[data-attachment-remove]");
   (buttons[index + 1] ?? buttons[index - 1] ?? root).focus();
@@ -228,9 +234,6 @@ function KitAttachmentList({
   className,
   ...rest
 }: PluginAttachmentListProps) {
-  // The root outlives its last item, so removing that one still has
-  // somewhere for focus to land.
-  const rootRef = useRef<HTMLDivElement>(null);
   const items = readAttachmentList(attachments);
   const open = fn(onOpen);
   const remove = fn(onRemove);
@@ -240,7 +243,9 @@ function KitAttachmentList({
   return (
     <div
       {...pickRootProps(rest)}
-      ref={rootRef}
+      // The root outlives its last item, so removing that one still has
+      // somewhere for focus to land.
+      data-attachment-list=""
       tabIndex={-1}
       className={cn(
         "min-w-0 outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
@@ -265,7 +270,7 @@ function KitAttachmentList({
               : undefined;
             const removeItem = remove
               ? (button: HTMLButtonElement) => {
-                  focusNeighbour(rootRef.current, index, button);
+                  focusNeighbour(index, button);
                   runPluginAction("AttachmentList onRemove", () => remove(item.id));
                 }
               : undefined;

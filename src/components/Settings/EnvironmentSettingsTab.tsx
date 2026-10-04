@@ -53,7 +53,12 @@ export function EnvironmentSettingsTab() {
   // clears its message and breaking another one shows straight away.
   const [saveAttempted, setSaveAttempted] = useState(false);
   const [savedSnapshot, setSavedSnapshot] = useState<Record<string, string>>({});
-  const focus = useRowFocus();
+  const {
+    register: registerRow,
+    registerFallback: registerAddButton,
+    focusRow,
+    focusAfterDelete,
+  } = useRowFocus();
 
   const [loadFailed, setLoadFailed] = useState(false);
   const [loadNonce, setLoadNonce] = useState(0);
@@ -133,11 +138,11 @@ export function EnvironmentSettingsTab() {
   const addRow = () => {
     const id = `env-${crypto.randomUUID()}`;
     setEnvRows((prev) => [...prev, { id, key: "", value: "" }]);
-    focus.focusRow(id);
+    focusRow(id);
   };
 
   const deleteRow = (index: number, id: string) => {
-    focus.focusAfterDelete(
+    focusAfterDelete(
       envRows.map((r) => r.id),
       index
     );
@@ -220,7 +225,7 @@ export function EnvironmentSettingsTab() {
       size="sm"
       onClick={addRow}
       disabled={isLoading}
-      ref={focus.registerFallback}
+      ref={registerAddButton}
     >
       <Plus aria-hidden="true" />
       Add variable
@@ -268,7 +273,7 @@ export function EnvironmentSettingsTab() {
               onValueChange={(v) => updateRow(index, "value", v)}
               onDelete={() => deleteRow(index, envVar.id)}
               valuePlaceholder="e.g. /usr/local/bin"
-              keyRef={focus.register(envVar.id)}
+              keyRef={registerRow(envVar.id)}
             />
           ))
         )}
