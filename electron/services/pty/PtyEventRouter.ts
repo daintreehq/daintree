@@ -318,6 +318,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.rollup);
       return true;
 
+    case "process-inventory":
+      broker.resolve(event.requestId, event.inventory);
+      return true;
+
     case "trim-state-result":
       broker.resolve(event.requestId, event.result);
       return true;

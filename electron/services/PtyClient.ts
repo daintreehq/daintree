@@ -114,6 +114,7 @@ import type {
   TrimStateSummary,
   TerminalSubmitGuard,
 } from "../../shared/types/pty-host.js";
+import type { HostProcessInventory } from "../../shared/types/processes.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
@@ -2396,6 +2397,47 @@ export class PtyClient extends EventEmitter {
       return { ...merged, available: false };
     }
     return merged;
+  }
+
+  /**
+   * Every live PTY on every shard with its sampled process tree, plus tree
+   * samples for `extraPids` (processes Main owns, such as plugin children).
+   * Reads each shard's warm census — no extra OS sweep. A shard that fails or
+   * times out is left out and reported through `shardsFailed`, never as an
+   * empty answer.
+   */
+  async getProcessInventory(extraPids: readonly number[] = []): Promise<{
+    inventories: HostProcessInventory[];
+    shardsTotal: number;
+    shardsFailed: number;
+  }> {
+    const shards = this.fanOutShards();
+    // A host mid-restart is not fanned out to, but its terminals are still
+    // missing from the answer — it counts as a failure, not as nothing.
+    const unreachable = Math.max(
+      0,
+      [...this.shards.values()].filter((shard) => !shard.retired).length - shards.length
+    );
+    const pids = [...extraPids];
+    const results = await Promise.all(
+      shards.map((shard) =>
+        sendPtyHostRpc<HostProcessInventory>(shard, "process-inventory", (requestId) => ({
+          type: "get-process-inventory",
+          requestId,
+          // Plugin children are no shard's own; every census covers them, so
+          // each is asked and Main keeps the freshest reading rather than a sum.
+          pids,
+        })).catch(() => null)
+      )
+    );
+    const inventories = results.filter(
+      (inventory): inventory is HostProcessInventory => inventory !== null
+    );
+    return {
+      inventories,
+      shardsTotal: shards.length + unreachable,
+      shardsFailed: shards.length - inventories.length + unreachable,
+    };
   }
 
   /**
