@@ -258,6 +258,22 @@ export class DevPreviewSessionService {
     }
   }
 
+  /**
+   * Whether anything — any live session or restore placeholder — claims this
+   * worktree. Unlike `getByWorktree` this scans every session rather than the
+   * single `worktreeToSession` mapping, which a panel moving between worktrees
+   * can drop while another session still runs there.
+   */
+  hasWorktreeSessions(worktreeId: string): boolean {
+    for (const session of this.sessions.values()) {
+      if (session.worktreeId === worktreeId) return true;
+    }
+    for (const entry of this.restoredEntries.values()) {
+      if (entry.worktreeId === worktreeId) return true;
+    }
+    return false;
+  }
+
   getByWorktree(worktreeId: string): DevPreviewSessionState | null {
     const key = this.worktreeToSession.get(worktreeId);
     if (key) {

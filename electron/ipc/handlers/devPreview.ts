@@ -39,13 +39,9 @@ const WORKTREE_GONE_PROBE_TIMEOUT_MS = 5000;
 // monitor too. Only a confirmed ENOENT on the worktree root (the id is its
 // path) counts as gone — anything else, including a hung mount, keeps the
 // dev server running.
-async function isWorktreeGone(worktreeId: string): Promise<boolean> {
+async function isWorktreeGone(probe: Promise<unknown>): Promise<boolean> {
   try {
-    await withTimeout(
-      lstat(worktreeId),
-      WORKTREE_GONE_PROBE_TIMEOUT_MS,
-      "Worktree existence probe timed out"
-    );
+    await withTimeout(probe, WORKTREE_GONE_PROBE_TIMEOUT_MS, "Worktree existence probe timed out");
     return false;
   } catch (err) {
     return (err as NodeJS.ErrnoException)?.code === "ENOENT";
@@ -296,11 +292,22 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
   // UI delete path that stops the dev server first (#9084), so the workspace
   // host's removal event is the only signal that its server is now running in
   // a directory that no longer exists (#13171).
+  // A probe of a hung mount outlives its timeout and holds a libuv worker, so
+  // a worktree's slot stays taken until the syscall itself settles — repeat
+  // removal events must not stack probes on it.
   let disposed = false;
+  const probingWorktrees = new Set<string>();
   const unsubWorktreeRemove = events.on("sys:worktree:remove", ({ worktreeId }) => {
-    if (!sessionService || !sessionService.getByWorktree(worktreeId)) return;
+    if (!sessionService?.hasWorktreeSessions(worktreeId)) return;
+    if (probingWorktrees.has(worktreeId)) return;
+    probingWorktrees.add(worktreeId);
+    const probe = lstat(worktreeId);
+    probe.then(
+      () => probingWorktrees.delete(worktreeId),
+      () => probingWorktrees.delete(worktreeId)
+    );
     void (async () => {
-      if (!(await isWorktreeGone(worktreeId))) return;
+      if (!(await isWorktreeGone(probe))) return;
       if (disposed || !sessionService) return;
       await sessionService.stopByWorktree(worktreeId, "worktree-removed");
     })().catch((err) => {
