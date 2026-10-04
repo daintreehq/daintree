@@ -2,6 +2,8 @@ import * as pty from "node-pty";
 import { destroyPty } from "../../services/PtyPool.js";
 import { minimalSpawnEnv } from "../../utils/minimalSpawnEnv.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { PLUGIN_PROCESS_KILL_GRACE_MS } from "../../../shared/types/ipc/pluginProcess.js";
+import type { ProcessTreeKiller, ProcessTreeKillTarget } from "../../services/pty/ProcessTreeKiller.js";
 import type {
   PluginPtyHostEvent,
   PluginPtyHostSpawnOptions,
@@ -24,11 +26,21 @@ import type {
  * Every entry is keyed by `(id, generation)`. `restart()` in Main bumps the
  * generation, so output and exits from a replaced incarnation are dropped
  * rather than delivered against its successor.
+ *
+ * Teardown does share one thing with terminals: the process-tree killer and
+ * the lineage ledger behind it (#13173). A plugin running `npm run dev` here is
+ * a shell-shaped tree like any terminal's, and signalling only the root PID
+ * left its server running after every unload and quit — and, with the root
+ * never registered, after a crash too, which the ledger's persisted record now
+ * covers on the next launch.
  */
 export class PluginPtyProcessManager {
   private readonly entries = new Map<string, PluginPtyEntry>();
 
-  constructor(private readonly sendEvent: (event: PluginPtyHostEvent) => void) {}
+  constructor(
+    private readonly sendEvent: (event: PluginPtyHostEvent) => void,
+    private readonly createTreeKiller: PluginPtyTreeKillerFactory | null = null
+  ) {}
 
   spawn(id: string, generation: number, options: PluginPtyHostSpawnOptions): void {
     const existing = this.entries.get(id);
@@ -81,8 +93,12 @@ export class PluginPtyProcessManager {
       disposables: [],
       exited: false,
       tornDown: false,
+      killer: null,
+      treeKill: "none",
+      nativeReleased: false,
     };
     this.entries.set(id, entry);
+    entry.killer = this.buildTreeKiller(entry);
 
     // Wire output and exit BEFORE announcing the spawn, so a command that
     // greets the moment it starts cannot emit into a void.
@@ -95,6 +111,10 @@ export class PluginPtyProcessManager {
     entry.disposables.push(
       child.onExit(({ exitCode, signal }) => {
         entry.exited = true;
+        // A tree already being killed keeps its identity-checked escalation
+        // armed; one whose root just ended on its own still owes a sweep of
+        // whatever it left behind, which only the lineage ledger can reach.
+        if (entry.treeKill === "none") entry.killer?.reapAfterRootExit();
         this.sendEvent({
           type: "plugin-pty-exit",
           id,
@@ -156,6 +176,12 @@ export class PluginPtyProcessManager {
     const entry = this.liveEntry(id, generation);
     if (!entry) return;
     if (signal === "SIGTERM") {
+      if (entry.killer) {
+        // Descendants first, then the root, with the killer's own SIGKILL
+        // escalation armed for the same grace window Main gives the root.
+        this.killTree(entry, false);
+        return;
+      }
       try {
         entry.pty.kill("SIGTERM");
       } catch {
@@ -163,6 +189,7 @@ export class PluginPtyProcessManager {
       }
       return;
     }
+    this.killTree(entry, true);
     // SIGKILL is Main's escalation after the grace window, so on Unix it must
     // actually be SIGKILL: `destroyPty`'s bare `kill()` is
     // `process.kill(pid, signal || "SIGHUP")` in node-pty, and a child that
@@ -217,6 +244,10 @@ export class PluginPtyProcessManager {
   private teardownEntry(entry: PluginPtyEntry, reason: string): void {
     if (entry.tornDown) return;
     entry.tornDown = true;
+    // Supersede and host disposal end a live process like a forced kill does.
+    // Signalling the tree before the native release matters: releasing hangs
+    // up the root, and its children reparent out of the walk's reach.
+    if (reason !== "exit") this.killTree(entry, true);
     // A forced teardown disposes the `onExit` listener before node-pty would
     // have fired it, so nothing else will ever tell Main this process ended.
     // Without this ack the managed record sits in `running` forever: `onExit`
@@ -241,7 +272,7 @@ export class PluginPtyProcessManager {
     }
     entry.disposables.length = 0;
     try {
-      destroyPty(entry.pty);
+      this.releaseNative(entry);
     } catch (error) {
       console.warn(
         `[PluginPty] teardown (${reason}) of "${entry.id}" failed:`,
@@ -254,7 +285,74 @@ export class PluginPtyProcessManager {
       this.entries.delete(entry.id);
     }
   }
+
+  private buildTreeKiller(entry: PluginPtyEntry): PluginPtyTreeKiller | null {
+    if (!this.createTreeKiller) return null;
+    const target: ProcessTreeKillTarget = {
+      get pid() {
+        return entry.pty.pid;
+      },
+      // The root's own signal. On Windows it is the native release, routed
+      // through the one-shot below so the killer's fallback and the teardown
+      // chokepoint can never both reach ConPTY (#9551).
+      kill: () => {
+        if (process.platform === "win32") {
+          this.releaseNative(entry);
+          return;
+        }
+        entry.pty.kill("SIGTERM");
+      },
+    };
+    try {
+      return this.createTreeKiller(target);
+    } catch (error) {
+      console.warn(
+        `[PluginPty] tree killer for "${entry.id}" unavailable:`,
+        formatErrorMessage(error, "tree killer failed")
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Signal the entry's whole process tree. `immediate` SIGKILLs now (finishing
+   * a graceful kill's pending escalation if there is one); otherwise the
+   * killer SIGTERMs and escalates after the plugin grace window itself, so
+   * grandchildren that ignore SIGTERM die even when the root exits promptly.
+   *
+   * Windows has no graceful step — `taskkill /T /F` is the whole kill — so the
+   * tree is killed at most once there: a second pass would taskkill a PID the
+   * OS may already have handed to something else.
+   */
+  private killTree(entry: PluginPtyEntry, immediate: boolean): void {
+    const killer = entry.killer;
+    if (!killer || entry.treeKill === "forced") return;
+    if (process.platform === "win32" && entry.treeKill !== "none") return;
+    entry.treeKill = immediate ? "forced" : "graceful";
+    try {
+      if (immediate) killer.execute(true);
+      else killer.execute(false, PLUGIN_PROCESS_KILL_GRACE_MS);
+    } catch (error) {
+      console.warn(
+        `[PluginPty] tree kill of "${entry.id}" failed:`,
+        formatErrorMessage(error, "tree kill failed")
+      );
+    }
+  }
+
+  /** Release the native handle exactly once per incarnation (#9544, #9551). */
+  private releaseNative(entry: PluginPtyEntry): void {
+    if (entry.nativeReleased) return;
+    entry.nativeReleased = true;
+    destroyPty(entry.pty);
+  }
 }
+
+/** The kill-side surface of {@link ProcessTreeKiller} a plugin PTY uses. */
+export type PluginPtyTreeKiller = Pick<ProcessTreeKiller, "execute" | "reapAfterRootExit">;
+
+/** Builds one killer per plugin PTY incarnation, bound to the pty-host's cache and ledger. */
+export type PluginPtyTreeKillerFactory = (target: ProcessTreeKillTarget) => PluginPtyTreeKiller;
 
 interface PluginPtyEntry {
   id: string;
@@ -265,6 +363,12 @@ interface PluginPtyEntry {
   exited: boolean;
   /** Set by the teardown chokepoint so it runs exactly once per incarnation. */
   tornDown: boolean;
+  /** Null when the host runs without tree teardown (unit tests). */
+  killer: PluginPtyTreeKiller | null;
+  /** How far tree teardown has gone, so a repeat only ever escalates. */
+  treeKill: "none" | "graceful" | "forced";
+  /** Latch for {@link PluginPtyProcessManager.releaseNative}. */
+  nativeReleased: boolean;
 }
 
 function isPositiveInt(value: number): boolean {

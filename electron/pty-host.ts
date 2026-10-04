@@ -76,6 +76,7 @@ import {
   type TerminalWorkerConnection,
 } from "./pty-host/handlers/index.js";
 import { PluginPtyProcessManager } from "./pty-host/services/PluginPtyProcessManager.js";
+import { ProcessTreeKiller } from "./services/pty/ProcessTreeKiller.js";
 import { GracefulCaptureTracker } from "./pty-host/GracefulCaptureTracker.js";
 import {
   PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS,
@@ -1741,7 +1742,13 @@ function resumePausedTerminal(id: string): void {
 // Raw plugin PTYs (#11300) live alongside — never inside — the terminal
 // PtyManager, so they inherit its crash isolation without any of its
 // panel semantics.
-const pluginPtyManager = new PluginPtyProcessManager(sendEvent);
+// They do share the terminals' tree teardown (#13173): the same census and
+// lineage ledger, so a plugin's dev server dies with it and a crash leaves a
+// persisted record for the next launch to reap.
+const pluginPtyManager = new PluginPtyProcessManager(
+  sendEvent,
+  (target) => new ProcessTreeKiller(target, processTreeCache, lineageLedger)
+);
 
 const hostContext: HostContext = {
   ptyManager,

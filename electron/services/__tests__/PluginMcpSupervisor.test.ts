@@ -413,6 +413,73 @@ describe("PluginMcpSupervisor (issue #9233)", () => {
     }
   });
 
+  it("tree-kills on Windows before the direct kill erases the parent links (#13173)", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+    try {
+      const fake = makeFakeSubprocess({ pid: 9876 });
+      const order: string[] = [];
+      const directKill = fake.subprocess.kill.bind(fake.subprocess);
+      fake.subprocess.kill = () => {
+        order.push("kill");
+        return directKill();
+      };
+      const killTree = vi.fn(async () => {
+        order.push("tree");
+      });
+      const supervisor = new PluginMcpSupervisor({ spawner: () => fake.handle, killTree });
+      const startPromise = supervisor.start({
+        pluginId: "acme.demo",
+        contributions: [{ id: "linear", name: "Linear", command: "node" }],
+        resolveSettings: async () => "",
+      });
+      await fake.waitForStdinCount(1);
+      fake.answerInitialize();
+      await startPromise;
+
+      await supervisor.shutdown({ pluginId: "acme.demo" });
+      expect(order).toEqual(["tree", "kill"]);
+    } finally {
+      if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+    }
+  });
+
+  it("signals a tree-owning server's process group on POSIX (#13173)", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    try {
+      const fake = makeFakeSubprocess({ pid: 4242 });
+      (fake.subprocess as { ownsProcessTree?: boolean }).ownsProcessTree = true;
+      const supervisor = new PluginMcpSupervisor({
+        spawner: () => fake.handle,
+        killTree: () => {},
+      });
+      const startPromise = supervisor.start({
+        pluginId: "acme.demo",
+        contributions: [{ id: "linear", name: "Linear", command: "node" }],
+        resolveSettings: async () => "",
+      });
+      await fake.waitForStdinCount(1);
+      fake.answerInitialize();
+      await startPromise;
+
+      vi.useFakeTimers();
+      await supervisor.shutdown({ pluginId: "acme.demo" });
+      expect(killSpy).toHaveBeenCalledWith(-4242, "SIGTERM");
+
+      // The wrapper is gone, but its group still answers: escalate it.
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
+    } finally {
+      vi.useRealTimers();
+      killSpy.mockRestore();
+      if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+    }
+  });
+
   it("restart re-spawns and appends a restart marker to the stderr ring", async () => {
     const fakes = [makeFakeSubprocess({ pid: 1 }), makeFakeSubprocess({ pid: 2 })];
     let nth = 0;

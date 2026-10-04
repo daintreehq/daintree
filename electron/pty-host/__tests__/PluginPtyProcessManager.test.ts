@@ -434,3 +434,159 @@ describe("PluginPtyProcessManager", () => {
     expect(b.calls).toEqual(["destroy", "kill"]);
   });
 });
+
+describe("PluginPtyProcessManager process-tree teardown (#13173)", () => {
+  type Target = { readonly pid: number; kill(signal?: string): void };
+
+  function makeTreeManager() {
+    const events: PluginPtyHostEvent[] = [];
+    const targets: Target[] = [];
+    const killer = {
+      execute: vi.fn<(immediate: boolean, delayMs?: number) => void>(),
+      reapAfterRootExit: vi.fn<(immediate?: boolean, delayMs?: number) => void>(),
+    };
+    const manager = new PluginPtyProcessManager(
+      (event) => events.push(event),
+      (target) => {
+        targets.push(target);
+        return killer;
+      }
+    );
+    return { manager, events, killer, targets };
+  }
+
+  function withPlatform(platform: NodeJS.Platform, fn: () => void): void {
+    const original = process.platform;
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    try {
+      fn();
+    } finally {
+      Object.defineProperty(process, "platform", { value: original, configurable: true });
+    }
+  }
+
+  beforeEach(() => {
+    spawnMock.mockReset();
+  });
+
+  it("builds one killer per incarnation, rooted at the PTY's pid", () => {
+    const fake = makeFakePty({ pid: 4321 });
+    spawnMock.mockReturnValue(fake.pty);
+    const { manager, targets } = makeTreeManager();
+    manager.spawn("p1", 0, options());
+    expect(targets).toHaveLength(1);
+    expect(targets[0].pid).toBe(4321);
+  });
+
+  it("SIGTERMs the whole tree with the plugin grace window instead of the root alone", () => {
+    withPlatform("linux", () => {
+      const fake = makeFakePty();
+      spawnMock.mockReturnValue(fake.pty);
+      const { manager, killer, targets } = makeTreeManager();
+      manager.spawn("p1", 0, options());
+      manager.kill("p1", 0, "SIGTERM");
+      expect(killer.execute).toHaveBeenCalledWith(false, 3_000);
+      // The killer signals the root through the adapter, which must stay a
+      // polite SIGTERM and leave the handle live for the child's own exit.
+      expect(fake.calls).toEqual([]);
+      targets[0].kill();
+      expect(fake.kills).toEqual(["SIGTERM"]);
+    });
+  });
+
+  it("finishes the tree kill immediately on SIGKILL, before releasing the handle", () => {
+    withPlatform("linux", () => {
+      const fake = makeFakePty();
+      spawnMock.mockReturnValue(fake.pty);
+      const { manager, killer } = makeTreeManager();
+      manager.spawn("p1", 0, options());
+      const order: string[] = [];
+      killer.execute.mockImplementation((immediate) => order.push(`execute:${immediate}`));
+      fake.pty.destroy = () => {
+        order.push("destroy");
+      };
+      manager.kill("p1", 0, "SIGTERM");
+      manager.kill("p1", 0, "SIGKILL");
+      expect(order).toEqual(["execute:false", "execute:true", "destroy"]);
+      expect(fake.kills[0]).toBe("SIGKILL");
+    });
+  });
+
+  it("tree-kills a PTY torn down by host disposal or a superseding generation", () => {
+    const a = makeFakePty({ pid: 10 });
+    const b = makeFakePty({ pid: 11 });
+    spawnMock.mockReturnValueOnce(a.pty).mockReturnValueOnce(b.pty);
+    const { manager, killer } = makeTreeManager();
+    manager.spawn("p1", 0, options());
+    manager.spawn("p1", 1, options());
+    expect(killer.execute).toHaveBeenCalledTimes(1);
+    expect(killer.execute).toHaveBeenLastCalledWith(true);
+    manager.disposeAll();
+    expect(killer.execute).toHaveBeenCalledTimes(2);
+    expect(killer.execute).toHaveBeenLastCalledWith(true);
+  });
+
+  it("reaps what a root that exited on its own left behind", () => {
+    const fake = makeFakePty();
+    spawnMock.mockReturnValue(fake.pty);
+    const { manager, killer } = makeTreeManager();
+    manager.spawn("p1", 0, options());
+    fake.emitExit(0);
+    expect(killer.reapAfterRootExit).toHaveBeenCalledTimes(1);
+    expect(killer.execute).not.toHaveBeenCalled();
+  });
+
+  it("leaves a graceful kill's escalation armed when the root exits inside the grace window", () => {
+    withPlatform("linux", () => {
+      const fake = makeFakePty();
+      spawnMock.mockReturnValue(fake.pty);
+      const { manager, killer } = makeTreeManager();
+      manager.spawn("p1", 0, options());
+      manager.kill("p1", 0, "SIGTERM");
+      fake.emitExit(0, 15);
+      // reapAfterRootExit() would abort the pending SIGKILL of grandchildren
+      // that ignored SIGTERM — the most likely survivors of all.
+      expect(killer.reapAfterRootExit).not.toHaveBeenCalled();
+      expect(killer.execute).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("issues one native kill and one tree kill on Windows across SIGTERM then SIGKILL", () => {
+    withPlatform("win32", () => {
+      const fake = makeFakePty();
+      (fake.pty as unknown as { _agent: object })._agent = {};
+      spawnMock.mockReturnValue(fake.pty);
+      const { manager, killer, targets } = makeTreeManager();
+      // Model the real killer: taskkill, then the root's native fallback.
+      killer.execute.mockImplementation(() => targets[0].kill());
+      manager.spawn("p1", 0, options());
+      manager.kill("p1", 0, "SIGTERM");
+      manager.kill("p1", 0, "SIGKILL");
+      // A second taskkill could land on a recycled PID; a second native kill
+      // double-frees the pseudoconsole (#9551).
+      expect(killer.execute).toHaveBeenCalledTimes(1);
+      expect(fake.calls.filter((c) => c === "kill")).toHaveLength(1);
+      expect(fake.calls).not.toContain("destroy");
+    });
+  });
+
+  it("still tears the PTY down when building its killer throws", () => {
+    const fake = makeFakePty();
+    spawnMock.mockReturnValue(fake.pty);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const manager = new PluginPtyProcessManager(
+        () => {},
+        () => {
+          throw new Error("no ledger");
+        }
+      );
+      manager.spawn("p1", 0, options());
+      manager.kill("p1", 0, "SIGTERM");
+      expect(fake.kills).toEqual(["SIGTERM"]);
+      expect(manager.getLiveCount()).toBe(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

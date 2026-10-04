@@ -1,5 +1,4 @@
 import { spawnSync } from "child_process";
-import type * as pty from "node-pty";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 import type { KillCensus } from "../TerminalLineageLedger.js";
 
@@ -17,6 +16,16 @@ interface EscalationState {
   shellPid: number;
   shellStartTime: string | undefined;
   targets: Map<number, string>;
+}
+
+/**
+ * The root process a killer owns: a terminal's `IPty`, or a plugin PTY's
+ * adapter around one (#13173). `kill()` is the root's own signal — for node-pty
+ * on Unix that is SIGHUP.
+ */
+export interface ProcessTreeKillTarget {
+  readonly pid: number;
+  kill(signal?: string): void;
 }
 
 /**
@@ -82,7 +91,7 @@ export class ProcessTreeKiller {
   private readonly killIdentities = new Map<number, string>();
 
   constructor(
-    private readonly ptyProcess: pty.IPty,
+    private readonly ptyProcess: ProcessTreeKillTarget,
     private readonly processTreeCache: ProcessTreeCache | null,
     private readonly lineage: LineageKillSource | null = null
   ) {
