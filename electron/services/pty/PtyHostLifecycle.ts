@@ -178,6 +178,13 @@ export interface PtyHostLifecycleCallbacks {
    * sets `needsRespawn=true` so its `ready` handler will replay pending spawns.
    */
   onBeforeRestart: () => void;
+  /**
+   * Work the next auto-restart fork must wait for. PtyClient returns the
+   * crashed host's in-flight lineage reap: the replacement replays every
+   * terminal on `ready`, so forking first would run a fresh copy beside a
+   * survivor the reap has not killed yet (#13166).
+   */
+  restartBarrier?: () => Promise<void> | null;
   /** Returns whether PtyClient.isDisposed is true. */
   isDisposed: () => boolean;
   /**
@@ -602,9 +609,17 @@ export class PtyHostLifecycle {
         }
         this.restartTimer = setTimeout(() => {
           this.restartTimer = null;
-          if (this.callbacks.isDisposed() || this.child !== null) return;
-          this.callbacks.onBeforeRestart();
-          this.start();
+          const restart = () => {
+            if (this.callbacks.isDisposed() || this.child !== null) return;
+            this.callbacks.onBeforeRestart();
+            this.start();
+          };
+          const barrier = this.callbacks.restartBarrier?.();
+          if (barrier) {
+            void barrier.then(restart, restart);
+          } else {
+            restart();
+          }
         }, delay);
         this.restartTimer.unref?.();
       } else {

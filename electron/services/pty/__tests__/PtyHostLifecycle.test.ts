@@ -629,6 +629,58 @@ describe("PtyHostLifecycle", () => {
     expect(lifecycle.child).toBe(newChild);
   });
 
+  it("holds the auto-restart fork until the restart barrier settles", async () => {
+    const { lifecycle, callbacks } = makeLifecycle();
+    let releaseReap!: () => void;
+    const reap = new Promise<void>((resolve) => {
+      releaseReap = resolve;
+    });
+    callbacks.callbacks.restartBarrier = () => reap;
+    lifecycle.start();
+    lifecycle.markReady();
+
+    mockChild.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    const newChild = createMockChild();
+    shared.forkMock.mockReturnValueOnce(newChild);
+    shared.forkMock.mockClear();
+
+    // The replacement replays every terminal on ready, so it must not exist
+    // while the crashed host's survivors are still being reaped (#13166).
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(shared.forkMock).not.toHaveBeenCalled();
+    expect(callbacks.log.onBeforeRestartCalls).toBe(0);
+    expect(lifecycle.child).toBeNull();
+
+    releaseReap();
+    await vi.advanceTimersByTimeAsync(0);
+    lifecycle.waitForReady().catch(() => undefined);
+    expect(callbacks.log.onBeforeRestartCalls).toBe(1);
+    expect(lifecycle.child).toBe(newChild);
+  });
+
+  it("does not fork from a settled barrier once the client is disposed", async () => {
+    const { lifecycle, callbacks } = makeLifecycle();
+    let releaseReap!: () => void;
+    const reap = new Promise<void>((resolve) => {
+      releaseReap = resolve;
+    });
+    callbacks.callbacks.restartBarrier = () => reap;
+    lifecycle.start();
+    lifecycle.markReady();
+
+    mockChild.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(10_001);
+    shared.forkMock.mockClear();
+
+    callbacks.log.isDisposed.current = true;
+    releaseReap();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(shared.forkMock).not.toHaveBeenCalled();
+    expect(callbacks.log.onBeforeRestartCalls).toBe(0);
+  });
+
   it("calls onMaxRestartsReached when three crashes occur within the window", async () => {
     const { lifecycle, callbacks } = makeLifecycle();
     lifecycle.start();

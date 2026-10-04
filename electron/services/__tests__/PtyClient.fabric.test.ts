@@ -23,6 +23,13 @@ vi.mock("../TrashedPidTracker.js", () => ({
   }),
 }));
 
+// Pass-through by default (nothing to claim); individual tests hand back a
+// claim and hold its reap open to exercise the restart/migration barrier.
+const lineage = vi.hoisted(() => ({
+  claim: vi.fn((_userData: string, _service?: string): string | null => null),
+  reap: vi.fn((_claimed: string): Promise<void> => Promise.resolve()),
+}));
+
 interface MockUtilityProcess extends EventEmitter {
   postMessage: Mock;
   kill: Mock;
@@ -114,6 +121,14 @@ describe("PtyClient fabric", () => {
         persistTrashed: vi.fn().mockResolvedValue(undefined),
         clearAll: vi.fn(),
       }),
+    }));
+
+    lineage.claim.mockReset().mockReturnValue(null);
+    lineage.reap.mockReset().mockResolvedValue(undefined);
+    vi.doMock("../TerminalLineageLedger.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../TerminalLineageLedger.js")>()),
+      claimShardLineageFile: lineage.claim,
+      reapClaimedLineageFile: lineage.reap,
     }));
 
     PtyClientClass = (await import("../PtyClient.js")).PtyClient;
@@ -560,6 +575,68 @@ describe("PtyClient fabric", () => {
       client.spawn("t3", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
       expect(forks.length).toBe(forkCount);
       expect(messagesOfType(defaultShard().child, "spawn").map((m) => m.id)).toEqual(["t1", "t3"]);
+      client.dispose();
+    });
+
+    it("does not restart a crashed shard until its lineage reap finishes", async () => {
+      // The restarted host replays every terminal on ready; forking before the
+      // reap would run a fresh copy beside a survivor it has not killed (#13166).
+      let releaseReap!: () => void;
+      lineage.claim.mockReturnValueOnce("/mock/user/data/pty-lineage-a.json.reaping-1");
+      lineage.reap.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          releaseReap = resolve;
+        })
+      );
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      const forkCountBefore = forks.length;
+
+      shardA.child.emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(lineage.claim).toHaveBeenCalledWith("/mock/user/data", shardA.serviceName);
+      expect(lineage.reap).toHaveBeenCalledTimes(1);
+      expect(forks.length).toBe(forkCountBefore);
+
+      releaseReap();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(forks.length).toBe(forkCountBefore + 1);
+      const restarted = forks[forks.length - 1];
+      restarted.child.emit("message", { type: "ready" });
+      expect(messagesOfType(restarted.child, "spawn").map((m) => m.id)).toEqual(["t1"]);
+      client.dispose();
+    });
+
+    it("waits for the final crash's lineage reap before migrating to the default shard", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      projectShard("project-a").child.emit("message", { type: "ready" });
+
+      for (let i = 0; i < 2; i++) {
+        forks[forks.length - 1].child.emit("exit", 1);
+        await vi.advanceTimersByTimeAsync(15_000);
+      }
+
+      let releaseReap!: () => void;
+      lineage.claim.mockReturnValueOnce("/mock/user/data/pty-lineage-a.json.reaping-3");
+      lineage.reap.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          releaseReap = resolve;
+        })
+      );
+      forks[forks.length - 1].child.emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(messagesOfType(defaultShard().child, "spawn")).toEqual([]);
+
+      releaseReap();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(messagesOfType(defaultShard().child, "spawn").map((m) => m.id)).toEqual(["t1"]);
       client.dispose();
     });
 

@@ -612,13 +612,14 @@ export class TerminalLineageLedger {
   }
 
   /**
-   * Refresh the "has this left our tree" flag, which decides both what gets its
-   * own discovery walk and what gets persisted for the next launch to reap.
+   * Refresh the "has this left our tree" flag, which decides what the killer
+   * must reach through the ledger rather than its live walk, and which members
+   * get re-verified before they may adopt children.
    *
    * Defined as *unreachable from the root in this census*, not "its parent is
    * missing". A detached wrapper's own children still have a live parent, so a
-   * parent-based test would leave them out of the persisted set and let them
-   * survive the very restart that reaps their wrapper.
+   * parent-based test would leave them out of the verified kill set and let
+   * them survive the teardown that reaps their wrapper.
    */
   private flagOrphans(entry: RootEntry, rootPid: number, census: LineageCensus): void {
     const reachable = new Set(census.getDescendantPids(rootPid));
@@ -719,7 +720,7 @@ export class TerminalLineageLedger {
         // A PID the probe could not resolve stays permanently unsignallable
         // unless it goes back in the queue.
         for (const pid of unresolved) this.pendingIdentification.add(pid);
-        // Identities changed, so the persisted orphan set may have too — and a
+        // Identities changed, so the persisted set may have too — and a
         // crash before the next census would otherwise lose it.
         this.persist();
       })
@@ -763,14 +764,15 @@ export class TerminalLineageLedger {
   }
 
   /**
-   * Write the orphaned, identified subset so a crashed host or a hard-killed
-   * app can still reap them on the next launch.
+   * Write every identified descendant so a crashed host or a hard-killed app
+   * can still reap them on the next launch.
    *
-   * Only orphans are persisted. Descendants still attached to a live pty shell
-   * die with it — the shell's own teardown, or the process-group kill in
-   * `PtyClient.cleanupOrphanedPtysForShard`, already reaches them — so writing
-   * them would churn the file on every build without widening what the reaper
-   * can actually save.
+   * Attached descendants are persisted too, not just orphans. Killing a shell's
+   * process group after a crash reaches only the shell: job control gives every
+   * `cmd &` pipeline its own group, agent background work runs in its own
+   * session, and a SIGKILLed shell never forwards SIGHUP to its jobs (#13166).
+   * Those processes reparent to init the moment the shell dies, so whatever
+   * this file holds is the only record left of them.
    */
   private persist(): void {
     if (!this.filePath) return;
@@ -778,16 +780,16 @@ export class TerminalLineageLedger {
     const entries: PersistedLineageEntry[] = [];
     for (const [rootPid, entry] of this.roots) {
       for (const [pid, tracked] of entry.pids) {
-        if (!tracked.orphaned || !tracked.startTime) continue;
+        if (!tracked.startTime) continue;
         entries.push({ pid, startTime: tracked.startTime, rootPid });
       }
     }
     entries.sort((a, b) => a.pid - b.pid);
 
-    // Change-detection is the whole write gate. The orphan set only moves when
-    // a descendant actually detaches or dies, so this settles to near-zero
-    // writes on its own — and a time-based throttle on top would leave a fresh
-    // orphan unrecorded across exactly the window a crash is most likely in.
+    // Change-detection is the whole write gate. The set only moves when a
+    // descendant is identified or dies, so a settled tree writes nothing — and
+    // a time-based throttle on top would leave a fresh job unrecorded across
+    // exactly the window a crash is most likely in.
     const signature = JSON.stringify(entries);
     if (signature === this.lastPersistedJson) return;
 
@@ -806,7 +808,7 @@ export class TerminalLineageLedger {
       }
       // Recorded only after the disk actually changed. Stamping it up front
       // would let a transient EBUSY or disk-full suppress every future retry
-      // for an unchanged orphan set, silently leaving no recovery record.
+      // for an unchanged set, silently leaving no recovery record.
       this.lastPersistedJson = signature;
     } catch (err) {
       this.lastPersistedJson = null;
@@ -914,7 +916,7 @@ async function reapEntries(entries: PersistedLineageEntry[]): Promise<PersistedL
   if (confirmed.length === 0) return retained;
 
   console.log(
-    `[TerminalLineageLedger] Reaping ${confirmed.length} orphaned descendant(s) from a previous session`
+    `[TerminalLineageLedger] Reaping ${confirmed.length} terminal descendant(s) left by an exited host`
   );
 
   if (process.platform === "win32") {
@@ -1030,9 +1032,14 @@ export async function reapPersistedLineages(userDataPath: string): Promise<void>
   );
 }
 
+/** Reap a ledger file already moved aside by {@link claimShardLineageFile}. */
+export async function reapClaimedLineageFile(claimedPath: string): Promise<void> {
+  await reapLineageFile(claimedPath);
+}
+
 /**
  * Reap one shard's ledger after its pty-host exited. The in-memory ledger died
- * with the host, so the persisted orphan set is all that is left.
+ * with the host, so the persisted lineage is all that is left.
  */
 export async function reapShardLineage(userDataPath: string, shardService?: string): Promise<void> {
   const claimed = claimShardLineageFile(userDataPath, shardService);
