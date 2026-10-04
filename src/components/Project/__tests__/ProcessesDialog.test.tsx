@@ -21,6 +21,7 @@ const mockGetSnapshot = vi.mocked(processesClient.getSnapshot);
 const mockKill = vi.mocked(terminalClient.kill);
 const mockStop = vi.fn();
 const mockGetAllSessions = vi.fn();
+const mockGetInfo = vi.fn();
 
 beforeAll(async () => {
   await primeRadix();
@@ -76,9 +77,13 @@ beforeEach(() => {
   mockGetAllSessions.mockResolvedValue([]);
   mockStop.mockResolvedValue(undefined);
   mockKill.mockResolvedValue(undefined);
+  mockGetInfo.mockResolvedValue({ id: "a", spawnedAt: 1, hasPty: true });
   Object.defineProperty(window, "electron", {
     configurable: true,
-    value: { devPreview: { getAllSessions: mockGetAllSessions, stop: mockStop } },
+    value: {
+      devPreview: { getAllSessions: mockGetAllSessions, stop: mockStop },
+      terminal: { getInfo: mockGetInfo },
+    },
   });
 });
 
@@ -168,15 +173,55 @@ describe("ProcessesDialog (#13175)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Kill 'shell' in Cedar" }));
     await screen.findByRole("alertdialog");
-    mockGetSnapshot.mockResolvedValue(
-      snapshot({ terminals: [terminal("a", { title: "shell", spawnedAt: 50 })] })
-    );
+    mockGetInfo.mockResolvedValue({ id: "a", spawnedAt: 50, hasPty: true });
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Kill terminal" }));
     });
 
     expect(mockKill).not.toHaveBeenCalled();
     expect(screen.getByRole("alert").textContent).toContain("restarted after you chose it");
+  });
+
+  it("stops a dev preview whose PTY already left, so its recovery is cancelled", async () => {
+    mockGetSnapshot.mockResolvedValue(
+      snapshot({ terminals: [terminal("dev-term", { kind: "dev-preview", title: "web" })] })
+    );
+    mockGetAllSessions.mockResolvedValue([
+      { terminalId: "dev-term", projectId: "p1", panelId: "panel-7" },
+    ]);
+    mockGetInfo.mockRejectedValue(new Error("Terminal dev-term not found"));
+    await renderOpen();
+
+    fireEvent.click(screen.getByRole("button", { name: "Kill 'web' in Cedar" }));
+    await screen.findByRole("alertdialog");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Stop dev server" }));
+    });
+
+    expect(mockStop).toHaveBeenCalledWith({ projectId: "p1", panelId: "panel-7" });
+  });
+
+  it("opens the confirm for the latest Kill press, not a slower earlier one", async () => {
+    mockGetSnapshot.mockResolvedValue(
+      snapshot({
+        terminals: [terminal("a", { title: "first" }), terminal("b", { title: "second" })],
+      })
+    );
+    await renderOpen();
+    let releaseFirst!: (value: unknown[]) => void;
+    mockGetAllSessions.mockImplementationOnce(
+      () => new Promise((resolve) => (releaseFirst = resolve))
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Kill 'first' in Cedar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill 'second' in Cedar" }));
+    const confirm = await screen.findByRole("alertdialog");
+    await act(async () => {
+      releaseFirst([]);
+    });
+
+    expect(confirm.textContent).toContain("Kill 'second'?");
+    expect(screen.getByRole("alertdialog").textContent).toContain("Kill 'second'?");
   });
 
   it("offers no kill when the dev preview sessions can't be read", async () => {

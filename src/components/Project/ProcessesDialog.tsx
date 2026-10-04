@@ -91,28 +91,26 @@ type KillOutcome =
   { status: "ended" } | { status: "replaced" } | { status: "failed"; message: string };
 
 /**
- * End the confirmed process — and only that one. The kill is by terminal id, so
- * a pane that restarted while the confirm was open would take the new process
- * with it; the generation is re-read first and a replacement is refused.
+ * End the confirmed process — and only that one. A dev preview stops through
+ * its session every time: that also cancels a recovery or reinstall waiting to
+ * relaunch it, which a PTY that already left would not show. A terminal is
+ * killed by id, so a pane that restarted while the confirm was open would take
+ * the new process with it; its generation is re-read from the owning host right
+ * before the kill and a replacement is refused.
  */
 async function endProcess(target: KillTarget): Promise<KillOutcome> {
   try {
-    const current = await processesClient.getSnapshot();
-    const live = current.terminals.find((terminal) => terminal.id === target.terminal.id);
-    if (!live) {
-      return current.complete
-        ? { status: "ended" }
-        : { status: "failed", message: "Its terminal host didn't answer." };
-    }
-    if (live.spawnedAt !== target.terminal.spawnedAt) return { status: "replaced" };
     if (target.via === "dev-session") {
       await window.electron.devPreview.stop({
         projectId: target.projectId,
         panelId: target.panelId,
       });
-    } else {
-      await terminalClient.kill(target.terminal.id);
+      return { status: "ended" };
     }
+    const live = await window.electron.terminal.getInfo(target.terminal.id);
+    if (live.spawnedAt !== target.terminal.spawnedAt) return { status: "replaced" };
+    if (live.hasPty === false) return { status: "ended" };
+    await terminalClient.kill(target.terminal.id);
     return { status: "ended" };
   } catch (error) {
     return { status: "failed", message: formatErrorMessage(error, "The process didn't respond.") };
@@ -155,6 +153,9 @@ export function ProcessesDialog({
   // Bumped on every open and close, so a session read that resolves after the
   // dialog closed can't raise a confirm nobody asked for.
   const openGenerationRef = useRef(0);
+  // The latest Kill press wins: a slower session read for an earlier row must
+  // not replace the confirm a later press opened.
+  const killRequestRef = useRef(0);
   const bodyRef = useRef<HTMLDivElement>(null);
   // Where the confirm hands focus back: the row's own Kill, or after a kill
   // the neighbouring rows' Kill buttons, in preference order.
@@ -219,14 +220,17 @@ export function ProcessesDialog({
   const requestKill = (terminal: ProcessInventoryTerminal) => {
     setKillError(null);
     const generation = openGenerationRef.current;
+    const request = ++killRequestRef.current;
+    const isCurrent = () =>
+      openGenerationRef.current === generation && killRequestRef.current === request;
     void resolveKillTarget(terminal).then(
       (target) => {
-        if (openGenerationRef.current !== generation) return;
+        if (!isCurrent()) return;
         focusPlanRef.current = { ids: [terminal.id] };
         setKillTarget(target);
       },
       (error: unknown) => {
-        if (openGenerationRef.current !== generation) return;
+        if (!isCurrent()) return;
         logError("[ProcessesDialog] Failed to read dev preview sessions", error);
         setKillError(
           `Couldn't check whether '${terminalTitle(terminal)}' is a dev preview, so nothing was killed. Try again.`

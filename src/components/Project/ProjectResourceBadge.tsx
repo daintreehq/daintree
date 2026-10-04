@@ -446,6 +446,11 @@ export function ProjectResourceBadge({
   // close-time restore would otherwise pull focus back to the readout from
   // under the modal that just took it.
   const handingOffRef = useRef(false);
+  // A handoff whose close never reached close-autofocus (reopened mid-exit)
+  // must not swallow the next ordinary close's focus restore.
+  useEffect(() => {
+    if (open) handingOffRef.current = false;
+  }, [open]);
   // Mirror into state so JSX doesn't read the ref during render (React Compiler).
   const [samples, setSamples] = useState<number[]>([]);
 
