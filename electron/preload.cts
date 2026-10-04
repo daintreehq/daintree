@@ -93,6 +93,7 @@ import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.
 import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
 import { buildWorkspaceResidencyPreloadBindings } from "./ipc/handlers/workspaceResidency.preload.js";
+import { buildProcessesPreloadBindings } from "./ipc/handlers/processes.preload.js";
 import { buildPluginAgentMcpPreloadBindings } from "./ipc/handlers/pluginAgentMcp.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
@@ -2873,6 +2874,8 @@ function buildElectronApi(): ElectronAPI {
     cli: buildCliPreloadBindings(_unwrappingInvoke),
 
     workspaceResidency: buildWorkspaceResidencyPreloadBindings(_unwrappingInvoke),
+
+    processes: buildProcessesPreloadBindings(_unwrappingInvoke),
 
     // Per-project consent for plugin agent tools. Renderer-only by design.
     pluginAgentMcp: buildPluginAgentMcpPreloadBindings(_unwrappingInvoke),

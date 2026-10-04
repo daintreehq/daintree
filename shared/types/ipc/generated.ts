@@ -1536,6 +1536,10 @@ export interface GeneratedIpcInvokeMap {
     args: [level: "errors" | "off" | "full"];
     result: void;
   };
+  "processes:get-snapshot": {
+    args: [];
+    result: import("../processes.js").ProcessInventorySnapshot;
+  };
   "project-history:peek": {
     args: [];
     result: import("./project.js").ProjectHistoryTarget | null;
