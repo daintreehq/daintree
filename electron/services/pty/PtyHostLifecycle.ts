@@ -315,6 +315,9 @@ export class PtyHostLifecycle {
     // terminals beside survivors the crashed host's reap has not killed yet.
     const restart = () => {
       if (this.callbacks.isDisposed() || this.child !== null) return;
+      // Again here: a crash classified while we waited (the deferred
+      // setImmediate pass) must not eat into the fresh budget.
+      this.crashTimestamps = [];
       this.callbacks.onBeforeRestart();
       this.start();
     };
