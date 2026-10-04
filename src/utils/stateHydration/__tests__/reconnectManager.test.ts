@@ -13,7 +13,9 @@ vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
 }));
 
-const { reconnectWithTimeout } = await import("../reconnectManager");
+const { reconnectWithTimeout, RECONNECT_TIMEOUT_MS, RECONNECT_GRACE_MS } = await import(
+  "../reconnectManager"
+);
 
 const noopLog = () => {};
 
@@ -101,9 +103,58 @@ describe("reconnectWithTimeout", () => {
       reconnectMock.mockReturnValueOnce(new Promise(() => {}));
 
       const outcomePromise = reconnectWithTimeout("t-hung", noopLog);
-      await vi.advanceTimersByTimeAsync(2001);
+      await vi.advanceTimersByTimeAsync(RECONNECT_TIMEOUT_MS + RECONNECT_GRACE_MS + 1);
 
       await expect(outcomePromise).resolves.toEqual({ status: "timeout" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #13172: a timeout makes restore give up on the saved id while the original
+  // may still be running, so a slow reply past the first deadline still counts.
+  it("waits out a slow probe past the first deadline and reattaches on a late reply", async () => {
+    vi.useFakeTimers();
+    try {
+      let reply: (value: unknown) => void = () => {};
+      reconnectMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          reply = resolve;
+        })
+      );
+      let settled = false;
+      const outcomePromise = reconnectWithTimeout("t-slow", noopLog).then((outcome) => {
+        settled = true;
+        return outcome;
+      });
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_TIMEOUT_MS + 1);
+      expect(settled).toBe(false);
+
+      reply({ exists: true, id: "t-slow", hasPty: true });
+
+      await expect(outcomePromise).resolves.toMatchObject({ status: "found" });
+      expect(reconnectMock).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not time out before the grace window ends", async () => {
+    vi.useFakeTimers();
+    try {
+      reconnectMock.mockReturnValueOnce(new Promise(() => {}));
+      let settled = false;
+      void reconnectWithTimeout("t-hung", noopLog).then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_TIMEOUT_MS + RECONNECT_GRACE_MS - 1);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
     } finally {
       vi.useRealTimers();
     }

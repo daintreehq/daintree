@@ -962,6 +962,10 @@ export function buildArgsForRespawn(
     location,
     requestedId: mintFreshTerminalId ? undefined : saved.id,
     command: isAgentPanel ? command : saved.command?.trim() || undefined,
+    // A saved id we can't reuse means the original may still be running its
+    // command, so a plain terminal comes back as a shell that keeps the command
+    // without re-running it — never a second `npm run dev` (#13172).
+    skipCommandExecution: mintFreshTerminalId && !isAgentPanel ? true : undefined,
     isInputLocked: saved.isInputLocked,
     devCommand: isDevPreview ? command : undefined,
     browserUrl: isDevPreview ? saved.browserUrl : undefined,
