@@ -36,6 +36,13 @@ import type {
  */
 export class PluginPtyProcessManager {
   private readonly entries = new Map<string, PluginPtyEntry>();
+  /**
+   * Killers whose root has exited but which still owe their tree a SIGKILL on
+   * an unref'd timer — a graceful kill's escalation, or a natural exit's
+   * orphan reap. Their entries are gone, so this is what lets host disposal
+   * finish that work instead of leaving it to a timer that may never fire.
+   */
+  private readonly lingeringKillers = new Map<PluginPtyTreeKiller, LingeringKill>();
 
   constructor(
     private readonly sendEvent: (event: PluginPtyHostEvent) => void,
@@ -94,17 +101,20 @@ export class PluginPtyProcessManager {
       exited: false,
       tornDown: false,
       killer: null,
+      rootRegistered: false,
       treeKill: "none",
       nativeReleased: false,
     };
     this.entries.set(id, entry);
     entry.killer = this.buildTreeKiller(entry);
+    this.ensureRootRegistered(entry);
 
     // Wire output and exit BEFORE announcing the spawn, so a command that
     // greets the moment it starts cannot emit into a void.
     entry.disposables.push(
       child.onData((data) => {
         if (entry.tornDown) return;
+        this.ensureRootRegistered(entry);
         this.sendEvent({ type: "plugin-pty-data", id, generation, data });
       })
     );
@@ -114,7 +124,7 @@ export class PluginPtyProcessManager {
         // A tree already being killed keeps its identity-checked escalation
         // armed; one whose root just ended on its own still owes a sweep of
         // whatever it left behind, which only the lineage ledger can reach.
-        if (entry.treeKill === "none") entry.killer?.reapAfterRootExit();
+        this.settleKillerOnExit(entry);
         this.sendEvent({
           type: "plugin-pty-exit",
           id,
@@ -222,6 +232,20 @@ export class PluginPtyProcessManager {
       this.teardownEntry(entry, "dispose");
     }
     this.entries.clear();
+    const now = Date.now();
+    for (const [killer, lingering] of this.lingeringKillers) {
+      if (lingering.untilMs < now) continue;
+      try {
+        if (lingering.mode === "escalate") killer.execute(true);
+        else killer.reapAfterRootExit(true);
+      } catch (error) {
+        console.warn(
+          "[PluginPty] final tree kill failed:",
+          formatErrorMessage(error, "tree kill failed")
+        );
+      }
+    }
+    this.lingeringKillers.clear();
   }
 
   /** Live-and-current lookup: wrong generation, exited, or unknown all return undefined. */
@@ -286,6 +310,47 @@ export class PluginPtyProcessManager {
     }
   }
 
+  /**
+   * A tree already being killed keeps its identity-checked escalation armed;
+   * one whose root just ended on its own still owes a sweep of whatever it
+   * left behind, which only the lineage ledger can reach. Either way the
+   * killer is kept until that work is due, for {@link disposeAll}.
+   */
+  private settleKillerOnExit(entry: PluginPtyEntry): void {
+    const killer = entry.killer;
+    if (!killer || entry.treeKill === "forced") return;
+    const now = Date.now();
+    for (const [stale, lingering] of this.lingeringKillers) {
+      if (lingering.untilMs < now) this.lingeringKillers.delete(stale);
+    }
+    if (entry.treeKill === "none") {
+      try {
+        killer.reapAfterRootExit();
+      } catch (error) {
+        console.warn(
+          `[PluginPty] orphan reap of "${entry.id}" failed:`,
+          formatErrorMessage(error, "reap failed")
+        );
+      }
+    }
+    this.lingeringKillers.set(killer, {
+      mode: entry.treeKill === "none" ? "reap" : "escalate",
+      untilMs: now + PLUGIN_PROCESS_KILL_GRACE_MS,
+    });
+  }
+
+  /**
+   * ConPTY can report PID 0 at spawn, leaving the killer's constructor nothing
+   * to register; the real PID lands later. Idempotent in the killer.
+   */
+  private ensureRootRegistered(entry: PluginPtyEntry): void {
+    if (entry.rootRegistered || !entry.killer) return;
+    const pid = entry.pty.pid;
+    if (!Number.isInteger(pid) || pid <= 0) return;
+    entry.rootRegistered = true;
+    entry.killer.registerRoot(pid);
+  }
+
   private buildTreeKiller(entry: PluginPtyEntry): PluginPtyTreeKiller | null {
     if (!this.createTreeKiller) return null;
     const target: ProcessTreeKillTarget = {
@@ -300,6 +365,8 @@ export class PluginPtyProcessManager {
           this.releaseNative(entry);
           return;
         }
+        // Once reaped, the root's PID may belong to anything.
+        if (entry.exited) return;
         entry.pty.kill("SIGTERM");
       },
     };
@@ -328,6 +395,7 @@ export class PluginPtyProcessManager {
     const killer = entry.killer;
     if (!killer || entry.treeKill === "forced") return;
     if (process.platform === "win32" && entry.treeKill !== "none") return;
+    this.ensureRootRegistered(entry);
     entry.treeKill = immediate ? "forced" : "graceful";
     try {
       if (immediate) killer.execute(true);
@@ -349,7 +417,16 @@ export class PluginPtyProcessManager {
 }
 
 /** The kill-side surface of {@link ProcessTreeKiller} a plugin PTY uses. */
-export type PluginPtyTreeKiller = Pick<ProcessTreeKiller, "execute" | "reapAfterRootExit">;
+export type PluginPtyTreeKiller = Pick<
+  ProcessTreeKiller,
+  "execute" | "reapAfterRootExit" | "registerRoot"
+>;
+
+interface LingeringKill {
+  mode: "escalate" | "reap";
+  /** Past this the killer's own timer has run, and nothing is owed. */
+  untilMs: number;
+}
 
 /** Builds one killer per plugin PTY incarnation, bound to the pty-host's cache and ledger. */
 export type PluginPtyTreeKillerFactory = (target: ProcessTreeKillTarget) => PluginPtyTreeKiller;
@@ -365,6 +442,8 @@ interface PluginPtyEntry {
   tornDown: boolean;
   /** Null when the host runs without tree teardown (unit tests). */
   killer: PluginPtyTreeKiller | null;
+  /** Whether a real PID has been handed to the killer's ledger root. */
+  rootRegistered: boolean;
   /** How far tree teardown has gone, so a repeat only ever escalates. */
   treeKill: "none" | "graceful" | "forced";
   /** Latch for {@link PluginPtyProcessManager.releaseNative}. */

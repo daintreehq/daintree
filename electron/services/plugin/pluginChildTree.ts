@@ -2,8 +2,17 @@ import { spawn } from "node:child_process";
 
 const TASKKILL_TIMEOUT_MS = 3000;
 
+interface PendingTree {
+  timer: ReturnType<typeof setTimeout>;
+  shouldEscalate: () => boolean;
+}
+
 /** Trees SIGTERMed whose escalation has not yet run — what quit still owes a SIGKILL. */
-const pendingTrees = new Map<TreeKillableChild, ReturnType<typeof setTimeout>>();
+const pendingTrees = new Map<TreeKillableChild, PendingTree>();
+
+/** Tree-owning children whose direct child is still running. */
+const liveTrees = new Set<TreeKillableChild>();
+let exitHookInstalled = false;
 
 /**
  * The slice of a spawned plugin child that tree teardown needs. `ownsProcessTree`
@@ -13,7 +22,7 @@ const pendingTrees = new Map<TreeKillableChild, ReturnType<typeof setTimeout>>()
  * `process.kill(-pid)` or `taskkill`.
  */
 export interface TreeKillableChild {
-  pid: number | undefined;
+  pid?: number | undefined;
   ownsProcessTree?: boolean;
   kill(signal?: NodeJS.Signals): boolean;
 }
@@ -101,14 +110,57 @@ export function scheduleChildTreeEscalation(
 ): void {
   if (treePid(child) === null || process.platform === "win32") return;
   const previous = pendingTrees.get(child);
-  if (previous) clearTimeout(previous);
+  if (previous) clearTimeout(previous.timer);
   const timer = setTimeout(() => {
     pendingTrees.delete(child);
     if (!shouldEscalate() || !isChildTreeAlive(child)) return;
     signalChildTree(child, "SIGKILL");
   }, delayMs);
   timer.unref?.();
-  pendingTrees.set(child, timer);
+  pendingTrees.set(child, { timer, shouldEscalate });
+}
+
+/**
+ * Reap what a direct child left in its process group when it exited on its
+ * own — a backgrounded `server &` behind a wrapper script. Terminals do the
+ * same for a shell that exits (#12203). Must be called from the child's `exit`
+ * event, while the group's ID is still known to be ours.
+ */
+export function reapChildTreeAfterExit(
+  child: TreeKillableChild,
+  graceMs: number,
+  shouldEscalate?: () => boolean
+): void {
+  liveTrees.delete(child);
+  if (!isChildTreeAlive(child)) return;
+  signalChildTree(child, "SIGTERM");
+  scheduleChildTreeEscalation(child, graceMs, shouldEscalate);
+}
+
+/**
+ * Record a freshly spawned tree-owning child so a synchronous process exit can
+ * still signal its group. Returns the untrack call for the child's own exit. Detaching takes the child out of this process's
+ * group, so a terminal's Ctrl+C no longer reaches it, and execa skips its own
+ * exit cleanup for detached children — this hook stands in for both.
+ */
+export function trackChildTree(child: TreeKillableChild): () => void {
+  const untrack = (): void => {
+    liveTrees.delete(child);
+  };
+  if (treePid(child) === null || process.platform === "win32") return untrack;
+  liveTrees.add(child);
+  if (!exitHookInstalled) {
+    exitHookInstalled = true;
+    process.once("exit", signalTrackedTreesOnExit);
+  }
+  return untrack;
+}
+
+function signalTrackedTreesOnExit(): void {
+  for (const child of liveTrees) signalChildTree(child, "SIGTERM");
+  for (const [child, pending] of pendingTrees) {
+    if (pending.shouldEscalate() && isChildTreeAlive(child)) signalChildTree(child, "SIGKILL");
+  }
 }
 
 /**
@@ -118,11 +170,35 @@ export function scheduleChildTreeEscalation(
  * outlive the app.
  */
 export function reapPendingChildTrees(): void {
-  for (const [child, timer] of [...pendingTrees]) {
-    clearTimeout(timer);
+  for (const [child, pending] of [...pendingTrees]) {
+    clearTimeout(pending.timer);
     pendingTrees.delete(child);
-    if (isChildTreeAlive(child)) signalChildTree(child, "SIGKILL");
+    if (pending.shouldEscalate() && isChildTreeAlive(child)) signalChildTree(child, "SIGKILL");
   }
+}
+
+/**
+ * Give every pending tree until `deadlineMs` to empty on its own, then reap
+ * the rest. For a quit path that only SIGTERMed and must not leave the
+ * SIGKILL to an unref'd timer that will never fire. Referenced on purpose.
+ */
+export async function drainPendingChildTrees(
+  deadlineMs: number,
+  pollMs: number = 50
+): Promise<void> {
+  const until = Date.now() + deadlineMs;
+  while (Date.now() < until) {
+    let anyAlive = false;
+    for (const child of pendingTrees.keys()) {
+      if (isChildTreeAlive(child)) {
+        anyAlive = true;
+        break;
+      }
+    }
+    if (!anyAlive) break;
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  reapPendingChildTrees();
 }
 
 function signalGroup(pid: number, signal: NodeJS.Signals): boolean {

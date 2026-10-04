@@ -7,12 +7,18 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args) as unknown,
 }));
 
-const { isChildTreeAlive, reapPendingChildTrees, scheduleChildTreeEscalation, signalChildTree } =
-  await import("../pluginChildTree.js");
+const {
+  drainPendingChildTrees,
+  isChildTreeAlive,
+  reapChildTreeAfterExit,
+  reapPendingChildTrees,
+  scheduleChildTreeEscalation,
+  signalChildTree,
+} = await import("../pluginChildTree.js");
 
 function makeChild(opts: { pid?: number; ownsProcessTree?: boolean } = {}) {
   return {
-    pid: opts.pid ?? 5150,
+    pid: "pid" in opts ? opts.pid : 5150,
     ownsProcessTree: opts.ownsProcessTree,
     kill: vi.fn<(signal?: NodeJS.Signals) => boolean>(() => true),
   };
@@ -40,6 +46,7 @@ describe("pluginChildTree (#13173)", () => {
 
   afterEach(() => {
     reapPendingChildTrees();
+    vi.clearAllTimers();
     killSpy.mockRestore();
     setPlatform(originalPlatform);
     vi.useRealTimers();
@@ -79,11 +86,28 @@ describe("pluginChildTree (#13173)", () => {
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
-  it("never signals a group for an invalid pid", () => {
-    const child = makeChild({ ownsProcessTree: true, pid: 1 });
+  it.each([undefined, 0, 1])("never signals a group for pid %s", (pid) => {
+    // An undefined pid is a spawn that failed (ENOENT) — there is no group.
+    const child = makeChild({ ownsProcessTree: true, pid });
     signalChildTree(child, "SIGKILL");
     expect(killSpy).not.toHaveBeenCalled();
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(isChildTreeAlive(child)).toBe(false);
+  });
+
+  it("falls back to the direct child when the group signal is refused", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      killSpy.mockImplementation(() => {
+        throw errno("EPERM");
+      });
+      const child = makeChild({ ownsProcessTree: true });
+      signalChildTree(child, "SIGKILL");
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("reports the group alive while any member answers signal 0", () => {
@@ -144,6 +168,66 @@ describe("pluginChildTree (#13173)", () => {
     expect(killSpy).not.toHaveBeenCalled();
   });
 
+  it("reaps what a root that exited on its own left in its group", () => {
+    vi.useFakeTimers();
+    const child = makeChild({ ownsProcessTree: true, pid: 800 });
+    reapChildTreeAfterExit(child, 1_000);
+    expect(killSpy.mock.calls).toEqual([
+      [-800, 0],
+      [-800, "SIGTERM"],
+      [-800, "SIGCONT"],
+    ]);
+    vi.advanceTimersByTime(1_000);
+    expect(killSpy).toHaveBeenLastCalledWith(-800, "SIGKILL");
+  });
+
+  it("leaves an emptied group alone after its root's natural exit", () => {
+    killSpy.mockImplementation(() => {
+      throw errno("ESRCH");
+    });
+    const child = makeChild({ ownsProcessTree: true, pid: 801 });
+    reapChildTreeAfterExit(child, 1_000);
+    expect(killSpy).toHaveBeenCalledTimes(1);
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("honours the escalation fence at quit as well as on the timer", () => {
+    vi.useFakeTimers();
+    const child = makeChild({ ownsProcessTree: true, pid: 900 });
+    scheduleChildTreeEscalation(child, 3_000, () => false);
+    reapPendingChildTrees();
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it("drains pending trees: waits for them to empty, then reaps any survivor", async () => {
+    vi.useFakeTimers();
+    let alive = true;
+    killSpy.mockImplementation(((pid: number, signal?: unknown) => {
+      if (signal === 0 && (pid === -950 || !alive)) throw errno("ESRCH");
+      return true;
+    }) as typeof process.kill);
+    const quitting = makeChild({ ownsProcessTree: true, pid: 951 });
+    scheduleChildTreeEscalation(quitting, 10_000);
+    let drained = false;
+    const done = drainPendingChildTrees(3_000).then(() => {
+      drained = true;
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(drained).toBe(false);
+    alive = false;
+    await vi.advanceTimersByTimeAsync(50);
+    await done;
+    expect(killSpy).not.toHaveBeenCalledWith(-951, "SIGKILL");
+
+    alive = true;
+    const stubborn = makeChild({ ownsProcessTree: true, pid: 952 });
+    scheduleChildTreeEscalation(stubborn, 10_000);
+    const bounded = drainPendingChildTrees(3_000);
+    await vi.advanceTimersByTimeAsync(3_050);
+    await bounded;
+    expect(killSpy).toHaveBeenCalledWith(-952, "SIGKILL");
+  });
+
   describe("on Windows", () => {
     beforeEach(() => {
       setPlatform("win32");
@@ -172,6 +256,15 @@ describe("pluginChildTree (#13173)", () => {
       signalChildTree(child, "SIGKILL");
       taskkill.emit("error", new Error("ENOENT"));
       taskkill.emit("exit", 1);
+      expect(child.kill).toHaveBeenCalledTimes(1);
+    });
+
+    it("still kills the direct child when taskkill cannot even be spawned", () => {
+      spawnMock.mockImplementation(() => {
+        throw new Error("EMFILE");
+      });
+      const child = makeChild({ ownsProcessTree: true });
+      signalChildTree(child, "SIGTERM");
       expect(child.kill).toHaveBeenCalledTimes(1);
     });
 

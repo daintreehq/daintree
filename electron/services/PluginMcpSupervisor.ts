@@ -15,9 +15,12 @@ import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { McpServerContributionSchema } from "../schemas/plugin.js";
 import { minimalWorkerEnv } from "../utils/minimalSpawnEnv.js";
 import {
+  drainPendingChildTrees,
   PLUGIN_CHILD_DETACHED,
+  reapChildTreeAfterExit,
   scheduleChildTreeEscalation,
   signalChildTree,
+  trackChildTree,
 } from "./plugin/pluginChildTree.js";
 
 type McpServerContribution = z.infer<typeof McpServerContributionSchema>;
@@ -321,7 +324,12 @@ export class PluginMcpSupervisor {
     // before nulling the reference — otherwise the orphan process leaks.
     if (existing) {
       if (existing.subprocess) {
-        void this.terminateSubprocess(key, existing.subprocess, existing.pid);
+        void this.terminateSubprocess(
+          key,
+          existing.subprocess,
+          existing.pid,
+          existing.spawnGeneration
+        );
       }
       state.contribution = contribution;
       state.status = "spawning";
@@ -379,7 +387,12 @@ export class PluginMcpSupervisor {
     // the typeof cast just bypasses the dead-code narrowing.
     if ((state.status as PluginMcpServerStatus) === "stopped") {
       handle.exit.catch(() => {});
-      void this.terminateSubprocess(key, handle.subprocess, handle.subprocess.pid ?? null);
+      void this.terminateSubprocess(
+        key,
+        handle.subprocess,
+        handle.subprocess.pid ?? null,
+        state.spawnGeneration
+      );
       return;
     }
     const subprocess = handle.subprocess;
@@ -593,6 +606,15 @@ export class PluginMcpSupervisor {
     if (state.status === "spawning" || state.status === "ready") {
       state.status = "crashed";
       if (!state.lastError) state.lastError = "MCP server exited unexpectedly";
+    }
+    // The server is gone, but anything it backgrounded is still in its group.
+    const exited = state.subprocess;
+    if (exited && state.pid !== null) {
+      reapChildTreeAfterExit(
+        exited,
+        SHUTDOWN_GRACE_MS,
+        this.escalationFence(stateKey(state.pluginId, state.serverId), state.pid, state.spawnGeneration)
+      );
     }
     state.pid = null;
     state.subprocess = null;
@@ -893,7 +915,7 @@ export class PluginMcpSupervisor {
     key: string,
     subprocess: SupervisedSubprocess,
     pid: number | null,
-    killGeneration?: number
+    killGeneration: number
   ): Promise<void> {
     if (pid !== null && process.platform === "win32") {
       try {
@@ -908,12 +930,13 @@ export class PluginMcpSupervisor {
     if (process.platform !== "win32" && subprocess.ownsProcessTree === true) {
       signalChildTree(subprocess, "SIGTERM");
     }
-    scheduleChildTreeEscalation(subprocess, SHUTDOWN_GRACE_MS, () => {
-      if (killGeneration === undefined) return true;
-      const current = this.states.get(key);
-      // A successor holding the same PID leads a group with the same ID.
-      return !current || current.spawnGeneration === killGeneration || current.pid !== pid;
-    });
+    if (pid !== null) {
+      scheduleChildTreeEscalation(
+        subprocess,
+        SHUTDOWN_GRACE_MS,
+        this.escalationFence(key, pid, killGeneration)
+      );
+    }
 
     // Call .kill() with NO arguments. Passing an explicit signal disables
     // execa's `forceKillAfterDelay` escalation in v9.
@@ -924,11 +947,26 @@ export class PluginMcpSupervisor {
     }
   }
 
+  /**
+   * Whether a delayed group SIGKILL for the server spawned as `killGeneration`
+   * on `pid` may still fire: not once a successor on this key holds the same
+   * PID, whose group then has the same ID (#9235).
+   */
+  private escalationFence(key: string, pid: number, killGeneration: number): () => boolean {
+    return () => {
+      const current = this.states.get(key);
+      return !current || current.spawnGeneration === killGeneration || current.pid !== pid;
+    };
+  }
+
   /** Tear down every server owned by every plugin. App-shutdown entry point. */
   async shutdownAll(): Promise<void> {
     const pluginIds = new Set<string>();
     for (const state of this.states.values()) pluginIds.add(state.pluginId);
     await Promise.all([...pluginIds].map((pluginId) => this.shutdown({ pluginId })));
+    // Quit cannot leave the SIGKILL to the unref'd escalation timers, which
+    // never fire once the app exits.
+    await drainPendingChildTrees(SHUTDOWN_GRACE_MS);
   }
 
   /**
@@ -1214,6 +1252,10 @@ const defaultSpawner: SubprocessSpawner = async (config) => {
   });
   const supervised = subprocess as unknown as SupervisedSubprocess;
   supervised.ownsProcessTree = true;
+  // execa's subprocess is a promise of its result; it settles once the
+  // server has exited, and `reject: false` keeps that a resolution.
+  const untrack = trackChildTree(supervised);
+  void (subprocess as Promise<unknown>).then(untrack, untrack);
   return {
     subprocess: supervised,
     // execa subprocesses are also Promises that resolve / reject with the

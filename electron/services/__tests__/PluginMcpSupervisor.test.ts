@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PassThrough } from "node:stream";
 import { PluginMcpSupervisor, TOOLS_LIST_MAX_PAGES } from "../PluginMcpSupervisor.js";
 import { PLUGIN_MCP_STDERR_RING_LINES } from "../../../shared/types/ipc/pluginMcp.js";
+import { reapPendingChildTrees } from "../plugin/pluginChildTree.js";
 
 async function flushMicrotasks(): Promise<void> {
   await new Promise((r) => setImmediate(r));
@@ -425,9 +426,14 @@ describe("PluginMcpSupervisor (issue #9233)", () => {
         order.push("kill");
         return directKill();
       };
-      const killTree = vi.fn(async () => {
-        order.push("tree");
-      });
+      let finishTree!: () => void;
+      const killTree = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            order.push("tree");
+            finishTree = resolve;
+          })
+      );
       const supervisor = new PluginMcpSupervisor({ spawner: () => fake.handle, killTree });
       const startPromise = supervisor.start({
         pluginId: "acme.demo",
@@ -438,9 +444,57 @@ describe("PluginMcpSupervisor (issue #9233)", () => {
       fake.answerInitialize();
       await startPromise;
 
-      await supervisor.shutdown({ pluginId: "acme.demo" });
+      const stopped = supervisor.shutdown({ pluginId: "acme.demo" });
+      await new Promise((r) => setImmediate(r));
+      // The direct child must outlive the tree-kill: killing it first erases
+      // the parent links taskkill walks.
+      expect(order).toEqual(["tree"]);
+      finishTree();
+      await stopped;
       expect(order).toEqual(["tree", "kill"]);
     } finally {
+      if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+    }
+  });
+
+  it("never reaps a stopped server's group once a successor holds its PID (#9235, #13173)", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    try {
+      // Same PID twice: the successor leads a group with the old group's ID.
+      const first = makeFakeSubprocess({ pid: 4242 });
+      const second = makeFakeSubprocess({ pid: 4242 });
+      (first.subprocess as { ownsProcessTree?: boolean }).ownsProcessTree = true;
+      (second.subprocess as { ownsProcessTree?: boolean }).ownsProcessTree = true;
+      const handles = [first.handle, second.handle];
+      const supervisor = new PluginMcpSupervisor({
+        spawner: () => handles.shift()!,
+        killTree: () => {},
+      });
+      const start = (fake: typeof first) => {
+        const started = supervisor.start({
+          pluginId: "acme.demo",
+          contributions: [{ id: "linear", name: "Linear", command: "node" }],
+          resolveSettings: async () => "",
+        });
+        return fake.waitForStdinCount(1).then(() => {
+          fake.answerInitialize();
+          return started;
+        });
+      };
+      await start(first);
+      await supervisor.shutdown({ pluginId: "acme.demo" });
+      await start(second);
+      killSpy.mockClear();
+
+      // Neither the escalation timer nor a quit-time reap may touch it.
+      reapPendingChildTrees();
+      expect(killSpy).not.toHaveBeenCalledWith(-4242, "SIGKILL");
+    } finally {
+      reapPendingChildTrees();
+      killSpy.mockRestore();
       if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
     }
   });
@@ -474,6 +528,8 @@ describe("PluginMcpSupervisor (issue #9233)", () => {
       await vi.advanceTimersByTimeAsync(3_000);
       expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
     } finally {
+      reapPendingChildTrees();
+      vi.clearAllTimers();
       vi.useRealTimers();
       killSpy.mockRestore();
       if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);

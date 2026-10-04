@@ -1535,17 +1535,21 @@ describe("PluginProcessManager", () => {
     });
 
     afterEach(() => {
-      // Cancel escalations still pending, while process.kill is still a spy.
+      // Every escalation must be gone before process.kill stops being a spy:
+      // a fake PID reaching a real negative-PID kill signals a real group.
       reapPendingChildTrees();
+      vi.clearAllTimers();
+      vi.useRealTimers();
       killSpy.mockRestore();
       Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
-      vi.useRealTimers();
     });
 
+    /** Spawn a tree-owning child, then switch to fake timers for the rest of the test. */
     async function spawnTreeOwner(h: Harness) {
       const handle = await h.manager.spawn("acme.tool", pipeConfig());
       const fake = h.fakes[h.fakes.length - 1]!;
       fake.child.ownsProcessTree = true;
+      vi.useFakeTimers();
       return { handle, fake };
     }
 
@@ -1568,18 +1572,18 @@ describe("PluginProcessManager", () => {
     it("SIGKILLs grandchildren that outlive a root which exited promptly on SIGTERM", async () => {
       const h = makeHarness({ killGraceMs: 3_000 });
       const { handle, fake } = await spawnTreeOwner(h);
-      vi.useFakeTimers();
       h.manager.kill(handle.id);
       // The wrapper exits at once; the server it started ignores SIGTERM.
       fake.emitExit(null, "SIGTERM");
-      await vi.advanceTimersByTimeAsync(3_000);
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(groupSignals()).not.toContainEqual([-4242, "SIGKILL"]);
+      await vi.advanceTimersByTimeAsync(1);
       expect(groupSignals()).toContainEqual([-4242, "SIGKILL"]);
     });
 
     it("leaves an emptied group alone once the grace window ends", async () => {
       const h = makeHarness({ killGraceMs: 3_000 });
       const { handle, fake } = await spawnTreeOwner(h);
-      vi.useFakeTimers();
       h.manager.kill(handle.id);
       fake.emitExit(null, "SIGTERM");
       groupAlive = false;
@@ -1587,10 +1591,43 @@ describe("PluginProcessManager", () => {
       expect(groupSignals()).not.toContainEqual([-4242, "SIGKILL"]);
     });
 
+    it("reaps what a root that exited on its own left running in its group", async () => {
+      const h = makeHarness({ killGraceMs: 3_000 });
+      const { fake } = await spawnTreeOwner(h);
+      fake.emitExit(0, null);
+      expect(groupSignals()).toEqual([
+        [-4242, "SIGTERM"],
+        [-4242, "SIGCONT"],
+      ]);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(groupSignals()).toContainEqual([-4242, "SIGKILL"]);
+    });
+
+    it("does not signal a group that emptied with its root's natural exit", async () => {
+      const h = makeHarness({ killGraceMs: 3_000 });
+      const { fake } = await spawnTreeOwner(h);
+      groupAlive = false;
+      fake.emitExit(0, null);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(groupSignals()).toEqual([]);
+    });
+
+    it("does not re-signal a reaped root when restarting before its pipes close", async () => {
+      const h = makeHarness({ killGraceMs: 3_000 });
+      const { handle, fake } = await spawnTreeOwner(h);
+      groupAlive = false;
+      // Reaped, but a grandchild still holds stdout so `close` has not landed.
+      fake.emitExitWithoutClose(0, null);
+      await h.manager.restart(handle.id);
+      await vi.advanceTimersByTimeAsync(3_000);
+      // The PID is free for reuse: nothing may be sent to it or its group.
+      expect(groupSignals()).toEqual([]);
+      expect(fake.killSignals).toEqual([]);
+    });
+
     it("holds quit open until the group is empty, not just the direct child", async () => {
       const h = makeHarness({ killGraceMs: 3_000 });
       const { fake } = await spawnTreeOwner(h);
-      vi.useFakeTimers();
       let resolved = false;
       const swept = h.manager.shutdownAll().then(() => {
         resolved = true;
@@ -1609,10 +1646,11 @@ describe("PluginProcessManager", () => {
     it("SIGKILLs a surviving group at the quit deadline even after its leader exited", async () => {
       const h = makeHarness({ killGraceMs: 3_000 });
       const { fake } = await spawnTreeOwner(h);
-      vi.useFakeTimers();
       const swept = h.manager.shutdownAll();
       fake.emitExit(null, "SIGTERM");
-      await vi.advanceTimersByTimeAsync(3_000);
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(groupSignals()).not.toContainEqual([-4242, "SIGKILL"]);
+      await vi.advanceTimersByTimeAsync(1);
       await swept;
       expect(groupSignals()).toContainEqual([-4242, "SIGKILL"]);
     });
@@ -1622,10 +1660,15 @@ describe("PluginProcessManager", () => {
       const { handle, fake } = await spawnTreeOwner(h);
       h.manager.kill(handle.id);
       fake.emitExit(null, "SIGTERM");
-      await new Promise((r) => setTimeout(r, 20));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(groupSignals()).not.toContainEqual([-4242, "SIGKILL"]);
       // The unload's escalation rides an unref'd timer quit would never wait for.
       await h.manager.shutdownAll();
       expect(groupSignals()).toContainEqual([-4242, "SIGKILL"]);
+      // Reaped once: the original timer no longer owns anything.
+      killSpy.mockClear();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(groupSignals()).toEqual([]);
     });
   });
 });

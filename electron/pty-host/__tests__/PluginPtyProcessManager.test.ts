@@ -444,6 +444,7 @@ describe("PluginPtyProcessManager process-tree teardown (#13173)", () => {
     const killer = {
       execute: vi.fn<(immediate: boolean, delayMs?: number) => void>(),
       reapAfterRootExit: vi.fn<(immediate?: boolean, delayMs?: number) => void>(),
+      registerRoot: vi.fn<(pid: number | undefined) => void>(),
     };
     const manager = new PluginPtyProcessManager(
       (event) => events.push(event),
@@ -588,5 +589,71 @@ describe("PluginPtyProcessManager process-tree teardown (#13173)", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("finishes a graceful kill's escalation at host disposal after the root already exited", () => {
+    withPlatform("linux", () => {
+      const fake = makeFakePty();
+      spawnMock.mockReturnValue(fake.pty);
+      const { manager, killer } = makeTreeManager();
+      manager.spawn("p1", 0, options());
+      manager.kill("p1", 0, "SIGTERM");
+      fake.emitExit(0, 15);
+      expect(manager.getLiveCount()).toBe(0);
+      // The escalation rides an unref'd timer the exiting host never waits for.
+      manager.disposeAll();
+      expect(killer.execute.mock.calls).toEqual([[false, 3_000], [true]]);
+    });
+  });
+
+  it("finishes a natural exit's orphan reap at host disposal", () => {
+    const fake = makeFakePty();
+    spawnMock.mockReturnValue(fake.pty);
+    const { manager, killer } = makeTreeManager();
+    manager.spawn("p1", 0, options());
+    fake.emitExit(0);
+    manager.disposeAll();
+    expect(killer.reapAfterRootExit.mock.calls).toEqual([[], [true]]);
+  });
+
+  it("owes nothing at disposal once the killer's own timer has run", () => {
+    vi.useFakeTimers();
+    try {
+      const fake = makeFakePty();
+      spawnMock.mockReturnValue(fake.pty);
+      const { manager, killer } = makeTreeManager();
+      manager.spawn("p1", 0, options());
+      fake.emitExit(0);
+      vi.advanceTimersByTime(3_001);
+      manager.disposeAll();
+      expect(killer.reapAfterRootExit).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("registers the real root PID once ConPTY reports it", () => {
+    const fake = makeFakePty({ pid: 0 });
+    spawnMock.mockReturnValue(fake.pty);
+    const { manager, killer } = makeTreeManager();
+    manager.spawn("p1", 0, options());
+    expect(killer.registerRoot).not.toHaveBeenCalled();
+    fake.pty.pid = 9001;
+    fake.emitData("ready");
+    fake.emitData("more");
+    expect(killer.registerRoot.mock.calls).toEqual([[9001]]);
+  });
+
+  it("never signals the root through the adapter once it has exited", () => {
+    withPlatform("linux", () => {
+      const fake = makeFakePty();
+      spawnMock.mockReturnValue(fake.pty);
+      const { manager, targets } = makeTreeManager();
+      manager.spawn("p1", 0, options());
+      fake.emitExit(0);
+      const before = fake.kills.length;
+      targets[0].kill();
+      expect(fake.kills).toHaveLength(before);
+    });
   });
 });

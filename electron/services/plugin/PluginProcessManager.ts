@@ -15,9 +15,11 @@ import type { ManagedPtyBackend, PluginPtyExit } from "./PluginPtyTransport.js";
 import {
   isChildTreeAlive,
   PLUGIN_CHILD_DETACHED,
+  reapChildTreeAfterExit,
   reapPendingChildTrees,
   scheduleChildTreeEscalation,
   signalChildTree,
+  trackChildTree,
 } from "./pluginChildTree.js";
 
 export { minimalSpawnEnv };
@@ -858,6 +860,9 @@ export class PluginProcessManager {
       // Recorded before the drain wait so liveness reads (concurrency cap,
       // stdin writes) see the reap immediately.
       managed.childExited = true;
+      // A requested kill already owns the tree's escalation. A child that
+      // ended on its own still leaves whatever it backgrounded in its group.
+      if (!managed.killRequested) reapChildTreeAfterExit(child, this.killGraceMs);
       // The exit code/signal are only ever authoritative here — `close` carries
       // its own arguments in Node, but this interface deliberately doesn't take
       // them, so the values are captured on the way past.
@@ -1037,11 +1042,13 @@ export class PluginProcessManager {
         clearTimeout(managed.killTimer);
         managed.killTimer = null;
       }
-      let oldExited = false;
+      // Between `exit` and `close` the child is still attached but already
+      // reaped, and its PID may already belong to something else.
+      let oldExited = managed.childExited;
       old.on("exit", () => {
         oldExited = true;
       });
-      signalChildTree(old, "SIGTERM");
+      if (!oldExited) signalChildTree(old, "SIGTERM");
       // Escalate the detached old child to SIGKILL if it ignores SIGTERM, so a
       // repeated restart can't strand a pile of live children outside the cap.
       // Once it has exited its PID is free for reuse, so only its process group
@@ -1317,5 +1324,6 @@ const defaultSpawner: ProcessSpawner = (config) => {
   });
   const managed = child as unknown as ManagedChildProcess;
   managed.ownsProcessTree = true;
+  child.once("exit", trackChildTree(managed));
   return managed;
 };
