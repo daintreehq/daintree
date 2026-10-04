@@ -592,8 +592,9 @@ describe("buildArgsForRespawn", () => {
   });
 
   // #13172: the original may still be running its command when the saved id
-  // can't be reused, so the respawn keeps the command without executing it.
-  it("keeps a plain terminal's command unexecuted when the saved id can't be reused", () => {
+  // can't be reused, so the respawn must not carry it — not even as metadata a
+  // later spawn of this pane would run.
+  it("drops a plain terminal's command when the saved id can't be reused", () => {
     const result = buildArgsForRespawn(
       { id: "t1", kind: "terminal" as const, cwd: "/p", location: "grid", command: "npm run dev" },
       "terminal",
@@ -603,8 +604,8 @@ describe("buildArgsForRespawn", () => {
       undefined
     );
     expect(result.requestedId).toBeUndefined();
-    expect(result.command).toBe("npm run dev");
-    expect(result.skipCommandExecution).toBe(true);
+    expect(result.command).toBeUndefined();
+    expect(result.cwd).toBe("/p");
   });
 
   it("runs a plain terminal's command when respawning under its saved id", () => {
@@ -618,7 +619,6 @@ describe("buildArgsForRespawn", () => {
     );
     expect(result.requestedId).toBe("t1");
     expect(result.command).toBe("npm run dev");
-    expect(result.skipCommandExecution).toBeUndefined();
   });
 
   it("leaves an agent respawn's command to the resume logic when the saved id can't be reused", () => {
@@ -631,7 +631,7 @@ describe("buildArgsForRespawn", () => {
       undefined
     );
     expect(result.launchAgentId).toBe("claude");
-    expect(result.skipCommandExecution).toBeUndefined();
+    expect(result.command).toBeDefined();
   });
 
   it("generates fresh command for agent terminal without session", () => {

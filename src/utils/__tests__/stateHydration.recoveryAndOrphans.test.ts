@@ -909,12 +909,12 @@ describe("hydrateAppState", () => {
       [
         "a confirmed-gone PTY re-runs its command",
         { exists: false },
-        { requestedId: "term-1", skipCommandExecution: undefined },
+        { requestedId: "term-1", command: "npm run dev" },
       ],
       [
         "a PTY live under another workspace does not re-run its command",
         { exists: false, conflict: true },
-        { requestedId: undefined, skipCommandExecution: true },
+        { requestedId: undefined, command: undefined },
       ],
     ])("%s", async (_label, reconnectResult, expected) => {
       appClientMock.hydrate.mockResolvedValue({
@@ -950,14 +950,9 @@ describe("hydrateAppState", () => {
       });
 
       expect(addPanel).toHaveBeenCalledTimes(1);
-      const args = addPanel.mock.calls[0]?.[0] as {
-        requestedId?: string;
-        command?: string;
-        skipCommandExecution?: boolean;
-      };
-      expect(args.command).toBe("npm run dev");
+      const args = addPanel.mock.calls[0]?.[0] as { requestedId?: string; command?: string };
       expect(args.requestedId).toBe(expected.requestedId);
-      expect(args.skipCommandExecution).toBe(expected.skipCommandExecution);
+      expect(args.command).toBe(expected.command);
     });
   });
 });
