@@ -1,3 +1,4 @@
+import { lstat } from "node:fs/promises";
 import { app } from "electron";
 import { z } from "zod";
 import { CHANNELS } from "../channels.js";
@@ -28,6 +29,28 @@ import type {
 import type { DevPreviewSessionService as DevPreviewSessionServiceType } from "../../services/DevPreviewSessionService.js";
 import type { DevPreviewProxyService as DevPreviewProxyServiceType } from "../../services/DevPreviewProxyService.js";
 import { getHibernationService } from "../../services/HibernationService.js";
+import { events } from "../../services/events.js";
+import { withTimeout } from "../../utils/withTimeout.js";
+
+const WORKTREE_GONE_PROBE_TIMEOUT_MS = 5000;
+
+// `sys:worktree:remove` means a monitor went away, not that the directory did:
+// a `git worktree list` that transiently omits a live worktree prunes its
+// monitor too. Only a confirmed ENOENT on the worktree root (the id is its
+// path) counts as gone — anything else, including a hung mount, keeps the
+// dev server running.
+async function isWorktreeGone(worktreeId: string): Promise<boolean> {
+  try {
+    await withTimeout(
+      lstat(worktreeId),
+      WORKTREE_GONE_PROBE_TIMEOUT_MS,
+      "Worktree existence probe timed out"
+    );
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === "ENOENT";
+  }
+}
 
 export function registerDevPreviewHandlers(deps: HandlerDependencies): () => void {
   let sessionService: DevPreviewSessionServiceType | null = null;
@@ -269,7 +292,25 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
     });
   });
 
+  // External removals (`git worktree remove`, an IDE) never pass through the
+  // UI delete path that stops the dev server first (#9084), so the workspace
+  // host's removal event is the only signal that its server is now running in
+  // a directory that no longer exists (#13171).
+  let disposed = false;
+  const unsubWorktreeRemove = events.on("sys:worktree:remove", ({ worktreeId }) => {
+    if (!sessionService || !sessionService.getByWorktree(worktreeId)) return;
+    void (async () => {
+      if (!(await isWorktreeGone(worktreeId))) return;
+      if (disposed || !sessionService) return;
+      await sessionService.stopByWorktree(worktreeId, "worktree-removed");
+    })().catch((err) => {
+      console.error("[DevPreview] Failed to stop sessions for removed worktree:", worktreeId, err);
+    });
+  });
+
   return () => {
+    disposed = true;
+    unsubWorktreeRemove();
     unsubHibernation();
     if (sessionService) {
       sessionService.dispose();

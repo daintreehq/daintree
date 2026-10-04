@@ -1,4 +1,7 @@
+import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import https from "node:https";
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 
@@ -68,6 +71,7 @@ vi.mock("../../../services/UrlDetector.js", () => ({
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerDevPreviewHandlers } from "../devPreview.js";
+import { events } from "../../../services/events.js";
 import type { HandlerDependencies } from "../../types.js";
 
 type MockIncomingMessage = {
@@ -786,5 +790,95 @@ describe("dev preview session handlers", () => {
     expect(() =>
       diagnosticsHandler!({} as Electron.IpcMainInvokeEvent, { panelId: "panel-1" })
     ).toThrow();
+  });
+
+  describe("worktree removed outside Daintree (#13171)", () => {
+    let tmpRoot: string;
+
+    beforeEach(() => {
+      tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "devpreview-wt-removed-"));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    });
+
+    async function ensureIn(worktreeId: string, panelId: string) {
+      const ensureHandler = getRegisteredHandle<
+        [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+        { terminalId: string | null }
+      >(CHANNELS.DEV_PREVIEW_ENSURE);
+      const state = await ensureHandler!({} as Electron.IpcMainInvokeEvent, {
+        panelId,
+        projectId: "project-removed",
+        cwd: worktreeId,
+        devCommand: "npm run dev",
+        worktreeId,
+      });
+      expect(state.terminalId).toBeTruthy();
+      return state.terminalId!;
+    }
+
+    function getByWorktree(worktreeId: string) {
+      const handler = getRegisteredHandle<
+        [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+        { status: string } | null
+      >(CHANNELS.DEV_PREVIEW_GET_BY_WORKTREE);
+      return handler!({} as Electron.IpcMainInvokeEvent, { worktreeId });
+    }
+
+    it("stops the dev server once the worktree directory is gone", async () => {
+      const goneId = path.join(tmpRoot, "gone");
+      const liveId = path.join(tmpRoot, "live");
+      fs.mkdirSync(liveId);
+      const goneTerminal = await ensureIn(goneId, "panel-gone");
+      const liveTerminal = await ensureIn(liveId, "panel-live");
+
+      events.emit("sys:worktree:remove", { worktreeId: goneId, timestamp: Date.now() });
+
+      await vi.waitFor(() => {
+        expect(ptyClient.kill).toHaveBeenCalledWith(goneTerminal, "dev-preview:worktree-removed");
+      });
+      expect(await getByWorktree(goneId)).toBeNull();
+      expect(ptyClient.kill).not.toHaveBeenCalledWith(liveTerminal, expect.anything());
+    });
+
+    it("keeps the dev server when the worktree directory still exists", async () => {
+      const liveId = path.join(tmpRoot, "still-here");
+      fs.mkdirSync(liveId);
+      const terminalId = await ensureIn(liveId, "panel-still-here");
+
+      events.emit("sys:worktree:remove", { worktreeId: liveId, timestamp: Date.now() });
+      // Let the existence probe settle before asserting nothing was stopped.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(ptyClient.kill).not.toHaveBeenCalledWith(terminalId, expect.anything());
+      expect(await getByWorktree(liveId)).not.toBeNull();
+    });
+
+    it("ignores removals before the session service exists", async () => {
+      events.emit("sys:worktree:remove", {
+        worktreeId: path.join(tmpRoot, "never-started"),
+        timestamp: Date.now(),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(ptyClient.kill).not.toHaveBeenCalled();
+    });
+
+    it("stops listening once the handlers are disposed", async () => {
+      const goneId = path.join(tmpRoot, "gone-after-dispose");
+      await ensureIn(goneId, "panel-after-dispose");
+
+      const disposeHandlers = cleanup;
+      cleanup = () => {};
+      disposeHandlers();
+      ptyClient.kill.mockClear();
+
+      events.emit("sys:worktree:remove", { worktreeId: goneId, timestamp: Date.now() });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(ptyClient.kill).not.toHaveBeenCalled();
+    });
   });
 });
