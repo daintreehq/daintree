@@ -946,10 +946,14 @@ describe("PtyHostLifecycle", () => {
   });
 
   describe("dispose waits for the host to finish its teardown (#13167)", () => {
-    function trackSettled(promise: Promise<void>): { settled: boolean } {
-      const state = { settled: false };
-      void promise.then(() => {
+    function trackSettled(promise: Promise<boolean>): {
+      settled: boolean;
+      exitedOnItsOwn: boolean | null;
+    } {
+      const state = { settled: false, exitedOnItsOwn: null as boolean | null };
+      void promise.then((exitedOnItsOwn) => {
         state.settled = true;
+        state.exitedOnItsOwn = exitedOnItsOwn;
       });
       return state;
     }
@@ -970,6 +974,7 @@ describe("PtyHostLifecycle", () => {
       mockChild.emit("exit", 0);
       await Promise.resolve();
       expect(exit.settled).toBe(true);
+      expect(exit.exitedOnItsOwn).toBe(true);
 
       await vi.advanceTimersByTimeAsync(DISPOSE_EXIT_TIMEOUT_MS);
       expect(killSpy).not.toHaveBeenCalled();
@@ -992,6 +997,7 @@ describe("PtyHostLifecycle", () => {
       expect(killSpy).toHaveBeenCalledWith(321, "SIGKILL");
       expect(mockChild.kill).not.toHaveBeenCalled();
       expect(exit.settled).toBe(true);
+      expect(exit.exitedOnItsOwn).toBe(false);
       // The exit event stays the authority on process death.
       expect(lifecycle.child).toBe(mockChild);
     });
@@ -1022,7 +1028,69 @@ describe("PtyHostLifecycle", () => {
 
     it("settles immediately when no host is running", async () => {
       const { lifecycle } = makeLifecycle();
-      await expect(lifecycle.dispose()).resolves.toBeUndefined();
+      await expect(lifecycle.dispose()).resolves.toBe(true);
+    });
+
+    it("settles through the host's exit when the dispose request cannot be sent", async () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+      callbacks.log.isDisposed.current = true;
+      mockChild.postMessage.mockImplementation(() => {
+        throw new Error("channel closed");
+      });
+
+      const exit = trackSettled(lifecycle.dispose());
+      expect(mockChild.kill).toHaveBeenCalledTimes(1);
+      mockChild.emit("exit", 143);
+      await Promise.resolve();
+      expect(exit.settled).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(DISPOSE_EXIT_TIMEOUT_MS);
+      expect(killSpy).not.toHaveBeenCalled();
+    });
+
+    it("settles at the deadline even when the SIGKILL itself fails", async () => {
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+
+      const exit = trackSettled(lifecycle.dispose());
+      await vi.advanceTimersByTimeAsync(DISPOSE_EXIT_TIMEOUT_MS);
+      expect(exit.settled).toBe(true);
+      expect(exit.exitedOnItsOwn).toBe(false);
+      expect(warn).toHaveBeenCalledWith(
+        "[PtyClient] Failed to kill host during dispose:",
+        expect.any(Error)
+      );
+    });
+
+    it("does not re-signal a host that already exited before dispose", async () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+      callbacks.log.isDisposed.current = true;
+      mockChild.emit("exit", 0);
+
+      await expect(lifecycle.dispose()).resolves.toBe(true);
+      expect(mockChild.postMessage).not.toHaveBeenCalledWith({ type: "dispose" });
+      await vi.advanceTimersByTimeAsync(DISPOSE_EXIT_TIMEOUT_MS);
+      expect(killSpy).not.toHaveBeenCalled();
+    });
+
+    it("settles when the host exits synchronously in response to the request", async () => {
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+      callbacks.log.isDisposed.current = true;
+      mockChild.postMessage.mockImplementation((msg: { type?: string }) => {
+        if (msg?.type === "dispose") mockChild.emit("exit", 0);
+      });
+
+      await expect(lifecycle.dispose()).resolves.toBe(true);
     });
   });
 

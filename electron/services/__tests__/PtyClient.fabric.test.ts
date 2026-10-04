@@ -216,6 +216,29 @@ describe("PtyClient fabric", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(settled).toBe(true);
     });
+
+    it("also waits for a shard still retiring when quit begins", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const retiring = projectShard("project-a");
+      retiring.child.emit("message", { type: "ready" });
+      retiring.child.emit("message", { type: "exit", id: "t1", exitCode: 0 });
+      await vi.advanceTimersByTimeAsync(fabricConfig.PTY_SHARD_IDLE_LINGER_MS + 1);
+      expect(messagesOfType(retiring.child, "dispose")).toHaveLength(1);
+
+      let exitedOnTheirOwn: boolean | null = null;
+      client.dispose();
+      void client.waitForHostsExited().then((result) => {
+        exitedOnTheirOwn = result;
+      });
+      defaultShard().child.emit("exit", 0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(exitedOnTheirOwn).toBeNull();
+
+      retiring.child.emit("exit", 0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(exitedOnTheirOwn).toBe(true);
+    });
   });
 
   describe("placement", () => {

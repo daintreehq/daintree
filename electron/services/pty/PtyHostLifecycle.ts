@@ -109,12 +109,13 @@ const RESTART_CAP_MAX_MS = 10_000;
 /**
  * How long a disposing host gets to finish its own teardown and exit before
  * the backstop SIGKILLs it. Teardown tree-kills every terminal, trashed ones
- * included, inside a 2s `ps` probe window (`SYNC_PROBE_BUDGET_MS`), so the
- * backstop must clear that with room to spare — killing the host part way
- * through leaves every terminal it had not reached alive (#13167). Still well
- * inside the quit chain's `CLEANUP_TIMEOUT_MS`.
+ * included, inside one 2s `ps` probe window (`SYNC_PROBE_BUDGET_MS`), and
+ * killing the host part way through leaves every terminal it had not reached
+ * alive (#13167). Sized to clear that window while keeping the quit chain's
+ * worst case — graceful kills, capture delivery and drain, then this wait —
+ * inside `CLEANUP_TIMEOUT_MS`.
  */
-export const DISPOSE_EXIT_TIMEOUT_MS = 5_000;
+export const DISPOSE_EXIT_TIMEOUT_MS = 3_000;
 
 // Time-windowed crash-loop guard. Mirrors the constants in
 // `CrashLoopGuardService` and `WorkspaceHostProcess` so the three guards
@@ -223,9 +224,12 @@ export class PtyHostLifecycle {
   restartTimer: NodeJS.Timeout | null = null;
   /** Force-kill backstop timer scheduled by dispose(); cleared by the child's `exit`. */
   private disposeTimer: NodeJS.Timeout | null = null;
-  /** Settles once a disposing host has exited or been force-killed. */
-  private disposeExit: Promise<void> | null = null;
-  private resolveDisposeExit: (() => void) | null = null;
+  /**
+   * Settles once a disposing host is gone: `true` when it exited on its own,
+   * `false` when the backstop had to SIGKILL it.
+   */
+  private disposeExit: Promise<boolean> | null = null;
+  private resolveDisposeExit: ((exitedOnItsOwn: boolean) => void) | null = null;
   /**
    * Authoritative crash reason captured from `app.on("child-process-gone")`.
    * Consumed by the next `exit` handler via `setImmediate` deferral, since
@@ -464,10 +468,10 @@ export class PtyHostLifecycle {
   /**
    * Tear down the lifecycle. Called from PtyClient.dispose() — clears timers,
    * removes the child-process-gone listener and asks the host to dispose. The
-   * returned promise settles when the host exits, or when the backstop
-   * SIGKILLs it after {@link DISPOSE_EXIT_TIMEOUT_MS}.
+   * returned promise settles `true` when the host exits on its own, or `false`
+   * once the backstop SIGKILLs it after {@link DISPOSE_EXIT_TIMEOUT_MS}.
    */
-  dispose(): Promise<void> {
+  dispose(): Promise<boolean> {
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
@@ -480,9 +484,9 @@ export class PtyHostLifecycle {
     this.pendingChildProcessGoneReason = null;
 
     if (this.disposeExit) return this.disposeExit;
-    if (!this.child) return Promise.resolve();
+    if (!this.child) return Promise.resolve(true);
 
-    this.disposeExit = new Promise<void>((resolve) => {
+    this.disposeExit = new Promise<boolean>((resolve) => {
       this.resolveDisposeExit = resolve;
     });
     // Armed before the request goes out so an immediate exit finds it in place.
@@ -490,7 +494,7 @@ export class PtyHostLifecycle {
     this.disposeTimer = setTimeout(() => {
       this.disposeTimer = null;
       this.forceKillDisposingHost();
-      this.settleDisposeExit();
+      this.settleDisposeExit(false);
     }, DISPOSE_EXIT_TIMEOUT_MS);
     this.disposeTimer.unref?.();
     this.postMessage({ type: "dispose" });
@@ -520,14 +524,14 @@ export class PtyHostLifecycle {
     );
   }
 
-  private settleDisposeExit(): void {
+  private settleDisposeExit(exitedOnItsOwn: boolean): void {
     if (this.disposeTimer) {
       clearTimeout(this.disposeTimer);
       this.disposeTimer = null;
     }
     const resolve = this.resolveDisposeExit;
     this.resolveDisposeExit = null;
-    resolve?.();
+    resolve?.(exitedOnItsOwn);
   }
 
   /**
@@ -558,7 +562,7 @@ export class PtyHostLifecycle {
   }
 
   private handleExit(code: number | null): void {
-    this.settleDisposeExit();
+    this.settleDisposeExit(true);
     this.flushHostOutputBuffers();
     // UtilityProcess exit event doesn't provide signal, but we can infer from
     // the POSIX exit-code convention (`code = 128 + signum`). On Windows, exit

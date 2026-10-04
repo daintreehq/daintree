@@ -735,7 +735,14 @@ function dataPayloads(
 }
 
 describe("pty-host adversarial", () => {
+  // The host exits itself after teardown; stub that so the worker survives and
+  // the exit stays observable.
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+  let baselineSigtermListeners: Array<(...args: unknown[]) => void>;
+
   beforeEach(() => {
+    exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    baselineSigtermListeners = process.listeners("SIGTERM") as Array<(...args: unknown[]) => void>;
     vi.useFakeTimers();
     vi.mocked(getPtyPool).mockClear();
     // Restore the module-default (metrics off) so per-test overrides don't leak.
@@ -746,6 +753,12 @@ describe("pty-host adversarial", () => {
     hostState.currentParentPort?.emit("message", { type: "dispose" });
     await flushMicrotasks();
     hostState.currentParentPort?.removeAllListeners();
+    for (const listener of process.listeners("SIGTERM")) {
+      if (!baselineSigtermListeners.includes(listener as (...args: unknown[]) => void)) {
+        process.off("SIGTERM", listener);
+      }
+    }
+    exitSpy.mockRestore();
     if (originalParentPortDescriptor) {
       Object.defineProperty(process, "parentPort", originalParentPortDescriptor);
     } else {
@@ -759,6 +772,40 @@ describe("pty-host adversarial", () => {
 
   afterAll(() => {
     process.setMaxListeners(originalMaxListeners);
+  });
+
+  it("DISPOSE_FINISHES_TEARDOWN_THEN_EXITS (#13167)", async () => {
+    const parentPort = await loadHost();
+    const manager = hostState.currentPtyManager as MiniEmitter & { dispose: TestMock };
+
+    parentPort.emit("message", { type: "dispose" });
+    await flushMicrotasks();
+
+    expect(manager.dispose).toHaveBeenCalledTimes(1);
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(manager.dispose.mock.invocationCallOrder[0]).toBeLessThan(
+      exitSpy.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("SIGTERM_RUNS_TEARDOWN_ONCE_AND_EXITS_SIGNALLED (#13167)", async () => {
+    const parentPort = await loadHost();
+    const manager = hostState.currentPtyManager as MiniEmitter & { dispose: TestMock };
+    const hostSigterm = process
+      .listeners("SIGTERM")
+      .find(
+        (listener) => !baselineSigtermListeners.includes(listener as (...args: unknown[]) => void)
+      );
+    expect(hostSigterm).toBeTypeOf("function");
+
+    (hostSigterm as () => void)();
+    expect(manager.dispose).toHaveBeenCalledTimes(1);
+    expect(exitSpy).toHaveBeenCalledWith(143);
+
+    // A dispose request racing the signal must not tear down twice.
+    parentPort.emit("message", { type: "dispose" });
+    await flushMicrotasks();
+    expect(manager.dispose).toHaveBeenCalledTimes(1);
   });
 
   it("WINDOWS_STARTUP_SKIPS_PTY_POOL", async () => {

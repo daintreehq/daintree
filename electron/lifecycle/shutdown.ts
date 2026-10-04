@@ -656,27 +656,16 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
           // The chain waits on the hosts' own exit: each one is still tree-killing
           // its terminals, trashed ones included, and is SIGKILLed only past its
           // dispose deadline (#13167).
-          let ptyHostsExited: Promise<void> = Promise.resolve();
+          let ptyHostsExited: Promise<boolean> = Promise.resolve(true);
           if (ptyClient) {
             try {
               ptyClient.dispose();
               ptyHostsExited = ptyClient.waitForHostsExited();
             } catch (err) {
               console.warn("[MAIN] PtyClient.dispose failed:", err);
+              ptyHostsExited = Promise.resolve(false);
             }
             deps.setPtyClient(null);
-          }
-          // Disarm the POSIX crash-safe supervisor only after PTY teardown.
-          // DISARM tells the supervisor this is a clean quit and it should not
-          // SIGKILL on pipe close — but if we disarmed before the PTYs were
-          // actually gone (e.g. the graceful-kill above timed out), a crash in
-          // the intervening window would leave them orphaned. Disarming last
-          // guarantees the cooperative kill has run first. No-op on Windows /
-          // when no supervisor was started.
-          try {
-            helpSessionJobService.dispose();
-          } catch (err) {
-            console.warn("[MAIN] helpSessionJobService.dispose failed:", err);
           }
           // Project checks spawn detached (POSIX) so a run can't pin teardown —
           // which also means a live `npm test` would outlive the app if nobody
@@ -704,10 +693,31 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
           } catch (err) {
             console.warn("[MAIN] disposeMainProcessWatchdog failed:", err);
           }
-          void ptyHostsExited.then(resolve, (err: unknown) => {
-            console.warn("[MAIN] Waiting for PTY hosts to exit failed:", err);
-            resolve();
-          });
+          void ptyHostsExited
+            .catch((err: unknown) => {
+              console.warn("[MAIN] Waiting for PTY hosts to exit failed:", err);
+              return false;
+            })
+            .then((exitedOnTheirOwn) => {
+              // Disarm the POSIX crash-safe supervisor only once every host has
+              // finished its own teardown. DISARM tells it this is a clean quit
+              // and it should not SIGKILL on pipe close; a host that had to be
+              // force-killed may not have reached its help sessions, so the
+              // supervisor stays armed and reaps them when Main's pipe closes.
+              // No-op on Windows / when no supervisor was started.
+              if (exitedOnTheirOwn) {
+                try {
+                  helpSessionJobService.dispose();
+                } catch (err) {
+                  console.warn("[MAIN] helpSessionJobService.dispose failed:", err);
+                }
+              } else {
+                console.warn(
+                  "[MAIN] PTY hosts did not all exit on their own; supervisor left armed"
+                );
+              }
+              resolve();
+            });
         }),
       ])
     )
