@@ -394,6 +394,31 @@ describe("dev preview stop keeps ownership until the terminal is gone", () => {
 
     await expect(stopSessionTerminal(session, "stop", deps)).rejects.toThrow(/host unavailable/);
     expect(session.terminalId).toBe("term-1");
+    expect(deps.updateSession).toHaveBeenLastCalledWith(
+      session,
+      expect.objectContaining({ status: "error", terminalId: "term-1" })
+    );
+  });
+
+  it("does not read an unanswered liveness query as the terminal being gone", async () => {
+    let answering = false;
+    const { session, deps } = setupRunning(() => null);
+    vi.mocked(deps.ptyClient.getTerminalAsync).mockImplementation(async () => {
+      if (!answering) throw new Error("get-terminal timed out");
+      return null as never;
+    });
+
+    let settled = false;
+    const stop = stopSessionTerminal(session, "stop", deps).then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(settled).toBe(false);
+
+    answering = true;
+    await vi.advanceTimersByTimeAsync(200);
+    await stop;
+    expect(session.terminalId).toBeNull();
   });
 
   it("ensure does not spawn a second server beside one that is still dying", async () => {

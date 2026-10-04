@@ -563,7 +563,8 @@ describe("dev preview session handlers", () => {
     });
 
     expect(firstAfter.status).toBe("error");
-    expect(firstAfter.terminalId).toBeNull();
+    // The terminal that refused to die stays owned, so a retry can reach it.
+    expect(firstAfter.terminalId).toBe(first.terminalId);
     expect(firstAfter.error?.message).toContain("Failed to stop dev preview:");
     expect(secondAfter.status).toBe("stopped");
     expect(secondAfter.terminalId).toBeNull();

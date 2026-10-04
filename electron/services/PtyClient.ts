@@ -2525,9 +2525,16 @@ export class PtyClient extends EventEmitter {
    * already makes every request id unique — but it names the token-bearing
    * variant so a stalled correlation read is distinguishable in broker traces.
    */
+  /**
+   * `strict` rejects when a live host fails to answer in time instead of
+   * resolving `null`, so a caller confirming that a terminal is gone doesn't
+   * mistake a stalled query for its absence. A host that is gone still resolves
+   * `null` — its terminals went with it.
+   */
   async getTerminalAsync(
     id: string,
-    submissionToken?: string
+    submissionToken?: string,
+    options?: { strict?: boolean }
   ): Promise<TerminalInfoResponse | null> {
     const shard = this.shardForTerminal(id);
     const promise = sendPtyHostRpc<TerminalInfoResponse | null>(
@@ -2535,7 +2542,18 @@ export class PtyClient extends EventEmitter {
       submissionToken === undefined ? `terminal-${id}` : `terminal-${id}-sub-${submissionToken}`,
       (requestId) => ({ type: "get-terminal", id, requestId, submissionToken })
     );
-    return promise.catch(() => null);
+    return promise.catch((error) => {
+      if (
+        options?.strict &&
+        error instanceof BrokerError &&
+        error.code === "TIMEOUT" &&
+        shard.lifecycle.child &&
+        !this.isDisposed
+      ) {
+        throw error;
+      }
+      return null;
+    });
   }
 
   /** Get available terminals (idle or waiting for user input), across all shards */

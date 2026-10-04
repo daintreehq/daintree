@@ -171,10 +171,45 @@ describe("DevPreviewSessionService external project kills", () => {
     ptyClient.announceProjectKill("project-a");
     // An install that happened to finish cleanly as the kill landed.
     ptyClient.emitExit(installId, 0);
+    // The respawn would still be resolving its port here, so the state is the
+    // synchronous proof that none was started.
+    expect(["installing", "starting"]).not.toContain(service.getState(requestA).status);
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(ptyClient.spawn.mock.calls.length).toBe(spawnsBefore);
     expect(service.getState(requestA).terminalId).toBeNull();
+  });
+
+  it("ignores output that was still in flight when the project was killed", async () => {
+    const started = await service.ensure(requestA);
+    const devId = started.terminalId!;
+    const spawnsBefore = ptyClient.spawn.mock.calls.length;
+
+    ptyClient.announceProjectKill("project-a");
+    ptyClient.emitData(devId, "missing deps");
+    ptyClient.emitExit(devId, 129);
+
+    expect(ptyClient.spawn.mock.calls.length).toBe(spawnsBefore);
+    expect(service.getState(requestA).terminalId).toBeNull();
+  });
+
+  it("settles a launch that had no terminal yet when the project is killed", async () => {
+    await service.ensure(requestA);
+    let releasePort!: (free: boolean) => void;
+    portFreeGate.pending = new Promise<boolean>((resolve) => {
+      releasePort = resolve;
+    });
+
+    const restart = service.restart(requestA);
+    await vi.waitFor(() => expect(portFreeGate.reached).toBe(true));
+    // Mid-restart: the old terminal is stopped and the new one not spawned.
+    ptyClient.announceProjectKill("project-a");
+    const settled = service.getState(requestA);
+    expect(settled.status).toBe("stopped");
+    expect(settled.isRestarting).toBe(false);
+
+    releasePort(true);
+    await restart;
   });
 
   it("leaves other projects' sessions to recover as usual", async () => {

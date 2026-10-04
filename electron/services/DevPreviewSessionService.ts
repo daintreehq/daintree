@@ -177,6 +177,8 @@ export class DevPreviewSessionService {
   // In-flight waitForPortFree aborts, so dispose() doesn't leave locked tasks
   // polling a busy port for up to PORT_FREE_TIMEOUT_MS after app quit began.
   private readonly portWaitAborts = new Set<AbortController>();
+  /** Terminals a project-wide kill has claimed; their late output must not re-arm recovery. */
+  private readonly projectKilledTerminals = new Set<string>();
   private readonly onDataListener: (id: string, data: string | Uint8Array) => void;
   private readonly onExitListener: (id: string, exitCode: number, signal?: number) => void;
   private readonly onProjectKillListener: (projectId: string) => void;
@@ -434,6 +436,7 @@ export class DevPreviewSessionService {
       }
     }
     this.terminalToSession.clear();
+    this.projectKilledTerminals.clear();
     this.sessions.clear();
     this.locks.clear();
     this.portRegistry.clear();
@@ -1478,6 +1481,7 @@ export class DevPreviewSessionService {
 
   private handleData(id: string, data: string | Uint8Array): void {
     if (this.disposed) return;
+    if (this.projectKilledTerminals.has(id)) return;
     const sessionKey = this.terminalToSession.get(id);
     if (!sessionKey) return;
     const session = this.sessions.get(sessionKey);
@@ -1497,6 +1501,7 @@ export class DevPreviewSessionService {
 
   private handleExit(id: string, exitCode: number, signal?: number): void {
     if (this.disposed) return;
+    this.projectKilledTerminals.delete(id);
     const sessionKey = this.terminalToSession.get(id);
     if (!sessionKey) return;
     const session = this.sessions.get(sessionKey);
@@ -1518,6 +1523,23 @@ export class DevPreviewSessionService {
     for (const session of this.sessions.values()) {
       if (session.projectId !== projectId) continue;
       cancelSessionWork(session, this.terminalControllerDeps);
+      if (session.terminalId) {
+        // Output still in flight (a missing-dependencies line, a URL) would
+        // otherwise re-arm the reinstall or readiness this just cancelled.
+        this.projectKilledTerminals.add(session.terminalId);
+      } else if (RUNNING_STATES.has(session.status)) {
+        // A launch with no terminal yet just stood down, and no exit will
+        // ever arrive to settle it.
+        this.updateSession(session, {
+          status: "stopped",
+          url: null,
+          predictedUrl: null,
+          error: null,
+          terminalId: null,
+          isRestarting: false,
+          phaseLabel: undefined,
+        });
+      }
     }
   }
 
