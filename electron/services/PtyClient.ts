@@ -78,6 +78,7 @@ import { helpSessionJobService } from "./HelpSessionJobService.js";
 import { getLifecycleLedger, ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
 import { getEnvVar, hasEnvVar } from "./pty/EnvironmentFilter.js";
 import { BrokerError } from "./rpc/index.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "./pty/PtyEventRouter.js";
 import { sendPtyHostRpc } from "./pty/PtyHostRpcFacade.js";
 import { mergeFlowControlSnapshots, mergeMemoryRollups } from "./pty/rollupMerge.js";
@@ -2283,6 +2284,7 @@ export class PtyClient extends EventEmitter {
     projectId: string,
     options?: { preserveSession?: boolean }
   ): Promise<GracefulKillByProjectOutcome> {
+    this.emitProjectKillRequested(projectId);
     const shard = this.shardForProjectQuery(projectId);
     const inFlight: {
       requestId: string | null;
@@ -2364,7 +2366,24 @@ export class PtyClient extends EventEmitter {
       .catch(() => []);
   }
 
+  /**
+   * Fired synchronously before a project-wide kill is sent, so Main-side owners
+   * of service-managed PTYs (the dev preview) can cancel work that would revive
+   * them. The `exit` events that follow arrive too late to stop a respawn
+   * already queued behind the kill.
+   */
+  private emitProjectKillRequested(projectId: string): void {
+    try {
+      this.emit("project-kill-requested", projectId);
+    } catch (err) {
+      logWarn("[PtyClient] project-kill-requested listener threw", {
+        error: formatErrorMessage(err, "project-kill-requested listener failed"),
+      });
+    }
+  }
+
   async killByProject(projectId: string): Promise<number> {
+    this.emitProjectKillRequested(projectId);
     const shard = this.shardForProjectQuery(projectId);
     const promise = sendPtyHostRpc<number>(
       shard,
@@ -2510,9 +2529,16 @@ export class PtyClient extends EventEmitter {
    * already makes every request id unique — but it names the token-bearing
    * variant so a stalled correlation read is distinguishable in broker traces.
    */
+  /**
+   * `strict` rejects when a live host fails to answer in time instead of
+   * resolving `null`, so a caller confirming that a terminal is gone doesn't
+   * mistake a stalled query for its absence. A host that is gone still resolves
+   * `null` — its terminals went with it.
+   */
   async getTerminalAsync(
     id: string,
-    submissionToken?: string
+    submissionToken?: string,
+    options?: { strict?: boolean }
   ): Promise<TerminalInfoResponse | null> {
     const shard = this.shardForTerminal(id);
     const promise = sendPtyHostRpc<TerminalInfoResponse | null>(
@@ -2520,7 +2546,18 @@ export class PtyClient extends EventEmitter {
       submissionToken === undefined ? `terminal-${id}` : `terminal-${id}-sub-${submissionToken}`,
       (requestId) => ({ type: "get-terminal", id, requestId, submissionToken })
     );
-    return promise.catch(() => null);
+    return promise.catch((error) => {
+      if (
+        options?.strict &&
+        error instanceof BrokerError &&
+        error.code === "TIMEOUT" &&
+        shard.lifecycle.child &&
+        !this.isDisposed
+      ) {
+        throw error;
+      }
+      return null;
+    });
   }
 
   /** Get available terminals (idle or waiting for user input), across all shards */

@@ -38,6 +38,7 @@ import {
   runInstall,
   handleDevPreviewTerminalExit,
   invalidatePendingLaunch,
+  cancelSessionWork,
   clearStartupReplay,
   isBenignMissingTerminalError,
   type TerminalControllerDeps,
@@ -94,6 +95,8 @@ interface DevPreviewSession extends DevPreviewSessionState {
   installAttemptedGeneration: number | null;
   /** See TerminalControllerSession.launchEpoch — bumped by every stop. */
   launchEpoch: number;
+  /** See TerminalControllerSession.killedTerminalId. */
+  killedTerminalId: string | null;
   startupReplayTimer: ReturnType<typeof setTimeout> | null;
   updatedAtPerformanceMs: number;
   phaseLabel?: "Compiling";
@@ -178,6 +181,7 @@ export class DevPreviewSessionService {
   private readonly portWaitAborts = new Set<AbortController>();
   private readonly onDataListener: (id: string, data: string | Uint8Array) => void;
   private readonly onExitListener: (id: string, exitCode: number, signal?: number) => void;
+  private readonly onProjectKillListener: (projectId: string) => void;
 
   constructor(
     private readonly ptyClient: PtyClient,
@@ -202,6 +206,7 @@ export class DevPreviewSessionService {
   ) {
     this.onDataListener = this.handleData.bind(this);
     this.onExitListener = this.handleExit.bind(this);
+    this.onProjectKillListener = this.handleProjectKillRequested.bind(this);
     // Mirrored dev-server output arrives as "data-mirror" (Main-process-only
     // copy of chunks the renderer already received on its visual path); plain
     // "data" still carries the IPC-fallback case where no window's port took
@@ -209,6 +214,7 @@ export class DevPreviewSessionService {
     this.ptyClient.on("data", this.onDataListener);
     this.ptyClient.on("data-mirror", this.onDataListener);
     this.ptyClient.on("exit", this.onExitListener);
+    this.ptyClient.on("project-kill-requested", this.onProjectKillListener);
     for (const entry of restoredEntries) {
       this.restoredEntries.set(createSessionKey(entry.projectId, entry.panelId), entry);
     }
@@ -407,6 +413,7 @@ export class DevPreviewSessionService {
     this.ptyClient.off("data", this.onDataListener);
     this.ptyClient.off("data-mirror", this.onDataListener);
     this.ptyClient.off("exit", this.onExitListener);
+    this.ptyClient.off("project-kill-requested", this.onProjectKillListener);
     for (const abort of this.portWaitAborts) {
       abort.abort();
     }
@@ -534,7 +541,8 @@ export class DevPreviewSessionService {
       if (configChanged) {
         invalidatePendingLaunch(session);
         if (session.terminalId) {
-          await this.stopSessionTerminal(session, "config-change");
+          const epoch = await this.stopSessionTerminal(session, "config-change");
+          if (this.relaunchSuperseded(session, epoch)) return;
         }
       }
 
@@ -589,8 +597,12 @@ export class DevPreviewSessionService {
           forceKilled: undefined,
         });
 
-        await this.stopSessionTerminal(session, "restart");
+        const epoch = await this.stopSessionTerminal(session, "restart");
         if (!(await this.waitForRegisteredPortFree(session, key))) {
+          state = this.getSessionState(request.projectId, request.panelId);
+          return;
+        }
+        if (this.relaunchSuperseded(session, epoch)) {
           state = this.getSessionState(request.projectId, request.panelId);
           return;
         }
@@ -644,13 +656,15 @@ export class DevPreviewSessionService {
       // Caches must be deleted only after the PTY is confirmed dead — Vite and
       // Next.js hold file handles on these directories, and a live process
       // causes EPERM on Windows.
-      await this.stopSessionTerminal(session, "restart-clear-cache");
+      const epoch = await this.stopSessionTerminal(session, "restart-clear-cache");
 
       if (!(await this.waitForRegisteredPortFree(session, key))) {
         return;
       }
+      if (this.relaunchSuperseded(session, epoch)) return;
 
       const deletionError = await clearCacheDirs(session.cwd);
+      if (this.relaunchSuperseded(session, epoch)) return;
       if (deletionError) {
         this.updateSession(session, {
           status: "error",
@@ -705,7 +719,7 @@ export class DevPreviewSessionService {
         isRestarting: true,
       });
 
-      await this.stopSessionTerminal(session, "reinstall-restart");
+      const epoch = await this.stopSessionTerminal(session, "reinstall-restart");
 
       // node_modules deletion uses retries because Windows Defender frequently
       // holds locks on files mid-scan, surfacing as transient EPERM/EBUSY.
@@ -731,6 +745,8 @@ export class DevPreviewSessionService {
         });
         return;
       }
+
+      if (this.relaunchSuperseded(session, epoch)) return;
 
       // runInstall spawns its own install PTY; the handleExit chain respawns
       // the dev server when the install exits 0. Do NOT call
@@ -886,12 +902,13 @@ export class DevPreviewSessionService {
             await this.stopAndRemoveSession(session, "panel-closed");
           } catch (err) {
             const message = formatErrorMessage(err, "Failed to stop dev preview");
+            // terminalId deliberately untouched: a terminal that outlived its
+            // stop stays attached so a later stop or its exit can settle it.
             this.updateSession(session, {
               status: "error",
               url: null,
               predictedUrl: null,
               error: { type: "unknown", message: `Failed to stop dev preview: ${message}` },
-              terminalId: null,
               isRestarting: false,
             });
             console.warn("[DevPreviewSessionService] stopByPanel failed for session", {
@@ -1228,6 +1245,7 @@ export class DevPreviewSessionService {
       isRunningInstall: false,
       installAttemptedGeneration: null,
       launchEpoch: 0,
+      killedTerminalId: null,
       startupReplayTimer: null,
       compiling: false,
       compilingTimer: null,
@@ -1413,8 +1431,30 @@ export class DevPreviewSessionService {
     session: DevPreviewSession,
     context: string,
     escalationDelayMs?: number
-  ): Promise<void> {
+  ): Promise<number> {
     return stopSessionTerminal(session, context, this.terminalControllerDeps, escalationDelayMs);
+  }
+
+  /**
+   * A restart awaits the port, cache deletion, or node_modules removal between
+   * its stop and its spawn. A project-wide kill landing in that window retires
+   * the session (bumping its epoch); the restart must then stand down rather
+   * than start a server for a project that was just closed.
+   */
+  private relaunchSuperseded(session: DevPreviewSession, epoch: number): boolean {
+    if (session.launchEpoch === epoch) return false;
+    if (!this.disposed && !session.terminalId) {
+      this.updateSession(session, {
+        status: "stopped",
+        url: null,
+        predictedUrl: null,
+        error: null,
+        terminalId: null,
+        isRestarting: false,
+        phaseLabel: undefined,
+      });
+    }
+    return true;
   }
 
   private async waitForRegisteredPortFree(
@@ -1445,6 +1485,7 @@ export class DevPreviewSessionService {
     if (!sessionKey) return;
     const session = this.sessions.get(sessionKey);
     if (!session || session.terminalId !== id) return;
+    if (session.killedTerminalId === id) return;
 
     processDevPreviewOutput(session, id, data, {
       detector: this.detector,
@@ -1464,8 +1505,42 @@ export class DevPreviewSessionService {
     if (!sessionKey) return;
     const session = this.sessions.get(sessionKey);
     if (!session || session.terminalId !== id) return;
+    if (session.killedTerminalId === id) session.killedTerminalId = null;
 
     handleDevPreviewTerminalExit(session, exitCode, signal, this.terminalControllerDeps);
+  }
+
+  /**
+   * Project close-with-kill, Sleep, idle auto-close, hibernation and relocation
+   * all kill a project's PTYs wholesale, without going through this service.
+   * Cancel every session's pending work before that kill lands, so the exit it
+   * produces settles the session instead of reinstalling, and a launch still
+   * allocating its port stands down instead of spawning into a closed project.
+   * The terminal stays attached: its exit is how the session learns it's gone.
+   */
+  private handleProjectKillRequested(projectId: string): void {
+    if (this.disposed) return;
+    for (const session of this.sessions.values()) {
+      if (session.projectId !== projectId) continue;
+      cancelSessionWork(session, this.terminalControllerDeps);
+      if (session.terminalId) {
+        // Output still in flight (a missing-dependencies line, a URL) would
+        // otherwise re-arm the reinstall or readiness this just cancelled.
+        session.killedTerminalId = session.terminalId;
+      } else if (RUNNING_STATES.has(session.status)) {
+        // A launch with no terminal yet just stood down, and no exit will
+        // ever arrive to settle it.
+        this.updateSession(session, {
+          status: "stopped",
+          url: null,
+          predictedUrl: null,
+          error: null,
+          terminalId: null,
+          isRestarting: false,
+          phaseLabel: undefined,
+        });
+      }
+    }
   }
 
   private async runInstall(session: DevPreviewSession): Promise<void> {
