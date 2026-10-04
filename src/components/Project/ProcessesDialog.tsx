@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { RefreshCw } from "lucide-react";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import type {
@@ -55,6 +55,70 @@ function incarnationKey(terminal: ProcessInventoryTerminal): string {
   return `${terminal.id}@${terminal.spawnedAt}`;
 }
 
+type ReadOutcome = {
+  snapshot: ProcessInventorySnapshot | null;
+  snapshotError: unknown;
+  sessions: DevPreviewSessionState[] | null;
+};
+
+/** Settled one by one: a failed session read must not hold back the list. */
+async function readProcesses(): Promise<ReadOutcome> {
+  const [snapshotResult, sessionsResult] = await Promise.allSettled([
+    processesClient.getSnapshot(),
+    window.electron.devPreview.getAllSessions(),
+  ]);
+  return {
+    snapshot: snapshotResult.status === "fulfilled" ? snapshotResult.value : null,
+    snapshotError: snapshotResult.status === "rejected" ? snapshotResult.reason : null,
+    sessions: sessionsResult.status === "fulfilled" ? sessionsResult.value : null,
+  };
+}
+
+/**
+ * Read the dev-preview sessions fresh: a dev preview's PTY must stop through its
+ * session, and a stale or failed read would silently pick the raw kill instead.
+ * Rejects when the sessions can't be read, so nothing is offered.
+ */
+async function resolveKillTarget(terminal: ProcessInventoryTerminal): Promise<KillTarget> {
+  const sessions = await window.electron.devPreview.getAllSessions();
+  const session = sessions.find((candidate) => candidate.terminalId === terminal.id);
+  return session
+    ? { via: "dev-session", terminal, projectId: session.projectId, panelId: session.panelId }
+    : { via: "pty", terminal };
+}
+
+type KillOutcome =
+  { status: "ended" } | { status: "replaced" } | { status: "failed"; message: string };
+
+/**
+ * End the confirmed process — and only that one. The kill is by terminal id, so
+ * a pane that restarted while the confirm was open would take the new process
+ * with it; the generation is re-read first and a replacement is refused.
+ */
+async function endProcess(target: KillTarget): Promise<KillOutcome> {
+  try {
+    const current = await processesClient.getSnapshot();
+    const live = current.terminals.find((terminal) => terminal.id === target.terminal.id);
+    if (!live) {
+      return current.complete
+        ? { status: "ended" }
+        : { status: "failed", message: "Its terminal host didn't answer." };
+    }
+    if (live.spawnedAt !== target.terminal.spawnedAt) return { status: "replaced" };
+    if (target.via === "dev-session") {
+      await window.electron.devPreview.stop({
+        projectId: target.projectId,
+        panelId: target.panelId,
+      });
+    } else {
+      await terminalClient.kill(target.terminal.id);
+    }
+    return { status: "ended" };
+  } catch (error) {
+    return { status: "failed", message: formatErrorMessage(error, "The process didn't respond.") };
+  }
+}
+
 function SampleReadout({ sample }: { sample: ProcessTreeSample | null }): ReactElement {
   if (!sample) {
     return <span className="text-xs text-text-secondary">Not sampled</span>;
@@ -78,7 +142,6 @@ export function ProcessesDialog({
   restoreFocusTo,
 }: ProcessesDialogProps): ReactElement {
   const [snapshot, setSnapshot] = useState<ProcessInventorySnapshot | null>(null);
-  const [devSessions, setDevSessions] = useState<DevPreviewSessionState[]>([]);
   const [readFailed, setReadFailed] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [killTarget, setKillTarget] = useState<KillTarget | null>(null);
@@ -89,38 +152,43 @@ export function ProcessesDialog({
   // restarts on exit reappears as the new process it is.
   const [killedIds, setKilledIds] = useState<ReadonlySet<string>>(() => new Set());
   const fetchRef = useRef<() => Promise<void>>(async () => {});
+  // Bumped on every open and close, so a session read that resolves after the
+  // dialog closed can't raise a confirm nobody asked for.
+  const openGenerationRef = useRef(0);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // Where the confirm hands focus back: the row's own Kill, or after a kill
+  // the neighbouring rows' Kill buttons, in preference order.
+  const focusPlanRef = useRef<{ ids: string[] } | null>(null);
 
   useEffect(() => {
-    if (!isOpen) return;
+    openGenerationRef.current += 1;
+    if (!isOpen) {
+      setKillTarget(null);
+      return;
+    }
     let cancelled = false;
     let inFlight = false;
 
-    const fetchSnapshot = async () => {
-      if (inFlight || document.hidden || isProjectViewCached()) return;
+    const fetchSnapshot = (): Promise<void> => {
+      if (inFlight || document.hidden || isProjectViewCached()) return Promise.resolve();
       inFlight = true;
-      try {
-        const [snapshotResult, sessionsResult] = await Promise.allSettled([
-          processesClient.getSnapshot(),
-          window.electron.devPreview.getAllSessions(),
-        ]);
+      return readProcesses().then((result) => {
+        inFlight = false;
         if (cancelled) return;
-        if (snapshotResult.status === "fulfilled") {
-          const next = snapshotResult.value;
+        if (result.snapshot) {
+          const next = result.snapshot;
           setSnapshot(next);
           setReadFailed(false);
           const listed = new Set(next.terminals.map(incarnationKey));
           setKilledIds((prev) => {
-            const kept = [...prev].filter((id) => listed.has(id));
+            const kept = [...prev].filter((key) => listed.has(key));
             return kept.length === prev.size ? prev : new Set(kept);
           });
         } else {
           setReadFailed(true);
-          logError("[ProcessesDialog] Failed to read processes", snapshotResult.reason);
+          logError("[ProcessesDialog] Failed to read processes", result.snapshotError);
         }
-        if (sessionsResult.status === "fulfilled") setDevSessions(sessionsResult.value);
-      } finally {
-        inFlight = false;
-      }
+      });
     };
 
     fetchRef.current = fetchSnapshot;
@@ -146,74 +214,72 @@ export function ProcessesDialog({
   const groups = groupTerminalsByProject(terminals);
   const plugins = sortPluginProcesses(snapshot?.plugins ?? []);
   const isEmpty = snapshot !== null && terminals.length + plugins.length === 0;
-
-  // The Kill button leaves with its row, so focus moves to the next row's Kill,
-  // or the one before, or the close button once none is left.
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const pendingFocusRef = useRef<{ killedId: string; neighbourId: string | null } | null>(null);
   const listedIds = groups.flatMap((group) => group.terminals.map((terminal) => terminal.id));
-  const listedKey = listedIds.join("\n");
-  useLayoutEffect(() => {
-    const pending = pendingFocusRef.current;
-    if (!pending || listedKey.split("\n").includes(pending.killedId)) return;
-    pendingFocusRef.current = null;
-    const active = document.activeElement;
-    if (active && active !== document.body && active.isConnected) return;
-    const dialog = bodyRef.current?.closest('[role="dialog"]');
-    const target =
-      (pending.neighbourId !== null &&
-        dialog?.querySelector<HTMLElement>(
-          `[data-process-kill="${CSS.escape(pending.neighbourId)}"]`
-        )) ||
-      dialog?.querySelector<HTMLElement>('button[aria-label="Close dialog"]');
-    target?.focus();
-  }, [listedKey]);
 
   const requestKill = (terminal: ProcessInventoryTerminal) => {
     setKillError(null);
-    // Only a dev preview's PTY belongs to a session.
-    const session = devSessions.find((candidate) => candidate.terminalId === terminal.id);
-    setKillTarget(
-      session
-        ? {
-            via: "dev-session",
-            terminal,
-            projectId: session.projectId,
-            panelId: session.panelId,
-          }
-        : { via: "pty", terminal }
+    const generation = openGenerationRef.current;
+    void resolveKillTarget(terminal).then(
+      (target) => {
+        if (openGenerationRef.current !== generation) return;
+        focusPlanRef.current = { ids: [terminal.id] };
+        setKillTarget(target);
+      },
+      (error: unknown) => {
+        if (openGenerationRef.current !== generation) return;
+        logError("[ProcessesDialog] Failed to read dev preview sessions", error);
+        setKillError(
+          `Couldn't check whether '${terminalTitle(terminal)}' is a dev preview, so nothing was killed. Try again.`
+        );
+      }
     );
   };
 
-  const confirmKill = async () => {
-    if (!killTarget) return;
-    const { terminal } = killTarget;
+  const confirmKill = (): Promise<void> | undefined => {
+    const target = killTarget;
+    if (!target) return undefined;
+    const { terminal } = target;
+    const title = terminalTitle(terminal);
+    const at = listedIds.indexOf(terminal.id);
+    const neighbours = [
+      ...listedIds.slice(at + 1),
+      ...listedIds.slice(0, Math.max(0, at)).reverse(),
+    ];
     setIsKilling(true);
-    try {
-      if (killTarget.via === "dev-session") {
-        await window.electron.devPreview.stop({
-          projectId: killTarget.projectId,
-          panelId: killTarget.panelId,
-        });
-      } else {
-        await terminalClient.kill(terminal.id);
-      }
-      const at = listedIds.indexOf(terminal.id);
-      pendingFocusRef.current = {
-        killedId: terminal.id,
-        neighbourId: listedIds[at + 1] ?? listedIds[at - 1] ?? null,
-      };
-      setKilledIds((prev) => new Set(prev).add(incarnationKey(terminal)));
-      setKillTarget(null);
-      void fetchRef.current();
-    } catch (error) {
-      setKillTarget(null);
-      setKillError(
-        `Couldn't ${killTarget.via === "dev-session" ? "stop" : "kill"} '${terminalTitle(terminal)}'. ${formatErrorMessage(error, "The process didn't respond.")}`
-      );
-    } finally {
+    return endProcess(target).then((outcome) => {
       setIsKilling(false);
+      setKillTarget(null);
+      if (outcome.status === "ended") {
+        focusPlanRef.current = { ids: neighbours };
+        setKilledIds((prev) => new Set(prev).add(incarnationKey(terminal)));
+        void fetchRef.current();
+      } else if (outcome.status === "replaced") {
+        setKillError(
+          `'${title}' restarted after you chose it, so the new process wasn't killed. Choose it again to kill it.`
+        );
+      } else {
+        setKillError(
+          `Couldn't ${target.via === "dev-session" ? "stop" : "kill"} '${title}'. ${outcome.message}`
+        );
+      }
+    });
+  };
+
+  // Resolved when the confirm finishes closing, not when the kill lands: by
+  // then a killed row has left, and its neighbour is the next Kill to reach.
+  const resolveConfirmFocus = (): HTMLElement | null => {
+    const dialog = bodyRef.current?.closest('[role="dialog"]');
+    if (!dialog) return null;
+    const plan = focusPlanRef.current;
+    focusPlanRef.current = null;
+    for (const id of plan?.ids ?? []) {
+      const button = dialog.querySelector<HTMLElement>(`[data-process-kill="${CSS.escape(id)}"]`);
+      if (button) return button;
     }
+    return (
+      dialog.querySelector<HTMLElement>("[data-process-kill]") ??
+      dialog.querySelector<HTMLElement>('button[aria-label="Close dialog"]')
+    );
   };
 
   const sampleAge =
@@ -393,7 +459,8 @@ export function ProcessesDialog({
         </AppDialog.Body>
       </AppDialog>
       <ConfirmDialog
-        isOpen={target !== null}
+        isOpen={isOpen && target !== null}
+        restoreFocusTo={resolveConfirmFocus}
         onClose={() => setKillTarget(null)}
         variant="destructive"
         title={target?.via === "dev-session" ? `Stop '${targetTitle}'?` : `Kill '${targetTitle}'?`}
@@ -404,7 +471,11 @@ export function ProcessesDialog({
                 targetCount !== null && targetCount > 1
                   ? ` and the ${pluralize(targetCount - 1, "process", "processes")} running in it`
                   : ""
-              }.`
+              }.${
+                target?.terminal.isTrashed
+                  ? " It's in the trash, so its pane is removed and can't be restored."
+                  : ""
+              }`
         }
         confirmLabel={target?.via === "dev-session" ? "Stop dev server" : "Kill terminal"}
         onConfirm={confirmKill}

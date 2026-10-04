@@ -2412,15 +2412,21 @@ export class PtyClient extends EventEmitter {
     shardsFailed: number;
   }> {
     const shards = this.fanOutShards();
+    // A host mid-restart is not fanned out to, but its terminals are still
+    // missing from the answer — it counts as a failure, not as nothing.
+    const unreachable = Math.max(
+      0,
+      [...this.shards.values()].filter((shard) => !shard.retired).length - shards.length
+    );
     const pids = [...extraPids];
     const results = await Promise.all(
-      shards.map((shard, index) =>
+      shards.map((shard) =>
         sendPtyHostRpc<HostProcessInventory>(shard, "process-inventory", (requestId) => ({
           type: "get-process-inventory",
           requestId,
-          // Plugin children are not a shard's own, and every shard's census
-          // covers them alike; one shard samples them so none are summed twice.
-          pids: index === 0 ? pids : [],
+          // Plugin children are no shard's own; every census covers them, so
+          // each is asked and Main keeps the freshest reading rather than a sum.
+          pids,
         })).catch(() => null)
       )
     );
@@ -2429,8 +2435,8 @@ export class PtyClient extends EventEmitter {
     );
     return {
       inventories,
-      shardsTotal: shards.length,
-      shardsFailed: shards.length - inventories.length,
+      shardsTotal: shards.length + unreachable,
+      shardsFailed: shards.length - inventories.length + unreachable,
     };
   }
 

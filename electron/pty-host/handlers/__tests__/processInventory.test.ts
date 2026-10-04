@@ -100,6 +100,25 @@ describe("buildProcessInventory (#13175)", () => {
     expect(asst.projectId).toBeNull();
   });
 
+  it("names tree members by executable, never by path", () => {
+    const { ctx } = makeCtx([{ id: "t", cwd: "/", spawnedAt: 1, ptyProcess: { pid: 7 } }], {
+      summaries: {
+        7: {
+          cpuPercent: 0,
+          memoryKb: 10,
+          processCount: 1,
+          breakdown: [
+            { pid: 7, comm: "/Users/alice/private-tools/node", cpuPercent: 0, memoryKb: 10 },
+          ],
+        },
+      },
+    });
+
+    const [terminal] = buildProcessInventory(ctx, []).terminals;
+
+    expect(terminal.sample?.members.map((m) => m.comm)).toEqual(["node"]);
+  });
+
   it("leaves out exited and killed records kept for their scrollback", () => {
     const { ctx } = makeCtx([
       { id: "live", cwd: "/", spawnedAt: 1, ptyProcess: { pid: 1 } },

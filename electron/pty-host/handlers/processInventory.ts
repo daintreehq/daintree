@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   HostProcessInventory,
   HostProcessInventoryTerminal,
@@ -16,7 +17,14 @@ function sampleTree(ctx: HostContext, pid: number): ProcessTreeSample | null {
     cpuPercent: summary.cpuPercent,
     memoryKb: summary.memoryKb,
     processCount: summary.processCount,
-    members: summary.breakdown,
+    // The census's `comm` can be a full executable path (macOS); the name is
+    // what says what the process is, and the path is the user's filesystem.
+    members: summary.breakdown.map((member) => ({
+      pid: member.pid,
+      comm: path.basename(member.comm) || member.comm,
+      cpuPercent: member.cpuPercent,
+      memoryKb: member.memoryKb,
+    })),
   };
 }
 

@@ -130,6 +130,52 @@ describe("collectProcessInventory (#13175)", () => {
     expect(snapshot.sampledAt).toBe(3_000);
   });
 
+  it("treats a host with terminals whose census never ran as unavailable", async () => {
+    const withIdleHost = await collectProcessInventory(
+      deps({
+        getHostInventory: async () => ({
+          inventories: [inventory([terminal("a", "p1")]), inventory([], { sampledAt: 0 })],
+          shardsTotal: 2,
+          shardsFailed: 0,
+        }),
+      })
+    );
+    expect(withIdleHost.samplesAvailable).toBe(true);
+
+    const withColdHost = await collectProcessInventory(
+      deps({
+        getHostInventory: async () => ({
+          inventories: [
+            inventory([terminal("a", "p1")]),
+            inventory([terminal("b", "p2")], { sampledAt: 0 }),
+          ],
+          shardsTotal: 2,
+          shardsFailed: 0,
+        }),
+      })
+    );
+    expect(withColdHost.samplesAvailable).toBe(false);
+  });
+
+  it("takes each plugin pid's reading from the freshest working census, never a sum", async () => {
+    const snapshot = await collectProcessInventory(
+      deps({
+        getHostInventory: async () => ({
+          inventories: [
+            inventory([], { sampledAt: 9_000, pidSamples: { 700: sample(300) } }),
+            inventory([], { sampledAt: 5_000, pidSamples: { 700: sample(100) } }),
+            inventory([], { sampledAt: 9_500, available: false, pidSamples: { 700: sample(999) } }),
+          ],
+          shardsTotal: 3,
+          shardsFailed: 0,
+        }),
+        getPluginProcesses: async () => ({ children: [child()], workers: [] }),
+      })
+    );
+
+    expect(snapshot.plugins[0].sample).toEqual(sample(300));
+  });
+
   it("projects plugin children without their args, env or full command path", async () => {
     const getHostInventory = vi.fn(async () => ({
       inventories: [inventory([], { pidSamples: { 700: sample(1024) } })],

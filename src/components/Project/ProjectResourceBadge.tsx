@@ -442,6 +442,10 @@ export function ProjectResourceBadge({
   const popoverContentRef = useRef<HTMLDivElement>(null);
   const [processesOpen, setProcessesOpen] = useState(false);
   const readoutRef = useRef<HTMLButtonElement>(null);
+  // Set while the popover closes into the processes dialog: the popover's own
+  // close-time restore would otherwise pull focus back to the readout from
+  // under the modal that just took it.
+  const handingOffRef = useRef(false);
   // Mirror into state so JSX doesn't read the ref during render (React Compiler).
   const [samples, setSamples] = useState<number[]>([]);
 
@@ -740,18 +744,33 @@ export function ProjectResourceBadge({
     if (!showReadout) setOpen(false);
   }, [showReadout]);
 
+  // Mounted on every path: the readout can drop out from under an open dialog
+  // (activity ending before the first read lands), and the dialog — maybe
+  // mid-kill — must not go with it.
+  const processesDialog = (
+    <ProcessesDialog
+      isOpen={processesOpen}
+      onClose={() => setProcessesOpen(false)}
+      restoreFocusTo={() => (readoutRef.current?.isConnected ? readoutRef.current : null)}
+    />
+  );
+
   if (!showReadout) {
     // The readout waits for its first read, but whatever the footer pinned
     // beside it must not: Run command has nothing to do with whether the
     // metrics read has landed or failed.
-    if (trailing == null) return null;
     return (
-      <div
-        data-sidebar-status-bar=""
-        className="flex items-center justify-end shrink-0 w-full min-h-7"
-      >
-        {trailing}
-      </div>
+      <>
+        {trailing != null && (
+          <div
+            data-sidebar-status-bar=""
+            className="flex items-center justify-end shrink-0 w-full min-h-7"
+          >
+            {trailing}
+          </div>
+        )}
+        {processesDialog}
+      </>
     );
   }
 
@@ -884,6 +903,11 @@ export function ProjectResourceBadge({
             event.preventDefault();
             popoverContentRef.current?.focus({ preventScroll: true, focusVisible: false });
           }}
+          onCloseAutoFocus={(event) => {
+            if (!handingOffRef.current) return;
+            handingOffRef.current = false;
+            event.preventDefault();
+          }}
           className="w-72 p-3"
         >
           <div className="space-y-3">
@@ -936,6 +960,7 @@ export function ProjectResourceBadge({
             <button
               type="button"
               onClick={() => {
+                handingOffRef.current = true;
                 setOpen(false);
                 setProcessesOpen(true);
               }}
@@ -986,11 +1011,7 @@ export function ProjectResourceBadge({
           </div>
         </PopoverContent>
       </Popover>
-      <ProcessesDialog
-        isOpen={processesOpen}
-        onClose={() => setProcessesOpen(false)}
-        restoreFocusTo={readoutRef}
-      />
+      {processesDialog}
     </>
   );
 }

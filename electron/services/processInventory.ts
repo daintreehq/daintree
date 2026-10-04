@@ -62,8 +62,13 @@ export async function collectProcessInventory(
     // A failed lookup leaves rows unnamed; the ids still group them.
   }
 
+  // Every census covers the plugin children, so the freshest working one
+  // answers for each pid; readings are never summed across hosts.
   const pidSamples = new Map<number, ProcessTreeSample>();
-  for (const inventory of host.inventories) {
+  const bySampleAge = [...host.inventories]
+    .filter((inventory) => inventory.available && inventory.sampledAt > 0)
+    .sort((a, b) => a.sampledAt - b.sampledAt);
+  for (const inventory of bySampleAge) {
     for (const [pid, sample] of Object.entries(inventory.pidSamples)) {
       pidSamples.set(Number(pid), sample);
     }
@@ -109,7 +114,12 @@ export async function collectProcessInventory(
     ),
     plugins,
     complete: host.shardsFailed === 0,
-    samplesAvailable: host.inventories.every((inventory) => inventory.available),
+    // A host with terminals whose census has never run has nothing to show
+    // for them; an idle host without terminals owes no reading.
+    samplesAvailable: host.inventories.every(
+      (inventory) =>
+        inventory.available && (inventory.sampledAt > 0 || inventory.terminals.length === 0)
+    ),
     sampledAt:
       answered.length > 0 ? Math.min(...answered.map((inventory) => inventory.sampledAt)) : 0,
   };

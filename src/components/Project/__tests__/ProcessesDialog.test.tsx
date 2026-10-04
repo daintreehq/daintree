@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ProcessInventorySnapshot, ProcessInventoryTerminal } from "@shared/types/processes";
 
 vi.mock("@/clients/processesClient", () => ({
@@ -160,6 +160,82 @@ describe("ProcessesDialog (#13175)", () => {
     });
 
     expect(screen.getAllByTestId("process-row")).toHaveLength(1);
+  });
+
+  it("refuses to kill a pane that restarted while the confirm was open", async () => {
+    mockGetSnapshot.mockResolvedValue(snapshot({ terminals: [terminal("a", { title: "shell" })] }));
+    await renderOpen();
+
+    fireEvent.click(screen.getByRole("button", { name: "Kill 'shell' in Cedar" }));
+    await screen.findByRole("alertdialog");
+    mockGetSnapshot.mockResolvedValue(
+      snapshot({ terminals: [terminal("a", { title: "shell", spawnedAt: 50 })] })
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Kill terminal" }));
+    });
+
+    expect(mockKill).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain("restarted after you chose it");
+  });
+
+  it("offers no kill when the dev preview sessions can't be read", async () => {
+    mockGetSnapshot.mockResolvedValue(snapshot({ terminals: [terminal("a", { title: "web" })] }));
+    await renderOpen();
+    mockGetAllSessions.mockRejectedValue(new Error("ipc down"));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Kill 'web' in Cedar" }));
+    });
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("nothing was killed");
+  });
+
+  it("says a trashed terminal's pane goes for good", async () => {
+    mockGetSnapshot.mockResolvedValue(
+      snapshot({ terminals: [terminal("a", { title: "shell", isTrashed: true })] })
+    );
+    await renderOpen();
+
+    fireEvent.click(screen.getByRole("button", { name: "Kill 'shell' in Cedar" }));
+    const confirm = await screen.findByRole("alertdialog");
+
+    expect(confirm.textContent).toContain("can't be restored");
+  });
+
+  it("drops a pending confirm when the dialog closes", async () => {
+    mockGetSnapshot.mockResolvedValue(snapshot({ terminals: [terminal("a", { title: "shell" })] }));
+    let rerender!: (ui: React.ReactElement) => void;
+    await act(async () => {
+      ({ rerender } = render(
+        <TooltipProvider>
+          <ProcessesDialog isOpen onClose={() => {}} />
+        </TooltipProvider>
+      ));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Kill 'shell' in Cedar" }));
+    await screen.findByRole("alertdialog");
+
+    await act(async () => {
+      rerender(
+        <TooltipProvider>
+          <ProcessesDialog isOpen={false} onClose={() => {}} />
+        </TooltipProvider>
+      );
+    });
+    await act(async () => {
+      rerender(
+        <TooltipProvider>
+          <ProcessesDialog isOpen onClose={() => {}} />
+        </TooltipProvider>
+      );
+    });
+
+    // The closed confirm finishes its exit animation, then stays closed.
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(screen.getAllByTestId("process-row")).toHaveLength(1);
+    expect(mockKill).not.toHaveBeenCalled();
   });
 
   it("cancelling the confirm kills nothing", async () => {
