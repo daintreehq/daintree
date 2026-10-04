@@ -1913,27 +1913,41 @@ describe("DevPreviewSessionService", () => {
       expect(restarted.terminalId).toBeTruthy();
     });
 
-    it("a repeated stop keeps the worktree attribution for later cleanup", async () => {
+    it("keeps intent through worktree teardown, which runs before a git delete that can fail", async () => {
       await service.ensure({ ...baseRequest, worktreeId: "wt-1" });
-      await service.stop(sessionRequest);
-      await service.stopByProject(baseRequest.projectId);
       await service.stop(sessionRequest);
 
       await service.stopByWorktree("wt-1");
 
-      expect(service.getState(sessionRequest).userStopped).toBeUndefined();
+      expect(service.getState(sessionRequest).userStopped).toBe(true);
+      const remount = await service.ensure({ ...baseRequest, worktreeId: "wt-1" });
+      expect(remount.status).toBe("stopped");
     });
 
-    it("drops intent when the worktree is deleted, even without a live session", async () => {
+    it("a refused ensure does not take the worktree mapping from a running panel", async () => {
+      const panelB = { ...baseRequest, panelId: "panel-2", worktreeId: "wt-1" };
       await service.ensure({ ...baseRequest, worktreeId: "wt-1" });
       await service.stop(sessionRequest);
-      await service.stopByProject(baseRequest.projectId);
+      await service.ensure(panelB);
 
-      await service.stopByWorktree("wt-1");
+      await service.ensure({ ...baseRequest, worktreeId: "wt-1" });
+      const stopped = await service.stopDevServerByWorktree("wt-1");
 
-      expect(service.getState(sessionRequest).userStopped).toBeUndefined();
+      expect(stopped.panelId).toBe("panel-2");
     });
 
+    it("a refused ensure that recreates the session broadcasts it", async () => {
+      await service.ensure(baseRequest);
+      await service.stop(sessionRequest);
+      await service.stopByProject(baseRequest.projectId);
+      vi.mocked(onStateChanged).mockClear();
+
+      await service.ensure(baseRequest);
+
+      expect(onStateChanged).toHaveBeenCalledWith(
+        expect.objectContaining({ panelId: baseRequest.panelId, userStopped: true })
+      );
+    });
     it("a crash does not record intent", async () => {
       const started = await service.ensure(baseRequest);
       ptyClient.emitExit(started.terminalId!, 1);

@@ -229,17 +229,6 @@ export class DevPreviewSessionService {
     if (this.userStopped.delete(key)) this.persistUserStopped();
   }
 
-  private clearUserStoppedWhere(predicate: (record: DevPreviewUserStoppedRecord) => boolean): void {
-    let changed = false;
-    for (const [key, record] of this.userStopped) {
-      if (predicate(record)) {
-        this.userStopped.delete(key);
-        changed = true;
-      }
-    }
-    if (changed) this.persistUserStopped();
-  }
-
   private persistManifest(): void {
     if (this.disposed) return;
     try {
@@ -449,6 +438,7 @@ export class DevPreviewSessionService {
       // launches it.
       const refused = this.userStopped.has(key) && !request.resumeUserStopped;
       if (!refused) this.clearUserStopped(key);
+      const created = !this.sessions.has(key);
       const session = this.getOrCreateSession(request.projectId, request.panelId);
       const envChanged = !envEquals(session.env, request.env);
       const nextTurbopackEnabled = request.turbopackEnabled ?? true;
@@ -481,15 +471,28 @@ export class DevPreviewSessionService {
         resetCrashLoopGuard(session);
       }
 
-      if (prevWorktreeId && prevWorktreeId !== session.worktreeId) {
+      // A refused (stopped) panel must not take a worktree's dashboard and
+      // card controls away from a live session sharing that worktree.
+      const ownsMapping = (worktreeId: string): boolean => {
+        if (!refused) return true;
+        const mappedKey = this.worktreeToSession.get(worktreeId);
+        if (mappedKey === undefined || mappedKey === key) return true;
+        const mapped = this.sessions.get(mappedKey);
+        return !mapped || !RUNNING_STATES.has(mapped.status);
+      };
+      if (prevWorktreeId && prevWorktreeId !== session.worktreeId && ownsMapping(prevWorktreeId)) {
         this.worktreeToSession.delete(prevWorktreeId);
       }
-      if (session.worktreeId) {
-        const sessionKey = createSessionKey(session.projectId, session.panelId);
-        this.worktreeToSession.set(session.worktreeId, sessionKey);
+      if (session.worktreeId && ownsMapping(session.worktreeId)) {
+        this.worktreeToSession.set(session.worktreeId, key);
       }
 
-      if (refused) return;
+      if (refused) {
+        // Broadcast so surfaces that hydrated before this session existed
+        // (WorktreeCard after relaunch) see it and can offer Start.
+        if (created || configChanged) this.updateSession(session, {});
+        return;
+      }
 
       const commandError = getInvalidCommandMessage(session.devCommand);
       if (commandError) {
@@ -1026,13 +1029,6 @@ export class DevPreviewSessionService {
           }
         });
       })
-    );
-
-    const targetKeys = new Set(targets.map(([key]) => key));
-    this.clearUserStoppedWhere(
-      (record) =>
-        record.worktreeId === worktreeId ||
-        targetKeys.has(createSessionKey(record.projectId, record.panelId))
     );
 
     // Drop any restore placeholder for this worktree too — the worktree is
