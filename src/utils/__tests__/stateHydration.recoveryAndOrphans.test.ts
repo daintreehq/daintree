@@ -820,7 +820,7 @@ describe("hydrateAppState", () => {
       expect(addPanel).toHaveBeenCalledTimes(1);
     });
 
-    it("still respawns agent on reconnect timeout (network issue)", async () => {
+    it("still respawns agent when the saved id cannot be reconnected", async () => {
       appClientMock.hydrate.mockResolvedValue({
         appState: {
           terminals: [
@@ -848,13 +848,8 @@ describe("hydrateAppState", () => {
 
       // getForProject returns empty
       terminalClientMock.getForProject.mockResolvedValue([]);
-      // reconnect times out
-      terminalClientMock.reconnect.mockImplementation(
-        () =>
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Reconnection timeout")), 10)
-          )
-      );
+      // reconnect is refused, so the saved id can't be reused (as on a timeout)
+      terminalClientMock.reconnect.mockResolvedValue({ exists: false, conflict: true });
 
       const addPanel = vi.fn().mockResolvedValue("agent-1");
 
@@ -865,7 +860,7 @@ describe("hydrateAppState", () => {
         openDiagnosticsDock: vi.fn(),
       });
 
-      // Agent should still respawn on timeout (could be a temporary network issue)
+      // Agent should still respawn when the saved id can't be reconnected
       expect(addPanel).toHaveBeenCalledTimes(1);
       expect(addPanel).toHaveBeenCalledWith(expect.objectContaining({ kind: "terminal" }));
     });
@@ -906,6 +901,60 @@ describe("hydrateAppState", () => {
       expect(addPanel).toHaveBeenCalledWith(
         expect.objectContaining({ kind: "terminal", requestedId: "term-1" })
       );
+    });
+
+    // #13172: when the saved id can't be reused the original may still be
+    // running its command, so the respawn must not start a second copy.
+    it.each([
+      [
+        "a confirmed-gone PTY re-runs its command",
+        { exists: false },
+        { requestedId: "term-1", command: "npm run dev" },
+      ],
+      [
+        "a PTY live under another workspace does not re-run its command",
+        { exists: false, conflict: true },
+        { requestedId: undefined, command: undefined },
+      ],
+    ])("%s", async (_label, reconnectResult, expected) => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "term-1",
+              kind: "terminal",
+              type: "terminal",
+              title: "Dev server",
+              cwd: "/project",
+              location: "grid",
+              command: "npm run dev",
+            },
+          ],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([]);
+      terminalClientMock.reconnect.mockResolvedValue(reconnectResult);
+
+      const addPanel = vi.fn(
+        async (_args: { requestedId?: string; command?: string }) => "term-new"
+      );
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addPanel).toHaveBeenCalledTimes(1);
+      const args = addPanel.mock.calls[0]?.[0];
+      expect(args?.requestedId).toBe(expected.requestedId);
+      expect(args?.command).toBe(expected.command);
     });
   });
 });
