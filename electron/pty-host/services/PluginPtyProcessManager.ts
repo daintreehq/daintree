@@ -3,7 +3,10 @@ import { destroyPty } from "../../services/PtyPool.js";
 import { minimalSpawnEnv } from "../../utils/minimalSpawnEnv.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { PLUGIN_PROCESS_KILL_GRACE_MS } from "../../../shared/types/ipc/pluginProcess.js";
-import type { ProcessTreeKiller, ProcessTreeKillTarget } from "../../services/pty/ProcessTreeKiller.js";
+import type {
+  ProcessTreeKiller,
+  ProcessTreeKillTarget,
+} from "../../services/pty/ProcessTreeKiller.js";
 import type {
   PluginPtyHostEvent,
   PluginPtyHostSpawnOptions,

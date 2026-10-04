@@ -614,7 +614,11 @@ export class PluginMcpSupervisor {
         exited,
         "mcp",
         SHUTDOWN_GRACE_MS,
-        this.escalationFence(stateKey(state.pluginId, state.serverId), state.pid, state.spawnGeneration)
+        this.escalationFence(
+          stateKey(state.pluginId, state.serverId),
+          state.pid,
+          state.spawnGeneration
+        )
       );
     }
     state.pid = null;
