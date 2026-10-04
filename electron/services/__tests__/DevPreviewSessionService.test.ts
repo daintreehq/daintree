@@ -1751,4 +1751,211 @@ describe("DevPreviewSessionService", () => {
       expect(service.getUpstreamPortForSubdomain(subdomain)).toBeNull();
     });
   });
+
+  describe("user stop intent (#13169)", () => {
+    const sessionRequest = { panelId: baseRequest.panelId, projectId: baseRequest.projectId };
+
+    it("refuses an automatic ensure after a user stop and reports userStopped", async () => {
+      await service.ensure(baseRequest);
+      const stopped = await service.stop(sessionRequest);
+      expect(stopped.userStopped).toBe(true);
+
+      const remount = await service.ensure(baseRequest);
+
+      expect(remount.status).toBe("stopped");
+      expect(remount.userStopped).toBe(true);
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses an automatic ensure even when the config changed while stopped", async () => {
+      await service.ensure(baseRequest);
+      await service.stop(sessionRequest);
+
+      const edited = await service.ensure({ ...baseRequest, devCommand: "npm run start" });
+
+      expect(edited.status).toBe("stopped");
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it("an explicit resume clears the intent and starts the server", async () => {
+      await service.ensure(baseRequest);
+      await service.stop(sessionRequest);
+
+      const resumed = await service.ensure({ ...baseRequest, resumeUserStopped: true });
+
+      expect(resumed.terminalId).toBeTruthy();
+      expect(resumed.userStopped).toBeUndefined();
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+
+      const later = await service.ensure(baseRequest);
+      expect(later.terminalId).toBe(resumed.terminalId);
+    });
+
+    it("restart clears the intent", async () => {
+      await service.ensure(baseRequest);
+      await service.stop(sessionRequest);
+
+      const restarted = await service.restart(sessionRequest);
+
+      expect(restarted.userStopped).toBeUndefined();
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+    });
+
+    it("a configuration stop does not record intent", async () => {
+      await service.ensure(baseRequest);
+      const stopped = await service.stop({ ...sessionRequest, reason: "configuration" });
+
+      expect(stopped.userStopped).toBeUndefined();
+      const again = await service.ensure(baseRequest);
+      expect(again.terminalId).toBeTruthy();
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects an unknown stop reason", async () => {
+      await expect(
+        service.stop({ ...sessionRequest, reason: "bogus" as unknown as "user" })
+      ).rejects.toThrow(/reason/);
+    });
+
+    it("persists intent and honours it in a fresh service (relaunch)", async () => {
+      const persisted: unknown[][] = [];
+      service.dispose();
+      service = new DevPreviewSessionService(
+        ptyClient as unknown as PtyClient,
+        onStateChanged,
+        [],
+        () => {},
+        () => {},
+        [],
+        (records) => persisted.push(records)
+      );
+      await service.ensure({ ...baseRequest, worktreeId: "wt-1" });
+      await service.stop(sessionRequest);
+      const saved = persisted.at(-1);
+      expect(saved).toEqual([{ ...sessionRequest, worktreeId: "wt-1" }]);
+
+      service.dispose();
+      ptyClient = createPtyClientMock();
+      service = new DevPreviewSessionService(
+        ptyClient as unknown as PtyClient,
+        onStateChanged,
+        [],
+        () => {},
+        () => {},
+        saved
+      );
+
+      expect(service.getState(sessionRequest)).toMatchObject({
+        status: "stopped",
+        userStopped: true,
+      });
+      const remount = await service.ensure(baseRequest);
+      expect(remount.status).toBe("stopped");
+      expect(ptyClient.spawn).not.toHaveBeenCalled();
+    });
+
+    it("ignores malformed persisted records", () => {
+      service.dispose();
+      service = new DevPreviewSessionService(
+        ptyClient as unknown as PtyClient,
+        onStateChanged,
+        [],
+        () => {},
+        () => {},
+        [null, { panelId: 3 }, "x", { projectId: "project-1" }]
+      );
+
+      expect(service.getState(sessionRequest).userStopped).toBeUndefined();
+    });
+
+    it("keeps intent across project hibernation", async () => {
+      await service.ensure(baseRequest);
+      await service.stop(sessionRequest);
+      await service.stopByProject(baseRequest.projectId);
+
+      expect(service.getState(sessionRequest).userStopped).toBe(true);
+      const remount = await service.ensure(baseRequest);
+      expect(remount.status).toBe("stopped");
+    });
+
+    it("keeps intent through stopByPanel, which also serves reversible trash/background", async () => {
+      await service.ensure(baseRequest);
+      await service.stop(sessionRequest);
+      await service.stopByPanel({ panelId: baseRequest.panelId });
+
+      expect(service.getState(sessionRequest).userStopped).toBe(true);
+      const restored = await service.ensure(baseRequest);
+      expect(restored.status).toBe("stopped");
+    });
+
+    it("a refused ensure still records the latest config, so restart launches it", async () => {
+      await service.ensure(baseRequest);
+      await service.stop(sessionRequest);
+      await service.ensure({ ...baseRequest, cwd: "/repo-edited" });
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+
+      await service.restart(sessionRequest);
+
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+      expect(ptyClient.spawn.mock.calls[1]?.[1]).toMatchObject({ cwd: "/repo-edited" });
+    });
+
+    it("restart works after hibernation once a refused ensure recreated the session", async () => {
+      await service.ensure(baseRequest);
+      await service.stop(sessionRequest);
+      await service.stopByProject(baseRequest.projectId);
+      expect(await service.restart(sessionRequest)).toMatchObject({ userStopped: true });
+
+      await service.ensure(baseRequest);
+      const restarted = await service.restart(sessionRequest);
+
+      expect(restarted.userStopped).toBeUndefined();
+      expect(restarted.terminalId).toBeTruthy();
+    });
+
+    it("keeps intent through worktree teardown, which runs before a git delete that can fail", async () => {
+      await service.ensure({ ...baseRequest, worktreeId: "wt-1" });
+      await service.stop(sessionRequest);
+
+      await service.stopByWorktree("wt-1");
+
+      expect(service.getState(sessionRequest).userStopped).toBe(true);
+      const remount = await service.ensure({ ...baseRequest, worktreeId: "wt-1" });
+      expect(remount.status).toBe("stopped");
+    });
+
+    it("a refused ensure does not take the worktree mapping from a running panel", async () => {
+      const panelB = { ...baseRequest, panelId: "panel-2", worktreeId: "wt-1" };
+      await service.ensure({ ...baseRequest, worktreeId: "wt-1" });
+      await service.stop(sessionRequest);
+      await service.ensure(panelB);
+
+      await service.ensure({ ...baseRequest, worktreeId: "wt-1" });
+      const stopped = await service.stopDevServerByWorktree("wt-1");
+
+      expect(stopped.panelId).toBe("panel-2");
+    });
+
+    it("a refused ensure that recreates the session broadcasts it", async () => {
+      await service.ensure(baseRequest);
+      await service.stop(sessionRequest);
+      await service.stopByProject(baseRequest.projectId);
+      vi.mocked(onStateChanged).mockClear();
+
+      await service.ensure(baseRequest);
+
+      expect(onStateChanged).toHaveBeenCalledWith(
+        expect.objectContaining({ panelId: baseRequest.panelId, userStopped: true })
+      );
+    });
+    it("a crash does not record intent", async () => {
+      const started = await service.ensure(baseRequest);
+      ptyClient.emitExit(started.terminalId!, 1);
+
+      await vi.waitFor(() => {
+        expect(service.getState(sessionRequest).status).toBe("error");
+      });
+      expect(service.getState(sessionRequest).userStopped).toBeUndefined();
+    });
+  });
 });

@@ -27,6 +27,8 @@ import {
   validateEnsureRequest,
   validateSessionRequest,
   validateStopByPanelRequest,
+  validateStopRequest,
+  parseUserStoppedRecords,
 } from "./DevPreviewRequestValidators.js";
 import {
   ensureSessionTerminal,
@@ -51,6 +53,8 @@ import type {
   DevPreviewEnsureRequest,
   DevPreviewSessionRequest,
   DevPreviewStopByPanelRequest,
+  DevPreviewStopRequest,
+  DevPreviewUserStoppedRecord,
   DevPreviewSessionState,
   DevPreviewSessionStatus,
   DevPreviewDiagnosticEvent,
@@ -160,6 +164,10 @@ export class DevPreviewSessionService {
   // session reports status "restored-stopped" so the UI can offer a restart.
   // Entries are dropped the moment a real session is created for that key.
   private readonly restoredEntries = new Map<string, DevPreviewManifestEntry>();
+  // Durable "the user pressed Stop" intent, keyed by session key. Outlives the
+  // session itself (hibernation, relaunch) so automatic ensures stay refused
+  // until an explicit Start or restart.
+  private readonly userStopped = new Map<string, DevPreviewUserStoppedRecord>();
   // Per-session diagnostics timeline (sessionKey -> bounded ring). Kept in a
   // separate map (not on the session object) so the timeline outlives session
   // deletion — a "why did my server stop?" after hibernation or panel-close is
@@ -186,7 +194,11 @@ export class DevPreviewSessionService {
     // restored), powering the cross-worktree dev-server dashboard. Optional with
     // a no-op default so the 2-arg test fixtures and other call sites that don't
     // need the global view are unaffected.
-    private readonly onAllSessionsChanged: (sessions: DevPreviewSessionState[]) => void = () => {}
+    private readonly onAllSessionsChanged: (sessions: DevPreviewSessionState[]) => void = () => {},
+    initialUserStopped: unknown = [],
+    private readonly onPersistUserStopped: (
+      records: DevPreviewUserStoppedRecord[]
+    ) => void = () => {}
   ) {
     this.onDataListener = this.handleData.bind(this);
     this.onExitListener = this.handleExit.bind(this);
@@ -200,6 +212,21 @@ export class DevPreviewSessionService {
     for (const entry of restoredEntries) {
       this.restoredEntries.set(createSessionKey(entry.projectId, entry.panelId), entry);
     }
+    for (const record of parseUserStoppedRecords(initialUserStopped)) {
+      this.userStopped.set(createSessionKey(record.projectId, record.panelId), record);
+    }
+  }
+
+  private persistUserStopped(): void {
+    try {
+      this.onPersistUserStopped([...this.userStopped.values()]);
+    } catch (err) {
+      console.warn("[DevPreviewSessionService] persistUserStopped failed:", err);
+    }
+  }
+
+  private clearUserStopped(key: string): void {
+    if (this.userStopped.delete(key)) this.persistUserStopped();
   }
 
   private persistManifest(): void {
@@ -405,6 +432,13 @@ export class DevPreviewSessionService {
     let state: DevPreviewSessionState | undefined;
     await this.runLocked(key, async () => {
       if (this.disposed) return;
+      // A user-stopped panel still takes the latest config (so a later restart
+      // from the dashboard or palette launches current settings, and a
+      // session exists for it after relaunch) but only an explicit resume
+      // launches it.
+      const refused = this.userStopped.has(key) && !request.resumeUserStopped;
+      if (!refused) this.clearUserStopped(key);
+      const created = !this.sessions.has(key);
       const session = this.getOrCreateSession(request.projectId, request.panelId);
       const envChanged = !envEquals(session.env, request.env);
       const nextTurbopackEnabled = request.turbopackEnabled ?? true;
@@ -437,12 +471,27 @@ export class DevPreviewSessionService {
         resetCrashLoopGuard(session);
       }
 
-      if (prevWorktreeId && prevWorktreeId !== session.worktreeId) {
+      // A refused (stopped) panel must not take a worktree's dashboard and
+      // card controls away from a live session sharing that worktree.
+      const ownsMapping = (worktreeId: string): boolean => {
+        if (!refused) return true;
+        const mappedKey = this.worktreeToSession.get(worktreeId);
+        if (mappedKey === undefined || mappedKey === key) return true;
+        const mapped = this.sessions.get(mappedKey);
+        return !mapped || !RUNNING_STATES.has(mapped.status);
+      };
+      if (prevWorktreeId && prevWorktreeId !== session.worktreeId && ownsMapping(prevWorktreeId)) {
         this.worktreeToSession.delete(prevWorktreeId);
       }
-      if (session.worktreeId) {
-        const sessionKey = createSessionKey(session.projectId, session.panelId);
-        this.worktreeToSession.set(session.worktreeId, sessionKey);
+      if (session.worktreeId && ownsMapping(session.worktreeId)) {
+        this.worktreeToSession.set(session.worktreeId, key);
+      }
+
+      if (refused) {
+        // Broadcast so surfaces that hydrated before this session existed
+        // (WorktreeCard after relaunch) see it and can offer Start.
+        if (created || configChanged) this.updateSession(session, {});
+        return;
       }
 
       const commandError = getInvalidCommandMessage(session.devCommand);
@@ -496,6 +545,7 @@ export class DevPreviewSessionService {
         // User-initiated restart cancels any pending crash-loop backoff and
         // clears the guard so this attempt starts from a clean slate.
         resetCrashLoopGuard(session);
+        this.clearUserStopped(key);
 
         const commandError = getInvalidCommandMessage(session.devCommand);
         if (commandError) {
@@ -549,6 +599,7 @@ export class DevPreviewSessionService {
       if (!session) return;
 
       resetCrashLoopGuard(session);
+      this.clearUserStopped(key);
 
       const commandError = getInvalidCommandMessage(session.devCommand);
       if (commandError) {
@@ -612,6 +663,7 @@ export class DevPreviewSessionService {
       if (!session) return;
 
       resetCrashLoopGuard(session);
+      this.clearUserStopped(key);
 
       const commandError = getInvalidCommandMessage(session.devCommand);
       if (commandError) {
@@ -672,12 +724,31 @@ export class DevPreviewSessionService {
     return this.getSessionState(request.projectId, request.panelId);
   }
 
-  async stop(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState> {
-    validateSessionRequest(request);
+  async stop(request: DevPreviewStopRequest): Promise<DevPreviewSessionState> {
+    validateStopRequest(request);
     const key = createSessionKey(request.projectId, request.panelId);
+    const isUserStop = request.reason !== "configuration";
+    let droppedRestoreEntry = false;
     await this.runLocked(key, async () => {
       const session = this.sessions.get(key);
-      if (!session) return;
+      // Recorded before the terminal is torn down so an ensure queued behind
+      // this lock (a remount mid-stop) already sees the intent.
+      if (isUserStop) {
+        const worktreeId =
+          session?.worktreeId ??
+          this.restoredEntries.get(key)?.worktreeId ??
+          this.userStopped.get(key)?.worktreeId;
+        this.userStopped.set(key, {
+          projectId: request.projectId,
+          panelId: request.panelId,
+          ...(worktreeId ? { worktreeId } : {}),
+        });
+        this.persistUserStopped();
+      }
+      if (!session) {
+        if (isUserStop) droppedRestoreEntry = this.restoredEntries.delete(key);
+        return;
+      }
 
       // An explicit stop ends the session — clear the guard (and any pending
       // backoff) so it can't auto-respawn behind the user's back. The terminal
@@ -752,6 +823,9 @@ export class DevPreviewSessionService {
     // Explicit user stop — drop this session from the restore manifest so the
     // next launch doesn't offer to restart a server the user chose to stop.
     this.persistManifest();
+    if (droppedRestoreEntry && !this.disposed) {
+      this.onAllSessionsChanged(this.getAllSessions());
+    }
     return this.getSessionState(request.projectId, request.panelId);
   }
 
@@ -813,6 +887,8 @@ export class DevPreviewSessionService {
         });
       })
     );
+    // Stop intent survives: this path also serves reversible teardown (trash,
+    // background), and the panel can come back.
     this.persistManifest();
   }
 
@@ -903,6 +979,7 @@ export class DevPreviewSessionService {
           worktreeId: entry.worktreeId,
           env: entry.env,
           turbopackEnabled: entry.turbopackEnabled,
+          resumeUserStopped: true,
         });
       }
     }
@@ -1161,6 +1238,7 @@ export class DevPreviewSessionService {
         updatedAt: Date.now(),
         forceKilled: undefined,
         phaseLabel: undefined,
+        userStopped: this.userStopped.has(key) || undefined,
       };
     }
     return this.toPublicState(session);
@@ -1182,6 +1260,8 @@ export class DevPreviewSessionService {
       phaseLabel: session.phaseLabel,
       forceKilled: session.forceKilled,
       crashLoopStopped: session.crashLoopStopped || undefined,
+      userStopped:
+        this.userStopped.has(createSessionKey(session.projectId, session.panelId)) || undefined,
       lastOutput: session.status === "stopped" ? undefined : this.getLastOutputLine(session.buffer),
     };
   }

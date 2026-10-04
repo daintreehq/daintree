@@ -142,7 +142,8 @@ export function useDevServer({
   const isMountedRef = useRef(true);
   const isEnsuringRef = useRef(false);
   const lastEnsureConfigRef = useRef<string>("");
-  const pendingEnsureConfigRef = useRef<string | null>(null);
+  const pendingEnsureRef = useRef<{ configKey: string; resume: boolean } | null>(null);
+  const userStoppedRef = useRef(false);
   const requestVersionRef = useRef(0);
 
   const latestContextRef = useRef<{
@@ -196,6 +197,7 @@ export function useDevServer({
       terminalId: state.terminalId,
       phaseLabel: state.phaseLabel,
     };
+    userStoppedRef.current = state.userStopped === true;
     setStatus(state.status);
     setUrl(state.url);
     setTerminalId(state.terminalId);
@@ -225,10 +227,18 @@ export function useDevServer({
     setIsRestarting(false);
   }, []);
 
+  // `resume` marks an explicit Start: only that may lift a user Stop in Main.
+  // Automatic ensures (mount, remount, config edits) leave a stopped panel
+  // stopped, so a queued Start keeps its resume through later config changes
+  // and always drains; only a Stop cancels it.
   const ensureLatestConfig = useCallback(
-    async (configKey: string) => {
+    async (configKey: string, resume = false) => {
       if (isEnsuringRef.current) {
-        pendingEnsureConfigRef.current = configKey;
+        const pending = pendingEnsureRef.current;
+        pendingEnsureRef.current = {
+          configKey,
+          resume: resume || (pending?.resume ?? false),
+        };
         return;
       }
 
@@ -254,6 +264,7 @@ export function useDevServer({
           worktreeId: latest.worktreeId,
           env: latest.env,
           turbopackEnabled: latest.turbopackEnabled,
+          ...(resume && { resumeUserStopped: true }),
         });
 
         if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
@@ -266,14 +277,12 @@ export function useDevServer({
         }
       } finally {
         isEnsuringRef.current = false;
-        const pendingConfig = pendingEnsureConfigRef.current;
-        if (pendingConfig && pendingConfig !== configKey) {
-          pendingEnsureConfigRef.current = null;
-          safeFireAndForget(ensureLatestConfig(pendingConfig), {
+        const pending = pendingEnsureRef.current;
+        pendingEnsureRef.current = null;
+        if (pending && (pending.configKey !== configKey || pending.resume)) {
+          safeFireAndForget(ensureLatestConfig(pending.configKey, pending.resume), {
             context: "Re-running queued dev preview ensure",
           });
-        } else if (pendingConfig === configKey) {
-          pendingEnsureConfigRef.current = null;
         }
       }
     },
@@ -300,7 +309,7 @@ export function useDevServer({
       envSignature: serializeEnv(latest.env),
       turbopackEnabled: latest.turbopackEnabled,
     });
-    await ensureLatestConfig(configKey);
+    await ensureLatestConfig(configKey, true);
   }, [applyInvokeError, ensureLatestConfig]);
 
   const stop = useCallback(() => {
@@ -308,6 +317,8 @@ export function useDevServer({
     if (!latest.projectId) return;
     persistedEnsureCache.delete(latest.panelId);
     lastEnsureConfigRef.current = "";
+    // A Start queued behind an in-flight ensure must not resume after this Stop.
+    pendingEnsureRef.current = null;
     const requestVersion = requestVersionRef.current;
     const requestProjectId = latest.projectId;
     const requestPanelId = latest.panelId;
@@ -334,6 +345,14 @@ export function useDevServer({
       return;
     }
 
+    // Main still holds the config from before the Stop (automatic ensures were
+    // refused since), so a restart would relaunch stale settings — start with
+    // the current ones instead.
+    if (userStoppedRef.current) {
+      await start();
+      return;
+    }
+
     persistedEnsureCache.delete(latest.panelId);
     const requestVersion = requestVersionRef.current;
     const requestProjectId = latest.projectId;
@@ -352,7 +371,7 @@ export function useDevServer({
         applyInvokeError(err);
       }
     }
-  }, [applyInvokeError, applyState, isRequestCurrent]);
+  }, [applyInvokeError, applyState, isRequestCurrent, start]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -380,7 +399,8 @@ export function useDevServer({
       setPhaseLabel(undefined);
       setIsRestarting(false);
       lastEnsureConfigRef.current = "";
-      pendingEnsureConfigRef.current = null;
+      pendingEnsureRef.current = null;
+      userStoppedRef.current = false;
       persistedEnsureCache.delete(panelId);
       setInitialStateResolved(true);
       return;
@@ -430,10 +450,10 @@ export function useDevServer({
     const requestPanelId = panelId;
 
     lastEnsureConfigRef.current = "";
-    pendingEnsureConfigRef.current = null;
+    pendingEnsureRef.current = null;
     persistedEnsureCache.delete(panelId);
     window.electron.devPreview
-      .stop({ panelId: requestPanelId, projectId: requestProjectId })
+      .stop({ panelId: requestPanelId, projectId: requestProjectId, reason: "configuration" })
       .then((state) => {
         if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
           applyState(state);
@@ -454,7 +474,8 @@ export function useDevServer({
     // rather than firing on the synchronous mount with the stale "stopped"
     // default. A "restored-stopped" panel (dev server was running when Daintree
     // closed) then auto-starts like any other dev preview — reopening a project,
-    // whether by cold launch or live switch, brings its dev server back.
+    // whether by cold launch or live switch, brings its dev server back. A panel
+    // the user stopped is not: Main refuses this (non-resume) ensure (#13169).
     if (!initialStateResolved) return;
 
     const configKey = buildEnsureConfigKey({

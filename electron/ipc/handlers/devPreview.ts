@@ -12,6 +12,7 @@ import type { DevPreviewManifestEntry } from "../../services/DevPreviewManifestS
 import type {
   DevPreviewEnsureRequest,
   DevPreviewSessionRequest,
+  DevPreviewStopRequest,
   DevPreviewStopByPanelRequest,
   DevPreviewStateChangedPayload,
   DevPreviewAllSessionsPayload,
@@ -71,8 +72,9 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
       sessionServicePromise = Promise.all([
         import("../../services/DevPreviewSessionService.js"),
         import("../../services/DevPreviewManifestService.js"),
+        import("../../store.js"),
       ])
-        .then(([sessionMod, manifestMod]) => {
+        .then(([sessionMod, manifestMod, storeMod]) => {
           // Read (and clear) the restore manifest the previous session left
           // behind. The in-memory copy owns restore state for this launch, so
           // a corrupt or stale file degrades to "no restore" rather than
@@ -94,7 +96,9 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
             (sessions) => {
               const payload: DevPreviewAllSessionsPayload = { sessions };
               broadcastToRenderer(CHANNELS.DEV_PREVIEW_ALL_SESSIONS_CHANGED, payload);
-            }
+            },
+            storeMod.store.get("devPreviewUserStopped"),
+            (records) => storeMod.store.set("devPreviewUserStopped", records)
           );
           return sessionService;
         })
@@ -136,7 +140,7 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
           return svc.reinstallAndRestart(request);
         }
       ),
-      stop: op(DEV_PREVIEW_METHOD_CHANNELS.stop, async (request: DevPreviewSessionRequest) => {
+      stop: op(DEV_PREVIEW_METHOD_CHANNELS.stop, async (request: DevPreviewStopRequest) => {
         const svc = await getSessionService();
         return svc.stop(request);
       }),

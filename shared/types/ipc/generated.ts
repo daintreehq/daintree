@@ -359,7 +359,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./devPreview.js").DevPreviewSessionState;
   };
   "dev-preview:stop": {
-    args: [request: import("./devPreview.js").DevPreviewSessionRequest];
+    args: [request: import("./devPreview.js").DevPreviewStopRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
   };
   "dev-preview:stop-by-panel": {

@@ -3,6 +3,8 @@ import type {
   DevPreviewEnsureRequest,
   DevPreviewSessionRequest,
   DevPreviewStopByPanelRequest,
+  DevPreviewStopRequest,
+  DevPreviewUserStoppedRecord,
 } from "../../shared/types/ipc/devPreview.js";
 
 export function createSessionKey(projectId: string, panelId: string): string {
@@ -74,6 +76,9 @@ export function validateEnsureRequest(request: DevPreviewEnsureRequest): void {
   if (request.turbopackEnabled !== undefined && typeof request.turbopackEnabled !== "boolean") {
     throw new Error("turbopackEnabled must be a boolean if provided");
   }
+  if (request.resumeUserStopped !== undefined && typeof request.resumeUserStopped !== "boolean") {
+    throw new Error("resumeUserStopped must be a boolean if provided");
+  }
 }
 
 export function validateSessionRequest(request: DevPreviewSessionRequest): void {
@@ -86,6 +91,34 @@ export function validateSessionRequest(request: DevPreviewSessionRequest): void 
   if (typeof request.projectId !== "string" || !request.projectId.trim()) {
     throw new Error("projectId is required");
   }
+}
+
+export function validateStopRequest(request: DevPreviewStopRequest): void {
+  validateSessionRequest(request);
+  if (
+    request.reason !== undefined &&
+    request.reason !== "user" &&
+    request.reason !== "configuration"
+  ) {
+    throw new Error("reason must be 'user' or 'configuration' if provided");
+  }
+}
+
+export function parseUserStoppedRecords(value: unknown): DevPreviewUserStoppedRecord[] {
+  if (!Array.isArray(value)) return [];
+  const records: DevPreviewUserStoppedRecord[] = [];
+  for (const item of value) {
+    if (!isPlainRecord(item)) continue;
+    const { projectId, panelId, worktreeId } = item;
+    if (typeof projectId !== "string" || !projectId.trim()) continue;
+    if (typeof panelId !== "string" || !panelId.trim()) continue;
+    records.push({
+      projectId,
+      panelId,
+      ...(typeof worktreeId === "string" && worktreeId ? { worktreeId } : {}),
+    });
+  }
+  return records;
 }
 
 export function validateStopByPanelRequest(request: DevPreviewStopByPanelRequest): void {
