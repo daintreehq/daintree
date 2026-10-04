@@ -1031,6 +1031,18 @@ describe("PtyHostLifecycle", () => {
       await expect(lifecycle.dispose()).resolves.toBe(true);
     });
 
+    it("does not count a host that died abnormally mid-dispose as exiting on its own", async () => {
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+      callbacks.log.isDisposed.current = true;
+
+      const exit = trackSettled(lifecycle.dispose());
+      mockChild.emit("exit", 1);
+      await Promise.resolve();
+      expect(exit.settled).toBe(true);
+      expect(exit.exitedOnItsOwn).toBe(false);
+    });
+
     it("settles through the host's exit when the dispose request cannot be sent", async () => {
       const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
       vi.spyOn(console, "error").mockImplementation(() => {});

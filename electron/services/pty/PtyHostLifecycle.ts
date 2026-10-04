@@ -225,8 +225,8 @@ export class PtyHostLifecycle {
   /** Force-kill backstop timer scheduled by dispose(); cleared by the child's `exit`. */
   private disposeTimer: NodeJS.Timeout | null = null;
   /**
-   * Settles once a disposing host is gone: `true` when it exited on its own,
-   * `false` when the backstop had to SIGKILL it.
+   * Settles once a disposing host is gone: `true` when it exited cleanly on its
+   * own, `false` when it crashed or the backstop had to SIGKILL it.
    */
   private disposeExit: Promise<boolean> | null = null;
   private resolveDisposeExit: ((exitedOnItsOwn: boolean) => void) | null = null;
@@ -468,8 +468,9 @@ export class PtyHostLifecycle {
   /**
    * Tear down the lifecycle. Called from PtyClient.dispose() — clears timers,
    * removes the child-process-gone listener and asks the host to dispose. The
-   * returned promise settles `true` when the host exits on its own, or `false`
-   * once the backstop SIGKILLs it after {@link DISPOSE_EXIT_TIMEOUT_MS}.
+   * returned promise settles `true` when the host exits cleanly on its own, or
+   * `false` when it dies otherwise or the backstop SIGKILLs it after
+   * {@link DISPOSE_EXIT_TIMEOUT_MS}.
    */
   dispose(): Promise<boolean> {
     if (this.restartTimer) {
@@ -562,7 +563,9 @@ export class PtyHostLifecycle {
   }
 
   private handleExit(code: number | null): void {
-    this.settleDisposeExit(true);
+    // Only a clean exit means the host finished its teardown; a crash, signal
+    // or failed cleanup mid-dispose did not.
+    this.settleDisposeExit(code === 0);
     this.flushHostOutputBuffers();
     // UtilityProcess exit event doesn't provide signal, but we can infer from
     // the POSIX exit-code convention (`code = 128 + signum`). On Windows, exit

@@ -293,6 +293,7 @@ import {
   CAPTURE_DELIVERY_BUDGET_MS,
   CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS,
   CLEANUP_TIMEOUT_MS,
+  POST_PTY_TEARDOWN_RESERVE_MS,
   PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
   SHUTDOWN_DEADLINE_MS,
   SHUTDOWN_TAIL_TIMEOUT_MS,
@@ -1361,6 +1362,22 @@ describe("registerShutdownHandler", () => {
         await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
         expect(disarm).not.toHaveBeenCalled();
         expect(order).toEqual(["pty-dispose", "ipc-cleanup"]);
+      });
+
+      it("stops waiting on a wedged host before the hard timeout and still exits clean", async () => {
+        vi.useFakeTimers();
+        try {
+          const { disarm, cleanupIpc } = await quitWith(() => new Promise<boolean>(() => {}));
+
+          await vi.advanceTimersByTimeAsync(CLEANUP_TIMEOUT_MS - POST_PTY_TEARDOWN_RESERVE_MS);
+          // Short of the hard timeout: the chain finishes on its own budget.
+          await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+          expect(appMock.exit).toHaveBeenCalledWith(0);
+          expect(cleanupIpc).toHaveBeenCalledTimes(1);
+          expect(disarm).not.toHaveBeenCalled();
+        } finally {
+          vi.useRealTimers();
+        }
       });
 
       it("finishes the chain without disarming when the wait itself fails", async () => {

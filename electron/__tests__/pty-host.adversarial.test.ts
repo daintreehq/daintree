@@ -788,6 +788,22 @@ describe("pty-host adversarial", () => {
     );
   });
 
+  it("FAILED_TEARDOWN_DOES_NOT_EXIT_CLEAN (#13167)", async () => {
+    const parentPort = await loadHost();
+    const manager = hostState.currentPtyManager as MiniEmitter & { dispose: TestMock };
+    manager.dispose.mockImplementation(() => {
+      throw new Error("tree-kill failed");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    parentPort.emit("message", { type: "dispose" });
+    await flushMicrotasks();
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(exitSpy).not.toHaveBeenCalledWith(0);
+    errorSpy.mockRestore();
+  });
+
   it("SIGTERM_RUNS_TEARDOWN_ONCE_AND_EXITS_SIGNALLED (#13167)", async () => {
     const parentPort = await loadHost();
     const manager = hostState.currentPtyManager as MiniEmitter & { dispose: TestMock };

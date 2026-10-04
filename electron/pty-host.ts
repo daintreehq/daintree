@@ -1896,15 +1896,19 @@ function cleanup(): void {
 /**
  * Finish the teardown, then exit. The explicit exit is load-bearing: the
  * message port keeps the event loop alive, so a host that only cleans up never
- * exits and Main is left waiting on its force-kill deadline. Main treats the
- * exit as proof every terminal was reached (#13167).
+ * exits and Main is left waiting on its force-kill deadline. Main treats a
+ * clean exit as proof every terminal was reached (#13167).
  */
 function shutdownHost(exitCode = 0): void {
   try {
     cleanup();
-  } finally {
-    process.exit(exitCode);
+  } catch (error) {
+    // Main reads a clean exit as "every terminal was reached"; a teardown that
+    // threw part way must not claim that.
+    console.error("[PtyHost] Teardown failed:", error);
+    exitCode = exitCode || 1;
   }
+  process.exit(exitCode);
 }
 
 // Handle process exit
