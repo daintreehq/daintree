@@ -95,6 +95,8 @@ interface DevPreviewSession extends DevPreviewSessionState {
   installAttemptedGeneration: number | null;
   /** See TerminalControllerSession.launchEpoch — bumped by every stop. */
   launchEpoch: number;
+  /** See TerminalControllerSession.killedTerminalId. */
+  killedTerminalId: string | null;
   startupReplayTimer: ReturnType<typeof setTimeout> | null;
   updatedAtPerformanceMs: number;
   phaseLabel?: "Compiling";
@@ -177,8 +179,6 @@ export class DevPreviewSessionService {
   // In-flight waitForPortFree aborts, so dispose() doesn't leave locked tasks
   // polling a busy port for up to PORT_FREE_TIMEOUT_MS after app quit began.
   private readonly portWaitAborts = new Set<AbortController>();
-  /** Terminals a project-wide kill has claimed; their late output must not re-arm recovery. */
-  private readonly projectKilledTerminals = new Set<string>();
   private readonly onDataListener: (id: string, data: string | Uint8Array) => void;
   private readonly onExitListener: (id: string, exitCode: number, signal?: number) => void;
   private readonly onProjectKillListener: (projectId: string) => void;
@@ -436,7 +436,6 @@ export class DevPreviewSessionService {
       }
     }
     this.terminalToSession.clear();
-    this.projectKilledTerminals.clear();
     this.sessions.clear();
     this.locks.clear();
     this.portRegistry.clear();
@@ -1246,6 +1245,7 @@ export class DevPreviewSessionService {
       isRunningInstall: false,
       installAttemptedGeneration: null,
       launchEpoch: 0,
+      killedTerminalId: null,
       startupReplayTimer: null,
       compiling: false,
       compilingTimer: null,
@@ -1481,11 +1481,11 @@ export class DevPreviewSessionService {
 
   private handleData(id: string, data: string | Uint8Array): void {
     if (this.disposed) return;
-    if (this.projectKilledTerminals.has(id)) return;
     const sessionKey = this.terminalToSession.get(id);
     if (!sessionKey) return;
     const session = this.sessions.get(sessionKey);
     if (!session || session.terminalId !== id) return;
+    if (session.killedTerminalId === id) return;
 
     processDevPreviewOutput(session, id, data, {
       detector: this.detector,
@@ -1501,11 +1501,11 @@ export class DevPreviewSessionService {
 
   private handleExit(id: string, exitCode: number, signal?: number): void {
     if (this.disposed) return;
-    this.projectKilledTerminals.delete(id);
     const sessionKey = this.terminalToSession.get(id);
     if (!sessionKey) return;
     const session = this.sessions.get(sessionKey);
     if (!session || session.terminalId !== id) return;
+    if (session.killedTerminalId === id) session.killedTerminalId = null;
 
     handleDevPreviewTerminalExit(session, exitCode, signal, this.terminalControllerDeps);
   }
@@ -1526,7 +1526,7 @@ export class DevPreviewSessionService {
       if (session.terminalId) {
         // Output still in flight (a missing-dependencies line, a URL) would
         // otherwise re-arm the reinstall or readiness this just cancelled.
-        this.projectKilledTerminals.add(session.terminalId);
+        session.killedTerminalId = session.terminalId;
       } else if (RUNNING_STATES.has(session.status)) {
         // A launch with no terminal yet just stood down, and no exit will
         // ever arrive to settle it.

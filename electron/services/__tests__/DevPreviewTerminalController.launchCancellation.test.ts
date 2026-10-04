@@ -66,6 +66,7 @@ function makeSession(): TerminalControllerSession {
     isRunningInstall: false,
     installAttemptedGeneration: null,
     launchEpoch: 0,
+    killedTerminalId: null,
     startupReplayTimer: null,
     updatedAtPerformanceMs: 0,
     compiling: false,
@@ -419,6 +420,41 @@ describe("dev preview stop keeps ownership until the terminal is gone", () => {
     await vi.advanceTimersByTimeAsync(200);
     await stop;
     expect(session.terminalId).toBeNull();
+  });
+
+  it("stale-start recovery stands down when the project is killed during replay", async () => {
+    const { session, deps } = setupRunning(() => ({
+      id: "term-1",
+      projectId: "project-1",
+      hasPty: true,
+      isExited: false,
+    }));
+    session.status = "starting";
+    session.updatedAtPerformanceMs = -60_000;
+    vi.mocked(deps.ptyClient.replayHistoryAsync).mockImplementation(async () => {
+      cancelSessionWork(session, deps);
+      return 0;
+    });
+
+    await ensureSessionTerminal(session, deps);
+
+    expect(deps.ptyClient.kill).not.toHaveBeenCalled();
+    expect(deps.ptyClient.spawn).not.toHaveBeenCalled();
+  });
+
+  it("ensure takes back a terminal a project kill claimed but never stopped", async () => {
+    const { session, deps } = setupRunning(() => ({
+      id: "term-1",
+      projectId: "project-1",
+      hasPty: true,
+      isExited: false,
+    }));
+    session.killedTerminalId = "term-1";
+
+    await ensureSessionTerminal(session, deps);
+
+    expect(session.killedTerminalId).toBeNull();
+    expect(session.terminalId).toBe("term-1");
   });
 
   it("ensure does not spawn a second server beside one that is still dying", async () => {

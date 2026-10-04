@@ -69,6 +69,12 @@ export interface TerminalControllerSession extends CrashLoopGuardSession {
    * and the post-install respawn runs outside the session lock.
    */
   launchEpoch: number;
+  /**
+   * The terminal a project-wide kill claimed. Its late output is ignored so it
+   * can't re-arm the recovery that kill cancelled; cleared by its exit, or by an
+   * ensure that finds it alive after all (a kill the host never carried out).
+   */
+  killedTerminalId: string | null;
   startupReplayTimer: ReturnType<typeof setTimeout> | null;
   updatedAtPerformanceMs: number;
   compiling: boolean;
@@ -422,8 +428,10 @@ export async function ensureSessionTerminal<TSession extends TerminalControllerS
   const startEpoch = session.launchEpoch;
   if (session.terminalId) {
     const alive = await isTerminalAlive(session.terminalId, session.projectId, deps);
+    if (session.launchEpoch !== startEpoch) return;
     if (alive) {
       const terminalId = session.terminalId;
+      if (session.killedTerminalId === terminalId) session.killedTerminalId = null;
       attachTerminal(session, terminalId, deps);
       if (!RUNNING_STATES.has(session.status)) {
         deps.updateSession(session, {
@@ -446,6 +454,7 @@ export async function ensureSessionTerminal<TSession extends TerminalControllerS
       }
 
       if (
+        session.launchEpoch === startEpoch &&
         session.status === "starting" &&
         !session.url &&
         !session.pendingUrl &&
