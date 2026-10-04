@@ -659,6 +659,35 @@ describe("PtyHostLifecycle", () => {
     expect(lifecycle.child).toBe(newChild);
   });
 
+  it("holds a manual restart behind the restart barrier too", async () => {
+    const { lifecycle, callbacks } = makeLifecycle();
+    let releaseReap!: () => void;
+    const reap = new Promise<void>((resolve) => {
+      releaseReap = resolve;
+    });
+    callbacks.callbacks.restartBarrier = () => reap;
+    lifecycle.start();
+    lifecycle.markReady();
+
+    mockChild.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    const newChild = createMockChild();
+    shared.forkMock.mockReturnValueOnce(newChild);
+    shared.forkMock.mockClear();
+
+    lifecycle.manualRestart();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shared.forkMock).not.toHaveBeenCalled();
+    expect(lifecycle.child).toBeNull();
+
+    releaseReap();
+    await vi.advanceTimersByTimeAsync(0);
+    lifecycle.waitForReady().catch(() => undefined);
+    expect(shared.forkMock).toHaveBeenCalledTimes(1);
+    expect(callbacks.log.onBeforeRestartCalls).toBe(1);
+    expect(lifecycle.child).toBe(newChild);
+  });
+
   it("does not fork from a settled barrier once the client is disposed", async () => {
     const { lifecycle, callbacks } = makeLifecycle();
     let releaseReap!: () => void;

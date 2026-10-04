@@ -310,9 +310,20 @@ export class PtyHostLifecycle {
     }
 
     this.crashTimestamps = [];
-    this.callbacks.onBeforeRestart();
     this.callbacks.logInfo("[PtyClient] Manual restart initiated");
-    this.start();
+    // Same barrier as the auto-restart: a user retry is just as able to replay
+    // terminals beside survivors the crashed host's reap has not killed yet.
+    const restart = () => {
+      if (this.callbacks.isDisposed() || this.child !== null) return;
+      this.callbacks.onBeforeRestart();
+      this.start();
+    };
+    const barrier = this.callbacks.restartBarrier?.();
+    if (barrier) {
+      void barrier.then(restart, restart);
+    } else {
+      restart();
+    }
   }
 
   /** Start the host. Used both for the initial spawn and subsequent restarts. */

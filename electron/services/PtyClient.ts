@@ -1340,6 +1340,14 @@ export class PtyClient extends EventEmitter {
     if (crashType === "CLEAN_EXIT") {
       return;
     }
+    // A retired shard's late exit (the idle-retirement force-kill backstop)
+    // must not touch a same-key replacement: its ledger lives at the same path
+    // and its terminals share the owner key, so both the claim and the group
+    // kill below would land on healthy processes.
+    const current = this.shards.get(shard.key);
+    if (current && current !== shard) {
+      return;
+    }
 
     // The crashed host's lineage ledger died with it, so its persisted lineage
     // is the only remaining record of descendants the process-group kill below

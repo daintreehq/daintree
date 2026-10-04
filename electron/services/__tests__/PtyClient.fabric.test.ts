@@ -746,6 +746,35 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
+    it("keeps a retired host's late exit off its same-key replacement", async () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      try {
+        const client = createFabricClient();
+        client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        const retiring = projectShard("project-a");
+        retiring.child.emit("message", { type: "ready" });
+        retiring.child.emit("message", { type: "exit", id: "t1", exitCode: 0 });
+        await vi.advanceTimersByTimeAsync(fabricConfig.PTY_SHARD_IDLE_LINGER_MS + 1);
+
+        client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        const replacement = forks[forks.length - 1];
+        expect(replacement.serviceName).toBe(retiring.serviceName);
+        replacement.child.emit("message", { type: "ready" });
+        replacement.child.emit("message", { type: "terminal-pid", id: "t2", pid: 33333 });
+
+        // The force-kill backstop lands after the replacement is live. Same
+        // ledger path, same owner key — the cleanup must leave both alone.
+        retiring.child.emit("exit", 137);
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(lineage.claim).not.toHaveBeenCalled();
+        expect(killSpy.mock.calls.map((c) => c[0])).not.toContain(-33333);
+        client.dispose();
+      } finally {
+        killSpy.mockRestore();
+      }
+    });
+
     it("does not retire a shard while a window still shows its project", async () => {
       const client = createFabricClient();
       client.setActiveProject(1, "project-a", "/projects/a");
