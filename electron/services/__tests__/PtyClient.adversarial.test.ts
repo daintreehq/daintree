@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { EventEmitter } from "events";
 import type { PtyHostSpawnOptions, SpawnResult } from "../../../shared/types/pty-host.js";
-import { DISPOSE_EXIT_TIMEOUT_MS } from "../pty/PtyHostLifecycle.js";
 
 const shared = vi.hoisted(() => {
   // vi.hoisted runs before module imports resolve, so use require() to load
@@ -980,6 +979,7 @@ describe("PtyClient adversarial", () => {
     expect(mockChild.postMessage).toHaveBeenCalledWith({ type: "dispose" });
 
     // The host gets its full teardown window, then a raw SIGKILL (#13167).
+    const { DISPOSE_EXIT_TIMEOUT_MS } = await import("../pty/PtyHostLifecycle.js");
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     vi.advanceTimersByTime(DISPOSE_EXIT_TIMEOUT_MS - 1);
     expect(killSpy).not.toHaveBeenCalled();
