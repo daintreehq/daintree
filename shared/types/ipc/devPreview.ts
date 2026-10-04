@@ -21,11 +21,27 @@ export interface DevPreviewEnsureRequest {
   worktreeId?: string;
   env?: Record<string, string>;
   turbopackEnabled?: boolean;
+  // Set only by an explicit Start. Automatic ensures (mount, remount, config
+  // edits) leave a user-stopped session stopped; this clears that intent.
+  resumeUserStopped?: boolean;
 }
 
 export interface DevPreviewSessionRequest {
   panelId: string;
   projectId: string;
+}
+
+export interface DevPreviewStopRequest extends DevPreviewSessionRequest {
+  // "configuration" is the hook's own stop when the dev command is cleared — it
+  // must not record user stop intent, or configuring a command would never
+  // auto-start. Omitted means a user stop.
+  reason?: "user" | "configuration";
+}
+
+export interface DevPreviewUserStoppedRecord {
+  projectId: string;
+  panelId: string;
+  worktreeId?: string;
 }
 
 export interface DevPreviewStopByPanelRequest {
@@ -50,6 +66,10 @@ export interface DevPreviewSessionState {
   // repeated fast install→crash cycles. The session lands in a recoverable
   // "stopped" state (not a permanent lockout); an explicit restart clears it.
   crashLoopStopped?: boolean;
+  // True when the user stopped this panel's dev server and hasn't started it
+  // since. Durable across remounts, relaunch and project hibernation; automatic
+  // ensures are refused until an explicit Start or restart clears it.
+  userStopped?: boolean;
   // Last non-empty line of the session's terminal output, ANSI-stripped and
   // length-capped. Surfaced for the cross-worktree dev-server dashboard so each
   // row can show a one-line activity hint. Omitted while the session is stopped
