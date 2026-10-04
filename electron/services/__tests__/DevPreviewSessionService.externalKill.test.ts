@@ -10,10 +10,7 @@ import type { PtyClient } from "../PtyClient.js";
 
 const scanOutputMock = vi.hoisted(() =>
   vi.fn<
-    (
-      data: string,
-      buffer: string
-    ) => { buffer: string; error?: { type: string; message: string } }
+    (data: string, buffer: string) => { buffer: string; error?: { type: string; message: string } }
   >()
 );
 

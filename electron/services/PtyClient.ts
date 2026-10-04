@@ -78,6 +78,7 @@ import { helpSessionJobService } from "./HelpSessionJobService.js";
 import { getLifecycleLedger, ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
 import { getEnvVar, hasEnvVar } from "./pty/EnvironmentFilter.js";
 import { BrokerError } from "./rpc/index.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "./pty/PtyEventRouter.js";
 import { sendPtyHostRpc } from "./pty/PtyHostRpcFacade.js";
 import { mergeFlowControlSnapshots, mergeMemoryRollups } from "./pty/rollupMerge.js";
@@ -2373,7 +2374,7 @@ export class PtyClient extends EventEmitter {
       this.emit("project-kill-requested", projectId);
     } catch (err) {
       logWarn("[PtyClient] project-kill-requested listener threw", {
-        error: err instanceof Error ? err.message : String(err),
+        error: formatErrorMessage(err, "project-kill-requested listener failed"),
       });
     }
   }
