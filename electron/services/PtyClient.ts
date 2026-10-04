@@ -72,7 +72,7 @@ const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
 const logWarn = (msg: string, ctx?: Record<string, unknown>) =>
   ctx ? logger.warn(msg, ctx) : logger.warn(msg);
 import { getTrashedPidTracker } from "./TrashedPidTracker.js";
-import { reapShardLineage } from "./TerminalLineageLedger.js";
+import { claimShardLineageFile, reapClaimedLineageFile } from "./TerminalLineageLedger.js";
 import { helpSessionService } from "./HelpSessionService.js";
 import { helpSessionJobService } from "./HelpSessionJobService.js";
 import { getLifecycleLedger, ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
@@ -1179,6 +1179,18 @@ export class PtyClient extends EventEmitter {
    * default.
    */
   private migrateShardTerminalsToDefault(shard: PtyShard, code: number | null): void {
+    const reap = shard.lineageReap;
+    if (reap) {
+      // Same barrier as an auto-restart: replaying on the default shard while
+      // the crashed host's survivors are still being reaped would run a fresh
+      // copy of each terminal's work beside the old one.
+      const migrate = () => {
+        if (this.isDisposed || shard.retired) return;
+        this.migrateShardTerminalsToDefault(shard, code);
+      };
+      void reap.then(migrate, migrate);
+      return;
+    }
     logWarn(
       `[PtyClient] PTY shard '${shard.key}' exceeded its crash budget (code ${code}); migrating its terminals to the default shard`
     );
@@ -1329,16 +1341,35 @@ export class PtyClient extends EventEmitter {
     if (crashType === "CLEAN_EXIT") {
       return;
     }
+    // A retired shard's late exit (the idle-retirement force-kill backstop)
+    // must not touch a same-key replacement: its ledger lives at the same path
+    // and its terminals share the owner key, so both the claim and the group
+    // kill below would land on healthy processes.
+    const current = this.shards.get(shard.key);
+    if (current && current !== shard) {
+      return;
+    }
 
-    // The crashed host's lineage ledger died with it, so its persisted orphan
-    // set is the only remaining record of descendants that had already
-    // reparented away from the PTY trees killed below (#12203). Runs before the
-    // terminalPids check: those orphans outlive whatever we still track, and
-    // they are not reachable by the process-group kill at all.
-    const userData = app.getPath("userData");
-    void reapShardLineage(userData, shard.serviceName).catch((err) => {
-      console.warn("[PtyClient] Lineage reap after host crash failed:", err);
-    });
+    // The crashed host's lineage ledger died with it, so its persisted lineage
+    // is the only remaining record of descendants the process-group kill below
+    // cannot reach: background jobs in their own groups, setsid'd agent work,
+    // and anything already reparented away (#12203, #13166). Runs before the
+    // terminalPids check, since those outlive whatever we still track.
+    //
+    // The claim is synchronous so a replacement host can never write the same
+    // path first; the reap itself is held on the shard so the restart and the
+    // replay it triggers wait for it.
+    const claimed = claimShardLineageFile(app.getPath("userData"), shard.serviceName);
+    if (claimed) {
+      const reap: Promise<void> = reapClaimedLineageFile(claimed)
+        .catch((err) => {
+          console.warn("[PtyClient] Lineage reap after host crash failed:", err);
+        })
+        .finally(() => {
+          if (shard.lineageReap === reap) shard.lineageReap = null;
+        });
+      shard.lineageReap = reap;
+    }
 
     if (this.terminalPids.size === 0) {
       return;

@@ -23,6 +23,13 @@ vi.mock("../TrashedPidTracker.js", () => ({
   }),
 }));
 
+// Pass-through by default (nothing to claim); individual tests hand back a
+// claim and hold its reap open to exercise the restart/migration barrier.
+const lineage = vi.hoisted(() => ({
+  claim: vi.fn((_userData: string, _service?: string): string | null => null),
+  reap: vi.fn((_claimed: string): Promise<void> => Promise.resolve()),
+}));
+
 interface MockUtilityProcess extends EventEmitter {
   postMessage: Mock;
   kill: Mock;
@@ -114,6 +121,14 @@ describe("PtyClient fabric", () => {
         persistTrashed: vi.fn().mockResolvedValue(undefined),
         clearAll: vi.fn(),
       }),
+    }));
+
+    lineage.claim.mockReset().mockReturnValue(null);
+    lineage.reap.mockReset().mockResolvedValue(undefined);
+    vi.doMock("../TerminalLineageLedger.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../TerminalLineageLedger.js")>()),
+      claimShardLineageFile: lineage.claim,
+      reapClaimedLineageFile: lineage.reap,
     }));
 
     PtyClientClass = (await import("../PtyClient.js")).PtyClient;
@@ -563,6 +578,68 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
+    it("does not restart a crashed shard until its lineage reap finishes", async () => {
+      // The restarted host replays every terminal on ready; forking before the
+      // reap would run a fresh copy beside a survivor it has not killed (#13166).
+      let releaseReap!: () => void;
+      lineage.claim.mockReturnValueOnce("/mock/user/data/pty-lineage-a.json.reaping-1");
+      lineage.reap.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          releaseReap = resolve;
+        })
+      );
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      const forkCountBefore = forks.length;
+
+      shardA.child.emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(lineage.claim).toHaveBeenCalledWith("/mock/user/data", shardA.serviceName);
+      expect(lineage.reap).toHaveBeenCalledTimes(1);
+      expect(forks.length).toBe(forkCountBefore);
+
+      releaseReap();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(forks.length).toBe(forkCountBefore + 1);
+      const restarted = forks[forks.length - 1];
+      restarted.child.emit("message", { type: "ready" });
+      expect(messagesOfType(restarted.child, "spawn").map((m) => m.id)).toEqual(["t1"]);
+      client.dispose();
+    });
+
+    it("waits for the final crash's lineage reap before migrating to the default shard", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      projectShard("project-a").child.emit("message", { type: "ready" });
+
+      for (let i = 0; i < 2; i++) {
+        forks[forks.length - 1].child.emit("exit", 1);
+        await vi.advanceTimersByTimeAsync(15_000);
+      }
+
+      let releaseReap!: () => void;
+      lineage.claim.mockReturnValueOnce("/mock/user/data/pty-lineage-a.json.reaping-3");
+      lineage.reap.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          releaseReap = resolve;
+        })
+      );
+      forks[forks.length - 1].child.emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(messagesOfType(defaultShard().child, "spawn")).toEqual([]);
+
+      releaseReap();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(messagesOfType(defaultShard().child, "spawn").map((m) => m.id)).toEqual(["t1"]);
+      client.dispose();
+    });
+
     it("still emits host-crash when the default shard exhausts its restart budget", async () => {
       const client = createFabricClient();
       const hostCrash = vi.fn();
@@ -667,6 +744,35 @@ describe("PtyClient fabric", () => {
       client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
       expect(forks.length).toBe(forkCount + 1);
       client.dispose();
+    });
+
+    it("keeps a retired host's late exit off its same-key replacement", async () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      try {
+        const client = createFabricClient();
+        client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        const retiring = projectShard("project-a");
+        retiring.child.emit("message", { type: "ready" });
+        retiring.child.emit("message", { type: "exit", id: "t1", exitCode: 0 });
+        await vi.advanceTimersByTimeAsync(fabricConfig.PTY_SHARD_IDLE_LINGER_MS + 1);
+
+        client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        const replacement = forks[forks.length - 1];
+        expect(replacement.serviceName).toBe(retiring.serviceName);
+        replacement.child.emit("message", { type: "ready" });
+        replacement.child.emit("message", { type: "terminal-pid", id: "t2", pid: 33333 });
+
+        // The force-kill backstop lands after the replacement is live. Same
+        // ledger path, same owner key — the cleanup must leave both alone.
+        retiring.child.emit("exit", 137);
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(lineage.claim).not.toHaveBeenCalled();
+        expect(killSpy.mock.calls.map((c) => c[0])).not.toContain(-33333);
+        client.dispose();
+      } finally {
+        killSpy.mockRestore();
+      }
     });
 
     it("does not retire a shard while a window still shows its project", async () => {

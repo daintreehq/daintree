@@ -35,6 +35,7 @@ import {
   parseKillCensus,
   probeStartTimes,
   probeStartTimesSync,
+  reapClaimedLineageFile,
   reapPersistedLineages,
   takeKillCensusSync,
   type LineageCensus,
@@ -631,7 +632,7 @@ describe("TerminalLineageLedger", () => {
   });
 
   describe("persistence", () => {
-    it("persists only orphaned descendants", async () => {
+    it("persists attached descendants alongside orphans", async () => {
       const ledger = new TerminalLineageLedger(filePath);
       const census = new FakeCensus([
         { pid: 100, ppid: 10 },
@@ -650,7 +651,9 @@ describe("TerminalLineageLedger", () => {
       ledger.reconcile(census);
       await flush();
 
-      // ...then detaches. 200 stays attached to the live shell.
+      // ...then detaches. 200 stays attached to the live shell, and is still
+      // recorded: a `cmd &` job sits in its own process group, so the crash
+      // path's group kill of the shell never reaches it (#13166).
       census.set([
         { pid: 10, ppid: 1 },
         { pid: 100, ppid: 10 },
@@ -660,10 +663,51 @@ describe("TerminalLineageLedger", () => {
       ledger.reconcile(census);
 
       const persisted = readPersisted();
-      expect(persisted?.entries.map((e) => e.pid)).toEqual([300]);
+      expect(persisted?.entries.map((e) => e.pid)).toEqual([200, 300]);
     });
 
-    it("removes the file when nothing is orphaned any more", async () => {
+    it("records an attached job before anything detaches", async () => {
+      const ledger = new TerminalLineageLedger(filePath);
+      const census = new FakeCensus([
+        { pid: 10, ppid: 1 },
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+        { pid: 300, ppid: 200 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      // Unidentified PIDs are never written: nothing could verify them later.
+      expect(readPersisted()).toBeNull();
+
+      await flush();
+
+      expect(readPersisted()?.entries).toEqual([
+        { pid: 200, startTime: startTimeFor(200), rootPid: 100 },
+        { pid: 300, startTime: startTimeFor(300), rootPid: 100 },
+      ]);
+    });
+
+    it("does not rewrite the file for an unchanged tree", async () => {
+      const ledger = new TerminalLineageLedger(filePath);
+      const census = new FakeCensus([
+        { pid: 10, ppid: 1 },
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+      const first = fs.statSync(filePath).mtimeMs;
+      fs.utimesSync(filePath, new Date(0), new Date(0));
+
+      ledger.reconcile(census);
+      await flush();
+
+      expect(first).toBeGreaterThan(0);
+      expect(fs.statSync(filePath).mtimeMs).toBe(0);
+    });
+
+    it("removes the file when no identified descendant remains", async () => {
       const ledger = new TerminalLineageLedger(filePath);
       const census = new FakeCensus([
         { pid: 10, ppid: 1 },
@@ -718,7 +762,7 @@ describe("TerminalLineageLedger", () => {
       expect(readPersisted()?.entries.map((e) => e.pid)).toEqual([200, 300]);
     });
 
-    it("retries the write after a transient failure on an unchanged orphan set", async () => {
+    it("retries the write after a transient failure on an unchanged set", async () => {
       // The parent directory does not exist yet, so the atomic write throws.
       const nestedDir = path.join(tmpDir, "nested");
       const nestedPath = path.join(nestedDir, "pty-lineage.json");
@@ -743,7 +787,7 @@ describe("TerminalLineageLedger", () => {
       ledger.reconcile(census);
       expect(readNested()).toBeNull();
 
-      // The orphan set is identical on the retry, so a signature recorded
+      // The set is identical on the retry, so a signature recorded
       // before the failed write would suppress it forever, leaving no
       // crash-recovery record at all.
       fs.mkdirSync(nestedDir);
@@ -869,6 +913,39 @@ describe("TerminalLineageLedger", () => {
         expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGKILL");
       }
       expect(fs.existsSync(filePath)).toBe(false);
+    });
+
+    it("reaps a crashed host's still-attached background job", async () => {
+      // A `cmd &` job is never orphaned while its shell lives, and the crash
+      // path's group kill of the shell misses its separate group, so the
+      // ledger has to have recorded it before the host died (#13166).
+      const ledger = new TerminalLineageLedger(filePath);
+      ledger.registerRoot(100);
+      ledger.reconcile(
+        new FakeCensus([
+          { pid: 10, ppid: 1 },
+          { pid: 100, ppid: 10 },
+          { pid: ORPHAN_PID, ppid: 100 },
+        ])
+      );
+      await flush();
+      ledger.dispose();
+
+      const claimed = claimShardLineageFile(tmpDir);
+      expect(claimed).not.toBeNull();
+      await reapClaimedLineageFile(claimed!);
+
+      if (isWindows) {
+        expect(mockSpawnSync).toHaveBeenCalledWith(
+          "taskkill",
+          ["/T", "/F", "/PID", String(ORPHAN_PID)],
+          expect.anything()
+        );
+      } else {
+        expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGTERM");
+        expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGKILL");
+      }
+      expect(fs.readdirSync(tmpDir).filter((n) => n.startsWith("pty-lineage"))).toEqual([]);
     });
 
     it("never signals a PID whose start time no longer matches", async () => {

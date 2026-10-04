@@ -366,9 +366,9 @@ export async function setupWindowServices(
     // before the fork rather than silently skipping it on a null promise.
     await (getEarlyPathRefreshPromise() ?? kickOffEarlyPathRefresh());
     // Reap descendants a previous session left detached, before any new host
-    // can reuse their PIDs. Only orphans that reparented away from their PTY
-    // tree are persisted, and each is re-verified against its recorded start
-    // time before it is signalled (#12203). Awaited rather than fired off: a
+    // can reuse their PIDs. Every identified terminal descendant is persisted,
+    // and each is re-verified against its recorded start time before it is
+    // signalled (#12203, #13166). Awaited rather than fired off: a
     // reap racing the fork could validate a PID the new host has just spawned.
     try {
       const { reapPersistedLineages } = await import("../services/TerminalLineageLedger.js");

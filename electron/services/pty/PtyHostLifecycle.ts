@@ -178,6 +178,13 @@ export interface PtyHostLifecycleCallbacks {
    * sets `needsRespawn=true` so its `ready` handler will replay pending spawns.
    */
   onBeforeRestart: () => void;
+  /**
+   * Work the next auto-restart fork must wait for. PtyClient returns the
+   * crashed host's in-flight lineage reap: the replacement replays every
+   * terminal on `ready`, so forking first would run a fresh copy beside a
+   * survivor the reap has not killed yet (#13166).
+   */
+  restartBarrier?: () => Promise<void> | null;
   /** Returns whether PtyClient.isDisposed is true. */
   isDisposed: () => boolean;
   /**
@@ -303,9 +310,23 @@ export class PtyHostLifecycle {
     }
 
     this.crashTimestamps = [];
-    this.callbacks.onBeforeRestart();
     this.callbacks.logInfo("[PtyClient] Manual restart initiated");
-    this.start();
+    // Same barrier as the auto-restart: a user retry is just as able to replay
+    // terminals beside survivors the crashed host's reap has not killed yet.
+    const restart = () => {
+      if (this.callbacks.isDisposed() || this.child !== null) return;
+      // Again here: a crash classified while we waited (the deferred
+      // setImmediate pass) must not eat into the fresh budget.
+      this.crashTimestamps = [];
+      this.callbacks.onBeforeRestart();
+      this.start();
+    };
+    const barrier = this.callbacks.restartBarrier?.();
+    if (barrier) {
+      void barrier.then(restart, restart);
+    } else {
+      restart();
+    }
   }
 
   /** Start the host. Used both for the initial spawn and subsequent restarts. */
@@ -602,9 +623,17 @@ export class PtyHostLifecycle {
         }
         this.restartTimer = setTimeout(() => {
           this.restartTimer = null;
-          if (this.callbacks.isDisposed() || this.child !== null) return;
-          this.callbacks.onBeforeRestart();
-          this.start();
+          const restart = () => {
+            if (this.callbacks.isDisposed() || this.child !== null) return;
+            this.callbacks.onBeforeRestart();
+            this.start();
+          };
+          const barrier = this.callbacks.restartBarrier?.();
+          if (barrier) {
+            void barrier.then(restart, restart);
+          } else {
+            restart();
+          }
         }, delay);
         this.restartTimer.unref?.();
       } else {
