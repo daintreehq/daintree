@@ -442,8 +442,8 @@ describe("PluginPtyProcessManager process-tree teardown (#13173)", () => {
     const events: PluginPtyHostEvent[] = [];
     const targets: Target[] = [];
     const killer = {
-      execute: vi.fn<(immediate: boolean, delayMs?: number) => void>(),
-      reapAfterRootExit: vi.fn<(immediate?: boolean, delayMs?: number) => void>(),
+      execute: vi.fn<(immediate: boolean, delayMs?: number) => number[]>(() => []),
+      reapAfterRootExit: vi.fn<(immediate?: boolean, delayMs?: number) => number[]>(() => []),
       registerRoot: vi.fn<(pid: number | undefined) => void>(),
     };
     const manager = new PluginPtyProcessManager(
@@ -502,7 +502,10 @@ describe("PluginPtyProcessManager process-tree teardown (#13173)", () => {
       const { manager, killer } = makeTreeManager();
       manager.spawn("p1", 0, options());
       const order: string[] = [];
-      killer.execute.mockImplementation((immediate) => order.push(`execute:${immediate}`));
+      killer.execute.mockImplementation((immediate) => {
+        order.push(`execute:${immediate}`);
+        return [];
+      });
       fake.pty.destroy = () => {
         order.push("destroy");
       };
@@ -559,7 +562,10 @@ describe("PluginPtyProcessManager process-tree teardown (#13173)", () => {
       spawnMock.mockReturnValue(fake.pty);
       const { manager, killer, targets } = makeTreeManager();
       // Model the real killer: taskkill, then the root's native fallback.
-      killer.execute.mockImplementation(() => targets[0].kill());
+      killer.execute.mockImplementation(() => {
+        targets[0].kill();
+        return [];
+      });
       manager.spawn("p1", 0, options());
       manager.kill("p1", 0, "SIGTERM");
       manager.kill("p1", 0, "SIGKILL");
