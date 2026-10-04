@@ -39,7 +39,7 @@ function ListItems({
   onAutoFocused: () => void;
   onEmptied: () => void;
 }) {
-  const focus = useRowFocus();
+  const { register: registerRow, registerFallback: registerAddButton, focusRow } = useRowFocus();
   const firstField = useRef<HTMLInputElement | null>(null);
 
   // The empty state is a different row, so the first add mounts this list fresh:
@@ -59,7 +59,7 @@ function ListItems({
   // the deleted one's place is simply the same index.
   const remove = (index: number) => {
     if (items.length === 1) onEmptied();
-    else focus.focusRow(String(index < items.length - 1 ? index : index - 1));
+    else focusRow(String(index < items.length - 1 ? index : index - 1));
     onChange(items.filter((_, i) => i !== index));
   };
 
@@ -77,7 +77,7 @@ function ListItems({
         <div key={index} className="flex items-center gap-2">
           <Input
             ref={(el) => {
-              focus.register(String(index))(el);
+              registerRow(String(index))(el);
               if (index === 0) firstField.current = el;
             }}
             type="text"
@@ -125,9 +125,9 @@ function ListItems({
         <Button
           variant="outline"
           size="sm"
-          ref={focus.registerFallback}
+          ref={registerAddButton}
           onClick={() => {
-            focus.focusRow(String(items.length));
+            focusRow(String(items.length));
             onChange([...items, ""]);
           }}
         >

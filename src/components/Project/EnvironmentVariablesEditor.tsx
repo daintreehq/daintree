@@ -54,7 +54,12 @@ export function EnvironmentVariablesEditor({
   const [saveAttempted, setSaveAttempted] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const focus = useRowFocus();
+  const {
+    register: registerRow,
+    registerFallback: registerAddButton,
+    focusRow,
+    focusAfterDelete,
+  } = useRowFocus();
 
   useEffect(() => {
     setRows(cloneRows(environmentVariables));
@@ -83,11 +88,11 @@ export function EnvironmentVariablesEditor({
   const addRow = () => {
     const id = `env-${crypto.randomUUID()}`;
     setRows((prev) => [...prev, { id, key: "", value: "" }]);
-    focus.focusRow(id);
+    focusRow(id);
   };
 
   const deleteRow = (index: number, id: string) => {
-    focus.focusAfterDelete(
+    focusAfterDelete(
       rows.map((r) => r.id),
       index
     );
@@ -183,7 +188,7 @@ export function EnvironmentVariablesEditor({
   const insecureCount = settings?.insecureEnvironmentVariables?.length ?? 0;
 
   const addButton = (
-    <Button variant="outline" size="sm" onClick={addRow} ref={focus.registerFallback}>
+    <Button variant="outline" size="sm" onClick={addRow} ref={registerAddButton}>
       <Plus />
       Add variable
     </Button>
@@ -291,7 +296,7 @@ export function EnvironmentVariablesEditor({
                 onValueChange={(v) => updateRow(index, "value", v)}
                 onDelete={() => deleteRow(index, row.id)}
                 storageBadge={storageBadge}
-                keyRef={focus.register(row.id)}
+                keyRef={registerRow(row.id)}
               />
             );
           })}
