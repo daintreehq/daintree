@@ -559,8 +559,12 @@ describe("home-relative paths (#13177)", () => {
       col: 3,
     });
     expect(resolveFilePathCandidate("~/a/../b.ts", "/elsewhere", HOME)?.absolutePath).toBe(
-      "/Users/me/b.ts"
+      "/Users/me/a/../b.ts"
     );
+    expect(resolveFilePathCandidate("~//tmp/b.ts", "", HOME)?.absolutePath).toBe(
+      "/Users/me//tmp/b.ts"
+    );
+    expect(resolveFilePathCandidate("~/b.ts", "", "/")?.absolutePath).toBe("/b.ts");
   });
 
   it("returns null rather than resolving against cwd when home is unknown", () => {
@@ -608,9 +612,9 @@ describe("home-relative paths (#13177)", () => {
     expect(text.slice(quoted.startIndex, quoted.endIndex)).toBe("~/My Docs/a.md");
   });
 
-  it("stops spaced growth at a following ~/ word", () => {
-    const [candidate] = findSpacedFilePathCandidates("/a b/x ~/c/d.ts");
-    expect(candidate).toBeUndefined();
+  it("starts a fresh spaced candidate at a following ~/ word", () => {
+    const found = findSpacedFilePathCandidates("/a b/x ~/c d/y.ts").map(({ path }) => path);
+    expect(found).toEqual(["~/c d/y.ts"]);
   });
 
   it("resolves a selected home path", () => {

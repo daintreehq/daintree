@@ -51,7 +51,7 @@ const ESCAPED_PATH_REGEX = /(?:^|[\s(])((?:~(?=\/))?(?:[\w./-]|\\ )+\.\w+(?::\d+
 const SPACED_ANCHOR_REGEX = /(?:^|[\s(])((?:\/|[a-zA-Z]:[\\/]|~[\\/])[\w./\\-]*)/g;
 const SPACED_WORD_REGEX = /[\w./\\-]+(?::\d+(?::\d+)?)?/y;
 const SPACED_TAIL_REGEX = /^[\w./\\-]*[\\/][\w./\\-]*\.\w+(?::\d+(?::\d+)?)?/;
-const ABSOLUTE_WORD = /^(?:\/|[a-zA-Z]:[\\/]|~[\\/])/;
+const ABSOLUTE_WORD = /^(?:\/|[a-zA-Z]:[\\/])/;
 // Sentence punctuation after the name still ends it: `/a/b.ts. See foo/x.ts`.
 const COMPLETE_FILE_WORD = /\.\w+(?::\d+(?::\d+)?)?\.?$/;
 const MAX_SPACED_WORDS = 8;
@@ -77,7 +77,9 @@ export function expandHomePath(path: string, homeDir: string | undefined): strin
     const base = homeDir.replace(/[\\/]+$/, "");
     return rest ? `${base}${sep}${rest.replace(/[\\/]+/g, sep)}` : base;
   }
-  return rest ? resolve(homeDir, rest) : homeDir;
+  // Joined as printed, never normalized: an absolute path links exactly as
+  // written, and collapsing `..` here would skip a symlink the OS follows.
+  return rest ? `${homeDir.replace(/\/+$/, "")}/${rest}` : homeDir;
 }
 
 function stripLocationSuffix(path: string): string {

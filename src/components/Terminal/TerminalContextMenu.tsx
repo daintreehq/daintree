@@ -552,6 +552,9 @@ function TerminalContextMenuBody({
   const [hoveredFilePath, setHoveredFilePath] = useState<string | null>(null);
   const [hoveredFileKind, setHoveredFileKind] = useState<"file" | "directory" | null>(null);
   const [selectedText, setSelectedText] = useState<string | null>(null);
+  // Captured with the selection: a menu opened before the home dir arrived
+  // re-resolves `~/` on the next open even when the selection is unchanged.
+  const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
   const suppressNextCloseAutoFocusRef = useRef(false);
   // Local confirm dialog for single-terminal kill/restart when an agent
   // session is mid-work. Bare PTY terminals skip this gate and run
@@ -618,6 +621,7 @@ function TerminalContextMenuBody({
       const selection = managed.terminal.getSelection();
       setHasSelection(!!selection);
       setSelectedText(selection || null);
+      setHomeDir(selection ? systemClient.getCachedHomeDir() : undefined);
       setHoveredUrl(terminalInstanceService.getHoveredLinkText(terminalId));
       setHoveredFilePath(terminalInstanceService.getHoveredFilePath(terminalId));
       setHoveredFileKind(terminalInstanceService.getHoveredFileKind(terminalId));
@@ -634,13 +638,10 @@ function TerminalContextMenuBody({
   const selectionFilePath = useMemo(
     () =>
       selectedText
-        ? (resolveSelectedFilePath(
-            selectedText,
-            terminalPty?.cwd ?? "",
-            systemClient.getCachedHomeDir()
-          )?.absolutePath ?? null)
+        ? (resolveSelectedFilePath(selectedText, terminalPty?.cwd ?? "", homeDir)?.absolutePath ??
+          null)
         : null,
-    [selectedText, terminalPty?.cwd]
+    [selectedText, terminalPty?.cwd, homeDir]
   );
   // Where the hovered path sits in the *live* worktree list — never
   // `terminal.worktreeId`, which stamps the worktree that was active when the
