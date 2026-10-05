@@ -1309,10 +1309,11 @@ describe("registerShutdownHandler", () => {
       const spies: Array<{ mockRestore: () => void }> = [];
 
       async function quitWith(waitForHostsExited: () => Promise<boolean>) {
-        const { helpSessionJobService } = await import("../../services/HelpSessionJobService.js");
+        const { terminalCrashReapService } =
+          await import("../../services/TerminalCrashReapService.js");
         const order: string[] = [];
         const disarm = vi
-          .spyOn(helpSessionJobService, "dispose")
+          .spyOn(terminalCrashReapService, "dispose")
           .mockImplementation(() => void order.push("supervisor-disarm"));
         spies.push(disarm);
         const ptyClient = makePtyClient({

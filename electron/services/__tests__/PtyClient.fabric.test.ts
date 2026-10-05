@@ -23,6 +23,15 @@ vi.mock("../TrashedPidTracker.js", () => ({
   }),
 }));
 
+const crashReap = vi.hoisted(() => ({
+  attachTerminal: vi.fn(),
+  detachTerminal: vi.fn(),
+}));
+
+vi.mock("../TerminalCrashReapService.js", () => ({
+  terminalCrashReapService: crashReap,
+}));
+
 // Pass-through by default (nothing to claim); individual tests hand back a
 // claim and hold its reap open to exercise the restart/migration barrier.
 const lineage = vi.hoisted(() => ({
@@ -479,12 +488,43 @@ describe("PtyClient fabric", () => {
           expect(killedPids).toContain(-11111);
           expect(killedPids).not.toContain(-22222);
           expect(killedPids).not.toContain(22222);
+          // The crashed host's exits will never arrive, so its terminals are
+          // released from the crash reaper here; the sibling's stay tracked.
+          const detached = crashReap.detachTerminal.mock.calls.map((c) => c[0]);
+          expect(detached).toContain("t1");
+          expect(detached).not.toContain("t2");
           client.dispose();
         } finally {
           killSpy.mockRestore();
         }
       }
     );
+
+    it("registers every terminal with the crash reaper and releases it on exit (#13176)", async () => {
+      crashReap.attachTerminal.mockClear();
+      crashReap.detachTerminal.mockClear();
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      client.spawn("t2", { cwd: "/tmp", cols: 80, rows: 24 });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      shardA.child.emit("message", { type: "terminal-pid", id: "t1", pid: 11111 });
+      defaultShard().child.emit("message", { type: "terminal-pid", id: "t2", pid: 22222 });
+
+      expect(crashReap.attachTerminal).toHaveBeenCalledWith("t1", 11111, expect.any(Number));
+      expect(crashReap.attachTerminal).toHaveBeenCalledWith("t2", 22222, expect.any(Number));
+
+      const generation = crashReap.attachTerminal.mock.calls.find((c) => c[0] === "t1")?.[2];
+      shardA.child.emit("message", {
+        type: "exit",
+        id: "t1",
+        exitCode: 0,
+        launchGeneration: generation,
+      });
+      expect(crashReap.detachTerminal).toHaveBeenCalledWith("t1", generation);
+      expect(crashReap.detachTerminal).not.toHaveBeenCalledWith("t2", expect.anything());
+      client.dispose();
+    });
 
     it("respawns only the crashed shard's terminals on its restarted host", async () => {
       const client = createFabricClient();

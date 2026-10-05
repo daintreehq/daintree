@@ -785,7 +785,9 @@ export type PtyHostEvent =
       boundary: AgentSessionCaptureBoundary;
       record: Omit<AgentSessionRecord, "savedAt">;
     }
-  | { type: "terminal-pid"; id: string; pid: number }
+  // `launchGeneration` binds the PID to the incarnation that owns it, so Main
+  // never attributes a predecessor's PID to a same-id respawn.
+  | { type: "terminal-pid"; id: string; pid: number; launchGeneration?: number }
   | { type: "snapshot"; id: string; requestId: string; snapshot: PtyHostTerminalSnapshot | null }
   | { type: "all-snapshots"; requestId: string; snapshots: PtyHostTerminalSnapshot[] }
   | { type: "transition-result"; id: string; requestId: string; success: boolean }

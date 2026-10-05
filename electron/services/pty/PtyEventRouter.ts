@@ -61,12 +61,11 @@ export interface PtyEventRouterCallbacks {
   onTerminalRemovedFromTrash: (id: string) => void;
   /**
    * Optional. Fires after `state.terminalPids` has been updated for a
-   * `terminal-pid` event. Consumed by the help-session Job Object wiring
-   * (#7526) so help-session PTYs can be attached to a Windows Job Object
-   * for crash-safe reaping. Must not throw — the router treats this as a
-   * pure side effect.
+   * `terminal-pid` event. Consumed by the crash-safe reaper (#7526,
+   * #13176), which registers every PTY with the Windows Job Object or POSIX
+   * supervisor. Must not throw — the router treats this as a pure side effect.
    */
-  onTerminalPid?: (id: string, pid: number) => void;
+  onTerminalPid?: (id: string, pid: number, launchGeneration?: number) => void;
   /**
    * Optional. Fires on every `exit` event so the lifecycle ledger can record
    * the close against the exiting incarnation's generation. Pure side effect.
@@ -352,7 +351,7 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       state.terminalPids.set(event.id, event.pid);
       if (callbacks.onTerminalPid) {
         try {
-          callbacks.onTerminalPid(event.id, event.pid);
+          callbacks.onTerminalPid(event.id, event.pid, event.launchGeneration);
         } catch (err) {
           // Hardens the documented "must not throw" contract — a future
           // callback that does throw must not break unrelated PTY routing.
