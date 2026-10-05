@@ -239,7 +239,9 @@ describe("help prompt outputs", () => {
       expect(body).not.toMatch(/Off-topic|focused on Daintree/);
       expect(body).not.toMatch(/never file it yourself/);
       expect(body).not.toContain("## Topics You Can Help With");
-      expect(section(body, "## GitHub Issues")).toMatch(/file it once the user approves the repository, title and body/);
+      expect(section(body, "## GitHub Issues")).toMatch(
+        /file it once the user approves the repository, title and body/
+      );
     });
   });
 

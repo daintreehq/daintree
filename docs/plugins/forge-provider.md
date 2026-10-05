@@ -349,7 +349,7 @@ Forge providers are built-in only, so their tests follow the existing `plugins/b
 - [ ] `state` normalized and `rawState` preserved on every `Issue`/`PR`
 - [ ] Verbatim transport node in `rawData`; no first-party reads of it
 - [ ] Optional capabilities present only when supported; consumers probe with truthiness
-- [ ] CLI allow + create/merge deny entries added to `help/.claude/settings.json` if the assistant should drive your forge's CLI
+- [ ] CLI allow entry added to `help/.claude/settings.json` and the `readBundledSettings` fallback if the assistant should drive your forge's CLI
 - [ ] Unit tests mirroring the GitHub provider's coverage
 
 ## Related

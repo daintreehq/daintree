@@ -68,8 +68,8 @@ Both also share:
 
 - **Answer workflow:** Search the `daintree-docs` MCP first, never fabricate
 - **Tone:** Concise, actionable, grounded in documentation
-- **Scope boundary:** If a question is outside docs, search GitHub issues or offer to file one
-- **Forge access:** Search/view issues without confirmation, never write through a forge CLI. Creating an issue requires user approval of the exact draft; because `forge.createIssue` has no repository argument and targets the active worktree's repo, Daintree feedback is handed to the user to file by default and filed directly only when the active worktree is itself a `daintreehq/daintree` checkout
+- **Scope:** Docs-first applies to Daintree questions; anything else gets ordinary agent help
+- **Forge access:** The forge CLIs are fully available. Filing an issue waits for the user to approve its repository, title and body
 
 ### Editing the prompts
 
@@ -88,7 +88,7 @@ scripts/help-src/
 └── AGENTS.transcript.md   # Codex session-transcript lookup
 ```
 
-`CLAUDE.md` is `CLAUDE.head` + `SHARED.head` + `SHARED.tasks` + `SHARED` + `CLAUDE.transcript` + `SHARED.tail` + `CLAUDE.tail`; `AGENTS.md` is `AGENTS.head` + `SHARED.head` + `SHARED.tasks` + `SHARED` + `AGENTS.transcript` + `SHARED.tail`. Anything both assistants need therefore belongs in a `SHARED*` partial — the Claude-only partials never reach Codex. Keep `AGENTS.md` well under Codex's 32 KiB `project_doc_max_bytes` ceiling; Codex truncates past it without telling the model. The build test caps each generated prompt at 8,400 bytes — procedures belong in the runbooks — and keeps the older 24 KiB and 21,500-byte AGENTS.md caps as backstops.
+`CLAUDE.md` is `CLAUDE.head` + `SHARED.head` + `SHARED.tasks` + `SHARED` + `CLAUDE.transcript` + `SHARED.tail` + `CLAUDE.tail`; `AGENTS.md` is `AGENTS.head` + `SHARED.head` + `SHARED.tasks` + `SHARED` + `AGENTS.transcript` + `SHARED.tail`. Anything both assistants need therefore belongs in a `SHARED*` partial — the Claude-only partials never reach Codex. Keep `AGENTS.md` well under Codex's 32 KiB `project_doc_max_bytes` ceiling; Codex truncates past it without telling the model. The build test caps each generated prompt at 8,100 bytes — procedures belong in the runbooks — and keeps the older 24 KiB and 21,500-byte AGENTS.md caps as backstops.
 
 After editing any partial, run:
 
@@ -113,7 +113,7 @@ These are the **help-assistant** tool sets. They are distinct from the `external
 
 Tool set and `bypassPermissions` (skip Claude's per-tool prompt) are independent settings — both are configured under Settings → Assistant → Daintree Assistant.
 
-The authoritative definitions live in `shared/config/helpAssistantTierAllowlists.ts` (`CORE_TIER_TOOLS`, `FULL_TIER_ADDONS`); `electron/services/mcp-server/shared.ts` lifts them into Sets for dispatch-time lookup. When local MCP is disabled in settings, the `daintree` server is omitted from the per-session config entirely (Claude's `.mcp.json` and Codex's `-c` flags alike) — the assistant falls back to docs-only behavior.
+The authoritative definitions live in `shared/config/helpAssistantTierAllowlists.ts` (`CORE_TIER_TOOLS`, `FULL_TIER_ADDONS`); `electron/services/mcp-server/shared.ts` lifts them into Sets for dispatch-time lookup. When local MCP is disabled in settings, the `daintree` server is omitted from the per-session config entirely (Claude's `.mcp.json` and Codex's `-c` flags alike) — the assistant loses app control but keeps its docs and local tools.
 
 ## Permissions
 

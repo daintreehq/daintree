@@ -143,11 +143,7 @@ vi.mock("../AssistantUserConfig.js", async (importOriginal) => {
   };
 });
 
-import {
-  HelpSessionService,
-  codexTrustArgs,
-  projectRuleRoots,
-} from "../HelpSessionService.js";
+import { HelpSessionService, codexTrustArgs, projectRuleRoots } from "../HelpSessionService.js";
 
 async function makeBundledHelpFolder(root: string): Promise<string> {
   const helpDir = path.join(root, "help");
@@ -774,6 +770,22 @@ describe("HelpSessionService", () => {
     );
     expect(settings.permissions.additionalDirectories).toEqual(["/tmp/project"]);
     expect(settings.permissions.allow).toContain("Read(//tmp/project/**)");
+    expect(settings.permissions.deny).toBeUndefined();
+  });
+
+  it("drops a legacy deny list from a reused session folder (#13193)", async () => {
+    const first = await service.provisionSession(provisionInput());
+    if (!first) throw new Error("expected result");
+    const settingsPath = path.join(first.sessionPath, ".claude", "settings.json");
+    const legacy = JSON.parse(await fs.readFile(settingsPath, "utf-8"));
+    legacy.permissions.deny = ["Edit(**)", "Bash(gh issue create*)"];
+    await fs.writeFile(settingsPath, JSON.stringify(legacy));
+
+    await service.revokeSession(first.sessionId);
+    const second = await service.provisionSession(provisionInput());
+    if (!second) throw new Error("expected result");
+    expect(second.sessionPath).toBe(first.sessionPath);
+    const settings = JSON.parse(await fs.readFile(settingsPath, "utf-8"));
     expect(settings.permissions.deny).toBeUndefined();
   });
 

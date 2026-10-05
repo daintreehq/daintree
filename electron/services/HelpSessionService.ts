@@ -27,10 +27,7 @@ import {
 } from "../../shared/config/helpAssistantTierAllowlists.js";
 import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
-import {
-  ASSISTANT_SCRATCH_ENV_VAR,
-  getScratchDirForSession,
-} from "./AssistantScratchService.js";
+import { ASSISTANT_SCRATCH_ENV_VAR, getScratchDirForSession } from "./AssistantScratchService.js";
 import {
   CONFIRMATIONS_BLOCK_END,
   CONFIRMATIONS_BLOCK_START,
@@ -1348,8 +1345,7 @@ export class HelpSessionService {
     for (const warning of userConfig.warnings) {
       console.warn("[HelpSessionService] Assistant folder:", warning);
     }
-    const copilotLaunchArgs =
-      input.agentId === "copilot" ? [] : undefined;
+    const copilotLaunchArgs = input.agentId === "copilot" ? [] : undefined;
     // Claude reads its MCP wiring from the per-lane file rather than the
     // shared cwd `.mcp.json`; the flag is the only way that file reaches it.
     const claudeLaunchArgs = laneMcpConfigPath ? ["--mcp-config", laneMcpConfigPath] : undefined;
@@ -2866,7 +2862,7 @@ export class HelpSessionService {
     return [
       "## Assistant Scratch Folder",
       "",
-      `Put notes, drafts and working files in the folder named by \`${ASSISTANT_SCRATCH_ENV_VAR}\` (read the variable; don't assume a path), never in the project or the system temp dir. It is cleared on every Daintree launch.`,
+      `Put temporary notes and drafts in the folder named by \`${ASSISTANT_SCRATCH_ENV_VAR}\` (read the variable; don't assume a path), not the system temp dir. It is cleared on every Daintree launch.`,
       "",
     ].join("\n");
   }
