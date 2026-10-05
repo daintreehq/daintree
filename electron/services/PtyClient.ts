@@ -2512,7 +2512,14 @@ export class PtyClient extends EventEmitter {
     targets: readonly ClosedProcessKillTarget[]
   ): Promise<ClosedProcessKillResult> {
     const shards = this.fanOutShards();
-    const list = targets.map(({ pid, startTime }) => ({ pid, startTime }));
+    // A host mid-restart isn't asked, and its targets may well be its own.
+    const unreachable = Math.max(
+      0,
+      [...this.shards.values()].filter((shard) => !shard.retired).length - shards.length
+    );
+    const unique = new Map<string, ClosedProcessKillTarget>();
+    for (const { pid, startTime } of targets) unique.set(`${pid}@${startTime}`, { pid, startTime });
+    const list = [...unique.values()];
     const results = await Promise.all(
       shards.map((shard) =>
         sendPtyHostRpc<ClosedProcessKillResult>(
@@ -2531,7 +2538,7 @@ export class PtyClient extends EventEmitter {
     // Every answering shard reports each target it doesn't own as untracked, so
     // a target is untracked only when every shard said so. If any shard didn't
     // answer, the targets nobody claimed may be that shard's.
-    if (answered.length < shards.length || shards.length === 0) {
+    if (answered.length < shards.length || unreachable > 0 || shards.length === 0) {
       return {
         ended,
         stillRunning,

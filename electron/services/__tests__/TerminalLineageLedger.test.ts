@@ -1007,6 +1007,8 @@ describe("TerminalLineageLedger", () => {
       expect(outcome.found).toBe(1);
       expect(outcome.stillRunning).toBe(1);
       expect(outcome.ended).toBe(0);
+      // Still there, so it stays recorded for the next attempt.
+      expect(outcome.survivors).toEqual([entry()]);
     });
 
     it("never signals and reports unchecked when the probe itself cannot run", async () => {
@@ -1024,7 +1026,7 @@ describe("TerminalLineageLedger", () => {
         unchecked: 1,
       });
       expect(killSpy).not.toHaveBeenCalled();
-      expect(mockSpawnSync).not.toHaveBeenCalled();
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith("taskkill", expect.anything(), expect.anything());
     });
 
     it("never signals a recorded PID now held under another start time", async () => {
@@ -1034,7 +1036,7 @@ describe("TerminalLineageLedger", () => {
 
       expect(outcome).toEqual({ survivors: [], found: 0, ended: 0, stillRunning: 0, unchecked: 0 });
       expect(killSpy).not.toHaveBeenCalled();
-      expect(mockSpawnSync).not.toHaveBeenCalled();
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith("taskkill", expect.anything(), expect.anything());
     });
   });
 
@@ -1087,7 +1089,22 @@ describe("TerminalLineageLedger", () => {
     let killSpy: ReturnType<typeof vi.spyOn>;
 
     beforeEach(() => {
-      killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      // A SIGKILLed (or taskkilled) process stops being listed, so the
+      // post-kill check observes it gone — as the OS would show it.
+      const killed = new Set<number>();
+      killSpy = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: string) => {
+        if (signal === "SIGKILL") killed.add(pid);
+        return true;
+      }) as typeof process.kill);
+      mockExecFileAsync.mockImplementation(async (file: string, args: string[]) => {
+        if (file === "taskkill") {
+          killed.add(Number(args[args.length - 1]));
+          return { stdout: "", stderr: "" };
+        }
+        const pids = readRequestedPids(args).filter((pid) => !killed.has(pid));
+        if (pids.length === 0) throw Object.assign(new Error("exit 1"), { code: 1, stdout: "" });
+        return { stdout: psOutput(pids), stderr: "" };
+      });
     });
 
     /** The single lineage file the sweep left behind, whatever its name. */
@@ -1125,7 +1142,7 @@ describe("TerminalLineageLedger", () => {
       await reapPersistedLineages(tmpDir);
 
       if (isWindows) {
-        expect(mockSpawnSync).toHaveBeenCalledWith(
+        expect(mockExecFileAsync).toHaveBeenCalledWith(
           "taskkill",
           ["/T", "/F", "/PID", String(ORPHAN_PID)],
           expect.anything()
@@ -1158,7 +1175,7 @@ describe("TerminalLineageLedger", () => {
       await reapClaimedLineageFile(claimed!);
 
       if (isWindows) {
-        expect(mockSpawnSync).toHaveBeenCalledWith(
+        expect(mockExecFileAsync).toHaveBeenCalledWith(
           "taskkill",
           ["/T", "/F", "/PID", String(ORPHAN_PID)],
           expect.anything()
@@ -1176,7 +1193,7 @@ describe("TerminalLineageLedger", () => {
       await reapPersistedLineages(tmpDir);
 
       expect(killSpy).not.toHaveBeenCalled();
-      expect(mockSpawnSync).not.toHaveBeenCalled();
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith("taskkill", expect.anything(), expect.anything());
       expect(fs.existsSync(filePath)).toBe(false);
     });
 
@@ -1188,7 +1205,7 @@ describe("TerminalLineageLedger", () => {
       await reapPersistedLineages(tmpDir);
 
       expect(killSpy).not.toHaveBeenCalled();
-      expect(mockSpawnSync).not.toHaveBeenCalled();
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith("taskkill", expect.anything(), expect.anything());
       expect(fs.existsSync(filePath)).toBe(false);
     });
 
@@ -1202,7 +1219,7 @@ describe("TerminalLineageLedger", () => {
       await reapPersistedLineages(tmpDir);
 
       expect(killSpy).not.toHaveBeenCalled();
-      expect(mockSpawnSync).not.toHaveBeenCalled();
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith("taskkill", expect.anything(), expect.anything());
     });
 
     it("ignores a ledger written by a future schema version", async () => {

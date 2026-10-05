@@ -132,7 +132,7 @@ export async function killClosedTerminalProcesses(
 ): Promise<ClosedProcessKillResult> {
   const result: ClosedProcessKillResult = { ended: 0, stillRunning: 0, unchecked: 0, notTracked: 0 };
   const ledger = ctx.lineageLedger;
-  const wanted = new Map<number, string>();
+  const wanted = new Set<string>();
   for (const raw of targets.slice(0, MAX_KILL_TARGETS)) {
     const target = raw as Partial<ClosedProcessKillTarget> | null;
     if (
@@ -144,7 +144,7 @@ export async function killClosedTerminalProcesses(
     ) {
       continue;
     }
-    wanted.set(target.pid, target.startTime);
+    wanted.add(`${target.pid}@${target.startTime}`);
   }
   if (!ledger) {
     result.notTracked = wanted.size;
@@ -153,13 +153,13 @@ export async function killClosedTerminalProcesses(
   // No grace here: the user is looking at a row the inventory already listed.
   const owned = ledger
     .getClosedSurvivors(0)
-    .filter((survivor) => wanted.get(survivor.pid) === survivor.startTime);
+    .filter((survivor) => wanted.has(`${survivor.pid}@${survivor.startTime}`));
   result.notTracked = wanted.size - owned.length;
   if (owned.length === 0) return result;
 
   const outcome = await reapLineageEntries(
     owned.map(({ pid, startTime, rootPid }) => ({ pid, startTime, rootPid })),
-    "from closed terminals at the user's request"
+    { reason: "from closed terminals at the user's request", windowsTree: false }
   );
   // A target the first probe already found gone, or under another start time,
   // ended before we signalled it — the same observation as one that ended after.

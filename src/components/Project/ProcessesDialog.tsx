@@ -224,10 +224,14 @@ export function ProcessesDialog({
             return kept.length === prev.size ? prev : new Set(kept);
           });
           const listedClosed = new Set(next.closedTerminalProcesses.map(closedProcessKey));
-          setEndedClosedKeys((prev) => {
-            const kept = [...prev].filter((key) => listedClosed.has(key));
-            return kept.length === prev.size ? prev : new Set(kept);
-          });
+          // A missing host's processes are absent from a partial reading, not
+          // gone; forgetting them here would let a stale row come back.
+          if (next.complete) {
+            setEndedClosedKeys((prev) => {
+              const kept = [...prev].filter((key) => listedClosed.has(key));
+              return kept.length === prev.size ? prev : new Set(kept);
+            });
+          }
         } else {
           setReadFailed(true);
           logError("[ProcessesDialog] Failed to read processes", result.snapshotError);
@@ -286,6 +290,7 @@ export function ProcessesDialog({
       (target) => {
         if (!isCurrent()) return;
         focusPlanRef.current = { ids: [terminal.id] };
+        setClosedKillTarget(null);
         setKillTarget(target);
       },
       (error: unknown) => {
@@ -326,6 +331,10 @@ export function ProcessesDialog({
 
   const requestClosedKill = (group: ClosedProcessGroup) => {
     setKillError(null);
+    // Supersedes a terminal Kill still resolving its dev-preview lookup, so the
+    // two confirms can never both open.
+    killRequestRef.current += 1;
+    setKillTarget(null);
     focusPlanRef.current = { ids: [`${CLOSED_KILL_PREFIX}${group.key}`] };
     setClosedKillTarget(group);
   };

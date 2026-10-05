@@ -68,6 +68,9 @@ function snapshot(extra: Partial<ProcessInventorySnapshot> = {}): ProcessInvento
   };
 }
 
+/** One fixed close time, so every fixture process belongs to the same incarnation. */
+const CLOSED_AT = Date.now() - 120_000;
+
 function closed(
   pid: number,
   extra: Partial<ProcessInventoryClosedProcess> = {}
@@ -79,7 +82,7 @@ function closed(
     memoryKb: 512 * 1024,
     cpuPercent: 0,
     origin: { kind: "terminal", id: "t-old", projectId: "p1", title: "npm run dev", spawnedAt: 5 },
-    closedAt: Date.now() - 120_000,
+    closedAt: CLOSED_AT,
     projectName: "Cedar",
     ...extra,
   };
@@ -470,6 +473,31 @@ describe("ProcessesDialog (#13175)", () => {
       expect(alert.textContent).toContain("1 process is still running.");
       expect(alert.textContent).toContain("Couldn't check 1 process");
       expect(screen.getByTestId("closed-process-row")).toBeTruthy();
+    });
+
+    it("a slow terminal Kill lookup can't open a second confirm over a closed-terminal one", async () => {
+      mockGetSnapshot.mockResolvedValue(
+        snapshot({
+          terminals: [terminal("a", { title: "shell" })],
+          closedTerminalProcesses: [closed(201)],
+        })
+      );
+      await renderOpen();
+      // Only the Kill's own lookup hangs; the list read has already landed.
+      let resolveSessions: (value: unknown[]) => void = () => {};
+      mockGetAllSessions.mockImplementationOnce(
+        () => new Promise((resolve) => (resolveSessions = resolve))
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Kill 'shell' in Cedar" }));
+      fireEvent.click(screen.getByRole("button", { name: "Kill 1 process from 'npm run dev'" }));
+      await act(async () => {
+        resolveSessions([]);
+      });
+
+      const confirms = screen.getAllByRole("alertdialog");
+      expect(confirms).toHaveLength(1);
+      expect(confirms[0]?.textContent).toContain("Kill 1 process from 'npm run dev'?");
     });
 
     it("cancelling the confirm kills nothing", async () => {

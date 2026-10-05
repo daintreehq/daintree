@@ -1072,17 +1072,46 @@ export interface LineageReapOutcome {
 }
 
 const POST_KILL_CHECK_DELAY_MS = 100;
+const TASKKILL_TIMEOUT_MS = 3000;
+
+export interface ReapLineageOptions {
+  /** Log context for the reap line. */
+  reason?: string;
+  /**
+   * Windows only: `taskkill /T` also ends the target's current children, which
+   * the reaper never verified. Crash recovery wants that — the whole recorded
+   * tree is going anyway — but a user-requested kill must reach only the
+   * identities it was shown.
+   */
+  windowsTree?: boolean;
+}
+
+/** Async so a slow `taskkill` never blocks the host thread its heartbeat runs on. */
+async function taskkill(pid: number, tree: boolean): Promise<void> {
+  try {
+    await execFileAsync("taskkill", [...(tree ? ["/T"] : []), "/F", "/PID", String(pid)], {
+      windowsHide: true,
+      shell: false,
+      signal: AbortSignal.timeout(TASKKILL_TIMEOUT_MS),
+    });
+  } catch {
+    // Exit status says what taskkill thought; the probe afterwards says what
+    // the OS shows, and only that is reported.
+  }
+}
 
 /**
- * Signal the entries whose identity still matches, re-verifying each one
- * immediately before every signal. A PID with no fresh start-time match is
- * never signalled, and a probe that could not run leaves its entries
- * unsignalled and unchecked rather than presumed gone.
+ * Signal the entries whose identity still matches, re-verifying the batch
+ * immediately before each signalling pass. A PID with no fresh start-time
+ * match is never signalled, and a probe that could not run leaves its entries
+ * unsignalled and unchecked rather than presumed gone. Every outcome counted
+ * is what a probe observed afterwards, never what was sent.
  */
 export async function reapLineageEntries(
   entries: readonly PersistedLineageEntry[],
-  reason: string = "left by an exited host"
+  options: ReapLineageOptions = {}
 ): Promise<LineageReapOutcome> {
+  const { reason = "left by an exited host", windowsTree = true } = options;
   const outcome: LineageReapOutcome = {
     survivors: [],
     found: 0,
@@ -1107,66 +1136,61 @@ export async function reapLineageEntries(
 
   console.log(`[TerminalLineageLedger] Reaping ${confirmed.length} terminal descendant(s) ${reason}`);
 
+  let signalled: PersistedLineageEntry[];
   if (process.platform === "win32") {
+    for (const entry of confirmed) await taskkill(entry.pid, windowsTree);
+    signalled = confirmed;
+  } else {
     for (const entry of confirmed) {
-      const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(entry.pid)], {
-        windowsHide: true,
-        stdio: "ignore",
-        timeout: 3000,
-      });
-      // 128 is "process not found", which is the outcome we wanted.
-      if (result.status !== 0 && result.status !== 128) {
+      killValidated(entry.pid, "SIGTERM");
+      // SIGTERM only queues while a process is stopped; SIGCONT lets the kernel
+      // deliver it. Same ordering as ProcessTreeKiller (#9085).
+      killValidated(entry.pid, "SIGCONT");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, REAP_ESCALATION_DELAY_MS));
+
+    // Re-verify before escalating: a PID freed by the SIGTERM above may already
+    // have been handed to an unrelated process.
+    const after = await probeStartTimesDetailed(confirmed.map((e) => e.pid));
+    signalled = [];
+    for (const entry of confirmed) {
+      // A failed escalation probe is not proof the SIGTERM worked — keep the
+      // entry so the next launch can finish the job.
+      if (after.unresolved.has(entry.pid)) {
+        outcome.survivors.push(entry);
+        outcome.unchecked++;
+        continue;
+      }
+      if (after.startTimes.get(entry.pid) !== entry.startTime) {
+        outcome.ended++;
+        continue;
+      }
+      if (killValidated(entry.pid, "SIGKILL")) {
+        signalled.push(entry);
+      } else {
         outcome.survivors.push(entry);
         outcome.stillRunning++;
-      } else {
-        outcome.ended++;
       }
     }
-    return outcome;
+    if (signalled.length === 0) return outcome;
   }
 
-  for (const entry of confirmed) {
-    killValidated(entry.pid, "SIGTERM");
-    // SIGTERM only queues while a process is stopped; SIGCONT lets the kernel
-    // deliver it. Same ordering as ProcessTreeKiller (#9085).
-    killValidated(entry.pid, "SIGCONT");
-  }
-
-  await new Promise((resolve) => setTimeout(resolve, REAP_ESCALATION_DELAY_MS));
-
-  // Re-verify before escalating: a PID freed by the SIGTERM above may already
-  // have been handed to an unrelated process.
-  const after = await probeStartTimesDetailed(confirmed.map((e) => e.pid));
-  const escalated: PersistedLineageEntry[] = [];
-  for (const entry of confirmed) {
-    // A failed escalation probe is not proof the SIGTERM worked — keep the
-    // entry so the next launch can finish the job.
-    if (after.unresolved.has(entry.pid)) {
+  // A delivered SIGKILL or a zero taskkill status is an attempt, not an
+  // observation. Look once more so the outcome reports what the OS shows, and
+  // keep anything still there or unanswerable for the next attempt.
+  await new Promise((resolve) => setTimeout(resolve, POST_KILL_CHECK_DELAY_MS));
+  const final = await probeStartTimesDetailed(signalled.map((e) => e.pid));
+  for (const entry of signalled) {
+    if (final.unresolved.has(entry.pid)) {
       outcome.survivors.push(entry);
       outcome.unchecked++;
-      continue;
-    }
-    if (after.startTimes.get(entry.pid) !== entry.startTime) {
-      outcome.ended++;
-      continue;
-    }
-    if (killValidated(entry.pid, "SIGKILL")) {
-      escalated.push(entry);
-    } else {
+    } else if (final.startTimes.get(entry.pid) === entry.startTime) {
       outcome.survivors.push(entry);
       outcome.stillRunning++;
+    } else {
+      outcome.ended++;
     }
-  }
-  if (escalated.length === 0) return outcome;
-
-  // A delivered SIGKILL is an attempt, not an observation. Look once more so
-  // the outcome reports what the OS shows rather than what we sent.
-  await new Promise((resolve) => setTimeout(resolve, POST_KILL_CHECK_DELAY_MS));
-  const final = await probeStartTimesDetailed(escalated.map((e) => e.pid));
-  for (const entry of escalated) {
-    if (final.unresolved.has(entry.pid)) outcome.unchecked++;
-    else if (final.startTimes.get(entry.pid) === entry.startTime) outcome.stillRunning++;
-    else outcome.ended++;
   }
   return outcome;
 }

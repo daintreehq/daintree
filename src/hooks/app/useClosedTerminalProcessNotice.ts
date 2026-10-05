@@ -16,9 +16,11 @@ const SUPERSEDE_KEY = "closed-terminal-processes";
  * The first read is a baseline: whatever is already running then was either
  * announced by the view that was visible when it appeared, or is listed in the
  * processes view — announcing it again on every project switch would be noise.
- * After that, only identities this view hasn't seen raise the notice, and it
- * leaves once nothing from a closed terminal is running. Reads only while the
- * view is observable.
+ * After that, only identities this view hasn't seen raise the notice; a
+ * notice already up is refreshed when some of its processes end, and leaves
+ * once nothing from a closed terminal is running. Each view keeps its own
+ * memory, so a survivor announced in one project is announced again by a
+ * cached view whose last reading predates it. Reads only while the view is observable.
  */
 export function useClosedTerminalProcessNotice(onView: () => void): void {
   const onViewRef = useRef(onView);
@@ -75,20 +77,24 @@ export function useClosedTerminalProcessNotice(onView: () => void): void {
         .then(
           (snapshot) => {
             if (cancelled) return;
+            // A host that didn't answer, or a census that failed, hides
+            // processes rather than proving them gone. Only a complete, fresh
+            // reading may set the baseline, announce, or withdraw.
+            if (!snapshot.complete || !snapshot.samplesAvailable) return;
             const processes = snapshot.closedTerminalProcesses;
             const keys = processes.map(closedProcessKey);
-            if (seen === null) {
-              seen = new Set(keys);
-              return;
-            }
-            const fresh = keys.filter((key) => !seen!.has(key));
-            for (const key of keys) seen.add(key);
+            const previous = seen;
+            // Identities are pid + start time, so one that left never returns:
+            // the current set is all the memory dedup needs.
+            seen = new Set(keys);
+            if (previous === null) return;
             if (processes.length === 0) {
               clearNotice();
-              seen = new Set();
-            } else if (fresh.length > 0) {
-              announce(processes);
+              return;
             }
+            const fresh = keys.some((key) => !previous.has(key));
+            const shrank = noticeId !== null && keys.length < previous.size;
+            if (fresh || shrank) announce(processes);
           },
           () => {
             // A failed read says nothing about what's running; the processes
@@ -121,6 +127,8 @@ export function useClosedTerminalProcessNotice(onView: () => void): void {
       cancelled = true;
       stop();
       offObservability();
+      // Its action opens this badge's dialog, which is going away with it.
+      clearNotice();
     };
   }, []);
 }

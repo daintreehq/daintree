@@ -153,6 +153,52 @@ describe("useClosedTerminalProcessNotice (#13174)", () => {
     expect(removeNotificationMock).not.toHaveBeenCalled();
   });
 
+  it("never baselines, announces or withdraws on an incomplete or stale reading", async () => {
+    // A partial first reading must not become the baseline...
+    getSnapshotMock.mockResolvedValue({ ...snapshotWith([]), complete: false });
+    renderHook(() => useClosedTerminalProcessNotice(() => {}));
+    await settle();
+    getSnapshotMock.mockResolvedValue(snapshotWith([closed(201)]));
+    await poll();
+    expect(notifyMock).not.toHaveBeenCalled();
+
+    getSnapshotMock.mockResolvedValue(snapshotWith([closed(201), closed(202)]));
+    await poll();
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+
+    // ...and a failed census hides processes rather than proving them gone.
+    getSnapshotMock.mockResolvedValue({ ...snapshotWith([]), samplesAvailable: false });
+    await poll();
+    expect(removeNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes a standing notice when some of its processes end", async () => {
+    getSnapshotMock.mockResolvedValue(snapshotWith([]));
+    renderHook(() => useClosedTerminalProcessNotice(() => {}));
+    await settle();
+
+    getSnapshotMock.mockResolvedValue(snapshotWith([closed(201), closed(202)]));
+    await poll();
+    getSnapshotMock.mockResolvedValue(snapshotWith([closed(202)]));
+    await poll();
+
+    expect(notifyMock).toHaveBeenCalledTimes(2);
+    expect((notifyMock.mock.calls[1]?.[0] as NoticePayload).title).toBe(
+      "1 process from closed terminals · ~1.0 GB"
+    );
+  });
+
+  it("withdraws its notice on unmount, since the action targets this badge", async () => {
+    getSnapshotMock.mockResolvedValue(snapshotWith([]));
+    const { unmount } = renderHook(() => useClosedTerminalProcessNotice(() => {}));
+    await settle();
+    getSnapshotMock.mockResolvedValue(snapshotWith([closed(201)]));
+    await poll();
+
+    unmount();
+    expect(removeNotificationMock).toHaveBeenCalledWith("notice-1");
+  });
+
   it("reads nothing while the view can't be seen, and resumes when it can", async () => {
     view.observable = false;
     getSnapshotMock.mockResolvedValue(snapshotWith([]));
