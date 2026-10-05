@@ -266,6 +266,11 @@ export interface StoreSchema {
   projectEnv: Record<string, string>;
   globalEnvironmentVariables: Record<string, string>;
   appAgentConfig: AppAgentConfig;
+  /**
+   * The user turned Canopy on, agreeing to send agent screens off the machine
+   * to be read. Nothing is read until they do, and turning it off stops it.
+   */
+  canopyActivated: boolean;
   windowStates: Record<
     string,
     {
@@ -807,6 +812,7 @@ const storeOptions = {
     projectEnv: {},
     globalEnvironmentVariables: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
+    canopyActivated: false,
     windowStates: {},
     worktreeIssueMap: {},
     wslGitByWorktree: {},

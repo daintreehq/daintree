@@ -2385,4 +2385,149 @@ describe("AgentNotificationService", () => {
       expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
     });
   });
+
+  describe("Canopy asks", () => {
+    const ask = (terminalId = "term-1", kind: "approval" | "question" = "approval") => ({
+      terminalId,
+      worktreeId: "wt-1",
+      agentId: "agent-1",
+      kind,
+    });
+    /** Past the boot grace, so a restore's first reading doesn't page. */
+    const pastBoot = () => vi.advanceTimersByTime(9_000);
+
+    afterEach(() => {
+      // clearAllMocks keeps implementations; these tests change them.
+      notificationServiceMock.isOwnerViewFocused.mockImplementation(() => false);
+      notificationServiceMock.isWindowFocused.mockReturnValue(false);
+      notificationServiceMock.getUserPresence.mockReturnValue("present");
+    });
+
+    it("pages for an ask without waiting notifications on or the panel watched", () => {
+      mockStore({ soundEnabled: true });
+      agentNotificationService.syncWatchedPanels(OWNER, []);
+      pastBoot();
+      agentNotificationService.notifyCanopyAsk(ask(), () => []);
+      vi.advanceTimersByTime(200);
+
+      expect(soundServiceMock.playFile).toHaveBeenCalledWith("waiting.wav");
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        "agent-1 is waiting for approval",
+        expect.objectContaining({
+          closeWithPanels: ["term-1"],
+          navigation: expect.objectContaining({
+            context: expect.objectContaining({ panelId: "term-1", worktreeId: "wt-1" }),
+          }),
+        })
+      );
+    });
+
+    it("groups asks that land together into one banner", () => {
+      mockStore();
+      pastBoot();
+      agentNotificationService.notifyCanopyAsk(ask("term-1", "question"), () => []);
+      agentNotificationService.notifyCanopyAsk(ask("term-2", "question"), () => []);
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agents waiting",
+        "2 agents waiting on questions",
+        expect.objectContaining({ closeWithPanels: ["term-1", "term-2"] })
+      );
+    });
+
+    it("stays quiet with notifications off, or during the boot grace", () => {
+      mockStore();
+      projectStoreMock.getEffectiveNotificationSettings.mockReturnValue({
+        ...DEFAULT_NOTIFICATION_SETTINGS,
+        enabled: false,
+      });
+      pastBoot();
+      agentNotificationService.notifyCanopyAsk(ask(), () => []);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+
+      agentNotificationService.dispose();
+      agentNotificationService.initialize();
+      mockStore();
+      agentNotificationService.notifyCanopyAsk(ask(), () => []);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("stays quiet when Daintree's own banner already went out for the wait", () => {
+      mockStore({ waitingEnabled: true });
+      pastBoot();
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+
+      agentNotificationService.notifyCanopyAsk(ask(), () => []);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("stays quiet while Canopy is open in front of the user", () => {
+      mockStore();
+      pastBoot();
+      notificationServiceMock.isOwnerViewFocused.mockImplementation((owner) => owner === 7);
+      agentNotificationService.notifyCanopyAsk(ask(), () => [7]);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("keeps Daintree's own waiting banner quiet for a wait Canopy already paged for", () => {
+      mockStore({ waitingEnabled: true });
+      pastBoot();
+      agentNotificationService.notifyCanopyAsk(ask(), () => []);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+    });
+
+    it("drops a buffered ask when the agent goes back to work", () => {
+      mockStore();
+      pastBoot();
+      agentNotificationService.notifyCanopyAsk(ask(), () => []);
+      events.emit("agent:state-changed", makePayload("working", "waiting"));
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("drops buffered asks when Canopy opens in front before they flush", () => {
+      mockStore();
+      pastBoot();
+      const open: number[] = [];
+      agentNotificationService.notifyCanopyAsk(ask(), () => open);
+      open.push(7);
+      notificationServiceMock.isOwnerViewFocused.mockImplementation((owner) => owner === 7);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("stays quiet for a never-watched agent whose worktree the focused window shows", () => {
+      mockStore();
+      pastBoot();
+      notificationServiceMock.isWindowFocused.mockReturnValue(true);
+      notificationServiceMock.getUserPresence.mockReturnValue("present");
+      agentNotificationService.notifyCanopyAsk(ask("term-never-watched"), () => []);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("stays quiet when the user is looking at the agent's worktree", () => {
+      mockStore();
+      pastBoot();
+      notificationServiceMock.isOwnerViewFocused.mockImplementation((owner) => owner === OWNER);
+      notificationServiceMock.getUserPresence.mockReturnValue("present");
+      agentNotificationService.notifyCanopyAsk(ask(), () => []);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+  });
 });
