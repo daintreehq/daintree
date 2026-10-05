@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ProcessInventoryTerminal, ProcessTreeSample } from "@shared/types/processes";
+import type { ProcessInventoryClosedProcess } from "@shared/types/processes";
 import {
+  describeCleanupReport,
+  describeClosedMembers,
+  describeClosedOrigin,
+  describeClosedSummary,
+  groupClosedProcesses,
   describeMembers,
   describeTerminalKind,
   formatApproxMemory,
@@ -104,5 +110,82 @@ describe("processesView", () => {
     expect(trashSecondsLeft(trashed, 20_000)).toBe(0);
     expect(trashSecondsLeft(terminal("t", { isTrashed: true }), 0)).toBeNull();
     expect(trashSecondsLeft(terminal("t"), 0)).toBeNull();
+  });
+});
+
+describe("closed-terminal processes (#13174)", () => {
+  function closed(
+    pid: number,
+    extra: Partial<ProcessInventoryClosedProcess> = {}
+  ): ProcessInventoryClosedProcess {
+    return {
+      pid,
+      startTime: `s${pid}`,
+      comm: "node",
+      memoryKb: 1024,
+      cpuPercent: 0,
+      origin: { kind: "terminal", id: "t1", spawnedAt: 1, projectId: "p1" },
+      closedAt: 100,
+      projectName: "Cedar",
+      ...extra,
+    };
+  }
+
+  it("groups by terminal incarnation, so a restarted terminal's lineages stay apart", () => {
+    const groups = groupClosedProcesses([
+      closed(1),
+      closed(2, { memoryKb: 4096 }),
+      closed(3, {
+        origin: { kind: "terminal", id: "t1", spawnedAt: 2, projectId: "p1" },
+        closedAt: 200,
+      }),
+    ]);
+
+    expect(groups.map((g) => g.processes.map((p) => p.pid))).toEqual([[2, 1], [3]]);
+    expect(groups[0]?.memoryKb).toBe(5120);
+    expect(groups[0]?.projectLabel).toBe("Cedar");
+  });
+
+  it("leaves memory unknown rather than zero when the census had no reading", () => {
+    const [group] = groupClosedProcesses([closed(1, { memoryKb: null })]);
+    expect(group?.memoryKb).toBeNull();
+    expect(describeClosedSummary([closed(1, { memoryKb: null })])).toBe(
+      "1 process from closed terminals"
+    );
+  });
+
+  it("names the origin from the record, never from what's running", () => {
+    expect(describeClosedOrigin(null)).toBe("Closed terminal");
+    expect(describeClosedOrigin({ kind: "plugin", id: "x" })).toBe("Plugin terminal");
+    expect(describeClosedOrigin({ kind: "terminal", id: "x", title: "  dev  " })).toBe("dev");
+  });
+
+  it("lists each process name once and falls back to the PID", () => {
+    expect(
+      describeClosedMembers([
+        closed(1),
+        closed(2),
+        closed(3, { comm: "" }),
+        closed(4, { comm: "esbuild" }),
+        closed(5, { comm: "vite" }),
+      ])
+    ).toBe("node, PID 3, esbuild +2");
+  });
+
+  it("describes cleanup only when it saw something", () => {
+    expect(describeCleanupReport(null)).toBeNull();
+    expect(
+      describeCleanupReport({ found: 0, ended: 0, stillRunning: 0, unchecked: 0, lastAt: 1 })
+    ).toBeNull();
+    expect(
+      describeCleanupReport({ found: 1, ended: 1, stillRunning: 0, unchecked: 0, lastAt: 1 })
+    ).toEqual({
+      text: "Ended 1 process left running by an earlier session.",
+      severity: "neutral",
+    });
+    expect(
+      describeCleanupReport({ found: 2, ended: 0, stillRunning: 2, unchecked: 0, lastAt: 1 })
+        ?.severity
+    ).toBe("warning");
   });
 });

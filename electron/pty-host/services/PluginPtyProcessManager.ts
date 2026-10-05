@@ -7,6 +7,7 @@ import type {
   ProcessTreeKiller,
   ProcessTreeKillTarget,
 } from "../../services/pty/ProcessTreeKiller.js";
+import type { LineageOrigin } from "../../services/TerminalLineageLedger.js";
 import type {
   PluginPtyHostEvent,
   PluginPtyHostSpawnOptions,
@@ -377,7 +378,7 @@ export class PluginPtyProcessManager {
       },
     };
     try {
-      return this.createTreeKiller(target);
+      return this.createTreeKiller(target, { kind: "plugin", id: entry.id });
     } catch (error) {
       console.warn(
         `[PluginPty] tree killer for "${entry.id}" unavailable:`,
@@ -435,7 +436,10 @@ interface LingeringKill {
 }
 
 /** Builds one killer per plugin PTY incarnation, bound to the pty-host's cache and ledger. */
-export type PluginPtyTreeKillerFactory = (target: ProcessTreeKillTarget) => PluginPtyTreeKiller;
+export type PluginPtyTreeKillerFactory = (
+  target: ProcessTreeKillTarget,
+  origin: LineageOrigin
+) => PluginPtyTreeKiller;
 
 interface PluginPtyEntry {
   id: string;

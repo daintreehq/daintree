@@ -514,7 +514,16 @@ export class TerminalProcess {
     this.processTreeKiller = new ProcessTreeKiller(
       ptyProcess,
       deps.processTreeCache,
-      deps.lineageLedger ?? null
+      deps.lineageLedger ?? null,
+      {
+        kind: "terminal",
+        id,
+        projectId: options.projectId,
+        title: options.title,
+        panelKind: options.kind,
+        launchAgentId,
+        spawnedAt,
+      }
     );
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;

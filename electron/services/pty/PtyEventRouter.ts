@@ -321,6 +321,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.inventory);
       return true;
 
+    case "closed-terminal-processes-killed":
+      broker.resolve(event.requestId, event.result);
+      return true;
+
     case "trim-state-result":
       broker.resolve(event.requestId, event.result);
       return true;

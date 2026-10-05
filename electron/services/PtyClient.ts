@@ -114,7 +114,11 @@ import type {
   TrimStateSummary,
   TerminalSubmitGuard,
 } from "../../shared/types/pty-host.js";
-import type { HostProcessInventory } from "../../shared/types/processes.js";
+import type {
+  ClosedProcessKillResult,
+  ClosedProcessKillTarget,
+  HostProcessInventory,
+} from "../../shared/types/processes.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
@@ -258,6 +262,11 @@ const DEFAULT_CONFIG: ResolvedPtyClientConfig = {
 };
 
 const MAX_MISSED_HEARTBEATS = 3;
+/**
+ * A closed-terminal kill probes identity up to three times (before SIGTERM,
+ * before SIGKILL, after it), each bounded at 3s, plus the escalation grace.
+ */
+const CLOSED_PROCESS_KILL_TIMEOUT_MS = 15_000;
 
 /**
  * Centralized per-operation timeout policy for PTY host RPC calls.
@@ -2498,6 +2507,53 @@ export class PtyClient extends EventEmitter {
       shardsTotal: shards.length + unreachable,
       shardsFailed: shards.length - inventories.length + unreachable,
     };
+  }
+
+  /**
+   * End processes still running after their terminal closed. Each shard acts
+   * only on targets its own lineage ledger recorded, re-verifying identity
+   * before every signal, so fanning out to all of them is safe. A shard that
+   * can't answer leaves its share counted as unchecked — never as ended.
+   */
+  async killClosedTerminalProcesses(
+    targets: readonly ClosedProcessKillTarget[]
+  ): Promise<ClosedProcessKillResult> {
+    const shards = this.fanOutShards();
+    // A host mid-restart isn't asked, and its targets may well be its own.
+    const unreachable = Math.max(
+      0,
+      [...this.shards.values()].filter((shard) => !shard.retired).length - shards.length
+    );
+    const unique = new Map<string, ClosedProcessKillTarget>();
+    for (const { pid, startTime } of targets) unique.set(`${pid}@${startTime}`, { pid, startTime });
+    const list = [...unique.values()];
+    const results = await Promise.all(
+      shards.map((shard) =>
+        sendPtyHostRpc<ClosedProcessKillResult>(
+          shard,
+          "closed-terminal-processes-killed",
+          (requestId) => ({ type: "kill-closed-terminal-processes", requestId, targets: list }),
+          { method: "kill-closed-terminal-processes", timeoutMs: CLOSED_PROCESS_KILL_TIMEOUT_MS }
+        ).catch(() => null)
+      )
+    );
+    const answered = results.filter((r): r is ClosedProcessKillResult => r !== null);
+    const ended = answered.reduce((sum, r) => sum + r.ended, 0);
+    const stillRunning = answered.reduce((sum, r) => sum + r.stillRunning, 0);
+    const unchecked = answered.reduce((sum, r) => sum + r.unchecked, 0);
+    const accounted = ended + stillRunning + unchecked;
+    // Every answering shard reports each target it doesn't own as untracked, so
+    // a target is untracked only when every shard said so. If any shard didn't
+    // answer, the targets nobody claimed may be that shard's.
+    if (answered.length < shards.length || unreachable > 0 || shards.length === 0) {
+      return {
+        ended,
+        stillRunning,
+        unchecked: unchecked + Math.max(0, list.length - accounted),
+        notTracked: 0,
+      };
+    }
+    return { ended, stillRunning, unchecked, notTracked: Math.max(0, list.length - accounted) };
   }
 
   /**

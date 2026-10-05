@@ -2,6 +2,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 
 export const PROCESSES_METHOD_CHANNELS = {
   getSnapshot: "processes:get-snapshot",
+  killClosedTerminalProcesses: "processes:kill-closed-terminal-processes",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof PROCESSES_METHOD_CHANNELS;

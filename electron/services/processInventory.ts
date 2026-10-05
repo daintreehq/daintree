@@ -1,6 +1,8 @@
 import path from "node:path";
 import type {
   HostProcessInventory,
+  ProcessCleanupReport,
+  ProcessInventoryClosedProcess,
   ProcessInventoryPluginProcess,
   ProcessInventorySnapshot,
   ProcessTreeSample,
@@ -22,6 +24,8 @@ export interface ProcessInventoryDeps {
     workers: WorkerResourceSnapshot[];
   } | null>;
   getAppMetrics: () => Electron.ProcessMetric[];
+  /** What automatic cleanup of earlier sessions' processes observed this session. */
+  getCleanupReport?: () => ProcessCleanupReport | null;
 }
 
 function workerSample(metric: Electron.ProcessMetric | undefined): ProcessTreeSample | null {
@@ -104,6 +108,30 @@ export async function collectProcessInventory(
     })),
   ];
 
+  // Each ledger records only its own shard's terminals, so a process should
+  // appear once; the identity key keeps a duplicate from being counted twice.
+  const closedTerminalProcesses: ProcessInventoryClosedProcess[] = [];
+  const seenClosed = new Set<string>();
+  for (const inventory of host.inventories) {
+    for (const closed of inventory.closedTerminalProcesses ?? []) {
+      const key = `${closed.pid}@${closed.startTime}`;
+      if (seenClosed.has(key)) continue;
+      seenClosed.add(key);
+      const projectId = closed.origin?.projectId;
+      closedTerminalProcesses.push({
+        ...closed,
+        projectName: projectId ? (names.get(projectId) ?? null) : null,
+      });
+    }
+  }
+
+  let cleanup: ProcessCleanupReport | null = null;
+  try {
+    cleanup = deps.getCleanupReport?.() ?? null;
+  } catch {
+    // The report is a courtesy; the list stands without it.
+  }
+
   const answered = host.inventories.filter((inventory) => inventory.sampledAt > 0);
   return {
     terminals: host.inventories.flatMap((inventory) =>
@@ -112,6 +140,8 @@ export async function collectProcessInventory(
         projectName: terminal.projectId ? (names.get(terminal.projectId) ?? null) : null,
       }))
     ),
+    closedTerminalProcesses,
+    cleanup,
     plugins,
     complete: host.shardsFailed === 0,
     // A host with terminals whose census has never run has nothing to show

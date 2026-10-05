@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 import { RefreshCw } from "lucide-react";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import type {
+  ClosedProcessKillResult,
   ProcessInventoryPluginProcess,
   ProcessInventorySnapshot,
   ProcessInventoryTerminal,
@@ -20,11 +21,17 @@ import { isProjectViewCached } from "@/lib/viewCacheState";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import {
+  closedProcessKey,
+  describeCleanupReport,
+  describeClosedMembers,
   describeMembers,
   describeTerminalKind,
+  formatAgo,
   formatApproxMemory,
   formatCpu,
+  groupClosedProcesses,
   groupTerminalsByProject,
+  type ClosedProcessGroup,
   pluginProcessTitle,
   sortPluginProcesses,
   terminalTitle,
@@ -117,6 +124,32 @@ async function endProcess(target: KillTarget): Promise<KillOutcome> {
   }
 }
 
+const CLOSED_KILL_PREFIX = "closed:";
+
+/**
+ * Says what the kill observed when it didn't see every process end. Returns
+ * null when it did — the rows leaving the list say that on their own.
+ */
+function describeClosedKillShortfall(
+  result: ClosedProcessKillResult,
+  requested: number
+): string | null {
+  const parts: string[] = [];
+  if (result.stillRunning > 0) {
+    parts.push(`${pluralize(result.stillRunning, "process is", "processes are")} still running.`);
+  }
+  if (result.unchecked > 0) {
+    parts.push(
+      `Couldn't check ${pluralize(result.unchecked, "process", "processes")}, so ${
+        result.unchecked === 1 ? "it may still be" : "they may still be"
+      } running.`
+    );
+  }
+  if (parts.length === 0) return null;
+  const ended = result.ended + result.notTracked;
+  return `Ended ${ended} of ${pluralize(requested, "process", "processes")}. ${parts.join(" ")}`;
+}
+
 function SampleReadout({ sample }: { sample: ProcessTreeSample | null }): ReactElement {
   if (!sample) {
     return <span className="text-xs text-text-secondary">Not sampled</span>;
@@ -149,6 +182,10 @@ export function ProcessesDialog({
   // lands before the census notices. Keyed by PTY generation, so a pane that
   // restarts on exit reappears as the new process it is.
   const [killedIds, setKilledIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [closedKillTarget, setClosedKillTarget] = useState<ClosedProcessGroup | null>(null);
+  // Closed-terminal processes a kill saw end, by recorded identity, hidden
+  // until the next read stops listing them.
+  const [endedClosedKeys, setEndedClosedKeys] = useState<ReadonlySet<string>>(() => new Set());
   const fetchRef = useRef<() => Promise<void>>(async () => {});
   // Bumped on every open and close, so a session read that resolves after the
   // dialog closed can't raise a confirm nobody asked for.
@@ -165,6 +202,7 @@ export function ProcessesDialog({
     openGenerationRef.current += 1;
     if (!isOpen) {
       setKillTarget(null);
+      setClosedKillTarget(null);
       return;
     }
     let cancelled = false;
@@ -185,6 +223,15 @@ export function ProcessesDialog({
             const kept = [...prev].filter((key) => listed.has(key));
             return kept.length === prev.size ? prev : new Set(kept);
           });
+          const listedClosed = new Set(next.closedTerminalProcesses.map(closedProcessKey));
+          // A missing host's processes are absent from a partial reading, not
+          // gone; forgetting them here would let a stale row come back.
+          if (next.complete) {
+            setEndedClosedKeys((prev) => {
+              const kept = [...prev].filter((key) => listedClosed.has(key));
+              return kept.length === prev.size ? prev : new Set(kept);
+            });
+          }
         } else {
           setReadFailed(true);
           logError("[ProcessesDialog] Failed to read processes", result.snapshotError);
@@ -214,8 +261,24 @@ export function ProcessesDialog({
   );
   const groups = groupTerminalsByProject(terminals);
   const plugins = sortPluginProcesses(snapshot?.plugins ?? []);
-  const isEmpty = snapshot !== null && terminals.length + plugins.length === 0;
-  const listedIds = groups.flatMap((group) => group.terminals.map((terminal) => terminal.id));
+  const closedGroups = groupClosedProcesses(
+    (snapshot?.closedTerminalProcesses ?? []).filter(
+      (process) => !endedClosedKeys.has(closedProcessKey(process))
+    )
+  );
+  const cleanup = describeCleanupReport(snapshot?.cleanup ?? null);
+  const isEmpty =
+    snapshot !== null && terminals.length + plugins.length + closedGroups.length === 0;
+  const listedIds = [
+    ...groups.flatMap((group) => group.terminals.map((terminal) => terminal.id)),
+    ...closedGroups.map((group) => `${CLOSED_KILL_PREFIX}${group.key}`),
+  ];
+
+  const neighboursOf = (id: string): string[] => {
+    const at = listedIds.indexOf(id);
+    if (at < 0) return listedIds;
+    return [...listedIds.slice(at + 1), ...listedIds.slice(0, at).reverse()];
+  };
 
   const requestKill = (terminal: ProcessInventoryTerminal) => {
     setKillError(null);
@@ -227,6 +290,7 @@ export function ProcessesDialog({
       (target) => {
         if (!isCurrent()) return;
         focusPlanRef.current = { ids: [terminal.id] };
+        setClosedKillTarget(null);
         setKillTarget(target);
       },
       (error: unknown) => {
@@ -244,11 +308,7 @@ export function ProcessesDialog({
     if (!target) return undefined;
     const { terminal } = target;
     const title = terminalTitle(terminal);
-    const at = listedIds.indexOf(terminal.id);
-    const neighbours = [
-      ...listedIds.slice(at + 1),
-      ...listedIds.slice(0, Math.max(0, at)).reverse(),
-    ];
+    const neighbours = neighboursOf(terminal.id);
     setIsKilling(true);
     return endProcess(target).then((outcome) => {
       setIsKilling(false);
@@ -267,6 +327,53 @@ export function ProcessesDialog({
         );
       }
     });
+  };
+
+  const requestClosedKill = (group: ClosedProcessGroup) => {
+    setKillError(null);
+    // Supersedes a terminal Kill still resolving its dev-preview lookup, so the
+    // two confirms can never both open.
+    killRequestRef.current += 1;
+    setKillTarget(null);
+    focusPlanRef.current = { ids: [`${CLOSED_KILL_PREFIX}${group.key}`] };
+    setClosedKillTarget(group);
+  };
+
+  const confirmClosedKill = (): Promise<void> | undefined => {
+    const group = closedKillTarget;
+    if (!group) return undefined;
+    const neighbours = neighboursOf(`${CLOSED_KILL_PREFIX}${group.key}`);
+    const targets = group.processes.map(({ pid, startTime }) => ({ pid, startTime }));
+    setIsKilling(true);
+    return processesClient.killClosedTerminalProcesses(targets).then(
+      (result) => {
+        setIsKilling(false);
+        setClosedKillTarget(null);
+        const shortfall = describeClosedKillShortfall(result, targets.length);
+        if (shortfall === null) {
+          focusPlanRef.current = { ids: neighbours };
+          setEndedClosedKeys((prev) => {
+            const next = new Set(prev);
+            for (const target of targets) next.add(closedProcessKey(target));
+            return next;
+          });
+        } else {
+          setKillError(`Kill from '${group.title}' didn't finish. ${shortfall}`);
+        }
+        void fetchRef.current();
+      },
+      (error: unknown) => {
+        setIsKilling(false);
+        setClosedKillTarget(null);
+        logError("[ProcessesDialog] Failed to kill closed-terminal processes", error);
+        setKillError(
+          `Couldn't kill the processes from '${group.title}'. ${formatErrorMessage(
+            error,
+            "The terminal host didn't respond."
+          )}`
+        );
+      }
+    );
   };
 
   // Resolved when the confirm finishes closing, not when the kill lands: by
@@ -354,6 +461,48 @@ export function ProcessesDialog({
     );
   };
 
+  const renderClosedGroup = (group: ClosedProcessGroup) => {
+    const count = group.processes.length;
+    const details = [
+      group.projectLabel,
+      `Closed ${formatAgo(now - group.closedAt)}`,
+      describeClosedMembers(group.processes),
+      count === 1 && group.processes[0] ? `PID ${group.processes[0].pid}` : null,
+    ].filter((part): part is string => part !== null);
+    const killId = `${CLOSED_KILL_PREFIX}${group.key}`;
+    return (
+      <li
+        key={group.key}
+        className="flex min-h-11 items-center gap-3 border-t border-border-subtle py-1.5 first:border-t-0"
+        data-testid="closed-process-row"
+      >
+        <div className="min-w-0 flex-1">
+          <TruncatedTooltip content={group.title}>
+            <div className="truncate text-sm text-text-primary">{group.title}</div>
+          </TruncatedTooltip>
+          <div className="truncate text-xs text-text-secondary">{details.join(" · ")}</div>
+        </div>
+        <span className="flex shrink-0 items-center gap-3 text-xs tabular-nums text-text-secondary">
+          <span>{pluralize(count, "process", "processes")}</span>
+          {group.memoryKb !== null && <span>{formatApproxMemory(group.memoryKb)}</span>}
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label={`Kill ${pluralize(count, "process", "processes")} from '${group.title}'`}
+          onClick={() => requestClosedKill(group)}
+          data-process-kill={killId}
+        >
+          Kill
+        </Button>
+      </li>
+    );
+  };
+
+  const closedTarget = closedKillTarget;
+  const closedTargetCount = closedTarget?.processes.length ?? 0;
+  const closedTargetWhere = closedTarget?.projectLabel ? ` in ${closedTarget.projectLabel}` : "";
+
   const target = killTarget;
   const targetTitle = target ? terminalTitle(target.terminal) : "";
   const targetWhere = target?.terminal.projectId
@@ -407,12 +556,20 @@ export function ProcessesDialog({
             )}
             {snapshot && !snapshot.complete && (
               <Callout severity="warning" size="compact">
-                A terminal host didn't answer, so some terminals may be missing.
+                A terminal host didn't answer, so some terminals may be missing, along with
+                processes from their closed terminals.
               </Callout>
             )}
             {snapshot && snapshot.complete && !snapshot.samplesAvailable && (
               <Callout severity="warning" size="compact">
-                The last process census failed. CPU and memory are from the reading before it.
+                The last process census failed, so Daintree can't currently check what's still
+                running. CPU, memory and processes from closed terminals are from the reading before
+                it.
+              </Callout>
+            )}
+            {cleanup && (
+              <Callout severity={cleanup.severity} size="compact">
+                {cleanup.text}
               </Callout>
             )}
             {snapshot === null && !readFailed ? (
@@ -427,6 +584,27 @@ export function ProcessesDialog({
               </p>
             ) : (
               <>
+                {closedGroups.length > 0 && (
+                  <section aria-labelledby="processes-group-closed">
+                    <h3
+                      id="processes-group-closed"
+                      className="mb-1 flex items-baseline justify-between gap-2 text-xs font-medium text-text-secondary"
+                    >
+                      <span className="truncate">From closed terminals</span>
+                      <span className="shrink-0 font-normal">
+                        {pluralize(
+                          closedGroups.reduce((sum, group) => sum + group.processes.length, 0),
+                          "process",
+                          "processes"
+                        )}
+                      </span>
+                    </h3>
+                    <p className="mb-1 text-xs leading-snug text-text-secondary">
+                      Started in a terminal that has since closed, and still running.
+                    </p>
+                    <ul>{closedGroups.map(renderClosedGroup)}</ul>
+                  </section>
+                )}
                 {groups.map((group) => {
                   const headingId = `processes-group-${group.key.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
                   return (
@@ -483,6 +661,25 @@ export function ProcessesDialog({
         }
         confirmLabel={target?.via === "dev-session" ? "Stop dev server" : "Kill terminal"}
         onConfirm={confirmKill}
+        isConfirmLoading={isKilling}
+      />
+      <ConfirmDialog
+        isOpen={isOpen && closedTarget !== null}
+        restoreFocusTo={resolveConfirmFocus}
+        onClose={() => setClosedKillTarget(null)}
+        variant="destructive"
+        title={`Kill ${pluralize(closedTargetCount, "process", "processes")} from '${
+          closedTarget?.title ?? ""
+        }'?`}
+        description={`Ends ${
+          closedTarget ? describeClosedMembers(closedTarget.processes) : ""
+        }, still running after this terminal closed${closedTargetWhere}. Anything ${
+          closedTargetCount === 1 ? "it was" : "they were"
+        } doing stops.`}
+        confirmLabel={
+          closedTargetCount === 1 ? "Kill process" : `Kill ${closedTargetCount} processes`
+        }
+        onConfirm={confirmClosedKill}
         isConfirmLoading={isKilling}
       />
     </>

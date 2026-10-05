@@ -256,3 +256,57 @@ describe("collectProcessInventory (#13175)", () => {
     expect(snapshot.plugins).toEqual([]);
   });
 });
+
+describe("collectProcessInventory closed-terminal processes (#13174)", () => {
+  function closedProcess(pid: number, projectId?: string) {
+    return {
+      pid,
+      startTime: `start-${pid}`,
+      comm: "node",
+      memoryKb: 1024,
+      cpuPercent: 0,
+      origin: { kind: "terminal" as const, id: "t", projectId },
+      closedAt: 5,
+    };
+  }
+
+  it("merges every shard's survivors once per identity and names their project", async () => {
+    const snapshot = await collectProcessInventory(
+      deps({
+        getHostInventory: async () => ({
+          inventories: [
+            inventory([], { closedTerminalProcesses: [closedProcess(201, "p1")] }),
+            inventory([], {
+              closedTerminalProcesses: [closedProcess(201, "p1"), closedProcess(202)],
+            }),
+            // A host that predates the field.
+            inventory([]),
+          ],
+          shardsTotal: 3,
+          shardsFailed: 0,
+        }),
+        getWorkspaceNames: () => [{ id: "p1", name: "Cedar" }],
+      })
+    );
+
+    expect(snapshot.closedTerminalProcesses.map((p) => [p.pid, p.projectName])).toEqual([
+      [201, "Cedar"],
+      [202, null],
+    ]);
+  });
+
+  it("carries the cleanup report, and survives it throwing", async () => {
+    const report = { found: 2, ended: 1, stillRunning: 0, unchecked: 1, lastAt: 9 };
+    expect(
+      (await collectProcessInventory(deps({ getCleanupReport: () => report }))).cleanup
+    ).toEqual(report);
+    const failing = await collectProcessInventory(
+      deps({
+        getCleanupReport: () => {
+          throw new Error("boom");
+        },
+      })
+    );
+    expect(failing.cleanup).toBeNull();
+  });
+});
