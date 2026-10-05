@@ -115,8 +115,8 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
   };
 }
 
-function termInfo(pid?: number) {
-  return { ptyProcess: { pid } };
+function termInfo(pid?: number, launchGeneration?: number) {
+  return { ptyProcess: { pid }, launchGeneration };
 }
 
 describe("lifecycle update-worktree-id handler", () => {
@@ -427,6 +427,57 @@ describe("lifecycle spawn — terminal-pid gating and deferred retry (#10787)", 
       .map(([event]) => event)
       .filter((event) => event.type === "terminal-pid");
     expect(pidEvents).toEqual([{ type: "terminal-pid", id: "t1", pid: 4321 }]);
+  });
+
+  it("stamps the spawn's launch generation on terminal-pid (#13176)", () => {
+    const ctx = makeCtx();
+    getMock(ctx).mockReturnValue(termInfo(1234, 3));
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: { launchGeneration: 3 } });
+
+    expect(ctx.sendEvent).toHaveBeenCalledWith({
+      type: "terminal-pid",
+      id: "t1",
+      pid: 1234,
+      launchGeneration: 3,
+    });
+  });
+
+  it("stamps the generation on a PID recovered by deferred retry (#13176)", async () => {
+    vi.useFakeTimers();
+    const ctx = makeCtx();
+    getMock(ctx)
+      .mockReturnValueOnce(termInfo(0, 3))
+      .mockReturnValue(termInfo(4321, 3));
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: { launchGeneration: 3 } });
+    await vi.runAllTimersAsync();
+
+    expect(ctx.sendEvent).toHaveBeenCalledWith({
+      type: "terminal-pid",
+      id: "t1",
+      pid: 4321,
+      launchGeneration: 3,
+    });
+  });
+
+  it("abandons the retry once a same-id respawn replaced the incarnation (#13176)", async () => {
+    vi.useFakeTimers();
+    const ctx = makeCtx();
+    getMock(ctx)
+      .mockReturnValueOnce(termInfo(0, 3)) // synchronous spawn read
+      .mockReturnValue(termInfo(9999, 4)); // successor owns the id now
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: { launchGeneration: 3 } });
+    await vi.runAllTimersAsync();
+
+    expect(ctx.sendEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "terminal-pid" })
+    );
+    expect(ctx.ptyManager.startProcessDetectorForTerminal).not.toHaveBeenCalled();
   });
 
   it("abandons the retry if the terminal disappears before the PID resolves", async () => {

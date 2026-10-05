@@ -73,8 +73,7 @@ const logWarn = (msg: string, ctx?: Record<string, unknown>) =>
   ctx ? logger.warn(msg, ctx) : logger.warn(msg);
 import { getTrashedPidTracker } from "./TrashedPidTracker.js";
 import { claimShardLineageFile, reapClaimedLineageFile } from "./TerminalLineageLedger.js";
-import { helpSessionService } from "./HelpSessionService.js";
-import { helpSessionJobService } from "./HelpSessionJobService.js";
+import { terminalCrashReapService } from "./TerminalCrashReapService.js";
 import { getLifecycleLedger, ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
 import { getEnvVar, hasEnvVar } from "./pty/EnvironmentFilter.js";
 import { BrokerError } from "./rpc/index.js";
@@ -645,18 +644,23 @@ export class PtyClient extends EventEmitter {
         onReady: () => this.handleShardReady(shard),
         onPong: () => shard.watchdog.recordPong(),
         onTerminalRemovedFromTrash: (id) => getTrashedPidTracker().removeTrashed(id),
-        // #7526: filter help-session PTYs into the Windows Job Object so the
-        // OS reaps the agent tree on a hard Daintree crash. No-op on
-        // non-Windows and on non-help terminals.
-        onTerminalPid: (id, pid) => {
-          if (helpSessionService.isHelpTerminal(id)) {
-            helpSessionJobService.attachHelpSessionPid(pid);
-          }
+        // #13176: every PTY joins the crash-safe tier (Job Object / POSIX
+        // supervisor) so a hard Daintree crash leaves no terminal's tree
+        // running. The host stamps the owning incarnation on the event; one
+        // without it falls back to the ledger, which recorded this launch
+        // before the spawn was sent.
+        onTerminalPid: (id, pid, launchGeneration) => {
+          terminalCrashReapService.attachTerminal(
+            id,
+            pid,
+            launchGeneration ?? getLifecycleLedger().currentGeneration(id)
+          );
         },
         // Lifecycle-ledger bookkeeping. Exits carry the host-adopted
         // launchGeneration so a stale exit arriving after a same-id respawn
         // closes its own incarnation, never the successor.
         onTerminalExit: (id, exitCode, launchGeneration) => {
+          terminalCrashReapService.detachTerminal(id, launchGeneration);
           const ledger = getLifecycleLedger();
           const generation = launchGeneration ?? ledger.currentGeneration(id);
           if (generation !== undefined && ledger.currentGeneration(id) !== undefined) {
@@ -1434,6 +1438,9 @@ export class PtyClient extends EventEmitter {
 
     for (const id of ownedIds) {
       this.terminalPids.delete(id);
+      // Their exit events died with the host; release them here so the
+      // supervisor never holds a PID that is free to be recycled.
+      terminalCrashReapService.detachTerminal(id);
     }
   }
 

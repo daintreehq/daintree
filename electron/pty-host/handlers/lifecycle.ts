@@ -1,6 +1,6 @@
 import { parseSpawnError } from "../index.js";
 import type { AgentEvent } from "../../services/AgentStateMachine.js";
-import type { SpawnResult } from "../../../shared/types/pty-host.js";
+import type { PtyHostEvent, SpawnResult } from "../../../shared/types/pty-host.js";
 import type { HandlerMap, HostContext } from "./types.js";
 import { markHostPerformance } from "../../utils/hostPerformance.js";
 import { finishAgentSessionCaptures } from "../../services/pty/agentSessionCaptureDelivery.js";
@@ -8,6 +8,15 @@ import { finishAgentSessionCaptures } from "../../services/pty/agentSessionCaptu
 /** A PTY PID is usable only once it is a positive integer. */
 function isValidPid(pid: number | undefined): pid is number {
   return typeof pid === "number" && Number.isInteger(pid) && pid > 0;
+}
+
+type TerminalPidEvent = Extract<PtyHostEvent, { type: "terminal-pid" }>;
+
+function withGeneration(
+  event: TerminalPidEvent,
+  launchGeneration: number | undefined
+): TerminalPidEvent {
+  return launchGeneration === undefined ? event : { ...event, launchGeneration };
 }
 
 // On Windows, node-pty reports `pid: 0` during the brief window before the
@@ -23,18 +32,21 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
   // spawned with an invalid PID (Windows ConPTY). Once a positive PID lands,
   // emit `terminal-pid` and start the process detector. Stops if the terminal
   // disappears (killed/trashed) before the PID resolves, or after the cap.
-  function schedulePidRetry(id: string, attempt = 0): void {
+  function schedulePidRetry(id: string, launchGeneration: number | undefined, attempt = 0): void {
     if (attempt >= PID_RETRY_MAX_ATTEMPTS) return;
     setImmediate(() => {
       const terminalInfo = ptyManager.getTerminal(id);
       if (!terminalInfo) return; // terminal gone — abandon the retry
+      // A same-id respawn replaced the incarnation this retry was resolving;
+      // its own spawn emits (or retries) the successor's PID.
+      if (terminalInfo.launchGeneration !== launchGeneration) return;
       const pid = terminalInfo.ptyProcess?.pid;
       if (isValidPid(pid)) {
-        sendEvent({ type: "terminal-pid", id, pid });
+        sendEvent(withGeneration({ type: "terminal-pid", id, pid }, launchGeneration));
         ptyManager.startProcessDetectorForTerminal(id);
         return;
       }
-      schedulePidRetry(id, attempt + 1);
+      schedulePidRetry(id, launchGeneration, attempt + 1);
     });
   }
 
@@ -68,11 +80,13 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
         const terminalInfo = ptyManager.getTerminal(msg.id);
         const pid = terminalInfo?.ptyProcess?.pid;
         if (isValidPid(pid)) {
-          sendEvent({ type: "terminal-pid", id: msg.id, pid });
+          sendEvent(
+            withGeneration({ type: "terminal-pid", id: msg.id, pid }, msg.options.launchGeneration)
+          );
         } else {
           // Windows ConPTY: retry until the real PID resolves, then emit the
           // event and start monitoring (no node-pty event fires on its own).
-          schedulePidRetry(msg.id);
+          schedulePidRetry(msg.id, msg.options.launchGeneration);
         }
 
         // Deliver a wrapper-less launch command now that the terminal is

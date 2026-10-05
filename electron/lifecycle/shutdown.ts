@@ -13,7 +13,7 @@ import {
   getAgentAvailabilityStore,
 } from "../services/AgentAvailabilityStore.js";
 import { disposePowerSaveBlockerService } from "../services/PowerSaveBlockerService.js";
-import { helpSessionJobService } from "../services/HelpSessionJobService.js";
+import { terminalCrashReapService } from "../services/TerminalCrashReapService.js";
 import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
 import { disposeMainProcessWatchdog } from "../services/MainProcessWatchdogClient.js";
 import { projectCheckService } from "../services/ProjectCheckService.js";
@@ -702,14 +702,14 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
             // Disarm the POSIX crash-safe supervisor only once every host has
             // finished its own teardown. DISARM tells it this is a clean quit
             // and it should not SIGKILL on pipe close; a host that had to be
-            // force-killed may not have reached its help sessions, so the
+            // force-killed may not have reached its terminals, so the
             // supervisor stays armed and reaps them when Main's pipe closes.
             // No-op on Windows / when no supervisor was started.
             if (exitedOnTheirOwn) {
               try {
-                helpSessionJobService.dispose();
+                terminalCrashReapService.dispose();
               } catch (err) {
-                console.warn("[MAIN] helpSessionJobService.dispose failed:", err);
+                console.warn("[MAIN] terminalCrashReapService.dispose failed:", err);
               }
             } else {
               console.warn("[MAIN] PTY hosts did not all exit on their own; supervisor left armed");

@@ -15,7 +15,9 @@ interface BrokerCall {
 
 function makeDeps(
   overrides: Partial<PtyEventRouterDeps> = {},
-  callbackOverrides: { onTerminalPid?: (id: string, pid: number) => void } = {}
+  callbackOverrides: {
+    onTerminalPid?: (id: string, pid: number, launchGeneration?: number) => void;
+  } = {}
 ): {
   deps: PtyEventRouterDeps;
   emitter: EventEmitter;
@@ -418,6 +420,13 @@ describe("routeHostEvent", () => {
 
     expect(state.terminalPids.get("t1")).toBe(555);
     expect(callbacks.terminalPidCalls).toEqual([{ id: "t1", pid: 555 }]);
+  });
+
+  it("forwards the host-stamped launch generation to onTerminalPid (#13176)", () => {
+    const onTerminalPid = vi.fn();
+    const { deps } = makeDeps({}, { onTerminalPid });
+    routeHostEvent({ type: "terminal-pid", id: "t1", pid: 4242, launchGeneration: 5 }, deps);
+    expect(onTerminalPid).toHaveBeenCalledWith("t1", 4242, 5);
   });
 
   it("invokes onTerminalPid with id and pid after updating the state map (#7526)", () => {
