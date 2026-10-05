@@ -2072,6 +2072,12 @@ describe("viewer identity and ways out", () => {
 });
 
 describe("closing the viewer's subject (#13194)", () => {
+  // The compact-width case's layout spy would otherwise fold the mode toggle
+  // away for every case after it.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("offers Close for an open file and hands the gesture to the pane", async () => {
     readMock.mockResolvedValue({ content: "x" });
     const onCloseSelection = vi.fn();
@@ -2132,6 +2138,44 @@ describe("closing the viewer's subject (#13194)", () => {
     rerender(viewerJsx(null, { folderPath: "src", folderRows: [] }));
 
     expect(document.activeElement).not.toBe(screen.getByTestId("file-browser-sidebar-toggle"));
+  });
+
+  // Leaving Diff has its own focus hand-off (#13195) that falls back to the path
+  // pill; a close must still end on the tree toggle, not race it to the pill.
+  it("moves focus to the tree toggle when a file is closed from Diff mode", async () => {
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+    const changedFiles = [change("app.ts")];
+    const { rerender } = renderViewer("/repo/app.ts", { changedFiles });
+    await clickMode("Diff");
+    await screen.findByTestId("diff-viewer-mock");
+    const close = screen.getByRole("button", { name: "Close file" });
+    close.focus();
+    fireEvent.click(close);
+
+    rerender(viewerJsx(null, { changedFiles }));
+
+    expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId("file-browser-sidebar-toggle"));
+  });
+
+  it("keeps focus on Close when a file closed from Diff mode returns to its listing", async () => {
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+    const changedFiles = [change("src/app.ts")];
+    const { rerender } = renderViewer("/repo/src/app.ts", {
+      changedFiles,
+      relativePath: "src/app.ts",
+    });
+    await clickMode("Diff");
+    await screen.findByTestId("diff-viewer-mock");
+    const close = screen.getByRole("button", { name: "Close file" });
+    close.focus();
+    fireEvent.click(close);
+
+    rerender(viewerJsx(null, { changedFiles, folderPath: "src", folderRows: [] }));
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close folder" }));
   });
 });
 
