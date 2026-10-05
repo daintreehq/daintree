@@ -31,6 +31,7 @@ import {
 } from "./ProjectResourceBadge.utils";
 import { pluralize, pluralNoun } from "@/lib/pluralize";
 import { ProcessesDialog } from "./ProcessesDialog";
+import { useClosedTerminalProcessNotice } from "@/hooks/app/useClosedTerminalProcessNotice";
 
 const MAX_SAMPLES = 12;
 const BADGE_POLL_MS = 10_000;
@@ -441,6 +442,10 @@ export function ProjectResourceBadge({
   const samplesRef = useRef<number[]>([]);
   const popoverContentRef = useRef<HTMLDivElement>(null);
   const [processesOpen, setProcessesOpen] = useState(false);
+  useClosedTerminalProcessNotice(() => {
+    setOpen(false);
+    setProcessesOpen(true);
+  });
   const readoutRef = useRef<HTMLButtonElement>(null);
   // Set while the popover closes into the processes dialog: the popover's own
   // close-time restore would otherwise pull focus back to the readout from

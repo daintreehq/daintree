@@ -4,6 +4,7 @@ import type { PluginPtyProcessManager } from "../services/PluginPtyProcessManage
 import type { PtyPool } from "../../services/PtyPool.js";
 import type { AnalysisWorkerPool } from "../../services/pty/analysis/AnalysisWorkerPool.js";
 import type { ProcessTreeCache } from "../../services/ProcessTreeCache.js";
+import type { TerminalLineageLedger } from "../../services/TerminalLineageLedger.js";
 import type { TerminalResourceMonitor } from "../../services/pty/TerminalResourceMonitor.js";
 import type { PtyHostEvent } from "../../../shared/types/pty-host.js";
 import type { SharedRingBuffer, PacketFramer } from "../../../shared/utils/SharedRingBuffer.js";
@@ -58,6 +59,8 @@ export interface HostContext {
    */
   pluginPtyManager: PluginPtyProcessManager;
   processTreeCache: ProcessTreeCache;
+  /** Absent in hosts built without lineage tracking (unit tests). */
+  lineageLedger?: TerminalLineageLedger;
   terminalResourceMonitor: TerminalResourceMonitor;
   backpressureManager: BackpressureManager;
   ipcQueueManager: IpcQueueManager;

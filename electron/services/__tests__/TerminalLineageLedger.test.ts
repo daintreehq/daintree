@@ -31,12 +31,15 @@ import {
   claimShardLineageFile,
   currentBootEpochSec,
   endTeardownProbeWindow,
+  getLineageReapReport,
   lineageFilePath,
   parseKillCensus,
   probeStartTimes,
   probeStartTimesSync,
   reapClaimedLineageFile,
+  reapLineageEntries,
   reapPersistedLineages,
+  resetLineageReapReportForTests,
   takeKillCensusSync,
   type LineageCensus,
 } from "../TerminalLineageLedger.js";
@@ -858,6 +861,225 @@ describe("TerminalLineageLedger", () => {
 
     it("returns null when there is nothing to claim", () => {
       expect(claimShardLineageFile(tmpDir)).toBeNull();
+    });
+  });
+
+  describe("closed survivors", () => {
+    const origin = {
+      kind: "terminal" as const,
+      id: "term-1",
+      projectId: "proj-1",
+      title: "npm run dev",
+      spawnedAt: 1234,
+    };
+
+    async function trackedUnder(ledger: TerminalLineageLedger, census: FakeCensus) {
+      ledger.registerRoot(100, origin);
+      ledger.reconcile(census);
+      await flush();
+    }
+
+    it("reports a descendant still running after its root closed, with the root's origin", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: ORPHAN_PID, ppid: 100 },
+      ]);
+      await trackedUnder(ledger, census);
+
+      const closedAt = Date.now();
+      ledger.markRootClosing(100);
+      census.set([{ pid: ORPHAN_PID, ppid: 1 }]);
+      ledger.reconcile(census);
+      await flush();
+
+      const survivors = ledger.getClosedSurvivors(10_000, closedAt + 10_000 + 1_000);
+      expect(survivors).toEqual([
+        expect.objectContaining({
+          pid: ORPHAN_PID,
+          startTime: startTimeFor(ORPHAN_PID),
+          rootPid: 100,
+          origin,
+        }),
+      ]);
+      expect(survivors[0].closedAtMs).toBeGreaterThanOrEqual(closedAt);
+    });
+
+    it("holds back survivors while teardown is still inside its grace window", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: ORPHAN_PID, ppid: 100 },
+      ]);
+      await trackedUnder(ledger, census);
+
+      ledger.markRootClosing(100);
+      expect(ledger.getClosedSurvivors(10_000, Date.now())).toEqual([]);
+    });
+
+    it("never reports descendants of a root that is still active", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: ORPHAN_PID, ppid: 100 },
+      ]);
+      await trackedUnder(ledger, census);
+
+      expect(ledger.getClosedSurvivors(0, Date.now() + 60_000)).toEqual([]);
+    });
+
+    it("dates a root the census saw vanish without a teardown", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: ORPHAN_PID, ppid: 100 },
+      ]);
+      await trackedUnder(ledger, census);
+
+      census.set([{ pid: ORPHAN_PID, ppid: 1 }]);
+      ledger.reconcile(census);
+      await flush();
+
+      const survivors = ledger.getClosedSurvivors(0);
+      expect(survivors.map((s) => s.pid)).toEqual([ORPHAN_PID]);
+      expect(survivors[0].origin).toEqual(origin);
+    });
+
+    it("stops reporting a survivor once the census no longer lists it", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: ORPHAN_PID, ppid: 100 },
+      ]);
+      await trackedUnder(ledger, census);
+
+      ledger.markRootClosing(100);
+      census.set([]);
+      ledger.reconcile(census);
+
+      expect(ledger.getClosedSurvivors(0)).toEqual([]);
+    });
+
+    it("reports a root registered without an origin as having none", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: ORPHAN_PID, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+      ledger.markRootClosing(100);
+
+      expect(ledger.getClosedSurvivors(0)[0]?.origin).toBeNull();
+    });
+  });
+
+  describe("reapLineageEntries", () => {
+    let killSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    });
+
+    const entry = () => ({ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), rootPid: 100 });
+
+    it.skipIf(isWindows)("counts a process the post-SIGTERM check no longer lists as ended", async () => {
+      mockExecFileAsync
+        .mockImplementationOnce(async () => ({ stdout: psOutput([ORPHAN_PID]), stderr: "" }))
+        .mockImplementationOnce(async () => {
+          // `ps` exits 1 when none of the requested PIDs exist: a real answer.
+          throw Object.assign(new Error("exit 1"), { code: 1, stdout: "" });
+        });
+
+      const outcome = await reapLineageEntries([entry()]);
+
+      expect(outcome).toEqual({ survivors: [], found: 1, ended: 1, stillRunning: 0, unchecked: 0 });
+      expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(ORPHAN_PID, "SIGKILL");
+    });
+
+    it.skipIf(isWindows)("reports what the OS shows after SIGKILL, not that it was sent", async () => {
+      // Every probe still lists the process under its recorded identity.
+      const outcome = await reapLineageEntries([entry()]);
+
+      expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGKILL");
+      expect(outcome.found).toBe(1);
+      expect(outcome.stillRunning).toBe(1);
+      expect(outcome.ended).toBe(0);
+    });
+
+    it("never signals and reports unchecked when the probe itself cannot run", async () => {
+      mockExecFileAsync.mockImplementation(async () => {
+        throw Object.assign(new Error("spawn ps ENOENT"), { code: "ENOENT" });
+      });
+
+      const outcome = await reapLineageEntries([entry()]);
+
+      expect(outcome).toEqual({
+        survivors: [entry()],
+        found: 0,
+        ended: 0,
+        stillRunning: 0,
+        unchecked: 1,
+      });
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(mockSpawnSync).not.toHaveBeenCalled();
+    });
+
+    it("never signals a recorded PID now held under another start time", async () => {
+      const outcome = await reapLineageEntries([
+        { pid: ORPHAN_PID, startTime: "some other process", rootPid: 100 },
+      ]);
+
+      expect(outcome).toEqual({ survivors: [], found: 0, ended: 0, stillRunning: 0, unchecked: 0 });
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(mockSpawnSync).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("lineage reap report", () => {
+    beforeEach(() => {
+      resetLineageReapReportForTests();
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+    });
+
+    afterEach(() => {
+      resetLineageReapReportForTests();
+    });
+
+    function writeLedgerFile(entries: Array<{ pid: number; startTime: string; rootPid: number }>) {
+      fs.writeFileSync(
+        filePath,
+        JSON.stringify({
+          version: 1,
+          bootEpochSec: currentBootEpochSec(),
+          owner: "daintree-pty-host",
+          updatedAt: Date.now(),
+          entries,
+        })
+      );
+    }
+
+    it("stays empty when a launch finds nothing to clean up", async () => {
+      writeLedgerFile([{ pid: ORPHAN_PID, startTime: "a recycled pid", rootPid: 100 }]);
+
+      await reapPersistedLineages(tmpDir);
+
+      expect(getLineageReapReport()).toBeNull();
+    });
+
+    it("records what the launch cleanup found and could not check", async () => {
+      mockExecFileAsync.mockImplementation(async () => {
+        throw Object.assign(new Error("blocked"), { code: "EPERM" });
+      });
+      writeLedgerFile([{ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), rootPid: 100 }]);
+
+      await reapPersistedLineages(tmpDir);
+
+      expect(getLineageReapReport()).toEqual(
+        expect.objectContaining({ found: 0, ended: 0, stillRunning: 0, unchecked: 1 })
+      );
     });
   });
 

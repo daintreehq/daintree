@@ -1747,13 +1747,14 @@ function resumePausedTerminal(id: string): void {
 // persisted record for the next launch to reap.
 const pluginPtyManager = new PluginPtyProcessManager(
   sendEvent,
-  (target) => new ProcessTreeKiller(target, processTreeCache, lineageLedger)
+  (target, origin) => new ProcessTreeKiller(target, processTreeCache, lineageLedger, origin)
 );
 
 const hostContext: HostContext = {
   ptyManager,
   pluginPtyManager,
   processTreeCache,
+  lineageLedger,
   terminalResourceMonitor,
   backpressureManager,
   ipcQueueManager,

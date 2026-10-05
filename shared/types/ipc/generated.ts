@@ -1540,6 +1540,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../processes.js").ProcessInventorySnapshot;
   };
+  "processes:kill-closed-terminal-processes": {
+    args: [targets: import("../processes.js").ClosedProcessKillTarget[]];
+    result: import("../processes.js").ClosedProcessKillResult;
+  };
   "project-history:peek": {
     args: [];
     result: import("./project.js").ProjectHistoryTarget | null;

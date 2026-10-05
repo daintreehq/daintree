@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ProcessInventorySnapshot, ProcessInventoryTerminal } from "@shared/types/processes";
+import type {
+  ProcessInventoryClosedProcess,
+  ProcessInventorySnapshot,
+  ProcessInventoryTerminal,
+} from "@shared/types/processes";
 
 vi.mock("@/clients/processesClient", () => ({
-  processesClient: { getSnapshot: vi.fn() },
+  processesClient: { getSnapshot: vi.fn(), killClosedTerminalProcesses: vi.fn() },
 }));
 
 vi.mock("@/clients/terminalClient", () => ({
@@ -18,6 +22,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProcessesDialog } from "../ProcessesDialog";
 
 const mockGetSnapshot = vi.mocked(processesClient.getSnapshot);
+const mockKillClosed = vi.mocked(processesClient.killClosedTerminalProcesses);
 const mockKill = vi.mocked(terminalClient.kill);
 const mockStop = vi.fn();
 const mockGetAllSessions = vi.fn();
@@ -53,10 +58,29 @@ function terminal(
 function snapshot(extra: Partial<ProcessInventorySnapshot> = {}): ProcessInventorySnapshot {
   return {
     terminals: [],
+    closedTerminalProcesses: [],
+    cleanup: null,
     plugins: [],
     complete: true,
     samplesAvailable: true,
     sampledAt: Date.now(),
+    ...extra,
+  };
+}
+
+function closed(
+  pid: number,
+  extra: Partial<ProcessInventoryClosedProcess> = {}
+): ProcessInventoryClosedProcess {
+  return {
+    pid,
+    startTime: `start-${pid}`,
+    comm: "node",
+    memoryKb: 512 * 1024,
+    cpuPercent: 0,
+    origin: { kind: "terminal", id: "t-old", projectId: "p1", title: "npm run dev", spawnedAt: 5 },
+    closedAt: Date.now() - 120_000,
+    projectName: "Cedar",
     ...extra,
   };
 }
@@ -379,5 +403,112 @@ describe("ProcessesDialog (#13175)", () => {
     });
 
     expect(mockGetSnapshot.mock.calls.length).toBe(calls);
+  });
+
+  describe("processes from closed terminals (#13174)", () => {
+    it("lists them by the terminal that started them, with count and approximate memory", async () => {
+      mockGetSnapshot.mockResolvedValue(
+        snapshot({
+          closedTerminalProcesses: [closed(201), closed(202, { comm: "esbuild" })],
+        })
+      );
+      await renderOpen();
+
+      const row = screen.getByTestId("closed-process-row");
+      expect(row.textContent).toContain("npm run dev");
+      expect(row.textContent).toContain("Cedar");
+      expect(row.textContent).toContain("Closed 2m ago");
+      expect(row.textContent).toContain("node, esbuild");
+      expect(row.textContent).toContain("2 processes");
+      expect(row.textContent).toContain("~1.0 GB");
+      expect(screen.queryByText("No terminals or plugin processes are running.")).toBeNull();
+      // Observations only — never a verdict about the process.
+      const dialog = screen.getByTestId("processes-dialog");
+      expect(dialog.textContent).not.toMatch(/leak|orphan|unused/i);
+    });
+
+    it("kills only after the confirm, naming the recorded identities", async () => {
+      mockGetSnapshot.mockResolvedValue(
+        snapshot({ closedTerminalProcesses: [closed(201), closed(202)] })
+      );
+      mockKillClosed.mockResolvedValue({ ended: 2, stillRunning: 0, unchecked: 0, notTracked: 0 });
+      await renderOpen();
+
+      fireEvent.click(screen.getByRole("button", { name: "Kill 2 processes from 'npm run dev'" }));
+      expect(mockKillClosed).not.toHaveBeenCalled();
+
+      const confirm = await screen.findByRole("alertdialog");
+      expect(confirm.textContent).toContain("Kill 2 processes from 'npm run dev'?");
+      expect(confirm.textContent).toContain("in Cedar");
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Kill 2 processes" }));
+      });
+
+      expect(mockKillClosed).toHaveBeenCalledWith([
+        { pid: 201, startTime: "start-201" },
+        { pid: 202, startTime: "start-202" },
+      ]);
+      await waitFor(() => expect(screen.queryByTestId("closed-process-row")).toBeNull());
+    });
+
+    it("says what is still running or couldn't be checked after a kill, and keeps the row", async () => {
+      mockGetSnapshot.mockResolvedValue(
+        snapshot({ closedTerminalProcesses: [closed(201), closed(202), closed(203)] })
+      );
+      mockKillClosed.mockResolvedValue({ ended: 1, stillRunning: 1, unchecked: 1, notTracked: 0 });
+      await renderOpen();
+
+      fireEvent.click(screen.getByRole("button", { name: "Kill 3 processes from 'npm run dev'" }));
+      await screen.findByRole("alertdialog");
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Kill 3 processes" }));
+      });
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain("Ended 1 of 3 processes.");
+      expect(alert.textContent).toContain("1 process is still running.");
+      expect(alert.textContent).toContain("Couldn't check 1 process");
+      expect(screen.getByTestId("closed-process-row")).toBeTruthy();
+    });
+
+    it("cancelling the confirm kills nothing", async () => {
+      mockGetSnapshot.mockResolvedValue(snapshot({ closedTerminalProcesses: [closed(201)] }));
+      await renderOpen();
+
+      fireEvent.click(screen.getByRole("button", { name: "Kill 1 process from 'npm run dev'" }));
+      await screen.findByRole("alertdialog");
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      });
+
+      expect(mockKillClosed).not.toHaveBeenCalled();
+    });
+
+    it("says the census failed rather than presenting the list as current", async () => {
+      mockGetSnapshot.mockResolvedValue(
+        snapshot({ samplesAvailable: false, closedTerminalProcesses: [closed(201)] })
+      );
+      await renderOpen();
+
+      expect(screen.getByText(/can't currently check what's still running/)).toBeTruthy();
+    });
+
+    it("reports what launch cleanup did and couldn't check", async () => {
+      mockGetSnapshot.mockResolvedValue(
+        snapshot({
+          cleanup: { found: 3, ended: 3, stillRunning: 0, unchecked: 2, lastAt: Date.now() },
+        })
+      );
+      await renderOpen();
+
+      const dialog = screen.getByTestId("processes-dialog");
+      expect(dialog.textContent).toContain(
+        "Ended 3 processes left running by an earlier session."
+      );
+      expect(dialog.textContent).toContain(
+        "Couldn't check 2 processes recorded by an earlier session."
+      );
+    });
   });
 });

@@ -20,7 +20,11 @@ import type { WorkerResourceSnapshot } from "./workerGovernance.js";
 import type { SerializedTerminalSnapshot } from "./terminal.js";
 import type { TerminalSubmissionRecord } from "./terminalSubmission.js";
 import type { TerminalHandback } from "./handback.js";
-import type { HostProcessInventory } from "./processes.js";
+import type {
+  ClosedProcessKillResult,
+  ClosedProcessKillTarget,
+  HostProcessInventory,
+} from "./processes.js";
 
 export type { TerminalFlowStatus };
 
@@ -378,6 +382,11 @@ export type PtyHostRequest =
   | { type: "get-all-terminals"; requestId: string }
   | { type: "get-memory-rollup"; requestId: string }
   | { type: "get-process-inventory"; requestId: string; pids: number[] }
+  | {
+      type: "kill-closed-terminal-processes";
+      requestId: string;
+      targets: ClosedProcessKillTarget[];
+    }
   | {
       type: "search-semantic-buffers";
       query: string;
@@ -806,6 +815,11 @@ export type PtyHostEvent =
   | { type: "all-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "memory-rollup"; requestId: string; rollup: MemoryRollup }
   | { type: "process-inventory"; requestId: string; inventory: HostProcessInventory }
+  | {
+      type: "closed-terminal-processes-killed";
+      requestId: string;
+      result: ClosedProcessKillResult;
+    }
   | { type: "trim-state-result"; requestId: string; result: TrimStateResult }
   | {
       type: "session-captures-finished";

@@ -268,12 +268,17 @@ describe.skipIf(process.platform === "win32")(
       expect(killSpy).toHaveBeenCalledWith(9001, "SIGKILL");
     });
 
-    it("registers the shell as a lineage root at construction", () => {
+    it("registers the shell as a lineage root at construction, with its origin", () => {
       const pty = createControllablePty();
       const lineageLedger = ledgerFor([]);
       createTerminal(pty, undefined, { lineageLedger });
 
-      expect(lineageLedger.registerRoot).toHaveBeenCalledWith(123);
+      // The origin is what lets a descendant that outlives the terminal be
+      // traced back to it (#13174).
+      expect(lineageLedger.registerRoot).toHaveBeenCalledWith(
+        123,
+        expect.objectContaining({ kind: "terminal", id: "t1", spawnedAt: expect.any(Number) })
+      );
     });
 
     it("marks the root closing so a recycled PID cannot inherit the lineage", () => {

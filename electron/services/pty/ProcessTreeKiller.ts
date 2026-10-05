@@ -1,6 +1,6 @@
 import { spawnSync } from "child_process";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
-import type { KillCensus } from "../TerminalLineageLedger.js";
+import type { KillCensus, LineageOrigin } from "../TerminalLineageLedger.js";
 
 const SIGKILL_ESCALATION_DELAY_MS = 500;
 /**
@@ -33,7 +33,7 @@ export interface ProcessTreeKillTarget {
  * stays unit-testable without the ledger's fs/subprocess machinery.
  */
 export interface LineageKillSource {
-  registerRoot(rootPid: number): void;
+  registerRoot(rootPid: number, origin?: LineageOrigin | null): void;
   markRootClosing(rootPid: number): void;
   /**
    * Tracked descendants of this root that the live walk can no longer reach,
@@ -93,7 +93,9 @@ export class ProcessTreeKiller {
   constructor(
     private readonly ptyProcess: ProcessTreeKillTarget,
     private readonly processTreeCache: ProcessTreeCache | null,
-    private readonly lineage: LineageKillSource | null = null
+    private readonly lineage: LineageKillSource | null = null,
+    /** What started this root, kept with its lineage for reporting survivors. */
+    private readonly origin: LineageOrigin | null = null
   ) {
     this.registerRoot(this.ptyProcess.pid);
   }
@@ -112,7 +114,7 @@ export class ProcessTreeKiller {
     if (!Number.isInteger(shellPid) || (shellPid as number) <= 0) return;
     if (this.registeredRootPid === shellPid) return;
     this.registeredRootPid = shellPid as number;
-    this.lineage.registerRoot(shellPid as number);
+    this.lineage.registerRoot(shellPid as number, this.origin);
   }
 
   /**

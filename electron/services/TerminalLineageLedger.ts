@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { resilientAtomicWriteFileSync } from "../utils/fs.js";
+import type { ClosedProcessOrigin } from "../../shared/types/processes.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -55,6 +56,13 @@ const MAX_REAP_ATTEMPTS = 3;
  * perfectly healthy terminal.
  */
 const MAX_UNSEEN_SWEEPS_BEFORE_CLOSE = 5;
+/**
+ * How long after a root closes before its remaining descendants are reported
+ * as outliving it. Covers the 500ms SIGKILL escalation, the post-kill survivor
+ * check and the census sweep that prunes what the kill reached — ordinary
+ * teardown still settling is not something to tell the user about.
+ */
+export const CLOSED_SURVIVOR_GRACE_MS = 10_000;
 
 /**
  * Pinned so the recorded identity string is reproducible. `lstart` renders
@@ -95,6 +103,21 @@ interface TrackedPid {
   orphaned: boolean;
 }
 
+/**
+ * What a root was when it registered, so a descendant that outlives it can be
+ * traced back to the terminal or plugin that started it.
+ */
+export type LineageOrigin = ClosedProcessOrigin;
+
+/** A tracked descendant still running after its root closed. */
+export interface ClosedLineageSurvivor {
+  pid: number;
+  startTime: string;
+  rootPid: number;
+  origin: LineageOrigin | null;
+  closedAtMs: number;
+}
+
 interface RootEntry {
   /**
    * `active` roots discover new descendants each sweep. `closing` roots have
@@ -112,6 +135,9 @@ interface RootEntry {
   rootPpid: number | null;
   /** Consecutive censuses that did not contain the root, before it was ever seen. */
   unseenSweeps: number;
+  origin: LineageOrigin | null;
+  /** When the root left `active`, or null while it is still active. */
+  closedAtMs: number | null;
 }
 
 export interface PersistedLineageEntry {
@@ -509,7 +535,7 @@ export class TerminalLineageLedger {
   ) {}
 
   /** Begin tracking a PTY shell's lineage. Called when its killer is built. */
-  registerRoot(rootPid: number): void {
+  registerRoot(rootPid: number, origin?: LineageOrigin | null): void {
     if (this.disposed || !Number.isInteger(rootPid) || rootPid <= 1) return;
     if (this.roots.has(rootPid)) {
       // A recycled root PID must start from an empty lineage, never inherit the
@@ -521,6 +547,8 @@ export class TerminalLineageLedger {
       pids: new Map(),
       rootPpid: null,
       unseenSweeps: 0,
+      origin: origin ?? null,
+      closedAtMs: null,
     });
   }
 
@@ -531,7 +559,7 @@ export class TerminalLineageLedger {
    */
   markRootClosing(rootPid: number): void {
     const entry = this.roots.get(rootPid);
-    if (entry) entry.state = "closing";
+    if (entry) this.close(entry);
   }
 
   /** Forget a root entirely. */
@@ -605,6 +633,38 @@ export class TerminalLineageLedger {
   }
 
   /**
+   * Identified descendants still tracked under a root that closed at least
+   * `graceMs` ago. The census prunes the ones the OS no longer lists and the
+   * identification pass re-verifies every orphan's start time each sweep, so
+   * what remains is what was last seen running as the process we recorded —
+   * an observation from the last successful sweep, not a fresh probe. Anyone
+   * signalling one of these must re-verify it first.
+   */
+  getClosedSurvivors(
+    graceMs: number = CLOSED_SURVIVOR_GRACE_MS,
+    nowMs: number = Date.now()
+  ): ClosedLineageSurvivor[] {
+    const out: ClosedLineageSurvivor[] = [];
+    for (const [rootPid, entry] of this.roots) {
+      if (entry.state !== "closing" || entry.closedAtMs === null) continue;
+      if (nowMs - entry.closedAtMs < graceMs) continue;
+      for (const [pid, tracked] of entry.pids) {
+        if (pid === rootPid || !tracked.startTime || isForbiddenTarget(pid)) continue;
+        // A PID can't be a survivor of one root while another root holds it.
+        if (this.roots.has(pid)) continue;
+        out.push({
+          pid,
+          startTime: tracked.startTime,
+          rootPid,
+          origin: entry.origin,
+          closedAtMs: entry.closedAtMs,
+        });
+      }
+    }
+    return out;
+  }
+
+  /**
    * Fold one process census into the ledger: admit newly seen descendants,
    * drop the ones the OS says are gone, and refresh orphan flags.
    *
@@ -633,18 +693,18 @@ export class TerminalLineageLedger {
           if (entry.rootPpid === null) {
             entry.rootPpid = rootProc.ppid;
           } else if (entry.rootPpid !== rootProc.ppid) {
-            entry.state = "closing";
+            this.close(entry);
           }
         } else if (entry.rootPpid !== null) {
           // Seen before, gone now — the terminal ended without a teardown we
           // observed.
-          entry.state = "closing";
+          this.close(entry);
         } else if (++entry.unseenSweeps >= MAX_UNSEEN_SWEEPS_BEFORE_CLOSE) {
           // Never seen at all. A census that *started* before this shell
           // spawned legitimately lacks it, so one miss proves nothing and
           // closing on it would silently disable tracking for a healthy
           // terminal. Give it a few sweeps, then assume the spawn failed.
-          entry.state = "closing";
+          this.close(entry);
         }
       }
 
@@ -681,6 +741,12 @@ export class TerminalLineageLedger {
     this.roots.clear();
     this.pendingIdentification.clear();
     this.trackedCount = 0;
+  }
+
+  private close(entry: RootEntry): void {
+    if (entry.state === "closing") return;
+    entry.state = "closing";
+    entry.closedAtMs = Date.now();
   }
 
   /** Drop entries the OS says are gone, or that a recycled PID now holds. */
@@ -987,30 +1053,61 @@ function isForbiddenTarget(pid: number): boolean {
   return pid <= 1 || pid === process.pid || pid === process.ppid;
 }
 
+/** What one reap pass observed. Counts are processes, never terminals. */
+export interface LineageReapOutcome {
+  /**
+   * Entries that could not be resolved or did not end — the caller must keep
+   * those, because forgetting them is the leak this whole file exists to
+   * prevent.
+   */
+  survivors: PersistedLineageEntry[];
+  /** Entries the OS still listed under the recorded start time. */
+  found: number;
+  /** Of {@link found}, the ones a re-check after signalling no longer listed. */
+  ended: number;
+  /** Of {@link found}, the ones still listed under the same identity afterwards. */
+  stillRunning: number;
+  /** Entries no probe could answer for, before or after signalling. */
+  unchecked: number;
+}
+
+const POST_KILL_CHECK_DELAY_MS = 100;
+
 /**
- * Signal the entries whose identity still matches. Returns the entries that
- * could not be resolved or could not be killed — the caller must keep those,
- * because forgetting them is the leak this whole file exists to prevent.
+ * Signal the entries whose identity still matches, re-verifying each one
+ * immediately before every signal. A PID with no fresh start-time match is
+ * never signalled, and a probe that could not run leaves its entries
+ * unsignalled and unchecked rather than presumed gone.
  */
-async function reapEntries(entries: PersistedLineageEntry[]): Promise<PersistedLineageEntry[]> {
+export async function reapLineageEntries(
+  entries: readonly PersistedLineageEntry[],
+  reason: string = "left by an exited host"
+): Promise<LineageReapOutcome> {
+  const outcome: LineageReapOutcome = {
+    survivors: [],
+    found: 0,
+    ended: 0,
+    stillRunning: 0,
+    unchecked: 0,
+  };
   const candidates = entries.filter((e) => !isForbiddenTarget(e.pid));
-  if (candidates.length === 0) return [];
+  if (candidates.length === 0) return outcome;
 
   const { startTimes, unresolved } = await probeStartTimesDetailed(candidates.map((e) => e.pid));
   // "Absent" and "could not tell" are different facts — `ps` may be blocked by
   // the utility-process sandbox. Keep every entry we could not resolve, even
   // when other chunks answered.
   const retained = candidates.filter((e) => unresolved.has(e.pid));
+  outcome.survivors.push(...retained);
+  outcome.unchecked = retained.length;
 
   const confirmed = candidates.filter((e) => startTimes.get(e.pid) === e.startTime);
-  if (confirmed.length === 0) return retained;
+  outcome.found = confirmed.length;
+  if (confirmed.length === 0) return outcome;
 
-  console.log(
-    `[TerminalLineageLedger] Reaping ${confirmed.length} terminal descendant(s) left by an exited host`
-  );
+  console.log(`[TerminalLineageLedger] Reaping ${confirmed.length} terminal descendant(s) ${reason}`);
 
   if (process.platform === "win32") {
-    const survivors: PersistedLineageEntry[] = [...retained];
     for (const entry of confirmed) {
       const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(entry.pid)], {
         windowsHide: true,
@@ -1018,9 +1115,14 @@ async function reapEntries(entries: PersistedLineageEntry[]): Promise<PersistedL
         timeout: 3000,
       });
       // 128 is "process not found", which is the outcome we wanted.
-      if (result.status !== 0 && result.status !== 128) survivors.push(entry);
+      if (result.status !== 0 && result.status !== 128) {
+        outcome.survivors.push(entry);
+        outcome.stillRunning++;
+      } else {
+        outcome.ended++;
+      }
     }
-    return survivors;
+    return outcome;
   }
 
   for (const entry of confirmed) {
@@ -1035,18 +1137,75 @@ async function reapEntries(entries: PersistedLineageEntry[]): Promise<PersistedL
   // Re-verify before escalating: a PID freed by the SIGTERM above may already
   // have been handed to an unrelated process.
   const after = await probeStartTimesDetailed(confirmed.map((e) => e.pid));
-  const survivors: PersistedLineageEntry[] = [...retained];
+  const escalated: PersistedLineageEntry[] = [];
   for (const entry of confirmed) {
     // A failed escalation probe is not proof the SIGTERM worked — keep the
     // entry so the next launch can finish the job.
     if (after.unresolved.has(entry.pid)) {
-      survivors.push(entry);
+      outcome.survivors.push(entry);
+      outcome.unchecked++;
       continue;
     }
-    if (after.startTimes.get(entry.pid) !== entry.startTime) continue;
-    if (!killValidated(entry.pid, "SIGKILL")) survivors.push(entry);
+    if (after.startTimes.get(entry.pid) !== entry.startTime) {
+      outcome.ended++;
+      continue;
+    }
+    if (killValidated(entry.pid, "SIGKILL")) {
+      escalated.push(entry);
+    } else {
+      outcome.survivors.push(entry);
+      outcome.stillRunning++;
+    }
   }
-  return survivors;
+  if (escalated.length === 0) return outcome;
+
+  // A delivered SIGKILL is an attempt, not an observation. Look once more so
+  // the outcome reports what the OS shows rather than what we sent.
+  await new Promise((resolve) => setTimeout(resolve, POST_KILL_CHECK_DELAY_MS));
+  const final = await probeStartTimesDetailed(escalated.map((e) => e.pid));
+  for (const entry of escalated) {
+    if (final.unresolved.has(entry.pid)) outcome.unchecked++;
+    else if (final.startTimes.get(entry.pid) === entry.startTime) outcome.stillRunning++;
+    else outcome.ended++;
+  }
+  return outcome;
+}
+
+/**
+ * Running totals of what automatic reaping found since this process started.
+ * Read by the processes view so a launch that cleaned up after a crash — or
+ * could not check — says so, instead of the cleanup being invisible.
+ */
+export interface LineageReapReport {
+  found: number;
+  ended: number;
+  stillRunning: number;
+  unchecked: number;
+  /** When the most recent reap that found or could not check anything finished. */
+  lastAt: number;
+}
+
+let reapReport: LineageReapReport | null = null;
+
+function recordReapOutcome(outcome: LineageReapOutcome): void {
+  if (outcome.found === 0 && outcome.unchecked === 0) return;
+  const prev = reapReport ?? { found: 0, ended: 0, stillRunning: 0, unchecked: 0, lastAt: 0 };
+  reapReport = {
+    found: prev.found + outcome.found,
+    ended: prev.ended + outcome.ended,
+    stillRunning: prev.stillRunning + outcome.stillRunning,
+    unchecked: prev.unchecked + outcome.unchecked,
+    lastAt: Date.now(),
+  };
+}
+
+export function getLineageReapReport(): LineageReapReport | null {
+  return reapReport ? { ...reapReport } : null;
+}
+
+/** Test seam: the report is process-global. */
+export function resetLineageReapReportForTests(): void {
+  reapReport = null;
 }
 
 async function reapLineageFile(filePath: string): Promise<void> {
@@ -1065,10 +1224,19 @@ async function reapLineageFile(filePath: string): Promise<void> {
 
   let survivors: PersistedLineageEntry[];
   try {
-    survivors = await reapEntries(parsed.entries);
+    const outcome = await reapLineageEntries(parsed.entries);
+    recordReapOutcome(outcome);
+    survivors = outcome.survivors;
   } catch (err) {
     console.warn("[TerminalLineageLedger] Reap failed:", err);
     survivors = parsed.entries;
+    recordReapOutcome({
+      survivors,
+      found: 0,
+      ended: 0,
+      stillRunning: 0,
+      unchecked: survivors.length,
+    });
   }
 
   const attempts = (parsed.attempts ?? 0) + 1;

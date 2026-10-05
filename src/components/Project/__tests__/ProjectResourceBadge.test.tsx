@@ -22,6 +22,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render } from "@testing-library/react";
 import { act, StrictMode } from "react";
 
+// The closed-terminal notice polls on its own timer and has its own suite;
+// these tests count the badge's timers alone.
+vi.mock("@/hooks/app/useClosedTerminalProcessNotice", () => ({
+  useClosedTerminalProcessNotice: () => {},
+}));
+
 vi.mock("@/clients", () => ({
   projectClient: {
     getAll: vi.fn(),
