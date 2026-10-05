@@ -279,6 +279,10 @@ describe("listCodexSubagents", () => {
       status: "unavailable",
       reason: "provider-mismatch",
     });
+    await expect(readCodexSubagentTranscript("t1", "child")).resolves.toMatchObject({
+      status: "unavailable",
+      reason: "provider-mismatch",
+    });
     expect(runSession).not.toHaveBeenCalled();
   });
 

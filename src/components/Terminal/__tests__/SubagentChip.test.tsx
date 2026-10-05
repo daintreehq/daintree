@@ -252,6 +252,29 @@ describe("SubagentChip", () => {
     expect(screen.getAllByRole("button", { expanded: false })).toHaveLength(2);
   });
 
+  it("follows a relaunch inside the same shell to the new session's children", async () => {
+    mockPanel = {
+      id: "t1",
+      kind: "terminal",
+      launchAgentId: "claude",
+      cwd: "/repo",
+      startedAt: 1,
+      agentIncarnation: 0,
+    };
+    listClaudeSubagents.mockResolvedValueOnce(
+      ok([subagent({ label: "Old session child", status: { type: "completed" } })], "claude")
+    );
+    const { rerender } = render(<SubagentChip terminalId="t1" />);
+    expect(await screen.findByText("Old session child")).toBeTruthy();
+
+    listClaudeSubagents.mockReturnValueOnce(new Promise(() => {}));
+    mockPanel = { ...mockPanel, agentIncarnation: 1 };
+    rerender(<SubagentChip terminalId="t1" />);
+
+    await waitFor(() => expect(listClaudeSubagents).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText("Old session child")).toBeNull();
+  });
+
   it("never puts a number on a Codex chip, whose store cannot say what is running", async () => {
     listSubagents.mockResolvedValue(
       ok([subagent({ status: { type: "working" } }), subagent({ id: "child-2" })])
@@ -287,9 +310,8 @@ describe("SubagentChip", () => {
 
     render(<SubagentChip terminalId="t1" />);
 
-    expect(
-      await screen.findByRole("button", { name: "1 Claude subagent, none running" })
-    ).toBeTruthy();
+    // Its one child is unaccounted for, so the chip claims neither way.
+    expect(await screen.findByRole("button", { name: "1 Claude subagent" })).toBeTruthy();
     expect(screen.getByText("Claude subagents")).toBeTruthy();
     expect(screen.getByText("Run the palette suite")).toBeTruthy();
     expect(listSubagents).not.toHaveBeenCalled();

@@ -175,7 +175,9 @@ export function useSubagents(
   }, []);
 
   const fetchSubagents = useCallback(
-    (force: boolean) => {
+    // `quiet` is for the background poll: it refreshes the list without
+    // driving the refresh button's busy state every few seconds.
+    (force: boolean, quiet = false) => {
       if (!provider || !isElectronAvailable()) return;
       const settle = (next: AgentSubagentsResult) => {
         // Answers the key it was asked under. Without this an in-flight
@@ -195,6 +197,10 @@ export function useSubagents(
         });
       };
       const follow = (request: Promise<AgentSubagentsResult>) => {
+        if (quiet) {
+          void request.then(settle);
+          return;
+        }
         setIsLoading(true);
         void request.then(settle).finally(() => {
           if (mountedRef.current) setIsLoading(false);
@@ -225,8 +231,10 @@ export function useSubagents(
           next.status === "unavailable" &&
           TRANSIENT_REASONS.has(next.reason) &&
           previous?.status === "ok";
-        if (keepPrevious) rememberLookup(key, previous, Date.now(), next.reason);
-        else rememberLookup(key, next, Date.now());
+        // Stamped with when the lookup was asked, not when it answered, so a
+        // poll on the floor's own interval is never just short of it.
+        if (keepPrevious) rememberLookup(key, previous, now, next.reason);
+        else rememberLookup(key, next, now);
       };
       const request = adapter
         .list({ terminalId })
@@ -258,10 +266,13 @@ export function useSubagents(
     fetchSubagents(false);
   }, [fetchSubagents]);
 
+  // Claude's settle bypasses the floor: the poll stops at this point unless a
+  // child is already known to be live, so a child spawned since the last poll
+  // would otherwise go unseen until something else asked again.
   useEffect(() => {
     if (!agentState || !SETTLED_STATES.has(agentState)) return;
-    fetchSubagents(false);
-  }, [agentState, fetchSubagents]);
+    fetchSubagents(provider === "claude");
+  }, [agentState, provider, fetchSubagents]);
 
   const refresh = useCallback(() => fetchSubagents(true), [fetchSubagents]);
 
@@ -280,7 +291,7 @@ export function useSubagents(
   const shouldPoll = provider === "claude" && (agentState === "working" || hasLiveChild);
   useEffect(() => {
     if (!shouldPoll) return;
-    const timer = setInterval(() => fetchSubagents(false), CLAUDE_SUBAGENT_POLL_MS);
+    const timer = setInterval(() => fetchSubagents(false, true), CLAUDE_SUBAGENT_POLL_MS);
     return () => clearInterval(timer);
   }, [shouldPoll, fetchSubagents]);
 

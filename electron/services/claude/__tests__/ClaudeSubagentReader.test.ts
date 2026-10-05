@@ -507,7 +507,24 @@ describe("listSubagentsInDir", () => {
     ]);
 
     const [child] = await listSubagentsInDir(dir);
-    expect(child?.status.type).not.toBe("completed");
+    expect(child?.status).toEqual({ type: "unknown", reason: "unrecognized" });
+  });
+
+  it("finds the final turn behind bookkeeping in a transcript past the probe window", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    const filler = Array.from({ length: 400 }, (_, index) =>
+      assistantRecord(`step ${index} ${"x".repeat(500)}`, "tool_use")
+    );
+    await writeChild(dir, "aaa1", [
+      userRecord("the delegated task"),
+      ...filler,
+      assistantRecord("all done", "end_turn"),
+      record({ type: "attachment", attachment: { type: "hook_success" } }),
+      record({ type: "system", subtype: "stop_hook_summary" }),
+    ]);
+
+    const [child] = await listSubagentsInDir(dir);
+    expect(child?.status).toEqual({ type: "completed" });
   });
 
   it("admits it cannot tell when the tail holds nothing but bookkeeping", async () => {

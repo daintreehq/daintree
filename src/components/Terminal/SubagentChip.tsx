@@ -335,10 +335,15 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
   const live = subagents.filter((subagent) => isLiveSubagentStatus(subagent.status)).length;
   const count = result.provider === "claude" && live > 0 ? live : null;
   const recorded = pluralize(subagents.length, `${label} subagent`);
+  // "None running" only when every child was seen to stop: an unknown one may
+  // be mid-way through a long tool call that writes nothing.
+  const noneRunning =
+    result.provider === "claude" &&
+    subagents.every((subagent) => subagent.status.type !== "unknown");
   const summary =
     count !== null
       ? `${pluralize(count, `${label} subagent`)} running`
-      : result.provider === "claude"
+      : noneRunning
         ? `${recorded}, none running`
         : recorded;
   const waitingNote = waiting > 0 ? `${waiting} waiting on you` : null;

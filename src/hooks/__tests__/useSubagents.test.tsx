@@ -356,6 +356,55 @@ describe("useSubagents", () => {
       expect(listClaudeSubagents).toHaveBeenCalledTimes(1);
     });
 
+    it("finds a child spawned just before the parent settles, inside the poll interval", async () => {
+      listClaudeSubagents.mockResolvedValueOnce(claudeOk());
+      listClaudeSubagents.mockResolvedValue(claudeOk({ type: "working" }));
+      const { result, rerender, unmount } = renderHook(
+        ({ agentState }: { agentState: "working" | "idle" }) =>
+          useSubagents("t1", { provider: "claude", agentState }),
+        { initialProps: { agentState: "working" } as { agentState: "working" | "idle" } }
+      );
+      await advancePolls(0);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      rerender({ agentState: "idle" });
+      await advancePolls(0);
+
+      expect(listClaudeSubagents).toHaveBeenCalledTimes(2);
+      expect(
+        result.current.result?.status === "ok" && result.current.result.subagents
+      ).toHaveLength(1);
+      unmount();
+    });
+
+    it("keeps to the poll interval when each lookup takes a while to answer", async () => {
+      listClaudeSubagents.mockImplementation(
+        () => new Promise((resolve) => setTimeout(() => resolve(claudeOk()), 200))
+      );
+      const { unmount } = renderHook(() =>
+        useSubagents("t1", { provider: "claude", agentState: "working" })
+      );
+
+      await advancePolls(3);
+      expect(listClaudeSubagents).toHaveBeenCalledTimes(4);
+      unmount();
+    });
+
+    it("refreshes in the background without showing the list as loading", async () => {
+      listClaudeSubagents.mockResolvedValueOnce(claudeOk({ type: "working" }));
+      listClaudeSubagents.mockReturnValue(new Promise(() => {}));
+      const { result, unmount } = renderHook(() =>
+        useSubagents("t1", { provider: "claude", agentState: "working" })
+      );
+
+      await advancePolls(1);
+      expect(listClaudeSubagents).toHaveBeenCalledTimes(2);
+      expect(result.current.isLoading).toBe(false);
+      unmount();
+    });
+
     it("never polls Codex, whose every lookup spawns a process", async () => {
       listSubagents.mockResolvedValue(ok("child-1"));
       const { unmount } = renderHook(() =>
