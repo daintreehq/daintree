@@ -30,22 +30,37 @@ import {
   assistantSlotKey,
   projectIdFromSlotKey,
 } from "@shared/config/assistantSlots";
-import { getAssistantSupportedAgentIds } from "@shared/config/agentRegistry";
+import {
+  getAssistantSupportedAgentIds,
+  getAssistantWiredAgentIds,
+} from "@shared/config/agentRegistry";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 
 type HelpPanelState = ReturnType<typeof useHelpPanelStore.getState>;
 
+// Slots an in-flight help launch has chosen but not yet bound. Provisioning a
+// slot displaces whatever holds it, so a second launch picking the same slot
+// before the first binds would kill the first. Module state is per V8 context,
+// i.e. per project view — the same scope as the store these slots index.
+const claimedHelpLaneKeys = new Set<string>();
+
+function isHeldHelpSlot(state: HelpPanelState, workspaceId: string, slot: number): boolean {
+  const key = assistantSlotKey(workspaceId, slot);
+  return key in state.hibernateSessions || claimedHelpLaneKeys.has(key);
+}
+
 // A lane is free only when nothing could be lost by launching into it: no
-// terminal (live or reserved), no provisioned session, and no hibernated
-// conversation waiting to resume there. A live lane mirrors its resume token
-// into `hibernateSessions` too, so the last check also covers it.
+// terminal (live or reserved), no provisioned session, no hibernated
+// conversation waiting to resume there, and no other help launch heading for
+// it. A live lane mirrors its resume token into `hibernateSessions` too, so the
+// hibernation check also covers it.
 function isFreeHelpLane(state: HelpPanelState, workspaceId: string, slot: number): boolean {
   const lane = state.sessions[slot];
   return (
     !!lane &&
     lane.terminalId === null &&
     lane.sessionId === null &&
-    !(assistantSlotKey(workspaceId, slot) in state.hibernateSessions)
+    !isHeldHelpSlot(state, workspaceId, slot)
   );
 }
 
@@ -65,10 +80,7 @@ function pickHelpLaunchLane(
     if (isFreeHelpLane(state, workspaceId, slot)) return { slot, isNew: false };
   }
   for (const slot of ASSISTANT_SLOTS) {
-    if (
-      !state.sessions[slot] &&
-      !(assistantSlotKey(workspaceId, slot) in state.hibernateSessions)
-    ) {
+    if (!state.sessions[slot] && !isHeldHelpSlot(state, workspaceId, slot)) {
       return { slot, isNew: true };
     }
   }
@@ -80,8 +92,9 @@ function pickHelpLaunchLane(
  * Lanes of one project share a session folder and must run one agent — main
  * refuses a mismatch with `MIXED_AGENT_LANES` — so a help launch beside them
  * has to join that agent rather than fail on the default. A live lane proves
- * its agent launches; a hibernated one only counts while its CLI still does,
- * since main doesn't hold it against the launch and a missing CLI would.
+ * its agent launches; a hibernated one only counts while the assistant can
+ * still run it, since main doesn't hold it against the launch and a missing
+ * CLI or a retired agent would.
  */
 function siblingLaneAgentId(
   state: HelpPanelState,
@@ -295,6 +308,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       const panelState = useHelpPanelStore.getState();
       const lane = pickHelpLaunchLane(panelState, workspace.id);
       if (!lane) {
+        useFocusStore.getState().clearAssistantGesture();
         if (!panelState.isOpen) {
           suppressSidebarResizes();
           panelState.setOpen(true);
@@ -309,133 +323,148 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         return;
       }
       const targetSlot = lane.slot;
-      if (!parsed?.agentId) {
-        const { availability, isInitialized } = useCliAvailabilityStore.getState();
-        const canLaunch = (id: string) =>
-          !isInitialized || !isBuiltInAgentId(id) || isAgentLaunchable(availability[id]);
-        agentId = siblingLaneAgentId(panelState, workspace.id, targetSlot, canLaunch) ?? agentId;
-      }
-
+      const claimKey = assistantSlotKey(workspace.id, targetSlot);
+      claimedHelpLaneKeys.add(claimKey);
       try {
-        session = await window.electron.help.provisionSession({
-          projectId: workspace.id,
-          projectPath: workspace.path,
-          agentId,
-          context: capturedContext,
-          slot: targetSlot,
-        });
-      } catch (err) {
-        logError("Failed to provision help session", err);
-        // Decode BEFORE any message formatting: the contextBridge strips the
-        // custom `code` property, so it rides an encoded message prefix.
-        const code = extractHelpSessionErrorCode(err);
-        let message = "Couldn't start the Daintree Assistant session.";
-        if (code === "MCP_PROBE_FAILED") {
-          message =
-            "Daintree's assistant services didn't respond in time. Check assistant settings, then try again.";
-        } else if (code === "MCP_SERVER_NOT_STARTED" || code === "MCP_NOT_READY") {
-          message =
-            "Daintree's assistant services didn't start. Check assistant settings, then try again.";
-        } else if (code === "USER_CONTENT_SYNC_FAILED") {
-          message =
-            "Daintree couldn't load this project's assistant folder, so the session didn't start. Try again.";
-        } else if (code === "MIXED_AGENT_LANES") {
-          message =
-            "Another session in this project is running a different agent. Sessions of one project share a folder and use one agent, so stop that session first or open this one with the same agent.";
+        if (!parsed?.agentId) {
+          const { availability, isInitialized } = useCliAvailabilityStore.getState();
+          const wired = getAssistantWiredAgentIds();
+          const canLaunch = (id: string) =>
+            wired.includes(id) &&
+            (!isInitialized || !isBuiltInAgentId(id) || isAgentLaunchable(availability[id]));
+          agentId = siblingLaneAgentId(panelState, workspace.id, targetSlot, canLaunch) ?? agentId;
         }
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "error",
-          title: "Assistant couldn't start",
-          message,
-        });
-        return;
-      }
 
-      if (!session) {
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "error",
-          title: "Assistant couldn't start",
-          message: "Couldn't start the Daintree Assistant session.",
-        });
-        return;
-      }
-
-      // The Daintree Assistant is env-only (MCP via DAINTREE_MCP_* env vars)
-      // and ships its own skills, so it reads nothing from cwd. Run it in the
-      // workspace root so its file tools (read/list/grep/edit) and the terminal's
-      // file-link resolution operate on the actual workspace; other help agents
-      // stay in the session dir that owns their .mcp.json / settings. The
-      // session token still scopes the assistant's MCP surface to this workspace.
-      const cwd = isAssistantOnlyAgentId(agentId) ? workspace.path : session.sessionPath;
-      const env: Record<string, string> = {
-        DAINTREE_MCP_TOKEN: session.token,
-        DAINTREE_WINDOW_ID: String(session.windowId),
-        ...(session.mcpUrl ? { DAINTREE_MCP_URL: session.mcpUrl } : {}),
-        DAINTREE_PROJECT_ID: workspace.id,
-      };
-
-      const agentLaunchFlags = await loadCustomLaunchFlags(agentId);
-      const result = await actionService.dispatch<{ terminalId: string | null }>(
-        "agent.launch",
-        {
-          agentId,
-          cwd,
-          location: "overlay",
-          prompt: helpPrompt,
-          excludeFromPersistence: true,
-          removeOnExit: true,
-          ...(env && { env }),
-          ...(agentLaunchFlags.length > 0 && { agentLaunchFlags }),
-        },
-        { source: "user" }
-      );
-
-      if (result.ok && result.result?.terminalId) {
-        const launchedTerminalId = result.result.terminalId;
-        // The lane can be closed while the provision + dispatch awaits are
-        // outstanding (#12108). `setTerminal` refuses to bind into a lane that
-        // is gone, so binding blind would leave this PTY holding a live bearer,
-        // owned by no lane and no longer filtered out of the dock. Tear it down
-        // instead — revoke before kill, mirroring `_teardownBoundSession`.
-        //
-        // A lane that did not exist yet is created only now, already bound, so
-        // its runtime never mounts empty and auto-launches a second session into
-        // the slot this one was provisioned for. Should a tab have claimed the
-        // slot meanwhile, it is ours to keep only while it is still free.
-        const bindState = useHelpPanelStore.getState();
-        const laneLost = lane.isNew
-          ? !!bindState.sessions[targetSlot] && !isFreeHelpLane(bindState, workspace.id, targetSlot)
-          : !bindState.sessions[targetSlot];
-        if (laneLost) {
-          window.electron.help.revokeSession(session.sessionId).catch((err) => {
-            logError("Failed to revoke help session for a lane closed mid-launch", err);
+        try {
+          session = await window.electron.help.provisionSession({
+            projectId: workspace.id,
+            projectPath: workspace.path,
+            agentId,
+            context: capturedContext,
+            slot: targetSlot,
           });
-          usePanelStore.getState().removePanel(launchedTerminalId);
+        } catch (err) {
+          logError("Failed to provision help session", err);
+          // Decode BEFORE any message formatting: the contextBridge strips the
+          // custom `code` property, so it rides an encoded message prefix.
+          const code = extractHelpSessionErrorCode(err);
+          let message = "Couldn't start the Daintree Assistant session.";
+          if (code === "MCP_PROBE_FAILED") {
+            message =
+              "Daintree's assistant services didn't respond in time. Check assistant settings, then try again.";
+          } else if (code === "MCP_SERVER_NOT_STARTED" || code === "MCP_NOT_READY") {
+            message =
+              "Daintree's assistant services didn't start. Check assistant settings, then try again.";
+          } else if (code === "USER_CONTENT_SYNC_FAILED") {
+            message =
+              "Daintree couldn't load this project's assistant folder, so the session didn't start. Try again.";
+          } else if (code === "MIXED_AGENT_LANES") {
+            message =
+              "Another session in this project is running a different agent. Sessions of one project share a folder and use one agent, so stop that session first or open this one with the same agent.";
+          }
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+          notify({
+            type: "error",
+            title: "Assistant couldn't start",
+            message,
+          });
           return;
         }
-        // Bind into the lane provisioning targeted above (#12108): binding
-        // anywhere else would leave that session unreachable. Then show it.
-        if (lane.isNew) bindState.ensureSlot(targetSlot);
-        const helpPanel = useHelpPanelStore.getState();
-        helpPanel.setTerminal(targetSlot, launchedTerminalId, agentId, session?.sessionId ?? null);
-        useFocusStore.getState().clearAssistantGesture();
-        const switchedLane = helpPanel.activeSlot !== targetSlot;
-        helpPanel.setActiveSlot(targetSlot);
-        if (!helpPanel.isOpen) {
-          suppressSidebarResizes();
-          helpPanel.setOpen(true);
-        } else if (switchedLane) {
-          // A lane that was in the background has no trustworthy geometry;
-          // the focus request drives the panel's fit-and-repaint reveal.
-          helpPanel.requestFocus();
+
+        if (!session) {
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+          notify({
+            type: "error",
+            title: "Assistant couldn't start",
+            message: "Couldn't start the Daintree Assistant session.",
+          });
+          return;
         }
-        window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
-      } else if (session) {
-        window.electron.help.revokeSession(session.sessionId).catch((err) => {
-          logError("Failed to revoke help session after failed launch", err);
-        });
+
+        // The Daintree Assistant is env-only (MCP via DAINTREE_MCP_* env vars)
+        // and ships its own skills, so it reads nothing from cwd. Run it in the
+        // workspace root so its file tools (read/list/grep/edit) and the terminal's
+        // file-link resolution operate on the actual workspace; other help agents
+        // stay in the session dir that owns their .mcp.json / settings. The
+        // session token still scopes the assistant's MCP surface to this workspace.
+        const cwd = isAssistantOnlyAgentId(agentId) ? workspace.path : session.sessionPath;
+        const env: Record<string, string> = {
+          DAINTREE_MCP_TOKEN: session.token,
+          DAINTREE_WINDOW_ID: String(session.windowId),
+          ...(session.mcpUrl ? { DAINTREE_MCP_URL: session.mcpUrl } : {}),
+          DAINTREE_PROJECT_ID: workspace.id,
+        };
+
+        const agentLaunchFlags = await loadCustomLaunchFlags(agentId);
+        const result = await actionService.dispatch<{ terminalId: string | null }>(
+          "agent.launch",
+          {
+            agentId,
+            cwd,
+            location: "overlay",
+            prompt: helpPrompt,
+            excludeFromPersistence: true,
+            removeOnExit: true,
+            ...(env && { env }),
+            ...(agentLaunchFlags.length > 0 && { agentLaunchFlags }),
+          },
+          { source: "user" }
+        );
+
+        if (result.ok && result.result?.terminalId) {
+          const launchedTerminalId = result.result.terminalId;
+          // The lane can be closed while the provision + dispatch awaits are
+          // outstanding (#12108). `setTerminal` refuses to bind into a lane that
+          // is gone, so binding blind would leave this PTY holding a live bearer,
+          // owned by no lane and no longer filtered out of the dock. Tear it down
+          // instead — revoke before kill, mirroring `_teardownBoundSession`.
+          //
+          // A lane that did not exist yet is created only now, already bound, so
+          // its runtime never mounts empty and auto-launches a second session into
+          // the slot this one was provisioned for. Should a tab have claimed the
+          // slot meanwhile — or bound the tab this launch reused — it is ours to
+          // keep only while it is still free.
+          claimedHelpLaneKeys.delete(claimKey);
+          const bindState = useHelpPanelStore.getState();
+          const laneLost = bindState.sessions[targetSlot]
+            ? !isFreeHelpLane(bindState, workspace.id, targetSlot)
+            : !lane.isNew || isHeldHelpSlot(bindState, workspace.id, targetSlot);
+          if (laneLost) {
+            window.electron.help.revokeSession(session.sessionId).catch((err) => {
+              logError("Failed to revoke help session for a lane closed mid-launch", err);
+            });
+            usePanelStore.getState().removePanel(launchedTerminalId);
+            return;
+          }
+          // Bind into the lane provisioning targeted above (#12108): binding
+          // anywhere else would leave that session unreachable. Then show it.
+          if (lane.isNew) bindState.ensureSlot(targetSlot);
+          const helpPanel = useHelpPanelStore.getState();
+          helpPanel.setTerminal(
+            targetSlot,
+            launchedTerminalId,
+            agentId,
+            session?.sessionId ?? null
+          );
+          useFocusStore.getState().clearAssistantGesture();
+          const switchedLane = helpPanel.activeSlot !== targetSlot;
+          helpPanel.setActiveSlot(targetSlot);
+          if (!helpPanel.isOpen) {
+            suppressSidebarResizes();
+            helpPanel.setOpen(true);
+          } else if (switchedLane) {
+            // A lane that was in the background has no trustworthy geometry;
+            // the focus request drives the panel's fit-and-repaint reveal.
+            helpPanel.requestFocus();
+          }
+          window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
+        } else if (session) {
+          window.electron.help.revokeSession(session.sessionId).catch((err) => {
+            logError("Failed to revoke help session after failed launch", err);
+          });
+        }
+      } finally {
+        claimedHelpLaneKeys.delete(claimKey);
       }
     },
   }));

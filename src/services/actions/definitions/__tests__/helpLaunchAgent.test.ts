@@ -107,6 +107,9 @@ describe("help.launchAgent", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks keeps implementations; several tests swap these in.
+    mockDispatch.mockReset().mockResolvedValue({ ok: true });
+    mockGetContext.mockReset().mockImplementation(() => ({}));
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: undefined });
     mockGetCliAvailabilityState.mockReturnValue({
       availability: allAvailability(),
@@ -933,25 +936,55 @@ describe("help.launchAgent", () => {
       useHelpPanelStore.getState().setHibernateSession("proj-default", 0, {
         sessionId: "agent-s",
         cwd: "/repo",
+        agentId: "codex",
+      });
+
+      await action.run(undefined, stubCtx);
+
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "codex", slot: 1 })
+      );
+    });
+
+    it("joins a hibernated sibling's agent before CLI availability is known", async () => {
+      mockGetCliAvailabilityState.mockReturnValue({ availability: {}, isInitialized: false });
+      useHelpPanelStore.getState().setHibernateSession("proj-default", 0, {
+        sessionId: "agent-s",
+        cwd: "/repo",
+        agentId: "codex",
+      });
+
+      await action.run(undefined, stubCtx);
+
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "codex", slot: 1 })
+      );
+    });
+
+    it("skips a hibernated sibling's agent the assistant can no longer run", async () => {
+      // Gemini is a deprecated assistant tier: main refuses to provision it.
+      useHelpPanelStore.getState().setHibernateSession("proj-default", 0, {
+        sessionId: "agent-s",
+        cwd: "/repo",
         agentId: "gemini",
       });
 
       await action.run(undefined, stubCtx);
 
       expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId: "gemini", slot: 1 })
+        expect.objectContaining({ agentId: "claude", slot: 1 })
       );
     });
 
     it("skips a hibernated sibling's agent once its CLI can't launch", async () => {
       mockGetCliAvailabilityState.mockReturnValue({
-        availability: allAvailability({ gemini: "missing" }),
+        availability: allAvailability({ codex: "missing" }),
         isInitialized: true,
       });
       useHelpPanelStore.getState().setHibernateSession("proj-default", 0, {
         sessionId: "agent-s",
         cwd: "/repo",
-        agentId: "gemini",
+        agentId: "codex",
       });
 
       await action.run(undefined, stubCtx);
@@ -985,12 +1018,123 @@ describe("help.launchAgent", () => {
       );
     });
 
+    it("surfaces main's mixed-agent refusal for an explicit mismatch and changes nothing", async () => {
+      useHelpPanelStore.getState().setTerminal(0, "term-live", "codex", "sess-live");
+      vi.mocked(window.electron.help.provisionSession).mockRejectedValue(
+        new Error("[HelpSessionError|MIXED_AGENT_LANES] Another session runs codex")
+      );
+
+      await action.run({ agentId: "claude" }, stubCtx);
+
+      expect(mockDispatch).not.toHaveBeenCalled();
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          message: expect.stringContaining(
+            "Another session in this project is running a different agent"
+          ),
+        })
+      );
+      const state = useHelpPanelStore.getState();
+      expect(Object.keys(state.sessions)).toEqual(["0"]);
+      expect(state.sessions[0]?.terminalId).toBe("term-live");
+      expect(state.activeSlot).toBe(0);
+    });
+
+    it("leaves no tab behind when provisioning a new slot throws", async () => {
+      useHelpPanelStore.getState().setTerminal(0, "term-live", "claude", "sess-live");
+      vi.mocked(window.electron.help.provisionSession).mockRejectedValue(new Error("boom"));
+
+      await action.run(undefined, stubCtx);
+
+      expect(provisionedSlot()).toBe(1);
+      expect(mockDispatch).not.toHaveBeenCalled();
+      expect(useHelpPanelStore.getState().sessions[1]).toBeUndefined();
+      expect(useHelpPanelStore.getState().activeSlot).toBe(0);
+    });
+
+    it("revokes once and creates no tab when the launch yields no terminal", async () => {
+      useHelpPanelStore.getState().setTerminal(0, "term-live", "claude", "sess-live");
+      mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: null } });
+
+      await action.run(undefined, stubCtx);
+
+      expect(window.electron.help.revokeSession).toHaveBeenCalledTimes(1);
+      expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-default");
+      expect(window.electron.help.markTerminal).not.toHaveBeenCalled();
+      expect(useHelpPanelStore.getState().sessions[1]).toBeUndefined();
+    });
+
+    it("sends overlapping launches to different slots", async () => {
+      useHelpPanelStore.getState().setTerminal(0, "term-live", "claude", "sess-live");
+      let releaseFirst!: () => void;
+      const firstHeld = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let provisionCount = 0;
+      vi.mocked(window.electron.help.provisionSession).mockImplementation(async (input) => {
+        provisionCount += 1;
+        if (provisionCount === 1) await firstHeld;
+        return {
+          sessionId: `sess-${input.slot}`,
+          sessionPath: "/mock/help",
+          token: "tok",
+          tier: "core",
+          mcpUrl: null,
+          windowId: 1,
+        };
+      });
+      let dispatchCount = 0;
+      mockDispatch.mockImplementation(async () => {
+        dispatchCount += 1;
+        return { ok: true, result: { terminalId: `term-help-${dispatchCount}` } };
+      });
+
+      const first = action.run(undefined, stubCtx);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const second = action.run(undefined, stubCtx);
+      await second;
+      releaseFirst();
+      await first;
+
+      const slots = vi
+        .mocked(window.electron.help.provisionSession)
+        .mock.calls.map(([input]) => input.slot)
+        .sort();
+      expect(slots).toEqual([1, 2]);
+      const state = useHelpPanelStore.getState();
+      expect(state.sessions[0]?.terminalId).toBe("term-live");
+      expect(state.sessions[1]?.sessionId).toBe("sess-1");
+      expect(state.sessions[2]?.sessionId).toBe("sess-2");
+    });
+
+    it("does not overwrite a reused tab that another launch bound mid-flight", async () => {
+      useHelpPanelStore.getState().setTerminal(0, "term-live", "claude", "sess-live");
+      useHelpPanelStore.getState().ensureSlot(2);
+      mockDispatch.mockImplementation(async () => {
+        useHelpPanelStore.getState().setTerminal(2, "term-user", "claude", "sess-user");
+        return { ok: true, result: { terminalId: "term-help" } };
+      });
+
+      await action.run(undefined, stubCtx);
+
+      expect(provisionedSlot()).toBe(2);
+      expect(useHelpPanelStore.getState().sessions[2]).toMatchObject({
+        terminalId: "term-user",
+        sessionId: "sess-user",
+      });
+      expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-default");
+      expect(mockRemovePanel).toHaveBeenCalledWith("term-help");
+      expect(window.electron.help.markTerminal).not.toHaveBeenCalled();
+    });
+
     it("leaves no tab behind when the launch into a new slot fails", async () => {
       useHelpPanelStore.getState().setTerminal(0, "term-live", "claude", "sess-live");
       mockDispatch.mockResolvedValue({ ok: false });
 
       await action.run(undefined, stubCtx);
 
+      expect(provisionedSlot()).toBe(1);
       expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-default");
       const state = useHelpPanelStore.getState();
       expect(state.sessions[1]).toBeUndefined();
