@@ -117,6 +117,7 @@ const {
       listingRows: null as unknown[] | null,
       listingStatus: "ready" as "pending" | "ready" | "error",
       listingHasHiddenDotfiles: false,
+      listingHiddenCounts: { dotfiles: 0, alwaysHidden: 0 },
     },
     // What the pane last handed the tree hook, so a test can assert the derived
     // change tick rather than only what renders.
@@ -360,6 +361,30 @@ const { treeProps } = vi.hoisted(() => ({
     gitStatusIndex: undefined as FileBrowserGitStatusIndex | null | undefined,
   },
 }));
+// The folder listing virtualizes through Virtuoso, which renders no rows in
+// jsdom. Render every row inline so a listing row can be clicked (#13194).
+vi.mock("react-virtuoso", async () => {
+  const { forwardRef } = await import("react");
+  return {
+    Virtuoso: forwardRef(function VirtuosoStub(
+      props: {
+        data: Array<{ path: string }>;
+        context: unknown;
+        itemContent: (index: number, row: { path: string }, context: unknown) => React.ReactNode;
+      },
+      _ref
+    ) {
+      return (
+        <div>
+          {props.data.map((row, index) => (
+            <div key={row.path}>{props.itemContent(index, row, props.context)}</div>
+          ))}
+        </div>
+      );
+    }),
+  };
+});
+
 vi.mock("../FileTreeView", () => ({
   FileTreeView: ({
     rowContextMenu,
@@ -3371,4 +3396,116 @@ describe("file browser document navigation guards", () => {
         });
     }
   );
+});
+
+describe("closing the viewer's subject (#13194)", () => {
+  /** What each close asked the viewer to show next. */
+  function closeWrites(): unknown[] {
+    return setFileBrowserViewMock.mock.calls.flatMap(([, patch]: unknown[]) =>
+      typeof patch === "object" && patch !== null && "browserSelectedPath" in patch
+        ? [patch.browserSelectedPath]
+        : []
+    );
+  }
+
+  afterEach(() => {
+    treeState.listingPath = null;
+    treeState.listingRows = null;
+  });
+
+  it("clears a file opened from the tree or the summary, back to the idle body", async () => {
+    mockPanel.browserSelectedPath = "src/app.ts";
+    renderPane();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Close file" }));
+
+    expect(closeWrites()).toEqual([null]);
+  });
+
+  /** Stand in for the store applying a selection write; the mock doesn't. */
+  function showSelection(
+    rerender: (ui: React.ReactElement) => void,
+    path: string,
+    listing: { path: string; name: string; isDirectory: boolean }[] | null = null
+  ) {
+    mockPanel.browserSelectedPath = path;
+    treeState.listingPath = listing === null ? null : path;
+    treeState.listingRows = listing;
+    rerender(paneJsx({ worktreeId: "wt-1" }));
+    setFileBrowserViewMock.mockClear();
+  }
+
+  const SRC_LISTING = [
+    { path: "src/app.ts", name: "app.ts", isDirectory: false },
+    { path: "src/lib", name: "lib", isDirectory: true },
+  ];
+
+  it("returns a file opened from a folder listing to that listing", async () => {
+    mockPanel.browserSelectedPath = "src";
+    treeState.listingPath = "src";
+    treeState.listingRows = SRC_LISTING;
+    const { rerender } = renderPane();
+
+    fireEvent.click(screen.getByRole("button", { name: "app.ts" }));
+    expect(closeWrites()).toEqual(["src/app.ts"]);
+    showSelection(rerender, "src/app.ts");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Close file" }));
+    expect(closeWrites()).toEqual(["src"]);
+    // Ancestors ride along so the folder can still resolve as a folder.
+    expect(setFileBrowserViewMock).toHaveBeenLastCalledWith(
+      "fb-1",
+      expect.objectContaining({ browserExpandedPaths: expect.any(Array) })
+    );
+
+    // The dirty guard cancelling that close leaves the file open; the retry
+    // must still know where to go back to.
+    fireEvent.click(screen.getByRole("button", { name: "Close file" }));
+    expect(closeWrites()).toEqual(["src", "src"]);
+  });
+
+  it("forgets the listing once the file is reached again some other way", async () => {
+    mockPanel.browserSelectedPath = "src";
+    treeState.listingPath = "src";
+    treeState.listingRows = SRC_LISTING;
+    const { rerender } = renderPane();
+
+    fireEvent.click(screen.getByRole("button", { name: "app.ts" }));
+    showSelection(rerender, "src/app.ts");
+    // The close landed back on the listing, then the tree reopened the file.
+    showSelection(rerender, "src", SRC_LISTING);
+    showSelection(rerender, "src/app.ts");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Close file" }));
+    expect(closeWrites()).toEqual([null]);
+  });
+
+  it("closes a folder drilled into from a listing straight to the idle body", async () => {
+    mockPanel.browserSelectedPath = "src";
+    treeState.listingPath = "src";
+    treeState.listingRows = SRC_LISTING;
+    const { rerender } = renderPane();
+
+    fireEvent.click(screen.getByRole("button", { name: "lib" }));
+    showSelection(rerender, "src/lib", []);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Close folder" }));
+    expect(closeWrites()).toEqual([null]);
+  });
+
+  it("ignores a listing return whose open never landed", async () => {
+    mockPanel.browserSelectedPath = "src";
+    treeState.listingPath = "src";
+    treeState.listingRows = SRC_LISTING;
+    const { rerender } = renderPane();
+    fireEvent.click(screen.getByRole("button", { name: "app.ts" }));
+
+    // The guard cancelled that open, so the viewer is still on the listing:
+    // the recorded return names a file that never became the selection.
+    rerender(paneJsx({ worktreeId: "wt-1" }));
+    setFileBrowserViewMock.mockClear();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Close folder" }));
+    expect(closeWrites()).toEqual([null]);
+  });
 });

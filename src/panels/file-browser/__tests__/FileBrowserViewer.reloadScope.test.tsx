@@ -82,6 +82,7 @@ function viewer(
         canCollapseAll={false}
         missingFilePath={null}
         onShowFolder={vi.fn()}
+        onCloseSelection={vi.fn()}
       />
     </TooltipProvider>
   );
