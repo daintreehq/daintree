@@ -366,9 +366,11 @@ export function FileBrowserViewer({
   // The open file's git status, read off the same worktree-relative list the
   // summary renders — never `change.path`, which is absolute at runtime. The
   // first row wins when a path is listed twice (staged and unstaged), matching
-  // FilePane's lookup. Undefined for a clean file, or with no git status at all.
+  // FilePane's lookup. Undefined for a clean file, with no git status at all, or
+  // once the file is no longer shown (a filter can hide it while the pane keeps
+  // its relative path).
   const changeStatus =
-    relativePath !== null
+    filePath !== null && relativePath !== null
       ? changedFiles?.find((change) => change.relativePath === relativePath)?.status
       : undefined;
   // Reading controls only for content that can be read: a Markdown file that

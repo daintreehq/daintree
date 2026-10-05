@@ -75,10 +75,16 @@ const { useDiffContentMock } = vi.hoisted(() => ({
 vi.mock("@/panels/diff/useDiffContent", () => ({ useDiffContent: useDiffContentMock }));
 // Lazy-loaded by the viewer, so assertions on it must await the chunk.
 vi.mock("@/components/Worktree/DiffViewer", () => ({
-  DiffViewer: (props: { diff: string; rootPath?: string; wrapLines?: boolean }) => (
+  DiffViewer: (props: {
+    diff: string;
+    viewType?: string;
+    rootPath?: string;
+    wrapLines?: boolean;
+  }) => (
     <div
       data-testid="diff-viewer-mock"
       data-diff={props.diff}
+      data-view-type={props.viewType ?? ""}
       data-root={props.rootPath ?? ""}
       data-wrap-lines={String(props.wrapLines)}
     />
@@ -1333,7 +1339,80 @@ describe("FileBrowserViewer Diff mode (#13195)", () => {
     const viewer = await screen.findByTestId("diff-viewer-mock");
     expect(viewer.getAttribute("data-diff")).toBe("@@ -1 +1 @@");
     expect(viewer.getAttribute("data-root")).toBe("/repo");
+    expect(viewer.getAttribute("data-view-type")).toBe("unified");
     expect(screen.queryByTestId("code-viewer-mock")).toBeNull();
+  });
+
+  it("holds a loading state in place of the source while the diff is fetched", async () => {
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    useDiffContentMock.mockReturnValue({ content: undefined, stale: true, retry: vi.fn() });
+    renderViewer("/repo/app.ts", { changedFiles: [change("app.ts")] });
+    await screen.findByTestId("code-viewer-mock");
+
+    await clickMode("Diff");
+
+    expect(screen.getByTestId("file-browser-diff")).toBeTruthy();
+    expect(screen.queryByTestId("code-viewer-mock")).toBeNull();
+    expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+    // Nothing on screen yet, so nothing can be stale.
+    expect(screen.queryByText("File changed since this diff loaded")).toBeNull();
+  });
+
+  it("drops the rendered-markdown text size while a markdown diff is up", async () => {
+    useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+    renderViewer("/repo/notes.md", { changedFiles: [change("notes.md")] });
+    await screen.findByTestId("markdown-text-size-mock");
+
+    await clickMode("Diff");
+
+    await screen.findByTestId("diff-viewer-mock");
+    expect(screen.queryByTestId("markdown-text-size-mock")).toBeNull();
+  });
+
+  it("does not carry Diff into another panel's viewer", async () => {
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+    const changedFiles = [change("app.ts")];
+    const { rerender } = renderViewer("/repo/app.ts", { changedFiles, panelId: "panel-a" });
+    await clickMode("Diff");
+    await screen.findByTestId("diff-viewer-mock");
+
+    rerender(viewerJsx("/repo/app.ts", { changedFiles, panelId: "panel-b" }));
+
+    await screen.findByTestId("code-viewer-mock");
+    expect(lastDiffSubject()).toBeNull();
+  });
+
+  it("hands focus to the path pill when the file goes clean under a focused Diff segment", async () => {
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+    const { rerender } = renderViewer("/repo/app.ts", { changedFiles: [change("app.ts")] });
+    await clickMode("Diff");
+    await screen.findByTestId("diff-viewer-mock");
+    screen.getByRole("radio", { name: "Diff" }).focus();
+
+    // The toggle unmounts with the only mode it offered beyond Source.
+    rerender(viewerJsx("/repo/app.ts", { changedFiles: [] }));
+
+    await screen.findByTestId("code-viewer-mock");
+    expect(screen.queryByRole("radio", { name: "Diff" })).toBeNull();
+    await waitFor(() =>
+      expect(document.activeElement?.hasAttribute("data-toolbar-path")).toBe(true)
+    );
+  });
+
+  it("stops asking for a diff once the file is no longer shown", async () => {
+    readMock.mockResolvedValue({ content: "const a = 1;" });
+    useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+    const changedFiles = [change(".env")];
+    const { rerender } = renderViewer("/repo/.env", { changedFiles });
+    await clickMode("Diff");
+    expect(lastDiffSubject()?.filePath).toBe(".env");
+
+    // A filter hiding the file clears `filePath` while the pane keeps the path.
+    rerender(viewerJsx(null, { changedFiles, relativePath: ".env" }));
+
+    expect(lastDiffSubject()).toBeNull();
   });
 
   it("returns to the file's source when Source is picked again", async () => {
