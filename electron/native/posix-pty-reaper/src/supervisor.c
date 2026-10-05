@@ -27,8 +27,11 @@
  * retires the root: whatever the terminal left running stays tracked until it
  * dies, so a crash during (or after) that terminal's cleanup still reaps it.
  *
- * Sampling has a gap it cannot close: a child that forks, detaches and is
- * reparented entirely between two ticks was never seen under a tracked parent.
+ * Known limits: sampling cannot see a child that forks, detaches and is
+ * reparented entirely between two ticks. A start-time check and the kill()
+ * that follows it are two syscalls, and ADD reads the start time when it
+ * arrives rather than at spawn — both would need a PID to be recycled within
+ * that window to go wrong.
  *
  * PID reuse: every tracked process is identified by its start time, captured
  * while it was provably ours (a registered root, or a live child of a tracked
@@ -245,7 +248,16 @@ static int snapshot_procs(proc_t **out) {
     return -1;
   }
   struct dirent *ent;
-  while ((ent = readdir(d)) != NULL) {
+  int failed = 0;
+  for (;;) {
+    /* read_stat() sets errno for processes that vanish mid-walk, so reset it
+     * before each readdir() to tell end-of-directory from a read error. */
+    errno = 0;
+    ent = readdir(d);
+    if (!ent) {
+      if (errno != 0) failed = 1;
+      break;
+    }
     const char *name = ent->d_name;
     if (name[0] == '\0') continue;
     int numeric = 1;
@@ -262,7 +274,10 @@ static int snapshot_procs(proc_t **out) {
     if (n == cap) {
       int ncap = cap * 2;
       proc_t *grown = (proc_t *)realloc(procs, (size_t)ncap * sizeof(proc_t));
-      if (!grown) break;
+      if (!grown) {
+        failed = 1;
+        break;
+      }
       procs = grown;
       cap = ncap;
     }
@@ -272,6 +287,12 @@ static int snapshot_procs(proc_t **out) {
     n++;
   }
   closedir(d);
+  /* A partial table would read as "those processes died" and drop identities
+   * we can never recover, so it counts as no table at all. */
+  if (failed) {
+    free(procs);
+    return -1;
+  }
 #elif defined(__APPLE__)
   int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
   struct kinfo_proc *kps = NULL;
@@ -310,6 +331,27 @@ static int snapshot_procs(proc_t **out) {
   return n;
 }
 
+/* A child adopted through its parent link must still have that parent: on
+ * Linux the /proc walk is not atomic, so a tracked parent could have died and
+ * had its pid reused between reading the parent and reading the child. macOS
+ * reads the whole table in one sysctl, which is already consistent. */
+static int adoption_holds(const proc_t *child, const proc_t *parent) {
+#if defined(__linux__)
+  char pidstr[32];
+  snprintf(pidstr, sizeof(pidstr), "%ld", (long)child->pid);
+  pid_t ppid;
+  starttime_t start;
+  if (!read_stat(pidstr, &ppid, &start)) return 0;
+  if (start != child->start || ppid != parent->pid) return 0;
+  starttime_t parent_start;
+  return get_starttime(parent->pid, &parent_start) && parent_start == parent->start;
+#else
+  (void)child;
+  (void)parent;
+  return 1;
+#endif
+}
+
 /* Recompute the tracked set against a sorted snapshot. A snapshot process is a
  * member if it matches a tracked (pid, start) pair, or if its parent is a
  * member — the parent link is live in this same snapshot, which is the proof
@@ -317,16 +359,20 @@ static int snapshot_procs(proc_t **out) {
  * drop out; roots persist until REMOVE. Fills g_member_idx and returns 1, or
  * returns 0 on allocation failure with the tracked set left untouched. */
 static int refresh(const proc_t *procs, int n) {
-  int *member = (int *)calloc((size_t)(n > 0 ? n : 1), sizeof(int));
-  int *idx = (int *)realloc(g_member_idx, (size_t)(n > 0 ? n : 1) * sizeof(int));
+  size_t slots = (size_t)(n > 0 ? n : 1);
+  int *member = (int *)calloc(slots, sizeof(int));
+  int *idx = (int *)realloc(g_member_idx, slots * sizeof(int));
   if (idx) g_member_idx = idx;
   g_nmembers = 0;
   if (!member || !idx) {
     free(member);
     return 0;
   }
+
   pid_t self = getpid();
+  int nroots = 0;
   for (int i = 0; i < g_nentries; i++) {
+    if (g_entries[i].is_root) nroots++;
     int j = find_proc(procs, n, g_entries[i].pid);
     if (j < 0 || procs[j].start != g_entries[i].start) continue;
     member[j] = 1;
@@ -340,30 +386,47 @@ static int refresh(const proc_t *procs, int n) {
       if (member[i] || procs[i].pid <= 1 || procs[i].pid == self) continue;
       int j = find_proc(procs, n, procs[i].ppid);
       if (j < 0 || !member[j] || j == i) continue;
+      if (!adoption_holds(&procs[i], &procs[j])) continue;
       member[i] = 1;
       changed = 1;
     }
   }
 
-  /* Rebuild: roots first (kept even when dead), then every live descendant. */
+  /* Build the replacement set before committing it, so an allocation failure
+   * leaves every previously recorded identity in place. Roots come first and
+   * are kept even when dead; then every live member. */
+  int nmembers = 0;
+  for (int i = 0; i < n; i++) nmembers += member[i];
+  int cap = nroots + nmembers > 0 ? nroots + nmembers : 1;
+  entry_t *next = (entry_t *)malloc((size_t)cap * sizeof(entry_t));
+  if (!next) {
+    free(member);
+    return 0;
+  }
   int w = 0;
   for (int i = 0; i < g_nentries; i++) {
-    if (g_entries[i].is_root) g_entries[w++] = g_entries[i];
+    if (g_entries[i].is_root) next[w++] = g_entries[i];
   }
-  int nroots = w;
-  g_nentries = w;
   for (int i = 0; i < n; i++) {
     if (!member[i]) continue;
     g_member_idx[g_nmembers++] = i;
     int is_root = 0;
     for (int r = 0; r < nroots; r++) {
-      if (g_entries[r].pid == procs[i].pid && g_entries[r].start == procs[i].start) {
+      if (next[r].pid == procs[i].pid && next[r].start == procs[i].start) {
         is_root = 1;
         break;
       }
     }
-    if (!is_root) push_entry(procs[i].pid, procs[i].start, 0);
+    if (is_root) continue;
+    next[w].pid = procs[i].pid;
+    next[w].start = procs[i].start;
+    next[w].is_root = 0;
+    w++;
   }
+  free(g_entries);
+  g_entries = next;
+  g_cap = cap;
+  g_nentries = w;
 
   free(member);
   return 1;
@@ -432,6 +495,10 @@ static void reap_all(void) {
     }
     free(procs);
     if (fresh == 0) break;
+    /* SIGSTOP lands asynchronously; give it a moment so a fork already in
+     * flight shows up in the next round's table. */
+    struct timespec settle = {0, 20 * 1000000L};
+    nanosleep(&settle, NULL);
   }
   for (int s = targets.n - 1; s >= 0; s--) {
     signal_verified(targets.items[s].pid, targets.items[s].start, SIGKILL);

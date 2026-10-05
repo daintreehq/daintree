@@ -36,7 +36,13 @@ function isGone(pid: number): boolean {
     }).trim();
     return stat === "" || stat.startsWith("Z");
   } catch {
-    return true;
+    // ps exits non-zero once the pid is gone; anything else is unknown.
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch {
+      return true;
+    }
   }
 }
 
@@ -59,7 +65,7 @@ function parentOf(pid: number): number | null {
   }
 }
 
-describe.skipIf(!canRun)("daintree_pty_supervisor (#8769, #13176)", () => {
+describe.skipIf(!canRun)("daintree_pty_supervisor (#8769, #13176)", { timeout: 30_000 }, () => {
   let dir: string;
   let bin: string;
   const children: ChildProcess[] = [];
@@ -76,6 +82,8 @@ describe.skipIf(!canRun)("daintree_pty_supervisor (#8769, #13176)", () => {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     }
     for (const pid of strays.splice(0)) {
+      // Reaped strays are skipped so a recycled pid is never signalled.
+      if (isGone(pid)) continue;
       try {
         process.kill(pid, "SIGKILL");
       } catch {
@@ -108,11 +116,14 @@ describe.skipIf(!canRun)("daintree_pty_supervisor (#8769, #13176)", () => {
     const pidFile = path.join(dir, `gc-${Date.now()}-${Math.random()}`);
     const root = spawn(
       "sh",
-      ["-c", `sh -c 'sleep 300 & echo "$! $$" > "${pidFile}"; sleep 1'; exec sleep 300`],
+      ["-c", `sh -c 'sleep 300 & echo "$! $$" > "${pidFile}"; sleep 2'; exec sleep 300`],
       { stdio: "ignore" }
     );
     children.push(root);
-    await waitFor(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, "utf8").includes(" "));
+    const ready = await waitFor(
+      () => fs.existsSync(pidFile) && fs.readFileSync(pidFile, "utf8").includes(" ")
+    );
+    expect(ready).toBe(true);
     const [grandchild, intermediate] = fs
       .readFileSync(pidFile, "utf8")
       .trim()
@@ -132,7 +143,7 @@ describe.skipIf(!canRun)("daintree_pty_supervisor (#8769, #13176)", () => {
     const { root, intermediate, grandchild } = await startRootWithDetachedGrandchild();
     sup.stdin!.write(`ADD ${root.pid}\n`);
 
-    // The intermediate shell exits after 1s, orphaning the sleep away from
+    // The intermediate shell exits after 2s, orphaning the sleep away from
     // the registered root before the "crash".
     expect(await waitFor(() => isGone(intermediate))).toBe(true);
     expect(await waitFor(() => parentOf(grandchild) !== intermediate)).toBe(true);

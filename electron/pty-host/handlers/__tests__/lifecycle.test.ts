@@ -447,9 +447,7 @@ describe("lifecycle spawn — terminal-pid gating and deferred retry (#10787)", 
   it("stamps the generation on a PID recovered by deferred retry (#13176)", async () => {
     vi.useFakeTimers();
     const ctx = makeCtx();
-    getMock(ctx)
-      .mockReturnValueOnce(termInfo(0, 3))
-      .mockReturnValue(termInfo(4321, 3));
+    getMock(ctx).mockReturnValueOnce(termInfo(0, 3)).mockReturnValue(termInfo(4321, 3));
     const dispatch = createPtyHostMessageDispatcher(ctx);
 
     dispatch({ type: "spawn", id: "t1", options: { launchGeneration: 3 } });
@@ -461,6 +459,22 @@ describe("lifecycle spawn — terminal-pid gating and deferred retry (#10787)", 
       pid: 4321,
       launchGeneration: 3,
     });
+  });
+
+  it("abandons the retry for an incarnation that already exited (#13176)", async () => {
+    vi.useFakeTimers();
+    const ctx = makeCtx();
+    getMock(ctx)
+      .mockReturnValueOnce(termInfo(0, 3))
+      .mockReturnValue({ ...termInfo(4321, 3), isExited: true });
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: { launchGeneration: 3 } });
+    await vi.runAllTimersAsync();
+
+    expect(ctx.sendEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "terminal-pid" })
+    );
   });
 
   it("abandons the retry once a same-id respawn replaced the incarnation (#13176)", async () => {

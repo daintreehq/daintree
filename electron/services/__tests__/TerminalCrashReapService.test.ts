@@ -292,6 +292,30 @@ describe("TerminalCrashReapService (#7526, #8769, #13176)", () => {
           expect(svc.getTrackedPidsForTest()).toEqual(new Map([["t1", 200]]));
         });
 
+        it("a stale same-PID event cannot rewind the generation and detach the live one", () => {
+          const { spawn, reaper, writes } = makePosix();
+          const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+          svc.attachTerminal("t1", 100, 2);
+          svc.attachTerminal("t1", 100, 1);
+          svc.detachTerminal("t1", 1);
+
+          expect(writes).toEqual(["ADD 100\n"]);
+          expect(svc.getTrackedPidsForTest()).toEqual(new Map([["t1", 100]]));
+        });
+
+        it("re-registers a successor that landed on its predecessor's recycled PID", () => {
+          const { spawn, reaper, writes } = makePosix();
+          const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+          svc.attachTerminal("t1", 100, 1);
+          svc.attachTerminal("t1", 100, 2);
+          svc.detachTerminal("t1", 1);
+
+          expect(writes).toEqual(["ADD 100\n", "REMOVE 100\n", "ADD 100\n"]);
+          expect(svc.getTrackedPidsForTest()).toEqual(new Map([["t1", 100]]));
+        });
+
         it("detaches regardless of generation when either side has none", () => {
           const { spawn, reaper, writes } = makePosix();
           const svc = new TerminalCrashReapService(null, { reaper, spawn });

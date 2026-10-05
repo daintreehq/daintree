@@ -137,22 +137,25 @@ export class TerminalCrashReapService {
    */
   attachTerminal(id: string, pid: number, generation?: number): void {
     if (!isValidPid(pid)) return;
-    if (process.platform !== "win32" && process.platform !== "darwin" && process.platform !== "linux") {
+    if (
+      process.platform !== "win32" &&
+      process.platform !== "darwin" &&
+      process.platform !== "linux"
+    ) {
       return;
     }
 
     const existing = this.terminals.get(id);
-    if (existing?.pid === pid) {
-      if (generation !== undefined) existing.generation = generation;
-      return;
-    }
+    const existingGeneration = existing?.generation;
+    const comparable = existingGeneration !== undefined && generation !== undefined;
     // A predecessor's PID that arrives after its successor registered must not
-    // displace it — generations only grow per id.
-    if (
-      existing?.generation !== undefined &&
-      generation !== undefined &&
-      generation < existing.generation
-    ) {
+    // displace it (or rewind its generation) — generations only grow per id.
+    if (comparable && generation < existingGeneration) return;
+    // Same incarnation reporting again. A newer incarnation that landed on the
+    // same (recycled) PID still re-registers below so the reaper captures the
+    // new process's identity.
+    if (existing?.pid === pid && (!comparable || generation === existingGeneration)) {
+      if (generation !== undefined) existing.generation = generation;
       return;
     }
     if (existing) this.releasePid(existing.pid);

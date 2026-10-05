@@ -1309,9 +1309,8 @@ describe("registerShutdownHandler", () => {
       const spies: Array<{ mockRestore: () => void }> = [];
 
       async function quitWith(waitForHostsExited: () => Promise<boolean>) {
-        const { terminalCrashReapService } = await import(
-          "../../services/TerminalCrashReapService.js"
-        );
+        const { terminalCrashReapService } =
+          await import("../../services/TerminalCrashReapService.js");
         const order: string[] = [];
         const disarm = vi
           .spyOn(terminalCrashReapService, "dispose")

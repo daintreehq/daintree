@@ -38,8 +38,11 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
       const terminalInfo = ptyManager.getTerminal(id);
       if (!terminalInfo) return; // terminal gone — abandon the retry
       // A same-id respawn replaced the incarnation this retry was resolving;
-      // its own spawn emits (or retries) the successor's PID.
+      // its own spawn emits (or retries) the successor's PID. An incarnation
+      // that already exited (kept for its scrollback) has no live PID to
+      // report — Main has already released it.
       if (terminalInfo.launchGeneration !== launchGeneration) return;
+      if (terminalInfo.isExited || terminalInfo.wasKilled) return;
       const pid = terminalInfo.ptyProcess?.pid;
       if (isValidPid(pid)) {
         sendEvent(withGeneration({ type: "terminal-pid", id, pid }, launchGeneration));

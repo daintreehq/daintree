@@ -514,8 +514,14 @@ describe("PtyClient fabric", () => {
       expect(crashReap.attachTerminal).toHaveBeenCalledWith("t1", 11111, expect.any(Number));
       expect(crashReap.attachTerminal).toHaveBeenCalledWith("t2", 22222, expect.any(Number));
 
-      shardA.child.emit("message", { type: "exit", id: "t1", exitCode: 0, launchGeneration: 7 });
-      expect(crashReap.detachTerminal).toHaveBeenCalledWith("t1", 7);
+      const generation = crashReap.attachTerminal.mock.calls.find((c) => c[0] === "t1")?.[2];
+      shardA.child.emit("message", {
+        type: "exit",
+        id: "t1",
+        exitCode: 0,
+        launchGeneration: generation,
+      });
+      expect(crashReap.detachTerminal).toHaveBeenCalledWith("t1", generation);
       expect(crashReap.detachTerminal).not.toHaveBeenCalledWith("t2", expect.anything());
       client.dispose();
     });
