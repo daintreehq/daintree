@@ -266,12 +266,17 @@ export function useSubagents(
     fetchSubagents(false);
   }, [fetchSubagents]);
 
-  // Claude's settle bypasses the floor: the poll stops at this point unless a
-  // child is already known to be live, so a child spawned since the last poll
-  // would otherwise go unseen until something else asked again.
+  // The poll stops at a settle unless a child is already known to be live, so
+  // Claude gets one trailing look once the floor has passed: a child spawned
+  // since the last poll would otherwise go unseen until something else asked.
+  // Trailing rather than forced, so a parent flickering in and out of a settled
+  // state still cannot read the store more often than the floor allows.
   useEffect(() => {
     if (!agentState || !SETTLED_STATES.has(agentState)) return;
-    fetchSubagents(provider === "claude");
+    fetchSubagents(false);
+    if (provider !== "claude") return;
+    const timer = setTimeout(() => fetchSubagents(false, true), CLAUDE_SUBAGENT_POLL_MS);
+    return () => clearTimeout(timer);
   }, [agentState, provider, fetchSubagents]);
 
   const refresh = useCallback(() => fetchSubagents(true), [fetchSubagents]);

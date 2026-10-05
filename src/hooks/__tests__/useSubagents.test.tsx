@@ -327,6 +327,28 @@ describe("useSubagents", () => {
       unmount();
     });
 
+    it("does not let a parent flickering in and out of a settle outrun the floor", async () => {
+      listClaudeSubagents.mockResolvedValue(claudeOk());
+      const { rerender, unmount } = renderHook(
+        ({ agentState }: { agentState: "working" | "idle" }) =>
+          useSubagents("t1", { provider: "claude", agentState }),
+        { initialProps: { agentState: "idle" } as { agentState: "working" | "idle" } }
+      );
+      await advancePolls(0);
+
+      for (let i = 0; i < 10; i += 1) {
+        rerender({ agentState: "working" });
+        rerender({ agentState: "idle" });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(CLAUDE_SUBAGENT_POLL_MS / 10);
+        });
+      }
+
+      // Five seconds of flicker: the mount lookup and at most one more.
+      expect(listClaudeSubagents.mock.calls.length).toBeLessThanOrEqual(2);
+      unmount();
+    });
+
     it("stops once the parent has settled and nothing it spawned is live", async () => {
       // Unknown is not live: a quiet child nobody can account for does not
       // keep the poll alive any more than a finished one does.
@@ -338,7 +360,8 @@ describe("useSubagents", () => {
       );
 
       await advancePolls(3);
-      expect(listClaudeSubagents).toHaveBeenCalledTimes(1);
+      // The mount lookup, the one trailing look after the settle, then nothing.
+      expect(listClaudeSubagents).toHaveBeenCalledTimes(2);
       unmount();
     });
 
@@ -371,7 +394,11 @@ describe("useSubagents", () => {
       });
       rerender({ agentState: "idle" });
       await advancePolls(0);
+      // Inside the floor, the settle itself is absorbed...
+      expect(listClaudeSubagents).toHaveBeenCalledTimes(1);
 
+      // ...and the trailing look once it has passed finds the child.
+      await advancePolls(1);
       expect(listClaudeSubagents).toHaveBeenCalledTimes(2);
       expect(
         result.current.result?.status === "ok" && result.current.result.subagents
@@ -380,8 +407,9 @@ describe("useSubagents", () => {
     });
 
     it("keeps to the poll interval when each lookup takes a while to answer", async () => {
+      const LOOKUP_LATENCY_MS = 200;
       listClaudeSubagents.mockImplementation(
-        () => new Promise((resolve) => setTimeout(() => resolve(claudeOk()), 200))
+        () => new Promise((resolve) => setTimeout(() => resolve(claudeOk()), LOOKUP_LATENCY_MS))
       );
       const { unmount } = renderHook(() =>
         useSubagents("t1", { provider: "claude", agentState: "working" })
