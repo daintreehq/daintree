@@ -78,7 +78,7 @@ describe("setFileBrowserView", () => {
     setFileBrowserView("panel-1", { browserSelectedPath: null });
 
     const panel = store.get().panelsById["panel-1"];
-    expect("browserSelectedPath" in panel).toBe(false);
+    expect(Object.keys(panel ?? {})).not.toContain("browserSelectedPath");
     expect(panel).toMatchObject({ browserExpandedPaths: ["src"] });
   });
 
@@ -87,7 +87,7 @@ describe("setFileBrowserView", () => {
     setFileBrowserView("panel-1", { browserSelectedPath: null, browserHideDotfiles: true });
 
     const panel = store.get().panelsById["panel-1"];
-    expect("browserSelectedPath" in panel).toBe(false);
+    expect(Object.keys(panel ?? {})).not.toContain("browserSelectedPath");
     expect(panel).toMatchObject({ browserHideDotfiles: true });
   });
 
