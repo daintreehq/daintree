@@ -144,27 +144,34 @@ static starttime_t kp_start(const struct kinfo_proc *kp) {
 }
 #endif
 
-/* Read a process's start time — a stable per-process identity anchor — so a
- * reused PID can't trick the supervisor into reaping an unrelated process.
- * Returns 1 and sets *out on success, 0 if the process is gone or unreadable. */
-static int get_starttime(pid_t pid, starttime_t *out) {
+/* Read a process's parent and start time. The start time is a stable
+ * per-process identity anchor, so a reused PID can't trick the supervisor into
+ * reaping an unrelated process. Returns 1 on success, 0 if the process is gone
+ * or unreadable. */
+static int read_identity(pid_t pid, pid_t *ppid, starttime_t *start) {
 #if defined(__linux__)
   char pidstr[32];
   snprintf(pidstr, sizeof(pidstr), "%ld", (long)pid);
-  pid_t ppid;
-  return read_stat(pidstr, &ppid, out);
+  return read_stat(pidstr, ppid, start);
 #elif defined(__APPLE__)
   int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, (int)pid};
   struct kinfo_proc kp;
   size_t len = sizeof(kp);
   if (sysctl(mib, 4, &kp, &len, NULL, 0) != 0 || len == 0) return 0;
-  *out = kp_start(&kp);
+  *ppid = kp.kp_eproc.e_ppid;
+  *start = kp_start(&kp);
   return 1;
 #else
   (void)pid;
-  (void)out;
+  (void)ppid;
+  (void)start;
   return 0;
 #endif
+}
+
+static int get_starttime(pid_t pid, starttime_t *out) {
+  pid_t ppid;
+  return read_identity(pid, &ppid, out);
 }
 
 /* Signal `pid` only if it is still the process we recorded. */
@@ -331,25 +338,17 @@ static int snapshot_procs(proc_t **out) {
   return n;
 }
 
-/* A child adopted through its parent link must still have that parent: on
- * Linux the /proc walk is not atomic, so a tracked parent could have died and
- * had its pid reused between reading the parent and reading the child. macOS
- * reads the whole table in one sysctl, which is already consistent. */
+/* A child adopted through its parent link must still have that parent. The
+ * table is not read atomically on either platform (Linux walks /proc; macOS
+ * resolves KERN_PROC_ALL pid by pid), so a tracked parent could have died and
+ * had its pid reused between reading the parent and reading the child. A
+ * child whose parent has since exited is left for a later tick to prove. */
 static int adoption_holds(const proc_t *child, const proc_t *parent) {
-#if defined(__linux__)
-  char pidstr[32];
-  snprintf(pidstr, sizeof(pidstr), "%ld", (long)child->pid);
-  pid_t ppid;
-  starttime_t start;
-  if (!read_stat(pidstr, &ppid, &start)) return 0;
+  pid_t ppid, parent_ppid;
+  starttime_t start, parent_start;
+  if (!read_identity(child->pid, &ppid, &start)) return 0;
   if (start != child->start || ppid != parent->pid) return 0;
-  starttime_t parent_start;
-  return get_starttime(parent->pid, &parent_start) && parent_start == parent->start;
-#else
-  (void)child;
-  (void)parent;
-  return 1;
-#endif
+  return read_identity(parent->pid, &parent_ppid, &parent_start) && parent_start == parent->start;
 }
 
 /* Recompute the tracked set against a sorted snapshot. A snapshot process is a
@@ -375,7 +374,7 @@ static int refresh(const proc_t *procs, int n) {
     if (g_entries[i].is_root) nroots++;
     int j = find_proc(procs, n, g_entries[i].pid);
     if (j < 0 || procs[j].start != g_entries[i].start) continue;
-    member[j] = 1;
+    member[j] = 1; /* already-recorded identity */
   }
 
   /* Propagate to children until stable; each pass extends at least one level. */
@@ -387,17 +386,21 @@ static int refresh(const proc_t *procs, int n) {
       int j = find_proc(procs, n, procs[i].ppid);
       if (j < 0 || !member[j] || j == i) continue;
       if (!adoption_holds(&procs[i], &procs[j])) continue;
-      member[i] = 1;
+      member[i] = 2; /* newly adopted */
       changed = 1;
     }
   }
 
   /* Build the replacement set before committing it, so an allocation failure
    * leaves every previously recorded identity in place. Roots come first and
-   * are kept even when dead; then every live member. */
+   * are kept even when dead, then identities already recorded, then new
+   * adoptions — so a fork bomb hitting MAX_TRACKED can't push out what we
+   * already knew. */
   int nmembers = 0;
-  for (int i = 0; i < n; i++) nmembers += member[i];
-  int cap = nroots + nmembers > 0 ? nroots + nmembers : 1;
+  for (int i = 0; i < n; i++) nmembers += member[i] != 0;
+  int cap = nroots + nmembers;
+  if (cap > MAX_TRACKED) cap = MAX_TRACKED > nroots ? MAX_TRACKED : nroots;
+  if (cap < 1) cap = 1;
   entry_t *next = (entry_t *)malloc((size_t)cap * sizeof(entry_t));
   if (!next) {
     free(member);
@@ -407,21 +410,25 @@ static int refresh(const proc_t *procs, int n) {
   for (int i = 0; i < g_nentries; i++) {
     if (g_entries[i].is_root) next[w++] = g_entries[i];
   }
-  for (int i = 0; i < n; i++) {
-    if (!member[i]) continue;
-    g_member_idx[g_nmembers++] = i;
-    int is_root = 0;
-    for (int r = 0; r < nroots; r++) {
-      if (next[r].pid == procs[i].pid && next[r].start == procs[i].start) {
-        is_root = 1;
-        break;
+  for (int pass = 1; pass <= 2; pass++) {
+    for (int i = 0; i < n; i++) {
+      if (member[i] != pass) continue;
+      int is_root = 0;
+      for (int r = 0; r < nroots; r++) {
+        if (next[r].pid == procs[i].pid && next[r].start == procs[i].start) {
+          is_root = 1;
+          break;
+        }
       }
+      if (!is_root) {
+        if (w >= cap) continue;
+        next[w].pid = procs[i].pid;
+        next[w].start = procs[i].start;
+        next[w].is_root = 0;
+        w++;
+      }
+      g_member_idx[g_nmembers++] = i;
     }
-    if (is_root) continue;
-    next[w].pid = procs[i].pid;
-    next[w].start = procs[i].start;
-    next[w].is_root = 0;
-    w++;
   }
   free(g_entries);
   g_entries = next;
