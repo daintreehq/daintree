@@ -12,6 +12,7 @@ import {
   PanelLeftOpen,
   RefreshCw,
   WrapText,
+  X,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
@@ -221,6 +222,11 @@ export interface FileBrowserViewerProps {
   missingFilePath: string | null;
   /** Points the viewer at a folder's listing; the missing state's way out. */
   onShowFolder: (path: string) => void;
+  /**
+   * Closes whatever the viewer is showing — back to the listing the file was
+   * opened from, or to the idle body (#13194). The pane decides which.
+   */
+  onCloseSelection: () => void;
 }
 
 /** Toolbar sort menu entries, in menu order. */
@@ -329,6 +335,7 @@ export function FileBrowserViewer({
   hiddenCounts,
   missingFilePath,
   onShowFolder,
+  onCloseSelection,
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
   // The reader's explicit Source/Rendered choice, `null` until they touch the
@@ -682,6 +689,23 @@ export function FileBrowserViewer({
         ? join(basePath, missingFilePath)
         : null);
 
+  // Closing into the idle body unmounts the close button under the user's
+  // focus; hand it to the tree toggle, the one control every layout keeps.
+  // Closing back to a listing keeps the button mounted, so focus stays put.
+  // Armed by the click and spent on the next subject change, so a close the
+  // dirty-document guard cancels can't move focus later.
+  const sidebarToggleRef = useRef<HTMLDivElement>(null);
+  const closeFocusPending = useRef(false);
+  useEffect(() => {
+    if (!closeFocusPending.current) return;
+    closeFocusPending.current = false;
+    if (identityAbsolutePath === null) sidebarToggleRef.current?.querySelector("button")?.focus();
+  }, [identityAbsolutePath]);
+  const handleCloseSelection = () => {
+    closeFocusPending.current = true;
+    onCloseSelection();
+  };
+
   const handleExternalAction = useCallback(
     async (target: ExternalTarget) => {
       if (!filePath) return;
@@ -797,20 +821,22 @@ export function FileBrowserViewer({
         label="File viewer controls"
         compactBelow={showModeToggle ? COMPACT_BELOW_WITH_MODES : COMPACT_BELOW}
       >
-        <FileViewerToolbar.IconButton
-          label="Toggle file tree"
-          expanded={!sidebarCollapsed}
-          controls={sidebarCollapsed ? undefined : treeSidebarId}
-          sidebarToggle
-          onClick={onToggleSidebar}
-          data-testid="file-browser-sidebar-toggle"
-        >
-          {sidebarCollapsed ? (
-            <PanelLeftOpen className={TOOLBAR_ICON_CLASS} />
-          ) : (
-            <PanelLeftClose className={TOOLBAR_ICON_CLASS} />
-          )}
-        </FileViewerToolbar.IconButton>
+        <div ref={sidebarToggleRef} className="contents">
+          <FileViewerToolbar.IconButton
+            label="Toggle file tree"
+            expanded={!sidebarCollapsed}
+            controls={sidebarCollapsed ? undefined : treeSidebarId}
+            sidebarToggle
+            onClick={onToggleSidebar}
+            data-testid="file-browser-sidebar-toggle"
+          >
+            {sidebarCollapsed ? (
+              <PanelLeftOpen className={TOOLBAR_ICON_CLASS} />
+            ) : (
+              <PanelLeftClose className={TOOLBAR_ICON_CLASS} />
+            )}
+          </FileViewerToolbar.IconButton>
+        </div>
         {showModeToggle && (
           <div ref={modeToggleRef} className="contents">
             <FileViewerToolbar.ModeControl<FileViewMode>
@@ -888,6 +914,17 @@ export function FileBrowserViewer({
               openIcon={openAction.icon}
               onOpen={runOpen}
             />
+          )}
+          {/* Outside `FileActions` so it never folds into "More actions": it
+              is the only way back to the changed-files summary (#13194). */}
+          {identityAbsolutePath !== null && (
+            <FileViewerToolbar.IconButton
+              label={folderPath !== null ? "Close folder" : "Close file"}
+              onClick={handleCloseSelection}
+              data-testid="file-browser-close-file"
+            >
+              <X className={TOOLBAR_ICON_CLASS} />
+            </FileViewerToolbar.IconButton>
           )}
         </FileViewerToolbar.Actions>
       </FileViewerToolbar.Root>

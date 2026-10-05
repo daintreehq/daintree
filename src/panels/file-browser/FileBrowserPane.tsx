@@ -104,7 +104,7 @@ export function FileBrowserPane({
       const changesDocument =
         "browserSelectedPath" in patch &&
         current?.kind === "file-browser" &&
-        patch.browserSelectedPath !== current.browserSelectedPath;
+        (patch.browserSelectedPath ?? undefined) !== current.browserSelectedPath;
       if (!changesDocument) {
         updateFileBrowserView(panelId, patch);
         return;
@@ -567,6 +567,30 @@ export function FileBrowserPane({
     },
     [id, setFileBrowserView]
   );
+
+  // Where closing the viewer's subject goes back to (#13194). Only a folder
+  // listing row records one: the summary and the tree sit beside the viewer
+  // rather than inside it, so closing a file opened from either returns to the
+  // idle body, which is the summary on a dirty worktree. Session-only, and
+  // honoured only while `target` is still what the viewer shows — a cancelled
+  // or superseded navigation simply never matches.
+  const closeReturn = useRef<{ target: string; from: string } | null>(null);
+  const handleSelectListingEntry = useCallback(
+    (path: string) => {
+      if (listingPath !== null) closeReturn.current = { target: path, from: listingPath };
+      showInViewer(path);
+    },
+    [listingPath, showInViewer]
+  );
+  const handleCloseSelection = useCallback(() => {
+    const current = usePanelStore.getState().panelsById[id];
+    const selected = current?.kind === "file-browser" ? current.browserSelectedPath : undefined;
+    const back = closeReturn.current;
+    closeReturn.current = null;
+    setFileBrowserView(id, {
+      browserSelectedPath: back !== null && back.target === selected ? back.from : null,
+    });
+  }, [id, setFileBrowserView]);
 
   // The explicit "show me this folder" gestures: Enter, double-click, and the
   // row menu's "Show contents". They clear a collapsed viewer as well as moving
@@ -1405,7 +1429,7 @@ export function FileBrowserPane({
               folderHasHiddenDotfiles={hideDotfiles && listingHasHiddenDotfiles}
               folderHiddenCounts={listingHiddenCounts}
               onShowDotfiles={handleShowDotfiles}
-              onSelectEntry={showInViewer}
+              onSelectEntry={handleSelectListingEntry}
               rowContextMenu={rowContextMenu}
               basePath={basePath}
               sort={sort}
@@ -1423,6 +1447,7 @@ export function FileBrowserPane({
                 selectionMissing && selectedPath !== null && selectionInRoot ? selectedPath : null
               }
               onShowFolder={showFolderContents}
+              onCloseSelection={handleCloseSelection}
             />
           </div>
         )}

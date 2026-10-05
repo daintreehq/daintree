@@ -71,6 +71,44 @@ describe("setFileBrowserView", () => {
     });
   });
 
+  // #13194: `null` is the only way to close what the viewer shows; `undefined`
+  // still means "leave the selection alone".
+  it("clears the selection on a null patch, dropping the key rather than storing null", () => {
+    setFileBrowserView("panel-1", { browserSelectedPath: "src/app.ts" });
+    setFileBrowserView("panel-1", { browserSelectedPath: null });
+
+    const panel = store.get().panelsById["panel-1"];
+    expect("browserSelectedPath" in panel).toBe(false);
+    expect(panel).toMatchObject({ browserExpandedPaths: ["src"] });
+  });
+
+  it("clears the selection alongside other fields in the same patch", () => {
+    setFileBrowserView("panel-1", { browserSelectedPath: "src/app.ts" });
+    setFileBrowserView("panel-1", { browserSelectedPath: null, browserHideDotfiles: true });
+
+    const panel = store.get().panelsById["panel-1"];
+    expect("browserSelectedPath" in panel).toBe(false);
+    expect(panel).toMatchObject({ browserHideDotfiles: true });
+  });
+
+  it("treats clearing an absent selection as a no-op", () => {
+    const before = store.get().panelsById["panel-1"];
+
+    setFileBrowserView("panel-1", { browserSelectedPath: null });
+
+    expect(store.get().panelsById["panel-1"]).toBe(before);
+  });
+
+  it("keeps the selection when the patch leaves it undefined", () => {
+    setFileBrowserView("panel-1", { browserSelectedPath: "src/app.ts" });
+    setFileBrowserView("panel-1", { browserSelectedPath: undefined, browserHideDotfiles: true });
+
+    expect(store.get().panelsById["panel-1"]).toMatchObject({
+      browserSelectedPath: "src/app.ts",
+      browserHideDotfiles: true,
+    });
+  });
+
   it("leaves the panel object identical when nothing actually changes", () => {
     const before = store.get().panelsById["panel-1"];
 

@@ -299,6 +299,7 @@ interface ViewerOpts {
   onShowFolder?: (path: string) => void;
   /** Worktree-relative path of the open file; defaults to its file name. */
   relativePath?: string | null;
+  onCloseSelection?: () => void;
 }
 
 function change(relativePath: string, status: GitStatus = "modified"): WorkingTreeFileChange {
@@ -356,6 +357,7 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         canCollapseAll={opts.canCollapseAll ?? false}
         missingFilePath={opts.missingFilePath ?? null}
         onShowFolder={opts.onShowFolder ?? vi.fn()}
+        onCloseSelection={opts.onCloseSelection ?? vi.fn()}
       />
     </TooltipProvider>
   );
@@ -1814,8 +1816,14 @@ describe("FileBrowserViewer copy file contents (#12136)", () => {
     );
     // The exact tail, not index arithmetic: a difference of 2 also holds with an
     // unrelated control wedged between them. FilePane's suite asserts the
-    // identical suffix — that parity is what #12136 asked for.
-    expect(buttons.slice(-3)).toEqual(["Copy file contents", revealCopy().label, "Open in editor"]);
+    // identical suffix — that parity is what #12136 asked for. Close trails it:
+    // it closes the browser's subject, a control FilePane has no use for (#13194).
+    expect(buttons.slice(-4)).toEqual([
+      "Copy file contents",
+      revealCopy().label,
+      "Open in editor",
+      "Close file",
+    ]);
   });
 });
 
@@ -2060,6 +2068,70 @@ describe("viewer identity and ways out", () => {
     expect(screen.queryByRole("button", { name: revealCopy().label })).toBeNull();
     // The identity is what the fold protects, so it must still be there.
     expect(screen.getByRole("button", { name: /^Copy file path/ })).toBeTruthy();
+  });
+});
+
+describe("closing the viewer's subject (#13194)", () => {
+  it("offers Close for an open file and hands the gesture to the pane", async () => {
+    readMock.mockResolvedValue({ content: "x" });
+    const onCloseSelection = vi.fn();
+    renderViewer("/repo/src/notes.txt", { onCloseSelection });
+    await screen.findByTestId("code-viewer-mock");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close file" }));
+
+    expect(onCloseSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the control for a listed folder and a deleted file", () => {
+    const { unmount } = renderViewer(null, { folderPath: "src", folderRows: [] });
+    expect(screen.getByRole("button", { name: "Close folder" })).toBeTruthy();
+    unmount();
+
+    renderViewer(null, { missingFilePath: "src/gone.ts" });
+    expect(screen.getByRole("button", { name: "Close file" })).toBeTruthy();
+  });
+
+  it("has nothing to close in the idle body", () => {
+    renderViewer(null, { changedFiles: [change("src/app.ts")] });
+
+    expect(screen.queryByTestId("file-browser-close-file")).toBeNull();
+  });
+
+  it("keeps Close out of the folded menu at compact widths", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, 320, 30)
+    );
+    readMock.mockResolvedValue({ content: "x" });
+    renderViewer("/repo/src/notes.txt");
+    await screen.findByTestId("code-viewer-mock");
+
+    expect(screen.getByRole("button", { name: "More actions" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Close file" })).toBeTruthy();
+  });
+
+  it("moves focus to the tree toggle once the close lands on the idle body", async () => {
+    readMock.mockResolvedValue({ content: "x" });
+    const { rerender } = renderViewer("/repo/src/notes.txt");
+    await screen.findByTestId("code-viewer-mock");
+    const close = screen.getByRole("button", { name: "Close file" });
+    close.focus();
+    fireEvent.click(close);
+
+    rerender(viewerJsx(null, { changedFiles: [change("src/app.ts")] }));
+
+    expect(document.activeElement).toBe(screen.getByTestId("file-browser-sidebar-toggle"));
+  });
+
+  it("leaves focus alone when the close returns to a listing", async () => {
+    readMock.mockResolvedValue({ content: "x" });
+    const { rerender } = renderViewer("/repo/src/notes.txt");
+    await screen.findByTestId("code-viewer-mock");
+    fireEvent.click(screen.getByRole("button", { name: "Close file" }));
+
+    rerender(viewerJsx(null, { folderPath: "src", folderRows: [] }));
+
+    expect(document.activeElement).not.toBe(screen.getByTestId("file-browser-sidebar-toggle"));
   });
 });
 
