@@ -85,6 +85,30 @@ describe("listClaudeSubagents", () => {
     });
   });
 
+  it.each([
+    ["the agent exited back to the shell", { agentState: "exited" }],
+    ["the terminal process exited", { isExited: true }],
+    ["the terminal has no live process", { hasPty: false }],
+  ])("refuses the old session's children once %s", async (_label, overrides) => {
+    await seedChild("aaa1", [TASK, REPLY]);
+    getTerminalAsync.mockResolvedValue(claudeTerminal(overrides));
+    await expect(listClaudeSubagents("t1")).resolves.toEqual({
+      status: "unavailable",
+      reason: "provider-mismatch",
+    });
+    await expect(readClaudeSubagentTranscript("t1", "aaa1")).resolves.toEqual({
+      status: "unavailable",
+      reason: "provider-mismatch",
+    });
+  });
+
+  it("still answers for a restored pane the detector has not reached yet", async () => {
+    await seedChild("aaa1", [TASK, REPLY]);
+    getTerminalAsync.mockResolvedValue(claudeTerminal());
+    const result = await listClaudeSubagents("t1");
+    expect(result.status).toBe("ok");
+  });
+
   it("accepts a terminal detected as Claude even when it was launched as something else", async () => {
     getTerminalAsync.mockResolvedValue(
       claudeTerminal({ launchAgentId: "bash", detectedAgentId: "claude" })

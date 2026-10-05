@@ -4,10 +4,11 @@ import { isElectronAvailable } from "./useElectron";
 import { logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { AgentState } from "@/types";
-import type {
-  AgentSubagentUnavailableReason,
-  AgentSubagentsResult,
-  SubagentProvider,
+import {
+  isLiveSubagentStatus,
+  type AgentSubagentUnavailableReason,
+  type AgentSubagentsResult,
+  type SubagentProvider,
 } from "@shared/types/ipc/agentSubagents";
 
 /**
@@ -17,6 +18,19 @@ import type {
  * refresh bypasses it — the user asked.
  */
 export const SUBAGENT_REFRESH_THROTTLE_MS = 20_000;
+
+/**
+ * Claude's floor, and its polling interval while children can be running.
+ * Its lookup is a directory listing plus a stat per child — a transcript is
+ * only re-read once it has changed — so it can afford to keep up with a parent
+ * that is delegating. Codex has no equivalent: each lookup spawns a process,
+ * and `notLoaded` children give it no liveness to keep up with anyway.
+ */
+export const CLAUDE_SUBAGENT_POLL_MS = 5_000;
+
+function automaticFloor(provider: SubagentProvider): number {
+  return provider === "claude" ? CLAUDE_SUBAGENT_POLL_MS : SUBAGENT_REFRESH_THROTTLE_MS;
+}
 
 /**
  * States where the parent has stopped producing output, so any subagent it
@@ -90,7 +104,7 @@ const MAX_CACHED_TERMINALS = 64;
 function cacheKey(
   provider: SubagentProvider,
   terminalId: string,
-  generation: number | undefined
+  generation: number | string | undefined
 ): string {
   return `${provider}:${terminalId}:${generation ?? 0}`;
 }
@@ -116,16 +130,20 @@ function rememberLookup(
 }
 
 /**
- * Poll-free view of a terminal's spawned subagents: one query on mount, one
- * whenever the parent settles, and one per manual refresh. Which store gets
- * asked is the provider adapter's business, not this hook's.
+ * View of a terminal's spawned subagents: one query on mount, one whenever the
+ * parent settles, and one per manual refresh. Claude is also polled while its
+ * children can be running — the parent is working, or the last answer still
+ * had a child live — since that is exactly when a settle-only refresh would
+ * leave the count describing the past. Which store gets asked is the provider
+ * adapter's business, not this hook's.
  */
 export function useSubagents(
   terminalId: string,
   options: {
     provider: SubagentProvider | null;
     agentState?: AgentState;
-    generation?: number;
+    /** Anything that changes when the process or agent session behind the pane does. */
+    generation?: number | string;
   }
 ): UseSubagentsResult {
   const { provider, agentState, generation } = options;
@@ -157,7 +175,9 @@ export function useSubagents(
   }, []);
 
   const fetchSubagents = useCallback(
-    (force: boolean) => {
+    // `quiet` is for the background poll: it refreshes the list without
+    // driving the refresh button's busy state every few seconds.
+    (force: boolean, quiet = false) => {
       if (!provider || !isElectronAvailable()) return;
       const settle = (next: AgentSubagentsResult) => {
         // Answers the key it was asked under. Without this an in-flight
@@ -177,6 +197,10 @@ export function useSubagents(
         });
       };
       const follow = (request: Promise<AgentSubagentsResult>) => {
+        if (quiet) {
+          void request.then(settle);
+          return;
+        }
         setIsLoading(true);
         void request.then(settle).finally(() => {
           if (mountedRef.current) setIsLoading(false);
@@ -191,7 +215,7 @@ export function useSubagents(
       }
       const now = Date.now();
       const cached = lookupCache.get(key);
-      if (!force && cached && now - cached.at < SUBAGENT_REFRESH_THROTTLE_MS) {
+      if (!force && cached && now - cached.at < automaticFloor(provider)) {
         // Still fresh: adopt it so a remount inside the window shows the same
         // list it had before, without spawning anything.
         setEntry({ key, result: cached.result, refreshError: cached.refreshError });
@@ -207,8 +231,10 @@ export function useSubagents(
           next.status === "unavailable" &&
           TRANSIENT_REASONS.has(next.reason) &&
           previous?.status === "ok";
-        if (keepPrevious) rememberLookup(key, previous, Date.now(), next.reason);
-        else rememberLookup(key, next, Date.now());
+        // Stamped with when the lookup was asked, not when it answered, so a
+        // poll on the floor's own interval is never just short of it.
+        if (keepPrevious) rememberLookup(key, previous, now, next.reason);
+        else rememberLookup(key, next, now);
       };
       const request = adapter
         .list({ terminalId })
@@ -240,10 +266,18 @@ export function useSubagents(
     fetchSubagents(false);
   }, [fetchSubagents]);
 
+  // The poll stops at a settle unless a child is already known to be live, so
+  // Claude gets one trailing look once the floor has passed: a child spawned
+  // since the last poll would otherwise go unseen until something else asked.
+  // Trailing rather than forced, so a parent flickering in and out of a settled
+  // state still cannot read the store more often than the floor allows.
   useEffect(() => {
     if (!agentState || !SETTLED_STATES.has(agentState)) return;
     fetchSubagents(false);
-  }, [agentState, fetchSubagents]);
+    if (provider !== "claude") return;
+    const timer = setTimeout(() => fetchSubagents(false, true), CLAUDE_SUBAGENT_POLL_MS);
+    return () => clearTimeout(timer);
+  }, [agentState, provider, fetchSubagents]);
 
   const refresh = useCallback(() => fetchSubagents(true), [fetchSubagents]);
 
@@ -251,6 +285,21 @@ export function useSubagents(
   // Reporting null rather than the stale list is what keeps a respawned pane
   // from showing the dead process's children until the new lookup returns.
   const current = entry?.key === key ? entry : null;
+
+  // Children outlive the parent's turn when they run in the background, so a
+  // live child keeps the poll going after the parent settles, until the list
+  // says it has finished. Runs whether or not anything is on screen: a session
+  // whose first answer was empty has to be asked again to find its first child.
+  const hasLiveChild =
+    current?.result.status === "ok" &&
+    current.result.subagents.some((subagent) => isLiveSubagentStatus(subagent.status));
+  const shouldPoll = provider === "claude" && (agentState === "working" || hasLiveChild);
+  useEffect(() => {
+    if (!shouldPoll) return;
+    const timer = setInterval(() => fetchSubagents(false, true), CLAUDE_SUBAGENT_POLL_MS);
+    return () => clearInterval(timer);
+  }, [shouldPoll, fetchSubagents]);
+
   return {
     result: current?.result ?? null,
     isLoading,

@@ -273,6 +273,19 @@ describe("listCodexSubagents", () => {
     expect(runSession).not.toHaveBeenCalled();
   });
 
+  it("refuses a pane whose Codex has exited back to the shell, without spawning anything", async () => {
+    getTerminalAsync.mockResolvedValue({ ...codexTerminal, agentState: "exited" });
+    await expect(listCodexSubagents("t1")).resolves.toEqual({
+      status: "unavailable",
+      reason: "provider-mismatch",
+    });
+    await expect(readCodexSubagentTranscript("t1", "child")).resolves.toMatchObject({
+      status: "unavailable",
+      reason: "provider-mismatch",
+    });
+    expect(runSession).not.toHaveBeenCalled();
+  });
+
   it("reports terminal-unknown for an id the pty host has never heard of", async () => {
     getTerminalAsync.mockResolvedValue(null);
     await expect(listCodexSubagents("ghost")).resolves.toEqual({

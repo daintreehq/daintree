@@ -25,6 +25,7 @@
 
 import { realpath } from "fs/promises";
 import { getPtyClient } from "../../window/serviceRefs.js";
+import { subagentTerminalAgentId } from "../subagentTerminalAgent.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
@@ -299,10 +300,9 @@ async function resolveTerminal(
 ): Promise<ResolvedTerminal | { status: "unavailable"; reason: AgentSubagentUnavailableReason }> {
   const info = await getPtyClient()?.getTerminalAsync(terminalId);
   if (!info) return { status: "unavailable", reason: "terminal-unknown" };
-  // Live detection wins over the launch hint, matching the renderer. A pane
-  // relaunched onto another agent keeps its original `launchAgentId`, and an
-  // `||` here would let a direct IPC call read the previous agent's children.
-  if ((info.detectedAgentId ?? info.launchAgentId) !== "codex") {
+  // An exited agent answers for nothing, even though the record still holds
+  // its launch hint and session id.
+  if (subagentTerminalAgentId(info) !== "codex") {
     return { status: "unavailable", reason: "provider-mismatch" };
   }
   if (!info.cwd) return { status: "unavailable", reason: "terminal-unknown" };
