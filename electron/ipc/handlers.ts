@@ -72,6 +72,7 @@ import { initForgeHealthRelay, disposeForgeHealthRelay } from "../services/forge
 import { registerRunHistoryHandlers } from "./handlers/runHistory.js";
 import { registerCopyTreeHistoryHandlers } from "./handlers/copyTreeHistory.js";
 import { registerFleetHandlers } from "./handlers/fleet.js";
+import { registerCanopyHandlers } from "./handlers/canopy.js";
 import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
 import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
 import { registerHelpAssistantHandlers } from "./handlers/helpAssistant.js";
@@ -220,6 +221,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerRunHistoryHandlers());
     register(() => registerCopyTreeHistoryHandlers(deps));
     register(() => registerFleetHandlers());
+    register(() => registerCanopyHandlers());
     register(() => registerVoiceInputHandlers(deps));
     register(() => registerMcpServerHandlers());
     register(() => registerHelpAssistantHandlers());

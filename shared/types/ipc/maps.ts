@@ -1722,6 +1722,9 @@ export interface IpcEventMap {
   "project:background-resize": { width: number; height: number };
   "project:stats-updated": ProjectStatusMap;
   "fleet:snapshot-updated": FleetSnapshot;
+  "canopy:snapshot-updated": import("./canopy.js").CanopySnapshot;
+  "canopy:terminal-data": import("./canopy.js").CanopyTerminalData;
+  "canopy:trash-requested": import("./canopy.js").CanopyTrashRequest;
   "project:updated": Project;
   /**
    * A project was put to sleep. Carries the project id so a window showing it

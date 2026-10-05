@@ -38,6 +38,62 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["app:get-version-info"]["args"]
     ): Promise<IpcInvokeMap["app:get-version-info"]["result"]>;
   };
+  canopy: {
+    activate(
+      ...args: IpcInvokeMap["canopy:activate"]["args"]
+    ): Promise<IpcInvokeMap["canopy:activate"]["result"]>;
+    answer(
+      ...args: IpcInvokeMap["canopy:answer"]["args"]
+    ): Promise<IpcInvokeMap["canopy:answer"]["result"]>;
+    archive(
+      ...args: IpcInvokeMap["canopy:archive"]["args"]
+    ): Promise<IpcInvokeMap["canopy:archive"]["result"]>;
+    captureBackdrop(
+      ...args: IpcInvokeMap["canopy:capture-backdrop"]["args"]
+    ): Promise<IpcInvokeMap["canopy:capture-backdrop"]["result"]>;
+    getSnapshot(
+      ...args: IpcInvokeMap["canopy:get-snapshot"]["args"]
+    ): Promise<IpcInvokeMap["canopy:get-snapshot"]["result"]>;
+    markSeen(
+      ...args: IpcInvokeMap["canopy:mark-seen"]["args"]
+    ): Promise<IpcInvokeMap["canopy:mark-seen"]["result"]>;
+    refresh(
+      ...args: IpcInvokeMap["canopy:refresh"]["args"]
+    ): Promise<IpcInvokeMap["canopy:refresh"]["result"]>;
+    runBranch(
+      ...args: IpcInvokeMap["canopy:run-branch"]["args"]
+    ): Promise<IpcInvokeMap["canopy:run-branch"]["result"]>;
+    setActive(
+      ...args: IpcInvokeMap["canopy:set-active"]["args"]
+    ): Promise<IpcInvokeMap["canopy:set-active"]["result"]>;
+    setScope(
+      ...args: IpcInvokeMap["canopy:set-scope"]["args"]
+    ): Promise<IpcInvokeMap["canopy:set-scope"]["result"]>;
+    terminalInput(
+      ...args: IpcInvokeMap["canopy:terminal-input"]["args"]
+    ): Promise<IpcInvokeMap["canopy:terminal-input"]["result"]>;
+    terminalResize(
+      ...args: IpcInvokeMap["canopy:terminal-resize"]["args"]
+    ): Promise<IpcInvokeMap["canopy:terminal-resize"]["result"]>;
+    terminalSendKey(
+      ...args: IpcInvokeMap["canopy:terminal-send-key"]["args"]
+    ): Promise<IpcInvokeMap["canopy:terminal-send-key"]["result"]>;
+    terminalSubmit(
+      ...args: IpcInvokeMap["canopy:terminal-submit"]["args"]
+    ): Promise<IpcInvokeMap["canopy:terminal-submit"]["result"]>;
+    trash(
+      ...args: IpcInvokeMap["canopy:trash"]["args"]
+    ): Promise<IpcInvokeMap["canopy:trash"]["result"]>;
+    unarchive(
+      ...args: IpcInvokeMap["canopy:unarchive"]["args"]
+    ): Promise<IpcInvokeMap["canopy:unarchive"]["result"]>;
+    unwatchTerminal(
+      ...args: IpcInvokeMap["canopy:unwatch-terminal"]["args"]
+    ): Promise<IpcInvokeMap["canopy:unwatch-terminal"]["result"]>;
+    watchTerminal(
+      ...args: IpcInvokeMap["canopy:watch-terminal"]["args"]
+    ): Promise<IpcInvokeMap["canopy:watch-terminal"]["result"]>;
+  };
   claude: {
     listSubagents(
       ...args: IpcInvokeMap["claude:list-subagents"]["args"]

@@ -114,6 +114,78 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
   };
+  "canopy:activate": {
+    args: [on: boolean];
+    result: import("./canopy.js").CanopySnapshot;
+  };
+  "canopy:answer": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget, label: string];
+    result: void;
+  };
+  "canopy:archive": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: void;
+  };
+  "canopy:capture-backdrop": {
+    args: [];
+    result: Uint8Array<ArrayBufferLike> | null;
+  };
+  "canopy:get-snapshot": {
+    args: [];
+    result: import("./canopy.js").CanopySnapshot;
+  };
+  "canopy:mark-seen": {
+    args: [runId: string];
+    result: void;
+  };
+  "canopy:refresh": {
+    args: [];
+    result: void;
+  };
+  "canopy:run-branch": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: string | null;
+  };
+  "canopy:set-active": {
+    args: [active: boolean];
+    result: import("./canopy.js").CanopySnapshot;
+  };
+  "canopy:set-scope": {
+    args: [workspaceId: string | null];
+    result: void;
+  };
+  "canopy:terminal-input": {
+    args: [watchId: number, data: string];
+    result: void;
+  };
+  "canopy:terminal-resize": {
+    args: [watchId: number, cols: number, rows: number];
+    result: void;
+  };
+  "canopy:terminal-send-key": {
+    args: [watchId: number, key: string];
+    result: void;
+  };
+  "canopy:terminal-submit": {
+    args: [watchId: number, text: string, imagePaths?: string[] | undefined];
+    result: void;
+  };
+  "canopy:trash": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: void;
+  };
+  "canopy:unarchive": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: void;
+  };
+  "canopy:unwatch-terminal": {
+    args: [];
+    result: void;
+  };
+  "canopy:watch-terminal": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: import("./canopy.js").CanopyTerminalView;
+  };
   "claude:list-subagents": {
     args: [__0: { terminalId: string }];
     result: import("./agentSubagents.js").AgentSubagentsResult;
