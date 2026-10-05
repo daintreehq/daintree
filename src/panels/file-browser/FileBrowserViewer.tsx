@@ -692,14 +692,18 @@ export function FileBrowserViewer({
   // Closing into the idle body unmounts the close button under the user's
   // focus; hand it to the tree toggle, the one control every layout keeps.
   // Closing back to a listing keeps the button mounted, so focus stays put.
-  // Armed by the click and spent on the next subject change, so a close the
-  // dirty-document guard cancels can't move focus later.
+  // Armed by the click and spent on the next subject change. A close the
+  // dirty-document guard cancels leaves it armed, so it only acts when focus
+  // was actually dropped to the body — never pulling focus off whatever an
+  // unrelated later change handed it to.
   const sidebarToggleRef = useRef<HTMLDivElement>(null);
   const closeFocusPending = useRef(false);
   useEffect(() => {
     if (!closeFocusPending.current) return;
     closeFocusPending.current = false;
-    if (identityAbsolutePath === null) sidebarToggleRef.current?.querySelector("button")?.focus();
+    const active = document.activeElement;
+    if (identityAbsolutePath !== null || (active !== null && active !== document.body)) return;
+    sidebarToggleRef.current?.querySelector("button")?.focus();
   }, [identityAbsolutePath]);
   const handleCloseSelection = () => {
     closeFocusPending.current = true;
