@@ -14,9 +14,9 @@ export interface FileBrowserChangeSummaryProps {
    */
   changes: readonly WorkingTreeFileChange[];
   /**
-   * Opens the file in the viewer beside the tree. Never a diff: that is what
-   * `worktree.openChanges` is for, and this pane exists to *read* the file an
-   * agent just touched.
+   * Opens the file in the viewer beside the tree, in whatever mode the reader
+   * last chose there. A changed file's viewer offers a Diff segment beside
+   * Source, so the file's own diff is one click away without leaving the pane.
    */
   onSelect: (relativePath: string) => void;
 }
