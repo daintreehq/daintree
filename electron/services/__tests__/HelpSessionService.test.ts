@@ -3518,11 +3518,11 @@ describe("HelpSessionService", () => {
       expect(mockProbeMcpSseServer).not.toHaveBeenCalled();
     });
 
-    it("getCopilotLaunchArgs returns ['--plan'] for a Copilot session", async () => {
+    it("getCopilotLaunchArgs returns no flags for a Copilot session, not read-only --plan (#13193)", async () => {
       const result = await service.provisionSession(copilotInput());
       if (!result) throw new Error("expected result");
 
-      expect(service.getCopilotLaunchArgs(result.token)).toEqual(["--plan"]);
+      expect(service.getCopilotLaunchArgs(result.token)).toEqual([]);
     });
 
     it.each([{ name: "a Claude session", provision: () => provisionInput() }])(

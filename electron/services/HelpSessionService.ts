@@ -1329,8 +1329,7 @@ export class HelpSessionService {
     // accessor below; nothing is written to disk for Codex.
     //
     // Copilot reads `<sessionPath>/.mcp.json` (written above by
-    // `writeCopilotMcpConfig`). The `--plan` read-only flag is appended at
-    // spawn time via `getCopilotLaunchArgs`.
+    // `writeCopilotMcpConfig`), so it needs no launch flags.
 
     const codexLaunchArgs =
       input.agentId === "codex"
@@ -1350,7 +1349,7 @@ export class HelpSessionService {
       console.warn("[HelpSessionService] Assistant folder:", warning);
     }
     const copilotLaunchArgs =
-      input.agentId === "copilot" ? this.buildCopilotLaunchArgs() : undefined;
+      input.agentId === "copilot" ? [] : undefined;
     // Claude reads its MCP wiring from the per-lane file rather than the
     // shared cwd `.mcp.json`; the flag is the only way that file reaches it.
     const claudeLaunchArgs = laneMcpConfigPath ? ["--mcp-config", laneMcpConfigPath] : undefined;
@@ -1517,18 +1516,6 @@ export class HelpSessionService {
     if (!record || record.revoked) return null;
     if (record.agentId !== "codex") return null;
     return record.codexLaunchArgs ?? [];
-  }
-
-  /**
-   * Builds the CLI flags that constrain a Copilot help-session spawn to
-   * read-only behaviour. Pins `--plan` (read-only mode, available since
-   * Copilot CLI v1.0.40 — gated by `assistantMinVersion` in
-   * `copilot.ts`). MCP servers are written into `<sessionPath>/.mcp.json`
-   * via `writeCopilotMcpConfig` and read from cwd at launch — no flag
-   * injection needed for MCP discovery.
-   */
-  private buildCopilotLaunchArgs(): string[] {
-    return ["--plan"];
   }
 
   /**

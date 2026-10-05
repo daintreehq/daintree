@@ -732,16 +732,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           safeCommand = `${safeCommand} ${codexArgs.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`;
         }
       }
-      // Copilot help sessions get the `--plan` read-only flag appended at
-      // spawn time (the same CLI-flag pinning pattern Codex uses for its
-      // `-c` MCP args). MCP wiring lives in `<sessionPath>/.mcp.json` via
-      // `writeCopilotMcpConfig` and is auto-discovered from cwd — no flag
-      // injection needed for that.
+      // Copilot help sessions read their MCP wiring from
+      // `<sessionPath>/.mcp.json` (`writeCopilotMcpConfig`), so any flags
+      // here are appended as-is, the same pattern Codex uses for its `-c`
+      // MCP args.
       //
       // A `null` return is the agent-mismatch signal (e.g. a Claude help
       // token reused with `launchAgentId: "copilot"`) — refuse to spawn.
-      // Strip any user-supplied `--plan` first so the appended flag is
-      // unambiguously authoritative.
       if (launchAgentId === "copilot") {
         const copilotArgs = helpSessionService.getCopilotLaunchArgs(helpToken);
         if (copilotArgs === null) {
@@ -749,10 +746,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             "Daintree Assistant help token does not belong to a Copilot session; refusing to spawn"
           );
         }
-        safeCommand = safeCommand
-          .replace(/(^|\s)--plan(?:=\S*)?(?=\s|$)/g, "$1")
-          .replace(/\s{2,}/g, " ")
-          .trim();
         if (copilotArgs.length > 0) {
           safeCommand =
             `${safeCommand} ${copilotArgs.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`.trim();

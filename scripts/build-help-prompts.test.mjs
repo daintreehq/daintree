@@ -189,7 +189,7 @@ describe("help prompt outputs", () => {
     // beside it, so the no-shell-workaround rule has to be stated to both.
     it.each(ALL_GENERATED)("%s keeps local tools from standing in for the tier", (_name, body) => {
       const perms = section(body, "## Permissions Outside MCP");
-      expect(perms).toMatch(/Never use the shell/);
+      expect(perms).toMatch(/never use the shell[^.]*bypass a tier or confirmation/i);
       expect(perms).not.toMatch(/deny list|Codex has none/);
       const tier = section(body, "## Tier Model");
       expect(tier).toMatch(/Don't retry and don't look for a way around it/);
@@ -229,8 +229,8 @@ describe("help prompt outputs", () => {
       expect(body).not.toContain("### Launch agents");
       expect(body).not.toContain("## Checking Whether Work Is Ready");
       expect(body).not.toContain("### Work through a queue");
-      // Ratchet: ~5% above the 2026-09 trim (AGENTS.md 7,990 B). Lower it, never raise it.
-      expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(8_400);
+      // Ratchet: ~1% above the #13193 trim (AGENTS.md 8,004 B). Lower it, never raise it.
+      expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(8_100);
     });
 
     // The assistant runs a full agent CLI, so it isn't fenced to Daintree
@@ -239,7 +239,7 @@ describe("help prompt outputs", () => {
       expect(body).not.toMatch(/Off-topic|focused on Daintree/);
       expect(body).not.toMatch(/never file it yourself/);
       expect(body).not.toContain("## Topics You Can Help With");
-      expect(section(body, "## GitHub Issues")).toMatch(/file it once the user approves/);
+      expect(section(body, "## GitHub Issues")).toMatch(/file it once the user approves the repository, title and body/);
     });
   });
 

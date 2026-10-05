@@ -2298,10 +2298,10 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
 
-  it("appends --plan to a Copilot help-session spawn (#7542)", async () => {
+  it("appends a Copilot help session's launch args to the spawn (#7542)", async () => {
     mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
     mockGetCopilotLaunchArgs.mockImplementation((token) =>
-      token === "help-token" ? ["--plan"] : null
+      token === "help-token" ? ["--banner"] : null
     );
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -2321,7 +2321,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     );
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.command).toContain("'--plan'");
+    expect(spawnArgs.command).toContain("'--banner'");
     // Copilot help launches don't flow through the Claude per-pane MCP path.
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
@@ -2350,9 +2350,9 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(ptyClient.spawn).not.toHaveBeenCalled();
   });
 
-  it("strips a smuggled --plan from a Copilot command so the appended flag is unambiguously authoritative (#7542)", async () => {
+  it("leaves a Copilot help-session command untouched when it has no launch args (#13193)", async () => {
     mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
-    mockGetCopilotLaunchArgs.mockReturnValue(["--plan"]);
+    mockGetCopilotLaunchArgs.mockReturnValue([]);
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -2364,16 +2364,14 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
         cols: 80,
         rows: 24,
         cwd: tmpDir,
-        command: "copilot --plan",
+        command: "copilot",
         launchAgentId: "copilot",
         env: { DAINTREE_MCP_TOKEN: "help-token" },
       } as unknown as Parameters<typeof handler>[1]
     );
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    const matches = spawnArgs.command.match(/--plan/g) ?? [];
-    expect(matches).toHaveLength(1);
-    expect(spawnArgs.command).toContain("'--plan'");
+    expect(spawnArgs.command).toBe("copilot");
   });
 
   it("does not query Copilot launch args for a non-help Copilot launch (#7542)", async () => {

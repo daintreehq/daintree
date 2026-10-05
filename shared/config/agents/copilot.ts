@@ -20,10 +20,8 @@ export const config: AgentConfig = {
   },
   // Copilot help sessions read MCP from `.mcp.json` written into the
   // per-session cwd (root key `mcpServers`, `type: "http"`, `$VAR` env-var
-  // substitution in headers). `--plan` is appended at spawn time via
-  // `HelpSessionService.buildCopilotLaunchArgs` to pin the session to
-  // read-only mode. Held at `"experimental"` until end-to-end validation
-  // lands.
+  // substitution in headers). Held at `"experimental"` until end-to-end
+  // validation lands.
   supports: {
     mcpInjection: "project-config",
     settingsOverlay: false,
@@ -32,8 +30,7 @@ export const config: AgentConfig = {
     versionProbe: true,
     tier: "experimental",
   },
-  // `--plan` flag landed in Copilot CLI v1.0.40; below this floor we'd
-  // launch without the read-only guardrail.
+  // Oldest Copilot CLI validated for help sessions.
   assistantMinVersion: "1.0.40",
   tooltip: "GitHub's CLI",
   usageUrl: "https://github.com/features/copilot",
