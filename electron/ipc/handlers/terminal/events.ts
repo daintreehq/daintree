@@ -92,6 +92,10 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   handlers.push(() => ptyClient.off("data", handlePtyData));
 
   const handlePtyExit = (id: string, exitCode: number) => {
+    // The shell and project views have separate renderer restart guards. An
+    // intentional restart must be suppressed here before it reaches either
+    // view, even when its exit arrives before the replacement is registered.
+    const forRestart = ptyClient.consumeRestartExitSuppression(id);
     // Best-effort: revoke any per-pane MCP token + delete the managed config
     // file. Idempotent — no-ops if no pane config was minted for this terminal.
     mcpPaneConfigService.revokePaneConfig(id).catch((err) => {
@@ -101,6 +105,7 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     // orchestrator's side ends with its bearer, which the revocation above
     // covers. Unloaded means nothing was ever handed over.
     getMcpServerServiceRef()?.handleTerminalExit(id);
+    if (forRestart) return;
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
       name: "terminal:exit",
       payload: [id, exitCode],

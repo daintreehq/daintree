@@ -1,5 +1,6 @@
 import type {
   TerminalSpawnOptions,
+  TerminalKillOptions,
   AgentStateChangePayload,
   AgentDetectedPayload,
   AgentExitedPayload,
@@ -538,26 +539,28 @@ export const terminalClient = {
     }
   },
 
-  kill: (id: string): Promise<void> => {
+  kill: (id: string, options?: TerminalKillOptions): Promise<void> => {
     markClosed(id);
     earlyDataBuffer.delete(id);
     earlyDataBufferBytes.delete(id);
     pendingPortAckBytes.delete(id);
     pendingEchoProbes.delete(id);
     settleWorkerPortRequest(id, null);
-    return window.electron.terminal.kill(id);
+    return options ? window.electron.terminal.kill(id, options) : window.electron.terminal.kill(id);
   },
 
   locate: (id: string): Promise<TerminalLocation> => window.electron.terminal.locate(id),
 
-  gracefulKill: (id: string): Promise<string | null> => {
+  gracefulKill: (id: string, options?: TerminalKillOptions): Promise<string | null> => {
     markClosed(id);
     earlyDataBuffer.delete(id);
     earlyDataBufferBytes.delete(id);
     pendingPortAckBytes.delete(id);
     pendingEchoProbes.delete(id);
     settleWorkerPortRequest(id, null);
-    return window.electron.terminal.gracefulKill(id);
+    return options
+      ? window.electron.terminal.gracefulKill(id, options)
+      : window.electron.terminal.gracefulKill(id);
   },
 
   trash: (id: string): Promise<void> => {

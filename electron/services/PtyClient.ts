@@ -404,6 +404,9 @@ export class PtyClient extends EventEmitter {
   private displacedSpawns = new Map<string, { byGeneration: number; entry: PtyHostSpawnOptions }>();
   private ipcDataMirrorIds = new Set<string>();
   private pendingKillCount: Map<string, number> = new Map();
+  // Main spans every renderer view; a view-local restart guard cannot protect
+  // its siblings. Consumed by the old exit or retired when its successor starts.
+  private restartExitSuppression = new Set<string>();
   // Captures streamed back for a graceful kill that is still in flight, keyed
   // by project. Seeded when the call starts and dropped when it settles, so an
   // entry existing IS the "in flight" signal the router checks (#12180). The
@@ -1131,6 +1134,7 @@ export class PtyClient extends EventEmitter {
         ledger.recordClose(id, previousGeneration, "pty-host-crash");
       }
       const generation = ledger.recordLaunch(id, ledgerFactsFromSpawnOptions(options));
+      this.restartExitSuppression.delete(id);
       const stamped: PtyHostSpawnOptions = { ...options, launchGeneration: generation };
       this.pendingSpawns.set(id, stamped);
       this.sendSpawnWithPostInput(shard, id, stamped);
@@ -1244,6 +1248,7 @@ export class PtyClient extends EventEmitter {
         ledger.recordClose(id, previousGeneration, "pty-host-crash");
       }
       const generation = ledger.recordLaunch(id, ledgerFactsFromSpawnOptions(options));
+      this.restartExitSuppression.delete(id);
       const stamped: PtyHostSpawnOptions = { ...options, launchGeneration: generation };
       this.pendingSpawns.set(id, stamped);
       this.terminalOwners.set(id, DEFAULT_SHARD_KEY);
@@ -1759,6 +1764,7 @@ export class PtyClient extends EventEmitter {
       id,
       ledgerFactsFromSpawnOptions(projectResolvedOptions)
     );
+    this.restartExitSuppression.delete(id);
     const resolvedOptions: PtyHostSpawnOptions = {
       ...projectResolvedOptions,
       launchGeneration: generation,
@@ -1927,6 +1933,14 @@ export class PtyClient extends EventEmitter {
 
   resize(id: string, cols: number, rows: number): void {
     this.shardForTerminal(id).send({ type: "resize", id, cols, rows });
+  }
+
+  suppressExitForRestart(id: string): void {
+    if (this.pendingSpawns.has(id)) this.restartExitSuppression.add(id);
+  }
+
+  consumeRestartExitSuppression(id: string): boolean {
+    return this.restartExitSuppression.delete(id);
   }
 
   kill(id: string, reason?: string, options?: { escalationDelayMs?: number }): void {
@@ -3135,6 +3149,7 @@ export class PtyClient extends EventEmitter {
     this.pendingSpawns.clear();
     this.displacedSpawns.clear();
     this.pendingKillCount.clear();
+    this.restartExitSuppression.clear();
     this.windowProjectContexts.clear();
     this.windowFocusedTerminals.clear();
     this.ipcDataMirrorIds.clear();

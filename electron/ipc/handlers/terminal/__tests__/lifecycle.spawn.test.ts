@@ -3228,20 +3228,29 @@ describe("terminal close handlers - resume journaling", () => {
     const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
       .calls;
     const call = calls.find((c) => c[0] === CHANNELS.TERMINAL_KILL);
-    return call?.[1] as (event: unknown, id: string) => Promise<void>;
+    return call?.[1] as (
+      event: unknown,
+      id: string,
+      options?: { forRestart?: boolean }
+    ) => Promise<void>;
   }
 
   function getGracefulKillHandler() {
     const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
       .calls;
     const call = calls.find((c) => c[0] === CHANNELS.TERMINAL_GRACEFUL_KILL);
-    return call?.[1] as (event: unknown, id: string) => Promise<string | null>;
+    return call?.[1] as (
+      event: unknown,
+      id: string,
+      options?: { forRestart?: boolean }
+    ) => Promise<string | null>;
   }
 
   let ptyClient: {
     getTerminalAsync: ReturnType<typeof vi.fn>;
     gracefulKill: ReturnType<typeof vi.fn>;
     kill: ReturnType<typeof vi.fn>;
+    suppressExitForRestart: ReturnType<typeof vi.fn>;
   };
   let worktreeService: { getMonitorAsync: ReturnType<typeof vi.fn> };
 
@@ -3263,6 +3272,7 @@ describe("terminal close handlers - resume journaling", () => {
       getTerminalAsync: vi.fn(),
       gracefulKill: vi.fn(),
       kill: vi.fn(),
+      suppressExitForRestart: vi.fn(),
     };
     worktreeService = { getMonitorAsync: vi.fn().mockResolvedValue({ branch: "feature/foo" }) };
   });
@@ -3271,6 +3281,23 @@ describe("terminal close handlers - resume journaling", () => {
     const deps = { ptyClient, worktreeService } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
   }
+
+  it.each(["kill", "gracefulKill"] as const)(
+    "arms restart suppression before %s awaits the host",
+    async (operation) => {
+      register();
+      ptyClient.getTerminalAsync.mockResolvedValue(null);
+      ptyClient.gracefulKill.mockResolvedValue(null);
+      const handler = operation === "kill" ? getKillHandler() : getGracefulKillHandler();
+
+      await handler({}, "term-1", { forRestart: true });
+
+      expect(ptyClient.suppressExitForRestart).toHaveBeenCalledExactlyOnceWith("term-1");
+      expect(ptyClient.suppressExitForRestart.mock.invocationCallOrder[0]).toBeLessThan(
+        ptyClient.getTerminalAsync.mock.invocationCallOrder[0]!
+      );
+    }
+  );
 
   it("does not journal the assistant's overlay terminal on close", async () => {
     // The path the assistant travels every time it closes: removePanel ->

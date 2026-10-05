@@ -175,6 +175,7 @@ describe("PtyClient lifecycle ledger", () => {
     const ledger = getLifecycleLedger();
     client.spawn("t1", baseOptions);
     expect(ledger.currentGeneration("t1")).toBe(1);
+    client.suppressExitForRestart("t1");
 
     const restartedChild = createMockChild();
     shared.forkMock.mockReturnValue(restartedChild);
@@ -187,6 +188,7 @@ describe("PtyClient lifecycle ledger", () => {
     expect(replayed).toHaveLength(1);
     expect(replayed[0]?.options.launchGeneration).toBe(2);
     expect(ledger.currentGeneration("t1")).toBe(2);
+    expect(client.consumeRestartExitSuppression("t1")).toBe(false);
 
     // Old incarnation closed as a host crash; its journal slot is independent
     // of the replayed generation's.
@@ -293,9 +295,11 @@ describe("PtyClient lifecycle ledger", () => {
     expect(getLifecycleLedger().currentGeneration("t1")).toBe(1);
   });
 
-  it("attributes exit events to the generation they carry, not the successor", () => {
+  it("keeps a predecessor's exit off the successor while recording its generation", () => {
     const client = createReadyClient();
     const ledger = getLifecycleLedger();
+    const onExit = vi.fn();
+    client.on("exit", onExit);
 
     client.spawn("t1", baseOptions);
     client.kill("t1");
@@ -307,11 +311,30 @@ describe("PtyClient lifecycle ledger", () => {
     const entry = ledger.getEntry("t1");
     expect(entry?.generation).toBe(2);
     expect(entry?.closedAt).toBeUndefined();
+    expect(onExit).not.toHaveBeenCalled();
+    expect(client.hasTerminal("t1")).toBe(true);
 
     // The live incarnation's own exit still closes it.
     mockChild.emit("message", { type: "exit", id: "t1", exitCode: 0, launchGeneration: 2 });
     expect(ledger.getEntry("t1")?.closedAt).toBeDefined();
     expect(ledger.getEntry("t1")?.exitCode).toBe(0);
+    expect(onExit).toHaveBeenCalledExactlyOnceWith("t1", 0, undefined);
+    expect(client.hasTerminal("t1")).toBe(false);
+  });
+
+  it("consumes restart suppression once and disarms it when a successor launches", () => {
+    const client = createReadyClient();
+    client.suppressExitForRestart("unknown");
+    expect(client.consumeRestartExitSuppression("unknown")).toBe(false);
+    client.spawn("t1", baseOptions);
+    client.suppressExitForRestart("t1");
+    expect(client.consumeRestartExitSuppression("t1")).toBe(true);
+    expect(client.consumeRestartExitSuppression("t1")).toBe(false);
+
+    client.suppressExitForRestart("t1");
+    client.kill("t1");
+    client.spawn("t1", baseOptions);
+    expect(client.consumeRestartExitSuppression("t1")).toBe(false);
   });
 
   it("records spawn failures as resolved+closed for the failing generation", () => {

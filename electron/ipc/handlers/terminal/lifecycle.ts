@@ -44,7 +44,10 @@ import type {
 } from "../../../../shared/types/ipc/agentSessionHistory.js";
 import type { HostMemoryPauseSnapshot } from "../../../../shared/types/pty-host.js";
 import { resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
-import { normalizeTerminalGridDimension } from "../../../../shared/types/terminal.js";
+import {
+  normalizeTerminalGridDimension,
+  type TerminalKillOptions,
+} from "../../../../shared/types/terminal.js";
 import {
   DEFAULT_DANGEROUS_ARGS,
   relaunchResumeAsAssignedSession,
@@ -1208,11 +1211,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     }
   };
 
-  const handleTerminalKill = async (id: string): Promise<void> => {
+  const handleTerminalKill = async (id: string, options?: TerminalKillOptions): Promise<void> => {
     try {
       if (typeof id !== "string") {
         throw new Error("Invalid terminal ID: must be a string");
       }
+      if (options?.forRestart === true) ptyClient.suppressExitForRestart(id);
       // Before any await: a restart's respawn arms a fresh window for this id,
       // and it must not be the one this kill clears.
       settleSpawnConfirmation(id);
@@ -1237,10 +1241,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     }
   };
 
-  const handleTerminalGracefulKill = async (id: string): Promise<string | null> => {
+  const handleTerminalGracefulKill = async (
+    id: string,
+    options?: TerminalKillOptions
+  ): Promise<string | null> => {
     if (typeof id !== "string") {
       throw new Error("Invalid terminal ID: must be a string");
     }
+    if (options?.forRestart === true) ptyClient.suppressExitForRestart(id);
     const info = await ptyClient.getTerminalAsync(id).catch(() => null);
     const generation = getLifecycleLedger().currentGeneration(id);
     const sessionId = await ptyClient.gracefulKill(id);

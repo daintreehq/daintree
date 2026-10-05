@@ -185,7 +185,12 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       return true;
 
     case "exit": {
-      callbacks.onTerminalRemovedFromTrash(event.id);
+      const currentGeneration = state.pendingSpawns.get(event.id)?.launchGeneration;
+      const superseded =
+        event.launchGeneration !== undefined &&
+        currentGeneration !== undefined &&
+        event.launchGeneration !== currentGeneration;
+      if (!superseded) callbacks.onTerminalRemovedFromTrash(event.id);
       const killCount = state.pendingKillCount.get(event.id) ?? 0;
       if (killCount > 0) {
         // Exit from a kill() call — a new spawn() may have already
@@ -196,11 +201,11 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
         } else {
           state.pendingKillCount.delete(event.id);
         }
-      } else {
+      } else if (!superseded) {
         // Normal exit (process ended on its own)
         state.pendingSpawns.delete(event.id);
       }
-      state.terminalPids.delete(event.id);
+      if (!superseded) state.terminalPids.delete(event.id);
       if (callbacks.onTerminalExit) {
         try {
           callbacks.onTerminalExit(event.id, event.exitCode, event.launchGeneration);
@@ -208,6 +213,11 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
           deps.logWarn(`[PtyClient] onTerminalExit threw for ${event.id}: ${String(err)}`);
         }
       }
+      // A kill returns before the host delivers its exit. Restart may already
+      // have registered a successor with the same id: retire the old kill and
+      // ledger/reaper above, but never clear the successor's PID/trash state or
+      // broadcast an id-only exit that would auto-trash its live renderer pane.
+      if (superseded) return true;
       emitter.emit("exit", event.id, event.exitCode, event.signal);
       return true;
     }

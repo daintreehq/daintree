@@ -69,7 +69,11 @@ import type {
   SemanticSearchMatch,
 } from "./terminal.js";
 import type { AppVersionInfo } from "./app.js";
-import type { SerializeReadOptions, SerializedTerminalSnapshot } from "../terminal.js";
+import type {
+  SerializeReadOptions,
+  SerializedTerminalSnapshot,
+  TerminalKillOptions,
+} from "../terminal.js";
 import type {
   SaveArtifactOptions,
   SaveArtifactResult,
@@ -318,8 +322,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     getOutputActivity(terminalIds: string[]): Promise<Record<string, TerminalOutputActivityLookup>>;
     resize(id: string, cols: number, rows: number): void;
-    kill(id: string): Promise<void>;
-    gracefulKill(id: string): Promise<string | null>;
+    kill(id: string, options?: TerminalKillOptions): Promise<void>;
+    gracefulKill(id: string, options?: TerminalKillOptions): Promise<string | null>;
     trash(id: string): Promise<void>;
     restore(id: string): Promise<boolean>;
     setActivityTier(id: string, tier: PtyHostActivityTier, pollingIntervalMs?: number): void;

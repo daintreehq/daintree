@@ -16,6 +16,7 @@ import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import type { AppErrorCode } from "../shared/types/appError.js";
 import type { PanelTitleMode } from "../shared/types/panel.js";
 import type { HostMemoryPauseSnapshot } from "../shared/types/pty-host.js";
+import type { TerminalKillOptions } from "../shared/types/terminal.js";
 import type {
   McpRuntimeSnapshot,
   McpGrantLifecyclePayload,
@@ -1417,8 +1418,14 @@ function buildElectronApi(): ElectronAPI {
       resize: (id: string, cols: number, rows: number) =>
         ipcRenderer.send(CHANNELS.TERMINAL_RESIZE, { id, cols, rows }),
 
-      kill: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_KILL, id),
-      gracefulKill: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_GRACEFUL_KILL, id),
+      kill: (id: string, options?: TerminalKillOptions) =>
+        options
+          ? _unwrappingInvoke(CHANNELS.TERMINAL_KILL, id, options)
+          : _unwrappingInvoke(CHANNELS.TERMINAL_KILL, id),
+      gracefulKill: (id: string, options?: TerminalKillOptions) =>
+        options
+          ? _unwrappingInvoke(CHANNELS.TERMINAL_GRACEFUL_KILL, id, options)
+          : _unwrappingInvoke(CHANNELS.TERMINAL_GRACEFUL_KILL, id),
 
       // Tuple payload [id, data] dispatched via the shared multiplexer above
       // Accepts both string and Uint8Array/Buffer (binary optimization for reduced GC pressure)

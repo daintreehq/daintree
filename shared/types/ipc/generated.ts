@@ -1949,11 +1949,11 @@ export interface GeneratedIpcInvokeMap {
     result: Record<string, import("../terminalSubmission.js").TerminalSubmissionLookup>;
   };
   "terminal:graceful-kill": {
-    args: [id: string];
+    args: [id: string, options?: import("../terminal.js").TerminalKillOptions | undefined];
     result: string | null;
   };
   "terminal:kill": {
-    args: [id: string];
+    args: [id: string, options?: import("../terminal.js").TerminalKillOptions | undefined];
     result: void;
   };
   "terminal:locate": {

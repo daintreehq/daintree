@@ -13,6 +13,11 @@
  */
 export type TerminalTaskType = "interactive" | "background" | "idle";
 
+export interface TerminalKillOptions {
+  /** The pane survives this teardown and will receive a replacement process. */
+  forRestart?: boolean;
+}
+
 /**
  * Terminal activity status.
  * - working: Terminal is actively processing
