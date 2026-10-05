@@ -8,6 +8,9 @@ import type {
 
 const notifyMock = vi.hoisted(() => vi.fn((_payload: unknown) => "notice-1"));
 const removeNotificationMock = vi.hoisted(() => vi.fn());
+const notifications = vi.hoisted(() => ({
+  list: [] as Array<{ id: string; dismissed?: boolean }>,
+}));
 const getSnapshotMock = vi.hoisted(() => vi.fn());
 const view = vi.hoisted(() => ({
   observable: true,
@@ -16,7 +19,12 @@ const view = vi.hoisted(() => ({
 
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 vi.mock("@/store/notificationStore", () => ({
-  useNotificationStore: { getState: () => ({ removeNotification: removeNotificationMock }) },
+  useNotificationStore: {
+    getState: () => ({
+      removeNotification: removeNotificationMock,
+      notifications: notifications.list,
+    }),
+  },
 }));
 vi.mock("@/clients/processesClient", () => ({
   processesClient: { getSnapshot: getSnapshotMock },
@@ -86,6 +94,7 @@ describe("useClosedTerminalProcessNotice (#13174)", () => {
     vi.clearAllMocks();
     view.observable = true;
     view.listener = null;
+    notifications.list = [{ id: "notice-1" }];
   });
 
   afterEach(() => {
@@ -186,6 +195,21 @@ describe("useClosedTerminalProcessNotice (#13174)", () => {
     expect((notifyMock.mock.calls[1]?.[0] as NoticePayload).title).toBe(
       "1 process from closed terminals · ~1.0 GB"
     );
+  });
+
+  it("doesn't bring back a notice the user dismissed when some of its processes end", async () => {
+    getSnapshotMock.mockResolvedValue(snapshotWith([]));
+    renderHook(() => useClosedTerminalProcessNotice(() => {}));
+    await settle();
+    getSnapshotMock.mockResolvedValue(snapshotWith([closed(201), closed(202)]));
+    await poll();
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+
+    notifications.list = [{ id: "notice-1", dismissed: true }];
+    getSnapshotMock.mockResolvedValue(snapshotWith([closed(202)]));
+    await poll();
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
   });
 
   it("withdraws its notice on unmount, since the action targets this badge", async () => {

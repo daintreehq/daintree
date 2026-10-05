@@ -35,6 +35,18 @@ export function useClosedTerminalProcessNotice(onView: () => void): void {
     let noticeId: string | null = null;
     let timer: ReturnType<typeof setInterval> | null = null;
 
+    // The user can dismiss the notice from the grid bar; a dismissed one is not
+    // brought back just because some of its processes ended.
+    const noticeStanding = (): boolean => {
+      if (noticeId === null) return false;
+      const notice = useNotificationStore
+        .getState()
+        .notifications.find((candidate) => candidate.id === noticeId);
+      if (notice && !notice.dismissed) return true;
+      noticeId = null;
+      return false;
+    };
+
     const clearNotice = () => {
       if (noticeId === null) return;
       useNotificationStore.getState().removeNotification(noticeId);
@@ -93,7 +105,7 @@ export function useClosedTerminalProcessNotice(onView: () => void): void {
               return;
             }
             const fresh = keys.some((key) => !previous.has(key));
-            const shrank = noticeId !== null && keys.length < previous.size;
+            const shrank = keys.length < previous.size && noticeStanding();
             if (fresh || shrank) announce(processes);
           },
           () => {

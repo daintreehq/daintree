@@ -1138,8 +1138,27 @@ export async function reapLineageEntries(
 
   let signalled: PersistedLineageEntry[];
   if (process.platform === "win32") {
-    for (const entry of confirmed) await taskkill(entry.pid, windowsTree);
-    signalled = confirmed;
+    signalled = [];
+    for (const [index, entry] of confirmed.entries()) {
+      // Each taskkill can take seconds, long enough for a later target to exit
+      // and its PID be reused, so every one after the first is re-verified
+      // right before it is signalled.
+      if (index > 0) {
+        const fresh = await probeStartTimesDetailed([entry.pid]);
+        if (fresh.unresolved.has(entry.pid)) {
+          outcome.survivors.push(entry);
+          outcome.unchecked++;
+          continue;
+        }
+        if (fresh.startTimes.get(entry.pid) !== entry.startTime) {
+          outcome.ended++;
+          continue;
+        }
+      }
+      await taskkill(entry.pid, windowsTree);
+      signalled.push(entry);
+    }
+    if (signalled.length === 0) return outcome;
   } else {
     for (const entry of confirmed) {
       killValidated(entry.pid, "SIGTERM");
