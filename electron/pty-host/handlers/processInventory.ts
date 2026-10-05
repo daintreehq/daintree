@@ -130,7 +130,12 @@ export async function killClosedTerminalProcesses(
   ctx: HostContext,
   targets: readonly unknown[]
 ): Promise<ClosedProcessKillResult> {
-  const result: ClosedProcessKillResult = { ended: 0, stillRunning: 0, unchecked: 0, notTracked: 0 };
+  const result: ClosedProcessKillResult = {
+    ended: 0,
+    stillRunning: 0,
+    unchecked: 0,
+    notTracked: 0,
+  };
   const ledger = ctx.lineageLedger;
   const wanted = new Set<string>();
   for (const raw of targets.slice(0, MAX_KILL_TARGETS)) {

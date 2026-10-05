@@ -531,9 +531,7 @@ describe("ProcessesDialog (#13175)", () => {
       await renderOpen();
 
       const dialog = screen.getByTestId("processes-dialog");
-      expect(dialog.textContent).toContain(
-        "Ended 3 processes left running by an earlier session."
-      );
+      expect(dialog.textContent).toContain("Ended 3 processes left running by an earlier session.");
       expect(dialog.textContent).toContain(
         "Couldn't check 2 processes recorded by an earlier session."
       );

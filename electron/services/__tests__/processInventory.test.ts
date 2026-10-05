@@ -297,9 +297,9 @@ describe("collectProcessInventory closed-terminal processes (#13174)", () => {
 
   it("carries the cleanup report, and survives it throwing", async () => {
     const report = { found: 2, ended: 1, stillRunning: 0, unchecked: 1, lastAt: 9 };
-    expect((await collectProcessInventory(deps({ getCleanupReport: () => report }))).cleanup).toEqual(
-      report
-    );
+    expect(
+      (await collectProcessInventory(deps({ getCleanupReport: () => report }))).cleanup
+    ).toEqual(report);
     const failing = await collectProcessInventory(
       deps({
         getCleanupReport: () => {

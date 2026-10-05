@@ -563,8 +563,8 @@ export function ProcessesDialog({
             {snapshot && snapshot.complete && !snapshot.samplesAvailable && (
               <Callout severity="warning" size="compact">
                 The last process census failed, so Daintree can't currently check what's still
-                running. CPU, memory and processes from closed terminals are from the reading
-                before it.
+                running. CPU, memory and processes from closed terminals are from the reading before
+                it.
               </Callout>
             )}
             {cleanup && (
@@ -676,7 +676,9 @@ export function ProcessesDialog({
         }, still running after this terminal closed${closedTargetWhere}. Anything ${
           closedTargetCount === 1 ? "it was" : "they were"
         } doing stops.`}
-        confirmLabel={closedTargetCount === 1 ? "Kill process" : `Kill ${closedTargetCount} processes`}
+        confirmLabel={
+          closedTargetCount === 1 ? "Kill process" : `Kill ${closedTargetCount} processes`
+        }
         onConfirm={confirmClosedKill}
         isConfirmLoading={isKilling}
       />

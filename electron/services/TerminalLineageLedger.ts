@@ -1134,7 +1134,9 @@ export async function reapLineageEntries(
   outcome.found = confirmed.length;
   if (confirmed.length === 0) return outcome;
 
-  console.log(`[TerminalLineageLedger] Reaping ${confirmed.length} terminal descendant(s) ${reason}`);
+  console.log(
+    `[TerminalLineageLedger] Reaping ${confirmed.length} terminal descendant(s) ${reason}`
+  );
 
   let signalled: PersistedLineageEntry[];
   if (process.platform === "win32") {

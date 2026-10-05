@@ -984,32 +984,44 @@ describe("TerminalLineageLedger", () => {
 
     const entry = () => ({ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), rootPid: 100 });
 
-    it.skipIf(isWindows)("counts a process the post-SIGTERM check no longer lists as ended", async () => {
-      mockExecFileAsync
-        .mockImplementationOnce(async () => ({ stdout: psOutput([ORPHAN_PID]), stderr: "" }))
-        .mockImplementationOnce(async () => {
-          // `ps` exits 1 when none of the requested PIDs exist: a real answer.
-          throw Object.assign(new Error("exit 1"), { code: 1, stdout: "" });
+    it.skipIf(isWindows)(
+      "counts a process the post-SIGTERM check no longer lists as ended",
+      async () => {
+        mockExecFileAsync
+          .mockImplementationOnce(async () => ({ stdout: psOutput([ORPHAN_PID]), stderr: "" }))
+          .mockImplementationOnce(async () => {
+            // `ps` exits 1 when none of the requested PIDs exist: a real answer.
+            throw Object.assign(new Error("exit 1"), { code: 1, stdout: "" });
+          });
+
+        const outcome = await reapLineageEntries([entry()]);
+
+        expect(outcome).toEqual({
+          survivors: [],
+          found: 1,
+          ended: 1,
+          stillRunning: 0,
+          unchecked: 0,
         });
+        expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGTERM");
+        expect(killSpy).not.toHaveBeenCalledWith(ORPHAN_PID, "SIGKILL");
+      }
+    );
 
-      const outcome = await reapLineageEntries([entry()]);
+    it.skipIf(isWindows)(
+      "reports what the OS shows after SIGKILL, not that it was sent",
+      async () => {
+        // Every probe still lists the process under its recorded identity.
+        const outcome = await reapLineageEntries([entry()]);
 
-      expect(outcome).toEqual({ survivors: [], found: 1, ended: 1, stillRunning: 0, unchecked: 0 });
-      expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGTERM");
-      expect(killSpy).not.toHaveBeenCalledWith(ORPHAN_PID, "SIGKILL");
-    });
-
-    it.skipIf(isWindows)("reports what the OS shows after SIGKILL, not that it was sent", async () => {
-      // Every probe still lists the process under its recorded identity.
-      const outcome = await reapLineageEntries([entry()]);
-
-      expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGKILL");
-      expect(outcome.found).toBe(1);
-      expect(outcome.stillRunning).toBe(1);
-      expect(outcome.ended).toBe(0);
-      // Still there, so it stays recorded for the next attempt.
-      expect(outcome.survivors).toEqual([entry()]);
-    });
+        expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGKILL");
+        expect(outcome.found).toBe(1);
+        expect(outcome.stillRunning).toBe(1);
+        expect(outcome.ended).toBe(0);
+        // Still there, so it stays recorded for the next attempt.
+        expect(outcome.survivors).toEqual([entry()]);
+      }
+    );
 
     it("never signals and reports unchecked when the probe itself cannot run", async () => {
       mockExecFileAsync.mockImplementation(async () => {
@@ -1026,7 +1038,11 @@ describe("TerminalLineageLedger", () => {
         unchecked: 1,
       });
       expect(killSpy).not.toHaveBeenCalled();
-      expect(mockExecFileAsync).not.toHaveBeenCalledWith("taskkill", expect.anything(), expect.anything());
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith(
+        "taskkill",
+        expect.anything(),
+        expect.anything()
+      );
     });
 
     it("never signals a recorded PID now held under another start time", async () => {
@@ -1036,7 +1052,11 @@ describe("TerminalLineageLedger", () => {
 
       expect(outcome).toEqual({ survivors: [], found: 0, ended: 0, stillRunning: 0, unchecked: 0 });
       expect(killSpy).not.toHaveBeenCalled();
-      expect(mockExecFileAsync).not.toHaveBeenCalledWith("taskkill", expect.anything(), expect.anything());
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith(
+        "taskkill",
+        expect.anything(),
+        expect.anything()
+      );
     });
   });
 
@@ -1193,7 +1213,11 @@ describe("TerminalLineageLedger", () => {
       await reapPersistedLineages(tmpDir);
 
       expect(killSpy).not.toHaveBeenCalled();
-      expect(mockExecFileAsync).not.toHaveBeenCalledWith("taskkill", expect.anything(), expect.anything());
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith(
+        "taskkill",
+        expect.anything(),
+        expect.anything()
+      );
       expect(fs.existsSync(filePath)).toBe(false);
     });
 
@@ -1205,7 +1229,11 @@ describe("TerminalLineageLedger", () => {
       await reapPersistedLineages(tmpDir);
 
       expect(killSpy).not.toHaveBeenCalled();
-      expect(mockExecFileAsync).not.toHaveBeenCalledWith("taskkill", expect.anything(), expect.anything());
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith(
+        "taskkill",
+        expect.anything(),
+        expect.anything()
+      );
       expect(fs.existsSync(filePath)).toBe(false);
     });
 
@@ -1219,7 +1247,11 @@ describe("TerminalLineageLedger", () => {
       await reapPersistedLineages(tmpDir);
 
       expect(killSpy).not.toHaveBeenCalled();
-      expect(mockExecFileAsync).not.toHaveBeenCalledWith("taskkill", expect.anything(), expect.anything());
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith(
+        "taskkill",
+        expect.anything(),
+        expect.anything()
+      );
     });
 
     it("ignores a ledger written by a future schema version", async () => {
