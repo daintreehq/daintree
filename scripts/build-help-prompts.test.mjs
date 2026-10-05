@@ -185,14 +185,12 @@ describe("help prompt outputs", () => {
       expect(section(body, "## Finding the Right Tool")).toMatch(/tool name is the action ID/);
     });
 
-    // The tier binds only the MCP server. Claude's deny list is narrow and
-    // Codex has none, so the no-shell-workaround rule has to be stated to both
-    // rather than left to whichever enforcement happens to exist.
+    // The tier binds only the MCP server and neither CLI enforces anything
+    // beside it, so the no-shell-workaround rule has to be stated to both.
     it.each(ALL_GENERATED)("%s keeps local tools from standing in for the tier", (_name, body) => {
       const perms = section(body, "## Permissions Outside MCP");
-      expect(perms).toMatch(/deny list/);
-      expect(perms).toMatch(/Codex has none/);
       expect(perms).toMatch(/Never use the shell/);
+      expect(perms).not.toMatch(/deny list|Codex has none/);
       const tier = section(body, "## Tier Model");
       expect(tier).toMatch(/Don't retry and don't look for a way around it/);
       expect(tier).toMatch(/new help session/);
@@ -235,12 +233,13 @@ describe("help prompt outputs", () => {
       expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(8_400);
     });
 
-    // The topic list was dropped: docs search is the scope, and the list had
-    // drifted from the product. The off-topic rule has to stand without it.
-    it.each(ALL_GENERATED)("%s declines questions that aren't about Daintree", (_name, body) => {
-      const idk = section(body, "## When You Cannot Answer");
-      expect(idk).toMatch(/Off-topic[^\n]*not about Daintree[^\n]*don't answer/);
+    // The assistant runs a full agent CLI, so it isn't fenced to Daintree
+    // topics or kept from filing an approved issue itself (#13193).
+    it.each(ALL_GENERATED)("%s carries no scope or filing fence", (_name, body) => {
+      expect(body).not.toMatch(/Off-topic|focused on Daintree/);
+      expect(body).not.toMatch(/never file it yourself/);
       expect(body).not.toContain("## Topics You Can Help With");
+      expect(section(body, "## GitHub Issues")).toMatch(/file it once the user approves/);
     });
   });
 
@@ -270,13 +269,13 @@ describe("help prompt outputs", () => {
   });
 
   describe("Claude-only content stays in CLAUDE.md", () => {
-    // The deny list covers only the roots Daintree knows about, so the prompt
-    // states the rule instead of claiming a blanket deny (#12879).
-    it("CLAUDE.md states the write rule instead of claiming every edit is denied", () => {
-      const tools = section(CLAUDE, "## Local Tools");
-      expect(tools).toMatch(/Write only in the scratch folder/);
-      expect(tools).toMatch(/leave repository changes to launched agents/);
-      expect(CLAUDE).not.toMatch(/forge writes are denied/);
+    // Claude ships no deny rules, so the prompt must not claim edits or forge
+    // writes are blocked or belong only to launched agents (#13193).
+    it.each(ALL_GENERATED)("%s claims no edit or forge-write fence", (_name, body) => {
+      expect(body).not.toContain("## Local Tools");
+      expect(body).not.toMatch(/Edit denies|forge writes are denied/);
+      expect(body).not.toMatch(/leave repository changes to launched agents/);
+      expect(body).not.toMatch(/Shell and `gh` are read-only/);
     });
 
     it("CLAUDE.md contains the Tier Model and terminal.getStatus recipe", () => {
@@ -314,21 +313,6 @@ describe("help prompt outputs", () => {
     it("AGENTS.md routes operational work through the tier-gated MCP rather than the shell", () => {
       expect(AGENTS).toContain("TIER_NOT_PERMITTED");
       expect(AGENTS).toMatch(/launch agents, send prompts, move and close terminals/);
-    });
-
-    // Asserted against the head partial, not the generated file: SHARED.md is
-    // concatenated into AGENTS.md and independently mentions read-only access
-    // and the shell, so a generated-file check would still pass if the Codex
-    // local-tools restriction were deleted outright. Matched semantically
-    // rather than by exact phrase so ordinary rewording doesn't force a paired
-    // test edit — only losing the policy does.
-    it("AGENTS.head.md carries the local-tool restriction without claiming a sandbox enforces it", () => {
-      expect(AGENTS_HEAD).toMatch(/read-only/i);
-      expect(AGENTS_HEAD).toMatch(/(?:do not|don't|never)[^.\n]*\b(?:edit|write|create|mutate)\b/i);
-      expect(AGENTS_HEAD).toMatch(/(?:do not|don't|never)[^.\n]*\bshell\b/i);
-      expect(AGENTS_HEAD).toMatch(
-        /\b(?:instruction|prompt-level)\b[^.\n]*\b(?:not|rather than)\b/i
-      );
     });
 
     // Codex help sessions are NOT write-sandboxed: `buildCodexLaunchArgs`

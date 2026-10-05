@@ -15,4 +15,4 @@ Tool set: **`core`** (default; worktrees and agents) or **`full`** (adds issue, 
 
 ## Permissions Outside MCP
 
-The tier binds only `daintree`. Claude's deny list does not block every forge write; Codex has none. Never use the shell, a forge CLI or `gh api` for a `daintree` action or to bypass a tier or confirmation.
+The tier binds only `daintree`. Never use the shell, a forge CLI or `gh api` for a `daintree` action or to bypass a tier or confirmation.

@@ -9,7 +9,6 @@ const registeredTaskRuns = new Map<string, () => unknown>();
 // (globalServicesInit value-imports the singleton statically).
 const setMcpRegistry = vi.hoisted(() => vi.fn());
 const setProjectMetadataReader = vi.hoisted(() => vi.fn());
-const setKnownProjectRootsReader = vi.hoisted(() => vi.fn());
 let migrationCurrentVersion = 1;
 let migrationShouldThrow = false;
 let storeFreshAtBoot = false;
@@ -305,7 +304,6 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     setPendingHibernationStore: vi.fn(),
     setPtyClient: vi.fn(),
     setProjectMetadataReader,
-    setKnownProjectRootsReader,
     startOrphanSweep: vi.fn(),
     validateToken: vi.fn(),
     gcStaleSessions: vi.fn(async () => {}),
@@ -733,7 +731,6 @@ describe("initGlobalServices task ordering", () => {
     // leak into the next — keeps tests independent as the suite grows.
     setMcpRegistry.mockReset();
     setProjectMetadataReader.mockReset();
-    setKnownProjectRootsReader.mockReset();
     pruneOldLogs.mockReset();
     pruneOldLogsAsync.mockReset();
     pruneHeapSnapshots.mockReset();
@@ -1036,20 +1033,6 @@ describe("initGlobalServices task ordering", () => {
 
     expect(setProjectMetadataReader).toHaveBeenCalledWith(expect.any(Function));
     const setIdx = registeredTaskNames.indexOf("__setProjectMetadataReader__");
-    expect(setIdx).toBeGreaterThanOrEqual(0);
-    expect(registeredTaskNames.indexOf("mcp-server")).toBeGreaterThan(setIdx);
-  });
-
-  it("wires the help-session known-roots reader before any deferred task can provision", async () => {
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    setKnownProjectRootsReader.mockImplementation(() => {
-      registeredTaskNames.push("__setKnownProjectRootsReader__");
-    });
-
-    await initGlobalServices(fakeRegistry);
-
-    expect(setKnownProjectRootsReader).toHaveBeenCalledWith(expect.any(Function));
-    const setIdx = registeredTaskNames.indexOf("__setKnownProjectRootsReader__");
     expect(setIdx).toBeGreaterThanOrEqual(0);
     expect(registeredTaskNames.indexOf("mcp-server")).toBeGreaterThan(setIdx);
   });
