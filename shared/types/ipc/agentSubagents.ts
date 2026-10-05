@@ -50,6 +50,15 @@ export type AgentSubagentStatus =
   | { type: "completed" }
   | { type: "error" };
 
+/**
+ * A child observed running or waiting on the user right now. `unknown` is not
+ * live and not finished either — it is left out of the count rather than read
+ * as one or the other.
+ */
+export function isLiveSubagentStatus(status: AgentSubagentStatus): boolean {
+  return status.type === "working" || status.type === "blocked";
+}
+
 export interface AgentSubagent {
   /** Provider-scoped child id: a Codex thread id, a Claude agent id. */
   id: string;

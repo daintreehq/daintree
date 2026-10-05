@@ -121,7 +121,7 @@ describe("SubagentChip", () => {
     expect(screen.queryByRole("button", { name: /subagent/i })).toBeNull();
   });
 
-  it("counts the children it found and names each one read-only", async () => {
+  it("lists the children it found and names each one read-only", async () => {
     listSubagents.mockResolvedValue(
       ok([subagent(), subagent({ id: "child-2", label: "Kant", preview: "Run the tests" })])
     );
@@ -209,6 +209,76 @@ describe("SubagentChip", () => {
     await waitFor(() => expect(listSubagents).not.toHaveBeenCalled());
   });
 
+  it("counts only the Claude children running now, not the session's history", async () => {
+    mockPanel = { id: "t1", kind: "terminal", launchAgentId: "claude", cwd: "/repo" };
+    listClaudeSubagents.mockResolvedValue(
+      ok(
+        [
+          subagent({ id: "a", status: { type: "working" } }),
+          subagent({ id: "b", status: { type: "blocked", reason: "input" } }),
+          subagent({ id: "c", status: { type: "completed" } }),
+          subagent({ id: "d", status: { type: "unknown", reason: "stale" } }),
+        ],
+        "claude"
+      )
+    );
+
+    render(<SubagentChip terminalId="t1" />);
+
+    const chip = await screen.findByRole("button", {
+      name: "2 Claude subagents running, 1 waiting on you",
+    });
+    expect(chip.textContent).toBe("2");
+    // The finished and the unaccounted-for are still one click away.
+    expect(screen.getAllByRole("button", { expanded: false })).toHaveLength(4);
+  });
+
+  it("drops the number once no Claude child is running, and keeps the history reachable", async () => {
+    mockPanel = { id: "t1", kind: "terminal", launchAgentId: "claude", cwd: "/repo" };
+    listClaudeSubagents.mockResolvedValue(
+      ok(
+        [
+          subagent({ id: "a", status: { type: "completed" } }),
+          subagent({ id: "b", status: { type: "completed" } }),
+        ],
+        "claude"
+      )
+    );
+
+    render(<SubagentChip terminalId="t1" />);
+
+    const chip = await screen.findByRole("button", { name: "2 Claude subagents, none running" });
+    expect(chip.textContent).toBe("");
+    expect(screen.getAllByRole("button", { expanded: false })).toHaveLength(2);
+  });
+
+  it("never puts a number on a Codex chip, whose store cannot say what is running", async () => {
+    listSubagents.mockResolvedValue(
+      ok([subagent({ status: { type: "working" } }), subagent({ id: "child-2" })])
+    );
+
+    render(<SubagentChip terminalId="t1" />);
+
+    const chip = await screen.findByRole("button", { name: "2 Codex subagents" });
+    expect(chip.textContent).toBe("");
+  });
+
+  it.each([
+    ["the agent exited back to the shell", { agentState: "exited" }],
+    ["the agent's runtime reported an exit", { runtimeStatus: "exited" }],
+    ["the process left an exit code", { exitCode: 0 }],
+  ])("asks nothing and shows nothing once %s", async (_label, exit) => {
+    mockPanel = { id: "t1", kind: "terminal", launchAgentId: "claude", cwd: "/repo", ...exit };
+    listClaudeSubagents.mockResolvedValue(
+      ok([subagent({ status: { type: "working" } })], "claude")
+    );
+
+    render(<SubagentChip terminalId="t1" />);
+
+    await waitFor(() => expect(listClaudeSubagents).not.toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: /subagent/i })).toBeNull();
+  });
+
   it("reads a Claude terminal's children through Claude, not through Codex", async () => {
     mockPanel = { id: "t1", kind: "terminal", launchAgentId: "claude", cwd: "/repo" };
     listClaudeSubagents.mockResolvedValue(
@@ -217,7 +287,9 @@ describe("SubagentChip", () => {
 
     render(<SubagentChip terminalId="t1" />);
 
-    expect(await screen.findByRole("button", { name: "1 Claude subagent" })).toBeTruthy();
+    expect(
+      await screen.findByRole("button", { name: "1 Claude subagent, none running" })
+    ).toBeTruthy();
     expect(screen.getByText("Claude subagents")).toBeTruthy();
     expect(screen.getByText("Run the palette suite")).toBeTruthy();
     expect(listSubagents).not.toHaveBeenCalled();
@@ -230,7 +302,7 @@ describe("SubagentChip", () => {
       id: "t1",
       kind: "terminal",
       launchAgentId: "codex",
-      runtimeIdentity: { agentId: "claude" },
+      runtimeIdentity: { kind: "agent", id: "claude", iconId: "claude", agentId: "claude" },
       cwd: "/repo",
     };
     listClaudeSubagents.mockResolvedValue(ok([subagent()], "claude"));

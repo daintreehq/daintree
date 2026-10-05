@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
+import { getBuiltInRuntimeAgentId } from "@/utils/terminalType";
 import { logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { SUBAGENT_PROVIDERS, toSubagentProvider } from "@/clients/subagentProviders";
@@ -28,10 +29,11 @@ import {
   subagentTitle,
   subagentUnavailableMessage,
 } from "./subagentDisplay";
-import type {
-  AgentSubagent,
-  AgentSubagentTranscriptResult,
-  SubagentProvider,
+import {
+  isLiveSubagentStatus,
+  type AgentSubagent,
+  type AgentSubagentTranscriptResult,
+  type SubagentProvider,
 } from "@shared/types/ipc/agentSubagents";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import {
@@ -286,16 +288,17 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
       const panel = state.panelsById[terminalId];
       const pty = panel && isPtyPanel(panel) ? panel : undefined;
       return {
-        // Live detection wins, with launch affinity as the fallback so the chip
-        // survives a restore until detection rehydrates. Precedence rather than
-        // a union: a pane relaunched onto another agent must not keep answering
-        // for the one it was launched as.
-        provider: toSubagentProvider(pty?.runtimeIdentity?.agentId ?? pty?.launchAgentId),
+        // The header's own rule for which agent the pane is running: live
+        // detection first, launch affinity until detection rehydrates after a
+        // restore, and nothing once the agent has exited back to the shell —
+        // launch affinity outlives the agent, and the chip must not.
+        provider: toSubagentProvider(getBuiltInRuntimeAgentId(pty)),
         agentState: pty?.agentState,
         hasPty: pty?.hasPty !== false,
         // Distinguishes a respawn from the process that held this panel id
-        // before it, so a reused pane can't inherit the old session's list.
-        generation: pty?.startedAt,
+        // before it, and a relaunch inside the same shell from the session
+        // before it, so neither can inherit the old session's list.
+        generation: `${pty?.startedAt ?? 0}:${pty?.agentIncarnation ?? 0}`,
       };
     })
   );
@@ -323,9 +326,21 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
 
   const subagents = byAttention(result.subagents);
   const label = SUBAGENT_PROVIDERS[result.provider].label;
-  const count = subagents.length;
   const waiting = subagents.filter((subagent) => subagent.status.type === "blocked").length;
-  const summary = pluralize(count, `${label} subagent`);
+  // The number on the chip is what is running now, never the session's
+  // history: the list keeps every child the session spawned, finished or not.
+  // Codex gets no number at all — its store reports almost every child as not
+  // loaded, so running and finished look the same, and it is only re-read
+  // when the parent settles. A count there would claim liveness nobody saw.
+  const live = subagents.filter((subagent) => isLiveSubagentStatus(subagent.status)).length;
+  const count = result.provider === "claude" && live > 0 ? live : null;
+  const recorded = pluralize(subagents.length, `${label} subagent`);
+  const summary =
+    count !== null
+      ? `${pluralize(count, `${label} subagent`)} running`
+      : result.provider === "claude"
+        ? `${recorded}, none running`
+        : recorded;
   const waitingNote = waiting > 0 ? `${waiting} waiting on you` : null;
   const refreshErrorMessage = refreshError ? subagentUnavailableMessage(refreshError, label) : null;
   // A retry in flight outranks the failure it is retrying; the visible notice
@@ -375,7 +390,7 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
               aria-label={waitingNote ? `${summary}, ${waitingNote}` : summary}
             >
               <Network className="w-3 h-3" aria-hidden="true" />
-              <span className="tabular-nums">{count}</span>
+              {count !== null && <span className="tabular-nums">{count}</span>}
             </button>
           </PopoverTrigger>
         </TooltipTrigger>

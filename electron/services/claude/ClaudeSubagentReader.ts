@@ -446,17 +446,27 @@ async function probeTranscript(file: string, size: number): Promise<Probe> {
 }
 
 /**
- * The final record in a chunk, and whether it was whole.
+ * Records that carry a turn of the conversation. Everything else in a
+ * transcript — `attachment` (hook results, token reminders), `system`,
+ * `progress`, `summary` and the rest — is bookkeeping the CLI writes around
+ * the turns, including after the one that ended the child.
+ */
+const CONVERSATION_RECORD_TYPES: ReadonlySet<string> = new Set(["user", "assistant"]);
+
+/**
+ * The last conversation record in a chunk, and whether the chunk ended whole.
  *
- * Only the newest non-blank line is considered. Walking further back to find
- * something parseable is what would let a child that finished one turn and is
- * midway through writing the next be reported as finished — the older
- * `end_turn` is real, it just isn't this child's last word any more. When the
- * newest line won't parse, that is reported as a partial tail so the caller can
- * fall back to file activity instead of to stale evidence.
+ * Parseable bookkeeping records are stepped over, because the CLI writes them
+ * after a finished turn: a child that ended on `end_turn` and then logged a
+ * hook result is still a child that ended. An unparseable line is never
+ * stepped over. As the newest line it is a record mid-write, reported as a
+ * partial tail so the caller falls back to file activity — walking past it to
+ * an older `end_turn` is what would report a child streaming its next turn as
+ * finished. Further up, it is a line nobody can account for, and the older
+ * record behind it is no longer evidence of the child's last word either.
  *
- * A chunk that starts mid-file opens on a fragment, so a chunk of one line has
- * no whole record in it at all.
+ * A chunk that starts mid-file opens on a fragment, so its first line is never
+ * read as a record.
  */
 function finalRecord(
   chunk: string,
@@ -464,11 +474,16 @@ function finalRecord(
 ): { last: ParsedRecord | null; partialTail: boolean } {
   const lines = chunk.split("\n");
   const floor = fromStart ? 0 : 1;
+  let newest = true;
   for (let index = lines.length - 1; index >= floor; index -= 1) {
     const line = lines[index] ?? "";
     if (line.trim().length === 0) continue;
     const record = parseRecord(line);
-    return record ? { last: record, partialTail: false } : { last: null, partialTail: true };
+    if (!record) return { last: null, partialTail: newest };
+    newest = false;
+    if (record.type !== null && CONVERSATION_RECORD_TYPES.has(record.type)) {
+      return { last: record, partialTail: false };
+    }
   }
   return { last: null, partialTail: false };
 }

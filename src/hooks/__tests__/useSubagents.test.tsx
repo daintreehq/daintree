@@ -13,11 +13,12 @@ vi.mock("@/clients/claudeClient", () => ({
 }));
 
 import {
+  CLAUDE_SUBAGENT_POLL_MS,
   SUBAGENT_REFRESH_THROTTLE_MS,
   __resetSubagentThrottle,
   useSubagents,
 } from "../useSubagents";
-import type { AgentSubagentsResult } from "@shared/types/ipc/agentSubagents";
+import type { AgentSubagentStatus, AgentSubagentsResult } from "@shared/types/ipc/agentSubagents";
 
 function ok(id: string): AgentSubagentsResult {
   return {
@@ -38,6 +39,37 @@ function ok(id: string): AgentSubagentsResult {
       },
     ],
   };
+}
+
+function claudeOk(...statuses: AgentSubagentStatus[]): AgentSubagentsResult {
+  return {
+    status: "ok",
+    provider: "claude",
+    parentId: "root",
+    subagents: statuses.map((status, index) => ({
+      id: `child-${index}`,
+      label: null,
+      role: null,
+      preview: "",
+      model: null,
+      depth: null,
+      status,
+      createdAt: 0,
+      updatedAt: 0,
+    })),
+  };
+}
+
+/** Let the mount lookup land, then step the clock one poll at a time. */
+async function advancePolls(polls: number): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  for (let i = 0; i < polls; i += 1) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CLAUDE_SUBAGENT_POLL_MS);
+    });
+  }
 }
 
 beforeEach(() => {
@@ -265,5 +297,74 @@ describe("useSubagents", () => {
       expect(result.current.result).toEqual({ status: "unavailable", reason: "ambiguous-session" })
     );
     expect(result.current.refreshError).toBeNull();
+  });
+
+  describe("live polling", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000_000);
+    });
+
+    it("keeps asking Claude while the parent is working, so a first child is found", async () => {
+      listClaudeSubagents.mockResolvedValue(claudeOk());
+      const { unmount } = renderHook(() =>
+        useSubagents("t1", { provider: "claude", agentState: "working" })
+      );
+
+      await advancePolls(2);
+      expect(listClaudeSubagents).toHaveBeenCalledTimes(3);
+      unmount();
+    });
+
+    it("keeps asking after the parent settles while a child is still running", async () => {
+      listClaudeSubagents.mockResolvedValue(claudeOk({ type: "working" }, { type: "completed" }));
+      const { unmount } = renderHook(() =>
+        useSubagents("t1", { provider: "claude", agentState: "idle" })
+      );
+
+      await advancePolls(1);
+      expect(listClaudeSubagents).toHaveBeenCalledTimes(2);
+      unmount();
+    });
+
+    it("stops once the parent has settled and nothing it spawned is live", async () => {
+      // Unknown is not live: a quiet child nobody can account for does not
+      // keep the poll alive any more than a finished one does.
+      listClaudeSubagents.mockResolvedValue(
+        claudeOk({ type: "completed" }, { type: "unknown", reason: "stale" })
+      );
+      const { unmount } = renderHook(() =>
+        useSubagents("t1", { provider: "claude", agentState: "idle" })
+      );
+
+      await advancePolls(3);
+      expect(listClaudeSubagents).toHaveBeenCalledTimes(1);
+      unmount();
+    });
+
+    it("stops asking when the pane unmounts", async () => {
+      listClaudeSubagents.mockResolvedValue(claudeOk({ type: "working" }));
+      const { unmount } = renderHook(() =>
+        useSubagents("t1", { provider: "claude", agentState: "working" })
+      );
+      await advancePolls(0);
+      unmount();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CLAUDE_SUBAGENT_POLL_MS * 3);
+      });
+      expect(listClaudeSubagents).toHaveBeenCalledTimes(1);
+    });
+
+    it("never polls Codex, whose every lookup spawns a process", async () => {
+      listSubagents.mockResolvedValue(ok("child-1"));
+      const { unmount } = renderHook(() =>
+        useSubagents("t1", { provider: "codex", agentState: "working" })
+      );
+
+      await advancePolls(3);
+      expect(listSubagents).toHaveBeenCalledTimes(1);
+      unmount();
+    });
   });
 });
