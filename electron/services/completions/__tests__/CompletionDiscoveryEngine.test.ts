@@ -438,7 +438,11 @@ Body.
         expect.objectContaining({ scope: "user", description: "installed skill" }),
       ]);
       expect(byLabel("$shared")).toEqual([
-        expect.objectContaining({ scope: "user", description: "agents shared" }),
+        expect.objectContaining({
+          scope: "user",
+          description: "agents shared",
+          sourcePath: path.join(homeRoot, ".agents", "skills", "shared", "SKILL.md"),
+        }),
       ]);
       expect(byLabel("$proj")).toEqual([
         expect.objectContaining({ scope: "project", description: "project proj" }),
