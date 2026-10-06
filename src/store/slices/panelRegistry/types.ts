@@ -172,7 +172,12 @@ export interface PanelRegistrySlice {
   promoteDialogPanelToGrid: (id: string) => boolean;
   toggleTerminalLocation: (id: string) => void;
 
-  trashPanel: (id: string) => void;
+  /**
+   * Move a panel to the trash and tell the PTY host. `hostTrashed` is for a
+   * terminal main has already trashed on the host: the pane follows without a
+   * second host trash, which after an Undo elsewhere would trash it again.
+   */
+  trashPanel: (id: string, options?: { hostTrashed?: boolean }) => void;
   /** Trash all panels in a group together, storing group metadata for restoration */
   trashPanelGroup: (panelId: string) => void;
   restoreTerminal: (id: string, targetWorktreeId?: string) => void;

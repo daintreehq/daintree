@@ -46,6 +46,15 @@ export function useFleetEscapeChords(
 
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      // Escape inside a modal belongs to the modal and what it holds — the
+      // canopy panel's live terminal among them — never to the fleet behind it.
+      if (
+        e.target instanceof Element &&
+        e.target.closest('[role="dialog"][aria-modal="true"]') !== null
+      ) {
+        lastBareEscapeMsRef.current = 0;
+        return;
+      }
 
       // Bare Escape branch: detect a double-tap to dispatch fleet.interrupt
       // through batchDoubleEscape so every armed agent gets the

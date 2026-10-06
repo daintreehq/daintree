@@ -275,6 +275,9 @@ export const BUILT_IN_ACTION_IDS = [
   "pilot.toggle",
   "pilot.openProject",
   "pilot.openRun",
+
+  // -- canopyActions --
+  "canopy.toggle",
   "project.getAll",
   "project.getCurrent",
   "project.add",

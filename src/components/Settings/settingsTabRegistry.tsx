@@ -23,7 +23,14 @@ import {
   Shield,
   ArrowDownUp,
 } from "lucide-react";
-import { DaintreeIcon, FolderGit2, Plug, McpServerIcon, Workflow } from "@/components/icons";
+import {
+  DaintreeIcon,
+  FolderGit2,
+  Plug,
+  McpServerIcon,
+  Telescope,
+  Workflow,
+} from "@/components/icons";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { GeneralTab } from "./GeneralTab";
@@ -122,6 +129,7 @@ const importWorktreeSettingsTab = () => import("./WorktreeSettingsTab");
 const importToolbarSettingsTab = () => import("./ToolbarSettingsTab");
 const importIntegrationsTab = () => import("./IntegrationsTab");
 const importVoiceInputSettingsTab = () => import("./VoiceInputSettingsTab");
+const importCanopySettingsTab = () => import("./CanopySettingsTab");
 const importMcpServerSettingsTab = () => import("./McpServerSettingsTab");
 const importPluginActionsSettingsTab = () => import("./PluginActionsSettingsTab");
 const importRunHistorySettingsTab = () => import("./RunHistorySettingsTab");
@@ -177,6 +185,7 @@ const LazyCodeForgeSettingsTab = lazyWithPreload(
   importCodeForgeSettingsTab,
   (m) => m.CodeForgeSettingsTab
 );
+const LazyCanopySettingsTab = lazyWithPreload(importCanopySettingsTab, (m) => m.CanopySettingsTab);
 const LazyVoiceInputSettingsTab = lazyWithPreload(
   importVoiceInputSettingsTab,
   (m) => m.VoiceInputSettingsTab
@@ -1677,6 +1686,35 @@ export const SETTINGS_REGISTRY = [
   } satisfies LazySettingsTabEntry,
 
   {
+    id: "canopy",
+    scope: "global",
+    group: "Integrations",
+    label: "Canopy",
+    icon: <Telescope className="w-4 h-4" />,
+    importKind: "lazy",
+    importer: LazyCanopySettingsTab.preload,
+    LazyComponent: LazyCanopySettingsTab,
+    searchNavDescription: "Turn Canopy on or off, and how its screens are processed",
+    searchNavKeywords: ["canopy", "inbox", "agents", "summary", "priority", "privacy", "servers"],
+    sections: [
+      {
+        id: "canopy-read-terminals",
+        section: "Canopy",
+        title: "Read agent terminals",
+        description: "Send agents' terminal output to Daintree's servers to be read",
+        keywords: ["canopy", "privacy", "consent", "activate", "turn on", "servers"],
+      },
+      {
+        id: "canopy-plan",
+        section: "Canopy",
+        title: "Plan",
+        description: "Free and unlimited during the beta",
+        keywords: ["beta", "free", "paid", "subscription", "plan", "pricing"],
+      },
+    ],
+  } satisfies LazySettingsTabEntry,
+
+  {
     id: "run-history",
     scope: "global",
     group: "Integrations",
@@ -2188,6 +2226,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   "import-export": <ArrowDownUp className="w-5 h-5 text-text-secondary" />,
   integrations: <Blocks className="w-5 h-5 text-text-secondary" />,
   voice: <Mic className="w-5 h-5 text-text-secondary" />,
+  canopy: <Telescope className="w-5 h-5 text-text-secondary" />,
   mcp: <McpServerIcon className="w-5 h-5 text-text-secondary" />,
   plugins: <Package className="w-5 h-5 text-text-secondary" />,
   "plugin-actions": <ScrollText className="w-5 h-5 text-text-secondary" />,

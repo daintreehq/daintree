@@ -1,0 +1,189 @@
+import { useEffect, useRef, useState } from "react";
+import { BellRing, ListChecks, Hourglass, Send } from "lucide-react";
+import { Telescope } from "@/components/icons";
+import { AppDialog } from "@/components/ui/AppDialog";
+import { Button } from "@/components/ui/button";
+import { CanopyRow } from "./CanopyRow";
+import { SectionBar } from "./CanopySectionBar";
+import { CANOPY_DEMO_FRAME_COUNT, canopyDemoItems } from "./canopyDemo";
+import { itemNeedsAttention } from "./canopyModel";
+import { useListReorderMotion } from "./useListReorderMotion";
+import { CANOPY_BETA_TERMS } from "./canopyTerms";
+
+/** Long enough to read a row that just rose to the top. */
+const DEMO_FRAME_MS = 3_200;
+
+const POINTS = [
+  {
+    icon: BellRing,
+    title: "Permission prompts first",
+    body: "An agent asking to run something goes to the top of one list across every project. Answer it with a single key.",
+  },
+  {
+    icon: ListChecks,
+    title: "Where every run has got to",
+    body: "What each agent is doing, how far through it is, and whether its tests pass and its work is committed.",
+  },
+  {
+    icon: Hourglass,
+    title: "The one that went quiet",
+    body: "A run stuck behind a spinner, or waiting on you for ten minutes, surfaces instead of hiding in a pane.",
+  },
+] as const;
+
+interface CanopyPitchProps {
+  isOpen: boolean;
+  onClose: () => void;
+  backdrop?: React.ReactNode;
+  /** The user agreed to send their agents' screens to be read. */
+  onTurnOn: () => Promise<void>;
+}
+
+/**
+ * What Canopy shows until the user turns it on: what it does, beside its inbox
+ * playing a made-up fleet through the moments it is for, and what turning it on
+ * sends where. Nothing here reads a terminal; nothing is read until they agree.
+ */
+export function CanopyPitch({ isOpen, onClose, backdrop, onTurnOn }: CanopyPitchProps) {
+  const [turningOn, setTurningOn] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  return (
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="workspace"
+      maxHeight="h-[min(90vh,1100px)]"
+      backdrop={backdrop}
+      data-testid="canopy-dialog"
+    >
+      <AppDialog.Header>
+        <AppDialog.Title icon={<Telescope />}>Canopy</AppDialog.Title>
+        <span className="flex-1" />
+        <AppDialog.CloseButton />
+      </AppDialog.Header>
+      <div className="flex min-h-0 flex-1">
+        <DemoInbox paused={!isOpen} />
+        <section
+          aria-labelledby="canopy-pitch-title"
+          className="flex min-w-0 flex-1 items-center justify-center overflow-y-auto p-10"
+        >
+          <div className="flex max-w-md flex-col gap-6">
+            <div className="flex flex-col gap-2">
+              <h2
+                id="canopy-pitch-title"
+                className="text-2xl font-semibold tracking-tight text-text-primary"
+              >
+                Every agent, read for you
+              </h2>
+              <p className="text-sm leading-6 text-text-secondary">
+                Canopy reads each agent's screen and keeps one inbox for all of them, most urgent
+                first, so you stop hunting through panes to find out who needs you.
+              </p>
+            </div>
+            <ul className="flex flex-col gap-4">
+              {POINTS.map(({ icon: Icon, title, body }) => (
+                <li key={title} className="flex gap-3">
+                  <Icon className="mt-0.5 size-4 shrink-0 text-text-secondary" aria-hidden="true" />
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-sm font-medium text-text-primary">{title}</span>
+                    <span className="text-xs leading-5 text-text-secondary">{body}</span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <div className="flex flex-col gap-3">
+              <p className="flex gap-2 text-xs leading-5 text-text-secondary">
+                <Send className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                <span>
+                  To read them, Canopy sends your agents' terminal output to Daintree's servers,
+                  while it's closed too, so it can tell you when an agent is asking for you.
+                  Anything shaped like a password or key is stripped first.
+                </span>
+              </p>
+              <div className="flex items-center gap-3">
+                <Button
+                  variant="contrast"
+                  disabled={turningOn}
+                  onClick={() => {
+                    setTurningOn(true);
+                    setFailed(false);
+                    onTurnOn().then(
+                      () => setTurningOn(false),
+                      () => {
+                        setTurningOn(false);
+                        setFailed(true);
+                      }
+                    );
+                  }}
+                >
+                  Turn on Canopy
+                </Button>
+                <p role="status" className="text-xs text-text-secondary">
+                  {failed ? "Couldn't turn Canopy on. Try again." : ""}
+                </p>
+              </div>
+              <p className="text-xs text-text-secondary">{CANOPY_BETA_TERMS}</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </AppDialog>
+  );
+}
+
+/** The inbox's own rows over a made-up fleet, stepping on by itself; held while pointed at. */
+function DemoInbox({ paused }: { paused: boolean }) {
+  const [frame, setFrame] = useState(0);
+  const [hovered, setHovered] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (paused || hovered) return;
+    const handle = setInterval(() => {
+      setFrame((current) => (current + 1) % CANOPY_DEMO_FRAME_COUNT);
+      setNowMs(Date.now());
+    }, DEMO_FRAME_MS);
+    return () => clearInterval(handle);
+  }, [paused, hovered]);
+
+  const items = canopyDemoItems(frame, nowMs);
+  useListReorderMotion(listRef, items.map((item) => item.runId).join(","));
+
+  return (
+    <div
+      className="flex min-h-0 w-[28rem] shrink-0 flex-col self-stretch overflow-hidden border-r border-border-default select-none"
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+    >
+      <SectionBar
+        id="canopy-demo-label"
+        label="Inbox"
+        count={items.length}
+        trailing={<span className="text-2xs text-text-secondary">Demo</span>}
+      />
+      {/* Shown, not used: the rows take no focus and say nothing to a screen
+          reader, which has the offer beside them instead. */}
+      <div ref={listRef} aria-hidden="true" inert className="flex flex-col">
+        {items.map((item) => (
+          <CanopyRow
+            key={item.runId}
+            item={item}
+            domId={`canopy-demo-${item.runId}`}
+            isSelected={false}
+            unread={itemNeedsAttention(item)}
+            nowMs={nowMs}
+            tabbable={false}
+            reserveDetail
+            onSelect={noop}
+            onClick={noop}
+            onOpen={noop}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function noop() {}

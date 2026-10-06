@@ -262,6 +262,24 @@ export function setupLifecycleListeners(): DisposableStore {
     )
   );
 
+  // Canopy trashed a terminal this view holds. The host's own trashed event is
+  // dropped for a pane that isn't in the trash already (see `markAsTrashed`),
+  // so the pane takes the path closing it in place would — minus the host
+  // trash, which main has done: sent again, it would re-trash a terminal an
+  // Undo elsewhere restored in between.
+  const onCanopyTrash = window.electron?.canopy?.onTrashRequested;
+  if (onCanopyTrash) {
+    d.add(
+      toDisposable(
+        onCanopyTrash(({ runId }) => {
+          const panel = usePanelStore.getState().panelsById[runId];
+          if (!panel || panel.location === "trash") return;
+          usePanelStore.getState().trashPanel(runId, { hostTrashed: true });
+        })
+      )
+    );
+  }
+
   d.add(
     toDisposable(
       terminalRegistryController.onRestored((data: { id: string }) => {

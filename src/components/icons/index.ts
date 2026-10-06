@@ -20,6 +20,7 @@ export {
   BookDashed, // a Scratchpad's notes are temporary — kept only while its terminal is open; the dashed outline reads as a mode, not a warning
   Bot, // a commit author that is a bot account (a `[bot]` name) with no picture — shape says machine where initials would say person
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
+  CheckCheck, // Canopy: the readers think an agent's task is done and Daintree sees it stopped — a suggestion to close it, distinct from Pilot's observed CircleCheck
   CircleArrowUp, // a CLI below the version Daintree needs — the same up-arrow-in-a-circle plugins show for an available update
   CircleCheck, // finished run — blue awaiting review, neutral once acknowledged (Pilot's review and done bands)
   CircleDashed, // run the user snoozed — quiet until it wakes (Pilot's snoozed band)
@@ -28,7 +29,7 @@ export {
   CirclePause, // run the user parked — shelved on purpose (Pilot's parked band)
   CircleSlash, // agent stopped on an error, distinct in shape from a waiting one (Pilot's blocked band)
   CircleX, // anything that failed: CI, an environment, a pane that could not load — the cross the PR badge already uses, enclosed so a glyph standing alone reads as a verdict rather than a dismiss control
-  Clock, // recency sort order (most recently opened first)
+  Clock, // recency sort order (most recently opened first); a canopy row's time in its current state
   CloudOff, // a remote or forge that could not be reached — the same glyph the PR and issue badges show when detection is paused
   Coffee, // Daintree keeping the machine from idle-sleeping while agents work — the long-standing keep-awake metaphor
   FileStack, // artifacts an agent left in a terminal — the code, patches and files pulled from its output
@@ -40,6 +41,7 @@ export {
   FolderTree, // Daintree's own file browser panel (the worktree file tree)
   Folders, // copy tree / file hierarchy capture (two overlapping folders)
   Gauge, // git that could run faster on this worktree — the suggestion to route a WSL checkout's git through WSL
+  GitBranch, // the branch a folder has checked out — where an agent's work is going
   GitBranchPlus, // per-project worktree setup — creating branches, not browsing them
   GitMergeConflict, // a PR whose branch the forge reports as conflicting with its base — takes the CI glyph's place, since the conflict has to be resolved first
   GitPullRequest, // forge provider / code-host plugin category
@@ -64,6 +66,7 @@ export {
   Radar, // an agent pane waiting to hear about other terminals, which Daintree may type a notice into — distinct from BellDot, the user's own watch alert
   ServerCog, // a worktree's runtime — dev-server and remote-environment lifecycle
   Sprout, // origin / first step (main worktree, first agent launch)
+  Telescope, // Canopy: the long view out over every agent, read off its screen and laid out by what it needs from you — binoculars read clumsy at 16px, and both trees read as the notifications bell beside it
   TriangleAlert, // a setting failing validation, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors
   Workflow, // terminal recipe / scripted command sequence
 } from "lucide-react";

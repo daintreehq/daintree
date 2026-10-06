@@ -621,7 +621,7 @@ export const usePanelStore = create<PanelGridState>()(
         return moved;
       },
 
-      trashPanel: (id: string) => {
+      trashPanel: (id: string, options?: { hostTrashed?: boolean }) => {
         const state = get();
         const terminalToTrash = state.panelsById[id];
         if (terminalToTrash && terminalToTrash.location !== "trash") {
@@ -637,7 +637,7 @@ export const usePanelStore = create<PanelGridState>()(
         const policy = resolvePanelKindPolicy(terminalToTrash?.kind);
         const preferAgent = Boolean(terminalToTrash && isRuntimeAgentTerminal(terminalToTrash));
 
-        registrySlice.trashPanel(id);
+        registrySlice.trashPanel(id, options);
 
         // Clear watch when panel is trashed (onTerminalRemoved only fires on full removal)
         get().unwatchPanel(id);

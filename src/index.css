@@ -14,6 +14,7 @@
 @import "./styles/components/surface-header.css";
 @import "./styles/components/pulse.css";
 @import "./styles/components/sidebar.css";
+@import "./styles/components/canopy.css";
 @import "./styles/components/panels.css";
 @import "./styles/components/dock.css";
 @import "./styles/components/search-field.css";

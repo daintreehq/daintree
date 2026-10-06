@@ -321,6 +321,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
+| `canopy.toggle` | Open Canopy | safe | — |
 | `pilot.openProject` | View this project's agents | safe | — |
 | `pilot.openRun` | Open run | safe | `runId`, `workspaceId?` |
 | `pilot.toggle` | View all agents | safe | — |
