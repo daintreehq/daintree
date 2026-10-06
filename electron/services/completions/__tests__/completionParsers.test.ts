@@ -284,3 +284,35 @@ describe("codex-plugin-registry parser", () => {
     }
   });
 });
+
+describe("skill-dir parser", () => {
+  it("follows symlinked skill folders and skips links to files", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "daintree-skill-dir-"));
+    try {
+      const skillsDir = path.join(root, "skills");
+      const elsewhere = path.join(root, "elsewhere", "linked");
+      await write(path.join(skillsDir, "plain", "SKILL.md"), "---\ndescription: plain\n---\n");
+      await write(path.join(elsewhere, "SKILL.md"), "---\ndescription: linked\n---\n");
+      await write(path.join(root, "stray.md"), "not a skill");
+      // "junction" lets Windows create a directory link without privileges;
+      // other platforms ignore the type.
+      await fsp.symlink(elsewhere, path.join(skillsDir, "linked"), "junction");
+      // File symlinks need elevated privileges on Windows.
+      if (process.platform !== "win32") {
+        await fsp.symlink(path.join(root, "stray.md"), path.join(skillsDir, "stray"));
+      }
+
+      const parser = getCompletionParser("skill-dir");
+      expect(parser).toBeDefined();
+      const entries = byName(await parser!(skillsDir));
+
+      expect([...entries.keys()].sort()).toEqual(["linked", "plain"]);
+      expect(entries.get("linked")).toMatchObject({
+        description: "linked",
+        relativeSourcePath: path.join("linked", "SKILL.md"),
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

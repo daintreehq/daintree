@@ -287,6 +287,15 @@ export const config: AgentConfig = {
             locationPrecedence: 0,
           },
           {
+            // Codex's documented personal skill location. Not moved by
+            // CODEX_HOME, and outranks `$CODEX_HOME/skills` on a name clash.
+            id: "user:agents-skills",
+            scope: "user",
+            base: { type: "homeRelative", segments: [".agents"] },
+            segments: ["skills"],
+            locationPrecedence: 1,
+          },
+          {
             id: "project:agents-skills",
             scope: "project",
             base: { type: "projectRoot" },
