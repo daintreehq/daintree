@@ -594,20 +594,21 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generateAndCopyFile",
       title: "Generate and copy context",
       description:
-        "Bundle a worktree's context to a file and put it on the system clipboard, replacing what the user copied: the file on macOS and Linux, its path on Windows. Agent and MCP callers must name the worktree. Never returned inline; check the budget flags for completeness.",
+        "Bundle a worktree's context to a file and put it on the system clipboard, replacing what the user copied: the file on macOS/Linux, its path on Windows. Agents must name the worktree, or omit it if none exist to copy the root. Never returned inline; check budget flags.",
       category: "copyTree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      // run() resolves the target from ctx.activeWorktreeId and throws when none
-      // is active. Disable-with-reason in the palette rather than letting the
-      // pick produce a "No active worktree" error toast. Palette picks dispatch
-      // with source "user", so the agent-only explicit-target guard below never
-      // applies to them and this fallback stays intact.
+      // run() resolves the target from ctx.activeWorktreeId, or the workspace
+      // root when there is no worktree, and throws with no workspace at all.
+      // Disable-with-reason in the palette rather than letting the pick produce
+      // an error toast. Palette picks dispatch with source "user", so the
+      // agent-only explicit-target guard below never applies to them and this
+      // fallback stays intact.
       palette: {
         mode: "requireContext",
-        isReady: (ctx) => Boolean(ctx.activeWorktreeId),
-        reason: "Open a worktree to generate its context",
+        isReady: (ctx) => Boolean(ctx.activeWorktreeId || ctx.projectId || ctx.scratchId),
+        reason: "Open a project or scratch to generate its context",
       },
       argsSchema: withWorktreeLocation({
         options: CopyTreeOptionsSchema.optional().describe(
@@ -630,8 +631,20 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       }),
       mcpOutputSchema: true,
       run: async (args, ctx: ActionContext) => {
-        requireExplicitWorktreeForAgentDispatch("copyTree.generateAndCopyFile", args, ctx);
-        const worktreeId = requireWorktreeId(args, ctx);
+        // Nothing named and no worktree to inherit is a non-git project or a
+        // scratch, whose root is its one copyable folder — main resolves it
+        // from the dispatching view (#13210). An agent is only made to name a
+        // worktree when there is one it could otherwise inherit by accident.
+        const copiesWorkspaceRoot =
+          !args?.worktreeId &&
+          !args?.worktreePath &&
+          !ctx.activeWorktreeId &&
+          Boolean(ctx.projectId || ctx.scratchId);
+        let worktreeId: string | undefined;
+        if (!copiesWorkspaceRoot) {
+          requireExplicitWorktreeForAgentDispatch("copyTree.generateAndCopyFile", args, ctx);
+          worktreeId = requireWorktreeId(args, ctx);
+        }
         // Bracketed for the toolbar's Copy context spinner — this is the action
         // MCP clipboard copies and the recents replay land on, and both should
         // spin the button exactly like a direct click (the other clipboard

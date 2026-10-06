@@ -392,13 +392,16 @@ export function registerWorktreeContextActions(
         const scopePaths = args?.scopePaths;
         const scopeIgnoresIgnoreFiles = args?.scopeIgnoresIgnoreFiles;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
-        if (!targetWorktreeId) return null;
+        // No worktree at all is a non-git project or a scratch: copy its root,
+        // which main resolves from the dispatching view itself (#13210). Only
+        // with no workspace of any kind is there nothing to copy.
+        if (!targetWorktreeId && !ctx.projectId && !ctx.scratchId) return null;
 
         const format = explicitFormat ?? DEFAULT_COPYTREE_FORMAT;
 
         // Bracketed for the toolbar spinner, whoever dispatched — an MCP copy
         // spins the Copy context button the same as a clicked one. After the
-        // no-worktree return so a refused dispatch never blips it.
+        // no-workspace return so a refused dispatch never blips it.
         const runStore = useCopyTreeRunStore.getState();
         runStore.beginRun();
         let result: CopyTreeResult;
@@ -459,7 +462,7 @@ export function registerWorktreeContextActions(
         }
 
         return {
-          worktreeId: targetWorktreeId,
+          worktreeId: targetWorktreeId ?? null,
           fileCount: result.fileCount,
           stats: result.stats ?? null,
           format,

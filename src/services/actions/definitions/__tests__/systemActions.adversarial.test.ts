@@ -673,6 +673,60 @@ describe("systemActions adversarial", () => {
       expect(notifyMock).not.toHaveBeenCalled();
     });
 
+    describe("worktree-less workspace (#13210)", () => {
+      it.each([
+        ["user", "a non-git project", { projectId: "proj-1" }],
+        ["agent", "a non-git project", { projectId: "proj-1" }],
+        ["user", "a scratch", { scratchId: "scratch-1" }],
+      ])(
+        "copies the workspace root for a %s dispatch in %s",
+        async (dispatchSource, _label, workspace) => {
+          // With no worktree there is nothing an agent could inherit by
+          // accident, so the explicit-target guard has nothing to protect.
+          const { run } = setupActions();
+          await run(
+            "copyTree.generateAndCopyFile",
+            { options: { format: "xml" } },
+            { dispatchSource, ...workspace }
+          );
+          expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledTimes(1);
+          const [worktreeId, options] = copyTreeClientMock.generateAndCopyFile.mock.calls[0]!;
+          expect(worktreeId).toBeUndefined();
+          expect(options).toEqual({ format: "xml" });
+        }
+      );
+
+      it("still refuses a named worktreePath that matches nothing, rather than widening to the root", async () => {
+        setWorktreePathIndexAccessor(() => new Map());
+        const { run } = setupActions();
+        await expect(
+          run(
+            "copyTree.generateAndCopyFile",
+            { worktreePath: "/repo/gone" },
+            { dispatchSource: "agent", projectId: "proj-1" }
+          )
+        ).rejects.toThrow(/no open worktree matches that path/i);
+        expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
+      });
+
+      it("refuses with no workspace of any kind", async () => {
+        const { run } = setupActions();
+        await expect(
+          run("copyTree.generateAndCopyFile", undefined, { dispatchSource: "user" })
+        ).rejects.toThrow(/No active worktree/);
+        expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
+      });
+
+      it("is ready in the palette for any workspace, worktree or not", () => {
+        const palette = setupActions().getDef("copyTree.generateAndCopyFile").palette;
+        if (palette?.mode !== "requireContext") throw new Error("expected requireContext");
+        expect(palette.isReady({ projectId: "proj-1" })).toBe(true);
+        expect(palette.isReady({ scratchId: "scratch-1" })).toBe(true);
+        expect(palette.isReady({ activeWorktreeId: "wt-1" })).toBe(true);
+        expect(palette.isReady({})).toBe(false);
+      });
+    });
+
     it("toasts once on a successful agent dispatch", async () => {
       const { run } = setupActions();
       await run(

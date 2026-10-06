@@ -138,11 +138,14 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
     });
 
     it("disables the overflow copy-tree item exactly when its handler would refuse", () => {
-      // Mirrors the visible button's aria-disabled states: no active worktree
-      // ("Open a worktree first") and a copy already in flight — which can
-      // start from routes that never touch this menu (MCP, Cmd+Shift+C), so
-      // the item must not look live while activation would silently no-op.
-      expect(source).toMatch(/id === "copy-tree" && \(!hasActiveWorktree \|\| isCopyingTree\)/);
+      // Mirrors the visible button's aria-disabled states: no workspace open
+      // ("Open a project or scratch first") and a copy already in flight —
+      // which can start from routes that never touch this menu (MCP,
+      // Cmd+Shift+C), so the item must not look live while activation would
+      // silently no-op. A worktree-less workspace still copies its root
+      // (#13210), so it must not disable the item.
+      expect(source).toMatch(/id === "copy-tree" && \(!hasWorkspace \|\| isCopyingTree\)/);
+      expect(source).toContain("hasWorkspace={hasWorkspace}");
       expect(source).toContain("disabled={disabled}");
     });
 

@@ -171,7 +171,7 @@ describe("worktree.copyTree completion announcement", () => {
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
-  it("never announces when there is no worktree to copy", async () => {
+  it("never announces when there is no workspace to copy", async () => {
     // run() short-circuits to null before touching the client; a toast here
     // would claim a copy that never happened.
     const { run } = setupActions();
@@ -180,6 +180,32 @@ describe("worktree.copyTree completion announcement", () => {
     ).resolves.toBeNull();
     expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
     expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a non-git project", { projectId: "proj-1" }],
+    ["a scratch", { scratchId: "scratch-1" }],
+  ])("copies the workspace root of %s with no worktree (#13210)", async (_label, workspace) => {
+    // No worktree id crosses IPC: main resolves the root from the dispatching
+    // view itself, so the renderer never names a folder it could get wrong.
+    const { run } = setupActions();
+    const result = await run("worktree.copyTree", undefined, {
+      dispatchSource: "keybinding",
+      ...workspace,
+    });
+
+    expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledTimes(1);
+    expect(copyTreeClientMock.generateAndCopyFile.mock.calls[0]?.[0]).toBeUndefined();
+    expect(result).toEqual(expect.objectContaining({ worktreeId: null, fileCount: 3 }));
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ context: { eventKind: "agent", worktreeId: undefined } })
+    );
+  });
+
+  it("prefers the active worktree over the workspace root when there is one", async () => {
+    const { run } = setupActions();
+    await run("worktree.copyTree", undefined, { projectId: "proj-1", activeWorktreeId: "wt-a" });
+    expect(copyTreeClientMock.generateAndCopyFile.mock.calls[0]?.[0]).toBe("wt-a");
   });
 
   it.each([

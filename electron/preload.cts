@@ -1683,7 +1683,7 @@ function buildElectronApi(): ElectronAPI {
         }),
 
       generateAndCopyFile: (
-        worktreeId: string,
+        worktreeId: string | undefined,
         options?: CopyTreeOptions,
         source?: CopyTreeRunSource,
         name?: string

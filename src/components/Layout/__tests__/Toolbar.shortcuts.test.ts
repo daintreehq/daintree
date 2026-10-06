@@ -329,7 +329,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       // possibly one that no longer exists. File-wide rather than block-scoped:
       // the field must not be read anywhere in the toolbar, however the handler
       // is later refactored or extracted.
-      expect(source).toContain("handleCopyTreeWithOptions(activeWorktree, record.options");
+      expect(source).toContain("handleCopyTreeWithOptions(activeWorktree ?? null, record.options");
       expect(source).not.toContain("record.worktreeId");
     });
 

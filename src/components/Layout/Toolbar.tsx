@@ -246,7 +246,7 @@ interface OverflowMenuProps {
   // the same rule as `severity`, so the name never says less than the dot.
   agentObservations: readonly string[];
   agentAttentionStates: Map<string, AttentionAgentState | null>;
-  hasActiveWorktree: boolean;
+  hasWorkspace: boolean;
   forgeStatsRef: React.RefObject<ForgeStatsHandle | null>;
   // Display name of the resolved forge provider, or null when none resolves
   // (no matching plugin / owning plugin disabled) — the stats group is
@@ -288,7 +288,7 @@ function OverflowMenu({
   notificationUnreadCount,
   agentObservations,
   agentAttentionStates,
-  hasActiveWorktree,
+  hasWorkspace,
   forgeStatsRef,
   forgeProviderName,
   overflowActions,
@@ -592,11 +592,11 @@ function OverflowMenu({
           }
           const Icon = meta.icon;
           // Mirror the visible copy-tree button, which declines both when no
-          // worktree is active ("Open a worktree first" tooltip) and while a
-          // copy is in flight — without this the overflow item would
+          // workspace is open ("Open a project or scratch first" tooltip) and
+          // while a copy is in flight — without this the overflow item would
           // look live yet silently close with no feedback, since its handler
           // guards on the same two conditions.
-          const disabled = id === "copy-tree" && (!hasActiveWorktree || isCopyingTree);
+          const disabled = id === "copy-tree" && (!hasWorkspace || isCopyingTree);
           // The in-flight reason is spelled out, as the visible button's
           // spinner and "Copying…" name do — a greyed row alone reads as
           // unavailable rather than busy. The label carries it rather than a
@@ -1004,10 +1004,12 @@ export function Toolbar({
   // tooltip, so every route — this handler, the overflow item, Cmd+Shift+C,
   // the palette, MCP — reports identically (#11735). This handler only guards
   // and dispatches.
+  // With no worktree — a non-git project or a scratch — the copy targets the
+  // workspace root instead (#13210), so only "no workspace at all" declines.
   const handleCopyTreeClick = useCallback(() => {
-    if (isCopyingTree || !activeWorktree) return;
-    return handleCopyTree(activeWorktree, "toolbar");
-  }, [isCopyingTree, activeWorktree, handleCopyTree]);
+    if (isCopyingTree || !hasWorkspace) return;
+    return handleCopyTree(activeWorktree ?? null, "toolbar");
+  }, [isCopyingTree, hasWorkspace, activeWorktree, handleCopyTree]);
 
   // The visible button opens the menu; it no longer copies. Every immediate
   // route is deliberately left alone: `Cmd+Shift+C` dispatches
@@ -1017,20 +1019,20 @@ export function Toolbar({
   //
   // The guard sits on the open transition rather than on the trigger's
   // `disabled`: the button is deliberately `aria-disabled` so its "Open a
-  // worktree first" tooltip still shows on hover, and a truly disabled trigger
+  // project or scratch first" tooltip still shows on hover, and a truly disabled trigger
   // would fire no pointer events for it. Close is always honoured; the menu
   // primitive owns close-time focus, so nothing here restores it.
   const handleCopyTreeOpenChange = useCallback(
     (open: boolean) => {
       if (open) {
-        if (isCopyingTree || !activeWorktree) return;
+        if (isCopyingTree || !hasWorkspace) return;
         // A lingering completion tooltip and the opening menu would anchor to
         // the same button; the click is also an acknowledgement of the notice.
         clearCopyTreeNotice();
       }
       setCopyTreeOpen(open);
     },
-    [isCopyingTree, activeWorktree, clearCopyTreeNotice]
+    [isCopyingTree, hasWorkspace, clearCopyTreeNotice]
   );
 
   // Where focus goes when the menu closes because its button was evicted to
@@ -1063,27 +1065,27 @@ export function Toolbar({
     );
   }, []);
 
-  // A recent entry. Replayed against the ACTIVE worktree, never the worktree
-  // stored on the record — the history dedupe key covers options alone, so a
+  // A recent entry. Replayed against the ACTIVE worktree — or the workspace
+  // root when there is none — never the worktree stored on the record — the history dedupe key covers options alone, so a
   // record's worktree is whichever one ran it last rather than a stable target,
   // and it may name a worktree that has since been removed.
   const handleCopyTreeRunRecent = useCallback(
     (record: CopyTreeHistoryRecord) => {
-      if (isCopyingTree || !activeWorktree) return;
-      void handleCopyTreeWithOptions(activeWorktree, record.options, "toolbar");
+      if (isCopyingTree || !hasWorkspace) return;
+      void handleCopyTreeWithOptions(activeWorktree ?? null, record.options, "toolbar");
     },
-    [isCopyingTree, activeWorktree, handleCopyTreeWithOptions]
+    [isCopyingTree, hasWorkspace, activeWorktree, handleCopyTreeWithOptions]
   );
 
-  // The anchor stops being interactive without a worktree or while a copy is
+  // The anchor stops being interactive without a workspace or while a copy is
   // in flight (aria-disabled for the first, busy for the second), and the menu's entries
   // decline in both states — leaving it open would strand a dead menu over the
   // toolbar. The in-flight half matters because copies start without the
   // trigger: MCP and assistant dispatches, Cmd+Shift+C, and the palette can
   // all begin one while the menu is open.
   useEffect(() => {
-    if ((!activeWorktree || isCopyingTree) && copyTreeOpen) setCopyTreeOpen(false);
-  }, [activeWorktree, isCopyingTree, copyTreeOpen]);
+    if ((!hasWorkspace || isCopyingTree) && copyTreeOpen) setCopyTreeOpen(false);
+  }, [hasWorkspace, isCopyingTree, copyTreeOpen]);
 
   const getToolbarItems = useCallback(
     () =>
@@ -1524,8 +1526,8 @@ export function Toolbar({
                           data-toolbar-item=""
                           // Busy is the spinner, not a dim: a copy in flight keeps
                           // the button at full strength and the handlers veto a
-                          // second run. Only "no worktree" is unavailable.
-                          aria-disabled={!activeWorktree || undefined}
+                          // second run. Only "no workspace" is unavailable.
+                          aria-disabled={!hasWorkspace || undefined}
                           aria-busy={isCopyingTree || undefined}
                           className={cn(
                             "toolbar-icon-button relative",
@@ -1557,8 +1559,8 @@ export function Toolbar({
                       </span>
                     ) : isCopyingTree ? (
                       "Copying…"
-                    ) : !activeWorktree ? (
-                      "Open a worktree first"
+                    ) : !hasWorkspace ? (
+                      "Open a project or scratch first"
                     ) : (
                       createTooltipContent("Copy context", copyTreeCombo)
                     )}
@@ -1715,7 +1717,6 @@ export function Toolbar({
       clearCopyTreeNotice,
       isCopyingTree,
       showCopyingSpinner,
-      activeWorktree,
       onSettings,
       onPreloadSettings,
       onToggleProblems,
@@ -2235,7 +2236,7 @@ export function Toolbar({
       notificationUnreadCount={notificationUnreadCount}
       agentObservations={agentObservations}
       agentAttentionStates={agentAttentionStates}
-      hasActiveWorktree={!!activeWorktree}
+      hasWorkspace={hasWorkspace}
       forgeStatsRef={forgeStatsRef}
       forgeProviderName={forgeProviderName}
       overflowActions={overflowActions}

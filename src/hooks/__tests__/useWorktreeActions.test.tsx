@@ -96,6 +96,18 @@ describe("useWorktreeActions", () => {
     expect(updateNotificationMock).not.toHaveBeenCalled();
   });
 
+  it("copies the workspace root when handed no worktree (#13210)", async () => {
+    dispatchMock.mockResolvedValueOnce({ ok: true, result: null });
+    const { result } = renderHook(() => useWorktreeActions());
+
+    await result.current.handleCopyTree(null, "toolbar");
+
+    expect(dispatchMock).toHaveBeenCalledWith("worktree.copyTree", undefined, {
+      source: "user",
+      copyTreeRunSource: "toolbar",
+    });
+  });
+
   describe("handleCopyTreeWithOptions — replaying a recent (#11733)", () => {
     // Every field `CopyTreeOptions` carries. The point of the fixture is that
     // it is wider than `worktree.copyTree`'s flat args schema, which accepts
@@ -144,6 +156,17 @@ describe("useWorktreeActions", () => {
       await result.current.handleCopyTreeWithOptions(worktree, storedOptions);
 
       expect(dispatchMock.mock.calls[0]![1].worktreeId).toBe(worktree.id);
+    });
+
+    it("replays against the workspace root when there is no worktree (#13210)", async () => {
+      dispatchMock.mockResolvedValueOnce({ ok: true, result: {} });
+
+      const { result } = renderHook(() => useWorktreeActions());
+      await result.current.handleCopyTreeWithOptions(null, storedOptions, "toolbar");
+
+      const [actionId, args] = dispatchMock.mock.calls[0]!;
+      expect(actionId).toBe("copyTree.generateAndCopyFile");
+      expect(args).toEqual({ options: storedOptions });
     });
 
     it("forwards the run source so history attributes the replay to the toolbar", async () => {

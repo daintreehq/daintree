@@ -116,6 +116,12 @@ import {
   releaseContextFilePath,
   reserveContextFilePath,
 } from "../../services/copyTreeOutputFile.js";
+import { scratchStore } from "../../services/ScratchStore.js";
+import {
+  cancelAllWorkspaceRootContext,
+  generateWorkspaceRootContext,
+} from "../../services/workspaceRootCopyTree.js";
+import { isFullyQualifiedRoot } from "../../utils/fullyQualifiedRoot.js";
 
 function getStringField(payload: unknown, key: string): string | undefined {
   if (!payload || typeof payload !== "object") {
@@ -251,6 +257,13 @@ interface CopyTreeSender {
   projectId: string | null;
   /** Null for an unbound view, a scratch (#11484), or an unknown id. */
   project: Project | null;
+  /**
+   * The folder the sender view's workspace is rooted at — its project's path,
+   * or a scratch's own folder. Null when the view resolves to no workspace, and
+   * deliberately never the global current project: a root copy bundles whole
+   * folders, so it must only ever reach the view's own (#13210).
+   */
+  workspaceRoot: string | null;
 }
 
 /**
@@ -261,11 +274,17 @@ interface CopyTreeSender {
  * row lookup is synchronous too, so pinning it here costs nothing.
  */
 function resolveCopyTreeSender(ctx: IpcContext, deps: HandlerDependencies): CopyTreeSender {
-  const projectId = resolveCopyTreeProjectId(ctx, deps);
-  return {
-    projectId,
-    project: projectId ? (projectStore.getProjectById(projectId) ?? null) : null,
-  };
+  const scoped = resolveScopedProjectForIpcContext(ctx, deps);
+  const projectId =
+    scoped === null ? projectStore.getCurrentProjectId() : (scoped.project?.id ?? null);
+  const project = projectId ? (projectStore.getProjectById(projectId) ?? null) : null;
+  let workspaceRoot: string | null = null;
+  if (scoped?.project) {
+    workspaceRoot = scoped.project.path;
+  } else if (scoped?.workspaceId) {
+    workspaceRoot = scratchStore.getScratchById(scoped.workspaceId)?.path ?? null;
+  }
+  return { projectId, project, workspaceRoot };
 }
 
 /**
@@ -286,11 +305,12 @@ function resolveCopyTreeSender(ctx: IpcContext, deps: HandlerDependencies): Copy
  * the project after the await — the eviction race #6015/#11103 fixed for
  * settings applies verbatim here.
  *
- * A sender with no project row resolves nothing. Every copyTree channel makes
- * `worktreeId` mandatory, and a supplied worktree id demands a project row —
- * the workspace root a scratch or worktree-less project has is not a worktree,
- * and falling back to one would silently widen the bundle to a folder the
- * caller never named.
+ * A sender with no project row resolves nothing. A supplied worktree id
+ * demands a project row — the workspace root a scratch or worktree-less project
+ * has is not a worktree, and falling back to one would silently widen the
+ * bundle to a folder the caller never named. The one way to reach that root is
+ * to name no worktree at all, which only `generateAndCopyFile` accepts
+ * (#13210).
  */
 async function findSenderWorktree(
   sender: CopyTreeSender,
@@ -329,13 +349,17 @@ async function findSenderWorktree(
 async function recordCompletedCopyTreeRun(
   projectId: string | null,
   validated: {
-    worktreeId: string;
+    worktreeId?: string;
     options?: CopyTreeOptions;
     name?: string;
     source?: CopyTreeRunSource;
   },
-  result: CopyTreeResult
+  result: CopyTreeResult,
+  /** Provenance for a workspace-root run, which names no worktree (#13210). */
+  rootPath?: string
 ): Promise<void> {
+  const worktreeId = validated.worktreeId ?? rootPath;
+  if (!worktreeId) return;
   try {
     await recordCopyTreeRun(projectId, {
       // Forwarded raw, including blank and untrimmed values: `applyCopyTreeRun`
@@ -344,7 +368,7 @@ async function recordCompletedCopyTreeRun(
       name: validated.name,
       options: validated.options ?? {},
       source: validated.source ?? "unknown",
-      worktreeId: validated.worktreeId,
+      worktreeId,
       stats: {
         fileCount: result.fileCount,
         totalSize: result.stats?.totalSize,
@@ -388,15 +412,15 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
    * the host → main → renderer boundaries before anything trimmed it.
    */
   const generateToFile = async (
-    worktree: { path: string; branch?: string },
+    target: { path: string; branch?: string; isWorkspaceRoot?: boolean },
     options: CopyTreeOptions,
     onProgress: (progress: CopyTreeProgress) => void
   ): Promise<CopyTreeResult> => {
     let filePath: string;
     try {
       filePath = await reserveContextFilePath({
-        worktreePath: worktree.path,
-        branch: worktree.branch,
+        worktreePath: target.path,
+        branch: target.branch,
         // The merged options, not the caller's: project settings decide the
         // format too, and the extension has to match what actually gets written.
         extension: getExtensionForFormat(options.format),
@@ -409,12 +433,11 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     try {
-      const result = await deps.worktreeService!.generateContext(
-        worktree.path,
-        options,
-        onProgress,
-        filePath
-      );
+      // A workspace root has no workspace host to route to — a scratch never
+      // gets one — so it runs on main's own CopyTree worker (#13210).
+      const result = target.isWorkspaceRoot
+        ? await generateWorkspaceRootContext(target.path, options, onProgress, filePath)
+        : await deps.worktreeService!.generateContext(target.path, options, onProgress, filePath);
       if (result.error) return result;
       // A successful generation names the file we reserved and reports its
       // size. Anything else is a result that outlived its operation: publishing
@@ -526,7 +549,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     checkRateLimit(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, 5, 10_000);
     const traceId = crypto.randomUUID();
     const senderWindow = ctx.senderWindow;
-    const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
+    const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "(workspace root)";
     console.log(
       `[${traceId}] CopyTree generate-and-copy-file started for worktree ${requestedWorktreeId}`
     );
@@ -546,26 +569,36 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
     const validated = parseResult.data;
 
-    if (!deps.worktreeService) {
-      return {
-        content: "",
-        fileCount: 0,
-        error: "Workspace client not initialized",
-      };
-    }
-
     // Capture the sender's project before awaiting: the view can be evicted
     // while the workspace call is in flight, taking its binding with it.
     const sender = resolveCopyTreeSender(ctx, deps);
 
-    const worktree = await findSenderWorktree(sender, validated.worktreeId, deps.worktreeService);
-
-    if (!worktree) {
-      return {
-        content: "",
-        fileCount: 0,
-        error: `Worktree not found: ${validated.worktreeId}`,
-      };
+    // No worktree named means the view's own workspace root — the only thing a
+    // scratch or a non-git project has to copy (#13210). A named one must
+    // resolve: it never falls back to that wider folder.
+    let target: { path: string; branch?: string; isWorkspaceRoot?: boolean };
+    if (validated.worktreeId === undefined) {
+      if (!sender.workspaceRoot || !isFullyQualifiedRoot(sender.workspaceRoot)) {
+        return { content: "", fileCount: 0, error: "No workspace open to copy" };
+      }
+      target = { path: sender.workspaceRoot, isWorkspaceRoot: true };
+    } else {
+      if (!deps.worktreeService) {
+        return {
+          content: "",
+          fileCount: 0,
+          error: "Workspace client not initialized",
+        };
+      }
+      const worktree = await findSenderWorktree(sender, validated.worktreeId, deps.worktreeService);
+      if (!worktree) {
+        return {
+          content: "",
+          fileCount: 0,
+          error: `Worktree not found: ${validated.worktreeId}`,
+        };
+      }
+      target = worktree;
     }
 
     const onProgress = (progress: CopyTreeProgress) => {
@@ -584,7 +617,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     // Written by the workspace host straight to disk. This handler used to pull
     // the whole bundle across two process boundaries only to write it out here
     // (#11528); the file it needs is now already on disk when the call returns.
-    const result = await generateToFile(worktree, mergedOptions, onProgress);
+    const result = await generateToFile(target, mergedOptions, onProgress);
 
     if (result.error || !result.filePath) {
       return result;
@@ -594,7 +627,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     // exists and its path rides back even when the clipboard step throws, so a
     // run the user would most want to retry is exactly the one that must not be
     // missing from the history.
-    await recordCompletedCopyTreeRun(sender.projectId, validated, result);
+    await recordCompletedCopyTreeRun(
+      sender.projectId,
+      validated,
+      result,
+      target.isWorkspaceRoot ? target.path : undefined
+    );
 
     const filePath = result.filePath;
 
@@ -837,6 +875,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       if (deps.worktreeService) {
         deps.worktreeService.cancelAllContext();
       }
+      cancelAllWorkspaceRootContext();
       console.log(`[cancel] Marked all ${count} active injections for cancellation`);
     }
   };
