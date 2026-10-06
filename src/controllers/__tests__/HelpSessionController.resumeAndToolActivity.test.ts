@@ -821,6 +821,8 @@ describe("HelpSessionController — picked past-session resume (#13206)", () => 
       cwd: "/help",
       agentId: "claude",
     };
+    // As `launch()` records it before handing off to `_executeLaunch`.
+    ctrl["_lastResumeTarget"] = { sessionId: "picked-123" };
 
     await ctrl["_executeLaunch"](
       7,
@@ -843,6 +845,8 @@ describe("HelpSessionController — picked past-session resume (#13206)", () => 
     // The replaced lane's capture is spent once the pick is live, and only then.
     expect(takeMock()).toHaveBeenCalledTimes(1);
     expect(takeMock()).toHaveBeenCalledWith("p1", 0);
+    // Live, so the lane no longer belongs to the pick.
+    expect(ctrl["_lastResumeTarget"]).toBeUndefined();
     ctrl.stop();
   });
 
@@ -932,6 +936,30 @@ describe("HelpSessionController — launchWhenReady (#13206)", () => {
     ctrl.syncInputs({ ...readyInputs, visibilityEpoch: 1 });
     const replays = launch.mock.calls.filter(([options]) => options.resumeTarget !== undefined);
     expect(replays).toHaveLength(1);
+  });
+
+  it("does not auto-launch a blank session over a failed pick", () => {
+    const ctrl = new HelpSessionController();
+    const launch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
+    // The pick ran and failed: the lane is idle with no terminal, consent is on.
+    ctrl["_lastResumeTarget"] = { sessionId: "picked-4" };
+
+    ctrl.syncInputs(readyInputs);
+    ctrl.handleViewRevealed();
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  it("leaves a stuck picked launch alone on view reveal, even in a lane that auto-launched before", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    ctrl["_hasAutoLaunched"] = true;
+    ctrl["_lastResumeTarget"] = { sessionId: "picked-5" };
+    ctrl["_patch"]({ phase: "provisioning" });
+    const gen = ctrl["_launchGen"];
+
+    ctrl.handleViewRevealed();
+    expect(ctrl["_launchGen"]).toBe(gen);
+    expect(ctrl.getSnapshot().phase).toBe("provisioning");
   });
 
   it("retries a failed pick with the same conversation, and a plain launch plainly", () => {

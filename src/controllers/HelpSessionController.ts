@@ -375,7 +375,11 @@ export class HelpSessionController {
   private _lastInputs: HelpSessionInputs | null = null;
   /** A launch waiting for this lane's first ready inputs — see `launchWhenReady`. */
   private _queuedLaunch: HelpLaunchOptions | null = null;
-  /** The picked conversation the latest launch was for, so Retry reopens that one. */
+  /**
+   * The picked conversation the latest launch was for, so Retry reopens that
+   * one. Cleared once it goes live; while set, the lane belongs to that pick —
+   * auto-launch stands down and view-reveal recovery leaves the launch alone.
+   */
   private _lastResumeTarget: HelpLaunchOptions["resumeTarget"] = undefined;
 
   private readonly _versionGate = new HelpVersionGate({
@@ -610,7 +614,12 @@ export class HelpSessionController {
     // short-circuits on `!autoLaunchEnabled`), so reaping it would silently discard
     // the user's explicit pick. Leaving it alone lets its own watchdog reap it (with
     // a retryable error) once the view un-parks, or the thawed IPC complete it.
-    if (isStuckLaunch && this._hasAutoLaunched && (this._lastInputs?.terminalId ?? null) === null) {
+    if (
+      isStuckLaunch &&
+      this._hasAutoLaunched &&
+      !this._lastResumeTarget &&
+      (this._lastInputs?.terminalId ?? null) === null
+    ) {
       // Supersede the stranded flow so its in-flight awaits bail at their next
       // gen-check (`_abandonInFlightLaunch`); clear the re-entrancy guard so the
       // re-drive below isn't dropped; revoke the minted-but-orphaned bearer; and
@@ -1159,6 +1168,9 @@ export class HelpSessionController {
     // must never start a billed session. Placed ahead of the visibility check
     // so a visibilityEpoch re-arm can't bypass consent on a restore.
     if (!inputs.autoLaunchEnabled) return;
+    // A picked conversation owns this lane — queued, in flight, or failed and
+    // waiting on Retry. A blank session must not take its place.
+    if (this._queuedLaunch || this._lastResumeTarget) return;
     if (typeof document !== "undefined" && document.hidden) return;
     if (!inputs.isOpen) return;
     if (!inputs.isReadyToLaunch) return;
@@ -1495,6 +1507,7 @@ export class HelpSessionController {
             // both post-spawn checks and is about to go live. Every other exit
             // from here leaves the marker set so the `finally` releases it.
             unreleasedHibernation = null;
+            this._lastResumeTarget = undefined;
             useHelpPanelStore.getState().clearHibernateSession(launchProject.id, this.slot);
             // A picked conversation needs no cleanup on main: its spawn carries
             // `agentSessionId`, which main records as the lane's pointer in

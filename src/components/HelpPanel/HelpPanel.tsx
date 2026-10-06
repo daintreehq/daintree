@@ -29,7 +29,7 @@ import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
-import { HelpPastSessionsPalette } from "./HelpPastSessionsPalette";
+import { usePaletteStore } from "@/store/paletteStore";
 import { HelpPanelHeader } from "./HelpPanelHeader";
 import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "./HelpSessionTabs";
 import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
@@ -87,6 +87,12 @@ import { isPtyPanel } from "@shared/types/panel";
 import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
+
+// Loaded on first open: the picker reads the panel store and the agents'
+// history, none of which the panel needs until someone asks for it.
+const LazyHelpPastSessionsPalette = lazy(() =>
+  import("./HelpPastSessionsPalette").then((m) => ({ default: m.HelpPastSessionsPalette }))
+);
 
 const LazyHybridInputBar = lazy(() =>
   import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
@@ -1307,6 +1313,11 @@ export function HelpPanel({
     void actionService.dispatch("app.settings.openTab", { tab: "assistant" }, { source: "user" });
   }, []);
 
+  const isPastSessionsOpen = usePaletteStore((s) => s.activePaletteId === "assistant-sessions");
+  // Stays mounted once opened so the palette's exit animation can run.
+  const [pastSessionsMounted, setPastSessionsMounted] = useState(false);
+  if (isPastSessionsOpen && !pastSessionsMounted) setPastSessionsMounted(true);
+
   const handleResumePastSession = useCallback(() => {
     void actionService.dispatch("help.resumePastSession", undefined, { source: "user" });
   }, []);
@@ -1526,7 +1537,11 @@ export function HelpPanel({
         isFocused={isHighlighted}
       />
 
-      <HelpPastSessionsPalette workspace={activeWorkspace} tabs={sessionTabs} />
+      {pastSessionsMounted && (
+        <Suspense fallback={null}>
+          <LazyHelpPastSessionsPalette workspace={activeWorkspace} tabs={sessionTabs} />
+        </Suspense>
+      )}
 
       <HelpSessionTabs
         tabs={sessionTabs}
