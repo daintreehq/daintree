@@ -89,143 +89,113 @@ test.describe.serial("Core: Markdown file editing", () => {
     fixtureCleanup?.();
   });
 
-  test.skip(
-    "the editing hint enables the plugin and Mod+S writes the edit to disk",
-    {
-      annotation: {
-        type: "quarantine",
-        description:
-          "2026-09-30 the built MarkdownEditorView chunk throws 'ReferenceError: z is not defined' on load (zod binding from shared/protocol.ts dropped by the bundler), so Edit mode never mounts",
-      },
-    },
-    async () => {
-      const page = ctx.window;
-      await openNotesPanel(page);
+  test("the editing hint enables the plugin and Mod+S writes the edit to disk", async () => {
+    const page = ctx.window;
+    await openNotesPanel(page);
 
-      const hint = editPanel(page).locator('[data-testid="file-editor-hint"]');
-      await expect(hint).toContainText("to edit this file", { timeout: T_LONG });
-      await hint.locator('[data-testid="file-editor-hint-action"]').click();
+    const hint = editPanel(page).locator('[data-testid="file-editor-hint"]');
+    await expect(hint).toContainText("to edit this file", { timeout: T_LONG });
+    await hint.locator('[data-testid="file-editor-hint-action"]').click();
 
-      await expect(
-        editPanel(page).getByRole("radio", { name: "Edit", exact: true })
-      ).toHaveAttribute("aria-checked", "true", { timeout: T_LONG });
-      await expect.poll(() => editorText(page), { timeout: T_LONG }).toBe(ORIGINAL);
-      await expect(dirtyMark(page)).toHaveCount(0);
+    await expect(editPanel(page).getByRole("radio", { name: "Edit", exact: true })).toHaveAttribute(
+      "aria-checked",
+      "true",
+      { timeout: T_LONG }
+    );
+    await expect.poll(() => editorText(page), { timeout: T_LONG }).toBe(ORIGINAL);
+    await expect(dirtyMark(page)).toHaveCount(0);
 
-      await focusEditorEnd(page);
-      await page.keyboard.type(FIRST_EDIT);
+    await focusEditorEnd(page);
+    await page.keyboard.type(FIRST_EDIT);
 
-      await expect(dirtyMark(page)).toBeVisible({ timeout: T_MEDIUM });
-      await expect.poll(() => editorText(page), { timeout: T_SHORT }).toBe(SAVED);
-      // Typing alone never writes: the draft lives beside the file until Save.
-      expect(diskText()).toBe(ORIGINAL);
+    await expect(dirtyMark(page)).toBeVisible({ timeout: T_MEDIUM });
+    await expect.poll(() => editorText(page), { timeout: T_SHORT }).toBe(SAVED);
+    // Typing alone never writes: the draft lives beside the file until Save.
+    expect(diskText()).toBe(ORIGINAL);
 
-      await page.keyboard.press("ControlOrMeta+s");
+    await page.keyboard.press("ControlOrMeta+s");
 
-      await expect.poll(diskText, { timeout: T_MEDIUM }).toBe(SAVED);
-      await expect(dirtyMark(page)).toHaveCount(0, { timeout: T_MEDIUM });
-      await expect(editor(page).locator('[data-testid="markdown-editor-dirty-state"]')).toHaveText(
-        "Saved"
-      );
-    }
-  );
+    await expect.poll(diskText, { timeout: T_MEDIUM }).toBe(SAVED);
+    await expect(dirtyMark(page)).toHaveCount(0, { timeout: T_MEDIUM });
+    await expect(editor(page).locator('[data-testid="markdown-editor-dirty-state"]')).toHaveText(
+      "Saved"
+    );
+  });
 
-  test.skip(
-    "closing a dirty panel asks first: Cancel keeps it, Discard drops the edit",
-    {
-      annotation: {
-        type: "quarantine",
-        description:
-          "2026-09-30 the built MarkdownEditorView chunk throws 'ReferenceError: z is not defined' on load (zod binding from shared/protocol.ts dropped by the bundler), so Edit mode never mounts",
-      },
-    },
-    async () => {
-      const page = ctx.window;
-      await focusEditorEnd(page);
-      await page.keyboard.type(" Unsaved tail.");
-      await expect(dirtyMark(page)).toBeVisible({ timeout: T_MEDIUM });
+  test("closing a dirty panel asks first: Cancel keeps it, Discard drops the edit", async () => {
+    const page = ctx.window;
+    await focusEditorEnd(page);
+    await page.keyboard.type(" Unsaved tail.");
+    await expect(dirtyMark(page)).toBeVisible({ timeout: T_MEDIUM });
 
-      const prompt = page.locator('[data-testid="file-pane-close-prompt"]');
-      await editPanel(page).locator(SEL.panel.close).click();
-      await expect(prompt).toBeVisible({ timeout: T_MEDIUM });
-      await expect(prompt).toContainText(`Save changes to '${FILE_NAME}'?`);
+    const prompt = page.locator('[data-testid="file-pane-close-prompt"]');
+    await editPanel(page).locator(SEL.panel.close).click();
+    await expect(prompt).toBeVisible({ timeout: T_MEDIUM });
+    await expect(prompt).toContainText(`Save changes to '${FILE_NAME}'?`);
 
-      await prompt.getByRole("button", { name: "Cancel", exact: true }).click();
-      await expect(prompt).toHaveCount(0, { timeout: T_SHORT });
-      // The panel survived the veto with its draft: it still takes keys, and
-      // the new key lands on the unsaved text rather than a reloaded file.
-      await focusEditorEnd(page);
-      await page.keyboard.type("!");
-      await expect
-        .poll(() => editorText(page), { timeout: T_SHORT })
-        .toBe(SAVED + " Unsaved tail.!");
-      await expect(dirtyMark(page)).toBeVisible();
-      expect(diskText()).toBe(SAVED);
+    await prompt.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(prompt).toHaveCount(0, { timeout: T_SHORT });
+    // The panel survived the veto with its draft: it still takes keys, and
+    // the new key lands on the unsaved text rather than a reloaded file.
+    await focusEditorEnd(page);
+    await page.keyboard.type("!");
+    await expect.poll(() => editorText(page), { timeout: T_SHORT }).toBe(SAVED + " Unsaved tail.!");
+    await expect(dirtyMark(page)).toBeVisible();
+    expect(diskText()).toBe(SAVED);
 
-      await editPanel(page).locator(SEL.panel.close).click();
-      await expect(prompt).toBeVisible({ timeout: T_MEDIUM });
-      await prompt.getByRole("button", { name: "Discard changes", exact: true }).click();
+    await editPanel(page).locator(SEL.panel.close).click();
+    await expect(prompt).toBeVisible({ timeout: T_MEDIUM });
+    await prompt.getByRole("button", { name: "Discard changes", exact: true }).click();
 
-      await expect(prompt).toHaveCount(0, { timeout: T_SHORT });
-      await expect(editPanel(page)).toHaveCount(0, { timeout: T_MEDIUM });
-      expect(diskText()).toBe(SAVED);
-    }
-  );
+    await expect(prompt).toHaveCount(0, { timeout: T_SHORT });
+    await expect(editPanel(page)).toHaveCount(0, { timeout: T_MEDIUM });
+    expect(diskText()).toBe(SAVED);
+  });
 
-  test.skip(
-    "a file changed on disk under a draft holds the save until the disk version is loaded",
-    {
-      annotation: {
-        type: "quarantine",
-        description:
-          "2026-09-30 the built MarkdownEditorView chunk throws 'ReferenceError: z is not defined' on load (zod binding from shared/protocol.ts dropped by the bundler), so Edit mode never mounts",
-      },
-    },
-    async () => {
-      const page = ctx.window;
-      await openNotesPanel(page);
+  test("a file changed on disk under a draft holds the save until the disk version is loaded", async () => {
+    const page = ctx.window;
+    await openNotesPanel(page);
 
-      // The plugin stays on, so Edit is a mode of the toggle rather than a hint.
-      await editPanel(page).getByRole("radio", { name: "Edit", exact: true }).click();
-      // The discarded draft is gone: the editor opens on what was saved.
-      await expect.poll(() => editorText(page), { timeout: T_LONG }).toBe(SAVED);
-      await expect(dirtyMark(page)).toHaveCount(0);
+    // The plugin stays on, so Edit is a mode of the toggle rather than a hint.
+    await editPanel(page).getByRole("radio", { name: "Edit", exact: true }).click();
+    // The discarded draft is gone: the editor opens on what was saved.
+    await expect.poll(() => editorText(page), { timeout: T_LONG }).toBe(SAVED);
+    await expect(dirtyMark(page)).toHaveCount(0);
 
-      await focusEditorEnd(page);
-      await page.keyboard.type(DRAFT_TAIL);
-      await expect(dirtyMark(page)).toBeVisible({ timeout: T_MEDIUM });
+    await focusEditorEnd(page);
+    await page.keyboard.type(DRAFT_TAIL);
+    await expect(dirtyMark(page)).toBeVisible({ timeout: T_MEDIUM });
 
-      writeFileSync(filePath, EXTERNAL);
+    writeFileSync(filePath, EXTERNAL);
 
-      const banner = editor(page).getByRole("status").filter({ hasText: "File changed on disk" });
-      await expect(banner).toBeVisible({ timeout: T_LONG });
-      await expect(dirtyMark(page)).toHaveAttribute(
-        "aria-label",
-        "Unsaved changes, file changed on disk"
-      );
+    const banner = editor(page).getByRole("status").filter({ hasText: "File changed on disk" });
+    await expect(banner).toBeVisible({ timeout: T_LONG });
+    await expect(dirtyMark(page)).toHaveAttribute(
+      "aria-label",
+      "Unsaved changes, file changed on disk"
+    );
 
-      // Detection keeps the draft as typed rather than merging the disk version.
-      await expect.poll(() => editorText(page), { timeout: T_SHORT }).toBe(SAVED + DRAFT_TAIL);
+    // Detection keeps the draft as typed rather than merging the disk version.
+    await expect.poll(() => editorText(page), { timeout: T_SHORT }).toBe(SAVED + DRAFT_TAIL);
 
-      // Save is held while the conflict stands. The shortcut must not clobber
-      // the other writer's bytes; the disk check at the end, after several more
-      // round trips, is what would catch a late write.
-      await focusEditorEnd(page);
-      await page.keyboard.press("ControlOrMeta+s");
-      await expect(banner).toBeVisible();
-      await expect(dirtyMark(page)).toBeVisible();
+    // Save is held while the conflict stands. The shortcut must not clobber
+    // the other writer's bytes; the disk check at the end, after several more
+    // round trips, is what would catch a late write.
+    await focusEditorEnd(page);
+    await page.keyboard.press("ControlOrMeta+s");
+    await expect(banner).toBeVisible();
+    await expect(dirtyMark(page)).toBeVisible();
 
-      await banner.getByRole("button", { name: "Load disk version", exact: true }).click();
-      const confirm = page.getByRole("alertdialog", { name: `Discard changes to '${FILE_NAME}'?` });
-      await expect(confirm).toBeVisible({ timeout: T_SHORT });
-      // Nothing is replaced until the user confirms.
-      expect(await editorText(page)).toBe(SAVED + DRAFT_TAIL);
-      await confirm.getByRole("button", { name: "Discard changes", exact: true }).click();
+    await banner.getByRole("button", { name: "Load disk version", exact: true }).click();
+    const confirm = page.getByRole("alertdialog", { name: `Discard changes to '${FILE_NAME}'?` });
+    await expect(confirm).toBeVisible({ timeout: T_SHORT });
+    // Nothing is replaced until the user confirms.
+    expect(await editorText(page)).toBe(SAVED + DRAFT_TAIL);
+    await confirm.getByRole("button", { name: "Discard changes", exact: true }).click();
 
-      await expect.poll(() => editorText(page), { timeout: T_MEDIUM }).toBe(EXTERNAL);
-      await expect(banner).toHaveCount(0, { timeout: T_MEDIUM });
-      await expect(dirtyMark(page)).toHaveCount(0, { timeout: T_MEDIUM });
-      expect(diskText()).toBe(EXTERNAL);
-    }
-  );
+    await expect.poll(() => editorText(page), { timeout: T_MEDIUM }).toBe(EXTERNAL);
+    await expect(banner).toHaveCount(0, { timeout: T_MEDIUM });
+    await expect(dirtyMark(page)).toHaveCount(0, { timeout: T_MEDIUM });
+    expect(diskText()).toBe(EXTERNAL);
+  });
 });
