@@ -619,7 +619,9 @@ export const CopyTreeGeneratePayloadSchema = z.object({
 });
 
 export const CopyTreeGenerateAndCopyFilePayloadSchema = z.object({
-  worktreeId: z.string().min(1),
+  // Absent = the requesting view's own workspace root (a non-git project or a
+  // scratch has nothing else). A supplied id must still resolve (#13210).
+  worktreeId: z.string().min(1).optional(),
   options: CopyTreeOptionsSchema,
   name: CopyTreeRunNameSchema,
   source: CopyTreeRunSourceSchema.optional(),

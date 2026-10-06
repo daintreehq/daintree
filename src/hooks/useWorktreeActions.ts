@@ -166,12 +166,13 @@ export interface UseWorktreeActionsOptions {
 }
 
 export interface WorktreeActions {
+  /** A null worktree copies the workspace root — a non-git project or scratch (#13210). */
   handleCopyTree: (
-    worktree: WorktreeSnapshot,
+    worktree: WorktreeSnapshot | null,
     copyTreeRunSource?: CopyTreeRunSource
   ) => Promise<void>;
   handleCopyTreeWithOptions: (
-    worktree: WorktreeSnapshot,
+    worktree: WorktreeSnapshot | null,
     options: CopyTreeOptions,
     copyTreeRunSource?: CopyTreeRunSource
   ) => Promise<void>;
@@ -192,7 +193,7 @@ export function useWorktreeActions({
   // same way a full copy does — the user cannot tell the two routes apart, so
   // neither should the error surface.
   const reportCopyFailure = useCallback(
-    (worktreeId: string, e: unknown, source = "WorktreeCard"): void => {
+    (worktreeId: string | undefined, e: unknown, source = "WorktreeCard"): void => {
       const message = formatErrorMessage(e, "Failed to copy context to clipboard");
       const details = e instanceof Error ? e.stack : undefined;
 
@@ -228,18 +229,21 @@ export function useWorktreeActions({
   // `worktree.copyTree` action so the keybinding and palette routes — which
   // never reach this hook — are covered by the same call (#11735).
   const handleCopyTree = useCallback(
-    async (worktree: WorktreeSnapshot, copyTreeRunSource?: CopyTreeRunSource): Promise<void> => {
+    async (
+      worktree: WorktreeSnapshot | null,
+      copyTreeRunSource?: CopyTreeRunSource
+    ): Promise<void> => {
       try {
         const result = await actionService.dispatch(
           "worktree.copyTree",
-          { worktreeId: worktree.id },
+          worktree ? { worktreeId: worktree.id } : undefined,
           { source: "user", copyTreeRunSource }
         );
         if (!result.ok) {
           throw new Error(result.error.message);
         }
       } catch (e) {
-        reportCopyFailure(worktree.id, e);
+        reportCopyFailure(worktree?.id, e);
       }
     },
     [reportCopyFailure]
@@ -270,24 +274,25 @@ export function useWorktreeActions({
    * than `record.worktreeId`. The dedupe key covers options alone, so a record's
    * `worktreeId` adopts whichever worktree ran it last: it is provenance, not a
    * stable original target, and may name a worktree that no longer exists.
+   * With no worktree at all the replay lands on the workspace root (#13210).
    */
   const handleCopyTreeWithOptions = useCallback(
     async (
-      worktree: WorktreeSnapshot,
+      worktree: WorktreeSnapshot | null,
       options: CopyTreeOptions,
       copyTreeRunSource?: CopyTreeRunSource
     ): Promise<void> => {
       try {
         const result = await actionService.dispatch(
           "copyTree.generateAndCopyFile",
-          { worktreeId: worktree.id, options },
+          worktree ? { worktreeId: worktree.id, options } : { options },
           { source: "user", copyTreeRunSource }
         );
         if (!result.ok) {
           throw new Error(result.error.message);
         }
       } catch (e) {
-        reportCopyFailure(worktree.id, e, "Toolbar");
+        reportCopyFailure(worktree?.id, e, "Toolbar");
       }
     },
     [reportCopyFailure]

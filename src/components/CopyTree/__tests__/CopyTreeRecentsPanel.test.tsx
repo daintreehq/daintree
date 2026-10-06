@@ -153,6 +153,17 @@ describe("CopyTreeMenuContent", () => {
     );
   });
 
+  it("offers no Context settings entry where there are no project settings to open", () => {
+    // A scratch copies its root too (#13210), but Context settings is a
+    // project page — opening it there would land on nothing, or on another
+    // project's settings.
+    seed([]);
+    renderMenu({ onOpenContextSettings: undefined });
+    const names = screen.getAllByRole("menuitem").map((item) => item.textContent ?? "");
+    expect(names.some((name) => name.includes("Copy full context"))).toBe(true);
+    expect(names.some((name) => name.includes("Context settings"))).toBe(false);
+  });
+
   it("names the next action when the project has no history yet", () => {
     seed([]);
     renderMenu();

@@ -461,7 +461,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       name?: string
     ): Promise<CopyTreeResult>;
     generateAndCopyFile(
-      worktreeId: string,
+      worktreeId: string | undefined,
       options?: CopyTreeOptions,
       source?: CopyTreeRunSource,
       name?: string

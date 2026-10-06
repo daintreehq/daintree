@@ -156,6 +156,19 @@ describe("CopytreeWorkerClient", () => {
     expect(copyTreeService.testConfig).toHaveBeenCalledTimes(1);
   });
 
+  it("refuses to generate in-thread when its owner forbids it (main, #13210)", async () => {
+    const factory = vi.fn(() => {
+      throw new Error("no worker for you");
+    });
+    const client = new CopytreeWorkerClient(factory, false);
+
+    const result = await client.generate("/root", {}, undefined, "op-1", "/tmp/out.xml");
+
+    expect(result.error).toBeTruthy();
+    expect(result.fileCount).toBe(0);
+    expect(copyTreeService.generate).not.toHaveBeenCalled();
+  });
+
   it("rejects in-flight operations and pins the fallback when the worker dies", async () => {
     const { client, factory, worker } = makeClient();
 

@@ -620,7 +620,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "copyTree",
     danger: "safe",
     description:
-      "Bundle a worktree's context to a file and put it on the system clipboard, replacing what the user copied: the file on macOS and Linux, its path on Windows. Agent and MCP callers must name the worktree. Never returned inline; check the budget flags for completeness.",
+      "Bundle a worktree's context to a file and put it on the system clipboard, replacing what the user copied: the file on macOS/Linux, its path on Windows. Agents must name the worktree, or omit it if none exist to copy the root. Never returned inline; check budget flags.",
     enabled: true,
     id: "copyTree.generateAndCopyFile",
     inputSchema: {
