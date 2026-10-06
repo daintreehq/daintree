@@ -119,6 +119,15 @@ describe("HandbackTracker", () => {
     expect(tracker.noteReported("aaaaaa", null)).toBe(false);
   });
 
+  it("reports a capture again when only its cut at the cap changes", () => {
+    const tracker = new HandbackTracker(noScreen);
+    tracker.registerDelivered("aaaaaa");
+
+    expect(tracker.noteReported("aaaaaa", "x".repeat(500), false)).toBe(true);
+    expect(tracker.noteReported("aaaaaa", "x".repeat(500), true)).toBe(true);
+    expect(tracker.noteReported("aaaaaa", "x".repeat(500), true)).toBe(false);
+  });
+
   it("reads the rendered screen through the reader it was given", () => {
     const tracker = new HandbackTracker((rows) => {
       expect(rows).toBeGreaterThanOrEqual(200);

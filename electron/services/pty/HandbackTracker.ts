@@ -24,7 +24,7 @@ export interface HandbackRequest {
    * working. The code stays open then: a marker seen mid-turn can sit in a
    * draft or a status line that the reply goes on to replace.
    */
-  reported?: { message: string | null };
+  reported?: { message: string | null; truncated: boolean };
 }
 
 /**
@@ -87,13 +87,18 @@ export class HandbackTracker {
 
   /**
    * Note a hit for `code`. False when it repeats the capture already reported
-   * for that code, so sampling the same screen again reports nothing new.
+   * for that code, so sampling the same screen again reports nothing new. A
+   * capture that only now reaches the length cap is new: its summary is no
+   * longer whole.
    */
-  noteReported(code: string, message: string | null): boolean {
+  noteReported(code: string, message: string | null, truncated = false): boolean {
     const request = this.requests.find((candidate) => candidate.code === code);
     if (request === undefined) return true;
-    if (request.reported !== undefined && request.reported.message === message) return false;
-    request.reported = { message };
+    const reported = request.reported;
+    if (reported !== undefined && reported.message === message && reported.truncated === truncated) {
+      return false;
+    }
+    request.reported = { message, truncated };
     return true;
   }
 
