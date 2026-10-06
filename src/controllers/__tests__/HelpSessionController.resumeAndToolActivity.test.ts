@@ -842,9 +842,9 @@ describe("HelpSessionController — picked past-session resume (#13206)", () => 
       "sess-pick"
     );
     expect(ctrl.getSnapshot().phase).toBe("live");
-    // The replaced lane's capture is spent once the pick is live, and only then.
-    expect(takeMock()).toHaveBeenCalledTimes(1);
-    expect(takeMock()).toHaveBeenCalledWith("p1", 0);
+    // Main records the picked id as the lane's pointer from the spawn's
+    // `agentSessionId` (#13205), so the pick never claims the lane's old entry.
+    expect(takeMock()).not.toHaveBeenCalled();
     // Live, so the lane no longer belongs to the pick.
     expect(ctrl["_lastResumeTarget"]).toBeUndefined();
     ctrl.stop();
