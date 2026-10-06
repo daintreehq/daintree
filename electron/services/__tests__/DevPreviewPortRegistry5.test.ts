@@ -255,7 +255,7 @@ describe("DevPreviewSessionService — real-life robustness invariants (adversar
 
     // Re-ensure should reuse the original port — same predictedUrl.
     // Fails when stop() calls releasePort() for a still-live session.
-    const second = await service.ensure({ ...base, worktreeId: "wt-1" });
+    const second = await service.ensure({ ...base, worktreeId: "wt-1", resumeUserStopped: true });
     expect(second.predictedUrl).toBe(originalUrl);
   });
 
@@ -265,7 +265,7 @@ describe("DevPreviewSessionService — real-life robustness invariants (adversar
     expect(originalUrl).toBeTruthy();
 
     await service.stop(base);
-    await service.ensure({ ...base, worktreeId: "wt-1" });
+    await service.ensure({ ...base, worktreeId: "wt-1", resumeUserStopped: true });
 
     // If stop() released the port, getByWorktree now returns a different URL.
     const afterUrl = service.getByWorktree("wt-1")?.predictedUrl;
@@ -278,7 +278,7 @@ describe("DevPreviewSessionService — real-life robustness invariants (adversar
 
     for (let i = 0; i < 3; i++) {
       await service.stop(base);
-      const state = await service.ensure({ ...base, worktreeId: "wt-1" });
+      const state = await service.ensure({ ...base, worktreeId: "wt-1", resumeUserStopped: true });
       expect(state.predictedUrl).toBe(originalUrl);
     }
   });
@@ -400,7 +400,11 @@ describe("DevPreviewSessionService — real-life robustness invariants (adversar
     expect(stopped.predictedUrl).toBeNull();
 
     // Re-ensure restarts the server — same port, same URL.
-    const restarted = await service.ensure({ ...base, worktreeId: "wt-1" });
+    const restarted = await service.ensure({
+      ...base,
+      worktreeId: "wt-1",
+      resumeUserStopped: true,
+    });
     expect(restarted.status).toBe("starting");
     expect(restarted.predictedUrl).toBe(first.predictedUrl);
 

@@ -1237,6 +1237,13 @@ export const CHANNELS = {
   WORKSPACE_RESIDENCY_GET: "workspace-residency:get",
   WORKSPACE_RESIDENCY_SET: "workspace-residency:set",
 
+  // Every live terminal and plugin process across all projects (#13175).
+  // Renderer-only: a live terminal is killed through the existing terminal
+  // kill, and a closed terminal's remaining processes through the host that
+  // recorded them (#13174) — both behind a confirm in the processes view.
+  PROCESSES_GET_SNAPSHOT: "processes:get-snapshot",
+  PROCESSES_KILL_CLOSED_TERMINAL_PROCESSES: "processes:kill-closed-terminal-processes",
+
   // Per-project consent for plugin agent tools (`contributes.agentMcp`).
   // Renderer-only by design: an action here would be on the MCP tool surface,
   // and an agent must never be able to grant itself a plugin's tools.

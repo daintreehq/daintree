@@ -57,9 +57,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     on: vi.fn(),
   } as unknown as HostContext["ptyManager"];
 
-  const resourceGovernor = {
-    trackKilledPid: vi.fn(),
-  } as unknown as HostContext["resourceGovernor"];
+  const resourceGovernor = {} as unknown as HostContext["resourceGovernor"];
 
   return {
     analysisWorkerPool: null,
@@ -117,8 +115,8 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
   };
 }
 
-function termInfo(pid?: number) {
-  return { ptyProcess: { pid } };
+function termInfo(pid?: number, launchGeneration?: number) {
+  return { ptyProcess: { pid }, launchGeneration };
 }
 
 describe("lifecycle update-worktree-id handler", () => {
@@ -180,7 +178,7 @@ describe("lifecycle update-title handler", () => {
   });
 });
 
-describe("lifecycle kill handlers — trackKilledPid", () => {
+describe("lifecycle kill handlers", () => {
   beforeEach(() => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -190,96 +188,41 @@ describe("lifecycle kill handlers — trackKilledPid", () => {
     vi.restoreAllMocks();
   });
 
-  it("kill tracks PID", () => {
+  it("kill forwards the reason to the registry", () => {
     const ctx = makeCtx();
-    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>).mockReturnValue(termInfo(1234));
     const dispatch = createPtyHostMessageDispatcher(ctx);
 
     dispatch({ type: "kill", id: "t1", reason: "test" });
 
     expect(ctx.ptyManager.kill).toHaveBeenCalledWith("t1", "test");
-    expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledWith(1234);
   });
 
-  it("kill does not track when PID is undefined", () => {
+  it("kill forwards an explicit escalation delay", () => {
     const ctx = makeCtx();
-    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>).mockReturnValue(termInfo());
     const dispatch = createPtyHostMessageDispatcher(ctx);
 
-    dispatch({ type: "kill", id: "t1", reason: "test" });
+    dispatch({ type: "kill", id: "t1", reason: "test", escalationDelayMs: 2000 });
 
-    expect(ctx.ptyManager.kill).toHaveBeenCalledWith("t1", "test");
-    expect(ctx.resourceGovernor.trackKilledPid).not.toHaveBeenCalled();
+    expect(ctx.ptyManager.kill).toHaveBeenCalledWith("t1", "test", { escalationDelayMs: 2000 });
   });
 
-  it("kill does not track when PID is 0 (Windows ConPTY transient, #10787)", () => {
+  it("kill-by-project replies with the registry's kill count", () => {
     const ctx = makeCtx();
-    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>).mockReturnValue(termInfo(0));
-    const dispatch = createPtyHostMessageDispatcher(ctx);
-
-    dispatch({ type: "kill", id: "t1", reason: "test" });
-
-    expect(ctx.ptyManager.kill).toHaveBeenCalledWith("t1", "test");
-    expect(ctx.resourceGovernor.trackKilledPid).not.toHaveBeenCalled();
-  });
-
-  it("kill-by-project skips PID 0 and undefined, tracks only valid PIDs (#10787)", () => {
-    const ctx = makeCtx();
-    (ctx.ptyManager.getTerminalsForProject as ReturnType<typeof vi.fn>).mockReturnValue([
-      "t1",
-      "t2",
-      "t3",
-    ]);
-    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>)
-      .mockReturnValueOnce(termInfo(0)) // transient ConPTY PID
-      .mockReturnValueOnce(termInfo(500))
-      .mockReturnValueOnce(termInfo()); // no PID
-    (ctx.ptyManager.killByProject as ReturnType<typeof vi.fn>).mockReturnValue(3);
-    const dispatch = createPtyHostMessageDispatcher(ctx);
-
-    dispatch({ type: "kill-by-project", projectId: "proj-1", requestId: "r1" });
-
-    expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledTimes(1);
-    expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledWith(500);
-  });
-
-  it("kill-by-project tracks all PIDs", () => {
-    const ctx = makeCtx();
-    (ctx.ptyManager.getTerminalsForProject as ReturnType<typeof vi.fn>).mockReturnValue([
-      "t1",
-      "t2",
-      "t3",
-    ]);
-    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>)
-      .mockReturnValueOnce(termInfo(100))
-      .mockReturnValueOnce(termInfo(200))
-      .mockReturnValueOnce(termInfo()); // t3 has no PID
     (ctx.ptyManager.killByProject as ReturnType<typeof vi.fn>).mockReturnValue(3);
     const dispatch = createPtyHostMessageDispatcher(ctx);
 
     dispatch({ type: "kill-by-project", projectId: "proj-1", requestId: "r1" });
 
     expect(ctx.ptyManager.killByProject).toHaveBeenCalledWith("proj-1");
-    expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledTimes(2);
-    expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledWith(100);
-    expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledWith(200);
+    expect(ctx.sendEvent).toHaveBeenCalledWith({
+      type: "kill-by-project-result",
+      requestId: "r1",
+      killed: 3,
+    });
   });
 
-  it("kill-by-project handles empty project", () => {
+  it("graceful-kill replies with the captured session id", async () => {
     const ctx = makeCtx();
-    (ctx.ptyManager.getTerminalsForProject as ReturnType<typeof vi.fn>).mockReturnValue([]);
-    (ctx.ptyManager.killByProject as ReturnType<typeof vi.fn>).mockReturnValue(0);
-    const dispatch = createPtyHostMessageDispatcher(ctx);
-
-    dispatch({ type: "kill-by-project", projectId: "empty-proj", requestId: "r1" });
-
-    expect(ctx.ptyManager.killByProject).toHaveBeenCalledWith("empty-proj");
-    expect(ctx.resourceGovernor.trackKilledPid).not.toHaveBeenCalled();
-  });
-
-  it("graceful-kill tracks PID", async () => {
-    const ctx = makeCtx();
-    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>).mockReturnValue(termInfo(5678));
     (ctx.ptyManager.gracefulKill as ReturnType<typeof vi.fn>).mockResolvedValue({
       sessionId: "sess-1",
     });
@@ -288,47 +231,12 @@ describe("lifecycle kill handlers — trackKilledPid", () => {
     await dispatch({ type: "graceful-kill", id: "t1", requestId: "r1" });
 
     expect(ctx.ptyManager.gracefulKill).toHaveBeenCalledWith("t1");
-    expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledWith(5678);
-  });
-
-  it("graceful-kill does not track when PID is undefined", async () => {
-    const ctx = makeCtx();
-    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>).mockReturnValue(termInfo());
-    (ctx.ptyManager.gracefulKill as ReturnType<typeof vi.fn>).mockResolvedValue({
-      sessionId: "sess-1",
+    expect(ctx.sendEvent).toHaveBeenCalledWith({
+      type: "graceful-kill-result",
+      requestId: "r1",
+      id: "t1",
+      agentSessionId: "sess-1",
     });
-    const dispatch = createPtyHostMessageDispatcher(ctx);
-
-    await dispatch({ type: "graceful-kill", id: "t1", requestId: "r1" });
-
-    expect(ctx.resourceGovernor.trackKilledPid).not.toHaveBeenCalled();
-  });
-
-  it("graceful-kill-by-project tracks all PIDs", async () => {
-    const ctx = makeCtx();
-    (ctx.ptyManager.getTerminalsForProject as ReturnType<typeof vi.fn>).mockReturnValue([
-      "t1",
-      "t2",
-    ]);
-    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>)
-      .mockReturnValueOnce(termInfo(300))
-      .mockReturnValueOnce(termInfo(400));
-    (ctx.ptyManager.gracefulKillByProject as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { id: "t1", agentSessionId: "s1" },
-      { id: "t2", agentSessionId: "s2" },
-    ]);
-    const dispatch = createPtyHostMessageDispatcher(ctx);
-
-    await dispatch({ type: "graceful-kill-by-project", projectId: "proj-1", requestId: "r1" });
-
-    expect(ctx.ptyManager.gracefulKillByProject).toHaveBeenCalledWith(
-      "proj-1",
-      { preserveSession: undefined },
-      expect.any(Function)
-    );
-    expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledTimes(2);
-    expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledWith(300);
-    expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledWith(400);
   });
 
   it("graceful-kill-by-project forwards preserveSession to the registry (#10054)", async () => {
@@ -452,7 +360,11 @@ describe("lifecycle kill handlers — trackKilledPid", () => {
 
     await dispatch({ type: "graceful-kill-by-project", projectId: "empty", requestId: "r1" });
 
-    expect(ctx.resourceGovernor.trackKilledPid).not.toHaveBeenCalled();
+    expect(ctx.sendEvent).toHaveBeenCalledWith({
+      type: "graceful-kill-by-project-result",
+      requestId: "r1",
+      results: [],
+    });
   });
 });
 
@@ -515,6 +427,71 @@ describe("lifecycle spawn — terminal-pid gating and deferred retry (#10787)", 
       .map(([event]) => event)
       .filter((event) => event.type === "terminal-pid");
     expect(pidEvents).toEqual([{ type: "terminal-pid", id: "t1", pid: 4321 }]);
+  });
+
+  it("stamps the spawn's launch generation on terminal-pid (#13176)", () => {
+    const ctx = makeCtx();
+    getMock(ctx).mockReturnValue(termInfo(1234, 3));
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: { launchGeneration: 3 } });
+
+    expect(ctx.sendEvent).toHaveBeenCalledWith({
+      type: "terminal-pid",
+      id: "t1",
+      pid: 1234,
+      launchGeneration: 3,
+    });
+  });
+
+  it("stamps the generation on a PID recovered by deferred retry (#13176)", async () => {
+    vi.useFakeTimers();
+    const ctx = makeCtx();
+    getMock(ctx).mockReturnValueOnce(termInfo(0, 3)).mockReturnValue(termInfo(4321, 3));
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: { launchGeneration: 3 } });
+    await vi.runAllTimersAsync();
+
+    expect(ctx.sendEvent).toHaveBeenCalledWith({
+      type: "terminal-pid",
+      id: "t1",
+      pid: 4321,
+      launchGeneration: 3,
+    });
+  });
+
+  it("abandons the retry for an incarnation that already exited (#13176)", async () => {
+    vi.useFakeTimers();
+    const ctx = makeCtx();
+    getMock(ctx)
+      .mockReturnValueOnce(termInfo(0, 3))
+      .mockReturnValue({ ...termInfo(4321, 3), isExited: true });
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: { launchGeneration: 3 } });
+    await vi.runAllTimersAsync();
+
+    expect(ctx.sendEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "terminal-pid" })
+    );
+  });
+
+  it("abandons the retry once a same-id respawn replaced the incarnation (#13176)", async () => {
+    vi.useFakeTimers();
+    const ctx = makeCtx();
+    getMock(ctx)
+      .mockReturnValueOnce(termInfo(0, 3)) // synchronous spawn read
+      .mockReturnValue(termInfo(9999, 4)); // successor owns the id now
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: { launchGeneration: 3 } });
+    await vi.runAllTimersAsync();
+
+    expect(ctx.sendEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "terminal-pid" })
+    );
+    expect(ctx.ptyManager.startProcessDetectorForTerminal).not.toHaveBeenCalled();
   });
 
   it("abandons the retry if the terminal disappears before the PID resolves", async () => {

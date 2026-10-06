@@ -1,15 +1,39 @@
 import { spawnSync } from "child_process";
-import type * as pty from "node-pty";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
+import type { KillCensus, LineageOrigin } from "../TerminalLineageLedger.js";
 
 const SIGKILL_ESCALATION_DELAY_MS = 500;
+/**
+ * How long a census captured ahead of PTY release stays usable by the kill
+ * that follows it. Teardown runs both synchronously, so anything older belongs
+ * to a kill that never happened.
+ */
+const CAPTURED_CENSUS_MAX_AGE_MS = 1000;
+const SHELL_GONE = Symbol("shell-gone");
+
+/** Identities recorded at SIGTERM time, re-checked before anything is SIGKILLed. */
+interface EscalationState {
+  shellPid: number;
+  shellStartTime: string | undefined;
+  targets: Map<number, string>;
+}
+
+/**
+ * The root process a killer owns: a terminal's `IPty`, or a plugin PTY's
+ * adapter around one (#13173). `kill()` is the root's own signal — for node-pty
+ * on Unix that is SIGHUP.
+ */
+export interface ProcessTreeKillTarget {
+  readonly pid: number;
+  kill(signal?: string): void;
+}
 
 /**
  * The lineage ledger's kill-side surface. Declared structurally so the killer
  * stays unit-testable without the ledger's fs/subprocess machinery.
  */
 export interface LineageKillSource {
-  registerRoot(rootPid: number): void;
+  registerRoot(rootPid: number, origin?: LineageOrigin | null): void;
   markRootClosing(rootPid: number): void;
   /**
    * Tracked descendants of this root that the live walk can no longer reach,
@@ -17,7 +41,16 @@ export interface LineageKillSource {
    * the ledger so the killer needs no subprocess or filesystem access of its
    * own — the only PIDs it ever sees here are ones proven to still be ours.
    */
-  getVerifiedOrphanPids(rootPid: number, alreadyCovered: readonly number[]): number[];
+  getVerifiedOrphanPids(
+    rootPid: number,
+    alreadyCovered: readonly number[],
+    census?: KillCensus | null
+  ): number[];
+  /**
+   * A fresh process-table read for the kill path, or null when one cannot be
+   * taken. Absent or null leaves the killer on the cached census.
+   */
+  takeKillCensus?(): KillCensus | null;
 }
 
 /**
@@ -32,15 +65,37 @@ export interface LineageKillSource {
  * wrapper exiting (#12203). Every signalling pass therefore targets the union
  * of the live walk and the lineage ledger, which recorded those descendants
  * back when they were still reachable.
+ *
+ * The live walk itself comes from a census taken at kill time when the ledger
+ * can supply one, not the periodic cache (#13165): the cache is seconds stale,
+ * so a kill that trusted it missed everything spawned since its last sweep.
  */
 export class ProcessTreeKiller {
   private killTreeTimer: NodeJS.Timeout | null = null;
   private registeredRootPid: number | null = null;
+  /** `census: null` records a capture that failed, so the kill does not retry it. */
+  private capturedCensus: { census: KillCensus | null; atMs: number } | null = null;
+  /**
+   * The shell's identity from the first census that saw it. A later kill on
+   * this killer (dispose after a completed kill) must not mistake whatever now
+   * holds the PID for our shell and walk an unrelated tree. `SHELL_GONE` once a
+   * census has shown the shell missing: nothing that later takes the PID is ours.
+   */
+  private shellIdentity: string | typeof SHELL_GONE | null = null;
+  private escalation: EscalationState | null = null;
+  /**
+   * Every process a kill on this killer has signalled, by start time, kept past
+   * escalation so a later survivor check can tell a lingering target from a
+   * stranger that inherited its PID.
+   */
+  private readonly killIdentities = new Map<number, string>();
 
   constructor(
-    private readonly ptyProcess: pty.IPty,
+    private readonly ptyProcess: ProcessTreeKillTarget,
     private readonly processTreeCache: ProcessTreeCache | null,
-    private readonly lineage: LineageKillSource | null = null
+    private readonly lineage: LineageKillSource | null = null,
+    /** What started this root, kept with its lineage for reporting survivors. */
+    private readonly origin: LineageOrigin | null = null
   ) {
     this.registerRoot(this.ptyProcess.pid);
   }
@@ -59,7 +114,31 @@ export class ProcessTreeKiller {
     if (!Number.isInteger(shellPid) || (shellPid as number) <= 0) return;
     if (this.registeredRootPid === shellPid) return;
     this.registeredRootPid = shellPid as number;
-    this.lineage.registerRoot(shellPid as number);
+    this.lineage.registerRoot(shellPid as number, this.origin);
+  }
+
+  /**
+   * Snapshot the process table before the PTY is released. Closing the master
+   * hangs up the foreground job, and an intermediate parent dying there
+   * reparents its detached children to PID 1 before {@link execute} could walk
+   * to them — the ancestry has to be read while it still exists.
+   */
+  captureTree(): void {
+    this.capturedCensus = null;
+    if (process.platform === "win32" || !(this.ptyProcess.pid > 0)) return;
+    const atMs = Date.now();
+    this.capturedCensus = { census: this.lineage?.takeKillCensus?.() ?? null, atMs };
+  }
+
+  private takeCensus(): KillCensus | null {
+    const captured = this.capturedCensus;
+    this.capturedCensus = null;
+    // A capture that failed moments ago would fail again, and the shared
+    // teardown budget cannot afford a second timeout.
+    if (captured && Date.now() - captured.atMs <= CAPTURED_CENSUS_MAX_AGE_MS) {
+      return captured.census;
+    }
+    return this.lineage?.takeKillCensus?.() ?? null;
   }
 
   /**
@@ -74,15 +153,31 @@ export class ProcessTreeKiller {
    * tree are covered because the ledger's own sweep admits and identifies them;
    * the census is used here only to order what is already proven.
    */
-  private resolveOrphans(shellPid: number, live: number[]): number[] {
+  private resolveOrphans(shellPid: number, live: number[], census?: KillCensus | null): number[] {
     if (!this.lineage) return [];
 
-    const verified = this.lineage.getVerifiedOrphanPids(shellPid, live);
+    const verified = census
+      ? this.lineage.getVerifiedOrphanPids(shellPid, live, census)
+      : this.lineage.getVerifiedOrphanPids(shellPid, live);
     if (verified.length === 0) return [];
 
-    const verifiedSet = new Set(verified);
     const ordered: number[] = [];
     const seen = new Set<number>([...live, shellPid]);
+    if (census) {
+      // A fresh census is a live read, so a verified member's children in it
+      // are that member's children right now — including ones it forked after
+      // detaching, which no sweep has identified yet.
+      for (const pid of verified) {
+        for (const child of [...walkDescendants(census, pid), pid]) {
+          if (seen.has(child)) continue;
+          seen.add(child);
+          ordered.push(child);
+        }
+      }
+      return ordered;
+    }
+
+    const verifiedSet = new Set(verified);
     for (const pid of verified) {
       // getDescendantPids is post-order, so emitting a verified member's
       // verified descendants first keeps the leaves-first contract across the
@@ -99,25 +194,39 @@ export class ProcessTreeKiller {
     return ordered;
   }
 
+  getKillIdentities(): ReadonlyMap<number, string> {
+    return this.killIdentities;
+  }
+
+  private recordIdentities(census: KillCensus, pids: Iterable<number>): void {
+    for (const pid of pids) {
+      const startTime = census.startTimeOf(pid);
+      if (startTime !== undefined) this.killIdentities.set(pid, startTime);
+    }
+  }
+
   /**
    * Kill the entire process tree rooted at the PTY shell.
    * Sends SIGTERM to all descendants bottom-up (leaves first), then kills the shell.
    * @param immediate If true, SIGKILL is sent synchronously (for process.on("exit") context
    *   where timers don't fire). If false, SIGKILL escalation fires after 500ms and re-reads
    *   the descendant list to catch processes spawned during the grace window.
+   * @returns The PIDs this pass targeted, shell included.
    */
-  execute(immediate: boolean, escalationDelayMs?: number): void {
+  execute(immediate: boolean, escalationDelayMs?: number): number[] {
+    const pending = this.escalation;
     this.abort();
 
     const shellPid = this.ptyProcess.pid;
 
     if (shellPid === undefined || shellPid <= 0) {
+      this.capturedCensus = null;
       try {
         this.ptyProcess.kill();
       } catch {
         // Process may already be dead
       }
-      return;
+      return [];
     }
 
     this.lineage?.markRootClosing(shellPid);
@@ -137,15 +246,24 @@ export class ProcessTreeKiller {
       // Unix walk below — reparented descendants need their own pass. Exclude
       // what the walk already covered so the taskkill above isn't repeated
       // once per live descendant.
-      this.taskkillOrphans(
-        this.resolveOrphans(shellPid, this.processTreeCache?.getDescendantPids(shellPid) ?? [])
-      );
+      const live = this.processTreeCache?.getDescendantPids(shellPid) ?? [];
+      const orphans = this.resolveOrphans(shellPid, live);
+      this.taskkillOrphans(orphans);
       try {
         this.ptyProcess.kill();
       } catch {
         // Process may already be dead
       }
-      return;
+      return [...orphans, ...live, shellPid];
+    }
+
+    // A kill already mid-way through its grace window (kill() then dispose())
+    // only needs its escalation completed. Restarting from a fresh walk would
+    // miss everything the first SIGTERM already orphaned from the shell.
+    if (immediate && pending && pending.shellPid === shellPid) {
+      this.capturedCensus = null;
+      this.escalate(pending, this.lineage?.takeKillCensus?.() ?? null);
+      return [...pending.targets.keys(), shellPid];
     }
 
     // Unix: SIGTERM descendants bottom-up, then kill the shell.
@@ -155,10 +273,30 @@ export class ProcessTreeKiller {
     // release fire normally. SIGTERM-then-SIGCONT (per pid) is the correct
     // order — reversing it lets the resumed process fork() new children in the
     // window between SIGCONT delivery and SIGTERM delivery.
-    const live = this.processTreeCache?.getDescendantPids(shellPid) ?? [];
-    // Orphans first: they are already detached, so nothing about signalling
-    // them can reparent a process the live walk still owns.
-    const descendants = [...this.resolveOrphans(shellPid, live), ...live];
+    //
+    // A fresh census is the source of truth when one can be taken (#13165): the
+    // cached one is seconds stale, so it has never heard of anything spawned
+    // since its last sweep. Without one, fall back to the cached walk.
+    const census = this.takeCensus();
+    let shellStartTime = census?.startTimeOf(shellPid);
+    if (census) {
+      if (shellStartTime === undefined) this.shellIdentity = SHELL_GONE;
+      else if (this.shellIdentity === null) this.shellIdentity = shellStartTime;
+      else if (this.shellIdentity !== shellStartTime) shellStartTime = undefined;
+    }
+    // A fresh census without our shell means the PID is free for reuse, so
+    // nothing below may signal it — including node-pty's SIGHUP.
+    const shellGone = census !== null && shellStartTime === undefined;
+    let descendants: number[];
+    if (census) {
+      const live = shellStartTime !== undefined ? walkDescendants(census, shellPid) : [];
+      // Orphans first: they are already detached, so nothing about signalling
+      // them can reparent a process the live walk still owns.
+      descendants = [...this.resolveOrphans(shellPid, live, census), ...live];
+    } else {
+      const live = this.processTreeCache?.getDescendantPids(shellPid) ?? [];
+      descendants = [...this.resolveOrphans(shellPid, live), ...live];
+    }
 
     for (const pid of descendants) {
       let sigtermBlocked = false;
@@ -192,28 +330,63 @@ export class ProcessTreeKiller {
       }
     }
 
-    try {
-      this.ptyProcess.kill();
-    } catch {
-      // Process may already be dead
+    if (!shellGone) {
+      try {
+        this.ptyProcess.kill();
+      } catch {
+        // Process may already be dead
+      }
     }
 
     // node-pty's IPty.kill() sends SIGHUP to the shell, which also queues
     // while stopped. Wake the shell so the queued SIGHUP delivers. Kept
     // outside the ptyProcess.kill() try/catch so it still fires if that
-    // throws (already-dead shell → ESRCH here, silent).
-    try {
-      process.kill(shellPid, "SIGCONT");
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ESRCH") {
-        console.warn(`[ProcessTreeKiller] SIGCONT pid=${shellPid}: ${(err as Error).message}`);
+    // throws (already-dead shell → ESRCH here, silent). A fresh census that
+    // lacks the shell means it is already gone and its PID is up for reuse.
+    if (!shellGone) {
+      try {
+        process.kill(shellPid, "SIGCONT");
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== "ESRCH") {
+          console.warn(`[ProcessTreeKiller] SIGCONT pid=${shellPid}: ${(err as Error).message}`);
+        }
       }
     }
 
+    // Everything signalled above, by identity. Once its parent dies a target
+    // reparents to PID 1 where no walk from the shell reaches it, so the
+    // escalation finds it again by this record — and only while its start time
+    // still matches, so a PID recycled during the grace window is left alone.
+    const state: EscalationState | null = census
+      ? {
+          shellPid,
+          shellStartTime,
+          targets: new Map([
+            // A repeated kill keeps what the first one signalled: those targets
+            // may have reparented out of reach of this pass's walk.
+            ...(pending?.shellPid === shellPid ? pending.targets : []),
+            ...descendants.flatMap((pid) => {
+              const startTime = census.startTimeOf(pid);
+              return startTime === undefined ? [] : [[pid, startTime] as const];
+            }),
+          ]),
+        }
+      : // Without a census nothing new is learned, but what an earlier kill
+        // recorded is still the best evidence of what to SIGKILL.
+        pending?.shellPid === shellPid
+        ? pending
+        : null;
+
+    const targets = shellGone ? descendants : [...descendants, shellPid];
+    if (census) this.recordIdentities(census, targets);
+
     if (immediate) {
-      this.sigkillSweep(shellPid);
-      return;
+      // Re-read even here: a snapshot taken before the SIGTERM pass cannot
+      // prove that a target survived it rather than exiting and being replaced.
+      if (state) this.escalate(state, this.lineage?.takeKillCensus?.() ?? null);
+      else this.sigkillSweep(shellPid);
+      return targets;
     }
 
     const delay = escalationDelayMs ?? SIGKILL_ESCALATION_DELAY_MS;
@@ -221,11 +394,61 @@ export class ProcessTreeKiller {
     // Re-read descendants inside the timer so children spawned in the
     // grace window between SIGTERM and SIGKILL are also reaped. Capturing
     // the snapshot in a closure here would orphan late-forked subprocesses.
+    this.escalation = state;
     this.killTreeTimer = setTimeout(() => {
       this.killTreeTimer = null;
-      this.sigkillSweep(shellPid);
+      const current = this.escalation;
+      this.escalation = null;
+      if (current) this.escalate(current, this.lineage?.takeKillCensus?.() ?? null);
+      else this.sigkillSweep(shellPid);
     }, delay);
     this.killTreeTimer.unref?.();
+    return targets;
+  }
+
+  /**
+   * SIGKILL whatever of a SIGTERMed tree is still alive, judged against a fresh
+   * census: every recorded target whose identity still matches, anything those
+   * survivors forked during the grace window, verified ledger orphans and their
+   * children, and the shell with its subtree only if it is still the same
+   * process. Without a census, falls back to the cached sweep.
+   */
+  private escalate(state: EscalationState, census: KillCensus | null): void {
+    if (!census) {
+      this.sigkillSweep(state.shellPid);
+      return;
+    }
+
+    const shellAlive =
+      state.shellStartTime !== undefined &&
+      census.startTimeOf(state.shellPid) === state.shellStartTime;
+    const seen = new Set<number>([state.shellPid]);
+    const ordered: number[] = [];
+    const addSubtree = (root: number) => {
+      for (const pid of walkDescendants(census, root)) {
+        if (seen.has(pid)) continue;
+        seen.add(pid);
+        ordered.push(pid);
+      }
+    };
+    const add = (pid: number) => {
+      addSubtree(pid);
+      if (seen.has(pid)) return;
+      seen.add(pid);
+      ordered.push(pid);
+    };
+
+    for (const [pid, startTime] of state.targets) {
+      if (census.startTimeOf(pid) === startTime) add(pid);
+    }
+    for (const pid of this.resolveOrphans(state.shellPid, ordered, census)) add(pid);
+    if (shellAlive) {
+      addSubtree(state.shellPid);
+      ordered.push(state.shellPid);
+    }
+
+    this.recordIdentities(census, ordered);
+    for (const pid of ordered) this.signal(pid, "SIGKILL");
   }
 
   /**
@@ -239,12 +462,14 @@ export class ProcessTreeKiller {
    *
    * @param immediate SIGKILL synchronously instead of after the grace window,
    *   for the `process.on("exit")` context where timers never fire.
+   * @returns The orphaned descendants this pass targeted.
    */
-  reapAfterRootExit(immediate: boolean = false, escalationDelayMs?: number): void {
+  reapAfterRootExit(immediate: boolean = false, escalationDelayMs?: number): number[] {
     this.abort();
+    this.capturedCensus = null;
 
     const shellPid = this.ptyProcess.pid;
-    if (shellPid === undefined || shellPid <= 0) return;
+    if (shellPid === undefined || shellPid <= 0) return [];
 
     this.lineage?.markRootClosing(shellPid);
 
@@ -254,12 +479,22 @@ export class ProcessTreeKiller {
     // children has already been reparented. Asking the ledger for its whole set
     // also means each PID is start-time verified before it is signalled, which a
     // stale live-walk entry would not be.
-    const orphans = this.resolveOrphans(shellPid, []);
-    if (orphans.length === 0) return;
+    let orphans = this.resolveOrphans(shellPid, []);
+    if (orphans.length === 0) return [];
 
     if (process.platform === "win32") {
       this.taskkillOrphans(orphans);
-      return;
+      return orphans;
+    }
+
+    // With orphans to signal, re-verify them against one fresh census so the
+    // identities recorded for the survivor check are the processes signalled
+    // below. Skipped on the exit path, whose budget belongs to the kill itself
+    // and whose check could never run.
+    const census = immediate ? null : (this.lineage?.takeKillCensus?.() ?? null);
+    if (census) {
+      orphans = this.resolveOrphans(shellPid, [], census);
+      this.recordIdentities(census, orphans);
     }
 
     for (const pid of orphans) {
@@ -270,7 +505,7 @@ export class ProcessTreeKiller {
     if (immediate) {
       // `process.on("exit")` context — no timer will ever fire, so escalate now.
       this.sigkillSweep(shellPid, { includeShell: false, includeLiveWalk: false });
-      return;
+      return orphans;
     }
 
     this.killTreeTimer = setTimeout(() => {
@@ -278,12 +513,14 @@ export class ProcessTreeKiller {
       this.sigkillSweep(shellPid, { includeShell: false, includeLiveWalk: false });
     }, escalationDelayMs ?? SIGKILL_ESCALATION_DELAY_MS);
     this.killTreeTimer.unref?.();
+    return orphans;
   }
 
   /**
    * Cancel any pending SIGKILL escalation. Idempotent.
    */
   abort(): void {
+    this.escalation = null;
     if (this.killTreeTimer) {
       clearTimeout(this.killTreeTimer);
       this.killTreeTimer = null;
@@ -345,4 +582,32 @@ export class ProcessTreeKiller {
       }
     }
   }
+}
+
+/**
+ * PIDs no kill path may ever signal, whatever a census says: init, the kernel's
+ * placeholders, this process, and its parent.
+ */
+function isForbiddenTarget(pid: number): boolean {
+  return !Number.isInteger(pid) || pid <= 1 || pid === process.pid || pid === process.ppid;
+}
+
+/**
+ * Descendants of `root` in the census, post-order (leaves first), never
+ * descending through a forbidden PID. The visited set makes a malformed table
+ * with a ppid cycle terminate.
+ */
+function walkDescendants(census: KillCensus, root: number): number[] {
+  const out: number[] = [];
+  const visited = new Set<number>([root]);
+  const visit = (pid: number) => {
+    for (const child of census.childrenOf(pid)) {
+      if (visited.has(child) || isForbiddenTarget(child)) continue;
+      visited.add(child);
+      visit(child);
+      out.push(child);
+    }
+  };
+  visit(root);
+  return out;
 }

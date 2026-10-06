@@ -359,7 +359,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./devPreview.js").DevPreviewSessionState;
   };
   "dev-preview:stop": {
-    args: [request: import("./devPreview.js").DevPreviewSessionRequest];
+    args: [request: import("./devPreview.js").DevPreviewStopRequest];
     result: import("./devPreview.js").DevPreviewSessionState;
   };
   "dev-preview:stop-by-panel": {
@@ -1536,6 +1536,14 @@ export interface GeneratedIpcInvokeMap {
     args: [level: "errors" | "off" | "full"];
     result: void;
   };
+  "processes:get-snapshot": {
+    args: [];
+    result: import("../processes.js").ProcessInventorySnapshot;
+  };
+  "processes:kill-closed-terminal-processes": {
+    args: [targets: import("../processes.js").ClosedProcessKillTarget[]];
+    result: import("../processes.js").ClosedProcessKillResult;
+  };
   "project-history:peek": {
     args: [];
     result: import("./project.js").ProjectHistoryTarget | null;
@@ -1941,11 +1949,11 @@ export interface GeneratedIpcInvokeMap {
     result: Record<string, import("../terminalSubmission.js").TerminalSubmissionLookup>;
   };
   "terminal:graceful-kill": {
-    args: [id: string];
+    args: [id: string, options?: import("../terminal.js").TerminalKillOptions | undefined];
     result: string | null;
   };
   "terminal:kill": {
-    args: [id: string];
+    args: [id: string, options?: import("../terminal.js").TerminalKillOptions | undefined];
     result: void;
   };
   "terminal:locate": {

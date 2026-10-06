@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef, useMemo, type ReactNode } fro
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ChevronRight, Coffee, TriangleAlert } from "lucide-react";
+import { ChevronRight, Coffee, List, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { projectClient, systemClient } from "@/clients";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
@@ -30,6 +30,8 @@ import {
   formatProcessLabel,
 } from "./ProjectResourceBadge.utils";
 import { pluralize, pluralNoun } from "@/lib/pluralize";
+import { ProcessesDialog } from "./ProcessesDialog";
+import { useClosedTerminalProcessNotice } from "@/hooks/app/useClosedTerminalProcessNotice";
 
 const MAX_SAMPLES = 12;
 const BADGE_POLL_MS = 10_000;
@@ -439,6 +441,21 @@ export function ProjectResourceBadge({
   const [thresholds, setThresholds] = useState<MemoryThresholds>(FALLBACK_THRESHOLDS);
   const samplesRef = useRef<number[]>([]);
   const popoverContentRef = useRef<HTMLDivElement>(null);
+  const [processesOpen, setProcessesOpen] = useState(false);
+  useClosedTerminalProcessNotice(() => {
+    setOpen(false);
+    setProcessesOpen(true);
+  });
+  const readoutRef = useRef<HTMLButtonElement>(null);
+  // Set while the popover closes into the processes dialog: the popover's own
+  // close-time restore would otherwise pull focus back to the readout from
+  // under the modal that just took it.
+  const handingOffRef = useRef(false);
+  // A handoff whose close never reached close-autofocus (reopened mid-exit)
+  // must not swallow the next ordinary close's focus restore.
+  useEffect(() => {
+    if (open) handingOffRef.current = false;
+  }, [open]);
   // Mirror into state so JSX doesn't read the ref during render (React Compiler).
   const [samples, setSamples] = useState<number[]>([]);
 
@@ -646,7 +663,10 @@ export function ProjectResourceBadge({
   useEffect(
     () =>
       subscribeProjectViewLifecycle((phase) => {
-        if (phase === "cached") setOpen(false);
+        if (phase === "cached") {
+          setOpen(false);
+          setProcessesOpen(false);
+        }
       }),
     []
   );
@@ -734,18 +754,33 @@ export function ProjectResourceBadge({
     if (!showReadout) setOpen(false);
   }, [showReadout]);
 
+  // Mounted on every path: the readout can drop out from under an open dialog
+  // (activity ending before the first read lands), and the dialog — maybe
+  // mid-kill — must not go with it.
+  const processesDialog = (
+    <ProcessesDialog
+      isOpen={processesOpen}
+      onClose={() => setProcessesOpen(false)}
+      restoreFocusTo={() => (readoutRef.current?.isConnected ? readoutRef.current : null)}
+    />
+  );
+
   if (!showReadout) {
     // The readout waits for its first read, but whatever the footer pinned
     // beside it must not: Run command has nothing to do with whether the
     // metrics read has landed or failed.
-    if (trailing == null) return null;
     return (
-      <div
-        data-sidebar-status-bar=""
-        className="flex items-center justify-end shrink-0 w-full min-h-7"
-      >
-        {trailing}
-      </div>
+      <>
+        {trailing != null && (
+          <div
+            data-sidebar-status-bar=""
+            className="flex items-center justify-end shrink-0 w-full min-h-7"
+          >
+            {trailing}
+          </div>
+        )}
+        {processesDialog}
+      </>
     );
   }
 
@@ -788,180 +823,205 @@ export function ProjectResourceBadge({
   );
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      {/* The footer owns the surface and the top divider; this row is its
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        {/* The footer owns the surface and the top divider; this row is its
           bottom line, with the readout on the left and whatever the footer
           pins to the right. */}
-      <div data-sidebar-status-bar="" className="flex items-center shrink-0 w-full min-h-7">
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            data-status-readout=""
-            aria-label={`${announcement} — open resource usage`}
-            className="px-4 py-1.5 flex items-center flex-1 min-w-0 self-stretch hover:bg-overlay-subtle transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              {/* Decorative: the working/idle state it encodes is carried in
+        <div data-sidebar-status-bar="" className="flex items-center shrink-0 w-full min-h-7">
+          <PopoverTrigger asChild>
+            <button
+              ref={readoutRef}
+              type="button"
+              data-status-readout=""
+              aria-label={`${announcement} — open resource usage`}
+              className="px-4 py-1.5 flex items-center flex-1 min-w-0 self-stretch hover:bg-overlay-subtle transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                {/* Decorative: the working/idle state it encodes is carried in
                   words by the label and the live region, so announcing the mark
                   as well would say everything twice. */}
-              <SidebarFooterGlyph>
-                <span
-                  key={`${isWorking}-${memoryState}`}
-                  aria-hidden="true"
-                  data-working={isWorking ? "true" : "false"}
-                  className={`status-mark inline-flex h-2 w-2 rounded-full shrink-0 ${
-                    isWorking ? WORKING_DOT_CLASS : IDLE_DOT_CLASS
-                  } animate-diagnostics-flash`}
-                />
-              </SidebarFooterGlyph>
-              <span className="text-2xs tabular-nums text-text-secondary font-medium truncate">
-                {/* The row shares its width with Run command, so at the 200px
+                <SidebarFooterGlyph>
+                  <span
+                    key={`${isWorking}-${memoryState}`}
+                    aria-hidden="true"
+                    data-working={isWorking ? "true" : "false"}
+                    className={`status-mark inline-flex h-2 w-2 rounded-full shrink-0 ${
+                      isWorking ? WORKING_DOT_CLASS : IDLE_DOT_CLASS
+                    } animate-diagnostics-flash`}
+                  />
+                </SidebarFooterGlyph>
+                <span className="text-2xs tabular-nums text-text-secondary font-medium truncate">
+                  {/* The row shares its width with Run command, so at the 200px
                     floor the count drops its noun ("7 active") rather than
                     truncating mid-word. One string either way, so the text
                     never exists twice. */}
-                {stats.runningProjects > 0 ? (
-                  <>
-                    {stats.runningProjects}
-                    <span className="@max-[280px]/footer:hidden">
-                      {` ${pluralNoun(stats.runningProjects, "project")}`}
-                    </span>
-                    {" active"}
-                  </>
-                ) : (
-                  readoutLabel
-                )}
-              </span>
-            </div>
-          </button>
-        </PopoverTrigger>
-        {/* The live region is a sibling of the trigger, not its child and not
+                  {stats.runningProjects > 0 ? (
+                    <>
+                      {stats.runningProjects}
+                      <span className="@max-[280px]/footer:hidden">
+                        {` ${pluralNoun(stats.runningProjects, "project")}`}
+                      </span>
+                      {" active"}
+                    </>
+                  ) : (
+                    readoutLabel
+                  )}
+                </span>
+              </div>
+            </button>
+          </PopoverTrigger>
+          {/* The live region is a sibling of the trigger, not its child and not
             its ancestor. Wrapping the button would re-announce the whole strip
             on every press; nesting the region inside it puts a live region in a
             control's own subtree. Visually redundant with the label above, so
             it is screen-reader only. */}
-        <span role="status" className="sr-only">
-          {announcement}
-        </span>
-        {memoryState === "critical" && (
-          <span
-            data-testid="sidebar-status-items"
-            title="Daintree's own memory use is high — open the readout for details"
-            className="flex items-center pl-1 pr-2 shrink-0"
-          >
-            {/* The glyph alone on the row; the words live in the popover. With
+          <span role="status" className="sr-only">
+            {announcement}
+          </span>
+          {memoryState === "critical" && (
+            <span
+              data-testid="sidebar-status-items"
+              title="Daintree's own memory use is high — open the readout for details"
+              className="flex items-center pl-1 pr-2 shrink-0"
+            >
+              {/* The glyph alone on the row; the words live in the popover. With
                 the count on the left and Run command on the right, a worded
                 chip left 320px with "4 a…" — the warning cost the row its
                 first answer. The triangle carries the severity colour. */}
-            <TriangleAlert
-              className="h-3 w-3 shrink-0 text-status-warning"
-              data-resource-glyph=""
-              aria-hidden="true"
-            />
-            <span className="sr-only">High app memory</span>
-          </span>
-        )}
-        {trailing}
-      </div>
-      <PopoverContent
-        side="top"
-        align="start"
-        aria-labelledby="resource-usage-title"
-        // Focus the popover itself, not its first control. Radix's default
-        // landed on the keep-awake row and painted a ring on a settings link
-        // nobody had reached for; leaving focus on the readout instead strands
-        // keyboard users, because the content is portalled to the end of the
-        // document and Tab from the readout never reaches it.
-        ref={popoverContentRef}
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          popoverContentRef.current?.focus({ preventScroll: true, focusVisible: false });
-        }}
-        className="w-72 p-3"
-      >
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            {popoverMemoryState === "critical" && (
-              <div className="flex items-start gap-1.5 text-2xs text-text-primary">
-                <TriangleAlert
-                  className="mt-px h-3 w-3 shrink-0 text-status-warning"
-                  data-resource-glyph=""
-                  aria-hidden="true"
-                />
-                Daintree's own memory use is high for this machine
-              </div>
-            )}
-            {/* Mounted before the data lands: it names the popover, and the
+              <TriangleAlert
+                className="h-3 w-3 shrink-0 text-status-warning"
+                data-resource-glyph=""
+                aria-hidden="true"
+              />
+              <span className="sr-only">High app memory</span>
+            </span>
+          )}
+          {trailing}
+        </div>
+        <PopoverContent
+          side="top"
+          align="start"
+          aria-labelledby="resource-usage-title"
+          // Focus the popover itself, not its first control. Radix's default
+          // landed on the keep-awake row and painted a ring on a settings link
+          // nobody had reached for; leaving focus on the readout instead strands
+          // keyboard users, because the content is portalled to the end of the
+          // document and Tab from the readout never reaches it.
+          ref={popoverContentRef}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            popoverContentRef.current?.focus({ preventScroll: true, focusVisible: false });
+          }}
+          onCloseAutoFocus={(event) => {
+            if (!handingOffRef.current) return;
+            handingOffRef.current = false;
+            event.preventDefault();
+          }}
+          className="w-72 p-3"
+        >
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              {popoverMemoryState === "critical" && (
+                <div className="flex items-start gap-1.5 text-2xs text-text-primary">
+                  <TriangleAlert
+                    className="mt-px h-3 w-3 shrink-0 text-status-warning"
+                    data-resource-glyph=""
+                    aria-hidden="true"
+                  />
+                  Daintree's own memory use is high for this machine
+                </div>
+              )}
+              {/* Mounted before the data lands: it names the popover, and the
                 popover takes focus on open, so a heading that waited for the
                 first read left focus on an unnamed dialog. */}
-            <div className="flex items-baseline justify-between gap-2">
-              <SectionLabel id="resource-usage-title">Memory</SectionLabel>
-              {ageLabel && <span className="text-2xs text-text-secondary">{ageLabel}</span>}
-            </div>
-            {popoverData ? (
-              <MemorySummary
-                appMemoryMB={appMemoryMB}
-                workloads={shownWorkloads}
-                workloadNote={workloadNote}
-                systemAvailableMB={systemAvailableMB}
-              />
-            ) : (
-              <Skeleton label="Loading resource details" className="space-y-1.5">
-                <SkeletonBone className="h-3 w-full" />
-                <SkeletonBone className="h-3 w-5/6" />
-                <SkeletonBone className="h-3 w-3/4" />
-              </Skeleton>
-            )}
-          </div>
-          {popoverData && (
-            <>
-              {shownWorkloads !== null && (
-                <ProjectBreakdown workloads={shownWorkloads} projectNames={projectNames} />
+              <div className="flex items-baseline justify-between gap-2">
+                <SectionLabel id="resource-usage-title">Memory</SectionLabel>
+                {ageLabel && <span className="text-2xs text-text-secondary">{ageLabel}</span>}
+              </div>
+              {popoverData ? (
+                <MemorySummary
+                  appMemoryMB={appMemoryMB}
+                  workloads={shownWorkloads}
+                  workloadNote={workloadNote}
+                  systemAvailableMB={systemAvailableMB}
+                />
+              ) : (
+                <Skeleton label="Loading resource details" className="space-y-1.5">
+                  <SkeletonBone className="h-3 w-full" />
+                  <SkeletonBone className="h-3 w-5/6" />
+                  <SkeletonBone className="h-3 w-3/4" />
+                </Skeleton>
               )}
-              <p className="text-2xs leading-snug text-text-secondary">
-                Each process is counted in full, so memory two processes share is counted twice and
-                these totals run high.
-              </p>
-            </>
-          )}
-          {/* The keep-awake hold used to be a coffee cup pinned to the strip.
+            </div>
+            {popoverData && (
+              <>
+                {shownWorkloads !== null && (
+                  <ProjectBreakdown workloads={shownWorkloads} projectNames={projectNames} />
+                )}
+                <p className="text-2xs leading-snug text-text-secondary">
+                  Each process is counted in full, so memory two processes share is counted twice
+                  and these totals run high.
+                </p>
+              </>
+            )}
+            {/* Mounted unconditionally: the list is its own read, so a failed
+              memory read above must not hide the way to it. */}
+            <button
+              type="button"
+              onClick={() => {
+                handingOffRef.current = true;
+                setOpen(false);
+                setProcessesOpen(true);
+              }}
+              data-testid="open-processes-dialog"
+              className="-mx-1 flex min-h-6 w-[calc(100%+0.5rem)] cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-2xs text-text-secondary hover:bg-overlay-subtle hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+            >
+              <List className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">Running processes</span>
+              <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
+            </button>
+            {/* The keep-awake hold used to be a coffee cup pinned to the strip.
               Its state and settings route survive here as one line.
 
               Mounted unconditionally, with only its wording changing: the hold
               ends on main's schedule, so a row that appeared only while holding
               could vanish under a keyboard user mid-popover. */}
-          <button
-            type="button"
-            onClick={() =>
-              void actionService.dispatch(
-                "app.settings.openTab",
-                { tab: "general", subtab: "overview", sectionId: "general-keep-awake" },
-                { source: "user" }
-              )
-            }
-            aria-label={`${
-              holdingWakeLock ? "Keeping this machine awake" : "Not keeping this machine awake"
-            } — keep-awake settings`}
-            className="-mx-1 flex min-h-6 w-[calc(100%+0.5rem)] cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-2xs text-text-secondary hover:bg-overlay-subtle hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-          >
-            <Coffee className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            <span className="min-w-0 flex-1 truncate">
-              {holdingWakeLock ? "Keeping this machine awake" : "Not keeping this machine awake"}
-            </span>
-            <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
-          </button>
-          {popoverData && (
-            <div className="border-t border-divider pt-2">
-              <DiagnosticsSection
-                diagnosticsInfo={popoverData.diagnosticsInfo}
-                processMetrics={popoverData.processMetrics}
-                heapStats={popoverData.heapStats}
-                trend={trend}
-                trendSamples={samples}
-              />
-            </div>
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
+            <button
+              type="button"
+              onClick={() =>
+                void actionService.dispatch(
+                  "app.settings.openTab",
+                  { tab: "general", subtab: "overview", sectionId: "general-keep-awake" },
+                  { source: "user" }
+                )
+              }
+              aria-label={`${
+                holdingWakeLock ? "Keeping this machine awake" : "Not keeping this machine awake"
+              } — keep-awake settings`}
+              className="-mx-1 flex min-h-6 w-[calc(100%+0.5rem)] cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-2xs text-text-secondary hover:bg-overlay-subtle hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+            >
+              <Coffee className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">
+                {holdingWakeLock ? "Keeping this machine awake" : "Not keeping this machine awake"}
+              </span>
+              <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
+            </button>
+            {popoverData && (
+              <div className="border-t border-divider pt-2">
+                <DiagnosticsSection
+                  diagnosticsInfo={popoverData.diagnosticsInfo}
+                  processMetrics={popoverData.processMetrics}
+                  heapStats={popoverData.heapStats}
+                  trend={trend}
+                  trendSamples={samples}
+                />
+              </div>
+            )}
+          </div>
+        </PopoverContent>
+      </Popover>
+      {processesDialog}
+    </>
   );
 }

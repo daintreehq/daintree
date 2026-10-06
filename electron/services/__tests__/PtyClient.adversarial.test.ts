@@ -978,8 +978,15 @@ describe("PtyClient adversarial", () => {
     expect(pendingPort.close).toHaveBeenCalledTimes(1);
     expect(mockChild.postMessage).toHaveBeenCalledWith({ type: "dispose" });
 
-    vi.advanceTimersByTime(1000);
-    expect(mockChild.kill).toHaveBeenCalledTimes(1);
+    // The host gets its full teardown window, then a raw SIGKILL (#13167).
+    const { DISPOSE_EXIT_TIMEOUT_MS } = await import("../pty/PtyHostLifecycle.js");
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.advanceTimersByTime(DISPOSE_EXIT_TIMEOUT_MS - 1);
+    expect(killSpy).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(killSpy).toHaveBeenCalledWith(321, "SIGKILL");
+    expect(mockChild.kill).not.toHaveBeenCalled();
+    killSpy.mockRestore();
   });
 
   const MAX_PENDING_SPAWNS = 250;

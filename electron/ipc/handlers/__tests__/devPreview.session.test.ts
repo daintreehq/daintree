@@ -2,6 +2,12 @@ import http from "node:http";
 import https from "node:https";
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 
+const lstatMock = vi.hoisted(() => vi.fn());
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, default: actual, lstat: lstatMock };
+});
+
 vi.mock("node:http", () => ({ default: { request: vi.fn() }, request: vi.fn() }));
 vi.mock("node:https", () => ({ default: { request: vi.fn() }, request: vi.fn() }));
 
@@ -68,6 +74,7 @@ vi.mock("../../../services/UrlDetector.js", () => ({
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerDevPreviewHandlers } from "../devPreview.js";
+import { events } from "../../../services/events.js";
 import type { HandlerDependencies } from "../../types.js";
 
 type MockIncomingMessage = {
@@ -556,7 +563,8 @@ describe("dev preview session handlers", () => {
     });
 
     expect(firstAfter.status).toBe("error");
-    expect(firstAfter.terminalId).toBeNull();
+    // The terminal that refused to die stays owned, so a retry can reach it.
+    expect(firstAfter.terminalId).toBe(first.terminalId);
     expect(firstAfter.error?.message).toContain("Failed to stop dev preview:");
     expect(secondAfter.status).toBe("stopped");
     expect(secondAfter.terminalId).toBeNull();
@@ -786,5 +794,170 @@ describe("dev preview session handlers", () => {
     expect(() =>
       diagnosticsHandler!({} as Electron.IpcMainInvokeEvent, { panelId: "panel-1" })
     ).toThrow();
+  });
+
+  describe("worktree removed outside Daintree (#13171)", () => {
+    function enoent(): NodeJS.ErrnoException {
+      return Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" });
+    }
+
+    function deferred() {
+      let resolve!: (value: unknown) => void;
+      let reject!: (err: unknown) => void;
+      const promise = new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    // Lets the probe's continuation and the stop it schedules run to completion.
+    async function flushAsync() {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    async function ensureIn(worktreeId: string, panelId: string) {
+      const ensureHandler = getRegisteredHandle<
+        [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+        { terminalId: string | null }
+      >(CHANNELS.DEV_PREVIEW_ENSURE);
+      const state = await ensureHandler!({} as Electron.IpcMainInvokeEvent, {
+        panelId,
+        projectId: "project-removed",
+        cwd: worktreeId,
+        devCommand: "npm run dev",
+        worktreeId,
+      });
+      expect(state.terminalId).toBeTruthy();
+      return state.terminalId!;
+    }
+
+    function emitRemove(worktreeId: string) {
+      events.emit("sys:worktree:remove", { worktreeId, timestamp: Date.now() });
+    }
+
+    beforeEach(() => {
+      lstatMock.mockReset();
+    });
+
+    it("stops the dev server once the worktree directory is gone", async () => {
+      lstatMock.mockRejectedValue(enoent());
+      const goneTerminal = await ensureIn("/repo/wt-gone", "panel-gone");
+      const otherTerminal = await ensureIn("/repo/wt-other", "panel-other");
+
+      emitRemove("/repo/wt-gone");
+
+      await vi.waitFor(() => {
+        expect(ptyClient.kill).toHaveBeenCalledWith(goneTerminal, "dev-preview:worktree-removed");
+      });
+      expect(lstatMock).toHaveBeenCalledWith("/repo/wt-gone");
+      expect(ptyClient.kill).not.toHaveBeenCalledWith(otherTerminal, expect.anything());
+    });
+
+    it("keeps the dev server when the worktree directory still exists", async () => {
+      const probe = deferred();
+      lstatMock.mockReturnValue(probe.promise);
+      const terminalId = await ensureIn("/repo/wt-live", "panel-live");
+
+      emitRemove("/repo/wt-live");
+      probe.resolve({});
+      await flushAsync();
+
+      expect(lstatMock).toHaveBeenCalledTimes(1);
+      expect(ptyClient.kill).not.toHaveBeenCalledWith(terminalId, expect.anything());
+    });
+
+    it("keeps the dev server when the probe fails for any reason but ENOENT", async () => {
+      const probe = deferred();
+      lstatMock.mockReturnValue(probe.promise);
+      const terminalId = await ensureIn("/repo/wt-eacces", "panel-eacces");
+
+      emitRemove("/repo/wt-eacces");
+      probe.reject(Object.assign(new Error("EACCES"), { code: "EACCES" }));
+      await flushAsync();
+
+      expect(ptyClient.kill).not.toHaveBeenCalledWith(terminalId, expect.anything());
+    });
+
+    it("stops every session in the worktree even after its lookup mapping moved away", async () => {
+      lstatMock.mockRejectedValue(enoent());
+      const ensureHandler = getRegisteredHandle<
+        [Electron.IpcMainInvokeEvent, Record<string, unknown>],
+        { terminalId: string | null }
+      >(CHANNELS.DEV_PREVIEW_ENSURE);
+      const stayingTerminal = await ensureIn("/repo/wt-x", "panel-a");
+      await ensureIn("/repo/wt-x", "panel-b");
+      // Re-pointing panel-b at another worktree drops wt-x's single lookup
+      // mapping although panel-a still runs there.
+      await ensureHandler!({} as Electron.IpcMainInvokeEvent, {
+        panelId: "panel-b",
+        projectId: "project-removed",
+        cwd: "/repo/wt-y",
+        devCommand: "npm run dev",
+        worktreeId: "/repo/wt-y",
+      });
+
+      emitRemove("/repo/wt-x");
+
+      await vi.waitFor(() => {
+        expect(ptyClient.kill).toHaveBeenCalledWith(
+          stayingTerminal,
+          "dev-preview:worktree-removed"
+        );
+      });
+    });
+
+    it("does not stack probes for repeat events while one is pending", async () => {
+      const probe = deferred();
+      lstatMock.mockReturnValue(probe.promise);
+      await ensureIn("/repo/wt-hung", "panel-hung");
+
+      emitRemove("/repo/wt-hung");
+      emitRemove("/repo/wt-hung");
+
+      expect(lstatMock).toHaveBeenCalledTimes(1);
+      probe.resolve({});
+      await flushAsync();
+    });
+
+    it("ignores removals before the session service exists", () => {
+      emitRemove("/repo/never-started");
+
+      expect(lstatMock).not.toHaveBeenCalled();
+      expect(ptyClient.kill).not.toHaveBeenCalled();
+    });
+
+    it("does not stop anything when disposed while the probe is pending", async () => {
+      const probe = deferred();
+      lstatMock.mockReturnValue(probe.promise);
+      await ensureIn("/repo/wt-race", "panel-race");
+
+      emitRemove("/repo/wt-race");
+      expect(lstatMock).toHaveBeenCalledTimes(1);
+
+      const disposeHandlers = cleanup;
+      cleanup = () => {};
+      disposeHandlers();
+      ptyClient.kill.mockClear();
+
+      probe.reject(enoent());
+      await flushAsync();
+
+      expect(ptyClient.kill).not.toHaveBeenCalled();
+    });
+
+    it("stops listening once the handlers are disposed", async () => {
+      lstatMock.mockRejectedValue(enoent());
+      await ensureIn("/repo/wt-after-dispose", "panel-after-dispose");
+
+      const disposeHandlers = cleanup;
+      cleanup = () => {};
+      disposeHandlers();
+
+      emitRemove("/repo/wt-after-dispose");
+
+      expect(lstatMock).not.toHaveBeenCalled();
+    });
   });
 });

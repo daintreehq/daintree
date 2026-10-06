@@ -69,6 +69,12 @@ export interface TerminalControllerSession extends CrashLoopGuardSession {
    * and the post-install respawn runs outside the session lock.
    */
   launchEpoch: number;
+  /**
+   * The terminal a project-wide kill claimed. Its late output is ignored so it
+   * can't re-arm the recovery that kill cancelled; cleared by its exit, or by an
+   * ensure that finds it alive after all (a kill the host never carried out).
+   */
+  killedTerminalId: string | null;
   startupReplayTimer: ReturnType<typeof setTimeout> | null;
   updatedAtPerformanceMs: number;
   compiling: boolean;
@@ -223,6 +229,30 @@ async function isTerminalAlive(
   }
 }
 
+/**
+ * Whether a terminal we asked to die has actually exited. `hasPty` goes false
+ * the moment the kill is issued, while the process tree is still on its way
+ * down, so it can't confirm a stop; `isExited` can. A query that went
+ * unanswered is not evidence of anything, so it reads as still running.
+ */
+async function isTerminalGone(
+  terminalId: string,
+  projectId: string,
+  deps: { ptyClient: PtyClient }
+): Promise<boolean> {
+  try {
+    const terminal = await deps.ptyClient.getTerminalAsync(terminalId, undefined, {
+      strict: true,
+    });
+    if (!terminal) return true;
+    if (terminal.projectId && terminal.projectId !== projectId) return true;
+    if (terminal.isExited !== undefined) return terminal.isExited;
+    return !terminal.hasPty;
+  } catch {
+    return false;
+  }
+}
+
 async function waitForTerminalGone(
   terminalId: string,
   projectId: string,
@@ -231,19 +261,23 @@ async function waitForTerminalGone(
 ): Promise<boolean> {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
-    const alive = await isTerminalAlive(terminalId, projectId, deps);
-    if (!alive) return true;
+    if (await isTerminalGone(terminalId, projectId, deps)) return true;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   return false;
 }
 
-export async function stopSessionTerminal<TSession extends TerminalControllerSession>(
+/**
+ * Synchronously revoke everything that could revive a session's dev server:
+ * readiness probes, a pending crash-loop backoff, the install-then-respawn
+ * chain, and any launch still resolving its port or command. Runs before the
+ * kill so nothing queued behind it can spawn a replacement — whether the kill
+ * is ours or a project-wide teardown that only tells us afterwards via `exit`.
+ */
+export function cancelSessionWork<TSession extends TerminalControllerSession>(
   session: TSession,
-  context: string,
-  deps: TerminalControllerDeps<TSession>,
-  escalationDelayMs?: number
-): Promise<void> {
+  deps: Pick<TerminalControllerDeps<TSession>, "clearCompiling">
+): void {
   clearStartupReplay(session);
   session.readinessAbort?.abort();
   session.readinessAbort = null;
@@ -259,14 +293,31 @@ export async function stopSessionTerminal<TSession extends TerminalControllerSes
   deps.clearCompiling(session);
   session.needsInstall = false;
   session.isRunningInstall = false;
-  // Before the no-terminal early return: a post-install respawn that is still
-  // resolving its command has no terminal yet, and is exactly what must not
-  // survive this stop.
+  // A post-install respawn that is still resolving its command has no terminal
+  // yet, and is exactly what must not survive a stop.
   invalidatePendingLaunch(session);
+}
+
+/**
+ * Resolves with the launch epoch this stop established. A caller that goes on
+ * to relaunch must check it is still current after each await: a project-wide
+ * kill landing mid-restart bumps it, and the relaunch must then stand down.
+ */
+export async function stopSessionTerminal<TSession extends TerminalControllerSession>(
+  session: TSession,
+  context: string,
+  deps: TerminalControllerDeps<TSession>,
+  escalationDelayMs?: number
+): Promise<number> {
+  cancelSessionWork(session, deps);
+  const epoch = session.launchEpoch;
 
   const terminalId = session.terminalId;
-  if (!terminalId) return;
+  if (!terminalId) return epoch;
 
+  // Detached for the wait so the exit we caused isn't classified as a crash,
+  // but every failure below re-attaches it: a terminal we couldn't confirm dead
+  // must stay owned, or nothing can retry the stop or see it exit later.
   detachTerminal(session, deps);
   session.buffer = "";
   session.lastErrorKey = null;
@@ -280,14 +331,52 @@ export async function stopSessionTerminal<TSession extends TerminalControllerSes
   } catch (err) {
     const message = formatErrorMessage(err, "Failed to kill dev preview terminal");
     if (!isBenignMissingTerminalError(message)) {
+      reportUnstoppedTerminal(session, terminalId, "Couldn't stop the dev server.", deps);
       throw new Error(`Failed to kill terminal (${context}): ${message}`, { cause: err });
     }
   }
 
   const stopped = await waitForTerminalGone(terminalId, session.projectId, deps);
-  if (!stopped) {
-    throw new Error(`Timed out waiting for terminal ${terminalId} to stop (${context})`);
+  if (stopped) return epoch;
+  if (deps.isDisposed() || session.terminalId !== null) return epoch;
+  attachTerminal(session, terminalId, deps);
+  // The exit may have landed between the last poll and the re-attach, while
+  // nothing was listening for it.
+  if (await isTerminalGone(terminalId, session.projectId, deps)) {
+    if (session.terminalId === terminalId) detachTerminal(session, deps);
+    return epoch;
   }
+  reportUnstoppedTerminal(
+    session,
+    terminalId,
+    `Dev server didn't stop within ${DEFAULT_TIMEOUT_MS / 1000}s.`,
+    deps
+  );
+  throw new Error(`Timed out waiting for terminal ${terminalId} to stop (${context})`);
+}
+
+/**
+ * Hand a terminal that survived its stop back to the session and say so. Skipped
+ * when the session has already moved on to another terminal (or was disposed):
+ * that terminal's own lifecycle owns the session now.
+ */
+function reportUnstoppedTerminal<TSession extends TerminalControllerSession>(
+  session: TSession,
+  terminalId: string,
+  reason: string,
+  deps: TerminalControllerDeps<TSession>
+): void {
+  if (deps.isDisposed()) return;
+  if (session.terminalId === null) attachTerminal(session, terminalId, deps);
+  if (session.terminalId !== terminalId) return;
+  deps.updateSession(session, {
+    status: "error",
+    url: null,
+    error: { type: "unknown", message: `${reason} Stop it again, or close the project to retry.` },
+    terminalId,
+    isRestarting: false,
+    phaseLabel: undefined,
+  });
 }
 
 /**
@@ -334,10 +423,15 @@ export async function ensureSessionTerminal<TSession extends TerminalControllerS
   session: TSession,
   deps: TerminalControllerDeps<TSession>
 ): Promise<void> {
+  // The liveness and replay queries below await the host. A project-wide kill
+  // landing meanwhile must not be answered by spawning a fresh server.
+  const startEpoch = session.launchEpoch;
   if (session.terminalId) {
     const alive = await isTerminalAlive(session.terminalId, session.projectId, deps);
+    if (session.launchEpoch !== startEpoch) return;
     if (alive) {
       const terminalId = session.terminalId;
+      if (session.killedTerminalId === terminalId) session.killedTerminalId = null;
       attachTerminal(session, terminalId, deps);
       if (!RUNNING_STATES.has(session.status)) {
         deps.updateSession(session, {
@@ -360,16 +454,34 @@ export async function ensureSessionTerminal<TSession extends TerminalControllerS
       }
 
       if (
+        session.launchEpoch === startEpoch &&
         session.status === "starting" &&
         !session.url &&
         !session.pendingUrl &&
         performance.now() - session.updatedAtPerformanceMs >= STALE_START_RECOVERY_MS
       ) {
-        await stopSessionTerminal(session, "stale-start-recovery", deps);
+        const epoch = await stopSessionTerminal(session, "stale-start-recovery", deps);
+        // Retired by a project-wide kill during the stop — don't relaunch.
+        if (session.launchEpoch !== epoch) {
+          deps.updateSession(session, {
+            status: "stopped",
+            url: null,
+            predictedUrl: null,
+            error: null,
+            terminalId: null,
+            isRestarting: false,
+            phaseLabel: undefined,
+          });
+          return;
+        }
         await spawnSessionTerminal(session, deps);
       }
       return;
     }
+    // Killed but not yet exited — a stop that timed out leaves exactly this.
+    // Spawning now would run a second server beside the one still dying; keep
+    // the terminal owned and let its exit (or a retried stop) settle it.
+    if (!(await isTerminalGone(session.terminalId, session.projectId, deps))) return;
     detachTerminal(session, deps);
     session.readinessAbort?.abort();
     session.readinessAbort = null;
@@ -389,6 +501,7 @@ export async function ensureSessionTerminal<TSession extends TerminalControllerS
   // change clears the guard upstream (resetCrashLoopGuard in ensure()), and
   // restart() clears it before spawning, so only the automatic path is held.
   if (session.crashLoopStopped) return;
+  if (session.launchEpoch !== startEpoch) return;
 
   await spawnSessionTerminal(session, deps);
 }

@@ -814,6 +814,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["privacy:set-telemetry-level"]["args"]
     ): Promise<IpcInvokeMap["privacy:set-telemetry-level"]["result"]>;
   };
+  processes: {
+    getSnapshot(
+      ...args: IpcInvokeMap["processes:get-snapshot"]["args"]
+    ): Promise<IpcInvokeMap["processes:get-snapshot"]["result"]>;
+    killClosedTerminalProcesses(
+      ...args: IpcInvokeMap["processes:kill-closed-terminal-processes"]["args"]
+    ): Promise<IpcInvokeMap["processes:kill-closed-terminal-processes"]["result"]>;
+  };
   projectHistory: {
     peek(
       ...args: IpcInvokeMap["project-history:peek"]["args"]

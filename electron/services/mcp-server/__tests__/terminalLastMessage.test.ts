@@ -1,13 +1,19 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { setPtyClientRef } from "../../../window/serviceRefs.js";
+import type { PtyClient } from "../../PtyClient.js";
 import { mkdtemp, mkdir, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 
 const getTerminalAsync = vi.fn();
 
-vi.mock("../../PtyClient.js", () => ({
-  getPtyClient: () => ({ getTerminalAsync }),
-}));
+beforeEach(() => {
+  setPtyClientRef({ getTerminalAsync } as unknown as PtyClient);
+});
+
+afterEach(() => {
+  setPtyClientRef(null);
+});
 
 const { deriveProjectSlug } = await import("../../claude/ClaudeSubagentReader.js");
 const { rememberClaudePaneStore, __resetClaudeSessionStoreForTests } =

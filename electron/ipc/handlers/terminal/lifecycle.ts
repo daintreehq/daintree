@@ -44,7 +44,10 @@ import type {
 } from "../../../../shared/types/ipc/agentSessionHistory.js";
 import type { HostMemoryPauseSnapshot } from "../../../../shared/types/pty-host.js";
 import { resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
-import { normalizeTerminalGridDimension } from "../../../../shared/types/terminal.js";
+import {
+  normalizeTerminalGridDimension,
+  type TerminalKillOptions,
+} from "../../../../shared/types/terminal.js";
 import {
   DEFAULT_DANGEROUS_ARGS,
   relaunchResumeAsAssignedSession,
@@ -732,16 +735,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           safeCommand = `${safeCommand} ${codexArgs.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`;
         }
       }
-      // Copilot help sessions get the `--plan` read-only flag appended at
-      // spawn time (the same CLI-flag pinning pattern Codex uses for its
-      // `-c` MCP args). MCP wiring lives in `<sessionPath>/.mcp.json` via
-      // `writeCopilotMcpConfig` and is auto-discovered from cwd — no flag
-      // injection needed for that.
+      // Copilot help sessions read their MCP wiring from
+      // `<sessionPath>/.mcp.json` (`writeCopilotMcpConfig`), so any flags
+      // here are appended as-is, the same pattern Codex uses for its `-c`
+      // MCP args.
       //
       // A `null` return is the agent-mismatch signal (e.g. a Claude help
       // token reused with `launchAgentId: "copilot"`) — refuse to spawn.
-      // Strip any user-supplied `--plan` first so the appended flag is
-      // unambiguously authoritative.
       if (launchAgentId === "copilot") {
         const copilotArgs = helpSessionService.getCopilotLaunchArgs(helpToken);
         if (copilotArgs === null) {
@@ -749,10 +749,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             "Daintree Assistant help token does not belong to a Copilot session; refusing to spawn"
           );
         }
-        safeCommand = safeCommand
-          .replace(/(^|\s)--plan(?:=\S*)?(?=\s|$)/g, "$1")
-          .replace(/\s{2,}/g, " ")
-          .trim();
         if (copilotArgs.length > 0) {
           safeCommand =
             `${safeCommand} ${copilotArgs.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`.trim();
@@ -1215,11 +1211,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     }
   };
 
-  const handleTerminalKill = async (id: string): Promise<void> => {
+  const handleTerminalKill = async (id: string, options?: TerminalKillOptions): Promise<void> => {
     try {
       if (typeof id !== "string") {
         throw new Error("Invalid terminal ID: must be a string");
       }
+      if (options?.forRestart === true) ptyClient.suppressExitForRestart(id);
       // Before any await: a restart's respawn arms a fresh window for this id,
       // and it must not be the one this kill clears.
       settleSpawnConfirmation(id);
@@ -1244,10 +1241,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     }
   };
 
-  const handleTerminalGracefulKill = async (id: string): Promise<string | null> => {
+  const handleTerminalGracefulKill = async (
+    id: string,
+    options?: TerminalKillOptions
+  ): Promise<string | null> => {
     if (typeof id !== "string") {
       throw new Error("Invalid terminal ID: must be a string");
     }
+    if (options?.forRestart === true) ptyClient.suppressExitForRestart(id);
     const info = await ptyClient.getTerminalAsync(id).catch(() => null);
     const generation = getLifecycleLedger().currentGeneration(id);
     const sessionId = await ptyClient.gracefulKill(id);

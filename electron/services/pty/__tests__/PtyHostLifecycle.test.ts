@@ -3,6 +3,7 @@ import { EventEmitter } from "events";
 import type { HostLogEvent } from "../../../../shared/types/host-log.js";
 import {
   classifyCrash,
+  DISPOSE_EXIT_TIMEOUT_MS,
   mapGoneReasonToCrashType,
   PtyHostLifecycle,
   type PtyHostLifecycleCallbacks,
@@ -629,6 +630,112 @@ describe("PtyHostLifecycle", () => {
     expect(lifecycle.child).toBe(newChild);
   });
 
+  it("holds the auto-restart fork until the restart barrier settles", async () => {
+    const { lifecycle, callbacks } = makeLifecycle();
+    let releaseReap!: () => void;
+    const reap = new Promise<void>((resolve) => {
+      releaseReap = resolve;
+    });
+    callbacks.callbacks.restartBarrier = () => reap;
+    lifecycle.start();
+    lifecycle.markReady();
+
+    mockChild.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    const newChild = createMockChild();
+    shared.forkMock.mockReturnValueOnce(newChild);
+    shared.forkMock.mockClear();
+
+    // The replacement replays every terminal on ready, so it must not exist
+    // while the crashed host's survivors are still being reaped (#13166).
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(shared.forkMock).not.toHaveBeenCalled();
+    expect(callbacks.log.onBeforeRestartCalls).toBe(0);
+    expect(lifecycle.child).toBeNull();
+
+    releaseReap();
+    await vi.advanceTimersByTimeAsync(0);
+    lifecycle.waitForReady().catch(() => undefined);
+    expect(callbacks.log.onBeforeRestartCalls).toBe(1);
+    expect(lifecycle.child).toBe(newChild);
+  });
+
+  it("holds a manual restart behind the restart barrier too", async () => {
+    const { lifecycle, callbacks } = makeLifecycle();
+    let releaseReap!: () => void;
+    const reap = new Promise<void>((resolve) => {
+      releaseReap = resolve;
+    });
+    callbacks.callbacks.restartBarrier = () => reap;
+    lifecycle.start();
+    lifecycle.markReady();
+
+    mockChild.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    const newChild = createMockChild();
+    shared.forkMock.mockReturnValueOnce(newChild);
+    shared.forkMock.mockClear();
+
+    lifecycle.manualRestart();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shared.forkMock).not.toHaveBeenCalled();
+    expect(lifecycle.child).toBeNull();
+
+    releaseReap();
+    await vi.advanceTimersByTimeAsync(0);
+    lifecycle.waitForReady().catch(() => undefined);
+    expect(shared.forkMock).toHaveBeenCalledTimes(1);
+    expect(callbacks.log.onBeforeRestartCalls).toBe(1);
+    expect(lifecycle.child).toBe(newChild);
+  });
+
+  it("gives a barrier-held manual restart a fresh crash budget", async () => {
+    const { lifecycle, callbacks } = makeLifecycle();
+    let releaseReap!: () => void;
+    const reap = new Promise<void>((resolve) => {
+      releaseReap = resolve;
+    });
+    callbacks.callbacks.restartBarrier = () => reap;
+    lifecycle.start();
+    lifecycle.markReady();
+
+    // Manual retry lands between the exit and its deferred classification.
+    mockChild.emit("exit", 1);
+    lifecycle.manualRestart();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lifecycle.crashTimestamps).toHaveLength(1);
+
+    shared.forkMock.mockReturnValueOnce(createMockChild());
+    releaseReap();
+    await vi.advanceTimersByTimeAsync(0);
+    lifecycle.waitForReady().catch(() => undefined);
+
+    expect(lifecycle.child).not.toBeNull();
+    expect(lifecycle.crashTimestamps).toHaveLength(0);
+  });
+
+  it("does not fork from a settled barrier once the client is disposed", async () => {
+    const { lifecycle, callbacks } = makeLifecycle();
+    let releaseReap!: () => void;
+    const reap = new Promise<void>((resolve) => {
+      releaseReap = resolve;
+    });
+    callbacks.callbacks.restartBarrier = () => reap;
+    lifecycle.start();
+    lifecycle.markReady();
+
+    mockChild.emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(10_001);
+    shared.forkMock.mockClear();
+
+    callbacks.log.isDisposed.current = true;
+    releaseReap();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(shared.forkMock).not.toHaveBeenCalled();
+    expect(callbacks.log.onBeforeRestartCalls).toBe(0);
+  });
+
   it("calls onMaxRestartsReached when three crashes occur within the window", async () => {
     const { lifecycle, callbacks } = makeLifecycle();
     lifecycle.start();
@@ -836,6 +943,167 @@ describe("PtyHostLifecycle", () => {
     expect(shared.appMock.listenerCount("child-process-gone")).toBe(1);
     lifecycle.dispose();
     expect(shared.appMock.listenerCount("child-process-gone")).toBe(0);
+  });
+
+  describe("dispose waits for the host to finish its teardown (#13167)", () => {
+    function trackSettled(promise: Promise<boolean>): {
+      settled: boolean;
+      exitedOnItsOwn: boolean | null;
+    } {
+      const state = { settled: false, exitedOnItsOwn: null as boolean | null };
+      void promise.then((exitedOnItsOwn) => {
+        state.settled = true;
+        state.exitedOnItsOwn = exitedOnItsOwn;
+      });
+      return state;
+    }
+
+    it("posts dispose and settles when the host exits on its own", async () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+      callbacks.log.isDisposed.current = true;
+
+      const exit = trackSettled(lifecycle.dispose());
+      expect(mockChild.postMessage).toHaveBeenCalledWith({ type: "dispose" });
+
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(exit.settled).toBe(false);
+      expect(mockChild.kill).not.toHaveBeenCalled();
+
+      mockChild.emit("exit", 0);
+      await Promise.resolve();
+      expect(exit.settled).toBe(true);
+      expect(exit.exitedOnItsOwn).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(DISPOSE_EXIT_TIMEOUT_MS);
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(mockChild.kill).not.toHaveBeenCalled();
+    });
+
+    it("gives the host longer than the teardown probe budget before killing it", async () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+
+      const exit = trackSettled(lifecycle.dispose());
+      await vi.advanceTimersByTimeAsync(DISPOSE_EXIT_TIMEOUT_MS - 1);
+      expect(DISPOSE_EXIT_TIMEOUT_MS).toBeGreaterThan(2_000);
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(exit.settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      // Raw SIGKILL, never the blocking UtilityProcess.kill() (#11069).
+      expect(killSpy).toHaveBeenCalledWith(321, "SIGKILL");
+      expect(mockChild.kill).not.toHaveBeenCalled();
+      expect(exit.settled).toBe(true);
+      expect(exit.exitedOnItsOwn).toBe(false);
+      // The exit event stays the authority on process death.
+      expect(lifecycle.child).toBe(mockChild);
+    });
+
+    it("settles even when the backstop finds the host already gone", async () => {
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+      });
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+
+      const exit = trackSettled(lifecycle.dispose());
+      await vi.advanceTimersByTimeAsync(DISPOSE_EXIT_TIMEOUT_MS);
+      expect(exit.settled).toBe(true);
+    });
+
+    it("returns the same pending wait when dispose runs again", () => {
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+
+      const first = lifecycle.dispose();
+      const second = lifecycle.dispose();
+      expect(second).toBe(first);
+      expect(
+        mockChild.postMessage.mock.calls.filter(([msg]) => msg?.type === "dispose")
+      ).toHaveLength(1);
+    });
+
+    it("settles immediately when no host is running", async () => {
+      const { lifecycle } = makeLifecycle();
+      await expect(lifecycle.dispose()).resolves.toBe(true);
+    });
+
+    it("does not count a host that died abnormally mid-dispose as exiting on its own", async () => {
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+      callbacks.log.isDisposed.current = true;
+
+      const exit = trackSettled(lifecycle.dispose());
+      mockChild.emit("exit", 1);
+      await Promise.resolve();
+      expect(exit.settled).toBe(true);
+      expect(exit.exitedOnItsOwn).toBe(false);
+    });
+
+    it("settles through the host's exit when the dispose request cannot be sent", async () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+      callbacks.log.isDisposed.current = true;
+      mockChild.postMessage.mockImplementation(() => {
+        throw new Error("channel closed");
+      });
+
+      const exit = trackSettled(lifecycle.dispose());
+      expect(mockChild.kill).toHaveBeenCalledTimes(1);
+      mockChild.emit("exit", 143);
+      await Promise.resolve();
+      expect(exit.settled).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(DISPOSE_EXIT_TIMEOUT_MS);
+      expect(killSpy).not.toHaveBeenCalled();
+    });
+
+    it("settles at the deadline even when the SIGKILL itself fails", async () => {
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+
+      const exit = trackSettled(lifecycle.dispose());
+      await vi.advanceTimersByTimeAsync(DISPOSE_EXIT_TIMEOUT_MS);
+      expect(exit.settled).toBe(true);
+      expect(exit.exitedOnItsOwn).toBe(false);
+      expect(warn).toHaveBeenCalledWith(
+        "[PtyClient] Failed to kill host during dispose:",
+        expect.any(Error)
+      );
+    });
+
+    it("does not re-signal a host that already exited before dispose", async () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+      callbacks.log.isDisposed.current = true;
+      mockChild.emit("exit", 0);
+
+      await expect(lifecycle.dispose()).resolves.toBe(true);
+      expect(mockChild.postMessage).not.toHaveBeenCalledWith({ type: "dispose" });
+      await vi.advanceTimersByTimeAsync(DISPOSE_EXIT_TIMEOUT_MS);
+      expect(killSpy).not.toHaveBeenCalled();
+    });
+
+    it("settles when the host exits synchronously in response to the request", async () => {
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+      callbacks.log.isDisposed.current = true;
+      mockChild.postMessage.mockImplementation((msg: { type?: string }) => {
+        if (msg?.type === "dispose") mockChild.emit("exit", 0);
+      });
+
+      await expect(lifecycle.dispose()).resolves.toBe(true);
+    });
   });
 
   it("postMessage forwards to the child", () => {

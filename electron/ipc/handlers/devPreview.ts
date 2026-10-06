@@ -1,3 +1,4 @@
+import { lstat } from "node:fs/promises";
 import { app } from "electron";
 import { z } from "zod";
 import { CHANNELS } from "../channels.js";
@@ -12,6 +13,7 @@ import type { DevPreviewManifestEntry } from "../../services/DevPreviewManifestS
 import type {
   DevPreviewEnsureRequest,
   DevPreviewSessionRequest,
+  DevPreviewStopRequest,
   DevPreviewStopByPanelRequest,
   DevPreviewStateChangedPayload,
   DevPreviewAllSessionsPayload,
@@ -28,6 +30,24 @@ import type {
 import type { DevPreviewSessionService as DevPreviewSessionServiceType } from "../../services/DevPreviewSessionService.js";
 import type { DevPreviewProxyService as DevPreviewProxyServiceType } from "../../services/DevPreviewProxyService.js";
 import { getHibernationService } from "../../services/HibernationService.js";
+import { events } from "../../services/events.js";
+import { withTimeout } from "../../utils/withTimeout.js";
+
+const WORKTREE_GONE_PROBE_TIMEOUT_MS = 5000;
+
+// `sys:worktree:remove` means a monitor went away, not that the directory did:
+// a `git worktree list` that transiently omits a live worktree prunes its
+// monitor too. Only a confirmed ENOENT on the worktree root (the id is its
+// path) counts as gone — anything else, including a hung mount, keeps the
+// dev server running.
+async function isWorktreeGone(probe: Promise<unknown>): Promise<boolean> {
+  try {
+    await withTimeout(probe, WORKTREE_GONE_PROBE_TIMEOUT_MS, "Worktree existence probe timed out");
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === "ENOENT";
+  }
+}
 
 export function registerDevPreviewHandlers(deps: HandlerDependencies): () => void {
   let sessionService: DevPreviewSessionServiceType | null = null;
@@ -71,8 +91,9 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
       sessionServicePromise = Promise.all([
         import("../../services/DevPreviewSessionService.js"),
         import("../../services/DevPreviewManifestService.js"),
+        import("../../store.js"),
       ])
-        .then(([sessionMod, manifestMod]) => {
+        .then(([sessionMod, manifestMod, storeMod]) => {
           // Read (and clear) the restore manifest the previous session left
           // behind. The in-memory copy owns restore state for this launch, so
           // a corrupt or stale file degrades to "no restore" rather than
@@ -94,7 +115,9 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
             (sessions) => {
               const payload: DevPreviewAllSessionsPayload = { sessions };
               broadcastToRenderer(CHANNELS.DEV_PREVIEW_ALL_SESSIONS_CHANGED, payload);
-            }
+            },
+            storeMod.store.get("devPreviewUserStopped"),
+            (records) => storeMod.store.set("devPreviewUserStopped", records)
           );
           return sessionService;
         })
@@ -136,7 +159,7 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
           return svc.reinstallAndRestart(request);
         }
       ),
-      stop: op(DEV_PREVIEW_METHOD_CHANNELS.stop, async (request: DevPreviewSessionRequest) => {
+      stop: op(DEV_PREVIEW_METHOD_CHANNELS.stop, async (request: DevPreviewStopRequest) => {
         const svc = await getSessionService();
         return svc.stop(request);
       }),
@@ -269,7 +292,36 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
     });
   });
 
+  // External removals (`git worktree remove`, an IDE) never pass through the
+  // UI delete path that stops the dev server first (#9084), so the workspace
+  // host's removal event is the only signal that its server is now running in
+  // a directory that no longer exists (#13171).
+  // A probe of a hung mount outlives its timeout and holds a libuv worker, so
+  // a worktree's slot stays taken until the syscall itself settles — repeat
+  // removal events must not stack probes on it.
+  let disposed = false;
+  const probingWorktrees = new Set<string>();
+  const unsubWorktreeRemove = events.on("sys:worktree:remove", ({ worktreeId }) => {
+    if (!sessionService?.hasWorktreeSessions(worktreeId)) return;
+    if (probingWorktrees.has(worktreeId)) return;
+    probingWorktrees.add(worktreeId);
+    const probe = lstat(worktreeId);
+    probe.then(
+      () => probingWorktrees.delete(worktreeId),
+      () => probingWorktrees.delete(worktreeId)
+    );
+    void (async () => {
+      if (!(await isWorktreeGone(probe))) return;
+      if (disposed || !sessionService) return;
+      await sessionService.stopByWorktree(worktreeId, "worktree-removed");
+    })().catch((err) => {
+      console.error("[DevPreview] Failed to stop sessions for removed worktree:", worktreeId, err);
+    });
+  });
+
   return () => {
+    disposed = true;
+    unsubWorktreeRemove();
     unsubHibernation();
     if (sessionService) {
       sessionService.dispose();

@@ -1,7 +1,8 @@
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Copy,
   ExternalLink,
+  FileDiff,
   FileText,
   FileX,
   Folder,
@@ -11,6 +12,7 @@ import {
   PanelLeftOpen,
   RefreshCw,
   WrapText,
+  X,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
@@ -64,7 +66,10 @@ import {
 } from "@/components/FileViewer/FileUnavailableState";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { copyWithToast } from "@/lib/copyWithToast";
-import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
+import { Skeleton, SkeletonBone, SkeletonHint, SkeletonText } from "@/components/ui/Skeleton";
+import { isProseFilePath } from "@/components/FileViewer/isProseFile";
+import { useDiffContent } from "@/panels/diff/useDiffContent";
+import type { DiffSubject } from "@/panels/diff/diffContentCache";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { FolderListingView } from "./FolderListingView";
@@ -83,7 +88,7 @@ import { sanitizeSvg } from "@shared/utils/svgSanitizer";
 import { useFileEditor } from "@/registry/fileEditorRegistry";
 import { useFileDocumentDraftText } from "@/store/fileDocumentStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
-import type { FileRenderMode } from "@shared/types/panel";
+import type { FileViewMode } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
 import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { FileBrowserChangeSummary } from "./FileBrowserChangeSummary";
@@ -217,6 +222,11 @@ export interface FileBrowserViewerProps {
   missingFilePath: string | null;
   /** Points the viewer at a folder's listing; the missing state's way out. */
   onShowFolder: (path: string) => void;
+  /**
+   * Closes whatever the viewer is showing — back to the listing the file was
+   * opened from, or to the idle body (#13194). The pane decides which.
+   */
+  onCloseSelection: () => void;
 }
 
 /** Toolbar sort menu entries, in menu order. */
@@ -244,13 +254,40 @@ type ViewerState =
   | { status: "pdf" }
   | { status: "error"; reason: UnavailableReason; message: string };
 
-// Markdown and HTML both get a Source/Rendered switch mirroring FilePane's
-// toggle. Typed at the constant so the option values stay `FileRenderMode`
-// rather than widening to `string`; a two-entry list only — no diff mode here.
-const FILE_RENDER_MODE_OPTIONS: Array<{ value: FileRenderMode; label: string }> = [
-  { value: "source", label: "Source" },
-  { value: "rendered", label: "Rendered" },
-];
+// The toggle's segments, in toggle order. Rendered is offered for markdown and
+// HTML, Diff for a file the worktree reports as changed, Edit for a file a
+// plugin editor claims. Typed as `FileViewMode` locally — never widen
+// `FileRenderMode`, which the document viewers read as "anything but source
+// is rendered".
+const MODE_LABELS: Record<FileViewMode, string> = {
+  source: "Source",
+  rendered: "Rendered",
+  diff: "Diff",
+  edit: "Edit",
+};
+
+// Kept out of the browser's chunk: it pulls react-diff-view, the tokenizer and
+// the diff stylesheet, none of which reading a file needs. Same split as
+// FilePane's.
+const LazyDiffViewer = lazy(() =>
+  import("@/components/Worktree/DiffViewer").then((m) => ({ default: m.DiffViewer }))
+);
+
+// Shared by the fetch wait and the lazy-chunk wait so the two are
+// indistinguishable on screen. `Skeleton` carries the 400ms anti-flicker gate.
+function DiffLoadingSkeleton() {
+  return (
+    <div className="p-4 space-y-3">
+      <Skeleton label="Loading diff">
+        <SkeletonBone className="h-7 w-3/4" />
+        <SkeletonText lines={8} />
+      </Skeleton>
+      {/* Sibling, never nested: the wrapper's aria-busy silences mutations
+          inside its own subtree. */}
+      <SkeletonHint />
+    </div>
+  );
+}
 
 /**
  * File viewer beside the tree, with optional plugin-contributed editing.
@@ -298,6 +335,7 @@ export function FileBrowserViewer({
   hiddenCounts,
   missingFilePath,
   onShowFolder,
+  onCloseSelection,
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
   // The reader's explicit Source/Rendered choice, `null` until they touch the
@@ -307,11 +345,10 @@ export function FileBrowserViewer({
   // broken file (#12205). Once chosen the mode is sticky and shared across both
   // types, deliberately not reset on file change: a reader paging through docs
   // in source keeps source, mirroring FilePane (whose per-panel mode also
-  // survives a file swap). Files that are neither simply hide the toggle, so a
-  // stale mode never applies where it can't be honoured.
-  const [explicitRenderMode, setExplicitRenderMode] = useState<FileRenderMode | "edit" | null>(
-    null
-  );
+  // survives a file swap). A mode the open file can't honour falls back to
+  // Source without being written back, so paging from a changed file in Diff to
+  // a clean one and on to another changed file lands back in Diff.
+  const [explicitRenderMode, setExplicitRenderMode] = useState<FileViewMode | null>(null);
   const isMarkdown = filePath !== null && isMarkdownFilePath(filePath);
   const isHtml = filePath !== null && isHtmlFilePath(filePath);
   const isRenderable = isMarkdown || isHtml;
@@ -333,30 +370,85 @@ export function FileBrowserViewer({
     (explicitRenderMode === "edit" ||
       draftText !== null ||
       (contentBytes !== null && contentBytes <= editor.registration.maxBytes));
-  const renderMode =
-    explicitRenderMode === "edit"
-      ? canEdit
-        ? "edit"
-        : "source"
-      : (explicitRenderMode ?? (isMarkdown ? "rendered" : "source"));
-  const readerOptions = isRenderable
-    ? FILE_RENDER_MODE_OPTIONS
-    : [{ value: "source" as const, label: "Source" }];
-  const renderOptions = canEdit
-    ? [...readerOptions, { value: "edit" as const, label: "Edit" }]
-    : readerOptions;
+  // The open file's git status, read off the same worktree-relative list the
+  // summary renders — never `change.path`, which is absolute at runtime. The
+  // first row wins when a path is listed twice (staged and unstaged), matching
+  // FilePane's lookup. Undefined for a clean file, with no git status at all, or
+  // once the file is no longer shown (a filter can hide it while the pane keeps
+  // its relative path).
+  const changeStatus =
+    filePath !== null && relativePath !== null
+      ? changedFiles?.find((change) => change.relativePath === relativePath)?.status
+      : undefined;
+  // Reading controls only for content that can be read: a Markdown file that
+  // failed as oversized has no rendered view to switch to.
+  const readable = state.status !== "error";
+  const availableModes: FileViewMode[] = [
+    "source",
+    ...(isRenderable && readable ? (["rendered"] as const) : []),
+    ...(changeStatus !== undefined ? (["diff"] as const) : []),
+    ...(canEdit ? (["edit"] as const) : []),
+  ];
+  const requestedMode = explicitRenderMode ?? (isMarkdown ? "rendered" : "source");
+  const renderMode: FileViewMode = availableModes.includes(requestedMode)
+    ? requestedMode
+    : "source";
+  const renderOptions = availableModes.map((mode) => ({ value: mode, label: MODE_LABELS[mode] }));
+  // Only fetch while Diff is the live mode; a null subject also drops any
+  // response still in flight from a mode the reader has since left.
+  const diffSubject = useMemo<DiffSubject | null>(
+    () =>
+      renderMode === "diff" && relativePath !== null && changeStatus !== undefined
+        ? {
+            source: "working-tree",
+            worktreePath: rootPath,
+            filePath: relativePath,
+            status: changeStatus,
+          }
+        : null,
+    [renderMode, rootPath, relativePath, changeStatus]
+  );
+  const { content: diffContent, stale: diffStale, retry: retryDiff } = useDiffContent(diffSubject);
+  // The browser's Refresh (toolbar, tree header, or returning to the project)
+  // refetches the diff on screen, as it re-reads a file on screen. Only an
+  // advance while the same diff stays up: entering Diff already fetches.
+  const diffRefreshRef = useRef({ nonce: surfaceRefreshNonce, subject: diffSubject });
+  useEffect(() => {
+    const previous = diffRefreshRef.current;
+    diffRefreshRef.current = { nonce: surfaceRefreshNonce, subject: diffSubject };
+    if (
+      diffSubject !== null &&
+      previous.subject === diffSubject &&
+      previous.nonce !== surfaceRefreshNonce
+    ) {
+      retryDiff();
+    }
+  }, [surfaceRefreshNonce, diffSubject, retryDiff]);
+  // Shared with the diff panel and FilePane, so split/unified and wrap carry
+  // across every surface that shows a diff. `null` wrap means auto: prose
+  // wraps, code doesn't.
+  const diffViewType = usePreferencesStore((state) => state.diffViewType);
+  const diffWrapLines = usePreferencesStore((state) => state.diffWrapLines);
+  const setDiffWrapLines = usePreferencesStore((state) => state.setDiffWrapLines);
+  const effectiveDiffWrapLines = diffWrapLines ?? (filePath !== null && isProseFilePath(filePath));
   const modeToggleRef = useRef<HTMLDivElement>(null);
   const previousMode = useRef(renderMode);
   useEffect(() => {
+    // Leaving Edit unmounts the editor, and Diff can vanish under the reader
+    // when the file goes clean — either way focus can fall to the body, so
+    // hand it back to the toggle.
     if (
-      previousMode.current === "edit" &&
-      renderMode !== "edit" &&
+      (previousMode.current === "edit" || previousMode.current === "diff") &&
+      renderMode !== previousMode.current &&
       document.activeElement === document.body
     ) {
+      // The toggle itself is gone when the file went clean and Diff was the
+      // only mode beyond Source; the path pill names the file instead.
       const toggle = modeToggleRef.current;
       (
-        toggle?.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]') ??
-        toggle?.querySelector<HTMLButtonElement>("button")
+        toggle?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]') ??
+        toggle?.querySelector<HTMLElement>("button") ??
+        bodyRef.current?.parentElement?.querySelector<HTMLElement>("[data-toolbar-path]")
       )?.focus({ preventScroll: true });
     }
     previousMode.current = renderMode;
@@ -597,6 +689,27 @@ export function FileBrowserViewer({
         ? join(basePath, missingFilePath)
         : null);
 
+  // Closing into the idle body unmounts the close button under the user's
+  // focus; hand it to the tree toggle, the one control every layout keeps.
+  // Closing back to a listing keeps the button mounted, so focus stays put.
+  // Armed by the click and spent on the next subject change. A close the
+  // dirty-document guard cancels leaves it armed, so it only acts when focus
+  // was actually dropped to the body — never pulling focus off whatever an
+  // unrelated later change handed it to.
+  const sidebarToggleRef = useRef<HTMLDivElement>(null);
+  const closeFocusPending = useRef(false);
+  useEffect(() => {
+    if (!closeFocusPending.current) return;
+    closeFocusPending.current = false;
+    const active = document.activeElement;
+    if (identityAbsolutePath !== null || (active !== null && active !== document.body)) return;
+    sidebarToggleRef.current?.querySelector("button")?.focus();
+  }, [identityAbsolutePath]);
+  const handleCloseSelection = () => {
+    closeFocusPending.current = true;
+    onCloseSelection();
+  };
+
   const handleExternalAction = useCallback(
     async (target: ExternalTarget) => {
       if (!filePath) return;
@@ -702,32 +815,35 @@ export function FileBrowserViewer({
   // folds earlier, because that control alone takes ~120px.
   // Reading controls only for content that can be read: a Markdown file that
   // failed as oversized has no source or rendered view for them to change.
-  // A plugin's Edit mode stays, since it may open what the reader could not.
-  const readable = state.status !== "error";
-  const showModeToggle = filePath !== null && ((isRenderable && readable) || canEdit);
+  // A plugin's Edit mode stays, since it may open what the reader could not,
+  // and so does Diff: the diff is fetched from git, not from the failed read.
+  const showModeToggle =
+    filePath !== null && ((isRenderable && readable) || canEdit || changeStatus !== undefined);
   return (
     <>
       <FileViewerToolbar.Root
         label="File viewer controls"
         compactBelow={showModeToggle ? COMPACT_BELOW_WITH_MODES : COMPACT_BELOW}
       >
-        <FileViewerToolbar.IconButton
-          label="Toggle file tree"
-          expanded={!sidebarCollapsed}
-          controls={sidebarCollapsed ? undefined : treeSidebarId}
-          sidebarToggle
-          onClick={onToggleSidebar}
-          data-testid="file-browser-sidebar-toggle"
-        >
-          {sidebarCollapsed ? (
-            <PanelLeftOpen className={TOOLBAR_ICON_CLASS} />
-          ) : (
-            <PanelLeftClose className={TOOLBAR_ICON_CLASS} />
-          )}
-        </FileViewerToolbar.IconButton>
+        <div ref={sidebarToggleRef} className="contents">
+          <FileViewerToolbar.IconButton
+            label="Toggle file tree"
+            expanded={!sidebarCollapsed}
+            controls={sidebarCollapsed ? undefined : treeSidebarId}
+            sidebarToggle
+            onClick={onToggleSidebar}
+            data-testid="file-browser-sidebar-toggle"
+          >
+            {sidebarCollapsed ? (
+              <PanelLeftOpen className={TOOLBAR_ICON_CLASS} />
+            ) : (
+              <PanelLeftClose className={TOOLBAR_ICON_CLASS} />
+            )}
+          </FileViewerToolbar.IconButton>
+        </div>
         {showModeToggle && (
           <div ref={modeToggleRef} className="contents">
-            <FileViewerToolbar.ModeControl<FileRenderMode | "edit">
+            <FileViewerToolbar.ModeControl<FileViewMode>
               options={renderOptions}
               value={renderMode}
               onChange={setExplicitRenderMode}
@@ -788,9 +904,13 @@ export function FileBrowserViewer({
                   : null
               }
               wrap={
-                readable && isMarkdown && renderMode === "source"
-                  ? { value: wrapLines, onValueChange: setWrapLines }
-                  : null
+                // Diff mode's own wrap, on the shared `diffWrapLines` — not the
+                // markdown one, which only ever applied to Source view.
+                renderMode === "diff"
+                  ? { value: effectiveDiffWrapLines, onValueChange: setDiffWrapLines }
+                  : readable && isMarkdown && renderMode === "source"
+                    ? { value: wrapLines, onValueChange: setWrapLines }
+                    : null
               }
               revealLabel={reveal.label}
               onReveal={() => void handleExternalAction("reveal")}
@@ -798,6 +918,17 @@ export function FileBrowserViewer({
               openIcon={openAction.icon}
               onOpen={runOpen}
             />
+          )}
+          {/* Outside `FileActions` so it never folds into "More actions": it
+              is the only way back to the changed-files summary (#13194). */}
+          {identityAbsolutePath !== null && (
+            <FileViewerToolbar.IconButton
+              label={folderPath !== null ? "Close folder" : "Close file"}
+              onClick={handleCloseSelection}
+              data-testid="file-browser-close-file"
+            >
+              <X className={TOOLBAR_ICON_CLASS} />
+            </FileViewerToolbar.IconButton>
           )}
         </FileViewerToolbar.Actions>
       </FileViewerToolbar.Root>
@@ -807,6 +938,16 @@ export function FileBrowserViewer({
           filePath={filePath}
           content={state.content}
           onEdit={() => setExplicitRenderMode("edit")}
+        />
+      )}
+      {filePath && renderMode === "diff" && diffStale && diffContent !== undefined && (
+        <InlineStatusBanner
+          severity="info"
+          icon={FileDiff}
+          title="File changed since this diff loaded"
+          role="status"
+          ariaLive="polite"
+          action={{ id: "refresh-diff", label: "Refresh", icon: RefreshCw, onClick: retryDiff }}
         />
       )}
       {filePath && externalError && externalErrorCopy && (
@@ -1023,6 +1164,30 @@ export function FileBrowserViewer({
     // the truthy `filePath` branch above, but that narrowing doesn't flow into a
     // nested function.
     if (!filePath) return null;
+    // Ahead of every load-state branch: the diff comes from git, so a file
+    // whose read failed or never loads as text still has one to show.
+    if (renderMode === "diff") {
+      return (
+        <div
+          data-testid="file-browser-diff"
+          className="h-full min-h-0 overflow-auto diff-scroll-root"
+        >
+          <Suspense fallback={<DiffLoadingSkeleton />}>
+            {diffContent === undefined ? (
+              <DiffLoadingSkeleton />
+            ) : (
+              <LazyDiffViewer
+                diff={diffContent}
+                viewType={diffViewType}
+                rootPath={rootPath}
+                wrapLines={effectiveDiffWrapLines}
+                onRetry={retryDiff}
+              />
+            )}
+          </Suspense>
+        </div>
+      );
+    }
     if (renderMode === "edit") {
       if (!canEdit || !editor || !editorContext) return null;
       return (

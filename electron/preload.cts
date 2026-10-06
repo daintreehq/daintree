@@ -16,6 +16,7 @@ import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import type { AppErrorCode } from "../shared/types/appError.js";
 import type { PanelTitleMode } from "../shared/types/panel.js";
 import type { HostMemoryPauseSnapshot } from "../shared/types/pty-host.js";
+import type { TerminalKillOptions } from "../shared/types/terminal.js";
 import type {
   McpRuntimeSnapshot,
   McpGrantLifecyclePayload,
@@ -93,6 +94,7 @@ import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.
 import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
 import { buildWorkspaceResidencyPreloadBindings } from "./ipc/handlers/workspaceResidency.preload.js";
+import { buildProcessesPreloadBindings } from "./ipc/handlers/processes.preload.js";
 import { buildPluginAgentMcpPreloadBindings } from "./ipc/handlers/pluginAgentMcp.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
@@ -1416,8 +1418,14 @@ function buildElectronApi(): ElectronAPI {
       resize: (id: string, cols: number, rows: number) =>
         ipcRenderer.send(CHANNELS.TERMINAL_RESIZE, { id, cols, rows }),
 
-      kill: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_KILL, id),
-      gracefulKill: (id: string) => _unwrappingInvoke(CHANNELS.TERMINAL_GRACEFUL_KILL, id),
+      kill: (id: string, options?: TerminalKillOptions) =>
+        options
+          ? _unwrappingInvoke(CHANNELS.TERMINAL_KILL, id, options)
+          : _unwrappingInvoke(CHANNELS.TERMINAL_KILL, id),
+      gracefulKill: (id: string, options?: TerminalKillOptions) =>
+        options
+          ? _unwrappingInvoke(CHANNELS.TERMINAL_GRACEFUL_KILL, id, options)
+          : _unwrappingInvoke(CHANNELS.TERMINAL_GRACEFUL_KILL, id),
 
       // Tuple payload [id, data] dispatched via the shared multiplexer above
       // Accepts both string and Uint8Array/Buffer (binary optimization for reduced GC pressure)
@@ -2873,6 +2881,8 @@ function buildElectronApi(): ElectronAPI {
     cli: buildCliPreloadBindings(_unwrappingInvoke),
 
     workspaceResidency: buildWorkspaceResidencyPreloadBindings(_unwrappingInvoke),
+
+    processes: buildProcessesPreloadBindings(_unwrappingInvoke),
 
     // Per-project consent for plugin agent tools. Renderer-only by design.
     pluginAgentMcp: buildPluginAgentMcpPreloadBindings(_unwrappingInvoke),

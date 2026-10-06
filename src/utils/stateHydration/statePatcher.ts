@@ -961,7 +961,17 @@ export function buildArgsForRespawn(
     worktreeId: coldLaunch?.worktreeId ?? saved.worktreeId,
     location,
     requestedId: mintFreshTerminalId ? undefined : saved.id,
-    command: isAgentPanel ? command : saved.command?.trim() || undefined,
+    // A saved id we can't reuse means the original may still be running its
+    // command, so a plain terminal comes back as a bare shell — never a second
+    // `npm run dev` (#13172). The command stays with the original PTY rather
+    // than this pane: carried here it would persist, and any later spawn of
+    // this pane (a reload after its shell exits, a rollback) would run it
+    // while the original is still alive.
+    command: isAgentPanel
+      ? command
+      : mintFreshTerminalId
+        ? undefined
+        : saved.command?.trim() || undefined,
     isInputLocked: saved.isInputLocked,
     devCommand: isDevPreview ? command : undefined,
     browserUrl: isDevPreview ? saved.browserUrl : undefined,

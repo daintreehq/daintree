@@ -12,6 +12,10 @@
 // mirrors globalEnvClient.ts (minus invalidation — the value cannot change).
 let tmpDirInflight: Promise<string> | null = null;
 let cachedTmpDir: string | null = null;
+// Terminal link detection resolves `~/` on every hover and can't await, so the
+// last home dir any caller fetched is kept for synchronous reads.
+let cachedHomeDir: string | undefined;
+let homeDirInflight: Promise<string> | null = null;
 
 export const systemClient = {
   openExternal: (url: string): Promise<void> => {
@@ -48,7 +52,27 @@ export const systemClient = {
   },
 
   getHomeDir: (): Promise<string> => {
-    return window.electron.system.getHomeDir();
+    return window.electron.system.getHomeDir().then((dir) => {
+      if (dir) cachedHomeDir = dir;
+      return dir;
+    });
+  },
+
+  /**
+   * The home dir if it is known yet. An unknown value starts a fetch, so a
+   * later read has it; a failed fetch stays silent and the next read retries.
+   */
+  getCachedHomeDir: (): string | undefined => {
+    if (cachedHomeDir === undefined && !homeDirInflight) {
+      const promise = Promise.resolve()
+        .then(() => systemClient.getHomeDir())
+        .catch(() => "")
+        .finally(() => {
+          if (homeDirInflight === promise) homeDirInflight = null;
+        });
+      homeDirInflight = promise;
+    }
+    return cachedHomeDir;
   },
 
   getResourceProfileSnapshot: (): ReturnType<

@@ -72,12 +72,12 @@ const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
 const logWarn = (msg: string, ctx?: Record<string, unknown>) =>
   ctx ? logger.warn(msg, ctx) : logger.warn(msg);
 import { getTrashedPidTracker } from "./TrashedPidTracker.js";
-import { reapShardLineage } from "./TerminalLineageLedger.js";
-import { helpSessionService } from "./HelpSessionService.js";
-import { helpSessionJobService } from "./HelpSessionJobService.js";
+import { claimShardLineageFile, reapClaimedLineageFile } from "./TerminalLineageLedger.js";
+import { terminalCrashReapService } from "./TerminalCrashReapService.js";
 import { getLifecycleLedger, ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
 import { getEnvVar, hasEnvVar } from "./pty/EnvironmentFilter.js";
 import { BrokerError } from "./rpc/index.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "./pty/PtyEventRouter.js";
 import { sendPtyHostRpc } from "./pty/PtyHostRpcFacade.js";
 import { mergeFlowControlSnapshots, mergeMemoryRollups } from "./pty/rollupMerge.js";
@@ -114,6 +114,11 @@ import type {
   TrimStateSummary,
   TerminalSubmitGuard,
 } from "../../shared/types/pty-host.js";
+import type {
+  ClosedProcessKillResult,
+  ClosedProcessKillTarget,
+  HostProcessInventory,
+} from "../../shared/types/processes.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
@@ -257,6 +262,11 @@ const DEFAULT_CONFIG: ResolvedPtyClientConfig = {
 };
 
 const MAX_MISSED_HEARTBEATS = 3;
+/**
+ * A closed-terminal kill probes identity up to three times (before SIGTERM,
+ * before SIGKILL, after it), each bounded at 3s, plus the escalation grace.
+ */
+const CLOSED_PROCESS_KILL_TIMEOUT_MS = 15_000;
 
 /**
  * Centralized per-operation timeout policy for PTY host RPC calls.
@@ -329,6 +339,9 @@ function withCurrentWindowsPath(options: PtyHostSpawnOptions): PtyHostSpawnOptio
 export class PtyClient extends EventEmitter {
   private config: ResolvedPtyClientConfig;
   private isDisposed = false;
+  private hostsExited: Promise<boolean> = Promise.resolve(true);
+  /** Retired shards whose hosts are still tearing down; quit waits on them too. */
+  private readonly retiringHostExits = new Set<Promise<boolean>>();
 
   /** Whether the PTY fabric (per-project host shards) is active. */
   private readonly fabricEnabled: boolean;
@@ -391,6 +404,9 @@ export class PtyClient extends EventEmitter {
   private displacedSpawns = new Map<string, { byGeneration: number; entry: PtyHostSpawnOptions }>();
   private ipcDataMirrorIds = new Set<string>();
   private pendingKillCount: Map<string, number> = new Map();
+  // Main spans every renderer view; a view-local restart guard cannot protect
+  // its siblings. Consumed by the old exit or retired when its successor starts.
+  private restartExitSuppression = new Set<string>();
   // Captures streamed back for a graceful kill that is still in flight, keyed
   // by project. Seeded when the call starts and dropped when it settles, so an
   // entry existing IS the "in flight" signal the router checks (#12180). The
@@ -640,18 +656,23 @@ export class PtyClient extends EventEmitter {
         onReady: () => this.handleShardReady(shard),
         onPong: () => shard.watchdog.recordPong(),
         onTerminalRemovedFromTrash: (id) => getTrashedPidTracker().removeTrashed(id),
-        // #7526: filter help-session PTYs into the Windows Job Object so the
-        // OS reaps the agent tree on a hard Daintree crash. No-op on
-        // non-Windows and on non-help terminals.
-        onTerminalPid: (id, pid) => {
-          if (helpSessionService.isHelpTerminal(id)) {
-            helpSessionJobService.attachHelpSessionPid(pid);
-          }
+        // #13176: every PTY joins the crash-safe tier (Job Object / POSIX
+        // supervisor) so a hard Daintree crash leaves no terminal's tree
+        // running. The host stamps the owning incarnation on the event; one
+        // without it falls back to the ledger, which recorded this launch
+        // before the spawn was sent.
+        onTerminalPid: (id, pid, launchGeneration) => {
+          terminalCrashReapService.attachTerminal(
+            id,
+            pid,
+            launchGeneration ?? getLifecycleLedger().currentGeneration(id)
+          );
         },
         // Lifecycle-ledger bookkeeping. Exits carry the host-adopted
         // launchGeneration so a stale exit arriving after a same-id respawn
         // closes its own incarnation, never the successor.
         onTerminalExit: (id, exitCode, launchGeneration) => {
+          terminalCrashReapService.detachTerminal(id, launchGeneration);
           const ledger = getLifecycleLedger();
           const generation = launchGeneration ?? ledger.currentGeneration(id);
           if (generation !== undefined && ledger.currentGeneration(id) !== undefined) {
@@ -1113,6 +1134,7 @@ export class PtyClient extends EventEmitter {
         ledger.recordClose(id, previousGeneration, "pty-host-crash");
       }
       const generation = ledger.recordLaunch(id, ledgerFactsFromSpawnOptions(options));
+      this.restartExitSuppression.delete(id);
       const stamped: PtyHostSpawnOptions = { ...options, launchGeneration: generation };
       this.pendingSpawns.set(id, stamped);
       this.sendSpawnWithPostInput(shard, id, stamped);
@@ -1178,6 +1200,18 @@ export class PtyClient extends EventEmitter {
    * default.
    */
   private migrateShardTerminalsToDefault(shard: PtyShard, code: number | null): void {
+    const reap = shard.lineageReap;
+    if (reap) {
+      // Same barrier as an auto-restart: replaying on the default shard while
+      // the crashed host's survivors are still being reaped would run a fresh
+      // copy of each terminal's work beside the old one.
+      const migrate = () => {
+        if (this.isDisposed || shard.retired) return;
+        this.migrateShardTerminalsToDefault(shard, code);
+      };
+      void reap.then(migrate, migrate);
+      return;
+    }
     logWarn(
       `[PtyClient] PTY shard '${shard.key}' exceeded its crash budget (code ${code}); migrating its terminals to the default shard`
     );
@@ -1214,6 +1248,7 @@ export class PtyClient extends EventEmitter {
         ledger.recordClose(id, previousGeneration, "pty-host-crash");
       }
       const generation = ledger.recordLaunch(id, ledgerFactsFromSpawnOptions(options));
+      this.restartExitSuppression.delete(id);
       const stamped: PtyHostSpawnOptions = { ...options, launchGeneration: generation };
       this.pendingSpawns.set(id, stamped);
       this.terminalOwners.set(id, DEFAULT_SHARD_KEY);
@@ -1239,7 +1274,7 @@ export class PtyClient extends EventEmitter {
       this.onPortRefresh?.(windowId);
     }
 
-    shard.dispose();
+    this.trackRetiringHost(shard.dispose());
     this.dropShardSignals(shard.key);
   }
 
@@ -1282,7 +1317,7 @@ export class PtyClient extends EventEmitter {
       if (!shard) return;
       console.log(`[PtyClient] Retiring idle PTY shard '${key}'`);
       this.shards.delete(key);
-      shard.dispose();
+      this.trackRetiringHost(shard.dispose());
       this.dropShardSignals(key);
     }, PTY_SHARD_IDLE_LINGER_MS);
     timer.unref?.();
@@ -1328,16 +1363,35 @@ export class PtyClient extends EventEmitter {
     if (crashType === "CLEAN_EXIT") {
       return;
     }
+    // A retired shard's late exit (the idle-retirement force-kill backstop)
+    // must not touch a same-key replacement: its ledger lives at the same path
+    // and its terminals share the owner key, so both the claim and the group
+    // kill below would land on healthy processes.
+    const current = this.shards.get(shard.key);
+    if (current && current !== shard) {
+      return;
+    }
 
-    // The crashed host's lineage ledger died with it, so its persisted orphan
-    // set is the only remaining record of descendants that had already
-    // reparented away from the PTY trees killed below (#12203). Runs before the
-    // terminalPids check: those orphans outlive whatever we still track, and
-    // they are not reachable by the process-group kill at all.
-    const userData = app.getPath("userData");
-    void reapShardLineage(userData, shard.serviceName).catch((err) => {
-      console.warn("[PtyClient] Lineage reap after host crash failed:", err);
-    });
+    // The crashed host's lineage ledger died with it, so its persisted lineage
+    // is the only remaining record of descendants the process-group kill below
+    // cannot reach: background jobs in their own groups, setsid'd agent work,
+    // and anything already reparented away (#12203, #13166). Runs before the
+    // terminalPids check, since those outlive whatever we still track.
+    //
+    // The claim is synchronous so a replacement host can never write the same
+    // path first; the reap itself is held on the shard so the restart and the
+    // replay it triggers wait for it.
+    const claimed = claimShardLineageFile(app.getPath("userData"), shard.serviceName);
+    if (claimed) {
+      const reap: Promise<void> = reapClaimedLineageFile(claimed)
+        .catch((err) => {
+          console.warn("[PtyClient] Lineage reap after host crash failed:", err);
+        })
+        .finally(() => {
+          if (shard.lineageReap === reap) shard.lineageReap = null;
+        });
+      shard.lineageReap = reap;
+    }
 
     if (this.terminalPids.size === 0) {
       return;
@@ -1398,6 +1452,9 @@ export class PtyClient extends EventEmitter {
 
     for (const id of ownedIds) {
       this.terminalPids.delete(id);
+      // Their exit events died with the host; release them here so the
+      // supervisor never holds a PID that is free to be recycled.
+      terminalCrashReapService.detachTerminal(id);
     }
   }
 
@@ -1707,6 +1764,7 @@ export class PtyClient extends EventEmitter {
       id,
       ledgerFactsFromSpawnOptions(projectResolvedOptions)
     );
+    this.restartExitSuppression.delete(id);
     const resolvedOptions: PtyHostSpawnOptions = {
       ...projectResolvedOptions,
       launchGeneration: generation,
@@ -1875,6 +1933,14 @@ export class PtyClient extends EventEmitter {
 
   resize(id: string, cols: number, rows: number): void {
     this.shardForTerminal(id).send({ type: "resize", id, cols, rows });
+  }
+
+  suppressExitForRestart(id: string): void {
+    if (this.pendingSpawns.has(id)) this.restartExitSuppression.add(id);
+  }
+
+  consumeRestartExitSuppression(id: string): boolean {
+    return this.restartExitSuppression.delete(id);
   }
 
   kill(id: string, reason?: string, options?: { escalationDelayMs?: number }): void {
@@ -2248,6 +2314,7 @@ export class PtyClient extends EventEmitter {
     projectId: string,
     options?: { preserveSession?: boolean }
   ): Promise<GracefulKillByProjectOutcome> {
+    this.emitProjectKillRequested(projectId);
     const shard = this.shardForProjectQuery(projectId);
     const inFlight: {
       requestId: string | null;
@@ -2329,7 +2396,24 @@ export class PtyClient extends EventEmitter {
       .catch(() => []);
   }
 
+  /**
+   * Fired synchronously before a project-wide kill is sent, so Main-side owners
+   * of service-managed PTYs (the dev preview) can cancel work that would revive
+   * them. The `exit` events that follow arrive too late to stop a respawn
+   * already queued behind the kill.
+   */
+  private emitProjectKillRequested(projectId: string): void {
+    try {
+      this.emit("project-kill-requested", projectId);
+    } catch (err) {
+      logWarn("[PtyClient] project-kill-requested listener threw", {
+        error: formatErrorMessage(err, "project-kill-requested listener failed"),
+      });
+    }
+  }
+
   async killByProject(projectId: string): Promise<number> {
+    this.emitProjectKillRequested(projectId);
     const shard = this.shardForProjectQuery(projectId);
     const promise = sendPtyHostRpc<number>(
       shard,
@@ -2399,6 +2483,94 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
+   * Every live PTY on every shard with its sampled process tree, plus tree
+   * samples for `extraPids` (processes Main owns, such as plugin children).
+   * Reads each shard's warm census — no extra OS sweep. A shard that fails or
+   * times out is left out and reported through `shardsFailed`, never as an
+   * empty answer.
+   */
+  async getProcessInventory(extraPids: readonly number[] = []): Promise<{
+    inventories: HostProcessInventory[];
+    shardsTotal: number;
+    shardsFailed: number;
+  }> {
+    const shards = this.fanOutShards();
+    // A host mid-restart is not fanned out to, but its terminals are still
+    // missing from the answer — it counts as a failure, not as nothing.
+    const unreachable = Math.max(
+      0,
+      [...this.shards.values()].filter((shard) => !shard.retired).length - shards.length
+    );
+    const pids = [...extraPids];
+    const results = await Promise.all(
+      shards.map((shard) =>
+        sendPtyHostRpc<HostProcessInventory>(shard, "process-inventory", (requestId) => ({
+          type: "get-process-inventory",
+          requestId,
+          // Plugin children are no shard's own; every census covers them, so
+          // each is asked and Main keeps the freshest reading rather than a sum.
+          pids,
+        })).catch(() => null)
+      )
+    );
+    const inventories = results.filter(
+      (inventory): inventory is HostProcessInventory => inventory !== null
+    );
+    return {
+      inventories,
+      shardsTotal: shards.length + unreachable,
+      shardsFailed: shards.length - inventories.length + unreachable,
+    };
+  }
+
+  /**
+   * End processes still running after their terminal closed. Each shard acts
+   * only on targets its own lineage ledger recorded, re-verifying identity
+   * before every signal, so fanning out to all of them is safe. A shard that
+   * can't answer leaves its share counted as unchecked — never as ended.
+   */
+  async killClosedTerminalProcesses(
+    targets: readonly ClosedProcessKillTarget[]
+  ): Promise<ClosedProcessKillResult> {
+    const shards = this.fanOutShards();
+    // A host mid-restart isn't asked, and its targets may well be its own.
+    const unreachable = Math.max(
+      0,
+      [...this.shards.values()].filter((shard) => !shard.retired).length - shards.length
+    );
+    const unique = new Map<string, ClosedProcessKillTarget>();
+    for (const { pid, startTime } of targets) unique.set(`${pid}@${startTime}`, { pid, startTime });
+    const list = [...unique.values()];
+    const results = await Promise.all(
+      shards.map((shard) =>
+        sendPtyHostRpc<ClosedProcessKillResult>(
+          shard,
+          "closed-terminal-processes-killed",
+          (requestId) => ({ type: "kill-closed-terminal-processes", requestId, targets: list }),
+          { method: "kill-closed-terminal-processes", timeoutMs: CLOSED_PROCESS_KILL_TIMEOUT_MS }
+        ).catch(() => null)
+      )
+    );
+    const answered = results.filter((r): r is ClosedProcessKillResult => r !== null);
+    const ended = answered.reduce((sum, r) => sum + r.ended, 0);
+    const stillRunning = answered.reduce((sum, r) => sum + r.stillRunning, 0);
+    const unchecked = answered.reduce((sum, r) => sum + r.unchecked, 0);
+    const accounted = ended + stillRunning + unchecked;
+    // Every answering shard reports each target it doesn't own as untracked, so
+    // a target is untracked only when every shard said so. If any shard didn't
+    // answer, the targets nobody claimed may be that shard's.
+    if (answered.length < shards.length || unreachable > 0 || shards.length === 0) {
+      return {
+        ended,
+        stillRunning,
+        unchecked: unchecked + Math.max(0, list.length - accounted),
+        notTracked: 0,
+      };
+    }
+    return { ended, stillRunning, unchecked, notTracked: Math.max(0, list.length - accounted) };
+  }
+
+  /**
    * Acknowledge data processing for flow control.
    */
   acknowledgeData(id: string, byteCount: number): void {
@@ -2434,9 +2606,16 @@ export class PtyClient extends EventEmitter {
    * already makes every request id unique — but it names the token-bearing
    * variant so a stalled correlation read is distinguishable in broker traces.
    */
+  /**
+   * `strict` rejects when a live host fails to answer in time instead of
+   * resolving `null`, so a caller confirming that a terminal is gone doesn't
+   * mistake a stalled query for its absence. A host that is gone still resolves
+   * `null` — its terminals went with it.
+   */
   async getTerminalAsync(
     id: string,
-    submissionToken?: string
+    submissionToken?: string,
+    options?: { strict?: boolean }
   ): Promise<TerminalInfoResponse | null> {
     const shard = this.shardForTerminal(id);
     const promise = sendPtyHostRpc<TerminalInfoResponse | null>(
@@ -2444,7 +2623,18 @@ export class PtyClient extends EventEmitter {
       submissionToken === undefined ? `terminal-${id}` : `terminal-${id}-sub-${submissionToken}`,
       (requestId) => ({ type: "get-terminal", id, requestId, submissionToken })
     );
-    return promise.catch(() => null);
+    return promise.catch((error) => {
+      if (
+        options?.strict &&
+        error instanceof BrokerError &&
+        error.code === "TIMEOUT" &&
+        shard.lifecycle.child &&
+        !this.isDisposed
+      ) {
+        throw error;
+      }
+      return null;
+    });
   }
 
   /** Get available terminals (idle or waiting for user input), across all shards */
@@ -2947,16 +3137,19 @@ export class PtyClient extends EventEmitter {
     this.shardRetirementTimers.clear();
 
     // Per shard: watchdog, lifecycle (posts `dispose` to the host, force-kills
-    // after 1s), pending ports, and the broker (rejects pending promises with
-    // "Broker disposed"; callers convert to sentinel values via .catch()).
-    for (const shard of this.shards.values()) {
-      shard.dispose();
-    }
+    // if it has not exited in time), pending ports, and the broker (rejects
+    // pending promises with "Broker disposed"; callers convert to sentinel
+    // values via .catch()).
+    this.hostsExited = Promise.all([
+      ...Array.from(this.shards.values(), (shard) => shard.dispose()),
+      ...this.retiringHostExits,
+    ]).then((exits) => exits.every(Boolean));
     this.shards.clear();
 
     this.pendingSpawns.clear();
     this.displacedSpawns.clear();
     this.pendingKillCount.clear();
+    this.restartExitSuppression.clear();
     this.windowProjectContexts.clear();
     this.windowFocusedTerminals.clear();
     this.ipcDataMirrorIds.clear();
@@ -2969,6 +3162,21 @@ export class PtyClient extends EventEmitter {
     this.removeAllListeners();
 
     console.log("[PtyClient] Disposed");
+  }
+
+  /**
+   * Settles once every host disposed by {@link dispose}, or still retiring, is
+   * gone: `true` when all of them exited on their own, `false` when any had to
+   * be force-killed. Quit awaits this so a host finishes reaping its terminals,
+   * trashed ones included, before the app goes away (#13167).
+   */
+  waitForHostsExited(): Promise<boolean> {
+    return this.hostsExited;
+  }
+
+  private trackRetiringHost(exit: Promise<boolean>): void {
+    this.retiringHostExits.add(exit);
+    void exit.finally(() => this.retiringHostExits.delete(exit));
   }
 
   /** Check if the (default-shard) host is running and initialized */
@@ -3010,21 +3218,5 @@ class ShardEventEmitter extends EventEmitter {
 
   override emit(event: string | symbol, ...args: unknown[]): boolean {
     return this.forward(String(event), args);
-  }
-}
-
-let ptyClientInstance: PtyClient | null = null;
-
-export function getPtyClient(config?: PtyClientConfig): PtyClient {
-  if (!ptyClientInstance) {
-    ptyClientInstance = new PtyClient(config);
-  }
-  return ptyClientInstance;
-}
-
-export function disposePtyClient(): void {
-  if (ptyClientInstance) {
-    ptyClientInstance.dispose();
-    ptyClientInstance = null;
   }
 }

@@ -1,6 +1,6 @@
 import { parseSpawnError } from "../index.js";
 import type { AgentEvent } from "../../services/AgentStateMachine.js";
-import type { SpawnResult } from "../../../shared/types/pty-host.js";
+import type { PtyHostEvent, SpawnResult } from "../../../shared/types/pty-host.js";
 import type { HandlerMap, HostContext } from "./types.js";
 import { markHostPerformance } from "../../utils/hostPerformance.js";
 import { finishAgentSessionCaptures } from "../../services/pty/agentSessionCaptureDelivery.js";
@@ -10,6 +10,15 @@ function isValidPid(pid: number | undefined): pid is number {
   return typeof pid === "number" && Number.isInteger(pid) && pid > 0;
 }
 
+type TerminalPidEvent = Extract<PtyHostEvent, { type: "terminal-pid" }>;
+
+function withGeneration(
+  event: TerminalPidEvent,
+  launchGeneration: number | undefined
+): TerminalPidEvent {
+  return launchGeneration === undefined ? event : { ...event, launchGeneration };
+}
+
 // On Windows, node-pty reports `pid: 0` during the brief window before the
 // ConPTY `connect()` resolves, and never emits a follow-up event when the real
 // PID lands. We poll the live PTY object across event-loop turns to recover the
@@ -17,30 +26,30 @@ function isValidPid(pid: number | undefined): pid is number {
 const PID_RETRY_MAX_ATTEMPTS = 20;
 
 export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
-  const {
-    ptyManager,
-    pauseCoordinators,
-    resourceGovernor,
-    sendEvent,
-    getOrCreatePauseCoordinator,
-  } = ctx;
+  const { ptyManager, pauseCoordinators, sendEvent, getOrCreatePauseCoordinator } = ctx;
 
   // Poll the live PTY object across event-loop turns for a terminal that
   // spawned with an invalid PID (Windows ConPTY). Once a positive PID lands,
   // emit `terminal-pid` and start the process detector. Stops if the terminal
   // disappears (killed/trashed) before the PID resolves, or after the cap.
-  function schedulePidRetry(id: string, attempt = 0): void {
+  function schedulePidRetry(id: string, launchGeneration: number | undefined, attempt = 0): void {
     if (attempt >= PID_RETRY_MAX_ATTEMPTS) return;
     setImmediate(() => {
       const terminalInfo = ptyManager.getTerminal(id);
       if (!terminalInfo) return; // terminal gone — abandon the retry
+      // A same-id respawn replaced the incarnation this retry was resolving;
+      // its own spawn emits (or retries) the successor's PID. An incarnation
+      // that already exited (kept for its scrollback) has no live PID to
+      // report — Main has already released it.
+      if (terminalInfo.launchGeneration !== launchGeneration) return;
+      if (terminalInfo.isExited || terminalInfo.wasKilled) return;
       const pid = terminalInfo.ptyProcess?.pid;
       if (isValidPid(pid)) {
-        sendEvent({ type: "terminal-pid", id, pid });
+        sendEvent(withGeneration({ type: "terminal-pid", id, pid }, launchGeneration));
         ptyManager.startProcessDetectorForTerminal(id);
         return;
       }
-      schedulePidRetry(id, attempt + 1);
+      schedulePidRetry(id, launchGeneration, attempt + 1);
     });
   }
 
@@ -74,11 +83,13 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
         const terminalInfo = ptyManager.getTerminal(msg.id);
         const pid = terminalInfo?.ptyProcess?.pid;
         if (isValidPid(pid)) {
-          sendEvent({ type: "terminal-pid", id: msg.id, pid });
+          sendEvent(
+            withGeneration({ type: "terminal-pid", id: msg.id, pid }, msg.options.launchGeneration)
+          );
         } else {
           // Windows ConPTY: retry until the real PID resolves, then emit the
           // event and start monitoring (no node-pty event fires on its own).
-          schedulePidRetry(msg.id);
+          schedulePidRetry(msg.id, msg.options.launchGeneration);
         }
 
         // Deliver a wrapper-less launch command now that the terminal is
@@ -152,15 +163,10 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
     },
 
     kill: (msg) => {
-      const termInfo = ptyManager.getTerminal(msg.id);
-      const killedPid = termInfo?.ptyProcess.pid;
       if (msg.escalationDelayMs !== undefined) {
         ptyManager.kill(msg.id, msg.reason, { escalationDelayMs: msg.escalationDelayMs });
       } else {
         ptyManager.kill(msg.id, msg.reason);
-      }
-      if (isValidPid(killedPid)) {
-        resourceGovernor.trackKilledPid(killedPid);
       }
     },
 
@@ -173,25 +179,12 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
     },
 
     "kill-by-project": (msg) => {
-      const terminalIds = ptyManager.getTerminalsForProject(msg.projectId);
-      const pids: number[] = [];
-      for (const id of terminalIds) {
-        const pid = ptyManager.getTerminal(id)?.ptyProcess.pid;
-        if (isValidPid(pid)) pids.push(pid);
-      }
       const killed = ptyManager.killByProject(msg.projectId);
-      for (const pid of pids) {
-        resourceGovernor.trackKilledPid(pid);
-      }
       sendEvent({ type: "kill-by-project-result", requestId: msg.requestId, killed });
     },
 
     "graceful-kill": async (msg) => {
-      const killedPid = ptyManager.getTerminal(msg.id)?.ptyProcess.pid;
       const { sessionId } = await ptyManager.gracefulKill(msg.id);
-      if (isValidPid(killedPid)) {
-        resourceGovernor.trackKilledPid(killedPid);
-      }
       sendEvent({
         type: "graceful-kill-result",
         requestId: msg.requestId,
@@ -201,12 +194,6 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
     },
 
     "graceful-kill-by-project": async (msg) => {
-      const terminalIds = ptyManager.getTerminalsForProject(msg.projectId);
-      const pids: number[] = [];
-      for (const id of terminalIds) {
-        const pid = ptyManager.getTerminal(id)?.ptyProcess.pid;
-        if (isValidPid(pid)) pids.push(pid);
-      }
       const results = await ptyManager.gracefulKillByProject(
         msg.projectId,
         { preserveSession: msg.preserveSession },
@@ -224,9 +211,6 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
           });
         }
       );
-      for (const pid of pids) {
-        resourceGovernor.trackKilledPid(pid);
-      }
       sendEvent({
         type: "graceful-kill-by-project-result",
         requestId: msg.requestId,

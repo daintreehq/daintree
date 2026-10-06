@@ -10,7 +10,8 @@
  */
 
 import path from "path";
-import { getPtyClient } from "../PtyClient.js";
+import { getPtyClient } from "../../window/serviceRefs.js";
+import { subagentTerminalAgentId } from "../subagentTerminalAgent.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -59,12 +60,11 @@ export async function resolveClaudeTerminal(terminalId: string): Promise<
       >;
     }
 > {
-  const info = await getPtyClient().getTerminalAsync(terminalId);
+  const info = await getPtyClient()?.getTerminalAsync(terminalId);
   if (!info) return { status: "unavailable", reason: "terminal-unknown" };
-  // Live detection wins over the launch hint, matching the renderer. A pane
-  // relaunched onto another agent keeps its original `launchAgentId`, and an
-  // `||` here would let a direct IPC call read the previous agent's children.
-  if ((info.detectedAgentId ?? info.launchAgentId) !== "claude") {
+  // An exited agent answers for nothing, even though the record still holds
+  // its launch hint and session id.
+  if (subagentTerminalAgentId(info) !== "claude") {
     return { status: "unavailable", reason: "provider-mismatch" };
   }
   if (!info.cwd || !path.isAbsolute(info.cwd)) {

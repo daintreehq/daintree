@@ -14,6 +14,7 @@ import type { PendingUpdateInstallStage } from "./utils/updateInstallStages.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { InstalledPluginRecord } from "../shared/types/plugin.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
+import type { DevPreviewUserStoppedRecord } from "../shared/types/ipc/devPreview.js";
 import type {
   AssistantTurnRecord,
   McpAuditRecord,
@@ -693,6 +694,14 @@ export interface StoreSchema {
    * a stale entry for a deleted workspace grants nothing.
    */
   workspaceKeepResident?: Record<string, true>;
+
+  /**
+   * Dev-preview panels whose server the user stopped and hasn't started since
+   * (#13169). Owned by `DevPreviewSessionService`, which refuses automatic
+   * ensures for these panels so Stop survives remounts and relaunch. Additive
+   * key with no numbered migration; entries are validated on load.
+   */
+  devPreviewUserStopped?: DevPreviewUserStoppedRecord[];
 }
 
 const storeOptions = {

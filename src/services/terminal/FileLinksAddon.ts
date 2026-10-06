@@ -8,6 +8,7 @@ import { isClientAppError } from "@/utils/clientAppError";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   DIR_PATH_REGEX,
+  expandHomePath,
   FILE_PATH_REGEX,
   FILE_URL_REGEX,
   findSpacedFilePathCandidates,
@@ -550,12 +551,21 @@ export class FileLinksAddon implements ILinkProvider {
   private _terminal: Terminal;
   private _getCwd: () => string;
   private _onHover?: HoverCallback;
+  // Read per scan, never captured: the home dir arrives asynchronously and the
+  // addon is recreated across terminal tiers, so a snapshot could be stale.
+  private _getHomeDir: () => string | undefined;
   private _disposed = false;
 
-  constructor(terminal: Terminal, getCwd: () => string, onHover?: HoverCallback) {
+  constructor(
+    terminal: Terminal,
+    getCwd: () => string,
+    onHover?: HoverCallback,
+    getHomeDir: () => string | undefined = () => undefined
+  ) {
     this._terminal = terminal;
     this._getCwd = getCwd;
     this._onHover = onHover;
+    this._getHomeDir = getHomeDir;
   }
 
   provideLinks(bufferLineNumber: number, callback: (links: ILink[] | undefined) => void): void {
@@ -717,7 +727,7 @@ export class FileLinksAddon implements ILinkProvider {
       const spacedSpans: Array<[number, number]> = [];
       pending.forEach((group, index) => {
         const resolved = verdicts.spaced[index]
-          ? resolveFilePathCandidate(group.candidate.path, this._getCwd())
+          ? resolveFilePathCandidate(group.candidate.path, this._getCwd(), this._getHomeDir())
           : null;
         if (!resolved) {
           links.push(...group.fallback);
@@ -869,7 +879,7 @@ export class FileLinksAddon implements ILinkProvider {
       if (touchesClippedEdge(logical, startIndex, endIndex)) continue;
       if (isPathExcluded(fullMatch)) continue;
 
-      const resolved = resolveFilePathCandidate(fullMatch, this._getCwd());
+      const resolved = resolveFilePathCandidate(fullMatch, this._getCwd(), this._getHomeDir());
       if (!resolved) continue;
 
       // Inside a spaced path still being probed, this is the tail fragment the
@@ -919,7 +929,12 @@ export class FileLinksAddon implements ILinkProvider {
         // Cut off by the rejoin window, the path can't be probed whole — but
         // its span is still claimed, or the bare-path pass would link the
         // fragment after its space against the cwd.
-        if (touchesClippedEdge(logical, startIndex, endIndex)) {
+        // Same for a `~/` path while the home dir is still unknown: there is
+        // nothing to probe, and its tail must not link against the cwd.
+        if (
+          touchesClippedEdge(logical, startIndex, endIndex) ||
+          expandHomePath(candidate.probeDir, this._getHomeDir()) === null
+        ) {
           claimed.push(local);
           continue;
         }
@@ -932,7 +947,7 @@ export class FileLinksAddon implements ILinkProvider {
       claimed.push(local);
       if (touchesClippedEdge(logical, startIndex, endIndex)) continue;
 
-      const resolved = resolveFilePathCandidate(candidate.path, this._getCwd());
+      const resolved = resolveFilePathCandidate(candidate.path, this._getCwd(), this._getHomeDir());
       if (!resolved) continue;
       links.push(
         new FileLink(
@@ -962,16 +977,19 @@ export class FileLinksAddon implements ILinkProvider {
   ): Promise<void> {
     // Verdicts land in `confirmed` the moment each is known, rather than all
     // at once: a probe that stalls to the deadline must not hide the siblings
-    // that already answered.
+    // that already answered. Probes and the cache key on the expanded
+    // directory, so `~/a b` and its absolute spelling share one verdict.
+    const homeDir = this._getHomeDir();
+    const dirs = pending.map(({ candidate }) => expandHomePath(candidate.probeDir!, homeDir));
     const settle = (dir: string, exists: boolean): void => {
-      pending.forEach(({ candidate }, index) => {
-        if (candidate.probeDir === dir) confirmed[index] = exists;
+      dirs.forEach((candidateDir, index) => {
+        if (candidateDir === dir) confirmed[index] = exists;
       });
     };
 
     const toProbe = new Set<string>();
-    for (const { candidate } of pending) {
-      const dir = candidate.probeDir!;
+    for (const dir of dirs) {
+      if (dir === null) continue;
       const cached = spacedDirCache.get(dir);
       if (cached !== undefined && Date.now() - cached.at < DIR_KIND_CACHE_TTL_MS) {
         settle(dir, cached.exists);
@@ -1160,7 +1178,7 @@ export class FileLinksAddon implements ILinkProvider {
       const endIndex = startIndex + fullMatch.length;
       if (overlapsClaimed(claimed, startIndex, endIndex)) continue;
 
-      const absolutePath = resolveDirPathCandidate(fullMatch, this._getCwd());
+      const absolutePath = resolveDirPathCandidate(fullMatch, this._getCwd(), this._getHomeDir());
       if (!absolutePath) continue;
 
       candidates.push({ text: fullMatch, startIndex, absolutePath });

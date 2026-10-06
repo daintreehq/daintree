@@ -629,12 +629,12 @@ describe("hydrateAppState", () => {
     ];
     projectClientMock.getTabGroups.mockResolvedValue(persistedTabGroups);
 
-    // The first panel's reconnect times out (reconnectManager surfaces the
-    // 2000ms rejection as status "timeout"), so it respawns with requestedId
-    // undefined and the store assigns "new-panel-id". The second misses (not
-    // found) and respawns under its saved id.
+    // The first panel's reconnect is refused (live under another workspace), so
+    // like a timeout it respawns with requestedId undefined and the store
+    // assigns "new-panel-id". The second misses (not found) and respawns under
+    // its saved id.
     terminalClientMock.reconnect.mockImplementation(async (id: string) => {
-      if (id === "old-panel-id") throw new Error("Reconnection timeout");
+      if (id === "old-panel-id") return { exists: false, conflict: true };
       return { exists: false };
     });
     const addPanel = vi.fn(async (args: { requestedId?: string; existingId?: string }) =>
@@ -708,7 +708,7 @@ describe("hydrateAppState", () => {
     projectClientMock.getTabGroups.mockResolvedValue(persistedTabGroups);
 
     terminalClientMock.reconnect.mockImplementation(async (id: string) => {
-      if (id === "old-panel-id") throw new Error("Reconnection timeout");
+      if (id === "old-panel-id") return { exists: false, conflict: true };
       return { exists: false };
     });
     const addPanel = vi.fn(async (args: { requestedId?: string; existingId?: string }) =>

@@ -188,7 +188,7 @@ describe("DevPreviewSessionService — predictedUrl must be null in every error 
     broadcasts.length = 0;
 
     // Re-ensure → spawnSessionTerminal sets predictedUrl then spawn throws.
-    await service.ensure({ ...base, worktreeId: "wt-1" });
+    await service.ensure({ ...base, worktreeId: "wt-1", resumeUserStopped: true });
 
     // The error broadcast must have predictedUrl: null.
     // Fails if spawnSessionTerminal's catch omits predictedUrl: null.

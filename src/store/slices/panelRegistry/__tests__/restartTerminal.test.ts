@@ -860,7 +860,7 @@ describe("restartTerminal captured live-session resume", () => {
 
     await usePanelStore.getState().restartTerminal("test-1");
 
-    expect(mockGracefulKill).toHaveBeenCalledWith("test-1");
+    expect(mockGracefulKill).toHaveBeenCalledWith("test-1", { forRestart: true });
     expect(buildResumeCommand).toHaveBeenCalledWith("claude", "live-123", ["--persisted-flag"]);
     // Exact resume must preempt the resume-latest fallback — resume-latest
     // resolves to the most recently active session in scope, which with
@@ -947,7 +947,7 @@ describe("restartTerminal captured live-session resume", () => {
 
     await usePanelStore.getState().restartTerminal("test-1");
 
-    expect(mockKill).toHaveBeenCalledWith("test-1");
+    expect(mockKill).toHaveBeenCalledWith("test-1", { forRestart: true });
     const payload = mockSpawn.mock.calls[0]![0];
     expect(payload.command).toBe("claude --continue");
   });
@@ -962,7 +962,7 @@ describe("restartTerminal captured live-session resume", () => {
     await usePanelStore.getState().restartTerminal("test-1");
 
     expect(mockGracefulKill).not.toHaveBeenCalled();
-    expect(mockKill).toHaveBeenCalledWith("test-1");
+    expect(mockKill).toHaveBeenCalledWith("test-1", { forRestart: true });
   });
 
   it("uses bare kill for failed-spawn retries (no live process to quit)", async () => {
@@ -979,7 +979,7 @@ describe("restartTerminal captured live-session resume", () => {
     await usePanelStore.getState().restartTerminal("test-1");
 
     expect(mockGracefulKill).not.toHaveBeenCalled();
-    expect(mockKill).toHaveBeenCalledWith("test-1");
+    expect(mockKill).toHaveBeenCalledWith("test-1", { forRestart: true });
     // The retry still relaunches as the agent (#10816).
     const payload = mockSpawn.mock.calls[0]![0];
     expect(payload.launchAgentId).toBe("claude");

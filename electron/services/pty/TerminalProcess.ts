@@ -66,6 +66,11 @@ import {
 import { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
 import { SemanticBufferManager } from "./SemanticBufferManager.js";
 import { ProcessTreeKiller, type LineageKillSource } from "./ProcessTreeKiller.js";
+import {
+  logTerminalKill,
+  scheduleSurvivorCheck,
+  SURVIVOR_CHECK_DELAY_MS,
+} from "./terminalKillAudit.js";
 import { IdentityWatcher, type IdentityWatcherDelegate } from "./IdentityWatcher.js";
 import type { SpawnContext } from "./terminalSpawn.js";
 import { getLiveAgentId } from "./terminalTitle.js";
@@ -509,7 +514,16 @@ export class TerminalProcess {
     this.processTreeKiller = new ProcessTreeKiller(
       ptyProcess,
       deps.processTreeCache,
-      deps.lineageLedger ?? null
+      deps.lineageLedger ?? null,
+      {
+        kind: "terminal",
+        id,
+        projectId: options.projectId,
+        title: options.title,
+        panelKind: options.kind,
+        launchAgentId,
+        spawnedAt,
+      }
     );
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
@@ -1151,9 +1165,14 @@ export class TerminalProcess {
       // is invisible to every live tree walk and would otherwise run forever
       // (#12203) — the lineage ledger is the only record that can still reach
       // it, and this is the only path that consults it on a natural exit.
-      this.processTreeKiller.reapAfterRootExit();
+      const orphans = this.processTreeKiller.reapAfterRootExit();
+      if (orphans.length > 0) this.auditKill("root-exit", orphans);
     } else {
       this.processTreeKiller.abort();
+      // Every non-natural teardown is followed by a kill, and destroyPty()
+      // below hangs up the foreground job first. Read the tree while the
+      // detached work under it is still reachable from the shell (#13165).
+      this.processTreeKiller.captureTree();
     }
 
     // Release the master /dev/ptmx fd on Unix. Pooled terminals already do this
@@ -1650,7 +1669,26 @@ export class TerminalProcess {
     // `reason: "kill"` carried through the lifecycle state machine.
     this.disposeHeadless();
 
-    this.processTreeKiller.execute(false, escalationDelayMs);
+    const targets = this.processTreeKiller.execute(false, escalationDelayMs);
+    this.auditKill(reason ?? "kill", targets, escalationDelayMs);
+  }
+
+  /**
+   * Record a kill and schedule the check for anything it left running. Callers
+   * only reach this after winning the teardown transition, so each terminal
+   * logs its kill once however many paths race to tear it down.
+   */
+  private auditKill(reason: string, targets: number[], escalationDelayMs?: number): void {
+    const shellPid = this.terminalInfo.ptyProcess.pid;
+    const verifiable = this.processTreeKiller.getKillIdentities().size > 0;
+    logTerminalKill(this.id, reason, shellPid > 0 ? shellPid : undefined, targets, verifiable);
+    if (!verifiable) return;
+    scheduleSurvivorCheck(
+      this.id,
+      reason,
+      () => this.processTreeKiller.getKillIdentities(),
+      SURVIVOR_CHECK_DELAY_MS + (escalationDelayMs ?? 0)
+    );
   }
 
   checkFlooding(): { flooded: boolean; resumed: boolean } {
@@ -1973,7 +2011,8 @@ export class TerminalProcess {
     if (alreadyExitedNaturally) {
       this.processTreeKiller.reapAfterRootExit(true);
     } else {
-      this.processTreeKiller.execute(true);
+      const targets = this.processTreeKiller.execute(true);
+      if (wonTeardown) this.auditKill("dispose", targets);
     }
 
     // If the PTY never fired onExit (LRU eviction, app shutdown, or kill()

@@ -1,6 +1,7 @@
 import { normalizeScrollbackLines } from "../../../shared/config/scrollback.js";
 import { setSessionPersistSuppressed } from "../../services/pty/terminalSessionPersistence.js";
 import type { MemoryRollupProject } from "../../../shared/types/pty-host.js";
+import { buildProcessInventory, killClosedTerminalProcesses } from "./processInventory.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
 export function createStateConfigHandlers(ctx: HostContext): HandlerMap {
@@ -109,6 +110,26 @@ export function createStateConfigHandlers(ctx: HostContext): HandlerMap {
           sampledAt: processTreeCache.getLastRefreshTime(),
         },
       });
+    },
+
+    "get-process-inventory": (msg) => {
+      sendEvent({
+        type: "process-inventory",
+        requestId: msg.requestId,
+        inventory: buildProcessInventory(ctx, Array.isArray(msg.pids) ? msg.pids : []),
+      });
+    },
+
+    "kill-closed-terminal-processes": (msg) => {
+      const targets = Array.isArray(msg.targets) ? msg.targets : [];
+      void killClosedTerminalProcesses(ctx, targets)
+        .catch((err: unknown) => {
+          console.warn("[PtyHost] Closed-terminal process kill failed:", err);
+          return { ended: 0, stillRunning: 0, unchecked: targets.length, notTracked: 0 };
+        })
+        .then((result) => {
+          sendEvent({ type: "closed-terminal-processes-killed", requestId: msg.requestId, result });
+        });
     },
   };
 }

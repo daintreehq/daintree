@@ -483,6 +483,7 @@ export type { EventContext } from "./events.js";
 // Terminal activity types - semantic activity detection
 export type {
   TerminalTaskType,
+  TerminalKillOptions,
   TerminalActivityStatus,
   TerminalActivity,
   TerminalActivityPayload,

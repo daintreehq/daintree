@@ -104,7 +104,7 @@ export function FileBrowserPane({
       const changesDocument =
         "browserSelectedPath" in patch &&
         current?.kind === "file-browser" &&
-        patch.browserSelectedPath !== current.browserSelectedPath;
+        (patch.browserSelectedPath ?? undefined) !== current.browserSelectedPath;
       if (!changesDocument) {
         updateFileBrowserView(panelId, patch);
         return;
@@ -567,6 +567,54 @@ export function FileBrowserPane({
     },
     [id, setFileBrowserView]
   );
+
+  // Where closing the viewer's subject goes back to (#13194). Only a file
+  // opened from a folder listing records one: the summary and the tree sit
+  // beside the viewer rather than inside it, so closing a file opened from
+  // either returns to the idle body, which is the summary on a dirty worktree.
+  // Session-only. The effect below retires it once the viewer moves on, so a
+  // later route to the same file doesn't inherit it, while a close the dirty
+  // guard cancels leaves it in place for the retry.
+  const closeReturn = useRef<{
+    panelId: string;
+    target: string;
+    from: string;
+    landed: boolean;
+  } | null>(null);
+  useEffect(() => {
+    const back = closeReturn.current;
+    if (back === null) return;
+    if (back.panelId !== id) closeReturn.current = null;
+    else if (selectedPath === back.target) back.landed = true;
+    else if (back.landed || selectedPath !== back.from) closeReturn.current = null;
+  }, [id, selectedPath]);
+  const handleSelectListingEntry = useCallback(
+    (path: string) => {
+      const isFile = listingRows?.some((row) => row.path === path && !row.isDirectory) === true;
+      closeReturn.current =
+        isFile && listingPath !== null
+          ? { panelId: id, target: path, from: listingPath, landed: false }
+          : null;
+      showInViewer(path);
+    },
+    [id, listingPath, listingRows, showInViewer]
+  );
+  const handleCloseSelection = useCallback(() => {
+    const back = closeReturn.current;
+    if (back === null || back.panelId !== id || back.target !== selectedPath) {
+      setFileBrowserView(id, { browserSelectedPath: null });
+      return;
+    }
+    // The listing's own parent may have been pruned from the tree while the
+    // file was open, and without it the folder can't resolve as a folder.
+    // Expanding its ancestors keeps it findable, as the summary route does.
+    const expanded = new Set(stableExpandedPaths);
+    for (const ancestor of ancestorDirectories(back.from)) expanded.add(ancestor);
+    setFileBrowserView(id, {
+      browserSelectedPath: back.from,
+      browserExpandedPaths: [...expanded].sort(),
+    });
+  }, [id, selectedPath, stableExpandedPaths, setFileBrowserView]);
 
   // The explicit "show me this folder" gestures: Enter, double-click, and the
   // row menu's "Show contents". They clear a collapsed viewer as well as moving
@@ -1405,7 +1453,7 @@ export function FileBrowserPane({
               folderHasHiddenDotfiles={hideDotfiles && listingHasHiddenDotfiles}
               folderHiddenCounts={listingHiddenCounts}
               onShowDotfiles={handleShowDotfiles}
-              onSelectEntry={showInViewer}
+              onSelectEntry={handleSelectListingEntry}
               rowContextMenu={rowContextMenu}
               basePath={basePath}
               sort={sort}
@@ -1423,6 +1471,7 @@ export function FileBrowserPane({
                 selectionMissing && selectedPath !== null && selectionInRoot ? selectedPath : null
               }
               onShowFolder={showFolderContents}
+              onCloseSelection={handleCloseSelection}
             />
           </div>
         )}

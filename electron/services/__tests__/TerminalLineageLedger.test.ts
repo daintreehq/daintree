@@ -31,10 +31,16 @@ import {
   claimShardLineageFile,
   currentBootEpochSec,
   endTeardownProbeWindow,
+  getLineageReapReport,
   lineageFilePath,
+  parseKillCensus,
   probeStartTimes,
   probeStartTimesSync,
+  reapClaimedLineageFile,
+  reapLineageEntries,
   reapPersistedLineages,
+  resetLineageReapReportForTests,
+  takeKillCensusSync,
   type LineageCensus,
 } from "../TerminalLineageLedger.js";
 
@@ -629,7 +635,7 @@ describe("TerminalLineageLedger", () => {
   });
 
   describe("persistence", () => {
-    it("persists only orphaned descendants", async () => {
+    it("persists attached descendants alongside orphans", async () => {
       const ledger = new TerminalLineageLedger(filePath);
       const census = new FakeCensus([
         { pid: 100, ppid: 10 },
@@ -648,7 +654,9 @@ describe("TerminalLineageLedger", () => {
       ledger.reconcile(census);
       await flush();
 
-      // ...then detaches. 200 stays attached to the live shell.
+      // ...then detaches. 200 stays attached to the live shell, and is still
+      // recorded: a `cmd &` job sits in its own process group, so the crash
+      // path's group kill of the shell never reaches it (#13166).
       census.set([
         { pid: 10, ppid: 1 },
         { pid: 100, ppid: 10 },
@@ -658,10 +666,51 @@ describe("TerminalLineageLedger", () => {
       ledger.reconcile(census);
 
       const persisted = readPersisted();
-      expect(persisted?.entries.map((e) => e.pid)).toEqual([300]);
+      expect(persisted?.entries.map((e) => e.pid)).toEqual([200, 300]);
     });
 
-    it("removes the file when nothing is orphaned any more", async () => {
+    it("records an attached job before anything detaches", async () => {
+      const ledger = new TerminalLineageLedger(filePath);
+      const census = new FakeCensus([
+        { pid: 10, ppid: 1 },
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+        { pid: 300, ppid: 200 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      // Unidentified PIDs are never written: nothing could verify them later.
+      expect(readPersisted()).toBeNull();
+
+      await flush();
+
+      expect(readPersisted()?.entries).toEqual([
+        { pid: 200, startTime: startTimeFor(200), rootPid: 100 },
+        { pid: 300, startTime: startTimeFor(300), rootPid: 100 },
+      ]);
+    });
+
+    it("does not rewrite the file for an unchanged tree", async () => {
+      const ledger = new TerminalLineageLedger(filePath);
+      const census = new FakeCensus([
+        { pid: 10, ppid: 1 },
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+      const first = fs.statSync(filePath).mtimeMs;
+      fs.utimesSync(filePath, new Date(0), new Date(0));
+
+      ledger.reconcile(census);
+      await flush();
+
+      expect(first).toBeGreaterThan(0);
+      expect(fs.statSync(filePath).mtimeMs).toBe(0);
+    });
+
+    it("removes the file when no identified descendant remains", async () => {
       const ledger = new TerminalLineageLedger(filePath);
       const census = new FakeCensus([
         { pid: 10, ppid: 1 },
@@ -716,7 +765,7 @@ describe("TerminalLineageLedger", () => {
       expect(readPersisted()?.entries.map((e) => e.pid)).toEqual([200, 300]);
     });
 
-    it("retries the write after a transient failure on an unchanged orphan set", async () => {
+    it("retries the write after a transient failure on an unchanged set", async () => {
       // The parent directory does not exist yet, so the atomic write throws.
       const nestedDir = path.join(tmpDir, "nested");
       const nestedPath = path.join(nestedDir, "pty-lineage.json");
@@ -741,7 +790,7 @@ describe("TerminalLineageLedger", () => {
       ledger.reconcile(census);
       expect(readNested()).toBeNull();
 
-      // The orphan set is identical on the retry, so a signature recorded
+      // The set is identical on the retry, so a signature recorded
       // before the failed write would suppress it forever, leaving no
       // crash-recovery record at all.
       fs.mkdirSync(nestedDir);
@@ -815,11 +864,267 @@ describe("TerminalLineageLedger", () => {
     });
   });
 
-  describe("reapPersistedLineages", () => {
+  describe("closed survivors", () => {
+    const origin = {
+      kind: "terminal" as const,
+      id: "term-1",
+      projectId: "proj-1",
+      title: "npm run dev",
+      spawnedAt: 1234,
+    };
+
+    async function trackedUnder(ledger: TerminalLineageLedger, census: FakeCensus) {
+      ledger.registerRoot(100, origin);
+      ledger.reconcile(census);
+      await flush();
+    }
+
+    it("reports a descendant still running after its root closed, with the root's origin", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: ORPHAN_PID, ppid: 100 },
+      ]);
+      await trackedUnder(ledger, census);
+
+      const closedAt = Date.now();
+      ledger.markRootClosing(100);
+      census.set([{ pid: ORPHAN_PID, ppid: 1 }]);
+      ledger.reconcile(census);
+      await flush();
+
+      const survivors = ledger.getClosedSurvivors(10_000, closedAt + 10_000 + 1_000);
+      expect(survivors).toEqual([
+        expect.objectContaining({
+          pid: ORPHAN_PID,
+          startTime: startTimeFor(ORPHAN_PID),
+          rootPid: 100,
+          origin,
+        }),
+      ]);
+      expect(survivors[0].closedAtMs).toBeGreaterThanOrEqual(closedAt);
+    });
+
+    it("holds back survivors while teardown is still inside its grace window", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: ORPHAN_PID, ppid: 100 },
+      ]);
+      await trackedUnder(ledger, census);
+
+      ledger.markRootClosing(100);
+      expect(ledger.getClosedSurvivors(10_000, Date.now())).toEqual([]);
+    });
+
+    it("never reports descendants of a root that is still active", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: ORPHAN_PID, ppid: 100 },
+      ]);
+      await trackedUnder(ledger, census);
+
+      expect(ledger.getClosedSurvivors(0, Date.now() + 60_000)).toEqual([]);
+    });
+
+    it("dates a root the census saw vanish without a teardown", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: ORPHAN_PID, ppid: 100 },
+      ]);
+      await trackedUnder(ledger, census);
+
+      census.set([{ pid: ORPHAN_PID, ppid: 1 }]);
+      ledger.reconcile(census);
+      await flush();
+
+      const survivors = ledger.getClosedSurvivors(0);
+      expect(survivors.map((s) => s.pid)).toEqual([ORPHAN_PID]);
+      expect(survivors[0].origin).toEqual(origin);
+    });
+
+    it("stops reporting a survivor once the census no longer lists it", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: ORPHAN_PID, ppid: 100 },
+      ]);
+      await trackedUnder(ledger, census);
+
+      ledger.markRootClosing(100);
+      census.set([]);
+      ledger.reconcile(census);
+
+      expect(ledger.getClosedSurvivors(0)).toEqual([]);
+    });
+
+    it("reports a root registered without an origin as having none", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: ORPHAN_PID, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+      ledger.markRootClosing(100);
+
+      expect(ledger.getClosedSurvivors(0)[0]?.origin).toBeNull();
+    });
+  });
+
+  describe("reapLineageEntries", () => {
     let killSpy: ReturnType<typeof vi.spyOn>;
 
     beforeEach(() => {
       killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    });
+
+    const entry = () => ({ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), rootPid: 100 });
+
+    it.skipIf(isWindows)(
+      "counts a process the post-SIGTERM check no longer lists as ended",
+      async () => {
+        mockExecFileAsync
+          .mockImplementationOnce(async () => ({ stdout: psOutput([ORPHAN_PID]), stderr: "" }))
+          .mockImplementationOnce(async () => {
+            // `ps` exits 1 when none of the requested PIDs exist: a real answer.
+            throw Object.assign(new Error("exit 1"), { code: 1, stdout: "" });
+          });
+
+        const outcome = await reapLineageEntries([entry()]);
+
+        expect(outcome).toEqual({
+          survivors: [],
+          found: 1,
+          ended: 1,
+          stillRunning: 0,
+          unchecked: 0,
+        });
+        expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGTERM");
+        expect(killSpy).not.toHaveBeenCalledWith(ORPHAN_PID, "SIGKILL");
+      }
+    );
+
+    it.skipIf(isWindows)(
+      "reports what the OS shows after SIGKILL, not that it was sent",
+      async () => {
+        // Every probe still lists the process under its recorded identity.
+        const outcome = await reapLineageEntries([entry()]);
+
+        expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGKILL");
+        expect(outcome.found).toBe(1);
+        expect(outcome.stillRunning).toBe(1);
+        expect(outcome.ended).toBe(0);
+        // Still there, so it stays recorded for the next attempt.
+        expect(outcome.survivors).toEqual([entry()]);
+      }
+    );
+
+    it("never signals and reports unchecked when the probe itself cannot run", async () => {
+      mockExecFileAsync.mockImplementation(async () => {
+        throw Object.assign(new Error("spawn ps ENOENT"), { code: "ENOENT" });
+      });
+
+      const outcome = await reapLineageEntries([entry()]);
+
+      expect(outcome).toEqual({
+        survivors: [entry()],
+        found: 0,
+        ended: 0,
+        stillRunning: 0,
+        unchecked: 1,
+      });
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith(
+        "taskkill",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it("never signals a recorded PID now held under another start time", async () => {
+      const outcome = await reapLineageEntries([
+        { pid: ORPHAN_PID, startTime: "some other process", rootPid: 100 },
+      ]);
+
+      expect(outcome).toEqual({ survivors: [], found: 0, ended: 0, stillRunning: 0, unchecked: 0 });
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith(
+        "taskkill",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+  });
+
+  describe("lineage reap report", () => {
+    beforeEach(() => {
+      resetLineageReapReportForTests();
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+    });
+
+    afterEach(() => {
+      resetLineageReapReportForTests();
+    });
+
+    function writeLedgerFile(entries: Array<{ pid: number; startTime: string; rootPid: number }>) {
+      fs.writeFileSync(
+        filePath,
+        JSON.stringify({
+          version: 1,
+          bootEpochSec: currentBootEpochSec(),
+          owner: "daintree-pty-host",
+          updatedAt: Date.now(),
+          entries,
+        })
+      );
+    }
+
+    it("stays empty when a launch finds nothing to clean up", async () => {
+      writeLedgerFile([{ pid: ORPHAN_PID, startTime: "a recycled pid", rootPid: 100 }]);
+
+      await reapPersistedLineages(tmpDir);
+
+      expect(getLineageReapReport()).toBeNull();
+    });
+
+    it("records what the launch cleanup found and could not check", async () => {
+      mockExecFileAsync.mockImplementation(async () => {
+        throw Object.assign(new Error("blocked"), { code: "EPERM" });
+      });
+      writeLedgerFile([{ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), rootPid: 100 }]);
+
+      await reapPersistedLineages(tmpDir);
+
+      expect(getLineageReapReport()).toEqual(
+        expect.objectContaining({ found: 0, ended: 0, stillRunning: 0, unchecked: 1 })
+      );
+    });
+  });
+
+  describe("reapPersistedLineages", () => {
+    let killSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      // A SIGKILLed (or taskkilled) process stops being listed, so the
+      // post-kill check observes it gone — as the OS would show it.
+      const killed = new Set<number>();
+      killSpy = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: string) => {
+        if (signal === "SIGKILL") killed.add(pid);
+        return true;
+      }) as typeof process.kill);
+      mockExecFileAsync.mockImplementation(async (file: string, args: string[]) => {
+        if (file === "taskkill") {
+          killed.add(Number(args[args.length - 1]));
+          return { stdout: "", stderr: "" };
+        }
+        const pids = readRequestedPids(args).filter((pid) => !killed.has(pid));
+        if (pids.length === 0) throw Object.assign(new Error("exit 1"), { code: 1, stdout: "" });
+        return { stdout: psOutput(pids), stderr: "" };
+      });
     });
 
     /** The single lineage file the sweep left behind, whatever its name. */
@@ -857,7 +1162,7 @@ describe("TerminalLineageLedger", () => {
       await reapPersistedLineages(tmpDir);
 
       if (isWindows) {
-        expect(mockSpawnSync).toHaveBeenCalledWith(
+        expect(mockExecFileAsync).toHaveBeenCalledWith(
           "taskkill",
           ["/T", "/F", "/PID", String(ORPHAN_PID)],
           expect.anything()
@@ -869,13 +1174,50 @@ describe("TerminalLineageLedger", () => {
       expect(fs.existsSync(filePath)).toBe(false);
     });
 
+    it("reaps a crashed host's still-attached background job", async () => {
+      // A `cmd &` job is never orphaned while its shell lives, and the crash
+      // path's group kill of the shell misses its separate group, so the
+      // ledger has to have recorded it before the host died (#13166).
+      const ledger = new TerminalLineageLedger(filePath);
+      ledger.registerRoot(100);
+      ledger.reconcile(
+        new FakeCensus([
+          { pid: 10, ppid: 1 },
+          { pid: 100, ppid: 10 },
+          { pid: ORPHAN_PID, ppid: 100 },
+        ])
+      );
+      await flush();
+      ledger.dispose();
+
+      const claimed = claimShardLineageFile(tmpDir);
+      expect(claimed).not.toBeNull();
+      await reapClaimedLineageFile(claimed!);
+
+      if (isWindows) {
+        expect(mockExecFileAsync).toHaveBeenCalledWith(
+          "taskkill",
+          ["/T", "/F", "/PID", String(ORPHAN_PID)],
+          expect.anything()
+        );
+      } else {
+        expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGTERM");
+        expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGKILL");
+      }
+      expect(fs.readdirSync(tmpDir).filter((n) => n.startsWith("pty-lineage"))).toEqual([]);
+    });
+
     it("never signals a PID whose start time no longer matches", async () => {
       writeLedger([{ pid: ORPHAN_PID, startTime: "a-different-boot-of-this-pid", rootPid: 100 }]);
 
       await reapPersistedLineages(tmpDir);
 
       expect(killSpy).not.toHaveBeenCalled();
-      expect(mockSpawnSync).not.toHaveBeenCalled();
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith(
+        "taskkill",
+        expect.anything(),
+        expect.anything()
+      );
       expect(fs.existsSync(filePath)).toBe(false);
     });
 
@@ -887,7 +1229,11 @@ describe("TerminalLineageLedger", () => {
       await reapPersistedLineages(tmpDir);
 
       expect(killSpy).not.toHaveBeenCalled();
-      expect(mockSpawnSync).not.toHaveBeenCalled();
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith(
+        "taskkill",
+        expect.anything(),
+        expect.anything()
+      );
       expect(fs.existsSync(filePath)).toBe(false);
     });
 
@@ -901,7 +1247,11 @@ describe("TerminalLineageLedger", () => {
       await reapPersistedLineages(tmpDir);
 
       expect(killSpy).not.toHaveBeenCalled();
-      expect(mockSpawnSync).not.toHaveBeenCalled();
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith(
+        "taskkill",
+        expect.anything(),
+        expect.anything()
+      );
     });
 
     it("ignores a ledger written by a future schema version", async () => {
@@ -1050,6 +1400,110 @@ describe("TerminalLineageLedger", () => {
 
       expect(result.get(333)).toBe(startTimeFor(333));
       expect(result.has(444)).toBe(false);
+    });
+  });
+  describe.skipIf(isWindows)("kill census", () => {
+    function censusOutput(rows: Array<[number, number]>): string {
+      return (
+        rows.map(([pid, ppid]) => `  ${pid}  ${ppid} ${startTimeFor(pid)}`).join("\n") +
+        `\n  ${process.pid}     1 ${startTimeFor(process.pid)}\n`
+      );
+    }
+
+    it("parses ancestry and identity from one table", () => {
+      const census = parseKillCensus(
+        censusOutput([
+          [100, 1],
+          [200, 100],
+          [300, 100],
+          [400, 200],
+        ])
+      );
+
+      expect(census).not.toBeNull();
+      expect(census!.childrenOf(100)).toEqual([200, 300]);
+      expect(census!.childrenOf(200)).toEqual([400]);
+      expect(census!.childrenOf(400)).toEqual([]);
+      // Same string the per-PID probe records, so ledger identities compare equal.
+      expect(census!.startTimeOf(400)).toBe(startTimeFor(400));
+      expect(census!.startTimeOf(999)).toBeUndefined();
+    });
+
+    it("rejects a table that is missing our own row as truncated", () => {
+      expect(parseKillCensus(`  100     1 ${startTimeFor(100)}\n`)).toBeNull();
+      expect(parseKillCensus("")).toBeNull();
+    });
+
+    it("ignores malformed lines and duplicate rows", () => {
+      const census = parseKillCensus(
+        `garbage\n  100 1\n  200   1 ${startTimeFor(200)}\n  200   5 Mon Feb  2 00:00:00 2026\n` +
+          `  ${process.pid} 1 ${startTimeFor(process.pid)}\n`
+      );
+
+      expect(census!.startTimeOf(100)).toBeUndefined();
+      expect(census!.startTimeOf(200)).toBe(startTimeFor(200));
+      expect(census!.childrenOf(5)).toEqual([]);
+    });
+
+    it("reads pid, ppid and lstart only, bounded and pinned to UTC", () => {
+      mockSpawnSync.mockImplementation(() => ({ status: 0, stdout: censusOutput([[100, 1]]) }));
+
+      expect(takeKillCensusSync()?.startTimeOf(100)).toBe(startTimeFor(100));
+      const [file, args, opts] = mockSpawnSync.mock.calls[0] as [
+        string,
+        string[],
+        { timeout: number; env: Record<string, string>; killSignal: string },
+      ];
+      expect(file).toBe("ps");
+      expect(args).toEqual(["-A", "-o", "pid=,ppid=,lstart="]);
+      expect(opts.timeout).toBeLessThanOrEqual(1000);
+      expect(opts.env.TZ).toBe("UTC");
+      expect(opts.killSignal).toBe("SIGKILL");
+    });
+
+    it("returns null when ps fails, times out, or exits non-zero", () => {
+      mockSpawnSync.mockImplementation(() => ({ status: null, error: new Error("ETIMEDOUT") }));
+      expect(takeKillCensusSync()).toBeNull();
+      mockSpawnSync.mockImplementation(() => ({ status: 1, stdout: censusOutput([[100, 1]]) }));
+      expect(takeKillCensusSync()).toBeNull();
+      mockSpawnSync.mockImplementation(() => {
+        throw new Error("spawn failed");
+      });
+      expect(takeKillCensusSync()).toBeNull();
+    });
+
+    it("spends nothing once the teardown budget is exhausted", () => {
+      beginTeardownProbeWindow(0);
+      expect(takeKillCensusSync()).toBeNull();
+      expect(mockSpawnSync).not.toHaveBeenCalled();
+    });
+
+    it("verifies ledger orphans against the census without a second probe", async () => {
+      mockSpawnSync.mockImplementation((_file: string, args: string[]) => ({
+        status: 0,
+        stdout: psOutput(readRequestedPids(args)),
+      }));
+      const ledger = new TerminalLineageLedger(null);
+      const tree = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+        { pid: 300, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(tree);
+      await flush();
+      ledger.reconcile(tree);
+      mockSpawnSync.mockClear();
+
+      // 200 is alive with its recorded identity; 300's PID now belongs to a
+      // different process; nothing else is listed.
+      const census = parseKillCensus(
+        `  200   1 ${startTimeFor(200)}\n  300   1 Mon Feb  2 00:00:00 2026\n` +
+          `  ${process.pid} 1 ${startTimeFor(process.pid)}\n`
+      );
+
+      expect(ledger.getVerifiedOrphanPids(100, [], census)).toEqual([200]);
+      expect(mockSpawnSync).not.toHaveBeenCalled();
     });
   });
 });

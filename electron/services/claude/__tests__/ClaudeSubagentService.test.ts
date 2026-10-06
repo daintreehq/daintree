@@ -1,13 +1,19 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { setPtyClientRef } from "../../../window/serviceRefs.js";
+import type { PtyClient } from "../../PtyClient.js";
 import { mkdtemp, mkdir, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 
 const getTerminalAsync = vi.fn();
 
-vi.mock("../../PtyClient.js", () => ({
-  getPtyClient: () => ({ getTerminalAsync }),
-}));
+beforeEach(() => {
+  setPtyClientRef({ getTerminalAsync } as unknown as PtyClient);
+});
+
+afterEach(() => {
+  setPtyClientRef(null);
+});
 
 const { deriveProjectSlug, __resetClaudeSubagentProbeCache } =
   await import("../ClaudeSubagentReader.js");
@@ -79,6 +85,30 @@ describe("listClaudeSubagents", () => {
     });
   });
 
+  it.each([
+    ["the agent exited back to the shell", { agentState: "exited" }],
+    ["the terminal process exited", { isExited: true }],
+    ["the terminal has no live process", { hasPty: false }],
+  ])("refuses the old session's children once %s", async (_label, overrides) => {
+    await seedChild("aaa1", [TASK, REPLY]);
+    getTerminalAsync.mockResolvedValue(claudeTerminal(overrides));
+    await expect(listClaudeSubagents("t1")).resolves.toEqual({
+      status: "unavailable",
+      reason: "provider-mismatch",
+    });
+    await expect(readClaudeSubagentTranscript("t1", "aaa1")).resolves.toEqual({
+      status: "unavailable",
+      reason: "provider-mismatch",
+    });
+  });
+
+  it("still answers for a restored pane the detector has not reached yet", async () => {
+    await seedChild("aaa1", [TASK, REPLY]);
+    getTerminalAsync.mockResolvedValue(claudeTerminal());
+    const result = await listClaudeSubagents("t1");
+    expect(result.status).toBe("ok");
+  });
+
   it("accepts a terminal detected as Claude even when it was launched as something else", async () => {
     getTerminalAsync.mockResolvedValue(
       claudeTerminal({ launchAgentId: "bash", detectedAgentId: "claude" })
@@ -94,6 +124,15 @@ describe("listClaudeSubagents", () => {
       status: "unavailable",
       reason: "terminal-unknown",
     });
+  });
+
+  it("reports terminal-unknown before the pty client exists, without building one", async () => {
+    setPtyClientRef(null);
+    await expect(listClaudeSubagents("t1")).resolves.toEqual({
+      status: "unavailable",
+      reason: "terminal-unknown",
+    });
+    expect(getTerminalAsync).not.toHaveBeenCalled();
   });
 
   it("reports no-session for a terminal that never had a session id assigned", async () => {

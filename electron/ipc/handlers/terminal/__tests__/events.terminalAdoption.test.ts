@@ -40,7 +40,10 @@ describe("terminal event handlers — terminal hand-over (#12490)", () => {
     handleTerminalExit.mockReset();
     handleTerminalSpawnResult.mockReset();
     serviceRef.current = { handleTerminalExit, handleTerminalSpawnResult };
-    ptyClient = Object.assign(new EventEmitter(), { getTerminalProjectId: vi.fn() });
+    ptyClient = Object.assign(new EventEmitter(), {
+      getTerminalProjectId: vi.fn(),
+      consumeRestartExitSuppression: vi.fn(() => false),
+    });
     dispose = registerTerminalEventHandlers({ ptyClient } as unknown as HandlerDependencies);
   });
 

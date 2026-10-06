@@ -12,6 +12,15 @@ import {
 } from "../../../shared/types/ipc/pluginProcess.js";
 import type { PluginProcessDataChunk, PluginProcessMode } from "../../../shared/types/plugin.js";
 import type { ManagedPtyBackend, PluginPtyExit } from "./PluginPtyTransport.js";
+import {
+  isChildTreeAlive,
+  PLUGIN_CHILD_DETACHED,
+  reapChildTreeAfterExit,
+  reapPendingChildTrees,
+  scheduleChildTreeEscalation,
+  signalChildTree,
+  trackChildTree,
+} from "./pluginChildTree.js";
 
 export { minimalSpawnEnv };
 
@@ -24,6 +33,9 @@ export { minimalSpawnEnv };
  * unbounded; oldest chunks are dropped first.
  */
 export const PLUGIN_PROCESS_EARLY_DATA_CAP_BYTES = 64 * 1024;
+
+/** How often the quit sweep re-checks a process group whose leader has already exited. */
+const SHUTDOWN_TREE_POLL_MS = 50;
 
 /**
  * How long a terminated process keeps its unreplayed output. Covers the worker's
@@ -54,6 +66,12 @@ export interface ManagedChildProcess {
    * no-op. Mirrors `ChildProcessWithoutNullStreams["stdin"]`.
    */
   stdin: NodeJS.WritableStream | null;
+  /**
+   * Set by the production spawner: the child leads its own process group, so
+   * teardown signals its whole tree rather than the direct child alone (#13173).
+   * Fakes leave it unset and only ever see `kill()`.
+   */
+  ownsProcessTree?: boolean;
   /** Send a termination signal. Returns false if the process is already gone. */
   kill(signal?: NodeJS.Signals): boolean;
   /** Subscribe to the child's terminal `exit` (code, signal). */
@@ -842,6 +860,9 @@ export class PluginProcessManager {
       // Recorded before the drain wait so liveness reads (concurrency cap,
       // stdin writes) see the reap immediately.
       managed.childExited = true;
+      // A requested kill already owns the tree's escalation. A child that
+      // ended on its own still leaves whatever it backgrounded in its group.
+      if (!managed.killRequested) reapChildTreeAfterExit(child, "process", this.killGraceMs);
       // The exit code/signal are only ever authoritative here — `close` carries
       // its own arguments in Node, but this interface deliberately doesn't take
       // them, so the values are captured on the way past.
@@ -949,11 +970,7 @@ export class PluginProcessManager {
     if (!managed.child) return;
     managed.killRequested = true;
     const child = managed.child;
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // already-exited — the exit handler does the bookkeeping
-    }
+    signalChildTree(child, "SIGTERM");
     if (managed.killTimer) clearTimeout(managed.killTimer);
     managed.killTimer = setTimeout(() => {
       managed.killTimer = null;
@@ -961,14 +978,13 @@ export class PluginProcessManager {
       // when the child exits inside the grace window, so reaching here means it
       // didn't.
       if (managed.child === child && managed.status === "running") {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // best-effort
-        }
+        signalChildTree(child, "SIGKILL");
       }
     }, this.killGraceMs);
     managed.killTimer.unref?.();
+    // The timer above dies with the direct child's exit; grandchildren that
+    // ignored SIGTERM must not.
+    scheduleChildTreeEscalation(child, "process", this.killGraceMs);
   }
 
   /**
@@ -1026,22 +1042,23 @@ export class PluginProcessManager {
         clearTimeout(managed.killTimer);
         managed.killTimer = null;
       }
-      try {
-        old.kill("SIGTERM");
-      } catch {
-        // best-effort
-      }
+      // Between `exit` and `close` the child is still attached but already
+      // reaped, and its PID may already belong to something else.
+      let oldExited = managed.childExited;
+      old.on("exit", () => {
+        oldExited = true;
+      });
+      if (!oldExited) signalChildTree(old, "SIGTERM");
       // Escalate the detached old child to SIGKILL if it ignores SIGTERM, so a
       // repeated restart can't strand a pile of live children outside the cap.
+      // Once it has exited its PID is free for reuse, so only its process group
+      // — which cannot be recycled while a member lives — is still a target.
       const oldChild = old;
       const escalation = setTimeout(() => {
-        try {
-          oldChild.kill("SIGKILL");
-        } catch {
-          // best-effort
-        }
+        if (!oldExited) signalChildTree(oldChild, "SIGKILL");
       }, this.killGraceMs);
       escalation.unref?.();
+      scheduleChildTreeEscalation(old, "process", this.killGraceMs);
     }
     managed.restartCount++;
     managed.killRequested = false;
@@ -1129,7 +1146,7 @@ export class PluginProcessManager {
    * `utilityProcess` children that Electron reaps with the app, and its
    * `.kill()` can block main for ~2s on macOS (#11073). PTY-backed processes
    * are signalled but not awaited — the pty-host owns their reaping and has its
-   * own descendant sweep (#12203).
+   * own descendant sweep (#12203, #13173).
    */
   async shutdownAll(): Promise<void> {
     this.shuttingDown = true;
@@ -1158,12 +1175,14 @@ export class PluginProcessManager {
 
     if (targets.length === 0) {
       for (const managed of ptys) this.signalPtyForShutdown(managed);
+      reapPendingChildTrees("process");
       return;
     }
 
     await new Promise<void>((resolve) => {
       let remaining = targets.length;
       let timer: ReturnType<typeof setTimeout> | null = null;
+      let poll: ReturnType<typeof setInterval> | null = null;
       let done = false;
       const finish = (): void => {
         if (done) return;
@@ -1172,6 +1191,10 @@ export class PluginProcessManager {
           clearTimeout(timer);
           timer = null;
         }
+        if (poll) {
+          clearInterval(poll);
+          poll = null;
+        }
         resolve();
       };
       const settleOne = (): void => {
@@ -1179,28 +1202,33 @@ export class PluginProcessManager {
         if (remaining <= 0) finish();
       };
 
+      // A target is gone only once its direct child has exited AND nothing in
+      // its process group survives (#13173): a wrapper that exits promptly on
+      // SIGTERM says nothing about the server it started.
+      const exited = new Set<ManagedChildProcess>();
+      const counted = new Set<ManagedChildProcess>();
+      const check = (): void => {
+        for (const { child } of targets) {
+          if (counted.has(child) || !exited.has(child) || isChildTreeAlive(child)) continue;
+          counted.add(child);
+          settleOne();
+        }
+      };
+
       // Listeners BEFORE the signal: a child that dies the instant it is
       // signalled must not have its exit land before anything is listening,
       // which would strand the sweep on the full grace window for a process
       // that is already gone.
       for (const { child } of targets) {
-        let counted = false;
         child.on("exit", () => {
-          if (counted) return;
-          counted = true;
-          settleOne();
+          exited.add(child);
+          check();
         });
       }
 
-      for (const { child } of targets) {
-        try {
-          child.kill("SIGTERM");
-        } catch {
-          // already gone — the exit listener above still settles it
-        }
-      }
+      for (const { child } of targets) signalChildTree(child, "SIGTERM");
       // PTYs are signalled but never awaited: the pty-host owns their reaping
-      // and has its own descendant sweep (#12203), so blocking quit on its
+      // and has its own descendant sweep (#12203, #13173), so blocking quit on its
       // round trip would buy nothing.
       for (const managed of ptys) this.signalPtyForShutdown(managed);
 
@@ -1209,25 +1237,27 @@ export class PluginProcessManager {
       // handle holding the quit chain open for the full grace window.
       if (done) return;
 
+      // Group survivors announce nothing, so a tree-owning target is polled.
+      if (targets.some(({ child }) => child.ownsProcessTree === true)) {
+        poll = setInterval(check, SHUTDOWN_TREE_POLL_MS);
+      }
+
       // Deliberately NOT unref'd: the whole point is to hold the quit chain
       // open long enough to prove the children are gone. `settleWithin` in
       // lifecycle/shutdown.ts backstops it if a child wedges past the grace.
       timer = setTimeout(() => {
         timer = null;
         for (const { managed, child } of targets) {
-          if (managed.childExited) continue;
-          try {
-            // SIGKILL cannot be trapped, so the signal landing IS the kill;
-            // waiting for the reap would only add latency to a quit that has
-            // already done everything it can.
-            child.kill("SIGKILL");
-          } catch {
-            // best-effort
-          }
+          if (managed.childExited && !isChildTreeAlive(child)) continue;
+          // SIGKILL cannot be trapped, so the signal landing IS the kill;
+          // waiting for the reap would only add latency to a quit that has
+          // already done everything it can.
+          signalChildTree(child, "SIGKILL");
         }
         finish();
       }, this.killGraceMs);
     });
+    reapPendingChildTrees("process");
   }
 
   /**
@@ -1288,6 +1318,12 @@ const defaultSpawner: ProcessSpawner = (config) => {
     // process-orchestrator plugin would otherwise carry.
     shell: false,
     windowsHide: true,
+    // Its own process group on POSIX, so teardown reaches the whole tree with
+    // one signal (#13173). Never unref'd: the pipes stay owned by this process.
+    detached: PLUGIN_CHILD_DETACHED,
   });
-  return child as unknown as ManagedChildProcess;
+  const managed = child as unknown as ManagedChildProcess;
+  managed.ownsProcessTree = true;
+  child.once("exit", trackChildTree(managed));
+  return managed;
 };

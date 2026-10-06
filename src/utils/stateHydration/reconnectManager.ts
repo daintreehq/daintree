@@ -3,6 +3,23 @@ import type { TerminalReconnectResult } from "@shared/types/ipc/terminal";
 import { logWarn } from "@/utils/logger";
 
 export const RECONNECT_TIMEOUT_MS = 2000;
+/**
+ * Extra wait on the same in-flight probe once the first deadline passes. The
+ * probe is read-only, so a late reply is still good — and a timeout makes
+ * restore give up on the saved id while the original may still be running
+ * (#13172), so a slow host is worth waiting out before declaring it.
+ */
+export const RECONNECT_GRACE_MS = 5000;
+
+const TIMEOUT = Symbol("reconnect-timeout");
+
+function raceDeadline<T>(promise: Promise<T>, ms: number): Promise<T | typeof TIMEOUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<typeof TIMEOUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMEOUT), ms);
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
 
 export type ReconnectOutcome =
   | { status: "found"; terminal: NonNullable<Awaited<ReturnType<typeof terminalClient.reconnect>>> }
@@ -38,11 +55,19 @@ export async function reconnectWithTimeout(
     logHydrationInfo(`Trying reconnect fallback for ${terminalId}`);
 
     const reconnectPromise = terminalClient.reconnect(terminalId);
-    const timeoutPromise = new Promise<null>((_, reject) =>
-      setTimeout(() => reject(new Error("Reconnection timeout")), RECONNECT_TIMEOUT_MS)
-    );
-
-    const reconnectedTerminal = await Promise.race([reconnectPromise, timeoutPromise]);
+    let reconnectedTerminal = await raceDeadline(reconnectPromise, RECONNECT_TIMEOUT_MS);
+    if (reconnectedTerminal === TIMEOUT) {
+      logWarn(
+        `Reconnect for ${terminalId} slow after ${RECONNECT_TIMEOUT_MS}ms, waiting up to ${RECONNECT_GRACE_MS}ms more`
+      );
+      reconnectedTerminal = await raceDeadline(reconnectPromise, RECONNECT_GRACE_MS);
+    }
+    if (reconnectedTerminal === TIMEOUT) {
+      logWarn(
+        `Reconnect timed out for ${terminalId} after ${RECONNECT_TIMEOUT_MS + RECONNECT_GRACE_MS}ms`
+      );
+      return { status: "timeout" };
+    }
 
     if (reconnectedTerminal?.exists && reconnectedTerminal.hasPty) {
       logHydrationInfo(
@@ -61,14 +86,6 @@ export async function reconnectWithTimeout(
     );
     return { status: "not_found" };
   } catch (reconnectError) {
-    const isTimeout =
-      reconnectError instanceof Error && reconnectError.message === "Reconnection timeout";
-
-    if (isTimeout) {
-      logWarn(`Reconnect timed out for ${terminalId} after ${RECONNECT_TIMEOUT_MS}ms`);
-      return { status: "timeout" };
-    }
-
     logWarn(`Reconnect fallback failed for ${terminalId}`, {
       error: reconnectError,
     });

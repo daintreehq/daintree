@@ -15,7 +15,9 @@ interface BrokerCall {
 
 function makeDeps(
   overrides: Partial<PtyEventRouterDeps> = {},
-  callbackOverrides: { onTerminalPid?: (id: string, pid: number) => void } = {}
+  callbackOverrides: {
+    onTerminalPid?: (id: string, pid: number, launchGeneration?: number) => void;
+  } = {}
 ): {
   deps: PtyEventRouterDeps;
   emitter: EventEmitter;
@@ -273,6 +275,35 @@ describe("routeHostEvent", () => {
     expect(state.pendingSpawns.has("t1")).toBe(false);
   });
 
+  it.each([0, 1])("preserves a successor on a stale exit with %i pending kills", (killCount) => {
+    const { deps, emitter, state, callbacks } = makeDeps();
+    const successor: PtyHostSpawnOptions = { cwd: "/", cols: 80, rows: 24, launchGeneration: 2 };
+    state.pendingSpawns.set("t1", successor);
+    state.terminalPids.set("t1", 999);
+    if (killCount > 0) state.pendingKillCount.set("t1", killCount);
+    const onExit = vi.fn();
+    const recordExit = vi.fn();
+    emitter.on("exit", onExit);
+    deps.callbacks.onTerminalExit = recordExit;
+
+    routeHostEvent({ type: "exit", id: "t1", exitCode: 0, launchGeneration: 1 }, deps);
+
+    expect(state.pendingSpawns.get("t1")).toBe(successor);
+    expect(state.terminalPids.get("t1")).toBe(999);
+    expect(state.pendingKillCount.has("t1")).toBe(false);
+    expect(callbacks.trashIdsRemoved).toEqual([]);
+    expect(onExit).not.toHaveBeenCalled();
+    expect(recordExit).toHaveBeenCalledExactlyOnceWith("t1", 0, 1);
+
+    routeHostEvent({ type: "exit", id: "t1", exitCode: 0, launchGeneration: 2 }, deps);
+
+    expect(state.pendingSpawns.has("t1")).toBe(false);
+    expect(state.terminalPids.has("t1")).toBe(false);
+    expect(callbacks.trashIdsRemoved).toEqual(["t1"]);
+    expect(onExit).toHaveBeenCalledExactlyOnceWith("t1", 0, undefined);
+    expect(recordExit).toHaveBeenLastCalledWith("t1", 0, 2);
+  });
+
   it("removes the pendingKillCount entry once it reaches zero", () => {
     const { deps, state } = makeDeps();
     state.pendingKillCount.set("t1", 1);
@@ -418,6 +449,13 @@ describe("routeHostEvent", () => {
 
     expect(state.terminalPids.get("t1")).toBe(555);
     expect(callbacks.terminalPidCalls).toEqual([{ id: "t1", pid: 555 }]);
+  });
+
+  it("forwards the host-stamped launch generation to onTerminalPid (#13176)", () => {
+    const onTerminalPid = vi.fn();
+    const { deps } = makeDeps({}, { onTerminalPid });
+    routeHostEvent({ type: "terminal-pid", id: "t1", pid: 4242, launchGeneration: 5 }, deps);
+    expect(onTerminalPid).toHaveBeenCalledWith("t1", 4242, 5);
   });
 
   it("invokes onTerminalPid with id and pid after updating the state map (#7526)", () => {

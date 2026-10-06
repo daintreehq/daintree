@@ -27,11 +27,7 @@ import {
 } from "../../shared/config/helpAssistantTierAllowlists.js";
 import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
-import {
-  ASSISTANT_SCRATCH_ENV_VAR,
-  getAssistantScratchRoot,
-  getScratchDirForSession,
-} from "./AssistantScratchService.js";
+import { ASSISTANT_SCRATCH_ENV_VAR, getScratchDirForSession } from "./AssistantScratchService.js";
 import {
   CONFIRMATIONS_BLOCK_END,
   CONFIRMATIONS_BLOCK_START,
@@ -89,10 +85,6 @@ export type ProjectMetadataReader = (
   projectId: string,
   projectPath: string
 ) => Promise<HelpSessionProjectFacts>;
-
-// Injected for the same reason. Every directory Daintree knows as a project or
-// one of its worktrees, so Claude's edit deny reaches past the served project.
-export type KnownProjectRootsReader = (projectPath: string) => Promise<string[]>;
 
 const SESSIONS_DIR_NAME = "help-sessions";
 const META_FILE_NAME = "meta.json";
@@ -304,7 +296,6 @@ interface SessionMeta {
 interface BundledClaudeSettings {
   permissions?: {
     allow?: string[];
-    deny?: string[];
     additionalDirectories?: string[];
   };
   defaultMode?: string;
@@ -341,88 +332,6 @@ export async function projectRuleRoots(
   const real = await fs.realpath(projectPath).catch(() => null);
   if (real) paths.add(real);
   return [...paths].map((p) => toRuleRoot(p, platform));
-}
-
-const ROOT_RESOLVE_TIMEOUT_MS = 2000;
-
-function isSameOrInside(parent: string, child: string): boolean {
-  const rel = path.relative(parent, child);
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
-}
-
-/**
- * `p` and its realpath. When resolving stalls (a dead mount) the lexical path
- * alone still gets a deny rather than none.
- */
-async function aliasesWithin(p: string, timeoutMs: number): Promise<string[]> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const real = await Promise.race([
-      fs.realpath(p).catch(() => p),
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
-    if (real === null) {
-      console.warn(
-        "[HelpSessionService] Timed out resolving a project root; denying its path as given"
-      );
-      return [p];
-    }
-    return real !== p ? [p, real] : [p];
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-/**
- * The realpath `p` will have once created: its nearest existing ancestor,
- * resolved, with the missing tail re-appended. The scratch folder may not
- * exist yet when this runs, and a symlinked `userData` must still be seen.
- */
-async function resolvedEvenIfMissing(p: string): Promise<string> {
-  const tail: string[] = [];
-  let current = p;
-  for (;;) {
-    const real = await fs.realpath(current).catch(() => null);
-    if (real) return path.join(real, ...tail);
-    const parent = path.dirname(current);
-    if (parent === current) return p;
-    tail.unshift(path.basename(current));
-    current = parent;
-  }
-}
-
-/**
- * Edit-deny rule roots for `roots`, minus any that would also cover one of
- * `protectedPaths`. Deny beats allow in Claude Code, so a project containing
- * the scratch or session folders would otherwise lock the assistant out of the
- * only place it may write. Each root resolves on its own deadline, so one dead
- * mount can't hold up the rest.
- */
-export async function editDenyRuleRoots(
-  roots: readonly string[],
-  protectedPaths: readonly string[],
-  platform: NodeJS.Platform = process.platform,
-  timeoutMs: number = ROOT_RESOLVE_TIMEOUT_MS
-): Promise<string[]> {
-  const guarded = (
-    await Promise.all(protectedPaths.map(async (p) => [p, await resolvedEvenIfMissing(p)]))
-  ).flat();
-  const perRoot = await Promise.all(
-    [...new Set(roots)].map(async (root) => {
-      const aliases = await aliasesWithin(root, timeoutMs);
-      if (aliases.some((alias) => guarded.some((p) => isSameOrInside(alias, p)))) {
-        console.warn(
-          "[HelpSessionService] Skipping an edit deny that would cover the assistant's own folders"
-        );
-        return [];
-      }
-      return aliases.map((alias) => toRuleRoot(alias, platform));
-    })
-  );
-  return [...new Set(perRoot.flat())];
 }
 
 function deepClonePlainJson<T>(value: T): T {
@@ -701,7 +610,6 @@ export class HelpSessionService {
   private onMcpSessionRevokedFn: ((token: string, sessionId: string) => void) | null = null;
   private disposed = false;
   private projectMetadataReader: ProjectMetadataReader | null = null;
-  private knownProjectRootsReader: KnownProjectRootsReader | null = null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   setMcpRegistry(registry: WindowRegistry): void {
@@ -714,10 +622,6 @@ export class HelpSessionService {
 
   setProjectMetadataReader(reader: ProjectMetadataReader | null): void {
     this.projectMetadataReader = reader;
-  }
-
-  setKnownProjectRootsReader(reader: KnownProjectRootsReader | null): void {
-    this.knownProjectRootsReader = reader;
   }
 
   /**
@@ -1189,12 +1093,7 @@ export class HelpSessionService {
 
     // Gathered before taking the directory lock so a slow git call doesn't
     // serialize sibling lanes behind it. Never throws.
-    const [projectFacts, editDenyRules] = await Promise.all([
-      this.readProjectFacts(input.projectId, input.projectPath),
-      input.agentId === "claude"
-        ? this.readEditDenyRules(input.projectPath)
-        : Promise.resolve<string[]>([]),
-    ]);
+    const projectFacts = await this.readProjectFacts(input.projectId, input.projectPath);
 
     // Every lane of a project provisions into ONE directory, so the file work
     // below is serialized per directory as well as per lane. The lane lock
@@ -1394,8 +1293,7 @@ export class HelpSessionService {
             helpFolder,
             settings,
             userConfig.claudeHooks,
-            input.projectPath,
-            editDenyRules
+            input.projectPath
           );
         } else if (input.agentId === "copilot") {
           await this.writeCopilotMcpConfig(sessionPath, settings, port, userConfig.mcpServers);
@@ -1428,8 +1326,7 @@ export class HelpSessionService {
     // accessor below; nothing is written to disk for Codex.
     //
     // Copilot reads `<sessionPath>/.mcp.json` (written above by
-    // `writeCopilotMcpConfig`). The `--plan` read-only flag is appended at
-    // spawn time via `getCopilotLaunchArgs`.
+    // `writeCopilotMcpConfig`), so it needs no launch flags.
 
     const codexLaunchArgs =
       input.agentId === "codex"
@@ -1448,8 +1345,7 @@ export class HelpSessionService {
     for (const warning of userConfig.warnings) {
       console.warn("[HelpSessionService] Assistant folder:", warning);
     }
-    const copilotLaunchArgs =
-      input.agentId === "copilot" ? this.buildCopilotLaunchArgs() : undefined;
+    const copilotLaunchArgs = input.agentId === "copilot" ? [] : undefined;
     // Claude reads its MCP wiring from the per-lane file rather than the
     // shared cwd `.mcp.json`; the flag is the only way that file reaches it.
     const claudeLaunchArgs = laneMcpConfigPath ? ["--mcp-config", laneMcpConfigPath] : undefined;
@@ -1616,18 +1512,6 @@ export class HelpSessionService {
     if (!record || record.revoked) return null;
     if (record.agentId !== "codex") return null;
     return record.codexLaunchArgs ?? [];
-  }
-
-  /**
-   * Builds the CLI flags that constrain a Copilot help-session spawn to
-   * read-only behaviour. Pins `--plan` (read-only mode, available since
-   * Copilot CLI v1.0.40 — gated by `assistantMinVersion` in
-   * `copilot.ts`). MCP servers are written into `<sessionPath>/.mcp.json`
-   * via `writeCopilotMcpConfig` and read from cwd at launch — no flag
-   * injection needed for MCP discovery.
-   */
-  private buildCopilotLaunchArgs(): string[] {
-    return ["--plan"];
   }
 
   /**
@@ -2756,8 +2640,7 @@ export class HelpSessionService {
     bundledHelpFolder: string,
     settings: { daintreeControl: boolean; bypassPermissions: boolean },
     userHooks: Record<string, unknown> | null = null,
-    projectPath?: string,
-    editDenyRules: readonly string[] = []
+    projectPath?: string
   ): Promise<void> {
     const bundledSettingsPath = path.join(bundledHelpFolder, ".claude", "settings.json");
     const baseline = await this.readBundledSettings(bundledSettingsPath);
@@ -2765,26 +2648,18 @@ export class HelpSessionService {
     const merged = deepClonePlainJson(baseline);
     if (!merged.permissions) merged.permissions = {};
     if (!Array.isArray(merged.permissions.allow)) merged.permissions.allow = [];
-    // A malformed bundled file could pass the object guard in
-    // readBundledSettings with a non-array deny (e.g. the bare string
-    // "Bash(**)"). Claude Code's handling of a non-array deny is undefined,
-    // so normalize it here the same way we normalize allow.
-    if (!Array.isArray(merged.permissions.deny)) merged.permissions.deny = [];
 
     if (settings.daintreeControl && !merged.permissions.allow.includes("mcp__daintree__*")) {
       merged.permissions.allow.push("mcp__daintree__*");
     }
 
-    // The bundled `Read(**)`/`Edit(**)` are relative to the session folder, so
-    // without these every read of the project it serves stops on a directory
-    // prompt. Reads are allowed there; edits stay the launched agents' job —
-    // in this project and in every other project or worktree Daintree knows.
+    // The bundled `Read(**)` is relative to the session folder, so without
+    // these every read of the project it serves stops on a directory prompt.
     if (projectPath) {
       const roots = await projectRuleRoots(projectPath);
       merged.permissions.additionalDirectories = [projectPath];
       for (const root of roots) merged.permissions.allow.push(`Read(${root}/**)`);
     }
-    for (const root of editDenyRules) merged.permissions.deny.push(`Edit(${root}/**)`);
 
     // Auto-trust the project-scoped MCP servers we wrote into the session-dir
     // .mcp.json. Without this, Claude Code prompts the user to approve each
@@ -2871,26 +2746,6 @@ export class HelpSessionService {
           "Bash(gh *)",
           "Bash(glab *)",
           "Bash(tea *)",
-        ],
-        deny: [
-          // `Edit(...)` covers every file-editing tool (Write, NotebookEdit,
-          // MultiEdit). Separate `Write(**)`/`NotebookEdit(**)` entries are
-          // never matched by the file permission checks and make Claude Code
-          // print a warning on every session start.
-          "Edit(**)",
-          "Bash(gh issue create*)",
-          "Bash(gh pr create*)",
-          "Bash(gh pr merge*)",
-          "Bash(gh repo create*)",
-          "Bash(gh repo delete*)",
-          "Bash(glab issue create*)",
-          "Bash(glab mr create*)",
-          "Bash(glab mr merge*)",
-          "Bash(tea issue create*)",
-          "Bash(tea issues create*)",
-          "Bash(tea pr create*)",
-          "Bash(tea pulls create*)",
-          "Bash(tea pulls merge*)",
         ],
       },
     };
@@ -2998,52 +2853,6 @@ export class HelpSessionService {
     }
   }
 
-  /**
-   * Edit-deny rule roots for the served project and every other project or
-   * worktree Daintree knows. Resolved before the directory lock so a slow git
-   * or filesystem call doesn't serialize sibling lanes. Never throws: when the
-   * reader fails or times out, the served project is still denied.
-   */
-  private async readEditDenyRules(projectPath: string): Promise<string[]> {
-    const known = await this.readKnownProjectRoots(projectPath);
-    return editDenyRuleRoots(
-      [projectPath, ...known],
-      [getAssistantScratchRoot(), this.getSessionsRoot()]
-    ).catch((err: unknown) => {
-      console.warn(
-        "[HelpSessionService] Edit deny rules failed; omitting them:",
-        formatErrorMessage(err, "unknown error")
-      );
-      return [];
-    });
-  }
-
-  private async readKnownProjectRoots(projectPath: string): Promise<string[]> {
-    const reader = this.knownProjectRootsReader;
-    if (!reader) return [];
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        reader(projectPath),
-        new Promise<string[]>((resolve) => {
-          timer = setTimeout(() => {
-            console.warn("[HelpSessionService] Known project roots read timed out; omitting them");
-            resolve([]);
-          }, PROJECT_METADATA_READ_TIMEOUT_MS);
-          timer.unref?.();
-        }),
-      ]);
-    } catch (err) {
-      console.warn(
-        "[HelpSessionService] Known project roots read failed; omitting them:",
-        formatErrorMessage(err, "unknown error")
-      );
-      return [];
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
-
   private buildScratchAddendum(_scratchPath: string): string {
     // No literal path. This block lives in the CLAUDE.md / AGENTS.md that every
     // lane of the project shares, while the scratch folder is per session — so a
@@ -3053,7 +2862,7 @@ export class HelpSessionService {
     return [
       "## Assistant Scratch Folder",
       "",
-      `Put notes, drafts and working files in the folder named by \`${ASSISTANT_SCRATCH_ENV_VAR}\` (read the variable; don't assume a path), never in the project or the system temp dir. It is cleared on every Daintree launch.`,
+      `Put temporary notes and drafts in the folder named by \`${ASSISTANT_SCRATCH_ENV_VAR}\` (read the variable; don't assume a path), not the system temp dir. It is cleared on every Daintree launch.`,
       "",
     ].join("\n");
   }

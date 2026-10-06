@@ -9,7 +9,7 @@ import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
 import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
 import type { WorkerMemoryAccounting } from "../services/pty/analysis/AnalysisWorkerPool.js";
-import { FdMonitor, isProcessAlive } from "./FdMonitor.js";
+import { FdMonitor } from "./FdMonitor.js";
 import { metricsEnabled } from "./metrics.js";
 import type { PtyPauseCoordinator } from "./PtyPauseCoordinator.js";
 
@@ -189,8 +189,6 @@ export class ResourceGovernor {
   private fdSampleFailureLogged = false;
   private throttleStartTime = 0;
   private readonly fdMonitor: FdMonitor;
-  private readonly killedPids = new Map<number, number>();
-  private readonly ORPHAN_GRACE_MS = 4000;
   private powerLevel: PowerPolicyLevel = "active";
   private lastFdSampleAt = 0;
   private hasThroughputBaseline = false;
@@ -217,10 +215,6 @@ export class ResourceGovernor {
       this.fdSampleInterval = setInterval(() => this.sampleFdUsage(), FD_SAMPLE_INTERVAL_MS);
       console.log("[ResourceGovernor] FD monitoring enabled");
     }
-  }
-
-  trackKilledPid(pid: number): void {
-    this.killedPids.set(pid, Date.now());
   }
 
   /**
@@ -475,7 +469,6 @@ export class ResourceGovernor {
       }
     }
 
-    this.sweepKilledPids();
     this.emitPendingBytesGauge();
     this.emitThroughputRateGauge();
     this.emitPausedDurationGauge();
@@ -639,31 +632,6 @@ export class ResourceGovernor {
         perTerminalBufferMemory,
       },
     });
-  }
-
-  private sweepKilledPids(): void {
-    const now = Date.now();
-
-    // Prune on every platform: `killedPids` fills everywhere via
-    // `trackKilledPid`, and gating the sweep on FD support leaked the map on
-    // Windows until `dispose()` (#10842). The liveness probe keeps its
-    // previous scope — platforms with FD monitoring.
-    const expiredPids: number[] = [];
-    for (const [pid, killedAt] of this.killedPids) {
-      if (now - killedAt > this.ORPHAN_GRACE_MS) {
-        expiredPids.push(pid);
-        this.killedPids.delete(pid);
-      }
-    }
-
-    if (expiredPids.length === 0 || !this.fdMonitor.supported) return;
-
-    const orphanedPids = expiredPids.filter((pid) => isProcessAlive(pid));
-    if (orphanedPids.length > 0) {
-      console.warn(
-        `[ResourceGovernor] Orphaned PTY PIDs detected (killed but still alive): ${orphanedPids.join(", ")}`
-      );
-    }
   }
 
   private sampleFdUsage(): void {
@@ -1011,7 +979,6 @@ export class ResourceGovernor {
     this.pausedTerminalIds.clear();
     this.isWarning = false;
     this.profileOverride = null;
-    this.killedPids.clear();
     this.smoothedUtilizationPercent = undefined;
     this.sampleCount = 0;
     this.lastDisengageAt = 0;

@@ -98,6 +98,11 @@ export class PtyShard {
    * schedule restarts or mutate fabric state.
    */
   retired = false;
+  /**
+   * The crashed host's lineage reap while it is still running. Auto-restart
+   * and crash-budget migration both wait on it before replaying terminals.
+   */
+  lineageReap: Promise<void> | null = null;
   /** MessagePorts awaiting a live child, keyed by windowId. */
   readonly pendingMessagePorts = new Map<number, MessagePortMain>();
 
@@ -141,6 +146,7 @@ export class PtyShard {
         onBeforeRestart: () => {
           this.needsRespawn = true;
         },
+        restartBarrier: () => this.lineageReap,
         isDisposed: () => this.retired || callbacks.isClientDisposed(),
         onHostLog: callbacks.onHostLog,
         logInfo: callbacks.logInfo,
@@ -187,14 +193,16 @@ export class PtyShard {
 
   /**
    * Tear the shard down: watchdog first (no force-kill races the dispose),
-   * then the lifecycle (posts `dispose` to the host, force-kills after 1s),
-   * pending ports, and the broker (rejects this shard's pending requests).
+   * then the lifecycle (posts `dispose` to the host), pending ports, and the
+   * broker (rejects this shard's pending requests). Settles `true` when the
+   * host exited on its own, `false` when it had to be force-killed.
    */
-  dispose(): void {
+  dispose(): Promise<boolean> {
     this.retired = true;
     this.watchdog.dispose();
-    this.lifecycle.dispose();
+    const exited = this.lifecycle.dispose();
     this.closePendingPorts();
     this.broker.dispose();
+    return exited;
   }
 }

@@ -61,12 +61,11 @@ export interface PtyEventRouterCallbacks {
   onTerminalRemovedFromTrash: (id: string) => void;
   /**
    * Optional. Fires after `state.terminalPids` has been updated for a
-   * `terminal-pid` event. Consumed by the help-session Job Object wiring
-   * (#7526) so help-session PTYs can be attached to a Windows Job Object
-   * for crash-safe reaping. Must not throw — the router treats this as a
-   * pure side effect.
+   * `terminal-pid` event. Consumed by the crash-safe reaper (#7526,
+   * #13176), which registers every PTY with the Windows Job Object or POSIX
+   * supervisor. Must not throw — the router treats this as a pure side effect.
    */
-  onTerminalPid?: (id: string, pid: number) => void;
+  onTerminalPid?: (id: string, pid: number, launchGeneration?: number) => void;
   /**
    * Optional. Fires on every `exit` event so the lifecycle ledger can record
    * the close against the exiting incarnation's generation. Pure side effect.
@@ -186,7 +185,12 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       return true;
 
     case "exit": {
-      callbacks.onTerminalRemovedFromTrash(event.id);
+      const currentGeneration = state.pendingSpawns.get(event.id)?.launchGeneration;
+      const superseded =
+        event.launchGeneration !== undefined &&
+        currentGeneration !== undefined &&
+        event.launchGeneration !== currentGeneration;
+      if (!superseded) callbacks.onTerminalRemovedFromTrash(event.id);
       const killCount = state.pendingKillCount.get(event.id) ?? 0;
       if (killCount > 0) {
         // Exit from a kill() call — a new spawn() may have already
@@ -197,11 +201,11 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
         } else {
           state.pendingKillCount.delete(event.id);
         }
-      } else {
+      } else if (!superseded) {
         // Normal exit (process ended on its own)
         state.pendingSpawns.delete(event.id);
       }
-      state.terminalPids.delete(event.id);
+      if (!superseded) state.terminalPids.delete(event.id);
       if (callbacks.onTerminalExit) {
         try {
           callbacks.onTerminalExit(event.id, event.exitCode, event.launchGeneration);
@@ -209,6 +213,11 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
           deps.logWarn(`[PtyClient] onTerminalExit threw for ${event.id}: ${String(err)}`);
         }
       }
+      // A kill returns before the host delivers its exit. Restart may already
+      // have registered a successor with the same id: retire the old kill and
+      // ledger/reaper above, but never clear the successor's PID/trash state or
+      // broadcast an id-only exit that would auto-trash its live renderer pane.
+      if (superseded) return true;
       emitter.emit("exit", event.id, event.exitCode, event.signal);
       return true;
     }
@@ -318,6 +327,14 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.rollup);
       return true;
 
+    case "process-inventory":
+      broker.resolve(event.requestId, event.inventory);
+      return true;
+
+    case "closed-terminal-processes-killed":
+      broker.resolve(event.requestId, event.result);
+      return true;
+
     case "trim-state-result":
       broker.resolve(event.requestId, event.result);
       return true;
@@ -348,7 +365,7 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       state.terminalPids.set(event.id, event.pid);
       if (callbacks.onTerminalPid) {
         try {
-          callbacks.onTerminalPid(event.id, event.pid);
+          callbacks.onTerminalPid(event.id, event.pid, event.launchGeneration);
         } catch (err) {
           // Hardens the documented "must not throw" contract — a future
           // callback that does throw must not break unrelated PTY routing.

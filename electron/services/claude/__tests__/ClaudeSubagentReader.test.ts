@@ -470,6 +470,74 @@ describe("listSubagentsInDir", () => {
     expect(child?.status.type).not.toBe("completed");
   });
 
+  it("calls a child done when the CLI logged bookkeeping after its final turn", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    await writeChild(dir, "aaa1", [
+      userRecord("go"),
+      assistantRecord("all done", "end_turn"),
+      record({ type: "attachment", attachment: { type: "hook_success" } }),
+      record({ type: "system", subtype: "turn_duration" }),
+      record({ type: "file-history-snapshot" }),
+    ]);
+
+    const [child] = await listSubagentsInDir(dir);
+    expect(child?.status).toEqual({ type: "completed" });
+  });
+
+  it("does not let bookkeeping hide a turn that has not ended", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    await writeChild(dir, "aaa1", [
+      userRecord("go"),
+      assistantRecord("interim", "end_turn"),
+      userRecord("and the next thing"),
+      record({ type: "attachment", attachment: { type: "total_tokens_reminder" } }),
+    ]);
+
+    const [child] = await listSubagentsInDir(dir);
+    expect(child?.status).toEqual({ type: "working" });
+  });
+
+  it("will not step over a half-written line behind trailing bookkeeping", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    await writeChild(dir, "aaa1", [
+      userRecord("go"),
+      assistantRecord("finished the first turn", "end_turn"),
+      '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tex',
+      record({ type: "attachment", attachment: { type: "hook_success" } }),
+    ]);
+
+    const [child] = await listSubagentsInDir(dir);
+    expect(child?.status).toEqual({ type: "unknown", reason: "unrecognized" });
+  });
+
+  it("finds the final turn behind bookkeeping in a transcript past the probe window", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    const filler = Array.from({ length: 400 }, (_, index) =>
+      assistantRecord(`step ${index} ${"x".repeat(500)}`, "tool_use")
+    );
+    await writeChild(dir, "aaa1", [
+      userRecord("the delegated task"),
+      ...filler,
+      assistantRecord("all done", "end_turn"),
+      record({ type: "attachment", attachment: { type: "hook_success" } }),
+      record({ type: "system", subtype: "stop_hook_summary" }),
+    ]);
+
+    const [child] = await listSubagentsInDir(dir);
+    expect(child?.status).toEqual({ type: "completed" });
+  });
+
+  it("admits it cannot tell when the tail holds nothing but bookkeeping", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    await writeChild(dir, "aaa1", [
+      record({ type: "attachment", attachment: { type: "hook_success" } }),
+      record({ type: "system", subtype: "turn_duration" }),
+    ]);
+
+    const [child] = await listSubagentsInDir(dir);
+    expect(child?.status).toEqual({ type: "unknown", reason: "unrecognized" });
+  });
+
   it("re-reads a child that has written since the last look", async () => {
     const dir = await makeSubagentsDir("/Users/x/Projects/demo");
     const file = await writeChild(dir, "aaa1", [

@@ -680,7 +680,7 @@ export const createRestartActions = (
           // delete), which the graceful channel skips on a registry miss.
           if (isAgent && !wasFailed) {
             try {
-              return await terminalClient.gracefulKill(id);
+              return await terminalClient.gracefulKill(id, { forRestart: true });
             } catch (error) {
               logWarn("[TerminalStore] gracefulKill failed during restart; falling back to kill", {
                 id,
@@ -688,7 +688,7 @@ export const createRestartActions = (
               });
             }
           }
-          await terminalClient.kill(id).catch((error: unknown) => {
+          await terminalClient.kill(id, { forRestart: true }).catch((error: unknown) => {
             logWarn("[TerminalStore] kill failed during restart; continuing", { id, error });
           });
           return null;
@@ -1407,7 +1407,7 @@ export const createRestartActions = (
       terminalInstanceService.destroy(id);
       terminalInstanceService.suppressNextExit(id, 10000);
       try {
-        await terminalClient.kill(id);
+        await terminalClient.kill(id, { forRestart: true });
       } catch (error) {
         logWarn("[TerminalStore] kill failed during fallback activation; continuing", {
           id,

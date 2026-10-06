@@ -2298,10 +2298,10 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
 
-  it("appends --plan to a Copilot help-session spawn (#7542)", async () => {
+  it("appends a Copilot help session's launch args to the spawn (#7542)", async () => {
     mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
     mockGetCopilotLaunchArgs.mockImplementation((token) =>
-      token === "help-token" ? ["--plan"] : null
+      token === "help-token" ? ["--banner"] : null
     );
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -2321,7 +2321,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     );
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.command).toContain("'--plan'");
+    expect(spawnArgs.command).toContain("'--banner'");
     // Copilot help launches don't flow through the Claude per-pane MCP path.
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
@@ -2350,9 +2350,9 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(ptyClient.spawn).not.toHaveBeenCalled();
   });
 
-  it("strips a smuggled --plan from a Copilot command so the appended flag is unambiguously authoritative (#7542)", async () => {
+  it("leaves a Copilot help-session command untouched when it has no launch args (#13193)", async () => {
     mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
-    mockGetCopilotLaunchArgs.mockReturnValue(["--plan"]);
+    mockGetCopilotLaunchArgs.mockReturnValue([]);
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -2364,16 +2364,14 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
         cols: 80,
         rows: 24,
         cwd: tmpDir,
-        command: "copilot --plan",
+        command: "copilot",
         launchAgentId: "copilot",
         env: { DAINTREE_MCP_TOKEN: "help-token" },
       } as unknown as Parameters<typeof handler>[1]
     );
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    const matches = spawnArgs.command.match(/--plan/g) ?? [];
-    expect(matches).toHaveLength(1);
-    expect(spawnArgs.command).toContain("'--plan'");
+    expect(spawnArgs.command).toBe("copilot");
   });
 
   it("does not query Copilot launch args for a non-help Copilot launch (#7542)", async () => {
@@ -3230,20 +3228,29 @@ describe("terminal close handlers - resume journaling", () => {
     const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
       .calls;
     const call = calls.find((c) => c[0] === CHANNELS.TERMINAL_KILL);
-    return call?.[1] as (event: unknown, id: string) => Promise<void>;
+    return call?.[1] as (
+      event: unknown,
+      id: string,
+      options?: { forRestart?: boolean }
+    ) => Promise<void>;
   }
 
   function getGracefulKillHandler() {
     const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
       .calls;
     const call = calls.find((c) => c[0] === CHANNELS.TERMINAL_GRACEFUL_KILL);
-    return call?.[1] as (event: unknown, id: string) => Promise<string | null>;
+    return call?.[1] as (
+      event: unknown,
+      id: string,
+      options?: { forRestart?: boolean }
+    ) => Promise<string | null>;
   }
 
   let ptyClient: {
     getTerminalAsync: ReturnType<typeof vi.fn>;
     gracefulKill: ReturnType<typeof vi.fn>;
     kill: ReturnType<typeof vi.fn>;
+    suppressExitForRestart: ReturnType<typeof vi.fn>;
   };
   let worktreeService: { getMonitorAsync: ReturnType<typeof vi.fn> };
 
@@ -3265,6 +3272,7 @@ describe("terminal close handlers - resume journaling", () => {
       getTerminalAsync: vi.fn(),
       gracefulKill: vi.fn(),
       kill: vi.fn(),
+      suppressExitForRestart: vi.fn(),
     };
     worktreeService = { getMonitorAsync: vi.fn().mockResolvedValue({ branch: "feature/foo" }) };
   });
@@ -3273,6 +3281,23 @@ describe("terminal close handlers - resume journaling", () => {
     const deps = { ptyClient, worktreeService } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
   }
+
+  it.each(["kill", "gracefulKill"] as const)(
+    "arms restart suppression before %s awaits the host",
+    async (operation) => {
+      register();
+      ptyClient.getTerminalAsync.mockResolvedValue(null);
+      ptyClient.gracefulKill.mockResolvedValue(null);
+      const handler = operation === "kill" ? getKillHandler() : getGracefulKillHandler();
+
+      await handler({}, "term-1", { forRestart: true });
+
+      expect(ptyClient.suppressExitForRestart).toHaveBeenCalledExactlyOnceWith("term-1");
+      expect(ptyClient.suppressExitForRestart.mock.invocationCallOrder[0]).toBeLessThan(
+        ptyClient.getTerminalAsync.mock.invocationCallOrder[0]!
+      );
+    }
+  );
 
   it("does not journal the assistant's overlay terminal on close", async () => {
     // The path the assistant travels every time it closes: removePanel ->

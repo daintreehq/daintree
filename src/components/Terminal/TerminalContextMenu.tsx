@@ -56,6 +56,7 @@ import {
 } from "@shared/types/panel";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
+import { systemClient } from "@/clients/systemClient";
 import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
 import { resolveWorktreePathScope } from "@shared/utils/path";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
@@ -404,12 +405,19 @@ function TerminalContextMenuBody({
     setHandOverRequest((current) => (current?.id === request.id ? null : current));
   }, []);
 
+  // Captured on every open (right-click or long-press): a menu opened before
+  // the home dir arrived re-resolves `~/` next time, even for an unchanged
+  // selection.
+  const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
   const handleMenuOpenChange = useCallback(
     (open: boolean) => {
       // A menu reopened inside its exit animation never unmounts, so the close
       // hook never runs for that close; drop the intent rather than let it open
       // the picker on some later, unrelated close.
       if (open) {
+        // Only when it changed: an unconditional set costs every open a render.
+        const cachedHomeDir = systemClient.getCachedHomeDir();
+        if (cachedHomeDir !== homeDir) setHomeDir(cachedHomeDir);
         pendingMovePickerRef.current = null;
         pendingHandOverRef.current = null;
         pendingMenuDispatchRef.current = null;
@@ -419,7 +427,7 @@ function TerminalContextMenuBody({
         }
       }
     },
-    [refreshOrchestratorCandidates, terminal]
+    [homeDir, refreshOrchestratorCandidates, terminal]
   );
 
   const captureMovePickerAnchor = useCallback(
@@ -617,6 +625,7 @@ function TerminalContextMenuBody({
       const selection = managed.terminal.getSelection();
       setHasSelection(!!selection);
       setSelectedText(selection || null);
+      setHomeDir(systemClient.getCachedHomeDir());
       setHoveredUrl(terminalInstanceService.getHoveredLinkText(terminalId));
       setHoveredFilePath(terminalInstanceService.getHoveredFilePath(terminalId));
       setHoveredFileKind(terminalInstanceService.getHoveredFileKind(terminalId));
@@ -633,9 +642,10 @@ function TerminalContextMenuBody({
   const selectionFilePath = useMemo(
     () =>
       selectedText
-        ? (resolveSelectedFilePath(selectedText, terminalPty?.cwd ?? "")?.absolutePath ?? null)
+        ? (resolveSelectedFilePath(selectedText, terminalPty?.cwd ?? "", homeDir)?.absolutePath ??
+          null)
         : null,
-    [selectedText, terminalPty?.cwd]
+    [selectedText, terminalPty?.cwd, homeDir]
   );
   // Where the hovered path sits in the *live* worktree list — never
   // `terminal.worktreeId`, which stamps the worktree that was active when the

@@ -14,6 +14,14 @@ import {
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { McpServerContributionSchema } from "../schemas/plugin.js";
 import { minimalWorkerEnv } from "../utils/minimalSpawnEnv.js";
+import {
+  drainPendingChildTrees,
+  PLUGIN_CHILD_DETACHED,
+  reapChildTreeAfterExit,
+  scheduleChildTreeEscalation,
+  signalChildTree,
+  trackChildTree,
+} from "./plugin/pluginChildTree.js";
 
 type McpServerContribution = z.infer<typeof McpServerContributionSchema>;
 
@@ -35,6 +43,11 @@ interface SupervisedSubprocess {
   stdin: NodeJS.WritableStream | null;
   stdout: NodeJS.ReadableStream | null;
   stderr: NodeJS.ReadableStream | null;
+  /**
+   * Set by the production spawner: the server leads its own process group on
+   * POSIX, so teardown signals the whole tree (#13173). Fakes leave it unset.
+   */
+  ownsProcessTree?: boolean;
   kill(): boolean;
 }
 
@@ -68,8 +81,9 @@ export interface ResolvedMcpServerConfig {
 
 /**
  * Spawn shim. Injected so unit tests can substitute a controllable duplex.
- * Production wiring uses `execa` with `cleanup: true`, `windowsHide: true`,
- * `detached: false`, `stdio: ["pipe", "pipe", "pipe"]` and a minimal
+ * Production wiring uses `execa` with `windowsHide: true`, `detached: true` on
+ * POSIX (its own process group, for tree teardown — #13173),
+ * `stdio: ["pipe", "pipe", "pipe"]` and a minimal
  * environment (`minimalWorkerEnv(config.env)`, `extendEnv: false`) — so
  * `config.env` here is only the resolved manifest entries, not the child's
  * full environment.
@@ -79,16 +93,15 @@ export type SubprocessSpawner = (
 ) => SpawnHandle | Promise<SpawnHandle>;
 
 /**
- * Process-tree teardown shim. On Windows we shell out to
+ * Windows process-tree teardown shim. We shell out to
  * `taskkill /T /F /PID <pid>` because Windows does not cascade kills and the
  * supervisor's direct child is often a shell (`npx`, `uvx`, `.bat`) whose
- * actual MCP server is a grandchild. Injected so tests can assert the
- * platform-specific tree-kill is invoked without actually shelling out.
+ * actual MCP server is a grandchild. It runs BEFORE the direct child is
+ * killed: `taskkill /T` walks parent links, which the direct kill erases.
+ * Injected so tests can assert the tree-kill is invoked without shelling out.
  *
- * On POSIX a plain `SIGKILL` is sufficient — `execa` runs children with
- * `detached: false` so the kernel reparents stranded grandchildren to PID 1
- * only if the immediate child itself was a shell wrapper. The CVE-cited
- * failure mode is Windows-specific; POSIX-side cleanup is best-effort.
+ * POSIX does not use it: the server leads its own process group there, and
+ * the group signal reaches the same grandchildren (#13173).
  */
 export type ProcessTreeKiller = (pid: number) => void | Promise<void>;
 
@@ -111,9 +124,9 @@ interface SupervisedServerState {
   subprocess: SupervisedSubprocess | null;
   /**
    * Monotonic spawn counter, bumped each time a fresh subprocess is registered
-   * onto this key. A delayed Windows tree-kill captures the generation it was
-   * scheduled for and bails if a restart has since registered a newer one —
-   * so a reused PID for the post-restart server is never tree-killed (#9235).
+   * onto this key. A delayed process-group SIGKILL captures the generation it
+   * was scheduled for and bails if a restart has since registered a newer one
+   * on the same PID — whose group then has the same ID (#9235, #13173).
    */
   spawnGeneration: number;
   nextRequestId: number;
@@ -153,6 +166,8 @@ interface SupervisedServerState {
 
 const HANDSHAKE_TIMEOUT_MS = 15_000;
 const SHUTDOWN_GRACE_MS = 3_000;
+/** Bound on the Windows tree-kill, which shutdown now awaits before the direct kill. */
+const TASKKILL_TIMEOUT_MS = 3_000;
 const TOOL_CALL_TIMEOUT_MS = 30_000;
 /**
  * Debounce window for {@link PluginMcpSupervisor.notifySettingChanged} (#10619).
@@ -309,11 +324,12 @@ export class PluginMcpSupervisor {
     // before nulling the reference — otherwise the orphan process leaks.
     if (existing) {
       if (existing.subprocess) {
-        try {
-          existing.subprocess.kill();
-        } catch {
-          // already-exited or detached — fall through
-        }
+        void this.terminateSubprocess(
+          key,
+          existing.subprocess,
+          existing.pid,
+          existing.spawnGeneration
+        );
       }
       state.contribution = contribution;
       state.status = "spawning";
@@ -370,20 +386,21 @@ export class PluginMcpSupervisor {
     // the mutation from a concurrent shutdownOne — the runtime check is real,
     // the typeof cast just bypasses the dead-code narrowing.
     if ((state.status as PluginMcpServerStatus) === "stopped") {
-      try {
-        handle.subprocess.kill();
-      } catch {
-        // best-effort
-      }
       handle.exit.catch(() => {});
+      void this.terminateSubprocess(
+        key,
+        handle.subprocess,
+        handle.subprocess.pid ?? null,
+        state.spawnGeneration
+      );
       return;
     }
     const subprocess = handle.subprocess;
     state.subprocess = subprocess;
     state.pid = subprocess.pid ?? null;
-    // Bump the spawn generation so a delayed tree-kill scheduled by a prior
+    // Bump the spawn generation so a delayed group kill scheduled by a prior
     // shutdownOne (for this same key) can detect that a newer process now owns
-    // the key and skip the kill — guarding against Windows PID reuse (#9235).
+    // the key and skip the kill — guarding against PID reuse (#9235).
     state.spawnGeneration++;
     // Execa's subprocess promise rejects with the kill error when the child
     // exits non-zero or is killed. Without a `.catch` attached at spawn time
@@ -589,6 +606,20 @@ export class PluginMcpSupervisor {
     if (state.status === "spawning" || state.status === "ready") {
       state.status = "crashed";
       if (!state.lastError) state.lastError = "MCP server exited unexpectedly";
+    }
+    // The server is gone, but anything it backgrounded is still in its group.
+    const exited = state.subprocess;
+    if (exited && state.pid !== null) {
+      reapChildTreeAfterExit(
+        exited,
+        "mcp",
+        SHUTDOWN_GRACE_MS,
+        this.escalationFence(
+          stateKey(state.pluginId, state.serverId),
+          state.pid,
+          state.spawnGeneration
+        )
+      );
     }
     state.pid = null;
     state.subprocess = null;
@@ -827,9 +858,9 @@ export class PluginMcpSupervisor {
   }
 
   /**
-   * Tear down every supervised server owned by `pluginId`. SIGTERM the
-   * subprocess, wait briefly, then escalate to a process-tree kill on
-   * Windows. Resolves once every owned subprocess has been signalled — does
+   * Tear down every supervised server owned by `pluginId`, process tree and
+   * all (see {@link terminateSubprocess}). Resolves once every owned
+   * subprocess has been signalled — does
    * not wait synchronously for the exit because Electron's app shutdown timer
    * already bounds the overall shutdown window.
    */
@@ -868,29 +899,70 @@ export class PluginMcpSupervisor {
       pending.reject(plainError("STOPPED", "MCP server shutting down"));
     }
 
+    state.subprocess = null;
+    state.pid = null;
+    await this.terminateSubprocess(key, subprocess, pid, killGeneration);
+  }
+
+  /**
+   * Take down a server and everything it spawned (#13173). The direct child is
+   * often a wrapper (`npx`, `uvx`, a `.bat`) whose real server is a grandchild.
+   *
+   * Windows: tree-kill first, while the parent links `taskkill /T` walks still
+   * exist — killing the direct child first would orphan the server out of its
+   * reach. POSIX: SIGTERM the server's process group, then SIGKILL whatever of
+   * it outlives the grace window — even once the direct child has exited,
+   * which is when its grandchildren are most likely to be left behind. The
+   * escalation is fenced on the spawn generation (#9235), like every delayed
+   * kill here, so it never lands on a successor.
+   */
+  private async terminateSubprocess(
+    key: string,
+    subprocess: SupervisedSubprocess,
+    pid: number | null,
+    killGeneration: number
+  ): Promise<void> {
+    if (pid !== null && process.platform === "win32") {
+      try {
+        await this.killTree(pid);
+      } catch {
+        // best-effort — the direct kill below is the fallback
+      }
+    }
+
+    // The group signal is POSIX-only here: on Windows the tree is already gone,
+    // and the direct kill below is all that is left to do.
+    if (process.platform !== "win32" && subprocess.ownsProcessTree === true) {
+      signalChildTree(subprocess, "SIGTERM");
+    }
+    if (pid !== null) {
+      scheduleChildTreeEscalation(
+        subprocess,
+        "mcp",
+        SHUTDOWN_GRACE_MS,
+        this.escalationFence(key, pid, killGeneration)
+      );
+    }
+
     // Call .kill() with NO arguments. Passing an explicit signal disables
     // execa's `forceKillAfterDelay` escalation in v9.
     try {
       subprocess.kill();
     } catch {
-      // already-exited or detached — fall through to tree-kill on Windows.
+      // already-exited
     }
+  }
 
-    if (pid !== null && process.platform === "win32") {
-      // Even with execa cleanup:true, a hard SIGKILL from outside (parent
-      // crash, watchdog) leaves grandchildren stranded on Windows. Always
-      // shell out after the grace window — but skip it if a restart has since
-      // registered a newer subprocess on this key, because Windows can reuse
-      // the freed PID and the tree-kill would then take down the fresh server.
-      setTimeout(() => {
-        const current = this.states.get(key);
-        if (current && current.spawnGeneration !== killGeneration) return;
-        Promise.resolve(this.killTree(pid)).catch(() => {});
-      }, SHUTDOWN_GRACE_MS);
-    }
-
-    state.subprocess = null;
-    state.pid = null;
+  /**
+   * Whether a delayed group SIGKILL for the server spawned as `killGeneration`
+   * on `pid` may still fire: not once a successor on this key holds the same
+   * PID, whose group then has the same ID (#9235).
+   */
+  private escalationFence(key: string, pid: number, killGeneration: number): () => boolean {
+    return () => {
+      const current = this.states.get(key);
+      return !current || current.spawnGeneration === killGeneration || current.pid !== pid;
+    };
   }
 
   /** Tear down every server owned by every plugin. App-shutdown entry point. */
@@ -898,6 +970,9 @@ export class PluginMcpSupervisor {
     const pluginIds = new Set<string>();
     for (const state of this.states.values()) pluginIds.add(state.pluginId);
     await Promise.all([...pluginIds].map((pluginId) => this.shutdown({ pluginId })));
+    // Quit cannot leave the SIGKILL to the unref'd escalation timers, which
+    // never fire once the app exits.
+    await drainPendingChildTrees("mcp", SHUTDOWN_GRACE_MS);
   }
 
   /**
@@ -1173,14 +1248,22 @@ const defaultSpawner: SubprocessSpawner = async (config) => {
     env: minimalWorkerEnv(config.env),
     extendEnv: false,
     stdio: ["pipe", "pipe", "pipe"],
+    // Inert once `detached` is set; the supervisor's own shutdown, which app
+    // quit always runs, is what tears the tree down.
     cleanup: true,
     windowsHide: true,
-    detached: false,
+    detached: PLUGIN_CHILD_DETACHED,
     forceKillAfterDelay: SHUTDOWN_GRACE_MS,
     reject: false,
   });
+  const supervised = subprocess as unknown as SupervisedSubprocess;
+  supervised.ownsProcessTree = true;
+  // execa's subprocess is a promise of its result; it settles once the
+  // server has exited, and `reject: false` keeps that a resolution.
+  const untrack = trackChildTree(supervised);
+  void (subprocess as Promise<unknown>).then(untrack, untrack);
   return {
-    subprocess: subprocess as unknown as SupervisedSubprocess,
+    subprocess: supervised,
     // execa subprocesses are also Promises that resolve / reject with the
     // child's exit result. Expose that separately so the supervisor can
     // attach a `.catch` for unhandled-rejection safety without follow-await
@@ -1193,7 +1276,11 @@ const defaultProcessTreeKiller: ProcessTreeKiller = async (pid) => {
   if (process.platform !== "win32") return;
   const { execa } = await import("execa");
   try {
-    await execa("taskkill", ["/T", "/F", "/PID", String(pid)], { reject: false });
+    await execa("taskkill", ["/T", "/F", "/PID", String(pid)], {
+      reject: false,
+      windowsHide: true,
+      timeout: TASKKILL_TIMEOUT_MS,
+    });
   } catch {
     // best-effort — the process may have already exited cleanly
   }

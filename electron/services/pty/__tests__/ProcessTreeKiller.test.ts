@@ -3,6 +3,7 @@ import { spawnSync } from "child_process";
 import type { IPty } from "node-pty";
 import type { ProcessTreeCache } from "../../ProcessTreeCache.js";
 import { ProcessTreeKiller, type LineageKillSource } from "../ProcessTreeKiller.js";
+import type { KillCensus } from "../../TerminalLineageLedger.js";
 
 vi.mock("child_process", () => ({ spawnSync: vi.fn() }));
 
@@ -693,5 +694,599 @@ describe.skipIf(process.platform === "win32")("ProcessTreeKiller — reapAfterRo
     vi.advanceTimersByTime(500);
 
     expect(killSpy).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Fixture PIDs, shifted clear of this worker and its parent: the killer refuses
+ * to signal either, so a collision would silently change what a test sees.
+ */
+const PID_OFFSET = (() => {
+  let offset = 0;
+  const own = [process.pid, process.ppid];
+  while (own.some((pid) => pid >= 1000 + offset && pid < 6000 + offset)) offset += 100_000;
+  return offset;
+})();
+const P = (pid: number): number => pid + PID_OFFSET;
+
+type CensusRow = [pid: number, ppid: number, startTime: string];
+
+function makeCensus(rows: CensusRow[]): KillCensus {
+  const start = new Map(rows.map(([pid, , st]) => [pid, st]));
+  return {
+    startTimeOf: (pid) => start.get(pid),
+    childrenOf: (pid) => rows.filter(([, ppid]) => ppid === pid).map(([p]) => p),
+  };
+}
+
+/**
+ * Ledger stand-in that hands out censuses in order, one per kill-time read.
+ * `verifyCalls` records the census each verification received.
+ */
+function makeCensusLineage(
+  censuses: Array<KillCensus | null>,
+  tracked: Record<number, Array<[pid: number, startTime: string]>> = {}
+): LineageKillSource & {
+  takeKillCensus: ReturnType<typeof vi.fn>;
+  verifyCalls: Array<KillCensus | null | undefined>;
+} {
+  const verifyCalls: Array<KillCensus | null | undefined> = [];
+  let next = 0;
+  return {
+    verifyCalls,
+    registerRoot: () => {},
+    markRootClosing: () => {},
+    getVerifiedOrphanPids: (rootPid, alreadyCovered, census) => {
+      verifyCalls.push(census);
+      const covered = new Set(alreadyCovered);
+      return (tracked[rootPid] ?? [])
+        .filter(([pid, st]) => !covered.has(pid) && census?.startTimeOf(pid) === st)
+        .map(([pid]) => pid);
+    },
+    takeKillCensus: vi.fn(() => (next < censuses.length ? censuses[next++] : null)),
+  };
+}
+
+function signalsOf(killSpy: ReturnType<typeof vi.spyOn>, sig: NodeJS.Signals): number[] {
+  return killSpy.mock.calls.filter((c: unknown[]) => c[1] === sig).map((c: unknown[]) => c[0]);
+}
+
+// #13165: the periodic census is seconds stale, so a kill that trusted it alone
+// missed anything spawned since its last sweep — including detached agent work
+// that leaves the terminal's session.
+describe.skipIf(process.platform === "win32")("ProcessTreeKiller — kill-time census", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let killSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    killSpy?.mockRestore();
+    warnSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  // Shell P(1000) → agent P(2001) → detached `zsh -c "npm run dev"` P(2002) → npm P(2003).
+  const tree: CensusRow[] = [
+    [P(1000), 1, "shell"],
+    [P(2001), P(1000), "agent"],
+    [P(2002), P(2001), "zsh"],
+    [P(2003), P(2002), "npm"],
+  ];
+
+  it("SIGTERMs a tree the cached census has never seen, leaves first", () => {
+    const killer = new ProcessTreeKiller(
+      makePty(P(1000)),
+      makeTreeCache([]),
+      makeCensusLineage([makeCensus(tree)])
+    );
+
+    killer.execute(false);
+
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual([P(2003), P(2002), P(2001)]);
+    expect(signalsOf(killSpy, "SIGCONT")).toEqual([P(2003), P(2002), P(2001), P(1000)]);
+  });
+
+  it("SIGKILLs targets that reparented to PID 1, and what they forked in the grace window", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(tree),
+      // The agent and shell died on SIGTERM/SIGHUP; their detached children
+      // were reparented, and npm forked a dev server meanwhile.
+      makeCensus([
+        [P(2002), 1, "zsh"],
+        [P(2003), P(2002), "npm"],
+        [P(2004), P(2003), "vite"],
+      ]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(false);
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    const killed = signalsOf(killSpy, "SIGKILL");
+    expect(new Set(killed)).toEqual(new Set([P(2002), P(2003), P(2004)]));
+    expect(killed.indexOf(P(2004))).toBeLessThan(killed.indexOf(P(2003)));
+    // The shell is gone from the census, so its PID may already be reused.
+    expect(killed).not.toContain(P(1000));
+  });
+
+  it("never SIGKILLs a target whose PID was recycled during the grace window", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(tree),
+      makeCensus([
+        [P(2002), 1, "someone-else"],
+        [P(2005), P(2002), "their-child"],
+        [P(1000), 1, "also-someone-else"],
+      ]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(false);
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(signalsOf(killSpy, "SIGKILL")).toEqual([]);
+  });
+
+  it("SIGKILLs a surviving shell and its fresh children only while it is the same process", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(tree),
+      makeCensus([...tree, [P(2006), P(1000), "late-child"]]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(false);
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    const killed = signalsOf(killSpy, "SIGKILL");
+    expect(new Set(killed)).toEqual(new Set([P(2001), P(2002), P(2003), P(2006), P(1000)]));
+    expect(killed[killed.length - 1]).toBe(P(1000));
+  });
+
+  it("uses the tree captured before PTY release, not one read after the hangup", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(tree),
+      // What a read after destroyPty() could see: the agent died of SIGHUP and
+      // the detached work is no longer under the shell.
+      makeCensus([
+        [P(1000), 1, "shell"],
+        [P(2002), 1, "zsh"],
+        [P(2003), P(2002), "npm"],
+      ]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.captureTree();
+    killer.execute(false);
+
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual([P(2003), P(2002), P(2001)]);
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a captured tree that has gone stale", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(tree),
+      makeCensus([
+        [P(1000), 1, "shell"],
+        [P(2010), P(1000), "newer"],
+      ]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.captureTree();
+    vi.advanceTimersByTime(5_000);
+    killer.execute(false);
+
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual([P(2010)]);
+  });
+
+  it("immediate mode re-reads the table before SIGKILL", () => {
+    const lineage = makeCensusLineage([makeCensus(tree), makeCensus(tree)]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(true);
+
+    expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(
+      new Set([P(2001), P(2002), P(2003), P(1000)])
+    );
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(2);
+  });
+
+  it("immediate mode does not SIGKILL a target replaced during the SIGTERM pass", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(tree),
+      makeCensus([
+        [P(1000), 1, "shell"],
+        [P(2001), P(1000), "agent"],
+        [P(2002), 1, "replacement"],
+      ]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(true);
+
+    expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(new Set([P(2001), P(1000)]));
+  });
+
+  it("never adopts a recycled shell PID's tree on a later kill", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(tree),
+      makeCensus([]),
+      // Escalation is long over; the shell's PID now belongs to a stranger.
+      makeCensus([
+        [P(1000), 1, "stranger"],
+        [P(2020), P(1000), "strangers-child"],
+      ]),
+      makeCensus([
+        [P(1000), 1, "stranger"],
+        [P(2020), P(1000), "strangers-child"],
+      ]),
+    ]);
+    const pty = makePty(P(1000));
+    const killer = new ProcessTreeKiller(pty, makeTreeCache([]), lineage);
+
+    killer.execute(false);
+    vi.advanceTimersByTime(500);
+    killSpy.mockClear();
+    vi.mocked(pty.kill).mockClear();
+    killer.execute(true);
+
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(pty.kill).not.toHaveBeenCalled();
+  });
+
+  it("never adopts a PID reused after a census found the shell missing", () => {
+    const lineage = makeCensusLineage([
+      makeCensus([]),
+      makeCensus([]),
+      makeCensus([
+        [P(1000), 1, "stranger"],
+        [P(2020), P(1000), "strangers-child"],
+      ]),
+      makeCensus([
+        [P(1000), 1, "stranger"],
+        [P(2020), P(1000), "strangers-child"],
+      ]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(false);
+    vi.advanceTimersByTime(500);
+    killSpy.mockClear();
+    killer.execute(true);
+
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it("a repeated kill whose census fails keeps the earlier identities", () => {
+    const lineage = makeCensusLineage([makeCensus(tree), null, makeCensus([[P(2002), 1, "zsh"]])]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(false);
+    killer.execute(false);
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(signalsOf(killSpy, "SIGKILL")).toEqual([P(2002)]);
+  });
+
+  it("does not retry a capture that just failed", () => {
+    const lineage = makeCensusLineage([null, makeCensus(tree)]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([P(2001)]), lineage);
+
+    killer.captureTree();
+    killer.execute(false);
+
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(1);
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual([P(2001)]);
+  });
+
+  it("a repeated kill keeps the targets the first one recorded", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(tree),
+      // Second kill: the agent is gone and its detached child is under PID 1.
+      makeCensus([
+        [P(1000), 1, "shell"],
+        [P(2002), 1, "zsh"],
+      ]),
+      makeCensus([[P(2002), 1, "zsh"]]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(false);
+    killer.execute(false);
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(signalsOf(killSpy, "SIGKILL")).toEqual([P(2002)]);
+  });
+
+  it("reapAfterRootExit discards an unused capture", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(tree),
+      makeCensus([
+        [P(1000), 1, "shell"],
+        [P(2010), P(1000), "newer"],
+      ]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.captureTree();
+    killer.reapAfterRootExit();
+    killer.execute(false);
+
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual([P(2010)]);
+  });
+
+  it("dispose after kill completes the pending escalation instead of restarting", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(tree),
+      makeCensus([
+        [P(2002), 1, "zsh"],
+        [P(2003), P(2002), "npm"],
+      ]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(false);
+    killSpy.mockClear();
+    killer.execute(true);
+
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual([]);
+    expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(new Set([P(2002), P(2003)]));
+
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it("verifies ledger orphans against the census and reaps their fresh children", () => {
+    const lineage = makeCensusLineage(
+      [
+        makeCensus([
+          [P(1000), 1, "shell"],
+          [P(5001), 1, "detached"],
+          [P(5002), P(5001), "forked-after-detach"],
+        ]),
+      ],
+      { [P(1000)]: [[P(5001), "detached"]] }
+    );
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(false);
+
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual([P(5002), P(5001)]);
+    expect(lineage.verifyCalls[0]).toBeTruthy();
+  });
+
+  it("never signals this process or its parent, even under the shell", () => {
+    const lineage = makeCensusLineage([
+      makeCensus([
+        [P(1000), 1, "shell"],
+        [process.pid, P(1000), "self"],
+        [process.ppid, P(1000), "parent"],
+        [P(2001), P(1000), "agent"],
+      ]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(true);
+
+    const touched = killSpy.mock.calls.map((c: unknown[]) => c[0]);
+    expect(touched).not.toContain(process.pid);
+    expect(touched).not.toContain(process.ppid);
+    expect(touched).toContain(P(2001));
+  });
+
+  it("terminates on a census with a ppid cycle", () => {
+    const lineage = makeCensusLineage([
+      makeCensus([
+        [P(1000), P(2002), "shell"],
+        [P(2001), P(1000), "a"],
+        [P(2002), P(2001), "b"],
+      ]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(true);
+
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual([P(2002), P(2001)]);
+  });
+
+  it("falls back to the cached walk when no census can be taken", () => {
+    const lineage = makeCensusLineage([null, null]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([1001]), lineage);
+
+    killer.execute(false);
+    expect(signalsOf(killSpy, "SIGTERM")).toEqual([1001]);
+
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+    expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(new Set([1001, P(1000)]));
+  });
+
+  it("falls back to the cached sweep when the escalation census fails", () => {
+    const lineage = makeCensusLineage([makeCensus(tree), null]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([P(2001)]), lineage);
+
+    killer.execute(false);
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(new Set(signalsOf(killSpy, "SIGKILL"))).toEqual(new Set([P(2001), P(1000)]));
+  });
+
+  it("leaves the shell PID alone once the census says the shell is gone", () => {
+    const lineage = makeCensusLineage(
+      [
+        makeCensus([
+          [P(2001), 1, "stray"],
+          [P(5001), 1, "detached"],
+        ]),
+        makeCensus([[P(5001), 1, "detached"]]),
+      ],
+      { [P(1000)]: [[P(5001), "detached"]] }
+    );
+    const pty = makePty(P(1000));
+    // The stale cache still lists P(2001) under the shell; it must be ignored.
+    const killer = new ProcessTreeKiller(pty, makeTreeCache([P(2001)]), lineage);
+
+    killer.execute(true);
+
+    const touched = new Set(killSpy.mock.calls.map((c: unknown[]) => c[0]));
+    expect(touched).toEqual(new Set([P(5001)]));
+    expect(pty.kill).not.toHaveBeenCalled();
+  });
+
+  it("abort() drops the recorded identities with the timer", () => {
+    const lineage = makeCensusLineage([makeCensus(tree), makeCensus(tree)]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(false);
+    killer.abort();
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(lineage.takeKillCensus).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ProcessTreeKiller — Windows takes no census", () => {
+  beforeEach(() => {
+    setPlatform("win32");
+    spawnSyncMock.mockReset();
+  });
+
+  afterEach(() => {
+    restorePlatform();
+  });
+
+  it("never reads a kill-time census on win32", () => {
+    const lineage = makeCensusLineage([]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.captureTree();
+    killer.execute(false);
+
+    expect(lineage.takeKillCensus).not.toHaveBeenCalled();
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      "taskkill",
+      ["/T", "/F", "/PID", String(P(1000))],
+      expect.anything()
+    );
+  });
+});
+
+// #13168: the survivor check needs every process a kill signalled, by identity.
+describe.skipIf(process.platform === "win32")("ProcessTreeKiller — kill identities", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let killSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    killSpy?.mockRestore();
+    warnSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  const tree: CensusRow[] = [
+    [P(1000), 1, "shell"],
+    [P(2001), P(1000), "agent"],
+    [P(2002), P(2001), "npm"],
+  ];
+
+  it("returns the targets and records the shell and descendants by start time", () => {
+    const killer = new ProcessTreeKiller(
+      makePty(P(1000)),
+      makeTreeCache([]),
+      makeCensusLineage([makeCensus(tree)])
+    );
+
+    const targets = killer.execute(false);
+
+    expect(targets).toEqual([P(2002), P(2001), P(1000)]);
+    expect([...killer.getKillIdentities()]).toEqual(
+      expect.arrayContaining([
+        [P(1000), "shell"],
+        [P(2001), "agent"],
+        [P(2002), "npm"],
+      ])
+    );
+  });
+
+  it("adds what escalation found forked in the grace window", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(tree),
+      makeCensus([
+        [P(2002), 1, "npm"],
+        [P(2003), P(2002), "vite"],
+      ]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(false);
+    vi.advanceTimersByTime(500);
+
+    expect(killer.getKillIdentities().get(P(2003))).toBe("vite");
+    expect(killer.getKillIdentities().size).toBe(4);
+  });
+
+  it("leaves the shell out of the targets once the census shows it gone", () => {
+    const killer = new ProcessTreeKiller(
+      makePty(P(1000)),
+      makeTreeCache([]),
+      makeCensusLineage([makeCensus([[P(2002), 1, "npm"]])], { [P(1000)]: [[P(2002), "npm"]] })
+    );
+
+    const targets = killer.execute(false);
+
+    expect(targets).toEqual([P(2002)]);
+    expect(killer.getKillIdentities().has(P(1000))).toBe(false);
+  });
+
+  it("never records a recycled shell PID on a repeated kill", () => {
+    const lineage = makeCensusLineage([
+      makeCensus(tree),
+      makeCensus([]),
+      makeCensus([[P(1000), 1, "someone-else"]]),
+    ]);
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    killer.execute(false);
+    vi.advanceTimersByTime(500);
+    const targets = killer.execute(true);
+
+    expect(targets).not.toContain(P(1000));
+    expect(killer.getKillIdentities().get(P(1000))).toBe("shell");
+  });
+
+  it("records nothing without a census", () => {
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([P(2001)]));
+
+    expect(killer.execute(false)).toEqual([P(2001), P(1000)]);
+    expect(killer.getKillIdentities().size).toBe(0);
+  });
+
+  it("identifies the orphans a root-exit reap targets", () => {
+    const lineage = {
+      ...makeLineage({ [P(1000)]: [P(2002)] }),
+      takeKillCensus: () => makeCensus([[P(2002), 1, "npm"]]),
+    };
+    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+
+    expect(killer.reapAfterRootExit()).toEqual([P(2002)]);
+    expect(killer.getKillIdentities().get(P(2002))).toBe("npm");
   });
 });

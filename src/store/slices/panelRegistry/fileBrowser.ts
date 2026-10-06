@@ -14,7 +14,8 @@ import {
 type Set = PanelRegistryStoreApi["setState"];
 
 export interface FileBrowserViewPatch {
-  browserSelectedPath?: string;
+  /** `null` clears the selection, returning the viewer to its idle body. */
+  browserSelectedPath?: string | null;
   browserExpandedPaths?: string[];
   browserHideDotfiles?: boolean;
   /** "" roots the tree back at the worktree root. */
@@ -64,7 +65,7 @@ export const createFileBrowserPanelActions = (
 
       const selectedUnchanged =
         patch.browserSelectedPath === undefined ||
-        patch.browserSelectedPath === panel.browserSelectedPath;
+        (patch.browserSelectedPath ?? undefined) === panel.browserSelectedPath;
       const expandedUnchanged =
         patch.browserExpandedPaths === undefined ||
         sameStringList(panel.browserExpandedPaths, patch.browserExpandedPaths);
@@ -130,7 +131,7 @@ export const createFileBrowserPanelActions = (
 
       const nextPanel = {
         ...panel,
-        ...(patch.browserSelectedPath !== undefined && {
+        ...(typeof patch.browserSelectedPath === "string" && {
           browserSelectedPath: patch.browserSelectedPath,
         }),
         ...(patch.browserExpandedPaths !== undefined && {
@@ -159,6 +160,11 @@ export const createFileBrowserPanelActions = (
           browserSortDirection: patch.browserSortDirection,
         }),
       };
+
+      // A clear drops the key rather than storing `null`: the panel field is
+      // `string | undefined`, and absence is what serialization and restore
+      // already read as "nothing selected" (#13194).
+      if (patch.browserSelectedPath === null) delete nextPanel.browserSelectedPath;
 
       const newById = { ...state.panelsById, [id]: nextPanel };
       saveNormalized(newById, state.panelIds);

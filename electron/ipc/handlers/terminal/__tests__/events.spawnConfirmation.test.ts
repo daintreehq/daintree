@@ -33,6 +33,7 @@ describe("terminal event handlers — spawn confirmation (#12754)", () => {
     vi.clearAllMocks();
     ptyClient = Object.assign(new EventEmitter(), {
       getTerminalProjectId: vi.fn(() => "project-a"),
+      consumeRestartExitSuppression: vi.fn(() => false),
     });
     dispose = registerTerminalEventHandlers({ ptyClient } as unknown as HandlerDependencies);
   });

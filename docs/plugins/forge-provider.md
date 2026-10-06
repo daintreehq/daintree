@@ -324,9 +324,9 @@ A local provider typically reads the project on disk rather than a remote. Use `
 
 ## Expose the provider's CLI to the assistant
 
-The Daintree Assistant runs forge CLIs inside an allowlist at `help/.claude/settings.json`. The `allow` list already grants `Bash(gh *)`, `Bash(glab *)` (GitLab), and `Bash(tea *)` (Gitea); the `deny` list blocks the destructive create/merge mutations for each (e.g. `Bash(glab mr create*)`, `Bash(glab mr merge*)`, `Bash(tea pulls merge*)`).
+The Daintree Assistant auto-approves forge CLIs through the allowlist at `help/.claude/settings.json`, which already grants `Bash(gh *)`, `Bash(glab *)` (GitLab), and `Bash(tea *)` (Gitea). There is no deny list: the assistant can do anything a normal agent session can with them.
 
-When you add a provider whose CLI the assistant should be able to drive, add it directly: an `allow` entry for the CLI binary (`Bash(bb *)` for Bitbucket, etc.) plus the corresponding `deny` entries for that CLI's issue/PR create and merge commands. Bitbucket's `bb` is still to be added by a future provider.
+When you add a provider whose CLI the assistant should be able to drive, add an `allow` entry for the CLI binary (`Bash(bb *)` for Bitbucket, etc.) to both that file and the fallback in `HelpSessionService.readBundledSettings`. Bitbucket's `bb` is still to be added by a future provider.
 
 ## Tests to ship
 
@@ -349,7 +349,7 @@ Forge providers are built-in only, so their tests follow the existing `plugins/b
 - [ ] `state` normalized and `rawState` preserved on every `Issue`/`PR`
 - [ ] Verbatim transport node in `rawData`; no first-party reads of it
 - [ ] Optional capabilities present only when supported; consumers probe with truthiness
-- [ ] CLI allow + create/merge deny entries added to `help/.claude/settings.json` if the assistant should drive your forge's CLI
+- [ ] CLI allow entry added to `help/.claude/settings.json` and the `readBundledSettings` fallback if the assistant should drive your forge's CLI
 - [ ] Unit tests mirroring the GitHub provider's coverage
 
 ## Related
