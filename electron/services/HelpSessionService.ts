@@ -228,8 +228,12 @@ export interface ProvisionResult {
 export interface AssistantLaneSnapshot {
   slotKey: string;
   agentSessionId: string;
-  /** The pointer's revision: a discard + relaunch rewrites it even when both ids are empty. */
-  capturedAt: number;
+  /**
+   * The lane's conversation revision: bumped by a relaunch or a discard, never
+   * by a capture refining the same conversation, so a discard + fresh relaunch
+   * is told apart even when both ids are empty.
+   */
+  revision: number;
 }
 
 interface HelpSessionRecord {
@@ -595,6 +599,10 @@ export class HelpSessionService {
     string,
     { claimId: string; ownerWebContentsId: number | null }
   >();
+  // Which conversation each lane's pointer is on, as a counter bumped by every
+  // relaunch and discard (#13205). Shutdown's late captures compare it, so one
+  // can't land on a conversation that replaced the one it was captured from.
+  private readonly laneRevisionBySlotKey = new Map<string, number>();
   // #10815: per-project assistant-panel visibility, reported by the renderer
   // whenever its `isOpen` changes. Read at capture time to stamp
   // `panelWasOpen` onto the eviction hibernation entry so cold switch-back can
@@ -1879,6 +1887,7 @@ export class HelpSessionService {
     if (!getEffectiveAgentConfig(record.agentId)?.resume) return Promise.resolve();
     const slotKey = assistantSlotKey(record.projectId, record.slot);
     record.agentSessionId = agentSessionId || undefined;
+    this.bumpLaneRevision(slotKey);
     // The launch that held the claim has spent it.
     this.claimsBySlotKey.delete(slotKey);
     return this.pendingHibernationStore.set(slotKey, {
@@ -1908,7 +1917,7 @@ export class HelpSessionService {
       lanes.set(terminalId, {
         slotKey,
         agentSessionId: entry.agentSessionId,
-        capturedAt: entry.capturedAt,
+        revision: this.laneRevisionBySlotKey.get(slotKey) ?? 0,
       });
     }
     return lanes;
@@ -1926,7 +1935,10 @@ export class HelpSessionService {
     if (!agentSessionId || !this.pendingHibernationStore) return Promise.resolve();
     const entry = this.pendingHibernationStore.get(lane.slotKey);
     if (!entry) return Promise.resolve();
-    if (entry.agentSessionId !== lane.agentSessionId || entry.capturedAt !== lane.capturedAt) {
+    if (
+      entry.agentSessionId !== lane.agentSessionId ||
+      (this.laneRevisionBySlotKey.get(lane.slotKey) ?? 0) !== lane.revision
+    ) {
       return Promise.resolve();
     }
     if (entry.agentSessionId === agentSessionId) return Promise.resolve();
@@ -1935,6 +1947,10 @@ export class HelpSessionService {
       agentSessionId,
       capturedAt: Date.now(),
     });
+  }
+
+  private bumpLaneRevision(slotKey: string): void {
+    this.laneRevisionBySlotKey.set(slotKey, (this.laneRevisionBySlotKey.get(slotKey) ?? 0) + 1);
   }
 
   /**
@@ -1949,6 +1965,7 @@ export class HelpSessionService {
     const slotKey = assistantSlotKey(projectId, slot);
     this.pendingCapturesBySlotKey.delete(slotKey);
     this.claimsBySlotKey.delete(slotKey);
+    this.bumpLaneRevision(slotKey);
     for (const record of this.sessionsById.values()) {
       if (record.projectId === projectId && record.slot === slot) record.agentSessionId = undefined;
     }

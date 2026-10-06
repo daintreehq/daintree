@@ -2427,13 +2427,9 @@ describe("HelpSessionService", () => {
         await launchLane("term-codex-3");
         const lanes = service.snapshotLaneTerminals();
         await service.discardConversation("proj-1", 0);
-        // A new fresh lane lands with the same empty id but a new revision.
-        backing.set(slotKey("proj-1", 0), {
-          agentId: "claude",
-          agentSessionId: "",
-          cwd: "/help",
-          capturedAt: lanes.get("term-codex-3")!.capturedAt + 1,
-        });
+        // A new fresh lane lands with the same empty id.
+        await launchLane("term-codex-4");
+        expect(backing.get(slotKey("proj-1", 0))?.agentSessionId).toBe("");
 
         await service.noteQuitCapture(lanes.get("term-codex-3")!, "codex-thread-old");
 

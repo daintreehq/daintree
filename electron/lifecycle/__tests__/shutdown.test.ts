@@ -169,7 +169,7 @@ vi.mock("../../setup/environment.js", () => ({
 
 const helpSessionMock = vi.hoisted(() => ({
   snapshotLaneTerminals: vi.fn(
-    (): Map<string, { slotKey: string; agentSessionId: string }> => new Map()
+    (): Map<string, { slotKey: string; agentSessionId: string; revision: number }> => new Map()
   ),
   noteQuitCapture: vi.fn(async (_lane: unknown, _agentSessionId: string) => {}),
   revokeAll: vi.fn(async () => {}),
@@ -1628,7 +1628,7 @@ describe("registerShutdownHandler", () => {
       // A Codex lane has no id until this kill scrapes one; dropping the
       // assistant's result here is what lost the conversation on quit.
       projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
-      const lane = { slotKey: "proj-1#0", agentSessionId: "" };
+      const lane = { slotKey: "proj-1#0", agentSessionId: "", revision: 1 };
       helpSessionMock.snapshotLaneTerminals.mockReturnValueOnce(new Map([["assistant", lane]]));
       const ptyClient = makePtyClient({
         getAllTerminalsAsync: vi.fn(async () => [

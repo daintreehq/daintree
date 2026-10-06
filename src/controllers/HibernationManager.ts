@@ -359,14 +359,17 @@ export class HibernationManager {
    * stranded-launch reaper, and StrictMode remounts, and a held claim would
    * stop the retry they invite from resuming the lane (#11477).
    *
-   * Returns `"seeded"` when the entry is now live in the store and the caller
-   * owns it (and so must consume or release it), `"released"` when it went
-   * back to main, and `"empty"` when there was nothing to take.
+   * Returns `"seeded"` when the caller now holds the claim (and so must
+   * consume or release it) — with `mirrored` false when the store kept a
+   * locally-captured id instead, which a release must leave alone — `"released"`
+   * when it went back to main, and `"empty"` when there was nothing to take.
    */
   async seedFromMain(
     projectId: string,
     gen: number
-  ): Promise<{ status: "seeded"; claimId: string } | { status: "released" | "empty" }> {
+  ): Promise<
+    { status: "seeded"; claimId: string; mirrored: boolean } | { status: "released" | "empty" }
+  > {
     // Tracked outside the try so a throw from the store write below still
     // releases the claim main has already handed us — the take is the point of
     // no return, and swallowing it in the catch would lose the token exactly
@@ -411,9 +414,9 @@ export class HibernationManager {
           cwd: pending.cwd,
           agentId: pending.agentId,
         });
+        mirrored = true;
       }
-      mirrored = true;
-      return { status: "seeded", claimId: pending.claimId };
+      return { status: "seeded", claimId: pending.claimId, mirrored };
     } catch (err) {
       logError("HelpPanel: failed to pull pending hibernation from main", err);
       if (claimId) {

@@ -1397,11 +1397,12 @@ export class HelpSessionController {
           // "released" already handed it back inside seedFromMain (it saw the
           // stale gen first); only a live seed leaves this launch owning it.
           if (seeded.status === "seeded") {
-            // "seeded" means the entry IS in the store, so the mirror is ours.
+            // The mirror is ours only when the seed wrote it; a kept local
+            // capture predates this launch and must survive its abort.
             unreleasedHibernation = {
               projectId: launchProject.id,
               claimId: seeded.claimId,
-              mirrored: true,
+              mirrored: seeded.mirrored,
             };
           }
           if (gen !== this._launchGen) {
