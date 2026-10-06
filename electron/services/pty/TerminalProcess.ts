@@ -2213,11 +2213,7 @@ export class TerminalProcess {
       now
     );
     if (hit === undefined) return;
-    const changed = tracker.noteReported(
-      hit.code,
-      hit.handback.message,
-      hit.handback.truncated
-    );
+    const changed = tracker.noteReported(hit.code, hit.handback.message, hit.handback.truncated);
     // Retired outside `working` even when the capture repeats one already
     // reported, or the code would stay open until the next submission.
     if (t.agentState !== "working") tracker.retire(hit.code);

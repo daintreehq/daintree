@@ -793,13 +793,7 @@ export class TerminalNotifyService {
           ...(target.waitingReason !== undefined ? { waitingReason: target.waitingReason } : {}),
         };
       }
-      const notice = this.addNotice(
-        owner,
-        args.terminalId,
-        "when-idle",
-        note,
-        args.replyLines
-      );
+      const notice = this.addNotice(owner, args.terminalId, "when-idle", note, args.replyLines);
       this.activate(owner, notice, since);
       this.publish(owner);
       return { armed: true, terminalId: args.terminalId };

@@ -95,7 +95,11 @@ export class HandbackTracker {
     const request = this.requests.find((candidate) => candidate.code === code);
     if (request === undefined) return true;
     const reported = request.reported;
-    if (reported !== undefined && reported.message === message && reported.truncated === truncated) {
+    if (
+      reported !== undefined &&
+      reported.message === message &&
+      reported.truncated === truncated
+    ) {
       return false;
     }
     request.reported = { message, truncated };
