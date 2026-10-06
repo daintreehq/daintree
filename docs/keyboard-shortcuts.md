@@ -166,6 +166,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
 | View all agents | `⌘+⌥+O` | `Ctrl+Alt+O` |
+| Open Canopy | `⌘+E` | `Ctrl+Shift+O` |
 | View this project's agents by worktree | `⌘+⌥+I` | `Ctrl+Alt+I` |
 | Open project switcher | `⌘+⌥+P` | `Ctrl+Alt+P` |
 | Switch to last workspace | `⌘+⌥+=` | `Ctrl+Alt+=` |
@@ -236,3 +237,5 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 ## Fixed keys
 
 A few interactions are fixed and not rebindable: worktree-list navigation (arrows or `j`/`k` to move, PageUp/PageDown and Home/End to jump, Space or Enter to open, Enter/ArrowRight to reach a row's toolbar, `Alt+Up`/`Alt+Down` to reorder) and keyboard drag-and-drop reordering (Space to pick up, arrows to move).
+
+Tapping Shift twice opens Canopy from anywhere, a focused terminal included. It is a gesture rather than a binding, so it can't be rebound, only turned off in Settings → Keyboard.

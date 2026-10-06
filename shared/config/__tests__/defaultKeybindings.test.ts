@@ -50,6 +50,40 @@ describe("buildDefaultKeybindings", () => {
 
   it("leaves non-replaced Linux rows identical to the core table", () => {
     const changed = linux.filter((b, i) => b !== mac[i]).map((b) => b.actionId);
-    expect(changed).toEqual(["voiceInput.toggle"]);
+    expect(changed.sort()).toEqual(["canopy.toggle", "voiceInput.toggle"]);
+  });
+
+  it("gives Canopy the one-modifier E on macOS and keeps All agents on Cmd+Alt+O", () => {
+    expect(globalCombo(mac, "canopy.toggle")).toEqual(["Cmd+E"]);
+    expect(globalCombo(mac, "pilot.toggle")).toEqual(["Cmd+Alt+O"]);
+  });
+
+  it("moves Canopy off Ctrl+E on Windows and Linux, where readline owns it", () => {
+    for (const table of [windows, linux]) {
+      expect(globalCombo(table, "canopy.toggle")).toEqual(["Ctrl+Shift+O"]);
+      expect(table.some((b) => b.scope === "global" && foldCmd(b.combo) === "Ctrl+E")).toBe(false);
+    }
+  });
+
+  it("keeps Windows in core order with replacements in place and additions after", () => {
+    const changed = windows
+      .slice(0, mac.length)
+      .filter((b, i) => b !== mac[i])
+      .map((b) => b.actionId);
+    expect(changed).toEqual(["canopy.toggle"]);
+    expect(windows.length).toBeGreaterThan(mac.length);
+  });
+
+  it("keeps the Canopy replacement clear of every other global default", () => {
+    for (const table of [windows, linux]) {
+      const [replacement] = table.filter((b) => b.actionId === "canopy.toggle");
+      const collisions = table.filter(
+        (b) =>
+          b !== replacement &&
+          b.scope === "global" &&
+          foldCmd(b.combo) === foldCmd(replacement!.combo)
+      );
+      expect(collisions).toEqual([]);
+    }
   });
 });

@@ -179,8 +179,7 @@ async function resetFleetGroup(): Promise<void> {
   await clearAllFaults(ctx.app);
   await ensureProjectOpen();
   const page = ctx.window;
-  // The shift-click tests' Shift presses can add up to the double-Shift chord
-  // that toggles the command palette; that palette is expected noise.
+  // A palette left open by an earlier test would block the overlay check below.
   await dismissBlockingPalette(page);
   // Check overlays while the fleet is still armed: the ribbon unmounts its
   // menu when disarmed, which would hide a menu left open by the last test.

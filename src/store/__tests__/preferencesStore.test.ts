@@ -1290,3 +1290,22 @@ describe("diffMarkdownRendered (v20 migration, #12171)", () => {
     expect(migrated).toMatchObject({ diffMarkdownRendered: true });
   });
 });
+
+describe("doubleShiftOpensCanopy", () => {
+  it("is on until turned off", async () => {
+    const store = await loadStore();
+    expect(store.getState().doubleShiftOpensCanopy).toBe(true);
+    store.getState().setDoubleShiftOpensCanopy(false);
+    expect(store.getState().doubleShiftOpensCanopy).toBe(false);
+  });
+
+  it("hydrates a saved choice, and a missing or malformed one as on", async () => {
+    const store = await loadStore();
+    const merge = store.persist.getOptions().merge!;
+    const current = store.getState();
+    expect(merge({ doubleShiftOpensCanopy: false }, current).doubleShiftOpensCanopy).toBe(false);
+    expect(merge({ dockDensity: "compact" }, current).doubleShiftOpensCanopy).toBe(true);
+    expect(merge({ doubleShiftOpensCanopy: null }, current).doubleShiftOpensCanopy).toBe(true);
+    expect(merge({ doubleShiftOpensCanopy: "false" }, current).doubleShiftOpensCanopy).toBe(true);
+  });
+});
