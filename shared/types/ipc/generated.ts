@@ -789,6 +789,10 @@ export interface GeneratedIpcInvokeMap {
     args: [sessionId: string];
     result: import("./help.js").PinnedActionContextSnapshot | null;
   };
+  "help:list-past-sessions": {
+    args: [projectId: string, projectPath: string];
+    result: import("./help.js").HelpPastSession[];
+  };
   "help:list-pending-hibernation-slots": {
     args: [projectId: string];
     result: number[];

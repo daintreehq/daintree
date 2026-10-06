@@ -6,7 +6,10 @@ import type * as HelpSessionServiceModule from "../../services/HelpSessionServic
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../../shared/types/actions.js";
-import type { PinnedActionContextSnapshot } from "../../../shared/types/ipc/help.js";
+import type {
+  HelpPastSession,
+  PinnedActionContextSnapshot,
+} from "../../../shared/types/ipc/help.js";
 import {
   DEFAULT_ASSISTANT_SLOT,
   isValidAssistantSlot,
@@ -228,6 +231,39 @@ async function handleListPendingHibernationSlots(
   return helpSessionService.listPendingHibernationSlots(projectId);
 }
 
+/**
+ * Past assistant conversations for this project (#13206), read from the agents'
+ * own transcript stores. Same cross-project guard as the hibernation reads:
+ * titles are conversation text, so only the view bound to the project may ask.
+ */
+async function handleListPastSessions(
+  ctx: import("../types.js").IpcContext,
+  projectId: string,
+  projectPath: string
+): Promise<HelpPastSession[]> {
+  if (typeof projectId !== "string" || !projectId) return [];
+  if (typeof projectPath !== "string" || !projectPath) return [];
+  if (!ctx.projectId || ctx.projectId !== projectId) {
+    console.warn("[help] listPastSessions: projectId mismatch — refusing cross-project read", {
+      requested: projectId,
+      fromView: ctx.projectId,
+      webContentsId: ctx.webContentsId,
+    });
+    return [];
+  }
+  const [{ helpSessionService }, lister, claudeStore, codex] = await Promise.all([
+    getHelpSessionService(),
+    import("../../services/helpPastSessions.js"),
+    import("../../services/claude/ClaudeSessionStore.js"),
+    import("../../services/codex/CodexSubagentService.js"),
+  ]);
+  return lister.listHelpPastSessions(helpSessionService.getSessionPathForProject(projectPath), {
+    claudeProjectsRoot:
+      claudeStore.resolvePaneClaudeProjectsRoot() ?? lister.defaultClaudeProjectsRoot(),
+    listCodexSessions: (cwd) => codex.listCodexSessionsForCwd(cwd),
+  });
+}
+
 async function handleTakePendingHibernation(
   ctx: import("../types.js").IpcContext,
   projectId: string,
@@ -390,6 +426,9 @@ export const helpNamespace = defineIpcNamespace({
       { withContext: true }
     ),
     discardConversation: op(HELP_METHOD_CHANNELS.discardConversation, handleDiscardConversation, {
+      withContext: true,
+    }),
+    listPastSessions: op(HELP_METHOD_CHANNELS.listPastSessions, handleListPastSessions, {
       withContext: true,
     }),
     reportPanelOpen: op(HELP_METHOD_CHANNELS.reportPanelOpen, handleReportPanelOpen, {

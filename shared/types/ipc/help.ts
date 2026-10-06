@@ -12,3 +12,17 @@ export interface PinnedActionContextSnapshot {
   worktreeBranch: string | null;
   terminalId: string | null;
 }
+
+/**
+ * One past assistant conversation for a project (#13206): a transcript the
+ * agent itself recorded under the project's shared help-sessions directory.
+ * `title` is conversation text — rendered in the picker, never logged.
+ */
+export interface HelpPastSession {
+  agentId: "claude" | "codex";
+  /** The id `buildResumeCommand` resumes — exact, never "latest". */
+  sessionId: string;
+  title: string;
+  /** Epoch ms of the last activity the store recorded. */
+  updatedAt: number;
+}

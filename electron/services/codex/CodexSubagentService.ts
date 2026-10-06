@@ -91,6 +91,8 @@ interface RawThread {
   sessionId?: unknown;
   parentThreadId?: unknown;
   preview?: unknown;
+  /** The user's own name for the thread, when they gave it one. */
+  name?: unknown;
   cwd?: unknown;
   status?: unknown;
   createdAt?: unknown;
@@ -595,11 +597,13 @@ function toFolderSession(thread: RawThread): CodexFolderSession | null {
   // `selectResumeLatestThread` applies before trusting a session id from the
   // wire.
   if (!id || !CODEX_SESSION_ID_PATTERN.test(id)) return null;
+  const name = asString(thread.name);
   return {
     id,
     // The session's own first message — conversation text. Crosses IPC as-is
     // (see the type's doc comment) but must never be logged.
     preview: typeof thread.preview === "string" ? thread.preview : "",
+    ...(name ? { name } : {}),
     updatedAt: secondsToMs(activityOf(thread)),
   };
 }

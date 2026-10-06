@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight, CircleHelp, CircleStop, Ellipsis, RotateCw } from "lucide-react";
+import { ChevronRight, CircleHelp, CircleStop, Ellipsis, History, RotateCw } from "lucide-react";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import {
   DropdownMenu,
@@ -61,6 +61,7 @@ interface HelpPanelHeaderProps {
   canEndSession: boolean;
   onRestartConversation: () => void;
   onEndSession: () => void;
+  onResumePastSession: () => void;
   onOpenDocs: () => void;
   onClose: () => void;
   isFocused?: boolean;
@@ -72,6 +73,7 @@ export function HelpPanelHeader({
   canEndSession,
   onRestartConversation,
   onEndSession,
+  onResumePastSession,
   onOpenDocs,
   onClose,
   isFocused = false,
@@ -147,6 +149,10 @@ export function HelpPanelHeader({
               <DropdownMenuSeparator />
             </>
           )}
+          <DropdownMenuItem onSelect={onResumePastSession}>
+            <History className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            Resume a past session…
+          </DropdownMenuItem>
           <DropdownMenuItem onSelect={onOpenDocs}>
             <CircleHelp className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Open docs

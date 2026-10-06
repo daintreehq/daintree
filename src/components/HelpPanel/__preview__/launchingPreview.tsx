@@ -111,6 +111,7 @@ function App() {
         canEndSession={false}
         onRestartConversation={() => {}}
         onEndSession={() => {}}
+        onResumePastSession={() => {}}
         onOpenDocs={() => {}}
         onClose={() => {}}
         isFocused

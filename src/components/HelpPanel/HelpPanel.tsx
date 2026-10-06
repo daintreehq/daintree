@@ -11,7 +11,7 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useSplitterKeys } from "@/hooks/useSplitterKeys";
-import { ExternalLink, MessageCircle, Settings2, Sparkles } from "lucide-react";
+import { ExternalLink, History, MessageCircle, Settings2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ChoiceCard } from "@/components/ui/card";
@@ -29,6 +29,7 @@ import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
+import { HelpPastSessionsPalette } from "./HelpPastSessionsPalette";
 import { HelpPanelHeader } from "./HelpPanelHeader";
 import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "./HelpSessionTabs";
 import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
@@ -1306,6 +1307,10 @@ export function HelpPanel({
     void actionService.dispatch("app.settings.openTab", { tab: "assistant" }, { source: "user" });
   }, []);
 
+  const handleResumePastSession = useCallback(() => {
+    void actionService.dispatch("help.resumePastSession", undefined, { source: "user" });
+  }, []);
+
   const handleOpenAssistantDocs = useCallback(() => {
     void actionService.dispatch(
       "system.openExternal",
@@ -1515,10 +1520,13 @@ export function HelpPanel({
         canEndSession={Boolean(terminalId && agentId)}
         onRestartConversation={handleNewSession}
         onEndSession={handleEndSession}
+        onResumePastSession={handleResumePastSession}
         onOpenDocs={handleOpenAssistantDocs}
         onClose={handleClose}
         isFocused={isHighlighted}
       />
+
+      <HelpPastSessionsPalette workspace={activeWorkspace} tabs={sessionTabs} />
 
       <HelpSessionTabs
         tabs={sessionTabs}
@@ -1769,6 +1777,15 @@ export function HelpPanel({
                 </p>
               )}
               <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={handleResumePastSession}
+                  data-testid="help-resume-past-session"
+                  className="flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                >
+                  <History className="w-3.5 h-3.5" />
+                  Resume a past session…
+                </button>
                 <button
                   type="button"
                   onClick={handleOpenSettings}

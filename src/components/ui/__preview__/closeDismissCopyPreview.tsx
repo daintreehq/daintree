@@ -153,6 +153,7 @@ function Preview() {
             canEndSession
             onRestartConversation={noop}
             onEndSession={noop}
+            onResumePastSession={noop}
             onOpenDocs={noop}
             onClose={noop}
           />

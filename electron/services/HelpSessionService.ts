@@ -2428,6 +2428,15 @@ export class HelpSessionService {
   }
 
   /**
+   * The directory every assistant lane of `projectPath` runs in — the same
+   * path `provisionSession` derives — so a reader can find the transcripts
+   * the agents filed under it (#13206). Pure: never creates the directory.
+   */
+  getSessionPathForProject(projectPath: string): string {
+    return path.join(this.getSessionsRoot(), assistantSessionDirName(projectPathHash(projectPath)));
+  }
+
+  /**
    * Resolves once the in-process MCP server is bound and listening, OR
    * throws if it cannot be made ready. Daintree control on the assistant is
    * meaningless without a live MCP server, so we treat unreachable as a
