@@ -131,6 +131,9 @@ interface PreferencesState {
   setAssignWorktreeToSelf: (value: boolean) => void;
   reduceAnimations: boolean;
   setReduceAnimations: (value: boolean) => void;
+  /** Tapping Shift twice opens Canopy, from anywhere including a terminal. */
+  doubleShiftOpensCanopy: boolean;
+  setDoubleShiftOpensCanopy: (value: boolean) => void;
   diffViewType: DiffViewType;
   setDiffViewType: (value: DiffViewType) => void;
   /**
@@ -327,6 +330,9 @@ function sanitizePersistedPreferences(
     sanitized.markdownFontSize = DEFAULT_MARKDOWN_FONT_SIZE;
   }
   if (typeof sanitized.showAgentTaskTitles !== "boolean") sanitized.showAgentTaskTitles = true;
+  if (typeof sanitized.doubleShiftOpensCanopy !== "boolean") {
+    sanitized.doubleShiftOpensCanopy = true;
+  }
   if (!isDeletedWorktreeCleanupSeconds(sanitized.deletedWorktreeCleanupSeconds)) {
     sanitized.deletedWorktreeCleanupSeconds = DELETED_WORKTREE_CLEANUP_DEFAULT;
   }
@@ -379,6 +385,7 @@ type PreferencesPersistedState = Pick<
   | "dockDensity"
   | "assignWorktreeToSelf"
   | "reduceAnimations"
+  | "doubleShiftOpensCanopy"
   | "diffViewType"
   | "diffWrapLines"
   | "diffMarkdownRendered"
@@ -408,6 +415,7 @@ const PREFERENCES_PERSISTED_DEFAULTS: PreferencesPersistedState = {
   dockDensity: "normal",
   assignWorktreeToSelf: false,
   reduceAnimations: false,
+  doubleShiftOpensCanopy: true,
   diffViewType: "split",
   diffWrapLines: null,
   diffMarkdownRendered: false,
@@ -538,6 +546,7 @@ function toPreferencesPersisted(
     dockDensity: isDockDensity(raw.dockDensity) ? raw.dockDensity : d.dockDensity,
     assignWorktreeToSelf: coerceBool(raw.assignWorktreeToSelf, d.assignWorktreeToSelf),
     reduceAnimations: coerceBool(raw.reduceAnimations, d.reduceAnimations),
+    doubleShiftOpensCanopy: coerceBool(raw.doubleShiftOpensCanopy, d.doubleShiftOpensCanopy),
     diffViewType: isDiffViewType(raw.diffViewType) ? raw.diffViewType : d.diffViewType,
     diffWrapLines: isDiffWrapPreference(raw.diffWrapLines) ? raw.diffWrapLines : d.diffWrapLines,
     diffMarkdownRendered: coerceBool(raw.diffMarkdownRendered, d.diffMarkdownRendered),
@@ -638,6 +647,11 @@ function mergePreferencesPersistedWrite({
         base.reduceAnimations,
         inc.reduceAnimations,
         disk.reduceAnimations
+      ),
+      doubleShiftOpensCanopy: pickFieldByWriterDelta(
+        base.doubleShiftOpensCanopy,
+        inc.doubleShiftOpensCanopy,
+        disk.doubleShiftOpensCanopy
       ),
       diffViewType: pickFieldByWriterDelta(base.diffViewType, inc.diffViewType, disk.diffViewType),
       diffWrapLines: pickFieldByWriterDelta(
@@ -748,6 +762,8 @@ export const usePreferencesStore = create<PreferencesState>()(
       setAssignWorktreeToSelf: (value) => set({ assignWorktreeToSelf: value }),
       reduceAnimations: false,
       setReduceAnimations: (value) => set({ reduceAnimations: value }),
+      doubleShiftOpensCanopy: true,
+      setDoubleShiftOpensCanopy: (value) => set({ doubleShiftOpensCanopy: value }),
       diffViewType: "split",
       setDiffViewType: (value) => set({ diffViewType: value }),
       diffWrapLines: null,
@@ -876,6 +892,7 @@ export const usePreferencesStore = create<PreferencesState>()(
         dockDensity: state.dockDensity,
         assignWorktreeToSelf: state.assignWorktreeToSelf,
         reduceAnimations: state.reduceAnimations,
+        doubleShiftOpensCanopy: state.doubleShiftOpensCanopy,
         diffViewType: state.diffViewType,
         diffWrapLines: state.diffWrapLines,
         diffMarkdownRendered: state.diffMarkdownRendered,
@@ -1066,5 +1083,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean | null; diffMarkdownRendered: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; markdownFontSize: MarkdownFontSize; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; lastSelectedWorktreeAgentIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; projectSwitcherCollapsedBands: Record<string, boolean>; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean; keyboardLayoutConfirmationsByBinding: Record<string, number> }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; doubleShiftOpensCanopy: boolean; diffViewType: DiffViewType; diffWrapLines: boolean | null; diffMarkdownRendered: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; markdownFontSize: MarkdownFontSize; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; lastSelectedWorktreeAgentIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; projectSwitcherCollapsedBands: Record<string, boolean>; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean; keyboardLayoutConfirmationsByBinding: Record<string, number> }",
 });

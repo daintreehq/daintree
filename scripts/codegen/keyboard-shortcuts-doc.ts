@@ -49,13 +49,12 @@ function codeSpan(text: string): string {
 
 function generate(): string {
   const core = buildDefaultKeybindings(false);
+  // Windows and Linux keep the core table's order with replacements in place,
+  // and Windows appends its additions, so a core row's counterpart on either
+  // platform sits at the same index.
   const windows = buildDefaultKeybindings(true);
-  const windowsOnly = windows.filter((b) => !core.includes(b));
+  const windowsOnly = windows.slice(core.length);
   const linux = buildDefaultKeybindings(false, true);
-  const linuxReplacement = (binding: KeybindingConfig): KeybindingConfig | undefined =>
-    linux.includes(binding)
-      ? undefined
-      : linux.find((b) => b.actionId === binding.actionId && b.scope === binding.scope);
 
   const byCategory = new Map<string, KeybindingConfig[]>();
   const add = (binding: KeybindingConfig) => {
@@ -110,12 +109,14 @@ function generate(): string {
       const isWindowsOnly = windowsOnly.includes(binding);
       const label = escapeCell(binding.description ?? binding.actionId);
       const mac = isWindowsOnly ? "—" : codeSpan(escapeCell(displayMac(binding.combo)));
-      const replacement = linuxReplacement(binding);
-      const winCode = codeSpan(escapeCell(displayWin(binding.combo)));
+      const index = core.indexOf(binding);
+      const winCombo = isWindowsOnly ? binding.combo : windows[index]!.combo;
+      const linuxCombo = isWindowsOnly ? binding.combo : linux[index]!.combo;
+      const winCode = codeSpan(escapeCell(displayWin(winCombo)));
       const win = isWindowsOnly
         ? `${winCode} (Windows only)`
-        : replacement
-          ? `${winCode} (Windows), ${codeSpan(escapeCell(displayWin(replacement.combo)))} (Linux)`
+        : winCombo !== linuxCombo
+          ? `${winCode} (Windows), ${codeSpan(escapeCell(displayWin(linuxCombo)))} (Linux)`
           : winCode;
       lines.push(`| ${label} | ${mac} | ${win} |`);
     }
@@ -126,6 +127,10 @@ function generate(): string {
   lines.push("");
   lines.push(
     "A few interactions are fixed and not rebindable: worktree-list navigation (arrows or `j`/`k` to move, PageUp/PageDown and Home/End to jump, Space or Enter to open, Enter/ArrowRight to reach a row's toolbar, `Alt+Up`/`Alt+Down` to reorder) and keyboard drag-and-drop reordering (Space to pick up, arrows to move)."
+  );
+  lines.push("");
+  lines.push(
+    "Tapping Shift twice opens Canopy from anywhere, a focused terminal included. It is a gesture rather than a binding, so it can't be rebound, only turned off in Settings → Keyboard."
   );
   lines.push("");
   return lines.join("\n");

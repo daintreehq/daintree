@@ -24,6 +24,7 @@ export { useActiveWorktreeSync } from "./useActiveWorktreeSync";
 export { useAgentActivityBroadcast } from "./useAgentActivityBroadcast";
 export { useAgentWaitingNudge } from "./useAgentWaitingNudge";
 export { useCanopySeenTracking } from "./useCanopySeenTracking";
+export { useCanopyDoubleShift } from "./useCanopyDoubleShift";
 export { useForgeEnableRecommendation } from "./useForgeEnableRecommendation";
 export { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";
 export { useSleptProjectTransition } from "./useSleptProjectTransition";
