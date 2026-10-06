@@ -1630,15 +1630,16 @@ describe("registerShutdownHandler", () => {
       projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
       const lane = { slotKey: "proj-1#0", agentSessionId: "", revision: 1 };
       helpSessionMock.snapshotLaneTerminals.mockReturnValueOnce(new Map([["assistant", lane]]));
+      const gracefulKillByProject = vi.fn(async () => [
+        { id: "t1", agentSessionId: "sess-1" },
+        { id: "assistant", agentSessionId: "codex-thread-1" },
+      ]);
       const ptyClient = makePtyClient({
         getAllTerminalsAsync: vi.fn(async () => [
           agentTerminal,
           { ...agentTerminal, id: "assistant", isAssistantTerminal: true },
         ]),
-        gracefulKillByProject: vi.fn(async () => [
-          { id: "t1", agentSessionId: "sess-1" },
-          { id: "assistant", agentSessionId: "codex-thread-1" },
-        ]),
+        gracefulKillByProject,
       });
       const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
 
@@ -1649,7 +1650,7 @@ describe("registerShutdownHandler", () => {
       expect(helpSessionMock.noteQuitCapture).toHaveBeenCalledWith(lane, "codex-thread-1");
       // Snapshotted before the kill, while the lanes were still bound.
       expect(helpSessionMock.snapshotLaneTerminals.mock.invocationCallOrder[0]).toBeLessThan(
-        (ptyClient.gracefulKillByProject as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!
+        gracefulKillByProject.mock.invocationCallOrder[0]!
       );
     });
 
