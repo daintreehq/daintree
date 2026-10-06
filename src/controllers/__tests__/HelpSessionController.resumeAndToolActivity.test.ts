@@ -489,9 +489,8 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
       undefined
     );
 
-    for (const call of panelStoreState.addPanel.mock.calls) {
-      expect(JSON.stringify(call[0])).not.toContain("--continue");
-    }
+    // No resume panel at all — the fresh launch goes through agent.launch.
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
     ctrl.stop();
   });
 

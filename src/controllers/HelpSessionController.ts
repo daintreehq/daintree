@@ -1213,14 +1213,14 @@ export class HelpSessionController {
     // see this generation still holding it and silently drop the relaunch
     // (#10703) — leaving `_hasAutoLaunched` stuck and blocking all auto-launch.
     let pendingReEval: HelpSessionInputs | null = null;
-    // The main-captured resume token this launch has taken but not yet used,
-    // with the claim id that authorizes putting it back.
-    // `takePendingHibernation` is destructive on main, so every abort
-    // downstream of a successful take used to destroy the user's only resume
-    // token — across five separate early returns plus any provisioning failure
-    // or throw (#11477). One variable released from the `finally` covers them
-    // all, including early returns added later. Cleared only where the token is
-    // genuinely spent: a resumed session that survived its post-spawn checks.
+    // The lane claim this launch has taken on main but not yet used, with the
+    // claim id that authorizes releasing it. A held claim stops every other
+    // view resuming the lane, so every abort downstream of a successful take —
+    // five separate early returns plus any provisioning failure or throw —
+    // must release it (#11477). One variable released from the `finally`
+    // covers them all, including early returns added later. Cleared only where
+    // the claim is genuinely spent: a resumed session that survived its
+    // post-spawn checks, whose spawn main records as the lane's pointer.
     // `mirrored` records whether this take also reached the renderer's durable
     // `hibernateSessions` slot, so the release only drops that mirror when it
     // is genuinely ours — the bails below fire before it is ever written.
@@ -1315,8 +1315,8 @@ export class HelpSessionController {
         } catch (err) {
           logError("HelpPanel: resumeOnly early hibernation take failed", err);
         }
-        // Main has already cleared its side, so from here on this launch owns
-        // the token and the `finally` is what gives it back (#11477).
+        // From here on this launch holds the lane's claim, and the `finally` is
+        // what releases it (#11477).
         if (earlyPending) {
           unreleasedHibernation = {
             projectId: launchProject.id,
@@ -1391,8 +1391,7 @@ export class HelpSessionController {
         // #10819: the `resumeOnly` path already performed the atomic
         // `takePendingHibernation` before provisioning and seeded the local
         // store from it, so re-seeding here is skipped — a second take would
-        // return null (the entry is consumed) and clear nothing, but running it
-        // is wasteful and misleading.
+        // only re-claim what this launch already holds.
         if (!options.resumeOnly) {
           const seeded = await this._hibernationManager.seedFromMain(launchProject.id, gen);
           // "released" already handed it back inside seedFromMain (it saw the
@@ -1433,9 +1432,9 @@ export class HelpSessionController {
               usePanelStore.getState().removePanel(resumed.panelId);
               return;
             }
-            // The token is now genuinely spent: the resumed session survived
+            // The claim is now genuinely spent: the resumed session survived
             // both post-spawn checks and is about to go live. Every other exit
-            // from here leaves the marker set so the `finally` gives it back.
+            // from here leaves the marker set so the `finally` releases it.
             unreleasedHibernation = null;
             useHelpPanelStore.getState().clearHibernateSession(launchProject.id, this.slot);
             useHelpPanelStore

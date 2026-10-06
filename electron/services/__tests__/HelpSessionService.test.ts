@@ -2170,6 +2170,7 @@ describe("HelpSessionService", () => {
       get: ReturnType<typeof vi.fn>;
       set: ReturnType<typeof vi.fn>;
       clear: ReturnType<typeof vi.fn>;
+      flush: ReturnType<typeof vi.fn>;
     };
 
     beforeEach(() => {
@@ -2177,6 +2178,7 @@ describe("HelpSessionService", () => {
         get: vi.fn().mockReturnValue(null),
         set: vi.fn().mockResolvedValue(undefined),
         clear: vi.fn().mockResolvedValue(undefined),
+        flush: vi.fn().mockResolvedValue(undefined),
       };
       service.setPendingHibernationStore(hibernationStore as never);
     });
@@ -2419,6 +2421,51 @@ describe("HelpSessionService", () => {
         await service.noteQuitCapture(lanes.get("term-codex")!, "codex-thread-9");
 
         expect(backing.get(slotKey("proj-1", 0))?.agentSessionId).toBe("codex-thread-9");
+      });
+
+      it("drops a quit-time capture when the lane was discarded and relaunched with another empty id", async () => {
+        await launchLane("term-codex-3");
+        const lanes = service.snapshotLaneTerminals();
+        await service.discardConversation("proj-1", 0);
+        // A new fresh lane lands with the same empty id but a new revision.
+        backing.set(slotKey("proj-1", 0), {
+          agentId: "claude",
+          agentSessionId: "",
+          cwd: "/help",
+          capturedAt: lanes.get("term-codex-3")!.capturedAt + 1,
+        });
+
+        await service.noteQuitCapture(lanes.get("term-codex-3")!, "codex-thread-old");
+
+        expect(backing.get(slotKey("proj-1", 0))?.agentSessionId).toBe("");
+      });
+
+      it("revokeAll waits for queued pointer writes before the process exits", async () => {
+        await launchLane("term-flush", "claude-conv-5");
+
+        await service.revokeAll();
+
+        expect(hibernationStore.flush).toHaveBeenCalled();
+      });
+
+      it("a take of an empty placeholder waits for the in-flight capture's real id", async () => {
+        let resolveGraceful: (value: string | null) => void = () => {};
+        mockPtyGracefulKill.mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveGraceful = resolve;
+            })
+        );
+        await launchLane("term-codex-evict");
+
+        const revoking = service.revokeByWebContentsId(42);
+        const taking = service.takePendingHibernation("proj-1", 0, 7);
+        resolveGraceful("codex-thread-captured");
+        await revoking;
+
+        await expect(taking).resolves.toEqual(
+          expect.objectContaining({ agentSessionId: "codex-thread-captured" })
+        );
       });
 
       it("drops a quit-time capture for a lane the user discarded during the kill", async () => {
@@ -3023,16 +3070,23 @@ describe("HelpSessionService", () => {
       });
       if (!result) throw new Error("expected provision");
       expect(service.markTerminalForToken(result.token, "term-visible")).toBe(true);
+      // The lane's spawn recorded its conversation id (#13205).
+      await service.recordLaneLaunchForToken(result.token, "known-conv-id");
 
       // Kick off eviction-revoke; it hangs on gracefulKill.
       const revokePromise = service.revokeByWebContentsId(77);
 
       // Before gracefulKill resolves, the renderer's takePendingHibernation
-      // sees the empty-sentinel placeholder — so it resumes instead of starting
-      // a fresh session (the visible "restart" #9639 fixes).
+      // sees the placeholder, carrying the id the lane already knew — so it
+      // resumes instead of starting a fresh session (the visible "restart"
+      // #9639 fixes).
       const early = await service.takePendingHibernation("proj-visible", 0, 0);
       expect(early).toEqual(
-        expect.objectContaining({ agentId: "claude", agentSessionId: "", cwd: result.sessionPath })
+        expect.objectContaining({
+          agentId: "claude",
+          agentSessionId: "known-conv-id",
+          cwd: result.sessionPath,
+        })
       );
 
       // gracefulKill finally yields the real resume id. Because the renderer
@@ -3043,7 +3097,7 @@ describe("HelpSessionService", () => {
       await revokePromise;
       await Promise.resolve();
 
-      expect(backing.get(slotKey("proj-visible", 0))?.agentSessionId).toBe("");
+      expect(backing.get(slotKey("proj-visible", 0))?.agentSessionId).toBe("known-conv-id");
     });
 
     it("placeholder gets overwritten with the real id when no take happens (#9639 baseline — finalize-block still updates an untouched capture)", async () => {

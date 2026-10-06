@@ -329,18 +329,19 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
 
       // The assistant's captures are excluded from the grid writes below, but
       // they are its lane's resume pointer: a Codex lane has no id until this
-      // kill scrapes one (#13205).
+      // kill scrapes one (#13205). Started here, awaited after the grid
+      // writeback so a slow store write can't spend that work's budget.
+      const assistantCaptureWrites: Promise<void>[] = [];
       if (helpSessions && assistantLanes.size > 0) {
-        const sessions = helpSessions;
-        await Promise.all(
-          allResults.flat().map((result) => {
-            const lane = assistantLanes.get(result.id);
-            if (!lane || !result.agentSessionId) return undefined;
-            return sessions.noteQuitCapture(lane, result.agentSessionId).catch((err) => {
+        for (const result of allResults.flat()) {
+          const lane = assistantLanes.get(result.id);
+          if (!lane || !result.agentSessionId) continue;
+          assistantCaptureWrites.push(
+            helpSessions.noteQuitCapture(lane, result.agentSessionId).catch((err) => {
               console.warn("[MAIN] Persisting assistant lane capture at quit failed:", err);
-            });
-          })
-        );
+            })
+          );
+        }
       }
 
       for (let i = 0; i < projectIds.length; i++) {
@@ -375,6 +376,8 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
           );
         }
       }
+
+      await Promise.all(assistantCaptureWrites);
 
       // Journal a resume record per captured agent session, matching the
       // trash-expiry / kill / gracefulKill close paths. Non-agent terminals

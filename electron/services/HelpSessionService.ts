@@ -228,6 +228,8 @@ export interface ProvisionResult {
 export interface AssistantLaneSnapshot {
   slotKey: string;
   agentSessionId: string;
+  /** The pointer's revision: a discard + relaunch rewrites it even when both ids are empty. */
+  capturedAt: number;
 }
 
 interface HelpSessionRecord {
@@ -1590,8 +1592,8 @@ export class HelpSessionService {
     // races us whenever the project view outlives the kill (project sleep and
     // close+kill both keep it alive) — passes the guard at the top and reaches
     // the finalize block below. Without this flag it would release OUR ownership
-    // and the real resume id would be dropped for the empty-sentinel placeholder,
-    // silently demoting the resume to latest-conversation.
+    // and the real resume id would be dropped for the placeholder, which for a
+    // lane with no known id is the empty sentinel that resumes nothing.
     let ownsCapture = false;
     // When the renderer that owned the panel is gone (crash, eviction), the
     // open state is frozen at capture time: a crash-reloaded renderer mounts
@@ -1691,11 +1693,11 @@ export class HelpSessionService {
 
     // #9639: finalize the placeholder written before gracefulKill. Only act if
     // we still own the capture — a same-lane re-provision that ran
-    // `displacePriorSessions` during the await clears our ownership and the
-    // placeholder, so the old resume ID can't shadow the fresh session that
-    // took the lane. When we still own it: overwrite with the real resume ID
-    // if gracefulKill yielded one, otherwise leave the empty-sentinel in place
-    // (resume-latest beats a fresh launch). Then release ownership.
+    // `displacePriorSessions` during the await clears our ownership, so the old
+    // resume ID can't shadow the fresh session that took the lane. When we
+    // still own it: overwrite with the real resume ID if gracefulKill yielded
+    // one, otherwise leave the placeholder — which carries whatever id the lane
+    // already knew (#13205). Then release ownership.
     if (
       ownsCapture &&
       this.pendingHibernationStore &&
@@ -1799,6 +1801,14 @@ export class HelpSessionService {
   } | null> {
     if (!this.pendingHibernationStore) return null;
     const slotKey = assistantSlotKey(projectId, slot);
+    // An empty placeholder whose capture is still in flight (a Codex lane —
+    // its id only exists once gracefulKill scrapes it) is not resumable yet,
+    // and recovery is by exact id only. Wait for the capture to write the real
+    // id rather than handing out a placeholder that can only start fresh.
+    const capturingSession = this.pendingCapturesBySlotKey.get(slotKey);
+    if (capturingSession && this.pendingHibernationStore.get(slotKey)?.agentSessionId === "") {
+      await this.captureRevokesInFlight.get(capturingSession)?.catch(() => undefined);
+    }
     const entry = this.pendingHibernationStore.get(slotKey);
     if (!entry) return null;
     const owner = ownerWebContentsId ?? null;
@@ -1895,7 +1905,11 @@ export class HelpSessionService {
       if (this.activeHelpTerminalBySlotKey.get(slotKey) !== terminalId) continue;
       const entry = this.pendingHibernationStore.get(slotKey);
       if (!entry || entry.agentId !== record.agentId) continue;
-      lanes.set(terminalId, { slotKey, agentSessionId: entry.agentSessionId });
+      lanes.set(terminalId, {
+        slotKey,
+        agentSessionId: entry.agentSessionId,
+        capturedAt: entry.capturedAt,
+      });
     }
     return lanes;
   }
@@ -1911,7 +1925,10 @@ export class HelpSessionService {
   noteQuitCapture(lane: AssistantLaneSnapshot, agentSessionId: string): Promise<void> {
     if (!agentSessionId || !this.pendingHibernationStore) return Promise.resolve();
     const entry = this.pendingHibernationStore.get(lane.slotKey);
-    if (!entry || entry.agentSessionId !== lane.agentSessionId) return Promise.resolve();
+    if (!entry) return Promise.resolve();
+    if (entry.agentSessionId !== lane.agentSessionId || entry.capturedAt !== lane.capturedAt) {
+      return Promise.resolve();
+    }
     if (entry.agentSessionId === agentSessionId) return Promise.resolve();
     return this.pendingHibernationStore.set(lane.slotKey, {
       ...entry,
@@ -2107,6 +2124,9 @@ export class HelpSessionService {
     // persisted entries themselves are untouched — they are what brings each
     // lane back on the next boot (#13205).
     this.claimsBySlotKey.clear();
+    // A spawn's pointer write or a discard's clear may still be queued; the
+    // process is about to exit, so let it land rather than lose it.
+    await this.pendingHibernationStore?.flush();
   }
 
   /**

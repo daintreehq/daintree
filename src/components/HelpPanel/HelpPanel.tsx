@@ -417,8 +417,9 @@ export function HelpPanel({
   // pending-hibernation store. When the idle empty state is about to show, peek
   // that store so we can offer "Resume assistant" instead of a fresh "Start
   // assistant", making a workspace switch-back read as a recoverable pause rather
-  // than a crash. The peek is non-consuming: the launch flow still consumes the
-  // entry via takePendingHibernation. We stamp the entry with its workspace id so
+  // than a crash. The same pointer brings a lane back after an app quit or crash
+  // (#13205). The peek is non-consuming, like the launch flow's claim via
+  // takePendingHibernation. We stamp the entry with its workspace id so
   // a mid-flight A→B switch can't show workspace A's Resume CTA over workspace B.
   const [resumablePending, setResumablePending] = useState<{
     workspaceId: string;
@@ -1181,7 +1182,10 @@ export function HelpPanel({
       } else if (activeWorkspaceId) {
         // A dormant tab — one restored for a conversation nothing has resumed
         // yet — has no session to end, but closing it is still the user
-        // discarding that conversation, so its pointer must go too (#13205).
+        // discarding that conversation, so both of its pointers must go too:
+        // main's, and the renderer's own hibernate mirror, which a later launch
+        // into the reused slot would otherwise resume (#13205).
+        state.clearHibernateSession(activeWorkspaceId, slot);
         const discarded = window.electron.help.discardConversation?.(activeWorkspaceId, slot);
         if (discarded) safeFireAndForget(discarded, { context: "HelpPanel.closeSlot discard" });
       }

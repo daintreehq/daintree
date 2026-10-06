@@ -1122,10 +1122,17 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // The assistant lane's durable resume pointer, written the moment its
       // conversation exists so a quit or a main-process crash can't lose it
       // (#13205). Memory-first, so it is current before any later capture.
+      // The PTY is already up, so a failure here must not fail the spawn.
       if (isHelpLaunch) {
-        helpSessionService.recordLaneLaunchForToken(helpToken, spawnAgentSessionId).catch((err) => {
+        try {
+          helpSessionService
+            .recordLaneLaunchForToken(helpToken, spawnAgentSessionId)
+            .catch((err) => {
+              console.warn("[TerminalSpawn] Failed to record assistant lane pointer:", err);
+            });
+        } catch (err) {
           console.warn("[TerminalSpawn] Failed to record assistant lane pointer:", err);
-        });
+        }
       }
 
       return id;

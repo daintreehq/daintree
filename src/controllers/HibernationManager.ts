@@ -4,12 +4,12 @@
 // their handlers are unchanged, just relocated.
 
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { assistantSlotKey } from "@shared/config/assistantSlots";
 import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
 import { logError, logInfo } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { ACTIVE_AGENT_STATES } from "@shared/types/agent";
-import { buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { revokeHelpSession } from "./HelpSessionProvisioner";
 import type { HelpSessionSnapshot, HelpSessionInputs } from "./HelpSessionController";
 
@@ -305,22 +305,9 @@ export class HibernationManager {
               cwd,
               agentId: liveAgentId,
             });
-          } else if (
-            projectId &&
-            liveAgentId &&
-            cwd &&
-            buildResumeLatestCommand(liveAgentId) !== undefined
-          ) {
-            // Capture missed but the agent has a resume-latest flag — persist
-            // a sentinel hibernate entry (empty sessionId) so the next panel
-            // open hits the `--continue`-style fallback in `_spawnResumed`
-            // instead of starting a fresh session (#8787).
-            after.setHibernateSession(projectId, this.host.getSlot(), {
-              sessionId: "",
-              cwd,
-              agentId: liveAgentId,
-            });
           } else if (projectId) {
+            // Capture missed. Nothing local to resume by exact id; main still
+            // holds the lane's own pointer for the reopen (#13205).
             after.clearHibernateSession(projectId, this.host.getSlot());
           }
           usePanelStore.getState().removePanel(initialTerminalId);
@@ -360,23 +347,17 @@ export class HibernationManager {
    * being torn down. Best-effort: failures are logged and swallowed — a
    * missing pending entry just means we'll cold-start the agent like before.
    *
-   * The IPC takes-and-clears atomically on main: a one-shot read so a stale
-   * entry from many launches ago can't keep resurrecting an old conversation
-   * after the user has explicitly started a new session somewhere along the
-   * way.
+   * The IPC claims the entry on main without deleting it (#13205): the claim
+   * is the single-winner gate between views, and the entry itself stays on
+   * disk until the user discards the conversation or a fresh launch replaces
+   * it, so a resume interrupted by a crash or quit is still recoverable.
    *
    * Stale-gen guard: the caller passes the launch generation it started in. If
    * anything bumps `_launchGen` during the IPC await, this launch no longer
-   * owns the entry and must not write it into the store. It used to be dropped
-   * on the floor here — main had already cleared its side, so the resume
-   * opportunity was simply destroyed — on the theory that the bump meant the
-   * user had explicitly discarded the conversation. It usually doesn't: the
-   * gen-bump sites are dominated by the stall watchdog, the stranded-launch
-   * reaper, and StrictMode remounts, and the watchdog in particular surfaces a
-   * *retryable* error while silently destroying what the retry needs (#11477).
-   * So hand it back to main instead. `restorePendingHibernation` refuses if a
-   * newer capture has landed, and the put-back entry loses `panelWasOpen`, so
-   * it can only ever be resumed explicitly — never auto-resumed.
+   * owns the entry and must not write it into the store. It releases the claim
+   * instead: the gen-bump sites are dominated by the stall watchdog, the
+   * stranded-launch reaper, and StrictMode remounts, and a held claim would
+   * stop the retry they invite from resuming the lane (#11477).
    *
    * Returns `"seeded"` when the entry is now live in the store and the caller
    * owns it (and so must consume or release it), `"released"` when it went
@@ -409,15 +390,28 @@ export class HibernationManager {
       // `pending.agentSessionId` can be the empty-string sentinel when main's
       // `revokeSession({ captureHibernation: true })` placeholder write raced
       // the agent's real session-id echo (LRU eviction of the per-project
-      // WebContentsView, #10057), or for a Codex lane whose id was never
-      // captured. `_spawnResumed` resumes by exact id only, so an empty
-      // sentinel starts fresh rather than guessing at the latest conversation
-      // in a directory every lane shares (#13205).
-      useHelpPanelStore.getState().setHibernateSession(projectId, this.host.getSlot(), {
-        sessionId: pending.agentSessionId,
-        cwd: pending.cwd,
-        agentId: pending.agentId,
-      });
+      // WebContentsView, #10057), or for a Codex lane whose id main never
+      // learned. `_spawnResumed` resumes by exact id only, so an empty sentinel
+      // starts fresh rather than guessing at the latest conversation in a
+      // directory every lane shares (#13205). The renderer's own idle
+      // hibernate may have captured the id main is missing — never trade that
+      // for the empty pointer.
+      const local =
+        useHelpPanelStore.getState().hibernateSessions[
+          assistantSlotKey(projectId, this.host.getSlot())
+        ];
+      const keepLocal =
+        pending.agentSessionId === "" &&
+        local !== undefined &&
+        local.sessionId !== "" &&
+        local.agentId === pending.agentId;
+      if (!keepLocal) {
+        useHelpPanelStore.getState().setHibernateSession(projectId, this.host.getSlot(), {
+          sessionId: pending.agentSessionId,
+          cwd: pending.cwd,
+          agentId: pending.agentId,
+        });
+      }
       mirrored = true;
       return { status: "seeded", claimId: pending.claimId };
     } catch (err) {

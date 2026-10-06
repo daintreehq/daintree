@@ -1137,6 +1137,59 @@ describe("HelpPanel — resume from main-captured hibernation (eviction recovery
     expect(mockDispatch).toHaveBeenCalledWith("agent.launch", expect.anything(), expect.anything());
   });
 
+  it("keeps the renderer's captured id over main's empty pointer for the lane (#13205)", async () => {
+    // The renderer's idle hibernate captured the id main's spawn-time pointer
+    // never learned (a Codex lane). Seeding from main must not trade it away.
+    helpPanelState.terminalId = null;
+    helpPanelState.agentId = null;
+    helpPanelState.preferredAgentId = "claude";
+    helpPanelState.sessionId = null;
+    helpPanelState.hibernateSessions = {
+      [slotKey(projectStoreState.currentProject!.id, 0)]: {
+        sessionId: "locally-captured-id",
+        cwd: "/help",
+        agentId: "claude",
+      },
+    };
+
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockTakePendingHibernation.mockResolvedValueOnce({
+      agentId: "claude",
+      agentSessionId: "",
+      cwd: "/help",
+    });
+    helpPanelState.setHibernateSession = vi.fn(
+      (
+        projectId: string,
+        slot: number,
+        entry: { sessionId: string; cwd: string; agentId: string }
+      ) => {
+        helpPanelState.hibernateSessions[slotKey(projectId, slot)] = entry;
+      }
+    );
+    panelStoreState.addPanel.mockResolvedValueOnce("term-resumed-local");
+
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(helpPanelState.setHibernateSession).not.toHaveBeenCalledWith(
+      projectStoreState.currentProject?.id,
+      0,
+      expect.objectContaining({ sessionId: "" })
+    );
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ agentSessionId: "locally-captured-id" })
+    );
+  });
+
   it("falls through to a fresh launch when main has no pending hibernation", async () => {
     helpPanelState.terminalId = null;
     helpPanelState.agentId = null;
