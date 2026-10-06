@@ -8,6 +8,7 @@ import { copyTreeClient, systemClient } from "@/clients";
 import { resolveCopyTreeRunSource } from "@/lib/copyTreeRunSource";
 import { actionService } from "@/services/ActionService";
 import { getCurrentViewStore, getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
+import { copiesWorkspaceRoot } from "./workspaceRootCopyTarget";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 // Static, unlike the panel stores below: both are leaf modules (a lease map and
 // a zustand store) that pull in no client graph, and they are the same two
@@ -393,9 +394,8 @@ export function registerWorktreeContextActions(
         const scopeIgnoresIgnoreFiles = args?.scopeIgnoresIgnoreFiles;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         // No worktree at all is a non-git project or a scratch: copy its root,
-        // which main resolves from the dispatching view itself (#13210). Only
-        // with no workspace of any kind is there nothing to copy.
-        if (!targetWorktreeId && !ctx.projectId && !ctx.scratchId) return null;
+        // which main resolves from the dispatching view itself (#13210).
+        if (!targetWorktreeId && !copiesWorkspaceRoot(ctx)) return null;
 
         const format = explicitFormat ?? DEFAULT_COPYTREE_FORMAT;
 

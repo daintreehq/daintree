@@ -82,8 +82,31 @@ export class CopytreeWorkerClient {
   private lastCompletedAt: number | null = null;
 
   constructor(
-    private readonly createWorker: () => Worker = () => new Worker(resolveCopytreeWorkerPath())
+    private readonly createWorker: () => Worker = () => new Worker(resolveCopytreeWorkerPath()),
+    /**
+     * Whether `generate` may fall back to running in this thread. Main's own
+     * client (#13210) turns it off: a fallback there would walk and format a
+     * whole folder on the event loop every window's IPC runs on.
+     */
+    private readonly allowInProcessGenerate = true
   ) {}
+
+  private inProcessGenerate(
+    rootPath: string,
+    options: CopyTreeOptions,
+    onProgress: ProgressCallback | undefined,
+    id: string,
+    outputPath: string | undefined
+  ): Promise<CopyTreeResult> {
+    if (!this.allowInProcessGenerate) {
+      return Promise.resolve({
+        content: "",
+        fileCount: 0,
+        error: "Context generation is unavailable right now",
+      });
+    }
+    return copyTreeService.generate(rootPath, options, onProgress, id, outputPath);
+  }
 
   async generate(
     rootPath: string,
@@ -96,7 +119,7 @@ export class CopytreeWorkerClient {
     this.lastActivityAt = Date.now();
     const worker = this.getWorker();
     if (!worker) {
-      return copyTreeService.generate(rootPath, options, onProgress, id, outputPath);
+      return this.inProcessGenerate(rootPath, options, onProgress, id, outputPath);
     }
     const pending = new Promise<CopyTreeResult>((resolve, reject) => {
       this.pendingGenerate.set(id, {
@@ -119,7 +142,7 @@ export class CopytreeWorkerClient {
       logWarn("copytree worker postMessage failed; running in-process", {
         error: formatErrorMessage(error, "postMessage failed"),
       });
-      return copyTreeService.generate(rootPath, options, onProgress, id, outputPath);
+      return this.inProcessGenerate(rootPath, options, onProgress, id, outputPath);
     }
     return pending;
   }

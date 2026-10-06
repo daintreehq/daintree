@@ -67,8 +67,9 @@ import { _resetReservedPathsForTests } from "../../../services/copyTreeOutputFil
 import { registerCopyTreeHandlers } from "../copyTree.js";
 
 const sender = { sender: { id: 1 } } as never;
-const PROJECT = { id: "proj-plain", path: "/folders/plain", status: "active" };
-const SCRATCH = { id: "scratch-1", path: "/scratches/scratch-1" };
+// Resolved so they are fully qualified on Windows too (a drive root there).
+const PROJECT = { id: "proj-plain", path: nodePath.resolve("/folders/plain"), status: "active" };
+const SCRATCH = { id: "scratch-1", path: nodePath.resolve("/scratches/scratch-1") };
 
 function handler(): (...args: unknown[]) => Promise<Record<string, unknown>> {
   const call = (ipcMainMock.handle as Mock).mock.calls.find(
@@ -170,9 +171,10 @@ describe("copyTree generate-and-copy-file — workspace root (#13210)", () => {
   it("never widens a named worktree that doesn't resolve to the workspace root", async () => {
     bindView(PROJECT.id);
 
-    const result = await handler()(sender, { worktreeId: "/folders/plain/gone" });
+    const gone = nodePath.join(PROJECT.path, "gone");
+    const result = await handler()(sender, { worktreeId: gone });
 
-    expect(result.error).toBe("Worktree not found: /folders/plain/gone");
+    expect(result.error).toBe(`Worktree not found: ${gone}`);
     expect(rootCopyMock.generateWorkspaceRootContext).not.toHaveBeenCalled();
     expect(clipboardMock.writeBuffer).not.toHaveBeenCalled();
     expect(clipboardMock.writeText).not.toHaveBeenCalled();

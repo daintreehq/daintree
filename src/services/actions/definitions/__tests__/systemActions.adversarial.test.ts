@@ -3,6 +3,7 @@ import { z } from "zod";
 import { COPY_TREE_UNMATCHED_SELECTORS } from "@shared/types/ipc/copyTree";
 import { COPY_TREE_HISTORY_NAME_MAX_LENGTH } from "@shared/types/ipc/copyTreeHistory";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
+import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 
 const filesClientMock = vi.hoisted(() => ({
   search: vi.fn(),
@@ -674,6 +675,28 @@ describe("systemActions adversarial", () => {
     });
 
     describe("worktree-less workspace (#13210)", () => {
+      // The view's worktree list has loaded and come back empty: a non-git
+      // folder. A scratch never consults it.
+      beforeEach(() => {
+        const store = createWorktreeStore();
+        store.setState({ isInitialized: true, isLoading: false });
+        setCurrentViewStore(store);
+      });
+
+      it("makes an agent name a worktree while a project's list is still loading", async () => {
+        // Before the list arrives, no active worktree proves nothing — this is
+        // exactly the window the #11722 guard exists for.
+        setCurrentViewStore(createWorktreeStore());
+        const { run } = setupActions();
+        await expect(
+          run("copyTree.generateAndCopyFile", undefined, {
+            dispatchSource: "agent",
+            projectId: "proj-1",
+          })
+        ).rejects.toThrow(/requires an explicit/);
+        expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
+      });
+
       it.each([
         ["user", "a non-git project", { projectId: "proj-1" }],
         ["agent", "a non-git project", { projectId: "proj-1" }],

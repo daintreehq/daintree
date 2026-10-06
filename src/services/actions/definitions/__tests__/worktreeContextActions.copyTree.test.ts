@@ -26,6 +26,7 @@ import {
   _resetCopyTreeNoticePresenterForTest,
 } from "@/lib/copyTreeFeedback";
 import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
+import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 
 function setupActions(): {
   run: (id: string, args?: unknown, ctx?: Record<string, unknown>) => Promise<unknown>;
@@ -64,8 +65,16 @@ const COPY_TREE_RESULT = {
   stats: { totalSize: 4096, duration: 12 },
 };
 
+/** A fresh view store whose worktree list is still loading — the boot default. */
+function freshViewStore() {
+  const store = createWorktreeStore();
+  setCurrentViewStore(store);
+  return store;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  freshViewStore();
   _resetCopyTreeNoticePresenterForTest();
   useCopyTreeRunStore.setState({ activeRunCount: 0 });
   copyTreeClientMock.generateAndCopyFile.mockResolvedValue({ ...COPY_TREE_RESULT });
@@ -188,6 +197,8 @@ describe("worktree.copyTree completion announcement", () => {
   ])("copies the workspace root of %s with no worktree (#13210)", async (_label, workspace) => {
     // No worktree id crosses IPC: main resolves the root from the dispatching
     // view itself, so the renderer never names a folder it could get wrong.
+    // A non-git project's worktree list loads and comes back empty.
+    freshViewStore().setState({ isInitialized: true, isLoading: false });
     const { run } = setupActions();
     const result = await run("worktree.copyTree", undefined, {
       dispatchSource: "keybinding",
@@ -200,6 +211,14 @@ describe("worktree.copyTree completion announcement", () => {
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({ context: { eventKind: "agent", worktreeId: undefined } })
     );
+  });
+
+  it("copies nothing while a project's worktree list is still loading", async () => {
+    // "No active worktree" is a gap in what the view knows yet, not proof of a
+    // non-git folder — the whole project root is not a stand-in for it.
+    const { run } = setupActions();
+    await expect(run("worktree.copyTree", undefined, { projectId: "proj-1" })).resolves.toBeNull();
+    expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
   });
 
   it("prefers the active worktree over the workspace root when there is one", async () => {

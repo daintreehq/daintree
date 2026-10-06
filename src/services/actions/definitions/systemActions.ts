@@ -10,6 +10,7 @@ import {
   requireExplicitWorktreeForAgentDispatch,
   resolveProjectLocation,
 } from "./locationArgs";
+import { copiesWorkspaceRoot } from "./workspaceRootCopyTarget";
 import { z } from "zod";
 import { notify } from "@/lib/notify";
 import { announceCopyTreeCopy } from "@/lib/copyTreeFeedback";
@@ -607,7 +608,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       // fallback stays intact.
       palette: {
         mode: "requireContext",
-        isReady: (ctx) => Boolean(ctx.activeWorktreeId || ctx.projectId || ctx.scratchId),
+        isReady: (ctx) => Boolean(ctx.activeWorktreeId) || copiesWorkspaceRoot(ctx),
         reason: "Open a project or scratch to generate its context",
       },
       argsSchema: withWorktreeLocation({
@@ -631,17 +632,13 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       }),
       mcpOutputSchema: true,
       run: async (args, ctx: ActionContext) => {
-        // Nothing named and no worktree to inherit is a non-git project or a
-        // scratch, whose root is its one copyable folder — main resolves it
-        // from the dispatching view (#13210). An agent is only made to name a
-        // worktree when there is one it could otherwise inherit by accident.
-        const copiesWorkspaceRoot =
-          !args?.worktreeId &&
-          !args?.worktreePath &&
-          !ctx.activeWorktreeId &&
-          Boolean(ctx.projectId || ctx.scratchId);
+        // Nothing named and provably no worktree to inherit is a non-git
+        // project or a scratch, whose root is its one copyable folder — main
+        // resolves it from the dispatching view (#13210). An agent is only made
+        // to name a worktree when there is one it could inherit by accident.
+        const rootCopy = !args?.worktreeId && !args?.worktreePath && copiesWorkspaceRoot(ctx);
         let worktreeId: string | undefined;
-        if (!copiesWorkspaceRoot) {
+        if (!rootCopy) {
           requireExplicitWorktreeForAgentDispatch("copyTree.generateAndCopyFile", args, ctx);
           worktreeId = requireWorktreeId(args, ctx);
         }

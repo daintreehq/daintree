@@ -1570,7 +1570,7 @@ export function Toolbar({
                   shortcut={copyTreeCombo}
                   onCopyFullContext={handleCopyTreeFullContext}
                   onRunRecent={handleCopyTreeRunRecent}
-                  onOpenContextSettings={handleOpenContextSettings}
+                  onOpenContextSettings={currentProject ? handleOpenContextSettings : undefined}
                   onCloseAutoFocus={handleCopyTreeCloseAutoFocus}
                 />
               </DropdownMenu>

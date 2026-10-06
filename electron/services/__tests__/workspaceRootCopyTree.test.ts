@@ -7,8 +7,8 @@ const workerClientMock = vi.hoisted(() => {
   class CopytreeWorkerClient {
     generate = generate;
     cancel = cancel;
-    constructor() {
-      constructed();
+    constructor(...args: unknown[]) {
+      constructed(...args);
     }
   }
   return { generate, cancel, constructed, CopytreeWorkerClient };
@@ -55,6 +55,25 @@ describe("workspaceRootCopyTree", () => {
       expect.any(String),
       "/tmp/1.xml",
     ]);
+  });
+
+  it("never lets main's client fall back to generating on main's own thread", async () => {
+    await generateWorkspaceRootContext("/a", {}, vi.fn(), "/tmp/1.xml");
+    expect(workerClientMock.constructed).toHaveBeenCalledWith(undefined, false);
+  });
+
+  it("never starts a copy cancelled while the client was still loading", async () => {
+    // Prime the client so cancel-all knows one exists, then cancel the next copy
+    // before its own await on the client resolves.
+    await generateWorkspaceRootContext("/warm", {}, vi.fn(), "/tmp/0.xml");
+    workerClientMock.generate.mockClear();
+
+    const pending = generateWorkspaceRootContext("/a", {}, vi.fn(), "/tmp/1.xml");
+    cancelAllWorkspaceRootContext();
+
+    await expect(pending).resolves.toEqual(expect.objectContaining({ fileCount: 0 }));
+    expect((await pending).error).toBeTruthy();
+    expect(workerClientMock.generate).not.toHaveBeenCalled();
   });
 
   it("never spawns a worker just to cancel nothing", async () => {
