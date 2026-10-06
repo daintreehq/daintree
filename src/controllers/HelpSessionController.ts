@@ -274,6 +274,16 @@ export interface HelpLaunchOptions {
    * nothing-to-resume case — no user-facing launch error.
    */
   resumeOnly?: boolean;
+  /**
+   * A specific past conversation to resume into this lane (#13206), picked by
+   * the user from the agent's own transcript store. Takes precedence over any
+   * captured hibernation entry, which is neither read nor consumed. Exact-id
+   * only: a target the agent can't resume by id fails visibly rather than
+   * degrading to "latest in this cwd", which in a shared session directory can
+   * be a sibling lane's conversation (#11052) — and it never falls through to
+   * a fresh launch.
+   */
+  resumeTarget?: { sessionId: string };
 }
 
 // Help sessions keep their own bypass and model settings, but a CLI's
@@ -363,6 +373,14 @@ export class HelpSessionController {
   private _launchWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly LAUNCH_WATCHDOG_MS = 90_000;
   private _lastInputs: HelpSessionInputs | null = null;
+  /** A launch waiting for this lane's first ready inputs — see `launchWhenReady`. */
+  private _queuedLaunch: HelpLaunchOptions | null = null;
+  /**
+   * The picked conversation the latest launch was for, so Retry reopens that
+   * one. Cleared once it goes live; while set, the lane belongs to that pick —
+   * auto-launch stands down and view-reveal recovery leaves the launch alone.
+   */
+  private _lastResumeTarget: HelpLaunchOptions["resumeTarget"] = undefined;
 
   private readonly _versionGate = new HelpVersionGate({
     getSnapshot: () => this._snapshot,
@@ -476,7 +494,45 @@ export class HelpSessionController {
     }
 
     this._hibernationManager.maybeArm(inputs);
+    if (this._queuedLaunch && inputs.isReadyToLaunch && inputs.currentProject) {
+      const queued = this._queuedLaunch;
+      this._queuedLaunch = null;
+      // Taking this sync instead of `_maybeAutoLaunch` is what keeps an empty
+      // lane from auto-launching a blank session ahead of the one asked for;
+      // later syncs find this launch in flight and the re-entrancy guard.
+      this.launch(queued);
+      return;
+    }
     this._maybeAutoLaunch(inputs);
+  }
+
+  /**
+   * Launch as soon as this lane can (#13206) — now, when its inputs already say
+   * so. A lane opened from outside the panel (the past-session picker) has had
+   * no inputs synced yet, so a plain `launch()` would be refused as "still
+   * loading"; and an empty active lane auto-launches on its first sync, which
+   * would start a blank session ahead of the one asked for. The queued launch
+   * takes that first sync instead. Like `selectAgent`, it is a manual launch:
+   * it does not mark the lane auto-launched, so view-reveal recovery never
+   * mistakes it for a stranded auto-launch and swaps it for a plain one.
+   */
+  launchWhenReady(options: HelpLaunchOptions): void {
+    const inputs = this._lastInputs;
+    if (inputs?.isReadyToLaunch && inputs.currentProject) {
+      this._queuedLaunch = null;
+      this.launch(options);
+      return;
+    }
+    this._queuedLaunch = options;
+  }
+
+  /**
+   * The launch-error banner's Retry. A failed picked resume retries that
+   * conversation; anything else relaunches the agent as before.
+   */
+  retryLaunch(agentId: string): void {
+    const resumeTarget = this._lastResumeTarget;
+    this.launch(resumeTarget ? { agentId, replaceExisting: true, resumeTarget } : { agentId });
   }
 
   /**
@@ -558,7 +614,12 @@ export class HelpSessionController {
     // short-circuits on `!autoLaunchEnabled`), so reaping it would silently discard
     // the user's explicit pick. Leaving it alone lets its own watchdog reap it (with
     // a retryable error) once the view un-parks, or the thawed IPC complete it.
-    if (isStuckLaunch && this._hasAutoLaunched && (this._lastInputs?.terminalId ?? null) === null) {
+    if (
+      isStuckLaunch &&
+      this._hasAutoLaunched &&
+      !this._lastResumeTarget &&
+      (this._lastInputs?.terminalId ?? null) === null
+    ) {
       // Supersede the stranded flow so its in-flight awaits bail at their next
       // gen-check (`_abandonInFlightLaunch`); clear the re-entrancy guard so the
       // re-drive below isn't dropped; revoke the minted-but-orphaned bearer; and
@@ -817,6 +878,7 @@ export class HelpSessionController {
 
     const launchProject = inputs.currentProject;
     this._isLaunching = true;
+    this._lastResumeTarget = options.resumeTarget;
 
     // A launch supersedes any revoked-session banner — the user is starting a
     // fresh session, so the prior session's revocation no longer applies (#10017).
@@ -1106,6 +1168,9 @@ export class HelpSessionController {
     // must never start a billed session. Placed ahead of the visibility check
     // so a visibilityEpoch re-arm can't bypass consent on a restore.
     if (!inputs.autoLaunchEnabled) return;
+    // A picked conversation owns this lane — queued, in flight, or failed and
+    // waiting on Retry. A blank session must not take its place.
+    if (this._queuedLaunch || this._lastResumeTarget) return;
     if (typeof document !== "undefined" && document.hidden) return;
     if (!inputs.isOpen) return;
     if (!inputs.isReadyToLaunch) return;
@@ -1391,8 +1456,9 @@ export class HelpSessionController {
         // #10819: the `resumeOnly` path already performed the atomic
         // `takePendingHibernation` before provisioning and seeded the local
         // store from it, so re-seeding here is skipped — a second take would
-        // only re-claim what this launch already holds.
-        if (!options.resumeOnly) {
+        // only re-claim what this launch already holds. A picked conversation
+        // (`resumeTarget`) replaces the lane's pointer instead of resuming it.
+        if (!options.resumeOnly && !options.resumeTarget) {
           const seeded = await this._hibernationManager.seedFromMain(launchProject.id, gen);
           // "released" already handed it back inside seedFromMain (it saw the
           // stale gen first); only a live seed leaves this launch owning it.
@@ -1410,10 +1476,14 @@ export class HelpSessionController {
             return;
           }
         }
-        const hibernated =
-          useHelpPanelStore.getState().hibernateSessions[
-            assistantSlotKey(launchProject.id, this.slot)
-          ];
+        const resumeTarget = options.resumeTarget;
+        const hibernated = resumeTarget
+          ? // No cwd: an exact id isn't bound to one, and the resume runs in the
+            // session directory provisioning just returned.
+            { sessionId: resumeTarget.sessionId, cwd: "", agentId: launchAgentId }
+          : useHelpPanelStore.getState().hibernateSessions[
+              assistantSlotKey(launchProject.id, this.slot)
+            ];
         if (hibernated && hibernated.agentId === launchAgentId && folderPath) {
           const resumed = await this._spawnResumed(
             launchAgentId,
@@ -1437,7 +1507,11 @@ export class HelpSessionController {
             // both post-spawn checks and is about to go live. Every other exit
             // from here leaves the marker set so the `finally` releases it.
             unreleasedHibernation = null;
+            this._lastResumeTarget = undefined;
             useHelpPanelStore.getState().clearHibernateSession(launchProject.id, this.slot);
+            // A picked conversation needs no cleanup on main: its spawn carries
+            // `agentSessionId`, which main records as the lane's pointer in
+            // place of whatever the lane held (#13205).
             useHelpPanelStore
               .getState()
               .setTerminal(this.slot, resumed.panelId, launchAgentId, session.sessionId);
@@ -1451,8 +1525,20 @@ export class HelpSessionController {
             this._launchNotifications.armResumeBannerAutoDismiss();
             return;
           }
-          useHelpPanelStore.getState().clearHibernateSession(launchProject.id, this.slot);
+          // A picked conversation that couldn't be resumed leaves the lane's
+          // own captured entry alone — the pick never consumed it.
+          if (!resumeTarget) {
+            useHelpPanelStore.getState().clearHibernateSession(launchProject.id, this.slot);
+          }
         }
+      }
+
+      // A picked conversation is resumed or nothing: starting a blank session
+      // in its place would answer "open this conversation" with a different one.
+      if (options.resumeTarget) {
+        this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
+        this._surfaceLaunchError(launchAgentId, "spawn-failed");
+        return;
       }
 
       // #10815: resume-only intent (cold switch-back / cross-window auto-resume).

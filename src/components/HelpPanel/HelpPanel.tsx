@@ -11,7 +11,7 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useSplitterKeys } from "@/hooks/useSplitterKeys";
-import { ExternalLink, MessageCircle, Settings2, Sparkles } from "lucide-react";
+import { ExternalLink, History, MessageCircle, Settings2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ChoiceCard } from "@/components/ui/card";
@@ -29,6 +29,7 @@ import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
+import { usePaletteStore } from "@/store/paletteStore";
 import { HelpPanelHeader } from "./HelpPanelHeader";
 import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "./HelpSessionTabs";
 import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
@@ -86,6 +87,12 @@ import { isPtyPanel } from "@shared/types/panel";
 import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
+
+// Loaded on first open: the picker reads the panel store and the agents'
+// history, none of which the panel needs until someone asks for it.
+const LazyHelpPastSessionsPalette = lazy(() =>
+  import("./HelpPastSessionsPalette").then((m) => ({ default: m.HelpPastSessionsPalette }))
+);
 
 const LazyHybridInputBar = lazy(() =>
   import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
@@ -1306,6 +1313,15 @@ export function HelpPanel({
     void actionService.dispatch("app.settings.openTab", { tab: "assistant" }, { source: "user" });
   }, []);
 
+  const isPastSessionsOpen = usePaletteStore((s) => s.activePaletteId === "assistant-sessions");
+  // Stays mounted once opened so the palette's exit animation can run.
+  const [pastSessionsMounted, setPastSessionsMounted] = useState(false);
+  if (isPastSessionsOpen && !pastSessionsMounted) setPastSessionsMounted(true);
+
+  const handleResumePastSession = useCallback(() => {
+    void actionService.dispatch("help.resumePastSession", undefined, { source: "user" });
+  }, []);
+
   const handleOpenAssistantDocs = useCallback(() => {
     void actionService.dispatch(
       "system.openExternal",
@@ -1426,7 +1442,7 @@ export function HelpPanel({
   const dismissOutcomeAlert = useCallback(() => controller.dismissOutcomeAlert(), [controller]);
   const retryLaunch = useCallback(() => {
     const agentId = session.launchError?.agentId;
-    if (agentId) controller.launch({ agentId });
+    if (agentId) controller.retryLaunch(agentId);
   }, [controller, session.launchError]);
 
   // Esc-to-close. The xterm-helper-textarea check lets Escape reach the
@@ -1515,10 +1531,17 @@ export function HelpPanel({
         canEndSession={Boolean(terminalId && agentId)}
         onRestartConversation={handleNewSession}
         onEndSession={handleEndSession}
+        onResumePastSession={handleResumePastSession}
         onOpenDocs={handleOpenAssistantDocs}
         onClose={handleClose}
         isFocused={isHighlighted}
       />
+
+      {pastSessionsMounted && (
+        <Suspense fallback={null}>
+          <LazyHelpPastSessionsPalette workspace={activeWorkspace} tabs={sessionTabs} />
+        </Suspense>
+      )}
 
       <HelpSessionTabs
         tabs={sessionTabs}
@@ -1769,6 +1792,15 @@ export function HelpPanel({
                 </p>
               )}
               <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={handleResumePastSession}
+                  data-testid="help-resume-past-session"
+                  className="flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                >
+                  <History className="w-3.5 h-3.5" />
+                  Resume a past session…
+                </button>
                 <button
                   type="button"
                   onClick={handleOpenSettings}

@@ -592,6 +592,7 @@ export const CHANNELS = {
   HELP_RESTORE_PENDING_HIBERNATION: "help:restore-pending-hibernation",
   HELP_LIST_PENDING_HIBERNATION_SLOTS: "help:list-pending-hibernation-slots",
   HELP_DISCARD_CONVERSATION: "help:discard-conversation",
+  HELP_LIST_PAST_SESSIONS: "help:list-past-sessions",
   HELP_REPORT_PANEL_OPEN: "help:report-panel-open",
   HELP_GET_PINNED_ACTION_CONTEXT: "help:get-pinned-action-context",
 

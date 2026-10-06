@@ -149,6 +149,7 @@ function Chrome({ name }: { name: FixtureName }) {
         canEndSession
         onRestartConversation={() => {}}
         onEndSession={() => {}}
+        onResumePastSession={() => {}}
         onOpenDocs={() => {}}
         onClose={() => {}}
         isFocused={fixture.focused}
