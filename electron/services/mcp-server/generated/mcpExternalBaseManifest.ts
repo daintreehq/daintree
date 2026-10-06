@@ -230,12 +230,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         notify: {
           description:
-            "When this agent next stops, Daintree types a notice quoting its screen into your prompt; end your turn, don't poll. Agent panes and assistants only.",
+            "When this agent next stops, Daintree types its handback summary, else its screen, into your prompt; end your turn, don't poll. Agent panes and assistants only.",
           type: "boolean",
         },
         replyLines: {
           description:
-            "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker.",
+            "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker. Set, it quotes despite a summary.",
           type: "integer",
           minimum: 0,
           maximum: 200,
@@ -2170,12 +2170,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         notify: {
           description:
-            "When this agent next stops, Daintree types a notice quoting its screen into your prompt; end your turn, don't poll. Agent panes and assistants only.",
+            "When this agent next stops, Daintree types its handback summary, else its screen, into your prompt; end your turn, don't poll. Agent panes and assistants only.",
           type: "boolean",
         },
         replyLines: {
           description:
-            "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker.",
+            "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker. Set, it quotes despite a summary.",
           type: "integer",
           minimum: 0,
           maximum: 200,
