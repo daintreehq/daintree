@@ -701,7 +701,7 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `mergeState` field on the forge PR and linked-PR results.
   // 114_250 → 114_300 for #13130, measured at 114_275 B: the same
   // `cwdOutsideWorktree` field as the external ceiling above.
-  // 114_300 → 114_600 for #13202, measured at 114_550 B: `notify` and
+  // 114_300 → 114_600 for #13202, measured at 114_598 B: `notify` and
   // `replyLines` say a notice now carries the handback summary in place of the
   // screen, and that setting `replyLines` brings the screen back.
   const MAX_COHORT_PAYLOAD_BYTES = 114_600;

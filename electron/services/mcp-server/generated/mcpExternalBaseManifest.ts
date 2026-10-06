@@ -235,7 +235,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         replyLines: {
           description:
-            "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker. Set, it replaces the summary.",
+            "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker. Set, it quotes despite a summary.",
           type: "integer",
           minimum: 0,
           maximum: 200,
@@ -2175,7 +2175,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         replyLines: {
           description:
-            "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker. Set, it replaces the summary.",
+            "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker. Set, it quotes despite a summary.",
           type: "integer",
           minimum: 0,
           maximum: 200,

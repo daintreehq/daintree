@@ -840,6 +840,39 @@ describe("TerminalNotifyService", () => {
       expect(text).not.toContain("terminal.getOutput");
     });
 
+    it("falls back to the screen read when the notice fired, once a later capture is empty", async () => {
+      const h = setup();
+      h.client.screens.set("t-a", "The reply as it stood.");
+      await sentTo(h);
+      h.client.terminals.set(OWN, working());
+
+      h.handbackObserved("t-a", "tok-1", "Voted A");
+      await vi.advanceTimersByTimeAsync(100);
+      h.client.screens.delete("t-a");
+      h.handbackObserved("t-a", "tok-1", null);
+      h.client.terminals.set(OWN, atPrompt(Date.now() - 5_000));
+      h.stateChange({ terminalId: OWN, state: "waiting", previousState: "working" });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      const text = h.client.submitted.map((s) => s.text).join("\n");
+      expect(text).toContain("The reply as it stood.");
+      expect(text).not.toContain("Voted A");
+    });
+
+    it("quotes nothing and keeps the summary when the caller set replyLines to 0", async () => {
+      const h = setup();
+      h.client.screens.set("t-a", "Reply A.");
+      await sentTo(h, "tok-1", { replyLines: 0 });
+
+      h.handbackObserved("t-a", "tok-1", "Voted A");
+      await flushNotice();
+
+      const text = h.client.submitted[0].text;
+      expect(text).toContain("t-a, the summary in its done marker");
+      expect(text).not.toContain("Reply A.");
+      expect(text).not.toContain("terminal.getOutput");
+    });
+
     it("takes a later capture of the same marker before the line goes out", async () => {
       const h = setup();
       await sentTo(h);

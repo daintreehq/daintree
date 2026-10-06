@@ -106,7 +106,7 @@ export const NOTIFY_ARG_DESCRIPTION =
 
 /** Model-facing description of `replyLines`, shared like {@link NOTIFY_ARG_DESCRIPTION}. */
 export const NOTIFY_REPLY_LINES_DESCRIPTION =
-  "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker. Set, it replaces the summary.";
+  "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker. Set, it quotes despite a summary.";
 
 export const NotifyReplyLinesSchema = z
   .number()
