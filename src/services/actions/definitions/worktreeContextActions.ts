@@ -395,7 +395,7 @@ export function registerWorktreeContextActions(
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
         // No worktree at all is a non-git project or a scratch: copy its root,
         // which main resolves from the dispatching view itself (#13210).
-        if (!targetWorktreeId && !copiesWorkspaceRoot(ctx)) return null;
+        if (!targetWorktreeId && !(await copiesWorkspaceRoot(ctx))) return null;
 
         const format = explicitFormat ?? DEFAULT_COPYTREE_FORMAT;
 

@@ -45,6 +45,14 @@ const notifyMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
+// The host's own probe of the project folder, which a project's root copy
+// waits on (#13210). Answers "no repository here" unless a case says otherwise.
+const worktreeClientMock = vi.hoisted(() => ({
+  getAllWithStatus: vi.fn(async () => ({ worktrees: [], gitBacked: false as boolean | null })),
+}));
+
+vi.mock("@/clients/worktreeClient", () => ({ worktreeClient: worktreeClientMock }));
+
 vi.mock("@/clients", () => ({
   filesClient: filesClientMock,
   copyTreeClient: copyTreeClientMock,
@@ -687,6 +695,21 @@ describe("systemActions adversarial", () => {
         // Before the list arrives, no active worktree proves nothing — this is
         // exactly the window the #11722 guard exists for.
         setCurrentViewStore(createWorktreeStore());
+        const { run } = setupActions();
+        await expect(
+          run("copyTree.generateAndCopyFile", undefined, {
+            dispatchSource: "agent",
+            projectId: "proj-1",
+          })
+        ).rejects.toThrow(/requires an explicit/);
+        expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
+      });
+
+      it("makes an agent name a worktree while the host has yet to classify the folder", async () => {
+        worktreeClientMock.getAllWithStatus.mockResolvedValueOnce({
+          worktrees: [],
+          gitBacked: null,
+        });
         const { run } = setupActions();
         await expect(
           run("copyTree.generateAndCopyFile", undefined, {

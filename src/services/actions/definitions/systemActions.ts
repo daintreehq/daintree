@@ -10,7 +10,7 @@ import {
   requireExplicitWorktreeForAgentDispatch,
   resolveProjectLocation,
 } from "./locationArgs";
-import { copiesWorkspaceRoot } from "./workspaceRootCopyTarget";
+import { copiesWorkspaceRoot, mayCopyWorkspaceRoot } from "./workspaceRootCopyTarget";
 import { z } from "zod";
 import { notify } from "@/lib/notify";
 import { announceCopyTreeCopy } from "@/lib/copyTreeFeedback";
@@ -608,7 +608,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       // fallback stays intact.
       palette: {
         mode: "requireContext",
-        isReady: (ctx) => Boolean(ctx.activeWorktreeId) || copiesWorkspaceRoot(ctx),
+        isReady: (ctx) => Boolean(ctx.activeWorktreeId) || mayCopyWorkspaceRoot(ctx),
         reason: "Open a project or scratch to generate its context",
       },
       argsSchema: withWorktreeLocation({
@@ -636,7 +636,8 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         // project or a scratch, whose root is its one copyable folder — main
         // resolves it from the dispatching view (#13210). An agent is only made
         // to name a worktree when there is one it could inherit by accident.
-        const rootCopy = !args?.worktreeId && !args?.worktreePath && copiesWorkspaceRoot(ctx);
+        const rootCopy =
+          !args?.worktreeId && !args?.worktreePath && (await copiesWorkspaceRoot(ctx));
         let worktreeId: string | undefined;
         if (!rootCopy) {
           requireExplicitWorktreeForAgentDispatch("copyTree.generateAndCopyFile", args, ctx);

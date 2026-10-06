@@ -9,6 +9,14 @@ const notifyMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
+// The host's own probe of the project folder, which a project's root copy
+// waits on (#13210). Answers "no repository here" unless a case says otherwise.
+const worktreeClientMock = vi.hoisted(() => ({
+  getAllWithStatus: vi.fn(async () => ({ worktrees: [], gitBacked: false as boolean | null })),
+}));
+
+vi.mock("@/clients/worktreeClient", () => ({ worktreeClient: worktreeClientMock }));
+
 vi.mock("@/clients", () => ({
   copyTreeClient: copyTreeClientMock,
   systemClient: {},
@@ -216,6 +224,16 @@ describe("worktree.copyTree completion announcement", () => {
   it("copies nothing while a project's worktree list is still loading", async () => {
     // "No active worktree" is a gap in what the view knows yet, not proof of a
     // non-git folder — the whole project root is not a stand-in for it.
+    const { run } = setupActions();
+    await expect(run("worktree.copyTree", undefined, { projectId: "proj-1" })).resolves.toBeNull();
+    expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
+  });
+
+  it("copies nothing until the host has said the folder is not a repository", async () => {
+    // A view can be handed an empty list before a cold host has probed the
+    // folder; only the host's own answer separates that from a non-git one.
+    freshViewStore().setState({ isInitialized: true, isLoading: false });
+    worktreeClientMock.getAllWithStatus.mockResolvedValueOnce({ worktrees: [], gitBacked: null });
     const { run } = setupActions();
     await expect(run("worktree.copyTree", undefined, { projectId: "proj-1" })).resolves.toBeNull();
     expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
