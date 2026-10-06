@@ -886,6 +886,25 @@ class TerminalInstanceService {
     this.resizeController.lockResize(id, locked, customTtlMs);
   }
 
+  /**
+   * Freeze this terminal's pane while another view draws it at its own size —
+   * Canopy's live pane holds the PTY at the panel's grid. Without it the two
+   * take turns resizing the agent, and each turn is a full redraw. The release
+   * re-measures the pane once nothing holds it; call it after the other view
+   * has handed the PTY back, so the pane's own size lands last.
+   */
+  holdGeometry(id: string): () => void {
+    this.resizeController.holdGeometry(id);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      if (this.resizeController.releaseGeometry(id) && this.instances.has(id)) {
+        this.runResizePass([id]);
+      }
+    };
+  }
+
   private layoutTransitionTimer: number | undefined;
   private layoutTransitionDeadline = 0;
   private readonly layoutTransitionPendingIds = new Set<string>();

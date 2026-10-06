@@ -7,6 +7,7 @@ import {
   HollowCircle,
   InteractingCircle,
   ExitedCircle,
+  AskingCircle,
 } from "../AgentStateCircles";
 // Re-imported via the barrel to regression-test `export * from "./AgentStateCircles"`.
 import { SpinnerCircle } from "../index";
@@ -38,6 +39,7 @@ describe("AgentStateCircles a11y", () => {
     ["HollowCircle", HollowCircle],
     ["InteractingCircle", InteractingCircle],
     ["ExitedCircle", ExitedCircle],
+    ["AskingCircle", AskingCircle],
   ])("%s defaults to aria-hidden='true'", (_name, Component) => {
     const { container } = render(<Component />);
     const glyph = glyphBox(container);
@@ -49,6 +51,7 @@ describe("AgentStateCircles a11y", () => {
     ["HollowCircle", HollowCircle],
     ["InteractingCircle", InteractingCircle],
     ["ExitedCircle", ExitedCircle],
+    ["AskingCircle", AskingCircle],
   ])("%s allows callers to override aria-hidden and supply a label", (_name, Component) => {
     const { container } = render(
       <Component aria-hidden={undefined} role="img" aria-label="Working" />
@@ -228,6 +231,7 @@ describe("AgentStateCircles a11y", () => {
     ["HollowCircle", HollowCircle],
     ["InteractingCircle", InteractingCircle],
     ["ExitedCircle", ExitedCircle],
+    ["AskingCircle", AskingCircle],
   ])("%s renders the same stroke weight as a Lucide icon at any size", (_name, Component) => {
     const { container: custom } = render(<Component />);
     const customSvg = custom.querySelector("svg")!;

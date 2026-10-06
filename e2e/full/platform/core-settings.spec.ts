@@ -228,6 +228,13 @@ const GLOBAL_TABS: Record<GlobalSettingsTab, TabExpectation> = {
     },
   },
   voice: {},
+  canopy: {
+    content: async (window) => {
+      await expect(window.getByText("Read agent terminals", { exact: true })).toBeVisible({
+        timeout: T_SHORT,
+      });
+    },
+  },
   portal: { title: "Portal links" },
   mcp: {
     content: async (window) => {

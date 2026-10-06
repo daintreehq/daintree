@@ -653,6 +653,10 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.plane(id).lockResize(id, locked, customTtlMs);
   }
 
+  holdGeometry(id: string): () => void {
+    return this.plane(id).holdGeometry(id);
+  }
+
   suppressResizesDuringLayoutTransition(panelIds: string[], durationMs: number): void {
     this.groupBySurface(panelIds).forEach(({ plane, ids }) =>
       plane.suppressResizesDuringLayoutTransition(ids, durationMs)

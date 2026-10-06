@@ -63,7 +63,7 @@ export const createTrashActions = (
   | "markAsRestored"
   | "isInTrash"
 > => {
-  const trashPanel: PanelRegistrySlice["trashPanel"] = (id) => {
+  const trashPanel: PanelRegistrySlice["trashPanel"] = (id, options) => {
     const terminal = get().panelsById[id];
     if (!terminal) return;
 
@@ -100,7 +100,7 @@ export const createTrashActions = (
         : "grid";
 
     // Only call PTY operations for PTY-backed terminals
-    if (panelKindHasPty(terminal.kind ?? "terminal")) {
+    if (panelKindHasPty(terminal.kind ?? "terminal") && options?.hostTrashed !== true) {
       terminalClient.trash(id).catch((error) => {
         logError("Failed to trash terminal", error);
       });

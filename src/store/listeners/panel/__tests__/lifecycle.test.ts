@@ -519,6 +519,62 @@ describe("onTrashed — maximize trio clear (#9935)", () => {
   });
 });
 
+// Canopy trashes a terminal from main. The host's own trashed event is dropped
+// for a pane not already in the trash, so the owning view moves it itself.
+describe("onTrashRequested — Canopy trash", () => {
+  afterEach(() => {
+    delete (window as { electron?: unknown }).electron;
+  });
+
+  function getTrashRequestHandler() {
+    const handlers: Array<(request: { runId: string }) => void> = [];
+    const trash = vi.fn(async () => {});
+    Object.defineProperty(window, "electron", {
+      value: {
+        canopy: {
+          onTrashRequested: (handler: (request: { runId: string }) => void) => {
+            handlers.push(handler);
+            return () => {};
+          },
+        },
+        terminal: { trash },
+      },
+      configurable: true,
+      writable: true,
+    });
+    setupLifecycleListeners();
+    const handler = handlers.at(-1);
+    if (!handler) throw new Error("onTrashRequested handler was not registered");
+    return { handler, trash };
+  }
+
+  it("moves the pane to the trash the way closing it in place would", () => {
+    setupPanel();
+    usePanelStore.setState({ focusedId: "term-1" });
+    const { handler, trash } = getTrashRequestHandler();
+
+    handler({ runId: "term-1" });
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["term-1"]?.location).toBe("trash");
+    // Main has trashed it on the host; a second host trash would land after
+    // an Undo elsewhere and trash the restored terminal again.
+    expect(trash).not.toHaveBeenCalled();
+    expect(state.trashedTerminals.has("term-1")).toBe(true);
+    expect(state.focusedId).not.toBe("term-1");
+  });
+
+  it("ignores a terminal this view does not hold, or one already in the trash", () => {
+    setupPanel({ location: "trash" });
+    const before = usePanelStore.getState();
+    const { handler } = getTrashRequestHandler();
+    handler({ runId: "term-1" });
+    handler({ runId: "elsewhere" });
+    expect(usePanelStore.getState().trashedTerminals).toBe(before.trashedTerminals);
+    expect(usePanelStore.getState().panelsById).toBe(before.panelsById);
+  });
+});
+
 describe("onReliabilityMetric — pause-duration-gauge routing", () => {
   function getReliabilityHandler(): (payload: {
     metricType: string;
