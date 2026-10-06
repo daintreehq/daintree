@@ -55,10 +55,7 @@ import {
   buildProjectMetadataAddendum,
   type HelpSessionProjectFacts,
 } from "./helpSessionProjectMetadata.js";
-import type {
-  PendingHelpHibernation,
-  PendingHelpHibernationStore,
-} from "./PendingHelpHibernationStore.js";
+import type { PendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
 import {
   ASSISTANT_LANE_CONFIG_DIR,
   ASSISTANT_SLOTS,
