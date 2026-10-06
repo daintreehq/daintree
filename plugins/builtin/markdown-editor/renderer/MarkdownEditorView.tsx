@@ -25,7 +25,7 @@ import { cn } from "@/lib/utils";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { MarkdownEditorStatusBar } from "./MarkdownEditorStatusBar.js";
 import { DocumentController } from "./documentController.js";
-import { identityKey } from "../shared/protocol.js";
+import { identityKey } from "../shared/ids.js";
 import { currentText, useDocumentStateStore, type DocumentRecord } from "./documentStateStore.js";
 import {
   buildMarkdownEditorExtensions,
