@@ -287,6 +287,30 @@ async function handleRestorePendingHibernation(
   return helpSessionService.restorePendingHibernation(projectId, slot, claimId, ctx.webContentsId);
 }
 
+/**
+ * The user explicitly discarded a lane's conversation — Stop, Restart
+ * conversation, or closing its tab (#13205). The only renderer path that clears
+ * a lane's durable resume pointer; CLI exits and crashes leave it in place.
+ */
+async function handleDiscardConversation(
+  ctx: import("../types.js").IpcContext,
+  projectId: string,
+  rawSlot?: number
+): Promise<void> {
+  if (typeof projectId !== "string" || !projectId) return;
+  if (!ctx.projectId || ctx.projectId !== projectId) {
+    console.warn(
+      "[help] discardConversation: projectId mismatch — refusing cross-project discard",
+      { requested: projectId, fromView: ctx.projectId, webContentsId: ctx.webContentsId }
+    );
+    return;
+  }
+  const slot = resolveSlot(rawSlot);
+  if (slot === null) return;
+  const { helpSessionService } = await getHelpSessionService();
+  await helpSessionService.discardConversation(projectId, slot);
+}
+
 async function handleReportPanelOpen(
   ctx: import("../types.js").IpcContext,
   projectId: string,
@@ -365,6 +389,9 @@ export const helpNamespace = defineIpcNamespace({
       handleRestorePendingHibernation,
       { withContext: true }
     ),
+    discardConversation: op(HELP_METHOD_CHANNELS.discardConversation, handleDiscardConversation, {
+      withContext: true,
+    }),
     reportPanelOpen: op(HELP_METHOD_CHANNELS.reportPanelOpen, handleReportPanelOpen, {
       withContext: true,
     }),

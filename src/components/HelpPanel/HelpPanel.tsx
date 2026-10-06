@@ -74,7 +74,7 @@ import { useScratchStore } from "@/store/scratchStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useFocusStore } from "@/store/focusStore";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
-import { buildResumeLatestCommand } from "@shared/types/agentSettings";
+import { buildResumeCommand } from "@shared/types/agentSettings";
 import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { actionService } from "@/services/ActionService";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
@@ -441,16 +441,15 @@ export function HelpPanel({
       .then((pending) => {
         if (cancelled) return;
         const pendingAgentId = pending?.agentId ?? null;
-        // Offer Resume only for an agent that is BOTH still installed AND
-        // actually resume-capable. A captured-but-non-resumable agent (e.g. the
-        // built-in assistant — no `resume` config) would dead-end in
-        // `_spawnResumed` and silently start fresh, so "Resume" would lie.
-        // `buildResumeLatestCommand` is the same capability probe the controller
-        // uses for live agents.
+        // Offer Resume only for an agent that is still installed AND an entry
+        // the controller can resume by exact id (#13205). A non-resumable agent,
+        // or an entry with no id (a Codex lane never captured), would dead-end
+        // in `_spawnResumed` and start fresh, so "Resume" would lie.
         const canResume =
           pendingAgentId != null &&
           supportedInstalledAgentIds.includes(pendingAgentId) &&
-          buildResumeLatestCommand(pendingAgentId) !== undefined;
+          !!pending?.agentSessionId &&
+          buildResumeCommand(pendingAgentId, pending.agentSessionId) !== undefined;
         setResumablePending(
           canResume ? { workspaceId: activeWorkspaceId, agentId: pendingAgentId } : null
         );
@@ -1164,24 +1163,33 @@ export function HelpPanel({
     useHelpPanelStore.getState().requestFocus();
   }, []);
 
-  const closeSlotNow = useCallback((slot: number) => {
-    const state = useHelpPanelStore.getState();
-    const lane = state.sessions[slot];
-    // Revoke and kill BEFORE dropping the lane. `stop()` only disarms
-    // listeners — it deliberately does not end the session — so releasing the
-    // controller first would strand a live agent with nothing to shut it down.
-    if (lane?.terminalId || lane?.sessionId) {
-      // Whether the panel slides out is the controller's call, made in one
-      // place for every stop path: it stays on screen while any other lane is
-      // open, and closes only for the last one — where the close is
-      // load-bearing, because `closeSlot` recreates an empty slot 0 whose fresh
-      // controller would auto-launch straight back into a session the user just
-      // ended if the panel stayed open.
-      acquireHelpSessionController(slot).endSession();
-    }
-    releaseHelpSessionController(slot);
-    state.closeSlot(slot);
-  }, []);
+  const closeSlotNow = useCallback(
+    (slot: number) => {
+      const state = useHelpPanelStore.getState();
+      const lane = state.sessions[slot];
+      // Revoke and kill BEFORE dropping the lane. `stop()` only disarms
+      // listeners — it deliberately does not end the session — so releasing the
+      // controller first would strand a live agent with nothing to shut it down.
+      if (lane?.terminalId || lane?.sessionId) {
+        // Whether the panel slides out is the controller's call, made in one
+        // place for every stop path: it stays on screen while any other lane is
+        // open, and closes only for the last one — where the close is
+        // load-bearing, because `closeSlot` recreates an empty slot 0 whose fresh
+        // controller would auto-launch straight back into a session the user just
+        // ended if the panel stayed open.
+        acquireHelpSessionController(slot).endSession();
+      } else if (activeWorkspaceId) {
+        // A dormant tab — one restored for a conversation nothing has resumed
+        // yet — has no session to end, but closing it is still the user
+        // discarding that conversation, so its pointer must go too (#13205).
+        const discarded = window.electron.help.discardConversation?.(activeWorkspaceId, slot);
+        if (discarded) safeFireAndForget(discarded, { context: "HelpPanel.closeSlot discard" });
+      }
+      releaseHelpSessionController(slot);
+      state.closeSlot(slot);
+    },
+    [activeWorkspaceId]
+  );
 
   // Same "something to lose" gate the Stop control uses, but evaluated against
   // the lane BEING CLOSED rather than the one on screen — a background lane is

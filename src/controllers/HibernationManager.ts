@@ -409,12 +409,10 @@ export class HibernationManager {
       // `pending.agentSessionId` can be the empty-string sentinel when main's
       // `revokeSession({ captureHibernation: true })` placeholder write raced
       // the agent's real session-id echo (LRU eviction of the per-project
-      // WebContentsView, #10057). The empty sentinel flows through to
-      // `_spawnResumed`, which classifies the resume as `"latest"` and the
-      // arm sites skip the "Resumed your previous session." banner on that
-      // branch — see the comment in `_spawnResumed` and `ResumeSpawnResult`.
-      // The root-cause capture race is in main; the fix here is the
-      // renderer-side truth-in-trigger only.
+      // WebContentsView, #10057), or for a Codex lane whose id was never
+      // captured. `_spawnResumed` resumes by exact id only, so an empty
+      // sentinel starts fresh rather than guessing at the latest conversation
+      // in a directory every lane shares (#13205).
       useHelpPanelStore.getState().setHibernateSession(projectId, this.host.getSlot(), {
         sessionId: pending.agentSessionId,
         cwd: pending.cwd,
