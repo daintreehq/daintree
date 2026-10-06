@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.42.0] - 2026-10-06
+
+A process-hygiene release: terminals, dev servers and plugin processes are now reaped reliably on kill, quit and host crash, and a new Running processes view shows everything alive across projects, including work that outlived its terminal. The file browser viewer gains a Diff mode and a Close control, and the assistant drops its deny list and read-only posture.
+
+### Features
+
+**Processes**
+
+- Running processes in the sidebar footer's resource popover lists every live terminal across projects and windows, grouped by project, with PID, member processes, CPU and approximate memory, plus plugin workers and child processes; terminals and dev previews can be killed from it (#13175)
+- Processes that outlive the terminal that spawned them are tracked by ancestry and start time, listed under "From closed terminals", and can be killed; a grid-bar notice appears when new survivors show up (#13174)
+- Every terminal now registers with crash-safe reaping (Windows Job Object or the POSIX supervisor), so a pty-host crash no longer leaves terminal work running, including work that reparented away (#13176)
+
+**File browser**
+
+- Changed files get a Diff mode in the viewer, sharing the diff pane's wrap and view-type preferences (#13195)
+- The viewer has a Close control; closing a file opened from a folder listing returns to that listing (#13194)
+
+**Daintree Assistant**
+
+- The assistant no longer runs under a hard deny list or read-only posture: Claude can edit and use forge create/merge/delete, Copilot is no longer forced into `--plan`, and off-topic questions are no longer refused. The MCP tier and confirmation rules are unchanged (#13193)
+
+### Bug Fixes
+
+**Terminals and processes**
+
+- Every launch no longer forks a second, empty pty-host, which also left subagent lookups unable to find any terminal (#13164)
+- Terminal kills take a fresh process census instead of trusting the cached one (#13165)
+- After a pty-host crash, `cmd &` jobs and `setsid`'d agent work are reaped, and restarts wait for the reap instead of running beside survivors (#13166)
+- Quit lets the pty-host finish reaping terminals instead of killing it mid-teardown (#13167)
+- Terminal kills and exits are logged, and anything still running after a grace period is reported (#13168)
+- Restore never re-runs a terminal's command while its original PTY may still be alive (#13172)
+- Plugin process teardown reaches the whole process tree, not just the direct child (#13173)
+- Home-relative `~/` paths in terminal output are linked (#13177)
+- A restarted terminal's old PTY exit can no longer clobber its replacement across project views
+- The subagent chip counts only working or blocked children and disappears when the agent exits (#13200)
+
+**Dev preview**
+
+- Stop stays in effect across remounts, hibernation and relaunch until you press Start (#13169)
+- Servers that keep running after a stop or a project kill are no longer forgotten, and relaunch no longer starts a second server beside them (#13170)
+- Removing a worktree outside Daintree stops its dev server (#13171)
+
+**Daintree Assistant**
+
+- Launch Help Agent opens in a free tab instead of replacing the live assistant session, and warns when every tab is in use (#13192)
+
 ## [0.41.0] - 2026-10-03
 
 Plugins get a native UI kit, per-plugin performance and style tabs, a faster worker transport, and new host APIs for agents, terminals and cross-project dispatch. Dictation is reworked so the first words are no longer lost, Mermaid diagrams render in Markdown, and the assistant can close its finished panes and clean up worktrees at the core tier.
