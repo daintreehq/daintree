@@ -107,6 +107,11 @@ export class PendingHelpHibernationStore {
     return this.persist();
   }
 
+  /** Resolves once every queued write has landed. */
+  flush(): Promise<void> {
+    return this.writeChain.catch(() => undefined);
+  }
+
   clear(slotKey: string): Promise<void> {
     if (!this.entries.has(slotKey)) return Promise.resolve();
     this.entries.delete(slotKey);
@@ -138,9 +143,10 @@ export class PendingHelpHibernationStore {
   private isValid(value: unknown): value is PendingHelpHibernation {
     if (!value || typeof value !== "object") return false;
     const v = value as Record<string, unknown>;
-    // An empty `agentSessionId` is the valid resume-latest sentinel (#9639):
-    // it routes the renderer down `buildResumeLatestCommand` rather than a
-    // fresh launch. Only the field's type is required, not non-emptiness.
+    // An empty `agentSessionId` is valid: a lane whose conversation id is not
+    // known yet (a fresh Codex launch, or a capture placeholder, #9639). It
+    // keeps the lane's tab but resumes nothing — recovery is by exact id only
+    // (#13205). Only the field's type is required, not non-emptiness.
     return (
       typeof v.agentId === "string" &&
       v.agentId !== "" &&

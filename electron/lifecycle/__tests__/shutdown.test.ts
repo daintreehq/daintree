@@ -167,6 +167,17 @@ vi.mock("../../setup/environment.js", () => ({
   },
 }));
 
+const helpSessionMock = vi.hoisted(() => ({
+  snapshotLaneTerminals: vi.fn(
+    (): Map<string, { slotKey: string; agentSessionId: string; revision: number }> => new Map()
+  ),
+  noteQuitCapture: vi.fn(async (_lane: unknown, _agentSessionId: string) => {}),
+  revokeAll: vi.fn(async () => {}),
+}));
+vi.mock("../../services/HelpSessionService.js", () => ({
+  helpSessionService: helpSessionMock,
+}));
+
 const hibernationMock = vi.hoisted(() => ({ stop: vi.fn() }));
 vi.mock("../../services/HibernationService.js", () => ({
   getHibernationService: vi.fn(() => hibernationMock),
@@ -1611,6 +1622,36 @@ describe("registerShutdownHandler", () => {
         { id: "t1", agentSessionId: "sess-1" },
         { id: "assistant", agentSessionId: undefined },
       ]);
+    });
+
+    it("routes the assistant's quit capture to its lane pointer (#13205)", async () => {
+      // A Codex lane has no id until this kill scrapes one; dropping the
+      // assistant's result here is what lost the conversation on quit.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const lane = { slotKey: "proj-1#0", agentSessionId: "", revision: 1 };
+      helpSessionMock.snapshotLaneTerminals.mockReturnValueOnce(new Map([["assistant", lane]]));
+      const gracefulKillByProject = vi.fn(async () => [
+        { id: "t1", agentSessionId: "sess-1" },
+        { id: "assistant", agentSessionId: "codex-thread-1" },
+      ]);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [
+          agentTerminal,
+          { ...agentTerminal, id: "assistant", isAssistantTerminal: true },
+        ]),
+        gracefulKillByProject,
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      expect(helpSessionMock.noteQuitCapture).toHaveBeenCalledTimes(1);
+      expect(helpSessionMock.noteQuitCapture).toHaveBeenCalledWith(lane, "codex-thread-1");
+      // Snapshotted before the kill, while the lanes were still bound.
+      expect(helpSessionMock.snapshotLaneTerminals.mock.invocationCallOrder[0]).toBeLessThan(
+        gracefulKillByProject.mock.invocationCallOrder[0]!
+      );
     });
 
     it("still captures and journals when the rate-limit drain import fails", async () => {

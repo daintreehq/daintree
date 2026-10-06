@@ -777,6 +777,10 @@ export interface GeneratedIpcInvokeMap {
     args: [patch: Partial<import("./api.js").HelpAssistantSettings>];
     result: void;
   };
+  "help:discard-conversation": {
+    args: [projectId: string, rawSlot?: number | undefined];
+    result: void;
+  };
   "help:get-folder-path": {
     args: [];
     result: string | null;

@@ -347,11 +347,11 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
     panelStoreState.addPanel = vi.fn().mockResolvedValue("term-resumed");
   }
 
-  it("does not show the resume banner when the hibernation sessionId is empty (resume-latest path)", async () => {
+  it("starts fresh instead of resuming when the hibernation sessionId is empty (#13205)", async () => {
     const ctrl = new HelpSessionController();
     ctrl.start();
     primeResumeInputs(ctrl);
-    // Empty sessionId is the sentinel from main's LRU-eviction race.
+    // Empty sessionId: a Codex lane never captured, or main's LRU-eviction race.
     helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
       sessionId: "",
       // Captured in the session directory the resume will launch in.
@@ -366,17 +366,12 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
       undefined
     );
 
-    // The phase still reached live (the spawn succeeded via --continue) but
-    // the resume-banner claim is suppressed because we never had a real id.
-    expect(ctrl.getSnapshot().phase).toBe("live");
+    // Recovery is by exact id only: no resume panel is spawned, so nothing can
+    // run `--continue` against the directory every lane shares, and no banner
+    // claims a restore that never happened.
     expect(ctrl.getSnapshot().showResumeBanner).toBe(false);
-    // The hibernate entry is still consumed so a future auto-launch doesn't
-    // loop on the same --continue attempt.
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1", 0);
-    // The spawn still happened — the renderer attempted the agent heuristic.
-    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "terminal" })
-    );
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
     ctrl.stop();
   });
 
@@ -446,35 +441,6 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
     ctrl.stop();
   });
 
-  it("ignores another project's hibernated lanes when deciding whether it is alone", async () => {
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    primeResumeInputs(ctrl);
-    helpPanelState.openSlots = [0];
-    helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
-      sessionId: "",
-      // Captured in the session directory the resume will launch in.
-      cwd: "/help",
-      agentId: "claude",
-    };
-    helpPanelState.hibernateSessions[slotKey("p2", 1)] = {
-      sessionId: "elsewhere",
-      cwd: "/other",
-      agentId: "claude",
-    };
-
-    await ctrl["_executeLaunch"](
-      7,
-      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
-      { id: "p1", path: "/repo" },
-      undefined
-    );
-
-    expect(panelStoreState.addPanel).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(panelStoreState.addPanel.mock.calls[0]![0])).toContain("--continue");
-    ctrl.stop();
-  });
-
   it("refuses resume-latest when the entry was captured in a different directory", async () => {
     // A lane from before every lane shared one directory has its entry keyed to
     // `<hash>-s1`. Resuming "latest" from the shared directory would pick up
@@ -503,14 +469,15 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
     ctrl.stop();
   });
 
-  it("still allows resume-latest when this is the project's only lane", async () => {
+  it("never falls back to resume-latest, even as the project's only lane (#13205)", async () => {
+    // "Only lane now" can't prove no other conversation ever used the shared
+    // directory — a lane closed before a restart left its transcript there.
     const ctrl = new HelpSessionController();
     ctrl.start();
     primeResumeInputs(ctrl);
     helpPanelState.openSlots = [0];
     helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
       sessionId: "",
-      // Captured in the session directory the resume will launch in.
       cwd: "/help",
       agentId: "claude",
     };
@@ -522,8 +489,8 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
       undefined
     );
 
-    expect(panelStoreState.addPanel).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(panelStoreState.addPanel.mock.calls[0]![0])).toContain("--continue");
+    // No resume panel at all — the fresh launch goes through agent.launch.
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
     ctrl.stop();
   });
 
@@ -547,6 +514,11 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
     expect(ctrl.getSnapshot().phase).toBe("live");
     expect(ctrl.getSnapshot().showResumeBanner).toBe(true);
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1", 0);
+    // The resumed panel carries the id it reopened, so main re-records it at
+    // spawn and the lane stays recoverable after another quit (#13205).
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ agentSessionId: "abc-123" })
+    );
     ctrl.stop();
   });
 });

@@ -279,6 +279,9 @@ export interface GeneratedElectronAPI {
     fetch(...args: IpcInvokeMap["git:fetch"]["args"]): Promise<IpcInvokeMap["git:fetch"]["result"]>;
   };
   help: {
+    discardConversation(
+      ...args: IpcInvokeMap["help:discard-conversation"]["args"]
+    ): Promise<IpcInvokeMap["help:discard-conversation"]["result"]>;
     getFolderPath(
       ...args: IpcInvokeMap["help:get-folder-path"]["args"]
     ): Promise<IpcInvokeMap["help:get-folder-path"]["result"]>;

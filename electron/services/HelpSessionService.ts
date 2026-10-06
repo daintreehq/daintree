@@ -55,10 +55,7 @@ import {
   buildProjectMetadataAddendum,
   type HelpSessionProjectFacts,
 } from "./helpSessionProjectMetadata.js";
-import type {
-  PendingHelpHibernation,
-  PendingHelpHibernationStore,
-} from "./PendingHelpHibernationStore.js";
+import type { PendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
 import {
   ASSISTANT_LANE_CONFIG_DIR,
   ASSISTANT_SLOTS,
@@ -225,6 +222,17 @@ export interface ProvisionResult {
   windowId: number;
 }
 
+export interface AssistantLaneSnapshot {
+  slotKey: string;
+  agentSessionId: string;
+  /**
+   * The lane's conversation revision: bumped by a relaunch or a discard, never
+   * by a capture refining the same conversation, so a discard + fresh relaunch
+   * is told apart even when both ids are empty.
+   */
+  revision: number;
+}
+
 interface HelpSessionRecord {
   sessionId: string;
   token: string;
@@ -258,6 +266,13 @@ interface HelpSessionRecord {
   debugLogging: boolean;
   createdAt: number;
   revoked: boolean;
+  /**
+   * The conversation this lane's PTY is running, once known: the id assigned
+   * at spawn (Claude's `--session-id`, or the id a resume reopened), or one a
+   * quit-time capture scraped (#13205). Seeds the capture placeholder so an
+   * eviction never downgrades a known id to the empty sentinel.
+   */
+  agentSessionId?: string;
   /**
    * Renderer `ActionContext` snapshot bound at provision time. Returned by
    * `getActionContextForToken` so the MCP handshake can pin every tool call
@@ -568,26 +583,23 @@ export class HelpSessionService {
   // would pass the `revoked` guard and graceful-kill the same PTY again. Later
   // capture calls join the first instead.
   private readonly captureRevokesInFlight = new Map<string, Promise<void>>();
-  // #11477: the entry most recently handed out by `takePendingHibernation`, per
-  // project, so a taker whose launch aborts can put it back verbatim via
-  // `restorePendingHibernation` — original `capturedAt` intact, `panelWasOpen`
-  // stripped. Holding it here rather than round-tripping it through the
-  // renderer means the put-back carries no entry data at all, so there is no
-  // way to write a fabricated agentId/cwd into the persistent store.
+  // #11477/#13205: the live claim on each lane's pending entry, taken by
+  // `takePendingHibernation` and released by `restorePendingHibernation` (an
+  // aborted launch), the resumed spawn (`recordLaneLaunchForToken`), an
+  // explicit discard, or the owning view's death. The entry itself stays in
+  // the store throughout; the claim is only the single-winner gate (#10819).
   //
-  // `claimId` + `ownerWebContentsId` make the put-back a compare-and-swap on
-  // the specific take rather than on the project: only the view that took this
-  // entry, quoting the id it was handed, can put it back. Without that pair a
-  // release is merely project-scoped, so a duplicate or late release could
-  // restore a stash a LATER take had already replaced, and a stash left behind
-  // by a successfully-resumed launch would stay restorable indefinitely.
-  //
-  // In-memory only, one deep per project: a take that is never answered is
-  // dropped, and a later take supersedes the stash outright.
-  private readonly lastTakenBySlotKey = new Map<
+  // `claimId` + `ownerWebContentsId` make the release a compare-and-swap on the
+  // specific take rather than on the lane, so a duplicate or late release can
+  // never free a claim a later take holds. In-memory only.
+  private readonly claimsBySlotKey = new Map<
     string,
-    { entry: PendingHelpHibernation; claimId: string; ownerWebContentsId: number | null }
+    { claimId: string; ownerWebContentsId: number | null }
   >();
+  // Which conversation each lane's pointer is on, as a counter bumped by every
+  // relaunch and discard (#13205). Shutdown's late captures compare it, so one
+  // can't land on a conversation that replaced the one it was captured from.
+  private readonly laneRevisionBySlotKey = new Map<string, number>();
   // #10815: per-project assistant-panel visibility, reported by the renderer
   // whenever its `isOpen` changes. Read at capture time to stamp
   // `panelWasOpen` onto the eviction hibernation entry so cold switch-back can
@@ -1585,8 +1597,8 @@ export class HelpSessionService {
     // races us whenever the project view outlives the kill (project sleep and
     // close+kill both keep it alive) — passes the guard at the top and reaches
     // the finalize block below. Without this flag it would release OUR ownership
-    // and the real resume id would be dropped for the empty-sentinel placeholder,
-    // silently demoting the resume to latest-conversation.
+    // and the real resume id would be dropped for the placeholder, which for a
+    // lane with no known id is the empty sentinel that resumes nothing.
     let ownsCapture = false;
     // When the renderer that owned the panel is gone (crash, eviction), the
     // open state is frozen at capture time: a crash-reloaded renderer mounts
@@ -1601,10 +1613,10 @@ export class HelpSessionService {
       // calls us is fire-and-forget, so a project switch-back can load the new
       // renderer view and call `takePendingHibernation` before gracefulKill
       // resolves. Without the placeholder it gets null and starts a *fresh*
-      // assistant session — the visible "restart" this issue is about. The
-      // empty-`agentSessionId` sentinel routes the renderer down the
-      // resume-latest path instead; once gracefulKill returns we overwrite the
-      // placeholder with the agent's real resume ID (below).
+      // assistant session — the visible "restart" this issue is about. It
+      // carries the id the lane already knows (#13205); only a lane that never
+      // learned one (a fresh Codex launch) gets the empty sentinel. Once
+      // gracefulKill returns we overwrite it with the agent's real resume ID.
       if (this.pendingHibernationStore) {
         this.pendingCapturesBySlotKey.set(slotKey, sessionId);
         ownsCapture = true;
@@ -1612,7 +1624,7 @@ export class HelpSessionService {
         void this.pendingHibernationStore
           .set(slotKey, {
             agentId: record.agentId,
-            agentSessionId: "",
+            agentSessionId: record.agentSessionId ?? "",
             cwd: record.sessionPath,
             capturedAt: Date.now(),
             panelWasOpen: panelOpenAtCapture,
@@ -1686,11 +1698,11 @@ export class HelpSessionService {
 
     // #9639: finalize the placeholder written before gracefulKill. Only act if
     // we still own the capture — a same-lane re-provision that ran
-    // `displacePriorSessions` during the await clears our ownership and the
-    // placeholder, so the old resume ID can't shadow the fresh session that
-    // took the lane. When we still own it: overwrite with the real resume ID
-    // if gracefulKill yielded one, otherwise leave the empty-sentinel in place
-    // (resume-latest beats a fresh launch). Then release ownership.
+    // `displacePriorSessions` during the await clears our ownership, so the old
+    // resume ID can't shadow the fresh session that took the lane. When we
+    // still own it: overwrite with the real resume ID if gracefulKill yielded
+    // one, otherwise leave the placeholder — which carries whatever id the lane
+    // already knew (#13205). Then release ownership.
     if (
       ownsCapture &&
       this.pendingHibernationStore &&
@@ -1766,17 +1778,21 @@ export class HelpSessionService {
   }
 
   /**
-   * Reads and clears the main-captured pending hibernation entry for a
-   * project. Called by the renderer at launch time to seed
-   * `helpPanelStore.hibernateSessions[projectId]` from the entry main
-   * captured on the prior eviction. The entry is one-shot — once read it's
-   * dropped from the persistent store so a future cold launch without
-   * intervening capture starts fresh.
+   * Claims the lane's pending conversation entry for a resume. Called by the
+   * renderer at launch time to seed `helpPanelStore.hibernateSessions` from
+   * the pointer main holds for the lane.
    *
-   * Returns a `claimId` alongside the entry (#11477): a launch that takes but
-   * then aborts quotes it back to `restorePendingHibernation` to put the entry
-   * back. `ownerWebContentsId` is the taking view, supplied by the IPC layer
-   * from its context — never by the renderer.
+   * The claim is the single-winner gate that stops two views from resuming
+   * (and so displacing) the same lane at once (#10819), but it no longer
+   * deletes anything (#13205): the entry stays on disk for as long as the
+   * conversation lives, so a resume interrupted by a crash or a quit is still
+   * recoverable on the next boot. Only an explicit discard
+   * (`discardConversation`) or a fresh launch into the lane replaces it.
+   *
+   * A claim held by another view refuses the take. The owner itself may take
+   * again — a crash-reloaded renderer keeps its webContents id, and its old
+   * launch can never release. `ownerWebContentsId` is supplied by the IPC
+   * layer from its context, never by the renderer.
    */
   async takePendingHibernation(
     projectId: string,
@@ -1790,29 +1806,25 @@ export class HelpSessionService {
   } | null> {
     if (!this.pendingHibernationStore) return null;
     const slotKey = assistantSlotKey(projectId, slot);
+    // An empty placeholder whose capture is still in flight (a Codex lane —
+    // its id only exists once gracefulKill scrapes it) is not resumable yet,
+    // and recovery is by exact id only. Wait for the capture to write the real
+    // id rather than handing out a placeholder that can only start fresh.
+    const capturingSession = this.pendingCapturesBySlotKey.get(slotKey);
+    if (capturingSession && this.pendingHibernationStore.get(slotKey)?.agentSessionId === "") {
+      await this.captureRevokesInFlight.get(capturingSession)?.catch(() => undefined);
+    }
     const entry = this.pendingHibernationStore.get(slotKey);
     if (!entry) return null;
-    // #10048: invalidate the in-flight capture owner before the await so the
-    // post-gracefulKill finalize block's ownership guard fails and the
-    // already-killed agent's (now-stale) resume ID cannot overwrite the
-    // placeholder the renderer just claimed. Mirrors displacePriorSessions.
+    const owner = ownerWebContentsId ?? null;
+    const held = this.claimsBySlotKey.get(slotKey);
+    if (held && held.ownerWebContentsId !== owner) return null;
+    // #10048: invalidate the in-flight capture owner so the post-gracefulKill
+    // finalize block can't overwrite the entry the renderer just claimed with
+    // the already-killed agent's resume ID. Mirrors displacePriorSessions.
     this.pendingCapturesBySlotKey.delete(slotKey);
-    // Stash the exact entry (original `capturedAt` and all) so a taker that
-    // aborts can hand it back via `restorePendingHibernation` (#11477).
-    // Overwrites any prior stash for this lane: only the most recent take is
-    // restorable, and an earlier taker's put-back must not resurrect a
-    // superseded entry. Stashes are per lane, so one view holding claims on
-    // several lanes keeps them independent — the CAS identity is
-    // (slotKey, claimId, ownerWebContentsId), and the same owner appearing in
-    // more than one bucket is expected rather than ambiguous.
-    const { panelWasOpen: _panelWasOpen, ...restorable } = entry;
     const claimId = randomUUID();
-    this.lastTakenBySlotKey.set(slotKey, {
-      entry: restorable,
-      claimId,
-      ownerWebContentsId: ownerWebContentsId ?? null,
-    });
-    await this.pendingHibernationStore.clear(slotKey);
+    this.claimsBySlotKey.set(slotKey, { claimId, ownerWebContentsId: owner });
     return {
       agentId: entry.agentId,
       agentSessionId: entry.agentSessionId,
@@ -1822,38 +1834,15 @@ export class HelpSessionService {
   }
 
   /**
-   * Put back an entry a caller took via `takePendingHibernation` but did not
-   * end up using (#11477).
+   * Releases a claim a caller took via `takePendingHibernation` but did not
+   * end up using (#11477) — a launch superseded by a StrictMode remount, the
+   * stall watchdog, or a provisioning failure. The entry itself never left
+   * the store, so releasing is all a put-back has to do.
    *
-   * `takePendingHibernation` is destructive by design — the atomic take is the
-   * single-winner gate that stops two windows from displacing each other's
-   * backend (#10819). But every abort downstream of a successful take dropped
-   * the entry on the floor, so a launch superseded by a StrictMode remount, the
-   * stall watchdog, or a plain provisioning failure destroyed the only resume
-   * token the user had. The watchdog case is the sharpest: it surfaces a
-   * *retryable* launch error while the token that retry needs is already gone.
-   *
-   * The `claimId` from the matching take is required, so a release acts on the
-   * take that produced it rather than on the project at large. On top of that,
-   * it refuses whenever anything newer owns the slot:
-   *
-   * - A present entry means a fresh capture landed after our take. It is newer
-   *   and describes a later conversation; overwriting it would resurrect a
-   *   superseded one.
-   * - An in-flight capture owner means a `revokeSession` is mid-`gracefulKill`
-   *   and will write the real resume id when it resolves (#9646). Restoring
-   *   under it would be clobbered anyway, or would race the placeholder.
-   *
-   * The entry itself comes from main's own take-side stash, not from the
-   * caller: the renderer only reports that it didn't use what it took. That
-   * keeps the original `capturedAt` (so a put-back can't refresh its way past
-   * the 14-day staleness cutoff), keeps `panelWasOpen` stripped — the safe
-   * default, since a put-back entry should be offered for an explicit resume
-   * but never auto-resume on switch-back (#10815) — and leaves no path for a
-   * renderer to write an agentId/cwd of its choosing into main's persistent
-   * store.
-   *
-   * Returns whether the entry was actually restored.
+   * A compare-and-swap on the specific take: only the view that took it,
+   * quoting the id it was handed, can release it, so a duplicate or late
+   * release can't free a claim a later take now holds. Returns whether the
+   * lane still has an entry to resume.
    */
   async restorePendingHibernation(
     projectId: string,
@@ -1863,27 +1852,121 @@ export class HelpSessionService {
   ): Promise<boolean> {
     if (!this.pendingHibernationStore) return false;
     const slotKey = assistantSlotKey(projectId, slot);
-    const stashed = this.lastTakenBySlotKey.get(slotKey);
-    if (!stashed) return false;
-    // Compare-and-swap on the specific take. A release quoting a superseded
-    // claim (a later take replaced the stash) or arriving from a view other
-    // than the one that took it is refused WITHOUT consuming the stash, so the
-    // rightful claimant can still put its entry back.
-    if (stashed.claimId !== claimId) return false;
+    const held = this.claimsBySlotKey.get(slotKey);
+    if (!held || held.claimId !== claimId) return false;
     if (
-      stashed.ownerWebContentsId !== null &&
+      held.ownerWebContentsId !== null &&
       ownerWebContentsId !== undefined &&
-      stashed.ownerWebContentsId !== ownerWebContentsId
+      held.ownerWebContentsId !== ownerWebContentsId
     ) {
       return false;
     }
-    // One-shot from here: the claim is now spent either way, so a duplicate
-    // release can't re-resurrect an entry a subsequent take consumed.
-    this.lastTakenBySlotKey.delete(slotKey);
-    if (this.pendingHibernationStore.get(slotKey)) return false;
-    if (this.pendingCapturesBySlotKey.has(slotKey)) return false;
-    await this.pendingHibernationStore.set(slotKey, stashed.entry);
-    return true;
+    this.claimsBySlotKey.delete(slotKey);
+    return this.pendingHibernationStore.get(slotKey) !== null;
+  }
+
+  /**
+   * Records the conversation a freshly spawned assistant PTY is running as its
+   * lane's durable pointer (#13205), so the lane survives an app quit or a
+   * main-process crash — neither of which runs a capture. Called by the spawn
+   * handler once the PTY is launched, with the id the launch assigned
+   * (Claude's `--session-id`) or reopened (a resume). A launch with no id yet
+   * (a fresh Codex session, whose id only shows up at exit) still records the
+   * lane, with the empty sentinel, replacing whatever conversation the lane
+   * pointed at before — a fresh launch is the user starting over.
+   *
+   * Agents with no resume support have nothing to point at and are skipped.
+   */
+  recordLaneLaunchForToken(token: string, agentSessionId?: string): Promise<void> {
+    if (!token || !this.pendingHibernationStore) return Promise.resolve();
+    const record = this.sessionsByToken.get(token);
+    if (!record || record.revoked) return Promise.resolve();
+    if (!getEffectiveAgentConfig(record.agentId)?.resume) return Promise.resolve();
+    const slotKey = assistantSlotKey(record.projectId, record.slot);
+    record.agentSessionId = agentSessionId || undefined;
+    this.bumpLaneRevision(slotKey);
+    // The launch that held the claim has spent it.
+    this.claimsBySlotKey.delete(slotKey);
+    return this.pendingHibernationStore.set(slotKey, {
+      agentId: record.agentId,
+      agentSessionId: agentSessionId ?? "",
+      cwd: record.sessionPath,
+      capturedAt: Date.now(),
+    });
+  }
+
+  /**
+   * Which lane each live assistant PTY serves, with the pointer its lane held,
+   * frozen before shutdown's graceful kill (#13205). The kill makes the
+   * renderer revoke each exited lane, so by the time the captures come back the
+   * live bindings are gone; this snapshot is what routes them.
+   */
+  snapshotLaneTerminals(): Map<string, AssistantLaneSnapshot> {
+    const lanes = new Map<string, AssistantLaneSnapshot>();
+    if (!this.pendingHibernationStore) return lanes;
+    for (const [sessionId, terminalId] of this.terminalBySessionId.entries()) {
+      const record = this.sessionsById.get(sessionId);
+      if (!record || record.revoked) continue;
+      const slotKey = assistantSlotKey(record.projectId, record.slot);
+      if (this.activeHelpTerminalBySlotKey.get(slotKey) !== terminalId) continue;
+      const entry = this.pendingHibernationStore.get(slotKey);
+      if (!entry || entry.agentId !== record.agentId) continue;
+      lanes.set(terminalId, {
+        slotKey,
+        agentSessionId: entry.agentSessionId,
+        revision: this.laneRevisionBySlotKey.get(slotKey) ?? 0,
+      });
+    }
+    return lanes;
+  }
+
+  /**
+   * Stores an id shutdown's graceful kill captured for an assistant PTY
+   * (#13205). Shutdown already captures every terminal; routing the
+   * assistant's result here instead of dropping it is what keeps a Codex lane —
+   * no id until it exits — resumable after a quit. Only applies while the lane
+   * still points where it did at the snapshot, so an explicit discard or a
+   * newer launch during the kill wins.
+   */
+  noteQuitCapture(lane: AssistantLaneSnapshot, agentSessionId: string): Promise<void> {
+    if (!agentSessionId || !this.pendingHibernationStore) return Promise.resolve();
+    const entry = this.pendingHibernationStore.get(lane.slotKey);
+    if (!entry) return Promise.resolve();
+    if (
+      entry.agentSessionId !== lane.agentSessionId ||
+      (this.laneRevisionBySlotKey.get(lane.slotKey) ?? 0) !== lane.revision
+    ) {
+      return Promise.resolve();
+    }
+    if (entry.agentSessionId === agentSessionId) return Promise.resolve();
+    return this.pendingHibernationStore.set(lane.slotKey, {
+      ...entry,
+      agentSessionId,
+      capturedAt: Date.now(),
+    });
+  }
+
+  private bumpLaneRevision(slotKey: string): void {
+    this.laneRevisionBySlotKey.set(slotKey, (this.laneRevisionBySlotKey.get(slotKey) ?? 0) + 1);
+  }
+
+  /**
+   * The user explicitly discarded this lane's conversation — Stop, Restart
+   * conversation, or closing its tab (#13205). The only path that clears a
+   * lane's pointer: a CLI exit, a crash, or a quit all leave it in place so
+   * the conversation stays recoverable. Also drops the lane's claim and any
+   * in-flight capture ownership, so a late capture can't resurrect it.
+   */
+  async discardConversation(projectId: string, slot: number): Promise<void> {
+    if (!this.pendingHibernationStore || !projectId) return;
+    const slotKey = assistantSlotKey(projectId, slot);
+    this.pendingCapturesBySlotKey.delete(slotKey);
+    this.claimsBySlotKey.delete(slotKey);
+    this.bumpLaneRevision(slotKey);
+    for (const record of this.sessionsById.values()) {
+      if (record.projectId === projectId && record.slot === slot) record.agentSessionId = undefined;
+    }
+    await this.pendingHibernationStore.clear(slotKey);
   }
 
   /**
@@ -1924,18 +2007,13 @@ export class HelpSessionService {
       prior.revoked = true;
       this.sessionsByToken.delete(prior.token);
       this.sessionsById.delete(prior.sessionId);
-      // #9639: if this displaced session owns an in-flight capture placeholder,
-      // drop it (and release ownership) so the old, soon-to-be-stale resume ID
-      // can't shadow the fresh session now taking this lane.
+      // #9639: if this displaced session owns an in-flight capture, release
+      // ownership so its late finalize can't write the old resume ID over the
+      // fresh session now taking this lane. The entry itself stays (#13205):
+      // the new launch replaces it when it spawns, and a provision that fails
+      // before then must not cost the user the conversation it was resuming.
       if (this.pendingCapturesBySlotKey.get(slotKey) === prior.sessionId) {
         this.pendingCapturesBySlotKey.delete(slotKey);
-        void this.pendingHibernationStore?.clear(slotKey).catch((err) => {
-          console.warn(
-            "[HelpSessionService] Failed to clear displaced pending hibernation:",
-            projectId,
-            err
-          );
-        });
       }
       const terminalId = this.terminalBySessionId.get(prior.sessionId);
       if (terminalId) {
@@ -1988,6 +2066,11 @@ export class HelpSessionService {
   }
 
   async revokeByWebContentsId(webContentsId: number): Promise<void> {
+    // A dead view can never release the claims it held; free them so another
+    // view can still resume those lanes.
+    for (const [slotKey, claim] of this.claimsBySlotKey) {
+      if (claim.ownerWebContentsId === webContentsId) this.claimsBySlotKey.delete(slotKey);
+    }
     const targets = [...this.sessionsById.values()].filter(
       (record) => record.projectViewWebContentsId === webContentsId
     );
@@ -2045,14 +2128,19 @@ export class HelpSessionService {
 
   async revokeAll(): Promise<void> {
     // App shutdown — no time to await gracefulKill round-trips, so we skip
-    // capture. The cooperative renderer-side hibernate timer is the main
-    // resume mechanism for clean shutdowns; this is the safety net.
+    // capture here. Every lane's pointer is already on disk: written at spawn
+    // (`recordLaneLaunchForToken`), refined by shutdown's own graceful-kill
+    // pass (`noteCapturedConversationForTerminal`), and left in place by this
+    // plain revoke (#13205).
     const targets = [...this.sessionsById.values()];
     await Promise.all(targets.map((record) => this.revokeSession(record.sessionId)));
-    // Take-side stashes are launch-scoped and hold a resume id; nothing can
-    // release one across a restart, so drop them rather than carry them to
-    // shutdown. The persisted entries themselves are untouched (#11477).
-    this.lastTakenBySlotKey.clear();
+    // Claims are launch-scoped; nothing can release one across a restart. The
+    // persisted entries themselves are untouched — they are what brings each
+    // lane back on the next boot (#13205).
+    this.claimsBySlotKey.clear();
+    // A spawn's pointer write or a discard's clear may still be queued; the
+    // process is about to exit, so let it land rather than lose it.
+    await this.pendingHibernationStore?.flush();
   }
 
   /**
