@@ -238,11 +238,9 @@ async function handleListPendingHibernationSlots(
  */
 async function handleListPastSessions(
   ctx: import("../types.js").IpcContext,
-  projectId: string,
-  projectPath: string
+  projectId: string
 ): Promise<HelpPastSession[]> {
   if (typeof projectId !== "string" || !projectId) return [];
-  if (typeof projectPath !== "string" || !projectPath) return [];
   if (!ctx.projectId || ctx.projectId !== projectId) {
     console.warn("[help] listPastSessions: projectId mismatch — refusing cross-project read", {
       requested: projectId,
@@ -251,12 +249,20 @@ async function handleListPastSessions(
     });
     return [];
   }
-  const [{ helpSessionService }, lister, claudeStore, codex] = await Promise.all([
-    getHelpSessionService(),
-    import("../../services/helpPastSessions.js"),
-    import("../../services/claude/ClaudeSessionStore.js"),
-    import("../../services/codex/CodexSubagentService.js"),
-  ]);
+  const [{ helpSessionService }, lister, claudeStore, codex, { projectStore }, { scratchStore }] =
+    await Promise.all([
+      getHelpSessionService(),
+      import("../../services/helpPastSessions.js"),
+      import("../../services/claude/ClaudeSessionStore.js"),
+      import("../../services/codex/CodexSubagentService.js"),
+      import("../../services/ProjectStore.js"),
+      import("../../services/ScratchStore.js"),
+    ]);
+  // The path comes from main's own record of the view's workspace, never the
+  // renderer: a path it supplied could name another project's history.
+  const projectPath =
+    projectStore.getProjectById(projectId)?.path ?? scratchStore.getScratchById(projectId)?.path;
+  if (!projectPath) return [];
   return lister.listHelpPastSessions(helpSessionService.getSessionPathForProject(projectPath), {
     claudeProjectsRoot:
       claudeStore.resolvePaneClaudeProjectsRoot() ?? lister.defaultClaudeProjectsRoot(),

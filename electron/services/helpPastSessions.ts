@@ -26,6 +26,8 @@ const TITLE_MAX_CHARS = 120;
 const EDGE_BYTES = 64 * 1024;
 const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TRANSCRIPT_SUFFIX = ".jsonl";
+/** Transcripts summarised at once — a long history must not open every file together. */
+const READ_CONCURRENCY = 8;
 
 /**
  * Claude names a project folder after its cwd with every character that is
@@ -209,38 +211,46 @@ export async function listClaudeHelpSessions(
   }
 
   const sessions = new Map<string, HelpPastSession>();
+  const summarizeInto = async (dir: string, name: string): Promise<void> => {
+    if (!name.endsWith(TRANSCRIPT_SUFFIX)) return;
+    const sessionId = name.slice(0, -TRANSCRIPT_SUFFIX.length);
+    if (!CLAUDE_SESSION_ID.test(sessionId) || sessions.has(sessionId)) return;
+    const filePath = path.join(dir, name);
+    try {
+      // lstat: a symlink planted in the store is not a transcript we follow.
+      const stats = await lstat(filePath);
+      if (!stats.isFile() || stats.size === 0) return;
+      const { head, tail, complete } = await readEdges(filePath, stats.size);
+      const summary = summarizeClaudeTranscript(head, tail, complete);
+      if (!summary) return;
+      sessions.set(sessionId, {
+        agentId: "claude",
+        sessionId,
+        title: summary.title,
+        updatedAt: stats.mtimeMs,
+      });
+    } catch {
+      // Removed or unreadable mid-scan: one fewer row.
+    }
+  };
+
   for (const spelling of spellings) {
     const dir = path.join(projectsRoot, claudeProjectSlug(spelling));
     let names: string[];
     try {
+      // A symlinked project folder could point at another project's history.
+      if (!(await lstat(dir)).isDirectory()) continue;
       names = await readdir(dir);
     } catch {
       continue;
     }
-    await Promise.all(
-      names.map(async (name) => {
-        if (!name.endsWith(TRANSCRIPT_SUFFIX)) return;
-        const sessionId = name.slice(0, -TRANSCRIPT_SUFFIX.length);
-        if (!CLAUDE_SESSION_ID.test(sessionId) || sessions.has(sessionId)) return;
-        const filePath = path.join(dir, name);
-        try {
-          // lstat: a symlink planted in the store is not a transcript we follow.
-          const stats = await lstat(filePath);
-          if (!stats.isFile() || stats.size === 0) return;
-          const { head, tail, complete } = await readEdges(filePath, stats.size);
-          const summary = summarizeClaudeTranscript(head, tail, complete);
-          if (!summary) return;
-          sessions.set(sessionId, {
-            agentId: "claude",
-            sessionId,
-            title: summary.title,
-            updatedAt: stats.mtimeMs,
-          });
-        } catch {
-          // Removed or unreadable mid-scan: one fewer row.
-        }
-      })
-    );
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      for (let name = names[next++]; name !== undefined; name = names[next++]) {
+        await summarizeInto(dir, name);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(READ_CONCURRENCY, names.length) }, worker));
   }
   return [...sessions.values()];
 }
@@ -250,11 +260,16 @@ export function codexHelpSessionsFrom(result: CodexFolderSessionsResult): HelpPa
   const out: HelpPastSession[] = [];
   for (const session of result.sessions) {
     const name = session.name ? normalizePromptTitle(session.name) : "";
-    if (!name && (!session.preview.trim() || isGreeting(session.preview))) continue;
+    if (!name && !session.preview.trim()) continue;
+    // Codex reports only the FIRST message, and a session opened by
+    // `help.launchAgent` starts with the greeting however long it ran after.
+    // Unlike a Claude transcript there is nothing here to prove it stopped
+    // there, so it stays listed, just without the greeting as its name.
+    const preview = isGreeting(session.preview) ? "" : normalizePromptTitle(session.preview);
     out.push({
       agentId: "codex",
       sessionId: session.id,
-      title: name || normalizePromptTitle(session.preview) || "Untitled conversation",
+      title: name || preview || "Untitled conversation",
       updatedAt: session.updatedAt,
     });
   }
@@ -278,7 +293,15 @@ export async function listHelpPastSessions(
       .then(codexHelpSessionsFrom)
       .catch(() => []),
   ]);
-  return [...claude, ...codex]
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, HELP_PAST_SESSIONS_LIMIT);
+  return (
+    [...claude, ...codex]
+      // Ties break on identity so the order — and what the cap keeps — is stable.
+      .sort(
+        (a, b) =>
+          b.updatedAt - a.updatedAt ||
+          a.agentId.localeCompare(b.agentId) ||
+          a.sessionId.localeCompare(b.sessionId)
+      )
+      .slice(0, HELP_PAST_SESSIONS_LIMIT)
+  );
 }

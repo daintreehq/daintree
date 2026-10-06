@@ -183,6 +183,48 @@ describe("help.resumePastSession", () => {
     expect(useHelpPanelStore.getState().activeSlot).toBe(1);
   });
 
+  it("refuses a named tab another resume is already heading for", async () => {
+    bindLane(0, "term-0", "claude");
+    bindLane(1, "term-1", "claude");
+    bindLane(2, "term-2", "claude");
+    await run({ agentId: "claude", sessionId: "abc-1", slot: 1 });
+    controllers.get(1)!.phase = "provisioning";
+    controllers.get(1)!.listeners.forEach((listener) => listener());
+
+    expect(await run({ agentId: "claude", sessionId: "def-2", slot: 1 })).toEqual({
+      outcome: "lanes-full",
+    });
+    expect(controllers.get(1)!.launchWhenReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a tab is busy rather than dropping the pick when it is mid-launch", async () => {
+    const { acquireHelpSessionController } =
+      await import("@/controllers/helpSessionControllerRegistry");
+    acquireHelpSessionController(0);
+    controllers.get(0)!.phase = "provisioning";
+
+    expect(await run({ agentId: "claude", sessionId: "abc-1" })).toEqual({
+      outcome: "unavailable",
+    });
+    expect(controllers.get(0)!.launchWhenReady).not.toHaveBeenCalled();
+    expect(mockNotify).toHaveBeenCalledWith(expect.objectContaining({ type: "warning" }));
+
+    // The refused pick left no claim behind.
+    controllers.get(0)!.phase = "idle";
+    expect(await run({ agentId: "claude", sessionId: "abc-1" })).toEqual({ outcome: "resumed" });
+  });
+
+  it("ignores a closed tab's capture when checking the agent", async () => {
+    useHelpPanelStore.getState().setHibernateSession(PROJECT.id, 2, {
+      sessionId: "old",
+      cwd: "/help",
+      agentId: "claude",
+    });
+    expect(await run({ agentId: "codex", sessionId: "thread-1" })).toEqual({
+      outcome: "resumed",
+    });
+  });
+
   it("refuses a named tab that has since closed", async () => {
     expect(await run({ agentId: "claude", sessionId: "abc-1", slot: 2 })).toEqual({
       outcome: "lanes-full",

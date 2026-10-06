@@ -927,9 +927,30 @@ describe("HelpSessionController — launchWhenReady (#13206)", () => {
       resumeTarget: { sessionId: "picked-1" },
     });
 
-    // Consumed: later syncs neither replay it nor auto-launch a second session.
+    // Consumed: a later sync never replays it. (Any auto-launch that sync
+    // attempts meets the real launch's re-entrancy guard, stubbed out here.)
     ctrl.syncInputs({ ...readyInputs, visibilityEpoch: 1 });
-    expect(launch).toHaveBeenCalledTimes(1);
+    const replays = launch.mock.calls.filter(([options]) => options.resumeTarget !== undefined);
+    expect(replays).toHaveLength(1);
+  });
+
+  it("retries a failed pick with the same conversation, and a plain launch plainly", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    const launch = vi.spyOn(ctrl, "launch");
+    ctrl["_lastResumeTarget"] = { sessionId: "picked-3" };
+
+    launch.mockImplementation(() => {});
+    ctrl.retryLaunch("claude");
+    expect(launch).toHaveBeenLastCalledWith({
+      agentId: "claude",
+      replaceExisting: true,
+      resumeTarget: { sessionId: "picked-3" },
+    });
+
+    ctrl["_lastResumeTarget"] = undefined;
+    ctrl.retryLaunch("claude");
+    expect(launch).toHaveBeenLastCalledWith({ agentId: "claude" });
   });
 
   it("launches immediately when the lane is already ready", () => {

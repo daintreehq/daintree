@@ -1431,7 +1431,7 @@ export function HelpPanel({
   const dismissOutcomeAlert = useCallback(() => controller.dismissOutcomeAlert(), [controller]);
   const retryLaunch = useCallback(() => {
     const agentId = session.launchError?.agentId;
-    if (agentId) controller.launch({ agentId });
+    if (agentId) controller.retryLaunch(agentId);
   }, [controller, session.launchError]);
 
   // Esc-to-close. The xterm-helper-textarea check lets Escape reach the

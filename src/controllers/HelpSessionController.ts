@@ -375,6 +375,8 @@ export class HelpSessionController {
   private _lastInputs: HelpSessionInputs | null = null;
   /** A launch waiting for this lane's first ready inputs — see `launchWhenReady`. */
   private _queuedLaunch: HelpLaunchOptions | null = null;
+  /** The picked conversation the latest launch was for, so Retry reopens that one. */
+  private _lastResumeTarget: HelpLaunchOptions["resumeTarget"] = undefined;
 
   private readonly _versionGate = new HelpVersionGate({
     getSnapshot: () => this._snapshot,
@@ -491,7 +493,10 @@ export class HelpSessionController {
     if (this._queuedLaunch && inputs.isReadyToLaunch && inputs.currentProject) {
       const queued = this._queuedLaunch;
       this._queuedLaunch = null;
-      this._launchInsteadOfAutoLaunch(queued);
+      // Taking this sync instead of `_maybeAutoLaunch` is what keeps an empty
+      // lane from auto-launching a blank session ahead of the one asked for;
+      // later syncs find this launch in flight and the re-entrancy guard.
+      this.launch(queued);
       return;
     }
     this._maybeAutoLaunch(inputs);
@@ -503,23 +508,27 @@ export class HelpSessionController {
    * no inputs synced yet, so a plain `launch()` would be refused as "still
    * loading"; and an empty active lane auto-launches on its first sync, which
    * would start a blank session ahead of the one asked for. The queued launch
-   * takes that first sync instead.
+   * takes that first sync instead. Like `selectAgent`, it is a manual launch:
+   * it does not mark the lane auto-launched, so view-reveal recovery never
+   * mistakes it for a stranded auto-launch and swaps it for a plain one.
    */
   launchWhenReady(options: HelpLaunchOptions): void {
     const inputs = this._lastInputs;
     if (inputs?.isReadyToLaunch && inputs.currentProject) {
       this._queuedLaunch = null;
-      this._launchInsteadOfAutoLaunch(options);
+      this.launch(options);
       return;
     }
     this._queuedLaunch = options;
   }
 
-  private _launchInsteadOfAutoLaunch(options: HelpLaunchOptions): void {
-    // This launch is what the lane is for now; the auto-launch must not add a
-    // second session behind it.
-    this._hasAutoLaunched = true;
-    this.launch(options);
+  /**
+   * The launch-error banner's Retry. A failed picked resume retries that
+   * conversation; anything else relaunches the agent as before.
+   */
+  retryLaunch(agentId: string): void {
+    const resumeTarget = this._lastResumeTarget;
+    this.launch(resumeTarget ? { agentId, replaceExisting: true, resumeTarget } : { agentId });
   }
 
   /**
@@ -860,6 +869,7 @@ export class HelpSessionController {
 
     const launchProject = inputs.currentProject;
     this._isLaunching = true;
+    this._lastResumeTarget = options.resumeTarget;
 
     // A launch supersedes any revoked-session banner — the user is starting a
     // fresh session, so the prior session's revocation no longer applies (#10017).

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
+import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
@@ -34,7 +35,7 @@ const FUSE_OPTIONS = { keys: ["title"], threshold: 0.4, ignoreLocation: true };
 
 interface HelpPastSessionsPaletteProps {
   /** The workspace whose assistant history is listed. */
-  workspace: { id: string; path: string } | null;
+  workspace: { id: string } | null;
   /** The panel's open tabs, for "already open" and for choosing one to replace. */
   tabs: readonly HelpSessionTab[];
 }
@@ -51,7 +52,6 @@ interface HelpPastSessionsPaletteProps {
 export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPaletteProps) {
   const isOpen = usePaletteStore((s) => s.activePaletteId === PALETTE_ID);
   const workspaceId = workspace?.id ?? null;
-  const workspacePath = workspace?.path ?? null;
   const [listing, setListing] = useState<{
     workspaceId: string;
     sessions: HelpPastSession[];
@@ -59,11 +59,11 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
   const [replacing, setReplacing] = useState<HelpPastSession | null>(null);
 
   useEffect(() => {
-    if (!isOpen || !workspaceId || !workspacePath) return;
+    if (!isOpen || !workspaceId) return;
     setReplacing(null);
     let cancelled = false;
     window.electron.help
-      .listPastSessions(workspaceId, workspacePath)
+      .listPastSessions(workspaceId)
       .then((sessions) => {
         if (!cancelled) setListing({ workspaceId, sessions });
       })
@@ -74,7 +74,7 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
     return () => {
       cancelled = true;
     };
-  }, [isOpen, workspaceId, workspacePath]);
+  }, [isOpen, workspaceId]);
 
   const sessions = listing && listing.workspaceId === workspaceId ? listing.sessions : null;
   const laneTerminals = useHelpPanelStore((s) =>
@@ -139,10 +139,14 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
         },
         { source: "user" }
       );
-      if (result.ok && result.result?.outcome === "lanes-full" && item.kind === "session") {
+      const outcome = result.ok ? result.result?.outcome : undefined;
+      if (outcome === "lanes-full" && item.kind === "session") {
         setReplacing(session);
         return;
       }
+      // The pick moved the keyboard to a tab; handing it back to whatever
+      // opened the palette would undo that a beat later.
+      if (outcome === "focused" || outcome === "resumed") suppressPaletteFocusRestore();
       close();
     },
     [replacing, close]

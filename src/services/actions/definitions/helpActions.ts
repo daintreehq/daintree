@@ -127,8 +127,12 @@ function siblingLaneAgentId(
   return null;
 }
 
-/** Longest a picked resume may hold its lane claim without settling. */
-const LANE_CLAIM_MAX_HOLD_MS = 60_000;
+/**
+ * Backstop for a picked resume's lane claim when its launch never settles —
+ * longer than the controller's own launch watchdog, which reaps a hung launch
+ * first, so the claim never lapses under a launch that is still running.
+ */
+const LANE_CLAIM_MAX_HOLD_MS = 120_000;
 
 /** How the past-session picker's pick went — the picker acts on `lanes-full`. */
 export type HelpPastSessionPickOutcome =
@@ -258,7 +262,14 @@ async function resumeHelpPastSession(args: {
   if (claimedHelpLaneKeys.has(claimKey)) return { outcome: "lanes-full" };
 
   // Lanes of one project share a folder and one agent; main refuses a mix.
-  const sibling = siblingLaneAgentId(state, workspace.id, target.slot, () => true);
+  // Lanes of one project share a folder and one agent, and main refuses a
+  // second agent beside a live one. Only live tabs count: a capture left by a
+  // closed tab is no obstacle, and counting it would block the switch the
+  // message below tells the user to make.
+  const targetSlot = target.slot;
+  const sibling = ASSISTANT_SLOTS.filter((slot) => slot !== targetSlot)
+    .map((slot) => state.sessions[slot])
+    .find((lane) => lane?.terminalId && lane.agentId)?.agentId;
   if (sibling && sibling !== args.agentId) {
     notify({
       type: "warning",
@@ -272,11 +283,32 @@ async function resumeHelpPastSession(args: {
   }
 
   claimedHelpLaneKeys.add(claimKey);
-  // The controller lives in the panel's lazy chunk; HelpPanel is mounted by
-  // now (`ensureHelpPanelRuntime` above), so this resolves from cache.
-  const { acquireHelpSessionController } =
-    await import("@/controllers/helpSessionControllerRegistry");
-  const controller = acquireHelpSessionController(target.slot);
+  let controller: HelpSessionController;
+  try {
+    // The controller lives in the panel's lazy chunk; HelpPanel is normally
+    // mounted by now, so this resolves from cache.
+    const { acquireHelpSessionController } =
+      await import("@/controllers/helpSessionControllerRegistry");
+    controller = acquireHelpSessionController(target.slot);
+  } catch (err) {
+    claimedHelpLaneKeys.delete(claimKey);
+    logError("Failed to load the assistant to resume a past session", err);
+    return { outcome: "unavailable" };
+  }
+  // A tab still starting its own session would drop this launch on its
+  // re-entrancy guard; say so rather than report a resume that never happens.
+  const phase = controller.getSnapshot().phase;
+  if (phase !== "idle" && phase !== "live") {
+    claimedHelpLaneKeys.delete(claimKey);
+    notify({
+      type: "warning",
+      title: "Assistant tab is busy",
+      message: "That tab is still starting a session. Try again once it's ready.",
+      priority: "high",
+      context: { eventKind: "uiFeedback" },
+    });
+    return { outcome: "unavailable" };
+  }
   // Queued before the lane appears: a brand-new lane's first input sync would
   // otherwise auto-launch a blank session into it.
   controller.launchWhenReady({

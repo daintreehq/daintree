@@ -174,6 +174,15 @@ describe("listClaudeHelpSessions", () => {
     expect(await listClaudeHelpSessions(sessionPath, projectsRoot)).toEqual([]);
   });
 
+  it("does not follow a symlinked project folder", async () => {
+    const elsewhere = path.join(root, "elsewhere");
+    await mkdir(elsewhere);
+    await writeFile(path.join(elsewhere, `${A}.jsonl`), transcript(prompt("Foreign")));
+    await rm(slugDir, { recursive: true });
+    await symlink(elsewhere, slugDir);
+    expect(await listClaudeHelpSessions(sessionPath, projectsRoot)).toEqual([]);
+  });
+
   it("returns nothing when the project folder does not exist", async () => {
     expect(await listClaudeHelpSessions(path.join(root, "missing"), projectsRoot)).toEqual([]);
   });
@@ -195,13 +204,15 @@ describe("listClaudeHelpSessions", () => {
 });
 
 describe("codexHelpSessionsFrom", () => {
-  it("prefers the thread name, falls back to the preview, and drops greeting-only threads", () => {
+  it("prefers the thread name, falls back to the preview, and never names a row after the greeting", () => {
     expect(
       codexHelpSessionsFrom({
         status: "ok",
         sessions: [
           { id: "t1", preview: "Question one", name: "Named thread", updatedAt: 3 },
           { id: "t2", preview: "Question two", updatedAt: 2 },
+          // Codex reports only the first message, so a session that opened with
+          // the greeting may have run long after it: kept, but not titled by it.
           { id: "t3", preview: HELP_ASSISTANT_GREETING, updatedAt: 1 },
           { id: "t4", preview: "", updatedAt: 0 },
         ],
@@ -209,6 +220,7 @@ describe("codexHelpSessionsFrom", () => {
     ).toEqual([
       { agentId: "codex", sessionId: "t1", title: "Named thread", updatedAt: 3 },
       { agentId: "codex", sessionId: "t2", title: "Question two", updatedAt: 2 },
+      { agentId: "codex", sessionId: "t3", title: "Untitled conversation", updatedAt: 1 },
     ]);
   });
 
@@ -249,6 +261,20 @@ describe("listHelpPastSessions", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("orders equal times by identity so the list is stable", async () => {
+    const merged = await listHelpPastSessions("/nonexistent/help-sessions/x", {
+      claudeProjectsRoot: "/nonexistent/projects",
+      listCodexSessions: async () => ({
+        status: "ok",
+        sessions: [
+          { id: "b", preview: "B", updatedAt: 5 },
+          { id: "a", preview: "A", updatedAt: 5 },
+        ],
+      }),
+    });
+    expect(merged.map((s) => s.sessionId)).toEqual(["a", "b"]);
   });
 
   it("caps the merged list", async () => {

@@ -790,7 +790,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./help.js").PinnedActionContextSnapshot | null;
   };
   "help:list-past-sessions": {
-    args: [projectId: string, projectPath: string];
+    args: [projectId: string];
     result: import("./help.js").HelpPastSession[];
   };
   "help:list-pending-hibernation-slots": {
