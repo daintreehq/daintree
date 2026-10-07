@@ -992,13 +992,21 @@ describe("PluginDevWorkerHostProxy runtime-surface validation rejects, never thr
       { actionId: "acme.demo.open", label: "Open", extra: () => {} } as never,
     ]);
     await proxy.host.setPanelMenuItems("panel-1", null);
+    // Only own data fields count: a label behind a getter is never run, so it
+    // cannot throw past the Promise or hand the port something else.
+    const label = vi.fn(() => "Lazy");
+    const accessorItem = { actionId: "acme.demo.lazy" };
+    Object.defineProperty(accessorItem, "label", { get: label, enumerable: true });
+    await proxy.host.setPanelMenuItems("panel-2", [accessorItem]);
+    expect(label).toHaveBeenCalledTimes(0);
     expect(
       sent
         .filter((m) => m.type === "host-notify" && m.method === "setPanelMenuItems")
         .map((m) => (m as { params: unknown }).params)
     ).toEqual([
       { panelId: "panel-1", items: [{ actionId: "acme.demo.open", label: "Open" }] },
-      { panelId: "panel-1", items: null },
+      { panelId: "panel-1", items: [] },
+      { panelId: "panel-2", items: [{ actionId: "acme.demo.lazy" }] },
     ]);
   });
 

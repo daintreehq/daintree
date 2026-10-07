@@ -1117,25 +1117,29 @@ function TerminalContextMenuBody({
   const isDiff = isDiffPanel(terminal);
   const kind = terminal.kind ?? "terminal";
   // A PTY-backed plugin panel is a "terminal" whose plugin kind is kept apart
-  // (#13213); its tour, settings and contributed entries are that kind's. Only
-  // while the kind is registered: a plugin disabled or mid-reload leaves a
-  // live terminal, which keeps the terminal's own answers (copy, restart…).
+  // (#13213); its tour, settings and contributed entries are that kind's, while
+  // the kind is registered. What the panel structurally is (a PTY, dockable)
+  // stays the terminal's: the plugin's registration can vanish or change under
+  // a live terminal without taking its copy, restart or dock away.
   const pluginPanelKindId = terminal.pluginPanelKindId;
+  const pluginKindApplies =
+    pluginPanelKindId !== undefined && panelKindRegistry[pluginPanelKindId] !== undefined;
   const kindCapabilities = readPanelKindMenuCapabilities(
     panelKindRegistry,
-    pluginPanelKindId !== undefined && panelKindRegistry[pluginPanelKindId] !== undefined
-      ? pluginPanelKindId
-      : kind,
+    pluginKindApplies ? pluginPanelKindId : kind,
     registeredTourIds,
     registeredPluginActions
   );
+  const structuralCapabilities = pluginKindApplies
+    ? readPanelKindMenuCapabilities(panelKindRegistry, kind)
+    : kindCapabilities;
   const pluginMenuItems = resolvePluginMenuItems(
     kindCapabilities,
     publishedViewMenuItems,
     publishedWorkerMenus,
     registeredPluginActions
   );
-  const hasPty = terminal.kind ? kindCapabilities.hasPty : true;
+  const hasPty = terminal.kind ? structuralCapabilities.hasPty : true;
   // A non-PTY plugin kind matches none of the built-in guards, so without this
   // it falls through to the terminal menu and is offered "Duplicate terminal",
   // "Kill terminal", and friends — none of which apply (#11228). The header's
@@ -1243,7 +1247,7 @@ function TerminalContextMenuBody({
         <ContextMenuItem
           // Move-to-grid is always safe; move-to-dock only for kinds the dock
           // renders (PTY + dockable non-PTY like file panels).
-          disabled={currentLocation === "grid" && !kindCapabilities.isDockable}
+          disabled={currentLocation === "grid" && !structuralCapabilities.isDockable}
           onSelect={() =>
             handleAction(currentLocation === "grid" ? "move-to-dock" : "move-to-grid")
           }
@@ -1514,7 +1518,7 @@ function TerminalContextMenuBody({
           {getGenericPanelMenuGroups({
             location: currentLocation === "grid" ? "grid" : "dock",
             isMaximized,
-            isDockable: kindCapabilities.isDockable,
+            isDockable: structuralCapabilities.isDockable,
             canMoveToWorktree,
             canReload: canReloadPanelKind(kind),
             tourLabel: kindCapabilities.tour?.label,

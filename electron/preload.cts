@@ -962,9 +962,18 @@ function _ensureEventBusWired(): void {
       // No subscriber yet: buffer replayable events so a late-mounting
       // subscriber (e.g. one behind a Suspense boundary) still receives them.
       if (_eventBusReplayable.has(envelope.name)) {
-        const prior = _eventBusFifoReplay.has(envelope.name)
+        let prior = _eventBusFifoReplay.has(envelope.name)
           ? (_eventBusBuffered.get(envelope.name) ?? [])
           : [];
+        // Each runtime-menu event is one plugin's whole map, so only its latest
+        // is worth keeping: a busy plugin during a slow boot replaces rather
+        // than piles up.
+        if (envelope.name === "plugin:panel-menus-changed") {
+          const pluginId = (envelope.payload as { pluginId?: unknown } | null)?.pluginId;
+          prior = prior.filter(
+            (payload) => (payload as { pluginId?: unknown } | null)?.pluginId !== pluginId
+          );
+        }
         prior.push(envelope.payload);
         _eventBusBuffered.set(envelope.name, prior);
       }

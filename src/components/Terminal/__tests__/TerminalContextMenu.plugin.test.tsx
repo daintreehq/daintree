@@ -899,6 +899,24 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
       expect(findRow("Tail logs")).toBeUndefined();
     });
 
+    it("keeps a live PTY plugin panel a terminal when its kind re-registers without a PTY", () => {
+      registerPluginKind(PTY_PLUGIN_KIND, { hasPty: false });
+      act(() => publishRegisteredPluginActions([["acme.tail-logs", "Tail logs"]]));
+      usePluginPanelMenuStore.setState({
+        workerMenusByPanelId: { "panel-1": { acme: [{ actionId: "acme.tail-logs" }] } },
+      });
+      renderMenuFor({
+        id: "panel-1",
+        title: "Acme Shell",
+        kind: "terminal",
+        pluginPanelKindId: PTY_PLUGIN_KIND,
+        worktreeId: "wt-1",
+      });
+
+      expect(screen.getByText("Rename terminal")).toBeTruthy();
+      expect(findRow("Tail logs")).toBeDefined();
+    });
+
     it("adds nothing to a plain terminal's menu", () => {
       act(() => publishRegisteredPluginActions([["acme.tail-logs", "Tail logs"]]));
       usePluginPanelMenuStore.setState({

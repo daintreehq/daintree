@@ -1165,20 +1165,16 @@ export class PluginDevWorkerHostProxy {
             )
           );
         }
-        const result = normalizePanelMenuItems(items, manifestId, pluginId);
+        // Normalized into the authored namespace (instance = manifest), so what
+        // crosses is exactly what was vetted, read once, and main's own
+        // qualification still applies.
+        const result = normalizePanelMenuItems(items, manifestId, manifestId);
         if (!result.ok) {
           return Promise.reject(
             new Error(`Plugin "${this.pluginId}" setPanelMenuItems: invalid items — ${result.error}`)
           );
         }
-        const authored =
-          items === null || items === undefined
-            ? null
-            : items.map((item) => ({
-                actionId: item.actionId,
-                ...(typeof item.label === "string" ? { label: item.label } : {}),
-              }));
-        this.notify("setPanelMenuItems", { panelId, items: authored });
+        this.notify("setPanelMenuItems", { panelId, items: result.items });
         return Promise.resolve();
       },
       showToast: (options: PluginToastOptions) =>
