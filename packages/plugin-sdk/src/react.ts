@@ -52,6 +52,7 @@ export {
 export { useNow, type NowOptions } from "./react/useNow.js";
 export { useActionRunning } from "./react/useActionRunning.js";
 export { usePanelToolbarItem } from "./react/usePanelToolbarItem.js";
+export { usePanelMenuItems } from "./react/usePanelMenuItems.js";
 export {
   useStreamBuffer,
   type StreamBufferOptions,

@@ -1569,6 +1569,17 @@ type AgentState = "idle" | "working" | "waiting" | "directing" | "completed" | "
  */
 type WaitingReason = "prompt" | "question" | "approval" | "error";
 
+/** One entry of a panel's `menu`. */
+interface PanelMenuItemContribution {
+    /**
+     * One of your own actions, in your plugin's namespace (`"{manifestId}.{id}"`),
+     * from `contributes.commands` or `host.registerAction`. The item appears
+     * while that action is registered.
+     */
+    actionId: string;
+    /** Menu label. Defaults to the action's title. */
+    label?: string;
+}
 /**
  * Semantic color for a {@link PluginPanelBadge}. Plugins pick intent, not a raw
  * hex value, so badges stay theme-consistent. `"warning"` and `"error"` map to
@@ -4306,6 +4317,36 @@ interface PluginHostApi extends PluginActivationApi {
      */
     setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
     /**
+     * Publish the contextual actions the ⋯ and right-click menus of one of this
+     * plugin's own panels offer right now — the backend-side twin of the view's
+     * `PanelViewProps.setMenuItems`, and the only way a PTY-backed panel (which
+     * has no view) gets entries of its own. They appear in the plugin's group,
+     * after the manifest's `menu` entries and any the view published; the host's
+     * own entries keep their place and order.
+     *
+     * Each call replaces this plugin's list for that panel; `null` (or `[]`)
+     * clears it. Every `actionId` must be one of your own actions, written
+     * `"{manifestId}.{id}"`; an entry shows while its action is registered and is
+     * dispatched with `{ panelId }`, through the action's own danger tier. At most
+     * five entries; labels default to the action's title and are cut at 80
+     * characters.
+     * Panel ids come from {@link onDidChangePanelLifecycle} or the `{ panelId }`
+     * that `panel.openPluginPanel` returns.
+     *
+     * Entries only ever show on a panel of a kind this plugin contributed. The
+     * list is not persisted: clear it when the panel reports `removed`, and
+     * republish after a restart. Every list this plugin published is dropped when
+     * it unloads.
+     *
+     * Like {@link setPanelBadge} this is NOT revoke-guarded and becomes a silent
+     * no-op once the plugin is unloaded. An empty `panelId` or an invalid list (a
+     * foreign or built-in action, a duplicate, too many entries) rejects. (In a
+     * worker the list is vetted before it crosses the port, so those still
+     * reject; only the host's 256-panel cap is logged there rather than
+     * rejected.)
+     */
+    setPanelMenuItems(panelId: string, items: readonly PanelMenuItemContribution[] | null): Promise<void>;
+    /**
      * Ask the host to discard one of this plugin's own panel views and mount a
      * fresh one (#12610) — the backend-side twin of the view's
      * `PanelViewProps.requestReload`. Use it when the worker has finished work
@@ -4671,6 +4712,14 @@ interface SetPanelBadgeRecord {
     panelId: string;
     badge: PluginPanelBadge | null;
 }
+/**
+ * Captured `host.setPanelMenuItems(panelId, items)` calls, items as the plugin
+ * wrote them. `null` (or `[]`) clears.
+ */
+interface SetPanelMenuItemsRecord {
+    panelId: string;
+    items: readonly PanelMenuItemContribution[] | null;
+}
 /** Captured `host.showQuickPick(items, options)` calls. */
 interface ShowQuickPickRecord {
     items: PluginQuickPickItem[];
@@ -4722,6 +4771,7 @@ interface MockHostState {
     readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
     readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
     readonly setPanelBadgeCalls: ReadonlyArray<SetPanelBadgeRecord>;
+    readonly setPanelMenuItemsCalls: ReadonlyArray<SetPanelMenuItemsRecord>;
     /**
      * Panel ids passed to `host.reloadPanel(panelId)`, in order (#12610). Only
      * calls that got past argument validation are recorded.

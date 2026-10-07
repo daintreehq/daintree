@@ -75,6 +75,8 @@ vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
   // A project plugin's settings writes are announced to its own project only.
   broadcastToProjectRenderers: vi.fn(),
+  // No project views: a project plugin's replay has nowhere to go.
+  getProjectRendererTargets: () => [],
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,
@@ -750,6 +752,38 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     expect((contextMenuItemsCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(
       false
     );
+  });
+
+  it("pushSnapshotTo() replays a global plugin's runtime panel menus, and skips a project plugin's for another view (#13213)", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    const menus = (
+      service as unknown as {
+        pluginPanelMenus: Map<string, Map<string, readonly { actionId: string }[]>>;
+      }
+    ).pluginPanelMenus;
+    menus.set("acme.global", new Map([["panel-a", [{ actionId: "acme.global.open" }]]]));
+    menus.set(
+      "project__other-project__acme.local",
+      new Map([["panel-b", [{ actionId: "project__other-project__acme.local.open" }]]])
+    );
+    const send = vi.fn();
+    const wc = { id: 4242, send, isDestroyed: () => false } as unknown as Electron.WebContents;
+
+    await service.pushSnapshotTo(wc);
+
+    const menuEvents = send.mock.calls
+      .map((c) => c[1] as { name?: string; payload?: unknown })
+      .filter((event) => event.name === "plugin:panel-menus-changed");
+    expect(menuEvents).toEqual([
+      {
+        name: "plugin:panel-menus-changed",
+        payload: {
+          pluginId: "acme.global",
+          menus: { "panel-a": [{ actionId: "acme.global.open" }] },
+        },
+      },
+    ]);
   });
 
   it("pushSnapshotTo() keeps sending remaining channels when one send() throws (TOCTOU)", async () => {

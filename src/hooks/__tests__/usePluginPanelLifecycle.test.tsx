@@ -5,6 +5,7 @@ import type { PluginPanelSnapshotEntry } from "@/services/plugin/pluginPanelLife
 
 interface FakePanel {
   kind?: string;
+  pluginPanelKindId?: string;
   location?: string;
 }
 
@@ -83,6 +84,19 @@ describe("usePluginPanelLifecycle", () => {
     // Liveness must span non-plugin panels too — it is what decides permanent
     // removal, and a built-in panel's presence says the store is populated.
     expect([...(live ?? [])].sort()).toEqual(["p1", "t1"]);
+  });
+
+  it("reports a PTY-backed plugin panel under the kind it was opened as (#13213)", () => {
+    kinds.set("acme.shell", "acme");
+    store.state.panelsById = {
+      s1: { kind: "terminal", pluginPanelKindId: "acme.shell", location: "grid" },
+    };
+
+    renderHook(() => usePluginPanelLifecycle());
+
+    expect(lastCall()[0]).toEqual([
+      { panelId: "s1", kindId: "acme.shell", pluginId: "acme", location: "grid" },
+    ]);
   });
 
   it("re-collects when the panel map changes identity", () => {

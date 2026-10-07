@@ -174,13 +174,13 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 | `name` | yes | Display label in the panel header and palette. |
 | `iconId` | yes | One of the shared plugin icon IDs listed in `shared/config/pluginIconIds.ts`, or a [custom SVG](#custom-icons) inside your plugin (`"./icons/dash.svg"`). An unrecognized ID falls back to the generic terminal glyph on panel surfaces; `daintree-plugin validate` warns about it. |
 | `color` | yes | Any CSS colour, applied raw to the panel's icon on the palette and launcher surfaces — not to the active-tab indicator, which is a fixed accent. The convention for plugin panels is a theme category token, `var(--theme-category-orange)`, so it follows the active theme; every fixture in the repo uses that form. |
-| `hasPty` | no | `false` (default) for a view panel. `true` makes the kind a terminal: it renders through the terminal host, never loads a view, and is refused together with `menu`, `toolbar` or `dockable: false`. Not a way to build plugin UI. |
+| `hasPty` | no | `false` (default) for a view panel. `true` makes the kind a terminal: it renders through the terminal host, never loads a view, and is refused together with `toolbar` or `dockable: false`. Its `menu` entries, and any it publishes at runtime, appear on the terminal's right-click menu. Not a way to build plugin UI. |
 | `canRestart` | no | Show a "restart" control in the panel header. Default `false`. |
 | `canConvert` | no | Allow conversion between compatible panel kinds. Rarely useful for plugins. Default `false`. |
 | `showInPalette` | no | Include in the "New Panel…" palette. Default `true`. |
 | `dockable` | no | Dockable by default. Declare `false` to opt the kind out of the dock. Rejected together with `hasPty: true` (`pty_panel_dock_opt_out_unsupported`) — a plugin PTY kind renders as a terminal, which is always dockable, so the opt-out could never be honoured. |
 | `stateVersion` | no | Integer from 1 to 1,000,000 naming the shape your panel writes through `persistState`. Omit it and the host makes no promises about your saved state; declare it and you get the migration contract below. |
-| `menu` | no | Up to five of your own actions to offer in the panel's ⋯ and right-click menus. See [Panel menu](#panel-menu) below. |
+| `menu` | no | Up to five of your own actions to offer in the panel's ⋯ and right-click menus. See [Panel menu](#panel-menu) below; to change the entries while the panel runs, see [Runtime menu entries](#runtime-menu-entries). |
 | `toolbar` | no | Up to three of your own actions drawn as buttons in the panel header, with live state your view sets. See [Panel toolbar](#panel-toolbar) below. |
 
 **Icon IDs** — one shared set backs every surface that renders a plugin icon (the panel palette, panel headers, tabs, the dock, toolbar buttons, and the toolbar overflow menu), so an ID looks the same everywhere it appears:
@@ -248,12 +248,63 @@ Bump `stateVersion` when the shape changes incompatibly, never for an additive k
 ```
 
 - **Only your own actions.** `actionId` is written in your manifest namespace, `"{manifestId}.{id}"`, and names a `contributes.commands` entry or an action you register with `host.registerAction`. When you declare commands, the id must match one of them (`action_id_undeclared_command`); a built-in action or another plugin's is refused (`panel_menu_action_not_own`). A project plugin writes its manifest id too; the host moves the id into the instance's namespace for you.
-- **At most five**, each action once (`panel_menu_duplicate_action`). A `hasPty: true` panel renders as a terminal with the terminal's menus, so a `menu` on one is refused (`pty_panel_menu_unsupported`).
+- **At most five**, each action once (`panel_menu_duplicate_action`).
+- **On a PTY-backed panel.** A `hasPty: true` panel renders as a terminal and keeps the terminal's right-click menu. Your entries appear on it after View terminal info, above your plugin's tour and settings. The terminal header's ⋯ menu does not show them. A PTY panel restored after a restart is an ordinary terminal and shows none of them.
 - **Where they appear.** In their own group, directly above the host's entries for your plugin (below), in the order you declared them, each with the same generic plugin glyph — the entry names no icon.
 - **When they appear.** An entry shows only while its action is registered, so an action you register late in `activate()`, or withdraw, comes and goes with it.
 - **Label.** `label` is the menu text, 1–80 characters after trimming. Leave it out to use the action's `title`. End it with `…` when the action asks for more before it acts, as the host's own entries do.
 - **Arguments.** The action is dispatched with `{ panelId }`, the id of the panel whose menu was used, the same `panelId` your view receives in `PanelViewProps`. If the action declares an `inputSchema`, it has to accept that property, or the dispatch fails validation. From the right-click menu, focus moves into that panel before the action runs, so a dialog it opens hands focus back there.
 - **Danger.** The action's own danger tier applies: a `"confirm"` action asks first, as it does from the palette.
+
+### Runtime menu entries
+
+`menu` is fixed when the plugin loads. To offer entries that follow what the panel is showing (a selected row, an open record, a mode), publish them while the panel runs. A published list holds entries of the same shape, `{ actionId, label? }`, and they appear in the same group, after the manifest's `menu` entries.
+
+There are two publishers, and both may be used at once:
+
+- **The view** calls `setMenuItems(items)` from `PanelViewProps`, or uses the `usePanelMenuItems(props, items)` hook from `@daintreehq/plugin-sdk/react`, which republishes only when an entry changes.
+- **The backend** calls [`host.setPanelMenuItems(panelId, items)`](./host-api.md#setpanelmenuitems). This is the only publisher a PTY-backed panel has, because it has no view.
+
+```tsx
+import { usePanelMenuItems } from "@daintreehq/plugin-sdk/react";
+
+export default function LedgerView(props: PanelViewProps) {
+  const selected = useSelectedRow();
+  usePanelMenuItems(
+    props,
+    selected
+      ? [
+          { actionId: "acme.ledger.open-row", label: `Open ${selected.name}` },
+          { actionId: "acme.ledger.delete-row" },
+        ]
+      : []
+  );
+  // …
+}
+```
+
+```ts
+// In the worker, for a PTY-backed panel it opened.
+const opened = await host.dispatch("panel.openPluginPanel", { kind: host.panelKindId("server") });
+if (opened.ok) {
+  const { panelId } = opened.result as { panelId: string };
+  await host.setPanelMenuItems(panelId, [
+    { actionId: "acme.devserver.restart", label: "Restart server" },
+  ]);
+}
+```
+
+The rules match `menu` where they can:
+
+- **Only your own actions**, written `"{manifestId}.{id}"`: a built-in action, another plugin's action, or a malformed id refuses the whole list. A project plugin writes its manifest id, and the host moves it into the instance's namespace.
+- **At most five per publisher**, each action once. Labels are trimmed and cut at 80 characters. Leave a label out to use the action's `title`.
+- **Order and duplicates.** The group lists the manifest's `menu` entries, then the view's list, then the backend's. An action already listed earlier in the group is not repeated.
+- **When an entry appears.** It shows only while its action is registered, and only on a panel of a kind your plugin contributed. A list published for another plugin's panel is never drawn.
+- **Replacing and clearing.** Each call replaces that publisher's whole list, and `null` or `[]` clears it. A menu that is open when you republish shows the new list straight away. Avoid republishing on every render while the user may be reading the menu.
+- **Dispatch.** An entry dispatches its action with `{ panelId }`, through the action's own danger tier, exactly like a `menu` entry.
+- **Lifetime.** The view's list belongs to the panel. It survives the view unmounting and remounting, and is cleared when the panel closes or is trashed, or the view reloads or crashes. The setter belongs to its attempt, like `setToolbarItemState`. The backend's list lasts until you clear it or the plugin unloads, and a restored window gets it back. Clear it when [`onDidChangePanelLifecycle`](./host-api.md#ondidchangepanellifecycle) reports the panel `removed`. Neither list is persisted across a restart.
+
+The host's own entries never move: a published list cannot remove, reorder or rename any of them.
 
 ### Panel toolbar
 
@@ -324,7 +375,7 @@ Every panel of a plugin carries some entries you never declare. The ⋯ menu and
 
 1. Layout: Move to worktree… where there is one to move to, Move to dock (or Move to grid from the dock), Maximize or Restore.
 2. Rename panel and **Reload panel** — a fresh view attempt, the same one `requestReload` asks for; see [Views → Reloading a view](./views.md#reloading-a-view).
-3. Your `menu` entries.
+3. Your `menu` entries, then the [runtime entries](#runtime-menu-entries) your view and backend publish.
 4. Your plugin's own entries, in this order, each only when it applies:
    - **<Panel name> Welcome Tour** — once a tour whose `panelKind` names this panel is registered (see [Tours](#tours--shipped-installed-plugins)).
    - **Back up data…** — when the plugin declares any [database](#databases--shipped).
@@ -440,6 +491,7 @@ export default function Dashboard(props) {
 | `persistState` | `(patch: Record<string, unknown>) => boolean` \| `undefined` | Writes view state back onto the panel record, so the next mount sees it in `initialArgs`. The two are one bag: spawn seeds it, this updates it, `initialArgs` reads it back — which is what lets a view survive the teardowns a panel routinely outlives (maximizing a sibling pane, leaving a dock tab, a project view reclaimed under memory pressure, a restart) without forgetting where the user was. The patch is **merged**, so independent parts of a view can each persist their own key; a key set to `undefined` is removed. An unchanged write is free — it neither churns the store nor schedules a save — so calling it from a render-derived effect is fine. Keep it small: the host refuses an update whose serialized form exceeds 64KB, and anything larger, not JSON round-trippable, or that should outlive the panel belongs in `host.storage`. Returns `true` when the stored state now matches what you asked for (applied, or already identical) and `false` when the host rejected the write — the merged bag would exceed 64KB, or it is not JSON-serializable (a cyclic value, a `BigInt`, a throwing `toJSON`). `true` means accepted and scheduled, not flushed: the layout save is debounced. |
 | `requestReload` | `() => void` \| `undefined` | Ask the host to discard this view attempt and mount a fresh one for the same panel, without restarting the backend. The current `disposeSignal` aborts and React cleanup runs; the next attempt gets a new `disposeSignal` and the latest accepted `persistState` bag as `initialArgs`, while `panelId`, `panelRemovedSignal` and the backend carry over. The module is reused, so module globals, document-wide registrations and anything on `window` survive — a reload frees only what your cleanup releases, and cannot rescue a blocked renderer. A request, not a command: the host may refuse it, reports no completion, and merges calls in the same tick. A callback held past its own attempt does nothing. A fourth reload within 30 seconds of three accepted ones stops the view until the user reloads the panel. Absent on project surfaces and settings views. See [Views → Reloading a view](./views.md#reloading-a-view). |
 | `setHasUnsavedChanges` | `(hasUnsavedChanges: boolean) => void` \| `undefined` | Tell the host whether the view holds work a reload would lose. The user and agents can reload a plugin panel without being asked, since persisted state comes back; while this is `true`, they are asked to confirm first. Your own `requestReload` is never held up by it. The setter belongs to its attempt, so one held past its teardown does nothing, and a new attempt starts with nothing unsaved. Absent where the host offers no reload. See [Views → Reloading a view](./views.md#reloading-a-view). |
+| `setMenuItems` | `(items: readonly { actionId: string; label?: string }[] \| null) => void` \| `undefined` | Publishes the contextual actions the panel's ⋯ and right-click menus offer right now, after the manifest's `menu` entries. Each call replaces the list; `null` or `[]` clears it. The list survives the view remounting and is cleared when the panel closes or the view reloads. Belongs to its attempt. Absent on project surfaces, settings views and a panel shown as a dialog. See [Runtime menu entries](#runtime-menu-entries). |
 | `setToolbarItemState` | `(actionId: string, state: PluginPanelToolbarItemState \| null) => void` \| `undefined` | Set the live state of one of the panel's manifest `toolbar` buttons: busy, disabled, a status line, an "Updated" age and its tone. Each call replaces that button's state; `null` resets it. State survives the view remounting and is cleared when the panel closes or the view reloads. Belongs to its attempt, like `setHasUnsavedChanges`. Absent on project surfaces, settings views and a panel shown as a dialog. See [Panel toolbar](#panel-toolbar). |
 | `runningActions` | `readonly string[]` \| `undefined` | Your actions whose handlers are running now, by `actionId` as the manifest writes it, however they were dispatched (palette, menu, panel toolbar, keybinding, agent). A new array when the set changes, so the view re-renders as a run starts and ends, and a view mounting mid-run sees it at once. Read one action with `useActionRunning(props, actionId)` from `@daintreehq/plugin-sdk/react`. |
 | `styleRootAttributes` | `Readonly<Record<string, string>>` | Spread onto any container you render through `createPortal`, so the runtime-compiled Tailwind classes inside it still apply. See [Views → Styling](./views.md#styling). |
@@ -699,7 +751,7 @@ An identifier that names no key evaluates false, so `"worktree.hasBranch"` hides
 
 **Locations:** `worktree`, `terminal`, `file`. More may be added. The `file` location is mounted on every file row Daintree renders — the Review Hub's changed-file rows, the worktree card's changed-files list, the file browser's tree and folder listing, and the diff viewer's file sidebar: a contributed `file` item appears in the right-click menu of a file row on all four surfaces, and its action is dispatched with `{ path, worktreePath, status }` for the clicked file (so your handler receives the file, not `undefined`) — `path` is always absolute, while `worktreePath` and `status` are each omitted when the row has no worktree root or no git status, so an unchanged file in the file browser arrives as `{ path }` alone. Every file row carries the menu whether or not a plugin contributes to it: your items are appended below Daintree's own file actions, so a single `file` contribution reaches all four surfaces without any per-surface work.
 
-Context menus follow the same `actionId` dispatch pattern as menu items; only a `file`-location item receives the clicked subject as dispatch args. Two built-in actions pair well here: `file.openDiff` opens the side-by-side diff for the dispatched `{ path, worktreePath, status }`, and `panel.openPluginPanel` spawns (or focuses) one of your plugin panels, passing `initialArgs` straight through to the view's `initialArgs` prop — so a context-menu item can open your panel scoped to the file the user clicked.
+Context menus follow the same `actionId` dispatch pattern as menu items; only a `file`-location item receives the clicked subject as dispatch args. A `terminal`-location item is dispatched with no arguments and appears on every terminal. To put entries on your own panels, including a PTY-backed one, that know which panel was right-clicked, use the panel's `menu` or [runtime menu entries](#runtime-menu-entries) instead: those are dispatched with `{ panelId }`. Two built-in actions pair well here: `file.openDiff` opens the side-by-side diff for the dispatched `{ path, worktreePath, status }`, and `panel.openPluginPanel` spawns (or focuses) one of your plugin panels, passing `initialArgs` straight through to the view's `initialArgs` prop — so a context-menu item can open your panel scoped to the file the user clicked.
 
 ## MCP servers — _Shipped_
 

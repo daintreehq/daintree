@@ -2329,6 +2329,20 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onPanelBadgesCleared(callback: (payload: { pluginId: string }) => void): () => void;
     /**
+     * Subscribe to plugin runtime panel menus (#13213). The callback fires with
+     * one plugin's COMPLETE current map (`panelId → items`); an empty map clears
+     * that plugin's lists, as on unload. Returns a cleanup.
+     */
+    onPanelMenusChanged(
+      callback: (payload: {
+        pluginId: string;
+        menus: Record<
+          string,
+          readonly import("../../utils/pluginPanelMenuItems.js").PublishedPanelMenuItem[]
+        >;
+      }) => void
+    ): () => void;
+    /**
      * Subscribe to a plugin's running actions: the callback fires with its
      * COMPLETE set of action ids whose handlers are in flight, however they were
      * dispatched; an empty list means none. Returns a cleanup.

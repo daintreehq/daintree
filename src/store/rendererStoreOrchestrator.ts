@@ -16,6 +16,7 @@ import { useResourceMonitoringStore } from "./resourceMonitoringStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { usePluginPanelBadgeStore } from "./pluginPanelBadgeStore";
 import { usePluginPanelToolbarStore } from "./pluginPanelToolbarStore";
+import { usePluginPanelMenuStore } from "./pluginPanelMenuStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
@@ -403,6 +404,7 @@ export function initStoreOrchestrator(): () => void {
             usePluginPanelBadgeStore.getState().removePanel(removedId);
             // Header button states are keyed the same way and leak the same way.
             usePluginPanelToolbarStore.getState().clearPanel(removedId);
+            usePluginPanelMenuStore.getState().removePanel(removedId);
             useVoiceRecordingStore.getState().clearPanelBuffer(removedId);
             // Drop the dictation lock if it was pinned to this panel — panelIds
             // are ephemeral and a stale lock would silently break routing.
@@ -509,6 +511,9 @@ export function initStoreOrchestrator(): () => void {
               // id survives in the trash: an undone close must not bring back a
               // spinner for a refresh the old view started.
               usePluginPanelToolbarStore.getState().clearPanel(id);
+              // The view's menu goes with it; the backend's list is the
+              // backend's, and comes back with a restored panel.
+              usePluginPanelMenuStore.getState().setViewItems(id, []);
               // Drop an inactive worktree's stashed maximize when its panel is
               // trashed (#11183). `trashPanel` doesn't shrink `panelIds`, so the
               // removal subscriber above never fires for this — the same

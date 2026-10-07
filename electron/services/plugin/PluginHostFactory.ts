@@ -102,6 +102,11 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import { PluginPanelBadgeSchema, PluginToastOptionsSchema } from "../../schemas/plugin.js";
+import {
+  normalizePanelMenuItems,
+  samePanelMenuItems,
+  type PublishedPanelMenuItem,
+} from "../../../shared/utils/pluginPanelMenuItems.js";
 import { makeForgeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import {
   toPluginWorktreeSnapshot,
@@ -196,6 +201,13 @@ import type {
  * scope-wide invalidation (no `paths`) is the correct fallback anyway.
  */
 const MAX_FILE_DECORATION_PATHS = 1000;
+
+/**
+ * Most panels one plugin may hold a runtime menu on at once. Main keeps the
+ * lists for replay and cannot tell a closed panel from one moving between
+ * windows, so a plugin that never clears is bounded rather than trusted.
+ */
+const PLUGIN_PANEL_MENUS_MAX_PANELS = 256;
 /**
  * Ceiling for a `host.fs.watch` `debounceMs`. Node clamps any timer delay past
  * 2^31-1 ms to 1 ms, so an unbounded value would turn "almost never" into
@@ -493,6 +505,8 @@ export interface PluginHostFactoryDeps {
   pluginActionOwners: Map<string, Set<string>>;
   actionValidators: Map<string, ValidateFn>;
   pluginBadges: Map<string, Map<string, PluginPanelBadge>>;
+  /** Runtime panel menus set via `host.setPanelMenuItems`, `pluginId → panelId → items`. */
+  pluginPanelMenus: Map<string, Map<string, readonly PublishedPanelMenuItem[]>>;
   pluginFsWatchers: Map<string, Set<() => void>>;
   broadcaster: PluginContributionBroadcaster;
   panelLifecycleBroker: PluginPanelLifecycleBroker;
@@ -542,6 +556,9 @@ export interface PluginHostFactoryDeps {
     fields?: Record<string, unknown>
   ) => void;
   serializePluginBadges: (pluginId: string) => Record<string, PluginPanelBadge>;
+  serializePluginPanelMenus: (
+    pluginId: string
+  ) => Record<string, readonly PublishedPanelMenuItem[]>;
   /** User-facing name for a plugin id, for surfaces that name a plugin to a person. */
   pluginDisplayName: (pluginId: string) => string;
   pluginDataDir: (pluginId: string) => string;
@@ -2094,6 +2111,54 @@ export function createHost(
       pushToRenderers(CHANNELS.EVENTS_PUSH, {
         name: "plugin:panel-badges-changed",
         payload: { pluginId, badges: deps.serializePluginBadges(pluginId) },
+      });
+      return Promise.resolve();
+    },
+    // NOT revoke-guarded, like setPanelBadge: a plugin republishes its menu
+    // from lifecycle callbacks and its own state changes (#13213). Ownership is
+    // not checked against the panel here — `panel.openPluginPanel` hands back an
+    // id before the renderer has reported it — so the renderer shows a list
+    // only on a panel whose kind this plugin contributed.
+    setPanelMenuItems: (panelId, items) => {
+      if (!deps.plugins.has(pluginId)) return Promise.resolve();
+      if (typeof panelId !== "string" || panelId.length === 0) {
+        // Reject (not sync throw): runtime-surface Promise method (#10617).
+        return Promise.reject(
+          new Error(`Plugin "${pluginId}" setPanelMenuItems: panelId must be a non-empty string`)
+        );
+      }
+      const result = normalizePanelMenuItems(items, manifestId, pluginId);
+      if (!result.ok) {
+        return Promise.reject(
+          new Error(`Plugin "${pluginId}" setPanelMenuItems: invalid items — ${result.error}`)
+        );
+      }
+      let panelMap = deps.pluginPanelMenus.get(pluginId);
+      const previous = panelMap?.get(panelId);
+      if (result.items.length === 0) {
+        if (!panelMap || previous === undefined) return Promise.resolve();
+        panelMap.delete(panelId);
+        if (panelMap.size === 0) deps.pluginPanelMenus.delete(pluginId);
+      } else {
+        if (previous !== undefined && samePanelMenuItems(previous, result.items)) {
+          return Promise.resolve();
+        }
+        if (previous === undefined && (panelMap?.size ?? 0) >= PLUGIN_PANEL_MENUS_MAX_PANELS) {
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" setPanelMenuItems: menus are already published on ${PLUGIN_PANEL_MENUS_MAX_PANELS} panels — clear a closed panel's with null`
+            )
+          );
+        }
+        if (!panelMap) {
+          panelMap = new Map();
+          deps.pluginPanelMenus.set(pluginId, panelMap);
+        }
+        panelMap.set(panelId, result.items);
+      }
+      pushToRenderers(CHANNELS.EVENTS_PUSH, {
+        name: "plugin:panel-menus-changed",
+        payload: { pluginId, menus: deps.serializePluginPanelMenus(pluginId) },
       });
       return Promise.resolve();
     },

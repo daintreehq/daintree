@@ -1134,3 +1134,66 @@ describe("setToolbarItemState", () => {
     expect(stateOf()).toBeUndefined();
   });
 });
+
+describe("setMenuItems (#13213)", () => {
+  const OPEN = { actionId: "acme.open-row", label: "Open row" };
+
+  async function mountWithMenu(props: Partial<PluginViewContentProps> = {}) {
+    const mounted = await mountContent({ offerToolbar: true, ...props });
+    const { usePluginPanelMenuStore } = await import("@/store/pluginPanelMenuStore");
+    usePluginPanelMenuStore.setState({ viewMenusByPanelId: {}, workerMenusByPanelId: {} });
+    const listOf = () => usePluginPanelMenuStore.getState().viewMenusByPanelId["panel-1"];
+    return { ...mounted, listOf };
+  }
+
+  it("is withheld where the host draws no panel menus", async () => {
+    await mountContent();
+    expect(latest().setMenuItems).toBeUndefined();
+  });
+
+  it("publishes the plugin's own actions and keeps them through an unmount", async () => {
+    const { listOf, unmount } = await mountWithMenu();
+    act(() => latest().setMenuItems?.([OPEN]));
+    expect(listOf()).toEqual([OPEN]);
+
+    unmount();
+    await act(async () => {});
+    expect(listOf()).toEqual([OPEN]);
+  });
+
+  it("ignores an invalid list whole and keeps the last good one", async () => {
+    const { listOf } = await mountWithMenu();
+    act(() => latest().setMenuItems?.([OPEN]));
+    act(() => latest().setMenuItems?.([OPEN, { actionId: "terminal.kill" }]));
+    expect(listOf()).toEqual([OPEN]);
+
+    act(() => latest().setMenuItems?.(null));
+    expect(listOf()).toBeUndefined();
+  });
+
+  it("clears on a reload and ignores the old attempt's setter", async () => {
+    const { listOf } = await mountWithMenu();
+    const stale = latest();
+    act(() => stale.setMenuItems?.([OPEN]));
+
+    await requestReload();
+    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
+    expect(listOf()).toBeUndefined();
+
+    act(() => stale.setMenuItems?.([OPEN]));
+    expect(listOf()).toBeUndefined();
+    act(() => latest().setMenuItems?.([{ actionId: "acme.export" }]));
+    expect(listOf()).toEqual([{ actionId: "acme.export" }]);
+  });
+
+  it("clears when the view crashes", async () => {
+    const { listOf } = await mountWithMenu();
+    act(() => latest().setMenuItems?.([OPEN]));
+
+    await act(async () => {
+      boundaryCallbacks.onError?.(new Error("view threw"));
+    });
+
+    expect(listOf()).toBeUndefined();
+  });
+});

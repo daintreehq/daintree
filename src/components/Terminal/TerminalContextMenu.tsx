@@ -98,6 +98,7 @@ import {
   MicOff,
   Minimize2,
   OctagonX,
+  Puzzle,
   PanelBottomClose,
   PanelTopClose,
   Pencil,
@@ -143,13 +144,16 @@ import {
   hasGenericPanelMenu,
   isPluginMenuCommandId,
   pluginMenuCommandActionId,
+  pluginMenuCommandId,
   readPanelKindMenuCapabilities,
+  resolvePluginMenuItems,
 } from "@/components/Panel/genericPanelMenu";
 import {
   getRegisteredPluginActionsSnapshot,
   subscribeToRegisteredPluginActions,
 } from "@/services/plugin/registeredPluginActions";
 import { copyWithToast } from "@/lib/copyWithToast";
+import { usePanelViewMenuItems, usePanelWorkerMenus } from "@/store/pluginPanelMenuStore";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
@@ -311,6 +315,10 @@ function TerminalContextMenuBody({
   // the time; only the live menu lists worktrees, so a git-status pass on any
   // worktree doesn't re-render every closed menu.
   const worktrees = useSidebarWorktreeOrder({ enabled: isMenuLive });
+  // What the panel's plugin published for its menus (#13213), read only while
+  // the menu is live for the same reason.
+  const publishedViewMenuItems = usePanelViewMenuItems(terminalId, isMenuLive);
+  const publishedWorkerMenus = usePanelWorkerMenus(terminalId, isMenuLive);
   // Subscribed so a plugin registering or dropping its kind reaches the menu;
   // the generic panel menu reads its capabilities from this snapshot.
   const panelKindRegistry = useSyncExternalStore(
@@ -945,7 +953,7 @@ function TerminalContextMenuBody({
         case "tour": {
           const tour = readPanelKindMenuCapabilities(
             panelKindRegistry,
-            terminal.kind ?? "terminal",
+            terminal.pluginPanelKindId ?? terminal.kind ?? "terminal",
             registeredTourIds
           ).tour;
           if (!tour) break;
@@ -959,7 +967,7 @@ function TerminalContextMenuBody({
         case "plugin-settings": {
           const pluginId = readPanelKindMenuCapabilities(
             panelKindRegistry,
-            terminal.kind ?? "terminal",
+            terminal.pluginPanelKindId ?? terminal.kind ?? "terminal",
             registeredTourIds
           ).pluginSettingsId;
           if (!pluginId) break;
@@ -975,7 +983,7 @@ function TerminalContextMenuBody({
         case "plugin-backup": {
           const pluginId = readPanelKindMenuCapabilities(
             panelKindRegistry,
-            terminal.kind ?? "terminal",
+            terminal.pluginPanelKindId ?? terminal.kind ?? "terminal",
             registeredTourIds
           ).pluginBackupId;
           if (!pluginId) break;
@@ -1108,13 +1116,30 @@ function TerminalContextMenuBody({
   const isFileBrowser = isFileBrowserPanel(terminal);
   const isDiff = isDiffPanel(terminal);
   const kind = terminal.kind ?? "terminal";
+  // A PTY-backed plugin panel is a "terminal" whose plugin kind is kept apart
+  // (#13213); its tour, settings and contributed entries are that kind's, while
+  // the kind is registered. What the panel structurally is (a PTY, dockable)
+  // stays the terminal's: the plugin's registration can vanish or change under
+  // a live terminal without taking its copy, restart or dock away.
+  const pluginPanelKindId = terminal.pluginPanelKindId;
+  const pluginKindApplies =
+    pluginPanelKindId !== undefined && panelKindRegistry[pluginPanelKindId] !== undefined;
   const kindCapabilities = readPanelKindMenuCapabilities(
     panelKindRegistry,
-    kind,
+    pluginKindApplies ? pluginPanelKindId : kind,
     registeredTourIds,
     registeredPluginActions
   );
-  const hasPty = terminal.kind ? kindCapabilities.hasPty : true;
+  const structuralCapabilities = pluginKindApplies
+    ? readPanelKindMenuCapabilities(panelKindRegistry, kind)
+    : kindCapabilities;
+  const pluginMenuItems = resolvePluginMenuItems(
+    kindCapabilities,
+    publishedViewMenuItems,
+    publishedWorkerMenus,
+    registeredPluginActions
+  );
+  const hasPty = terminal.kind ? structuralCapabilities.hasPty : true;
   // A non-PTY plugin kind matches none of the built-in guards, so without this
   // it falls through to the terminal menu and is offered "Duplicate terminal",
   // "Kill terminal", and friends — none of which apply (#11228). The header's
@@ -1222,7 +1247,7 @@ function TerminalContextMenuBody({
         <ContextMenuItem
           // Move-to-grid is always safe; move-to-dock only for kinds the dock
           // renders (PTY + dockable non-PTY like file panels).
-          disabled={currentLocation === "grid" && !kindCapabilities.isDockable}
+          disabled={currentLocation === "grid" && !structuralCapabilities.isDockable}
           onSelect={() =>
             handleAction(currentLocation === "grid" ? "move-to-dock" : "move-to-grid")
           }
@@ -1493,13 +1518,13 @@ function TerminalContextMenuBody({
           {getGenericPanelMenuGroups({
             location: currentLocation === "grid" ? "grid" : "dock",
             isMaximized,
-            isDockable: kindCapabilities.isDockable,
+            isDockable: structuralCapabilities.isDockable,
             canMoveToWorktree,
             canReload: canReloadPanelKind(kind),
             tourLabel: kindCapabilities.tour?.label,
             hasPluginSettings: kindCapabilities.pluginSettingsId !== null,
             hasPluginDatabases: kindCapabilities.pluginBackupId !== null,
-            pluginMenuItems: kindCapabilities.pluginMenuItems,
+            pluginMenuItems,
           }).map((group, groupIndex) => (
             <Fragment key={group[0]?.id ?? groupIndex}>
               {groupIndex > 0 && <ContextMenuSeparator />}
@@ -1806,6 +1831,17 @@ function TerminalContextMenuBody({
             <Info className={ICON_CLASS} aria-hidden="true" />
             View terminal info
           </ContextMenuItem>
+          {/* A PTY-backed plugin kind's own entries, above its tour and
+              settings as on the generic list (#13213). */}
+          {pluginMenuItems.map((item) => (
+            <ContextMenuItem
+              key={item.actionId}
+              onSelect={() => handleAction(pluginMenuCommandId(item.actionId))}
+            >
+              <Puzzle className={ICON_CLASS} aria-hidden="true" />
+              {item.label}
+            </ContextMenuItem>
+          ))}
           {tourMenuItem}
           {pluginOwnedMenuItems}
           {!isBackgrounded && (

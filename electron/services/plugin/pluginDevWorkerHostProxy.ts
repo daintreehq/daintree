@@ -69,6 +69,7 @@ import type {
   PluginActionManifestEntry,
 } from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { normalizePanelMenuItems } from "../../../shared/utils/pluginPanelMenuItems.js";
 import {
   normalizePluginAllAgentsSnapshot,
   UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT,
@@ -1149,6 +1150,33 @@ export class PluginDevWorkerHostProxy {
           );
         }
         this.notify("setPanelBadge", { panelId, badge: badge ?? null });
+        return Promise.resolve();
+      },
+      // Vetted here with the host's own rules, so an authoring mistake rejects
+      // back to the caller rather than only being logged in main, then sent as
+      // a plain copy that always survives the port. Main vets it again and
+      // owns the per-plugin panel cap.
+      setPanelMenuItems: (panelId, items) => {
+        if (typeof panelId !== "string" || panelId.length === 0) {
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(
+            new Error(
+              `Plugin "${this.pluginId}" setPanelMenuItems: panelId must be a non-empty string`
+            )
+          );
+        }
+        // Normalized into the authored namespace (instance = manifest), so what
+        // crosses is exactly what was vetted, read once, and main's own
+        // qualification still applies.
+        const result = normalizePanelMenuItems(items, manifestId, manifestId);
+        if (!result.ok) {
+          return Promise.reject(
+            new Error(
+              `Plugin "${this.pluginId}" setPanelMenuItems: invalid items — ${result.error}`
+            )
+          );
+        }
+        this.notify("setPanelMenuItems", { panelId, items: result.items });
         return Promise.resolve();
       },
       showToast: (options: PluginToastOptions) =>
