@@ -869,6 +869,7 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
       const labels = menuRows().map((row) => (row === "---" ? row : row.label));
       expect(labels).toContain("Rename terminal");
       const info = labels.indexOf("View terminal info");
+      expect(info).toBeGreaterThan(-1);
       expect(labels.slice(info + 1, info + 3)).toEqual(["Restart server", "Tail logs"]);
 
       findRow("Tail logs")!.click();
@@ -878,6 +879,24 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
         { panelId: "panel-1" },
         expect.anything()
       );
+    });
+
+    it("keeps a PTY plugin panel a full terminal while its plugin kind is unregistered", () => {
+      act(() => publishRegisteredPluginActions([["acme.tail-logs", "Tail logs"]]));
+      usePluginPanelMenuStore.setState({
+        workerMenusByPanelId: { "panel-1": { acme: [{ actionId: "acme.tail-logs" }] } },
+      });
+      renderMenuFor({
+        id: "panel-1",
+        title: "Acme Shell",
+        kind: "terminal",
+        pluginPanelKindId: PTY_PLUGIN_KIND,
+        worktreeId: "wt-1",
+      });
+
+      expect(screen.getByText("Rename terminal")).toBeTruthy();
+      expect(screen.queryByText("Rename panel")).toBeNull();
+      expect(findRow("Tail logs")).toBeUndefined();
     });
 
     it("adds nothing to a plain terminal's menu", () => {

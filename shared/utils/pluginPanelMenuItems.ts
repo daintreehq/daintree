@@ -13,6 +13,11 @@ export type PanelMenuItemsResult =
   | { ok: true; items: readonly PublishedPanelMenuItem[] }
   | { ok: false; error: string };
 
+/** A refused value, named without anything that can throw on plugin-supplied data. */
+function describe(value: unknown): string {
+  return typeof value === "string" ? `"${value.slice(0, 200)}"` : `of type ${typeof value}`;
+}
+
 function readField(value: object, key: string): unknown {
   return Object.getOwnPropertyDescriptor(value, key)?.value;
 }
@@ -55,7 +60,7 @@ export function normalizePanelMenuItems(
     ) {
       return {
         ok: false,
-        error: `entry ${index} actionId ${JSON.stringify(actionId)} must be one of this plugin's own actions, written "${manifestId}.<id>"`,
+        error: `entry ${index} actionId ${describe(actionId)} must be one of this plugin's own actions, written "${manifestId}.<id>"`,
       };
     }
     if (seen.has(actionId)) {

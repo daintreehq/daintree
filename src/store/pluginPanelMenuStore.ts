@@ -26,7 +26,6 @@ interface PluginPanelMenuState {
 
 let initialized = false;
 let unsubscribeChanged: (() => void) | null = null;
-let unsubscribeCleared: (() => void) | null = null;
 
 /**
  * Replace one plugin's whole set of backend lists. Panels the plugin touches
@@ -81,19 +80,10 @@ export const usePluginPanelMenuStore = create<PluginPanelMenuState>((set, get) =
     if (initialized) return;
     // Tolerate a partially-stubbed bridge, and stay retryable until it exists.
     const plugin = window.electron?.plugin;
-    if (
-      typeof plugin?.onPanelMenusChanged !== "function" ||
-      typeof plugin.onPanelMenusCleared !== "function"
-    ) {
-      return;
-    }
+    if (typeof plugin?.onPanelMenusChanged !== "function") return;
     initialized = true;
     unsubscribeChanged = plugin.onPanelMenusChanged(({ pluginId, menus }) => {
       const workerMenusByPanelId = applyPluginMenus(get().workerMenusByPanelId, pluginId, menus);
-      if (workerMenusByPanelId !== get().workerMenusByPanelId) set({ workerMenusByPanelId });
-    });
-    unsubscribeCleared = plugin.onPanelMenusCleared(({ pluginId }) => {
-      const workerMenusByPanelId = applyPluginMenus(get().workerMenusByPanelId, pluginId, {});
       if (workerMenusByPanelId !== get().workerMenusByPanelId) set({ workerMenusByPanelId });
     });
   },
@@ -165,9 +155,7 @@ export function usePanelWorkerMenus(
 /** Test-only: reset the module-level init guard and state between cases. */
 export function _resetPluginPanelMenuStoreForTest(): void {
   unsubscribeChanged?.();
-  unsubscribeCleared?.();
   unsubscribeChanged = null;
-  unsubscribeCleared = null;
   initialized = false;
   usePluginPanelMenuStore.setState({ workerMenusByPanelId: {}, viewMenusByPanelId: {} });
 }

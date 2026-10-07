@@ -69,6 +69,7 @@ import type {
   PluginActionManifestEntry,
 } from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { normalizePanelMenuItems } from "../../../shared/utils/pluginPanelMenuItems.js";
 import {
   normalizePluginAllAgentsSnapshot,
   UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT,
@@ -1151,7 +1152,10 @@ export class PluginDevWorkerHostProxy {
         this.notify("setPanelBadge", { panelId, badge: badge ?? null });
         return Promise.resolve();
       },
-      // Fire-and-forget like setPanelBadge; the real host vets the list.
+      // Vetted here with the host's own rules, so an authoring mistake rejects
+      // back to the caller rather than only being logged in main, then sent as
+      // a plain copy that always survives the port. Main vets it again and
+      // owns the per-plugin panel cap.
       setPanelMenuItems: (panelId, items) => {
         if (typeof panelId !== "string" || panelId.length === 0) {
           // Reject (not sync throw): runtime-surface Promise method (#10617).
@@ -1161,7 +1165,20 @@ export class PluginDevWorkerHostProxy {
             )
           );
         }
-        this.notify("setPanelMenuItems", { panelId, items: items ?? null });
+        const result = normalizePanelMenuItems(items, manifestId, pluginId);
+        if (!result.ok) {
+          return Promise.reject(
+            new Error(`Plugin "${this.pluginId}" setPanelMenuItems: invalid items — ${result.error}`)
+          );
+        }
+        const authored =
+          items === null || items === undefined
+            ? null
+            : items.map((item) => ({
+                actionId: item.actionId,
+                ...(typeof item.label === "string" ? { label: item.label } : {}),
+              }));
+        this.notify("setPanelMenuItems", { panelId, items: authored });
         return Promise.resolve();
       },
       showToast: (options: PluginToastOptions) =>

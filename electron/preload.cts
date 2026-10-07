@@ -930,6 +930,9 @@ const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   // the id as it stages it and never announces it again — so a push that lands
   // before the subscriber mounts is a notification the user never gets.
   "plugin:project-plugin-staged",
+  // A restored view's runtime panel menus arrive in the did-finish-load
+  // replay, before the store behind the boot gate subscribes (#13213).
+  "plugin:panel-menus-changed",
 ]);
 // Replayable events that accumulate instead of superseding. A double-clicked
 // `.dntr` archive (#11280) is one decision per file, so collapsing two
@@ -942,6 +945,9 @@ const _eventBusFifoReplay: ReadonlySet<keyof IpcEventBusMap> = new Set([
   // separate "something new wants to run here" signals, and collapsing them to
   // the latest would silently drop one.
   "plugin:project-plugin-staged",
+  // Each event is one plugin's whole map, so only the latest per plugin
+  // matters — but the latest of all would drop every other plugin's.
+  "plugin:panel-menus-changed",
 ]);
 const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown[]>();
 
@@ -3579,8 +3585,6 @@ function buildElectronApi(): ElectronAPI {
           menus: Record<string, readonly PublishedPanelMenuItem[]>;
         }) => void
       ) => _eventBusOn("plugin:panel-menus-changed", callback),
-      onPanelMenusCleared: (callback: (payload: { pluginId: string }) => void) =>
-        _eventBusOn("plugin:panel-menus-cleared", callback),
       onActionsRunningChanged: (
         callback: (payload: { pluginId: string; actionIds: string[] }) => void
       ) => _eventBusOn("plugin:actions-running-changed", callback),

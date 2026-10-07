@@ -6,33 +6,24 @@ type ChangedPayload = {
   pluginId: string;
   menus: Record<string, readonly PublishedPanelMenuItem[]>;
 };
-type ClearedPayload = { pluginId: string };
 
-const { onChangedMock, onClearedMock } = vi.hoisted(() => ({
+const { onChangedMock } = vi.hoisted(() => ({
   onChangedMock: vi.fn(),
-  onClearedMock: vi.fn(),
 }));
 
 let changedCb: ((p: ChangedPayload) => void) | null = null;
-let clearedCb: ((p: ClearedPayload) => void) | null = null;
 
 beforeEach(() => {
   vi.clearAllMocks();
   changedCb = null;
-  clearedCb = null;
   onChangedMock.mockImplementation((cb: (p: ChangedPayload) => void) => {
     changedCb = cb;
-    return () => {};
-  });
-  onClearedMock.mockImplementation((cb: (p: ClearedPayload) => void) => {
-    clearedCb = cb;
     return () => {};
   });
   (globalThis as unknown as { window: unknown }).window = Object.assign(globalThis.window ?? {}, {
     electron: {
       plugin: {
         onPanelMenusChanged: onChangedMock,
-        onPanelMenusCleared: onClearedMock,
       },
     },
   });
@@ -58,7 +49,6 @@ describe("pluginPanelMenuStore", () => {
     const mod = await load();
     mod.usePluginPanelMenuStore.getState().init();
     expect(onChangedMock).toHaveBeenCalledTimes(1);
-    expect(onClearedMock).toHaveBeenCalledTimes(1);
   });
 
   it("stays retryable while the bridge is missing", async () => {
@@ -67,7 +57,7 @@ describe("pluginPanelMenuStore", () => {
     (globalThis as unknown as { window: { electron?: unknown } }).window.electron = {};
     mod.usePluginPanelMenuStore.getState().init();
     (globalThis as unknown as { window: { electron?: unknown } }).window.electron = {
-      plugin: { onPanelMenusChanged: onChangedMock, onPanelMenusCleared: onClearedMock },
+      plugin: { onPanelMenusChanged: onChangedMock },
     };
     mod.usePluginPanelMenuStore.getState().init();
     expect(onChangedMock).toHaveBeenCalledTimes(1);
@@ -81,11 +71,11 @@ describe("pluginPanelMenuStore", () => {
     expect(worker(mod, "panelB")).toEqual({ acme: [open] });
   });
 
-  it("keeps two plugins' lists on one panel apart, and clears one on its unload", async () => {
+  it("keeps two plugins' lists on one panel apart, and clears one on its empty map", async () => {
     const mod = await load();
     changedCb!({ pluginId: "acme", menus: { panelA: [open] } });
     changedCb!({ pluginId: "other", menus: { panelA: [exportCsv] } });
-    clearedCb!({ pluginId: "acme" });
+    changedCb!({ pluginId: "acme", menus: {} });
     expect(worker(mod, "panelA")).toEqual({ other: [exportCsv] });
   });
 

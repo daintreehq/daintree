@@ -3052,6 +3052,9 @@ export class PluginService {
         // would erase the plugin's palette commands after the first reload.
         this.removeHandlers(pluginId);
         this.unregisterImperativePluginActions(pluginId);
+        // A runtime menu describes the retiring backend's state (a selection,
+        // a mode); the next generation republishes its own (#13213).
+        this.clearPluginPanelMenus(pluginId);
       },
       // A protocol violation terminates the worker for good (#12276). Provenance
       // is already recorded by `onActivationResult`; this releases the runtime
@@ -6263,14 +6266,7 @@ export class PluginService {
       });
     }
 
-    if (this.pluginPanelMenus.delete(pluginId)) {
-      runUnloadStep(pluginId, "clearPanelMenus", () => {
-        broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-          name: "plugin:panel-menus-cleared",
-          payload: { pluginId },
-        });
-      });
-    }
+    runUnloadStep(pluginId, "clearPanelMenus", () => this.clearPluginPanelMenus(pluginId));
 
     if (decorationScopes && decorationScopes.length > 0) {
       runUnloadStep(pluginId, "broadcastDecorationsChanged", () => {
@@ -6496,6 +6492,15 @@ export class PluginService {
     const panelMap = this.pluginBadges.get(pluginId);
     if (!panelMap || panelMap.size === 0) return {};
     return Object.fromEntries(panelMap);
+  }
+
+  /** Drop every runtime panel menu a plugin published, telling renderers only when there were any. */
+  private clearPluginPanelMenus(pluginId: string): void {
+    if (!this.pluginPanelMenus.delete(pluginId)) return;
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+      name: "plugin:panel-menus-changed",
+      payload: { pluginId, menus: {} },
+    });
   }
 
   /** One plugin's runtime panel menus (`panelId → items`), empty when it has none. */

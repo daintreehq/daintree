@@ -614,7 +614,7 @@ describe("createHost (plugin activation API)", () => {
     broadcastToRendererMock.mockClear();
     service.unloadPlugin("acme.menu-publish");
     expect(menuEvents()).toEqual([
-      { name: "plugin:panel-menus-cleared", payload: { pluginId: "acme.menu-publish" } },
+      { name: "plugin:panel-menus-changed", payload: { pluginId: "acme.menu-publish", menus: {} } },
     ]);
   });
 

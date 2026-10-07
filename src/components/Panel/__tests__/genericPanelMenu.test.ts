@@ -543,7 +543,7 @@ describe("resolvePluginMenuItems (#13213)", () => {
     expect(resolvePluginMenuItems(owned, [], {}, registered)).toBe(owned.pluginMenuItems);
   });
 
-  it("dispatches a published entry through the same command id as a manifest one", () => {
+  it("encodes a published entry as the same kind of command as a manifest one", () => {
     const [group] = groups({
       pluginMenuItems: resolvePluginMenuItems(owned, [{ actionId: "acme.open" }], {}, registered),
     }).filter((g) => g.some((c) => isPluginMenuCommandId(c.id)));

@@ -5516,9 +5516,10 @@ interface PluginHostApi extends PluginActivationApi {
      *
      * Like {@link setPanelBadge} this is NOT revoke-guarded and becomes a silent
      * no-op once the plugin is unloaded. An empty `panelId` or an invalid list (a
-     * foreign or built-in action, a duplicate, too many entries) rejects. (In the
-     * dev-mode hot-reload worker it is fire-and-forget: an invalid list is logged
-     * in the host rather than rejected.)
+     * foreign or built-in action, a duplicate, too many entries) rejects. (In a
+     * worker the list is vetted before it crosses the port, so those still
+     * reject; only the host's 256-panel cap is logged there rather than
+     * rejected.)
      */
     setPanelMenuItems(panelId: string, items: readonly PanelMenuItemContribution[] | null): Promise<void>;
     /**

@@ -979,19 +979,25 @@ describe("PluginDevWorkerHostProxy runtime-surface validation rejects, never thr
     expect(sent.some((m) => m.type === "host-notify" && m.method === "setPanelBadge")).toBe(false);
   });
 
-  it("setPanelMenuItems notifies main with the list, and rejects an empty panelId locally (#13213)", async () => {
+  it("setPanelMenuItems vets the list locally and notifies main with a plain copy (#13213)", async () => {
     const { proxy, sent } = makeProxy();
     await expect(proxy.host.setPanelMenuItems("", [])).rejects.toThrow(
       /setPanelMenuItems: panelId/
     );
-    await proxy.host.setPanelMenuItems("panel-1", [{ actionId: "acme.open" }]);
+    await expect(
+      proxy.host.setPanelMenuItems("panel-1", [{ actionId: "terminal.kill" }])
+    ).rejects.toThrow(/setPanelMenuItems: invalid items/);
+    // A field the list does not use never reaches the port, so it cannot fail to clone there.
+    await proxy.host.setPanelMenuItems("panel-1", [
+      { actionId: "acme.demo.open", label: "Open", extra: () => {} } as never,
+    ]);
     await proxy.host.setPanelMenuItems("panel-1", null);
     expect(
       sent
         .filter((m) => m.type === "host-notify" && m.method === "setPanelMenuItems")
         .map((m) => (m as { params: unknown }).params)
     ).toEqual([
-      { panelId: "panel-1", items: [{ actionId: "acme.open" }] },
+      { panelId: "panel-1", items: [{ actionId: "acme.demo.open", label: "Open" }] },
       { panelId: "panel-1", items: null },
     ]);
   });

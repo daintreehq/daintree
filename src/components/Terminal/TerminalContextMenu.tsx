@@ -1117,10 +1117,15 @@ function TerminalContextMenuBody({
   const isDiff = isDiffPanel(terminal);
   const kind = terminal.kind ?? "terminal";
   // A PTY-backed plugin panel is a "terminal" whose plugin kind is kept apart
-  // (#13213); its tour, settings and contributed entries are that kind's.
+  // (#13213); its tour, settings and contributed entries are that kind's. Only
+  // while the kind is registered: a plugin disabled or mid-reload leaves a
+  // live terminal, which keeps the terminal's own answers (copy, restart…).
+  const pluginPanelKindId = terminal.pluginPanelKindId;
   const kindCapabilities = readPanelKindMenuCapabilities(
     panelKindRegistry,
-    terminal.pluginPanelKindId ?? kind,
+    pluginPanelKindId !== undefined && panelKindRegistry[pluginPanelKindId] !== undefined
+      ? pluginPanelKindId
+      : kind,
     registeredTourIds,
     registeredPluginActions
   );

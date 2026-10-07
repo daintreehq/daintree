@@ -2057,15 +2057,11 @@ export interface IpcEventMap {
 
   // A plugin's runtime panel menus changed (main → renderer, #13213). Carries
   // the plugin's COMPLETE current map (panelId → items), never a delta; an
-  // empty `menus` clears the plugin's lists.
+  // empty `menus` clears the plugin's lists, which is also how an unload or a
+  // retired worker is announced, so one ordered stream replays correctly.
   "plugin:panel-menus-changed": {
     pluginId: string;
     menus: Record<string, readonly import("../../utils/pluginPanelMenuItems.js").PublishedPanelMenuItem[]>;
-  };
-
-  // Plugin unloaded — drop all of its runtime panel menus (main → renderer, #13213).
-  "plugin:panel-menus-cleared": {
-    pluginId: string;
   };
 
   // The plugin's action handlers in flight (main → renderer): its COMPLETE set
@@ -2278,7 +2274,6 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-badges-cleared"
   // Plugin runtime panel menus (project-scoped for a project instance)
   | "plugin:panel-menus-changed"
-  | "plugin:panel-menus-cleared"
   // Plugin action handlers in flight (project-scoped for a project instance)
   | "plugin:actions-running-changed"
   // Plugin provenance record changed (global broadcast)
