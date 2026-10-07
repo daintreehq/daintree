@@ -551,7 +551,8 @@ describe("resolvePluginMenuItems (#13213)", () => {
       pluginMenuCommandId("acme.refresh"),
       pluginMenuCommandId("acme.open"),
     ]);
-    expect(group!.map((c) => (isPluginMenuCommandId(c.id) ? pluginMenuCommandActionId(c.id) : null)))
-      .toEqual(["acme.refresh", "acme.open"]);
+    expect(
+      group!.map((c) => (isPluginMenuCommandId(c.id) ? pluginMenuCommandActionId(c.id) : null))
+    ).toEqual(["acme.refresh", "acme.open"]);
   });
 });

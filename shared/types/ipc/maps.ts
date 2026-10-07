@@ -2061,7 +2061,10 @@ export interface IpcEventMap {
   // retired worker is announced, so one ordered stream replays correctly.
   "plugin:panel-menus-changed": {
     pluginId: string;
-    menus: Record<string, readonly import("../../utils/pluginPanelMenuItems.js").PublishedPanelMenuItem[]>;
+    menus: Record<
+      string,
+      readonly import("../../utils/pluginPanelMenuItems.js").PublishedPanelMenuItem[]
+    >;
   };
 
   // The plugin's action handlers in flight (main → renderer): its COMPLETE set

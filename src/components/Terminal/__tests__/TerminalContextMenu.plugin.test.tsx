@@ -16,7 +16,6 @@ const menuCloseHook = vi.hoisted(() => ({
   current: undefined as ((event: Event) => void) | undefined,
 }));
 
-
 // Render menu content synchronously. Radix only mounts it behind a real
 // right-click into a portal, which tells us nothing about which branch ran —
 // the branch choice is the whole contract under test here.

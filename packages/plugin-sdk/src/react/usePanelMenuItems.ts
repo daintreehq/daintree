@@ -1,8 +1,5 @@
 import { useEffect, useRef } from "react";
-import type {
-  PanelMenuItemContribution,
-  PanelViewProps,
-} from "../../../../shared/types/plugin.js";
+import type { PanelMenuItemContribution, PanelViewProps } from "../../../../shared/types/plugin.js";
 
 type MenuSetter = NonNullable<PanelViewProps["setMenuItems"]>;
 

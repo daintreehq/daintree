@@ -10,8 +10,7 @@ export interface PublishedPanelMenuItem {
 }
 
 export type PanelMenuItemsResult =
-  | { ok: true; items: readonly PublishedPanelMenuItem[] }
-  | { ok: false; error: string };
+  { ok: true; items: readonly PublishedPanelMenuItem[] } | { ok: false; error: string };
 
 /** A refused value, named without anything that can throw on plugin-supplied data. */
 function describe(value: unknown): string {

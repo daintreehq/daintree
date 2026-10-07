@@ -1171,7 +1171,9 @@ export class PluginDevWorkerHostProxy {
         const result = normalizePanelMenuItems(items, manifestId, manifestId);
         if (!result.ok) {
           return Promise.reject(
-            new Error(`Plugin "${this.pluginId}" setPanelMenuItems: invalid items — ${result.error}`)
+            new Error(
+              `Plugin "${this.pluginId}" setPanelMenuItems: invalid items — ${result.error}`
+            )
           );
         }
         this.notify("setPanelMenuItems", { panelId, items: result.items });

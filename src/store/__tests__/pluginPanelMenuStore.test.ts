@@ -20,14 +20,12 @@ beforeEach(() => {
     changedCb = cb;
     return () => {};
   });
-  (globalThis as unknown as { window: unknown }).window = Object.assign(globalThis.window ?? {}, {
-    electron: {
-      plugin: {
-        onPanelMenusChanged: onChangedMock,
-      },
-    },
-  });
+  setBridge({ plugin: { onPanelMenusChanged: onChangedMock } });
 });
+
+function setBridge(value: unknown): void {
+  Object.defineProperty(window, "electron", { configurable: true, writable: true, value });
+}
 
 const worker = (mod: Awaited<ReturnType<typeof load>>, panelId: string) =>
   mod.usePluginPanelMenuStore.getState().workerMenusByPanelId[panelId];
@@ -54,11 +52,9 @@ describe("pluginPanelMenuStore", () => {
   it("stays retryable while the bridge is missing", async () => {
     const mod = await import("../pluginPanelMenuStore");
     mod._resetPluginPanelMenuStoreForTest();
-    (globalThis as unknown as { window: { electron?: unknown } }).window.electron = {};
+    setBridge({});
     mod.usePluginPanelMenuStore.getState().init();
-    (globalThis as unknown as { window: { electron?: unknown } }).window.electron = {
-      plugin: { onPanelMenusChanged: onChangedMock },
-    };
+    setBridge({ plugin: { onPanelMenusChanged: onChangedMock } });
     mod.usePluginPanelMenuStore.getState().init();
     expect(onChangedMock).toHaveBeenCalledTimes(1);
   });

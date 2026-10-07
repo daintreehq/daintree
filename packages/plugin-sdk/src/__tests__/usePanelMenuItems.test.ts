@@ -38,11 +38,7 @@ describe("usePanelMenuItems", () => {
     rerender({ setter, items: [{ ...OPEN, label: "Open Acme" }] });
     rerender({ setter, items: [] });
     rerender({ setter, items: null });
-    expect(setter.mock.calls.slice(1)).toEqual([
-      [[{ ...OPEN, label: "Open Acme" }]],
-      [[]],
-      [null],
-    ]);
+    expect(setter.mock.calls.slice(1)).toEqual([[[{ ...OPEN, label: "Open Acme" }]], [[]], [null]]);
   });
 
   it("publishes again to a new setter, as a reloaded view's would be", () => {

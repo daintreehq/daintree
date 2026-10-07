@@ -57,7 +57,18 @@ describe("normalizePanelMenuItems", () => {
     ["the bare namespace", [{ actionId: "acme.board." }]],
     ["a non-string id", [{ actionId: 42 }]],
     ["a BigInt id, which JSON cannot describe", [{ actionId: 1n }]],
-    ["a cyclic id", [{ actionId: (() => { const o: Record<string, unknown> = {}; o.self = o; return o; })() }]],
+    [
+      "a cyclic id",
+      [
+        {
+          actionId: (() => {
+            const o: Record<string, unknown> = {};
+            o.self = o;
+            return o;
+          })(),
+        },
+      ],
+    ],
     ["a non-object entry", ["acme.board.open"]],
     ["a non-string label", [{ actionId: "acme.board.open", label: 7 }]],
     ["a repeated action", [{ actionId: "acme.board.open" }, { actionId: "acme.board.open" }]],
