@@ -84,7 +84,7 @@ export interface PanelRegistrySlice {
   /** Explicit tab group storage - single source of truth for tab membership and order */
   tabGroups: Map<string, TabGroup>;
 
-  addPanel: (options: AddPanelOptions) => Promise<string | null>;
+  addPanel: (options: AddPanelOptions, commit?: AddPanelCommitOptions) => Promise<string | null>;
   /**
    * Hydration-only: collect subsequent `addPanel` mutations into one batched commit
    * instead of applying each individually. Every `addPanel` between begin and flush
@@ -405,3 +405,21 @@ export type PanelRegistryMiddleware = {
 };
 
 export type PanelRegistryStoreApi = StoreApi<PanelRegistrySlice>;
+
+/** Renderer-internal extras for the store wrapper's call into the registry. */
+export interface AddPanelCommitOptions {
+  /**
+   * Focus the new panel in the same `set()` that adds it, when it lands in the
+   * grid. Focusing in a follow-up `set()` after the registry returns costs a
+   * second full grid render before the new pane's first frame.
+   */
+  focus?: {
+    previousFocusedId: string | null;
+    /**
+     * Re-checked inside the commit: the add awaits before committing, and a
+     * panel maximized in that gap must keep focus until the wrapper leaves
+     * fullscreen.
+     */
+    stillApplies: () => boolean;
+  };
+}

@@ -413,4 +413,63 @@ describe("panelStore.addPanel focus guard (#6959)", () => {
       expect(state.previousFocusedId).toBe("incumbent-1");
     });
   });
+
+  describe("grid focus lands in the commit that adds the panel", () => {
+    function commitsWithPanel(): Array<{ hasPanel: boolean; focusedId: string | null }> {
+      const seen: Array<{ hasPanel: boolean; focusedId: string | null }> = [];
+      const before = new Set(usePanelStore.getState().panelIds);
+      usePanelStore.subscribe((state) => {
+        const fresh = state.panelIds.find((id) => !before.has(id));
+        seen.push({ hasPanel: fresh !== undefined, focusedId: state.focusedId });
+      });
+      return seen;
+    }
+
+    it("never publishes the new grid panel unfocused", async () => {
+      const seen = commitsWithPanel();
+      const newId = await usePanelStore.getState().addPanel({
+        kind: "terminal",
+        cwd: "/test",
+        location: "grid",
+      });
+
+      const firstWithPanel = seen.find((c) => c.hasPanel);
+      expect(firstWithPanel?.focusedId).toBe(newId);
+      const state = usePanelStore.getState();
+      expect(state.focusedId).toBe(newId);
+      expect(state.previousFocusedId).toBe("incumbent-1");
+    });
+
+    it("leaves fullscreen to the follow-up, focusing the panel after it", async () => {
+      usePanelStore.setState({ maximizedId: "incumbent-1" });
+      const seen = commitsWithPanel();
+      const newId = await usePanelStore.getState().addPanel({
+        kind: "terminal",
+        cwd: "/test",
+        location: "grid",
+      });
+
+      expect(seen.find((c) => c.hasPanel)?.focusedId).toBe("incumbent-1");
+      const state = usePanelStore.getState();
+      expect(state.maximizedId).toBeNull();
+      expect(state.focusedId).toBe(newId);
+      expect(state.previousFocusedId).toBe("incumbent-1");
+    });
+
+    it("leaves focus alone when a panel is maximized while the add is in flight", async () => {
+      const seen = commitsWithPanel();
+      const pending = usePanelStore.getState().addPanel({
+        kind: "terminal",
+        cwd: "/test",
+        location: "grid",
+      });
+      usePanelStore.setState({ maximizedId: "incumbent-1" });
+      const newId = await pending;
+
+      expect(seen.find((c) => c.hasPanel)?.focusedId).toBe("incumbent-1");
+      const state = usePanelStore.getState();
+      expect(state.maximizedId).toBeNull();
+      expect(state.focusedId).toBe(newId);
+    });
+  });
 });

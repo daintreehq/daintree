@@ -1,5 +1,5 @@
 import type { TerminalRuntimeStatus } from "@/types";
-import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
+import type { AddPanelCommitOptions, PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import {
   isGridPanelLocation,
   isPtyPanel,
@@ -309,13 +309,23 @@ class TerminalStartupQueue {
 }
 
 const terminalStartupQueue = new TerminalStartupQueue();
+
+function gridFocusPatch(
+  commit: AddPanelCommitOptions | undefined,
+  location: string,
+  id: string
+): { focusedId?: string; previousFocusedId?: string | null } {
+  if (!commit?.focus || location !== "grid" || !commit.focus.stillApplies()) return {};
+  const { previousFocusedId } = commit.focus;
+  return previousFocusedId === id ? { focusedId: id } : { focusedId: id, previousFocusedId };
+}
 const RECIPE_TERMINAL_STARTUP_CONCURRENCY = 3;
 
 export const createAddPanelActions = (
   set: Set,
   get: Get
 ): Pick<PanelRegistrySlice, "addPanel"> => ({
-  addPanel: async (options) => {
+  addPanel: async (options, commit) => {
     // Panel limit enforcement: only the hard ceiling blocks a single-panel add.
     // The confirm band (>= confirmationLimit) is intentionally non-blocking —
     // adding a panel is reversible (one-click close), so the step-throttled
@@ -531,7 +541,12 @@ export const createAddPanelActions = (
               focusedId: id,
             };
           }
-          return { panelsById: newById, panelIds: newIds, panelIdsByWorktreeId: newIndex };
+          return {
+            panelsById: newById,
+            panelIds: newIds,
+            panelIdsByWorktreeId: newIndex,
+            ...gridFocusPatch(commit, location, id),
+          };
         });
       }
 
@@ -965,7 +980,12 @@ export const createAddPanelActions = (
             focusedId: id,
           };
         }
-        return { panelsById: newById, panelIds: newIds, panelIdsByWorktreeId: newIndex };
+        return {
+          panelsById: newById,
+          panelIds: newIds,
+          panelIdsByWorktreeId: newIndex,
+          ...gridFocusPatch(commit, location, id),
+        };
       });
     }
 
