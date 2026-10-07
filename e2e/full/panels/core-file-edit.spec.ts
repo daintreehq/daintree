@@ -1,5 +1,5 @@
 import path from "path";
-import { readFileSync, realpathSync, writeFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
@@ -75,13 +75,14 @@ test.describe.serial("Core: Markdown file editing", () => {
     const { dir, cleanup } = createFixtureRepo({ name: "file-edit" });
     fixtureDir = dir;
     fixtureCleanup = cleanup;
-    // Canonical, as the project records it: macOS hands out temp dirs under the
-    // /var -> /private/var symlink, and Edit is only offered for a path inside
-    // the project root as spelled.
-    filePath = path.join(realpathSync(dir), FILE_NAME);
-    writeFileSync(filePath, ORIGINAL);
+    writeFileSync(path.join(dir, FILE_NAME), ORIGINAL);
     ctx = await launchApp();
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "File Edit");
+    // Use the recorded root: /var aliases on macOS and RUNNER~1 paths on
+    // Windows can differ from the spelling the project canonicalizes to.
+    const project = await ctx.window.evaluate(() => window.electron.project.getCurrent());
+    expect(project).not.toBeNull();
+    filePath = path.join(project!.path, FILE_NAME);
   });
 
   test.afterAll(async () => {
