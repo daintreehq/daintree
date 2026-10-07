@@ -127,7 +127,7 @@ import {
   getRegisteredPluginActionsSnapshot,
   subscribeToRegisteredPluginActions,
 } from "@/services/plugin/registeredPluginActions";
-import { NO_PUBLISHED_MENUS, readPanelPublishedMenus } from "@/store/pluginPanelMenuStore";
+import { usePanelViewMenuItems, usePanelWorkerMenus } from "@/store/pluginPanelMenuStore";
 
 import {
   getPanelKindRegistrySnapshot,
@@ -461,8 +461,9 @@ function PanelHeaderComponent({
     registeredPluginActions
   );
   const kindTour = storedKindCapabilities.tour;
-  // What the plugin published for this panel, as of the menu's last opening.
-  const [publishedMenus, setPublishedMenus] = useState(NO_PUBLISHED_MENUS);
+  // What the plugin published for this panel at runtime (#13213).
+  const publishedViewMenuItems = usePanelViewMenuItems(id);
+  const publishedWorkerMenus = usePanelWorkerMenus(id);
   const pluginSettingsId = storedKindCapabilities.pluginSettingsId;
   const pluginBackupId = storedKindCapabilities.pluginBackupId;
   // Recorded on select and spent by the menu's close hook, after it has handed
@@ -539,7 +540,6 @@ function PanelHeaderComponent({
   const handleOverflowMenuOpenChange = (open: boolean) => {
     if (!open) return;
     setOverflowTooltipOpen(false);
-    setPublishedMenus(readPanelPublishedMenus(id));
     // A menu reopened inside its exit animation never unmounts, so the close
     // hook below never runs for that close; drop the intent rather than let it
     // open the picker on some later, unrelated close.
@@ -583,8 +583,8 @@ function PanelHeaderComponent({
         hasPluginDatabases: pluginBackupId !== null,
         pluginMenuItems: resolvePluginMenuItems(
           storedKindCapabilities,
-          publishedMenus.view,
-          publishedMenus.worker,
+          publishedViewMenuItems,
+          publishedWorkerMenus,
           registeredPluginActions
         ),
       })

@@ -685,7 +685,7 @@ export interface PanelViewProps {
    *
    * The list belongs to the panel, so it survives the view re-rendering,
    * unmounting and remounting, and is cleared when the panel closes or the view
-   * reloads. A menu that is already open keeps the list it opened with.
+   * reloads. A menu that is open when you republish shows the new list.
    *
    * The setter belongs to the attempt that received it: a call held past this
    * attempt's teardown does nothing. `usePanelMenuItems` wraps it.

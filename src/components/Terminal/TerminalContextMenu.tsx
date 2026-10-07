@@ -153,7 +153,7 @@ import {
   subscribeToRegisteredPluginActions,
 } from "@/services/plugin/registeredPluginActions";
 import { copyWithToast } from "@/lib/copyWithToast";
-import { NO_PUBLISHED_MENUS, readPanelPublishedMenus } from "@/store/pluginPanelMenuStore";
+import { usePanelViewMenuItems, usePanelWorkerMenus } from "@/store/pluginPanelMenuStore";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
@@ -315,6 +315,10 @@ function TerminalContextMenuBody({
   // the time; only the live menu lists worktrees, so a git-status pass on any
   // worktree doesn't re-render every closed menu.
   const worktrees = useSidebarWorktreeOrder({ enabled: isMenuLive });
+  // What the panel's plugin published for its menus (#13213), read only while
+  // the menu is live for the same reason.
+  const publishedViewMenuItems = usePanelViewMenuItems(terminalId, isMenuLive);
+  const publishedWorkerMenus = usePanelWorkerMenus(terminalId, isMenuLive);
   // Subscribed so a plugin registering or dropping its kind reaches the menu;
   // the generic panel menu reads its capabilities from this snapshot.
   const panelKindRegistry = useSyncExternalStore(
@@ -413,15 +417,12 @@ function TerminalContextMenuBody({
   // the home dir arrived re-resolves `~/` next time, even for an unchanged
   // selection.
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
-  // What the plugin published for this panel, as of the menu's last opening.
-  const [publishedMenus, setPublishedMenus] = useState(NO_PUBLISHED_MENUS);
   const handleMenuOpenChange = useCallback(
     (open: boolean) => {
       // A menu reopened inside its exit animation never unmounts, so the close
       // hook never runs for that close; drop the intent rather than let it open
       // the picker on some later, unrelated close.
       if (open) {
-        setPublishedMenus(readPanelPublishedMenus(terminalId));
         // Only when it changed: an unconditional set costs every open a render.
         const cachedHomeDir = systemClient.getCachedHomeDir();
         if (cachedHomeDir !== homeDir) setHomeDir(cachedHomeDir);
@@ -434,7 +435,7 @@ function TerminalContextMenuBody({
         }
       }
     },
-    [homeDir, refreshOrchestratorCandidates, terminal, terminalId]
+    [homeDir, refreshOrchestratorCandidates, terminal]
   );
 
   const captureMovePickerAnchor = useCallback(
@@ -1125,8 +1126,8 @@ function TerminalContextMenuBody({
   );
   const pluginMenuItems = resolvePluginMenuItems(
     kindCapabilities,
-    publishedMenus.view,
-    publishedMenus.worker,
+    publishedViewMenuItems,
+    publishedWorkerMenus,
     registeredPluginActions
   );
   const hasPty = terminal.kind ? kindCapabilities.hasPty : true;

@@ -38,6 +38,11 @@ beforeEach(() => {
   });
 });
 
+const worker = (mod: Awaited<ReturnType<typeof load>>, panelId: string) =>
+  mod.usePluginPanelMenuStore.getState().workerMenusByPanelId[panelId];
+const view = (mod: Awaited<ReturnType<typeof load>>, panelId: string) =>
+  mod.usePluginPanelMenuStore.getState().viewMenusByPanelId[panelId];
+
 async function load() {
   const mod = await import("../pluginPanelMenuStore");
   mod._resetPluginPanelMenuStoreForTest();
@@ -72,8 +77,8 @@ describe("pluginPanelMenuStore", () => {
     const mod = await load();
     changedCb!({ pluginId: "acme", menus: { panelA: [open], panelB: [exportCsv] } });
     changedCb!({ pluginId: "acme", menus: { panelB: [open] } });
-    expect(mod.readPanelPublishedMenus("panelA")).toBe(mod.NO_PUBLISHED_MENUS);
-    expect(mod.readPanelPublishedMenus("panelB").worker).toEqual({ acme: [open] });
+    expect(worker(mod, "panelA")).toBeUndefined();
+    expect(worker(mod, "panelB")).toEqual({ acme: [open] });
   });
 
   it("keeps two plugins' lists on one panel apart, and clears one on its unload", async () => {
@@ -81,7 +86,7 @@ describe("pluginPanelMenuStore", () => {
     changedCb!({ pluginId: "acme", menus: { panelA: [open] } });
     changedCb!({ pluginId: "other", menus: { panelA: [exportCsv] } });
     clearedCb!({ pluginId: "acme" });
-    expect(mod.readPanelPublishedMenus("panelA").worker).toEqual({ other: [exportCsv] });
+    expect(worker(mod, "panelA")).toEqual({ other: [exportCsv] });
   });
 
   it("keeps the store untouched when a republish changes nothing", async () => {
@@ -96,13 +101,12 @@ describe("pluginPanelMenuStore", () => {
     const mod = await load();
     changedCb!({ pluginId: "acme", menus: { panelA: [open] } });
     mod.usePluginPanelMenuStore.getState().setViewItems("panelA", [exportCsv]);
-    expect(mod.readPanelPublishedMenus("panelA")).toEqual({
-      view: [exportCsv],
-      worker: { acme: [open] },
-    });
+    expect(view(mod, "panelA")).toEqual([exportCsv]);
+    expect(worker(mod, "panelA")).toEqual({ acme: [open] });
 
     mod.usePluginPanelMenuStore.getState().setViewItems("panelA", []);
-    expect(mod.readPanelPublishedMenus("panelA")).toEqual({ view: [], worker: { acme: [open] } });
+    expect(view(mod, "panelA")).toBeUndefined();
+    expect(worker(mod, "panelA")).toEqual({ acme: [open] });
   });
 
   it("drops every list on a closed panel and nothing on another", async () => {
@@ -110,8 +114,9 @@ describe("pluginPanelMenuStore", () => {
     changedCb!({ pluginId: "acme", menus: { panelA: [open], panelB: [open] } });
     mod.usePluginPanelMenuStore.getState().setViewItems("panelA", [exportCsv]);
     mod.usePluginPanelMenuStore.getState().removePanel("panelA");
-    expect(mod.readPanelPublishedMenus("panelA")).toBe(mod.NO_PUBLISHED_MENUS);
-    expect(mod.readPanelPublishedMenus("panelB").worker).toEqual({ acme: [open] });
+    expect(worker(mod, "panelA")).toBeUndefined();
+    expect(view(mod, "panelA")).toBeUndefined();
+    expect(worker(mod, "panelB")).toEqual({ acme: [open] });
 
     const before = mod.usePluginPanelMenuStore.getState();
     mod.usePluginPanelMenuStore.getState().removePanel("missing");

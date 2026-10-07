@@ -133,35 +133,33 @@ export function usePluginPanelMenuSubscription(): void {
   }, []);
 }
 
-/** What a panel's menus show from the published lists, captured as one opens. */
-export interface PanelPublishedMenus {
-  readonly view: readonly PublishedPanelMenuItem[];
-  readonly worker: Readonly<Record<string, readonly PublishedPanelMenuItem[]>>;
-}
-
 const NO_ITEMS: readonly PublishedPanelMenuItem[] = Object.freeze([]);
 const NO_WORKER_MENUS: Readonly<Record<string, readonly PublishedPanelMenuItem[]>> = Object.freeze(
   {}
 );
 
-/** Nothing published, for a menu that has not opened yet. */
-export const NO_PUBLISHED_MENUS: PanelPublishedMenus = Object.freeze({
-  view: NO_ITEMS,
-  worker: NO_WORKER_MENUS,
-});
-
 /**
- * The lists published on a panel right now. Read when a menu opens rather than
- * subscribed: a list republished while the menu is open lands on its next
- * opening, so the rows under the pointer never shift, and the many closed
- * menus a layout keeps mounted never re-render for a publish.
+ * The list the panel's view published; the reference holds while it is
+ * unchanged. `enabled: false` reads nothing, for a menu kept mounted closed
+ * that should not re-render on a publish.
  */
-export function readPanelPublishedMenus(panelId: string): PanelPublishedMenus {
-  const state = usePluginPanelMenuStore.getState();
-  const view = state.viewMenusByPanelId[panelId];
-  const worker = state.workerMenusByPanelId[panelId];
-  if (view === undefined && worker === undefined) return NO_PUBLISHED_MENUS;
-  return { view: view ?? NO_ITEMS, worker: worker ?? NO_WORKER_MENUS };
+export function usePanelViewMenuItems(
+  panelId: string,
+  enabled = true
+): readonly PublishedPanelMenuItem[] {
+  return usePluginPanelMenuStore((s) =>
+    enabled ? (s.viewMenusByPanelId[panelId] ?? NO_ITEMS) : NO_ITEMS
+  );
+}
+
+/** The lists backends published on the panel, by plugin; as {@link usePanelViewMenuItems}. */
+export function usePanelWorkerMenus(
+  panelId: string,
+  enabled = true
+): Readonly<Record<string, readonly PublishedPanelMenuItem[]>> {
+  return usePluginPanelMenuStore((s) =>
+    enabled ? (s.workerMenusByPanelId[panelId] ?? NO_WORKER_MENUS) : NO_WORKER_MENUS
+  );
 }
 
 /** Test-only: reset the module-level init guard and state between cases. */
