@@ -378,7 +378,24 @@ export const usePanelStore = create<PanelGridState>()(
           resolvedFocusPolicy === options.focusPolicy
             ? options
             : { ...options, focusPolicy: resolvedFocusPolicy };
-        const id = await registrySlice.addPanel(panelOptions);
+        // A grid panel that will take focus takes it in the commit that adds
+        // it, so the grid renders once rather than twice before its first
+        // frame. Only when nothing is fullscreen: leaving fullscreen stays the
+        // follow-up below.
+        const nothingFullscreen = () => get().maximizedId === null && get().maximizeTarget === null;
+        const focusesOnCommit =
+          !isHydrationBatchActive() &&
+          resolvedFocusPolicy !== "preserve" &&
+          !(resolvedFocusPolicy === "auto" && assistantHasFocus) &&
+          nothingFullscreen();
+        const id = await registrySlice.addPanel(
+          panelOptions,
+          focusesOnCommit
+            ? {
+                focus: { previousFocusedId: focusedBeforeCreate, stillApplies: nothingFullscreen },
+              }
+            : undefined
+        );
         if (id === null) return null;
         // A non-dockable kind requested into the dock is redirected to the grid
         // by the registry (#11054), so the focus / dock-activation decision must
@@ -423,10 +440,13 @@ export const usePanelStore = create<PanelGridState>()(
           if (!options.preserveMaximize) {
             get().exitMaximize();
           }
-          if (focusedBeforeCreate !== id) {
-            set({ focusedId: id, previousFocusedId: focusedBeforeCreate });
-          } else {
-            set({ focusedId: id });
+          const focusedByCommit = focusesOnCommit && get().focusedId === id;
+          if (!focusedByCommit) {
+            if (focusedBeforeCreate !== id) {
+              set({ focusedId: id, previousFocusedId: focusedBeforeCreate });
+            } else {
+              set({ focusedId: id });
+            }
           }
         } else if (options.activateDockOnCreate && committedToDock && !isHydrationBatchActive()) {
           // The registry slice atomically advances `focusedId` to the new id

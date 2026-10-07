@@ -936,11 +936,13 @@ export function useContentGridContext({
   }, [gridCols, gridItemCount, fleetGridCols]);
 
   const prevFleetGridColsRef = useRef(fleetGridCols);
+  const prevFleetIdsRef = useRef("");
   useLayoutEffect(() => {
     const writeFleetHysteresis =
       isFleetScopeRender && layoutConfig.strategy === "automatic" ? fleetGridCols : undefined;
     if (!isFleetScopeRender) {
       prevFleetGridColsRef.current = fleetGridCols;
+      prevFleetIdsRef.current = "";
       setHysteresisFleetCols(writeFleetHysteresis);
       return;
     }
@@ -950,19 +952,24 @@ export function useContentGridContext({
     }
     const fleetColsChanged = prevFleetGridColsRef.current !== fleetGridCols;
     prevFleetGridColsRef.current = fleetGridCols;
+    const fleetIdsKey = ids.join("|");
+    const fleetMembershipChanged = prevFleetIdsRef.current !== fleetIdsKey;
+    prevFleetIdsRef.current = fleetIdsKey;
     setHysteresisFleetCols(writeFleetHysteresis);
 
     if (isDraggingRef.current || ids.length === 0) return;
 
-    // Schedule a coalesced fleet-pane resize off the open/close path — one
-    // pass once the burst settles (see scheduleBatchResize).
-    terminalInstanceService.scheduleBatchResize(ids);
+    // Resize the fleet panes: at once when a pane joined or left (the boxes
+    // are final — see the grid effect below), otherwise as one coalesced pass
+    // once the burst settles (see scheduleBatchResize).
+    terminalInstanceService.scheduleBatchResize(ids, { leading: fleetMembershipChanged });
 
-    // A column-count change shifts cell widths, so the per-host ResizeObserver
-    // would otherwise fire an uncoordinated second resize through the 200ms
-    // FLIP. Lock those panes for the transition window; the lock's unlock pass
+    // A column-count change no membership change caused shifts cell widths
+    // while the window is still moving, so the per-host ResizeObserver would
+    // otherwise fire an uncoordinated second resize through the 200ms FLIP.
+    // Lock those panes for the transition window; the lock's unlock pass
     // doubles as the corrective backstop.
-    if (fleetColsChanged) {
+    if (fleetColsChanged && !fleetMembershipChanged) {
       terminalInstanceService.suppressResizesDuringLayoutTransition(
         ids,
         GRID_TRANSITION_DURATION_MS
@@ -972,15 +979,16 @@ export function useContentGridContext({
 
   // Reads fresh `gridTerminals` without making it an effect dependency — it
   // changes on agent-state ticks that must not retrigger a resize pass.
-  const runGridBatchFit = useEffectEvent(() => {
+  const runGridBatchFit = useEffectEvent((leading: boolean) => {
     if (isDraggingRef.current) return;
     const ids = gridTerminals.map((t) => t.id);
     if (ids.length > 0) {
-      terminalInstanceService.scheduleBatchResize(ids);
+      terminalInstanceService.scheduleBatchResize(ids, { leading });
     }
   });
   const prevGridColsRef = useRef(gridCols);
   const prevPanelCountRef = useRef(panelIds.length);
+  const closeSettleRenderRef = useRef(false);
   const prevScrollGeoRef = useRef(`${isScrollMode}:${scrollRowHeight}`);
   useLayoutEffect(() => {
     void gridCols;
@@ -994,6 +1002,19 @@ export function useContentGridContext({
     prevScrollGeoRef.current = scrollGeoKey;
 
     const isPureClose = panelIds.length < prevPanelCountRef.current;
+    // A close resets the scroll-mode hysteresis below, so a close that leaves
+    // scroll mode lands in two commits: the membership change, then the
+    // re-evaluated row mode one render later. Both belong to the close.
+    const membershipChanged =
+      panelIds.length !== prevPanelCountRef.current || closeSettleRenderRef.current;
+    closeSettleRenderRef.current = isPureClose;
+    // The follow-up is a layout-effect state update, so it commits
+    // synchronously before any microtask. Anything later is not this close.
+    if (isPureClose) {
+      queueMicrotask(() => {
+        closeSettleRenderRef.current = false;
+      });
+    }
     prevPanelCountRef.current = panelIds.length;
 
     setHysteresisGridCols(
@@ -1023,20 +1044,22 @@ export function useContentGridContext({
     // batch fit when nothing about the survivors' geometry actually changed.
     const survivorGeometryStable = isScrollMode && isPureClose && !colsChanged && !scrollGeoChanged;
     if (!survivorGeometryStable) {
-      // Schedule a coalesced sibling resize off the open/close path — the click
-      // never waits on N xterm resizes, and a burst of opens/closes collapses
-      // into a single pass once it settles (see scheduleBatchResize).
-      runGridBatchFit();
+      // An add or close is one discrete jump to boxes that are already final,
+      // so the survivors resize now, in a chunked focused-first pass, instead
+      // of sitting at the old size behind the coalescing window. Anything else
+      // in the same burst still coalesces into one trailing pass.
+      runGridBatchFit(membershipChanged);
     }
 
-    // A layout-changing close (or a column change) resizes every survivor's
-    // box. Each panel's own ResizeObserver in XtermAdapter would otherwise
-    // fire its own un-chunked resize on top of the coalesced pass above — a
-    // resize storm that is the main cause of close-path lag. Lock the panels
-    // for the transition window so the single chunked pass is the only resize;
-    // the lock's unlock pass is the corrective backstop.
-    const layoutChangingClose = isPureClose && !survivorGeometryStable;
-    if (colsChanged || scrollGeoChanged || layoutChangingClose) {
+    // A column or row-mode change that no add or close caused — a window
+    // resize crossing a breakpoint — resizes every panel's box while the
+    // window is still moving. Each panel's own ResizeObserver in XtermAdapter
+    // would otherwise fire its own un-chunked resize on top of the coalesced
+    // pass above, so lock the panels for the transition window and let the
+    // lock's unlock pass be the corrective backstop. An add or close needs no
+    // lock: its leading pass has already put every survivor on its final
+    // grid, so each observer's later resize finds nothing to change.
+    if (!membershipChanged && (colsChanged || scrollGeoChanged)) {
       const realPanelIds = panelIds.filter((id) => id !== GRID_PLACEHOLDER_ID);
       if (realPanelIds.length > 0) {
         terminalInstanceService.suppressResizesDuringLayoutTransition(

@@ -11,10 +11,30 @@ import { yieldToScheduler } from "@/lib/schedulerYield";
 // terminals instead of freezing the renderer for the whole batch.
 const RESIZE_PASS_CHUNK_SIZE = 1;
 
+const NO_IDS: ReadonlySet<string> = new Set();
+
 export interface TerminalResizePassSchedulerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
   isResizeLocked: (id: string) => boolean;
-  resize: (id: string, width: number, height: number) => unknown;
+  resize: (id: string, width: number, height: number, options?: { immediate?: boolean }) => unknown;
+}
+
+export interface ResizePassOptions {
+  /** Every id skips the large-buffer debounce: its box is final. */
+  immediate?: boolean;
+  /** Just these ids skip it. */
+  immediateIds?: ReadonlySet<string>;
+}
+
+export interface BatchResizeOptions {
+  /**
+   * Start the pass now when no burst is in progress, rather than after the
+   * trailing window. For a discrete grid change — a panel added or closed —
+   * whose boxes are already final: waiting only shows every survivor at the
+   * wrong size. Later calls inside the window still coalesce into one
+   * trailing pass, so a rapid close stream costs at most two.
+   */
+  leading?: boolean;
 }
 
 /**
@@ -23,11 +43,19 @@ export interface TerminalResizePassSchedulerDeps {
  * (`scheduleBatchResize`) and chunked-cancellable (`runResizePass`) resize
  * passes that keep a large-grid close/open from freezing the renderer.
  */
+interface ResizePass {
+  controller: AbortController;
+  pendingIds: Set<string>;
+  /** Ids whose resize skips the large-buffer debounce (see runResizePass). */
+  immediateIds: ReadonlySet<string>;
+}
+
 export class TerminalResizePassScheduler {
   private gridResizeTimer: number | undefined;
   private readonly gridResizePendingIds = new Set<string>();
+  private readonly gridResizeImmediateIds = new Set<string>();
   private readonly frameResizePendingPasses = new Map<number, ReadonlySet<string>>();
-  private activeResizePass: { controller: AbortController; pendingIds: Set<string> } | undefined;
+  private activeResizePass: ResizePass | undefined;
 
   constructor(private deps: TerminalResizePassSchedulerDeps) {}
 
@@ -40,7 +68,7 @@ export class TerminalResizePassScheduler {
    * freezes the renderer in one task. `executeResizePass` invokes this one
    * id at a time.
    */
-  private batchResize(ids: string[]): void {
+  private batchResize(ids: string[], immediateIds: ReadonlySet<string> = NO_IDS): void {
     if (ids.length === 0) return;
 
     type Pending = { id: string; width: number; height: number };
@@ -64,7 +92,8 @@ export class TerminalResizePassScheduler {
     }
 
     for (const { id, width, height } of pending) {
-      this.deps.resize(id, width, height);
+      if (immediateIds.has(id)) this.deps.resize(id, width, height, { immediate: true });
+      else this.deps.resize(id, width, height);
     }
   }
 
@@ -72,24 +101,44 @@ export class TerminalResizePassScheduler {
    * Coalesced variant of `batchResize`. A burst of grid open/close events each
    * union their ids and reset a trailing-edge timer; the actual resize runs
    * once the burst settles, on the next frame — so it never lands on the
-   * synchronous open/close path the user is waiting on.
+   * synchronous open/close path the user is waiting on. With `leading`, the
+   * first call of a burst starts its pass immediately instead (see
+   * {@link BatchResizeOptions.leading}).
    */
-  scheduleBatchResize(ids: string[]): void {
+  scheduleBatchResize(ids: string[], options: BatchResizeOptions = {}): void {
     if (ids.length === 0) return;
-    for (const id of ids) this.gridResizePendingIds.add(id);
+    const burstInProgress =
+      this.gridResizeTimer !== undefined ||
+      this.gridResizePendingIds.size > 0 ||
+      this.frameResizePendingPasses.size > 0;
+    if (options.leading && !burstInProgress) {
+      // The boxes are final, so the large-buffer debounce would only delay
+      // the one resize this pass exists to make.
+      this.runResizePass(ids, { immediate: true });
+    } else {
+      for (const id of ids) {
+        this.gridResizePendingIds.add(id);
+        // A later add/close in the burst is just as final as the first, so
+        // its ids keep their immediacy into the trailing pass.
+        if (options.leading) this.gridResizeImmediateIds.add(id);
+      }
+    }
     if (this.gridResizeTimer !== undefined) {
       clearTimeout(this.gridResizeTimer);
     }
     this.gridResizeTimer = window.setTimeout(() => {
       this.gridResizeTimer = undefined;
+      if (this.gridResizePendingIds.size === 0) return;
       const pendingIds = [...this.gridResizePendingIds];
+      const immediateIds = new Set(this.gridResizeImmediateIds);
       this.gridResizePendingIds.clear();
+      this.gridResizeImmediateIds.clear();
       const framePendingIds = new Set(pendingIds);
       const frameId = requestAnimationFrame(() => {
         // Establish active-pass ownership before dropping the frame marker so
         // observers never see a gap where geometry looks stable.
         try {
-          this.runResizePass(pendingIds);
+          this.runResizePass(pendingIds, { immediateIds });
         } finally {
           this.frameResizePendingPasses.delete(frameId);
         }
@@ -127,13 +176,20 @@ export class TerminalResizePassScheduler {
    * the explicit path for callers that know the old surface work is invalid.
    * Fire-and-forget — callers never await it.
    */
-  runResizePass(ids: string[]): void {
+  runResizePass(ids: string[], options: ResizePassOptions = {}): void {
     if (ids.length === 0) return;
     const supersededPass = this.activeResizePass;
     const pendingIds = [...new Set([...ids, ...(supersededPass?.pendingIds ?? [])])];
     supersededPass?.controller.abort();
     const controller = new AbortController();
-    const pass = { controller, pendingIds: new Set(pendingIds) };
+    // Immediacy belongs to the ids that asked for it: a carried-over id keeps
+    // the treatment its own request had, and nothing else inherits it.
+    const immediateIds = new Set<string>(options.immediate ? ids : []);
+    for (const id of options.immediateIds ?? []) immediateIds.add(id);
+    for (const id of supersededPass?.immediateIds ?? []) {
+      if (supersededPass?.pendingIds.has(id)) immediateIds.add(id);
+    }
+    const pass: ResizePass = { controller, pendingIds: new Set(pendingIds), immediateIds };
     this.activeResizePass = pass;
     const run = () => this.executeResizePass(pendingIds, pass);
     const task =
@@ -165,10 +221,7 @@ export class TerminalResizePassScheduler {
     this.activeResizePass = undefined;
   }
 
-  private async executeResizePass(
-    ids: string[],
-    pass: { controller: AbortController; pendingIds: Set<string> }
-  ): Promise<void> {
+  private async executeResizePass(ids: string[], pass: ResizePass): Promise<void> {
     const { signal } = pass.controller;
     try {
       const ordered = this.orderFocusedFirst([...new Set(ids)]);
@@ -178,7 +231,7 @@ export class TerminalResizePassScheduler {
         // connected, visible, not resize-locked) and reads fresh geometry —
         // correct here because layout has settled across the yields.
         const chunk = ordered.slice(i, i + RESIZE_PASS_CHUNK_SIZE);
-        this.batchResize(chunk);
+        this.batchResize(chunk, pass.immediateIds);
         if (this.activeResizePass === pass) {
           for (const id of chunk) pass.pendingIds.delete(id);
         }
@@ -213,6 +266,7 @@ export class TerminalResizePassScheduler {
       this.gridResizeTimer = undefined;
     }
     this.gridResizePendingIds.clear();
+    this.gridResizeImmediateIds.clear();
     for (const frameId of this.frameResizePendingPasses.keys()) {
       cancelAnimationFrame(frameId);
     }

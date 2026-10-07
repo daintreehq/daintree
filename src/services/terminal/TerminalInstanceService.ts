@@ -56,7 +56,11 @@ import { TerminalOutputRecovery } from "./TerminalOutputRecovery";
 import { TerminalWriteController } from "./TerminalWriteController";
 import { TerminalSettleWaiterRegistry } from "./TerminalSettleWaiterRegistry";
 import { TerminalBurstController } from "./TerminalBurstController";
-import { TerminalResizePassScheduler } from "./TerminalResizePassScheduler";
+import {
+  TerminalResizePassScheduler,
+  type BatchResizeOptions,
+  type ResizePassOptions,
+} from "./TerminalResizePassScheduler";
 import { yieldToScheduler } from "@/lib/schedulerYield";
 import { reportFileLinkFailure } from "./FileLinksAddon";
 import {
@@ -290,7 +294,10 @@ class TerminalInstanceService {
     this.resizePassScheduler = new TerminalResizePassScheduler({
       getInstance: (id) => this.instances.get(id),
       isResizeLocked: (id) => this.resizeController.isResizeLocked(id),
-      resize: (id, width, height) => this.resizeController.resize(id, width, height),
+      resize: (id, width, height, options) =>
+        options
+          ? this.resizeController.resize(id, width, height, options)
+          : this.resizeController.resize(id, width, height),
     });
 
     this.workerIngestController = new TerminalWorkerIngestController({
@@ -2884,16 +2891,16 @@ class TerminalInstanceService {
    * the next frame once the burst settles. See
    * {@link TerminalResizePassScheduler.scheduleBatchResize}.
    */
-  scheduleBatchResize(ids: string[]): void {
-    this.resizePassScheduler.scheduleBatchResize(ids);
+  scheduleBatchResize(ids: string[], options?: BatchResizeOptions): void {
+    this.resizePassScheduler.scheduleBatchResize(ids, options);
   }
 
   /**
    * Chunked, cancellable resize pass across a set of panels — see
    * {@link TerminalResizePassScheduler.runResizePass}.
    */
-  runResizePass(ids: string[]): void {
-    this.resizePassScheduler.runResizePass(ids);
+  runResizePass(ids: string[], options?: ResizePassOptions): void {
+    this.resizePassScheduler.runResizePass(ids, options);
   }
 
   /**
@@ -4058,6 +4065,22 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
   Object.assign(window, {
     __daintreeGetTerminalSelection: (panelId: string): string =>
       terminalInstanceService.getInstanceForE2E(panelId)?.terminal.getSelection() ?? "",
+  });
+
+  // The last `count` lines only — cheap enough to poll every frame on a pane
+  // with a deep scrollback, where reading the whole buffer would be the cost.
+  Object.assign(window, {
+    __daintreeReadTerminalTail: (panelId: string, count: number): string => {
+      const managed = terminalInstanceService.getInstanceForE2E(panelId);
+      if (!managed) return "";
+      const buf = managed.terminal.buffer.active;
+      const lines: string[] = [];
+      for (let i = Math.max(0, buf.length - count); i < buf.length; i++) {
+        const line = buf.getLine(i);
+        if (line) lines.push(line.translateToString(true));
+      }
+      return lines.join("\n");
+    },
   });
 
   (window as unknown as Record<string, unknown>).__daintreeGetTerminalBufferLength = (

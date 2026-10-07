@@ -11,6 +11,7 @@ import { GRID_RESIZE_COALESCE_MS } from "../types";
 import type { UnseenOutputSnapshot } from "../TerminalUnseenOutputTracker";
 import type { TerminalGeometry } from "@shared/types/terminal";
 import type { TerminalPaintPlane } from "../TerminalInstanceService";
+import type { BatchResizeOptions, ResizePassOptions } from "../TerminalResizePassScheduler";
 import type { TerminalPaddingPaint } from "../terminalPaddingPaint";
 import { logWarn } from "@/utils/logger";
 import { PaintSurfaceRegistry, surfaceKind, type PaintSurface } from "./PaintSurfaceRegistry";
@@ -143,6 +144,8 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   private surfaceForwarderUnsubs = new Map<string, () => void>();
   private gridResizeTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly gridResizePendingIds = new Set<string>();
+  private readonly gridResizeImmediateIds = new Set<string>();
+  private framePassPending = false;
 
   constructor(options: PaintFabricCompositorOptions) {
     if (options.surfaces.length === 0) {
@@ -854,17 +857,36 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   // surfaces — per-surface timers would turn one burst into K passes that
   // supersede each other's chunked work (Phase 1 watch-list: "cross-surface
   // resize-pass coordination").
-  scheduleBatchResize(ids: string[]): void {
+  scheduleBatchResize(ids: string[], options: BatchResizeOptions = {}): void {
     if (ids.length === 0) return;
-    for (const id of ids) this.gridResizePendingIds.add(id);
+    const burstInProgress =
+      this.gridResizeTimer !== undefined ||
+      this.gridResizePendingIds.size > 0 ||
+      this.framePassPending;
+    if (options.leading && !burstInProgress) {
+      this.runResizePass(ids, { immediate: true });
+    } else {
+      for (const id of ids) {
+        this.gridResizePendingIds.add(id);
+        if (options.leading) this.gridResizeImmediateIds.add(id);
+      }
+    }
     if (this.gridResizeTimer !== undefined) {
       clearTimeout(this.gridResizeTimer);
     }
     this.gridResizeTimer = setTimeout(() => {
       this.gridResizeTimer = undefined;
+      if (this.gridResizePendingIds.size === 0) return;
       const pendingIds = [...this.gridResizePendingIds];
+      const immediateIds = new Set(this.gridResizeImmediateIds);
       this.gridResizePendingIds.clear();
-      scheduleFrame(() => this.runResizePass(pendingIds));
+      this.gridResizeImmediateIds.clear();
+      this.framePassPending = true;
+      scheduleFrame(() => {
+        this.framePassPending = false;
+        if (immediateIds.size > 0) this.runResizePass(pendingIds, { immediateIds });
+        else this.runResizePass(pendingIds);
+      });
     }, GRID_RESIZE_COALESCE_MS);
   }
 
@@ -874,10 +896,12 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
   // fresh-measurement obligations and must survive an unrelated narrower
   // pass. Call cancelActiveResizePass() explicitly when all active surface
   // work is genuinely invalid.
-  runResizePass(ids: string[]): void {
+  runResizePass(ids: string[], options?: ResizePassOptions): void {
     if (ids.length === 0) return;
     const groups = this.groupBySurface(ids);
-    groups.forEach(({ plane, ids: group }) => plane.runResizePass(group));
+    groups.forEach(({ plane, ids: group }) =>
+      options ? plane.runResizePass(group, options) : plane.runResizePass(group)
+    );
   }
 
   cancelActiveResizePass(): void {
@@ -1149,6 +1173,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
       this.gridResizeTimer = undefined;
     }
     this.gridResizePendingIds.clear();
+    this.gridResizeImmediateIds.clear();
     this.surfaceForwarderUnsubs.forEach((unsubscribe) => unsubscribe());
     this.surfaceForwarderUnsubs.clear();
     this.planes().forEach((plane) => plane.dispose());
