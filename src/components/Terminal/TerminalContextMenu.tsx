@@ -98,6 +98,7 @@ import {
   MicOff,
   Minimize2,
   OctagonX,
+  Puzzle,
   PanelBottomClose,
   PanelTopClose,
   Pencil,
@@ -143,13 +144,16 @@ import {
   hasGenericPanelMenu,
   isPluginMenuCommandId,
   pluginMenuCommandActionId,
+  pluginMenuCommandId,
   readPanelKindMenuCapabilities,
+  resolvePluginMenuItems,
 } from "@/components/Panel/genericPanelMenu";
 import {
   getRegisteredPluginActionsSnapshot,
   subscribeToRegisteredPluginActions,
 } from "@/services/plugin/registeredPluginActions";
 import { copyWithToast } from "@/lib/copyWithToast";
+import { NO_PUBLISHED_MENUS, readPanelPublishedMenus } from "@/store/pluginPanelMenuStore";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
@@ -409,12 +413,15 @@ function TerminalContextMenuBody({
   // the home dir arrived re-resolves `~/` next time, even for an unchanged
   // selection.
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
+  // What the plugin published for this panel, as of the menu's last opening.
+  const [publishedMenus, setPublishedMenus] = useState(NO_PUBLISHED_MENUS);
   const handleMenuOpenChange = useCallback(
     (open: boolean) => {
       // A menu reopened inside its exit animation never unmounts, so the close
       // hook never runs for that close; drop the intent rather than let it open
       // the picker on some later, unrelated close.
       if (open) {
+        setPublishedMenus(readPanelPublishedMenus(terminalId));
         // Only when it changed: an unconditional set costs every open a render.
         const cachedHomeDir = systemClient.getCachedHomeDir();
         if (cachedHomeDir !== homeDir) setHomeDir(cachedHomeDir);
@@ -427,7 +434,7 @@ function TerminalContextMenuBody({
         }
       }
     },
-    [homeDir, refreshOrchestratorCandidates, terminal]
+    [homeDir, refreshOrchestratorCandidates, terminal, terminalId]
   );
 
   const captureMovePickerAnchor = useCallback(
@@ -945,7 +952,7 @@ function TerminalContextMenuBody({
         case "tour": {
           const tour = readPanelKindMenuCapabilities(
             panelKindRegistry,
-            terminal.kind ?? "terminal",
+            terminal.pluginPanelKindId ?? terminal.kind ?? "terminal",
             registeredTourIds
           ).tour;
           if (!tour) break;
@@ -959,7 +966,7 @@ function TerminalContextMenuBody({
         case "plugin-settings": {
           const pluginId = readPanelKindMenuCapabilities(
             panelKindRegistry,
-            terminal.kind ?? "terminal",
+            terminal.pluginPanelKindId ?? terminal.kind ?? "terminal",
             registeredTourIds
           ).pluginSettingsId;
           if (!pluginId) break;
@@ -975,7 +982,7 @@ function TerminalContextMenuBody({
         case "plugin-backup": {
           const pluginId = readPanelKindMenuCapabilities(
             panelKindRegistry,
-            terminal.kind ?? "terminal",
+            terminal.pluginPanelKindId ?? terminal.kind ?? "terminal",
             registeredTourIds
           ).pluginBackupId;
           if (!pluginId) break;
@@ -1108,10 +1115,18 @@ function TerminalContextMenuBody({
   const isFileBrowser = isFileBrowserPanel(terminal);
   const isDiff = isDiffPanel(terminal);
   const kind = terminal.kind ?? "terminal";
+  // A PTY-backed plugin panel is a "terminal" whose plugin kind is kept apart
+  // (#13213); its tour, settings and contributed entries are that kind's.
   const kindCapabilities = readPanelKindMenuCapabilities(
     panelKindRegistry,
-    kind,
+    terminal.pluginPanelKindId ?? kind,
     registeredTourIds,
+    registeredPluginActions
+  );
+  const pluginMenuItems = resolvePluginMenuItems(
+    kindCapabilities,
+    publishedMenus.view,
+    publishedMenus.worker,
     registeredPluginActions
   );
   const hasPty = terminal.kind ? kindCapabilities.hasPty : true;
@@ -1499,7 +1514,7 @@ function TerminalContextMenuBody({
             tourLabel: kindCapabilities.tour?.label,
             hasPluginSettings: kindCapabilities.pluginSettingsId !== null,
             hasPluginDatabases: kindCapabilities.pluginBackupId !== null,
-            pluginMenuItems: kindCapabilities.pluginMenuItems,
+            pluginMenuItems,
           }).map((group, groupIndex) => (
             <Fragment key={group[0]?.id ?? groupIndex}>
               {groupIndex > 0 && <ContextMenuSeparator />}
@@ -1806,6 +1821,17 @@ function TerminalContextMenuBody({
             <Info className={ICON_CLASS} aria-hidden="true" />
             View terminal info
           </ContextMenuItem>
+          {/* A PTY-backed plugin kind's own entries, above its tour and
+              settings as on the generic list (#13213). */}
+          {pluginMenuItems.map((item) => (
+            <ContextMenuItem
+              key={item.actionId}
+              onSelect={() => handleAction(pluginMenuCommandId(item.actionId))}
+            >
+              <Puzzle className={ICON_CLASS} aria-hidden="true" />
+              {item.label}
+            </ContextMenuItem>
+          ))}
           {tourMenuItem}
           {pluginOwnedMenuItems}
           {!isBackgrounded && (

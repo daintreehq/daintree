@@ -22,6 +22,7 @@ import { getNormalizedWorktreeList } from "./hooks/useWorktrees";
 import { usePluginActions } from "./hooks/usePluginActions";
 import { usePluginPanelKinds } from "./hooks/usePluginPanelKinds";
 import { usePluginPanelLifecycle } from "./hooks/usePluginPanelLifecycle";
+import { usePluginPanelMenuSubscription } from "./store/pluginPanelMenuStore";
 import { usePluginAgents } from "./hooks/usePluginAgents";
 import { usePluginRecipes } from "./hooks/usePluginRecipes";
 import { usePluginTours } from "./hooks/usePluginTours";
@@ -389,6 +390,7 @@ function AppInner() {
   usePluginActions();
   usePluginPanelKinds();
   usePluginPanelLifecycle();
+  usePluginPanelMenuSubscription();
   usePluginAgents();
   usePluginRecipes();
   usePluginTours();

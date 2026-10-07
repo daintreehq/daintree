@@ -197,6 +197,7 @@ import { toPluginWorktreeStatus } from "../../shared/utils/pluginWorktreeSnapsho
 import { getFleetSnapshotServiceRef, getPtyClient } from "../window/serviceRefs.js";
 import { getWindowForWebContents } from "../window/webContentsRegistry.js";
 import { makePluginTourId } from "../../shared/utils/tourIds.js";
+import type { PublishedPanelMenuItem } from "../../shared/utils/pluginPanelMenuItems.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import {
   registerPanelKind,
@@ -725,6 +726,13 @@ export class PluginService {
    * O(1) lookup at render time.
    */
   private pluginBadges = new Map<string, Map<string, PluginPanelBadge>>();
+  /**
+   * Runtime panel menus set via `host.setPanelMenuItems`, keyed `pluginId →
+   * panelId → items` (#13213). Held here for the same reason as
+   * {@link pluginBadges}: a cold-restored view gets them back through
+   * {@link pushSnapshotTo}, and an unload drops a plugin's whole set.
+   */
+  private pluginPanelMenus = new Map<string, Map<string, readonly PublishedPanelMenuItem[]>>();
   /**
    * Action handlers in flight, keyed `pluginId → actionId → count`, so the host
    * can draw a toolbar button busy and tell a view an action is running however
@@ -3756,6 +3764,7 @@ export class PluginService {
       pluginActionOwners: this.pluginActionOwners,
       actionValidators: this.actionValidators,
       pluginBadges: this.pluginBadges,
+      pluginPanelMenus: this.pluginPanelMenus,
       pluginFsWatchers: this.pluginFsWatchers,
       broadcaster: this.broadcaster,
       panelLifecycleBroker: this.panelLifecycleBroker,
@@ -3774,6 +3783,7 @@ export class PluginService {
       recordPluginLog: (boundPlugin, pluginId, level, message, fields) =>
         this.recordPluginLog(boundPlugin, pluginId, level, message, fields),
       serializePluginBadges: (pluginId) => this.serializePluginBadges(pluginId),
+      serializePluginPanelMenus: (pluginId) => this.serializePluginPanelMenus(pluginId),
       pluginDisplayName: (pluginId) => this.getPluginDisplayName(pluginId),
       pluginDataDir: (pluginId) => this.pluginDataDir(pluginId),
       isPathUnder: (root, candidate) => this.isPathUnder(root, candidate),
@@ -6253,6 +6263,15 @@ export class PluginService {
       });
     }
 
+    if (this.pluginPanelMenus.delete(pluginId)) {
+      runUnloadStep(pluginId, "clearPanelMenus", () => {
+        broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:panel-menus-cleared",
+          payload: { pluginId },
+        });
+      });
+    }
+
     if (decorationScopes && decorationScopes.length > 0) {
       runUnloadStep(pluginId, "broadcastDecorationsChanged", () => {
         for (const scope of new Set(decorationScopes)) {
@@ -6475,6 +6494,15 @@ export class PluginService {
    */
   private serializePluginBadges(pluginId: string): Record<string, PluginPanelBadge> {
     const panelMap = this.pluginBadges.get(pluginId);
+    if (!panelMap || panelMap.size === 0) return {};
+    return Object.fromEntries(panelMap);
+  }
+
+  /** One plugin's runtime panel menus (`panelId → items`), empty when it has none. */
+  private serializePluginPanelMenus(
+    pluginId: string
+  ): Record<string, readonly PublishedPanelMenuItem[]> {
+    const panelMap = this.pluginPanelMenus.get(pluginId);
     if (!panelMap || panelMap.size === 0) return {};
     return Object.fromEntries(panelMap);
   }
@@ -7327,6 +7355,25 @@ export class PluginService {
         webContents.send(CHANNELS.EVENTS_PUSH, {
           name: "plugin:panel-badges-changed",
           payload: { pluginId, badges: this.serializePluginBadges(pluginId) },
+        });
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+    // Scoped like the running-action replay below: a project plugin's menus
+    // belong to its own project's views.
+    for (const pluginId of this.pluginPanelMenus.keys()) {
+      const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
+      if (
+        owningProjectId !== null &&
+        !getProjectRendererTargets(owningProjectId).some((wc) => wc.id === webContents.id)
+      ) {
+        continue;
+      }
+      try {
+        webContents.send(CHANNELS.EVENTS_PUSH, {
+          name: "plugin:panel-menus-changed",
+          payload: { pluginId, menus: this.serializePluginPanelMenus(pluginId) },
         });
       } catch {
         // Silently ignore send failures during window initialization/disposal.

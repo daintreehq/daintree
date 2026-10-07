@@ -330,6 +330,13 @@ interface BasePanelData {
    * when its registration is gone.
    */
   pluginId?: string;
+  /**
+   * The plugin kind a PTY-backed plugin panel was opened as (#13213). Such a
+   * panel is created as a `terminal`, so `kind` no longer names its plugin;
+   * this does, for the lifecycle feed and the menus that find the kind's
+   * plugin. Runtime-only: not persisted, so a restored panel is a terminal.
+   */
+  pluginPanelKindId?: string;
   /** Persisted creation timestamp (milliseconds since epoch). */
   createdAt?: number;
   /**

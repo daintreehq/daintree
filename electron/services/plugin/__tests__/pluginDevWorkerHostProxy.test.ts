@@ -979,6 +979,23 @@ describe("PluginDevWorkerHostProxy runtime-surface validation rejects, never thr
     expect(sent.some((m) => m.type === "host-notify" && m.method === "setPanelBadge")).toBe(false);
   });
 
+  it("setPanelMenuItems notifies main with the list, and rejects an empty panelId locally (#13213)", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.setPanelMenuItems("", [])).rejects.toThrow(
+      /setPanelMenuItems: panelId/
+    );
+    await proxy.host.setPanelMenuItems("panel-1", [{ actionId: "acme.open" }]);
+    await proxy.host.setPanelMenuItems("panel-1", null);
+    expect(
+      sent
+        .filter((m) => m.type === "host-notify" && m.method === "setPanelMenuItems")
+        .map((m) => (m as { params: unknown }).params)
+    ).toEqual([
+      { panelId: "panel-1", items: [{ actionId: "acme.open" }] },
+      { panelId: "panel-1", items: null },
+    ]);
+  });
+
   it("invalidateFileDecorations rejects an empty scope without notifying main", async () => {
     const { proxy, sent } = makeProxy();
     await expect(proxy.host.invalidateFileDecorations("", undefined)).rejects.toThrow(

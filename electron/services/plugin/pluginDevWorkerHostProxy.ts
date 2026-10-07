@@ -1151,6 +1151,19 @@ export class PluginDevWorkerHostProxy {
         this.notify("setPanelBadge", { panelId, badge: badge ?? null });
         return Promise.resolve();
       },
+      // Fire-and-forget like setPanelBadge; the real host vets the list.
+      setPanelMenuItems: (panelId, items) => {
+        if (typeof panelId !== "string" || panelId.length === 0) {
+          // Reject (not sync throw): runtime-surface Promise method (#10617).
+          return Promise.reject(
+            new Error(
+              `Plugin "${this.pluginId}" setPanelMenuItems: panelId must be a non-empty string`
+            )
+          );
+        }
+        this.notify("setPanelMenuItems", { panelId, items: items ?? null });
+        return Promise.resolve();
+      },
       showToast: (options: PluginToastOptions) =>
         this.call<void>("showToast", {
           message: options?.message,

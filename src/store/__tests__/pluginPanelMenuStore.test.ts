@@ -1,0 +1,120 @@
+// @vitest-environment jsdom
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import type { PublishedPanelMenuItem } from "@shared/utils/pluginPanelMenuItems";
+
+type ChangedPayload = {
+  pluginId: string;
+  menus: Record<string, readonly PublishedPanelMenuItem[]>;
+};
+type ClearedPayload = { pluginId: string };
+
+const { onChangedMock, onClearedMock } = vi.hoisted(() => ({
+  onChangedMock: vi.fn(),
+  onClearedMock: vi.fn(),
+}));
+
+let changedCb: ((p: ChangedPayload) => void) | null = null;
+let clearedCb: ((p: ClearedPayload) => void) | null = null;
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  changedCb = null;
+  clearedCb = null;
+  onChangedMock.mockImplementation((cb: (p: ChangedPayload) => void) => {
+    changedCb = cb;
+    return () => {};
+  });
+  onClearedMock.mockImplementation((cb: (p: ClearedPayload) => void) => {
+    clearedCb = cb;
+    return () => {};
+  });
+  (globalThis as unknown as { window: unknown }).window = Object.assign(globalThis.window ?? {}, {
+    electron: {
+      plugin: {
+        onPanelMenusChanged: onChangedMock,
+        onPanelMenusCleared: onClearedMock,
+      },
+    },
+  });
+});
+
+async function load() {
+  const mod = await import("../pluginPanelMenuStore");
+  mod._resetPluginPanelMenuStoreForTest();
+  mod.usePluginPanelMenuStore.getState().init();
+  return mod;
+}
+
+const open = { actionId: "acme.open" };
+const exportCsv = { actionId: "acme.export", label: "CSV" };
+
+describe("pluginPanelMenuStore", () => {
+  it("subscribes once, however often init runs", async () => {
+    const mod = await load();
+    mod.usePluginPanelMenuStore.getState().init();
+    expect(onChangedMock).toHaveBeenCalledTimes(1);
+    expect(onClearedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays retryable while the bridge is missing", async () => {
+    const mod = await import("../pluginPanelMenuStore");
+    mod._resetPluginPanelMenuStoreForTest();
+    (globalThis as unknown as { window: { electron?: unknown } }).window.electron = {};
+    mod.usePluginPanelMenuStore.getState().init();
+    (globalThis as unknown as { window: { electron?: unknown } }).window.electron = {
+      plugin: { onPanelMenusChanged: onChangedMock, onPanelMenusCleared: onClearedMock },
+    };
+    mod.usePluginPanelMenuStore.getState().init();
+    expect(onChangedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats each backend event as the plugin's complete map", async () => {
+    const mod = await load();
+    changedCb!({ pluginId: "acme", menus: { panelA: [open], panelB: [exportCsv] } });
+    changedCb!({ pluginId: "acme", menus: { panelB: [open] } });
+    expect(mod.readPanelPublishedMenus("panelA")).toBe(mod.NO_PUBLISHED_MENUS);
+    expect(mod.readPanelPublishedMenus("panelB").worker).toEqual({ acme: [open] });
+  });
+
+  it("keeps two plugins' lists on one panel apart, and clears one on its unload", async () => {
+    const mod = await load();
+    changedCb!({ pluginId: "acme", menus: { panelA: [open] } });
+    changedCb!({ pluginId: "other", menus: { panelA: [exportCsv] } });
+    clearedCb!({ pluginId: "acme" });
+    expect(mod.readPanelPublishedMenus("panelA").worker).toEqual({ other: [exportCsv] });
+  });
+
+  it("keeps the store untouched when a republish changes nothing", async () => {
+    const mod = await load();
+    changedCb!({ pluginId: "acme", menus: { panelA: [open] } });
+    const before = mod.usePluginPanelMenuStore.getState().workerMenusByPanelId;
+    changedCb!({ pluginId: "acme", menus: { panelA: [{ actionId: "acme.open" }] } });
+    expect(mod.usePluginPanelMenuStore.getState().workerMenusByPanelId).toBe(before);
+  });
+
+  it("holds the view's list apart from the backend's", async () => {
+    const mod = await load();
+    changedCb!({ pluginId: "acme", menus: { panelA: [open] } });
+    mod.usePluginPanelMenuStore.getState().setViewItems("panelA", [exportCsv]);
+    expect(mod.readPanelPublishedMenus("panelA")).toEqual({
+      view: [exportCsv],
+      worker: { acme: [open] },
+    });
+
+    mod.usePluginPanelMenuStore.getState().setViewItems("panelA", []);
+    expect(mod.readPanelPublishedMenus("panelA")).toEqual({ view: [], worker: { acme: [open] } });
+  });
+
+  it("drops every list on a closed panel and nothing on another", async () => {
+    const mod = await load();
+    changedCb!({ pluginId: "acme", menus: { panelA: [open], panelB: [open] } });
+    mod.usePluginPanelMenuStore.getState().setViewItems("panelA", [exportCsv]);
+    mod.usePluginPanelMenuStore.getState().removePanel("panelA");
+    expect(mod.readPanelPublishedMenus("panelA")).toBe(mod.NO_PUBLISHED_MENUS);
+    expect(mod.readPanelPublishedMenus("panelB").worker).toEqual({ acme: [open] });
+
+    const before = mod.usePluginPanelMenuStore.getState();
+    mod.usePluginPanelMenuStore.getState().removePanel("missing");
+    expect(mod.usePluginPanelMenuStore.getState()).toBe(before);
+  });
+});

@@ -15,6 +15,7 @@ export const PLUGIN_SDK_REACT_RUNTIME_EXPORTS = [
   "useHostChannel",
   "useHostStore",
   "useNow",
+  "usePanelMenuItems",
   "usePanelToolbarItem",
   "usePluginEvent",
   "usePluginEventSelector",

@@ -182,6 +182,16 @@ export interface PanelMenuItemContribution {
   label?: string;
 }
 
+/**
+ * Most entries one publisher may put on a panel's menu at runtime, through
+ * `PanelViewProps.setMenuItems` or `host.setPanelMenuItems`. Separate from the
+ * manifest's {@link PANEL_MENU_MAX_ITEMS}.
+ */
+export const PANEL_RUNTIME_MENU_MAX_ITEMS = 5;
+
+/** Most characters a menu entry's label may carry; a longer runtime label is cut. */
+export const PANEL_MENU_LABEL_MAX = 80;
+
 export interface ToolbarButtonContribution {
   id: string;
   label: string;
@@ -662,6 +672,27 @@ export interface PanelViewProps {
     actionId: string,
     state: PluginPanelToolbarItemState | null
   ) => void;
+  /**
+   * Publishes the contextual actions this panel's ⋯ and right-click menus
+   * offer right now, in order, in the plugin's own group after the manifest's
+   * `menu` entries. Each call replaces the whole list; `null` (or `[]`) clears
+   * it. Every `actionId` must be one of your own actions, written
+   * `"{manifestId}.{id}"` like the manifest's `menu`; an entry shows while its
+   * action is registered and is dispatched with `{ panelId }`, through the
+   * action's own danger tier. At most five entries; labels default to the
+   * action's title and are cut at 80 characters. An invalid list (a foreign or
+   * built-in action, a duplicate, too many entries) is ignored whole.
+   *
+   * The list belongs to the panel, so it survives the view re-rendering,
+   * unmounting and remounting, and is cleared when the panel closes or the view
+   * reloads. A menu that is already open keeps the list it opened with.
+   *
+   * The setter belongs to the attempt that received it: a call held past this
+   * attempt's teardown does nothing. `usePanelMenuItems` wraps it.
+   *
+   * Absent where the panel has no host menu (a surface), so call it optionally.
+   */
+  readonly setMenuItems?: (items: readonly PanelMenuItemContribution[] | null) => void;
   /**
    * Your actions whose handlers are running right now, by `actionId` as the
    * manifest writes it — however they were dispatched: the palette, a menu,
@@ -4749,6 +4780,38 @@ export interface PluginHostApi extends PluginActivationApi {
    * still rejected synchronously worker-side.)
    */
   setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
+  /**
+   * Publish the contextual actions the ⋯ and right-click menus of one of this
+   * plugin's own panels offer right now — the backend-side twin of the view's
+   * `PanelViewProps.setMenuItems`, and the only way a PTY-backed panel (which
+   * has no view) gets entries of its own. They appear in the plugin's group,
+   * after the manifest's `menu` entries and any the view published; the host's
+   * own entries keep their place and order.
+   *
+   * Each call replaces this plugin's list for that panel; `null` (or `[]`)
+   * clears it. Every `actionId` must be one of your own actions, written
+   * `"{manifestId}.{id}"`; an entry shows while its action is registered and is
+   * dispatched with `{ panelId }`, through the action's own danger tier. At most
+   * five entries; labels default to the action's title and are cut at 80
+   * characters.
+   * Panel ids come from {@link onDidChangePanelLifecycle} or the `{ panelId }`
+   * that `panel.openPluginPanel` returns.
+   *
+   * Entries only ever show on a panel of a kind this plugin contributed. The
+   * list is not persisted: clear it when the panel reports `removed`, and
+   * republish after a restart. Every list this plugin published is dropped when
+   * it unloads.
+   *
+   * Like {@link setPanelBadge} this is NOT revoke-guarded and becomes a silent
+   * no-op once the plugin is unloaded. An empty `panelId` or an invalid list (a
+   * foreign or built-in action, a duplicate, too many entries) rejects. (In the
+   * dev-mode hot-reload worker it is fire-and-forget: an invalid list is logged
+   * in the host rather than rejected.)
+   */
+  setPanelMenuItems(
+    panelId: string,
+    items: readonly PanelMenuItemContribution[] | null
+  ): Promise<void>;
   /**
    * Ask the host to discard one of this plugin's own panel views and mount a
    * fresh one (#12610) — the backend-side twin of the view's

@@ -58,6 +58,7 @@ function makeHost() {
     registerFileDecorationProvider: vi.fn(() => vi.fn()),
     invalidateFileDecorations: vi.fn(),
     setPanelBadge: vi.fn(async () => {}),
+    setPanelMenuItems: vi.fn(async () => {}),
     showToast: vi.fn(async () => {}),
     showQuickPick: vi.fn(async (): Promise<unknown> => undefined),
     sendToAgent: vi.fn(async (): Promise<unknown> => ({ status: "drafted", terminalId: "t-1" })),
@@ -598,6 +599,25 @@ describe("PluginDevWorkerMainBridge", () => {
     });
     await flush();
     expect(host.setPanelBadge).toHaveBeenCalledWith("panel-1", null);
+  });
+
+  it("forwards setPanelMenuItems host-notify to the real host, which vets the list (#13213)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "setPanelMenuItems",
+      params: { panelId: "panel-1", items: [{ actionId: "acme.open", label: "Open" }] },
+    });
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "setPanelMenuItems",
+      params: { panelId: "panel-1", items: null },
+    });
+    await flush();
+    expect(host.setPanelMenuItems).toHaveBeenNthCalledWith(1, "panel-1", [
+      { actionId: "acme.open", label: "Open" },
+    ]);
+    expect(host.setPanelMenuItems).toHaveBeenNthCalledWith(2, "panel-1", null);
   });
 
   it("fails closed on a typed handler whose required capability is undeclared", async () => {

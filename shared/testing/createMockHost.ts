@@ -23,6 +23,7 @@ import { databaseError, openPluginDatabase } from "../utils/pluginDatabaseHandle
 import { validateAgentContextPayload } from "../utils/agentContextDrag.js";
 import { normalizePluginAllAgentsSnapshot } from "../utils/pluginAllAgentsSnapshot.js";
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
+import { normalizePanelMenuItems } from "../utils/pluginPanelMenuItems.js";
 import {
   PLUGIN_INVOKE_MAX_RESULT_BYTES,
   PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS,
@@ -44,6 +45,7 @@ import type {
 import type { NotificationType } from "../types/notification.js";
 import type {
   ActionHandler,
+  PanelMenuItemContribution,
   PluginActionContribution,
   PluginRenderPdfOptions,
   PluginChannelSchema,
@@ -192,6 +194,15 @@ export interface SetPanelBadgeRecord {
   badge: PluginPanelBadge | null;
 }
 
+/**
+ * Captured `host.setPanelMenuItems(panelId, items)` calls, items as the plugin
+ * wrote them. `null` (or `[]`) clears.
+ */
+export interface SetPanelMenuItemsRecord {
+  panelId: string;
+  items: readonly PanelMenuItemContribution[] | null;
+}
+
 /** Captured `host.showQuickPick(items, options)` calls. */
 export interface ShowQuickPickRecord {
   items: PluginQuickPickItem[];
@@ -249,6 +260,7 @@ export interface MockHostState {
   readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
   readonly setPanelBadgeCalls: ReadonlyArray<SetPanelBadgeRecord>;
+  readonly setPanelMenuItemsCalls: ReadonlyArray<SetPanelMenuItemsRecord>;
   /**
    * Panel ids passed to `host.reloadPanel(panelId)`, in order (#12610). Only
    * calls that got past argument validation are recorded.
@@ -824,6 +836,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const registeredMcpTools: RegisteredMcpToolsRecord[] = [];
   const invalidationCalls: InvalidationRecord[] = [];
   const setPanelBadgeCalls: SetPanelBadgeRecord[] = [];
+  const setPanelMenuItemsCalls: SetPanelMenuItemsRecord[] = [];
   const reloadPanelCalls: string[] = [];
   /** Latest simulated lifecycle event per panel id, for `reloadPanel`. */
   const panelPhases = new Map<string, PluginPanelLifecycleEvent>();
@@ -1870,6 +1883,19 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       setPanelBadgeCalls.push({ panelId, badge: badge ?? null });
       return Promise.resolve();
     },
+    setPanelMenuItems(panelId, items) {
+      // Vetted by the host's own normalizer, so a list the real host refuses
+      // rejects here too.
+      if (typeof panelId !== "string" || panelId.length === 0) {
+        return Promise.reject(new Error("setPanelMenuItems: panelId must be a non-empty string"));
+      }
+      const result = normalizePanelMenuItems(items, mockManifestId, pluginId);
+      if (!result.ok) {
+        return Promise.reject(new Error(`setPanelMenuItems: invalid items — ${result.error}`));
+      }
+      setPanelMenuItemsCalls.push({ panelId, items: items ?? null });
+      return Promise.resolve();
+    },
     async reloadPanel(panelId) {
       if (typeof panelId !== "string" || panelId.trim().length === 0) {
         throw new Error("reloadPanel: panelId must be a non-empty string");
@@ -2493,6 +2519,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     registeredMcpTools,
     invalidationCalls,
     setPanelBadgeCalls,
+    setPanelMenuItemsCalls,
     reloadPanelCalls,
     showQuickPickCalls,
     showInputBoxCalls,

@@ -15,7 +15,9 @@ import {
   hasGenericPanelMenu,
   isPluginMenuCommandId,
   pluginMenuCommandActionId,
+  pluginMenuCommandId,
   readPanelKindMenuCapabilities,
+  resolvePluginMenuItems,
   type GenericPanelMenuInput,
 } from "../genericPanelMenu";
 import { getRegisteredTourIdsSnapshot, registerTour } from "@/components/Tour/tourRegistry";
@@ -109,6 +111,9 @@ describe("readPanelKindMenuCapabilities", () => {
         pluginSettingsId: null,
         pluginBackupId: null,
         pluginMenuItems: [],
+        pluginOwnerId: [PTY_PLUGIN_KIND, VIEW_PLUGIN_KIND, UNDOCKABLE_PLUGIN_KIND].includes(kind)
+          ? "acme"
+          : null,
       });
     }
   });
@@ -472,5 +477,81 @@ describe("canReloadPanelKind (#12611)", () => {
 
   it.each(["file", "file-browser", "diff"])("withholds it from the built-in %s kind", (kind) => {
     expect(canReloadPanelKind(kind)).toBe(false);
+  });
+});
+
+describe("resolvePluginMenuItems (#13213)", () => {
+  const registered = new Map([
+    ["acme.refresh", "Refresh"],
+    ["acme.open", "Open"],
+    ["acme.export", "Export"],
+    ["other.run", "Run"],
+  ]);
+  const owned = {
+    pluginMenuItems: [{ actionId: "acme.refresh", label: "Refresh" }],
+    pluginOwnerId: "acme",
+  };
+
+  it("puts the manifest's entries first, then the view's, then the backend's", () => {
+    expect(
+      resolvePluginMenuItems(
+        owned,
+        [{ actionId: "acme.open", label: "Open row" }],
+        { acme: [{ actionId: "acme.export" }] },
+        registered
+      )
+    ).toEqual([
+      { actionId: "acme.refresh", label: "Refresh" },
+      { actionId: "acme.open", label: "Open row" },
+      { actionId: "acme.export", label: "Export" },
+    ]);
+  });
+
+  it("offers each action once, its first place winning", () => {
+    expect(
+      resolvePluginMenuItems(
+        owned,
+        [{ actionId: "acme.refresh", label: "Again" }, { actionId: "acme.open" }],
+        { acme: [{ actionId: "acme.open", label: "Later" }] },
+        registered
+      )
+    ).toEqual([
+      { actionId: "acme.refresh", label: "Refresh" },
+      { actionId: "acme.open", label: "Open" },
+    ]);
+  });
+
+  it("shows only the panel's own plugin's backend list, and only its own registered actions", () => {
+    expect(
+      resolvePluginMenuItems(
+        owned,
+        [{ actionId: "other.run" }, { actionId: "acme.unregistered" }],
+        { other: [{ actionId: "other.run" }] },
+        registered
+      )
+    ).toEqual(owned.pluginMenuItems);
+  });
+
+  it("publishes nothing onto a built-in panel", () => {
+    const builtIn = { pluginMenuItems: [], pluginOwnerId: null };
+    expect(
+      resolvePluginMenuItems(builtIn, [{ actionId: "acme.open" }], { acme: [] }, registered)
+    ).toEqual([]);
+  });
+
+  it("returns the manifest list itself when nothing was published", () => {
+    expect(resolvePluginMenuItems(owned, [], {}, registered)).toBe(owned.pluginMenuItems);
+  });
+
+  it("dispatches a published entry through the same command id as a manifest one", () => {
+    const [group] = groups({
+      pluginMenuItems: resolvePluginMenuItems(owned, [{ actionId: "acme.open" }], {}, registered),
+    }).filter((g) => g.some((c) => isPluginMenuCommandId(c.id)));
+    expect(group!.map((c) => c.id)).toEqual([
+      pluginMenuCommandId("acme.refresh"),
+      pluginMenuCommandId("acme.open"),
+    ]);
+    expect(group!.map((c) => (isPluginMenuCommandId(c.id) ? pluginMenuCommandActionId(c.id) : null)))
+      .toEqual(["acme.refresh", "acme.open"]);
   });
 });

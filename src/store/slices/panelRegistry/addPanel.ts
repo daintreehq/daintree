@@ -667,6 +667,12 @@ export const createAddPanelActions = (
     // PTY-backed plugin-contributed kinds are rare today, but stamp pluginId
     // if the registry has an entry so the panel survives plugin removal.
     const ptyKindConfig = getPanelKindConfig(kind);
+    // A PTY-backed plugin kind collapses to "terminal" above; keep the kind it
+    // was opened as, so its plugin can still be found for this panel (#13213).
+    const pluginPanelKindId =
+      requestedKind !== kind && getPanelKindConfig(requestedKind)?.extensionId !== undefined
+        ? requestedKind
+        : undefined;
     const ptyPluginId = ptyKindConfig?.extensionId ?? options.pluginId;
     const ptyExtensionStateVersion =
       options.extensionStateVersion ??
@@ -783,6 +789,7 @@ export const createAddPanelActions = (
       extensionState: options.extensionState,
       extensionStateVersion: ptyExtensionStateVersion,
       pluginId: ptyPluginId,
+      ...(pluginPanelKindId !== undefined && { pluginPanelKindId }),
       spawnedBy: options.spawnedBy,
       focusPolicy: options.focusPolicy,
       excludeFromPersistence: options.excludeFromPersistence,

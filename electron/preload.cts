@@ -193,6 +193,7 @@ import type {
   PluginPanelBadge,
 } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
+import type { PublishedPanelMenuItem } from "../shared/utils/pluginPanelMenuItems.js";
 import type { ToolbarButtonConfig } from "../shared/config/toolbarButtonRegistry.js";
 
 export type { ElectronAPI };
@@ -3572,6 +3573,14 @@ function buildElectronApi(): ElectronAPI {
       ) => _eventBusOn("plugin:panel-badges-changed", callback),
       onPanelBadgesCleared: (callback: (payload: { pluginId: string }) => void) =>
         _eventBusOn("plugin:panel-badges-cleared", callback),
+      onPanelMenusChanged: (
+        callback: (payload: {
+          pluginId: string;
+          menus: Record<string, readonly PublishedPanelMenuItem[]>;
+        }) => void
+      ) => _eventBusOn("plugin:panel-menus-changed", callback),
+      onPanelMenusCleared: (callback: (payload: { pluginId: string }) => void) =>
+        _eventBusOn("plugin:panel-menus-cleared", callback),
       onActionsRunningChanged: (
         callback: (payload: { pluginId: string; actionIds: string[] }) => void
       ) => _eventBusOn("plugin:actions-running-changed", callback),
