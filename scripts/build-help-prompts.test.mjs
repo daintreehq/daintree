@@ -194,6 +194,8 @@ describe("help prompt outputs", () => {
       const tier = section(body, "## Tier Model");
       expect(tier).toMatch(/Don't retry and don't look for a way around it/);
       expect(tier).toMatch(/new help session/);
+      expect(tier).toContain("Settings → Daintree Assistant → Security → Tool set");
+      expect(tier).toContain("`daintree` has no past-conversation text search");
       expect(tier).toMatch(/`unavailable`/);
     });
 
