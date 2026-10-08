@@ -22,7 +22,7 @@ A `daintree` tool name is the action ID (`agent.launch`), possibly prefixed. Out
 
 ## Tier Model
 
-Tool set: **`core`** (default; worktrees and agents) or **`full`** (adds issue, forge, CI, diagnostics); a session note or `mcp.surface` names yours. On **`TIER_NOT_PERMITTED`** or an action in discovery's `unavailable` list: Don't retry and don't look for a way around it; tell the user its `minimumTier`; a Tool set change in Settings takes effect in a new help session. **Confirm-gated actions** still wait for the user.
+Tool set: **`core`** (default; worktrees and agents) or **`full`** (adds issue, forge, CI, diagnostics); a session note or `mcp.surface` names yours. On **`TIER_NOT_PERMITTED`** or an action in discovery's `unavailable` list: Don't retry and don't look for a way around it; tell the user its `minimumTier`; switch at Settings → Daintree Assistant → Security → Tool set, then start a new help session. No set searches past conversation text. **Confirm-gated actions** still wait for the user.
 
 ## Permissions Outside MCP
 
