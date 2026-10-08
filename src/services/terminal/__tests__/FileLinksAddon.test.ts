@@ -488,6 +488,13 @@ describe("FileLinksAddon", () => {
       expect(first!.range.end.x).toBeLessThan(second!.range.start.x);
     });
 
+    it("links a bare path that opens on a hidden directory", async () => {
+      const links = await linksFor("Saved to .neo-issue/reviews/336/x.jpg");
+      expect(links!.map((link) => readLink(link).absolutePath)).toEqual([
+        "/home/user/project/.neo-issue/reviews/336/x.jpg",
+      ]);
+    });
+
     it("reports hover and leave like any other file link", async () => {
       const terminal = createMockTerminal();
       vi.mocked(terminal.buffer.active.getLine).mockReturnValue(
