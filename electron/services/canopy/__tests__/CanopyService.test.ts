@@ -3203,4 +3203,33 @@ describe("CanopyService across a resize", () => {
     await h.service.scan();
     expect(h.classify).toHaveBeenCalledTimes(1);
   });
+
+  it("writes words owed on open from the redrawn screen, without reading it again", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({
+      now: () => clock,
+      classify: asking,
+      closed: true,
+      backgroundPollMs: 60_000,
+      history: new Map([["a", "⏺ Earlier work."]]),
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "question" }));
+    h.screens.set("a", drawn(120));
+    await h.service.scan();
+    await settle();
+    expect(h.classify).toHaveBeenCalledTimes(1);
+    expect(h.describe).not.toHaveBeenCalled();
+
+    h.service.noteResize("a");
+    h.screens.set("a", drawn(64));
+    clock += 500;
+    await h.service.scan();
+    clock += CANOPY_REFLOW_MS;
+    await h.service.scan();
+    h.service.setActive(true);
+    await vi.waitFor(() => expect(h.describe).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(h.classify).toHaveBeenCalledTimes(1);
+    expect(h.describe.mock.calls[0]![0].screen).toContain("…)");
+  });
 });

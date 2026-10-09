@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { getViewWorkspaceId } from "./viewWorkspaceId";
 import type { CanopyOrder } from "@/components/Canopy/canopyOrder";
 import {
   CANOPY_URGENT_PRIORITY,
@@ -53,7 +54,7 @@ export type CanopyScope = "all" | "project";
 export type { CanopyOrder };
 
 const SCOPE_STORAGE_KEY = "daintree-canopy-scope";
-/** Shared by every project view, so a view opened or reloaded since still opens on the order last shown. */
+/** Read by every project view, so a view opened or reloaded since still opens on the order last shown. */
 const ORDER_STORAGE_KEY = "daintree-canopy-order";
 export const CANOPY_ACKNOWLEDGED_STORAGE_KEY = "daintree-canopy-acknowledged";
 
@@ -124,13 +125,28 @@ function loadScope(): CanopyScope {
   }
 }
 
+/** Project orders kept at most, the least recently saved dropped first. */
+const MAX_PROJECT_ORDERS = 20;
+
+/**
+ * Where a scope's order is stored: every project view shares the one for every
+ * project's agents, and keeps its own for its project's.
+ */
+function orderSlot(scope: CanopyScope): string {
+  return scope === "all" ? "all" : `project:${getViewWorkspaceId() ?? ""}`;
+}
+
+function readStoredOrders(): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(window.localStorage.getItem(ORDER_STORAGE_KEY) ?? "null");
+  return parsed && typeof parsed === "object" ? { ...parsed } : {};
+}
+
 function loadOrders(): Partial<Record<CanopyScope, CanopyOrder>> {
   try {
-    const parsed: unknown = JSON.parse(window.localStorage.getItem(ORDER_STORAGE_KEY) ?? "null");
-    if (!parsed || typeof parsed !== "object") return {};
+    const stored = readStoredOrders();
     const orders: Partial<Record<CanopyScope, CanopyOrder>> = {};
     for (const scope of ["all", "project"] as const) {
-      const ids: unknown = Reflect.get(parsed, scope);
+      const ids = stored[orderSlot(scope)];
       if (Array.isArray(ids) && ids.every((id) => typeof id === "string")) {
         // Ranked for no scan this view has seen, so the open places it afresh
         // by what is known now, starting from the order it was left in.
@@ -145,13 +161,19 @@ function loadOrders(): Partial<Record<CanopyScope, CanopyOrder>> {
 
 /**
  * Saves one scope's order over what is stored, so a project view saving its
- * own never drops the other scope another view saved meanwhile.
+ * own never drops what another view saved meanwhile.
  */
 function saveOrder(scope: CanopyScope, ids: readonly string[]): void {
   try {
-    const parsed: unknown = JSON.parse(window.localStorage.getItem(ORDER_STORAGE_KEY) ?? "null");
-    const stored = parsed && typeof parsed === "object" ? { ...parsed } : {};
-    window.localStorage.setItem(ORDER_STORAGE_KEY, JSON.stringify({ ...stored, [scope]: ids }));
+    const slot = orderSlot(scope);
+    const stored = readStoredOrders();
+    delete stored[slot];
+    stored[slot] = ids;
+    const projects = Object.keys(stored).filter((key) => key.startsWith("project:"));
+    for (const key of projects.slice(0, Math.max(0, projects.length - MAX_PROJECT_ORDERS))) {
+      delete stored[key];
+    }
+    window.localStorage.setItem(ORDER_STORAGE_KEY, JSON.stringify(stored));
   } catch {
     // Best effort: this view still keeps it for the session.
   }
