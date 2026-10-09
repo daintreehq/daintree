@@ -53,6 +53,8 @@ export type CanopyScope = "all" | "project";
 export type { CanopyOrder };
 
 const SCOPE_STORAGE_KEY = "daintree-canopy-scope";
+/** Shared by every project view, so a view opened or reloaded since still opens on the order last shown. */
+const ORDER_STORAGE_KEY = "daintree-canopy-order";
 export const CANOPY_ACKNOWLEDGED_STORAGE_KEY = "daintree-canopy-acknowledged";
 
 function promptKey(card: Pick<CanopyCard, "spawnedAt" | "revision">): string {
@@ -122,6 +124,39 @@ function loadScope(): CanopyScope {
   }
 }
 
+function loadOrders(): Partial<Record<CanopyScope, CanopyOrder>> {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(ORDER_STORAGE_KEY) ?? "null");
+    if (!parsed || typeof parsed !== "object") return {};
+    const orders: Partial<Record<CanopyScope, CanopyOrder>> = {};
+    for (const scope of ["all", "project"] as const) {
+      const ids: unknown = Reflect.get(parsed, scope);
+      if (Array.isArray(ids) && ids.every((id) => typeof id === "string")) {
+        // Ranked for no scan this view has seen, so the open places it afresh
+        // by what is known now, starting from the order it was left in.
+        orders[scope] = { ids, rankedFor: null, urgent: [] };
+      }
+    }
+    return orders;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Saves one scope's order over what is stored, so a project view saving its
+ * own never drops the other scope another view saved meanwhile.
+ */
+function saveOrder(scope: CanopyScope, ids: readonly string[]): void {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(ORDER_STORAGE_KEY) ?? "null");
+    const stored = parsed && typeof parsed === "object" ? { ...parsed } : {};
+    window.localStorage.setItem(ORDER_STORAGE_KEY, JSON.stringify({ ...stored, [scope]: ids }));
+  } catch {
+    // Best effort: this view still keeps it for the session.
+  }
+}
+
 function saveScope(scope: CanopyScope): void {
   try {
     window.localStorage.setItem(SCOPE_STORAGE_KEY, scope);
@@ -162,8 +197,19 @@ export const useCanopyStore = create<CanopyState>((set) => ({
   snapshot: null,
   reads: {},
   acknowledged: readAcknowledged(),
-  orders: {},
-  setOrder: (scope, order) => set((state) => ({ orders: { ...state.orders, [scope]: order } })),
+  orders: loadOrders(),
+  setOrder: (scope, order) =>
+    set((state) => {
+      const was = state.orders[scope]?.ids;
+      if (
+        was === undefined ||
+        was.length !== order.ids.length ||
+        was.some((id, i) => order.ids[i] !== id)
+      ) {
+        saveOrder(scope, order.ids);
+      }
+      return { orders: { ...state.orders, [scope]: order } };
+    }),
   archivedExpanded: false,
   setArchivedExpanded: (expanded) => set({ archivedExpanded: expanded }),
   scope: loadScope(),

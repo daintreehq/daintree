@@ -2,8 +2,11 @@
 export const CANOPY_RANK_IDLE_MS = 5_000;
 /** The least time between two re-ranks the user didn't ask for. */
 export const CANOPY_RANK_SPACING_MS = 10_000;
-/** The longest an opening list waits for the cards it is owed before it paints. */
-export const CANOPY_OPEN_SETTLE_MS = 4_000;
+/**
+ * The longest an opening list keeps placing runs as their scores land, before
+ * it holds still like any other: long enough for the readings an open sets off.
+ */
+export const CANOPY_REVEAL_MS = 15_000;
 
 /** One scope's order: each scope ranks its own runs, so switching never buries another's. */
 export interface CanopyOrder {
@@ -25,6 +28,12 @@ export interface CanopyRankInput {
   now: number;
   /** The panel is opening, or switching scope: the user's own move. */
   opening: boolean;
+  /**
+   * Just opened, and readings it set off are still landing: the list shows
+   * every run at once in its last known order and moves each to its place as
+   * its score arrives, rather than holding still for a pause.
+   */
+  revealing?: boolean;
   /** The user pressed Refresh since the last rank. */
   requested: boolean;
   /** A press is under way: the row under it must not move between down and up. */
@@ -90,12 +99,25 @@ export function nextCanopyOrder(order: CanopyOrder | null, input: CanopyRankInpu
     };
   }
 
-  if (!stale || input.pointerInList || input.pressing) return { kind: "hold" };
+  if (input.pressing) return { kind: "hold" };
+  // Revealing, every score that lands moves its run at once — a classification
+  // lands well before the scan that asked for it ends, so this goes by the
+  // priorities themselves rather than the scan's mark.
+  if (input.revealing) {
+    return sameIds(ranked.ids, order.ids) && !stale
+      ? { kind: "hold" }
+      : { kind: "set", order: ranked, ranked: true };
+  }
+  if (!stale || input.pointerInList) return { kind: "hold" };
   const wait = Math.max(
     input.lastInteractionAt + CANOPY_RANK_IDLE_MS - input.now,
     input.lastRankAt + CANOPY_RANK_SPACING_MS - input.now
   );
   return wait <= 0 ? { kind: "set", order: ranked, ranked: true } : { kind: "wait", ms: wait };
+}
+
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, index) => b[index] === id);
 }
 
 /**

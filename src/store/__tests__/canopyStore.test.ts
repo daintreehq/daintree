@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CanopySnapshot } from "@shared/types/ipc/canopy";
 import { isCanopyRead, useCanopyStore } from "../canopyStore";
 
@@ -47,5 +48,32 @@ describe("applySnapshot", () => {
     expect(useCanopyStore.getState().snapshot?.refreshedAt).toBe(500);
     useCanopyStore.getState().applySnapshot(snapshot(6, 600));
     expect(useCanopyStore.getState().snapshot?.refreshedAt).toBe(600);
+  });
+});
+
+describe("orders", () => {
+  afterEach(() => window.localStorage.removeItem("daintree-canopy-order"));
+
+  it("opens a view loaded later on the order last shown, to be placed afresh", async () => {
+    useCanopyStore.getState().setOrder("all", { ids: ["b", "a"], rankedFor: 7, urgent: ["b"] });
+    vi.resetModules();
+    const { useCanopyStore: reloaded } = await import("../canopyStore");
+    expect(reloaded.getState().orders.all).toEqual({
+      ids: ["b", "a"],
+      rankedFor: null,
+      urgent: [],
+    });
+    expect(reloaded.getState().orders.project).toBeUndefined();
+  });
+
+  it("never drops the scope another view saved", async () => {
+    vi.resetModules();
+    const { useCanopyStore: other } = await import("../canopyStore");
+    useCanopyStore.getState().setOrder("all", { ids: ["a", "b"], rankedFor: 1, urgent: [] });
+    other.getState().setOrder("project", { ids: ["c"], rankedFor: 1, urgent: [] });
+    vi.resetModules();
+    const { useCanopyStore: reloaded } = await import("../canopyStore");
+    expect(reloaded.getState().orders.all?.ids).toEqual(["a", "b"]);
+    expect(reloaded.getState().orders.project?.ids).toEqual(["c"]);
   });
 });

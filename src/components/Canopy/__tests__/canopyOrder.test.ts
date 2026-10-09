@@ -151,4 +151,24 @@ describe("nextCanopyOrder", () => {
       "a",
     ]);
   });
+
+  it("places each score as it lands while revealing, under the pointer and before the scan ends", () => {
+    const step = nextCanopyOrder(
+      order(["b", "a"], { rankedFor: 2 }),
+      input({ a: 90, b: 40 }, { revealing: true, pointerInList: true })
+    );
+    expect(idsOf(step)).toEqual(["a", "b"]);
+    expect(
+      nextCanopyOrder(
+        order(["a", "b"], { rankedFor: 2 }),
+        input({ a: 90, b: 40 }, { revealing: true })
+      )
+    ).toEqual({ kind: "hold" });
+    expect(
+      nextCanopyOrder(
+        order(["b", "a"], { rankedFor: 2 }),
+        input({ a: 90, b: 40 }, { revealing: true, pressing: true })
+      )
+    ).toEqual({ kind: "hold" });
+  });
 });

@@ -33,6 +33,7 @@ import {
 import { digestHistory, type CanopyDigest } from "./canopyDigest.js";
 import type { TerminalAnswer } from "../../../shared/utils/terminalSubmission.js";
 import { EMPTY_GLANCE, glanceScreen } from "./canopyGlance.js";
+import { CANOPY_REFLOW_MS, reflowPrint, sameAfterReflow } from "./canopyReflow.js";
 import { observedCaughtUp } from "../../../shared/utils/canopyObservedKind.js";
 
 /** Screen rows read per run — the tail the cards are written from. */
@@ -248,6 +249,18 @@ interface RunEntry {
   contentHash: string | null;
   /** When `contentHash` last changed (epoch ms): how long the screen has stood still. */
   contentChangedAt: number;
+  /** `contentHash`'s screen as `reflowPrint` reads it: what a redraw at another size is matched against. */
+  print: string | null;
+  /** When the terminal was last resized (epoch ms), until its redraw has been told from a change; null when not. */
+  resizedAt: number | null;
+  /**
+   * The screen is one redrawn at another size since it last changed: what the
+   * row shows of it at a glance stays as first read, rather than as cut short
+   * or spread out by the new width.
+   */
+  redrawn: boolean;
+  /** The hash of the screen last adopted as redrawn: words in flight for it are for the screen now shown. */
+  redrawnFrom: string | null;
   disposition: Disposition | null;
   /** Bumped per new screen, so a pass for an older screen can't land. */
   seq: number;
@@ -354,6 +367,10 @@ export class CanopyService {
   private inFlight = 0;
   private refreshedAt: number | null = null;
   private broadcastTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A scan due once the redraws after a resize have settled, and when. */
+  private reflowTimer: { at: number; timer: ReturnType<typeof setTimeout> } | null = null;
+  /** Resizes of runs whose screens were not read yet, so a first read still waits out the redraw. */
+  private readonly earlyResizes = new Map<string, number>();
   /** The last snapshot sent, as sent, so a quiet poll sends nothing. */
   private lastBroadcast: string | null = null;
   private sequence = 0;
@@ -760,6 +777,54 @@ export class CanopyService {
     if (this.active) this.scheduleBroadcast();
   }
 
+  /**
+   * The run's terminal was resized — the panel holding it at its own size, the
+   * user's layout changing. The agent redraws for the new size, which moves
+   * every row of its screen without it saying anything new; see `CANOPY_REFLOW_MS`.
+   */
+  noteResize(runId: string): void {
+    if (this.disposed) return;
+    const entry = this.entries.get(runId);
+    if (entry) entry.resizedAt = this.now();
+    else this.earlyResizes.set(runId, this.now());
+  }
+
+  private scanAfterReflow(at: number): void {
+    if (this.reflowTimer !== null && this.reflowTimer.at <= at) return;
+    if (this.reflowTimer !== null) clearTimeout(this.reflowTimer.timer);
+    const timer = setTimeout(
+      () => {
+        this.reflowTimer = null;
+        if (this.watching && this.closeTimer === null) void this.scan();
+      },
+      Math.max(0, at - this.now())
+    );
+    this.reflowTimer = { at, timer };
+  }
+
+  /**
+   * The screen redrawn at a new size says what it said before: it becomes the
+   * screen every key and read is of, with nothing read again and no time it
+   * changed. What the row shows at a glance stays the old screen's, which a
+   * narrower pane may only have cut short.
+   */
+  private adoptRedraw(entry: RunEntry, screen: PreparedScreen, print: string): void {
+    const before = entry.contentHash;
+    if (before === null) return;
+    const swap = (key: string | null) =>
+      key !== null && key.startsWith(`${before}:`) ? screen.hash + key.slice(before.length) : key;
+    entry.hash = swap(entry.hash);
+    entry.readKey = swap(entry.readKey);
+    if (entry.lastDescribed?.hash === before) {
+      entry.lastDescribed = { ...entry.lastDescribed, hash: screen.hash };
+    }
+    if (entry.disposition?.contentHash === before) entry.disposition.contentHash = screen.hash;
+    entry.contentHash = screen.hash;
+    entry.print = print;
+    entry.redrawn = true;
+    entry.redrawnFrom = before;
+  }
+
   /** Read only one workspace's runs, or every workspace's (null). */
   setScope(workspaceId: string | null): void {
     if (this.disposed || this.scope === workspaceId) return;
@@ -841,6 +906,8 @@ export class CanopyService {
     this.abort.abort();
     if (this.broadcastTimer !== null) clearTimeout(this.broadcastTimer);
     this.broadcastTimer = null;
+    if (this.reflowTimer !== null) clearTimeout(this.reflowTimer.timer);
+    this.reflowTimer = null;
   }
 
   /** One pass over every run. Overlapping requests coalesce into one follow-up. */
@@ -893,6 +960,34 @@ export class CanopyService {
           // shown, and its screen is read when it is again.
           if (this.scope !== null && run.workspaceId !== this.scope) return;
           const screen = prepareScreen(raw, cols);
+          // Resized lately and still redrawing: what is on screen now may be
+          // half the old size's drawing and half the new's, or blank between
+          // the two. It is read once the redraw has settled.
+          const held = this.entries.get(run.runId);
+          const known = held?.spawnedAt === run.spawnedAt ? held : undefined;
+          const resizedAt = known ? known.resizedAt : (this.earlyResizes.get(run.runId) ?? null);
+          this.earlyResizes.delete(run.runId);
+          if (resizedAt !== null && known?.contentHash !== screen.hash) {
+            const settled = resizedAt + CANOPY_REFLOW_MS;
+            // Blank just past the wait is still the redraw, not a cleared
+            // screen: the comparison waits for what it draws.
+            const blank = screen.text.trim() === "";
+            if (this.now() < settled || (blank && this.now() < settled + CANOPY_REFLOW_MS)) {
+              if (known) known.resizedAt = resizedAt;
+              else this.earlyResizes.set(run.runId, resizedAt);
+              this.scanAfterReflow(blank ? settled + CANOPY_REFLOW_MS : settled);
+              return;
+            }
+            if (known) {
+              known.resizedAt = null;
+              const print = reflowPrint(screen.text);
+              if (known.print !== null && sameAfterReflow(known.print, print)) {
+                this.adoptRedraw(known, screen, print);
+              }
+            }
+          } else if (known?.resizedAt != null && this.now() >= known.resizedAt + CANOPY_REFLOW_MS) {
+            known.resizedAt = null;
+          }
           // Nothing drawn yet — a pane still starting, or cleared. A reader
           // given nothing invents something (an empty screen was once carded
           // as a terminal multiplexer error), so nothing is sent.
@@ -906,6 +1001,9 @@ export class CanopyService {
           this.entries.set(run.runId, entry);
           if (entry.contentHash !== screen.hash) {
             entry.contentChangedAt = this.now();
+            entry.print = reflowPrint(screen.text);
+            entry.redrawn = false;
+            entry.redrawnFrom = null;
             entry.glance = glanceScreen(screen.lines);
             // The screen's own words are current at once, ahead of the
             // classifier's turn. Its line pick stays while the screen still
@@ -1417,7 +1515,9 @@ export class CanopyService {
       entry.describedAt = this.now();
       entry.lastDescribed = {
         lines: screen.lines,
-        hash: screen.hash,
+        // Read before a redraw at another size was adopted: the same words,
+        // under the hash the screen goes by now.
+        hash: screen.hash === entry.redrawnFrom ? (entry.contentHash ?? screen.hash) : screen.hash,
         failureRepeats: described.failureRepeats ?? 0,
         verdict: verdictOf(classified, run),
         options:
@@ -1586,6 +1686,9 @@ export class CanopyService {
     if (!entry || entry.spawnedAt !== run.spawnedAt || entry.contentHash === screen.hash) return;
     entry.contentHash = screen.hash;
     entry.contentChangedAt = this.now();
+    entry.print = null;
+    entry.redrawn = false;
+    entry.redrawnFrom = null;
     entry.hash = null;
     entry.readKey = null;
     // A pass or card still under way was for the screen that is gone: none of
@@ -1663,16 +1766,22 @@ export class CanopyService {
     const card = entry.card;
     if (!card) return;
     const stalledSince = this.stalledSince(run, entry);
-    const glance = glanceScreen(screen.lines);
+    const glance = entry.redrawn ? card.glance : glanceScreen(screen.lines);
+    // A redraw keeps the activity line it had where the new one is only that
+    // line cut at another width; a retry counter moving on still shows.
+    const activity =
+      entry.redrawn && sameLineCut(card.activity, screen.activity)
+        ? card.activity
+        : screen.activity;
     if (
       !sameGlance(card.glance, glance) ||
-      card.activity !== screen.activity ||
+      card.activity !== activity ||
       card.contextLeft !== screen.contextLeft ||
       card.stalledSince !== stalledSince
     ) {
       entry.card = {
         ...card,
-        activity: screen.activity,
+        activity,
         glance,
         contextLeft: screen.contextLeft,
         stalledSince,
@@ -1804,6 +1913,13 @@ function sameGlance(a: CanopyGlance | undefined, b: CanopyGlance): boolean {
   );
 }
 
+/** The same line, one cut shorter at the pane's edge than the other. */
+function sameLineCut(a: string | null, b: string | null): boolean {
+  if (a === null || b === null) return a === b;
+  const bare = (line: string) => line.replace(/…\s*$/, "").trimEnd();
+  return bare(a).startsWith(bare(b)) || bare(b).startsWith(bare(a));
+}
+
 function newEntry(spawnedAt: number): RunEntry {
   return {
     spawnedAt,
@@ -1811,6 +1927,10 @@ function newEntry(spawnedAt: number): RunEntry {
     readKey: null,
     contentHash: null,
     contentChangedAt: 0,
+    print: null,
+    resizedAt: null,
+    redrawn: false,
+    redrawnFrom: null,
     disposition: null,
     seq: 0,
     revision: 0,

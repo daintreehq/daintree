@@ -29,7 +29,6 @@ import { systemClient } from "@/clients/systemClient";
 import { useFrozenBackdrop } from "./useFrozenBackdrop";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
-import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { buildPilotGroups, type PilotWorkspaceMeta } from "@/components/Pilot/pilotRows";
 import {
   buildCanopyInbox,
@@ -41,7 +40,7 @@ import {
   splitInbox,
   type CanopyItem,
 } from "./canopyModel";
-import { CANOPY_OPEN_SETTLE_MS, nextCanopyOrder } from "./canopyOrder";
+import { CANOPY_REVEAL_MS, nextCanopyOrder } from "./canopyOrder";
 import {
   CanopyCard,
   canopyCardDomId,
@@ -186,31 +185,6 @@ export function CanopyView() {
     );
   }
   return <CanopyInbox backdrop={backdrop} />;
-}
-
-/**
- * The list while the cards it opened on are still being written: rows the
- * shape of the real ones, so nothing below them moves when they arrive.
- */
-function CanopyListSkeleton({ rows }: { rows: number }) {
-  return (
-    <Skeleton label="Reading your agents" className="flex flex-col">
-      {Array.from({ length: Math.min(Math.max(rows, 1), 8) }, (_, index) => (
-        <div key={index} className="canopy-inbox-row flex w-full shrink-0 gap-3 px-3 py-2.5">
-          <div className="flex w-16 shrink-0 flex-col gap-2 pt-1">
-            <SkeletonBone className="h-3 w-8" />
-            <SkeletonBone className="h-3 w-10" />
-          </div>
-          <div className="flex min-w-0 flex-1 flex-col gap-2 pt-1">
-            <SkeletonBone className="h-3 w-1/3" />
-            <SkeletonBone className="h-3 w-4/5" />
-            <SkeletonBone className="h-3 w-full" />
-            <SkeletonBone className="h-3 w-1/2" />
-          </div>
-        </div>
-      ))}
-    </Skeleton>
-  );
 }
 
 interface ShortcutRow {
@@ -373,11 +347,11 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
     );
   }, [fleet, workspaces, nowMs, canopy, scope]);
 
-  // Opening on readings still to come — words owed since the panel was last
-  // open, or a run's first while main is reading — the list waits for them as
-  // skeleton rows, for at most CANOPY_OPEN_SETTLE_MS: their scores would
-  // re-rank it moments after it painted. With nothing owed it paints at once,
-  // in the order it was left.
+  // Every run shows the moment the panel opens, in the order it was left — or,
+  // the first time, by what Daintree observes of each — and moves to its place
+  // as the readings the open set off land. Once they have, or after
+  // CANOPY_REVEAL_MS, the list holds still between pauses like always. Only
+  // words not yet written show as skeletons.
   const owedOnOpen = useMemo(() => {
     // Main hasn't answered the open yet: the snapshot in hand is from before
     // it, and says nothing about what the open will read.
@@ -392,24 +366,24 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
     );
   }, [baseItems, canopy]);
   const openedAtRef = useRef<number | null>(null);
-  const [settled, setSettled] = useState(false);
-  const [settleWake, setSettleWake] = useState(0);
+  const [revealed, setRevealed] = useState(false);
+  const [revealWake, setRevealWake] = useState(0);
   useLayoutEffect(() => {
     if (!isOpen) {
       openedAtRef.current = null;
-      setSettled(false);
+      setRevealed(false);
       return;
     }
-    if (settled) return;
+    if (revealed) return;
     if (openedAtRef.current === null) openedAtRef.current = Date.now();
-    const left = openedAtRef.current + CANOPY_OPEN_SETTLE_MS - Date.now();
+    const left = openedAtRef.current + CANOPY_REVEAL_MS - Date.now();
     if (!owedOnOpen || left <= 0) {
-      setSettled(true);
+      setRevealed(true);
       return;
     }
-    const timer = setTimeout(() => setSettleWake((n) => n + 1), left);
+    const timer = setTimeout(() => setRevealWake((n) => n + 1), left);
     return () => clearTimeout(timer);
-  }, [isOpen, settled, owedOnOpen, settleWake]);
+  }, [isOpen, revealed, owedOnOpen, revealWake]);
 
   // The list moves only at moments the user can expect it to; see `nextCanopyOrder`.
   const refreshedAt = canopy?.refreshedAt ?? null;
@@ -429,7 +403,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       openedRef.current = false;
       return;
     }
-    if (!settled || baseItems.length === 0) return;
+    if (baseItems.length === 0) return;
     const now = Date.now();
     const opening = !openedRef.current || scopeRef.current !== scope;
     if (opening) {
@@ -445,6 +419,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       refreshedAt,
       now,
       opening,
+      revealing: !revealed,
       requested: rankRequest !== rankRequestSeenRef.current,
       pressing: pressingRef.current,
       pointerInList,
@@ -472,7 +447,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
     pointerInList,
     rankWake,
     rankRequest,
-    settled,
+    revealed,
     nowMs,
   ]);
   const items = useMemo(() => {
@@ -591,7 +566,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
   // The run the pane shows is one the user has in front of them: it counts as
   // looked at when it opens there, each minute it stays, and as it stops
   // showing — while anyone can see the panel at all.
-  const shownRunId = isOpen && settled ? (focusedItem?.runId ?? null) : null;
+  const shownRunId = isOpen ? (focusedItem?.runId ?? null) : null;
   useEffect(() => {
     if (shownRunId === null) return;
     const look = () => {
@@ -635,7 +610,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       return;
     }
     focusAfterCloseRef.current = null;
-    if (landedRef.current || !settled || inbox.inbox.length === 0) return;
+    if (landedRef.current || inbox.inbox.length === 0) return;
     const target = inbox.inbox[0]!.runId;
     let inner = 0;
     const outer = requestAnimationFrame(() => {
@@ -651,7 +626,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       cancelAnimationFrame(outer);
       cancelAnimationFrame(inner);
     };
-  }, [isOpen, inbox, focusCardNow, settled]);
+  }, [isOpen, inbox, focusCardNow]);
 
   // The focused card left (trashed, answered into another section, exited):
   // put the keyboard on the card that took its place instead of dropping it on
@@ -952,9 +927,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       // The panel lands on its first run itself, two frames in; the dialog's own
       // first-control focus would race it. With no rows to land on, the first
       // control takes focus instead of leaving it on whatever opened the panel.
-      // Into the panel at once, even while its list is still being written:
-      // the list's landing moves the keyboard to the top run once it paints.
-      initialFocus={settled && inbox.inbox.length > 0 ? "none" : "first"}
+      initialFocus={inbox.inbox.length > 0 ? "none" : "first"}
       restoreFocusTo={() => focusAfterCloseRef.current}
       preferRestoreFocusTo
       backdrop={backdrop}
@@ -1029,6 +1002,8 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
             <div
               className="canopy-inbox flex min-h-0 w-[28rem] shrink-0 flex-col self-stretch overflow-y-auto border-r border-border-default select-none"
               data-canopy-list=""
+              // Still placing runs as the open's readings land.
+              data-revealing={revealed ? undefined : "true"}
             >
               <SectionBar
                 id="canopy-inbox-label"
@@ -1039,9 +1014,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
                   <span className="text-2xs text-text-secondary">AI reading · priority</span>
                 }
               />
-              {!settled ? (
-                <CanopyListSkeleton rows={inbox.inbox.length} />
-              ) : inbox.inbox.length > 0 ? (
+              {inbox.inbox.length > 0 ? (
                 <div
                   ref={listRef}
                   role="listbox"
@@ -1087,7 +1060,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
                   Every agent is archived. Each comes back when it has something new to say.
                 </p>
               )}
-              {settled && inbox.archived.length > 0 && (
+              {inbox.archived.length > 0 && (
                 <>
                   <SectionBar
                     id="canopy-archived-label"
@@ -1137,10 +1110,10 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
               )}
             </div>
             <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas px-2 pb-2">
-              {settled && focusedItem && (
+              {focusedItem && (
                 <CanopyPlace item={focusedItem} id={`canopy-place-${focusedItem.runId}`} />
               )}
-              {!settled ? null : focusedItem ? (
+              {focusedItem ? (
                 <CanopyCard
                   key={focusedItem.runId}
                   ref={detailRef}

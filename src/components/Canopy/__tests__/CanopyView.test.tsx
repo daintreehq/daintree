@@ -53,7 +53,7 @@ import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { __resetCanopySeenForTests } from "@/lib/canopySeen";
 import { __resetCanopyPlaceForTests } from "../CanopyPlace";
-import { CANOPY_OPEN_SETTLE_MS } from "../canopyOrder";
+import { CANOPY_REVEAL_MS } from "../canopyOrder";
 
 const NOW = Date.now();
 
@@ -148,6 +148,7 @@ beforeEach(() => {
 
 afterEach(() => {
   useCanopyStore.setState({ isOpen: false, snapshot: null, reads: {}, scope: "all", orders: {} });
+  window.localStorage.removeItem("daintree-canopy-order");
   vi.useRealTimers();
   vi.clearAllMocks();
   vi.restoreAllMocks();
@@ -606,83 +607,99 @@ describe("CanopyView", () => {
     expect(order()).toEqual(["working", "waiting", "asking"]);
   });
 
-  it("opens on skeleton rows while the cards it is owed are written, then paints the list once", async () => {
+  it("shows every run at once while the cards it is owed are written, and places each as it lands", async () => {
     const owed = { ...canopySnapshot, wordsDue: ["working"] };
     installElectron(owed);
     useCanopyStore.setState({ snapshot: owed });
     const { container } = render(<CanopyView />);
     await frames();
     const order = () => cards(container).map((card) => card.id.replace("canopy-card-", ""));
-    expect(order()).toEqual([]);
-    expect(
-      container.ownerDocument.querySelector('[aria-label="Reading your agents"]')
-    ).not.toBeNull();
-    // The card lands, read as stuck: the list paints with it already in place.
+    expect(order()).toEqual(["waiting", "asking", "working"]);
+    // Placing runs as their scores land is what the open is for: the pointer
+    // resting on the list doesn't hold it.
+    fireEvent.pointerEnter(container.ownerDocument.querySelector<HTMLElement>("[role=listbox]")!);
     act(() =>
       useCanopyStore.setState({
-        snapshot: { ...canopySnapshot, refreshedAt: NOW + 5_000, cards: [stuckCard("working")] },
+        snapshot: {
+          ...canopySnapshot,
+          cards: [{ ...stuckCard("working"), priority: 84, attentionScore: 84 }],
+        },
       })
     );
     await frames();
-    expect(order()).toEqual(["working", "waiting", "asking"]);
-    expect(container.ownerDocument.querySelector('[aria-label="Reading your agents"]')).toBeNull();
+    expect(order()).toEqual(["waiting", "working", "asking"]);
   });
 
-  it("waits for first readings while main is reading, as on the first open after turning it on", async () => {
-    const reading = { ...canopySnapshot, busy: true };
-    installElectron(reading);
-    useCanopyStore.setState({ snapshot: reading });
+  it("stops revealing once the cards it was owed have landed, and holds still after", async () => {
+    const owed = { ...canopySnapshot, wordsDue: ["working"] };
+    installElectron(owed);
+    useCanopyStore.setState({ snapshot: owed });
     const { container } = render(<CanopyView />);
     await frames();
-    expect(cards(container)).toEqual([]);
+    const revealing = () =>
+      container.ownerDocument.querySelector("[data-canopy-list][data-revealing]") !== null;
+    expect(revealing()).toBe(true);
+    act(() => useCanopyStore.setState({ snapshot: canopySnapshot }));
+    await frames();
+    expect(revealing()).toBe(false);
+    // Revealed: a score landing under the pointer waits, as always.
+    fireEvent.pointerEnter(container.ownerDocument.querySelector<HTMLElement>("[role=listbox]")!);
     act(() =>
       useCanopyStore.setState({
-        snapshot: { ...canopySnapshot, refreshedAt: NOW + 5_000, cards: [stuckCard("working")] },
+        snapshot: {
+          ...canopySnapshot,
+          refreshedAt: NOW + 20_000,
+          cards: [{ ...stuckCard("working"), priority: 84, attentionScore: 84 }],
+        },
       })
     );
     await frames();
     expect(cards(container).map((card) => card.id.replace("canopy-card-", ""))).toEqual([
-      "working",
       "waiting",
       "asking",
+      "working",
     ]);
   });
 
-  it("waits for main to answer the open before deciding the list is whole", async () => {
+  it("shows the runs main is still reading for the first time, and moves them as readings land", async () => {
     // The snapshot in hand is from before the open; main's answer says it is reading.
     installElectron({ ...canopySnapshot, busy: true });
     useCanopyStore.setState({ snapshot: { ...canopySnapshot, active: false } });
     const { container } = render(<CanopyView />);
     await frames();
-    expect(cards(container)).toEqual([]);
+    const order = () => cards(container).map((card) => card.id.replace("canopy-card-", ""));
+    expect(order()).toEqual(["waiting", "asking", "working"]);
     act(() =>
       useCanopyStore.setState({
-        snapshot: { ...canopySnapshot, refreshedAt: NOW + 5_000, cards: [stuckCard("working")] },
+        snapshot: { ...canopySnapshot, busy: true, cards: [stuckCard("working")] },
       })
     );
     await frames();
-    expect(cards(container).map((card) => card.id.replace("canopy-card-", ""))).toEqual([
-      "working",
-      "waiting",
-      "asking",
-    ]);
+    expect(order()).toEqual(["working", "waiting", "asking"]);
   });
 
-  it("stops waiting for owed cards after a moment, and paints what it has", async () => {
+  it("holds still like always once the open's readings have had their time", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const owed = { ...canopySnapshot, wordsDue: ["working"] };
     installElectron(owed);
     useCanopyStore.setState({ snapshot: owed });
     const { container } = render(<CanopyView />);
-    expect(cards(container)).toEqual([]);
+    const order = () => cards(container).map((card) => card.id.replace("canopy-card-", ""));
+    expect(order()).toEqual(["waiting", "asking", "working"]);
     act(() => {
-      vi.advanceTimersByTime(CANOPY_OPEN_SETTLE_MS);
+      vi.advanceTimersByTime(CANOPY_REVEAL_MS);
     });
-    expect(cards(container).map((card) => card.id.replace("canopy-card-", ""))).toEqual([
-      "waiting",
-      "asking",
-      "working",
-    ]);
+    fireEvent.pointerEnter(container.ownerDocument.querySelector<HTMLElement>("[role=listbox]")!);
+    act(() =>
+      useCanopyStore.setState({
+        snapshot: {
+          ...owed,
+          refreshedAt: NOW + 20_000,
+          cards: [{ ...stuckCard("working"), priority: 84, attentionScore: 84 }],
+        },
+      })
+    );
+    expect(order()).toEqual(["waiting", "asking", "working"]);
   });
 
   it("opens in the order it was left, or ranked before it shows when something was read meanwhile", async () => {
