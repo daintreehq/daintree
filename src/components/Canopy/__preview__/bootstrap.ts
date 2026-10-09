@@ -52,6 +52,10 @@ installPreviewShims({
     // anything, so the unread rows stay unread for every capture.
     markSeen: () => Promise.resolve(),
     noteSent: () => Promise.resolve(),
+    setMode: (mode: CanopySnapshot["mode"]) => {
+      if (current) setPreviewCanopySnapshot({ ...current, mode, activated: mode === "on" });
+      return record("setMode", { mode }).then(() => current);
+    },
     setRead: (runId: string, target: { spawnedAt: number }, read: boolean) => {
       const mark = current?.reads.find((entry) => entry.runId === runId);
       const next = {

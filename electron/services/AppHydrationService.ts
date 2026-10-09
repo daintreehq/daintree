@@ -2,6 +2,7 @@
 import os from "os";
 import { app } from "electron";
 import { store } from "../store.js";
+import { readCanopyMode } from "./canopy/canopyMode.js";
 import { projectStore } from "./ProjectStore.js";
 import { filterRestorableTerminalSnapshots } from "./projectStateRestore.js";
 import { getGpuFeatureStatus, isWebGLHardwareAccelerated } from "../utils/gpuDetection.js";
@@ -143,6 +144,7 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
     isWindowsStore: (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,
     runningUnderRosetta: isRunningUnderRosetta(),
     rosettaWarningDismissed: store.get("rosettaWarningDismissed") === true,
+    canopyMode: readCanopyMode(),
     settingsRecovery: null,
     databaseRecovery: null,
     projectStateRecovery: projectStateQuarantinedPath

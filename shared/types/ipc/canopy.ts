@@ -320,9 +320,24 @@ export function isCanopyUnread(mark: CanopyReadMark | null | undefined): boolean
  */
 export type CanopyTier = "free" | "priority";
 
+/**
+ * Where the user stands on Canopy. `unset`: never turned on, or turned off —
+ * its ways in offer it, and nothing is read. `on`: screens are read. `hidden`:
+ * the user doesn't want it — no way in but Settings, and nothing is read.
+ */
+export type CanopyMode = "unset" | "on" | "hidden";
+
+export const CANOPY_MODES: readonly CanopyMode[] = ["unset", "on", "hidden"];
+
 /** What the user has signed up for: whether screens are read at all, and how. */
 export interface CanopyPlan {
-  /** The user turned Canopy on, agreeing to send screens off the machine to be read. */
+  mode: CanopyMode;
+  /**
+   * Rises with every change of mode since launch, from any view, so an Undo of
+   * one hide can tell a later hide from its own.
+   */
+  modeRevision?: number;
+  /** The user turned Canopy on, agreeing to send screens off the machine to be read: `mode` is `on`. */
   activated: boolean;
   tier: CanopyTier;
 }
@@ -341,6 +356,9 @@ export interface CanopySnapshot {
    * never lets a late reply paint over a newer push.
    */
   sequence?: number;
+  mode: CanopyMode;
+  /** The plan's mode revision: see `CanopyPlan.modeRevision`. */
+  modeRevision?: number;
   /** The user turned Canopy on; nothing is read until they do. */
   activated: boolean;
   tier: CanopyTier;

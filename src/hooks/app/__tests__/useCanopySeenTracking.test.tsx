@@ -25,6 +25,7 @@ beforeEach(() => {
     configurable: true,
     writable: true,
   });
+  useCanopyStore.setState({ mode: "on" });
   usePanelStore.setState({
     panelsById: { a: terminal("a"), b: terminal("b"), gone: terminal("gone", "trash") },
     panelIds: ["a", "b", "gone"],
@@ -33,7 +34,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  useCanopyStore.setState({ isOpen: false });
+  useCanopyStore.setState({ isOpen: false, mode: "unset" });
   delete (window as { electron?: unknown }).electron;
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -124,6 +125,17 @@ describe("useCanopySeenTracking", () => {
     expect(looks()).toEqual(["a:false"]);
     act(() => useCanopyStore.setState({ isOpen: false }));
     expect(looks()).toEqual(["a:false", "a:true"]);
+  });
+
+  it("holds no look while Canopy isn't on, and starts one when it is turned on", () => {
+    useCanopyStore.setState({ mode: "unset" });
+    const view = renderHook(() => useCanopySeenTracking());
+    expect(markSeen).not.toHaveBeenCalled();
+    act(() => useCanopyStore.setState({ mode: "on" }));
+    expect(markSeen.mock.calls).toEqual([["a", true, "pane"]]);
+    act(() => useCanopyStore.setState({ mode: "hidden" }));
+    expect(markSeen.mock.calls.at(-1)).toEqual(["a", false, "pane"]);
+    view.unmount();
   });
 
   it("never looks at a pane in the trash", () => {

@@ -427,7 +427,7 @@ export class CanopyService {
   constructor(private readonly deps: CanopyServiceDeps) {
     this.now = deps.now ?? Date.now;
     this.closeGraceMs = deps.closeGraceMs ?? CANOPY_CLOSE_GRACE_MS;
-    this.plan = deps.plan ?? { activated: true, tier: "priority" };
+    this.plan = deps.plan ?? { mode: "on", activated: true, tier: "priority" };
     this.stateChangeScanMs = deps.stateChangeScanMs ?? CANOPY_STATE_CHANGE_SCAN_MS;
     this.classifierSlots = new Semaphore(CONCURRENCY.classifier);
     this.describerSlots = new Semaphore(CONCURRENCY.describer);
@@ -488,7 +488,13 @@ export class CanopyService {
       for (const entry of this.entries.values()) {
         entry.card = null;
         entry.hash = null;
+        // No view tells main a look ended once reading stops, so the looks go
+        // now: one left to its lease would read the next turn after reading
+        // comes back on.
+        entry.reads.lookers.clear();
       }
+      for (const timer of this.dwellTimers.values()) clearTimeout(timer);
+      this.dwellTimers.clear();
     }
     this.scheduleBroadcast();
     if (this.watching && !wasRunning) void this.scan();
@@ -520,6 +526,8 @@ export class CanopyService {
     }
     return {
       sequence: ++this.sequence,
+      mode: this.plan.mode,
+      modeRevision: this.plan.modeRevision ?? 0,
       activated: this.plan.activated,
       tier: this.plan.tier,
       dispositions,
@@ -1150,6 +1158,8 @@ export class CanopyService {
     await Promise.all(
       runs.map((run) =>
         reads.run(async () => {
+          // Queued behind other reads while reading was turned off: never read.
+          if (this.disposed || epoch !== this.epoch) return;
           const read = await this.deps.readScreen(run.runId, CANOPY_SCREEN_LINES).catch(() => null);
           if (read === null || this.disposed || epoch !== this.epoch) return;
           const raw = typeof read === "string" ? read : read.text;

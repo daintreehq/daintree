@@ -1694,9 +1694,17 @@ export const SETTINGS_REGISTRY = [
     importKind: "lazy",
     importer: LazyCanopySettingsTab.preload,
     LazyComponent: LazyCanopySettingsTab,
-    searchNavDescription: "Turn Canopy on or off, and how its screens are processed",
+    searchNavDescription:
+      "Show or hide Canopy, turn it on or off, and how its screens are processed",
     searchNavKeywords: ["canopy", "inbox", "agents", "summary", "priority", "privacy", "servers"],
     sections: [
+      {
+        id: "canopy-show",
+        section: "Canopy",
+        title: "Show Canopy",
+        description: "Its toolbar button, shortcut and command palette entry",
+        keywords: ["canopy", "hide", "show", "disable", "remove", "toolbar", "shortcut", "ai"],
+      },
       {
         id: "canopy-read-terminals",
         section: "Canopy",

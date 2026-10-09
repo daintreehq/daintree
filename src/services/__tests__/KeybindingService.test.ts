@@ -2505,6 +2505,20 @@ describe("when-clause context provider", () => {
     service.setWhenContext({ testFlag: true });
     expect(service.resolveKeybinding(event).match?.actionId).toBe("test.whenGatedStatic");
   });
+
+  it("lets Canopy's key go past it, unconsumed, while Canopy is hidden", () => {
+    setPlatform("MacIntel");
+    const service = new KeybindingService();
+    const event = createKeyboardEvent({ key: "e", code: "KeyE", metaKey: true });
+
+    service.setWhenContextProvider(() => ({ canopyHidden: false }));
+    expect(service.resolveKeybinding(event).match?.actionId).toBe("canopy.toggle");
+
+    service.setWhenContextProvider(() => ({ canopyHidden: true }));
+    const hidden = service.resolveKeybinding(event);
+    expect(hidden.match).toBeUndefined();
+    expect(hidden.shouldConsume).toBe(false);
+  });
 });
 
 describe("formatComboForDisplay — one grammar with KbdChord", () => {

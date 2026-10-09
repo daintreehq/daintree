@@ -114,6 +114,7 @@ import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
+import { useCanopyStore } from "@/store/canopyStore";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -796,6 +797,7 @@ export function Toolbar({
 
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
+  const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
   const positionAgentButton = useToolbarPreferencesStore((state) => state.positionAgentButton);
   const toggleButtonVisibility = useToolbarPreferencesStore(
@@ -1489,7 +1491,9 @@ export function Toolbar({
       },
       canopy: {
         render: () => <CanopyToolbarButton key="canopy" data-toolbar-item="" />,
-        isAvailable: true,
+        // Hidden, the slot goes and the pin stays: showing Canopy again puts
+        // the button back where it was.
+        isAvailable: !canopyHidden,
       },
       "notification-center": {
         render: () => (
@@ -1742,6 +1746,7 @@ export function Toolbar({
       topologyWatcherDark,
       showDeveloperTools,
       notificationsEnabled,
+      canopyHidden,
       pluginButtonIds,
       pluginConfigs,
       devServerCombo,

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useCanopyStore } from "@/store/canopyStore";
 import { __resetCanopySeenForTests, reportCanopySeen, reportCanopySent } from "../canopySeen";
 
 let markSeen: ReturnType<typeof vi.fn>;
@@ -15,9 +16,11 @@ beforeEach(() => {
     configurable: true,
     writable: true,
   });
+  useCanopyStore.setState({ mode: "on" });
 });
 
 afterEach(() => {
+  useCanopyStore.setState({ mode: "unset" });
   delete (window as { electron?: unknown }).electron;
   vi.useRealTimers();
 });
@@ -31,6 +34,14 @@ describe("reportCanopySent", () => {
     vi.advanceTimersByTime(1_000);
     reportCanopySent("a");
     expect(noteSent).toHaveBeenCalledTimes(3);
+  });
+
+  it("tells main nothing while Canopy is off or hidden", () => {
+    for (const mode of ["unset", "hidden"] as const) {
+      useCanopyStore.setState({ mode });
+      reportCanopySent("a");
+    }
+    expect(noteSent).not.toHaveBeenCalled();
   });
 
   it("does nothing where Canopy has no bridge", () => {

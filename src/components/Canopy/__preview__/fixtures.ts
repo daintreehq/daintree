@@ -501,6 +501,7 @@ function readsFor(now: number): CanopyReadMark[] {
 
 function snapshot(cards: CanopyCard[], now: number, extra: Partial<CanopySnapshot> = {}) {
   return {
+    mode: "on" as const,
     activated: true,
     // The beta's free tier, as most people run it: the standing notice shows.
     tier: "free" as const,
@@ -559,7 +560,7 @@ export function sceneFor(fixture: CanopyFixture, now: number): CanopyScene {
     case "off":
       return {
         fleet: fleet(runs, now),
-        canopy: snapshot([], now, { activated: false, refreshedAt: null }),
+        canopy: snapshot([], now, { mode: "unset", activated: false, refreshedAt: null }),
       };
     case "read-error":
       return {

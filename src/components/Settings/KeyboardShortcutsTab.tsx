@@ -21,6 +21,7 @@ import { SettingsSearchField } from "./SettingsSearchField";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { useCanopyStore } from "@/store/canopyStore";
 import { SettingsShortcutCapture } from "@/components/KeyboardShortcuts";
 import { pluralize } from "@/lib/pluralize";
 
@@ -260,6 +261,9 @@ const FIXED_SHORTCUTS: FixedShortcut[] = [
 const DOUBLE_SHIFT_TITLE = "Double-tap Shift opens Canopy";
 const DOUBLE_SHIFT_SUBTITLE =
   "Works from anywhere, a terminal included. Turn it off if it fires by accident, as it can with Sticky Keys or an input method that uses Shift.";
+/** Before Canopy is on, a double tap opens nothing: Cmd+E and the toolbar button are how to find it. */
+const DOUBLE_SHIFT_SUBTITLE_NOT_ON =
+  "Works once Canopy is on, from anywhere, a terminal included. Turn it off if it fires by accident, as it can with Sticky Keys or an input method that uses Shift.";
 
 function matchesQuery(query: string, ...fields: (string | undefined)[]): boolean {
   return fields.some((field) => field?.toLowerCase().includes(query) ?? false);
@@ -497,9 +501,11 @@ export function KeyboardShortcutsTab() {
 
   const doubleShiftOpensCanopy = usePreferencesStore((s) => s.doubleShiftOpensCanopy);
   const setDoubleShiftOpensCanopy = usePreferencesStore((s) => s.setDoubleShiftOpensCanopy);
+  const canopyOn = useCanopyStore((s) => s.mode === "on");
+  const doubleShiftSubtitle = canopyOn ? DOUBLE_SHIFT_SUBTITLE : DOUBLE_SHIFT_SUBTITLE_NOT_ON;
   const showGestures =
     (filterMode !== "modified" || !doubleShiftOpensCanopy) &&
-    matchesQuery(query, DOUBLE_SHIFT_TITLE, DOUBLE_SHIFT_SUBTITLE, "Shift");
+    matchesQuery(query, DOUBLE_SHIFT_TITLE, doubleShiftSubtitle, "Shift");
   // Back on its default it leaves the Modified list, taking the focused switch
   // with it; search is where the keyboard carries on, as for a binding row.
   const setDoubleShift = (value: boolean) => {
@@ -647,7 +653,7 @@ export function KeyboardShortcutsTab() {
             <SettingsSwitchCard
               id="keyboard-double-shift-canopy"
               title={DOUBLE_SHIFT_TITLE}
-              subtitle={DOUBLE_SHIFT_SUBTITLE}
+              subtitle={doubleShiftSubtitle}
               isEnabled={doubleShiftOpensCanopy}
               onChange={() => setDoubleShift(!doubleShiftOpensCanopy)}
               isModified={!doubleShiftOpensCanopy}

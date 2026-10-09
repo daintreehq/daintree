@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Telescope } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -13,7 +13,6 @@ import { agentStateDotColor } from "@/components/Worktree/terminalStateConfig";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { preloadCanopyView } from "@/lazyPanels";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 
 const CANOPY_ACTION_ID = "canopy.toggle" as const;
@@ -62,18 +61,9 @@ export function CanopyToolbarButton({
   "data-toolbar-item"?: string;
 }) {
   const isOpen = useCanopyStore((s) => s.isOpen);
-  const applySnapshot = useCanopyStore((s) => s.applySnapshot);
-  // Turned on, read before the panel opens so it opens on the inbox or the
-  // offer without a frame of the wrong one, and a change made in Settings
-  // lands here.
+  // Turned on, read (by useCanopySnapshotSync) before the panel opens, so it
+  // opens on the inbox or the offer without a frame of the wrong one.
   const activated = useCanopyStore((s) => s.snapshot?.activated === true);
-  useEffect(() => {
-    const unsubscribe = window.electron.canopy.onSnapshotUpdated(applySnapshot);
-    safeFireAndForget(window.electron.canopy.getSnapshot().then(applySnapshot), {
-      context: "Reading whether Canopy is set up",
-    });
-    return unsubscribe;
-  }, [applySnapshot]);
   // Agents Canopy read as blocked on the user right now — an approval or a
   // question it is sure of — in any project, not yet answered or put aside,
   // and not yet shown in the open panel: opening it clears the count until a

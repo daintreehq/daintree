@@ -18,7 +18,7 @@ export const CANOPY_METHOD_CHANNELS = {
   watchTerminal: "canopy:watch-terminal",
   unwatchTerminal: "canopy:unwatch-terminal",
   captureBackdrop: "canopy:capture-backdrop",
-  activate: "canopy:activate",
+  setMode: "canopy:set-mode",
   terminalInput: "canopy:terminal-input",
   terminalResize: "canopy:terminal-resize",
   terminalSendKey: "canopy:terminal-send-key",

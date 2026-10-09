@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, render } from "@testing-library/react";
 import type { CanopyCard, CanopySnapshot } from "@shared/types/ipc/canopy";
 import { CANOPY_ACKNOWLEDGED_STORAGE_KEY, useCanopyStore } from "@/store/canopyStore";
@@ -13,6 +13,7 @@ function card(runId: string, priority: number, extra: Partial<CanopyCard> = {}):
 
 function snapshot(activated: boolean, extra: Partial<CanopySnapshot> = {}): CanopySnapshot {
   return {
+    mode: activated ? "on" : "unset",
     activated,
     tier: "free",
     dispositions: [],
@@ -33,16 +34,6 @@ function snapshot(activated: boolean, extra: Partial<CanopySnapshot> = {}): Cano
 let main: CanopySnapshot = snapshot(true);
 
 beforeEach(() => {
-  Object.defineProperty(window, "electron", {
-    configurable: true,
-    writable: true,
-    value: {
-      canopy: {
-        getSnapshot: vi.fn(async () => main),
-        onSnapshotUpdated: vi.fn(() => () => {}),
-      },
-    },
-  });
   useFleetSnapshotStore.setState({
     snapshot: {
       runs: [
@@ -69,12 +60,18 @@ afterEach(() => {
   useFleetSnapshotStore.setState({ snapshot: null });
 });
 
-async function pip() {
-  const view = render(
+/** The button reads what the app-level sync (useCanopySnapshotSync) put in the store. */
+function renderButton() {
+  useCanopyStore.getState().applySnapshot(main);
+  return render(
     <TooltipProvider>
       <CanopyToolbarButton />
     </TooltipProvider>
   );
+}
+
+async function pip() {
+  const view = renderButton();
   await act(async () => {});
   const button = view.container.querySelector("button")!;
   const badge = button.querySelector(".toolbar-count")!;
@@ -118,11 +115,7 @@ describe("CanopyToolbarButton", () => {
       },
     });
     main = snapshot(true, { cards: ids.slice(0, 3).map((id) => card(id, 92)) });
-    const view = render(
-      <TooltipProvider>
-        <CanopyToolbarButton />
-      </TooltipProvider>
-    );
+    const view = renderButton();
     await act(async () => {});
     const badge = view.container.querySelector(".toolbar-count")!;
     const read = () => [badge.getAttribute("data-visible"), badge.textContent];
@@ -152,11 +145,7 @@ describe("CanopyToolbarButton", () => {
 
   it("clears once the panel is opened, and lights again only for a new prompt", async () => {
     main = snapshot(true, { cards: [card("r1", 92), card("r2", 92)] });
-    const view = render(
-      <TooltipProvider>
-        <CanopyToolbarButton />
-      </TooltipProvider>
-    );
+    const view = renderButton();
     await act(async () => {});
     const button = view.container.querySelector("button")!;
     const badge = button.querySelector(".toolbar-count")!;
@@ -193,11 +182,7 @@ describe("CanopyToolbarButton", () => {
 
   it("clears when a sibling project view opened the panel", async () => {
     main = snapshot(true, { cards: [card("r1", 92)] });
-    const view = render(
-      <TooltipProvider>
-        <CanopyToolbarButton />
-      </TooltipProvider>
-    );
+    const view = renderButton();
     await act(async () => {});
     const badge = view.container.querySelector(".toolbar-count")!;
     expect(badge.getAttribute("data-visible")).toBe("true");

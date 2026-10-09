@@ -39,9 +39,6 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["app:get-version-info"]["result"]>;
   };
   canopy: {
-    activate(
-      ...args: IpcInvokeMap["canopy:activate"]["args"]
-    ): Promise<IpcInvokeMap["canopy:activate"]["result"]>;
     answer(
       ...args: IpcInvokeMap["canopy:answer"]["args"]
     ): Promise<IpcInvokeMap["canopy:answer"]["result"]>;
@@ -75,6 +72,9 @@ export interface GeneratedElectronAPI {
     setActive(
       ...args: IpcInvokeMap["canopy:set-active"]["args"]
     ): Promise<IpcInvokeMap["canopy:set-active"]["result"]>;
+    setMode(
+      ...args: IpcInvokeMap["canopy:set-mode"]["args"]
+    ): Promise<IpcInvokeMap["canopy:set-mode"]["result"]>;
     setRead(
       ...args: IpcInvokeMap["canopy:set-read"]["args"]
     ): Promise<IpcInvokeMap["canopy:set-read"]["result"]>;

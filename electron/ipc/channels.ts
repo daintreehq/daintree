@@ -274,7 +274,7 @@ export const CHANNELS = {
   CANOPY_WATCH_TERMINAL: "canopy:watch-terminal",
   CANOPY_UNWATCH_TERMINAL: "canopy:unwatch-terminal",
   CANOPY_CAPTURE_BACKDROP: "canopy:capture-backdrop",
-  CANOPY_ACTIVATE: "canopy:activate",
+  CANOPY_SET_MODE: "canopy:set-mode",
   CANOPY_TERMINAL_INPUT: "canopy:terminal-input",
   CANOPY_TERMINAL_RESIZE: "canopy:terminal-resize",
   CANOPY_TERMINAL_SEND_KEY: "canopy:terminal-send-key",
