@@ -431,10 +431,10 @@ test.describe("Core: Terminal scroll & buffer", () => {
       )
       .toBe(true);
 
-    // The box the ResizeObserver actually watches, not the padded panel — the
-    // simulated resizes below have to speak the same geometry the watchdog
-    // compares against, or it reconciles them away mid-test.
-    const outputBox = await panel.locator('[aria-label="Terminal output"]').boundingBox();
+    // Resize the observed box itself so later layout passes and the watchdog
+    // agree with the shrunken grid rather than restoring synthetic geometry.
+    const output = panel.locator('[aria-label="Terminal output"]');
+    const outputBox = await output.boundingBox();
     if (!outputBox) throw new Error("Terminal output box has no layout");
 
     // Establish the baseline grid FIRST. This call can itself move the grid and
@@ -472,14 +472,23 @@ test.describe("Core: Terminal scroll & buffer", () => {
     // the row height from the box actually being divided so this shrinks by
     // exactly one row on any platform.
     const rowPx = Math.ceil(outputBox.height / baseline.rows) + 1;
-    await simulateResize(window, id, outputBox.width, outputBox.height - rowPx);
+    await output.evaluate((element, height) => {
+      element.style.height = `${height}px`;
+    }, outputBox.height - rowPx);
+    await expect
+      .poll(() => getScrollState(window, id).then((state) => state.rows), {
+        timeout: T_MEDIUM,
+        intervals: [50, 100],
+      })
+      .toBeLessThan(baseline.rows);
     // Frames, not wall clock: xterm's corrective sync rides an animation frame;
     // a host-side timer that expires first would snapshot a scrollable still
     // holding BOTH its old position and old maximum, which reads as pinned.
     await waitForFrames(window, 2);
 
     // ONE snapshot: the shrunken grid must still be the live grid at the moment
-    // the pin is judged. Polling would accept a watchdog repair as the fix.
+    // the pin is judged. Only grid readiness is polled above; polling the pin
+    // would accept a later repair as the fix.
     const after = await getScrollState(window, id);
     const detail = JSON.stringify({ baseline, after });
     expect(after.cols, `columns moved — not a rows-only resize: ${detail}`).toBe(baseline.cols);
