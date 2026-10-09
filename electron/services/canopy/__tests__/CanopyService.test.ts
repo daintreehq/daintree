@@ -25,6 +25,7 @@ import {
   type DescriberResult,
   type CanopyScreenInput,
 } from "../canopyProviders.js";
+import { CANOPY_REFLOW_MS } from "../canopyReflow.js";
 
 /** A classifier reading; `blocked` defaults to the attention of an ask, else 0. */
 type Reading = Omit<ClassifierResult, "blocked"> & { blocked?: number };
@@ -3082,5 +3083,124 @@ describe("CanopyService input from outside the panel", () => {
     const h = await waitingOn("working");
     h.service.noteInput("a", "submit");
     expect(card(h).handledAt).toBeNull();
+  });
+});
+
+describe("CanopyService across a resize", () => {
+  const QUESTION =
+    "⏺ The migration ran cleanly against staging, and the row counts match production. Shall I run it against production now, or wait for the release window tonight?";
+  const TOOL =
+    "⏺ Bash(npm run migrate -- --target staging --dry-run=false --batch-size 500 --verbose)";
+  /** The question as Claude Code draws it at `cols`: prose wrapped, the tool line cut at the edge. */
+  const drawn = (cols: number, question = QUESTION) => {
+    const rows: string[] = [
+      TOOL.length > cols ? `${TOOL.slice(0, cols - 2)}…)` : TOOL,
+      "  ⎿  done",
+    ];
+    let row = "";
+    for (const word of question.split(" ")) {
+      if (row !== "" && row.length + 1 + word.length > cols) {
+        rows.push(row);
+        row = word;
+      } else row = row === "" ? word : `${row} ${word}`;
+    }
+    rows.push(row, "", "─".repeat(cols), "❯ ", "─".repeat(cols));
+    return rows.join("\n");
+  };
+  const asking = async (): Promise<Reading> => ({
+    category: "question",
+    confidence: 0.9,
+    attention: 0.9,
+    question: "Shall I run it against production now?",
+  });
+
+  async function readAt(cols: number) {
+    let clock = 1_000_000;
+    const h = await makeHarness({ now: () => clock, classify: asking });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "question" }));
+    h.screens.set("a", drawn(cols));
+    await h.service.scan();
+    await settle();
+    return { h, tick: (ms: number) => (clock += ms) };
+  }
+
+  it("leaves a screen redrawn for a new size alone: nothing read again, no new prompt", async () => {
+    const { h, tick } = await readAt(120);
+    expect(h.classify).toHaveBeenCalledTimes(1);
+    const before = h.service.getSnapshot().cards[0]!;
+
+    h.service.noteResize("a");
+    // Mid-redraw: blank, then the new size's drawing.
+    h.screens.set("a", "");
+    tick(100);
+    await h.service.scan();
+    h.screens.set("a", drawn(64));
+    tick(400);
+    await h.service.scan();
+    tick(CANOPY_REFLOW_MS);
+    await h.service.scan();
+    await settle();
+
+    expect(h.classify).toHaveBeenCalledTimes(1);
+    expect(h.describe).toHaveBeenCalledTimes(1);
+    const after = h.service.getSnapshot().cards[0]!;
+    expect(after.revision).toBe(before.revision);
+    expect(after.headline).toBe(before.headline);
+    expect(after.glance).toEqual(before.glance);
+
+    // Something new after the redraw is still read.
+    h.screens.set("a", drawn(64, QUESTION.replace("tonight", "on Friday")));
+    tick(1_000);
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads a prompt that changed across a resize, once the redraw has settled", async () => {
+    const { h, tick } = await readAt(120);
+    h.service.noteResize("a");
+    h.screens.set("a", drawn(64, QUESTION.replace("production now", "production at noon")));
+    tick(500);
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(1);
+    tick(CANOPY_REFLOW_MS);
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+    expect(h.service.getSnapshot().cards[0]!.revision).toBeGreaterThan(0);
+  });
+
+  it("reads a screen that moved without a resize at once, as always", async () => {
+    const { h, tick } = await readAt(120);
+    h.screens.set("a", drawn(64));
+    tick(500);
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits out a redraw that is still blank just past the wait, then matches what it draws", async () => {
+    const { h, tick } = await readAt(120);
+    h.service.noteResize("a");
+    h.screens.set("a", "");
+    tick(CANOPY_REFLOW_MS + 100);
+    await h.service.scan();
+    h.screens.set("a", drawn(64));
+    tick(CANOPY_REFLOW_MS);
+    await h.service.scan();
+    await settle();
+    expect(h.classify).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds a first read until a resize before it has redrawn", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({ now: () => clock, classify: asking });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "question" }));
+    h.service.noteResize("a");
+    h.screens.set("a", drawn(120).split("\n").slice(0, 3).join("\n"));
+    clock += 200;
+    await h.service.scan();
+    expect(h.classify).not.toHaveBeenCalled();
+    h.screens.set("a", drawn(120));
+    clock += CANOPY_REFLOW_MS;
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(1);
   });
 });

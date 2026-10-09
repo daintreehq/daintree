@@ -9,6 +9,7 @@ import type {
 } from "../../../shared/types/ipc/canopy.js";
 import { getAgentNotificationServiceRef, getPtyClient } from "../../window/serviceRefs.js";
 import type { TerminalInputNotice } from "../../services/PtyClient.js";
+import type { TerminalResizeResult } from "../../../shared/types/pty-host.js";
 import { getFleetSnapshotService } from "./projectCrud/index.js";
 import { readPluginTerminalScreen } from "../../services/plugin/pluginTerminalScreenRead.js";
 import { CanopyService } from "../../services/canopy/CanopyService.js";
@@ -120,7 +121,7 @@ function subscribeFleet(): void {
 }
 
 /**
- * Input to any terminal, wherever it came from, so an answer typed into the
+ * Input to any terminal, and every resize of one, wherever it came from, so an answer typed into the
  * agent's own pane clears it here at once rather than when its screen is next
  * read. Made on first use like the fleet subscription: the terminal host may
  * not exist yet when the handlers register.
@@ -131,8 +132,17 @@ function subscribeInput(): void {
   if (!ptyClient) return;
   const onInput = (runId: string, input: TerminalInputNotice) =>
     service?.noteInput(runId, input.answer);
+  // Every resize, whoever asked for it: the agent redraws for the new size, and
+  // that redraw is not something new on its screen.
+  const onResize = (runId: string, result: TerminalResizeResult) => {
+    if (result.outcome === "applied") service?.noteResize(runId);
+  };
   ptyClient.on("terminal-input", onInput);
-  unsubscribeInput = () => ptyClient.off("terminal-input", onInput);
+  ptyClient.on("resize-result", onResize);
+  unsubscribeInput = () => {
+    ptyClient.off("terminal-input", onInput);
+    ptyClient.off("resize-result", onResize);
+  };
 }
 
 function getService(): CanopyService {

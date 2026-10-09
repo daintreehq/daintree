@@ -9,6 +9,10 @@
  * Each instance draws the scene in `<binDir>/scenes/<DAINTREE_PANE_ID>.json`,
  * re-read as the spec rewrites it (`setFakeCanopyScene`). Before one is
  * written it sits at an empty prompt.
+ *
+ * Like the real thing it draws for the pane's width — prose word-wrapped, tool
+ * calls cut at the edge with "…" — and on a resize blanks the screen and
+ * redraws a moment later, so a spec can tell a redraw from a change.
  */
 
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "fs";
@@ -59,7 +63,22 @@ function fakeCanopyProgram(config: Config, fs: typeof import("fs"), path: typeof
     const width = Math.max(40, Math.min(process.stdout.columns || 100, 140));
     const rule = "─".repeat(width - 2);
     const elapsed = Math.floor((Date.now() - sceneAt) / 1000);
-    const body = scene.lines.map((line) => line.replace("{t}", String(elapsed)));
+    const body: string[] = [];
+    for (const raw of scene.lines) {
+      const line = raw.replace("{t}", String(elapsed));
+      if (line.length <= width) body.push(line);
+      else if (/^⏺ \w+\(/.test(line)) body.push(`${line.slice(0, width - 2)}…)`);
+      else {
+        let row = "";
+        for (const word of line.split(" ")) {
+          if (row !== "" && row.length + 1 + word.length > width) {
+            body.push(row);
+            row = word;
+          } else row = row === "" ? word : `${row} ${word}`;
+        }
+        body.push(row);
+      }
+    }
     if (scene.working) {
       const every = scene.streamEveryMs ?? 4_000;
       const shown = Math.min(scene.stream?.length ?? 0, Math.floor((Date.now() - sceneAt) / every));
@@ -130,6 +149,18 @@ function fakeCanopyProgram(config: Config, fs: typeof import("fs"), path: typeof
     draw();
   });
 
+  let redraw: ReturnType<typeof setTimeout> | null = null;
+  process.stdout.on("resize", () => {
+    try {
+      fs.appendFileSync(`${sceneFile}.sizes`, `${process.stdout.columns}x${process.stdout.rows}\n`);
+    } catch {
+      // The size log is for the spec; the screen is what matters.
+    }
+    write(`${ESC}[H${ESC}[2J`);
+    if (redraw !== null) clearTimeout(redraw);
+    redraw = setTimeout(draw, 250);
+  });
+
   readScene();
   draw();
 }
@@ -168,6 +199,17 @@ export function readFakeCanopyKeys(binDir: string, paneId: string): string {
     return readFileSync(path.join(binDir, "scenes", `${paneId}.json.keys`), "utf8");
   } catch {
     return "";
+  }
+}
+
+/** Every size pane `paneId`'s agent was resized to, oldest first, as "colsxrows". */
+export function readFakeCanopySizes(binDir: string, paneId: string): string[] {
+  try {
+    return readFileSync(path.join(binDir, "scenes", `${paneId}.json.sizes`), "utf8")
+      .split("\n")
+      .filter(Boolean);
+  } catch {
+    return [];
   }
 }
 

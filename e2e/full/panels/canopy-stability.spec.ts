@@ -4,7 +4,9 @@
  * agents draw realistic screens; the inbox is sampled every 100 ms for its row
  * order, the priority each row shows and its words. The user types a reply
  * into one agent's terminal and clears it; another agent stops on an approval.
- * Only the approval may move anything.
+ * Only the approval may move anything. Moving between agents resizes each to
+ * the panel's pane and back, and resizing the window resizes them all: the
+ * agents redraw for the new width, and nothing in the inbox may move for it.
  *
  * Opt-in only, since it reads screens with the live service:
  *
@@ -27,6 +29,7 @@ import {
   installFakeCanopyAgent,
   readFakeCanopyDraft,
   readFakeCanopyKeys,
+  readFakeCanopySizes,
   setFakeCanopyScene,
   type FakeCanopyScene,
 } from "../../helpers/fakeCanopyAgent";
@@ -107,6 +110,23 @@ const WORKING: FakeCanopyScene = {
     "  ⎿  ✓ 14 passed",
   ],
 };
+
+/** Stopped agents with lines long enough that every width wraps or cuts them differently. */
+const LONG_FINISHED = (subject: string): FakeCanopyScene => ({
+  lines: [
+    ...HEADER,
+    `> Fix the rounding in ${subject} and run the tests`,
+    "",
+    `⏺ Fixed the rounding in ${subject}: amounts are now scaled at full precision and rounded once at the end, so halving a recipe twice and doubling it back returns the original quantities.`,
+    "",
+    `⏺ Bash(npm test -- --reporter=verbose src/recipes/${subject}.test.ts src/recipes/units.test.ts src/recipes/format.test.ts)`,
+    "  ⎿  ✓ 14 passed",
+    "",
+    `⏺ All 14 tests pass. Want me to commit this as "fix(recipes): round ${subject} amounts once at the end"?`,
+    "",
+    "✻ Worked for 41s · done",
+  ],
+});
 
 interface Sample {
   at: number;
@@ -452,7 +472,9 @@ test.describe("Canopy stability against the live service", () => {
     await expect(dialog(page).locator("[data-canopy-list] [data-canopy-card]")).toHaveCount(4, {
       timeout: 60_000,
     });
-    // Every row read and worded before measuring starts.
+    // Every row read and worded before measuring starts: the rows show at
+    // once and fill in as the open's readings land, which is not what this
+    // test measures.
     await expect
       .poll(
         async () =>
@@ -464,6 +486,12 @@ test.describe("Canopy stability against the live service", () => {
         { timeout: 60_000, intervals: [500] }
       )
       .toBe(true);
+    await expect(dialog(page).locator("[data-canopy-list][data-revealing]")).toHaveCount(0, {
+      timeout: 30_000,
+    });
+    await expect(dialog(page).locator("[data-canopy-detail-due]")).toHaveCount(0, {
+      timeout: 30_000,
+    });
     await sampleInbox(page);
     const started = Date.now();
     const events: Event[] = [];
@@ -616,5 +644,99 @@ test.describe("Canopy stability against the live service", () => {
       { run: card(agents.question), from: started, to: now },
     ]);
     expect(unexplained).toEqual([]);
+  });
+
+  test("holds still while the user moves between agents and resizes the window, which redraws every one", async () => {
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description:
+        "DAINTREE_E2E_CANOPY_LIVE is required: the spec reads screens with the live service",
+    });
+    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LIVE=1 to read screens with the live service");
+    test.setTimeout(300_000);
+    const page = ctx.window;
+    const { finished, approval, working, question } = agents;
+    setFakeCanopyScene(binDir, finished, LONG_FINISHED("scaleRecipe"));
+    setFakeCanopyScene(binDir, approval, LONG_FINISHED("convertUnits"));
+    setFakeCanopyScene(binDir, question, QUESTION);
+    // The pointer off the list, where the last test left it, so the new
+    // readings are placed before measuring starts rather than held for it.
+    await page.mouse.move(2, 2);
+    for (const id of [finished, approval, question, working]) {
+      await expect(page.locator(`[data-panel-id="${id}"]`)).toHaveAttribute(
+        "data-agent-state",
+        "waiting",
+        { timeout: 60_000 }
+      );
+    }
+    // Every new screen read and worded before measuring starts: the inbox
+    // goes ten seconds without a row changing.
+    let last = "";
+    let quietSince = Date.now();
+    await expect
+      .poll(
+        async () => {
+          const now = await dialog(page)
+            .locator("[data-canopy-list] [data-canopy-card]")
+            .evaluateAll((rows) =>
+              rows
+                .map(
+                  (row) => `${row.id}|${(row as HTMLElement).dataset.priority}|${row.textContent}`
+                )
+                .join("\n")
+            );
+          if (now !== last) {
+            last = now;
+            quietSince = Date.now();
+          }
+          return Date.now() - quietSince >= 10_000 && !now.includes("Reading the screen");
+        },
+        { timeout: 120_000, intervals: [1_000] }
+      )
+      .toBe(true);
+    await sampleInbox(page);
+    const started = Date.now();
+    const sizesBefore = Object.fromEntries(
+      [finished, approval, question, working].map((id) => [
+        id,
+        readFakeCanopySizes(binDir, id).length,
+      ])
+    );
+
+    // Into each agent and on to the next: each is held at the pane's size
+    // while shown, and handed back its own when the next one is.
+    for (const id of [finished, approval, question, working, finished]) {
+      await dialog(page)
+        .locator(`#${card(id)}`)
+        .click();
+      await page.waitForTimeout(6_000); // timer: the shown agent redraws and is scanned
+    }
+
+    // The window shrinks and grows back: every agent's terminal is resized.
+    const resize = (dw: number, dh: number) =>
+      ctx.app.evaluate(
+        ({ BrowserWindow }, delta) => {
+          const win = BrowserWindow.getAllWindows().find((w) => w.isVisible());
+          if (!win) return;
+          const [w, h] = win.getSize();
+          win.setSize(w! + delta.dw, h! + delta.dh);
+        },
+        { dw, dh }
+      );
+    await resize(-220, -140);
+    await page.waitForTimeout(8_000); // timer: every agent redraws and is scanned
+    await resize(220, 140);
+    await page.waitForTimeout(12_000); // timer: and again, then the measured hold
+
+    // Every agent was resized, so every one redrew.
+    for (const id of [finished, approval, question, working]) {
+      expect(readFakeCanopySizes(binDir, id).length).toBeGreaterThan(sizesBefore[id]!);
+    }
+    // Nothing moved for it: no order, priority, height or words changed but
+    // a row going from unread to read as it was opened.
+    const { changes } = await measure(page, started, [], []);
+    const opened = (change: Change) =>
+      change.kind === "words" && change.from.replace("unread, ", "") === change.to;
+    expect(changes.filter((change) => !opened(change))).toEqual([]);
   });
 });

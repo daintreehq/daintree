@@ -134,7 +134,7 @@ const TICKING = [
   /\battempt \d+\/\d+/g,
 ];
 
-function foldTicking(text: string): string {
+export function foldTicking(text: string): string {
   // A line asking something keeps its numbers: "a timeout of 5s?" and "of
   // 60s?" ask different things. Status lines don't end in a question.
   let out = text

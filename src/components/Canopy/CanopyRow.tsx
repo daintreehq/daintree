@@ -26,6 +26,9 @@ import { PRIORITY_LABEL, CanopyPriorityGlyph, priorityTier } from "./CanopyPrior
 /** Waiting on the user at least this long, the row's clock stands out. */
 const OVERDUE_WAIT_MS = 5 * 60_000;
 
+/** One line of a summary still being written; `SkeletonBone`'s look, as a span for the row's inline slot. */
+const DETAIL_BONE = "block h-2 rounded-[var(--radius-xs)] bg-tint/[0.1] animate-pulse-delayed";
+
 /** A dialog choice this short keeps its whole label on the row. */
 const SHORT_CHOICE_CHARS = 16;
 
@@ -282,7 +285,10 @@ export function CanopyRow({
   if (item.failed) metaTail.push({ text: "Read failed" });
   // Every inbox row keeps the same height, idle ones too: a run that goes idle
   // or wakes up must not move every row beneath it.
-  const holdsDetail = detail !== null || (reserveDetail && !compact);
+  // A summary on its way and nothing to stand in for it: its two lines show as
+  // bones, so the row reads as written-so-far rather than empty.
+  const detailDue = !compact && reading && detail === null && action === null;
+  const holdsDetail = detail !== null || detailDue || (reserveDetail && !compact);
   const askId = `${domId}-ask`;
   const detailId = `${domId}-detail`;
   const metaId = `${domId}-meta`;
@@ -470,7 +476,12 @@ export function CanopyRow({
                   choices.length > 0 ? "line-clamp-1 min-h-4" : "line-clamp-2 min-h-8"
                 )}
               >
-                {action !== null && !caution ? (
+                {detailDue ? (
+                  <span data-canopy-detail-due="" className="flex h-8 flex-col justify-around">
+                    <span className={cn(DETAIL_BONE, "w-full")} />
+                    <span className={cn(DETAIL_BONE, "w-2/3")} />
+                  </span>
+                ) : action !== null && !caution ? (
                   <span className="font-mono text-text-primary">
                     {/^[\w./-]+$/.test(action) && /[./]/.test(action) ? action : `$ ${action}`}
                   </span>

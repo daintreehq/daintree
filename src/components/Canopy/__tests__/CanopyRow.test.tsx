@@ -273,6 +273,16 @@ describe("CanopyRow", () => {
       const { container } = renderRow(itemFor("finished", unread));
       expect(container.querySelector("#row-ask")!.textContent).toBe("Reading the screen…");
     });
+
+    it("holds a summary still on its way as bones, and a written one as words", () => {
+      const due = renderRow(itemFor("finished", unread));
+      expect(due.container.querySelector("#row-detail [data-canopy-detail-due]")).not.toBeNull();
+      due.unmount();
+      const written = renderRow(
+        itemFor("finished", { ...unread, headline: "Done", summary: "Shipped the fix." })
+      );
+      expect(written.container.querySelector("[data-canopy-detail-due]")).toBeNull();
+    });
   });
 
   it("makes a long wait on the user stand out, and only a long one", () => {
