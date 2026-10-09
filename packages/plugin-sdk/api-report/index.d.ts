@@ -3762,7 +3762,7 @@ interface PluginFocusedPanel {
     /**
      * The focused kind, or `null` when Daintree has no focused panel: its window
      * is not the OS foreground window, or focus is on something that is not a
-     * panel (the sidebar, a dialog, the assistant).
+     * panel (the sidebar, an app dialog, the assistant).
      */
     readonly kind: PluginFocusedPanelKind | null;
     /** The focused panel is a terminal currently running an agent. */

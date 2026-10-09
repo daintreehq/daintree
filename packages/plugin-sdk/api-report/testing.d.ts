@@ -2604,7 +2604,7 @@ interface PluginFocusedPanel {
     /**
      * The focused kind, or `null` when Daintree has no focused panel: its window
      * is not the OS foreground window, or focus is on something that is not a
-     * panel (the sidebar, a dialog, the assistant).
+     * panel (the sidebar, an app dialog, the assistant).
      */
     readonly kind: PluginFocusedPanelKind | null;
     /** The focused panel is a terminal currently running an agent. */
@@ -5070,7 +5070,8 @@ interface CreateMockHostOptions {
     allAgents?: PluginAllAgentsSnapshot;
     /**
      * The focus `onDidChangeFocusedPanel` replays on subscribe. Defaults to no
-     * focused panel (`kind: null`).
+     * focused panel (`kind: null`). For a project plugin it is taken to be inside
+     * its own project; `"portal"` reads as `kind: null`, as in production.
      */
     focusedPanel?: PluginFocusedPanel;
     /**
