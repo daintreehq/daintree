@@ -193,6 +193,16 @@ export function observeFleet(track: ReadTrack, busy: boolean, at: number): void 
 }
 
 /**
+ * An ask a re-read found that the reading before it missed, on the same
+ * screen: it becomes the ask that screen's turn is about, without being a
+ * turn of its own — so the same ask drawn again later is no news either.
+ */
+export function adoptAsk(track: ReadTrack, ask: string, hash: string): void {
+  track.ask = ask;
+  track.hash = hash;
+}
+
+/**
  * An ask read on a stopped run. On the screen the last turn was taken on, it
  * is that turn's ask. On another screen, a different ask is a turn of its own:
  * a dialog answered and the next drawn in its place, or a question put after

@@ -43,6 +43,7 @@ import { observedCaughtUp } from "../../../shared/utils/canopyObservedKind.js";
 import { heldCanopyPriority } from "../../../shared/utils/canopyPriorityTier.js";
 import {
   CANOPY_READ_DWELL_MS,
+  adoptAsk,
   advanceTurn,
   isUnread,
   look,
@@ -1624,6 +1625,9 @@ export class CanopyService {
     // re-read asked for on a screen whose first reading never landed is that
     // screen's first reading, and a new ask on it is news like any other.
     const correction = forced && entry.card?.revision === entry.revision;
+    if (correction && !isBusy(run) && classified.question !== null) {
+      adoptAsk(entry.reads, promptKey(classified.question), screen.hash);
+    }
     if (
       !correction &&
       !isBusy(run) &&
