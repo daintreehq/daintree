@@ -145,6 +145,8 @@ let unsubscribeInput: (() => void) | null = null;
 const activeViews = new Set<number>();
 /** The workspace each view's panel asked to read (null: every one), kept across its opens. */
 const viewScopes = new Map<number, string | null>();
+/** The runs each view's open panel lists, scope and filters applied, as it last said. */
+const viewShown = new Map<number, ReadonlySet<string>>();
 /** Views that already carry lifecycle listeners, with the way to take them off. */
 const watchedViews = new Map<number, () => void>();
 
@@ -189,8 +191,12 @@ function subscribeInput(): void {
  * all projects, and those set to this one. Only these are in front of its ask;
  * a panel scoped to another project hides nothing, so it holds no page back.
  */
-export function canopyPanelsListing(workspaceId: string): number[] {
+export function canopyPanelsListing(workspaceId: string, runId?: string): number[] {
   return [...activeViews].filter((view) => {
+    // What the panel says it shows, its filters included, when it has said.
+    // A panel that hasn't said yet lists nothing for certain: better a page
+    // the user may not need than an ask held back for a row they can't see.
+    if (runId !== undefined) return viewShown.get(view)?.has(runId) ?? false;
     const scope = viewScopes.get(view) ?? null;
     return scope === null || scope === workspaceId;
   });
@@ -218,7 +224,7 @@ function getService(): CanopyService {
           ...(run.agentId !== undefined ? { agentId: run.agentId } : {}),
           kind: ask.kind,
         },
-        () => canopyPanelsListing(run.workspaceId)
+        () => canopyPanelsListing(run.workspaceId, run.runId)
       ),
     readScreen: async (runId, lines) => {
       const result = await readPluginTerminalScreen(getPtyClient(), runId, null, lines, null, {
@@ -268,6 +274,8 @@ function assertRunId(value: unknown): asserts value is string {
 
 /** The most runs one bulk read change may name. */
 const MAX_READ_BATCH = 500;
+/** Every run a panel can list, the whole fleet across projects: far above any real one. */
+const MAX_SHOWN_RUNS = 10_000;
 
 function isTurn(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -327,6 +335,26 @@ async function assertSameTerminal(runId: string, target: CanopyTarget): Promise<
     .catch(() => null);
   if (!record || record.spawnedAt !== target.spawnedAt || record.isExited === true) {
     throw new Error("That agent isn't running any more.");
+  }
+}
+
+/**
+ * The run the list showed is still this incarnation, alive or exited — for
+ * acts on the pane rather than on its process.
+ */
+async function assertSameIncarnation(runId: string, target: CanopyTarget): Promise<void> {
+  const snapshot = getFleetSnapshotService()?.getLastBroadcast();
+  if (!snapshot || snapshot.degraded) {
+    throw new Error("Agent state is unavailable right now — try again in a moment.");
+  }
+  if (!snapshot.runs.some((run) => run.runId === runId && run.spawnedAt === target.spawnedAt)) {
+    throw new Error("That agent isn't there any more.");
+  }
+  const record = await requirePtyClient()
+    .getTerminalAsync(runId)
+    .catch(() => null);
+  if (!record || record.spawnedAt !== target.spawnedAt) {
+    throw new Error("That agent isn't there any more.");
   }
 }
 
@@ -439,6 +467,29 @@ const recentlyTrashed = new Map<
 >();
 let trashReceipts = 0;
 
+/** A terminal brought back from the trash: that incarnation's receipts are spent. */
+function forgetReceiptsFor(runId: string, spawnedAt?: number): void {
+  for (const [receipt, trashed] of recentlyTrashed) {
+    if (trashed.runId === runId && (spawnedAt === undefined || trashed.spawnedAt === spawnedAt)) {
+      recentlyTrashed.delete(receipt);
+    }
+  }
+}
+
+/** Restores Canopy asked the host for, per run, whose acknowledgements are still to come. */
+const ownRestores = new Map<string, number>();
+
+/** The host restored a terminal: someone else's restore spends its receipts; Canopy's own did already. */
+function onHostRestored(runId: string): void {
+  const own = ownRestores.get(runId) ?? 0;
+  if (own > 0) {
+    if (own === 1) ownRestores.delete(runId);
+    else ownRestores.set(runId, own - 1);
+    return;
+  }
+  forgetReceiptsFor(runId);
+}
+
 function pruneTrashReceipts(): void {
   const now = Date.now();
   for (const [receipt, trashed] of recentlyTrashed) {
@@ -467,10 +518,15 @@ async function restoreThroughOwningViews(receipt: number): Promise<void> {
   recentlyTrashed.delete(receipt);
   if (!trashed) throw leftTheTrash();
   const ptyClient = requirePtyClient();
+  // The same incarnation, exited or not: an agent that finished while in the
+  // trash comes back as its pane would from the grid's own Undo. Checked
+  // before anything else is spent, so a stale receipt costs a newer one nothing.
   const record = await ptyClient.getTerminalAsync(trashed.runId).catch(() => null);
-  if (!record || record.spawnedAt !== trashed.spawnedAt || record.isExited === true) {
-    throw leftTheTrash();
-  }
+  if (!record || record.spawnedAt !== trashed.spawnedAt) throw leftTheTrash();
+  forgetReceiptsFor(trashed.runId, trashed.spawnedAt);
+  // The host's word that this restore landed is ours, not news of someone
+  // else's: it must not spend a receipt for a trash made after it.
+  ownRestores.set(trashed.runId, (ownRestores.get(trashed.runId) ?? 0) + 1);
   ptyClient.restore(trashed.runId);
   for (const view of getProjectRendererTargets(trashed.workspaceId)) {
     try {
@@ -517,6 +573,7 @@ function syncActive(): void {
 function forgetView(id: number): void {
   stopTerminalWatch(id);
   viewScopes.delete(id);
+  viewShown.delete(id);
   service?.forgetViewer(id);
   if (!activeViews.delete(id)) return;
   // Never builds a service: after cleanup there may be none, and none is wanted.
@@ -575,6 +632,8 @@ export const canopyNamespace = defineIpcNamespace({
           wakeService();
         } else {
           activeViews.delete(id);
+          // A closed panel shows nothing: the next open says afresh what it lists.
+          viewShown.delete(id);
           stopTerminalWatch(id);
         }
         syncActive();
@@ -792,7 +851,9 @@ export const canopyNamespace = defineIpcNamespace({
         checkRateLimit(CANOPY_METHOD_CHANNELS.trash, 20, 10_000);
         assertRunId(runId);
         assertTarget(target);
-        await assertSameTerminal(runId, target);
+        // The same incarnation, exited or not: an exited agent's pane is
+        // still there to clear away, as the pane says.
+        await assertSameIncarnation(runId, target);
         return trashThroughOwningViews(runId, target.spawnedAt);
       }
     ),
@@ -822,8 +883,9 @@ export const canopyNamespace = defineIpcNamespace({
      * Take back a trash made from Canopy, by the receipt `trash` gave, while
      * the trash still holds that terminal.
      */
+    // Not gated on Canopy being on: putting back a terminal it trashed reads
+    // nothing, and turning Canopy off must not strand one in the trash.
     untrash: op(CANOPY_METHOD_CHANNELS.untrash, async (receipt: number): Promise<void> => {
-      requireActivated();
       checkRateLimit(CANOPY_METHOD_CHANNELS.untrash, 20, 10_000);
       if (!Number.isSafeInteger(receipt) || receipt <= 0) throw new Error("Invalid trash receipt");
       await restoreThroughOwningViews(receipt);
@@ -1028,6 +1090,24 @@ export const canopyNamespace = defineIpcNamespace({
     ),
 
     /** Read only this workspace's agents (its id), or every workspace's (null). */
+    /**
+     * The runs this view's open panel lists right now — scope, Unread filter
+     * and folded Archived applied: only those are in front of the user, so
+     * only their asks are held back from a native page.
+     */
+    setShown: op(
+      CANOPY_METHOD_CHANNELS.setShown,
+      async (ctx, runIds: string[]): Promise<void> => {
+        if (!Array.isArray(runIds) || runIds.length > MAX_SHOWN_RUNS) {
+          throw new Error("Invalid run list");
+        }
+        for (const runId of runIds) assertRunId(runId);
+        viewShown.set(ctx.webContentsId, new Set(runIds));
+        watchView(ctx.event.sender);
+      },
+      { withContext: true }
+    ),
+
     setScope: op(
       CANOPY_METHOD_CHANNELS.setScope,
       async (ctx, workspaceId: string | null): Promise<void> => {
@@ -1050,8 +1130,12 @@ export const canopyNamespace = defineIpcNamespace({
 
 export function registerCanopyHandlers(): () => void {
   const unregister = canopyNamespace.register();
+  // Restored anywhere — the grid's Undo, the trash, another toast — a trash
+  // Canopy made is over, and its receipt must not restore a later one.
+  const offRestored = events.on("terminal:restored", ({ id }) => onHostRestored(id));
   return () => {
     unregister();
+    offRestored();
     unsubscribeFleet?.();
     unsubscribeFleet = null;
     unsubscribeInput?.();
@@ -1060,7 +1144,9 @@ export function registerCanopyHandlers(): () => void {
     watchedViews.clear();
     activeViews.clear();
     viewScopes.clear();
+    viewShown.clear();
     recentlyTrashed.clear();
+    ownRestores.clear();
     stopAllTerminalWatches();
     service?.dispose();
     service = null;

@@ -572,7 +572,7 @@ export function sceneFor(fixture: CanopyFixture, now: number): CanopyScene {
         canopy: snapshot(
           cards.filter((c) => c.runId !== "t-question"),
           now,
-          { lastError: "The describer timed out after 8s", failedRuns: ["t-approval-yn"] }
+          { lastError: "Canopy's service took too long to answer.", failedRuns: ["t-approval-yn"] }
         ),
       };
     case "calm": {

@@ -46,7 +46,11 @@ installPreviewShims({
     setActive: () => Promise.resolve(current),
     getSnapshot: () => Promise.resolve(current),
     refresh: () => record("refresh", null),
-    trash: (runId: string) => record("trash", { runId }),
+    // A receipt, so the preview's Trash offers its Undo as the app's does.
+    trash: (runId: string) => record("trash", { runId }).then(() => 1),
+    untrash: (receipt: number) => record("untrash", { receipt }),
+    reread: (runId: string) => record("reread", { runId }),
+    setShown: () => Promise.resolve(),
     // Looks are not recorded: the fixtures' seen times stay as written, so the
     // landing selection can't move the ranking between captures — nor read
     // anything, so the unread rows stay unread for every capture.

@@ -87,6 +87,9 @@ export interface GeneratedElectronAPI {
     setScope(
       ...args: IpcInvokeMap["canopy:set-scope"]["args"]
     ): Promise<IpcInvokeMap["canopy:set-scope"]["result"]>;
+    setShown(
+      ...args: IpcInvokeMap["canopy:set-shown"]["args"]
+    ): Promise<IpcInvokeMap["canopy:set-shown"]["result"]>;
     terminalInput(
       ...args: IpcInvokeMap["canopy:terminal-input"]["args"]
     ): Promise<IpcInvokeMap["canopy:terminal-input"]["result"]>;

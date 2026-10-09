@@ -191,6 +191,10 @@ export interface GeneratedIpcInvokeMap {
     args: [workspaceId: string | null];
     result: void;
   };
+  "canopy:set-shown": {
+    args: [runIds: string[]];
+    result: void;
+  };
   "canopy:terminal-input": {
     args: [watchId: number, data: string];
     result: void;

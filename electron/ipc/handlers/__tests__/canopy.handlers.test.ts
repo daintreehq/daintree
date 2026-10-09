@@ -691,6 +691,49 @@ describe("canopy IPC", () => {
     expect(again.ok).toBe(false);
   });
 
+  it("takes back its trash with Canopy turned off since, and of an agent that has exited", async () => {
+    state.record = { spawnedAt: 100, isExited: true };
+    const receipt = await trashReceipt();
+    state.mode = "unset";
+    const undone = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), receipt));
+    expect(undone.ok).toBe(true);
+    expect(ptyClient.restore).toHaveBeenCalledWith("run-1");
+  });
+
+  it("keeps a newer trash's Undo through its own restore's late word, and a stale receipt's refusal", async () => {
+    const first = await trashReceipt();
+    await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), first));
+    // Trashed again before the host's word on the first restore arrives.
+    const second = await trashReceipt();
+    events.emit("terminal:restored", { id: "run-1" });
+    // A receipt from an older incarnation is refused without spending the newer one.
+    state.record = { spawnedAt: 100 };
+    const undone = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), second));
+    expect(undone.ok).toBe(true);
+  });
+
+  it("spends a receipt once the terminal is restored anywhere else", async () => {
+    const receipt = await trashReceipt();
+    // The grid's own Undo, say; then the same terminal is trashed again there.
+    events.emit("terminal:restored", { id: "run-1" });
+    const stale = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), receipt));
+    expect(stale.ok).toBe(false);
+    expect(ptyClient.restore).not.toHaveBeenCalled();
+  });
+
+  it("holds back a page only for the runs a panel says it shows", async () => {
+    const sender = fakeSender(31);
+    await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true);
+    // Open but not yet said what it lists: it holds no page back.
+    expect(canopyPanelsListing("project-1", "run-1")).toEqual([]);
+    await invoke(CANOPY_METHOD_CHANNELS.setShown, sender, ["run-1"]);
+    expect(canopyPanelsListing("project-1", "run-1")).toEqual([31]);
+    // The Unread filter hides run-1: the panel isn't in front of its ask.
+    await invoke(CANOPY_METHOD_CHANNELS.setShown, sender, ["run-2"]);
+    expect(canopyPanelsListing("project-1", "run-1")).toEqual([]);
+    expect(canopyPanelsListing("project-1", "run-2")).toEqual([31]);
+  });
+
   it("refuses to read again a run Canopy hasn't read", async () => {
     const result = await outcome(
       invoke(CANOPY_METHOD_CHANNELS.reread, fakeSender(1), "run-1", { spawnedAt: 100 })

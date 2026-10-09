@@ -564,12 +564,14 @@ export function CanopyRow({
           )}
           {/* Where it runs is how a row is told apart: the project keeps its
               name longest, the worktree's gives way before it, and the facts
-              after them never take the last ten rems of the line. */}
+              after them never take the last ten rems of the line — and, short
+              of room, the facts give way, whole, before the worktree's name
+              is cut below a few characters. */}
           {project !== null && (
             <span className="max-w-[45%] min-w-0 shrink-0 truncate">{project}</span>
           )}
           {worktree !== null && (
-            <span className="flex min-w-0 shrink-[4]">
+            <span className="flex min-w-[5rem] shrink-[4]">
               {project !== null && <MetaDot />}
               <span className="min-w-0 truncate">{worktree}</span>
             </span>
@@ -590,7 +592,7 @@ export function CanopyRow({
             return (
               <span
                 key="facts"
-                className="flex h-4 max-w-[calc(100%-10rem)] shrink-0 flex-wrap overflow-hidden"
+                className="flex h-4 max-w-[calc(100%-10rem)] min-w-0 shrink-[16] flex-wrap overflow-hidden"
               >
                 <span className="h-4 w-0" />
                 {/* What the agent reported, read off its screen, not checked

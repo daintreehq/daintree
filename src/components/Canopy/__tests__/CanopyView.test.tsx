@@ -99,6 +99,7 @@ function installElectron(
     trash: vi.fn(async (): Promise<number | null> => null),
     untrash: vi.fn(async () => {}),
     reread: vi.fn(async () => {}),
+    setShown: vi.fn(async () => {}),
     archive: vi.fn(
       async (
         runId: string,
@@ -942,20 +943,29 @@ describe("CanopyView", () => {
       id: "elsewhere",
     } as typeof window.__DAINTREE_INITIAL_PROJECT__;
     try {
+      installElectron();
+      const view = render(<CanopyView />);
+      await frames();
+      expect(document.body.textContent).toContain("No agents in this project");
+      fireEvent.click(screenButton(document.body, "Show all projects"));
+      expect(useCanopyStore.getState().scope).toBe("all");
+      view.unmount();
+
+      // Daintree can't see its agents: no claim that there are none.
+      useCanopyStore.setState({ isOpen: true, scope: "project" });
       useFleetSnapshotStore.setState({
         snapshot: {
           ...useFleetSnapshotStore.getState().snapshot!,
+          runs: [],
           degraded: true,
           lastSuccessfulAt: NOW - 120_000,
         },
       });
-      installElectron();
       render(<CanopyView />);
       await frames();
-      expect(document.body.textContent).toContain("No agents in this project");
       expect(document.body.textContent).toContain("Agent status is unavailable");
-      fireEvent.click(screenButton(document.body, "Show all projects"));
-      expect(useCanopyStore.getState().scope).toBe("all");
+      expect(document.body.textContent).toContain("Can't tell who needs you right now");
+      expect(document.body.textContent).not.toContain("No agents");
     } finally {
       delete window.__DAINTREE_INITIAL_PROJECT__;
     }
@@ -1141,6 +1151,44 @@ describe("CanopyView", () => {
     await frames();
     // Shown now: its ask leaves the toolbar badge.
     expect(useCanopyStore.getState().acknowledged.working).toBe(`${NOW - 3_600_000}:2`);
+  });
+
+  it('withholds "Nothing needs you" while a read waits to be retried or agent status is unavailable', async () => {
+    const working = (degraded: boolean) => ({
+      snapshot: {
+        runs: [run("working", { agentState: "working", since: NOW - 30_000 })],
+        changedAt: NOW,
+        degraded,
+        lastSuccessfulAt: NOW,
+      },
+    });
+    useFleetSnapshotStore.setState(working(false));
+    // A settled, calm reading, so only the retry holds the conclusion back.
+    const calm = {
+      ...stuckCard("working"),
+      priority: 5,
+      attentionScore: 5,
+      headline: "Running the suite",
+    };
+    const retrying = { ...canopySnapshot, cards: [calm], waiting: "retrying" as const };
+    useCanopyStore.setState({ snapshot: retrying });
+    installElectron(retrying);
+    const first = render(<CanopyView />);
+    await frames();
+    expect(document.body.textContent).toContain("Checking who needs you…");
+    // Once the retry is through, the conclusion stands.
+    act(() => useCanopyStore.getState().applySnapshot({ ...canopySnapshot, cards: [calm] }));
+    await frames();
+    expect(document.body.textContent).toContain("Nothing needs you");
+    expect(document.body.textContent).not.toContain("Checking who needs you…");
+    first.unmount();
+
+    useCanopyStore.setState({ isOpen: true, snapshot: canopySnapshot });
+    useFleetSnapshotStore.setState(working(true));
+    installElectron();
+    render(<CanopyView />);
+    await frames();
+    expect(document.body.textContent).toContain("Can't tell who needs you right now");
   });
 
   it("lists a working run with the rest and lands on the top of the list", async () => {

@@ -355,7 +355,8 @@ function CanopyShortcuts() {
           .map((group) => (
             <section key={group.heading} className="flex flex-col gap-1.5">
               <h3 className="text-xs font-medium text-text-primary">{group.heading}</h3>
-              <dl className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5 text-xs text-text-secondary">
+              {/* One key column for every group, so the labels line up down the whole list. */}
+              <dl className="grid grid-cols-[7rem_1fr] items-center gap-x-3 gap-y-1.5 text-xs text-text-secondary">
                 {group.rows.map((row) => (
                   <div key={row.label} className="contents">
                     <dt className="inline-flex items-center gap-1">
@@ -620,6 +621,13 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
     if (!isOpen) return;
     acknowledge(visible.map((item) => item.runId));
   }, [isOpen, visible, acknowledge]);
+  // Main holds a native page back only for an ask the panel shows: told the
+  // rows as listed, filters included, whenever they change.
+  const shownKey = isOpen ? visible.map((item) => item.runId).join(" ") : null;
+  useEffect(() => {
+    if (shownKey === null) return;
+    safeFireAndForget(window.electron.canopy.setShown(shownKey === "" ? [] : shownKey.split(" ")));
+  }, [shownKey]);
   const listRef = useRef<HTMLDivElement>(null);
   useListReorderMotion(listRef, listed.map((item) => item.runId).join(" "));
   // A list unmounted under the pointer never says the pointer left.
@@ -1380,27 +1388,39 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
   const summaryLine =
     fleet === null
       ? "Reading agents…"
-      : items.length === 0
-        ? scope === "project" && fleet.runs.length > 0
-          ? "No agents in this project"
-          : "No agents are running"
-        : // What needs you leads; what is new follows. The list's own heading
-          // counts the agents.
-          [
-            needsYou > 0
-              ? `${pluralize(needsYou, "needs", "need")} you`
-              : // "Nothing" is a conclusion: qualified while some screens
-                // can't be read at all, and held back while readings are still
-                // owed — however long they take, and after a scope switch too.
-                (canopy?.lastError ?? null) !== null
-                ? "Nothing needs you that Canopy could read"
-                : owedOnOpen
-                  ? "Checking who needs you…"
-                  : "Nothing needs you",
-            unreadCount > 0 ? `${unreadCount.toLocaleString()} unread` : null,
-          ]
-            .filter(Boolean)
-            .join(" · ");
+      : fleet.degraded && items.length === 0
+        ? "Can't tell who needs you right now"
+        : items.length === 0
+          ? scope === "project" && fleet.runs.length > 0
+            ? "No agents in this project"
+            : "No agents are running"
+          : // What needs you leads; what is new follows. The list's own heading
+            // counts the agents.
+            [
+              needsYou > 0
+                ? `${pluralize(needsYou, "needs", "need")} you`
+                : // "Nothing" is a conclusion: qualified while some screens
+                  // can't be read at all, withheld while Daintree can't see its
+                  // agents, and held back while any run in the inbox has yet to
+                  // be read at all — readings owed, a retry waiting, however
+                  // long they take, and after a scope switch too.
+                  (canopy?.lastError ?? null) !== null
+                  ? "Nothing needs you that Canopy could read"
+                  : fleet.degraded
+                    ? "Can't tell who needs you right now"
+                    : owedOnOpen ||
+                        canopy?.waiting !== undefined ||
+                        (canopy?.busy === true && inbox.inbox.some((item) => item.card === null))
+                      ? "Checking who needs you…"
+                      : // A screen that can't be read yet (starting, hibernating)
+                        // has no reading at all: nothing is concluded about it.
+                        inbox.inbox.some((item) => item.card === null)
+                        ? "Not every agent could be read yet"
+                        : "Nothing needs you",
+              unreadCount > 0 ? `${unreadCount.toLocaleString()} unread` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ");
 
   return (
     <AppDialog
@@ -1677,7 +1697,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
             </div>
           </div>
         )}
-        {fleet !== null && items.length === 0 && (
+        {fleet !== null && !fleet.degraded && items.length === 0 && (
           <div className="flex flex-1 flex-col items-center justify-center gap-3">
             {scope === "project" && fleet.runs.length > 0 ? (
               <>
