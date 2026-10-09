@@ -347,17 +347,20 @@ describe("CanopyCard", () => {
     expect(h.onTrash).toHaveBeenCalledTimes(1);
   });
 
-  it("says a run looks done in its title bar, beside a spelled-out Trash, behind two presses", () => {
+  it("says a run looks done in its title bar, with Trash an icon until its first press", () => {
     const { container, h } = renderCard(itemFor("finished"));
     const note = container.querySelector<HTMLElement>("[data-canopy-looks-done]");
     expect(note?.textContent).toContain("Looks done");
     // Said in the header, never laid over the terminal's rows.
     expect(note?.closest("[data-canopy-terminal]")).toBeNull();
     const trash = buttonNamed(container, "Trash terminal");
-    expect(trash.textContent).toContain("Trash terminal");
+    expect(trash.textContent).not.toContain("Trash terminal");
     fireEvent.click(trash);
     expect(h.onTrash).not.toHaveBeenCalled();
     expect(container.querySelector("button[data-armed]")).toBe(trash);
+    expect(trash.textContent).toContain("Trash terminal");
+    // Armed, its name is the text it shows, not a hidden label beside it.
+    expect(trash.getAttribute("aria-label")).toBeNull();
     fireEvent.click(trash);
     expect(h.onTrash).toHaveBeenCalledTimes(1);
   });
