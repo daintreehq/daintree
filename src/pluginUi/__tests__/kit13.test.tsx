@@ -16,6 +16,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
+  // The kit's Markdown is lazy over a heavy renderer. Loaded cold on a busy CI
+  // worker it can take longer than a waitFor allows; loaded here, the render
+  // waits only on React.
+  await import("@/components/Markdown/PluginMarkdown");
 });
 
 afterEach(cleanup);

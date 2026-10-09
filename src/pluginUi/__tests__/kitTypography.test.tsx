@@ -298,9 +298,13 @@ describe("CodeBlock", () => {
     const { container } = render(
       withTooltips(createElement(kit.CodeBlock, { code: "const x = 1;", language: "ts" }))
     );
-    await vi.waitFor(() => {
-      expect(container.querySelector(".token.keyword")?.textContent).toBe("const");
-    });
+    // The highlighter loads cold, which a busy CI worker can stretch past a second.
+    await vi.waitFor(
+      () => {
+        expect(container.querySelector(".token.keyword")?.textContent).toBe("const");
+      },
+      { timeout: 10_000 }
+    );
     expect(container.querySelector("[data-line]")?.textContent).toContain("const x = 1;");
   });
 
