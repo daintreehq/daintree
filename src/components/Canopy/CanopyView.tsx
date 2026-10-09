@@ -547,6 +547,14 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
     () => [...listed, ...(archivedExpanded ? inbox.archived : [])],
     [listed, inbox, archivedExpanded]
   );
+  // What the open panel shows counts as seen: its urgent prompts leave the
+  // toolbar badge. Runs another scope or the Unread filter hides stay on it.
+  // Before paint, so a close in the same moment can't lose it.
+  const acknowledge = useCanopyStore((s) => s.acknowledge);
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    acknowledge(visible.map((item) => item.runId));
+  }, [isOpen, visible, acknowledge]);
   const listRef = useRef<HTMLDivElement>(null);
   useListReorderMotion(listRef, listed.map((item) => item.runId).join(" "));
   // A list unmounted under the pointer never says the pointer left.
@@ -1301,7 +1309,16 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
         : // What needs you leads; what is new follows. The list's own heading
           // counts the agents.
           [
-            needsYou > 0 ? `${pluralize(needsYou, "needs", "need")} you` : "Nothing needs you",
+            needsYou > 0
+              ? `${pluralize(needsYou, "needs", "need")} you`
+              : // "Nothing" is a conclusion: qualified while some screens
+                // can't be read at all, and held back while readings are still
+                // owed — however long they take, and after a scope switch too.
+                (canopy?.lastError ?? null) !== null
+                ? "Nothing needs you that Canopy could read"
+                : owedOnOpen
+                  ? "Checking who needs you…"
+                  : "Nothing needs you",
             unreadCount > 0 ? `${unreadCount.toLocaleString()} unread` : null,
           ]
             .filter(Boolean)

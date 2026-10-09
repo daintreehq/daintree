@@ -184,6 +184,18 @@ function subscribeInput(): void {
   };
 }
 
+/**
+ * The views whose open panel lists a run in this workspace: every panel set to
+ * all projects, and those set to this one. Only these are in front of its ask;
+ * a panel scoped to another project hides nothing, so it holds no page back.
+ */
+export function canopyPanelsListing(workspaceId: string): number[] {
+  return [...activeViews].filter((view) => {
+    const scope = viewScopes.get(view) ?? null;
+    return scope === null || scope === workspaceId;
+  });
+}
+
 function getService(): CanopyService {
   subscribeFleet();
   if (service) return service;
@@ -206,7 +218,7 @@ function getService(): CanopyService {
           ...(run.agentId !== undefined ? { agentId: run.agentId } : {}),
           kind: ask.kind,
         },
-        () => [...activeViews]
+        () => canopyPanelsListing(run.workspaceId)
       ),
     readScreen: async (runId, lines) => {
       const result = await readPluginTerminalScreen(getPtyClient(), runId, null, lines, null, {

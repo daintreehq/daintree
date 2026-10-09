@@ -77,10 +77,9 @@ export function CanopyToolbarButton({
   // away on a "0".
   const [shownCount, setShownCount] = useState(needYou);
   if (needYou > 0 && needYou !== shownCount) setShownCount(needYou);
-  const label =
-    activated && needYou > 0
-      ? `${CANOPY_LABEL}, ${needYou} ${needYou === 1 ? "needs" : "need"} you`
-      : CANOPY_LABEL;
+  // "Asking", not "need you": the badge counts only urgent asks, while the
+  // panel's own "need you" counts everything left for the user to check.
+  const label = activated && needYou > 0 ? `${CANOPY_LABEL}, ${needYou} asking you` : CANOPY_LABEL;
   const shortcut = useEffectiveCombo(CANOPY_ACTION_ID);
   const ariaShortcut = useAriaKeyshortcuts(CANOPY_ACTION_ID);
   const hover = useShortcutHintHover(CANOPY_ACTION_ID);

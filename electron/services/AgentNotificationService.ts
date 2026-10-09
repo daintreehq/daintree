@@ -117,10 +117,11 @@ class AgentNotificationService {
   private announcedWaitingIds = new Set<string>();
   /** The same, the other way round: asks Canopy paged for, until the agent works again or is dealt with. */
   private canopyAnnouncedIds = new Set<string>();
-  private canopyAskBuffer: CanopyAskNotice[] = [];
+  /** Each with the panels that list it: what's in front of one ask says nothing of another's. */
+  private canopyAskBuffer: Array<
+    CanopyAskNotice & { canopyOpenIn: () => readonly NotificationOwnerId[] }
+  > = [];
   private canopyAskTimer: NodeJS.Timeout | null = null;
-  /** The views showing Canopy right now, read again when the burst flushes. */
-  private canopyOpenIn: () => readonly NotificationOwnerId[] = () => [];
   /** Tracks when each agent spawned to suppress sounds during the grace period */
   private agentSpawnTimestamps = new Map<string, number>();
   /** Timestamp when the service was initialized — sounds are suppressed during boot */
@@ -869,23 +870,23 @@ class AgentNotificationService {
     if (settings.enabled === false) return;
     if (this.isWithinBootGrace() || this.isWithinSpawnGrace(ask.agentId, ask.terminalId)) return;
     if (this.announcedWaitingIds.has(ask.terminalId)) return;
-    this.canopyOpenIn = canopyOpenIn;
-    if (this.isCanopyInFront()) return;
+    if (this.isCanopyInFront(canopyOpenIn)) return;
     this.canopyAskBuffer = this.canopyAskBuffer.filter(
       (entry) => entry.terminalId !== ask.terminalId
     );
-    this.canopyAskBuffer.push(ask);
+    this.canopyAskBuffer.push({ ...ask, canopyOpenIn });
     this.canopyAskTimer ??= setTimeout(() => this.flushCanopyAsks(), BURST_WINDOW_MS);
   }
 
-  private isCanopyInFront(): boolean {
-    return this.canopyOpenIn().some((owner) => notificationService.isOwnerViewFocused(owner));
+  /** A panel listing the ask is open in a focused view: the user is looking at it already. */
+  private isCanopyInFront(canopyOpenIn: () => readonly NotificationOwnerId[]): boolean {
+    return canopyOpenIn().some((owner) => notificationService.isOwnerViewFocused(owner));
   }
 
   private flushCanopyAsks(): void {
     this.canopyAskTimer = null;
     const settings = projectStore.getEffectiveNotificationSettings();
-    if (settings.enabled === false || this.isCanopyInFront()) {
+    if (settings.enabled === false) {
       this.canopyAskBuffer = [];
       return;
     }
@@ -893,6 +894,8 @@ class AgentNotificationService {
     let activeWorktreeId: string | null | undefined;
     const asks = this.canopyAskBuffer.splice(0).filter((ask) => {
       if (this.announcedWaitingIds.has(ask.terminalId)) return false;
+      // Each ask by the panels that list it, read again now the burst is out.
+      if (this.isCanopyInFront(ask.canopyOpenIn)) return false;
       if (!ask.worktreeId) return true;
       // A terminal never watched has no known owner: the focused window
       // showing its worktree is the best evidence the user is looking at it.
@@ -1205,7 +1208,6 @@ class AgentNotificationService {
       this.canopyAskTimer = null;
     }
     this.canopyAskBuffer = [];
-    this.canopyOpenIn = () => [];
     this.announcedWaitingIds.clear();
     this.canopyAnnouncedIds.clear();
 

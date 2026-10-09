@@ -2478,6 +2478,22 @@ describe("AgentNotificationService", () => {
       expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
     });
 
+    it("pages for an ask no open panel lists, though another ask's panel is in front", () => {
+      mockStore();
+      pastBoot();
+      notificationServiceMock.isOwnerViewFocused.mockImplementation((owner) => owner === 7);
+      // term-1's project is listed by no panel; term-2's by the focused one.
+      agentNotificationService.notifyCanopyAsk(ask("term-1"), () => []);
+      agentNotificationService.notifyCanopyAsk(ask("term-2"), () => [7]);
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        expect.any(String),
+        expect.objectContaining({ closeWithPanels: ["term-1"] })
+      );
+    });
+
     it("keeps Daintree's own waiting banner quiet for a wait Canopy already paged for", () => {
       mockStore({ waitingEnabled: true });
       pastBoot();

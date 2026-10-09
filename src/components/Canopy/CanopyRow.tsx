@@ -25,7 +25,6 @@ import {
   unseenLabelMs,
   type CanopyItem,
 } from "./canopyModel";
-import { PRIORITY_LABEL, priorityTier } from "./CanopyPriority";
 
 /** Waiting on the user at least this long, the row's clock stands out. */
 const OVERDUE_WAIT_MS = 5 * 60_000;
@@ -175,7 +174,8 @@ interface CanopyRowProps {
  * carrying out, what it needs from you, the summary, and the project (by its
  * emoji) and worktree it runs in. An unread run carries a dot in the gutter and
  * a heavier name. The list's order is its priority; the row shows why it ranks
- * there in words, never as a score. A click opens its terminal beside the list.
+ * there in words, never as a score — on screen or read aloud. A click opens its
+ * terminal beside the list.
  */
 export function CanopyRow({
   item,
@@ -202,7 +202,6 @@ export function CanopyRow({
   // Why a busy run ranks where it does: not a reading, but how long it has
   // gone without the user looking at it.
   const unseenLabel = unseenMs === null ? null : `Unseen ${formatWaitAge(nowMs - unseenMs, nowMs)}`;
-  const tier = priorityTier(priority);
   const handled = itemHandled(item);
   const archived = itemArchived(item);
   const wordsShown = card !== null && (status === card.headline || status === card.question);
@@ -325,9 +324,6 @@ export function CanopyRow({
       ? `answer with ${choices.map((choice, index) => `${index + 1} ${choice}`).join(", ")}`
       : null,
     unseenLabel !== null ? unseenLabel.toLowerCase() : null,
-    priority === null || compact
-      ? null
-      : `priority ${priority}, ${PRIORITY_LABEL[tier].toLowerCase()}`,
     where,
     asideLabel !== null ? asideLabel.toLowerCase() : handled ? "replied" : null,
     item.failed ? "read failed" : null,

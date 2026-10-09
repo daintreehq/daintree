@@ -1003,7 +1003,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "project",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Mark every agent Canopy shows as unread as read, through what it had done when the panel last showed it; anything an agent does after that stays unread",
+    "description": "Mark every agent Canopy lists as unread as read — this project's alone when Canopy is set to This project — through what it had done when the panel last showed it; anything an agent does after that stays unread",
     "examples": undefined,
     "id": "canopy.markAllRead",
     "keywords": [

@@ -29,6 +29,8 @@ interface CanopyState {
    * in here, so opening the panel clears it until a new one arrives.
    */
   acknowledged: Record<string, string>;
+  /** The open panel shows these runs: their urgent prompts count as seen. */
+  acknowledge: (runIds: readonly string[]) => void;
   /**
    * The inbox's order as last shown, run ids first to last, and the scan it was
    * ranked after: kept across opens, so the list opens as it was left.
@@ -83,17 +85,22 @@ function saveAcknowledged(acknowledged: Record<string, string>): void {
 }
 
 /**
- * Marks every urgent prompt in the snapshot as shown. Merged over what is
- * stored rather than this view's copy, since every project view writes the
- * key, and pruned to the runs Canopy still has cards for.
+ * Marks the urgent prompts of the runs the panel shows as seen — only those: a
+ * panel scoped to one project leaves another project's asks on the badge.
+ * Merged over what is stored rather than this view's copy, since every project
+ * view writes the key, and pruned to the runs Canopy still has cards for.
  */
 function acknowledgeUrgent(
   current: Record<string, string>,
-  snapshot: CanopySnapshot | null
+  snapshot: CanopySnapshot | null,
+  shown: ReadonlySet<string>
 ): Record<string, string> | null {
   if (!snapshot) return null;
   const urgent = snapshot.cards.filter(
-    (card) => card.priority >= CANOPY_URGENT_PRIORITY && current[card.runId] !== promptKey(card)
+    (card) =>
+      shown.has(card.runId) &&
+      card.priority >= CANOPY_URGENT_PRIORITY &&
+      current[card.runId] !== promptKey(card)
   );
   if (urgent.length === 0) return null;
   const known = new Set(snapshot.cards.map((card) => card.runId));
@@ -184,11 +191,6 @@ function saveScope(scope: CanopyScope): void {
   }
 }
 
-function opened(state: CanopyState, snapshot: CanopySnapshot | null): Partial<CanopyState> {
-  const acknowledged = acknowledgeUrgent(state.acknowledged, snapshot);
-  return acknowledged ? { isOpen: true, acknowledged } : { isOpen: true };
-}
-
 /**
  * Open state for the canopy panel, and the latest cards main pushed.
  *
@@ -203,6 +205,12 @@ export const useCanopyStore = create<CanopyState>((set) => ({
   seedMode: (mode) => set((state) => (state.snapshot === null ? { mode } : state)),
   snapshot: null,
   acknowledged: readAcknowledged(),
+  acknowledge: (runIds) =>
+    set((state) => {
+      if (!state.isOpen) return state;
+      const acknowledged = acknowledgeUrgent(state.acknowledged, state.snapshot, new Set(runIds));
+      return acknowledged ? { acknowledged } : state;
+    }),
   orders: loadOrders(),
   setOrder: (scope, order) =>
     set((state) => {
@@ -225,15 +233,11 @@ export const useCanopyStore = create<CanopyState>((set) => ({
     saveScope(scope);
     set({ scope });
   },
-  open: () => set((state) => (state.mode === "hidden" ? state : opened(state, state.snapshot))),
+  open: () => set((state) => (state.mode === "hidden" ? state : { isOpen: true })),
   close: () => set({ isOpen: false }),
   toggle: () =>
     set((state) =>
-      state.isOpen
-        ? { isOpen: false }
-        : state.mode === "hidden"
-          ? state
-          : opened(state, state.snapshot)
+      state.isOpen ? { isOpen: false } : state.mode === "hidden" ? state : { isOpen: true }
     ),
   applySnapshot: (snapshot) =>
     set((state) => {
@@ -245,9 +249,7 @@ export const useCanopyStore = create<CanopyState>((set) => ({
       const mode = snapshot.mode;
       // Hidden from another view, or from Settings: a panel this view held open goes too.
       if (mode === "hidden") return { snapshot, mode, isOpen: false };
-      if (!state.isOpen) return { snapshot, mode };
-      const acknowledged = acknowledgeUrgent(state.acknowledged, snapshot);
-      return acknowledged ? { snapshot, mode, acknowledged } : { snapshot, mode };
+      return { snapshot, mode };
     }),
 }));
 

@@ -368,9 +368,8 @@ describe("CanopyRow", () => {
     }
     expect(name).not.toMatch(/priority|unread|waiting/i);
     expect(heard).toMatch(/unread/);
-    expect(heard).toMatch(/priority 88/);
-    // What it wants comes before the state and the place.
-    expect(heard.indexOf("Choose push")).toBeLessThan(heard.indexOf("priority"));
+    // What it wants comes before the place.
+    expect(heard.indexOf("Choose push")).toBeLessThan(heard.lastIndexOf("app"));
   });
 
   it("reads out how long ago a run was replied to, as the row shows it", () => {
@@ -402,14 +401,14 @@ describe("CanopyRow", () => {
     }
   });
 
-  it("shows no score on screen: the order is the priority, and a screen reader still hears it", () => {
+  it("gives no score, on screen or read aloud: the order is the priority", () => {
     const { container } = renderRow(itemFor("question"));
     const shown = [...container.querySelectorAll("[aria-hidden='true']")]
       .map((element) => element.textContent)
       .join(" ");
     expect(shown).not.toContain("88");
     expect(container.querySelector("svg rect")).toBeNull();
-    expect(description(container)).toMatch(/priority 88/);
+    expect(description(container)).not.toMatch(/priority|88/);
   });
 
   it("marks an unread run with a dot in the gutter, and a read one with none", () => {
