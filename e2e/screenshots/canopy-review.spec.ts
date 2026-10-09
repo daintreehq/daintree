@@ -311,6 +311,20 @@ for (const theme of THEMES) {
     await page.waitForTimeout(100);
     written.push(await snapList(page, `${theme}--r03-hover.png`, FLEET_CARDS));
 
+    // The archive button takes the pointer on a row whose progress meter it
+    // replaces: the faded meter must not sit over it and swallow the click.
+    const measured = cards(page)
+      .filter({ has: page.locator('[role="progressbar"]') })
+      .first();
+    await measured.hover();
+    const archiveBox = await measured.locator("[data-canopy-row-archive]").boundingBox();
+    expect(archiveBox).not.toBeNull();
+    const archiveHit = await page.evaluate(
+      ([x, y]) => Boolean(document.elementFromPoint(x!, y!)?.closest("[data-canopy-row-archive]")),
+      [archiveBox!.x + archiveBox!.width / 2, archiveBox!.y + archiveBox!.height / 2]
+    );
+    expect(archiveHit, "the archive button is under the pointer").toBe(true);
+
     // Only working agents: progress words, and the one gone unseen longest on top.
     await load(page, theme, "calm", ROWS_VIEWPORT);
     written.push(await snapList(page, `${theme}--r04-calm.png`, "some"));
