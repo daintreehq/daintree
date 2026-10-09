@@ -60,6 +60,9 @@ export interface GeneratedElectronAPI {
     markSeen(
       ...args: IpcInvokeMap["canopy:mark-seen"]["args"]
     ): Promise<IpcInvokeMap["canopy:mark-seen"]["result"]>;
+    noteSent(
+      ...args: IpcInvokeMap["canopy:note-sent"]["args"]
+    ): Promise<IpcInvokeMap["canopy:note-sent"]["result"]>;
     refresh(
       ...args: IpcInvokeMap["canopy:refresh"]["args"]
     ): Promise<IpcInvokeMap["canopy:refresh"]["result"]>;

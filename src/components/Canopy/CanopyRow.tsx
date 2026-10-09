@@ -387,7 +387,9 @@ export function CanopyRow({
             onArchive();
           }}
           onDoubleClick={(event) => event.stopPropagation()}
-          className="absolute top-2 right-2 flex size-6 items-center justify-center rounded-[var(--radius-sm)] bg-surface-panel text-text-secondary opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 hover:bg-overlay-highlight hover:text-text-primary [&_svg]:size-3.5"
+          // In the progress meter's place on the name line, which gives way to
+          // it under the pointer, as a mail list's actions take the date's.
+          className="absolute top-2.5 right-2 flex size-5 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 hover:bg-overlay-highlight hover:text-text-primary [&_svg]:size-3.5"
         >
           {item.disposition?.kind === "archived" ? <ArchiveRestore /> : <Archive />}
         </button>
@@ -424,6 +426,7 @@ export function CanopyRow({
         {row.age !== null && (
           <span
             data-overdue={overdue || undefined}
+            data-canopy-age=""
             className={cn(
               "flex items-center gap-1.5 text-xs leading-4 whitespace-nowrap tabular-nums",
               // Left waiting this long, the wait itself is the news: the clock
@@ -451,7 +454,12 @@ export function CanopyRow({
           {/* How far through its task, where a mail list puts the date: a
               glance down the column reads the whole fleet's progress. */}
           {progress !== null && (
-            <span className="flex shrink-0 items-center gap-1.5 text-xs leading-4 text-text-secondary tabular-nums">
+            <span
+              className={cn(
+                "flex shrink-0 items-center gap-1.5 text-xs leading-4 text-text-secondary tabular-nums",
+                onArchive && "transition-opacity duration-150 group-hover/row:opacity-0"
+              )}
+            >
               <ProgressBar value={progress.value} label={progress.spoken} className="w-10" />
               <span className="min-w-7 text-right">{progress.label}</span>
             </span>

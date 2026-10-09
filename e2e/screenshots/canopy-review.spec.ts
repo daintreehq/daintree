@@ -196,7 +196,9 @@ for (const theme of THEMES) {
     await expect(cards(page).first()).toBeFocused();
     for (let i = 0; i < 2; i += 1) await page.keyboard.press("ArrowDown");
     await expect(cards(page).nth(2)).toBeFocused();
-    await expect(cards(page).nth(2)).not.toHaveAttribute("data-unread", "true");
+    // Arriving on a row reads nothing by itself: a look reads it once it has
+    // lasted, which main times, and the preview stands in for none of it.
+    await expect(cards(page).nth(2)).toHaveAttribute("data-unread", "true");
     written.push(await snap(page, `${theme}--03-keyboard-down-the-inbox.png`, FLEET_CARDS));
 
     // Answer the first menu in its own live terminal, then start a reply on the question.

@@ -3,6 +3,7 @@ import type { ITerminalOptions } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import type { AgentState } from "@shared/types/agent";
 import { cn } from "@/lib/utils";
+import { reportCanopySent } from "@/lib/canopySeen";
 import {
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
@@ -597,6 +598,8 @@ export function XtermAdapter({
               const submit = "\r";
               writeTerminalInputOrFleet(terminalId, submit);
               terminalInstanceService.notifyUserInput(terminalId);
+              // Typed here by the user: what it sets going is their own doing.
+              reportCanopySent(terminalId);
               stableOnInput(submit);
               // Plain Enter is a submit. The custom key handler returns `false`
               // before xterm's onKey/onData fire, so the listener-installed

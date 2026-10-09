@@ -110,14 +110,6 @@ export function isWatched(track: ReadTrack, now: number): boolean {
   return since !== null && now - since >= CANOPY_READ_DWELL_MS;
 }
 
-/** Someone is looking at the run at all, however briefly. */
-export function isLookedAt(track: ReadTrack, now: number): boolean {
-  for (const look of track.lookers.values()) {
-    if (now - look.renewedAt <= CANOPY_LOOK_LEASE_MS) return true;
-  }
-  return false;
-}
-
 /** What Daintree and the screen show of the run at one read. */
 export interface TurnObservation {
   busy: boolean;

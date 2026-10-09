@@ -300,15 +300,24 @@ async function sampleInbox(page: Page): Promise<void> {
     setInterval(() => {
       const rows = [
         ...document.querySelectorAll<HTMLElement>("[data-canopy-list] [data-canopy-card]"),
-      ].map((row) => ({
-        id: row.id,
-        priority: row.dataset.priority ?? null,
-        text: row.textContent ?? "",
-        // Layout height, not the box on screen: the dialog scales in as it opens.
-        height: row.offsetHeight,
-        due: row.querySelector("[data-canopy-detail-due]") !== null,
-        unread: row.dataset.unread === "true",
-      }));
+      ]
+        .map((row) => {
+          // The age by the state glyph ticks by the minute and runs straight into
+          // the name after it, where no pattern can find its edge: it is taken
+          // out here, where it is still its own element.
+          const copy = row.cloneNode(true) as HTMLElement;
+          for (const age of copy.querySelectorAll("[data-canopy-age]")) age.textContent = "#";
+          return { row, text: copy.textContent ?? "" };
+        })
+        .map(({ row, text }) => ({
+          id: row.id,
+          priority: row.dataset.priority ?? null,
+          text,
+          // Layout height, not the box on screen: the dialog scales in as it opens.
+          height: row.offsetHeight,
+          due: row.querySelector("[data-canopy-detail-due]") !== null,
+          unread: row.dataset.unread === "true",
+        }));
       const open = document.querySelector('[data-testid="canopy-dialog"]') !== null;
       w.__canopySamples!.push({ at: Date.now(), open, rows });
     }, 100);
@@ -321,10 +330,14 @@ async function takeSamples(page: Page): Promise<Sample[]> {
   );
 }
 
-/** A row's words, with the ages that tick by the minute taken out. */
+/**
+ * A row's words, with the ages that tick by the minute taken out, and its
+ * read state too: that is its own kind of change (`unread`).
+ */
 function words(text: string): string {
   return (
     text
+      .replace(/\bunread,\s?/g, "")
       // The row's text runs its parts together ("urgentnow98"), so no word edges.
       .replace(/just now|now|\d+\s?(?:s|m|h|d)(?![a-z])/g, "#")
       .replace(/\s+/g, " ")
@@ -648,8 +661,14 @@ test.describe("Canopy stability against the live service", () => {
       { run: card(agents.finished), from: began, to: ended },
       { run: card(agents.question), from: began, to: ended },
     ]);
-    // Not even an explained change while nothing happened, or at the reopen.
-    expect(changes.filter((change) => change.at < reopenEnded)).toEqual([]);
+    // Not even an explained change while nothing happened, or at the reopen —
+    // but a row read meanwhile: the panel closed onto a pane the user then had
+    // in front of them, and it opens again showing what they read there.
+    expect(
+      changes.filter(
+        (change) => change.at < reopenEnded && !(change.kind === "unread" && change.to === "read")
+      )
+    ).toEqual([]);
     expect(unexplained).toEqual([]);
   });
 

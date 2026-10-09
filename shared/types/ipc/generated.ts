@@ -150,6 +150,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "canopy:note-sent": {
+    args: [runId: string];
+    result: void;
+  };
   "canopy:refresh": {
     args: [];
     result: void;

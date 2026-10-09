@@ -42,7 +42,6 @@ import { observedCaughtUp } from "../../../shared/utils/canopyObservedKind.js";
 import {
   CANOPY_READ_DWELL_MS,
   advanceTurn,
-  isLookedAt,
   isUnread,
   look,
   lookingSince,
@@ -718,10 +717,6 @@ export class CanopyService {
   noteInput(runId: string, answer: TerminalAnswer): void {
     if (this.disposed) return;
     const entry = this.entries.get(runId);
-    // Sent from a pane the user has in front of them: the work it starts is
-    // their own doing, not news. Input to a terminal nobody is looking at —
-    // a broadcast, an agent driving it — may be anyone's.
-    if (entry && isLookedAt(entry.reads, this.now())) entry.reads.userSentAt = this.now();
     const card = entry?.card;
     // Only a run waiting on the user: a message to a working agent leaves its
     // card as the readers wrote it.
@@ -933,6 +928,18 @@ export class CanopyService {
     const entry = this.entries.get(runId);
     if (!entry || entry.spawnedAt !== spawnedAt) return;
     entry.reads.userSentAt = this.now();
+  }
+
+  /**
+   * The user sent the run something from its own pane — Enter typed in it, or
+   * its composer — as its view saw it happen. Only a view's own input entry
+   * points report this: input from an action, an agent, a broadcast or a
+   * plugin never does, so the work those start stays news.
+   */
+  noteUserSentTo(runId: string): void {
+    if (this.disposed) return;
+    const entry = this.liveEntry(runId);
+    if (entry) entry.reads.userSentAt = this.now();
   }
 
   /**

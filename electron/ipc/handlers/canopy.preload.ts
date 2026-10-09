@@ -12,6 +12,7 @@ export const CANOPY_METHOD_CHANNELS = {
   setRead: "canopy:set-read",
   markAllRead: "canopy:mark-all-read",
   restoreReads: "canopy:restore-reads",
+  noteSent: "canopy:note-sent",
   setScope: "canopy:set-scope",
   runBranch: "canopy:run-branch",
   watchTerminal: "canopy:watch-terminal",

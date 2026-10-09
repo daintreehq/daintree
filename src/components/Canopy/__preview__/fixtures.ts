@@ -1,5 +1,10 @@
 import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
-import type { CanopyCard, CanopySeen, CanopySnapshot } from "@shared/types/ipc/canopy";
+import type {
+  CanopyCard,
+  CanopyReadMark,
+  CanopySeen,
+  CanopySnapshot,
+} from "@shared/types/ipc/canopy";
 import type { Project } from "@shared/types/project";
 
 /**
@@ -468,6 +473,32 @@ function seenFor(now: number): CanopySeen[] {
   ];
 }
 
+/**
+ * What the user has read: the stops that came in since they last looked are
+ * unread — the approval they glanced at, the PR one and the working agents
+ * are not — so the list shows both, as a real afternoon does.
+ */
+function readsFor(now: number): CanopyReadMark[] {
+  const spawnedAt = now - 120 * MIN;
+  const mark = (runId: string, unread: boolean): CanopyReadMark => ({
+    runId,
+    spawnedAt,
+    turn: 2,
+    readTurn: unread ? 1 : 2,
+    markedUnreadAt: null,
+    version: 3,
+  });
+  return [
+    mark("t-approval-edit", false),
+    mark("t-approval-yn", true),
+    mark("t-question", true),
+    mark("t-error", true),
+    mark("t-finished-pr", false),
+    mark("t-finished", true),
+    mark("t-working", false),
+  ];
+}
+
 function snapshot(cards: CanopyCard[], now: number, extra: Partial<CanopySnapshot> = {}) {
   return {
     activated: true,
@@ -475,7 +506,7 @@ function snapshot(cards: CanopyCard[], now: number, extra: Partial<CanopySnapsho
     tier: "free" as const,
     dispositions: [],
     seen: seenFor(now),
-    reads: [],
+    reads: readsFor(now),
     scope: null,
     active: true,
     busy: false,

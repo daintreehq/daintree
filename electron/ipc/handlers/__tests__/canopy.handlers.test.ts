@@ -372,6 +372,19 @@ describe("canopy IPC", () => {
       }
     });
 
+    it("hears what the user sent from a pane only while Canopy is on, and only for a run id", async () => {
+      const sender = fakeSender(1);
+      state.activated = false;
+      expect((await outcome(invoke(CANOPY_METHOD_CHANNELS.noteSent, sender, "run-1"))).ok).toBe(
+        true
+      );
+      state.activated = true;
+      expect((await outcome(invoke(CANOPY_METHOD_CHANNELS.noteSent, sender, "run-1"))).ok).toBe(
+        true
+      );
+      expect((await outcome(invoke(CANOPY_METHOD_CHANNELS.noteSent, sender, 7))).ok).toBe(false);
+    });
+
     it("follows a view that reports looks, so one that goes away stops looking", async () => {
       const sender = fakeSender(9);
       await invoke(CANOPY_METHOD_CHANNELS.markSeen, sender, "run-1", true);
