@@ -112,7 +112,8 @@
           "shell:exec",
           "socket:connect",
           "mcp:expose",
-          "project:dispatch"
+          "project:dispatch",
+          "panel:focus-read"
         ]
       }
     },
@@ -545,7 +546,8 @@
                     "shell:exec",
                     "socket:connect",
                     "mcp:expose",
-                    "project:dispatch"
+                    "project:dispatch",
+                    "panel:focus-read"
                   ]
                 }
               }

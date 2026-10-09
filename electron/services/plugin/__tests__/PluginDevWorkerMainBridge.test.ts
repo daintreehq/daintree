@@ -2530,6 +2530,33 @@ describe("PluginDevWorkerMainBridge app-wide agent list (#13154)", () => {
   });
 });
 
+describe("PluginDevWorkerMainBridge focused-panel subscription", () => {
+  it("subscribes focused-panel through the host and pushes each focus", async () => {
+    const { host, workerHost } = makeBridge({ capabilities: ["panel:focus-read"] });
+    let deliver: ((focus: unknown) => void) | undefined;
+    (host as any).onDidChangeFocusedPanel = vi.fn(async (cb: (focus: unknown) => void) => {
+      deliver = cb;
+      return vi.fn();
+    });
+    workerHost.emit("worker-message", {
+      type: "subscribe",
+      subscriptionId: "s-focus",
+      kind: "focused-panel",
+    });
+    await flush();
+
+    expect((host as any).onDidChangeFocusedPanel).toHaveBeenCalledWith(expect.any(Function), {
+      debounceMs: undefined,
+    });
+    const focus = { kind: "diff", agent: false, worktreeId: "wt-1" };
+    deliver?.(focus);
+    const evt = workerHost.sent.find(
+      (m: any) => m.type === "subscription-event" && m.subscriptionId === "s-focus"
+    );
+    expect(evt.payload).toEqual(focus);
+  });
+});
+
 describe("PluginDevWorkerMainBridge coalesced subscriptions and readFiles", () => {
   it("passes an absent debounceMs through as undefined so the host default applies", async () => {
     const { host, workerHost } = makeBridge({ capabilities: ["agent:read"] });

@@ -115,6 +115,7 @@ const SUBSCRIPTION_KINDS = {
   storage: true,
   "agent-state": true,
   "all-agents": true,
+  "focused-panel": true,
   "panel-lifecycle": true,
   "system-wake": true,
   "push-listeners": true,

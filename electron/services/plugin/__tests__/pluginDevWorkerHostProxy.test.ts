@@ -311,6 +311,24 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
     expect(Object.isFrozen(snapshot)).toBe(true);
   });
 
+  it("subscribes focused-panel and rebuilds each focus to the allowlist, frozen", async () => {
+    const { proxy, sent } = makeProxy();
+    const callback = vi.fn();
+    await proxy.host.onDidChangeFocusedPanel(callback, { debounceMs: 300 });
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "focused-panel");
+    expect(sub).toMatchObject({ debounceMs: 300 });
+
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { kind: "terminal", agent: true, worktreeId: "wt-1", extra: "x" },
+    });
+
+    const focus = callback.mock.calls[0][0];
+    expect(focus).toStrictEqual({ kind: "terminal", agent: true, worktreeId: "wt-1" });
+    expect(Object.isFrozen(focus)).toBe(true);
+  });
+
   it("relays terminals.readScreen and resolves with the screen", async () => {
     const { proxy, sent } = makeProxy();
     const promise = proxy.host.terminals.readScreen("t-1", { lines: 5 });

@@ -2371,6 +2371,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     reportViewMetrics(reports: import("./pluginMetrics.js").PluginRendererMetricsEnvelope[]): void;
     /**
+     * Fire-and-forget: the kind of panel holding DOM focus in this project
+     * view, or `kind: null` when none does. Main combines it with window and
+     * Portal focus for `host.onDidChangeFocusedPanel` (#13221).
+     */
+    reportFocusedPanel(report: import("../plugin.js").PluginFocusedPanel): void;
+    /**
      * Subscribe to per-plugin perf snapshots, pushed at most once a second and
      * only while at least one listener is attached (worker memory is sampled
      * only then). Each push carries every tracked plugin; read

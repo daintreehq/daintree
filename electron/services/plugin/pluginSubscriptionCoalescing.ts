@@ -32,8 +32,17 @@ export const PLUGIN_SUBSCRIPTION_MAX_WAIT_FACTOR = 4;
  * port — is the default; zero or negative is the explicit raw opt-out.
  */
 export function resolveSubscriptionDebounceMs(value: unknown): number {
+  return resolveSubscriptionDebounceMsOr(value, PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS);
+}
+
+/**
+ * {@link resolveSubscriptionDebounceMs} for a subscription with its own default
+ * window. A separate function rather than an optional parameter, so passing
+ * the resolver straight to `Array#map` can't read the index as the default.
+ */
+export function resolveSubscriptionDebounceMsOr(value: unknown, defaultMs: number): number {
   if (typeof value !== "number" || Number.isNaN(value)) {
-    return PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS;
+    return defaultMs;
   }
   if (value <= 0) return 0;
   return Math.min(

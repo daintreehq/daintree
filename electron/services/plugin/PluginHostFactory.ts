@@ -55,6 +55,7 @@ import {
   WorktreeChangeTracker,
   createSubscriptionCoalescer,
   resolveSubscriptionDebounceMs,
+  resolveSubscriptionDebounceMsOr,
 } from "./pluginSubscriptionCoalescing.js";
 import { isChannelSchema } from "./PluginChannelRegistry.js";
 import { abortErrorFor } from "./pluginAbortError.js";
@@ -120,6 +121,12 @@ import {
   toPluginAllAgentsSnapshot,
   UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT,
 } from "../../../shared/utils/pluginAllAgentsSnapshot.js";
+import {
+  NO_FOCUSED_PANEL,
+  pluginFocusedPanelEquals,
+} from "../../../shared/utils/pluginFocusedPanel.js";
+import { PLUGIN_FOCUSED_PANEL_DEFAULT_DEBOUNCE_MS } from "../../../shared/config/pluginBudgets.js";
+import { getFocusedPanelTracker, type FocusedPanelState } from "../FocusedPanelTracker.js";
 import type { FleetSnapshotService } from "../FleetSnapshotService.js";
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import {
@@ -157,6 +164,7 @@ import type {
   PluginStorageScope,
   PluginAgentSnapshot,
   PluginAllAgentsSnapshot,
+  PluginFocusedPanel,
   PluginSendToAgentRefusalReason,
   PluginSendToAgentResult,
   PluginPanelLifecycleEvent,
@@ -1738,6 +1746,65 @@ export function createHost(
         pending = null;
         unsub();
       });
+      return Promise.resolve(dispose);
+    },
+    onDidChangeFocusedPanel: (callback, options) => {
+      if (revoked) {
+        throw new Error(
+          `Plugin "${pluginId}" host revoked: onDidChangeFocusedPanel called after activate() returned or timed out`
+        );
+      }
+      if (!deps.declaredCapabilities(pluginId).has("panel:focus-read")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" onDidChangeFocusedPanel requires "panel:focus-read", which is not declared in manifest.capabilities`
+        );
+      }
+      const tracker = getFocusedPanelTracker();
+      // A project plugin sees focus inside its own project only; focus anywhere
+      // else, the Portal included, reads as no focused panel rather than as a
+      // fact about another project.
+      const project = (state: FocusedPanelState): PluginFocusedPanel =>
+        boundProjectId === null || state.workspaceId === boundProjectId
+          ? state.panel
+          : NO_FOCUSED_PANEL;
+      const failures = createListenerFailureState();
+      let latest: PluginFocusedPanel = project(tracker.getCurrent());
+      let delivered: PluginFocusedPanel | null = null;
+      let active = true;
+      // The issue asks for a 250–500ms trailing window: focus flips in bursts
+      // (click-through, tab cycling) and only where it settles is attention.
+      const debounceMs = resolveSubscriptionDebounceMsOr(
+        options?.debounceMs,
+        PLUGIN_FOCUSED_PANEL_DEFAULT_DEBOUNCE_MS
+      );
+      const deliver = (): void => {
+        if (!active || !isBound()) return;
+        const value = latest;
+        if (delivered !== null && pluginFocusedPanelEquals(delivered, value)) return;
+        delivered = value;
+        invokeTrackedListener(
+          failures,
+          pluginId,
+          "onDidChangeFocusedPanel",
+          () => callback(value),
+          () => dispose()
+        );
+      };
+      const coalescer = createSubscriptionCoalescer(debounceMs, deliver);
+      const unsub = tracker.subscribe((state) => {
+        if (!active || !isBound()) return;
+        latest = project(state);
+        coalescer.push();
+      });
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
+        active = false;
+        coalescer.dispose();
+        unsub();
+      });
+      // The current focus, replayed straight away rather than after a window a
+      // later change would restart. A microtask, so the plugin holds the
+      // disposer first and a throwing replay can quarantine the listener.
+      queueMicrotask(deliver);
       return Promise.resolve(dispose);
     },
     onDidChangePanelLifecycle: (callback) => {

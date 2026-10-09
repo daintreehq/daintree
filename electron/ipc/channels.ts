@@ -1075,6 +1075,8 @@ export const CHANNELS = {
   PLUGIN_REPORT_VIEW_METRICS: "plugin:report-view-metrics",
   /** Renderer → main, fire-and-forget: the plugin push channels this renderer has subscribers for. */
   PLUGIN_REPORT_PUSH_LISTENERS: "plugin:report-push-listeners",
+  /** Renderer → main, fire-and-forget: the kind of panel holding DOM focus in this view (#13221). */
+  PLUGIN_REPORT_FOCUSED_PANEL: "plugin:report-focused-panel",
   /** Every tracked plugin's `PluginPerfSnapshot`. */
   PLUGIN_PERF_SNAPSHOTS_GET: "plugin:perf-snapshots-get",
   /** Renderer → main, fire-and-forget: start receiving `PLUGIN_PERF_SNAPSHOTS_CHANGED`. */

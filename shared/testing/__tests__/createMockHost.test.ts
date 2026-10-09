@@ -1384,6 +1384,67 @@ describe("createMockHost production-parity validation (#10617)", () => {
       expect(twice).toHaveBeenCalledTimes(1);
     });
 
+    it("onDidChangeFocusedPanel gates, replays and dedupes like production", async () => {
+      expect(() => createMockHost().onDidChangeFocusedPanel(() => {})).toThrow(
+        /PERMISSION_REQUIRED:.*panel:focus-read/
+      );
+
+      const host = createMockHost({
+        capabilities: ["panel:focus-read"],
+        focusedPanel: { kind: "diff", agent: false, worktreeId: "wt-1" },
+      });
+      const received: unknown[] = [];
+      const dispose = await host.onDidChangeFocusedPanel((f) => received.push(f));
+      expect(host.subscriptionOptions.at(-1)).toEqual({ kind: "focused-panel", debounceMs: 250 });
+      await Promise.resolve();
+      expect(received).toEqual([{ kind: "diff", agent: false, worktreeId: "wt-1" }]);
+
+      host.simulateFocusedPanelChange({ kind: "acme.view", agent: true, worktreeId: "w" } as never);
+      host.simulateFocusedPanelChange({ kind: "plugin", agent: false, worktreeId: "w" });
+      expect(received).toEqual([
+        { kind: "diff", agent: false, worktreeId: "wt-1" },
+        { kind: "plugin", agent: false, worktreeId: "w" },
+      ]);
+      expect(Object.isFrozen(received[1])).toBe(true);
+
+      dispose();
+      host.simulateFocusedPanelChange({ kind: null, agent: false, worktreeId: null });
+      expect(received).toHaveLength(2);
+    });
+
+    it("onDidChangeFocusedPanel hides the Portal from a project plugin and survives a throw", async () => {
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      const host = createMockHost({
+        pluginId: `project__${"a".repeat(64)}__acme.board`,
+        capabilities: ["panel:focus-read"],
+        focusedPanel: { kind: "portal", agent: false, worktreeId: null },
+      });
+      const received: unknown[] = [];
+      await host.onDidChangeFocusedPanel((f) => {
+        received.push(f);
+        throw new Error("boom");
+      });
+      await Promise.resolve();
+      host.simulateFocusedPanelChange({ kind: "file", agent: false, worktreeId: "w" });
+
+      expect(received).toEqual([
+        { kind: null, agent: false, worktreeId: null },
+        { kind: "file", agent: false, worktreeId: "w" },
+      ]);
+      expect(errors).toHaveBeenCalled();
+
+      // An async listener's rejection is caught too, not left unhandled.
+      errors.mockClear();
+      const asyncHost = createMockHost({ capabilities: ["panel:focus-read"] });
+      await asyncHost.onDidChangeFocusedPanel(async () => {
+        throw new Error("async boom");
+      });
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(errors).toHaveBeenCalledTimes(1);
+      errors.mockRestore();
+    });
+
     it("sendToAgent gates on agent:input and validates like production", async () => {
       await expect(
         createMockHost({ capabilities: ["agent:read"] }).sendToAgent("x")
