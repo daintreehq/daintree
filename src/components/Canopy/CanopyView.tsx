@@ -3,19 +3,21 @@ import type { KeyboardEvent } from "react";
 import { Keyboard, RefreshCw } from "lucide-react";
 import { formatWaitAge } from "@/lib/projectRowStatus";
 import { Telescope } from "@/components/icons";
-import { isCanopyRead, useCanopyStore } from "@/store/canopyStore";
+import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
+import { cn } from "@/lib/utils";
 import { pluralize } from "@/lib/pluralize";
 import { isMac } from "@/lib/platform";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { CANOPY_URGENT_PRIORITY } from "@shared/types/ipc/canopy";
+import { CANOPY_URGENT_PRIORITY, type CanopyReadMark } from "@shared/types/ipc/canopy";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CANOPY_SEEN_HEARTBEAT_MS, canopyViewIsWatched, reportCanopySeen } from "@/lib/canopySeen";
+import { subscribeProjectViewObservability } from "@/lib/viewCacheState";
 import { useOverlayClaim } from "@/hooks/useOverlayState";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
@@ -49,6 +51,7 @@ import {
   type CanopyPaneFocus,
 } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
+import { CanopyRowMenu, type CanopyRowMenuActions } from "./CanopyRowMenu";
 import { SectionBar } from "./CanopySectionBar";
 import { CanopyPlace } from "./CanopyPlace";
 import { CanopyPitch } from "./CanopyPitch";
@@ -210,6 +213,10 @@ function CanopyShortcuts() {
         { keys: ["Y"], label: "Take the first choice, unless it's risky" },
         { keys: ["R"], label: "Reply" },
         { keys: ["E"], label: "Archive, or move back to the inbox" },
+        { keys: ["U"], label: "Mark as read or unread" },
+        { keys: ["Alt+U"], label: "Mark all as read" },
+        { keys: ["Z"], label: "Undo" },
+        { keys: ["Shift+F10"], label: "More actions" },
         { keys: ["Cmd+Backspace"], label: "Trash, pressed twice" },
         { keys: ["Escape"], label: "Close" },
       ],
@@ -343,7 +350,8 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       new Map((canopy?.dispositions ?? []).map((entry) => [entry.runId, entry])),
       new Map((canopy?.seen ?? []).map((entry) => [entry.runId, entry])),
       nowMs,
-      new Map((canopy?.glances ?? []).map((entry) => [entry.runId, entry]))
+      new Map((canopy?.glances ?? []).map((entry) => [entry.runId, entry])),
+      new Map((canopy?.reads ?? []).map((entry) => [entry.runId, entry]))
     );
   }, [fleet, workspaces, nowMs, canopy, scope]);
 
@@ -392,6 +400,8 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
   const [pointerInList, setPointerInList] = useState(false);
   const lastInteractionRef = useRef(0);
   const pressingRef = useRef(false);
+  // A row's context menu is open: the list holds still under it.
+  const menuOpenRef = useRef(false);
   const lastRankRef = useRef(0);
   const openedRef = useRef(false);
   const scopeRef = useRef(scope);
@@ -421,7 +431,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       opening,
       revealing: !revealed,
       requested: rankRequest !== rankRequestSeenRef.current,
-      pressing: pressingRef.current,
+      pressing: pressingRef.current || menuOpenRef.current,
       pointerInList,
       lastInteractionAt: lastInteractionRef.current,
       lastRankAt: lastRankRef.current,
@@ -459,19 +469,40 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       .map(({ item }) => item);
   }, [baseItems, order]);
   const inbox = useMemo(() => splitInbox(items), [items]);
+  const unreadOnly = useCanopyStore((s) => s.unreadOnly);
+  const setUnreadOnly = useCanopyStore((s) => s.setUnreadOnly);
+  // A run read while the Unread filter is on stays listed until the filter is
+  // turned off: reading the row in front of you must not pull it out from
+  // under you, nor shift every row beneath it.
+  const [keptUnread, setKeptUnread] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    setKeptUnread((kept) => {
+      if (!unreadOnly) return kept.size === 0 ? kept : new Set();
+      const added = inbox.inbox.filter((item) => item.unread && !kept.has(item.runId));
+      return added.length === 0 ? kept : new Set([...kept, ...added.map((item) => item.runId)]);
+    });
+  }, [unreadOnly, inbox]);
+  // The inbox as listed: every run in it, or with the filter on, the unread.
+  const listed = useMemo(
+    () =>
+      unreadOnly
+        ? inbox.inbox.filter((item) => item.unread || keptUnread.has(item.runId))
+        : inbox.inbox,
+    [unreadOnly, inbox, keptUnread]
+  );
   // What a reply answers: the runs that need you, in the list's order.
-  const queue = useMemo(() => inbox.inbox.filter(itemNeedsAttention), [inbox]);
+  const queue = useMemo(() => listed.filter(itemNeedsAttention), [listed]);
   const archivedExpanded = useCanopyStore((s) => s.archivedExpanded);
   const setArchivedExpanded = useCanopyStore((s) => s.setArchivedExpanded);
   // What the keyboard walks: the list, then the archived runs once they are shown.
   const visible = useMemo(
-    () => [...inbox.inbox, ...(archivedExpanded ? inbox.archived : [])],
-    [inbox, archivedExpanded]
+    () => [...listed, ...(archivedExpanded ? inbox.archived : [])],
+    [listed, inbox, archivedExpanded]
   );
   const listRef = useRef<HTMLDivElement>(null);
-  useListReorderMotion(listRef, inbox.inbox.map((item) => item.runId).join(" "));
+  useListReorderMotion(listRef, listed.map((item) => item.runId).join(" "));
   // A list unmounted under the pointer never says the pointer left.
-  const listShown = inbox.inbox.length > 0;
+  const listShown = listed.length > 0;
   useEffect(() => {
     if (!listShown) setPointerInList(false);
   }, [listShown]);
@@ -489,7 +520,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
   const focusedItem =
     focusedIndex !== -1
       ? visible[focusedIndex]!
-      : (items.find((item) => item.runId === focusedId) ?? inbox.inbox[0] ?? null);
+      : (items.find((item) => item.runId === focusedId) ?? listed[0] ?? null);
   const queueRef = useRef(queue);
   const visibleRef = useRef<CanopyItem[]>([]);
   const selectedRef = useRef<string | null>(null);
@@ -534,26 +565,20 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
   // Where the keyboard goes when the panel closes: the terminal "Go to
   // terminal" just focused, rather than whatever opened the panel.
   const focusAfterCloseRef = useRef<HTMLElement | null>(null);
-  const reads = useCanopyStore((s) => s.reads);
-  const markRead = useCanopyStore((s) => s.markRead);
-  const pruneReads = useCanopyStore((s) => s.pruneReads);
-  useEffect(() => {
-    // Only against a whole, current population: a degraded snapshot can leave
-    // runs out that are still running.
-    if (fleet && !fleet.degraded) pruneReads(new Set(fleet.runs.map((run) => run.runId)));
-  }, [fleet, pruneReads]);
-  const isUnread = useCallback(
-    (item: CanopyItem) =>
-      itemNeedsAttention(item) &&
-      !isCanopyRead(reads[item.runId], item.row.run.spawnedAt, item.card),
-    [reads]
-  );
-  // Opening a run — a click or the arrows onto it — reads it, as in a mail
-  // inbox. Landing on the first run when the panel opens does not.
-  const openedByUser = useCallback(
-    (item: CanopyItem) => markRead(item.runId, item.row.run.spawnedAt),
-    [markRead]
-  );
+  // A deliberate act on a run reads it at once — going to it, a click,
+  // answering, replying — through the turn it showed. Merely arriving on it
+  // reads it only once it has stayed in front of the user (main's dwell).
+  const readNow = useCallback((item: CanopyItem) => {
+    if (!item.unread) return;
+    safeFireAndForget(
+      window.electron.canopy.setRead(
+        item.runId,
+        { spawnedAt: item.row.run.spawnedAt },
+        true,
+        item.readMark?.turn
+      )
+    );
+  }, []);
 
   const focusCardNow = useCallback((runId: string) => {
     setPaneFocus(null);
@@ -569,14 +594,29 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
   const shownRunId = isOpen ? (focusedItem?.runId ?? null) : null;
   useEffect(() => {
     if (shownRunId === null) return;
-    const look = () => {
-      if (canopyViewIsWatched()) reportCanopySeen(shownRunId);
+    // One look, reconciled whenever it could stop or start being true — the
+    // window behind another app, the view cached — so it always ends.
+    let looking = false;
+    const sync = () => {
+      const next = canopyViewIsWatched();
+      if (next === looking) return;
+      looking = next;
+      reportCanopySeen(shownRunId, next, "panel");
     };
-    look();
-    const heartbeat = window.setInterval(look, CANOPY_SEEN_HEARTBEAT_MS);
+    sync();
+    const heartbeat = window.setInterval(() => {
+      sync();
+      if (looking) reportCanopySeen(shownRunId, true, "panel");
+    }, CANOPY_SEEN_HEARTBEAT_MS);
+    const offObservable = subscribeProjectViewObservability(sync);
+    window.addEventListener("focus", sync);
+    window.addEventListener("blur", sync);
     return () => {
       window.clearInterval(heartbeat);
-      look();
+      offObservable();
+      window.removeEventListener("focus", sync);
+      window.removeEventListener("blur", sync);
+      if (looking) reportCanopySeen(shownRunId, false, "panel");
     };
   }, [shownRunId]);
 
@@ -610,8 +650,8 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       return;
     }
     focusAfterCloseRef.current = null;
-    if (landedRef.current || inbox.inbox.length === 0) return;
-    const target = inbox.inbox[0]!.runId;
+    if (landedRef.current || listed.length === 0) return;
+    const target = listed[0]!.runId;
     let inner = 0;
     const outer = requestAnimationFrame(() => {
       inner = requestAnimationFrame(() => {
@@ -626,7 +666,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       cancelAnimationFrame(outer);
       cancelAnimationFrame(inner);
     };
-  }, [isOpen, inbox, focusCardNow]);
+  }, [isOpen, listed, focusCardNow]);
 
   // The focused card left (trashed, answered into another section, exited):
   // put the keyboard on the card that took its place instead of dropping it on
@@ -664,8 +704,66 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
     document.getElementById(canopyCardDomId(runId))?.scrollIntoView({ block: "nearest" });
   }, []);
 
+  // The last triage the user did here, to take back with Z or the toast's
+  // Undo. One deep, as in mail: only the newest action can be undone.
+  const undoRef = useRef<(() => void) | null>(null);
+  const offerUndo = useCallback((undo: () => void, toast?: { title: string; message: string }) => {
+    undoRef.current = undo;
+    if (!toast) return;
+    notify({
+      type: "success",
+      transient: true,
+      title: toast.title,
+      message: toast.message,
+      context: { eventKind: "agent" },
+      duration: 6000,
+      actions: [
+        {
+          label: "Undo",
+          onClick: () => {
+            if (undoRef.current === undo) undoRef.current = null;
+            undo();
+          },
+        },
+      ],
+    });
+  }, []);
+  /**
+   * Undo of a read change: each run back to what it was (`before`), wherever
+   * it is still as the change left it (`after`) — a new turn, or a change from
+   * another view since, stands.
+   */
+  const undoReads = useCallback((before: CanopyReadMark[], after: CanopyReadMark[]) => {
+    const was = new Map(before.map((mark) => [mark.runId, mark]));
+    const restores = after.flatMap((left) => {
+      const mark = was.get(left.runId);
+      return mark !== undefined && mark.spawnedAt === left.spawnedAt
+        ? [{ mark, expectVersion: left.version }]
+        : [];
+    });
+    if (restores.length > 0) safeFireAndForget(window.electron.canopy.restoreReads(restores));
+  }, []);
+
+  /**
+   * Where the cursor goes once a run is dealt with — archived, answered,
+   * replied to: the next run after it that needs you or has something unread,
+   * else the one before it that does, else simply its neighbour.
+   */
+  const nextAfter = useCallback((runId: string): CanopyItem | undefined => {
+    const order = visibleRef.current;
+    const index = order.findIndex((candidate) => candidate.runId === runId);
+    const wanted = (candidate: CanopyItem) =>
+      candidate.runId !== runId && (itemNeedsAttention(candidate) || candidate.unread);
+    return (
+      order.slice(index + 1).find(wanted) ??
+      order.slice(0, Math.max(index, 0)).find(wanted) ??
+      (index === -1 ? undefined : (order[index + 1] ?? order[index - 1]))
+    );
+  }, []);
+
   const handlers = useMemo<CanopyCardHandlers>(() => {
     const openRun = (item: CanopyItem) => {
+      readNow(item);
       const args = { runId: item.runId, workspaceId: item.workspaceId };
       if (item.workspaceId !== getViewWorkspaceId()) {
         // The switch replaces this view, so the panel closes first.
@@ -691,10 +789,20 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
     // The incarnation on screen, so main refuses a terminal respawned since.
     const target = (item: CanopyItem) => ({ spawnedAt: item.row.run.spawnedAt });
     const goTo = (item: CanopyItem) => ({ label: "Go to terminal", onClick: () => openRun(item) });
+    const archive = (item: CanopyItem, expectTurn?: number) =>
+      expectTurn === undefined
+        ? window.electron.canopy.archive(item.runId, target(item))
+        : window.electron.canopy.archive(item.runId, target(item), expectTurn);
+    const unarchive = (item: CanopyItem) =>
+      window.electron.canopy.unarchive(item.runId, target(item));
+    const archiveFailed = (item: CanopyItem) => (error: unknown) =>
+      failToast("Couldn't archive", error, goTo(item));
+    const unarchiveFailed = (item: CanopyItem) => (error: unknown) =>
+      failToast("Couldn't move to inbox", error, goTo(item));
     return {
       onOpen: openRun,
       onSent: (item, via) => {
-        openedByUser(item);
+        readNow(item);
         // Typed straight into the terminal: the keys stay there, since a menu
         // or a prompt may have more to ask. The reply still moves the run out
         // of the queue, and its pane stays open where the user is typing.
@@ -705,72 +813,57 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
         // Replied from the composer: on to the next run that needs you, into
         // its composer, as Send moves on in a mail queue. The answered one
         // leaves the queue when main's handled reading lands.
-        const pending = queueRef.current;
-        const index = pending.findIndex((candidate) => candidate.runId === item.runId);
-        const next = pending.slice(index + 1)[0] ?? pending.slice(0, Math.max(index, 0))[0];
-        if (next && next.runId !== item.runId) {
-          openPaneNow(next.runId, "composer");
-          openedByUser(next);
-        }
+        const next = nextAfter(item.runId);
+        if (next && next.runId !== item.runId) openPaneNow(next.runId, "composer");
       },
       onArchive: (item) => {
-        const runId = item.runId;
         if (itemArchived(item)) {
+          const turn = item.readMark?.turn ?? 0;
           safeFireAndForget(
-            window.electron.canopy
-              .unarchive(runId, target(item))
-              .catch((error: unknown) => failToast("Couldn't move to inbox", error, goTo(item)))
+            unarchive(item).then(
+              () =>
+                offerUndo(() =>
+                  // Main archives it again only while it has done nothing since
+                  // it came back: otherwise that would hide what it did.
+                  safeFireAndForget(archive(item, turn).catch(archiveFailed(item)))
+                ),
+              unarchiveFailed(item)
+            )
           );
           return;
         }
-        // The cursor moves on before the run leaves, as archiving does in mail:
-        // to the next run in the list, else the one before it.
-        const order = visibleRef.current;
-        const index = order.findIndex((candidate) => candidate.runId === runId);
-        const next = index === -1 ? undefined : (order[index + 1] ?? order[index - 1]);
-        if (next) {
-          focusCardNow(next.runId);
-          openedByUser(next);
-        }
+        // The cursor moves on before the run leaves, as archiving does in mail.
+        const next = nextAfter(item.runId);
+        if (next) focusCardNow(next.runId);
+        const before = item.readMark;
         safeFireAndForget(
-          window.electron.canopy.archive(runId, target(item)).then(
-            () => {
-              notify({
-                type: "success",
-                transient: true,
-                title: "Archived",
-                message: itemSubject(item),
-                context: { eventKind: "agent" },
-                duration: 6000,
-                actions: [
-                  {
-                    label: "Undo",
-                    onClick: () =>
-                      safeFireAndForget(window.electron.canopy.unarchive(runId, target(item))),
-                  },
-                ],
-              });
-            },
-            (error: unknown) => failToast("Couldn't archive", error, goTo(item))
+          archive(item).then(
+            (after) =>
+              // Refused — the run left, or was respawned: nothing to announce or undo.
+              after !== null &&
+              offerUndo(
+                () => {
+                  safeFireAndForget(unarchive(item).catch(unarchiveFailed(item)));
+                  // Archiving read it; taking it back puts back what was unread.
+                  if (before && after) undoReads([before], [after]);
+                },
+                { title: "Archived", message: itemSubject(item) }
+              ),
+            archiveFailed(item)
           )
         );
       },
       onSendFailed: (item, error) => failToast("Couldn't send to agent", error, goTo(item)),
       onAnswer: (item, label) => {
-        openedByUser(item);
+        readNow(item);
         // On to the next run that needs you, as a reply from the composer does —
         // on its row, where the next answer is one key away.
-        const pending = queueRef.current;
-        const index = pending.findIndex((candidate) => candidate.runId === item.runId);
-        const next = pending.slice(index + 1)[0] ?? pending.slice(0, Math.max(index, 0))[0];
+        const next = nextAfter(item.runId);
         safeFireAndForget(
           window.electron.canopy.answer(item.runId, target(item), label).then(
             () => {
               if (selectedRef.current !== item.runId) return;
-              if (next && next.runId !== item.runId) {
-                focusCardNow(next.runId);
-                openedByUser(next);
-              }
+              if (next && next.runId !== item.runId) focusCardNow(next.runId);
             },
             (error: unknown) => failToast("Couldn't answer", error, goTo(item))
           )
@@ -802,7 +895,72 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
         );
       },
     };
-  }, [close, openedByUser, focusCardNow, openPaneNow]);
+  }, [close, readNow, focusCardNow, openPaneNow, nextAfter, offerUndo, undoReads]);
+
+  /** U: read or unread, by hand. Z takes it back. */
+  const toggleRead = useCallback(
+    (item: CanopyItem) => {
+      if (itemArchived(item)) return;
+      const read = item.unread;
+      const send = () =>
+        window.electron.canopy.setRead(
+          item.runId,
+          { spawnedAt: item.row.run.spawnedAt },
+          read,
+          item.readMark?.turn
+        );
+      safeFireAndForget(
+        send().then(
+          (after) => {
+            if (!after) return;
+            // A run Canopy had no mark for had nothing unread.
+            const before = item.readMark ?? {
+              ...after,
+              readTurn: after.turn,
+              markedUnreadAt: null,
+            };
+            offerUndo(() => undoReads([before], [after]));
+          },
+          (error: unknown) =>
+            failToast(read ? "Couldn't mark as read" : "Couldn't mark as unread", error, {
+              label: "Retry",
+              onClick: () => safeFireAndForget(send()),
+            })
+        )
+      );
+    },
+    [offerUndo, undoReads]
+  );
+
+  /**
+   * Every unread run in the inbox as listed, read through the turn the list
+   * showed: anything that lands after the press stays unread. Undo puts back
+   * what each was, unless it has done something since.
+   */
+  const markAllRead = () => {
+    const unread = listed.filter((item) => item.unread);
+    if (unread.length === 0) return;
+    const before = unread.flatMap((item) => (item.readMark ? [item.readMark] : []));
+    safeFireAndForget(
+      window.electron.canopy
+        .markAllRead(
+          unread.map((item) => ({
+            runId: item.runId,
+            spawnedAt: item.row.run.spawnedAt,
+            turn: item.readMark?.turn ?? 0,
+          }))
+        )
+        .then(
+          (after) =>
+            offerUndo(() => undoReads(before, after), {
+              title: "Marked as read",
+              message: pluralize(unread.length, "agent"),
+            }),
+          (error: unknown) =>
+            failToast("Couldn't mark as read", error, { label: "Retry", onClick: markAllRead })
+        )
+    );
+  };
 
   // Each group is its own Tab stop: the selected row when it is in the group,
   // else the group's first.
@@ -838,7 +996,6 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
     const focus = paneFocusOf(document.activeElement);
     if (focus === null) focusCardNow(next.runId);
     else openPaneNow(next.runId, focus);
-    openedByUser(next);
   };
 
   // On the list's own wrapper rather than the palette body: the body only acts
@@ -848,10 +1005,41 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
     // Only from a row of the list: the pane holds a live terminal and a
     // composer whose keys belong to the agent, and the fold owns its own keys.
     if (!(event.target instanceof Element) || !event.target.closest("[data-canopy-card]")) return;
+    // Shift+F10 or the Menu key: the selected row's menu, as a right-click
+    // opens it. Replayed as a contextmenu on the row, since the menu has no
+    // way to be opened by hand, and macOS sends none for these keys itself.
+    if (
+      event.key === "ContextMenu" ||
+      (event.key === "F10" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey)
+    ) {
+      const row = visible[activeIndex]
+        ? document.getElementById(canopyCardDomId(visible[activeIndex]!.runId))
+        : null;
+      if (!row) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = row.getBoundingClientRect();
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: rect.left + 8,
+          clientY: rect.top + rect.height / 2,
+        })
+      );
+      return;
+    }
     // The selected run's own chords (Trash is ⌘⌫) go to it before the
     // modifier guard below, which keeps app shortcuts out of plain navigation.
     if ((event.metaKey || event.ctrlKey) && event.key === "Backspace") {
       if (detailRef.current?.handleKey(event)) return;
+    }
+    // ⌥U marks every unread run listed read. By the key's place, not its
+    // character: on a Mac ⌥U is the umlaut dead key and types no "u".
+    if (event.code === "KeyU" && event.altKey && !event.metaKey && !event.ctrlKey) {
+      event.preventDefault();
+      if (!event.repeat) markAllRead();
+      return;
     }
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     let next: number | null = null;
@@ -867,7 +1055,13 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
     if (next !== null) {
       event.preventDefault();
       focusCardNow(visible[next]!.runId);
-      openedByUser(visible[next]!);
+      return;
+    }
+    if ((event.key === "z" || event.key === "Z") && !event.shiftKey) {
+      event.preventDefault();
+      const undo = undoRef.current;
+      undoRef.current = null;
+      if (undo && !event.repeat) undo();
       return;
     }
     // Keys aimed at the list's selected row act on the selected agent.
@@ -878,10 +1072,43 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       handlers.onOpen(selected);
       return;
     }
+    if ((event.key === "u" || event.key === "U") && !event.shiftKey) {
+      event.preventDefault();
+      if (!event.repeat) toggleRead(selected);
+      return;
+    }
     detailRef.current?.handleKey(event);
   };
 
-  const needsYou = queue.length;
+  // Over the whole inbox, whatever the filter shows: a read approval still blocks its agent.
+  const needsYou = inbox.inbox.filter(itemNeedsAttention).length;
+  // Trash from a row's menu arms it as its first press does; the pane's
+  // button or ⌘⌫ confirms. Bumped per request, for the run it names.
+  const [trashArm, setTrashArm] = useState<{ runId: string; request: number } | null>(null);
+  // A request is for the run it named while it stays open: coming back to it
+  // later must not find Trash armed.
+  const openRunId = focusedItem?.runId ?? null;
+  useEffect(() => {
+    if (trashArm !== null && openRunId !== trashArm.runId) setTrashArm(null);
+  }, [trashArm, openRunId]);
+
+  const rowMenu: CanopyRowMenuActions = {
+    onOpen: handlers.onOpen,
+    onReply: (item) => openPaneNow(item.runId, "composer"),
+    onToggleRead: toggleRead,
+    onArchive: handlers.onArchive,
+    onTrash: (item) => {
+      focusCardNow(item.runId);
+      setTrashArm((arm) => ({ runId: item.runId, request: (arm?.request ?? 0) + 1 }));
+    },
+    onOpenChange: (open) => {
+      menuOpenRef.current = open;
+      if (open) return;
+      // Closing releases the hold, it doesn't move the list: the idle wait starts from here.
+      lastInteractionRef.current = Date.now();
+      setRankWake((n) => n + 1);
+    },
+  };
 
   // A press spins the button until the refresh it asked for is done, cards
   // included. The background polls never do: they are not news.
@@ -901,7 +1128,9 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
         })
     );
   };
-  const unreadCount = items.filter(isUnread).length;
+  const unreadCount = inbox.inbox.filter((item) => item.unread).length;
+  // Words being written for some run right now: said once for the list, only while it lasts.
+  const updating = (canopy?.cards ?? []).some((card) => card.describing);
   // A project's name on every row says nothing while every row is in it.
   const manyProjects = new Set(items.map((item) => item.workspaceId)).size > 1;
 
@@ -910,10 +1139,11 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       ? "Reading agents…"
       : items.length === 0
         ? "No agents are running"
-        : [
+        : // What needs you leads; what is new follows. The list's own heading
+          // counts the agents.
+          [
+            needsYou > 0 ? `${pluralize(needsYou, "needs", "need")} you` : "Nothing needs you",
             unreadCount > 0 ? `${unreadCount.toLocaleString()} unread` : null,
-            needsYou > 0 ? `${pluralize(needsYou, "needs", "need")} you` : null,
-            pluralize(items.length, "agent"),
           ]
             .filter(Boolean)
             .join(" · ");
@@ -927,7 +1157,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       // The panel lands on its first run itself, two frames in; the dialog's own
       // first-control focus would race it. With no rows to land on, the first
       // control takes focus instead of leaving it on whatever opened the panel.
-      initialFocus={inbox.inbox.length > 0 ? "none" : "first"}
+      initialFocus={listed.length > 0 ? "none" : "first"}
       restoreFocusTo={() => focusAfterCloseRef.current}
       preferRestoreFocusTo
       backdrop={backdrop}
@@ -1002,19 +1232,52 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
             <div
               className="canopy-inbox flex min-h-0 w-[28rem] shrink-0 flex-col self-stretch overflow-y-auto border-r border-border-default select-none"
               data-canopy-list=""
+              // Its rows have menus of their own: the app's Shift+F10 stands down here.
+              data-row-menu=""
               // Still placing runs as the open's readings land.
               data-revealing={revealed ? undefined : "true"}
             >
               <SectionBar
                 id="canopy-inbox-label"
                 label="Inbox"
-                count={inbox.inbox.length}
-                // Where the numbers and words come from, said once for the list.
+                count={listed.length}
                 trailing={
-                  <span className="text-2xs text-text-secondary">AI reading · priority</span>
+                  <span className="flex items-center gap-1">
+                    {/* Said only while it is so, never as a standing label. */}
+                    {updating && (
+                      <span role="status" className="mr-1 text-2xs text-text-secondary">
+                        Updating summaries…
+                      </span>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      aria-pressed={unreadOnly}
+                      onClick={() => setUnreadOnly(!unreadOnly)}
+                      className={cn(unreadOnly && "bg-overlay-subtle text-text-primary")}
+                    >
+                      Unread
+                      {unreadCount > 0 && <span className="tabular-nums">{unreadCount}</span>}
+                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          disabled={unreadCount === 0}
+                          onClick={markAllRead}
+                        >
+                          Mark all read
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        <KbdChord shortcut="Alt+U" />
+                      </TooltipContent>
+                    </Tooltip>
+                  </span>
                 }
               />
-              {inbox.inbox.length > 0 ? (
+              {listed.length > 0 ? (
                 <div
                   ref={listRef}
                   role="listbox"
@@ -1030,34 +1293,38 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
                     setPointerInList(false);
                   }}
                 >
-                  {inbox.inbox.map((item, index) => {
+                  {listed.map((item, index) => {
                     const replied = repliedAt(item);
                     return (
-                      <CanopyRow
-                        key={item.runId}
-                        item={item}
-                        domId={canopyCardDomId(item.runId)}
-                        isSelected={focusedItem?.runId === item.runId}
-                        // Words are coming whenever screens are read, so the slot
-                        // for them is held from the start.
-                        reserveDetail
-                        tabbable={tabStop(inbox.inbox, item, index)}
-                        unread={isUnread(item)}
-                        showProject={manyProjects}
-                        nowMs={nowMs}
-                        asideLabel={
-                          replied !== null ? `Replied ${formatWaitAge(replied, nowMs)} ago` : null
-                        }
-                        onSelect={() => selectRow(item.runId)}
-                        onClick={() => openedByUser(item)}
-                        onOpen={() => handlers.onOpen(item)}
-                      />
+                      <CanopyRowMenu key={item.runId} item={item} {...rowMenu}>
+                        <CanopyRow
+                          item={item}
+                          domId={canopyCardDomId(item.runId)}
+                          isSelected={focusedItem?.runId === item.runId}
+                          // Words are coming whenever screens are read, so the slot
+                          // for them is held from the start.
+                          reserveDetail
+                          tabbable={tabStop(listed, item, index)}
+                          unread={item.unread}
+                          showProject={manyProjects}
+                          nowMs={nowMs}
+                          asideLabel={
+                            replied !== null ? `Replied ${formatWaitAge(replied, nowMs)} ago` : null
+                          }
+                          onSelect={() => selectRow(item.runId)}
+                          onClick={() => readNow(item)}
+                          onOpen={() => handlers.onOpen(item)}
+                          onArchive={() => handlers.onArchive(item)}
+                        />
+                      </CanopyRowMenu>
                     );
                   })}
                 </div>
               ) : (
                 <p className="px-3 pb-3 text-xs text-text-secondary">
-                  Every agent is archived. Each comes back when it has something new to say.
+                  {unreadOnly && inbox.inbox.length > 0
+                    ? "Nothing unread. Each agent shows here again when it does something new."
+                    : "Every agent is archived. Each comes back when it has something new to say."}
                 </p>
               )}
               {inbox.archived.length > 0 && (
@@ -1070,10 +1337,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
                       expanded: archivedExpanded,
                       controls: "canopy-archived",
                       onToggle: () => setArchivedExpanded(!archivedExpanded),
-                      onEnter: () => {
-                        focusCardNow(inbox.archived[0]!.runId);
-                        openedByUser(inbox.archived[0]!);
-                      },
+                      onEnter: () => focusCardNow(inbox.archived[0]!.runId),
                     }}
                   />
                   {archivedExpanded && (
@@ -1083,26 +1347,28 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
                       aria-labelledby="canopy-archived-label"
                     >
                       {inbox.archived.map((item, index) => (
-                        <CanopyRow
-                          key={item.runId}
-                          item={item}
-                          domId={canopyCardDomId(item.runId)}
-                          isSelected={focusedItem?.runId === item.runId}
-                          reserveDetail={false}
-                          tabbable={tabStop(inbox.archived, item, index)}
-                          unread={false}
-                          showProject={manyProjects}
-                          compact
-                          nowMs={nowMs}
-                          asideLabel={
-                            item.disposition
-                              ? `Archived ${formatWaitAge(item.disposition.at, nowMs)} ago`
-                              : null
-                          }
-                          onSelect={() => selectRow(item.runId)}
-                          onClick={() => openedByUser(item)}
-                          onOpen={() => handlers.onOpen(item)}
-                        />
+                        <CanopyRowMenu key={item.runId} item={item} {...rowMenu}>
+                          <CanopyRow
+                            item={item}
+                            domId={canopyCardDomId(item.runId)}
+                            isSelected={focusedItem?.runId === item.runId}
+                            reserveDetail={false}
+                            tabbable={tabStop(inbox.archived, item, index)}
+                            unread={false}
+                            showProject={manyProjects}
+                            compact
+                            nowMs={nowMs}
+                            asideLabel={
+                              item.disposition
+                                ? `Archived ${formatWaitAge(item.disposition.at, nowMs)} ago`
+                                : null
+                            }
+                            onSelect={() => selectRow(item.runId)}
+                            onClick={() => readNow(item)}
+                            onOpen={() => handlers.onOpen(item)}
+                            onArchive={() => handlers.onArchive(item)}
+                          />
+                        </CanopyRowMenu>
                       ))}
                     </div>
                   )}
@@ -1121,6 +1387,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
                   domId={`canopy-detail-${focusedItem.runId}`}
                   describedBy={`canopy-place-${focusedItem.runId}`}
                   initialFocus={paneFocus?.runId === focusedItem.runId ? paneFocus.focus : null}
+                  armTrash={trashArm?.runId === focusedItem.runId ? trashArm.request : undefined}
                   onInitialFocusSettled={() =>
                     setPaneFocus((current) =>
                       current?.runId === focusedItem.runId ? null : current

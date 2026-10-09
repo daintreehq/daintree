@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render as rtlRender } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -45,7 +45,9 @@ vi.mock("../CanopyTerminal", () => ({
   ),
 }));
 vi.mock("@/components/Terminal/HybridInputBar", () => ({ HybridInputBar: () => null }));
+vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
+import { notify } from "@/lib/notify";
 import { CANOPY_WAITLIST_URL, CanopyView } from "../CanopyView";
 import { CANOPY_BETA_TERMS } from "../canopyTerms";
 import { useCanopyStore } from "@/store/canopyStore";
@@ -73,6 +75,7 @@ const canopySnapshot: CanopySnapshot = {
   tier: "priority",
   dispositions: [],
   seen: [],
+  reads: [],
   scope: null,
   active: true,
   busy: false,
@@ -93,10 +96,43 @@ function installElectron(
     refresh: vi.fn(async () => {}),
     reply: vi.fn(async () => {}),
     trash: vi.fn(async () => {}),
-    archive: vi.fn(async () => {}),
+    archive: vi.fn(
+      async (
+        runId: string,
+        target: { spawnedAt: number },
+        _expectTurn?: number
+      ): Promise<unknown> => ({
+        runId,
+        spawnedAt: target.spawnedAt,
+        turn: 0,
+        readTurn: 0,
+        markedUnreadAt: null,
+        version: 1,
+      })
+    ),
     unarchive: vi.fn(async () => {}),
     setScope: vi.fn(async () => {}),
-    markSeen: vi.fn(async (_runId: string) => {}),
+    markSeen: vi.fn(async (_runId: string, _looking?: boolean, _place?: string) => {}),
+    // Each read change answers with the mark it left, as main does.
+    setRead: vi.fn(
+      async (runId: string, target: { spawnedAt: number }, read: boolean, turn?: number) => ({
+        runId,
+        spawnedAt: target.spawnedAt,
+        turn: turn ?? 0,
+        readTurn: read ? (turn ?? 0) : 0,
+        markedUnreadAt: read ? null : NOW,
+        version: 2,
+      })
+    ),
+    markAllRead: vi.fn(async (targets: Array<{ runId: string; spawnedAt: number; turn: number }>) =>
+      targets.map((target) => ({
+        ...target,
+        readTurn: target.turn,
+        markedUnreadAt: null,
+        version: 2,
+      }))
+    ),
+    restoreReads: vi.fn(async (_restores: unknown[]) => {}),
     runBranch: vi.fn((runId: string, _target: { spawnedAt: number }) => branchOf(runId)),
     captureBackdrop: vi.fn(async () => null),
     activate: vi.fn(async (on: boolean) => ({ ...snapshot, activated: on })),
@@ -147,7 +183,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  useCanopyStore.setState({ isOpen: false, snapshot: null, reads: {}, scope: "all", orders: {} });
+  useCanopyStore.setState({
+    isOpen: false,
+    snapshot: null,
+    scope: "all",
+    orders: {},
+    unreadOnly: false,
+  });
   window.localStorage.removeItem("daintree-canopy-order");
   vi.useRealTimers();
   vi.clearAllMocks();
@@ -191,6 +233,11 @@ function stuckCard(runId: string): CanopyCard {
     stalledSince: null,
     observedAt: NOW + 10_000,
   };
+}
+
+/** A run with turns the user hasn't read. */
+function unreadMark(runId: string, turn: number) {
+  return { runId, spawnedAt: NOW - 3_600_000, turn, readTurn: 0, markedUnreadAt: null, version: 1 };
 }
 
 function liveRun(container: HTMLElement) {
@@ -480,22 +527,191 @@ describe("CanopyView", () => {
     expect(liveRun(container)).toBe("asking");
   });
 
-  it("opens a run's terminal on a click, not a hover, and marks it read", async () => {
-    installElectron();
+  it("opens a run's terminal on a click, not a hover, and reads it through the turn it showed", async () => {
+    const canopy = installElectron({
+      ...canopySnapshot,
+      reads: [unreadMark("waiting", 2), unreadMark("asking", 1)],
+    });
     const { container } = render(<CanopyView />);
     await frames();
     const [first, second] = cards(container);
     expect(liveRun(container)).toBe("waiting");
-    // Landing on the first run when the panel opens is not opening it.
+    // Landing on the first run when the panel opens reads nothing by itself.
     expect(first!.getAttribute("data-unread")).toBe("true");
+    expect(canopy.setRead).not.toHaveBeenCalled();
 
     fireEvent.pointerMove(second!);
     expect(liveRun(container)).toBe("waiting");
 
     fireEvent.click(first!);
-    expect(first!.hasAttribute("data-unread")).toBe(false);
+    expect(canopy.setRead).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 }, true, 2);
     fireEvent.click(second!);
     expect(liveRun(container)).toBe("asking");
+  });
+
+  it("marks the selected run read or unread with U, and takes it back with Z", async () => {
+    const canopy = installElectron({ ...canopySnapshot, reads: [unreadMark("waiting", 1)] });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const [first] = cards(container);
+    fireEvent.keyDown(first!, { key: "u" });
+    expect(canopy.setRead).toHaveBeenLastCalledWith(
+      "waiting",
+      { spawnedAt: NOW - 3_600_000 },
+      true,
+      1
+    );
+    // The undo is offered once main has answered with what the change left.
+    await act(async () => {});
+    fireEvent.keyDown(first!, { key: "z" });
+    expect(canopy.restoreReads).toHaveBeenCalledWith([
+      { mark: unreadMark("waiting", 1), expectVersion: 2 },
+    ]);
+    // One deep: a second Z has nothing left to undo.
+    fireEvent.keyDown(first!, { key: "z" });
+    expect(canopy.restoreReads).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks every unread run listed read with ⌥U, by the key's place rather than its character", async () => {
+    const canopy = installElectron({
+      ...canopySnapshot,
+      reads: [unreadMark("waiting", 2), unreadMark("asking", 1)],
+    });
+    const { container } = render(<CanopyView />);
+    await frames();
+    // On a Mac ⌥U is the umlaut dead key: the event carries no "u".
+    fireEvent.keyDown(cards(container)[0]!, { key: "Dead", code: "KeyU", altKey: true });
+    expect(canopy.markAllRead).toHaveBeenCalledWith([
+      { runId: "waiting", spawnedAt: NOW - 3_600_000, turn: 2 },
+      { runId: "asking", spawnedAt: NOW - 3_600_000, turn: 1 },
+    ]);
+  });
+
+  it("filters to the unread, keeping a row read since until the filter is turned off", async () => {
+    installElectron({ ...canopySnapshot, reads: [unreadMark("asking", 1)] });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const ids = () => cards(container).map((card) => card.id.replace("canopy-card-", ""));
+    expect(ids()).toEqual(["waiting", "asking", "working"]);
+    fireEvent.click(screenButton(container.ownerDocument.body, "Unread1"));
+    expect(ids()).toEqual(["asking"]);
+    // Read while listed: it stays, rather than vanishing under the user.
+    act(() =>
+      useCanopyStore.setState({
+        snapshot: { ...canopySnapshot, reads: [{ ...unreadMark("asking", 1), readTurn: 1 }] },
+      })
+    );
+    expect(ids()).toEqual(["asking"]);
+    fireEvent.click(screenButton(container.ownerDocument.body, "Unread"));
+    expect(ids()).toEqual(["waiting", "asking", "working"]);
+  });
+
+  it("says first what needs you, then what is unread", async () => {
+    installElectron({ ...canopySnapshot, reads: [unreadMark("working", 1)] });
+    const { container } = render(<CanopyView />);
+    await frames();
+    expect(container.ownerDocument.body.textContent).toContain("2 need you · 1 unread");
+  });
+
+  it("offers each row's actions on a right-click, with their keys", async () => {
+    const canopy = installElectron({ ...canopySnapshot, reads: [unreadMark("waiting", 1)] });
+    const { container } = render(<CanopyView />);
+    await frames();
+    fireEvent.contextMenu(cards(container)[0]!, { clientX: 5, clientY: 5 });
+    const items = await within(document.body).findAllByRole("menuitem", { hidden: true });
+    expect(items.map((item) => item.firstChild?.textContent)).toEqual([
+      "Go to terminal",
+      "Reply",
+      "Mark as read",
+      "Archive",
+      "Trash terminal…",
+    ]);
+    expect(
+      items
+        .find((item) => item.textContent?.startsWith("Archive"))
+        ?.getAttribute("aria-keyshortcuts")
+    ).toBe("E");
+    fireEvent.click(items.find((item) => item.textContent?.startsWith("Archive"))!);
+    expect(canopy.archive).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 });
+  });
+
+  it("arms Trash from the menu for the pane to confirm, rather than trashing at once", async () => {
+    const canopy = installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    fireEvent.contextMenu(cards(container)[1]!, { clientX: 5, clientY: 5 });
+    const items = await within(document.body).findAllByRole("menuitem", { hidden: true });
+    fireEvent.click(items.find((item) => item.textContent?.startsWith("Trash"))!);
+    expect(canopy.trash).not.toHaveBeenCalled();
+    // The run it named is open, its Trash armed: the second press trashes it.
+    expect(liveRun(container)).toBe("asking");
+    await vi.waitFor(() =>
+      expect(container.ownerDocument.body.textContent).toContain(
+        "Press Trash terminal again to trash it"
+      )
+    );
+    fireEvent.keyDown(cards(container)[1]!, { key: "Backspace", metaKey: true, ctrlKey: true });
+    expect(canopy.trash).toHaveBeenCalledWith("asking", { spawnedAt: NOW - 3_600_000 });
+  });
+
+  it("offers no Undo for an archive main refused, only the error", async () => {
+    const canopy = installElectron();
+    canopy.archive.mockRejectedValueOnce(new Error("rate limited"));
+    const notifySpy = vi.mocked(notify);
+    notifySpy.mockClear();
+    const { container } = render(<CanopyView />);
+    await frames();
+    fireEvent.keyDown(cards(container)[0]!, { key: "e" });
+    await vi.waitFor(() => expect(notifySpy).toHaveBeenCalled());
+    const titles = notifySpy.mock.calls.map(([options]) => options.title);
+    expect(titles).toEqual(["Couldn't archive"]);
+    fireEvent.keyDown(cards(container)[0]!, { key: "z" });
+    expect(canopy.unarchive).not.toHaveBeenCalled();
+  });
+
+  it("announces nothing for an archive main refused without an error", async () => {
+    const canopy = installElectron();
+    canopy.archive.mockResolvedValueOnce(null);
+    vi.mocked(notify).mockClear();
+    const { container } = render(<CanopyView />);
+    await frames();
+    fireEvent.keyDown(cards(container)[0]!, { key: "e" });
+    await act(async () => {});
+    expect(vi.mocked(notify)).not.toHaveBeenCalled();
+    fireEvent.keyDown(cards(container)[0]!, { key: "z" });
+    expect(canopy.unarchive).not.toHaveBeenCalled();
+  });
+
+  it("forgets a Trash armed from the menu once the user moves to another run", async () => {
+    const canopy = installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    fireEvent.contextMenu(cards(container)[0]!, { clientX: 5, clientY: 5 });
+    const items = await within(document.body).findAllByRole("menuitem", { hidden: true });
+    fireEvent.click(items.find((item) => item.textContent?.startsWith("Trash"))!);
+    await vi.waitFor(() => expect(liveRun(container)).toBe("waiting"));
+    fireEvent.click(cards(container)[1]!);
+    fireEvent.click(cards(container)[0]!);
+    // Back on it, one press only arms Trash again.
+    fireEvent.keyDown(cards(container)[0]!, { key: "Backspace", metaKey: true, ctrlKey: true });
+    expect(canopy.trash).not.toHaveBeenCalled();
+  });
+
+  it("counts what needs you across the whole inbox while the Unread filter is on", async () => {
+    installElectron({ ...canopySnapshot, reads: [unreadMark("working", 1)] });
+    const { container } = render(<CanopyView />);
+    await frames();
+    fireEvent.click(screenButton(container.ownerDocument.body, "Unread1"));
+    expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-working"]);
+    expect(container.ownerDocument.body.textContent).toContain("2 need you · 1 unread");
+  });
+
+  it("opens the selected row's menu from Shift+F10", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    fireEvent.keyDown(cards(container)[0]!, { key: "F10", shiftKey: true });
+    expect(await within(document.body).findByRole("menu", { hidden: true })).not.toBeNull();
   });
 
   it("trashes the selected run from the list with its chord pressed twice", async () => {
@@ -534,22 +750,21 @@ describe("CanopyView", () => {
     expect(container.ownerDocument.body.textContent).not.toContain("Everything else");
   });
 
-  it("tells main which run the pane shows, once per look, and nothing while the window is away", async () => {
+  it("tells main when a look at the shown run starts and ends, and starts none while the window is away", async () => {
     const canopy = installElectron();
     const { container } = render(<CanopyView />);
     await frames();
-    const marked = () => canopy.markSeen.mock.calls.map(([id]) => id);
-    expect(marked()).toEqual(["waiting"]);
-    // Leaving "waiting" a moment after landing on it is the same look.
+    const marked = () => canopy.markSeen.mock.calls.map(([id, looking]) => `${id}:${looking}`);
+    expect(marked()).toEqual(["waiting:true"]);
     fireEvent.click(cards(container)[1]!);
-    expect(marked()).toEqual(["waiting", "asking"]);
+    expect(marked()).toEqual(["waiting:true", "waiting:false", "asking:true"]);
     // A snapshot landing re-renders the panel but is no new look.
     act(() => useCanopyStore.setState({ snapshot: { ...canopySnapshot, refreshedAt: NOW + 1 } }));
-    expect(marked()).toEqual(["waiting", "asking"]);
+    expect(marked()).toEqual(["waiting:true", "waiting:false", "asking:true"]);
 
     vi.mocked(document.hasFocus).mockReturnValue(false);
     fireEvent.click(cards(container)[2]!);
-    expect(marked()).toEqual(["waiting", "asking"]);
+    expect(marked()).toEqual(["waiting:true", "waiting:false", "asking:true", "asking:false"]);
   });
 
   it("holds the order under the pointer, and re-ranks once the user leaves it alone", async () => {

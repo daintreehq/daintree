@@ -17,6 +17,7 @@ function snapshot(activated: boolean, extra: Partial<CanopySnapshot> = {}): Cano
     tier: "free",
     dispositions: [],
     seen: [],
+    reads: [],
     scope: null,
     active: false,
     busy: false,

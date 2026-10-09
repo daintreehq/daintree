@@ -73,6 +73,11 @@ interface CanopyCardProps extends CanopyCardHandlers {
   initialFocus?: CanopyPaneFocus;
   /** The handoff above landed, gave up, or gave way to the user. */
   onInitialFocusSettled?: () => void;
+  /**
+   * Trash asked for from the row's menu: armed as its first press arms it, for
+   * the pane's button or ⌘⌫ to confirm. Each new number is a new request.
+   */
+  armTrash?: number;
 }
 
 /**
@@ -165,6 +170,7 @@ export function CanopyCard({
   onAnswer,
   initialFocus = null,
   onInitialFocusSettled,
+  armTrash,
 }: CanopyCardProps) {
   const [stream, setStream] = useState<CanopyStreamState>({
     watchId: null,
@@ -257,6 +263,12 @@ export function CanopyCard({
     const timer = setTimeout(() => setTrashPressedFor(null), TRASH_CONFIRM_MS);
     return () => clearTimeout(timer);
   }, [trashPressedFor]);
+  const armedRequestRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (armTrash === undefined || armTrash === armedRequestRef.current) return;
+    armedRequestRef.current = armTrash;
+    if (canTrash) setTrashPressedFor(trashTarget);
+  }, [armTrash, canTrash, trashTarget]);
   const pressTrash = () => {
     if (!trashArmed) {
       setTrashPressedFor(trashTarget);

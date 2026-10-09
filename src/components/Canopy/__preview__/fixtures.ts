@@ -475,6 +475,7 @@ function snapshot(cards: CanopyCard[], now: number, extra: Partial<CanopySnapsho
     tier: "free" as const,
     dispositions: [],
     seen: seenFor(now),
+    reads: [],
     scope: null,
     active: true,
     busy: false,

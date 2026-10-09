@@ -1,6 +1,10 @@
 import { app } from "electron";
 import type {
+  CanopyLookPlace,
   CanopyPlan,
+  CanopyReadMark,
+  CanopyReadRestore,
+  CanopyReadTarget,
   CanopySnapshot,
   CanopyTarget,
   CanopyTier,
@@ -215,6 +219,38 @@ function assertRunId(value: unknown): asserts value is string {
   }
 }
 
+/** The most runs one bulk read change may name. */
+const MAX_READ_BATCH = 500;
+
+function isTurn(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function assertReadTarget(value: unknown): asserts value is CanopyReadTarget {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Invalid run");
+  }
+  const target = value as Record<string, unknown>;
+  assertRunId(target.runId);
+  assertTarget(target);
+  if (!isTurn(target.turn)) throw new Error("Invalid turn");
+}
+
+function assertReadRestore(value: unknown): asserts value is CanopyReadRestore {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Invalid mark");
+  }
+  const { mark, expectVersion } = value as Record<string, unknown>;
+  if (!isTurn(expectVersion)) throw new Error("Invalid mark");
+  assertReadTarget(mark);
+  const { readTurn, markedUnreadAt, version } = mark as unknown as Record<string, unknown>;
+  if (!isTurn(readTurn) || !isTurn(version)) throw new Error("Invalid mark");
+  // A mark set in the future would hold off every look until then.
+  if (markedUnreadAt !== null && (!isTurn(markedUnreadAt) || markedUnreadAt > Date.now())) {
+    throw new Error("Invalid mark");
+  }
+}
+
 function assertTarget(value: unknown): asserts value is CanopyTarget {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Invalid target");
@@ -313,6 +349,7 @@ function syncActive(): void {
 function forgetView(id: number): void {
   stopTerminalWatch(id);
   viewScopes.delete(id);
+  service?.forgetViewer(id);
   if (!activeViews.delete(id)) return;
   // Never builds a service: after cleanup there may be none, and none is wanted.
   // A view that went away will not bounce back, so no reopen grace either.
@@ -461,6 +498,7 @@ export const canopyNamespace = defineIpcNamespace({
         requirePtyClient().write(watched.runId, data);
         // Return submits a line: the user has answered what the screen showed.
         if (terminalAnswerOf(data) === "submit") {
+          service?.noteUserSent(watched.runId, watched.spawnedAt);
           service?.markHandled(watched.runId, watched.spawnedAt);
         }
       },
@@ -491,7 +529,10 @@ export const canopyNamespace = defineIpcNamespace({
         }
         const watched = requireWatched(ctx.webContentsId, watchId);
         requirePtyClient().sendKey(watched.runId, key);
-        if (key === "enter") service?.markHandled(watched.runId, watched.spawnedAt);
+        if (key === "enter") {
+          service?.noteUserSent(watched.runId, watched.spawnedAt);
+          service?.markHandled(watched.runId, watched.spawnedAt);
+        }
       },
       { withContext: true }
     ),
@@ -538,6 +579,7 @@ export const canopyNamespace = defineIpcNamespace({
         } else {
           requirePtyClient().submit(watched.runId, text);
         }
+        service?.noteUserSent(watched.runId, watched.spawnedAt);
         service?.markHandled(watched.runId, watched.spawnedAt);
       },
       { withContext: true }
@@ -559,12 +601,18 @@ export const canopyNamespace = defineIpcNamespace({
     /** Out of the inbox until the agent has something new to say; Undo and Unarchive bring it back. */
     archive: op(
       CANOPY_METHOD_CHANNELS.archive,
-      async (runId: string, target: CanopyTarget): Promise<void> => {
+      async (
+        runId: string,
+        target: CanopyTarget,
+        expectTurn?: number
+      ): Promise<CanopyReadMark | null> => {
         requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.archive, 30, 10_000);
         assertRunId(runId);
         assertTarget(target);
-        getService().archive(runId, target.spawnedAt);
+        if (expectTurn !== undefined && !isTurn(expectTurn)) throw new Error("Invalid turn");
+        // What archiving left read, for an undo to put back; null when refused.
+        return getService().archive(runId, target.spawnedAt, expectTurn);
       }
     ),
 
@@ -600,6 +648,7 @@ export const canopyNamespace = defineIpcNamespace({
           if (index > 0) await new Promise((resolve) => setTimeout(resolve, ANSWER_KEY_GAP_MS));
           pty.write(runId, ANSWER_KEY_SEQUENCES[key] ?? key);
         }
+        service?.noteUserSent(runId, target.spawnedAt);
         service?.markHandled(runId, target.spawnedAt);
       }
     ),
@@ -619,12 +668,77 @@ export const canopyNamespace = defineIpcNamespace({
      * The user had this terminal in front of them — focused in its pane, or
      * open in the panel. Kept by main so every view's panel ranks by it.
      */
-    markSeen: op(CANOPY_METHOD_CHANNELS.markSeen, async (runId: string): Promise<void> => {
-      requireActivated();
-      checkRateLimit(CANOPY_METHOD_CHANNELS.markSeen, 120, 10_000);
-      assertRunId(runId);
-      getService().markSeen(runId);
-    }),
+    markSeen: op(
+      CANOPY_METHOD_CHANNELS.markSeen,
+      async (ctx, runId: string, looking?: boolean, place?: CanopyLookPlace): Promise<void> => {
+        requireActivated();
+        checkRateLimit(CANOPY_METHOD_CHANNELS.markSeen, 120, 10_000);
+        assertRunId(runId);
+        if (looking !== undefined && typeof looking !== "boolean") throw new Error("Invalid look");
+        if (place !== undefined && place !== "pane" && place !== "panel") {
+          throw new Error("Invalid look");
+        }
+        if (looking === undefined) {
+          getService().markSeen(runId);
+          return;
+        }
+        // A look lasts until the view says it ended, or goes away without saying so.
+        watchView(ctx.event.sender);
+        getService().markSeen(runId, {
+          viewId: ctx.webContentsId,
+          place: place ?? "pane",
+          looking,
+        });
+      },
+      { withContext: true }
+    ),
+
+    /** The user read a run, through the turn the panel showed — or marked it unread. */
+    setRead: op(
+      CANOPY_METHOD_CHANNELS.setRead,
+      async (
+        runId: string,
+        target: CanopyTarget,
+        read: boolean,
+        turn?: number
+      ): Promise<CanopyReadMark | null> => {
+        requireActivated();
+        checkRateLimit(CANOPY_METHOD_CHANNELS.setRead, 60, 10_000);
+        assertRunId(runId);
+        assertTarget(target);
+        if (typeof read !== "boolean") throw new Error("Invalid read");
+        if (turn !== undefined && !isTurn(turn)) throw new Error("Invalid turn");
+        return getService().setRead(runId, target.spawnedAt, read, turn);
+      }
+    ),
+
+    /** Every run the panel listed, read through the turns it showed. */
+    markAllRead: op(
+      CANOPY_METHOD_CHANNELS.markAllRead,
+      async (targets: CanopyReadTarget[]): Promise<CanopyReadMark[]> => {
+        requireActivated();
+        checkRateLimit(CANOPY_METHOD_CHANNELS.markAllRead, 10, 10_000);
+        if (!Array.isArray(targets) || targets.length > MAX_READ_BATCH) {
+          throw new Error("Invalid runs");
+        }
+        for (const target of targets) assertReadTarget(target);
+        return getService().markAllRead(targets);
+      }
+    ),
+
+    /** Undo of a read change: what was read before, wherever nothing new has happened since. */
+    restoreReads: op(
+      CANOPY_METHOD_CHANNELS.restoreReads,
+      async (restores: CanopyReadRestore[]): Promise<void> => {
+        requireActivated();
+        checkRateLimit(CANOPY_METHOD_CHANNELS.restoreReads, 20, 10_000);
+        if (!Array.isArray(restores) || restores.length > MAX_READ_BATCH) {
+          throw new Error("Invalid runs");
+        }
+        for (const restore of restores) assertReadRestore(restore);
+        getService().restoreReads(restores);
+      }
+    ),
 
     /**
      * The branch a run's folder has checked out, for the panel to say where the

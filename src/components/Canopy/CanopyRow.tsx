@@ -4,7 +4,8 @@ import { Kbd } from "@/components/ui/Kbd";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { BAND_GLYPH_TONE, PilotRunState } from "@/components/Pilot/PilotRunState";
-import { AskingCircle, CheckCheck, Clock } from "@/components/icons";
+import { Archive, ArchiveRestore } from "lucide-react";
+import { AskingCircle, Clock } from "@/components/icons";
 import type { CanopyCategory } from "@shared/types/ipc/canopy";
 import { formatWaitAge } from "@/lib/projectRowStatus";
 import {
@@ -21,7 +22,7 @@ import {
   unseenLabelMs,
   type CanopyItem,
 } from "./canopyModel";
-import { PRIORITY_LABEL, CanopyPriorityGlyph, priorityTier } from "./CanopyPriority";
+import { PRIORITY_LABEL, priorityTier } from "./CanopyPriority";
 
 /** Waiting on the user at least this long, the row's clock stands out. */
 const OVERDUE_WAIT_MS = 5 * 60_000;
@@ -145,7 +146,7 @@ interface CanopyRowProps {
   item: CanopyItem;
   domId: string;
   isSelected: boolean;
-  /** Needs the user and not opened since it was last read off the screen. */
+  /** The run did something the user hasn't seen since they last looked, or they marked it unread. */
   unread: boolean;
   /** Archived rows: subject and status only. */
   compact?: boolean;
@@ -163,14 +164,20 @@ interface CanopyRowProps {
   /** A click on the row: the user opened it. */
   onClick: () => void;
   onOpen: () => void;
+  /**
+   * Archive the run, or bring it back: offered on the row under the pointer,
+   * for a mouse. The keyboard has E, and the context menu says so.
+   */
+  onArchive?: () => void;
 }
 
 /**
  * One agent in the inbox. A leading column holds what Daintree observed — its
- * state, whose agent, and the clock for that state — with the priority meter at
- * its foot; beside it, the task it is carrying out, what it needs from you, the
- * summary, and the project (by its emoji) and worktree it runs in. A click
- * opens its terminal beside the list.
+ * state, whose agent, and the clock for that state; beside it, the task it is
+ * carrying out, what it needs from you, the summary, and the project (by its
+ * emoji) and worktree it runs in. An unread run carries a dot in the gutter and
+ * a heavier name. The list's order is its priority; the row shows why it ranks
+ * there in words, never as a score. A click opens its terminal beside the list.
  */
 export function CanopyRow({
   item,
@@ -186,6 +193,7 @@ export function CanopyRow({
   onSelect,
   onClick,
   onOpen,
+  onArchive,
 }: CanopyRowProps) {
   const { row } = item;
   const card = item.card;
@@ -273,6 +281,8 @@ export function CanopyRow({
   // Quiet and working share the spinner and differ only in hue once motion is
   // reduced; the word says which, since the clock beside the glyph is only a time.
   if (row.band === "quiet") metaTail.push({ text: "Quiet" });
+  // A reading, not an observation, so it is said as one: it looks done.
+  if (!compact && looksDone) metaTail.push({ text: "Looks done" });
   if (facts.length > 0) metaTail.push({ facts });
   // Still behind a ticking spinner: Daintree's own quiet tracking cannot see it.
   const stalledSince = card?.stalledSince ?? null;
@@ -350,16 +360,45 @@ export function CanopyRow({
       onDoubleClick={onOpen}
       className={cn(
         // One size whichever group the row is in.
-        "canopy-inbox-row flex w-full shrink-0 cursor-pointer items-stretch gap-3 px-3 py-2.5 text-left"
+        "canopy-inbox-row group/row relative flex w-full shrink-0 cursor-pointer items-stretch gap-3 px-3 py-2.5 text-left"
       )}
     >
+      {/* Unread: a dot in the gutter, in a slot every row keeps, so a row
+          read or unread never moves its text. Neutral ink — the focus ring
+          owns this list's one accent. */}
+      {unread && (
+        <span
+          aria-hidden="true"
+          data-canopy-unread-dot=""
+          className="absolute top-[17px] left-1 size-1.5 rounded-full bg-text-primary"
+        />
+      )}
+      {onArchive && (
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-hidden="true"
+          data-canopy-row-archive=""
+          // A mouse affordance: it never takes focus, so the press neither
+          // selects the row on its way nor leaves focus somewhere hidden.
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onArchive();
+          }}
+          onDoubleClick={(event) => event.stopPropagation()}
+          className="absolute top-2 right-2 flex size-6 items-center justify-center rounded-[var(--radius-sm)] bg-surface-panel text-text-secondary opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 hover:bg-overlay-highlight hover:text-text-primary [&_svg]:size-3.5"
+        >
+          {item.disposition?.kind === "archived" ? <ArchiveRestore /> : <Archive />}
+        </button>
+      )}
       {/* The leading column: Daintree's own observation of the run and whose
-          agent it is, how long it has been in that state, and — at the foot —
-          the priority meter. The text beside it gets the full width. */}
+          agent it is, and how long it has been in that state. The text beside
+          it gets the full width. */}
       <span id={metaId} className="sr-only">
         {meta}
       </span>
-      <span aria-hidden="true" className="flex w-16 shrink-0 flex-col gap-1">
+      <span aria-hidden="true" data-canopy-lead="" className="flex w-16 shrink-0 flex-col gap-1">
         <span className="flex h-5 items-center gap-2">
           <span
             className="flex size-4 items-center justify-center"
@@ -380,8 +419,8 @@ export function CanopyRow({
           </span>
         </span>
         {/* How long it has been in that state. The glyph above already says
-            which state, so the clock carries only the time, on one line, in
-            the meter's form and a step quieter than its number. */}
+            which state, so the clock carries only the time, on one line, a
+            step quieter than the name. */}
         {row.age !== null && (
           <span
             data-overdue={overdue || undefined}
@@ -396,34 +435,6 @@ export function CanopyRow({
               <Clock aria-hidden="true" className="size-3.5" />
             </span>
             {row.age === "just now" ? "now" : row.age}
-          </span>
-        )}
-        {/* What the readers made of it that Daintree can't observe for itself,
-            in the clock's form beneath it: for now, that it looks done. */}
-        {looksDone && (
-          <span className="flex items-center gap-1.5 text-xs leading-4 whitespace-nowrap text-text-secondary">
-            <span className="flex size-4 shrink-0 items-center justify-center">
-              <CheckCheck aria-hidden="true" className="size-3.5" />
-            </span>
-            Done
-          </span>
-        )}
-        {/* The priority as a meter and its number: the list's ordering signal.
-            An archived run is out of the list, so it shows none. */}
-        {!compact && (
-          <span className="mt-auto flex items-center gap-1.5 text-xs leading-4 text-text-secondary tabular-nums">
-            {/* No reading behind a priority yet: the meter with no bars lit,
-                and no number to stand for one. */}
-            {priority === null ? (
-              <CanopyPriorityGlyph tier="none" />
-            ) : (
-              <>
-                <CanopyPriorityGlyph tier={tier} />
-                <span className={cn((tier === "urgent" || tier === "high") && "text-text-primary")}>
-                  {priority}
-                </span>
-              </>
-            )}
           </span>
         )}
       </span>

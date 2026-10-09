@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
-import type { CanopyCard, CanopySeen } from "@shared/types/ipc/canopy";
+import type { CanopyCard, CanopyReadMark, CanopySeen } from "@shared/types/ipc/canopy";
 import { buildPilotGroups, type PilotRowContext } from "@/components/Pilot/pilotRows";
 import {
   buildCanopyInbox,
@@ -216,6 +216,72 @@ describe("buildCanopyInbox", () => {
       [card("done", { category: "finished", observedAt: NOW, priorityFromEarlierRead: true })]
     );
     expect(itemLooksDone(moved!)).toBe(false);
+  });
+
+  it("marks a run unread from what the user has read, for its incarnation, never while archived", () => {
+    const runs = [run("a"), run("b"), run("c"), run("d")];
+    const spawned = runs[0]!.spawnedAt;
+    const mark = (runId: string, turn: number, readTurn: number, spawnedAt = spawned) => ({
+      runId,
+      spawnedAt,
+      turn,
+      readTurn,
+      markedUnreadAt: null,
+      version: 0,
+    });
+    const items = buildCanopyInbox(
+      buildPilotGroups(runs, ctx),
+      new Map(),
+      undefined,
+      new Map([["c", { runId: "c", spawnedAt: spawned, kind: "archived" as const, at: NOW }]]),
+      new Map(),
+      NOW,
+      new Map(),
+      new Map([
+        ["a", mark("a", 2, 1)],
+        ["b", mark("b", 2, 2)],
+        ["c", mark("c", 3, 1)],
+        ["d", mark("d", 4, 0, spawned - 1)],
+      ])
+    );
+    const byId = (id: string) => items.find((item) => item.runId === id)!;
+    expect(byId("a").unread).toBe(true);
+    expect(byId("b").unread).toBe(false);
+    // Put aside: whatever brings it back is what is new.
+    expect(byId("c").unread).toBe(false);
+    // Read marks of an earlier terminal under the same id say nothing about this one.
+    expect(byId("d").readMark).toBeNull();
+    expect(byId("d").unread).toBe(false);
+  });
+
+  it("never moves a run in the list for being read or unread", () => {
+    const runs = [run("a"), run("b")];
+    const cards = [card("a", { priority: 60 }), card("b", { priority: 40 })];
+    const order = (reads: Map<string, CanopyReadMark>) =>
+      buildCanopyInbox(
+        buildPilotGroups(runs, ctx),
+        new Map(cards.map((c) => [c.runId, c])),
+        undefined,
+        new Map(),
+        new Map(),
+        NOW,
+        new Map(),
+        reads
+      ).map((item) => item.runId);
+    const unreadB = new Map([
+      [
+        "b",
+        {
+          runId: "b",
+          spawnedAt: runs[1]!.spawnedAt,
+          turn: 1,
+          readTurn: 0,
+          markedUnreadAt: null,
+          version: 1,
+        },
+      ],
+    ]);
+    expect(order(unreadB)).toEqual(order(new Map()));
   });
 
   it("ignores an archive set on an earlier incarnation of the same terminal", () => {

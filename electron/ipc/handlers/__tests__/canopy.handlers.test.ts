@@ -285,6 +285,106 @@ describe("canopy IPC", () => {
     expect(await scope()).toBeNull();
   });
 
+  describe("reads", () => {
+    type Mark = { runId: string; markedUnreadAt: number | null; version: number };
+    /** The run's mark; a test reading one Canopy never made fails here, not on a field of nothing. */
+    const readMark = async (sender: unknown): Promise<Mark> => {
+      const result = (await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, sender)) as {
+        data?: { reads: Mark[] };
+        reads?: Mark[];
+      };
+      const mark = (result.data ?? result).reads?.find((entry) => entry.runId === "run-1");
+      expect(mark).toBeDefined();
+      return mark!;
+    };
+
+    it("marks a run unread by hand and read again, for the incarnation the panel showed", async () => {
+      const sender = fakeSender(1);
+      expect(
+        (
+          await outcome(
+            invoke(CANOPY_METHOD_CHANNELS.setRead, sender, "run-1", { spawnedAt: 100 }, false)
+          )
+        ).ok
+      ).toBe(true);
+      expect((await readMark(sender)).markedUnreadAt).not.toBeNull();
+      await invoke(CANOPY_METHOD_CHANNELS.setRead, sender, "run-1", { spawnedAt: 100 }, true);
+      expect((await readMark(sender)).markedUnreadAt).toBeNull();
+    });
+
+    it("refuses a read that names no turn a run can have", async () => {
+      const sender = fakeSender(1);
+      for (const turn of [-1, 1.5, "2"]) {
+        const result = await outcome(
+          invoke(CANOPY_METHOD_CHANNELS.setRead, sender, "run-1", { spawnedAt: 100 }, true, turn)
+        );
+        expect(result.ok).toBe(false);
+      }
+    });
+
+    it("checks every run a bulk read names before changing any", async () => {
+      const sender = fakeSender(1);
+      await invoke(CANOPY_METHOD_CHANNELS.setRead, sender, "run-1", { spawnedAt: 100 }, false);
+      const bad = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.markAllRead, sender, [
+          { runId: "run-1", spawnedAt: 100, turn: 0 },
+          { runId: "run-2", spawnedAt: 100 },
+        ])
+      );
+      expect(bad.ok).toBe(false);
+      expect((await readMark(sender)).markedUnreadAt).not.toBeNull();
+      expect((await outcome(invoke(CANOPY_METHOD_CHANNELS.markAllRead, sender, "run-1"))).ok).toBe(
+        false
+      );
+      const good = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.markAllRead, sender, [
+          { runId: "run-1", spawnedAt: 100, turn: 0 },
+        ])
+      );
+      expect(good.ok).toBe(true);
+      expect((await readMark(sender)).markedUnreadAt).toBeNull();
+    });
+
+    it("puts back a mark taken back with Undo, and refuses a malformed one", async () => {
+      const sender = fakeSender(1);
+      const mark = {
+        runId: "run-1",
+        spawnedAt: 100,
+        turn: 0,
+        readTurn: 0,
+        markedUnreadAt: 5,
+        version: 0,
+      };
+      await invoke(CANOPY_METHOD_CHANNELS.setRead, sender, "run-1", { spawnedAt: 100 }, false);
+      await invoke(CANOPY_METHOD_CHANNELS.setRead, sender, "run-1", { spawnedAt: 100 }, true);
+      const left = (await readMark(sender)).version;
+      await invoke(CANOPY_METHOD_CHANNELS.restoreReads, sender, [{ mark, expectVersion: left }]);
+      expect((await readMark(sender)).markedUnreadAt).toBe(5);
+      for (const bad of [
+        { mark: { ...mark, markedUnreadAt: "x" }, expectVersion: 0 },
+        // A mark set in the future would hold off every look until then.
+        { mark: { ...mark, markedUnreadAt: Date.now() + 60_000 }, expectVersion: 0 },
+        { mark, expectVersion: -1 },
+        mark,
+      ]) {
+        const result = await outcome(invoke(CANOPY_METHOD_CHANNELS.restoreReads, sender, [bad]));
+        expect(result.ok).toBe(false);
+      }
+    });
+
+    it("follows a view that reports looks, so one that goes away stops looking", async () => {
+      const sender = fakeSender(9);
+      await invoke(CANOPY_METHOD_CHANNELS.markSeen, sender, "run-1", true);
+      expect(sender.once.mock.calls.some(([event]) => event === "destroyed")).toBe(true);
+      // A report that names no look is only a sighting, and watches nothing.
+      const other = fakeSender(10);
+      await invoke(CANOPY_METHOD_CHANNELS.markSeen, other, "run-1");
+      expect(other.once).not.toHaveBeenCalled();
+      const refused = await outcome(invoke(CANOPY_METHOD_CHANNELS.markSeen, other, "run-1", "yes"));
+      expect(refused.ok).toBe(false);
+    });
+  });
+
   it("won't trash a terminal respawned under the same id", async () => {
     state.record = { spawnedAt: 200 };
     const result = await outcome(

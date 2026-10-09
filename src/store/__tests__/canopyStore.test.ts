@@ -1,27 +1,36 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CanopySnapshot } from "@shared/types/ipc/canopy";
-import { isCanopyRead, useCanopyStore } from "../canopyStore";
+import { isCanopyUnread, type CanopySnapshot } from "@shared/types/ipc/canopy";
+import { useCanopyStore } from "../canopyStore";
 
 const SPAWNED = 1_000;
 
-describe("isCanopyRead", () => {
-  it("is unread until the run is opened", () => {
-    expect(isCanopyRead(undefined, SPAWNED, null)).toBe(false);
+function mark(turn: number, readTurn: number, markedUnreadAt: number | null = null) {
+  return { runId: "a", spawnedAt: SPAWNED, turn, readTurn, markedUnreadAt, version: 0 };
+}
+
+describe("isCanopyUnread", () => {
+  it("has nothing unread on a run Canopy knows nothing about", () => {
+    expect(isCanopyUnread(undefined)).toBe(false);
+    expect(isCanopyUnread(null)).toBe(false);
   });
 
-  it("stays read until the screen is read anew after the run was opened", () => {
-    const read = { spawnedAt: SPAWNED, at: 5_000 };
-    expect(isCanopyRead(read, SPAWNED, { spawnedAt: SPAWNED, observedAt: 4_000 })).toBe(true);
-    expect(isCanopyRead(read, SPAWNED, { spawnedAt: SPAWNED, observedAt: 6_000 })).toBe(false);
+  it("is unread while a turn is unread, and read once read through it", () => {
+    expect(isCanopyUnread(mark(3, 2))).toBe(true);
+    expect(isCanopyUnread(mark(3, 3))).toBe(false);
   });
 
-  it("counts a run opened before its screen was ever read as read", () => {
-    expect(isCanopyRead({ spawnedAt: SPAWNED, at: 5_000 }, SPAWNED, null)).toBe(true);
+  it("stays unread when marked by hand, even with every turn read", () => {
+    expect(isCanopyUnread(mark(3, 3, 9_000))).toBe(true);
   });
+});
 
-  it("never carries a read over to a terminal respawned under the same id", () => {
-    expect(isCanopyRead({ spawnedAt: SPAWNED, at: 5_000 }, SPAWNED + 1, null)).toBe(false);
+describe("unreadOnly", () => {
+  it("is off until turned on, and holds for the session", () => {
+    expect(useCanopyStore.getState().unreadOnly).toBe(false);
+    useCanopyStore.getState().setUnreadOnly(true);
+    expect(useCanopyStore.getState().unreadOnly).toBe(true);
+    useCanopyStore.getState().setUnreadOnly(false);
   });
 });
 
@@ -34,6 +43,7 @@ describe("applySnapshot", () => {
       tier: "free",
       dispositions: [],
       seen: [],
+      reads: [],
       scope: null,
       active: false,
       busy: false,
