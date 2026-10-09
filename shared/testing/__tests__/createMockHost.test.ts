@@ -1432,6 +1432,16 @@ describe("createMockHost production-parity validation (#10617)", () => {
         { kind: "file", agent: false, worktreeId: "w" },
       ]);
       expect(errors).toHaveBeenCalled();
+
+      // An async listener's rejection is caught too, not left unhandled.
+      errors.mockClear();
+      const asyncHost = createMockHost({ capabilities: ["panel:focus-read"] });
+      await asyncHost.onDidChangeFocusedPanel(async () => {
+        throw new Error("async boom");
+      });
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(errors).toHaveBeenCalledTimes(1);
       errors.mockRestore();
     });
 

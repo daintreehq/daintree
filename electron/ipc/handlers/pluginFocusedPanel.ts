@@ -3,6 +3,7 @@ import { CHANNELS } from "../channels.js";
 import {
   getProjectForWebContents,
   getWindowForWebContents,
+  onRendererScopeChanged,
 } from "../../window/webContentsRegistry.js";
 import {
   getFocusedPanelTracker,
@@ -44,7 +45,12 @@ export function registerPluginFocusedPanelHandlers(
   };
 
   ipcMain.on(CHANNELS.PLUGIN_REPORT_FOCUSED_PANEL, handleReport);
+  // A view reports before it is registered to its project (the first view
+  // loads first), and an unchanged answer is never re-sent, so re-attribute
+  // when scope membership changes.
+  const offScope = onRendererScopeChanged(() => tracker.refresh());
   return () => {
+    offScope();
     ipcMain.removeListener(CHANNELS.PLUGIN_REPORT_FOCUSED_PANEL, handleReport);
   };
 }

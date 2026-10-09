@@ -1752,11 +1752,14 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
           mockProjectId !== null && raw.kind === "portal" ? toPluginFocusedPanel(null) : raw;
         if (delivered !== null && pluginFocusedPanelEquals(delivered, focus)) return;
         delivered = focus;
-        try {
-          callback(focus);
-        } catch (err) {
-          // Logged and swallowed, as the host does for a listener.
+        // Logged and swallowed, sync or async, as the host does for a listener.
+        const report = (err: unknown) =>
           console.error("[createMockHost] onDidChangeFocusedPanel callback failed:", err);
+        try {
+          const result: unknown = callback(focus);
+          if (result instanceof Promise) result.catch(report);
+        } catch (err) {
+          report(err);
         }
       };
       focusedPanelSubs.add(subscription);

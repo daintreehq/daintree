@@ -16,10 +16,15 @@ vi.mock("electron", () => ({
 const registryMock = vi.hoisted(() => ({
   windows: new Map<number, { id: number; isDestroyed: () => boolean }>(),
   projects: new Map<number, string>(),
+  scopeListeners: new Set<() => void>(),
 }));
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: vi.fn((wc: { id: number }) => registryMock.windows.get(wc.id) ?? null),
   getProjectForWebContents: vi.fn((id: number) => registryMock.projects.get(id) ?? null),
+  onRendererScopeChanged: vi.fn((listener: () => void) => {
+    registryMock.scopeListeners.add(listener);
+    return () => registryMock.scopeListeners.delete(listener);
+  }),
 }));
 
 import { CHANNELS } from "../../channels.js";
@@ -46,7 +51,9 @@ describe("plugin:report-focused-panel", () => {
   beforeEach(() => {
     registryMock.windows.set(7, { id: 1, isDestroyed: () => false });
     registryMock.projects.set(7, "project-a");
-    tracker = new FocusedPanelTracker();
+    tracker = new FocusedPanelTracker({
+      workspaceOf: (id) => registryMock.projects.get(id) ?? null,
+    });
     tracker.setFocusedWindow(1);
     cleanup = registerPluginFocusedPanelHandlers(tracker);
   });
@@ -68,6 +75,16 @@ describe("plugin:report-focused-panel", () => {
       panel: { kind: "diff", agent: false, worktreeId: "w" },
       workspaceId: "project-a",
     });
+  });
+
+  it("re-attributes a report made before its view joined a project", () => {
+    registryMock.projects.delete(7);
+    send(sender(7), { kind: "terminal" });
+    expect(tracker.getCurrent().workspaceId).toBeNull();
+
+    registryMock.projects.set(7, "project-a");
+    for (const listener of registryMock.scopeListeners) listener();
+    expect(tracker.getCurrent().workspaceId).toBe("project-a");
   });
 
   it("ignores subframes and senders with no window", () => {
@@ -92,6 +109,7 @@ describe("plugin:report-focused-panel", () => {
   it("stops listening once unregistered", () => {
     cleanup();
     expect(ipcMainMock.handlers.has(CHANNELS.PLUGIN_REPORT_FOCUSED_PANEL)).toBe(false);
+    expect(registryMock.scopeListeners.size).toBe(0);
     cleanup = () => {};
   });
 });
