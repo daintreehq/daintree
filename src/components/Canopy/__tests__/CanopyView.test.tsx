@@ -484,6 +484,12 @@ describe("CanopyView", () => {
       fireEvent.click(button);
     });
     expect(document.body.textContent).toContain("Take the first choice");
+    // Every way the list moves, and what Cmd+W does where the keyboard is.
+    expect(document.body.textContent).toContain("Move down or up");
+    expect(document.body.textContent).toContain("First or last agent");
+    expect(document.body.textContent).toContain("Close Canopy");
+    // Off the Mac, only from a reply: the terminal keeps Ctrl+W for the shell.
+    expect(document.body.textContent).toMatch(/trash the agent's terminal/i);
   });
 
   it("steps to the next agent with ⌘↓ from inside its terminal, keeping the keyboard in the pane", async () => {

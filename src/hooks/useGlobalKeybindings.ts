@@ -9,6 +9,7 @@ import { logError } from "@/utils/logger";
 import { dispatchEscape, hasHandlers } from "@/lib/escapeStack";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import { isTerminalReservedKey } from "@/services/terminalReservedKeys";
+import { CLOSE_OWNER_ATTR, requestOwnedClose } from "@/lib/closeRequest";
 import { buildKeybindingWhenContext } from "@/services/keybindingWhenContext";
 import { usePaletteStore, usePanelStore } from "../store";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
@@ -73,12 +74,21 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // panel's live view and its composer) keeps every shortcut but its own
       // toggle away from it: the rest act on the focused pane or the armed
       // fleet, neither of which is the terminal the user is typing to.
+      // Close is the exception inside a surface that owns it (below).
       if (
         typeof target.closest === "function" &&
         target.closest("[data-keybindings-isolated]") !== null
       ) {
-        const toggle = keybindingService.getEffectiveCombo("canopy.toggle");
-        if (toggle === undefined || !keybindingService.matchesEvent(e, toggle)) return;
+        // One keystroke only: a chord's first key would have to reach the
+        // resolver, and with it every other binding the surface keeps out.
+        const matches = (actionId: "canopy.toggle" | "terminal.close") => {
+          const combo = keybindingService.getEffectiveCombo(actionId);
+          return (
+            combo !== undefined && !combo.includes(" ") && keybindingService.matchesEvent(e, combo)
+          );
+        };
+        const ownsClose = target.closest(`[${CLOSE_OWNER_ATTR}]`) !== null;
+        if (!matches("canopy.toggle") && !(ownsClose && matches("terminal.close"))) return;
       }
       const isEditable =
         target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
@@ -316,6 +326,10 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
             // Element (not HTMLElement) — only closest() is needed below, and
             // an unchecked HTMLElement cast trips no-unsafe-type-assertion.
             const active = document.activeElement;
+            // A surface inside an overlay that holds a terminal of its own —
+            // the canopy panel's agent pane — closes that terminal, as a grid
+            // pane's Cmd+W would, rather than the overlay around it.
+            if (requestOwnedClose(active)) return;
             // Cmd+W inside the Daintree Assistant closes the assistant itself.
             // Its escape handler intentionally bails when the embedded xterm /
             // CodeMirror has focus (so a bare Escape reaches the running PTY),

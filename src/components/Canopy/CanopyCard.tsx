@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
+import { CLOSE_OWNER_ATTR, CLOSE_REQUEST_EVENT } from "@/lib/closeRequest";
 import { Button } from "@/components/ui/button";
 import { SURFACE_HEADER_FOCUS_LIFT_CLASS, SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -314,6 +315,27 @@ export function CanopyCard({
     onTrash(item);
   };
 
+  // Cmd+W with the keyboard in this pane — its terminal, its reply or its
+  // title bar — closes the agent's terminal to the trash, as Cmd+W on its grid
+  // pane would; the trash keeps it running a while, and the toast takes it
+  // back. From the list, Cmd+W closes the panel instead.
+  const onTrashRef = useRef(onTrash);
+  const itemRef = useRef(item);
+  useEffect(() => {
+    onTrashRef.current = onTrash;
+    itemRef.current = item;
+  });
+  useEffect(() => {
+    const section = sectionRef.current;
+    if (!section) return;
+    const onClose = (event: Event) => {
+      event.preventDefault();
+      onTrashRef.current(itemRef.current);
+    };
+    section.addEventListener(CLOSE_REQUEST_EVENT, onClose);
+    return () => section.removeEventListener(CLOSE_REQUEST_EVENT, onClose);
+  }, []);
+
   const handleKey = (event: KeyboardEvent<HTMLElement>): boolean => {
     // One key answers the dialog: its number picks that option, Y the first
     // (never on a risky action, which takes its number).
@@ -410,6 +432,7 @@ export function CanopyCard({
       aria-label={`${row.title}, ${KIND_LABEL[item.kind]}`}
       aria-describedby={describedBy}
       data-canopy-detail=""
+      {...{ [CLOSE_OWNER_ATTR]: "" }}
       onFocusCapture={() => setFocused(true)}
       onBlurCapture={(event) => {
         const next = event.relatedTarget;

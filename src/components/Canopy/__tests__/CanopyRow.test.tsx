@@ -343,13 +343,16 @@ describe("CanopyRow", () => {
       el.textContent?.startsWith("🦊")
     )!;
     // Each separator is its own padded dot, so the text runs them together.
-    expect(meta.textContent).toBe("🦊app·fix-rounding·Looks done·Tests pass·Not committed");
+    // Said as what the agent reported, not as checked facts.
+    expect(meta.textContent).toBe(
+      "🦊app·fix-rounding·Looks done·Reported: tests pass·not committed"
+    );
     // Every fact is a whole segment: one that doesn't fit drops, never "Tests p…".
     const facts = [...container.querySelectorAll("span")].filter(
-      (el) => el.textContent === "·Tests pass" || el.textContent === "·Not committed"
+      (el) => el.textContent === "·Reported: tests pass" || el.textContent === "·not committed"
     );
     expect(facts).toHaveLength(2);
-    expect(description(container)).toContain("tests pass, not committed");
+    expect(description(container)).toContain("reported tests pass, not committed");
   });
 
   it("rings a waiting agent that is asking a question with a question mark", () => {
@@ -525,8 +528,8 @@ describe("CanopyRow", () => {
       itemFor("working", { wordsCategory: "working" }, { agentState: "working" })
     );
     // Spawned an hour before NOW and never looked at since.
-    expect(container.textContent).toContain("Unseen 1h");
-    expect(description(container)).toContain("unseen 1h");
+    expect(container.textContent).toContain("Not checked 1h");
+    expect(description(container)).toContain("not checked 1h");
   });
 
   it("names the project by its emoji beside its name", () => {

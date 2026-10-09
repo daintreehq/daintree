@@ -625,7 +625,7 @@ describe("the row's name", () => {
 describe("progress and facts", () => {
   const stopped = { agentState: "waiting" as const, waitingReason: "prompt" as const };
 
-  it("shows checklist counts when the agent drew one, else the reading's percentage", () => {
+  it("shows checklist counts when the agent drew one, else the reading's estimate, marked as one", () => {
     const [counted] = inbox(
       [run("a", stopped)],
       [
@@ -646,7 +646,7 @@ describe("progress and facts", () => {
       [run("a", stopped)],
       [card("a", { category: "approval", progress: 30 })]
     );
-    expect(itemProgress(estimated!)).toMatchObject({ value: 30, label: "30%" });
+    expect(itemProgress(estimated!)).toMatchObject({ value: 30, label: "~30%" });
   });
 
   it("shows no progress for a task finished in full, nor one not yet begun", () => {

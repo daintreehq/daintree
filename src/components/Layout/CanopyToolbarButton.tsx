@@ -130,7 +130,13 @@ export function CanopyToolbarButton({
                 </span>
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">{createTooltipContent(label, shortcut)}</TooltipContent>
+            {/* The name alone says nothing to someone who hasn't used it. */}
+            <TooltipContent side="bottom">
+              {createTooltipContent(
+                needYou > 0 && activated ? label : `${CANOPY_LABEL} — agent inbox`,
+                shortcut
+              )}
+            </TooltipContent>
           </Tooltip>
         </span>
       </ContextMenuTrigger>

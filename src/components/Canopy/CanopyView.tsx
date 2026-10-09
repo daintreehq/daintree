@@ -19,6 +19,8 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CANOPY_SEEN_HEARTBEAT_MS, canopyViewIsWatched, reportCanopySeen } from "@/lib/canopySeen";
 import { subscribeProjectViewObservability } from "@/lib/viewCacheState";
 import { useOverlayClaim } from "@/hooks/useOverlayState";
+import { useEffectiveCombo } from "@/hooks";
+import { usePreferencesStore } from "@/store/preferencesStore";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
 import { Button } from "@/components/ui/button";
@@ -279,11 +281,27 @@ interface ShortcutRow {
  */
 function CanopyShortcuts() {
   const step = isMac() ? "Cmd" : "Alt";
+  // How to get here again: the user's own binding, and double-Shift while on.
+  const toggle = useEffectiveCombo("canopy.toggle");
+  // Close as the user has it bound, and only where it works: a chord can't
+  // reach the pane, and off the Mac the terminal keeps Ctrl+W for the shell.
+  const closeCombo = useEffectiveCombo("terminal.close");
+  const paneClose = closeCombo !== undefined && !closeCombo.includes(" ") ? closeCombo : undefined;
+  const doubleShift = usePreferencesStore((s) => s.doubleShiftOpensCanopy);
   const groups: Array<{ heading: string; rows: ShortcutRow[] }> = [
+    {
+      heading: "Anywhere",
+      rows: [
+        ...(toggle ? [{ keys: [toggle], label: "Open or close Canopy" }] : []),
+        ...(doubleShift ? [{ keys: ["Shift"], label: "Twice quickly: open or close Canopy" }] : []),
+      ],
+    },
     {
       heading: "In the list",
       rows: [
         { keys: ["ArrowUp", "ArrowDown"], label: "Move" },
+        { keys: ["J", "K"], label: "Move down or up" },
+        { keys: ["Home", "End"], label: "First or last agent" },
         { keys: ["Enter"], label: "Go to terminal" },
         { keys: ["1", "9"], range: true, label: "Answer with that choice (twice when it's risky)" },
         { keys: ["Y"], label: "Take the first choice, when it's read as safe" },
@@ -296,15 +314,26 @@ function CanopyShortcuts() {
         { keys: ["Shift+F10"], label: "More actions" },
         { keys: ["Cmd+Backspace"], label: "Trash, pressed twice; Z takes it back" },
         { keys: ["Escape"], label: "Close" },
+        ...(closeCombo ? [{ keys: [closeCombo], label: "Close Canopy" }] : []),
       ],
     },
     {
       heading: "In a reply or the terminal",
       rows: [
         { keys: [`${step}+ArrowUp`, `${step}+ArrowDown`], label: "Next agent" },
-        { keys: ["Enter"], label: "Send to the agent" },
+        { keys: ["Enter"], label: "In a reply: send, then move to the next agent" },
         { keys: ["Shift+Enter"], label: "New line in a reply" },
         { keys: ["Escape"], label: "Back to the list from a reply" },
+        ...(paneClose
+          ? [
+              {
+                keys: [paneClose],
+                label: isMac()
+                  ? "Trash the agent's terminal; the toast takes it back"
+                  : "In a reply: trash the agent's terminal; the toast takes it back",
+              },
+            ]
+          : []),
       ],
     },
   ];
@@ -321,31 +350,33 @@ function CanopyShortcuts() {
         <TooltipContent side="bottom">Keyboard shortcuts</TooltipContent>
       </Tooltip>
       <PopoverContent side="bottom" align="end" className="flex w-auto flex-col gap-3 p-3">
-        {groups.map((group) => (
-          <section key={group.heading} className="flex flex-col gap-1.5">
-            <h3 className="text-xs font-medium text-text-primary">{group.heading}</h3>
-            <dl className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5 text-xs text-text-secondary">
-              {group.rows.map((row) => (
-                <div key={row.label} className="contents">
-                  <dt className="inline-flex items-center gap-1">
-                    {row.keys.map((key, index) => (
-                      <span key={key} className="inline-flex items-center gap-1">
-                        {index > 0 && row.range && (
-                          <>
-                            <span aria-hidden="true">–</span>
-                            <span className="sr-only">to</span>
-                          </>
-                        )}
-                        <KbdChord shortcut={key} />
-                      </span>
-                    ))}
-                  </dt>
-                  <dd>{row.label}</dd>
-                </div>
-              ))}
-            </dl>
-          </section>
-        ))}
+        {groups
+          .filter((group) => group.rows.length > 0)
+          .map((group) => (
+            <section key={group.heading} className="flex flex-col gap-1.5">
+              <h3 className="text-xs font-medium text-text-primary">{group.heading}</h3>
+              <dl className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5 text-xs text-text-secondary">
+                {group.rows.map((row) => (
+                  <div key={row.label} className="contents">
+                    <dt className="inline-flex items-center gap-1">
+                      {row.keys.map((key, index) => (
+                        <span key={key} className="inline-flex items-center gap-1">
+                          {index > 0 && row.range && (
+                            <>
+                              <span aria-hidden="true">–</span>
+                              <span className="sr-only">to</span>
+                            </>
+                          )}
+                          <KbdChord shortcut={key} />
+                        </span>
+                      ))}
+                    </dt>
+                    <dd>{row.label}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          ))}
         <p className="text-xs text-text-secondary">
           In the terminal, every other key goes to the agent, Esc included.
         </p>
@@ -550,9 +581,13 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
   const unreadOnly = useCanopyStore((s) => s.unreadOnly);
   const setUnreadOnly = useCanopyStore((s) => s.setUnreadOnly);
   // A run read while the Unread filter is on stays listed until the filter is
-  // turned off: reading the row in front of you must not pull it out from
-  // under you, nor shift every row beneath it.
+  // turned off — or the panel closes, or shows another scope: reading the row
+  // in front of you must not pull it out from under you, nor shift every row
+  // beneath it, but a fresh look starts from what is unread now.
   const [keptUnread, setKeptUnread] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    setKeptUnread((kept) => (kept.size === 0 ? kept : new Set()));
+  }, [isOpen, scope]);
   useEffect(() => {
     setKeptUnread((kept) => {
       if (!unreadOnly) return kept.size === 0 ? kept : new Set();

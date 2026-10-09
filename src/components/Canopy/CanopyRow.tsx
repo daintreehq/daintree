@@ -134,6 +134,10 @@ export function firstSentence(text: string): { head: string; rest: string | null
   return { head: match[1]!, rest: match[2]! };
 }
 
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
 /** The meta line's separator: the same space either side, wherever it falls. */
 function MetaDot() {
   return <span className="shrink-0 px-1">·</span>;
@@ -200,8 +204,10 @@ export function CanopyRow({
   const priority = shownPriority(item, nowMs);
   const unseenMs = compact ? null : unseenLabelMs(item, nowMs);
   // Why a busy run ranks where it does: not a reading, but how long it has
-  // gone without the user looking at it.
-  const unseenLabel = unseenMs === null ? null : `Unseen ${formatWaitAge(nowMs - unseenMs, nowMs)}`;
+  // gone without the user looking at it — said apart from "unread", which is
+  // about what it did, not about being looked at.
+  const unseenLabel =
+    unseenMs === null ? null : `Not checked ${formatWaitAge(nowMs - unseenMs, nowMs)}`;
   const handled = itemHandled(item);
   const archived = itemArchived(item);
   const wordsShown = card !== null && (status === card.headline || status === card.question);
@@ -286,7 +292,8 @@ export function CanopyRow({
   // Still behind a ticking spinner: Daintree's own quiet tracking cannot see it.
   const stalledSince = card?.stalledSince ?? null;
   if (!compact && row.band !== "quiet" && stalledSince !== null && itemIsBusy(item)) {
-    metaTail.push({ text: `Still ${formatWaitAge(stalledSince, nowMs)}` });
+    // What was seen, not what it means: the screen hasn't moved.
+    metaTail.push({ text: `No change ${formatWaitAge(stalledSince, nowMs)}` });
   }
   const contextWarning = compact ? null : itemContextWarning(item);
   if (contextWarning !== null) metaTail.push({ text: contextWarning });
@@ -313,11 +320,11 @@ export function CanopyRow({
     looksDone ? "looks done" : null,
     row.agePhrase,
     !compact && row.band !== "quiet" && card?.stalledSince != null && itemIsBusy(item)
-      ? `still for ${formatWaitAge(card.stalledSince, nowMs)}`
+      ? `screen unchanged for ${formatWaitAge(card.stalledSince, nowMs)}`
       : null,
     overdue ? "waiting a while" : null,
     progress?.spoken ?? null,
-    ...facts.map((fact) => fact.toLowerCase()),
+    facts.length > 0 ? `reported ${facts.map((fact) => fact.toLowerCase()).join(", ")}` : null,
     compact ? null : itemContextWarning(item),
     action !== null ? `for ${action}` : null,
     choices.length > 0
@@ -586,10 +593,13 @@ export function CanopyRow({
                 className="flex h-4 max-w-[calc(100%-10rem)] shrink-0 flex-wrap overflow-hidden"
               >
                 <span className="h-4 w-0" />
+                {/* What the agent reported, read off its screen, not checked
+                    against the repository: said as a report. The word goes
+                    with the first fact, so it never stands alone. */}
                 {part.facts.map((fact, factIndex) => (
                   <span key={fact} className="flex shrink-0 whitespace-nowrap">
                     {(factIndex > 0 || dot !== null) && <MetaDot />}
-                    {fact}
+                    {factIndex === 0 ? `Reported: ${lowerFirst(fact)}` : lowerFirst(fact)}
                   </span>
                 ))}
               </span>
