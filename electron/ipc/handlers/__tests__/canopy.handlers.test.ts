@@ -24,6 +24,7 @@ const ptyClient = vi.hoisted(() => ({
   submit: vi.fn((_id: string, text: string) => state.submits.push(text)),
   sendKey: vi.fn(),
   trash: vi.fn(),
+  updateTitle: vi.fn(),
   on: vi.fn(),
   off: vi.fn(),
   acquireIpcDataMirror: vi.fn(() => state.releaseMirror),
@@ -42,6 +43,18 @@ vi.mock("electron", () => ({
   },
 }));
 vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => ptyClient }));
+const saved = vi.hoisted(() => ({
+  state: null as { terminals: Array<{ id: string; title: string; titleMode?: string }> } | null,
+}));
+const projectStore = vi.hoisted(() => ({
+  enqueueProjectStateUpdate: vi.fn(
+    async (_projectId: string, updater: (state: unknown) => unknown) => {
+      const next = await updater(saved.state);
+      if (next !== null) saved.state = next as typeof saved.state;
+    }
+  ),
+}));
+vi.mock("../../../services/ProjectStore.js", () => ({ projectStore }));
 vi.mock("../projectCrud/index.js", () => ({
   getFleetSnapshotService: () => ({
     getLastBroadcast: () => ({ runs: state.runs, degraded: false, changedAt: 0 }),
@@ -81,6 +94,8 @@ vi.mock("../../utils.js", async (importOriginal) => ({
 
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
+import { events } from "../../../services/events.js";
+import { getDefaultPanelTitle } from "../../../../shared/config/panelKindRegistry.js";
 import { registerCanopyHandlers } from "../canopy.js";
 import { CANOPY_METHOD_CHANNELS } from "../canopy.preload.js";
 
@@ -255,6 +270,137 @@ describe("canopy IPC", () => {
 
     await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset", hiddenAgain);
     expect(state.mode).toBe("unset");
+  });
+
+  describe("rename", () => {
+    function renameView() {
+      const sent: Array<{ channel: string; payload: unknown }> = [];
+      state.views = [{ send: (channel, payload) => sent.push({ channel, payload }) }];
+      return sent;
+    }
+
+    it("renames the terminal at the host, in its saved project, and in the views holding it", async () => {
+      const sent = renameView();
+      saved.state = { terminals: [{ id: "run-1", title: "Claude", titleMode: "default" }] };
+      const emit = vi.spyOn(events, "emit");
+      await invoke(
+        CANOPY_METHOD_CHANNELS.rename,
+        fakeSender(5),
+        "run-1",
+        { spawnedAt: 100 },
+        "  auth fix  "
+      );
+      expect(ptyClient.updateTitle).toHaveBeenCalledWith("run-1", "auth fix", "user");
+      expect(emit).toHaveBeenCalledWith(
+        "terminal:title-changed",
+        expect.objectContaining({ id: "run-1" })
+      );
+      // An evicted view restores the new name rather than the one it saved.
+      expect(projectStore.enqueueProjectStateUpdate).toHaveBeenCalledWith(
+        "project-1",
+        expect.any(Function)
+      );
+      expect(saved.state?.terminals[0]).toMatchObject({ title: "auth fix", titleMode: "user" });
+      expect(sent).toEqual([
+        { channel: "canopy:rename-requested", payload: { runId: "run-1", title: "auth fix" } },
+      ]);
+      emit.mockRestore();
+    });
+
+    it("puts back the default name for an empty one", async () => {
+      const sent = renameView();
+      state.runs = [
+        {
+          runId: "run-1",
+          spawnedAt: 100,
+          workspaceId: "project-1",
+          agentId: "claude",
+          titleMode: "user",
+        } as never,
+      ];
+      saved.state = { terminals: [{ id: "run-1", title: "auth fix", titleMode: "user" }] };
+      await invoke(CANOPY_METHOD_CHANNELS.rename, fakeSender(5), "run-1", { spawnedAt: 100 }, "");
+      const fallback = getDefaultPanelTitle("terminal", "claude");
+      expect(ptyClient.updateTitle).toHaveBeenCalledWith("run-1", fallback, "default");
+      expect(saved.state?.terminals[0]).toMatchObject({ title: fallback, titleMode: "default" });
+      // The view works out its own exact default from the empty title.
+      expect(sent[0]?.payload).toEqual({ runId: "run-1", title: "" });
+    });
+
+    it("names a run not yet seen as its agent after the agent it was launched as", async () => {
+      renameView();
+      state.runs = [
+        {
+          runId: "run-1",
+          spawnedAt: 100,
+          workspaceId: "project-1",
+          launchAgentId: "codex",
+          titleMode: "user",
+        } as never,
+      ];
+      await invoke(CANOPY_METHOD_CHANNELS.rename, fakeSender(5), "run-1", { spawnedAt: 100 }, "");
+      expect(ptyClient.updateTitle).toHaveBeenCalledWith(
+        "run-1",
+        getDefaultPanelTitle("terminal", "codex"),
+        "default"
+      );
+    });
+
+    it("puts back nothing for a name that is already the default", async () => {
+      const sent = renameView();
+      state.runs = [
+        { runId: "run-1", spawnedAt: 100, workspaceId: "project-1", titleMode: "default" } as never,
+      ];
+      await invoke(CANOPY_METHOD_CHANNELS.rename, fakeSender(5), "run-1", { spawnedAt: 100 }, "");
+      expect(ptyClient.updateTitle).not.toHaveBeenCalled();
+      expect(projectStore.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+      expect(sent).toEqual([]);
+    });
+
+    it("answers only once the saved project has the new name", async () => {
+      renameView();
+      let saveDone: () => void = () => {};
+      projectStore.enqueueProjectStateUpdate.mockImplementationOnce(
+        () => new Promise<void>((resolve) => (saveDone = resolve))
+      );
+      let answered = false;
+      const renaming = invoke(
+        CANOPY_METHOD_CHANNELS.rename,
+        fakeSender(5),
+        "run-1",
+        { spawnedAt: 100 },
+        "x"
+      ).then(() => (answered = true));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(answered).toBe(false);
+      saveDone();
+      await renaming;
+      expect(answered).toBe(true);
+    });
+
+    it("refuses a respawned terminal, a title that isn't one, and Canopy off", async () => {
+      renameView();
+      const sender = fakeSender(5);
+      const respawned = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.rename, sender, "run-1", { spawnedAt: 99 }, "x")
+      );
+      expect(respawned.ok).toBe(false);
+      for (const bad of [7, null, "x".repeat(201)]) {
+        expect(
+          (
+            await outcome(
+              invoke(CANOPY_METHOD_CHANNELS.rename, sender, "run-1", { spawnedAt: 100 }, bad)
+            )
+          ).ok
+        ).toBe(false);
+      }
+      state.mode = "unset";
+      const off = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.rename, sender, "run-1", { spawnedAt: 100 }, "x")
+      );
+      expect(off.ok).toBe(false);
+      expect(ptyClient.updateTitle).not.toHaveBeenCalled();
+    });
   });
 
   it("ends every live terminal view when reading stops", async () => {

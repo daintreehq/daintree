@@ -136,6 +136,7 @@ function installElectron(
     restoreReads: vi.fn(async (_restores: unknown[]) => {}),
     runBranch: vi.fn((runId: string, _target: { spawnedAt: number }) => branchOf(runId)),
     captureBackdrop: vi.fn(async () => null),
+    rename: vi.fn(async (_runId: string, _target: { spawnedAt: number }, _title: string) => {}),
     setMode: vi.fn(async (mode: CanopySnapshot["mode"], _expectRevision?: number) => ({
       ...snapshot,
       mode,
@@ -520,6 +521,46 @@ describe("CanopyView", () => {
     expect(canopy.unarchive).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 });
   });
 
+  it("renames the selected run from F2 on its row, in its title bar", async () => {
+    const canopy = installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    fireEvent.keyDown(cards(container)[0]!, { key: "F2" });
+    await frames();
+    const field = document.querySelector<HTMLInputElement>(
+      "[data-canopy-detail] [data-canopy-rename] input"
+    )!;
+    expect(document.activeElement).toBe(field);
+    fireEvent.change(field, { target: { value: "auth fix" } });
+    await act(async () => {
+      fireEvent.keyDown(field, { key: "Enter" });
+    });
+    expect(canopy.rename).toHaveBeenCalledWith(
+      "waiting",
+      { spawnedAt: NOW - 3_600_000 },
+      "auth fix"
+    );
+    expect(useCanopyStore.getState().isOpen).toBe(true);
+  });
+
+  it("leaves a rename with Escape, and the panel stays open", async () => {
+    const canopy = installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    fireEvent.keyDown(cards(container)[0]!, { key: "F2" });
+    await frames();
+    const field = document.querySelector<HTMLInputElement>(
+      "[data-canopy-detail] [data-canopy-rename] input"
+    )!;
+    fireEvent.change(field, { target: { value: "never mind" } });
+    fireEvent.keyDown(field, { key: "Escape" });
+    await frames();
+    expect(document.querySelector("[data-canopy-rename]")).toBeNull();
+    expect(canopy.rename).not.toHaveBeenCalled();
+    expect(useCanopyStore.getState().isOpen).toBe(true);
+    expect(document.activeElement?.getAttribute("aria-keyshortcuts")).toBe("F2");
+  });
+
   it("takes an archive back with Z pressed before main has answered it", async () => {
     const canopy = installElectron();
     let land: (mark: unknown) => void = () => {};
@@ -842,6 +883,7 @@ describe("CanopyView", () => {
       "Reply",
       "Mark as read",
       "Archive",
+      "Rename…",
       "Trash terminal…",
     ]);
     expect(
@@ -851,6 +893,26 @@ describe("CanopyView", () => {
     ).toBe("E");
     fireEvent.click(items.find((item) => item.textContent?.startsWith("Archive"))!);
     expect(canopy.archive).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 });
+  });
+
+  it("starts a rename in the pane from the row's menu", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    fireEvent.contextMenu(cards(container)[1]!, { clientX: 5, clientY: 5 });
+    const items = await within(document.body).findAllByRole("menuitem", { hidden: true });
+    const rename = items.find((item) => item.textContent?.startsWith("Rename"))!;
+    expect(rename.getAttribute("aria-keyshortcuts")).toBe("F2");
+    fireEvent.click(rename);
+    await frames();
+    // The run it was asked for is the one open, its name ready to type over —
+    // once the menu has finished handing focus about.
+    await vi.waitFor(() =>
+      expect(document.activeElement?.closest("[data-canopy-rename]")).not.toBeNull()
+    );
+    expect(document.activeElement?.closest("[data-canopy-detail]")?.id).toBe(
+      `canopy-detail-${cards(container)[1]!.id.replace(/^canopy-card-/, "")}`
+    );
   });
 
   it("arms Trash from the menu for the pane to confirm, rather than trashing at once", async () => {

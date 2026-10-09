@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -16,6 +16,8 @@ export interface CanopyRowMenuActions {
   onReply: (item: CanopyItem) => void;
   onToggleRead: (item: CanopyItem) => void;
   onArchive: (item: CanopyItem) => void;
+  /** Rename the run's terminal, in its title bar. */
+  onRename: (item: CanopyItem) => void;
   /** Arm Trash for the run, for its pane to confirm. */
   onTrash: (item: CanopyItem) => void;
   /** The menu opened or closed: the list holds still while it is open. */
@@ -34,13 +36,23 @@ export function CanopyRowMenu({
 }: CanopyRowMenuActions & { item: CanopyItem; children: ReactNode }) {
   const archived = itemArchived(item);
   const trashChord = isMac() ? "Meta+Backspace" : "Control+Backspace";
+  // Rename sends focus into the run's name field on purpose: the menu closing
+  // must not hand it back to the row it was opened from, which would end the
+  // rename and select that row again.
+  const focusMovedRef = useRef(false);
   return (
     <ContextMenu onOpenChange={actions.onOpenChange}>
       {/* Contents, so the trigger adds no box between the list and its rows. */}
       <ContextMenuTrigger asChild>
         <div className="contents">{children}</div>
       </ContextMenuTrigger>
-      <ContextMenuContent>
+      <ContextMenuContent
+        onCloseAutoFocus={(event) => {
+          if (!focusMovedRef.current) return;
+          focusMovedRef.current = false;
+          event.preventDefault();
+        }}
+      >
         <ContextMenuItem aria-keyshortcuts="Enter" onSelect={() => actions.onOpen(item)}>
           Go to terminal
           <ContextMenuShortcut shortcut="Enter" />
@@ -61,6 +73,16 @@ export function CanopyRowMenu({
         <ContextMenuItem aria-keyshortcuts="E" onSelect={() => actions.onArchive(item)}>
           {archived ? "Move to inbox" : "Archive"}
           <ContextMenuShortcut shortcut="E" />
+        </ContextMenuItem>
+        <ContextMenuItem
+          aria-keyshortcuts="F2"
+          onSelect={() => {
+            focusMovedRef.current = true;
+            actions.onRename(item);
+          }}
+        >
+          Rename…
+          <ContextMenuShortcut shortcut="F2" />
         </ContextMenuItem>
         <ContextMenuSeparator />
         {/* Arms Trash in the agent's pane, as its first press would; the

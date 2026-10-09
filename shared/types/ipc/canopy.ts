@@ -245,6 +245,16 @@ export interface CanopyTrashRequest {
 }
 
 /**
+ * The user renamed a run from Canopy. The view that holds its pane renames the
+ * pane as the user's own rename there would; an empty title puts back the one
+ * Daintree gives it.
+ */
+export interface CanopyRenameRequest {
+  runId: string;
+  title: string;
+}
+
+/**
  * The user put a run aside from the panel, for the screen it showed then:
  * `replied` sits under Everything else, `archived` in the Archived section.
  * Main brings it back to the inbox once the agent has something new to say.

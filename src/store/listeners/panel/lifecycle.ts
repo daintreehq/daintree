@@ -280,6 +280,21 @@ export function setupLifecycleListeners(): DisposableStore {
     );
   }
 
+  // Canopy renamed a terminal this view holds: the pane takes it as the user's
+  // own rename here would, user-locked — or, for an empty title, back to the
+  // default this view works out for it.
+  const onCanopyRename = window.electron?.canopy?.onRenameRequested;
+  if (onCanopyRename) {
+    d.add(
+      toDisposable(
+        onCanopyRename(({ runId, title }) => {
+          if (!usePanelStore.getState().panelsById[runId]) return;
+          usePanelStore.getState().updateTitle(runId, title, "user");
+        })
+      )
+    );
+  }
+
   d.add(
     toDisposable(
       terminalRegistryController.onRestored((data: { id: string }) => {
