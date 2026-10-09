@@ -917,12 +917,17 @@ describe("CanopyView", () => {
 
   it("shows neither the offer nor the inbox until main says whether Canopy is on", async () => {
     useCanopyStore.setState({ snapshot: null });
-    installElectron();
+    const canopy = installElectron();
+    // Main hasn't answered yet.
+    canopy.setActive.mockReturnValue(new Promise(() => {}));
     render(<CanopyView />);
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
     expect(dialog.textContent).not.toContain("Turn on Canopy");
     expect(dialog.querySelector("[role=listbox]")).toBeNull();
     expect(dialog.querySelector("[aria-busy=true]")).not.toBeNull();
+    // The keyboard waits inside the dialog, not on whatever opened it.
+    await frames();
+    expect(document.activeElement).toBe(dialog.querySelector("[aria-busy=true]"));
   });
 
   it("reads a row's screen again from its menu, for a reading that looks wrong", async () => {

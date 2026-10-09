@@ -384,9 +384,24 @@ export function CanopyCard({
     }
     return false;
   };
+  // Asked for from the row's menu, the handoff waits for the menu to close —
+  // its focus trap would take the keyboard straight back — and is confirmed
+  // from the DOM, trying again for a few frames until it lands.
+  const focusFrameRef = useRef(0);
+  useEffect(() => () => cancelAnimationFrame(focusFrameRef.current), []);
   const focusComposer = (): boolean => {
     if (!canReply || !composerRef.current) return false;
-    composerRef.current.focus();
+    cancelAnimationFrame(focusFrameRef.current);
+    const attempt = (tries: number) => {
+      composerRef.current?.focus();
+      const landed = sectionRef.current
+        ?.querySelector(".cm-editor")
+        ?.contains(document.activeElement);
+      if (!landed && tries < 30) {
+        focusFrameRef.current = requestAnimationFrame(() => attempt(tries + 1));
+      }
+    };
+    focusFrameRef.current = requestAnimationFrame(() => attempt(1));
     return true;
   };
   useImperativeHandle(ref, () => ({ handleKey, focusComposer }));

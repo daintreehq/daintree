@@ -760,8 +760,12 @@ export class CanopyService {
     entry.failures = 0;
     entry.retryAt = 0;
     entry.rereadOf = entry.contentHash;
-    // A card still being written is from the reading the user doubts: it gives
-    // way, so the scan reads the screen afresh rather than waiting it out.
+    // Whatever is in flight for the run is from the reading the user doubts:
+    // a new sequence makes it stale, so its end — the abort below included —
+    // counts as neither an answer nor a failure, and the scan reads afresh.
+    entry.seq++;
+    entry.pending = false;
+    if (entry.card?.describing) entry.card = { ...entry.card, describing: false };
     this.supersedeCard(entry);
     entry.cardProgress = false;
     await this.refresh();
