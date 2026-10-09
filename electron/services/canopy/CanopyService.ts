@@ -1072,6 +1072,7 @@ export class CanopyService {
       entry.lastDescribed = { ...entry.lastDescribed, hash: screen.hash };
     }
     if (entry.disposition?.contentHash === before) entry.disposition.contentHash = screen.hash;
+    if (entry.rereadOf === before) entry.rereadOf = screen.hash;
     if (entry.reads.hash === before) entry.reads.hash = screen.hash;
     // Words owed on open from a read of the old drawing are written from the
     // new one: the same screen, laid out as it is now.
@@ -1614,7 +1615,9 @@ export class CanopyService {
     // Asked for by the user: this read corrects the last reading of the same
     // screen, so it describes whatever the usual gates say, and it is no news.
     const forced = entry.rereadOf !== null && entry.rereadOf === screen.hash;
-    entry.rereadOf = null;
+    // Kept until a description of that screen lands: a failed one is tried
+    // again as the same correction. A screen that moved since is news anyway.
+    if (!forced) entry.rereadOf = null;
     // A new ask on a stopped run, with no start Daintree saw in between: one
     // dialog answered and the next drawn in its place.
     if (
@@ -1863,6 +1866,8 @@ export class CanopyService {
       entry.failures = 0;
       entry.retryAt = 0;
       entry.describedAt = this.now();
+      // The re-read asked for is done.
+      if (entry.rereadOf === screen.hash) entry.rereadOf = null;
       entry.lastDescribed = {
         lines: screen.lines,
         // Read before a redraw at another size was adopted: the same words,
