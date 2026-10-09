@@ -243,8 +243,8 @@ export function CanopyCard({
     return () => cancelAnimationFrame(frame);
   }, []);
 
-  // Trash takes two presses — the button or ⌘⌫ — and the Undo toast stays as
-  // the way back. The first press arms it for a few seconds, for the screen
+  // Trash takes two presses — the button or ⌘⌫ — and the trash is the way back,
+  // as for any terminal. The first press arms it for a few seconds, for the screen
   // that was showing: a respawn, a new screen or a change of state in between
   // means the second press is a first press again.
   // A screen that moved (its card flagged as from an earlier read) is a new
