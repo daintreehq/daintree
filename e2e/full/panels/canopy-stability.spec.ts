@@ -723,10 +723,18 @@ test.describe("Canopy stability against the live service", () => {
     const events: Event[] = [];
 
     // The user answers the first approval from its row, with its number key.
+    // It asks to force-push, which the readers flag as risky: the first press
+    // only arms the choice — the pane says what a second press picks — and
+    // the second sends it.
     const row = dialog(page).locator(`#${card(agents.approval)}`);
     await row.click();
     await expect(row).toBeFocused();
     const keysBefore = readFakeCanopyKeys(binDir, agents.approval).length;
+    await page.keyboard.press("1");
+    await expect(dialog(page).locator("[data-canopy-answer-armed]")).toContainText(
+      "Press 1 again",
+      { timeout: T_LONG }
+    );
     await page.keyboard.press("1");
     const answered = Date.now();
     // The answer reached the agent — Enter on the highlighted first choice,

@@ -575,8 +575,8 @@ describe("onTrashRequested — Canopy trash", () => {
   });
 });
 
-// Canopy takes back its own trash: the view holding the pane restores it as
-// its own Undo would, which restores it on the host as well.
+// Canopy takes back its own trash: main restores it on the host, and the view
+// holding the pane brings it out of the trash without restoring it again.
 describe("onRestoreRequested — Canopy trash undone", () => {
   afterEach(() => {
     delete (window as { electron?: unknown }).electron;
@@ -614,7 +614,9 @@ describe("onRestoreRequested — Canopy trash undone", () => {
     expect(usePanelStore.getState().panelsById["term-1"]?.location).toBe("trash");
     restoreRequest({ runId: "term-1" });
     expect(usePanelStore.getState().panelsById["term-1"]?.location).not.toBe("trash");
-    expect(restore).toHaveBeenCalledWith("term-1");
+    // Main restored it on the host already: a second restore could undo a
+    // trash another window made in between.
+    expect(restore).not.toHaveBeenCalled();
   });
 
   it("ignores a pane that isn't in the trash, or one it does not hold", () => {

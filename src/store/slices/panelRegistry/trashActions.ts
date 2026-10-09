@@ -258,7 +258,7 @@ export const createTrashActions = (
     trashPanel,
     trashPanelGroup,
 
-    restoreTerminal: (id, targetWorktreeId) => {
+    restoreTerminal: (id, targetWorktreeId, options) => {
       clearTrashExpiryTimer(id);
       const trashedInfo = get().trashedTerminals.get(id);
       const rawRestoreLocation = trashedInfo?.originalLocation ?? "grid";
@@ -271,7 +271,11 @@ export const createTrashActions = (
       const restoreLocation = normalizeDockLocation(terminal?.kind, rawRestoreLocation);
       const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
 
-      if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
+      if (
+        terminal &&
+        panelKindHasPty(terminal.kind ?? "terminal") &&
+        options?.hostRestored !== true
+      ) {
         terminalClient.restore(id).catch((error) => {
           logError("Failed to restore terminal", error);
         });

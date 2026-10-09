@@ -180,7 +180,16 @@ export interface PanelRegistrySlice {
   trashPanel: (id: string, options?: { hostTrashed?: boolean }) => void;
   /** Trash all panels in a group together, storing group metadata for restoration */
   trashPanelGroup: (panelId: string) => void;
-  restoreTerminal: (id: string, targetWorktreeId?: string) => void;
+  /**
+   * Bring a panel back from the trash and tell the PTY host. `hostRestored` is
+   * for a terminal main has already restored on the host: the pane follows
+   * without a second host restore, which could undo a trash made since.
+   */
+  restoreTerminal: (
+    id: string,
+    targetWorktreeId?: string,
+    options?: { hostRestored?: boolean }
+  ) => void;
   /** Restore all panels with the given groupRestoreId, recreating the tab group */
   restoreTrashedGroup: (groupRestoreId: string, targetWorktreeId?: string) => void;
   markAsTrashed: (id: string, expiresAt: number, originalLocation: "dock" | "grid") => void;
