@@ -280,6 +280,44 @@ describe("buildCanopyInbox", () => {
     expect(result[0]!.card).toBeNull();
   });
 
+  it("keeps a card current when Daintree's state only catches up with what it read", () => {
+    const approval = card("a", {
+      category: "approval",
+      observedAt: NOW - 8_000,
+      question: "Run npm test?",
+      options: ["Yes", "No"],
+      // Read while Daintree still saw the agent working.
+      observedWhenRead: { agentState: "working", waitingReason: null },
+    });
+    const [caughtUp] = inbox(
+      [run("a", { agentState: "waiting", waitingReason: "approval", since: NOW })],
+      [approval]
+    );
+    expect(caughtUp!.stale).toBe(false);
+    expect(caughtUp!.card?.options).toEqual(["Yes", "No"]);
+    // Daintree names the stop more loosely than the reading: still the same card.
+    const [loosely] = inbox(
+      [run("a", { agentState: "waiting", waitingReason: "prompt", since: NOW })],
+      [approval]
+    );
+    expect(loosely!.stale).toBe(false);
+    expect(loosely!.card?.category).toBe("approval");
+    // Long after the reading: the agent may have worked and stopped again since.
+    const [later] = inbox(
+      [run("a", { agentState: "waiting", waitingReason: "approval", since: NOW })],
+      [{ ...approval, observedAt: NOW - 60_000 }]
+    );
+    expect(later!.stale).toBe(true);
+    expect(later!.card?.options).toEqual([]);
+    // Read while it was already waiting: the same state reached again is a new ask.
+    const [again] = inbox(
+      [run("a", { agentState: "waiting", waitingReason: "approval", since: NOW })],
+      [{ ...approval, observedWhenRead: { agentState: "waiting", waitingReason: "approval" } }]
+    );
+    expect(again!.stale).toBe(true);
+    expect(again!.card?.options).toEqual([]);
+  });
+
   it("marks a card stale once the run's state moved after it was read", () => {
     const result = inbox(
       [run("a", { agentState: "waiting", waitingReason: "question", since: NOW })],
@@ -409,7 +447,8 @@ describe("checking on working agents", () => {
     );
     expect(items.map((item) => item.runId)).toEqual(["approval", "unseen", "finished", "looked"]);
     const byId = (id: string) => items.find((item) => item.runId === id)!;
-    expect(itemPriority(byId("looked"), NOW)).toBe(CHECK_IN_FLOOR + 3);
+    // A minute unseen is no step yet: the number holds while the user reads.
+    expect(itemPriority(byId("looked"), NOW)).toBe(CHECK_IN_FLOOR);
     expect(itemPriority(byId("unseen"), NOW)).toBe(CHECK_IN_CEILING);
     expect(shownPriority(byId("unseen"), NOW)).toBe(CHECK_IN_CEILING);
   });
@@ -457,6 +496,24 @@ describe("checking on working agents", () => {
     const byId = (id: string) => items.find((item) => item.runId === id)!;
     expect(itemPriority(byId("finished"), NOW)).toBe(30);
     expect(itemPriority(byId("answered"), NOW)).toBe(0);
+  });
+
+  it("shows an answered approval at 0 while Daintree sees its agent set off again", () => {
+    // Answered, then the agent works: the approval card is from before, and
+    // the number holds at 0 rather than blanking until the next reading.
+    const [answered] = inbox(
+      [working("a")],
+      [
+        card("a", {
+          category: "approval",
+          priority: 0,
+          handledAt: NOW - 1_000,
+          observedAt: NOW - 5_000,
+          observedWhenRead: { agentState: "waiting", waitingReason: "approval" },
+        }),
+      ]
+    );
+    expect(shownPriority(answered!, NOW)).toBe(0);
   });
 });
 

@@ -53,6 +53,7 @@ import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { __resetCanopySeenForTests } from "@/lib/canopySeen";
 import { __resetCanopyPlaceForTests } from "../CanopyPlace";
+import { CANOPY_OPEN_SETTLE_MS } from "../canopyOrder";
 
 const NOW = Date.now();
 
@@ -552,14 +553,12 @@ describe("CanopyView", () => {
 
   it("holds the order under the pointer, and re-ranks once the user leaves it alone", async () => {
     installElectron();
-    // Already ranked, every run already known to be urgent: only
-    // the hold applies, not the urgent pass.
     useCanopyStore.setState({
       orders: {
         all: {
           ids: ["waiting", "asking", "working"],
           rankedFor: canopySnapshot.refreshedAt,
-          urgent: ["waiting", "asking", "working"],
+          urgent: [],
         },
       },
     });
@@ -571,13 +570,14 @@ describe("CanopyView", () => {
 
     const list = container.ownerDocument.querySelector<HTMLElement>("[role=listbox]")!;
     fireEvent.pointerEnter(list);
-    // A scan lands that reads the working agent as stuck.
+    // A scan lands that reads the working agent above the question, though
+    // not as an urgent ask: only the hold decides when it moves.
     act(() =>
       useCanopyStore.setState({
         snapshot: {
           ...canopySnapshot,
           refreshedAt: NOW + 10_000,
-          cards: [stuckCard("working")],
+          cards: [{ ...stuckCard("working"), priority: 84, attentionScore: 84 }],
         },
       })
     );
@@ -588,7 +588,7 @@ describe("CanopyView", () => {
     act(() => {
       vi.advanceTimersByTime(10_000);
     });
-    expect(order()).toEqual(["working", "waiting", "asking"]);
+    expect(order()).toEqual(["waiting", "working", "asking"]);
   });
 
   it("places an ask that turns urgent at once, even under the pointer", async () => {
@@ -604,6 +604,85 @@ describe("CanopyView", () => {
       })
     );
     expect(order()).toEqual(["working", "waiting", "asking"]);
+  });
+
+  it("opens on skeleton rows while the cards it is owed are written, then paints the list once", async () => {
+    const owed = { ...canopySnapshot, wordsDue: ["working"] };
+    installElectron(owed);
+    useCanopyStore.setState({ snapshot: owed });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const order = () => cards(container).map((card) => card.id.replace("canopy-card-", ""));
+    expect(order()).toEqual([]);
+    expect(
+      container.ownerDocument.querySelector('[aria-label="Reading your agents"]')
+    ).not.toBeNull();
+    // The card lands, read as stuck: the list paints with it already in place.
+    act(() =>
+      useCanopyStore.setState({
+        snapshot: { ...canopySnapshot, refreshedAt: NOW + 5_000, cards: [stuckCard("working")] },
+      })
+    );
+    await frames();
+    expect(order()).toEqual(["working", "waiting", "asking"]);
+    expect(container.ownerDocument.querySelector('[aria-label="Reading your agents"]')).toBeNull();
+  });
+
+  it("waits for first readings while main is reading, as on the first open after turning it on", async () => {
+    const reading = { ...canopySnapshot, busy: true };
+    installElectron(reading);
+    useCanopyStore.setState({ snapshot: reading });
+    const { container } = render(<CanopyView />);
+    await frames();
+    expect(cards(container)).toEqual([]);
+    act(() =>
+      useCanopyStore.setState({
+        snapshot: { ...canopySnapshot, refreshedAt: NOW + 5_000, cards: [stuckCard("working")] },
+      })
+    );
+    await frames();
+    expect(cards(container).map((card) => card.id.replace("canopy-card-", ""))).toEqual([
+      "working",
+      "waiting",
+      "asking",
+    ]);
+  });
+
+  it("waits for main to answer the open before deciding the list is whole", async () => {
+    // The snapshot in hand is from before the open; main's answer says it is reading.
+    installElectron({ ...canopySnapshot, busy: true });
+    useCanopyStore.setState({ snapshot: { ...canopySnapshot, active: false } });
+    const { container } = render(<CanopyView />);
+    await frames();
+    expect(cards(container)).toEqual([]);
+    act(() =>
+      useCanopyStore.setState({
+        snapshot: { ...canopySnapshot, refreshedAt: NOW + 5_000, cards: [stuckCard("working")] },
+      })
+    );
+    await frames();
+    expect(cards(container).map((card) => card.id.replace("canopy-card-", ""))).toEqual([
+      "working",
+      "waiting",
+      "asking",
+    ]);
+  });
+
+  it("stops waiting for owed cards after a moment, and paints what it has", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const owed = { ...canopySnapshot, wordsDue: ["working"] };
+    installElectron(owed);
+    useCanopyStore.setState({ snapshot: owed });
+    const { container } = render(<CanopyView />);
+    expect(cards(container)).toEqual([]);
+    act(() => {
+      vi.advanceTimersByTime(CANOPY_OPEN_SETTLE_MS);
+    });
+    expect(cards(container).map((card) => card.id.replace("canopy-card-", ""))).toEqual([
+      "waiting",
+      "asking",
+      "working",
+    ]);
   });
 
   it("opens in the order it was left, or ranked before it shows when something was read meanwhile", async () => {

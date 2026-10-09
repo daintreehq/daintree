@@ -8,6 +8,7 @@
  * none of it is ever logged here.
  */
 import { CANOPY_CATEGORIES, type CanopyCategory } from "../../../shared/types/ipc/canopy.js";
+import { cleanStatusLine } from "./canopyScreen.js";
 import {
   CanopyProviderError,
   toDescriberResult,
@@ -136,7 +137,8 @@ export function toClassifierResult(data: unknown): ClassifierResult {
     throw new CanopyProviderError("classifier", "unexpected response shape");
   }
   const asks = category === "approval" || category === "question";
-  const status = text(raw.status);
+  const picked = text(raw.status);
+  const status = picked === null ? null : cleanStatusLine(picked);
   return {
     category: category as CanopyCategory,
     confidence: probability(raw.confidence),
