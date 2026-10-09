@@ -476,17 +476,19 @@ function forgetReceiptsFor(runId: string, spawnedAt?: number): void {
   }
 }
 
-/** Restores Canopy asked the host for, per run, whose acknowledgements are still to come. */
+/**
+ * A restore Canopy asked the host for, per run, and until when its
+ * acknowledgement is expected: one that never comes (the terminal had already
+ * left the trash) lapses rather than swallowing someone else's later restore.
+ */
 const ownRestores = new Map<string, number>();
+const OWN_RESTORE_ACK_MS = 5_000;
 
 /** The host restored a terminal: someone else's restore spends its receipts; Canopy's own did already. */
 function onHostRestored(runId: string): void {
-  const own = ownRestores.get(runId) ?? 0;
-  if (own > 0) {
-    if (own === 1) ownRestores.delete(runId);
-    else ownRestores.set(runId, own - 1);
-    return;
-  }
+  const expected = ownRestores.get(runId);
+  ownRestores.delete(runId);
+  if (expected !== undefined && Date.now() <= expected) return;
   forgetReceiptsFor(runId);
 }
 
@@ -515,18 +517,22 @@ function leftTheTrash(): AppError {
 async function restoreThroughOwningViews(receipt: number): Promise<void> {
   pruneTrashReceipts();
   const trashed = recentlyTrashed.get(receipt);
-  recentlyTrashed.delete(receipt);
   if (!trashed) throw leftTheTrash();
   const ptyClient = requirePtyClient();
   // The same incarnation, exited or not: an agent that finished while in the
   // trash comes back as its pane would from the grid's own Undo. Checked
   // before anything else is spent, so a stale receipt costs a newer one nothing.
   const record = await ptyClient.getTerminalAsync(trashed.runId).catch(() => null);
-  if (!record || record.spawnedAt !== trashed.spawnedAt) throw leftTheTrash();
+  if (!record || record.spawnedAt !== trashed.spawnedAt) {
+    recentlyTrashed.delete(receipt);
+    throw leftTheTrash();
+  }
+  // Restored elsewhere while the host was asked: that restore spent it.
+  if (!recentlyTrashed.has(receipt)) throw leftTheTrash();
   forgetReceiptsFor(trashed.runId, trashed.spawnedAt);
   // The host's word that this restore landed is ours, not news of someone
   // else's: it must not spend a receipt for a trash made after it.
-  ownRestores.set(trashed.runId, (ownRestores.get(trashed.runId) ?? 0) + 1);
+  ownRestores.set(trashed.runId, Date.now() + OWN_RESTORE_ACK_MS);
   ptyClient.restore(trashed.runId);
   for (const view of getProjectRendererTargets(trashed.workspaceId)) {
     try {
