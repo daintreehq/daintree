@@ -166,6 +166,17 @@ describe("classifyWithCanopy", () => {
     expect(input).toMatchObject({ agent: "claude", lines: INPUT.lines });
   });
 
+  it("reads the status line without the spinner glyph and timer that tick on every read", async () => {
+    stubFetch(
+      classified({
+        ...CLASSIFIER,
+        category: "working",
+        status: "✽ Refactoring the parser… (12s · ↓ 1.2k tokens · esc to interrupt)",
+      })
+    );
+    expect((await classifyWithCanopy(INPUT)).status).toBe("Refactoring the parser…");
+  });
+
   it("keeps a question only for an ask, and holds every probability to 0-1", async () => {
     stubFetch(
       classified({

@@ -332,6 +332,7 @@ export function CanopyRow({
       tabIndex={tabbable ? 0 : -1}
       data-canopy-card=""
       data-kind={item.kind}
+      data-priority={compact || priority === null ? undefined : priority}
       data-unread={unread ? "true" : undefined}
       onFocus={() => {
         if (!isSelected) onSelect();

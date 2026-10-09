@@ -39,8 +39,78 @@ describe("prepareScreen", () => {
     expect(screen.lines).toEqual(["⏺ Done. All tests pass."]);
   });
 
-  it("keeps what the user actually typed into the box", () => {
-    expect(prepareScreen("> deploy it to staging").lines).toEqual(["> deploy it to staging"]);
+  it("leaves out a reply the user is still typing, so it is neither sent nor a new screen", () => {
+    const finished = ["⏺ All 14 tests pass.", "", "✻ Cooked for 12s · done 9:27"];
+    const plain = prepareScreen(finished.join("\n"));
+    const claude = prepareScreen(
+      [...finished, "", "─".repeat(40), "❯ fix the failing da", "─".repeat(40)].join("\n")
+    );
+    expect(claude.lines).toEqual(plain.lines);
+    expect(claude.hash).toBe(plain.hash);
+    const codex = prepareScreen(
+      [
+        "• Done.",
+        "",
+        "› fix the failing date tests",
+        "",
+        "  GPT-6.1-Sol xhigh · ~/code/recipes",
+      ].join("\n")
+    );
+    expect(codex.lines).toEqual(["• Done.", "", "GPT-6.1-Sol xhigh · ~/code/recipes"]);
+  });
+
+  it("never takes a menu's unnumbered choices for a draft", () => {
+    const hint = "Enter to confirm · Esc to cancel";
+    for (const menu of [
+      ["Do you trust this folder?", "", "Yes, I trust this folder", "> No, exit", hint],
+      ["Do you trust this folder?", "", "> Yes, I trust this folder", "No, exit", hint],
+    ]) {
+      expect(prepareScreen(menu.join("\n")).lines).toEqual(menu);
+    }
+  });
+
+  it("leaves out a draft written over several lines", () => {
+    const finished = ["⏺ All 14 tests pass.", "", "✻ Cooked for 12s · done 9:27"];
+    const plain = prepareScreen(finished.join("\n"));
+    const multiline = prepareScreen(
+      [
+        ...finished,
+        "",
+        "─".repeat(40),
+        "❯ fix the failing date tests",
+        "  and then update the changelog",
+        "─".repeat(40),
+      ].join("\n")
+    );
+    expect(multiline.lines).toEqual(plain.lines);
+    expect(multiline.hash).toBe(plain.hash);
+  });
+
+  it("strips a spinner's timer quickly, even from a long row of brackets", () => {
+    const started = performance.now();
+    prepareScreen(`⏺ ${"(1".repeat(20_000)}`);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+
+  it("keeps the request an agent echoed above its reply, and a dialog's selected option", () => {
+    expect(prepareScreen("> deploy it to staging\n⏺ Deploying now.").lines).toEqual([
+      "> deploy it to staging",
+      "⏺ Deploying now.",
+    ]);
+    expect(prepareScreen("Do you want to proceed?\n❯ 1. Yes\n  2. No").lines).toEqual([
+      "Do you want to proceed?",
+      "❯ 1. Yes",
+      "2. No",
+    ]);
+  });
+
+  it("names a working agent's step without the spinner glyph and timer that tick on every read", () => {
+    const at = (glyph: string, seconds: number) =>
+      prepareScreen(
+        `⏺ Read src/units.ts\n\n${glyph} Writing… (${seconds}s · ↓ 1.2k tokens · esc to interrupt)`
+      ).activity;
+    expect(at("✶", 3)).toBe("Writing…");
+    expect(at("✳", 41)).toBe(at("✶", 3));
   });
 
   it("collapses blank runs and trims trailing blanks", () => {

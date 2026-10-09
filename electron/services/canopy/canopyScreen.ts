@@ -34,8 +34,6 @@ const PLACEHOLDER =
 const OTHER_PLACEHOLDER =
   /^(?:>|›|❯|┃)?\s*(?:Enter @ to mention files or \/ for commands|Ask anything\.\.\.(?:\s+".*")?|Ask Vibe anything or type \/ for commands\.\.\.|Ask about your codebase)\s*$/;
 
-const AGENT_BULLET = /^(?:⏺|•|✦|●|▌|■|⎿)\s*/;
-
 /**
  * Obvious credentials, so the screen that leaves the machine carries none of
  * them. A best-effort net, not a guarantee: anything shaped like a known key
@@ -327,6 +325,66 @@ export function joinWrappedRows(rows: readonly string[], cols: number | undefine
   return out;
 }
 
+/** A row of the agent's input box with something typed in it. */
+const INPUT_ROW = /^(?:>|›|❯)\s+\S/;
+/** A dialog's selected option, which some agents mark with the same glyph. */
+const MENU_OPTION = /^(?:>|›|❯)\s*\d+[.)]\s/;
+/** A status footer an agent draws under its input box: "GPT-6.1-Sol xhigh · ~/code". */
+const FOOTER_ROW = /^[^✻✶✢✳✽⏺•●✦*].*\s·\s/;
+/** The keys a dialog names under its choices: "Enter to confirm · Esc to cancel". */
+const DIALOG_HINT =
+  /\b(?:enter|esc|tab|space)\b[^·]*\bto\b|\bto (?:confirm|cancel|select|amend)\b/i;
+/** A row the agent drew itself, or one of a menu's choices: never part of a draft. */
+const NOT_DRAFT = /^(?:[⏺•●✦⎿└■✻✶✢✳✽✺]|(?:>|›|❯)\s|\d+[.)]\s)/;
+/** The most rows a draft takes before it is more likely the agent's own output. */
+const MAX_DRAFT_ROWS = 6;
+
+/**
+ * Takes out a reply the user is typing in the agent's input box: a block that
+ * opens with a prompt glyph after a blank row, runs on for a few rows of plain
+ * text (a draft written over several lines), and has nothing under it but the
+ * agent's status footer. It is the user's words, not the agent's: read as part
+ * of the screen, a half-typed "fix the tests" turned a finished turn into a
+ * working one and rewrote its card, and it changes with every key, so it is
+ * neither sent nor part of the screen's identity. A menu is never taken for
+ * one: no numbered choice, no row the agent drew, no dialog's key hints.
+ */
+function dropDraft(lines: string[]): void {
+  let end = lines.length - 1;
+  let footers = 0;
+  while (end >= 0) {
+    const line = lines[end]!;
+    if (line === "") end--;
+    else if (
+      footers < 2 &&
+      FOOTER_ROW.test(line) &&
+      !DIALOG_HINT.test(line) &&
+      !INPUT_ROW.test(line)
+    ) {
+      footers++;
+      end--;
+    } else break;
+  }
+  if (end < 0) return;
+  let start = end;
+  while (start > 0 && lines[start - 1] !== "" && end - start < MAX_DRAFT_ROWS) start--;
+  // The input box sits under the agent's output, a blank row above it: a block
+  // at the top of what was read is history, not a draft.
+  if (start === 0 || lines[start - 1] !== "") return;
+  const head = lines[start]!;
+  if (!INPUT_ROW.test(head) || MENU_OPTION.test(head) || DIALOG_HINT.test(head)) return;
+  for (let row = start + 1; row <= end; row++) {
+    const line = lines[row]!;
+    if (NOT_DRAFT.test(line) || DIALOG_HINT.test(line)) return;
+  }
+  lines.splice(start, end - start + 1);
+  // Blank runs are already one row; the draft's going must not make two.
+  if (start > 0 && lines[start - 1] === "" && (start === lines.length || lines[start] === "")) {
+    lines.splice(start - 1, 1);
+  }
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+}
+
 export function prepareScreen(
   raw: string,
   /** The pane's width, to put wrapped rows back together; absent, rows stay as drawn. */
@@ -342,6 +400,7 @@ export function prepareScreen(
     lines.push(line);
   }
   while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  dropDraft(lines);
   const text = redactSecrets(lines.join("\n"));
   const hash = createHash("sha1").update(foldTicking(text)).digest("hex");
   return {
@@ -356,11 +415,31 @@ export function prepareScreen(
 
 function findActivity(lines: readonly string[]): string | null {
   for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]!.trim();
+    const line = cleanStatusLine(lines[i]!);
     if (line.length < 4) continue;
-    return redactSecrets(line.replace(AGENT_BULLET, "")).slice(0, 160);
+    return redactSecrets(line).slice(0, 160);
   }
   return null;
 }
+
+/**
+ * A screen row as a row of the inbox shows it: the agent's bullet, a spinner
+ * glyph and its ticking timer taken off, the words kept verbatim. Left on, the
+ * glyph and the seconds changed the row's words on every read of a working agent.
+ */
+export function cleanStatusLine(line: string): string {
+  let text = line.replace(/^\s*(?:[⏺•●✦⎿└■✻✶✢✳✽✺·*▌]\s*)+/, "");
+  // Only the row's last parenthesis, and only a short one, is looked at: an
+  // unanchored search tried every "(" on a long row, each against the rest.
+  const open = text.lastIndexOf("(");
+  if (open !== -1 && text.length - open <= TIMER_TAIL_CHARS && TIMER_TAIL.test(text.slice(open))) {
+    text = text.slice(0, open);
+  }
+  return text.trim();
+}
+
+/** A spinner's trailing timer and key hint: "(12s · ↓ 1.2k tokens · esc to interrupt)". */
+const TIMER_TAIL = /^\((?:\d[^)]*)?(?:esc to \w+|thinking|thought for|ctrl\+\w to \w+)[^)]*\)\s*$/;
+const TIMER_TAIL_CHARS = 160;
 
 export { isSecretPrompt } from "../../../shared/utils/secretPrompt.js";

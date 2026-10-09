@@ -190,6 +190,13 @@ export interface CanopyCard {
   stalledSince: number | null;
   /** When the screen this card was built from was read (epoch ms). */
   observedAt: number;
+  /**
+   * What Daintree observed of the run when it was read. A state change after
+   * the read that only brings Daintree in line with the card — it often sees
+   * an agent stop on a dialog seconds after the screen shows it — leaves the
+   * card current.
+   */
+  observedWhenRead?: { agentState: string | null; waitingReason: string | null };
 }
 
 /** A terminal the canopy panel is showing live: where its stream starts. */
@@ -312,6 +319,11 @@ export interface CanopySnapshot {
   lastError: string | null;
   /** Runs whose last read failed; their cards, if any, are from an earlier read. */
   failedRuns: string[];
+  /**
+   * Runs read with no panel open whose words the next open writes: their
+   * cards, and so their place in the list, are about to change.
+   */
+  wordsDue?: string[];
 }
 
 /**

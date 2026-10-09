@@ -1,4 +1,5 @@
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import { observedCanopyKind, observedCaughtUp } from "@shared/utils/canopyObservedKind";
 import {
   CANOPY_ATTENTION_CATEGORIES,
   type CanopyCard,
@@ -62,19 +63,7 @@ const KIND_RANK: Record<CanopyCategory, number> = {
  * has read the screen — so the panel lays out at once instead of waiting.
  */
 export function observedKind(run: FleetRunRow): CanopyCategory {
-  switch (run.agentState) {
-    case "waiting":
-      if (run.waitingReason === "approval") return "approval";
-      if (run.waitingReason === "error") return "error";
-      return "question";
-    case "working":
-    case "directing":
-      return "working";
-    case "completed":
-      return "finished";
-    default:
-      return "idle";
-  }
+  return observedCanopyKind(run);
 }
 
 /**
@@ -95,6 +84,13 @@ function currentCard(
   // Read from a terminal that has since been respawned under the same id.
   if (card.spawnedAt !== run.spawnedAt) return { card: null, stale: false };
   if (run.since !== undefined && run.since > card.observedAt + STALE_GRACE_MS) {
+    // Daintree's own eye only caught up with what the reading saw: the card
+    // still holds, and its facts and choices stay where they are. A state the
+    // reading already saw, reached again, is a new episode.
+    const then = card.observedWhenRead;
+    if (then !== undefined && observedCaughtUp(card.category, then, run, card.observedAt)) {
+      return { card, stale: false };
+    }
     const moved = observedKind(run) !== card.category;
     return {
       card: {
@@ -167,14 +163,16 @@ export function itemIsBusy(item: CanopyItem): boolean {
 
 /**
  * A busy agent's claim on the user grows the longer it goes unlooked-at: from
- * the floor of a run working normally, three points a minute, to a ceiling
- * that passes routine finished work (25–44) but never anything waiting on a
- * decision. Going quiet while working is Daintree's own stall observation, and
- * ranks it above anything finished.
+ * the floor of a run working normally, fifteen points every five minutes, to a
+ * ceiling that passes routine finished work (25–44) but never anything waiting
+ * on a decision. In steps rather than a point at a time, so the number beside
+ * it doesn't tick up while the user reads. Going quiet while working is
+ * Daintree's own stall observation, and ranks it above anything finished.
  */
 export const CHECK_IN_FLOOR = 10;
 export const CHECK_IN_CEILING = 55;
-const CHECK_IN_POINTS_PER_MINUTE = 3;
+const CHECK_IN_STEP = 15;
+const CHECK_IN_STEP_MINUTES = 5;
 export const QUIET_PRIORITY = 60;
 /** Below this long unseen, a busy row doesn't say so: it is not why it ranks where it does. */
 export const UNSEEN_SHOWN_AFTER_MS = 5 * 60_000;
@@ -197,11 +195,8 @@ export function itemStalled(item: CanopyItem): boolean {
 
 function checkInPriority(item: CanopyItem, nowMs: number): number {
   if (itemStalled(item)) return QUIET_PRIORITY;
-  const minutes = unseenFor(item, nowMs) / 60_000;
-  return Math.min(
-    CHECK_IN_CEILING,
-    CHECK_IN_FLOOR + Math.floor(minutes * CHECK_IN_POINTS_PER_MINUTE)
-  );
+  const steps = Math.floor(unseenFor(item, nowMs) / (CHECK_IN_STEP_MINUTES * 60_000));
+  return Math.min(CHECK_IN_CEILING, CHECK_IN_FLOOR + steps * CHECK_IN_STEP);
 }
 
 /** The readers' priority, or what Daintree observed before a read. */
@@ -233,8 +228,13 @@ export function itemPriority(item: CanopyItem, nowMs: number): number {
  * unseen, which is Daintree's own observation and needs no reading.
  */
 export function shownPriority(item: CanopyItem, nowMs: number): number | null {
+  // Answered: out of the queue at 0 until it says something new, whatever
+  // Daintree sees it doing meanwhile.
+  if (itemHandled(item)) return 0;
   const card = item.card;
-  const read = card === null || item.stale || card.priorityFromEarlierRead ? null : card.priority;
+  // A reading stands until the next replaces it while the run stays the kind
+  // it was read as; once Daintree sees it change kind, the number goes.
+  const read = card === null || card.priorityFromEarlierRead ? null : card.priority;
   // Daintree's own observation needs no reading behind it.
   if (itemAwaitsPermission(item)) return Math.max(read ?? 0, PERMISSION_FLOOR);
   if (!itemIsBusy(item) || itemHandled(item)) return read;

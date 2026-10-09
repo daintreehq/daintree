@@ -33,6 +33,7 @@ import {
 import { digestHistory, type CanopyDigest } from "./canopyDigest.js";
 import type { TerminalAnswer } from "../../../shared/utils/terminalSubmission.js";
 import { EMPTY_GLANCE, glanceScreen } from "./canopyGlance.js";
+import { observedCaughtUp } from "../../../shared/utils/canopyObservedKind.js";
 
 /** Screen rows read per run — the tail the cards are written from. */
 export const CANOPY_SCREEN_LINES = 50;
@@ -53,6 +54,12 @@ export const CANOPY_REJUDGE_AFTER_MS = 60_000;
  * are described on every change, as before — they are what the user acts on.
  */
 export const CANOPY_PROGRESS_DESCRIBE_MS = 15_000;
+/**
+ * The least time between two reads of a run whose screen keeps changing while
+ * Daintree sees it in the same state: what the user sees holds still between
+ * reads, and a busy agent's output is not sent on every poll.
+ */
+export const CANOPY_REREAD_MS = 10_000;
 /**
  * How often an open panel re-reads every screen. Reading a screen is local and
  * cheap; only the ones whose tail changed since their card was written go on to
@@ -163,6 +170,8 @@ export interface CanopyServiceDeps {
   closeGraceMs?: number;
   /** How often an open panel re-reads screens, over `CANOPY_POLL_MS`; 0 never polls. */
   pollMs?: number;
+  /** The least time between two reads of a busy run's changing screen; see `CANOPY_REREAD_MS`. */
+  rereadMs?: number;
   /** How long after an observed state change an open panel scans; see `CANOPY_STATE_CHANGE_SCAN_MS`. */
   stateChangeScanMs?: number;
   /** How often screens are read with no panel open, over `CANOPY_BACKGROUND_POLL_MS`; 0 reads nothing then. */
@@ -265,6 +274,8 @@ interface RunEntry {
   retryAt: number;
   /** When the classifier last read this screen (epoch ms), 0 before it has. */
   readAt: number;
+  /** What Daintree observed of the run at that read (`observedKey`). */
+  readState: string;
   /**
    * The last read of this run failed, and where; its card, if any, is from
    * before. Each stage's success clears only its own failure.
@@ -295,7 +306,15 @@ interface RunEntry {
    * the next one looks for what scrolled away since, and an unchanged screen
    * shows no new failed run.
    */
-  lastDescribed: { lines: string[]; hash: string; failureRepeats: number } | null;
+  lastDescribed: {
+    lines: string[];
+    hash: string;
+    failureRepeats: number;
+    /** What the classifier made of the screen the words were written for (`verdictOf`). */
+    verdict: string;
+    /** The choices those words offered, for a re-read that keeps them. */
+    options: string[];
+  } | null;
   /** The urgent ask the classifier read on the current screen; null when it read none. */
   ask: CanopyAsk | null;
   /** What the newest screen read says at a glance; null before one was read. */
@@ -330,6 +349,8 @@ export class CanopyService {
   private active = false;
   private scanning: Promise<void> | null = null;
   private rescanRequested = false;
+  /** The next scan reads every changed screen, held or not: the user pressed Refresh. */
+  private forceNextScan = false;
   private inFlight = 0;
   private refreshedAt: number | null = null;
   private broadcastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -395,6 +416,10 @@ export class CanopyService {
     return this.deps.pollMs ?? CANOPY_POLL_MS;
   }
 
+  private get rereadMs(): number {
+    return this.deps.rereadMs ?? CANOPY_REREAD_MS;
+  }
+
   private get backgroundPollMs(): number {
     return this.deps.backgroundPollMs ?? CANOPY_BACKGROUND_POLL_MS;
   }
@@ -431,7 +456,9 @@ export class CanopyService {
     const dispositions: CanopyDisposition[] = [];
     const seen: CanopySeen[] = [];
     const glances: CanopyRunGlance[] = [];
+    const wordsDue: string[] = [];
     for (const [runId, entry] of this.entries) {
+      if (entry.wordsWaiting !== null) wordsDue.push(runId);
       if (entry.seenAt !== null) seen.push({ runId, spawnedAt: entry.spawnedAt, at: entry.seenAt });
       if (entry.card === null && entry.glance !== null) {
         glances.push({ runId, spawnedAt: entry.spawnedAt, glance: entry.glance });
@@ -465,6 +492,7 @@ export class CanopyService {
       failedRuns: [...this.entries]
         .filter(([, entry]) => entry.failure !== null)
         .map(([runId]) => runId),
+      ...(wordsDue.length > 0 ? { wordsDue } : {}),
     };
   }
 
@@ -615,6 +643,7 @@ export class CanopyService {
    */
   async refresh(): Promise<void> {
     const behind = this.scanning !== null;
+    this.forceNextScan = true;
     await this.scan();
     // A scan already under way when the press came ends first; the one asked
     // for follows straight after it. Only that one: later rescans are not
@@ -841,6 +870,8 @@ export class CanopyService {
     this.pruneDeparted(fleet);
     const scope = this.scope;
     const runs = scope === null ? fleet : fleet.filter((run) => run.workspaceId === scope);
+    const force = this.forceNextScan;
+    this.forceNextScan = false;
     const epoch = this.epoch;
     // A disposition set after this scan began acts on screens read later; what
     // this scan saw predates it.
@@ -930,20 +961,48 @@ export class CanopyService {
             this.refreshActivity(entry, screen, run);
             return;
           }
-          const moved = entry.readKey !== key;
+          // A busy run read lately, that Daintree still sees as it did then
+          // and whose screen still shows it at work: its next screen waits for
+          // the floor. An agent that stops — its working line gone, a dialog in
+          // its place — is read at once, before Daintree's own state catches
+          // up, as is an answer setting it working, and everything after
+          // Refresh. A waiting run is read at once whenever its screen moves:
+          // a dialog replaced by another must never wear the last one's command
+          // and choices.
+          if (
+            !force &&
+            isBusy(run) &&
+            showsWork(screen) &&
+            entry.card !== null &&
+            entry.readState === observedKey(run) &&
+            this.now() - entry.readAt < this.rereadMs
+          ) {
+            this.refreshActivity(entry, screen, run);
+            return;
+          }
+          // Daintree only caught up with what the card already says — the
+          // same screen, in a state that now matches a card read while it
+          // still lagged — is the same prompt, not a new one.
+          const content = `${screen.hash}:${run.spawnedAt}`;
+          const caughtUp =
+            entry.readKey !== null &&
+            entry.readKey.startsWith(`${content}:`) &&
+            entry.card !== null &&
+            stateCaughtUp(entry.card, run);
+          const moved = entry.readKey !== key && !caughtUp;
           entry.readKey = key;
           if (moved) entry.revision++;
           // Failing lately: wait out the backoff rather than ask again on every
           // poll. The card still says its screen has moved on.
           if (this.now() < entry.retryAt) {
-            if (moved) this.markMoved(entry);
+            if (moved) this.markMoved(entry, true);
             this.refreshActivity(entry, screen, run);
             return;
           }
           entry.hash = key;
           entry.seq++;
           this.supersedeCard(entry);
-          this.markMoved(entry);
+          if (moved) this.markMoved(entry);
           passes.push(this.pass(run, entry, epoch, screen, readMark));
         })
       )
@@ -989,19 +1048,24 @@ export class CanopyService {
   }
 
   /**
-   * The screen moved: its prompt and menu are gone from it, and words read off
-   * the old screen are from an earlier read until the new one lands — or for
-   * good, if that read fails.
+   * The screen moved on from the one the card read. Its question and choices
+   * go at once: a dialog that changed must never offer the last one's answers.
+   * Its words, facts and priority stay until the next reading replaces them —
+   * cleared first, they blinked out and back a second later — unless that
+   * reading is put off (`wordsOld`), when the words say they are from before.
    */
-  private markMoved(entry: RunEntry): void {
+  private markMoved(entry: RunEntry, wordsOld = false): void {
     if (!entry.card) return;
     entry.card = {
       ...entry.card,
       question: null,
       options: [],
-      // Streamed words a card never finished are about the old screen too.
-      wordsFromEarlierRead: entry.card.stage === "described" || entry.card.headline !== null,
-      priorityFromEarlierRead: true,
+      ...(wordsOld
+        ? {
+            // Streamed words a card never finished are about the old screen too.
+            wordsFromEarlierRead: entry.card.stage === "described" || entry.card.headline !== null,
+          }
+        : {}),
     };
   }
 
@@ -1079,6 +1143,11 @@ export class CanopyService {
     const sameScreen =
       entry.card?.spawnedAt === run.spawnedAt && entry.card.revision === entry.revision;
     const observedAt = (rejudge || sameScreen) && entry.card ? entry.card.observedAt : this.now();
+    // What Daintree saw at that read goes with it.
+    const observedWhenRead =
+      (rejudge || sameScreen) && entry.card?.observedWhenRead
+        ? entry.card.observedWhenRead
+        : { agentState: run.agentState ?? null, waitingReason: run.waitingReason ?? null };
     const signal = this.abort.signal;
 
     entry.pending = true;
@@ -1101,6 +1170,7 @@ export class CanopyService {
       return;
     }
     entry.readAt = this.now();
+    entry.readState = observedKey(run);
     if (entry.failure?.stage === "classifier") entry.failure = null;
     this.transientSince.delete(`${run.runId}:classifier`);
 
@@ -1126,16 +1196,30 @@ export class CanopyService {
     // about work: words about a prompt it has left are never fresh progress,
     // and the readers telling working from running apart is no new state.
     const progress = !needs && (busyCategory(classified.category) || isBusy(run));
+    // Judged again on an unchanged screen, a run still busy has nothing new
+    // for words to say: the describer would only reword it.
     const progressFresh =
       sameRun &&
       busyCategory(previous.wordsCategory) &&
-      this.now() - entry.describedAt < CANOPY_PROGRESS_DESCRIBE_MS;
+      (this.now() - entry.describedAt < CANOPY_PROGRESS_DESCRIBE_MS ||
+        (rejudge &&
+          previous.category === classified.category &&
+          entry.lastDescribed?.hash === screen.hash));
+    // The words already describe this very screen and verdict: a re-read that
+    // only caught Daintree's state up with what the screen showed, or judged an
+    // unchanged one the same, gives the describer nothing to add but rewording.
+    const wordsCurrent =
+      sameRun &&
+      previous.stage === "described" &&
+      !previous.describing &&
+      entry.lastDescribed?.hash === screen.hash &&
+      entry.lastDescribed.verdict === verdictOf(classified, run);
     // A reply holds the run's priority down, not its words: the work the reply
     // set going is read like any other. The screen it answered is not read
     // again, and an archived run is read for nothing until it comes back.
-    const wordsDue = needs
-      ? !aside
-      : entry.disposition?.kind !== "archived" && progress && !progressFresh;
+    const wordsDue =
+      !wordsCurrent &&
+      (needs ? !aside : entry.disposition?.kind !== "archived" && progress && !progressFresh);
     // Words are written for an open panel only: the background watch is the
     // service's light classifier read, leaves the words due, and the open
     // reads the run again (`wordsDueOnOpen`).
@@ -1146,7 +1230,7 @@ export class CanopyService {
     // put aside keeps the words it had, as archived mail does. A run the
     // describer is skipped for otherwise must not wear words written about an
     // earlier screen.
-    const keepWords = (wordsDue || aside || (progress && progressFresh)) && sameRun;
+    const keepWords = (wordsDue || aside || wordsCurrent || (progress && progressFresh)) && sameRun;
     const sameState = keepWords && previous.category === classified.category;
     // The describer's score outlives a screen that moved without leaving its
     // state — a recap line drawn under a finished turn, a dialog redrawn —
@@ -1154,16 +1238,19 @@ export class CanopyService {
     // in meanwhile moved a run in and out of "needs you" as the two readings
     // took turns. A busy run's re-read is the classifier's to judge (stuck or
     // not), so only a re-judge with the panel open keeps its score.
-    // An ask is not kept: a new approval or question in the same state may be
-    // a different one, and the classifier's own ask anchor stands meanwhile.
+    // An ask keeps it only while its new card is on its way: a new approval or
+    // question in the same state may be a different one, so the card replaces
+    // the score once it lands, rather than the classifier's anchor and then the
+    // card each moving it. With no card coming the anchor stands.
     const keepScore =
       sameState &&
       previous.attentionScore !== null &&
-      ((rejudge && this.active) ||
+      (wordsCurrent ||
+        (rejudge && this.active) ||
         (previous.stage === "described" &&
           !busyCategory(classified.category) &&
-          classified.category !== "approval" &&
-          classified.category !== "question"));
+          (describe ||
+            (classified.category !== "approval" && classified.category !== "question"))));
     entry.card = {
       runId: run.runId,
       spawnedAt: run.spawnedAt,
@@ -1177,8 +1264,13 @@ export class CanopyService {
       // A re-judged screen is the one the words were kept for, so they are as
       // current — or as old — as they were before it. Re-judged in the
       // background, they are due again, and an open reads the run afresh.
+      // Kept for the same state while new words are on their way, they stand
+      // as they are until those replace them whole: flagged old meanwhile, the
+      // row dropped its facts and choices for the second the describer took.
       wordsFromEarlierRead:
         keepWords &&
+        !wordsCurrent &&
+        !(sameState && describe) &&
         (rejudge && this.active
           ? previous.wordsFromEarlierRead
           : previous.stage === "described" || previous.headline !== null),
@@ -1211,7 +1303,12 @@ export class CanopyService {
       // Only the old options this screen still draws: a menu that moved on
       // must not keep offering the last one's answers. A run read in the
       // background shows the options written the last time a panel was open.
-      options: sameState ? optionsInScreenOrder(previous.options, screen.text) : [],
+      options: sameState
+        ? optionsInScreenOrder(
+            wordsCurrent ? entry.lastDescribed!.options : previous.options,
+            screen.text
+          )
+        : [],
       secretPrompt: isSecretPrompt(classified.question),
       activity: screen.activity,
       glance: glanceScreen(screen.lines),
@@ -1219,6 +1316,7 @@ export class CanopyService {
       contextLeft: screen.contextLeft,
       stalledSince: this.stalledSince(run, entry),
       observedAt,
+      observedWhenRead,
     };
     const kind = blockedOn(classified, run);
     entry.ask = kind === null ? null : { kind, question: classified.question };
@@ -1321,6 +1419,11 @@ export class CanopyService {
         lines: screen.lines,
         hash: screen.hash,
         failureRepeats: described.failureRepeats ?? 0,
+        verdict: verdictOf(classified, run),
+        options:
+          described.category === "approval"
+            ? optionsInScreenOrder(described.options, screen.text)
+            : [],
       };
       // A reading that wrote no note keeps the last one: losing the goal to one
       // terse reply is worse than a note a reading old.
@@ -1409,18 +1512,17 @@ export class CanopyService {
     // streamed in, they changed headline, then summary, then everything again.
     // Only a row with nothing to say yet shows words as they come.
     if (!entry.cardStreams) return;
-    const next = { ...card };
-    if (partial.headline !== undefined) {
-      next.headline = partial.headline;
-      next.wordsCategory = partial.category ?? card.wordsCategory;
-      next.wordsFromEarlierRead = false;
-      // A summary written about another state leaves with that state's headline.
-      if (partial.summary === undefined && next.wordsCategory !== card.wordsCategory) {
-        next.summary = null;
-      }
-    }
-    if (partial.summary !== undefined) next.summary = partial.summary;
-    entry.card = next;
+    // Headline and summary land together, once the summary has begun: one
+    // change to the row rather than one per field.
+    if (partial.headline === undefined || partial.summary === undefined) return;
+    if (card.headline === partial.headline && card.summary === partial.summary) return;
+    entry.card = {
+      ...card,
+      headline: partial.headline,
+      summary: partial.summary,
+      wordsCategory: partial.category ?? card.wordsCategory,
+      wordsFromEarlierRead: false,
+    };
     this.scheduleBroadcast();
   }
 
@@ -1603,6 +1705,18 @@ export class CanopyService {
     }
     // A read kept for the panel is older than this failure.
     entry.wordsWaiting = null;
+    // The screen moved on from the card's and no reading of the new one is
+    // coming soon: its words say they are from before. Its priority stands.
+    const card = entry.card;
+    if (
+      card !== null &&
+      (card.revision !== entry.revision ||
+        (card.stage === "described" &&
+          entry.lastDescribed !== null &&
+          entry.lastDescribed.hash !== entry.contentHash))
+    ) {
+      this.markMoved(entry, true);
+    }
     // Each failure in a row doubles the wait before this run is tried again.
     entry.failures++;
     entry.retryAt = this.now() + failureBackoffMs(entry.failures);
@@ -1709,6 +1823,7 @@ function newEntry(spawnedAt: number): RunEntry {
     failures: 0,
     retryAt: 0,
     readAt: 0,
+    readState: "",
     failure: null,
     describedAt: 0,
     seenAt: null,
@@ -1818,6 +1933,36 @@ function returnsToInbox(
 
 function busyCategory(category: CanopyCategory | null): boolean {
   return category === "working" || category === "running";
+}
+
+/**
+ * What a reading made of a screen, as far as its words go: its state, whether
+ * it needs the user, and whether a busy run looks stuck. Not the finer score:
+ * on a screen that has not moved, how notable it reads drifts as it ages, and
+ * that is no reason to write its words again.
+ */
+function verdictOf(classified: ClassifierResult, run: FleetRunRow): string {
+  const stuck = busyCategory(classified.category) && classified.attention >= STUCK_ATTENTION;
+  return `${classified.category}:${needsAttention(classified.attention)}:${stuck}:${blockedOn(classified, run) !== null}`;
+}
+
+/** Daintree now sees the run as the card read it, where at the read it still saw otherwise. */
+function stateCaughtUp(card: CanopyCard, run: FleetRunRow): boolean {
+  const then = card.observedWhenRead;
+  return then !== undefined && observedCaughtUp(card.category, then, run, card.observedAt);
+}
+
+/** A busy agent's working line, as Claude Code, Codex and Gemini draw it under their output. */
+const WORKING_LINE = /esc to interrupt|\(esc to cancel, \d/i;
+
+/** The bottom of the screen still shows the agent at work. */
+function showsWork(screen: PreparedScreen): boolean {
+  return screen.lines.slice(-6).some((line) => WORKING_LINE.test(line));
+}
+
+/** What Daintree observes of a run, as far as reading it goes: its state and why it waits. */
+function observedKey(run: FleetRunRow): string {
+  return `${run.agentState ?? ""}:${run.waitingReason ?? ""}`;
 }
 
 function isBusy(run: FleetRunRow): boolean {

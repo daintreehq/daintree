@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { CanopyOrder } from "@/components/Canopy/canopyOrder";
 import {
   CANOPY_URGENT_PRIORITY,
   type CanopyCard,
@@ -49,14 +50,7 @@ interface CanopyState {
 
 export type CanopyScope = "all" | "project";
 
-/** One scope's order: each scope ranks its own runs, so switching never buries another's. */
-export interface CanopyOrder {
-  ids: readonly string[];
-  /** The snapshot's `refreshedAt` this order was ranked for. */
-  rankedFor: number | null;
-  /** The runs that were urgent when it was ranked: a run urgent since is placed at once. */
-  urgent: readonly string[];
-}
+export type { CanopyOrder };
 
 const SCOPE_STORAGE_KEY = "daintree-canopy-scope";
 export const CANOPY_ACKNOWLEDGED_STORAGE_KEY = "daintree-canopy-acknowledged";
