@@ -2,6 +2,7 @@ import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import { observedCanopyKind, observedCaughtUp } from "@shared/utils/canopyObservedKind";
 import {
   CANOPY_ATTENTION_CATEGORIES,
+  CANOPY_NEEDS_YOU_PRIORITY,
   type CanopyCard,
   type CanopyCategory,
   type CanopyDisposition,
@@ -457,7 +458,7 @@ export function itemNeedsAttention(item: CanopyItem): boolean {
 }
 
 /** The lowest score band that leaves the user something to do: loose ends on a finished turn. */
-export const NEEDS_YOU_FLOOR = 55;
+export const NEEDS_YOU_FLOOR = CANOPY_NEEDS_YOU_PRIORITY;
 
 /**
  * The inbox: every run in one ranked list — waiting, finished and working alike,

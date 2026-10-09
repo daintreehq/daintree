@@ -438,13 +438,18 @@ describe("CanopyRow", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("keeps the plain waiting ring for a finished run, and for words from an earlier read", () => {
+  it("keeps the plain waiting ring for a finished run", () => {
     expect(renderRow(itemFor("finished")).container.querySelector("[data-asking]")).toBeNull();
+  });
+
+  it("keeps the question mark while new words for a question read just now are on their way", () => {
+    // The classifier read this screen as asking; only the words are older.
+    // Dropping the mark until they land made it blink off and on.
     expect(
       renderRow(itemFor("question", { wordsFromEarlierRead: true })).container.querySelector(
         "[data-asking]"
       )
-    ).toBeNull();
+    ).not.toBeNull();
   });
 
   it("drops the question mark once the screen moved and has not been read again", () => {
