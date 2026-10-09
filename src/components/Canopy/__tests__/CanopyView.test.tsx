@@ -1039,6 +1039,55 @@ describe("CanopyView", () => {
     expect(canopy.untrash).toHaveBeenCalledWith(7);
   });
 
+  it("says nothing needs you only once the open's readings are in, and qualifies it when reads fail", async () => {
+    const working = {
+      snapshot: {
+        runs: [run("working", { agentState: "working", since: NOW - 30_000 })],
+        changedAt: NOW,
+        degraded: false,
+        lastSuccessfulAt: NOW,
+      },
+    };
+    useFleetSnapshotStore.setState(working);
+    // Opening, with words still owed for the working run.
+    const owed = { ...canopySnapshot, wordsDue: ["working"] };
+    useCanopyStore.setState({ snapshot: owed });
+    installElectron(owed);
+    const first = render(<CanopyView />);
+    await frames();
+    expect(first.container.ownerDocument.body.textContent).toContain("Checking who needs you…");
+    first.unmount();
+
+    useCanopyStore.setState({ isOpen: true });
+    useFleetSnapshotStore.setState(working);
+    const failing = { ...canopySnapshot, lastError: "Couldn't reach Canopy" };
+    useCanopyStore.setState({ snapshot: failing });
+    installElectron(failing);
+    render(<CanopyView />);
+    await frames();
+    expect(document.body.textContent).toContain("Nothing needs you that Canopy could read");
+  });
+
+  it("counts as seen only the urgent asks it shows, not those the Unread filter hides", async () => {
+    // "working" reads as urgent, but it has nothing unread; "asking" has.
+    const snap = {
+      ...canopySnapshot,
+      cards: [stuckCard("working")],
+      reads: [unreadMark("asking", 1)],
+    };
+    useCanopyStore.setState({ snapshot: snap, unreadOnly: true, acknowledged: {} });
+    installElectron(snap);
+    render(<CanopyView />);
+    await frames();
+    expect(cards(document.body).map((card) => card.id)).not.toContain("canopy-card-working");
+    expect(useCanopyStore.getState().acknowledged.working).toBeUndefined();
+
+    act(() => useCanopyStore.getState().setUnreadOnly(false));
+    await frames();
+    // Shown now: its ask leaves the toolbar badge.
+    expect(useCanopyStore.getState().acknowledged.working).toBe(`${NOW - 3_600_000}:2`);
+  });
+
   it("lists a working run with the rest and lands on the top of the list", async () => {
     useFleetSnapshotStore.setState({
       snapshot: {

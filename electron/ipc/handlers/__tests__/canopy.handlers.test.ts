@@ -98,7 +98,7 @@ import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
 import { events } from "../../../services/events.js";
 import { getDefaultPanelTitle } from "../../../../shared/config/panelKindRegistry.js";
-import { registerCanopyHandlers } from "../canopy.js";
+import { canopyPanelsListing, registerCanopyHandlers } from "../canopy.js";
 import { CANOPY_METHOD_CHANNELS } from "../canopy.preload.js";
 
 type Handler = (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>;
@@ -443,6 +443,17 @@ describe("canopy IPC", () => {
     });
     // Nothing was made to show it: no service, so nothing listening to terminals.
     expect(ptyClient.on).not.toHaveBeenCalled();
+  });
+
+  it("counts only panels that list a run's project as in front of its ask", async () => {
+    const all = fakeSender(21);
+    const elsewhere = fakeSender(22);
+    await invoke(CANOPY_METHOD_CHANNELS.setActive, all, true);
+    await invoke(CANOPY_METHOD_CHANNELS.setActive, elsewhere, true);
+    await invoke(CANOPY_METHOD_CHANNELS.setScope, elsewhere, "project-2");
+    // A panel scoped to another project hides project-1's ask from no one.
+    expect(canopyPanelsListing("project-1")).toEqual([21]);
+    expect(canopyPanelsListing("project-2").sort()).toEqual([21, 22]);
   });
 
   it("wakes the service when a panel opens on Canopy turned on, and not before", async () => {
