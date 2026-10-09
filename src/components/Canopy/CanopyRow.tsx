@@ -467,7 +467,10 @@ export function CanopyRow({
             <span
               className={cn(
                 "flex shrink-0 items-center gap-1.5 text-xs leading-4 text-text-secondary tabular-nums",
-                onArchive && "transition-opacity duration-150 group-hover/row:opacity-0"
+                // Faded, it still sits over the archive button that takes its
+                // place: it lets the pointer through, or the click lands on it.
+                onArchive &&
+                  "transition-opacity duration-150 group-hover/row:pointer-events-none group-hover/row:opacity-0"
               )}
             >
               <ProgressBar value={progress.value} label={progress.spoken} className="w-10" />
