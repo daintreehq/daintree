@@ -23,6 +23,7 @@ import type {
   PersistableFlowStatus,
 } from "@/types";
 import { cn } from "@/lib/utils";
+import { reportCanopySent } from "@/lib/canopySeen";
 import { BANNER_ENTER_DURATION, BANNER_EXIT_DURATION } from "@/lib/animationUtils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
@@ -1697,6 +1698,7 @@ function TerminalPaneComponent({
                     onSend={({ trackerData, text, imagePaths }) => {
                       if (!isInputLocked && !isRestarting) {
                         terminalInstanceService.notifyUserInput(id);
+                        reportCanopySent(id);
                         // submit now rejects when the PTY is gone (#8706); the
                         // single-pane path has no recovery UI for that, so
                         // swallow to log instead of leaking an unhandled
@@ -1714,6 +1716,7 @@ function TerminalPaneComponent({
                     onSendKey={(key) => {
                       if (!isInputLocked && !isRestarting) {
                         terminalInstanceService.notifyUserInput(id);
+                        if (key === "enter") reportCanopySent(id);
                         terminalClient.sendKey(id, key);
                       }
                     }}

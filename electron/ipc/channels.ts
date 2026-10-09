@@ -268,6 +268,7 @@ export const CHANNELS = {
   CANOPY_SET_READ: "canopy:set-read",
   CANOPY_MARK_ALL_READ: "canopy:mark-all-read",
   CANOPY_RESTORE_READS: "canopy:restore-reads",
+  CANOPY_NOTE_SENT: "canopy:note-sent",
   CANOPY_SET_SCOPE: "canopy:set-scope",
   CANOPY_RUN_BRANCH: "canopy:run-branch",
   CANOPY_WATCH_TERMINAL: "canopy:watch-terminal",

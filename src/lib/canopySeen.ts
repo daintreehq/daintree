@@ -46,6 +46,28 @@ export function reportCanopySeen(
   markSeen(runId, looking, place).catch(() => {});
 }
 
+/** Sends to one run closer together than this are one report. */
+const SENT_COALESCE_MS = 1_000;
+const lastSentInput = new Map<string, number>();
+
+/**
+ * Tells main the user sent this run something from its pane — Enter typed in
+ * it, or its composer — so the work it starts is theirs rather than news.
+ * Called only from those input entry points, never on behalf of an action, a
+ * broadcast or a plugin: that is the whole of the signal.
+ */
+export function reportCanopySent(runId: string): void {
+  const noteSent = window.electron?.canopy?.noteSent;
+  if (!noteSent) return;
+  const now = Date.now();
+  const last = lastSentInput.get(runId);
+  if (last !== undefined && now - last < SENT_COALESCE_MS) return;
+  if (lastSentInput.size >= MAX_TRACKED) lastSentInput.clear();
+  lastSentInput.set(runId, now);
+  noteSent(runId).catch(() => {});
+}
+
 export function __resetCanopySeenForTests(): void {
   lastSent.clear();
+  lastSentInput.clear();
 }

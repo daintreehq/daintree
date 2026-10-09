@@ -48,8 +48,45 @@ installPreviewShims({
     refresh: () => record("refresh", null),
     trash: (runId: string) => record("trash", { runId }),
     // Looks are not recorded: the fixtures' seen times stay as written, so the
-    // landing selection can't move the ranking between captures.
+    // landing selection can't move the ranking between captures — nor read
+    // anything, so the unread rows stay unread for every capture.
     markSeen: () => Promise.resolve(),
+    noteSent: () => Promise.resolve(),
+    setRead: (runId: string, target: { spawnedAt: number }, read: boolean) => {
+      const mark = current?.reads.find((entry) => entry.runId === runId);
+      const next = {
+        runId,
+        spawnedAt: target.spawnedAt,
+        turn: mark?.turn ?? 0,
+        readTurn: read ? (mark?.turn ?? 0) : (mark?.readTurn ?? 0),
+        markedUnreadAt: read ? null : FROZEN_NOW,
+        version: (mark?.version ?? 0) + 1,
+      };
+      if (current) {
+        setPreviewCanopySnapshot({
+          ...current,
+          reads: [...current.reads.filter((entry) => entry.runId !== runId), next],
+        });
+      }
+      return record("setRead", { runId, read }).then(() => next);
+    },
+    markAllRead: (targets: Array<{ runId: string; spawnedAt: number; turn: number }>) => {
+      const marks = targets.map((target) => ({
+        ...target,
+        readTurn: target.turn,
+        markedUnreadAt: null,
+        version: 99,
+      }));
+      if (current) {
+        const read = new Set(targets.map((target) => target.runId));
+        setPreviewCanopySnapshot({
+          ...current,
+          reads: [...current.reads.filter((entry) => !read.has(entry.runId)), ...marks],
+        });
+      }
+      return record("markAllRead", { count: targets.length }).then(() => marks);
+    },
+    restoreReads: () => record("restoreReads", null),
     runBranch: (runId: string) => Promise.resolve(branches.get(runId) ?? null),
     // Archive acts the way main does, so the Archived group can be captured.
     archive: (runId: string, target: { spawnedAt: number }) => {

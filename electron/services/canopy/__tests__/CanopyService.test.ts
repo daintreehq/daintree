@@ -3450,6 +3450,29 @@ describe("CanopyService reads", () => {
     expect(unread(h)).toBe(true);
   });
 
+  it("keeps a start the user sent from the run's own pane read, but not input from anything else", async () => {
+    const own = await stoppedAfterWork();
+    own.service.setRead("a", 1, true);
+    own.service.noteUserSentTo("a");
+    own.runs[0] = run("a", { agentState: "working" });
+    own.screens.set("a", "Working on what you typed");
+    await own.service.refresh();
+    expect(unread(own)).toBe(false);
+    own.service.dispose();
+
+    // An action or a broadcast submits while someone has the run on screen:
+    // what it sets going is still news.
+    const other = await stoppedAfterWork();
+    other.service.setRead("a", 1, true);
+    other.service.markSeen("a", { viewId: 1, place: "pane", looking: true });
+    other.service.noteInput("a", "submit");
+    other.service.markSeen("a", { viewId: 1, place: "pane", looking: false });
+    other.runs[0] = run("a", { agentState: "working" });
+    other.screens.set("a", "Working on the broadcast");
+    await other.service.refresh();
+    expect(unread(other)).toBe(true);
+  });
+
   it("archives again on an undo only while the run has done nothing since", async () => {
     const h = await stoppedAfterWork();
     const turn = readOf(h)!.turn;

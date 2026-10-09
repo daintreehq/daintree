@@ -10,7 +10,6 @@ import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
-import { cn } from "@/lib/utils";
 import { pluralize } from "@/lib/pluralize";
 import { isMac } from "@/lib/platform";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -1252,9 +1251,8 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
                     <Button
                       variant="ghost"
                       size="xs"
-                      aria-pressed={unreadOnly}
+                      pressed={unreadOnly}
                       onClick={() => setUnreadOnly(!unreadOnly)}
-                      className={cn(unreadOnly && "bg-overlay-subtle text-text-primary")}
                     >
                       Unread
                       {unreadCount > 0 && <span className="tabular-nums">{unreadCount}</span>}

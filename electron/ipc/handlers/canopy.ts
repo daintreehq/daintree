@@ -693,6 +693,18 @@ export const canopyNamespace = defineIpcNamespace({
       { withContext: true }
     ),
 
+    /**
+     * The user sent a run something from its own pane, as their view saw it:
+     * the work that starts is theirs, not news. Said only by a view's input
+     * entry points; quiet while Canopy is off, since every pane reports it.
+     */
+    noteSent: op(CANOPY_METHOD_CHANNELS.noteSent, async (runId: string): Promise<void> => {
+      if (!currentPlan().activated) return;
+      checkRateLimit(CANOPY_METHOD_CHANNELS.noteSent, 120, 10_000);
+      assertRunId(runId);
+      getService().noteUserSentTo(runId);
+    }),
+
     /** The user read a run, through the turn the panel showed — or marked it unread. */
     setRead: op(
       CANOPY_METHOD_CHANNELS.setRead,
