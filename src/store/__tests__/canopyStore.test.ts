@@ -66,6 +66,22 @@ describe("orders", () => {
     expect(reloaded.getState().orders.project).toBeUndefined();
   });
 
+  it("keeps each project's own order apart", async () => {
+    const viewOf = async (projectId: string) => {
+      window.history.replaceState(null, "", `/?projectId=${projectId}`);
+      vi.resetModules();
+      return (await import("../canopyStore")).useCanopyStore;
+    };
+    try {
+      (await viewOf("p1")).getState().setOrder("project", { ids: ["x"], rankedFor: 1, urgent: [] });
+      (await viewOf("p2")).getState().setOrder("project", { ids: ["y"], rankedFor: 1, urgent: [] });
+      expect((await viewOf("p1")).getState().orders.project?.ids).toEqual(["x"]);
+      expect((await viewOf("p2")).getState().orders.project?.ids).toEqual(["y"]);
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
   it("never drops the scope another view saved", async () => {
     vi.resetModules();
     const { useCanopyStore: other } = await import("../canopyStore");

@@ -446,7 +446,7 @@ export function CanopyRow({
             </span>
           )}
         </span>
-        <span id={askId} className="flex min-w-0 items-center gap-2 text-xs leading-4">
+        <span id={askId} className="flex h-4 min-w-0 items-center gap-2 text-xs leading-4">
           <span
             className={cn(
               "min-w-0 flex-1 truncate",
@@ -513,7 +513,12 @@ export function CanopyRow({
             )}
           </span>
         )}
-        <span className="flex min-w-0 items-center text-xs leading-4 whitespace-nowrap text-text-secondary">
+        {/* Held at its line's height even with nothing to say: facts landing,
+            a reply noted or a run going quiet must not move the rows below. */}
+        <span
+          data-canopy-meta=""
+          className="flex h-4 min-w-0 items-center text-xs leading-4 whitespace-nowrap text-text-secondary"
+        >
           {/* The emoji leads a place, never stands for one: a row titled after
               its project drops the name here, and its emoji goes with it. */}
           {item.workspace.emoji && where !== "" && (

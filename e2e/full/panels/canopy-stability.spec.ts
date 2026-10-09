@@ -132,7 +132,14 @@ interface Sample {
   at: number;
   /** The panel is on screen. */
   open: boolean;
-  rows: Array<{ id: string; priority: string | null; text: string; height: number }>;
+  rows: Array<{
+    id: string;
+    priority: string | null;
+    text: string;
+    height: number;
+    /** The row shows bones where its summary will be. */
+    due: boolean;
+  }>;
 }
 
 interface Change {
@@ -179,12 +186,17 @@ interface Progress {
 
 const card = (paneId: string) => `canopy-card-${paneId}`;
 
-/** Every visible change since `started`, those no event explains, and a printed report. */
+/**
+ * Every visible change since `started`, those no event explains, and a printed
+ * report. A row's height changing is never explained: every row keeps one
+ * height whatever it says. `allowed` names changes a test expects of its own.
+ */
 async function measure(
   page: Page,
   started: number,
   events: Event[],
-  progress: Progress[]
+  progress: Progress[],
+  allowed: (change: Change) => boolean = () => false
 ): Promise<{ changes: Change[]; unexplained: Change[] }> {
   const all = (await takeSamples(page)).filter((sample) => sample.at >= started);
   const involved = (at: number) =>
@@ -198,21 +210,23 @@ async function measure(
   const shown = all.filter((sample) => sample.rows.length > 0);
   const changes = [...changesIn(shown, involved), ...blanksIn(all, events), ...rawIn(all)];
   const explained = (change: Change) =>
-    change.kind !== "reorder" &&
-    change.kind !== "blank" &&
-    change.kind !== "raw" &&
-    // A row moved only by another one moving keeps its order with the rest;
-    // `reorder` catches any that do not.
-    (change.kind === "position" ||
-      events.some(
-        (event) =>
-          change.at >= event.at &&
-          change.at - event.at <= event.within &&
-          (event.run === change.run || event.run === "*")
-      ) ||
-      progress.some(
-        (spell) => spell.run === change.run && change.at >= spell.from && change.at <= spell.to
-      ));
+    allowed(change) ||
+    (change.kind !== "reorder" &&
+      change.kind !== "height" &&
+      change.kind !== "blank" &&
+      change.kind !== "raw" &&
+      // A row moved only by another one moving keeps its order with the rest;
+      // `reorder` catches any that do not.
+      (change.kind === "position" ||
+        events.some(
+          (event) =>
+            change.at >= event.at &&
+            change.at - event.at <= event.within &&
+            (event.run === change.run || event.run === "*")
+        ) ||
+        progress.some(
+          (spell) => spell.run === change.run && change.at >= spell.from && change.at <= spell.to
+        )));
   // A spinner's frame is never news, whatever else happened at the time.
   const glyphless = (text: string) => text.replace(/[✻✶✢✳✽✺⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/g, "");
   const ticking = changes.filter(
@@ -277,6 +291,7 @@ async function sampleInbox(page: Page): Promise<void> {
         text: row.textContent ?? "",
         // Layout height, not the box on screen: the dialog scales in as it opens.
         height: row.offsetHeight,
+        due: row.querySelector("[data-canopy-detail-due]") !== null,
       }));
       const open = document.querySelector('[data-testid="canopy-dialog"]') !== null;
       w.__canopySamples!.push({ at: Date.now(), open, rows });
@@ -469,6 +484,10 @@ test.describe("Canopy stability against the live service", () => {
     // Turn Canopy on from its offer, the way a user does.
     await toggleCanopy(page);
     await dialog(page).getByRole("button", { name: "Turn on Canopy" }).click();
+    // From the first open on: rows show at once, summaries as bones until
+    // their words land, and no row changes height for it.
+    await sampleInbox(page);
+    const turnedOn = Date.now();
     await expect(dialog(page).locator("[data-canopy-list] [data-canopy-card]")).toHaveCount(4, {
       timeout: 60_000,
     });
@@ -492,6 +511,21 @@ test.describe("Canopy stability against the live service", () => {
     await expect(dialog(page).locator("[data-canopy-detail-due]")).toHaveCount(0, {
       timeout: 30_000,
     });
+    const firstOpen = (await takeSamples(page)).filter((sample) => sample.at >= turnedOn);
+    expect(firstOpen.some((sample) => sample.rows.some((row) => row.due))).toBe(true);
+    const heights = new Map<string, Set<number>>();
+    for (const sample of firstOpen) {
+      for (const row of sample.rows) {
+        heights.set(row.id, (heights.get(row.id) ?? new Set()).add(row.height));
+      }
+    }
+    expect([...heights.values()].map((seen) => [...seen])).toEqual(
+      [...heights.values()].map((seen) => [[...seen][0]])
+    );
+    // Nor blanks once shown.
+    expect(
+      blanksIn(firstOpen, [{ at: turnedOn, run: null, what: "opens", within: 0, opens: true }])
+    ).toEqual([]);
     await sampleInbox(page);
     const started = Date.now();
     const events: Event[] = [];
@@ -734,9 +768,9 @@ test.describe("Canopy stability against the live service", () => {
     }
     // Nothing moved for it: no order, priority, height or words changed but
     // a row going from unread to read as it was opened.
-    const { changes } = await measure(page, started, [], []);
     const opened = (change: Change) =>
       change.kind === "words" && change.from.replace("unread, ", "") === change.to;
-    expect(changes.filter((change) => !opened(change))).toEqual([]);
+    const { unexplained } = await measure(page, started, [], [], opened);
+    expect(unexplained).toEqual([]);
   });
 });

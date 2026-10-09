@@ -819,6 +819,16 @@ export class CanopyService {
       entry.lastDescribed = { ...entry.lastDescribed, hash: screen.hash };
     }
     if (entry.disposition?.contentHash === before) entry.disposition.contentHash = screen.hash;
+    // Words owed on open from a read of the old drawing are written from the
+    // new one: the same screen, laid out as it is now.
+    const waiting = entry.wordsWaiting;
+    if (waiting !== null && waiting.screen.hash === before) {
+      entry.wordsWaiting = {
+        ...waiting,
+        screen,
+        input: { ...waiting.input, screen: screen.text, lines: screen.lines },
+      };
+    }
     entry.contentHash = screen.hash;
     entry.print = print;
     entry.redrawn = true;
@@ -1466,7 +1476,10 @@ export class CanopyService {
           if (!this.stillWanted(run, entry, seq, epoch) || !this.isRunning) {
             throw new StaleCanopyPass();
           }
-          return this.readDigest(run.runId, input.agent, screen).then((read) => {
+          // A redraw at another size adopted since this screen was read: the
+          // history ends in that drawing, not this one.
+          const redrawn = entry.redrawnFrom === screen.hash ? entry.print : null;
+          return this.readDigest(run.runId, input.agent, screen, redrawn).then((read) => {
             if (!this.stillWanted(run, entry, seq, epoch)) throw new StaleCanopyPass();
             if (read === "moved") {
               // The terminal moved on while its history was read: what it shows
@@ -1665,15 +1678,23 @@ export class CanopyService {
   private async readDigest(
     runId: string,
     agent: string,
-    screen: PreparedScreen
+    screen: PreparedScreen,
+    /** The print of a redraw of `screen` adopted since it was read, which the history may end in instead. */
+    redrawn: string | null = null
   ): Promise<{ digest: CanopyDigest; history: string[] } | null | "moved"> {
     if (!this.deps.readHistory) return null;
     const raw = await this.deps.readHistory(runId, CANOPY_HISTORY_ROWS).catch(() => null);
     if (raw === null) return null;
-    if (!sameScreenTail(screen, raw)) return "moved";
+    const history = prepareScreen(raw, screen.cols);
+    if (
+      !sameScreenTail(screen, raw) &&
+      (redrawn === null || !sameAfterReflow(redrawn, reflowPrint(history.text)))
+    ) {
+      return "moved";
+    }
     return {
       digest: digestHistory(raw, agent),
-      history: prepareScreen(raw, screen.cols).lines,
+      history: history.lines,
     };
   }
 
