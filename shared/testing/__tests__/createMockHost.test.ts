@@ -1384,6 +1384,34 @@ describe("createMockHost production-parity validation (#10617)", () => {
       expect(twice).toHaveBeenCalledTimes(1);
     });
 
+    it("onDidChangeFocusedPanel gates, replays and dedupes like production", async () => {
+      expect(() => createMockHost().onDidChangeFocusedPanel(() => {})).toThrow(
+        /PERMISSION_REQUIRED:.*panel:focus-read/
+      );
+
+      const host = createMockHost({
+        capabilities: ["panel:focus-read"],
+        focusedPanel: { kind: "diff", agent: false, worktreeId: "wt-1" },
+      });
+      const received: unknown[] = [];
+      const dispose = await host.onDidChangeFocusedPanel((f) => received.push(f));
+      expect(host.subscriptionOptions.at(-1)).toEqual({ kind: "focused-panel", debounceMs: 250 });
+      await Promise.resolve();
+      expect(received).toEqual([{ kind: "diff", agent: false, worktreeId: "wt-1" }]);
+
+      host.simulateFocusedPanelChange({ kind: "acme.view", agent: true, worktreeId: "w" } as never);
+      host.simulateFocusedPanelChange({ kind: "plugin", agent: false, worktreeId: "w" });
+      expect(received).toEqual([
+        { kind: "diff", agent: false, worktreeId: "wt-1" },
+        { kind: "plugin", agent: false, worktreeId: "w" },
+      ]);
+      expect(Object.isFrozen(received[1])).toBe(true);
+
+      dispose();
+      host.simulateFocusedPanelChange({ kind: null, agent: false, worktreeId: null });
+      expect(received).toHaveLength(2);
+    });
+
     it("sendToAgent gates on agent:input and validates like production", async () => {
       await expect(
         createMockHost({ capabilities: ["agent:read"] }).sendToAgent("x")

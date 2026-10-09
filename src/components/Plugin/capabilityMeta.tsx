@@ -125,6 +125,12 @@ export const CAPABILITY_META = {
     description: "Send actions to a project you're not looking at, once you turn it on",
     severity: "warning",
   },
+  "panel:focus-read": {
+    label: "See which panel you're using",
+    description:
+      "Know whether you're in a terminal, browser, diff or other panel, never what it shows",
+    severity: "neutral",
+  },
 } satisfies Record<BuiltInPluginCapability, CapabilityMeta>;
 
 export const SEVERITY_TEXT_CLASS: Record<CapabilitySeverity, string> = {

@@ -147,6 +147,7 @@ export type PluginWorkerSubscriptionKind =
   | "storage"
   | "agent-state"
   | "all-agents"
+  | "focused-panel"
   | "panel-lifecycle"
   | "system-wake"
   | "push-listeners"

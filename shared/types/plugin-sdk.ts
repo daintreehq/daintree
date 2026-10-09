@@ -56,6 +56,10 @@ export type {
   PanelReloadResult,
 } from "./plugin.js";
 
+// ── Focused panel (worker-facing) ───────────────────────────────────
+
+export type { PluginFocusedPanel, PluginFocusedPanelKind } from "./plugin.js";
+
 // ── System wake (worker-facing) ─────────────────────────────────────
 
 export type { PluginSystemWakeEvent } from "./plugin.js";

@@ -70,6 +70,7 @@ import type {
 } from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { normalizePanelMenuItems } from "../../../shared/utils/pluginPanelMenuItems.js";
+import { toPluginFocusedPanel } from "../../../shared/utils/pluginFocusedPanel.js";
 import {
   normalizePluginAllAgentsSnapshot,
   UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT,
@@ -954,6 +955,19 @@ export class PluginDevWorkerHostProxy {
         const dispose = this.subscribe(
           "all-agents",
           (payload) => callback(normalizePluginAllAgentsSnapshot(payload)),
+          undefined,
+          undefined,
+          options?.debounceMs
+        );
+        return Promise.resolve(dispose);
+      },
+      onDidChangeFocusedPanel: (callback, options) => {
+        this.assertActivationOpen("onDidChangeFocusedPanel");
+        // Rebuilt and re-frozen on arrival: the port's structured clone hands
+        // back a plain mutable object.
+        const dispose = this.subscribe(
+          "focused-panel",
+          (payload) => callback(toPluginFocusedPanel(payload)),
           undefined,
           undefined,
           options?.debounceMs

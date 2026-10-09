@@ -22,11 +22,13 @@ import { join as joinPath } from "node:path";
 import { databaseError, openPluginDatabase } from "../utils/pluginDatabaseHandle.js";
 import { validateAgentContextPayload } from "../utils/agentContextDrag.js";
 import { normalizePluginAllAgentsSnapshot } from "../utils/pluginAllAgentsSnapshot.js";
+import { pluginFocusedPanelEquals, toPluginFocusedPanel } from "../utils/pluginFocusedPanel.js";
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import { normalizePanelMenuItems } from "../utils/pluginPanelMenuItems.js";
 import {
   PLUGIN_INVOKE_MAX_RESULT_BYTES,
   PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS,
+  PLUGIN_FOCUSED_PANEL_DEFAULT_DEBOUNCE_MS,
   PLUGIN_TERMINAL_SCREEN_DEFAULT_LINES,
   PLUGIN_TERMINAL_SCREEN_MAX_LINES,
 } from "../config/pluginBudgets.js";
@@ -84,6 +86,7 @@ import type {
   PluginAgentSnapshot,
   PluginAgentPane,
   PluginAllAgentsSnapshot,
+  PluginFocusedPanel,
   PluginSendToAgentOptions,
   PluginSendToAgentResult,
   PluginTerminalScreenResult,
@@ -231,8 +234,8 @@ export interface FsWriteRecord {
 
 /** A coalesced host subscription, with the window the host resolves for it. */
 export interface MockSubscriptionRecord {
-  kind: "worktrees" | "active-worktree" | "agent-state" | "all-agents";
-  /** Effective window in ms: the 100ms default, `0` for raw, else clamped to 50–60000. */
+  kind: "worktrees" | "active-worktree" | "agent-state" | "all-agents" | "focused-panel";
+  /** Effective window in ms: the 100ms default (250ms for `focused-panel`), `0` for raw, else clamped to 50–60000. */
   debounceMs: number;
 }
 
@@ -396,6 +399,12 @@ export interface MockHostState {
    */
   simulateAllAgentsChange(snapshot: PluginAllAgentsSnapshot): void;
   /**
+   * Move focus and push it, reduced to the allowlist and frozen like
+   * production, to every `onDidChangeFocusedPanel` subscriber. A value equal to
+   * the one a subscriber last received is not repeated, as in production.
+   */
+  simulateFocusedPanelChange(focus: PluginFocusedPanel): void;
+  /**
    * Configure what the user picks when `sendToAgent` is called without a
    * `terminalId`: a pane id drafts there, `null` (the default) dismisses the
    * picker and resolves `{ status: "cancelled" }`.
@@ -519,6 +528,11 @@ export interface CreateMockHostOptions {
    * (`{ agents: [], degraded: false, lastSuccessfulAt: 0 }`).
    */
   allAgents?: PluginAllAgentsSnapshot;
+  /**
+   * The focus `onDidChangeFocusedPanel` replays on subscribe. Defaults to no
+   * focused panel (`kind: null`).
+   */
+  focusedPanel?: PluginFocusedPanel;
   /**
    * What `terminals.readScreen` finds, by terminal id. An id not listed reads
    * `not-found`. Defaults to none. The mock neither rate limits nor applies
@@ -709,9 +723,12 @@ function isInvalidChannel(channel: unknown, allowEmpty: boolean): boolean {
  */
 const MOCK_SUBSCRIPTION_MIN_DEBOUNCE_MS = 50;
 const MOCK_SUBSCRIPTION_MAX_DEBOUNCE_MS = 60_000;
-function mockResolveSubscriptionDebounceMs(value: unknown): number {
+function mockResolveSubscriptionDebounceMs(
+  value: unknown,
+  defaultMs: number = PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS
+): number {
   if (typeof value !== "number" || Number.isNaN(value)) {
-    return PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS;
+    return defaultMs;
   }
   if (value <= 0) return 0;
   return Math.min(
@@ -826,6 +843,8 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     options.allAgents ?? { agents: [], degraded: false, lastSuccessfulAt: 0 }
   );
   const allAgentsSubs = new Set<(snapshot: PluginAllAgentsSnapshot) => void>();
+  let focusedPanel: PluginFocusedPanel = toPluginFocusedPanel(options.focusedPanel);
+  const focusedPanelSubs = new Set<(focus: PluginFocusedPanel) => void>();
   let sendToAgentPick: string | null = null;
   const readScreenCalls: ReadScreenRecord[] = [];
   const terminalScreens = new Map<string, PluginTerminalScreenResult>(
@@ -1705,6 +1724,37 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         if (disposed) return;
         disposed = true;
         allAgentsSubs.delete(subscription);
+      };
+      return Promise.resolve(dispose);
+    },
+    onDidChangeFocusedPanel(callback, subscribeOptions) {
+      if (!capabilities.has("panel:focus-read")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: onDidChangeFocusedPanel requires "panel:focus-read", which is not declared in manifest.capabilities`
+        );
+      }
+      subscriptionOptions.push({
+        kind: "focused-panel",
+        debounceMs: mockResolveSubscriptionDebounceMs(
+          subscribeOptions?.debounceMs,
+          PLUGIN_FOCUSED_PANEL_DEFAULT_DEBOUNCE_MS
+        ),
+      });
+      let delivered: PluginFocusedPanel | null = null;
+      let disposed = false;
+      const subscription = (focus: PluginFocusedPanel) => {
+        if (disposed) return;
+        if (delivered !== null && pluginFocusedPanelEquals(delivered, focus)) return;
+        delivered = focus;
+        callback(focus);
+      };
+      focusedPanelSubs.add(subscription);
+      // The current focus is replayed, asynchronously like production.
+      queueMicrotask(() => subscription(focusedPanel));
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        focusedPanelSubs.delete(subscription);
       };
       return Promise.resolve(dispose);
     },
@@ -2628,6 +2678,10 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     simulateAllAgentsChange(snapshot) {
       allAgentsSnapshot = normalizePluginAllAgentsSnapshot(snapshot);
       for (const cb of [...allAgentsSubs]) cb(allAgentsSnapshot);
+    },
+    simulateFocusedPanelChange(focus) {
+      focusedPanel = toPluginFocusedPanel(focus);
+      for (const cb of [...focusedPanelSubs]) cb(focusedPanel);
     },
     simulateSendToAgentPick(terminalId) {
       sendToAgentPick = terminalId;

@@ -1608,7 +1608,7 @@ type PluginPanelBadge = {
     color?: PluginPanelBadgeColor;
     tooltip?: string;
 };
-declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch"];
+declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch", "panel:focus-read"];
 type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
 /** Third argument to {@link PluginHostApi.dispatch} (#13119). */
 interface PluginDispatchOptions {
@@ -1892,15 +1892,17 @@ interface PluginHostCallOptions {
  * Options accepted by the bursty host subscriptions —
  * {@link PluginActivationApi.onDidChangeWorktrees},
  * {@link PluginActivationApi.onDidChangeActiveWorktree},
- * {@link PluginActivationApi.onDidChangeAgentState} and
- * {@link PluginActivationApi.onDidChangeAllAgents}. These coalesce by default:
+ * {@link PluginActivationApi.onDidChangeAgentState},
+ * {@link PluginActivationApi.onDidChangeAllAgents} and
+ * {@link PluginActivationApi.onDidChangeFocusedPanel}. These coalesce by default:
  * a burst of events becomes one trailing callback fired `debounceMs` after the
  * last event (the host re-emits the worktree set on every git-status poll, and
  * agents change state many times a second). A burst that never goes quiet
  * still fires at least every `4 × debounceMs`, so a busy project never
  * withholds its latest state indefinitely.
  *
- * - omitted (or not a number) — the default window, 100ms
+ * - omitted (or not a number) — the default window, 100ms (250ms for
+ *   `onDidChangeFocusedPanel`)
  * - `0` (or a negative number) — no coalescing: every event is delivered
  * - any other value — used as the window, clamped to 50–60000ms
  *
@@ -2585,6 +2587,30 @@ interface PluginAllAgentsSnapshot {
      * updated when the answer changes, so it is not a heartbeat.
      */
     readonly lastSuccessfulAt: number | null;
+}
+/**
+ * The kind of surface that has focus, as
+ * {@link PluginActivationApi.onDidChangeFocusedPanel} reports it. A built-in
+ * panel kind passes through as-is; every plugin-contributed panel, this
+ * plugin's own included, is `"plugin"`; `"portal"` is the Portal (web chat)
+ * dock.
+ */
+type PluginFocusedPanelKind = "terminal" | "browser" | "dev-preview" | "review" | "file" | "file-browser" | "diff" | "plugin" | "portal";
+/**
+ * Which kind of panel the user is working in. Carries the kind and the
+ * worktree only — never a panel's id, title, URL, cwd or content.
+ */
+interface PluginFocusedPanel {
+    /**
+     * The focused kind, or `null` when Daintree has no focused panel: its window
+     * is not the OS foreground window, or focus is on something that is not a
+     * panel (the sidebar, a dialog, the assistant).
+     */
+    readonly kind: PluginFocusedPanelKind | null;
+    /** The focused panel is a terminal currently running an agent. */
+    readonly agent: boolean;
+    /** The focused panel's worktree, when it belongs to one. Always `null` for `"portal"`. */
+    readonly worktreeId: string | null;
 }
 /** `host.agents` — the agent panes in the plugin's project. */
 interface PluginAgentsApi {
@@ -3915,6 +3941,27 @@ interface PluginActivationApi {
      */
     onDidChangeAllAgents(callback: (snapshot: PluginAllAgentsSnapshot) => void, options?: PluginHostSubscriptionOptions): Promise<() => void>;
     /**
+     * Subscribe to which kind of panel has focus (#13221): a terminal, a browser
+     * panel, a diff, the Portal, … The callback receives a frozen
+     * {@link PluginFocusedPanel} with `kind: null` while Daintree is not the
+     * foreground window or nothing that is a panel has focus. Gated on
+     * `panel:focus-read`. A project plugin sees focus only inside its own
+     * project, and `kind: null` everywhere else, the Portal included.
+     *
+     * The current focus is delivered once after subscribing, then every change.
+     * Coalesced to the latest value with a 250ms default window, and a value
+     * equal to the last one delivered is never repeated; see
+     * {@link PluginHostSubscriptionOptions}. Resolves to a disposer; calling it
+     * more than once is a no-op. Disposed automatically when the plugin is
+     * unloaded.
+     *
+     * Subscribing is revoke-guarded — call it during `activate()`.
+     *
+     * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+     *   `panel:focus-read`, or the host is revoked.
+     */
+    onDidChangeFocusedPanel(callback: (focus: PluginFocusedPanel) => void, options?: PluginHostSubscriptionOptions): Promise<() => void>;
+    /**
      * Subscribe to panel lifecycle transitions for this plugin's own contributed
      * panels (#11301). No capability is required — a plugin only ever sees events
      * for panel instances of kinds it contributed itself.
@@ -4744,8 +4791,8 @@ interface FsWriteRecord {
 }
 /** A coalesced host subscription, with the window the host resolves for it. */
 interface MockSubscriptionRecord {
-    kind: "worktrees" | "active-worktree" | "agent-state" | "all-agents";
-    /** Effective window in ms: the 100ms default, `0` for raw, else clamped to 50–60000. */
+    kind: "worktrees" | "active-worktree" | "agent-state" | "all-agents" | "focused-panel";
+    /** Effective window in ms: the 100ms default (250ms for `focused-panel`), `0` for raw, else clamped to 50–60000. */
     debounceMs: number;
 }
 /** Captured `host.git.commit(worktreePath, options)` calls. */
@@ -4897,6 +4944,12 @@ interface MockHostState {
      */
     simulateAllAgentsChange(snapshot: PluginAllAgentsSnapshot): void;
     /**
+     * Move focus and push it, reduced to the allowlist and frozen like
+     * production, to every `onDidChangeFocusedPanel` subscriber. A value equal to
+     * the one a subscriber last received is not repeated, as in production.
+     */
+    simulateFocusedPanelChange(focus: PluginFocusedPanel): void;
+    /**
      * Configure what the user picks when `sendToAgent` is called without a
      * `terminalId`: a pane id drafts there, `null` (the default) dismisses the
      * picker and resolves `{ status: "cancelled" }`.
@@ -5015,6 +5068,11 @@ interface CreateMockHostOptions {
      * (`{ agents: [], degraded: false, lastSuccessfulAt: 0 }`).
      */
     allAgents?: PluginAllAgentsSnapshot;
+    /**
+     * The focus `onDidChangeFocusedPanel` replays on subscribe. Defaults to no
+     * focused panel (`kind: null`).
+     */
+    focusedPanel?: PluginFocusedPanel;
     /**
      * What `terminals.readScreen` finds, by terminal id. An id not listed reads
      * `not-found`. Defaults to none. The mock neither rate limits nor applies

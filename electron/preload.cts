@@ -191,6 +191,7 @@ import type {
   PluginArchiveInstallIntent,
   PluginDeepLinkIntent,
   PluginPanelBadge,
+  PluginFocusedPanel,
 } from "../shared/types/plugin.js";
 import type { PanelKindConfig } from "../shared/config/panelKindRegistry.js";
 import type { PublishedPanelMenuItem } from "../shared/utils/pluginPanelMenuItems.js";
@@ -3475,6 +3476,11 @@ function buildElectronApi(): ElectronAPI {
       // Fire-and-forget: renderer-side view cost observations, drained in batches.
       reportViewMetrics: (reports: PluginRendererMetricsEnvelope[]) => {
         ipcRenderer.send(CHANNELS.PLUGIN_REPORT_VIEW_METRICS, reports);
+      },
+
+      // Fire-and-forget: the kind of panel holding DOM focus in this view.
+      reportFocusedPanel: (report: PluginFocusedPanel) => {
+        ipcRenderer.send(CHANNELS.PLUGIN_REPORT_FOCUSED_PANEL, report);
       },
 
       // Pushed at most once a second, only while subscribed. Carries every

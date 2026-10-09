@@ -31,9 +31,12 @@ export const PLUGIN_SUBSCRIPTION_MAX_WAIT_FACTOR = 4;
  * number at all, which is how an absent option can arrive across the worker
  * port — is the default; zero or negative is the explicit raw opt-out.
  */
-export function resolveSubscriptionDebounceMs(value: unknown): number {
+export function resolveSubscriptionDebounceMs(
+  value: unknown,
+  defaultMs: number = PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS
+): number {
   if (typeof value !== "number" || Number.isNaN(value)) {
-    return PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS;
+    return defaultMs;
   }
   if (value <= 0) return 0;
   return Math.min(
