@@ -2409,6 +2409,56 @@ describe("CanopyService", () => {
     expect(h.service.getSnapshot().cards[0]!.headline).toBe("Approve running npm test");
   });
 
+  it("tries a re-read's words again after they fail, rather than trusting the old ones", async () => {
+    let clock = 1_000_000;
+    let failNext = false;
+    let headline = "Old words";
+    const h = await makeHarness({
+      now: () => clock,
+      classify: async () => ({
+        category: "approval",
+        confidence: 0.95,
+        attention: 0.95,
+        question: "Do you want to proceed?",
+      }),
+      describe: async (_input, says) => {
+        if (failNext) {
+          failNext = false;
+          throw new CanopyProviderError("describer", "HTTP 500");
+        }
+        return {
+          category: says,
+          headline,
+          summary: "Runs the unit suite once.",
+          attentionScore: 94,
+          task: null,
+          risk: "none",
+          riskReason: null,
+          action: null,
+          progress: null,
+          tests: "unknown",
+          changes: "unknown",
+          question: "Do you want to proceed?",
+          options: ["Yes", "No"],
+        };
+      },
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
+    h.screens.set("a", APPROVAL_SCREEN);
+    await h.service.refresh();
+    expect(h.service.getSnapshot().cards[0]!.headline).toBe("Old words");
+
+    failNext = true;
+    headline = "New words";
+    await h.service.reread("a", h.runs[0]!.spawnedAt);
+    expect(h.service.getSnapshot().cards[0]!.headline).toBe("Old words");
+
+    // After the backoff, the same unchanged screen is described again.
+    clock += CANOPY_FAILURE_BACKOFF_MAX_MS;
+    await h.service.refresh();
+    expect(h.service.getSnapshot().cards[0]!.headline).toBe("New words");
+  });
+
   it("stops saying it is waiting to retry once no retry is due", async () => {
     let clock = 1_000_000;
     let fail = true;
