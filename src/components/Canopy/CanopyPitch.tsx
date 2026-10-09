@@ -3,12 +3,20 @@ import { BellRing, ListChecks, Hourglass, Send } from "lucide-react";
 import { Telescope } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { systemClient } from "@/clients/systemClient";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { CanopyRow } from "./CanopyRow";
 import { SectionBar } from "./CanopySectionBar";
 import { CANOPY_DEMO_FRAME_COUNT, canopyDemoItems } from "./canopyDemo";
 import { itemNeedsAttention } from "./canopyModel";
 import { useListReorderMotion } from "./useListReorderMotion";
-import { CANOPY_BETA_TERMS } from "./canopyTerms";
+import {
+  CANOPY_BETA_TERMS,
+  CANOPY_PRIVACY_URL,
+  CANOPY_REDACTION,
+  CANOPY_SENDS,
+  CANOPY_STOP,
+} from "./canopyTerms";
 
 /** Long enough to read a row that just rose to the top. */
 const DEMO_FRAME_MS = 3_200;
@@ -54,6 +62,17 @@ const FAILED: Record<"on" | "hide", string> = {
 export function CanopyPitch({ isOpen, onClose, backdrop, onTurnOn, onHide }: CanopyPitchProps) {
   const [pending, setPending] = useState<"on" | "hide" | null>(null);
   const [failed, setFailed] = useState<"on" | "hide" | null>(null);
+  // The keyboard lands on the offer's heading, not on Turn on: a reflexive
+  // Enter after the shortcut must not agree to sending anything. The dialog
+  // is told to place no focus of its own, so this is the only move.
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (!isOpen) return;
+    const frame = requestAnimationFrame(() => {
+      headingRef.current?.focus({ preventScroll: true, focusVisible: false });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen]);
   const choose = (choice: "on" | "hide", act: () => Promise<void>) => {
     setPending(choice);
     setFailed(null);
@@ -72,6 +91,7 @@ export function CanopyPitch({ isOpen, onClose, backdrop, onTurnOn, onHide }: Can
       onClose={onClose}
       size="workspace"
       maxHeight="h-[min(90vh,1100px)]"
+      initialFocus="none"
       backdrop={backdrop}
       data-testid="canopy-dialog"
     >
@@ -89,7 +109,9 @@ export function CanopyPitch({ isOpen, onClose, backdrop, onTurnOn, onHide }: Can
           <div className="flex max-w-md flex-col gap-6">
             <div className="flex flex-col gap-2">
               <h2
+                ref={headingRef}
                 id="canopy-pitch-title"
+                tabIndex={-1}
                 className="text-2xl font-semibold tracking-tight text-text-primary"
               >
                 Every agent, read for you
@@ -111,14 +133,25 @@ export function CanopyPitch({ isOpen, onClose, backdrop, onTurnOn, onHide }: Can
               ))}
             </ul>
             <div className="flex flex-col gap-3">
-              <p className="flex gap-2 text-xs leading-5 text-text-secondary">
-                <Send className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-                <span>
-                  To read them, Canopy sends your agents' terminal output to Daintree's servers,
-                  while it's closed too, so it can tell you when an agent is asking for you.
-                  Anything shaped like a password or key is stripped first.
-                </span>
-              </p>
+              {/* What turning it on sends, at the same size as the rest of the
+                  offer: the one paragraph here the user is agreeing to. */}
+              <div className="flex gap-2 text-sm leading-6 text-text-secondary">
+                <Send className="mt-1.5 size-3.5 shrink-0" aria-hidden="true" />
+                <div className="flex flex-col gap-2">
+                  <p>{CANOPY_SENDS}</p>
+                  <p>
+                    {CANOPY_REDACTION} {CANOPY_STOP}{" "}
+                    <Button
+                      variant="link"
+                      size="xs"
+                      className="h-auto p-0 text-sm"
+                      onClick={() => void systemClient.openExternal(CANOPY_PRIVACY_URL)}
+                    >
+                      Privacy policy
+                    </Button>
+                  </p>
+                </div>
+              </div>
               {/* Turning it on and not wanting it are the same size, side by
                   side: the close button is the "not now". */}
               <div className="flex items-center gap-3">
@@ -156,14 +189,24 @@ function DemoInbox({ paused }: { paused: boolean }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const listRef = useRef<HTMLDivElement>(null);
 
+  // Under reduced motion the demo holds its first frame: rows rearranging
+  // and rewording every few seconds beside the terms is motion all the same.
+  const [still, setStill] = useState(prefersReducedMotion);
   useEffect(() => {
-    if (paused || hovered) return;
+    const query = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (!query) return;
+    const onChange = () => setStill(prefersReducedMotion());
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+  useEffect(() => {
+    if (paused || hovered || still) return;
     const handle = setInterval(() => {
       setFrame((current) => (current + 1) % CANOPY_DEMO_FRAME_COUNT);
       setNowMs(Date.now());
     }, DEMO_FRAME_MS);
     return () => clearInterval(handle);
-  }, [paused, hovered]);
+  }, [paused, hovered, still]);
 
   const items = canopyDemoItems(frame, nowMs);
   useListReorderMotion(listRef, items.map((item) => item.runId).join(","));

@@ -54,7 +54,7 @@ import { CanopyRowMenu, type CanopyRowMenuActions } from "./CanopyRowMenu";
 import { SectionBar } from "./CanopySectionBar";
 import { CanopyPlace } from "./CanopyPlace";
 import { CanopyPitch } from "./CanopyPitch";
-import { CANOPY_BETA_TERMS } from "./canopyTerms";
+import { CANOPY_BETA_TERMS, CANOPY_WAITLIST_URL } from "./canopyTerms";
 import { useListReorderMotion } from "./useListReorderMotion";
 
 /** Ages are minute-grained, as in Pilot. */
@@ -111,9 +111,6 @@ function paneFocusOf(element: Element | null): CanopyPaneFocus {
 
 const FEEDBACK_MAILTO = "mailto:greg@daintree.org?subject=Canopy%20beta%20feedback";
 
-/** Where the waitlist for Canopy's paid tier lives. */
-export const CANOPY_WAITLIST_URL = "https://daintree.org/canopy";
-
 /** The beta's standing terms, said every time the inbox is open. */
 function BetaNotice() {
   return (
@@ -138,7 +135,7 @@ function BetaNotice() {
         className="shrink-0"
         onClick={() => void systemClient.openExternal(CANOPY_WAITLIST_URL)}
       >
-        Join waitlist
+        Paid plan waitlist
       </Button>
     </div>
   );

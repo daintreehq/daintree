@@ -682,7 +682,13 @@ describe("CanopyService", () => {
     expect(h.service.getSnapshot().cards).toHaveLength(1);
 
     h.service.setPlan({ mode: "unset", activated: false, tier: "priority" });
-    expect(h.service.getSnapshot()).toMatchObject({ activated: false, cards: [] });
+    // Every reading of the screen goes, the at-a-glance words included.
+    expect(h.service.getSnapshot()).toMatchObject({
+      activated: false,
+      cards: [],
+      glances: [],
+      lastError: null,
+    });
   });
 
   it("reads the free tier as soon and as often as the priority one", async () => {
@@ -2007,6 +2013,30 @@ describe("CanopyService", () => {
     await h.service.scan();
     expect(h.classify).toHaveBeenCalledTimes(1);
     clock += CANOPY_FAILURE_BACKOFF_MAX_MS;
+    await h.service.scan();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+    expect(h.service.getSnapshot().lastError).toBeNull();
+  });
+
+  it("reads at once when turned back on after a failure, rather than waiting out the old backoff", async () => {
+    const clock = 1_000_000;
+    let fail = true;
+    const h = await makeHarness({
+      now: () => clock,
+      classify: async () => {
+        if (fail) throw new Error("down");
+        return { category: "working", confidence: 0.9, attention: 0.9, question: null };
+      },
+    });
+    h.runs.push(run("a"));
+    h.screens.set("a", "screen");
+    await h.service.scan();
+    expect(h.service.getSnapshot().lastError).not.toBeNull();
+
+    fail = false;
+    h.service.setPlan({ mode: "unset", activated: false, tier: "priority" });
+    h.service.setPlan({ mode: "on", activated: true, tier: "priority" });
+    await settle();
     await h.service.scan();
     expect(h.classify).toHaveBeenCalledTimes(2);
     expect(h.service.getSnapshot().lastError).toBeNull();

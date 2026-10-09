@@ -53,8 +53,15 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   // The name may carry a prefix (`OPENAI_API_KEY`), which a word boundary
   // before `api` would miss.
   // A quoted value is taken whole, spaces and escaped quotes included.
-  /([A-Za-z0-9_]*(?:api[_-]?key|secret|token|password|passwd)["']?\s*[:=]\s*)(["'])(?:\\.|(?!\2)[^\\])*\2/gi,
-  /([A-Za-z0-9_]*(?:api[_-]?key|secret|token|password|passwd)["']?\s*[:=]\s*)[^\s"',}]{6,}/gi,
+  /([A-Za-z0-9_]{0,64}(?:api[_-]?key|secret|token|password|passwd)["']?\s*[:=]\s*)(["'])(?:\\.|(?!\2)[^\\])*\2/gi,
+  /([A-Za-z0-9_]{0,64}(?:api[_-]?key|secret|token|password|passwd)["']?\s*[:=]\s*)[^\s"',}]{6,}/gi,
+  // A password however short: `password: abc` is still a password. A value an
+  // earlier pattern already replaced is left as it is.
+  /([A-Za-z0-9_]{0,64}(?:password|passwd)["']?\s*[:=]\s*)(?!\[redacted\])[^\s"',}]+/gi,
+  // Credentials in a connection string: `postgres://user:pass@host`, or a
+  // password alone, `redis://:pass@host`. The scheme is bounded so a long run
+  // of word characters can't be rescanned from every position.
+  /(\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:@/]{0,256}:)(?!\[redacted\]@)[^\s@/]+(?=@)/gi,
 ];
 
 export function redactSecrets(text: string): string {

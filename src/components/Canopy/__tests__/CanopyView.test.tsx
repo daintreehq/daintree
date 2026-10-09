@@ -48,8 +48,8 @@ vi.mock("@/components/Terminal/HybridInputBar", () => ({ HybridInputBar: () => n
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 import { notify } from "@/lib/notify";
-import { CANOPY_WAITLIST_URL, CanopyView } from "../CanopyView";
-import { CANOPY_BETA_TERMS } from "../canopyTerms";
+import { CanopyView } from "../CanopyView";
+import { CANOPY_BETA_TERMS, CANOPY_WAITLIST_URL } from "../canopyTerms";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -272,6 +272,16 @@ describe("CanopyView", () => {
     expect(dialog.textContent).toContain(
       "sends your agents' terminal output to Daintree's servers"
     );
+    // What it sends, how far redaction goes, and how to stop, said where consent is given.
+    expect(dialog.textContent).toContain("recent scrollback");
+    expect(dialog.textContent).toContain("This can miss some secrets.");
+    expect(dialog.textContent).toContain("Settings > Canopy");
+    // The keyboard lands on the offer's heading: Enter alone agrees to nothing.
+    expect(document.activeElement?.id).toBe("canopy-pitch-title");
+    fireEvent.click(screenButton(dialog, "Privacy policy"));
+    expect(window.electron.system.openExternal).toHaveBeenLastCalledWith(
+      "https://daintree.org/privacy"
+    );
     // The demo's made-up agents, never the user's own runs, and nothing streamed.
     const rows = [...dialog.querySelectorAll<HTMLElement>("[data-canopy-card]")];
     expect(rows.length).toBeGreaterThan(0);
@@ -427,10 +437,10 @@ describe("CanopyView", () => {
       "mailto:greg@daintree.org?subject=Canopy%20beta%20feedback"
     );
     // The waitlist is a page on the website, opened in the browser.
-    fireEvent.click(screenButton(dialog, "Join waitlist"));
+    fireEvent.click(screenButton(dialog, "Paid plan waitlist"));
     expect(openExternal).toHaveBeenLastCalledWith(CANOPY_WAITLIST_URL);
     expect(new URL(CANOPY_WAITLIST_URL).protocol).toBe("https:");
-    expect(screenButton(dialog, "Join waitlist")).toBeTruthy();
+    expect(screenButton(dialog, "Paid plan waitlist")).toBeTruthy();
     free.unmount();
 
     installElectron();

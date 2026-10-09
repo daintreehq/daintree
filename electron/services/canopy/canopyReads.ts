@@ -46,7 +46,7 @@ export interface ReadTrack {
   busy: boolean | null;
   /** The screen when the last turn was taken: a state change with the screen unmoved is a flicker. */
   hash: string | null;
-  /** The ask the last turn is about, normalised; null when none was read. */
+  /** A fingerprint of the ask the last turn is about; null when none was read. */
   ask: string | null;
   /**
    * Daintree saw the run at work, for longer than a flicker, since the last

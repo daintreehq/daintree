@@ -161,6 +161,26 @@ describe("redactSecrets", () => {
     expect(redactSecrets('{"token":"abcdef123456"}')).not.toContain("abcdef123456");
   });
 
+  it("drops a short password and the password in a connection string", () => {
+    expect(redactSecrets("password: abc")).toBe("password: [redacted]");
+    expect(redactSecrets("DB_PASSWORD=pw1")).toBe("DB_PASSWORD=[redacted]");
+    expect(redactSecrets("connecting to postgres://app:s3cret@db.local:5432/main")).toBe(
+      "connecting to postgres://app:[redacted]@db.local:5432/main"
+    );
+    expect(redactSecrets("password=[abc]")).toBe("password=[redacted]");
+    expect(redactSecrets("password=a[b]")).toBe("password=[redacted]");
+    expect(redactSecrets("redis://:s3cret@cache:6379")).toBe("redis://:[redacted]@cache:6379");
+    // Already replaced by an earlier pattern: left as one marker, not two.
+    expect(redactSecrets("password: hunter22")).toBe("password: [redacted]");
+  });
+
+  it("stays fast on long runs that look almost like a URL or an assignment", () => {
+    const long = `${"a-".repeat(20_000)} ${"x".repeat(40_000)}`;
+    const start = performance.now();
+    redactSecrets(long);
+    expect(performance.now() - start).toBeLessThan(500);
+  });
+
   it("drops known key shapes wherever they appear", () => {
     const ghp = `ghp_${"x".repeat(36)}`;
     expect(redactSecrets(`cloning with ${ghp} now`)).toBe("cloning with [redacted] now");
