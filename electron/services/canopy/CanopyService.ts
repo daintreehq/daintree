@@ -1620,8 +1620,12 @@ export class CanopyService {
     if (!forced) entry.rereadOf = null;
     // A new ask on a stopped run, with no start Daintree saw in between: one
     // dialog answered and the next drawn in its place.
+    // Only a correction of a reading the card already holds is no news: a
+    // re-read asked for on a screen whose first reading never landed is that
+    // screen's first reading, and a new ask on it is news like any other.
+    const correction = forced && entry.card?.revision === entry.revision;
     if (
-      !forced &&
+      !correction &&
       !isBusy(run) &&
       classified.question !== null &&
       observeAsk(entry.reads, promptKey(classified.question), screen.hash, this.now())

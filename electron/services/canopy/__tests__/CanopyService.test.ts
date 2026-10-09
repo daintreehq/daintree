@@ -2409,6 +2409,43 @@ describe("CanopyService", () => {
     expect(h.service.getSnapshot().cards[0]!.headline).toBe("Approve running npm test");
   });
 
+  it("lets a re-read of a new ask whose first read failed bring it back unread", async () => {
+    let failClassify = false;
+    let question: string | null = null;
+    const h = await makeHarness({
+      classify: async () => {
+        if (failClassify) {
+          failClassify = false;
+          throw new CanopyProviderError("classifier", "HTTP 500");
+        }
+        return {
+          category: question ? "question" : "idle",
+          confidence: 0.9,
+          attention: question ? 0.9 : 0.1,
+          question,
+        };
+      },
+    });
+    h.runs.push(run("a", { agentState: "idle" }));
+    h.screens.set("a", "Done with the first part.");
+    await h.service.refresh();
+    const spawnedAt = h.runs[0]!.spawnedAt;
+    const mark = () => h.service.getSnapshot().reads.find((m) => m.runId === "a");
+    h.service.setRead("a", spawnedAt, true, mark()?.turn);
+    const before = mark()!;
+
+    // A new ask is drawn, and its first reading fails.
+    h.screens.set("a", "Done. Want me to push this?");
+    failClassify = true;
+    await h.service.refresh();
+    expect(mark()!.turn).toBe(before.turn);
+
+    // Read again finds the ask: that is this screen's first reading, and news.
+    question = "Want me to push this?";
+    await h.service.reread("a", spawnedAt);
+    expect(mark()!.turn).toBeGreaterThan(before.turn);
+  });
+
   it("tries a re-read's words again after they fail, rather than trusting the old ones", async () => {
     let clock = 1_000_000;
     let failNext = false;
