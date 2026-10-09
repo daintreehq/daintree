@@ -798,6 +798,27 @@ export const canopyNamespace = defineIpcNamespace({
     ),
 
     /**
+     * Read one run again, its words included, for a reading the user thinks
+     * is wrong: a screen that hasn't moved is otherwise never read again.
+     */
+    reread: op(
+      CANOPY_METHOD_CHANNELS.reread,
+      async (runId: string, target: CanopyTarget): Promise<void> => {
+        requireActivated();
+        checkRateLimit(CANOPY_METHOD_CHANNELS.reread, 10, 10_000);
+        assertRunId(runId);
+        assertTarget(target);
+        if (!(await getService().reread(runId, target.spawnedAt))) {
+          throw new AppError({
+            code: "NOT_FOUND",
+            message: "Run not read yet",
+            userMessage: "Canopy hasn't read that agent yet.",
+          });
+        }
+      }
+    ),
+
+    /**
      * Take back a trash made from Canopy, by the receipt `trash` gave, while
      * the trash still holds that terminal.
      */

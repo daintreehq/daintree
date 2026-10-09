@@ -406,6 +406,12 @@ export interface CanopySnapshot {
   /** Runs whose last read failed; their cards, if any, are from an earlier read. */
   failedRuns: string[];
   /**
+   * Reads are held up for a reason that passes, not yet reported as a
+   * failure: the service is starting, or a read is waiting to be tried again.
+   * Absent while nothing is held up.
+   */
+  waiting?: "waking" | "retrying";
+  /**
    * Runs read with no panel open whose words the next open writes: their
    * cards, and so their place in the list, are about to change.
    */

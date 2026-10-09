@@ -4,6 +4,7 @@ export const CANOPY_METHOD_CHANNELS = {
   getSnapshot: "canopy:get-snapshot",
   setActive: "canopy:set-active",
   refresh: "canopy:refresh",
+  reread: "canopy:reread",
   trash: "canopy:trash",
   untrash: "canopy:untrash",
   rename: "canopy:rename",

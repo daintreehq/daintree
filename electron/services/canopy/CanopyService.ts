@@ -360,6 +360,13 @@ interface RunEntry {
   asking: boolean;
   /** What the user has seen of what the run did; see `ReadTrack`. */
   reads: ReadTrack;
+  /**
+   * The screen (`contentHash`) the user asked to have read again, words
+   * included; null when not asked. A rebuild of that same screen describes it
+   * whatever the usual gates say, as a correction rather than news; a screen
+   * that moved since is read as any other.
+   */
+  rereadOf: string | null;
 }
 
 /**
@@ -511,6 +518,7 @@ export class CanopyService {
         this.supersedeCard(entry);
         entry.cardProgress = false;
         entry.cardStreams = false;
+        entry.rereadOf = null;
         // No view tells main a look ended once reading stops, so the looks go
         // now: one left to its lease would read the next turn after reading
         // comes back on.
@@ -571,6 +579,7 @@ export class CanopyService {
       failedRuns: [...this.entries]
         .filter(([, entry]) => entry.failure !== null)
         .map(([runId]) => runId),
+      ...this.waitingState(),
       ...(wordsDue.length > 0 ? { wordsDue } : {}),
     };
   }
@@ -720,6 +729,45 @@ export class CanopyService {
    * that changed since their card was written go to the providers — an
    * unchanged screen would get the same card back for the price of a call.
    */
+  /**
+   * Reads are held up for a reason that passes: the service is starting, or
+   * failed reads are being tried again before any is reported.
+   */
+  private waitingState(): { waiting?: "waking" | "retrying" } {
+    if (!this.isRunning) return {};
+    if (this.deps.serviceWaking?.()) return { waiting: "waking" };
+    // Only a retry still to come: a failure kept quiet, its run waiting out
+    // the backoff. One whose words are no longer due has nothing to wait for.
+    const now = this.now();
+    for (const entry of this.entries.values()) {
+      if (entry.failure === null && entry.failures > 0 && entry.retryAt > now) {
+        return { waiting: "retrying" };
+      }
+    }
+    return {};
+  }
+
+  /**
+   * The user asked for one run to be read again, its words included: for a
+   * reading they think is wrong, of a screen that hasn't moved and so would
+   * never be read again on its own. The same prompt, so nothing reads as new;
+   * a failing run is tried at once rather than after its backoff.
+   */
+  async reread(runId: string, spawnedAt: number): Promise<boolean> {
+    const entry = this.entries.get(runId);
+    if (!entry || entry.spawnedAt !== spawnedAt || !this.isRunning) return false;
+    entry.hash = null;
+    entry.failures = 0;
+    entry.retryAt = 0;
+    entry.rereadOf = entry.contentHash;
+    // A card still being written is from the reading the user doubts: it gives
+    // way, so the scan reads the screen afresh rather than waiting it out.
+    this.supersedeCard(entry);
+    entry.cardProgress = false;
+    await this.refresh();
+    return true;
+  }
+
   async refresh(): Promise<void> {
     const behind = this.scanning !== null;
     this.forceNextScan = true;
@@ -1559,9 +1607,14 @@ export class CanopyService {
         this.scheduleBroadcast();
       }
     }
+    // Asked for by the user: this read corrects the last reading of the same
+    // screen, so it describes whatever the usual gates say, and it is no news.
+    const forced = entry.rereadOf !== null && entry.rereadOf === screen.hash;
+    entry.rereadOf = null;
     // A new ask on a stopped run, with no start Daintree saw in between: one
     // dialog answered and the next drawn in its place.
     if (
+      !forced &&
       !isBusy(run) &&
       classified.question !== null &&
       observeAsk(entry.reads, promptKey(classified.question), screen.hash, this.now())
@@ -1580,6 +1633,7 @@ export class CanopyService {
     // Judged again on an unchanged screen, a run still busy has nothing new
     // for words to say: the describer would only reword it.
     const progressFresh =
+      !forced &&
       sameRun &&
       busyCategory(previous.wordsCategory) &&
       (this.now() - entry.describedAt < CANOPY_PROGRESS_DESCRIBE_MS ||
@@ -1590,6 +1644,7 @@ export class CanopyService {
     // only caught Daintree's state up with what the screen showed, or judged an
     // unchanged one the same, gives the describer nothing to add but rewording.
     const wordsCurrent =
+      !forced &&
       sameRun &&
       previous.stage === "described" &&
       !previous.describing &&
@@ -1600,7 +1655,11 @@ export class CanopyService {
     // again, and an archived run is read for nothing until it comes back.
     const wordsDue =
       !wordsCurrent &&
-      (needs ? !aside : entry.disposition?.kind !== "archived" && progress && !progressFresh);
+      (forced
+        ? entry.disposition?.kind !== "archived"
+        : needs
+          ? !aside
+          : entry.disposition?.kind !== "archived" && progress && !progressFresh);
     // Words are written for an open panel only: the background watch is the
     // service's light classifier read, leaves the words due, and the open
     // reads the run again (`wordsDueOnOpen`).
@@ -2153,13 +2212,10 @@ export class CanopyService {
       }
     }
     entry.pending = false;
-    entry.failure =
-      error instanceof CanopyProviderError
-        ? {
-            stage: error.provider,
-            message: `${error.provider === "classifier" ? "Classifier" : "Describer"}: ${error.message}`,
-          }
-        : { stage, message: "Canopy request failed" };
+    entry.failure = {
+      stage: error instanceof CanopyProviderError ? error.provider : stage,
+      message: failureMessage(error),
+    };
     // Forget the hash so the next scan retries this screen instead of trusting
     // a card that was never finished.
     if (entry.seq === seq) {
@@ -2259,6 +2315,7 @@ function newEntry(spawnedAt: number): RunEntry {
     asking: false,
     glance: null,
     reads: newReadTrack(),
+    rereadOf: null,
   };
 }
 
@@ -2480,6 +2537,33 @@ function readingFloor(classified: ClassifierResult, run: FleetRunRow): number {
 
 function needsAttention(probability: number): boolean {
   return probability >= CANOPY_ATTENTION_THRESHOLD;
+}
+
+/**
+ * A failed read in words for the user: what happened, never the provider's
+ * own terms — no stage names, status codes or stream codes.
+ */
+export function failureMessage(error: unknown): string {
+  if (!(error instanceof CanopyProviderError)) return "Canopy couldn't read some screens.";
+  const message = error.message;
+  if (/HTTP 429|no_workers_available|worker_disconnected|rate_limited/.test(message)) {
+    return "Canopy's service is busy right now.";
+  }
+  if (/inference_failed/.test(message)) return "Canopy's service ran into a problem.";
+  if (/bad_request/.test(message)) return "Canopy's service turned the request down.";
+  if (/^stream failed$|stream ended early/.test(message)) {
+    return "Canopy's service stopped partway through a reading.";
+  }
+  if (/service waking/.test(message)) return "Canopy's service is still starting.";
+  if (/timed out|inference_timeout/.test(message)) {
+    return "Canopy's service took too long to answer.";
+  }
+  if (/^request failed$/.test(message)) {
+    return "Couldn't reach Canopy's service. Check your connection.";
+  }
+  if (/^HTTP 5\d\d/.test(message)) return "Canopy's service ran into a problem.";
+  if (/^HTTP 4\d\d/.test(message)) return "Canopy's service turned the request down.";
+  return "Canopy's service sent back an answer it couldn't use.";
 }
 
 /**

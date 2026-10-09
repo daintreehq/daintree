@@ -98,6 +98,7 @@ function installElectron(
     reply: vi.fn(async () => {}),
     trash: vi.fn(async (): Promise<number | null> => null),
     untrash: vi.fn(async () => {}),
+    reread: vi.fn(async () => {}),
     archive: vi.fn(
       async (
         runId: string,
@@ -893,6 +894,7 @@ describe("CanopyView", () => {
       "Go to terminal",
       "Reply",
       "Mark as read",
+      "Read again",
       "Archive",
       "Rename…",
       "Trash terminal…",
@@ -904,6 +906,53 @@ describe("CanopyView", () => {
     ).toBe("E");
     fireEvent.click(items.find((item) => item.textContent?.startsWith("Archive"))!);
     expect(canopy.archive).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 });
+  });
+
+  it("shows neither the offer nor the inbox until main says whether Canopy is on", async () => {
+    useCanopyStore.setState({ snapshot: null });
+    installElectron();
+    render(<CanopyView />);
+    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
+    expect(dialog.textContent).not.toContain("Turn on Canopy");
+    expect(dialog.querySelector("[role=listbox]")).toBeNull();
+    expect(dialog.querySelector("[aria-busy=true]")).not.toBeNull();
+  });
+
+  it("reads a row's screen again from its menu, for a reading that looks wrong", async () => {
+    const canopy = installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    fireEvent.contextMenu(cards(container)[0]!, { clientX: 5, clientY: 5 });
+    const items = await within(document.body).findAllByRole("menuitem", { hidden: true });
+    await act(async () => {
+      fireEvent.click(items.find((item) => item.textContent === "Read again")!);
+    });
+    expect(canopy.reread).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 });
+  });
+
+  it("offers every project when this one has no agents, and says when status is unavailable", async () => {
+    useCanopyStore.setState({ scope: "project" });
+    window.__DAINTREE_INITIAL_PROJECT__ = {
+      id: "elsewhere",
+    } as typeof window.__DAINTREE_INITIAL_PROJECT__;
+    try {
+      useFleetSnapshotStore.setState({
+        snapshot: {
+          ...useFleetSnapshotStore.getState().snapshot!,
+          degraded: true,
+          lastSuccessfulAt: NOW - 120_000,
+        },
+      });
+      installElectron();
+      render(<CanopyView />);
+      await frames();
+      expect(document.body.textContent).toContain("No agents in this project");
+      expect(document.body.textContent).toContain("Agent status is unavailable");
+      fireEvent.click(screenButton(document.body, "Show all projects"));
+      expect(useCanopyStore.getState().scope).toBe("all");
+    } finally {
+      delete window.__DAINTREE_INITIAL_PROJECT__;
+    }
   });
 
   it("starts a rename in the pane from the row's menu", async () => {

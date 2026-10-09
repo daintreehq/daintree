@@ -66,6 +66,9 @@ export interface GeneratedElectronAPI {
     rename(
       ...args: IpcInvokeMap["canopy:rename"]["args"]
     ): Promise<IpcInvokeMap["canopy:rename"]["result"]>;
+    reread(
+      ...args: IpcInvokeMap["canopy:reread"]["args"]
+    ): Promise<IpcInvokeMap["canopy:reread"]["result"]>;
     restoreReads(
       ...args: IpcInvokeMap["canopy:restore-reads"]["args"]
     ): Promise<IpcInvokeMap["canopy:restore-reads"]["result"]>;

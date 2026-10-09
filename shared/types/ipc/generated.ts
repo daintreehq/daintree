@@ -158,6 +158,10 @@ export interface GeneratedIpcInvokeMap {
     args: [runId: string, target: import("./canopy.js").CanopyTarget, title: string];
     result: void;
   };
+  "canopy:reread": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: void;
+  };
   "canopy:restore-reads": {
     args: [restores: import("./canopy.js").CanopyReadRestore[]];
     result: void;

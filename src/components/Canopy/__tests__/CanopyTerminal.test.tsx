@@ -123,10 +123,15 @@ const data = (watchId: number, text: string, streamEnd?: number): CanopyTerminal
   ...(streamEnd === undefined ? {} : { streamEnd }),
 });
 
-function mount() {
+function mount(onGoTo?: () => void) {
   const states: CanopyStreamState[] = [];
   const view = render(
-    <CanopyTerminal runId="run-1" spawnedAt={100} onStreamChange={(s) => states.push(s)} />
+    <CanopyTerminal
+      runId="run-1"
+      spawnedAt={100}
+      onStreamChange={(s) => states.push(s)}
+      {...(onGoTo ? { onGoTo } : {})}
+    />
   );
   return { ...view, states, frame: view.container.querySelector("[data-canopy-terminal]")! };
 }
@@ -307,9 +312,15 @@ describe("CanopyTerminal", () => {
     expect(pane.events).toEqual(["hold run-1", "handed back", "release run-1"]);
   });
 
-  it("says it couldn't show a terminal the host had no screen for", async () => {
-    const { container } = mount();
+  it("says it couldn't show a terminal the host had no screen for, with the way to see it", async () => {
+    const onGoTo = vi.fn();
+    const { container } = mount(onGoTo);
     await open({ watchId: 7, snapshot: null });
     expect(container.textContent).toContain("Couldn't show this terminal");
+    const goTo = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Go to terminal"
+    );
+    goTo?.click();
+    expect(onGoTo).toHaveBeenCalledTimes(1);
   });
 });
