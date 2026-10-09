@@ -1,6 +1,13 @@
 import { useCallback, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { CANOPY_BETA_TERMS } from "@/components/Canopy/canopyTerms";
+import { Button } from "@/components/ui/button";
+import { systemClient } from "@/clients/systemClient";
+import {
+  CANOPY_BETA_TERMS,
+  CANOPY_PRIVACY_URL,
+  CANOPY_REDACTION,
+  CANOPY_SENDS,
+} from "@/components/Canopy/canopyTerms";
 import { useCanopyStore } from "@/store/canopyStore";
 import type { CanopyMode } from "@shared/types/ipc/canopy";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -42,7 +49,7 @@ export function CanopySettingsTab() {
     <div className="space-y-8">
       <SettingsSection
         title="Canopy"
-        description="One inbox of every agent, read off its screen. To read them, Canopy sends your agents' terminal output to Daintree's servers. It keeps reading while it's closed, so it can tell you when an agent is asking for you. Anything shaped like a password or key is stripped first."
+        description={`One inbox of every agent, read off its screen. ${CANOPY_SENDS} ${CANOPY_REDACTION}`}
         id="canopy-activation"
       >
         {failure && (
@@ -66,7 +73,7 @@ export function CanopySettingsTab() {
             <SettingsSwitchCard
               id="canopy-read-terminals"
               title="Read agent terminals"
-              subtitle="Off, nothing leaves this computer and every reading is deleted."
+              subtitle="When off, nothing leaves this computer and Canopy deletes its readings from this computer."
               isEnabled={activated}
               onChange={() => setMode(activated ? "unset" : "on")}
             />
@@ -74,7 +81,7 @@ export function CanopySettingsTab() {
           <SettingsRow
             id="canopy-plan"
             label="Plan"
-            description={snapshot?.tier === "priority" ? "Paid" : CANOPY_BETA_TERMS}
+            description={snapshot?.tier === "priority" ? "Priority processing" : CANOPY_BETA_TERMS}
             control={
               snapshot?.tier === "priority" ? (
                 <span className="text-xs text-text-secondary">Paid</span>
@@ -83,6 +90,20 @@ export function CanopySettingsTab() {
                   Beta
                 </Badge>
               )
+            }
+          />
+          <SettingsRow
+            id="canopy-privacy"
+            label="Privacy policy"
+            description="How Daintree handles what Canopy sends"
+            control={
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void systemClient.openExternal(CANOPY_PRIVACY_URL)}
+              >
+                Open
+              </Button>
             }
           />
         </SettingsGroup>

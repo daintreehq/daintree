@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { FleetRunRow } from "../../../shared/types/ipc/fleet.js";
 import {
   CANOPY_ATTENTION_THRESHOLD,
@@ -238,7 +239,7 @@ interface Disposition {
   mark: number;
   /** The screen text when the user acted, or null when it had not been read yet. */
   contentHash: string | null;
-  /** The prompt on screen when the user acted, normalised; null when none. */
+  /** A fingerprint of the prompt on screen when the user acted (`promptKey`); null when none. */
   question: string | null;
   /** The agent has worked, or been read as not needing anyone, since the action. */
   sawWork: boolean;
@@ -486,8 +487,30 @@ export class CanopyService {
     if (!this.isRunning) {
       this.invalidateInFlight();
       for (const entry of this.entries.values()) {
+        // Everything read off the screen goes, not just the card: the user was
+        // told turning reading off deletes every reading. What they did to the
+        // run (archive, read marks) is theirs, not the screen's, and stays.
         entry.card = null;
         entry.hash = null;
+        entry.readKey = null;
+        entry.contentHash = null;
+        entry.print = null;
+        entry.glance = null;
+        entry.note = null;
+        entry.taskRequest = null;
+        entry.lastDescribed = null;
+        entry.ask = null;
+        entry.asking = false;
+        entry.classified = null;
+        entry.wordsWaiting = null;
+        entry.failure = null;
+        entry.failures = 0;
+        entry.retryAt = 0;
+        // A card job still awaiting history must not hold the run's next read
+        // once reading comes back on.
+        this.supersedeCard(entry);
+        entry.cardProgress = false;
+        entry.cardStreams = false;
         // No view tells main a look ended once reading stops, so the looks go
         // now: one left to its lease would read the next turn after reading
         // comes back on.
@@ -495,6 +518,7 @@ export class CanopyService {
       }
       for (const timer of this.dwellTimers.values()) clearTimeout(timer);
       this.dwellTimers.clear();
+      this.transientSince.clear();
     }
     this.scheduleBroadcast();
     if (this.watching && !wasRunning) void this.scan();
@@ -799,7 +823,7 @@ export class CanopyService {
       at: this.now(),
       mark: ++this.marks,
       contentHash: entry.contentHash,
-      question: entry.card?.question ? normalize(entry.card.question) : null,
+      question: entry.card?.question ? promptKey(entry.card.question) : null,
       sawWork: false,
     };
     this.scheduleBroadcast();
@@ -1327,7 +1351,7 @@ export class CanopyService {
             if (
               !isBusy(run) &&
               reading.question !== null &&
-              observeAsk(entry.reads, normalize(reading.question), screen.hash, this.now())
+              observeAsk(entry.reads, promptKey(reading.question), screen.hash, this.now())
             ) {
               this.scheduleBroadcast();
             }
@@ -1540,7 +1564,7 @@ export class CanopyService {
     if (
       !isBusy(run) &&
       classified.question !== null &&
-      observeAsk(entry.reads, normalize(classified.question), screen.hash, this.now())
+      observeAsk(entry.reads, promptKey(classified.question), screen.hash, this.now())
     ) {
       this.scheduleBroadcast();
     }
@@ -2330,7 +2354,7 @@ function returnsToInbox(
 ): boolean {
   if (contentHash === disposition.contentHash) return false;
   if (disposition.sawWork) return true;
-  return question !== null && normalize(question) !== disposition.question;
+  return question !== null && promptKey(question) !== disposition.question;
 }
 
 function busyCategory(category: CanopyCategory | null): boolean {
@@ -2456,6 +2480,14 @@ function readingFloor(classified: ClassifierResult, run: FleetRunRow): number {
 
 function needsAttention(probability: number): boolean {
   return probability >= CANOPY_ATTENTION_THRESHOLD;
+}
+
+/**
+ * A prompt as kept past its screen — to tell the same ask from a new one — by
+ * fingerprint only, so no prompt text outlives the reading it came from.
+ */
+function promptKey(text: string): string {
+  return createHash("sha1").update(normalize(text)).digest("hex");
 }
 
 function normalize(text: string): string {
