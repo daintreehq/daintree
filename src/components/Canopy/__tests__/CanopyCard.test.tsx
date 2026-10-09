@@ -378,6 +378,18 @@ describe("CanopyCard", () => {
     expect(h.onOpen).toHaveBeenCalledTimes(1);
   });
 
+  it("takes Cmd+W from inside the pane as closing its terminal, to the trash", () => {
+    const { pane, h } = renderCard(itemFor("working"));
+    expect(pane.hasAttribute("data-close-owner")).toBe(true);
+    const request = new Event("daintree:close-request", { cancelable: true });
+    pane.querySelector("[data-canopy-terminal]")!.dispatchEvent(request);
+    // Not bubbling: the hook hands it to the owner itself.
+    expect(h.onTrash).not.toHaveBeenCalled();
+    pane.dispatchEvent(request);
+    expect(request.defaultPrevented).toBe(true);
+    expect(h.onTrash).toHaveBeenCalledTimes(1);
+  });
+
   it("trashes only on a second press, and stands down if none comes", () => {
     vi.useFakeTimers();
     try {

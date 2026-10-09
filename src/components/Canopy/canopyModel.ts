@@ -318,7 +318,8 @@ export function itemProgress(item: CanopyItem): ItemProgress | null {
   // Nothing done yet is no news beside a run blocked before it started.
   if (card.progress <= 0) return null;
   // Always a percentage, so a glance down the column compares like with like;
-  // a checklist's count is still said, where it is exact.
+  // a checklist's count is still said, where it is exact, and an estimate
+  // wears a "~".
   const steps = card.steps;
   if (steps !== null && steps.total > 0) {
     return {
@@ -327,9 +328,10 @@ export function itemProgress(item: CanopyItem): ItemProgress | null {
       spoken: `${steps.done} of ${steps.total} steps done`,
     };
   }
+  // The readers' estimate, not a count: marked as one.
   return {
     value: card.progress,
-    label: `${card.progress}%`,
+    label: `~${card.progress}%`,
     spoken: `about ${card.progress}% done`,
   };
 }

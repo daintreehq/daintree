@@ -203,6 +203,108 @@ describe("useGlobalKeybindings — isolated surfaces", () => {
   });
 });
 
+describe("useGlobalKeybindings — Cmd+W in a surface that owns its close", () => {
+  function closeOwner(isolated: boolean) {
+    const owner = document.createElement("section");
+    owner.setAttribute("data-close-owner", "");
+    const field = document.createElement("textarea");
+    if (isolated) {
+      const pane = document.createElement("div");
+      pane.setAttribute("data-keybindings-isolated", "");
+      pane.appendChild(field);
+      owner.appendChild(pane);
+    } else {
+      owner.appendChild(field);
+    }
+    document.body.appendChild(owner);
+    const requests = vi.fn((event: Event) => event.preventDefault());
+    owner.addEventListener("daintree:close-request", requests);
+    return { owner, field, requests };
+  }
+
+  beforeEach(() => {
+    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) =>
+      id === "terminal.close" ? "Cmd+W" : undefined
+    );
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "terminal.close" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+  });
+
+  it.each([
+    ["its isolated terminal or reply", true],
+    ["its own controls", false],
+  ])(
+    "hands Cmd+W from %s to the surface, and leaves the dialog around it open",
+    (_where, isolated) => {
+      const escapeHandler = vi.fn();
+      registerEscape(escapeHandler);
+      render(<Host />);
+      const { owner, field, requests } = closeOwner(isolated);
+      try {
+        field.focus();
+        act(() => {
+          field.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "w",
+              metaKey: true,
+              bubbles: true,
+              cancelable: true,
+            })
+          );
+        });
+        expect(requests).toHaveBeenCalledTimes(1);
+        expect(escapeHandler).not.toHaveBeenCalled();
+        expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+      } finally {
+        owner.remove();
+      }
+    }
+  );
+
+  it("lets no chord-bound close into the isolated surface, whose other keys stay its own", () => {
+    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) =>
+      id === "terminal.close" ? "Cmd+K W" : undefined
+    );
+    render(<Host />);
+    const { owner, field, requests } = closeOwner(true);
+    try {
+      act(() => {
+        field.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true, cancelable: true })
+        );
+      });
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(requests).not.toHaveBeenCalled();
+    } finally {
+      owner.remove();
+    }
+  });
+
+  it("keeps every other shortcut away from the isolated surface", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "fleet.armFocused" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const { owner, field, requests } = closeOwner(true);
+    try {
+      act(() => {
+        field.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "j", metaKey: true, bubbles: true, cancelable: true })
+        );
+      });
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(requests).not.toHaveBeenCalled();
+    } finally {
+      owner.remove();
+    }
+  });
+});
+
 describe("useGlobalKeybindings — Cmd+W escape stack guard", () => {
   it("routes Cmd+W to escape stack when a dialog is open instead of dispatching terminal.close", () => {
     mocks.keybindingService.resolveKeybinding.mockReturnValue({
