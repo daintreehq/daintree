@@ -17,6 +17,9 @@ import { applyMarkdownEdit, formatMarkdown } from "@/components/PluginKit/kitMar
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
+  // The editor's preview is the kit's lazy Markdown: loaded here, so a busy CI
+  // worker's cold import never eats a waitFor's budget.
+  await import("@/components/Markdown/PluginMarkdown");
 });
 
 afterEach(cleanup);

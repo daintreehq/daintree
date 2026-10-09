@@ -5,6 +5,8 @@ import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { BAND_GLYPH_TONE, PilotRunState } from "@/components/Pilot/PilotRunState";
 import { Archive, ArchiveRestore } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AskingCircle, Clock } from "@/components/icons";
 import type { CanopyCategory } from "@shared/types/ipc/canopy";
 import { formatWaitAge } from "@/lib/projectRowStatus";
@@ -12,6 +14,7 @@ import {
   answerOptions,
   itemContextWarning,
   itemFacts,
+  itemArchived,
   itemHandled,
   itemIsBusy,
   itemLooksDone,
@@ -201,6 +204,7 @@ export function CanopyRow({
   const unseenLabel = unseenMs === null ? null : `Unseen ${formatWaitAge(nowMs - unseenMs, nowMs)}`;
   const tier = priorityTier(priority);
   const handled = itemHandled(item);
+  const archived = itemArchived(item);
   const wordsShown = card !== null && (status === card.headline || status === card.question);
   // The summary stays when the run goes back to work and its ask gives way to
   // the newest line: a row always says what the run has been doing, until the
@@ -370,25 +374,35 @@ export function CanopyRow({
         />
       )}
       {onArchive && (
-        <button
-          type="button"
-          tabIndex={-1}
-          aria-hidden="true"
-          data-canopy-row-archive=""
-          // A mouse affordance: it never takes focus, so the press neither
-          // selects the row on its way nor leaves focus somewhere hidden.
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={(event) => {
-            event.stopPropagation();
-            onArchive();
-          }}
-          onDoubleClick={(event) => event.stopPropagation()}
-          // In the progress meter's place on the name line, which gives way to
-          // it under the pointer, as a mail list's actions take the date's.
-          className="absolute top-2.5 right-2 flex size-5 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 hover:bg-overlay-highlight hover:text-text-primary [&_svg]:size-3.5"
-        >
-          {item.disposition?.kind === "archived" ? <ArchiveRestore /> : <Archive />}
-        </button>
+        // Named as the context menu names it, with the key that does it from
+        // the keyboard. Hover only: the button never takes focus, so its
+        // tooltip never opens on one.
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              tabIndex={-1}
+              aria-hidden="true"
+              data-canopy-row-archive=""
+              // A mouse affordance: it never takes focus, so the press neither
+              // selects the row on its way nor leaves focus somewhere hidden.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={(event) => {
+                event.stopPropagation();
+                onArchive();
+              }}
+              onDoubleClick={(event) => event.stopPropagation()}
+              // In the progress meter's place on the name line, which gives way to
+              // it under the pointer, as a mail list's actions take the date's.
+              className="absolute top-2.5 right-2 flex size-5 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 hover:bg-overlay-highlight hover:text-text-primary [&_svg]:size-3.5"
+            >
+              {archived ? <ArchiveRestore /> : <Archive />}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {createTooltipContent(archived ? "Move to inbox" : "Archive", "E")}
+          </TooltipContent>
+        </Tooltip>
       )}
       {/* The leading column: Daintree's own observation of the run and whose
           agent it is, and how long it has been in that state. The text beside

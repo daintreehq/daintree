@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { CanopyCard as CanopyCardData, CanopyCategory } from "@shared/types/ipc/canopy";
 import { buildPilotGroups } from "@/components/Pilot/pilotRows";
@@ -79,22 +80,25 @@ function renderRow(
     onArchive?: () => void;
   } = {}
 ) {
+  // The archive button's tooltip needs the provider the app root gives it.
   return render(
-    <CanopyRow
-      item={item}
-      domId="row"
-      isSelected={false}
-      unread={props.unread ?? false}
-      compact={props.compact}
-      asideLabel={props.asideLabel}
-      nowMs={NOW}
-      tabbable
-      reserveDetail
-      onSelect={props.onSelect ?? (() => {})}
-      onClick={() => {}}
-      onOpen={() => {}}
-      onArchive={props.onArchive}
-    />
+    <TooltipProvider delayDuration={0}>
+      <CanopyRow
+        item={item}
+        domId="row"
+        isSelected={false}
+        unread={props.unread ?? false}
+        compact={props.compact}
+        asideLabel={props.asideLabel}
+        nowMs={NOW}
+        tabbable
+        reserveDetail
+        onSelect={props.onSelect ?? (() => {})}
+        onClick={() => {}}
+        onOpen={() => {}}
+        onArchive={props.onArchive}
+      />
+    </TooltipProvider>
   );
 }
 
@@ -436,6 +440,33 @@ describe("CanopyRow", () => {
     fireEvent.click(button);
     expect(onArchive).toHaveBeenCalledOnce();
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("names the archive button on hover, with the key that does it", async () => {
+    const { container, unmount } = renderRow(itemFor("finished"), { onArchive: vi.fn() });
+    const button = () => container.querySelector<HTMLElement>("[data-canopy-row-archive]")!;
+    fireEvent.pointerMove(button(), { pointerType: "mouse" });
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toContain("Archive");
+    expect(tip.textContent).toContain("E");
+    unmount();
+
+    const finished = itemFor("finished");
+    const archived: CanopyItem = {
+      ...finished,
+      disposition: {
+        runId: finished.runId,
+        spawnedAt: 1,
+        kind: "archived",
+        at: NOW,
+      },
+    };
+    const again = renderRow(archived, { onArchive: vi.fn() });
+    fireEvent.pointerMove(
+      again.container.querySelector<HTMLElement>("[data-canopy-row-archive]")!,
+      { pointerType: "mouse" }
+    );
+    expect((await screen.findByRole("tooltip")).textContent).toContain("Move to inbox");
   });
 
   it("keeps the plain waiting ring for a finished run", () => {
