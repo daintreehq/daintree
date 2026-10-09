@@ -238,7 +238,7 @@ for (const theme of THEMES) {
     await load(page, theme, "long");
     written.push(await snap(page, `${theme}--10-long.png`, "some"));
 
-    // A run that looks done: its title bar says so beside a spelled-out Trash.
+    // A run that looks done: its title bar says so.
     await load(page, theme, "fleet");
     await dialog(page).locator('[data-canopy-card][data-kind="finished"]').first().click();
     await expect(dialog(page).locator("[data-canopy-looks-done]")).toBeVisible();

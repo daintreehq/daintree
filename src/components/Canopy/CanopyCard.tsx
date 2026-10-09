@@ -112,7 +112,6 @@ function HeaderControl({
   shortcut,
   onClick,
   armed = false,
-  spelled = false,
   describedBy,
   children,
 }: {
@@ -125,12 +124,9 @@ function HeaderControl({
    * never reads as still armed.
    */
   armed?: boolean;
-  /** The control the pane is suggesting: its label spelled out beside the glyph. */
-  spelled?: boolean;
   describedBy?: string;
   children: React.ReactNode;
 }) {
-  const labelled = armed || spelled;
   // One button whether armed or not, so keyboard focus stays on it while it
   // changes shape between the two presses.
   return (
@@ -138,8 +134,8 @@ function HeaderControl({
       <TooltipTrigger asChild>
         <Button
           variant={armed ? "ghost-danger" : "ghost"}
-          size={labelled ? "xs" : "icon-xs"}
-          aria-label={labelled ? undefined : label}
+          size={armed ? "xs" : "icon-xs"}
+          aria-label={armed ? undefined : label}
           aria-keyshortcuts={shortcut}
           aria-describedby={describedBy}
           onClick={onClick}
@@ -147,7 +143,7 @@ function HeaderControl({
           className={cn(CONTROL_ICON, armed && "bg-status-error/10")}
         >
           {children}
-          {labelled && label}
+          {armed && label}
         </Button>
       </TooltipTrigger>
       <TooltipContent side="bottom">{armed ? "Press again to trash" : label}</TooltipContent>
@@ -391,9 +387,9 @@ export function CanopyCard({
             renameRequest={renameRequest}
           />
           {/* The readers think it is finished and Daintree sees it stopped:
-              said in the title bar, beside the Trash it suggests, rather than
-              over the terminal — where it would hide the agent's own report,
-              or resize the agent if it took rows of its own. */}
+              said in the title bar rather than over the terminal — where it
+              would hide the agent's own report, or resize the agent if it took
+              rows of its own. */}
           {looksDone && (
             <span
               role="status"
@@ -423,7 +419,6 @@ export function CanopyCard({
               shortcut={isMac() ? "Meta+Backspace" : "Control+Backspace"}
               onClick={pressTrash}
               armed={trashArmed}
-              spelled={looksDone}
               describedBy={trashArmed ? `${domId}-trash-confirm` : undefined}
             >
               <Trash2 aria-hidden="true" />
