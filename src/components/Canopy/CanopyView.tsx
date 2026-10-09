@@ -211,6 +211,14 @@ export function CanopyView() {
   const applySnapshot = useCanopyStore((s) => s.applySnapshot);
   useOverlayClaim("canopy", isOpen);
   const still = useFrozenBackdrop(isOpen);
+  const loadingRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isOpen || activated !== null) return;
+    const frame = requestAnimationFrame(() => {
+      loadingRef.current?.focus({ preventScroll: true, focusVisible: false });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen, activated]);
 
   // Main watches screens closely, and writes words, only while some view says a panel is open.
   useEffect(() => {
@@ -247,7 +255,10 @@ export function CanopyView() {
           <span className="flex-1" />
           <AppDialog.CloseButton />
         </AppDialog.Header>
-        <div className="flex-1" aria-busy="true" />
+        {/* The keyboard waits here, inside the dialog, rather than on
+            whatever opened it — a terminal behind the scrim would take the
+            keys — and not on Close, where a reflexive Enter would dismiss it. */}
+        <div ref={loadingRef} tabIndex={-1} className="flex-1" aria-busy="true" />
       </AppDialog>
     );
   }

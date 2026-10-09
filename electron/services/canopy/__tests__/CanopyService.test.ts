@@ -2347,6 +2347,68 @@ describe("CanopyService", () => {
     expect(mark()).toEqual(before);
   });
 
+  it("doesn't count the card a re-read cancels as a failure, and reads the run afresh", async () => {
+    let rejectFirst: ((error: unknown) => void) | undefined;
+    let describes = 0;
+    const h = await makeHarness({
+      classify: async () => ({
+        category: "approval",
+        confidence: 0.95,
+        attention: 0.95,
+        question: "Do you want to proceed?",
+      }),
+      describe: async (_input, says) => {
+        describes++;
+        if (describes === 1) {
+          return new Promise<DescriberResult>((_resolve, reject) => {
+            rejectFirst = reject;
+          });
+        }
+        return {
+          category: says,
+          headline: "Approve running npm test",
+          summary: "Runs the unit suite once.",
+          attentionScore: 94,
+          task: null,
+          risk: "none",
+          riskReason: null,
+          action: null,
+          progress: null,
+          tests: "unknown",
+          changes: "unknown",
+          question: "Do you want to proceed?",
+          options: ["Yes", "No"],
+        };
+      },
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
+    h.screens.set("a", APPROVAL_SCREEN);
+    await h.service.scan();
+    await settle();
+    expect(describes).toBe(1);
+
+    // The re-read's screen read is held open, so the cancelled card's
+    // rejection lands before the fresh pass has started.
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const deps = (h.service as unknown as { deps: { readScreen: unknown } }).deps;
+    deps.readScreen = async (runId: string) => {
+      await held;
+      return h.screens.get(runId) ?? null;
+    };
+    const reread = h.service.reread("a", h.runs[0]!.spawnedAt);
+    rejectFirst!(new CanopyProviderError("describer", "request cancelled"));
+    await settle();
+    release();
+    await reread;
+    expect(describes).toBe(2);
+    expect(h.service.getSnapshot()).toMatchObject({ lastError: null });
+    expect(h.service.getSnapshot().waiting).toBeUndefined();
+    expect(h.service.getSnapshot().cards[0]!.headline).toBe("Approve running npm test");
+  });
+
   it("stops saying it is waiting to retry once no retry is due", async () => {
     let clock = 1_000_000;
     let fail = true;
