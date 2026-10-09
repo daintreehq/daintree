@@ -1,12 +1,11 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
-import { render } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render } from "@testing-library/react";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { CanopyCard as CanopyCardData, CanopyCategory } from "@shared/types/ipc/canopy";
 import { buildPilotGroups } from "@/components/Pilot/pilotRows";
 import { buildCanopyInbox, type CanopyItem } from "../canopyModel";
 import { CanopyRow } from "../CanopyRow";
-import { CanopyPriorityGlyph, priorityTier } from "../CanopyPriority";
 
 const NOW = 1_700_000_000_000;
 
@@ -72,7 +71,13 @@ function itemFor(
 
 function renderRow(
   item: CanopyItem,
-  props: { unread?: boolean; compact?: boolean; asideLabel?: string | null } = {}
+  props: {
+    unread?: boolean;
+    compact?: boolean;
+    asideLabel?: string | null;
+    onSelect?: () => void;
+    onArchive?: () => void;
+  } = {}
 ) {
   return render(
     <CanopyRow
@@ -85,9 +90,10 @@ function renderRow(
       nowMs={NOW}
       tabbable
       reserveDetail
-      onSelect={() => {}}
+      onSelect={props.onSelect ?? (() => {})}
       onClick={() => {}}
       onOpen={() => {}}
+      onArchive={props.onArchive}
     />
   );
 }
@@ -103,7 +109,7 @@ function description(container: HTMLElement): string {
 }
 
 const leadingColumn = (container: HTMLElement) =>
-  container.querySelector<HTMLElement>("[role=option] > span[aria-hidden]")!;
+  container.querySelector<HTMLElement>("[data-canopy-lead]")!;
 
 describe("CanopyRow", () => {
   describe("before the readers have written words", () => {
@@ -333,7 +339,7 @@ describe("CanopyRow", () => {
       el.textContent?.startsWith("🦊")
     )!;
     // Each separator is its own padded dot, so the text runs them together.
-    expect(meta.textContent).toBe("🦊app·fix-rounding·Tests pass·Not committed");
+    expect(meta.textContent).toBe("🦊app·fix-rounding·Looks done·Tests pass·Not committed");
     // Every fact is a whole segment: one that doesn't fit drops, never "Tests p…".
     const facts = [...container.querySelectorAll("span")].filter(
       (el) => el.textContent === "·Tests pass" || el.textContent === "·Not committed"
@@ -392,14 +398,44 @@ describe("CanopyRow", () => {
     }
   });
 
-  it("shows an unlit meter and no number when no reading stands behind a priority", () => {
+  it("shows no score on screen: the order is the priority, and a screen reader still hears it", () => {
+    const { container } = renderRow(itemFor("question"));
+    const shown = [...container.querySelectorAll("[aria-hidden='true']")]
+      .map((element) => element.textContent)
+      .join(" ");
+    expect(shown).not.toContain("88");
+    expect(container.querySelector("svg rect")).toBeNull();
+    expect(description(container)).toMatch(/priority 88/);
+  });
+
+  it("marks an unread run with a dot in the gutter, and a read one with none", () => {
+    const dot = (unread: boolean) =>
+      renderRow(itemFor("finished"), { unread }).container.querySelector(
+        "[data-canopy-unread-dot]"
+      );
+    expect(dot(true)).not.toBeNull();
+    expect(dot(false)).toBeNull();
+  });
+
+  it("says a finished run looks done as a reading, in the meta line", () => {
     const { container } = renderRow(
-      itemFor("question", { stage: "classified", priorityFromEarlierRead: true })
+      itemFor("finished", { tests: "passing", progress: 100 }, { agentState: "completed" })
     );
-    const column = leadingColumn(container);
-    expect(column.querySelectorAll("rect[opacity='1']")).toHaveLength(0);
-    expect(column.querySelectorAll("rect")).toHaveLength(4);
-    expect(column.textContent).not.toMatch(/\d{2}|—/);
+    expect(container.querySelector("[data-canopy-meta]")?.textContent).toContain("Looks done");
+    expect(leadingColumn(container).textContent).not.toMatch(/done/i);
+  });
+
+  it("archives from the button under the pointer without selecting the row", () => {
+    const onArchive = vi.fn();
+    const onSelect = vi.fn();
+    const { container } = renderRow(itemFor("finished"), { onArchive, onSelect });
+    const button = container.querySelector<HTMLButtonElement>("[data-canopy-row-archive]")!;
+    // A mouse affordance: the keyboard has E, so it is neither tabbable nor announced.
+    expect(button.tabIndex).toBe(-1);
+    expect(button.getAttribute("aria-hidden")).toBe("true");
+    fireEvent.click(button);
+    expect(onArchive).toHaveBeenCalledOnce();
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it("keeps the plain waiting ring for a finished run, and for words from an earlier read", () => {
@@ -486,29 +522,13 @@ describe("CanopyRow", () => {
     expect(busy.textContent).not.toContain("Quiet");
   });
 
-  it("gives the leading column the time and the priority, never a word the glyph already says", () => {
+  it("gives the leading column the time, never a score or a word the glyph already says", () => {
     const { container } = renderRow(itemFor("question"));
     const column = leadingColumn(container);
     expect(column.textContent).toContain("1m");
-    expect(column.textContent).toContain("88");
+    expect(column.textContent).not.toContain("88");
     expect(column.textContent).not.toMatch(/waiting|blocked/i);
     // The state still reaches a screen reader, with its time.
     expect(description(container)).toMatch(/waiting for 1m|blocked for 1m/);
-  });
-});
-
-describe("CanopyPriorityGlyph", () => {
-  it("fills one bar per step and draws the rest faint", () => {
-    const filled = (priority: number) => {
-      const { container } = render(<CanopyPriorityGlyph tier={priorityTier(priority)} />);
-      const bars = [...container.querySelectorAll("rect")];
-      expect(bars).toHaveLength(4);
-      return bars.filter((bar) => bar.getAttribute("opacity") === "1").length;
-    };
-    expect(filled(95)).toBe(4);
-    expect(filled(70)).toBe(3);
-    expect(filled(50)).toBe(2);
-    expect(filled(20)).toBe(1);
-    expect(filled(0)).toBe(0);
   });
 });

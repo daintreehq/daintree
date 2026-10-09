@@ -6,7 +6,11 @@ import {
   type CanopyCategory,
   type CanopyDisposition,
   type CanopyGlance,
+  type CanopyLookPlace,
   type CanopyPlan,
+  type CanopyReadMark,
+  type CanopyReadRestore,
+  type CanopyReadTarget,
   type CanopyRunGlance,
   type CanopySeen,
   type CanopySnapshot,
@@ -35,6 +39,23 @@ import type { TerminalAnswer } from "../../../shared/utils/terminalSubmission.js
 import { EMPTY_GLANCE, glanceScreen } from "./canopyGlance.js";
 import { CANOPY_REFLOW_MS, reflowPrint, sameAfterReflow } from "./canopyReflow.js";
 import { observedCaughtUp } from "../../../shared/utils/canopyObservedKind.js";
+import {
+  CANOPY_READ_DWELL_MS,
+  advanceTurn,
+  isLookedAt,
+  isUnread,
+  look,
+  lookingSince,
+  markRead,
+  markUnread,
+  newReadTrack,
+  observeAsk,
+  observeFleet,
+  observeTurn,
+  readMarkOf,
+  restoreRead,
+  type ReadTrack,
+} from "./canopyReads.js";
 
 /** Screen rows read per run — the tail the cards are written from. */
 export const CANOPY_SCREEN_LINES = 50;
@@ -334,6 +355,8 @@ interface RunEntry {
   glance: CanopyGlance | null;
   /** `onAsk` was told about the ask on screen; cleared once it stops asking, goes back to work, or is suppressed. */
   asking: boolean;
+  /** What the user has seen of what the run did; see `ReadTrack`. */
+  reads: ReadTrack;
 }
 
 /**
@@ -396,6 +419,8 @@ export class CanopyService {
   private scope: string | null = null;
   /** Bumped by every scan start and every disposition, to order the two. */
   private marks = 0;
+  /** For each run someone just started looking at, the moment the look will have read it. */
+  private readonly dwellTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly deps: CanopyServiceDeps) {
     this.now = deps.now ?? Date.now;
@@ -472,11 +497,13 @@ export class CanopyService {
     for (const entry of this.entries.values()) if (entry.card) cards.push(entry.card);
     const dispositions: CanopyDisposition[] = [];
     const seen: CanopySeen[] = [];
+    const reads: CanopyReadMark[] = [];
     const glances: CanopyRunGlance[] = [];
     const wordsDue: string[] = [];
     for (const [runId, entry] of this.entries) {
       if (entry.wordsWaiting !== null) wordsDue.push(runId);
       if (entry.seenAt !== null) seen.push({ runId, spawnedAt: entry.spawnedAt, at: entry.seenAt });
+      reads.push(readMarkOf(runId, entry.spawnedAt, entry.reads));
       if (entry.card === null && entry.glance !== null) {
         glances.push({ runId, spawnedAt: entry.spawnedAt, glance: entry.glance });
       }
@@ -495,6 +522,7 @@ export class CanopyService {
       tier: this.plan.tier,
       dispositions,
       seen,
+      reads,
       scope: this.scope,
       active: this.active,
       busy: this.scanning !== null || this.inFlight > 0,
@@ -690,6 +718,10 @@ export class CanopyService {
   noteInput(runId: string, answer: TerminalAnswer): void {
     if (this.disposed) return;
     const entry = this.entries.get(runId);
+    // Sent from a pane the user has in front of them: the work it starts is
+    // their own doing, not news. Input to a terminal nobody is looking at —
+    // a broadcast, an agent driving it — may be anyone's.
+    if (entry && isLookedAt(entry.reads, this.now())) entry.reads.userSentAt = this.now();
     const card = entry?.card;
     // Only a run waiting on the user: a message to a working agent leaves its
     // card as the readers wrote it.
@@ -703,9 +735,19 @@ export class CanopyService {
    * The user archived the run: it leaves the inbox for the Archived section,
    * and comes back the way mail does — when the agent has something new to say.
    */
-  archive(runId: string, spawnedAt: number): void {
+  archive(runId: string, spawnedAt: number, expectTurn?: number): CanopyReadMark | null {
+    // An undo of "Move to inbox" archives only a run that has done nothing
+    // since: archiving it then would hide, and read, what it did.
+    if (expectTurn !== undefined) {
+      const held = this.entries.get(runId);
+      if (!held || held.spawnedAt !== spawnedAt || held.reads.turn !== expectTurn) return null;
+    }
     const entry = this.setDisposition(runId, spawnedAt, "archived");
-    if (entry?.card?.handledAt != null) entry.card = { ...entry.card, handledAt: null };
+    if (!entry) return null;
+    if (entry.card?.handledAt != null) entry.card = { ...entry.card, handledAt: null };
+    // Put aside having seen it: whatever brings it back is the news.
+    markRead(entry.reads);
+    return readMarkOf(runId, spawnedAt, entry.reads);
   }
 
   /**
@@ -764,17 +806,133 @@ export class CanopyService {
    * looking happens in the terminal's own pane, not here. Broadcast only to an
    * open panel; a closed one reads it with the next snapshot it asks for.
    */
-  markSeen(runId: string): void {
+  markSeen(
+    runId: string,
+    view?: { viewId: number; place: CanopyLookPlace; looking: boolean }
+  ): void {
     if (this.disposed) return;
+    const entry = this.liveEntry(runId);
+    if (!entry) return;
+    entry.seenAt = this.now();
+    if (view) this.noteLook(runId, entry, `${view.viewId}:${view.place}`, view.looking);
+    if (this.active) this.scheduleBroadcast();
+  }
+
+  /** The entry for the incarnation of the run the fleet shows now, made if it has none; null when it shows none. */
+  private liveEntry(runId: string, spawnedAt?: number): RunEntry | null {
     const run = this.deps.getRuns()?.find((candidate) => candidate.runId === runId);
-    if (!run) return;
+    if (!run || (spawnedAt !== undefined && run.spawnedAt !== spawnedAt)) return null;
     let entry = this.entries.get(runId);
     if (!entry || entry.spawnedAt !== run.spawnedAt) {
       entry = newEntry(run.spawnedAt);
       this.entries.set(runId, entry);
     }
-    entry.seenAt = this.now();
-    if (this.active) this.scheduleBroadcast();
+    return entry;
+  }
+
+  /**
+   * A view began or stopped showing the run to the user. A look that lasts
+   * `CANOPY_READ_DWELL_MS` reads it — at that moment, if it is still going, or
+   * as it ends — so arrowing past a row or switching through panes reads nothing.
+   */
+  private noteLook(runId: string, entry: RunEntry, looker: string, looking: boolean): void {
+    const step = look(entry.reads, looker, looking, this.now());
+    if (step.ended !== null && markRead(entry.reads, { lookedSince: step.ended })) {
+      this.scheduleBroadcast();
+    }
+    if (step.readsAt !== null) this.readAfterDwell(runId, entry.spawnedAt, step.readsAt);
+  }
+
+  private readAfterDwell(runId: string, spawnedAt: number, at: number): void {
+    const pending = this.dwellTimers.get(runId);
+    if (pending !== undefined) clearTimeout(pending);
+    const timer = setTimeout(
+      () => {
+        this.dwellTimers.delete(runId);
+        const entry = this.entries.get(runId);
+        if (this.disposed || !entry || entry.spawnedAt !== spawnedAt) return;
+        const since = lookingSince(entry.reads, this.now());
+        if (since === null) return;
+        // A look that may read it, begun later than the one that set this going.
+        if (this.now() - since < CANOPY_READ_DWELL_MS) {
+          this.readAfterDwell(runId, spawnedAt, since + CANOPY_READ_DWELL_MS);
+          return;
+        }
+        if (markRead(entry.reads, { lookedSince: since })) this.scheduleBroadcast();
+      },
+      Math.max(0, at - this.now())
+    );
+    this.dwellTimers.set(runId, timer);
+  }
+
+  /** A view went away: whatever it showed is no longer in front of anyone. */
+  forgetViewer(viewId: number): void {
+    const prefix = `${viewId}:`;
+    for (const entry of this.entries.values()) {
+      for (const looker of [...entry.reads.lookers.keys()]) {
+        if (looker.startsWith(prefix)) entry.reads.lookers.delete(looker);
+      }
+    }
+  }
+
+  /**
+   * The user read the run, or marked it unread. A read goes through the turn
+   * the panel showed, never one that landed since.
+   */
+  setRead(
+    runId: string,
+    spawnedAt: number,
+    read: boolean,
+    throughTurn?: number
+  ): CanopyReadMark | null {
+    if (this.disposed) return null;
+    const entry = this.liveEntry(runId, spawnedAt);
+    if (!entry) return null;
+    if (read) markRead(entry.reads, throughTurn !== undefined ? { throughTurn } : {});
+    else markUnread(entry.reads, this.now());
+    this.scheduleBroadcast();
+    return readMarkOf(runId, spawnedAt, entry.reads);
+  }
+
+  /**
+   * Every run the panel listed, read through the turn it showed; anything
+   * newer stays unread. Returns each run's mark as it left it, for an undo.
+   */
+  markAllRead(targets: readonly CanopyReadTarget[]): CanopyReadMark[] {
+    if (this.disposed) return [];
+    const marks: CanopyReadMark[] = [];
+    for (const target of targets) {
+      const entry = this.entries.get(target.runId);
+      if (!entry || entry.spawnedAt !== target.spawnedAt) continue;
+      markRead(entry.reads, { throughTurn: target.turn });
+      marks.push(readMarkOf(target.runId, target.spawnedAt, entry.reads));
+    }
+    this.scheduleBroadcast();
+    return marks;
+  }
+
+  /**
+   * Undo: what the user had read before, for each run left as the change
+   * being undone left it — a new turn, or a change from another view, stands.
+   */
+  restoreReads(restores: readonly CanopyReadRestore[]): void {
+    if (this.disposed) return;
+    for (const { mark, expectVersion } of restores) {
+      const entry = this.entries.get(mark.runId);
+      if (!entry || entry.spawnedAt !== mark.spawnedAt) continue;
+      restoreRead(entry.reads, mark, expectVersion);
+    }
+    this.scheduleBroadcast();
+  }
+
+  /**
+   * The user sent the run something from the panel. The work it starts is
+   * their own doing, so it stays read even once the panel has moved on.
+   */
+  noteUserSent(runId: string, spawnedAt: number): void {
+    const entry = this.entries.get(runId);
+    if (!entry || entry.spawnedAt !== spawnedAt) return;
+    entry.reads.userSentAt = this.now();
   }
 
   /**
@@ -789,7 +947,8 @@ export class CanopyService {
     else this.earlyResizes.set(runId, this.now());
   }
 
-  private scanAfterReflow(at: number): void {
+  /** A scan at `at`, unless one is due sooner: once a redraw has settled, or a state change has held. */
+  private scanAt(at: number): void {
     if (this.reflowTimer !== null && this.reflowTimer.at <= at) return;
     if (this.reflowTimer !== null) clearTimeout(this.reflowTimer.timer);
     const timer = setTimeout(
@@ -819,6 +978,7 @@ export class CanopyService {
       entry.lastDescribed = { ...entry.lastDescribed, hash: screen.hash };
     }
     if (entry.disposition?.contentHash === before) entry.disposition.contentHash = screen.hash;
+    if (entry.reads.hash === before) entry.reads.hash = screen.hash;
     // Words owed on open from a read of the old drawing are written from the
     // new one: the same screen, laid out as it is now.
     const waiting = entry.wordsWaiting;
@@ -873,9 +1033,12 @@ export class CanopyService {
     for (const run of runs ?? []) {
       const id = `${run.runId}:${run.spawnedAt}`;
       busy.set(id, isBusy(run));
-      if (!isBusy(run)) continue;
       const entry = this.entries.get(run.runId);
-      if (!entry || entry.spawnedAt !== run.spawnedAt) continue;
+      const known = entry !== undefined && entry.spawnedAt === run.spawnedAt;
+      // Work seen between reads of the screen, for a stop read after it.
+      // Timed by when main heard of it: a run's own state times can be stale.
+      if (known) observeFleet(entry.reads, isBusy(run), this.now());
+      if (!isBusy(run) || !entry || !known) continue;
       if (entry.disposition) entry.disposition.sawWork = true;
       // Starting work after an ask: whatever it asks next is a new ask, even
       // if no scan saw the screen in between. Only a start seen counts — an
@@ -883,6 +1046,23 @@ export class CanopyService {
       if (this.wasBusy.get(id) === false) entry.asking = false;
     }
     if (runs !== null) this.wasBusy = busy;
+  }
+
+  /**
+   * One read of the run for what the user has seen: a stop or start the
+   * screen backs up is a turn, once it has held; until then it is looked at
+   * again when it will have.
+   */
+  private takeTurn(entry: RunEntry, run: FleetRunRow, hash: string): void {
+    const step = observeTurn(entry.reads, {
+      busy: isBusy(run),
+      agentState: run.agentState ?? null,
+      since: run.since ?? null,
+      hash,
+      now: this.now(),
+    });
+    if (step.kind === "moved") this.scheduleBroadcast();
+    else if (step.kind === "wait" && this.watching) this.scanAt(step.at);
   }
 
   private observedStatesMoved(runs: readonly FleetRunRow[]): boolean {
@@ -918,6 +1098,8 @@ export class CanopyService {
     this.broadcastTimer = null;
     if (this.reflowTimer !== null) clearTimeout(this.reflowTimer.timer);
     this.reflowTimer = null;
+    for (const timer of this.dwellTimers.values()) clearTimeout(timer);
+    this.dwellTimers.clear();
   }
 
   /** One pass over every run. Overlapping requests coalesce into one follow-up. */
@@ -985,7 +1167,7 @@ export class CanopyService {
             if (this.now() < settled || (blank && this.now() < settled + CANOPY_REFLOW_MS)) {
               if (known) known.resizedAt = resizedAt;
               else this.earlyResizes.set(run.runId, resizedAt);
-              this.scanAfterReflow(blank ? settled + CANOPY_REFLOW_MS : settled);
+              this.scanAt(blank ? settled + CANOPY_REFLOW_MS : settled);
               return;
             }
             if (known) {
@@ -1030,6 +1212,7 @@ export class CanopyService {
             this.scheduleBroadcast();
           }
           entry.contentHash = screen.hash;
+          this.takeTurn(entry, run, screen.hash);
           const disposition = entry.disposition;
           if (disposition && disposition.mark < readMark) {
             // Put aside before its screen was ever read: the first read is the
@@ -1293,7 +1476,19 @@ export class CanopyService {
       if (!needs) disposition.sawWork = true;
       else if (returnsToInbox(disposition, screen.hash, classified.question)) {
         entry.disposition = null;
+        // Back with something new to say: it comes back unread.
+        if (!isUnread(entry.reads)) advanceTurn(entry.reads, this.now(), false);
+        this.scheduleBroadcast();
       }
+    }
+    // A new ask on a stopped run, with no start Daintree saw in between: one
+    // dialog answered and the next drawn in its place.
+    if (
+      !isBusy(run) &&
+      classified.question !== null &&
+      observeAsk(entry.reads, normalize(classified.question), screen.hash, this.now())
+    ) {
+      this.scheduleBroadcast();
     }
     const aside = entry.disposition !== null;
     const previous = entry.card;
@@ -1900,6 +2095,9 @@ export class CanopyService {
       if (spawnedAt === undefined || entry.spawnedAt !== spawnedAt) {
         this.supersedeCard(entry);
         this.entries.delete(runId);
+        const dwell = this.dwellTimers.get(runId);
+        if (dwell !== undefined) clearTimeout(dwell);
+        this.dwellTimers.delete(runId);
         this.transientSince.delete(`${runId}:classifier`);
         this.transientSince.delete(`${runId}:describer`);
         changed = true;
@@ -1974,6 +2172,7 @@ function newEntry(spawnedAt: number): RunEntry {
     ask: null,
     asking: false,
     glance: null,
+    reads: newReadTrack(),
   };
 }
 

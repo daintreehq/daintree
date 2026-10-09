@@ -7,6 +7,8 @@
  * Only the approval may move anything. Moving between agents resizes each to
  * the panel's pane and back, and resizing the window resizes them all: the
  * agents redraw for the new width, and nothing in the inbox may move for it.
+ * Nor may any row turn unread without an agent doing something: a row going
+ * read is the user reading it, but going unread takes a stop, a start or an ask.
  *
  * Opt-in only, since it reads screens with the live service:
  *
@@ -139,6 +141,8 @@ interface Sample {
     height: number;
     /** The row shows bones where its summary will be. */
     due: boolean;
+    /** The row is marked unread. */
+    unread: boolean;
   }>;
 }
 
@@ -148,9 +152,9 @@ interface Change {
   /**
    * `reorder`: rows no event touched changed their order. `blank`: the open
    * panel showed no rows after it had shown some. `raw`: a row showed a
-   * spinner's own line, timer and all.
+   * spinner's own line, timer and all. `unread`: a row turned read or unread.
    */
-  kind: "position" | "priority" | "words" | "height" | "reorder" | "blank" | "raw";
+  kind: "position" | "priority" | "words" | "height" | "reorder" | "blank" | "raw" | "unread";
   from: string;
   to: string;
 }
@@ -211,7 +215,18 @@ async function measure(
   const changes = [...changesIn(shown, involved), ...blanksIn(all, events), ...rawIn(all)];
   const explained = (change: Change) =>
     allowed(change) ||
-    (change.kind !== "reorder" &&
+    // Going read is the user reading it. Going unread needs something the
+    // agent did — never its own progress printing, a redraw or a resize.
+    (change.kind === "unread" &&
+      (change.to === "read" ||
+        events.some(
+          (event) =>
+            change.at >= event.at &&
+            change.at - event.at <= event.within &&
+            (event.run === change.run || event.run === "*")
+        ))) ||
+    (change.kind !== "unread" &&
+      change.kind !== "reorder" &&
       change.kind !== "height" &&
       change.kind !== "blank" &&
       change.kind !== "raw" &&
@@ -292,6 +307,7 @@ async function sampleInbox(page: Page): Promise<void> {
         // Layout height, not the box on screen: the dialog scales in as it opens.
         height: row.offsetHeight,
         due: row.querySelector("[data-canopy-detail-due]") !== null,
+        unread: row.dataset.unread === "true",
       }));
       const open = document.querySelector('[data-testid="canopy-dialog"]') !== null;
       w.__canopySamples!.push({ at: Date.now(), open, rows });
@@ -358,6 +374,15 @@ function changesIn(samples: Sample[], involved: (at: number) => Set<string>): Ch
           kind: "height",
           from: String(prev.height),
           to: String(row.height),
+        });
+      }
+      if (prev.unread !== row.unread) {
+        out.push({
+          at,
+          run: row.id,
+          kind: "unread",
+          from: prev.unread ? "unread" : "read",
+          to: row.unread ? "unread" : "read",
         });
       }
       if (prev.priority !== row.priority) {

@@ -12,7 +12,7 @@ function terminal(id: string, location: "grid" | "trash" = "grid") {
 
 let markSeen: ReturnType<typeof vi.fn>;
 let windowFocused = true;
-const marked = () => markSeen.mock.calls.map(([id]) => id as string);
+const looks = () => markSeen.mock.calls.map(([id, looking]) => `${String(id)}:${String(looking)}`);
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -40,24 +40,23 @@ afterEach(() => {
 });
 
 describe("useCanopySeenTracking", () => {
-  it("marks the pane in focus as seen, and the one it left as seen up to then", () => {
+  it("starts a look at the pane in focus, and ends it on the one focus left", () => {
     renderHook(() => useCanopySeenTracking());
-    expect(marked()).toEqual(["a"]);
-    vi.advanceTimersByTime(5_000);
+    expect(looks()).toEqual(["a:true"]);
     markSeen.mockClear();
 
     act(() => usePanelStore.setState({ focusedId: "b" }));
-    expect(marked()).toEqual(["a", "b"]);
+    expect(looks()).toEqual(["a:false", "b:true"]);
   });
 
-  it("counts looks at one pane a moment apart as one", () => {
+  it("tells every start and end, even a moment apart, so a quick switch through reads nothing", () => {
     renderHook(() => useCanopySeenTracking());
     act(() => usePanelStore.setState({ focusedId: "b" }));
     act(() => usePanelStore.setState({ focusedId: "a" }));
-    expect(marked()).toEqual(["a", "b"]);
+    expect(looks()).toEqual(["a:true", "a:false", "b:true", "b:false", "a:true"]);
   });
 
-  it("marks nothing while the window is behind another app", () => {
+  it("looks at nothing while the window is behind another app", () => {
     windowFocused = false;
     renderHook(() => useCanopySeenTracking());
     act(() => usePanelStore.setState({ focusedId: "b" }));
@@ -65,11 +64,51 @@ describe("useCanopySeenTracking", () => {
     expect(markSeen).not.toHaveBeenCalled();
   });
 
+  it("ends the look when the window loses focus, and starts one when it comes back", () => {
+    renderHook(() => useCanopySeenTracking());
+    markSeen.mockClear();
+    windowFocused = false;
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    windowFocused = true;
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(looks()).toEqual(["a:false", "a:true"]);
+  });
+
+  it("ends the look when the view is hidden, however focus stands, and starts one when shown", () => {
+    renderHook(() => useCanopySeenTracking());
+    markSeen.mockClear();
+    const hidden = (value: boolean) => {
+      Object.defineProperty(document, "hidden", { value, configurable: true });
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+    };
+    try {
+      hidden(true);
+      expect(looks()).toEqual(["a:false"]);
+      hidden(false);
+      expect(looks()).toEqual(["a:false", "a:true"]);
+    } finally {
+      Object.defineProperty(document, "hidden", { value: false, configurable: true });
+    }
+  });
+
+  it("ends the look it holds when it goes away", () => {
+    const { unmount } = renderHook(() => useCanopySeenTracking());
+    markSeen.mockClear();
+    unmount();
+    expect(looks()).toEqual(["a:false"]);
+  });
+
   it("keeps a pane in front of the user seen, but not while Canopy covers it", () => {
     renderHook(() => useCanopySeenTracking());
     markSeen.mockClear();
     vi.advanceTimersByTime(CANOPY_SEEN_HEARTBEAT_MS);
-    expect(marked()).toEqual(["a"]);
+    expect(looks()).toEqual(["a:true"]);
 
     act(() => useCanopyStore.setState({ isOpen: true }));
     markSeen.mockClear();
@@ -77,26 +116,28 @@ describe("useCanopySeenTracking", () => {
     expect(markSeen).not.toHaveBeenCalled();
   });
 
-  it("marks the focused pane when Canopy opens over it", () => {
+  it("ends the look at the focused pane when Canopy opens over it, and starts one as it closes", () => {
     renderHook(() => useCanopySeenTracking());
     vi.advanceTimersByTime(5_000);
     markSeen.mockClear();
     act(() => useCanopyStore.setState({ isOpen: true }));
-    expect(marked()).toEqual(["a"]);
+    expect(looks()).toEqual(["a:false"]);
+    act(() => useCanopyStore.setState({ isOpen: false }));
+    expect(looks()).toEqual(["a:false", "a:true"]);
   });
 
-  it("never marks a pane in the trash", () => {
+  it("never looks at a pane in the trash", () => {
     renderHook(() => useCanopySeenTracking());
     vi.advanceTimersByTime(5_000);
     markSeen.mockClear();
     act(() => usePanelStore.setState({ focusedId: "gone" }));
-    expect(marked()).toEqual(["a"]);
+    expect(looks()).toEqual(["a:false"]);
   });
 
   it("drops a refused report quietly", async () => {
     markSeen.mockRejectedValue(new Error("rate limited"));
     renderHook(() => useCanopySeenTracking());
     await act(async () => {});
-    expect(marked()).toEqual(["a"]);
+    expect(looks()).toEqual(["a:true"]);
   });
 });

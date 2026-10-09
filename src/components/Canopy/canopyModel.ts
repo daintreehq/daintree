@@ -6,8 +6,10 @@ import {
   type CanopyCategory,
   type CanopyDisposition,
   type CanopyGlance,
+  type CanopyReadMark,
   type CanopyRunGlance,
   type CanopySeen,
+  isCanopyUnread,
 } from "@shared/types/ipc/canopy";
 import type { PilotProjectGroup, PilotRow } from "@/components/Pilot/pilotRows";
 import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
@@ -45,6 +47,14 @@ export interface CanopyItem {
    * open here — for this incarnation; null when not since Daintree started.
    */
   seenAt: number | null;
+  /** What the user has read of what the run did, for this incarnation; null when nothing is known. */
+  readMark: CanopyReadMark | null;
+  /**
+   * The run did something since the user last looked — stopped, started on
+   * its own, asked something new — or they marked it unread. Never on a run
+   * put aside: whatever brings it back is what is new.
+   */
+  unread: boolean;
 }
 
 /** Worst first: a menu blocks a turn outright, a finished run only waits. */
@@ -474,7 +484,8 @@ export function buildCanopyInbox(
   dispositions: ReadonlyMap<string, CanopyDisposition> = new Map(),
   seen: ReadonlyMap<string, CanopySeen> = new Map(),
   nowMs: number = Date.now(),
-  glances: ReadonlyMap<string, CanopyRunGlance> = new Map()
+  glances: ReadonlyMap<string, CanopyRunGlance> = new Map(),
+  reads: ReadonlyMap<string, CanopyReadMark> = new Map()
 ): CanopyItem[] {
   const items: CanopyItem[] = [];
   for (const group of groups) {
@@ -486,6 +497,8 @@ export function buildCanopyInbox(
         entry !== undefined && entry.spawnedAt === row.run.spawnedAt ? entry : null;
       const look = seen.get(row.run.runId);
       const screenGlance = glances.get(row.run.runId);
+      const mark = reads.get(row.run.runId);
+      const readMark = mark !== undefined && mark.spawnedAt === row.run.spawnedAt ? mark : null;
       items.push({
         runId: row.run.runId,
         workspaceId: row.run.workspaceId,
@@ -518,6 +531,8 @@ export function buildCanopyInbox(
         failed: read.failedRuns?.has(row.run.runId) ?? false,
         disposition,
         seenAt: look !== undefined && look.spawnedAt === row.run.spawnedAt ? look.at : null,
+        readMark,
+        unread: disposition?.kind !== "archived" && isCanopyUnread(readMark),
       });
     }
   }

@@ -7,21 +7,10 @@ import {
   type CanopySnapshot,
 } from "@shared/types/ipc/canopy";
 
-/** When the user last opened a run in the panel, for its incarnation. */
-export interface CanopyRead {
-  spawnedAt: number;
-  at: number;
-}
-
 interface CanopyState {
   isOpen: boolean;
   /** Null until main has answered once — distinct from "no cards yet". */
   snapshot: CanopySnapshot | null;
-  /**
-   * Runs the user has opened, like read mail: unread until opened, and unread
-   * again once the screen is read anew after that.
-   */
-  reads: Record<string, CanopyRead>;
   open: () => void;
   close: () => void;
   toggle: () => void;
@@ -32,9 +21,6 @@ interface CanopyState {
    * in here, so opening the panel clears it until a new one arrives.
    */
   acknowledged: Record<string, string>;
-  markRead: (runId: string, spawnedAt: number, at?: number) => void;
-  /** Forget reads for runs no longer running. */
-  pruneReads: (live: ReadonlySet<string>) => void;
   /**
    * The inbox's order as last shown, run ids first to last, and the scan it was
    * ranked after: kept across opens, so the list opens as it was left.
@@ -44,6 +30,9 @@ interface CanopyState {
   /** The inbox's "Archived" group is unfolded; kept across opens. */
   archivedExpanded: boolean;
   setArchivedExpanded: (expanded: boolean) => void;
+  /** The inbox shows only unread runs; kept across opens for the session. */
+  unreadOnly: boolean;
+  setUnreadOnly: (unreadOnly: boolean) => void;
   /** Every project's agents, or only the project this view shows; remembered across launches. */
   scope: CanopyScope;
   setScope: (scope: CanopyScope) => void;
@@ -187,20 +176,6 @@ function saveScope(scope: CanopyScope): void {
   }
 }
 
-/**
- * Read once the user opened this incarnation after the screen they were shown
- * was read. A card that has not been read off the screen yet is read as soon
- * as the run is opened at all.
- */
-export function isCanopyRead(
-  read: CanopyRead | undefined,
-  spawnedAt: number,
-  card: Pick<CanopyCard, "spawnedAt" | "observedAt"> | null
-): boolean {
-  if (read === undefined || read.spawnedAt !== spawnedAt) return false;
-  return card === null || card.spawnedAt !== spawnedAt || card.observedAt <= read.at;
-}
-
 function opened(state: CanopyState, snapshot: CanopySnapshot | null): Partial<CanopyState> {
   const acknowledged = acknowledgeUrgent(state.acknowledged, snapshot);
   return acknowledged ? { isOpen: true, acknowledged } : { isOpen: true };
@@ -217,7 +192,6 @@ function opened(state: CanopyState, snapshot: CanopySnapshot | null): Partial<Ca
 export const useCanopyStore = create<CanopyState>((set) => ({
   isOpen: false,
   snapshot: null,
-  reads: {},
   acknowledged: readAcknowledged(),
   orders: loadOrders(),
   setOrder: (scope, order) =>
@@ -234,6 +208,8 @@ export const useCanopyStore = create<CanopyState>((set) => ({
     }),
   archivedExpanded: false,
   setArchivedExpanded: (expanded) => set({ archivedExpanded: expanded }),
+  unreadOnly: false,
+  setUnreadOnly: (unreadOnly) => set({ unreadOnly }),
   scope: loadScope(),
   setScope: (scope) => {
     saveScope(scope);
@@ -252,16 +228,6 @@ export const useCanopyStore = create<CanopyState>((set) => ({
       if (!state.isOpen) return { snapshot };
       const acknowledged = acknowledgeUrgent(state.acknowledged, snapshot);
       return acknowledged ? { snapshot, acknowledged } : { snapshot };
-    }),
-  markRead: (runId, spawnedAt, at = Date.now()) =>
-    set((state) => ({ reads: { ...state.reads, [runId]: { spawnedAt, at } } })),
-  pruneReads: (live) =>
-    set((state) => {
-      const departed = Object.keys(state.reads).filter((runId) => !live.has(runId));
-      if (departed.length === 0) return state;
-      const reads = { ...state.reads };
-      for (const runId of departed) delete reads[runId];
-      return { reads };
     }),
 }));
 

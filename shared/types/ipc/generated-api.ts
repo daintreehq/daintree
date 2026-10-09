@@ -54,18 +54,27 @@ export interface GeneratedElectronAPI {
     getSnapshot(
       ...args: IpcInvokeMap["canopy:get-snapshot"]["args"]
     ): Promise<IpcInvokeMap["canopy:get-snapshot"]["result"]>;
+    markAllRead(
+      ...args: IpcInvokeMap["canopy:mark-all-read"]["args"]
+    ): Promise<IpcInvokeMap["canopy:mark-all-read"]["result"]>;
     markSeen(
       ...args: IpcInvokeMap["canopy:mark-seen"]["args"]
     ): Promise<IpcInvokeMap["canopy:mark-seen"]["result"]>;
     refresh(
       ...args: IpcInvokeMap["canopy:refresh"]["args"]
     ): Promise<IpcInvokeMap["canopy:refresh"]["result"]>;
+    restoreReads(
+      ...args: IpcInvokeMap["canopy:restore-reads"]["args"]
+    ): Promise<IpcInvokeMap["canopy:restore-reads"]["result"]>;
     runBranch(
       ...args: IpcInvokeMap["canopy:run-branch"]["args"]
     ): Promise<IpcInvokeMap["canopy:run-branch"]["result"]>;
     setActive(
       ...args: IpcInvokeMap["canopy:set-active"]["args"]
     ): Promise<IpcInvokeMap["canopy:set-active"]["result"]>;
+    setRead(
+      ...args: IpcInvokeMap["canopy:set-read"]["args"]
+    ): Promise<IpcInvokeMap["canopy:set-read"]["result"]>;
     setScope(
       ...args: IpcInvokeMap["canopy:set-scope"]["args"]
     ): Promise<IpcInvokeMap["canopy:set-scope"]["result"]>;

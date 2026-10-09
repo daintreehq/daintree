@@ -13,7 +13,6 @@ import {
   type CanopyCardHandle,
   type CanopyCardHandlers,
 } from "../CanopyCard";
-import { useCanopyStore } from "@/store/canopyStore";
 
 interface ComposerProps {
   terminalId: string;
@@ -61,8 +60,6 @@ beforeEach(() => {
     writable: true,
     value: { canopy: { terminalSubmit: submit, terminalSendKey: sendKey } },
   });
-  // Answers outlive a card by design, so they must not leak between tests.
-  useCanopyStore.setState({ reads: {} });
   submit.mockClear();
   sendKey.mockClear();
   composerProps.current = null;

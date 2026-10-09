@@ -12,6 +12,7 @@ function snapshot(overrides: Partial<CanopySnapshot> = {}): CanopySnapshot {
     tier: "free",
     dispositions: [],
     seen: [],
+    reads: [],
     scope: null,
     active: false,
     busy: false,

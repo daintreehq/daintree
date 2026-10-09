@@ -267,6 +267,51 @@ export interface CanopySeen {
 }
 
 /**
+ * Whether the user has seen what a run has done since they last looked, the
+ * way mail is read or unread. Each thing the agent did that would be news to
+ * someone looking away is one turn — a stop, a start nobody here sent it, a
+ * new ask — taken from what Daintree observed and the screen showed, never
+ * from a reading's words.
+ */
+export interface CanopyReadMark {
+  runId: string;
+  /** The incarnation it is for; a respawn starts with nothing to read. */
+  spawnedAt: number;
+  turn: number;
+  /** The turn the user has read through; unread while below `turn`. */
+  readTurn: number;
+  /** When the user marked it unread themselves; null when not. */
+  markedUnreadAt: number | null;
+  /** Rises with every change to what is read, so an undo can tell nothing changed since. */
+  version: number;
+}
+
+/**
+ * Undo of a read change: what the run was before (`mark`), put back only while
+ * it still is as the change left it (`expectVersion`).
+ */
+export interface CanopyReadRestore {
+  mark: CanopyReadMark;
+  expectVersion: number;
+}
+
+/** Where in a view a terminal is in front of the user: its own pane, or Canopy's panel. */
+export type CanopyLookPlace = "pane" | "panel";
+
+/** A run to mark read, through the turn the panel showed — never a turn that landed since. */
+export interface CanopyReadTarget {
+  runId: string;
+  spawnedAt: number;
+  turn: number;
+}
+
+/** Unread: a turn the user hasn't read, or marked unread by hand. */
+export function isCanopyUnread(mark: CanopyReadMark | null | undefined): boolean {
+  if (!mark) return false;
+  return mark.markedUnreadAt !== null || mark.readTurn < mark.turn;
+}
+
+/**
  * Whether the user pays for Canopy. Screens are read alike on both: the tier
  * changes only what the panel tells them.
  */
@@ -300,6 +345,8 @@ export interface CanopySnapshot {
   dispositions: CanopyDisposition[];
   /** When the user last looked at each run, for the runs looked at since Daintree started. */
   seen: CanopySeen[];
+  /** What the user has read of each run Canopy knows. A run with none has nothing unread. */
+  reads: CanopyReadMark[];
   /** The workspace main reads screens in, or null for every workspace. */
   scope: string | null;
   /** A panel is open and main is watching screens. */

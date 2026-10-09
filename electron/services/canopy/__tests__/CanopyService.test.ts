@@ -3233,3 +3233,251 @@ describe("CanopyService across a resize", () => {
     expect(h.describe.mock.calls[0]![0].screen).toContain("…)");
   });
 });
+
+describe("CanopyService reads", () => {
+  const finishedReading: Reading = {
+    category: "finished",
+    confidence: 0.9,
+    attention: 0.9,
+    question: null,
+  };
+  const readOf = (h: Harness, runId = "a") =>
+    h.service.getSnapshot().reads.find((mark) => mark.runId === runId);
+  const unread = (h: Harness, runId = "a") => {
+    const mark = readOf(h, runId);
+    return mark !== undefined && (mark.markedUnreadAt !== null || mark.readTurn < mark.turn);
+  };
+
+  /** A run seen at work, then stopped on a new screen: one unread turn. */
+  async function stoppedAfterWork() {
+    const h = await makeHarness({
+      classify: async (input) =>
+        input.screen.includes("Working")
+          ? { category: "working", confidence: 0.9, attention: 0.1, question: null }
+          : finishedReading,
+    });
+    h.runs.push(run("a", { agentState: "working" }));
+    h.screens.set("a", "Working on it");
+    await h.service.scan();
+    expect(unread(h)).toBe(false);
+    h.runs[0] = run("a", { agentState: "completed" });
+    h.screens.set("a", "All done.");
+    await h.service.refresh();
+    return h;
+  }
+
+  it("marks a run unread when it stops after work, and read when the user reads it", async () => {
+    const h = await stoppedAfterWork();
+    expect(unread(h)).toBe(true);
+    const mark = readOf(h)!;
+    h.service.setRead("a", 1, true, mark.turn);
+    expect(unread(h)).toBe(false);
+  });
+
+  it("never reads a turn that landed after the one the user was shown", async () => {
+    const h = await stoppedAfterWork();
+    const shown = readOf(h)!.turn;
+    // Back at work on its own, before the read reached main.
+    h.runs[0] = run("a", { agentState: "working" });
+    h.screens.set("a", "Working on the follow-up");
+    await h.service.refresh();
+    h.service.setRead("a", 1, true, shown);
+    expect(unread(h)).toBe(true);
+  });
+
+  it("keeps a start the user sent from the panel read, once they had read the run", async () => {
+    const h = await stoppedAfterWork();
+    h.service.setRead("a", 1, true);
+    h.service.noteUserSent("a", 1);
+    h.runs[0] = run("a", { agentState: "working" });
+    h.screens.set("a", "Working on what you asked");
+    await h.service.refresh();
+    expect(unread(h)).toBe(false);
+  });
+
+  it("marks all read through the turns the panel showed, and undoes only what is unchanged", async () => {
+    const h = await stoppedAfterWork();
+    const before = readOf(h)!;
+    let [after] = h.service.markAllRead([{ runId: "a", spawnedAt: 1, turn: before.turn }]);
+    expect(unread(h)).toBe(false);
+    h.service.restoreReads([{ mark: before, expectVersion: after!.version }]);
+    expect(unread(h)).toBe(true);
+    // Read again, then something new: the undo no longer applies.
+    [after] = h.service.markAllRead([{ runId: "a", spawnedAt: 1, turn: before.turn }]);
+    h.runs[0] = run("a", { agentState: "working" });
+    h.screens.set("a", "Working on the next part");
+    await h.service.refresh();
+    h.service.setRead("a", 1, true);
+    h.service.restoreReads([{ mark: before, expectVersion: after!.version }]);
+    expect(unread(h)).toBe(false);
+  });
+
+  it("keeps a run marked unread by hand while it is still being looked at", async () => {
+    let now = 1_000_000;
+    const h = await makeHarness({ now: () => now });
+    h.runs.push(run("a", { agentState: "working" }));
+    h.screens.set("a", "Working on it");
+    await h.service.scan();
+    h.service.markSeen("a", { viewId: 1, place: "pane", looking: true });
+    now += 5_000;
+    h.service.setRead("a", 1, false);
+    now += 5_000;
+    h.service.markSeen("a", { viewId: 1, place: "pane", looking: false });
+    expect(unread(h)).toBe(true);
+    // Coming back to it and staying a while reads it.
+    h.service.markSeen("a", { viewId: 1, place: "pane", looking: true });
+    now += 5_000;
+    h.service.markSeen("a", { viewId: 1, place: "pane", looking: false });
+    expect(unread(h)).toBe(false);
+  });
+
+  it("reads nothing for a glance shorter than the dwell, nor for a view that went away", async () => {
+    let now = 1_000_000;
+    const h = await stoppedAfterWork();
+    h.service.dispose();
+    const g = await makeHarness({
+      now: () => now,
+      classify: async (input) =>
+        input.screen.includes("Working")
+          ? { category: "working", confidence: 0.9, attention: 0.1, question: null }
+          : finishedReading,
+    });
+    g.runs.push(run("a", { agentState: "completed" }));
+    g.screens.set("a", "All done.");
+    await g.service.scan();
+    expect(unread(g)).toBe(true);
+    g.service.markSeen("a", { viewId: 1, place: "pane", looking: true });
+    now += 200;
+    g.service.markSeen("a", { viewId: 1, place: "pane", looking: false });
+    expect(unread(g)).toBe(true);
+
+    g.service.markSeen("a", { viewId: 2, place: "pane", looking: true });
+    g.service.forgetViewer(2);
+    now += 10_000;
+    g.service.markSeen("a", { viewId: 2, place: "pane", looking: false });
+    expect(unread(g)).toBe(true);
+  });
+
+  it("keeps a look in a view's grid pane apart from one in its Canopy panel", async () => {
+    let now = 1_000_000;
+    const h = await makeHarness({ now: () => now });
+    h.runs.push(run("a", { agentState: "working" }));
+    h.screens.set("a", "Working on it");
+    await h.service.scan();
+    h.service.setRead("a", 1, false);
+    now += 1;
+    // Canopy closes onto the pane showing the same run: the pane's look can
+    // start before the panel's has ended.
+    h.service.markSeen("a", { viewId: 1, place: "panel", looking: true });
+    h.service.markSeen("a", { viewId: 1, place: "pane", looking: true });
+    h.service.markSeen("a", { viewId: 1, place: "panel", looking: false });
+    now += 5_000;
+    h.service.markSeen("a", { viewId: 1, place: "pane", looking: false });
+    expect(unread(h)).toBe(false);
+  });
+
+  it("reads a run once someone has looked at it for the dwell", async () => {
+    // Read through Date each time, so the faked clock below reaches the service.
+    const h = await makeHarness({ classify: async () => finishedReading, now: () => Date.now() });
+    h.runs.push(run("a", { agentState: "completed" }));
+    h.screens.set("a", "All done.");
+    await h.service.scan();
+    expect(unread(h)).toBe(true);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      h.service.markSeen("a", { viewId: 1, place: "pane", looking: true });
+      vi.advanceTimersByTime(1_000);
+      expect(unread(h)).toBe(true);
+      vi.advanceTimersByTime(1_000);
+      expect(unread(h)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("archives a run as read, and brings it back unread when it has something new to say", async () => {
+    const h = await stoppedAfterWork();
+    h.service.archive("a", 1);
+    expect(unread(h)).toBe(false);
+    h.runs[0] = run("a", { agentState: "working" });
+    h.screens.set("a", "Working on the next step");
+    await h.service.refresh();
+    h.service.setRead("a", 1, true);
+    h.runs[0] = run("a", { agentState: "completed" });
+    h.screens.set("a", "Finished the next step.");
+    await h.service.refresh();
+    expect(h.service.getSnapshot().dispositions).toEqual([]);
+    expect(unread(h)).toBe(true);
+  });
+
+  it("marks the first question of a run first seen idle unread", async () => {
+    const h = await makeHarness({
+      classify: async (input) =>
+        input.screen.includes("format")
+          ? { category: "question", confidence: 0.9, attention: 0.9, question: "Which format?" }
+          : { category: "idle", confidence: 0.9, attention: 0.1, question: null },
+    });
+    h.runs.push(run("a", { agentState: "idle" }));
+    h.screens.set("a", "Welcome to Claude Code");
+    await h.service.scan();
+    expect(unread(h)).toBe(false);
+    // It asks with no start Daintree saw.
+    h.screens.set("a", "Which format should the entry use?");
+    await h.service.refresh();
+    expect(unread(h)).toBe(true);
+  });
+
+  it("marks work that started and ended between two reads unread", async () => {
+    const h = await makeHarness({ classify: async () => finishedReading, now: () => Date.now() });
+    h.runs.push(run("a", { agentState: "idle" }));
+    h.screens.set("a", "Welcome to Claude Code");
+    await h.service.scan();
+    expect(unread(h)).toBe(false);
+    // Only the fleet saw it at work, for longer than a flicker — timed by when
+    // main heard of each change, since a run's own times can be stale.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      h.runs[0] = run("a", { agentState: "working", since: 1 });
+      h.service.onFleetChanged();
+      vi.setSystemTime(Date.now() + 5_000);
+      h.runs[0] = run("a", { agentState: "completed", since: 1 });
+      h.service.onFleetChanged();
+    } finally {
+      vi.useRealTimers();
+    }
+    h.screens.set("a", "Done: renamed the helper.");
+    await h.service.refresh();
+    expect(unread(h)).toBe(true);
+  });
+
+  it("archives again on an undo only while the run has done nothing since", async () => {
+    const h = await stoppedAfterWork();
+    const turn = readOf(h)!.turn;
+    h.runs[0] = run("a", { agentState: "working" });
+    h.screens.set("a", "Working on the next part");
+    await h.service.refresh();
+    expect(h.service.archive("a", 1, turn)).toBeNull();
+    expect(h.service.getSnapshot().dispositions).toEqual([]);
+    expect(h.service.archive("a", 1, readOf(h)!.turn)).not.toBeNull();
+  });
+
+  it("answers an archive with the mark it left, for an undo to restore", async () => {
+    const h = await stoppedAfterWork();
+    const before = readOf(h)!;
+    const after = h.service.archive("a", 1)!;
+    expect(after.readTurn).toBe(after.turn);
+    h.service.unarchive("a", 1);
+    h.service.restoreReads([{ mark: before, expectVersion: after.version }]);
+    expect(unread(h)).toBe(true);
+  });
+
+  it("starts a respawned terminal with nothing unread from the one before", async () => {
+    const h = await stoppedAfterWork();
+    expect(unread(h)).toBe(true);
+    h.runs[0] = run("a", { spawnedAt: 2, agentState: "working" });
+    h.service.onFleetChanged();
+    expect(readOf(h)).toBeUndefined();
+    h.service.setRead("a", 1, true);
+    expect(readOf(h)).toBeUndefined();
+  });
+});

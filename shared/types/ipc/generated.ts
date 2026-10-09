@@ -123,8 +123,12 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "canopy:archive": {
-    args: [runId: string, target: import("./canopy.js").CanopyTarget];
-    result: void;
+    args: [
+      runId: string,
+      target: import("./canopy.js").CanopyTarget,
+      expectTurn?: number | undefined,
+    ];
+    result: import("./canopy.js").CanopyReadMark | null;
   };
   "canopy:capture-backdrop": {
     args: [];
@@ -134,12 +138,24 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./canopy.js").CanopySnapshot;
   };
+  "canopy:mark-all-read": {
+    args: [targets: import("./canopy.js").CanopyReadTarget[]];
+    result: import("./canopy.js").CanopyReadMark[];
+  };
   "canopy:mark-seen": {
-    args: [runId: string];
+    args: [
+      runId: string,
+      looking?: boolean | undefined,
+      place?: import("./canopy.js").CanopyLookPlace | undefined,
+    ];
     result: void;
   };
   "canopy:refresh": {
     args: [];
+    result: void;
+  };
+  "canopy:restore-reads": {
+    args: [restores: import("./canopy.js").CanopyReadRestore[]];
     result: void;
   };
   "canopy:run-branch": {
@@ -149,6 +165,15 @@ export interface GeneratedIpcInvokeMap {
   "canopy:set-active": {
     args: [active: boolean];
     result: import("./canopy.js").CanopySnapshot;
+  };
+  "canopy:set-read": {
+    args: [
+      runId: string,
+      target: import("./canopy.js").CanopyTarget,
+      read: boolean,
+      turn?: number | undefined,
+    ];
+    result: import("./canopy.js").CanopyReadMark | null;
   };
   "canopy:set-scope": {
     args: [workspaceId: string | null];
