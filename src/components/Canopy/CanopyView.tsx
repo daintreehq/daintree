@@ -37,7 +37,6 @@ import {
   itemArchived,
   itemNeedsAttention,
   itemPriority,
-  itemSubject,
   repliedAt,
   splitInbox,
   type CanopyItem,
@@ -161,6 +160,7 @@ async function hideCanopy(): Promise<void> {
     type: "success",
     title: "Canopy hidden",
     message: "Show it again from Settings > Canopy.",
+    context: { eventKind: "settings" },
     priority: "high",
     transient: true,
     duration: UNDO_TOAST_DURATION_MS,
@@ -173,6 +173,9 @@ async function hideCanopy(): Promise<void> {
             type: "error",
             title: "Couldn't show Canopy",
             message: "Show it again from Settings > Canopy.",
+            // Settings events default to the inbox alone; a failed Undo is seen now.
+            priority: "high",
+            context: { eventKind: "settings" },
             action: {
               label: "Open settings",
               onClick: () =>
@@ -752,26 +755,77 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
   // The last triage the user did here, to take back with Z or the toast's
   // Undo. One deep, as in mail: only the newest action can be undone.
   const undoRef = useRef<(() => void) | null>(null);
-  const offerUndo = useCallback((undo: () => void, toast?: { title: string; message: string }) => {
+  /**
+   * Holds Z for an action from its press, not from when main answers: a Z
+   * pressed before then waits for it, and an action pressed after takes Z
+   * over. `land` hands over the action's undo once main has done it (with an
+   * Undo toast when one is given); `forget` gives Z up when main did nothing.
+   */
+  const reserveUndo = useCallback(() => {
+    let landed: (() => void) | null = null;
+    let asked = false;
+    const undo = () => {
+      if (landed) landed();
+      else asked = true;
+    };
     undoRef.current = undo;
-    if (!toast) return;
-    notify({
-      type: "success",
-      transient: true,
-      title: toast.title,
-      message: toast.message,
-      context: { eventKind: "agent" },
-      duration: 6000,
-      actions: [
-        {
-          label: "Undo",
-          onClick: () => {
-            if (undoRef.current === undo) undoRef.current = null;
-            undo();
-          },
-        },
-      ],
-    });
+    return {
+      land: (restore: () => void, toast?: { title: string; message: string }) => {
+        landed = restore;
+        if (asked) {
+          restore();
+          return;
+        }
+        if (!toast) return;
+        notify({
+          type: "success",
+          transient: true,
+          title: toast.title,
+          message: toast.message,
+          context: { eventKind: "agent" },
+          duration: 6000,
+          actions: [
+            {
+              label: "Undo",
+              onClick: () => {
+                if (undoRef.current === undo) undoRef.current = null;
+                restore();
+              },
+            },
+          ],
+        });
+      },
+      forget: () => {
+        if (undoRef.current === undo) undoRef.current = null;
+      },
+    };
+  }, []);
+  // Z takes the newest action back from anywhere in the panel: a row, the
+  // folded Archived bar, or Refresh once the last row archived away — never
+  // from the pane's terminal or composer, or any text field, where Z is a letter.
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.shiftKey || event.altKey) return;
+      if (event.key !== "z" && event.key !== "Z") return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target?.closest('[data-testid="canopy-dialog"]')) return;
+      if (
+        target.closest(
+          'input, textarea, select, [contenteditable="true"], [data-canopy-terminal], [data-canopy-detail] .cm-editor'
+        )
+      ) {
+        return;
+      }
+      event.preventDefault();
+      // Held down, Z undoes once: a repeat must not take the slot from an
+      // action pressed since.
+      if (event.repeat) return;
+      const undo = undoRef.current;
+      undoRef.current = null;
+      undo?.();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
   }, []);
   /**
    * Undo of a read change: each run back to what it was (`before`), wherever
@@ -864,15 +918,19 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       onArchive: (item) => {
         if (itemArchived(item)) {
           const turn = item.readMark?.turn ?? 0;
+          const undo = reserveUndo();
           safeFireAndForget(
             unarchive(item).then(
               () =>
-                offerUndo(() =>
+                undo.land(() =>
                   // Main archives it again only while it has done nothing since
                   // it came back: otherwise that would hide what it did.
                   safeFireAndForget(archive(item, turn).catch(archiveFailed(item)))
                 ),
-              unarchiveFailed(item)
+              (error: unknown) => {
+                undo.forget();
+                unarchiveFailed(item)(error);
+              }
             )
           );
           return;
@@ -881,20 +939,23 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
         const next = nextAfter(item.runId);
         if (next) focusCardNow(next.runId);
         const before = item.readMark;
+        // No toast: the user archived it and watched it leave, and Z takes it back.
+        const undo = reserveUndo();
         safeFireAndForget(
           archive(item).then(
-            (after) =>
-              // Refused — the run left, or was respawned: nothing to announce or undo.
-              after !== null &&
-              offerUndo(
-                () => {
-                  safeFireAndForget(unarchive(item).catch(unarchiveFailed(item)));
-                  // Archiving read it; taking it back puts back what was unread.
-                  if (before && after) undoReads([before], [after]);
-                },
-                { title: "Archived", message: itemSubject(item) }
-              ),
-            archiveFailed(item)
+            (after) => {
+              // Refused — the run left, or was respawned: nothing to undo.
+              if (after === null) return undo.forget();
+              undo.land(() => {
+                safeFireAndForget(unarchive(item).catch(unarchiveFailed(item)));
+                // Archiving read it; taking it back puts back what was unread.
+                if (before) undoReads([before], [after]);
+              });
+            },
+            (error: unknown) => {
+              undo.forget();
+              archiveFailed(item)(error);
+            }
           )
         );
       },
@@ -915,32 +976,16 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
         );
       },
       onTrash: (item) => {
-        const runId = item.runId;
+        // No toast: the user pressed Trash twice and watched the row go. The
+        // terminal is in the trash, restorable from there like any other.
         safeFireAndForget(
-          window.electron.canopy.trash(runId, target(item)).then(
-            () => {
-              notify({
-                type: "success",
-                // One-shot: its only job is the Undo, which means nothing once it has gone.
-                transient: true,
-                title: "Terminal trashed",
-                message: item.row.title,
-                context: { eventKind: "agent" },
-                duration: 5000,
-                actions: [
-                  {
-                    label: "Undo",
-                    onClick: () => safeFireAndForget(window.electron.terminal.restore(runId)),
-                  },
-                ],
-              });
-            },
-            (error: unknown) => failToast("Couldn't trash terminal", error, goTo(item))
-          )
+          window.electron.canopy
+            .trash(item.runId, target(item))
+            .catch((error: unknown) => failToast("Couldn't trash terminal", error, goTo(item)))
         );
       },
     };
-  }, [close, readNow, focusCardNow, openPaneNow, nextAfter, offerUndo, undoReads]);
+  }, [close, readNow, focusCardNow, openPaneNow, nextAfter, reserveUndo, undoReads]);
 
   /** U: read or unread, by hand. Z takes it back. */
   const toggleRead = useCallback(
@@ -954,27 +999,30 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
           read,
           item.readMark?.turn
         );
+      const undo = reserveUndo();
       safeFireAndForget(
         send().then(
           (after) => {
-            if (!after) return;
+            if (!after) return undo.forget();
             // A run Canopy had no mark for had nothing unread.
             const before = item.readMark ?? {
               ...after,
               readTurn: after.turn,
               markedUnreadAt: null,
             };
-            offerUndo(() => undoReads([before], [after]));
+            undo.land(() => undoReads([before], [after]));
           },
-          (error: unknown) =>
+          (error: unknown) => {
+            undo.forget();
             failToast(read ? "Couldn't mark as read" : "Couldn't mark as unread", error, {
               label: "Retry",
               onClick: () => safeFireAndForget(send()),
-            })
+            });
+          }
         )
       );
     },
-    [offerUndo, undoReads]
+    [reserveUndo, undoReads]
   );
 
   /**
@@ -986,6 +1034,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
     const unread = listed.filter((item) => item.unread);
     if (unread.length === 0) return;
     const before = unread.flatMap((item) => (item.readMark ? [item.readMark] : []));
+    const undo = reserveUndo();
     safeFireAndForget(
       window.electron.canopy
         .markAllRead(
@@ -997,12 +1046,14 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
         )
         .then(
           (after) =>
-            offerUndo(() => undoReads(before, after), {
+            undo.land(() => undoReads(before, after), {
               title: "Marked as read",
               message: pluralize(unread.length, "agent"),
             }),
-          (error: unknown) =>
-            failToast("Couldn't mark as read", error, { label: "Retry", onClick: markAllRead })
+          (error: unknown) => {
+            undo.forget();
+            failToast("Couldn't mark as read", error, { label: "Retry", onClick: markAllRead });
+          }
         )
     );
   };
@@ -1100,13 +1151,6 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
     if (next !== null) {
       event.preventDefault();
       focusCardNow(visible[next]!.runId);
-      return;
-    }
-    if ((event.key === "z" || event.key === "Z") && !event.shiftKey) {
-      event.preventDefault();
-      const undo = undoRef.current;
-      undoRef.current = null;
-      if (undo && !event.repeat) undo();
       return;
     }
     // Keys aimed at the list's selected row act on the selected agent.

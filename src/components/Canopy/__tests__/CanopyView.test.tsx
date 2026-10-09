@@ -505,12 +505,102 @@ describe("CanopyView", () => {
 
   it("archives the selected run with E and moves the cursor on to the next", async () => {
     const canopy = installElectron();
+    vi.mocked(notify).mockClear();
+    const { container } = render(<CanopyView />);
+    await frames();
+    const [first, second] = cards(container);
+    await act(async () => {
+      fireEvent.keyDown(first!, { key: "e" });
+    });
+    expect(canopy.archive).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 });
+    expect(document.activeElement).toBe(second);
+    // The user archived it and watched it go: no toast. Z takes it back.
+    expect(vi.mocked(notify)).not.toHaveBeenCalled();
+    fireEvent.keyDown(second!, { key: "z" });
+    expect(canopy.unarchive).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 });
+  });
+
+  it("takes an archive back with Z pressed before main has answered it", async () => {
+    const canopy = installElectron();
+    let land: (mark: unknown) => void = () => {};
+    canopy.archive.mockImplementationOnce(() => new Promise((resolve) => (land = resolve)));
     const { container } = render(<CanopyView />);
     await frames();
     const [first, second] = cards(container);
     fireEvent.keyDown(first!, { key: "e" });
-    expect(canopy.archive).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 });
-    expect(document.activeElement).toBe(second);
+    fireEvent.keyDown(second!, { key: "z" });
+    expect(canopy.unarchive).not.toHaveBeenCalled();
+    await act(async () => {
+      land({
+        runId: "waiting",
+        spawnedAt: NOW - 3_600_000,
+        turn: 1,
+        readTurn: 1,
+        markedUnreadAt: null,
+        version: 2,
+      });
+    });
+    expect(canopy.unarchive).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 });
+  });
+
+  it("undoes the newest action pressed, whichever main answers last", async () => {
+    const canopy = installElectron();
+    let land: (mark: unknown) => void = () => {};
+    canopy.archive.mockImplementationOnce(() => new Promise((resolve) => (land = resolve)));
+    const { container } = render(<CanopyView />);
+    await frames();
+    const [first, second] = cards(container);
+    fireEvent.keyDown(first!, { key: "e" });
+    // U on the next run, answered before the archive is.
+    await act(async () => {
+      fireEvent.keyDown(second!, { key: "u" });
+    });
+    await act(async () => {
+      land({
+        runId: "waiting",
+        spawnedAt: NOW - 3_600_000,
+        turn: 1,
+        readTurn: 1,
+        markedUnreadAt: null,
+        version: 2,
+      });
+    });
+    // Holding Z undoes once; the repeat takes nothing more.
+    fireEvent.keyDown(second!, { key: "z" });
+    fireEvent.keyDown(second!, { key: "z", repeat: true });
+    expect(canopy.restoreReads).toHaveBeenCalledTimes(1);
+    expect(canopy.unarchive).not.toHaveBeenCalled();
+  });
+
+  it("takes back archiving the last run with Z, though the list is empty", async () => {
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        runs: [run("done", { agentState: "completed", since: NOW - 60_000 })],
+        changedAt: NOW,
+        degraded: false,
+        lastSuccessfulAt: NOW,
+      },
+    });
+    const canopy = installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    await act(async () => {
+      fireEvent.keyDown(cards(container)[0]!, { key: "e" });
+    });
+    act(() => {
+      useCanopyStore.getState().applySnapshot({
+        ...canopySnapshot,
+        sequence: 50,
+        dispositions: [{ runId: "done", spawnedAt: NOW - 3_600_000, kind: "archived", at: NOW }],
+      });
+    });
+    await frames();
+    // Focus went to Refresh in the header, outside the list.
+    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
+    const refresh = dialog.querySelector<HTMLElement>('button[aria-label="Refresh"]')!;
+    refresh.focus();
+    fireEvent.keyDown(refresh, { key: "z" });
+    expect(canopy.unarchive).toHaveBeenCalledWith("done", { spawnedAt: NOW - 3_600_000 });
   });
 
   it("shows only this project's agents when asked, and tells main to read only those", async () => {
@@ -857,8 +947,13 @@ describe("CanopyView", () => {
     fireEvent.keyDown(cards(container)[0]!, { key: "Backspace", metaKey: true, ctrlKey: true });
     // The first press only arms it.
     expect(canopy.trash).not.toHaveBeenCalled();
-    fireEvent.keyDown(cards(container)[0]!, { key: "Backspace", metaKey: true, ctrlKey: true });
+    vi.mocked(notify).mockClear();
+    await act(async () => {
+      fireEvent.keyDown(cards(container)[0]!, { key: "Backspace", metaKey: true, ctrlKey: true });
+    });
     expect(canopy.trash).toHaveBeenCalledWith("done", { spawnedAt: NOW - 3_600_000 });
+    // Pressed twice and watched it go: no toast; it is in the trash like any other.
+    expect(vi.mocked(notify)).not.toHaveBeenCalled();
   });
 
   it("lists a working run with the rest and lands on the top of the list", async () => {
