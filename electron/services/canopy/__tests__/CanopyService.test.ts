@@ -2345,6 +2345,12 @@ describe("CanopyService", () => {
     question = "Want me to push this?";
     await h.service.reread("a", spawnedAt);
     expect(mark()).toEqual(before);
+
+    // The same question drawn again on a redrawn screen is still no news: the
+    // correction made it the ask this turn is about.
+    h.screens.set("a", "Done.\nWant me to push this?");
+    await h.service.refresh();
+    expect(mark()!.turn).toBe(before!.turn);
   });
 
   it("doesn't count the card a re-read cancels as a failure, and reads the run afresh", async () => {
