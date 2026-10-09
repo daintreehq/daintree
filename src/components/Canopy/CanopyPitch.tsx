@@ -25,7 +25,7 @@ const POINTS = [
   {
     icon: BellRing,
     title: "Permission prompts first",
-    body: "An agent asking to run something goes to the top of one list across every project. Answer it with a single key.",
+    body: "An agent asking to run something goes to the top of one list across every project. Answer it from the list; a risky one takes a second press.",
   },
   {
     icon: ListChecks,

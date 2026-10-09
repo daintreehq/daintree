@@ -265,6 +265,7 @@ export const CHANNELS = {
   CANOPY_TRASH: "canopy:trash",
   CANOPY_UNTRASH: "canopy:untrash",
   CANOPY_REREAD: "canopy:reread",
+  CANOPY_SET_SHOWN: "canopy:set-shown",
   CANOPY_ARCHIVE: "canopy:archive",
   CANOPY_UNARCHIVE: "canopy:unarchive",
   CANOPY_ANSWER: "canopy:answer",

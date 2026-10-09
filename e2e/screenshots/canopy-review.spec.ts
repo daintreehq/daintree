@@ -223,7 +223,7 @@ for (const theme of THEMES) {
     written.push(await snap(page, `${theme}--06-off.png`, "some"));
 
     await load(page, theme, "read-error");
-    await expect(dialog(page).getByText("Some screens couldn't be read")).toBeVisible();
+    await expect(dialog(page).getByText("Canopy couldn't read some screens")).toBeVisible();
     written.push(await snap(page, `${theme}--07-read-error.png`, "some"));
 
     // Nothing waiting on you: the working agents are the list, and it opens on the top one.
@@ -232,7 +232,9 @@ for (const theme of THEMES) {
     written.push(await snap(page, `${theme}--08-calm.png`, "some"));
 
     await load(page, theme, "empty");
-    await expect(dialog(page).getByText("Launch an agent and it shows up here.")).toBeVisible();
+    await expect(
+      dialog(page).getByText("Launch an agent from the toolbar and it shows up here.")
+    ).toBeVisible();
     written.push(await snap(page, `${theme}--09-empty.png`, "none"));
 
     await load(page, theme, "long");
