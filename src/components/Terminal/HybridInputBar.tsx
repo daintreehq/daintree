@@ -622,19 +622,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       agentId,
     });
 
-    // Every way this composer sends — Enter, a picked slash command, a prompt
-    // from the command picker — goes through `submitText` when it is given, so
-    // a refused send never eats the draft, whichever path sent it.
-    const sendText: typeof sendResolvedText = (text, options) => {
-      const submit = submitTextRef.current;
-      if (!submit || options?.submit) return sendResolvedText(text, options);
-      const imagePaths = options?.imagePaths ?? [];
-      return sendResolvedText(text, {
-        ...options,
-        submit: (outgoing: string) => submit(outgoing, imagePaths),
-      });
-    };
-
     // The outside-write revision the effect below last brought into the editor.
     // While the store's count is ahead of it, a write sits in the draft store
     // that the editor does not show yet.
@@ -677,6 +664,25 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             appliedExternalDraftRevisionRef.current
         ),
       [editorViewRef, terminalId]
+    );
+
+    // Every way this composer sends — Enter, a picked slash command, a prompt
+    // from the command picker — goes through `submitText` when it is given, so
+    // a refused send never eats the draft, whichever path sent it.
+    const sendText = useCallback<typeof sendResolvedText>(
+      (text, options) => {
+        const submit = submitTextRef.current;
+        if (!submit || options?.submit) return sendResolvedText(text, options);
+        const imagePaths = options?.imagePaths ?? [];
+        return sendResolvedText(text, {
+          // Awaited now, so the user can type while it is on its way: only the
+          // text that went out is cleared, whichever path sent it.
+          isDraftUnchanged: guardSentDraft(latestRef.current?.projectId),
+          ...options,
+          submit: (outgoing: string) => submit(outgoing, imagePaths),
+        });
+      },
+      [sendResolvedText, guardSentDraft]
     );
 
     const resetEditorDoc = () => {
