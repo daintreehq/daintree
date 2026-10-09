@@ -394,7 +394,8 @@ export function CanopyRow({
               onDoubleClick={(event) => event.stopPropagation()}
               // In the progress meter's place on the name line, which gives way to
               // it under the pointer, as a mail list's actions take the date's.
-              className="absolute top-2.5 right-2 flex size-5 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 hover:bg-overlay-highlight hover:text-text-primary [&_svg]:size-3.5"
+              // 24px square for WCAG 2.5.8: it sits inside the row's own target.
+              className="absolute top-2 right-1.5 flex size-6 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 hover:bg-overlay-highlight hover:text-text-primary [&_svg]:size-3.5"
             >
               {archived ? <ArchiveRestore /> : <Archive />}
             </button>
@@ -505,7 +506,9 @@ export function CanopyRow({
                 id={detailId}
                 className={cn(
                   "text-xs leading-4 text-text-secondary",
-                  choices.length > 0 ? "line-clamp-1 min-h-4" : "line-clamp-2 min-h-8"
+                  // One line above a dialog's choices ends mid-word rather than
+                  // at the last word that fits, which can leave a third of it empty.
+                  choices.length > 0 ? "min-h-4 truncate" : "line-clamp-2 min-h-8"
                 )}
               >
                 {detailDue ? (
