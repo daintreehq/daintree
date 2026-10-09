@@ -700,16 +700,40 @@ describe("canopy IPC", () => {
     expect(ptyClient.restore).toHaveBeenCalledWith("run-1");
   });
 
-  it("keeps a newer trash's Undo through its own restore's late word, and a stale receipt's refusal", async () => {
+  it("keeps a newer trash's Undo through its own restore's late word", async () => {
     const first = await trashReceipt();
     await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), first));
     // Trashed again before the host's word on the first restore arrives.
     const second = await trashReceipt();
     events.emit("terminal:restored", { id: "run-1" });
-    // A receipt from an older incarnation is refused without spending the newer one.
-    state.record = { spawnedAt: 100 };
     const undone = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), second));
     expect(undone.ok).toBe(true);
+  });
+
+  it("refuses an older incarnation's receipt without spending the newer one's", async () => {
+    const old = await trashReceipt();
+    // Respawned under the same id, listed and trashed again.
+    state.record = { spawnedAt: 200 };
+    state.runs = [{ runId: "run-1", spawnedAt: 200, workspaceId: "project-1" }];
+    const result = (await invoke(CANOPY_METHOD_CHANNELS.trash, fakeSender(1), "run-1", {
+      spawnedAt: 200,
+    })) as { data?: unknown } | number;
+    const newer = typeof result === "number" ? result : (result.data as number);
+    const stale = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), old));
+    expect(stale.ok).toBe(false);
+    const undone = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), newer));
+    expect(undone.ok).toBe(true);
+  });
+
+  it("refuses an Undo whose terminal was restored elsewhere while the host was asked", async () => {
+    const receipt = await trashReceipt();
+    ptyClient.getTerminalAsync.mockImplementationOnce(async () => {
+      events.emit("terminal:restored", { id: "run-1" });
+      return state.record;
+    });
+    const result = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), receipt));
+    expect(result.ok).toBe(false);
+    expect(ptyClient.restore).not.toHaveBeenCalled();
   });
 
   it("spends a receipt once the terminal is restored anywhere else", async () => {
