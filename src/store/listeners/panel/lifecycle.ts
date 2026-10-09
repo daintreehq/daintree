@@ -280,8 +280,9 @@ export function setupLifecycleListeners(): DisposableStore {
     );
   }
 
-  // Canopy took back its trash of a terminal this view holds: the pane comes
-  // back from the trash as its own Undo would, restoring it on the host too.
+  // Canopy took back its trash of a terminal this view holds: main has
+  // restored it on the host, so the pane comes back from the trash without a
+  // second host restore, which could undo a trash another window made since.
   const onCanopyRestore = window.electron?.canopy?.onRestoreRequested;
   if (onCanopyRestore) {
     d.add(
@@ -289,7 +290,7 @@ export function setupLifecycleListeners(): DisposableStore {
         onCanopyRestore(({ runId }) => {
           const panel = usePanelStore.getState().panelsById[runId];
           if (!panel || panel.location !== "trash") return;
-          usePanelStore.getState().restoreTerminal(runId);
+          usePanelStore.getState().restoreTerminal(runId, undefined, { hostRestored: true });
         })
       )
     );

@@ -107,7 +107,18 @@ installPreviewShims({
           ],
         });
       }
-      return record("archive", { runId });
+      // Main answers with the run's read mark after the archive read it, which
+      // Undo puts back from; the preview reads it through its turn the same way.
+      const mark = current?.reads.find((entry) => entry.runId === runId);
+      const after = {
+        runId,
+        spawnedAt: target.spawnedAt,
+        turn: mark?.turn ?? 0,
+        readTurn: mark?.turn ?? 0,
+        markedUnreadAt: null,
+        version: (mark?.version ?? 0) + 1,
+      };
+      return record("archive", { runId }).then(() => after);
     },
     unarchive: (runId: string) => {
       if (current) {
@@ -119,6 +130,7 @@ installPreviewShims({
       return record("unarchive", { runId });
     },
     setScope: (workspaceId: string | null) => record("scope", { workspaceId }),
+    rename: (runId: string, _target: unknown, title: string) => record("rename", { runId, title }),
     // No live grid behind the preview to freeze; the panel draws on its own backdrop.
     captureBackdrop: () => Promise.resolve(null),
     answer: (runId: string, _target: unknown, label: string) => record("answer", { runId, label }),

@@ -850,8 +850,12 @@ export const usePanelStore = create<PanelGridState>()(
         }
       },
 
-      restoreTerminal: (id: string, targetWorktreeId?: string) => {
-        registrySlice.restoreTerminal(id, targetWorktreeId);
+      restoreTerminal: (
+        id: string,
+        targetWorktreeId?: string,
+        options?: { hostRestored?: boolean }
+      ) => {
+        registrySlice.restoreTerminal(id, targetWorktreeId, options);
         // The registry restore is a no-op when the id is gone; don't move
         // focus onto a panel that doesn't exist.
         const restoredPanel = get().panelsById[id];

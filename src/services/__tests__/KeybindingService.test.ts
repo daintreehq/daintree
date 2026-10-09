@@ -182,6 +182,22 @@ describe("KeybindingService", () => {
       expect(windows.findMatchingAction(ctrlPeriod)?.actionId).toBe("voiceInput.toggle");
     });
 
+    it("lists every combo an action fires on, a second binding such as Windows' Ctrl+F4 included", () => {
+      const service = new KeybindingService();
+      const first = service.getEffectiveCombo("terminal.close")!;
+      service.registerBinding({
+        actionId: "terminal.close",
+        combo: "Ctrl+F4",
+        scope: "global",
+        priority: 10,
+        description: "Close focused terminal",
+        category: "Terminal",
+      });
+      expect(service.getTriggerCombos("terminal.close")).toEqual([first, "Ctrl+F4"]);
+      // The one-combo view leaves the second binding out.
+      expect(service.getEffectiveCombos("terminal.close")).toEqual([first]);
+    });
+
     it("keeps ⌘. distinct from the ⌘⇧. and ⌘⌥. defaults on macOS", () => {
       setPlatform("MacIntel");
 

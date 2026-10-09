@@ -75,19 +75,20 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // toggle away from it: the rest act on the focused pane or the armed
       // fleet, neither of which is the terminal the user is typing to.
       // Close is the exception inside a surface that owns it (below).
-      if (
+      const isolated =
         typeof target.closest === "function" &&
-        target.closest("[data-keybindings-isolated]") !== null
-      ) {
+        target.closest("[data-keybindings-isolated]") !== null;
+      const ownsClose = isolated && target.closest(`[${CLOSE_OWNER_ATTR}]`) !== null;
+      if (isolated) {
+        // A chord begun outside is abandoned once the user types in here: the
+        // keys are the terminal's, and the surface's own shortcuts are single.
+        if (keybindingService.getPendingChord() !== null) keybindingService.clearPendingChord();
         // One keystroke only: a chord's first key would have to reach the
         // resolver, and with it every other binding the surface keeps out.
-        const matches = (actionId: "canopy.toggle" | "terminal.close") => {
-          const combo = keybindingService.getEffectiveCombo(actionId);
-          return (
-            combo !== undefined && !combo.includes(" ") && keybindingService.matchesEvent(e, combo)
-          );
-        };
-        const ownsClose = target.closest(`[${CLOSE_OWNER_ATTR}]`) !== null;
+        const matches = (actionId: "canopy.toggle" | "terminal.close") =>
+          keybindingService
+            .getTriggerCombos(actionId)
+            .some((combo) => !combo.includes(" ") && keybindingService.matchesEvent(e, combo));
         if (!matches("canopy.toggle") && !(ownsClose && matches("terminal.close"))) return;
       }
       const isEditable =
@@ -122,7 +123,10 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         (e.key === "ContextMenu" ||
           (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey)) &&
         target.closest("[data-row-menu]") === null &&
-        target.closest('[role="menu"]') === null
+        target.closest('[role="menu"]') === null &&
+        // An isolated surface types to its own terminal: the focused grid
+        // pane's menu is not what these keys mean there.
+        !isolated
       ) {
         const effectiveCombo = keybindingService.getEffectiveCombo("terminal.contextMenu");
         if (effectiveCombo !== undefined) {
@@ -312,6 +316,19 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
 
       // Use resolveKeybinding for proper chord and priority resolution
       const result = keybindingService.resolveKeybinding(e);
+
+      // The combo let the key into the isolated surface; the action it
+      // resolved to must be one the surface allows too — another binding on
+      // the same keys (a plugin's, say) must not act from inside it. The key
+      // goes on to the terminal or composer untouched.
+      if (
+        isolated &&
+        result.match?.actionId !== "canopy.toggle" &&
+        !(ownsClose && result.match?.actionId === "terminal.close")
+      ) {
+        if (result.chordPrefix) keybindingService.clearPendingChord();
+        return;
+      }
 
       if (result.shouldConsume) {
         e.preventDefault();
