@@ -77,7 +77,18 @@ export function subscribeFocusedPanelReporter(): () => void {
   document.addEventListener("focusout", schedule);
   window.addEventListener("focus", schedule);
   window.addEventListener("blur", schedule);
-  const unsubscribeStore = usePanelStore.subscribe(schedule);
+  // A store change can remove or move the focused DOM node, and removal fires
+  // no `focusout`; sample again once React has committed it.
+  let frame: number | null = null;
+  const onStoreChange = () => {
+    schedule();
+    if (frame !== null || typeof requestAnimationFrame !== "function") return;
+    frame = requestAnimationFrame(() => {
+      frame = null;
+      schedule();
+    });
+  };
+  const unsubscribeStore = usePanelStore.subscribe(onStoreChange);
   // A view coming back from the cache re-sends even an unchanged answer: main
   // ignored this view while it was cached and may hold its stale report.
   const onVisibilityChange = () => {
@@ -95,6 +106,7 @@ export function subscribeFocusedPanelReporter(): () => void {
     window.removeEventListener("focus", schedule);
     window.removeEventListener("blur", schedule);
     document.removeEventListener("visibilitychange", onVisibilityChange);
+    if (frame !== null) cancelAnimationFrame(frame);
     unsubscribeStore();
   };
 }

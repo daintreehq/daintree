@@ -446,6 +446,9 @@ export class PortalManager {
     if (this.activeView) {
       this.activeView.setBounds(OFFSCREEN_BOUNDS);
       this.hidden = true;
+      // A parked page isn't where the user is working, whether or not the
+      // focus return below produces a blur.
+      if (this.focusedTabId !== null) this.setTabFocused(this.focusedTabId, false);
       // Parked like showTab() parks: not frozen, not CPU-throttled (#12456).
 
       // Return focus to the main app webContents. The old removeChildView

@@ -238,22 +238,35 @@ describe("onDidChangeFocusedPanel", () => {
     expect(() => host.onDidChangeFocusedPanel(() => {})).toThrow(/host revoked/);
   });
 
-  it("stops after dispose and after unload", async () => {
+  it("stops delivering, pending window included, once disposed while still loaded", async () => {
     const h = makeHarness();
     const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
-    const disposed: PluginFocusedPanel[] = [];
-    const unloaded: PluginFocusedPanel[] = [];
-    const dispose = await host.onDidChangeFocusedPanel((f) => disposed.push(f), { debounceMs: 0 });
-    h.plugins.delete(PLUGIN_ID);
-    await host.onDidChangeFocusedPanel((f) => unloaded.push(f));
-    dispose();
-    dispose();
-
+    const seen: PluginFocusedPanel[] = [];
+    const dispose = await host.onDidChangeFocusedPanel((f) => seen.push(f));
     tracker.report(VIEW, WINDOW, PROJECT_ID, { kind: "terminal", worktreeId: "w" });
+    dispose();
+    dispose();
+    tracker.report(VIEW, WINDOW, PROJECT_ID, { kind: "diff", worktreeId: "w" });
     vi.advanceTimersByTime(1_000);
 
-    expect(disposed).toEqual([{ kind: null, agent: false, worktreeId: null }]);
-    expect(unloaded).toEqual([]);
+    expect(seen).toEqual([{ kind: null, agent: false, worktreeId: null }]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("is torn down by the plugin's unload cleanups", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const seen: PluginFocusedPanel[] = [];
+    await host.onDidChangeFocusedPanel((f) => seen.push(f));
+    tracker.report(VIEW, WINDOW, PROJECT_ID, { kind: "terminal", worktreeId: "w" });
+    const cleanups = h.deps.pluginEventCleanups.get(PLUGIN_ID) ?? [];
+    expect(cleanups.length).toBeGreaterThan(0);
+    for (const cleanup of cleanups) cleanup();
+    tracker.report(VIEW, WINDOW, PROJECT_ID, { kind: "diff", worktreeId: "w" });
+    vi.advanceTimersByTime(1_000);
+
+    expect(seen).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("survives a listener that throws on the replay", async () => {

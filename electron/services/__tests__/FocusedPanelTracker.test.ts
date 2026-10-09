@@ -57,18 +57,60 @@ describe("FocusedPanelTracker", () => {
     expect(kindOf(tracker)).toBe("terminal");
   });
 
-  it("takes the newest report among the window's live views", () => {
-    let cached = new Set<number>();
-    const tracker = new FocusedPanelTracker({ isLiveSender: (id) => !cached.has(id) });
+  it("follows the view holding native focus, not the newest report", () => {
+    let focused = 11;
+    const tracker = new FocusedPanelTracker({ isFocused: (id) => id === focused });
     tracker.setFocusedWindow(W1);
     tracker.report(10, W1, "p1", { kind: "terminal" });
     tracker.report(11, W1, "p2", { kind: "browser" });
-    expect(kindOf(tracker)).toBe("browser");
-
-    // The view just switched away from reports its blur late: it is cached.
-    cached = new Set([10]);
+    // The view switched away from reports its blur late.
     tracker.report(10, W1, "p1", { kind: null });
     expect(kindOf(tracker)).toBe("browser");
+
+    // A warm switch back to p1: its unchanged report is deduped by the
+    // renderer, so only the focus edge tells the tracker.
+    tracker.report(10, W1, "p1", { kind: "terminal" });
+    focused = 11;
+    tracker.refresh();
+    expect(kindOf(tracker)).toBe("browser");
+    focused = 10;
+    tracker.refresh();
+    expect(kindOf(tracker)).toBe("terminal");
+  });
+
+  it("falls back to the active view while a webview guest holds native focus", () => {
+    const tracker = new FocusedPanelTracker({
+      isFocused: () => false,
+      isActive: (id) => id === 11,
+    });
+    tracker.setFocusedWindow(W1);
+    tracker.report(11, W1, "p2", { kind: "browser" });
+    tracker.report(10, W1, "p1", { kind: "diff" });
+
+    expect(kindOf(tracker)).toBe("browser");
+  });
+
+  it("attributes the project when composing, so a late registration still counts", () => {
+    let project: string | null = null;
+    const tracker = new FocusedPanelTracker({ workspaceOf: () => project });
+    tracker.setFocusedWindow(W1);
+    tracker.report(10, W1, null, { kind: "file" });
+    expect(tracker.getCurrent().workspaceId).toBeNull();
+
+    project = "p1";
+    tracker.refresh();
+    expect(tracker.getCurrent().workspaceId).toBe("p1");
+  });
+
+  it("never attributes Portal focus to a project, even from the dock's chrome", () => {
+    const tracker = new FocusedPanelTracker();
+    tracker.setFocusedWindow(W1);
+    tracker.report(10, W1, "p1", { kind: "portal" });
+
+    expect(tracker.getCurrent()).toEqual({
+      panel: { kind: "portal", agent: false, worktreeId: null },
+      workspaceId: null,
+    });
   });
 
   it("forgets a destroyed view and a closed window", () => {

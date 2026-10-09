@@ -530,7 +530,8 @@ export interface CreateMockHostOptions {
   allAgents?: PluginAllAgentsSnapshot;
   /**
    * The focus `onDidChangeFocusedPanel` replays on subscribe. Defaults to no
-   * focused panel (`kind: null`).
+   * focused panel (`kind: null`). For a project plugin it is taken to be inside
+   * its own project; `"portal"` reads as `kind: null`, as in production.
    */
   focusedPanel?: PluginFocusedPanel;
   /**
@@ -727,6 +728,7 @@ function mockResolveSubscriptionDebounceMs(
   value: unknown,
   defaultMs: number = PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS
 ): number {
+  // Every call site passes `value` explicitly, never via `Array#map`.
   if (typeof value !== "number" || Number.isNaN(value)) {
     return defaultMs;
   }
@@ -1742,11 +1744,20 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       });
       let delivered: PluginFocusedPanel | null = null;
       let disposed = false;
-      const subscription = (focus: PluginFocusedPanel) => {
+      const subscription = (raw: PluginFocusedPanel) => {
         if (disposed) return;
+        // A project plugin's simulated focus is taken to be inside its own
+        // project, except the Portal, which production never attributes to one.
+        const focus =
+          mockProjectId !== null && raw.kind === "portal" ? toPluginFocusedPanel(null) : raw;
         if (delivered !== null && pluginFocusedPanelEquals(delivered, focus)) return;
         delivered = focus;
-        callback(focus);
+        try {
+          callback(focus);
+        } catch (err) {
+          // Logged and swallowed, as the host does for a listener.
+          console.error("[createMockHost] onDidChangeFocusedPanel callback failed:", err);
+        }
       };
       focusedPanelSubs.add(subscription);
       // The current focus is replayed, asynchronously like production.

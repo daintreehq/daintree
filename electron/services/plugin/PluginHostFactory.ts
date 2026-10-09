@@ -55,6 +55,7 @@ import {
   WorktreeChangeTracker,
   createSubscriptionCoalescer,
   resolveSubscriptionDebounceMs,
+  resolveSubscriptionDebounceMsOr,
 } from "./pluginSubscriptionCoalescing.js";
 import { isChannelSchema } from "./PluginChannelRegistry.js";
 import { abortErrorFor } from "./pluginAbortError.js";
@@ -1772,7 +1773,7 @@ export function createHost(
       let active = true;
       // The issue asks for a 250–500ms trailing window: focus flips in bursts
       // (click-through, tab cycling) and only where it settles is attention.
-      const debounceMs = resolveSubscriptionDebounceMs(
+      const debounceMs = resolveSubscriptionDebounceMsOr(
         options?.debounceMs,
         PLUGIN_FOCUSED_PANEL_DEFAULT_DEBOUNCE_MS
       );

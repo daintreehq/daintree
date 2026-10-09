@@ -1,4 +1,4 @@
-import { BUILT_IN_PANEL_KINDS } from "../config/panelKindRegistry.js";
+import type { BuiltInPanelKind } from "../config/panelKindRegistry.js";
 import type { PluginFocusedPanel, PluginFocusedPanelKind } from "../types/plugin.js";
 
 /** Nothing that is a panel has focus, or Daintree is not the foreground window. */
@@ -8,7 +8,19 @@ export const NO_FOCUSED_PANEL: PluginFocusedPanel = Object.freeze({
   worktreeId: null,
 });
 
-const BUILT_IN_KIND_SET: ReadonlySet<string> = new Set(BUILT_IN_PANEL_KINDS);
+// A typed record rather than the registry's array: importing the registry as a
+// value drags its theme graph into main and the worker. The key type keeps it
+// exhaustive.
+const BUILT_IN_KINDS: Record<BuiltInPanelKind, true> = {
+  terminal: true,
+  browser: true,
+  "dev-preview": true,
+  review: true,
+  file: true,
+  "file-browser": true,
+  diff: true,
+};
+const BUILT_IN_KIND_SET: ReadonlySet<string> = new Set(Object.keys(BUILT_IN_KINDS));
 
 /**
  * Collapse any panel kind to what a plugin may see: a built-in kind as-is,

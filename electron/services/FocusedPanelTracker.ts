@@ -28,13 +28,17 @@ interface SenderReport {
   seq: number;
 }
 
-export interface FocusedPanelTrackerOptions {
+export interface FocusedPanelSenderChecks {
+  /** The reporting webContents holds native keyboard focus in its window. */
+  isFocused: (webContentsId: number) => boolean;
   /**
-   * Whether a reporting webContents may still speak for its window. A cached
-   * (deactivated) project view is not, so a blur report it sends after the
-   * switch can't overwrite the newly active view's focus.
+   * The reporting webContents is its window's active project view. Consulted
+   * only when no reporting view holds native focus, which is the case while
+   * a `<webview>` guest inside the view has it.
    */
-  isLiveSender?: (webContentsId: number) => boolean;
+  isActive: (webContentsId: number) => boolean;
+  /** The project a reporting view belongs to, read when composing so a view registered after its first report is still attributed. */
+  workspaceOf: (webContentsId: number) => string | null;
 }
 
 /**
@@ -51,15 +55,20 @@ export class FocusedPanelTracker {
   private seq = 0;
   private current: FocusedPanelState = NO_FOCUSED_PANEL_STATE;
   private readonly listeners = new Set<(state: FocusedPanelState) => void>();
-  private isLiveSender: (webContentsId: number) => boolean;
+  private checks: Partial<FocusedPanelSenderChecks>;
 
-  constructor(options: FocusedPanelTrackerOptions = {}) {
-    this.isLiveSender = options.isLiveSender ?? (() => true);
+  constructor(checks: Partial<FocusedPanelSenderChecks> = {}) {
+    this.checks = checks;
   }
 
   /** Installed by main, which owns the webContents registry this module stays free of. */
-  setLiveSenderCheck(check: (webContentsId: number) => boolean): void {
-    this.isLiveSender = check;
+  setSenderChecks(checks: Partial<FocusedPanelSenderChecks>): void {
+    this.checks = checks;
+    this.recompute();
+  }
+
+  /** Re-derive after a fact the checks read changed (a view gained or lost native focus). */
+  refresh(): void {
     this.recompute();
   }
 
@@ -126,13 +135,25 @@ export class FocusedPanelTracker {
     const windowId = this.focusedWindowId;
     if (windowId === null) return NO_FOCUSED_PANEL_STATE;
     if (this.portalFocusedWindows.has(windowId)) return PORTAL_FOCUSED_STATE;
-    let latest: SenderReport | null = null;
-    for (const [id, report] of this.reports) {
-      if (report.windowId !== windowId || !this.isLiveSender(id)) continue;
-      if (latest === null || report.seq > latest.seq) latest = report;
+    const { isFocused, isActive, workspaceOf } = this.checks;
+    const inWindow: Array<[number, SenderReport]> = [];
+    for (const entry of this.reports) {
+      if (entry[1].windowId === windowId) inWindow.push(entry);
     }
-    if (latest === null || latest.panel.kind === null) return NO_FOCUSED_PANEL_STATE;
-    return { panel: latest.panel, workspaceId: latest.workspaceId };
+    // Native focus first: during a project switch the outgoing view can keep
+    // focus after the incoming one is already "active".
+    let pool = isFocused ? inWindow.filter(([id]) => isFocused(id)) : inWindow;
+    if (pool.length === 0 && isActive) pool = inWindow.filter(([id]) => isActive(id));
+    let latest: [number, SenderReport] | null = null;
+    for (const entry of pool) {
+      if (latest === null || entry[1].seq > latest[1].seq) latest = entry;
+    }
+    if (latest === null || latest[1].panel.kind === null) return NO_FOCUSED_PANEL_STATE;
+    const [id, report] = latest;
+    // The Portal is app-wide however it was observed, so it never carries a
+    // project — a project plugin must not see it through the dock's chrome.
+    if (report.panel.kind === "portal") return PORTAL_FOCUSED_STATE;
+    return { panel: report.panel, workspaceId: workspaceOf?.(id) ?? report.workspaceId };
   }
 
   private recompute(): void {

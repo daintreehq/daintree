@@ -1412,6 +1412,29 @@ describe("createMockHost production-parity validation (#10617)", () => {
       expect(received).toHaveLength(2);
     });
 
+    it("onDidChangeFocusedPanel hides the Portal from a project plugin and survives a throw", async () => {
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      const host = createMockHost({
+        pluginId: `project__${"a".repeat(64)}__acme.board`,
+        capabilities: ["panel:focus-read"],
+        focusedPanel: { kind: "portal", agent: false, worktreeId: null },
+      });
+      const received: unknown[] = [];
+      await host.onDidChangeFocusedPanel((f) => {
+        received.push(f);
+        throw new Error("boom");
+      });
+      await Promise.resolve();
+      host.simulateFocusedPanelChange({ kind: "file", agent: false, worktreeId: "w" });
+
+      expect(received).toEqual([
+        { kind: null, agent: false, worktreeId: null },
+        { kind: "file", agent: false, worktreeId: "w" },
+      ]);
+      expect(errors).toHaveBeenCalled();
+      errors.mockRestore();
+    });
+
     it("sendToAgent gates on agent:input and validates like production", async () => {
       await expect(
         createMockHost({ capabilities: ["agent:read"] }).sendToAgent("x")

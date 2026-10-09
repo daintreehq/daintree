@@ -1,9 +1,10 @@
-import { BrowserWindow, session } from "electron";
+import { BrowserWindow, session, webContents } from "electron";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import {
   clearPortHolderWebContentsIfCurrent,
   getAppWebContents,
+  getProjectForWebContents,
   isCachedViewWebContents,
   setFallbackEligibleProjectsListener,
 } from "./webContentsRegistry.js";
@@ -465,16 +466,21 @@ export async function initPerWindowServices(
   // focus/blur, because a child view's webContents doesn't reliably blur when
   // the window deactivates.
   const focusedPanelTracker = getFocusedPanelTracker();
-  // Only the window's active project view speaks for it: "not cached" is not
-  // "active" while a cold switch keeps the outgoing view alive.
-  focusedPanelTracker.setLiveSenderCheck((id) => {
-    const activeView = windowRegistry
-      ?.getByWebContentsId(id)
-      ?.services.projectViewManager?.getActiveView();
-    if (activeView && !activeView.webContents.isDestroyed()) {
-      return activeView.webContents.id === id;
-    }
-    return !isCachedViewWebContents(id);
+  focusedPanelTracker.setSenderChecks({
+    isFocused: (id) => {
+      const wc = webContents.fromId(id);
+      return wc !== undefined && !wc.isDestroyed() && wc.isFocused();
+    },
+    isActive: (id) => {
+      const activeView = windowRegistry
+        ?.getByWebContentsId(id)
+        ?.services.projectViewManager?.getActiveView();
+      if (activeView && !activeView.webContents.isDestroyed()) {
+        return activeView.webContents.id === id;
+      }
+      return !isCachedViewWebContents(id);
+    },
+    workspaceOf: (id) => getProjectForWebContents(id),
   });
   const windowIdForFocus = win.id;
   const onWindowFocus = () => focusedPanelTracker.setFocusedWindow(windowIdForFocus);
