@@ -44,11 +44,6 @@ export const KIND_LABEL: Record<CanopyCategory, string> = {
   idle: "Idle",
 };
 
-/** The card's words are about an earlier screen than the one the run shows now. */
-export function wordsArePrevious(item: CanopyItem): boolean {
-  return item.stale || item.card?.wordsFromEarlierRead === true;
-}
-
 /**
  * The ask: what the run needs from the user, or what it is doing. Words from an
  * earlier reading stay until a new one replaces them, so a row never blanks
@@ -206,7 +201,6 @@ export function CanopyRow({
   const unseenLabel = unseenMs === null ? null : `Unseen ${formatWaitAge(nowMs - unseenMs, nowMs)}`;
   const tier = priorityTier(priority);
   const handled = itemHandled(item);
-  const earlier = wordsArePrevious(item);
   const wordsShown = card !== null && (status === card.headline || status === card.question);
   // The summary stays when the run goes back to work and its ask gives way to
   // the newest line: a row always says what the run has been doing, until the
@@ -254,7 +248,9 @@ export function CanopyRow({
   const asking =
     item.kind === "question" &&
     card !== null &&
-    !earlier &&
+    // The classifier's reading of the screen as it is now is enough: words
+    // still from an earlier one don't make the ask any less current.
+    !item.stale &&
     // A screen that moved and has not been classified again yet.
     !card.priorityFromEarlierRead &&
     // Never over the blocked mark: an observed error keeps its own shape.

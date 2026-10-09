@@ -37,6 +37,9 @@ export const CANOPY_ATTENTION_THRESHOLD = 0.5;
  */
 export const CANOPY_URGENT_PRIORITY = 85;
 
+/** The lowest score band that leaves the user something to do: loose ends on a finished turn. */
+export const CANOPY_NEEDS_YOU_PRIORITY = 55;
+
 /** Categories where the run is stopped until the user does something. */
 export const CANOPY_ATTENTION_CATEGORIES: ReadonlySet<CanopyCategory> = new Set([
   "approval",

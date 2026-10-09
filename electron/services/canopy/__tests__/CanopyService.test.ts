@@ -404,7 +404,9 @@ describe("CanopyService", () => {
       stage: "described",
       wordsCategory: "working",
       attentionScore: 3,
-      priority: 3,
+      // The describer's 3 sits within a couple of points of the classifier's
+      // 5 already shown, in the same step: the shown number stands.
+      priority: 5,
       task: "Plan the tests",
       headline: "Thinking about the test plan",
     });
@@ -1444,6 +1446,134 @@ describe("CanopyService", () => {
         headline: first.headline,
       });
       expect(caught.observedWhenRead).toEqual(first.observedWhenRead);
+    });
+
+    it("never asks the classifier again about a screen it read, when Daintree's state only catches up", async () => {
+      let clock = 1_000_000;
+      const h = await makeHarness({
+        now: () => clock,
+        classify: async () => ({
+          category: "question",
+          confidence: 0.95,
+          attention: 0.95,
+          question: "Which date format should the entry use?",
+        }),
+      });
+      h.runs.push(run("a", { agentState: "working" }));
+      h.screens.set("a", "⏺ Which date format should the entry use?\n\n✻ Worked for 3s · done");
+      await h.service.scan();
+      await settle();
+      expect(h.classify).toHaveBeenCalledTimes(1);
+
+      clock += 6_000;
+      h.runs[0] = run("a", { agentState: "waiting", waitingReason: "question", since: clock });
+      await h.service.scan();
+      await settle();
+      expect(h.classify).toHaveBeenCalledTimes(1);
+      // And it is read as it should be the next time its screen moves.
+      h.screens.set("a", "⏺ Which date format should the changelog use?\n\n✻ Worked for 3s · done");
+      clock += 1_000;
+      await h.service.scan();
+      expect(h.classify).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps an approval it was sure of without reading it again, its priority and page as they were", async () => {
+      let clock = 1_000_000;
+      const onAsk = vi.fn();
+      const h = await makeHarness({
+        now: () => clock,
+        onAsk,
+        classify: async () => ({
+          category: "approval",
+          confidence: 0.95,
+          attention: 0.95,
+          blocked: 0.97,
+          question: "Do you want to proceed?",
+        }),
+      });
+      h.runs.push(run("a", { agentState: "working" }));
+      h.screens.set("a", APPROVAL_SCREEN);
+      await h.service.scan();
+      await settle();
+      const before = h.service.getSnapshot().cards[0]!;
+      clock += 6_000;
+      h.runs[0] = run("a", { agentState: "waiting", waitingReason: "approval", since: clock });
+      await h.service.scan();
+      await settle();
+      expect(h.classify).toHaveBeenCalledTimes(1);
+      const after = h.service.getSnapshot().cards[0]!;
+      expect(after.priority).toBe(before.priority);
+      expect(after.revision).toBe(before.revision);
+      expect(onAsk).toHaveBeenCalledTimes(1);
+    });
+
+    it("still retries words a passing failure cut short, though Daintree has caught up since", async () => {
+      let clock = 1_000_000;
+      let fail = true;
+      const h = await makeHarness({
+        now: () => clock,
+        classify: async () => ({
+          category: "question",
+          confidence: 0.95,
+          attention: 0.95,
+          question: "Which date format should the entry use?",
+        }),
+        describe: async (_input, says) => {
+          if (fail) throw new CanopyProviderError("describer", "request timed out", true);
+          return {
+            category: says,
+            headline: "Choose the date format",
+            summary: "The entry waits on it.",
+            attentionScore: 90,
+            task: null,
+            risk: "unknown",
+            riskReason: null,
+            action: null,
+            progress: null,
+            tests: "unknown",
+            changes: "unknown",
+            question: null,
+            options: [],
+          };
+        },
+      });
+      h.runs.push(run("a", { agentState: "working" }));
+      h.screens.set("a", "⏺ Which date format should the entry use?\n\n✻ Worked for 3s · done");
+      await h.service.scan();
+      await settle();
+      expect(h.describe).toHaveBeenCalledTimes(1);
+      fail = false;
+      clock += 6_000;
+      h.runs[0] = run("a", { agentState: "waiting", waitingReason: "question", since: clock });
+      await h.service.scan();
+      clock += CANOPY_FAILURE_BACKOFF_MAX_MS;
+      await h.service.scan();
+      await settle();
+      expect(h.describe).toHaveBeenCalledTimes(2);
+      expect(h.service.getSnapshot().cards[0]!.headline).toBe("Choose the date format");
+    });
+
+    it("reads an approval it was unsure blocks the agent again once Daintree sees it waiting on one", async () => {
+      let clock = 1_000_000;
+      const h = await makeHarness({
+        now: () => clock,
+        classify: async () => ({
+          category: "approval",
+          confidence: 0.95,
+          attention: 0.95,
+          blocked: 0.6,
+          question: "Do you want to proceed?",
+        }),
+      });
+      h.runs.push(run("a", { agentState: "working" }));
+      h.screens.set("a", APPROVAL_SCREEN);
+      await h.service.scan();
+      await settle();
+      clock += 6_000;
+      h.runs[0] = run("a", { agentState: "waiting", waitingReason: "approval", since: clock });
+      await h.service.scan();
+      await settle();
+      expect(h.classify).toHaveBeenCalledTimes(2);
     });
 
     it("keeps an approval's choices when Daintree names its wait differently on the same screen", async () => {

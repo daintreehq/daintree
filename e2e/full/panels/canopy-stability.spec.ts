@@ -7,6 +7,8 @@
  * Only the approval may move anything. Moving between agents resizes each to
  * the panel's pane and back, and resizing the window resizes them all: the
  * agents redraw for the new width, and nothing in the inbox may move for it.
+ * Every reader call is traced (`DAINTREE_CANOPY_TRACE`), so a redraw is shown
+ * to cost no read at all, not just no movement.
  * Nor may any row turn unread without an agent doing something: a row going
  * read is the user reading it, but going unread takes a stop, a start or an ask.
  *
@@ -17,7 +19,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
-import { writeFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
@@ -81,6 +83,18 @@ const APPROVAL = (command: string, why: string): FakeCanopyScene => ({
     "╰──────────────────────────────────────────────────────────╯",
   ],
 });
+
+/** A question asked while the panel is closed, long enough to wrap at every width. */
+const QUESTION_WHILE_CLOSED: FakeCanopyScene = {
+  lines: [
+    ...HEADER,
+    "> Add a CHANGELOG entry for the units work, and ask me which date format to use first",
+    "",
+    "⏺ The release notes need a line for this. Should the changelog entry go under Fixed, since it corrects rounding, or under Changed, since amounts now differ slightly?",
+    "",
+    "✻ Worked for 3s · done",
+  ],
+};
 
 const QUESTION: FakeCanopyScene = {
   lines: [
@@ -161,6 +175,26 @@ interface Change {
 
 let ctx: AppContext;
 let binDir: string;
+/** Every reader call the app makes, one JSON line each (`DAINTREE_CANOPY_TRACE`). */
+let tracePath: string;
+
+/** The reader calls made since `since`: which stage, for which pane. */
+/** The reader calls that answered since `since`: which stage, for which pane. */
+function readsSince(since: number): Array<{ stage: string; run: string }> {
+  if (!existsSync(tracePath)) return [];
+  const calls: Array<{ at: number; stage: string; error?: string; input?: { runId?: string } }> =
+    [];
+  for (const line of readFileSync(tracePath, "utf8").split("\n")) {
+    try {
+      if (line !== "") calls.push(JSON.parse(line));
+    } catch {
+      // A line still being written.
+    }
+  }
+  return calls
+    .filter((call) => call.at >= since && call.error === undefined)
+    .map((call) => ({ stage: call.stage, run: call.input?.runId ?? "" }));
+}
 let cleanupFixture: (() => void) | undefined;
 /** The four agents, launched by the first test and carried through the rest. */
 const agents = { finished: "", approval: "", working: "", question: "" };
@@ -340,6 +374,8 @@ function words(text: string): string {
       .replace(/\bunread,\s?/g, "")
       // The row's text runs its parts together ("urgentnow98"), so no word edges.
       .replace(/just now|now|\d+\s?(?:s|m|h|d)(?![a-z])/g, "#")
+      // A wait read aloud past a minute: "waiting for 40s", then "waiting a while".
+      .replace(/(?:for #|a while)/g, "#")
       .replace(/\s+/g, " ")
       .trim()
   );
@@ -478,7 +514,8 @@ test.describe("Canopy stability against the live service", () => {
     binDir = installFakeCanopyAgent(dir);
     writeFileSync(path.join(dir, ".gitignore"), ".e2e canopy bin/\n");
     execSync("git add -A && git commit -m canopy-fixture", { cwd: dir, stdio: "ignore" });
-    ctx = await launchApp({ env: fakeAgentEnv(binDir) });
+    tracePath = path.join(binDir, "trace.jsonl");
+    ctx = await launchApp({ env: { ...fakeAgentEnv(binDir), DAINTREE_CANOPY_TRACE: tracePath } });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, dir, "Canopy Stability");
   });
 
@@ -815,6 +852,91 @@ test.describe("Canopy stability against the live service", () => {
     const opened = (change: Change) =>
       change.kind === "words" && change.from.replace("unread, ", "") === change.to;
     const { unexplained } = await measure(page, started, [], [], opened);
+    expect(unexplained).toEqual([]);
+    // Nor did any agent's redraw cost a read.
+    expect(readsSince(started)).toEqual([]);
+  });
+
+  test("writes words owed on open from the read made while closed, untouched by a resize meanwhile", async () => {
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description:
+        "DAINTREE_E2E_CANOPY_LIVE is required: the spec reads screens with the live service",
+    });
+    test.skip(!ENABLED, "set DAINTREE_E2E_CANOPY_LIVE=1 to read screens with the live service");
+    test.setTimeout(240_000);
+    const page = ctx.window;
+    const { finished, approval, working, question } = agents;
+    // Sampled from before the close, so the reopened list is compared with
+    // the last one shown.
+    await sampleInbox(page);
+    await page.waitForTimeout(500); // timer: a sample of the open list before it closes
+    const wordsBefore = await dialog(page)
+      .locator(`#${card(question)}`)
+      .textContent();
+    const closing = Date.now();
+    await toggleCanopy(page);
+    await expect(dialog(page)).toHaveCount(0);
+    await page.waitForTimeout(3_000); // timer: the pane hands its terminal's size back
+
+    // Closed: one agent asks something new, and the background watch reads it.
+    const asked = Date.now();
+    setFakeCanopyScene(binDir, question, QUESTION_WHILE_CLOSED);
+    await expect
+      .poll(
+        () =>
+          readsSince(asked).filter((call) => call.run === question && call.stage === "classifier")
+            .length,
+        { timeout: 60_000, intervals: [1_000] }
+      )
+      .toBeGreaterThan(0);
+    await page.waitForTimeout(3_000); // timer: Daintree's own state settles on the new screen
+
+    // Still closed: the window shrinks and grows back, and every agent redraws.
+    const resized = Date.now();
+    const ids = [finished, approval, working, question];
+    const sizesBefore = Object.fromEntries(
+      ids.map((id) => [id, readFakeCanopySizes(binDir, id).length])
+    );
+    const resize = (dw: number, dh: number) =>
+      ctx.app.evaluate(
+        ({ BrowserWindow }, delta) => {
+          const win = BrowserWindow.getAllWindows().find((w) => w.isVisible());
+          if (!win) return;
+          const [w, h] = win.getSize();
+          win.setSize(w! + delta.dw, h! + delta.dh);
+        },
+        { dw, dh }
+      );
+    await resize(-220, -140);
+    await page.waitForTimeout(9_000); // timer: every agent redraws and is scanned
+    await resize(220, 140);
+    await page.waitForTimeout(20_000); // timer: and again, past the background poll
+    for (const id of ids) {
+      expect(readFakeCanopySizes(binDir, id).length).toBeGreaterThan(sizesBefore[id]!);
+    }
+    expect(readsSince(resized)).toEqual([]);
+
+    // Reopened: the owed words are written from the read already made, once,
+    // and nothing else moves.
+    const reopened = Date.now();
+    await toggleCanopy(page);
+    await expect(dialog(page).locator("[data-canopy-list] [data-canopy-card]")).toHaveCount(4);
+    await page.waitForTimeout(30_000); // timer: the owed words land and the list holds
+    expect(readsSince(reopened)).toEqual([{ stage: "describer", run: question }]);
+    // The words did land: the row says something new, and nothing is still due.
+    const askingRow = dialog(page).locator(`#${card(question)}`);
+    expect(await askingRow.textContent()).not.toBe(wordsBefore);
+    await expect(askingRow.locator("[data-canopy-detail-due]")).toHaveCount(0);
+    const { unexplained } = await measure(
+      page,
+      closing,
+      [
+        { at: reopened, run: null, what: "reopens the panel", within: 0, opens: true },
+        { at: reopened, run: card(question), what: "its owed words land", within: 15_000 },
+      ],
+      []
+    );
     expect(unexplained).toEqual([]);
   });
 });

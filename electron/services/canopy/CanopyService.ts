@@ -39,6 +39,7 @@ import type { TerminalAnswer } from "../../../shared/utils/terminalSubmission.js
 import { EMPTY_GLANCE, glanceScreen } from "./canopyGlance.js";
 import { CANOPY_REFLOW_MS, reflowPrint, sameAfterReflow } from "./canopyReflow.js";
 import { observedCaughtUp } from "../../../shared/utils/canopyObservedKind.js";
+import { heldCanopyPriority } from "../../../shared/utils/canopyPriorityTier.js";
 import {
   CANOPY_READ_DWELL_MS,
   advanceTurn,
@@ -350,6 +351,8 @@ interface RunEntry {
   } | null;
   /** The urgent ask the classifier read on the current screen; null when it read none. */
   ask: CanopyAsk | null;
+  /** What the classifier made of the screen the card was last read from; null before a read. */
+  classified: ClassifierResult | null;
   /** What the newest screen read says at a glance; null before one was read. */
   glance: CanopyGlance | null;
   /** `onAsk` was told about the ask on screen; cleared once it stops asking, goes back to work, or is suppressed. */
@@ -1288,6 +1291,40 @@ export class CanopyService {
             entry.card !== null &&
             stateCaughtUp(entry.card, run);
           const moved = entry.readKey !== key && !caughtUp;
+          // Only Daintree catching up, on a screen already read to the end:
+          // the reading stands, and it is not asked again. Only a reading that
+          // needs the user, since what a busy or quiet one goes on to write
+          // turns on whether Daintree sees it working; and a read is still
+          // made where the state would change what it concluded — an approval
+          // the classifier was unsure blocks the agent ranks higher once
+          // Daintree sees it waiting on one.
+          const reading = entry.classified;
+          if (
+            caughtUp &&
+            entry.hash !== null &&
+            entry.hash === entry.readKey &&
+            !entry.pending &&
+            entry.failure === null &&
+            this.now() >= entry.retryAt &&
+            reading !== null &&
+            needsAttention(reading.attention) &&
+            readingIgnoresState(reading)
+          ) {
+            entry.readKey = key;
+            entry.hash = key;
+            entry.readState = observedKey(run);
+            // The ask a stopped run shows, as a read of it records.
+            if (
+              !isBusy(run) &&
+              reading.question !== null &&
+              observeAsk(entry.reads, normalize(reading.question), screen.hash, this.now())
+            ) {
+              this.scheduleBroadcast();
+            }
+            this.refreshActivity(entry, screen, run);
+            this.announce(run.runId, entry);
+            return;
+          }
           entry.readKey = key;
           if (moved) entry.revision++;
           // Failing lately: wait out the backoff rather than ask again on every
@@ -1628,6 +1665,7 @@ export class CanopyService {
       observedAt,
       observedWhenRead,
     };
+    entry.classified = classified;
     const kind = blockedOn(classified, run);
     entry.ask = kind === null ? null : { kind, question: classified.question };
     this.announce(run.runId, entry);
@@ -1761,12 +1799,17 @@ export class CanopyService {
         attentionScore: described.attentionScore,
         // The classifier reading an ask keeps the run at the top whatever the
         // describer scores: an agent asking is what Canopy pages the user for.
+        // A score a point or two from the one shown, in the same step, leaves
+        // the shown one standing: words landing must not nudge the number.
         priority:
           card.handledAt !== null
             ? 0
-            : Math.max(
-                readingFloor(classified, run),
-                combinePriority(card.attentionProbability, described.attentionScore)
+            : heldCanopyPriority(
+                card.priority,
+                Math.max(
+                  readingFloor(classified, run),
+                  combinePriority(card.attentionProbability, described.attentionScore)
+                )
               ),
         task: this.settleTask(entry, digestRead, described.task),
         steps: digestRead?.todo ?? null,
@@ -1921,6 +1964,7 @@ export class CanopyService {
     this.supersedeCard(entry);
     // The prompt is gone with the screen: whatever it asks next is a new ask.
     entry.ask = null;
+    entry.classified = null;
     entry.asking = false;
     // What the screen said at a glance went with it.
     entry.glance = null;
@@ -2177,6 +2221,7 @@ function newEntry(spawnedAt: number): RunEntry {
     note: null,
     lastDescribed: null,
     ask: null,
+    classified: null,
     asking: false,
     glance: null,
     reads: newReadTrack(),
@@ -2333,6 +2378,15 @@ function askScore(classified: ClassifierResult, run: FleetRunRow): number | null
   const scale = Math.min(1, Math.max(0, (blocked - from) / (to - from)));
   const low = CANOPY_CLASSIFIER_ANCHORS.finished;
   return Math.round(low + (CANOPY_CLASSIFIER_ANCHORS[category] - low) * scale);
+}
+
+/**
+ * Whether what the classifier concluded from a screen holds whatever Daintree
+ * observes of the run: everything but an approval it was unsure blocks the
+ * agent, which `askScore` raises once Daintree sees the agent waiting on one.
+ */
+function readingIgnoresState(classified: ClassifierResult): boolean {
+  return classified.category !== "approval" || classified.blocked >= CANOPY_BLOCKED_SCALE.to;
 }
 
 /** What the agent is blocked on, when the classifier's reading of it is urgent; null otherwise. */
