@@ -5,6 +5,7 @@ export const CANOPY_METHOD_CHANNELS = {
   setActive: "canopy:set-active",
   refresh: "canopy:refresh",
   trash: "canopy:trash",
+  untrash: "canopy:untrash",
   rename: "canopy:rename",
   archive: "canopy:archive",
   unarchive: "canopy:unarchive",

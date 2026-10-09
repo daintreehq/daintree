@@ -205,10 +205,14 @@ export interface GeneratedIpcInvokeMap {
   };
   "canopy:trash": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget];
-    result: void;
+    result: number | null;
   };
   "canopy:unarchive": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: void;
+  };
+  "canopy:untrash": {
+    args: [receipt: number];
     result: void;
   };
   "canopy:unwatch-terminal": {

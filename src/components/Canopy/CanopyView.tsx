@@ -37,6 +37,7 @@ import {
   itemArchived,
   itemNeedsAttention,
   itemPriority,
+  itemSubject,
   repliedAt,
   splitInbox,
   type CanopyItem,
@@ -254,8 +255,8 @@ function CanopyShortcuts() {
       rows: [
         { keys: ["ArrowUp", "ArrowDown"], label: "Move" },
         { keys: ["Enter"], label: "Go to terminal" },
-        { keys: ["1", "9"], range: true, label: "Answer with that choice" },
-        { keys: ["Y"], label: "Take the first choice, unless it's risky" },
+        { keys: ["1", "9"], range: true, label: "Answer with that choice (twice when it's risky)" },
+        { keys: ["Y"], label: "Take the first choice, when it's read as safe" },
         { keys: ["R"], label: "Reply" },
         { keys: ["E"], label: "Archive, or move back to the inbox" },
         { keys: ["F2"], label: "Rename" },
@@ -263,7 +264,7 @@ function CanopyShortcuts() {
         { keys: ["Alt+U"], label: "Mark all as read" },
         { keys: ["Z"], label: "Undo" },
         { keys: ["Shift+F10"], label: "More actions" },
-        { keys: ["Cmd+Backspace"], label: "Trash, pressed twice" },
+        { keys: ["Cmd+Backspace"], label: "Trash, pressed twice; Z takes it back" },
         { keys: ["Escape"], label: "Close" },
       ],
     },
@@ -273,6 +274,7 @@ function CanopyShortcuts() {
         { keys: [`${step}+ArrowUp`, `${step}+ArrowDown`], label: "Next agent" },
         { keys: ["Enter"], label: "Send to the agent" },
         { keys: ["Shift+Enter"], label: "New line in a reply" },
+        { keys: ["Escape"], label: "Back to the list from a reply" },
       ],
     },
   ];
@@ -315,7 +317,7 @@ function CanopyShortcuts() {
           </section>
         ))}
         <p className="text-xs text-text-secondary">
-          Every other key in the terminal, Esc included, goes to the agent.
+          In the terminal, every other key goes to the agent, Esc included.
         </p>
       </PopoverContent>
     </Popover>
@@ -898,6 +900,16 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       failToast("Couldn't move to inbox", error, goTo(item));
     return {
       onOpen: openRun,
+      // Escape from the pane lands on the run's row; a run folded away in
+      // Archived has no row to land on, so the keyboard takes the fold instead
+      // — still in the list, where the next Escape closes the panel.
+      onLeavePane: (item) => {
+        if (document.getElementById(canopyCardDomId(item.runId))) {
+          focusCardNow(item.runId);
+          return;
+        }
+        document.querySelector<HTMLElement>('[aria-controls="canopy-archived"]')?.focus();
+      },
       onSent: (item, via) => {
         readNow(item);
         // Typed straight into the terminal: the keys stay there, since a menu
@@ -987,12 +999,36 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
         return rename();
       },
       onTrash: (item) => {
-        // No toast: the user pressed Trash twice and watched the row go. The
-        // terminal is in the trash, restorable from there like any other.
+        // The trash keeps a terminal only briefly, and its own countdown sits
+        // behind this panel, in whichever project the run is in: so the way
+        // back is offered here, on the toast and on Z.
+        const undo = reserveUndo();
         safeFireAndForget(
-          window.electron.canopy
-            .trash(item.runId, target(item))
-            .catch((error: unknown) => failToast("Couldn't trash terminal", error, goTo(item)))
+          window.electron.canopy.trash(item.runId, target(item)).then(
+            (receipt) => {
+              if (receipt === null) return undo.forget();
+              undo.land(
+                () =>
+                  safeFireAndForget(
+                    window.electron.canopy.untrash(receipt).catch((error: unknown) =>
+                      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+                      notify({
+                        type: "error",
+                        title: "Couldn't restore terminal",
+                        message: formatErrorMessage(error, "It has left the trash."),
+                        context: { eventKind: "agent" },
+                        duration: 6000,
+                      })
+                    )
+                  ),
+                { title: "Terminal trashed", message: itemSubject(item) }
+              );
+            },
+            (error: unknown) => {
+              undo.forget();
+              failToast("Couldn't trash terminal", error, goTo(item));
+            }
+          )
         );
       },
     };
@@ -1211,7 +1247,12 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
 
   const rowMenu: CanopyRowMenuActions = {
     onOpen: handlers.onOpen,
-    onReply: (item) => openPaneNow(item.runId, "composer"),
+    // The run already open keeps its pane mounted, so the composer is focused
+    // directly; another run's pane takes the keyboard there as it opens.
+    onReply: (item) => {
+      if (focusedItem?.runId === item.runId && detailRef.current?.focusComposer()) return;
+      openPaneNow(item.runId, "composer");
+    },
     onToggleRead: toggleRead,
     onArchive: handlers.onArchive,
     onRename: askRename,

@@ -11,6 +11,7 @@ import type {
   CanopyTier,
   CanopyTerminalView,
   CanopyRenameRequest,
+  CanopyRestoreRequest,
   CanopyTrashRequest,
 } from "../../../shared/types/ipc/canopy.js";
 import { getAgentNotificationServiceRef, getPtyClient } from "../../window/serviceRefs.js";
@@ -50,6 +51,7 @@ import { events } from "../../services/events.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { getDefaultPanelTitle } from "../../../shared/config/panelKindRegistry.js";
 import type { FleetRunRow } from "../../../shared/types/ipc/fleet.js";
+import { TRASH_TTL_MS } from "../../../shared/config/trash.js";
 
 const MAX_INPUT_LENGTH = 64_000;
 const MAX_SUBMIT_LENGTH = 100_000;
@@ -388,17 +390,83 @@ function defaultTitleOf(run: FleetRunRow): string {
  * each view before the host's own trashed and restored events, so an Undo still
  * finds the pane in the trash. A view that does not hold the pane ignores it.
  */
-function trashThroughOwningViews(runId: string): void {
+function trashThroughOwningViews(runId: string, spawnedAt: number): number | null {
   requirePtyClient().trash(runId);
   const run = getFleetSnapshotService()
     ?.getLastBroadcast()
     ?.runs.find((candidate) => candidate.runId === runId);
-  if (!run) return;
+  if (!run) return null;
+  const receipt = ++trashReceipts;
+  pruneTrashReceipts();
+  recentlyTrashed.set(receipt, {
+    runId,
+    spawnedAt,
+    workspaceId: run.workspaceId,
+    at: Date.now(),
+  });
   for (const view of getProjectRendererTargets(run.workspaceId)) {
     try {
       view.send(CHANNELS.CANOPY_TRASH_REQUESTED, { runId } satisfies CanopyTrashRequest);
     } catch {
       // A view torn down mid-send has no pane left to move.
+    }
+  }
+  return receipt;
+}
+
+/**
+ * Trashes Canopy made, by receipt, for an Undo to put back: once a run is in
+ * the trash it leaves the fleet, so its project can't be looked up then. A
+ * receipt names one trash of one incarnation, so an Undo can never restore a
+ * terminal respawned under the same id, or a later trash of it. Kept only for
+ * as long as the trash keeps the terminal.
+ */
+const recentlyTrashed = new Map<
+  number,
+  { runId: string; spawnedAt: number; workspaceId: string; at: number }
+>();
+let trashReceipts = 0;
+
+function pruneTrashReceipts(): void {
+  const now = Date.now();
+  for (const [receipt, trashed] of recentlyTrashed) {
+    if (now - trashed.at > TRASH_TTL_MS) recentlyTrashed.delete(receipt);
+  }
+}
+
+function leftTheTrash(): AppError {
+  return new AppError({
+    code: "NOT_FOUND",
+    message: "Terminal no longer in the trash",
+    userMessage: "That terminal has left the trash.",
+  });
+}
+
+/**
+ * Takes back a trash made from Canopy. The host restores the terminal — the
+ * same restore any view's own Undo sends, so a view repeating it changes
+ * nothing — and the views of the run's project bring its pane back out of
+ * their trash. Refused once the trash has let the terminal go, or for a
+ * terminal that is no longer the incarnation trashed.
+ */
+async function restoreThroughOwningViews(receipt: number): Promise<void> {
+  pruneTrashReceipts();
+  const trashed = recentlyTrashed.get(receipt);
+  recentlyTrashed.delete(receipt);
+  if (!trashed) throw leftTheTrash();
+  const ptyClient = requirePtyClient();
+  const record = await ptyClient.getTerminalAsync(trashed.runId).catch(() => null);
+  if (!record || record.spawnedAt !== trashed.spawnedAt || record.isExited === true) {
+    throw leftTheTrash();
+  }
+  ptyClient.restore(trashed.runId);
+  for (const view of getProjectRendererTargets(trashed.workspaceId)) {
+    try {
+      view.send(CHANNELS.CANOPY_RESTORE_REQUESTED, {
+        runId: trashed.runId,
+      } satisfies CanopyRestoreRequest);
+    } catch {
+      // A view torn down mid-send has no pane left to restore.
     }
   }
 }
@@ -700,18 +768,33 @@ export const canopyNamespace = defineIpcNamespace({
       { withContext: true }
     ),
 
-    /** Move the run to the trash — restorable, so no confirmation tier applies (D0). */
+    /**
+     * Move the run to the trash — restorable, so no confirmation tier applies
+     * (D0). Returns the receipt `untrash` takes back, or null when the run had
+     * already left the fleet and so has no project to restore it into.
+     */
     trash: op(
       CANOPY_METHOD_CHANNELS.trash,
-      async (runId: string, target: CanopyTarget): Promise<void> => {
+      async (runId: string, target: CanopyTarget): Promise<number | null> => {
         requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.trash, 20, 10_000);
         assertRunId(runId);
         assertTarget(target);
         await assertSameTerminal(runId, target);
-        trashThroughOwningViews(runId);
+        return trashThroughOwningViews(runId, target.spawnedAt);
       }
     ),
+
+    /**
+     * Take back a trash made from Canopy, by the receipt `trash` gave, while
+     * the trash still holds that terminal.
+     */
+    untrash: op(CANOPY_METHOD_CHANNELS.untrash, async (receipt: number): Promise<void> => {
+      requireActivated();
+      checkRateLimit(CANOPY_METHOD_CHANNELS.untrash, 20, 10_000);
+      if (!Number.isSafeInteger(receipt) || receipt <= 0) throw new Error("Invalid trash receipt");
+      await restoreThroughOwningViews(receipt);
+    }),
 
     /**
      * The user renamed a run from Canopy: any project's, as a rename of its
@@ -944,6 +1027,7 @@ export function registerCanopyHandlers(): () => void {
     watchedViews.clear();
     activeViews.clear();
     viewScopes.clear();
+    recentlyTrashed.clear();
     stopAllTerminalWatches();
     service?.dispose();
     service = null;

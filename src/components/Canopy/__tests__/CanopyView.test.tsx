@@ -96,7 +96,8 @@ function installElectron(
     setActive: vi.fn(async () => snapshot),
     refresh: vi.fn(async () => {}),
     reply: vi.fn(async () => {}),
-    trash: vi.fn(async () => {}),
+    trash: vi.fn(async (): Promise<number | null> => null),
+    untrash: vi.fn(async () => {}),
     archive: vi.fn(
       async (
         runId: string,
@@ -1014,6 +1015,7 @@ describe("CanopyView", () => {
       },
     });
     const canopy = installElectron();
+    canopy.trash.mockResolvedValue(7);
     const { container } = render(<CanopyView />);
     await frames();
     fireEvent.keyDown(cards(container)[0]!, { key: "Backspace", metaKey: true, ctrlKey: true });
@@ -1024,8 +1026,17 @@ describe("CanopyView", () => {
       fireEvent.keyDown(cards(container)[0]!, { key: "Backspace", metaKey: true, ctrlKey: true });
     });
     expect(canopy.trash).toHaveBeenCalledWith("done", { spawnedAt: NOW - 3_600_000 });
-    // Pressed twice and watched it go: no toast; it is in the trash like any other.
-    expect(vi.mocked(notify)).not.toHaveBeenCalled();
+    // The trash keeps it only briefly and its countdown is behind the panel:
+    // the way back is the toast's Undo, and Z.
+    const toast = vi.mocked(notify).mock.calls.at(-1)![0];
+    expect(toast.title).toBe("Terminal trashed");
+    const undo = toast.actions?.find((action) => action.label === "Undo");
+    expect(undo).toBeTruthy();
+    await act(async () => {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "z" });
+    });
+    // By the receipt the trash gave, so only that trash of that terminal comes back.
+    expect(canopy.untrash).toHaveBeenCalledWith(7);
   });
 
   it("lists a working run with the rest and lands on the top of the list", async () => {

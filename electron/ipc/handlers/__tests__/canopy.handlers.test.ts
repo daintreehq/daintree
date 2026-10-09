@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TRASH_TTL_MS } from "../../../../shared/config/trash.js";
 
 const ipcHandlers = vi.hoisted(() => new Map<string, unknown>());
 const ipcMainMock = vi.hoisted(() => ({
@@ -24,6 +25,7 @@ const ptyClient = vi.hoisted(() => ({
   submit: vi.fn((_id: string, text: string) => state.submits.push(text)),
   sendKey: vi.fn(),
   trash: vi.fn(),
+  restore: vi.fn(),
   updateTitle: vi.fn(),
   on: vi.fn(),
   off: vi.fn(),
@@ -650,6 +652,54 @@ describe("canopy IPC", () => {
     expect(result.ok).toBe(true);
     expect(ptyClient.trash).toHaveBeenCalledWith("run-1");
     expect(view.send).toHaveBeenCalledWith("canopy:trash-requested", { runId: "run-1" });
+  });
+
+  /** The receipt a Canopy trash hands back, for its Undo. */
+  async function trashReceipt(): Promise<number> {
+    const result = (await invoke(CANOPY_METHOD_CHANNELS.trash, fakeSender(1), "run-1", {
+      spawnedAt: 100,
+    })) as { ok?: boolean; data?: unknown } | number;
+    const receipt = typeof result === "number" ? result : result.data;
+    if (typeof receipt !== "number") throw new Error(`no receipt: ${JSON.stringify(result)}`);
+    return receipt;
+  }
+
+  it("takes back its own trash through the host and the project's views, once", async () => {
+    const view = { send: vi.fn() };
+    state.views = [view];
+    const receipt = await trashReceipt();
+    // Trashed, the run leaves the fleet; the receipt still knows its project.
+    state.runs = [];
+    const undone = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), receipt));
+    expect(undone.ok).toBe(true);
+    expect(ptyClient.restore).toHaveBeenCalledWith("run-1");
+    expect(view.send).toHaveBeenCalledWith("canopy:restore-requested", { runId: "run-1" });
+    // A second Undo has nothing left to take back.
+    const again = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), receipt));
+    expect(again.ok).toBe(false);
+  });
+
+  it("refuses a receipt it never gave, or one for a terminal respawned since", async () => {
+    const unknown = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), 999));
+    expect(unknown.ok).toBe(false);
+    const receipt = await trashReceipt();
+    state.record = { spawnedAt: 200 };
+    const respawned = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), receipt));
+    expect(respawned.ok).toBe(false);
+    expect(ptyClient.restore).not.toHaveBeenCalled();
+  });
+
+  it("refuses once the trash has let the terminal go", async () => {
+    vi.useFakeTimers();
+    try {
+      const receipt = await trashReceipt();
+      vi.advanceTimersByTime(TRASH_TTL_MS + 1);
+      const late = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), receipt));
+      expect(late.ok).toBe(false);
+      expect(ptyClient.restore).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("streams a run's terminal only for the incarnation the card was built from", async () => {

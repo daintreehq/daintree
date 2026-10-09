@@ -280,6 +280,21 @@ export function setupLifecycleListeners(): DisposableStore {
     );
   }
 
+  // Canopy took back its trash of a terminal this view holds: the pane comes
+  // back from the trash as its own Undo would, restoring it on the host too.
+  const onCanopyRestore = window.electron?.canopy?.onRestoreRequested;
+  if (onCanopyRestore) {
+    d.add(
+      toDisposable(
+        onCanopyRestore(({ runId }) => {
+          const panel = usePanelStore.getState().panelsById[runId];
+          if (!panel || panel.location !== "trash") return;
+          usePanelStore.getState().restoreTerminal(runId);
+        })
+      )
+    );
+  }
+
   // Canopy renamed a terminal this view holds: the pane takes it as the user's
   // own rename here would, user-locked — or, for an empty title, back to the
   // default this view works out for it.

@@ -36,9 +36,9 @@ export function CanopyRowMenu({
 }: CanopyRowMenuActions & { item: CanopyItem; children: ReactNode }) {
   const archived = itemArchived(item);
   const trashChord = isMac() ? "Meta+Backspace" : "Control+Backspace";
-  // Rename sends focus into the run's name field on purpose: the menu closing
-  // must not hand it back to the row it was opened from, which would end the
-  // rename and select that row again.
+  // Rename and Reply send focus into the pane on purpose — the run's name
+  // field, or its composer: the menu closing must not hand it back to the row
+  // it was opened from, which would end the rename and select that row again.
   const focusMovedRef = useRef(false);
   return (
     <ContextMenu onOpenChange={actions.onOpenChange}>
@@ -58,7 +58,13 @@ export function CanopyRowMenu({
           <ContextMenuShortcut shortcut="Enter" />
         </ContextMenuItem>
         {canReplyTo(item) && (
-          <ContextMenuItem aria-keyshortcuts="R" onSelect={() => actions.onReply(item)}>
+          <ContextMenuItem
+            aria-keyshortcuts="R"
+            onSelect={() => {
+              focusMovedRef.current = true;
+              actions.onReply(item);
+            }}
+          >
             Reply
             <ContextMenuShortcut shortcut="R" />
           </ContextMenuItem>
