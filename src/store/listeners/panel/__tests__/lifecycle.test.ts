@@ -575,6 +575,55 @@ describe("onTrashRequested — Canopy trash", () => {
   });
 });
 
+// Canopy renames a terminal from main, which writes the host and the saved
+// state; the view holding the pane renames it as the user's own rename would.
+describe("onRenameRequested — Canopy rename", () => {
+  afterEach(() => {
+    delete (window as { electron?: unknown }).electron;
+  });
+
+  function getRenameRequestHandler() {
+    const handlers: Array<(request: { runId: string; title: string }) => void> = [];
+    Object.defineProperty(window, "electron", {
+      value: {
+        canopy: {
+          onRenameRequested: (handler: (request: { runId: string; title: string }) => void) => {
+            handlers.push(handler);
+            return () => {};
+          },
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+    setupLifecycleListeners();
+    const handler = handlers.at(-1);
+    if (!handler) throw new Error("onRenameRequested handler was not registered");
+    return handler;
+  }
+
+  it("renames the pane, locked against automation like a hand rename", () => {
+    setupPanel();
+    const handler = getRenameRequestHandler();
+    handler({ runId: "term-1", title: "auth fix" });
+    expect(usePanelStore.getState().panelsById["term-1"]).toMatchObject({
+      title: "auth fix",
+      titleMode: "user",
+    });
+  });
+
+  it("puts back the default for an empty title, and ignores a pane it does not hold", () => {
+    setupPanel();
+    const handler = getRenameRequestHandler();
+    handler({ runId: "term-1", title: "auth fix" });
+    handler({ runId: "term-1", title: "" });
+    expect(usePanelStore.getState().panelsById["term-1"]?.titleMode).toBe("default");
+    const before = usePanelStore.getState().panelsById;
+    handler({ runId: "elsewhere", title: "x" });
+    expect(usePanelStore.getState().panelsById).toBe(before);
+  });
+});
+
 describe("onReliabilityMetric — pause-duration-gauge routing", () => {
   function getReliabilityHandler(): (payload: {
     metricType: string;

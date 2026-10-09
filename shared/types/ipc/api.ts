@@ -902,6 +902,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onTrashRequested(
       callback: (request: import("./canopy.js").CanopyTrashRequest) => void
     ): () => void;
+    /** Canopy renamed a terminal this view owns: rename its pane as the user's own rename would. */
+    onRenameRequested(
+      callback: (request: import("./canopy.js").CanopyRenameRequest) => void
+    ): () => void;
   };
   scratch: {
     getAll(): Promise<import("../scratch.js").Scratch[]>;

@@ -261,6 +261,7 @@ function CanopyShortcuts() {
         { keys: ["Y"], label: "Take the first choice, unless it's risky" },
         { keys: ["R"], label: "Reply" },
         { keys: ["E"], label: "Archive, or move back to the inbox" },
+        { keys: ["F2"], label: "Rename" },
         { keys: ["U"], label: "Mark as read or unread" },
         { keys: ["Alt+U"], label: "Mark all as read" },
         { keys: ["Z"], label: "Undo" },
@@ -975,6 +976,19 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
           )
         );
       },
+      // No toast on success: the user watched the name change. A refusal says
+      // so and keeps the name it had.
+      onRename: (item, title) => {
+        const rename = (): Promise<void> =>
+          window.electron.canopy.rename(item.runId, target(item), title).catch((error: unknown) => {
+            failToast("Couldn't rename terminal", error, {
+              label: "Retry",
+              onClick: () => safeFireAndForget(rename()),
+            });
+            throw error;
+          });
+        return rename();
+      },
       onTrash: (item) => {
         // No toast: the user pressed Trash twice and watched the row go. The
         // terminal is in the trash, restorable from there like any other.
@@ -1078,6 +1092,8 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
   const onAgentStepKeyDownCapture = (event: KeyboardEvent<HTMLElement>) => {
     const step = agentStepOf(event);
     if (step === null || visible.length === 0) return;
+    // Renaming: ⌘↑/↓ move the caret in the name, not to another agent.
+    if (event.target instanceof Element && event.target.closest("[data-canopy-rename]")) return;
     event.preventDefault();
     event.stopPropagation();
     // From the open run, clamped at the ends rather than wrapping: the bottom
@@ -1161,6 +1177,11 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       handlers.onOpen(selected);
       return;
     }
+    if (event.key === "F2") {
+      event.preventDefault();
+      askRename(selected);
+      return;
+    }
     if ((event.key === "u" || event.key === "U") && !event.shiftKey) {
       event.preventDefault();
       if (!event.repeat) toggleRead(selected);
@@ -1180,12 +1201,23 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
   useEffect(() => {
     if (trashArm !== null && openRunId !== trashArm.runId) setTrashArm(null);
   }, [trashArm, openRunId]);
+  // Rename from a row — its menu, or F2 — opens the run and starts the rename
+  // in its title bar, where a grid pane's is.
+  const [renameAsk, setRenameAsk] = useState<{ runId: string; request: number } | null>(null);
+  useEffect(() => {
+    if (renameAsk !== null && openRunId !== renameAsk.runId) setRenameAsk(null);
+  }, [renameAsk, openRunId]);
+  const askRename = (item: CanopyItem) => {
+    focusCardNow(item.runId);
+    setRenameAsk((ask) => ({ runId: item.runId, request: (ask?.request ?? 0) + 1 }));
+  };
 
   const rowMenu: CanopyRowMenuActions = {
     onOpen: handlers.onOpen,
     onReply: (item) => openPaneNow(item.runId, "composer"),
     onToggleRead: toggleRead,
     onArchive: handlers.onArchive,
+    onRename: askRename,
     onTrash: (item) => {
       focusCardNow(item.runId);
       setTrashArm((arm) => ({ runId: item.runId, request: (arm?.request ?? 0) + 1 }));
@@ -1476,6 +1508,9 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
                   describedBy={`canopy-place-${focusedItem.runId}`}
                   initialFocus={paneFocus?.runId === focusedItem.runId ? paneFocus.focus : null}
                   armTrash={trashArm?.runId === focusedItem.runId ? trashArm.request : undefined}
+                  renameRequest={
+                    renameAsk?.runId === focusedItem.runId ? renameAsk.request : undefined
+                  }
                   onInitialFocusSettled={() =>
                     setPaneFocus((current) =>
                       current?.runId === focusedItem.runId ? null : current

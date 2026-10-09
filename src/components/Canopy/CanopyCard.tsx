@@ -28,6 +28,7 @@ import {
 } from "./canopyModel";
 import { KIND_LABEL } from "./CanopyRow";
 import { CanopyTerminal, type CanopyStreamState } from "./CanopyTerminal";
+import { CanopyTitle } from "./CanopyTitle";
 
 const LazyHybridInputBar = lazy(() =>
   import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
@@ -52,6 +53,8 @@ export interface CanopyCardHandlers {
   onSendFailed: (item: CanopyItem, error: unknown) => void;
   /** Pick one of the options the run's dialog shows, by its label. */
   onAnswer: (item: CanopyItem, label: string) => void;
+  /** Rename the run's terminal; settles once main has it, and rejects when refused. */
+  onRename: (item: CanopyItem, title: string) => Promise<void>;
 }
 
 /** What the list can ask of the pane for the agent it has selected. */
@@ -78,6 +81,8 @@ interface CanopyCardProps extends CanopyCardHandlers {
    * the pane's button or ⌘⌫ to confirm. Each new number is a new request.
    */
   armTrash?: number;
+  /** A rename asked for from the row (its menu, or F2): each new number is a new request. */
+  renameRequest?: number;
 }
 
 /**
@@ -91,8 +96,8 @@ export function canReplyTo(item: CanopyItem, liveSecretPrompt = false): boolean 
 }
 
 /**
- * Trash is always offered: it takes two presses and comes with Undo, and the
- * terminal is restorable from the trash, so a working agent needs no other gate.
+ * Trash is always offered: it takes two presses, and the terminal comes back
+ * from the trash like any other, so a working agent needs no other gate.
  */
 export function canTrashItem(_item: CanopyItem): boolean {
   return true;
@@ -168,9 +173,11 @@ export function CanopyCard({
   onSent,
   onSendFailed,
   onAnswer,
+  onRename,
   initialFocus = null,
   onInitialFocusSettled,
   armTrash,
+  renameRequest,
 }: CanopyCardProps) {
   const [stream, setStream] = useState<CanopyStreamState>({
     watchId: null,
@@ -378,14 +385,11 @@ export function CanopyCard({
               brandColor={row.presetColor ?? row.chrome.color}
             />
           </span>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <h3 className="min-w-[6ch] shrink truncate font-sans text-xs leading-6 font-medium text-text-primary">
-                {row.title}
-              </h3>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{row.title}</TooltipContent>
-          </Tooltip>
+          <CanopyTitle
+            title={row.title}
+            onRename={(title) => onRename(item, title)}
+            renameRequest={renameRequest}
+          />
           {/* The readers think it is finished and Daintree sees it stopped:
               said in the title bar, beside the Trash it suggests, rather than
               over the terminal — where it would hide the agent's own report,

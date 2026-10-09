@@ -2259,6 +2259,10 @@ function buildElectronApi(): ElectronAPI {
       onTrashRequested: (
         callback: (request: import("../shared/types/ipc/canopy.js").CanopyTrashRequest) => void
       ) => _typedOn(CHANNELS.CANOPY_TRASH_REQUESTED, callback),
+
+      onRenameRequested: (
+        callback: (request: import("../shared/types/ipc/canopy.js").CanopyRenameRequest) => void
+      ) => _typedOn(CHANNELS.CANOPY_RENAME_REQUESTED, callback),
     },
 
     // Scratch (one-off agent workspace) API

@@ -10,6 +10,7 @@ import type {
   CanopyTarget,
   CanopyTier,
   CanopyTerminalView,
+  CanopyRenameRequest,
   CanopyTrashRequest,
 } from "../../../shared/types/ipc/canopy.js";
 import { getAgentNotificationServiceRef, getPtyClient } from "../../window/serviceRefs.js";
@@ -45,6 +46,10 @@ import { planChoice } from "../../../shared/utils/terminalChoice.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { terminalAnswerOf } from "../../../shared/utils/terminalSubmission.js";
 import { getGitBranch } from "../../utils/gitUtils.js";
+import { events } from "../../services/events.js";
+import { projectStore } from "../../services/ProjectStore.js";
+import { getDefaultPanelTitle } from "../../../shared/config/panelKindRegistry.js";
+import type { FleetRunRow } from "../../../shared/types/ipc/fleet.js";
 
 const MAX_INPUT_LENGTH = 64_000;
 const MAX_SUBMIT_LENGTH = 100_000;
@@ -317,6 +322,61 @@ function requireWatched(viewId: number, watchId: unknown): { runId: string; spaw
   const watched = watchedTerminal(viewId, watchId);
   if (!watched) throw new Error("That agent isn't running any more.");
   return watched;
+}
+
+/**
+ * A rename reaches the terminal wherever its pane lives. The host record takes
+ * it at once, for the fleet and Canopy's own rows; the saved project state
+ * takes it too, so a project view evicted or closed meanwhile restores the new
+ * name rather than the one it saved; and the views of the run's project rename
+ * the pane themselves, as the user's own rename there would — which, for an
+ * empty title, also works out the exact default the view gives it.
+ */
+async function renameThroughOwningViews(run: FleetRunRow, title: string): Promise<void> {
+  const named = title.trim();
+  // Already the name Daintree gives it: there is nothing to put back, and the
+  // view holding it would leave a name this guessed in place.
+  if (!named && (run.titleMode ?? "default") === "default") return;
+  const titleMode = named ? "user" : "default";
+  const shown = named || defaultTitleOf(run);
+  requirePtyClient().updateTitle(run.runId, shown, titleMode);
+  events.emit("terminal:title-changed", { id: run.runId, timestamp: Date.now() });
+  for (const view of getProjectRendererTargets(run.workspaceId)) {
+    try {
+      view.send(CHANNELS.CANOPY_RENAME_REQUESTED, {
+        runId: run.runId,
+        title: named,
+      } satisfies CanopyRenameRequest);
+    } catch {
+      // A view torn down mid-send has no pane left to rename.
+    }
+  }
+  // Saved before the rename is answered, so a project reopened straight after
+  // restores the new name.
+  await projectStore
+    .enqueueProjectStateUpdate(run.workspaceId, (state) => {
+      const saved = state?.terminals?.find((terminal) => terminal.id === run.runId);
+      if (!state || !saved) return null;
+      saved.title = shown;
+      saved.titleMode = titleMode;
+      return state;
+    })
+    .catch((error: unknown) => {
+      // The host and every open view have the name; only a later restore of a
+      // view evicted meanwhile would miss it, which is no reason to say the
+      // rename failed.
+      console.warn("[Canopy] Saving a renamed terminal's title failed:", error);
+    });
+}
+
+/**
+ * The name Daintree gives a run, as its view works it out: the agent it was
+ * seen to be, else the one it was launched as until something else is seen.
+ * The view holding it puts back its own exact default on top of this.
+ */
+function defaultTitleOf(run: FleetRunRow): string {
+  const agent = run.agentId ?? (run.everDetectedAgent !== true ? run.launchAgentId : undefined);
+  return getDefaultPanelTitle("terminal", agent);
 }
 
 /**
@@ -650,6 +710,29 @@ export const canopyNamespace = defineIpcNamespace({
         assertTarget(target);
         await assertSameTerminal(runId, target);
         trashThroughOwningViews(runId);
+      }
+    ),
+
+    /**
+     * The user renamed a run from Canopy: any project's, as a rename of its
+     * pane would. An empty title puts back the one Daintree gives it.
+     */
+    rename: op(
+      CANOPY_METHOD_CHANNELS.rename,
+      async (runId: string, target: CanopyTarget, title: string): Promise<void> => {
+        requireActivated();
+        checkRateLimit(CANOPY_METHOD_CHANNELS.rename, 20, 10_000);
+        assertRunId(runId);
+        assertTarget(target);
+        if (typeof title !== "string" || title.length > MAX_LABEL_LENGTH) {
+          throw new Error("Invalid title");
+        }
+        await assertSameTerminal(runId, target);
+        const run = getFleetSnapshotService()
+          ?.getLastBroadcast()
+          ?.runs.find((candidate) => candidate.runId === runId);
+        if (!run) throw new Error("That agent isn't running any more.");
+        await renameThroughOwningViews(run, title);
       }
     ),
 

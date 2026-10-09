@@ -141,6 +141,7 @@ function handlers() {
     onSent: vi.fn<CanopyCardHandlers["onSent"]>(),
     onSendFailed: vi.fn<CanopyCardHandlers["onSendFailed"]>(),
     onAnswer: vi.fn<CanopyCardHandlers["onAnswer"]>(),
+    onRename: vi.fn<CanopyCardHandlers["onRename"]>(async () => {}),
   };
 }
 
