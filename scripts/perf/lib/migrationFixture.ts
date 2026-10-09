@@ -336,7 +336,7 @@ export function createHeavyMigrationFixture(): LegacyStoreV0 {
     projectEnv: {},
     globalEnvironmentVariables,
     appAgentConfig: {} as StoreSchema["appAgentConfig"],
-    canopyActivated: false,
+    canopyMode: "unset",
     windowStates: {},
     worktreeIssueMap,
     wslGitByWorktree: {},

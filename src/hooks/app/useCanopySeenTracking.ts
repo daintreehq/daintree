@@ -11,7 +11,7 @@ import { useCanopyStore } from "@/store/canopyStore";
  * did as read once the user has had it on screen a moment. Most looking
  * happens in the terminal's own pane, not in the panel, so the focused pane is
  * what counts: in front of the user while its view can be seen, its window has
- * focus, and Canopy is not open over it.
+ * focus, and Canopy is not open over it. Only while Canopy is on.
  *
  * One look at a time, reconciled on every change that could move it — focus,
  * the view being cached or shown, the window, the panel — so a look always
@@ -24,7 +24,9 @@ export function useCanopySeenTracking(): void {
 
     /** The pane in front of the user now, or null. */
     const inFront = (): string | null => {
-      if (!canopyViewIsWatched() || useCanopyStore.getState().isOpen) return null;
+      const { isOpen, mode } = useCanopyStore.getState();
+      // Not on, Canopy reads nothing, so nothing here is told.
+      if (mode !== "on" || !canopyViewIsWatched() || isOpen) return null;
       const id = usePanelStore.getState().focusedId;
       if (id === null) return null;
       const panel = usePanelStore.getState().panelsById[id];
@@ -47,7 +49,7 @@ export function useCanopySeenTracking(): void {
     });
     const offObservable = subscribeProjectViewObservability(sync);
     const offCanopy = useCanopyStore.subscribe((state, prev) => {
-      if (state.isOpen !== prev.isOpen) sync();
+      if (state.isOpen !== prev.isOpen || state.mode !== prev.mode) sync();
     });
     window.addEventListener("focus", sync);
     window.addEventListener("blur", sync);

@@ -5,6 +5,13 @@ import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
+const CANOPY_HIDDEN_REASON = "Canopy is hidden. Show it from Settings > Canopy.";
+
+/** Hidden by the user: Canopy has no way in but Settings, for people and agents alike. */
+function canopyShown(): boolean {
+  return useCanopyStore.getState().mode !== "hidden";
+}
+
 /** The canopy panel: every agent, read off its screen and laid out by what it needs. */
 export function registerCanopyActions(actions: ActionRegistry): void {
   actions.set("canopy.toggle", () => ({
@@ -17,6 +24,9 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     danger: "safe",
     scope: "renderer",
     nonRepeatable: true,
+    isVisible: canopyShown,
+    isEnabled: canopyShown,
+    disabledReason: () => (canopyShown() ? undefined : CANOPY_HIDDEN_REASON),
     keywords: ["canopy", "inbox", "agents", "waiting", "summary", "overview", "fleet"],
     run: async () => {
       useCanopyStore.getState().toggle();
@@ -33,6 +43,9 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     danger: "safe",
     scope: "renderer",
     nonRepeatable: true,
+    isVisible: canopyShown,
+    isEnabled: canopyShown,
+    disabledReason: () => (canopyShown() ? undefined : CANOPY_HIDDEN_REASON),
     keywords: ["canopy", "inbox", "read", "unread", "clear", "agents"],
     run: async () => {
       const snapshot = useCanopyStore.getState().snapshot;

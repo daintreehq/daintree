@@ -114,10 +114,6 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
   };
-  "canopy:activate": {
-    args: [on: boolean];
-    result: import("./canopy.js").CanopySnapshot;
-  };
   "canopy:answer": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget, label: string];
     result: void;
@@ -168,6 +164,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "canopy:set-active": {
     args: [active: boolean];
+    result: import("./canopy.js").CanopySnapshot;
+  };
+  "canopy:set-mode": {
+    args: [mode: import("./canopy.js").CanopyMode, expectRevision?: number | undefined];
     result: import("./canopy.js").CanopySnapshot;
   };
   "canopy:set-read": {
@@ -2002,7 +2002,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "terminal-config:set-screen-reader-mode": {
-    args: [mode: "off" | "auto" | "on"];
+    args: [mode: "on" | "off" | "auto"];
     result: void;
   };
   "terminal-config:set-scrollback": {

@@ -633,6 +633,76 @@ test.describe("Core: Settings", () => {
       await closeSettingsWithEscape(window);
     });
 
+    test("Canopy: hiding it takes its button and shortcut away, and showing it brings them back", async () => {
+      const { window } = ctx;
+      const canopyButton = window
+        .getByRole("toolbar", { name: "Main toolbar" })
+        .locator('button[aria-haspopup="dialog"][aria-label^="Canopy"]');
+      const canopyDialog = window.locator('[data-testid="canopy-dialog"]');
+      const shortcut = process.platform === "darwin" ? "Meta+E" : "Control+Shift+O";
+      const setShown = async (shown: boolean) => {
+        const panel = await openSettingsTab(window, "canopy");
+        const show = panel.getByRole("switch", { name: "Show Canopy" });
+        if ((await show.getAttribute("aria-checked")) !== String(shown)) await show.click();
+        await expect(show).toHaveAttribute("aria-checked", String(shown), { timeout: T_SHORT });
+        return panel;
+      };
+      /** A field that counts the shortcut's presses that reach it: none while Canopy owns the key. */
+      const pressIntoField = async () => {
+        await window.evaluate(() => {
+          document.getElementById("e2e-canopy-key-sink")?.remove();
+          const field = document.createElement("input");
+          field.id = "e2e-canopy-key-sink";
+          field.dataset.presses = "0";
+          field.addEventListener("keydown", (event) => {
+            if (event.key.toLowerCase() === "e" || event.key.toLowerCase() === "o") {
+              field.dataset.presses = String(Number(field.dataset.presses) + 1);
+            }
+          });
+          document.body.append(field);
+          field.focus();
+        });
+        await window.keyboard.press(shortcut);
+        return window.locator("#e2e-canopy-key-sink");
+      };
+
+      try {
+        await expect(canopyButton).toBeVisible({ timeout: T_MEDIUM });
+        // Shown: the shortcut is Canopy's, and opens it.
+        const owned = await pressIntoField();
+        await expect(canopyDialog).toBeVisible({ timeout: T_SHORT });
+        await expect(owned).toHaveAttribute("data-presses", "0");
+        await window.keyboard.press("Escape");
+        await expect(canopyDialog).toHaveCount(0, { timeout: T_SHORT });
+
+        const panel = await setShown(false);
+        await expect(panel.getByRole("switch", { name: "Read agent terminals" })).toBeDisabled();
+        await expect(panel.getByText("Show Canopy to turn it on")).toBeVisible();
+        await closeSettingsWithEscape(window);
+        await expect(canopyButton).toHaveCount(0, { timeout: T_SHORT });
+
+        // Hidden: the key is no shortcut, and reaches the field it was typed in.
+        const passed = await pressIntoField();
+        await expect(passed).toHaveAttribute("data-presses", "1", { timeout: T_SHORT });
+        await expect(canopyDialog).toHaveCount(0);
+
+        await setShown(true);
+        await closeSettingsWithEscape(window);
+        await expect(canopyButton).toBeVisible({ timeout: T_SHORT });
+        await pressIntoField();
+        await expect(canopyDialog).toBeVisible({ timeout: T_SHORT });
+        await window.keyboard.press("Escape");
+        await expect(canopyDialog).toHaveCount(0, { timeout: T_SHORT });
+      } finally {
+        await window.evaluate(() => document.getElementById("e2e-canopy-key-sink")?.remove());
+        await ensureSettingsClosed(window);
+        if ((await canopyButton.count()) === 0) {
+          await setShown(true);
+          await ensureSettingsClosed(window);
+        }
+      }
+    });
+
     test.describe("Search and scope", () => {
       test("search shows cross-tab results and the clear button restores navigation", async () => {
         const { window } = ctx;

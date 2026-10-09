@@ -71,6 +71,7 @@ function run(runId: string, overrides: Partial<FleetSnapshot["runs"][number]> = 
 }
 
 const canopySnapshot: CanopySnapshot = {
+  mode: "on",
   activated: true,
   tier: "priority",
   dispositions: [],
@@ -135,7 +136,12 @@ function installElectron(
     restoreReads: vi.fn(async (_restores: unknown[]) => {}),
     runBranch: vi.fn((runId: string, _target: { spawnedAt: number }) => branchOf(runId)),
     captureBackdrop: vi.fn(async () => null),
-    activate: vi.fn(async (on: boolean) => ({ ...snapshot, activated: on })),
+    setMode: vi.fn(async (mode: CanopySnapshot["mode"], _expectRevision?: number) => ({
+      ...snapshot,
+      mode,
+      modeRevision: 5,
+      activated: mode === "on",
+    })),
   };
   Object.defineProperty(window, "electron", {
     value: { canopy, terminal: { restore: vi.fn() }, system: { openExternal: vi.fn() } },
@@ -179,13 +185,14 @@ beforeEach(() => {
       lastSuccessfulAt: NOW,
     },
   });
-  useCanopyStore.setState({ isOpen: true, snapshot: canopySnapshot });
+  useCanopyStore.setState({ isOpen: true, snapshot: canopySnapshot, mode: "on" });
 });
 
 afterEach(() => {
   useCanopyStore.setState({
     isOpen: false,
     snapshot: null,
+    mode: "unset",
     scope: "all",
     orders: {},
     unreadOnly: false,
@@ -276,9 +283,130 @@ describe("CanopyView", () => {
     await act(async () => {
       fireEvent.click(screenButton(dialog, "Turn on Canopy"));
     });
-    expect(canopy.activate).toHaveBeenCalledWith(true);
+    expect(canopy.setMode).toHaveBeenCalledWith("on");
     // On: the user's own agents, in the inbox.
     expect(document.querySelector("[data-testid=canopy-dialog] [role=listbox]")).not.toBeNull();
+  });
+
+  it("hides Canopy from its offer, closing it with a way back", async () => {
+    const off = {
+      ...canopySnapshot,
+      mode: "unset" as const,
+      activated: false,
+      tier: "free" as const,
+    };
+    const canopy = installElectron(off);
+    useCanopyStore.setState({ snapshot: off, mode: "unset" });
+    const notifySpy = vi.mocked(notify);
+    notifySpy.mockClear();
+    render(<CanopyView />);
+    await frames();
+    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
+    await act(async () => {
+      fireEvent.click(screenButton(dialog, "Hide Canopy"));
+    });
+    expect(canopy.setMode).toHaveBeenCalledWith("hidden");
+    expect(useCanopyStore.getState()).toMatchObject({ isOpen: false, mode: "hidden" });
+    const [options] = notifySpy.mock.calls.at(-1)!;
+    expect(options).toMatchObject({
+      title: "Canopy hidden",
+      message: "Show it again from Settings > Canopy.",
+    });
+
+    await act(async () => {
+      options.action!.onClick();
+    });
+    // Against the revision the hide left: main changes nothing if Canopy has moved on since.
+    expect(canopy.setMode).toHaveBeenLastCalledWith("unset", 5);
+    expect(useCanopyStore.getState().mode).toBe("unset");
+  });
+
+  it("undoes against its own hide, never a later one it heard of since", async () => {
+    const off = {
+      ...canopySnapshot,
+      mode: "unset" as const,
+      activated: false,
+      tier: "free" as const,
+    };
+    const canopy = installElectron(off);
+    useCanopyStore.setState({ snapshot: off, mode: "unset" });
+    const notifySpy = vi.mocked(notify);
+    notifySpy.mockClear();
+    render(<CanopyView />);
+    await frames();
+    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
+    await act(async () => {
+      fireEvent.click(screenButton(dialog, "Hide Canopy"));
+    });
+    const [options] = notifySpy.mock.calls.at(-1)!;
+    // Shown and hidden again from Settings while the toast is up.
+    act(() => {
+      useCanopyStore
+        .getState()
+        .applySnapshot({ ...off, mode: "unset", modeRevision: 6, sequence: 10 });
+      useCanopyStore
+        .getState()
+        .applySnapshot({ ...off, mode: "hidden", modeRevision: 7, sequence: 11 });
+    });
+    await act(async () => {
+      options.action!.onClick();
+    });
+    // Main refuses it: revision 5 is no longer where Canopy stands.
+    expect(canopy.setMode).toHaveBeenLastCalledWith("unset", 5);
+  });
+
+  it("says where to show Canopy when its Undo fails", async () => {
+    const off = {
+      ...canopySnapshot,
+      mode: "unset" as const,
+      activated: false,
+      tier: "free" as const,
+    };
+    const canopy = installElectron(off);
+    useCanopyStore.setState({ snapshot: off, mode: "unset" });
+    const notifySpy = vi.mocked(notify);
+    notifySpy.mockClear();
+    render(<CanopyView />);
+    await frames();
+    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
+    await act(async () => {
+      fireEvent.click(screenButton(dialog, "Hide Canopy"));
+    });
+    const [options] = notifySpy.mock.calls.at(-1)!;
+    canopy.setMode.mockRejectedValueOnce(new Error("rate limited"));
+    await act(async () => {
+      options.action!.onClick();
+    });
+    const [failure] = notifySpy.mock.calls.at(-1)!;
+    expect(failure).toMatchObject({ type: "error", title: "Couldn't show Canopy" });
+    failure.action!.onClick();
+    expect(dispatchMock).toHaveBeenLastCalledWith(
+      "app.settings.openTab",
+      { tab: "canopy" },
+      { source: "user" }
+    );
+  });
+
+  it("keeps the offer open, saying so, when hiding Canopy fails", async () => {
+    const off = {
+      ...canopySnapshot,
+      mode: "unset" as const,
+      activated: false,
+      tier: "free" as const,
+    };
+    const canopy = installElectron(off);
+    canopy.setMode.mockRejectedValueOnce(new Error("rate limited"));
+    useCanopyStore.setState({ snapshot: off, mode: "unset" });
+    vi.mocked(notify).mockClear();
+    render(<CanopyView />);
+    await frames();
+    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
+    await act(async () => {
+      fireEvent.click(screenButton(dialog, "Hide Canopy"));
+    });
+    expect(useCanopyStore.getState().isOpen).toBe(true);
+    expect(dialog.textContent).toContain("Couldn't hide Canopy. Try again.");
+    expect(vi.mocked(notify)).not.toHaveBeenCalled();
   });
 
   it("tells a free user every time that the beta is free, and a paying one never", async () => {

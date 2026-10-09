@@ -892,6 +892,8 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     priority: 0,
     description: "Open Canopy",
     category: "Project",
+    // Hidden, the key is no shortcut at all: it reaches whatever has focus.
+    when: "!canopyHidden",
   },
   {
     // The sibling one step IN from pilot.toggle's Cmd+Alt+O: same surface, same rows,
@@ -1194,6 +1196,7 @@ const NON_MAC_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
     priority: 0,
     description: "Open Canopy",
     category: "Project",
+    when: "!canopyHidden",
   },
 ];
 

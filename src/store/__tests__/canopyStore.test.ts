@@ -25,6 +25,58 @@ describe("isCanopyUnread", () => {
   });
 });
 
+describe("mode", () => {
+  const base = (mode: CanopySnapshot["mode"], sequence?: number): CanopySnapshot => ({
+    ...(sequence !== undefined ? { sequence } : {}),
+    mode,
+    activated: mode === "on",
+    tier: "free",
+    dispositions: [],
+    seen: [],
+    reads: [],
+    scope: null,
+    active: false,
+    busy: false,
+    refreshedAt: null,
+    cards: [],
+    glances: [],
+    lastError: null,
+    failedRuns: [],
+  });
+
+  afterEach(() => useCanopyStore.setState({ mode: "unset", snapshot: null, isOpen: false }));
+
+  it("takes the hydrated mode only until main has answered", () => {
+    useCanopyStore.getState().seedMode("hidden");
+    expect(useCanopyStore.getState().mode).toBe("hidden");
+    useCanopyStore.getState().applySnapshot(base("on"));
+    useCanopyStore.getState().seedMode("hidden");
+    expect(useCanopyStore.getState().mode).toBe("on");
+  });
+
+  it("closes a panel held open when Canopy is hidden", () => {
+    useCanopyStore.getState().applySnapshot(base("on"));
+    useCanopyStore.getState().open();
+    expect(useCanopyStore.getState().isOpen).toBe(true);
+    useCanopyStore.getState().applySnapshot(base("hidden"));
+    expect(useCanopyStore.getState().isOpen).toBe(false);
+  });
+
+  it("opens nothing while hidden, by open or by toggle", () => {
+    useCanopyStore.getState().applySnapshot(base("hidden"));
+    useCanopyStore.getState().open();
+    expect(useCanopyStore.getState().isOpen).toBe(false);
+    useCanopyStore.getState().toggle();
+    expect(useCanopyStore.getState().isOpen).toBe(false);
+  });
+
+  it("never lets main's first answer, from before any service, paint over a newer push", () => {
+    useCanopyStore.getState().applySnapshot(base("unset", 1));
+    useCanopyStore.getState().applySnapshot(base("hidden", 0));
+    expect(useCanopyStore.getState().mode).toBe("unset");
+  });
+});
+
 describe("unreadOnly", () => {
   it("is off until turned on, and holds for the session", () => {
     expect(useCanopyStore.getState().unreadOnly).toBe(false);
@@ -39,6 +91,7 @@ describe("applySnapshot", () => {
     const snapshot = (sequence: number, refreshedAt: number): CanopySnapshot => ({
       sequence,
       refreshedAt,
+      mode: "on",
       activated: true,
       tier: "free",
       dispositions: [],

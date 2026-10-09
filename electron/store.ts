@@ -32,6 +32,7 @@ import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pl
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
 import type { RunParkRecord, RunSnoozeRecord } from "../shared/types/ipc/fleet.js";
 import type { RunHistoryRecord } from "../shared/types/ipc/runHistory.js";
+import type { CanopyMode } from "../shared/types/ipc/canopy.js";
 import type { WindowOpeningConfig } from "../shared/types/ipc/windowOpening.js";
 import { DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW } from "../shared/types/windowOpen.js";
 import type { SuggestedDictionaryEntry } from "../shared/types/ipc/api.js";
@@ -267,10 +268,11 @@ export interface StoreSchema {
   globalEnvironmentVariables: Record<string, string>;
   appAgentConfig: AppAgentConfig;
   /**
-   * The user turned Canopy on, agreeing to send agent screens off the machine
-   * to be read. Nothing is read until they do, and turning it off stops it.
+   * Where the user stands on Canopy: `on` once they agree to send agent screens
+   * off the machine to be read, `hidden` when they don't want it at all. Nothing
+   * is read unless it is `on`.
    */
-  canopyActivated: boolean;
+  canopyMode: CanopyMode;
   windowStates: Record<
     string,
     {
@@ -812,7 +814,7 @@ const storeOptions = {
     projectEnv: {},
     globalEnvironmentVariables: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
-    canopyActivated: false,
+    canopyMode: "unset" as const,
     windowStates: {},
     worktreeIssueMap: {},
     wslGitByWorktree: {},

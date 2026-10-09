@@ -14,7 +14,7 @@ const state = vi.hoisted(() => ({
   writes: [] as string[],
   submits: [] as string[],
   releaseMirror: (() => {}) as () => void,
-  activated: true,
+  mode: "on" as string,
   packaged: false,
 }));
 
@@ -58,9 +58,9 @@ vi.mock("../../../services/plugin/pluginTerminalScreenRead.js", () => ({
 }));
 vi.mock("../../../store.js", () => ({
   store: {
-    get: (key: string) => (key === "canopyActivated" ? state.activated : {}),
+    get: (key: string) => (key === "canopyMode" ? state.mode : {}),
     set: vi.fn((key: string, value: unknown) => {
-      if (key === "canopyActivated") state.activated = value as boolean;
+      if (key === "canopyMode") state.mode = value as string;
     }),
   },
 }));
@@ -80,6 +80,7 @@ vi.mock("../../utils.js", async (importOriginal) => ({
 }));
 
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { _resetRateLimitQueuesForTest } from "../../utils.js";
 import { registerCanopyHandlers } from "../canopy.js";
 import { CANOPY_METHOD_CHANNELS } from "../canopy.preload.js";
 
@@ -137,8 +138,10 @@ describe("canopy IPC", () => {
     state.screen = MENU;
     state.writes = [];
     state.submits = [];
-    state.activated = true;
+    state.mode = "on";
     state.packaged = false;
+    // setMode is rate-limited across the file; each case starts with the window clear.
+    _resetRateLimitQueuesForTest();
     // No test reaches the real service, whatever the shell sets.
     vi.stubEnv("DAINTREE_CANOPY_TIER", "");
     vi.stubGlobal(
@@ -174,12 +177,12 @@ describe("canopy IPC", () => {
   it("reads no branch while Canopy is off, or for an id that isn't one", async () => {
     state.runs = [{ runId: "run-1", spawnedAt: 100, cwd: "/repo" }];
     const sender = fakeSender(5);
-    state.activated = false;
+    state.mode = "unset";
     expect(
       (await outcome(invoke(CANOPY_METHOD_CHANNELS.runBranch, sender, "run-1", { spawnedAt: 100 })))
         .ok
     ).toBe(false);
-    state.activated = true;
+    state.mode = "on";
     expect(
       (await outcome(invoke(CANOPY_METHOD_CHANNELS.runBranch, sender, "", { spawnedAt: 100 }))).ok
     ).toBe(false);
@@ -187,7 +190,7 @@ describe("canopy IPC", () => {
   });
 
   it("acts on no terminal until the user turns Canopy on, and keeps the choice", async () => {
-    state.activated = false;
+    state.mode = "unset";
     const sender = fakeSender(5);
     const before = await outcome(
       invoke(CANOPY_METHOD_CHANNELS.answer, sender, "run-1", { spawnedAt: 100 }, "Yes")
@@ -195,12 +198,12 @@ describe("canopy IPC", () => {
     expect(before).toEqual({ ok: false, message: expect.stringContaining("isn't turned on") });
     expect(state.writes).toEqual([]);
 
-    const turnedOn = (await invoke(CANOPY_METHOD_CHANNELS.activate, sender, true)) as {
+    const turnedOn = (await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "on")) as {
       data?: { activated: boolean; tier: string };
       activated?: boolean;
     };
     expect((turnedOn.data ?? turnedOn).activated).toBe(true);
-    expect(state.activated).toBe(true);
+    expect(state.mode).toBe("on");
     // Free during the beta.
     expect((turnedOn.data ?? (turnedOn as { tier: string })).tier).toBe("free");
     const after = await outcome(
@@ -209,19 +212,104 @@ describe("canopy IPC", () => {
     expect(after.ok).toBe(true);
   });
 
+  it("hides Canopy, which stops reading, and shows it again only as off", async () => {
+    const sender = fakeSender(5);
+    const mode = (result: unknown) => {
+      const envelope = result as { data?: { mode: string; activated: boolean } };
+      return envelope.data ?? (result as { mode: string; activated: boolean });
+    };
+    const hidden = mode(await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "hidden"));
+    expect(hidden).toMatchObject({ mode: "hidden", activated: false });
+    expect(state.mode).toBe("hidden");
+    const refused = await outcome(
+      invoke(CANOPY_METHOD_CHANNELS.answer, sender, "run-1", { spawnedAt: 100 }, "Yes")
+    );
+    expect(refused).toEqual({ ok: false, message: expect.stringContaining("isn't turned on") });
+
+    // Reading never starts straight from hidden: it goes through off, and the on switch.
+    const straightOn = await outcome(invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "on"));
+    expect(straightOn.ok).toBe(false);
+    expect(state.mode).toBe("hidden");
+
+    const shown = mode(await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset"));
+    expect(shown).toMatchObject({ mode: "unset", activated: false });
+    const on = mode(await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "on"));
+    expect(on).toMatchObject({ mode: "on", activated: true });
+  });
+
+  it("changes nothing for a change made against a mode revision main has moved on from", async () => {
+    const sender = fakeSender(5);
+    const revisionOf = (result: unknown) => {
+      const envelope = result as { data?: { modeRevision: number } };
+      return (envelope.data ?? (result as { modeRevision: number })).modeRevision;
+    };
+    const hiddenAt = revisionOf(await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "hidden"));
+    // Shown and hidden again, from another view, before the first hide's Undo.
+    await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset");
+    const hiddenAgain = revisionOf(await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "hidden"));
+    expect(hiddenAgain).toBe(hiddenAt + 2);
+
+    const stale = await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset", hiddenAt);
+    expect(revisionOf(stale)).toBe(hiddenAgain);
+    expect(state.mode).toBe("hidden");
+
+    await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset", hiddenAgain);
+    expect(state.mode).toBe("unset");
+  });
+
+  it("ends every live terminal view when reading stops", async () => {
+    const release = vi.fn();
+    state.releaseMirror = release;
+    const sender = fakeSender(9);
+    await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, "run-1", { spawnedAt: 100 });
+    expect(ptyClient.acquireIpcDataMirror).toHaveBeenCalledWith("run-1");
+    await invoke(CANOPY_METHOD_CHANNELS.setMode, fakeSender(3), "hidden");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a mode that isn't one", async () => {
+    const sender = fakeSender(5);
+    for (const bad of [true, "off", "", null, 1]) {
+      expect((await outcome(invoke(CANOPY_METHOD_CHANNELS.setMode, sender, bad))).ok).toBe(false);
+    }
+    for (const badRevision of ["1", 1.5, NaN]) {
+      expect(
+        (await outcome(invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset", badRevision))).ok
+      ).toBe(false);
+    }
+    expect(state.mode).toBe("on");
+  });
+
+  it("answers a hidden Canopy's snapshot without starting it", async () => {
+    state.mode = "hidden";
+    const sender = fakeSender(5);
+    const result = (await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, sender)) as {
+      data?: { mode: string; cards: unknown[] };
+    };
+    // Sequence 0: never newer than anything a service pushes once one is made.
+    expect(result.data ?? result).toMatchObject({
+      sequence: 0,
+      mode: "hidden",
+      activated: false,
+      cards: [],
+    });
+    // Nothing was made to show it: no service, so nothing listening to terminals.
+    expect(ptyClient.on).not.toHaveBeenCalled();
+  });
+
   it("wakes the service when a panel opens on Canopy turned on, and not before", async () => {
-    state.activated = false;
+    state.mode = "unset";
     const sender = fakeSender(9);
     await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true);
     expect(canopyBackend.wakeCanopy).not.toHaveBeenCalled();
-    await invoke(CANOPY_METHOD_CHANNELS.activate, sender, true);
+    await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "on");
     expect(canopyBackend.wakeCanopy).toHaveBeenCalledTimes(1);
     await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true);
     expect(canopyBackend.wakeCanopy).toHaveBeenCalledTimes(2);
   });
 
   it("refuses every action on a terminal while Canopy is off", async () => {
-    state.activated = false;
+    state.mode = "unset";
     const sender = fakeSender(4);
     const refused = await Promise.all([
       outcome(invoke(CANOPY_METHOD_CHANNELS.answer, sender, "run-1", { spawnedAt: 100 }, "Yes")),
@@ -374,11 +462,11 @@ describe("canopy IPC", () => {
 
     it("hears what the user sent from a pane only while Canopy is on, and only for a run id", async () => {
       const sender = fakeSender(1);
-      state.activated = false;
+      state.mode = "unset";
       expect((await outcome(invoke(CANOPY_METHOD_CHANNELS.noteSent, sender, "run-1"))).ok).toBe(
         true
       );
-      state.activated = true;
+      state.mode = "on";
       expect((await outcome(invoke(CANOPY_METHOD_CHANNELS.noteSent, sender, "run-1"))).ok).toBe(
         true
       );

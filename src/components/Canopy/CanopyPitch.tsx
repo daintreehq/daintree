@@ -37,16 +37,34 @@ interface CanopyPitchProps {
   backdrop?: React.ReactNode;
   /** The user agreed to send their agents' screens to be read. */
   onTurnOn: () => Promise<void>;
+  /** The user doesn't want Canopy: its ways in go, all but Settings. */
+  onHide: () => Promise<void>;
 }
+
+const FAILED: Record<"on" | "hide", string> = {
+  on: "Couldn't turn Canopy on. Try again.",
+  hide: "Couldn't hide Canopy. Try again.",
+};
 
 /**
  * What Canopy shows until the user turns it on: what it does, beside its inbox
  * playing a made-up fleet through the moments it is for, and what turning it on
  * sends where. Nothing here reads a terminal; nothing is read until they agree.
  */
-export function CanopyPitch({ isOpen, onClose, backdrop, onTurnOn }: CanopyPitchProps) {
-  const [turningOn, setTurningOn] = useState(false);
-  const [failed, setFailed] = useState(false);
+export function CanopyPitch({ isOpen, onClose, backdrop, onTurnOn, onHide }: CanopyPitchProps) {
+  const [pending, setPending] = useState<"on" | "hide" | null>(null);
+  const [failed, setFailed] = useState<"on" | "hide" | null>(null);
+  const choose = (choice: "on" | "hide", act: () => Promise<void>) => {
+    setPending(choice);
+    setFailed(null);
+    act().then(
+      () => setPending(null),
+      () => {
+        setPending(null);
+        setFailed(choice);
+      }
+    );
+  };
 
   return (
     <AppDialog
@@ -101,26 +119,25 @@ export function CanopyPitch({ isOpen, onClose, backdrop, onTurnOn }: CanopyPitch
                   Anything shaped like a password or key is stripped first.
                 </span>
               </p>
+              {/* Turning it on and not wanting it are the same size, side by
+                  side: the close button is the "not now". */}
               <div className="flex items-center gap-3">
                 <Button
                   variant="contrast"
-                  disabled={turningOn}
-                  onClick={() => {
-                    setTurningOn(true);
-                    setFailed(false);
-                    onTurnOn().then(
-                      () => setTurningOn(false),
-                      () => {
-                        setTurningOn(false);
-                        setFailed(true);
-                      }
-                    );
-                  }}
+                  disabled={pending !== null}
+                  onClick={() => choose("on", onTurnOn)}
                 >
                   Turn on Canopy
                 </Button>
+                <Button
+                  variant="outline"
+                  disabled={pending !== null}
+                  onClick={() => choose("hide", onHide)}
+                >
+                  Hide Canopy
+                </Button>
                 <p role="status" className="text-xs text-text-secondary">
-                  {failed ? "Couldn't turn Canopy on. Try again." : ""}
+                  {failed ? FAILED[failed] : ""}
                 </p>
               </div>
               <p className="text-xs text-text-secondary">{CANOPY_BETA_TERMS}</p>

@@ -668,25 +668,25 @@ describe("CanopyService", () => {
   });
 
   it("reads nothing until the user turns it on, and forgets every reading when they turn it off", async () => {
-    const h = await makeHarness({ plan: { activated: false, tier: "priority" } });
+    const h = await makeHarness({ plan: { mode: "unset", activated: false, tier: "priority" } });
     h.runs.push(run("a"));
     h.screens.set("a", APPROVAL_SCREEN);
     await h.service.refresh();
     expect(h.classify).not.toHaveBeenCalled();
     expect(h.service.getSnapshot()).toMatchObject({ activated: false, cards: [] });
 
-    h.service.setPlan({ activated: true, tier: "priority" });
+    h.service.setPlan({ mode: "on", activated: true, tier: "priority" });
     await settle();
     await settle();
     expect(h.classify).toHaveBeenCalledTimes(1);
     expect(h.service.getSnapshot().cards).toHaveLength(1);
 
-    h.service.setPlan({ activated: false, tier: "priority" });
+    h.service.setPlan({ mode: "unset", activated: false, tier: "priority" });
     expect(h.service.getSnapshot()).toMatchObject({ activated: false, cards: [] });
   });
 
   it("reads the free tier as soon and as often as the priority one", async () => {
-    const h = await makeHarness({ plan: { activated: true, tier: "free" } });
+    const h = await makeHarness({ plan: { mode: "on", activated: true, tier: "free" } });
     h.service.setActive(false);
     vi.useFakeTimers();
     try {
@@ -1275,8 +1275,8 @@ describe("CanopyService", () => {
     const scan = h.service.scan();
     await vi.waitFor(() => expect(calls).toBe(1));
 
-    h.service.setPlan({ activated: false, tier: "priority" });
-    h.service.setPlan({ activated: true, tier: "priority" });
+    h.service.setPlan({ mode: "unset", activated: false, tier: "priority" });
+    h.service.setPlan({ mode: "on", activated: true, tier: "priority" });
     release();
     await scan;
     await settle();
@@ -2786,7 +2786,7 @@ describe("CanopyService", () => {
         closed: true,
         backgroundPollMs: BG,
         stateChangeScanMs: 0,
-        plan: { activated: true, tier: "priority" },
+        plan: { mode: "on", activated: true, tier: "priority" },
         classify: async () => ({
           category: "approval",
           confidence: 0.97,
@@ -3459,6 +3459,31 @@ describe("CanopyService reads", () => {
     now += 5_000;
     h.service.markSeen("a", { viewId: 1, place: "pane", looking: false });
     expect(unread(h)).toBe(false);
+  });
+
+  it("forgets every look when reading stops, so none reads a turn once it is back on", async () => {
+    let now = 1_000_000;
+    const h = await makeHarness({
+      now: () => now,
+      classify: async (input) =>
+        input.screen.includes("Working")
+          ? { category: "working", confidence: 0.9, attention: 0.1, question: null }
+          : finishedReading,
+    });
+    h.runs.push(run("a", { agentState: "working" }));
+    h.screens.set("a", "Working on it");
+    await h.service.scan();
+    h.service.markSeen("a", { viewId: 1, place: "pane", looking: true });
+    now += 5_000;
+    // Hidden while looked at: the view's word that the look ended never lands.
+    h.service.setPlan({ mode: "hidden", activated: false, tier: "priority" });
+    h.service.setPlan({ mode: "on", activated: true, tier: "priority" });
+    await settle();
+    now += 5_000;
+    h.runs[0] = run("a", { agentState: "completed" });
+    h.screens.set("a", "All done.");
+    await h.service.refresh();
+    expect(unread(h)).toBe(true);
   });
 
   it("reads nothing for a glance shorter than the dwell, nor for a view that went away", async () => {

@@ -1,6 +1,7 @@
 import { app } from "electron";
 import type {
   CanopyLookPlace,
+  CanopyMode,
   CanopyPlan,
   CanopyReadMark,
   CanopyReadRestore,
@@ -17,6 +18,7 @@ import type { TerminalResizeResult } from "../../../shared/types/pty-host.js";
 import { getFleetSnapshotService } from "./projectCrud/index.js";
 import { readPluginTerminalScreen } from "../../services/plugin/pluginTerminalScreenRead.js";
 import { CanopyService } from "../../services/canopy/CanopyService.js";
+import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
 import {
   canopyWaking,
   classifyWithCanopy,
@@ -90,8 +92,34 @@ function backgroundPollOverride(): number | undefined {
   return ms === 0 ? 0 : Math.min(2_147_483_647, Math.max(1_000, ms));
 }
 
+/** Changes of mode since launch; see `CanopyPlan.modeRevision`. */
+let modeRevision = 0;
+
 function currentPlan(): CanopyPlan {
-  return { activated: store.get("canopyActivated") === true, tier: currentTier() };
+  const mode = readCanopyMode();
+  return { mode, modeRevision, activated: mode === "on", tier: currentTier() };
+}
+
+/**
+ * What Canopy shows with no service made since launch: nothing. Sequence 0,
+ * so it never paints over anything a service has pushed since.
+ */
+function hiddenOrIdleSnapshot(): CanopySnapshot {
+  return {
+    sequence: 0,
+    ...currentPlan(),
+    dispositions: [],
+    seen: [],
+    reads: [],
+    scope: null,
+    active: false,
+    busy: false,
+    refreshedAt: null,
+    cards: [],
+    glances: [],
+    lastError: null,
+    failedRuns: [],
+  };
 }
 
 function answerRefused(reason: string): AppError {
@@ -387,6 +415,8 @@ export const canopyNamespace = defineIpcNamespace({
   name: "canopy",
   ops: {
     getSnapshot: op(CANOPY_METHOD_CHANNELS.getSnapshot, async (): Promise<CanopySnapshot> => {
+      // Hidden, there is nothing to show and nothing is started to show it.
+      if (!service && readCanopyMode() === "hidden") return hiddenOrIdleSnapshot();
       return getService().getSnapshot();
     }),
 
@@ -456,18 +486,43 @@ export const canopyNamespace = defineIpcNamespace({
 
     /**
      * The user turned Canopy on — agreeing, in the panel, to send agent screens
-     * off the machine to be read — or off again from Settings. Off, every card
-     * read so far is dropped.
+     * off the machine to be read — or off again from Settings; or hid it, or
+     * showed it again. Leaving `on`, every card read so far is dropped and every
+     * live terminal view ends. Hidden is left for `unset` only: reading starts
+     * again only through turning it on.
+     *
+     * `expectRevision` is the mode revision the change was made against — an
+     * Undo's — so one made after Canopy moved on since, in any view, changes
+     * nothing and answers how Canopy stands now.
      */
-    activate: op(CANOPY_METHOD_CHANNELS.activate, async (on: boolean): Promise<CanopySnapshot> => {
-      if (typeof on !== "boolean") throw new Error("Invalid activation");
-      checkRateLimit(CANOPY_METHOD_CHANNELS.activate, 10, 10_000);
-      store.set("canopyActivated", on);
-      const canopy = getService();
-      canopy.setPlan(currentPlan());
-      wakeService();
-      return canopy.getSnapshot();
-    }),
+    setMode: op(
+      CANOPY_METHOD_CHANNELS.setMode,
+      async (mode: CanopyMode, expectRevision?: number): Promise<CanopySnapshot> => {
+        if (!isCanopyMode(mode)) throw new Error("Invalid Canopy mode");
+        if (expectRevision !== undefined && !Number.isSafeInteger(expectRevision)) {
+          throw new Error("Invalid Canopy mode revision");
+        }
+        checkRateLimit(CANOPY_METHOD_CHANNELS.setMode, 10, 10_000);
+        if (expectRevision !== undefined && expectRevision !== modeRevision) {
+          return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
+        }
+        const was = readCanopyMode();
+        if (mode === "on" && was === "hidden") {
+          throw new AppError({
+            code: "PERMISSION",
+            message: "Canopy is hidden",
+            userMessage: "Show Canopy before turning it on.",
+          });
+        }
+        if (mode !== was) modeRevision++;
+        store.set("canopyMode", mode);
+        if (mode !== "on") stopAllTerminalWatches();
+        const canopy = getService();
+        canopy.setPlan(currentPlan());
+        wakeService();
+        return canopy.getSnapshot();
+      }
+    ),
 
     /**
      * A still of the view as it stands, for the panel to hold behind itself so

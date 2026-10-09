@@ -1,5 +1,6 @@
 import type { CanopyLookPlace } from "@shared/types/ipc/canopy";
 import { isProjectViewObservable } from "@/lib/viewCacheState";
+import { useCanopyStore } from "@/store/canopyStore";
 
 /**
  * How often a terminal that stays in front of the user is reported again, so
@@ -58,7 +59,8 @@ const lastSentInput = new Map<string, number>();
  */
 export function reportCanopySent(runId: string): void {
   const noteSent = window.electron?.canopy?.noteSent;
-  if (!noteSent) return;
+  // Every pane's Enter comes through here: with Canopy not on, nothing is told.
+  if (!noteSent || useCanopyStore.getState().mode !== "on") return;
   const now = Date.now();
   const last = lastSentInput.get(runId);
   if (last !== undefined && now - last < SENT_COALESCE_MS) return;

@@ -43,6 +43,7 @@ import {
 import { useToolbarPreferencesStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { useCanopyStore } from "@/store/canopyStore";
 import type { AnyToolbarButtonId, LauncherItemToolbarButtonId } from "@/../../shared/types/toolbar";
 // `@shared/...` because these are value imports — the type-only spelling above
 // is erased at compile time and never has to resolve at runtime.
@@ -467,6 +468,7 @@ function restoreUntouched<T extends object>(before: T, afterReset: T, now: T): T
 
 export function ToolbarSettingsTab() {
   const layout = useToolbarPreferencesStore((s) => s.layout);
+  const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
   const launcher = useToolbarPreferencesStore((s) => s.launcher);
   const setLeftButtons = useToolbarPreferencesStore((s) => s.setLeftButtons);
   const setRightButtons = useToolbarPreferencesStore((s) => s.setRightButtons);
@@ -661,15 +663,17 @@ export function ToolbarSettingsTab() {
   const liveLeft = dragState?.left ?? groupedLeft;
   const liveRight = dragState?.right ?? groupedRight;
 
-  const allMetadata = useMemo(
-    () =>
-      ({
-        ...TOOLBAR_BUTTON_METADATA,
-        ...buildPluginToolbarMeta(pluginButtonIds, pluginConfigs),
-        ...launcherItemMetadata,
-      }) as AllMetadata,
-    [pluginButtonIds, pluginConfigs, launcherItemMetadata]
-  );
+  const allMetadata = useMemo(() => {
+    const metadata = {
+      ...TOOLBAR_BUTTON_METADATA,
+      ...buildPluginToolbarMeta(pluginButtonIds, pluginConfigs),
+      ...launcherItemMetadata,
+    } as AllMetadata;
+    // Hidden, Canopy has no button to place: its row goes, and its place in
+    // the layout stays for when it is shown again.
+    if (canopyHidden) delete metadata.canopy;
+    return metadata;
+  }, [pluginButtonIds, pluginConfigs, launcherItemMetadata, canopyHidden]);
 
   const getToolbarButtonLabel = useCallback(
     (id: UniqueIdentifier) => allMetadata[toButtonId(id)]?.label,

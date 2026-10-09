@@ -3,6 +3,7 @@ import { isPtyPanel } from "@shared/types/panel";
 import { usePaletteStore, usePanelStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
+import { useCanopyStore } from "@/store/canopyStore";
 
 /**
  * Live `when`-clause context for keybinding resolution — the documented
@@ -39,5 +40,6 @@ export function buildKeybindingWhenContext(event: KeyboardEvent): WhenClauseCont
     fleetArmed: armedIds.size > 0,
     fleetWaiting,
     sidebarVisible: useMacroFocusStore.getState().visibility.sidebar,
+    canopyHidden: useCanopyStore.getState().mode === "hidden",
   };
 }

@@ -10,6 +10,7 @@ import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
+import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { pluralize } from "@/lib/pluralize";
 import { isMac } from "@/lib/platform";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -145,6 +146,50 @@ function BetaNotice() {
 }
 
 /**
+ * Hides Canopy from its offer. The panel closes as the hidden snapshot lands;
+ * the toast says where it went and takes it back — unless Canopy was shown,
+ * hidden again or turned on since, here or in another view, which stands.
+ */
+async function hideCanopy(): Promise<void> {
+  const { applySnapshot } = useCanopyStore.getState();
+  const hidden = await window.electron.canopy.setMode("hidden");
+  applySnapshot(hidden);
+  // The revision this hide left, as main counts them: an Undo applies only
+  // while main still stands there.
+  const revision = hidden.modeRevision ?? 0;
+  notify({
+    type: "success",
+    title: "Canopy hidden",
+    message: "Show it again from Settings > Canopy.",
+    priority: "high",
+    transient: true,
+    duration: UNDO_TOAST_DURATION_MS,
+    action: {
+      label: "Undo",
+      onClick: latestUndoOnly("canopy-hide", () => {
+        if (useCanopyStore.getState().mode !== "hidden") return;
+        window.electron.canopy.setMode("unset", revision).then(applySnapshot, () =>
+          notify({
+            type: "error",
+            title: "Couldn't show Canopy",
+            message: "Show it again from Settings > Canopy.",
+            action: {
+              label: "Open settings",
+              onClick: () =>
+                void actionService.dispatch(
+                  "app.settings.openTab",
+                  { tab: "canopy" },
+                  { source: "user" }
+                ),
+            },
+          })
+        );
+      }),
+    },
+  });
+}
+
+/**
  * Every agent across every project, read off its screen and ranked in one list
  * by what it needs from you: menus to answer, questions to reply to, finished
  * work to look at, and working agents gone a while without a look. Pilot's
@@ -182,7 +227,8 @@ export function CanopyView() {
         isOpen={isOpen}
         onClose={close}
         backdrop={backdrop}
-        onTurnOn={() => window.electron.canopy.activate(true).then(applySnapshot)}
+        onTurnOn={() => window.electron.canopy.setMode("on").then(applySnapshot)}
+        onHide={hideCanopy}
       />
     );
   }

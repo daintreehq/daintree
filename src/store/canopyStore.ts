@@ -4,11 +4,19 @@ import type { CanopyOrder } from "@/components/Canopy/canopyOrder";
 import {
   CANOPY_URGENT_PRIORITY,
   type CanopyCard,
+  type CanopyMode,
   type CanopySnapshot,
 } from "@shared/types/ipc/canopy";
 
 interface CanopyState {
   isOpen: boolean;
+  /**
+   * Where the user stands on Canopy: from the hydrate payload before main has
+   * answered, then from each snapshot. Hidden, nothing opens it.
+   */
+  mode: CanopyMode;
+  /** The mode the view hydrated with; a snapshot already held is newer and wins. */
+  seedMode: (mode: CanopyMode) => void;
   /** Null until main has answered once — distinct from "no cards yet". */
   snapshot: CanopySnapshot | null;
   open: () => void;
@@ -191,6 +199,8 @@ function opened(state: CanopyState, snapshot: CanopySnapshot | null): Partial<Ca
  */
 export const useCanopyStore = create<CanopyState>((set) => ({
   isOpen: false,
+  mode: "unset",
+  seedMode: (mode) => set((state) => (state.snapshot === null ? { mode } : state)),
   snapshot: null,
   acknowledged: readAcknowledged(),
   orders: loadOrders(),
@@ -215,9 +225,16 @@ export const useCanopyStore = create<CanopyState>((set) => ({
     saveScope(scope);
     set({ scope });
   },
-  open: () => set((state) => opened(state, state.snapshot)),
+  open: () => set((state) => (state.mode === "hidden" ? state : opened(state, state.snapshot))),
   close: () => set({ isOpen: false }),
-  toggle: () => set((state) => (state.isOpen ? { isOpen: false } : opened(state, state.snapshot))),
+  toggle: () =>
+    set((state) =>
+      state.isOpen
+        ? { isOpen: false }
+        : state.mode === "hidden"
+          ? state
+          : opened(state, state.snapshot)
+    ),
   applySnapshot: (snapshot) =>
     set((state) => {
       // A pull answered after a newer push is older news.
@@ -225,9 +242,12 @@ export const useCanopyStore = create<CanopyState>((set) => ({
       if (held !== undefined && snapshot.sequence !== undefined && snapshot.sequence < held) {
         return state;
       }
-      if (!state.isOpen) return { snapshot };
+      const mode = snapshot.mode;
+      // Hidden from another view, or from Settings: a panel this view held open goes too.
+      if (mode === "hidden") return { snapshot, mode, isOpen: false };
+      if (!state.isOpen) return { snapshot, mode };
       const acknowledged = acknowledgeUrgent(state.acknowledged, snapshot);
-      return acknowledged ? { snapshot, acknowledged } : { snapshot };
+      return acknowledged ? { snapshot, mode, acknowledged } : { snapshot, mode };
     }),
 }));
 

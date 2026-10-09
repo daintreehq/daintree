@@ -3,6 +3,7 @@ import os from "os";
 import { app } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { store, type StoreSchema, consumePendingSettingsRecovery } from "../../../store.js";
+import { readCanopyMode } from "../../../services/canopy/canopyMode.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { AppStateTerminalEntrySchema, filterValidTerminalEntries } from "../../../schemas/ipc.js";
 import { filterRestorableTerminalSnapshots } from "../../../services/projectStateRestore.js";
@@ -572,6 +573,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,
       runningUnderRosetta: isRunningUnderRosetta(),
       rosettaWarningDismissed: store.get("rosettaWarningDismissed") === true,
+      canopyMode: readCanopyMode(),
       skippedPanelCount,
       quarantinedPanels,
       crashCount: guard.getCrashCount(),
