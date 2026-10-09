@@ -575,6 +575,59 @@ describe("onTrashRequested — Canopy trash", () => {
   });
 });
 
+// Canopy takes back its own trash: the view holding the pane restores it as
+// its own Undo would, which restores it on the host as well.
+describe("onRestoreRequested — Canopy trash undone", () => {
+  afterEach(() => {
+    delete (window as { electron?: unknown }).electron;
+  });
+
+  function getHandlers() {
+    const trashHandlers: Array<(request: { runId: string }) => void> = [];
+    const restoreHandlers: Array<(request: { runId: string }) => void> = [];
+    const restore = vi.fn(async () => {});
+    Object.defineProperty(window, "electron", {
+      value: {
+        canopy: {
+          onTrashRequested: (handler: (request: { runId: string }) => void) => {
+            trashHandlers.push(handler);
+            return () => {};
+          },
+          onRestoreRequested: (handler: (request: { runId: string }) => void) => {
+            restoreHandlers.push(handler);
+            return () => {};
+          },
+        },
+        terminal: { trash: vi.fn(async () => {}), restore },
+      },
+      configurable: true,
+      writable: true,
+    });
+    setupLifecycleListeners();
+    return { trash: trashHandlers.at(-1)!, restoreRequest: restoreHandlers.at(-1)!, restore };
+  }
+
+  it("brings a pane Canopy trashed back out of the trash", () => {
+    setupPanel();
+    const { trash, restoreRequest, restore } = getHandlers();
+    trash({ runId: "term-1" });
+    expect(usePanelStore.getState().panelsById["term-1"]?.location).toBe("trash");
+    restoreRequest({ runId: "term-1" });
+    expect(usePanelStore.getState().panelsById["term-1"]?.location).not.toBe("trash");
+    expect(restore).toHaveBeenCalledWith("term-1");
+  });
+
+  it("ignores a pane that isn't in the trash, or one it does not hold", () => {
+    setupPanel();
+    const { restoreRequest, restore } = getHandlers();
+    const before = usePanelStore.getState().panelsById;
+    restoreRequest({ runId: "term-1" });
+    restoreRequest({ runId: "elsewhere" });
+    expect(usePanelStore.getState().panelsById).toBe(before);
+    expect(restore).not.toHaveBeenCalled();
+  });
+});
+
 // Canopy renames a terminal from main, which writes the host and the saved
 // state; the view holding the pane renames it as the user's own rename would.
 describe("onRenameRequested — Canopy rename", () => {

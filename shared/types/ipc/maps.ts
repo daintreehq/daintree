@@ -1725,6 +1725,7 @@ export interface IpcEventMap {
   "canopy:snapshot-updated": import("./canopy.js").CanopySnapshot;
   "canopy:terminal-data": import("./canopy.js").CanopyTerminalData;
   "canopy:trash-requested": import("./canopy.js").CanopyTrashRequest;
+  "canopy:restore-requested": import("./canopy.js").CanopyRestoreRequest;
   "canopy:rename-requested": import("./canopy.js").CanopyRenameRequest;
   "project:updated": Project;
   /**

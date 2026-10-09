@@ -383,11 +383,22 @@ export function answerOptions(item: CanopyItem): string[] {
   return card.options.slice(0, 9);
 }
 
-/** The option "Y" picks: the first, unless the readers flagged the action as risky. */
+/**
+ * The option "Y" picks: the first, and only when the readers judged the action
+ * safe. A risk they flagged, or never assessed, takes its number instead.
+ */
 export function quickApproveOption(item: CanopyItem): string | null {
   const options = answerOptions(item);
-  if (options.length === 0 || item.card?.risk === "caution") return null;
+  if (options.length === 0 || item.card?.risk !== "none") return null;
   return options[0]!;
+}
+
+/**
+ * A choice that takes two presses of its number: any choice on an action the
+ * readers flagged as risky, where one stray key would let it run.
+ */
+export function answerNeedsConfirm(item: CanopyItem): boolean {
+  return item.card?.risk === "caution";
 }
 
 /** At or below this share of context left, the row says so: the agent is near compacting. */

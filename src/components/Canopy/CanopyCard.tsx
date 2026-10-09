@@ -9,6 +9,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { Button } from "@/components/ui/button";
 import { SURFACE_HEADER_FOCUS_LIFT_CLASS, SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -20,6 +21,7 @@ import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar"
 import { isMac } from "@/lib/platform";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import {
+  answerNeedsConfirm,
   answerOptions,
   itemArchived,
   itemLooksDone,
@@ -33,6 +35,8 @@ import { CanopyTitle } from "./CanopyTitle";
 const LazyHybridInputBar = lazy(() =>
   import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
 );
+
+const WarningGlyph = SEVERITY_GLYPH.warning;
 
 /** A grid pane's header control: a ghost icon button with a 14px glyph. */
 const CONTROL_ICON = "[&_svg]:size-3.5";
@@ -49,18 +53,22 @@ export interface CanopyCardHandlers {
    * Return typed straight into the live terminal.
    */
   onSent: (item: CanopyItem, via: "composer" | "terminal") => void;
-  /** Main refused what the composer sent; the draft is already gone. */
+  /** Main refused what the composer sent; the draft stays in the composer. */
   onSendFailed: (item: CanopyItem, error: unknown) => void;
   /** Pick one of the options the run's dialog shows, by its label. */
   onAnswer: (item: CanopyItem, label: string) => void;
   /** Rename the run's terminal; settles once main has it, and rejects when refused. */
   onRename: (item: CanopyItem, title: string) => Promise<void>;
+  /** Escape in the reply: the keyboard goes back to the run's row in the list. */
+  onLeavePane: (item: CanopyItem) => void;
 }
 
 /** What the list can ask of the pane for the agent it has selected. */
 export interface CanopyCardHandle {
   /** Handle a key aimed at the list's selected row; true when it was used. */
   handleKey: (event: KeyboardEvent<HTMLElement>) => boolean;
+  /** Put the keyboard in the reply, when the run takes one; false when it doesn't. */
+  focusComposer: () => boolean;
 }
 
 /** Where the keyboard lands in the pane when it opens: what the user was in on the agent before. */
@@ -170,6 +178,7 @@ export function CanopyCard({
   onSendFailed,
   onAnswer,
   onRename,
+  onLeavePane,
   initialFocus = null,
   onInitialFocusSettled,
   armTrash,
@@ -272,6 +281,30 @@ export function CanopyCard({
     armedRequestRef.current = armTrash;
     if (canTrash) setTrashPressedFor(trashTarget);
   }, [armTrash, canTrash, trashTarget]);
+  // A number on a risky action takes two presses, as Trash does: the first
+  // says which choice it would pick, the second picks it. For the screen it was
+  // pressed on only — a new screen or a change of state stands it down.
+  const [answerArmed, setAnswerArmed] = useState<{
+    label: string;
+    digit: number;
+    target: string;
+  } | null>(null);
+  // Armed only while that choice is still on offer at that number: options
+  // that change or go away under the same screen stand it down too.
+  const armedAnswer =
+    answerArmed?.target === trashTarget &&
+    answerOptions(item)[answerArmed.digit - 1] === answerArmed.label
+      ? answerArmed
+      : null;
+  useEffect(() => {
+    setAnswerArmed((armed) => (armed === null || armed.target === trashTarget ? armed : null));
+  }, [trashTarget]);
+  useEffect(() => {
+    if (answerArmed === null) return;
+    const timer = setTimeout(() => setAnswerArmed(null), TRASH_CONFIRM_MS);
+    return () => clearTimeout(timer);
+  }, [answerArmed]);
+
   const pressTrash = () => {
     if (!trashArmed) {
       setTrashPressedFor(trashTarget);
@@ -295,7 +328,14 @@ export function CanopyCard({
             : null;
       if (label !== null) {
         event.preventDefault();
-        if (!event.repeat) onAnswer(item, label);
+        if (event.repeat) return true;
+        const confirms = armedAnswer?.digit === digit && armedAnswer.label === label;
+        if (digit !== null && answerNeedsConfirm(item) && !confirms) {
+          setAnswerArmed({ label, digit, target: trashTarget });
+          return true;
+        }
+        setAnswerArmed(null);
+        onAnswer(item, label);
         return true;
       }
     }
@@ -322,7 +362,12 @@ export function CanopyCard({
     }
     return false;
   };
-  useImperativeHandle(ref, () => ({ handleKey }));
+  const focusComposer = (): boolean => {
+    if (!canReply || !composerRef.current) return false;
+    composerRef.current.focus();
+    return true;
+  };
+  useImperativeHandle(ref, () => ({ handleKey, focusComposer }));
 
   const agentId = isBuiltInAgentId(run.agentId) ? run.agentId : undefined;
   // The grid's chip rules: nothing while idle, and a settled agent keeps its
@@ -339,13 +384,23 @@ export function CanopyCard({
 
   // Through the open stream only, so main sends to the incarnation on screen
   // or to nothing.
-  const send = (text: string, imagePaths?: string[]) => {
+  // The draft clears only once main has taken the text: a refused send (the
+  // agent exited, the terminal respawned) leaves the reply where it was typed.
+  const submit = async (text: string, imagePaths?: readonly string[]): Promise<boolean> => {
     const watchId = stream.watchId;
-    if (watchId === null) return;
-    window.electron.canopy.terminalSubmit(watchId, text, imagePaths).then(
-      () => onSent(item, "composer"),
-      (error: unknown) => onSendFailed(item, error)
-    );
+    if (watchId === null) return false;
+    try {
+      await window.electron.canopy.terminalSubmit(
+        watchId,
+        text,
+        imagePaths && imagePaths.length > 0 ? [...imagePaths] : undefined
+      );
+    } catch (error) {
+      onSendFailed(item, error);
+      return false;
+    }
+    onSent(item, "composer");
+    return true;
   };
 
   return (
@@ -390,6 +445,18 @@ export function CanopyCard({
               said in the title bar rather than over the terminal — where it
               would hide the agent's own report, or resize the agent if it took
               rows of its own. */}
+          {armedAnswer !== null && (
+            <span
+              role="status"
+              data-canopy-answer-armed=""
+              className="flex min-w-0 shrink items-center gap-1 text-text-primary"
+            >
+              <WarningGlyph className="size-3.5 shrink-0 text-status-warning" aria-hidden="true" />
+              <span className="truncate">
+                Press {armedAnswer.digit} again: {armedAnswer.label}
+              </span>
+            </span>
+          )}
           {looksDone && (
             <span
               role="status"
@@ -473,8 +540,16 @@ export function CanopyCard({
                 agentId={agentId}
                 agentState={run.agentState}
                 disabled={stream.watchId === null}
-                onSend={({ text, imagePaths }) => send(text, imagePaths)}
+                onSend={({ text, imagePaths }) => void submit(text, imagePaths)}
+                submitText={submit}
                 onSendKey={(key) => {
+                  // Escape in a dialog means leave: here it goes back to the
+                  // list rather than to the agent, where it would interrupt a
+                  // working turn. The terminal above still takes it.
+                  if (key === "escape") {
+                    onLeavePane(item);
+                    return;
+                  }
                   const watchId = stream.watchId;
                   if (watchId === null) return;
                   window.electron.canopy.terminalSendKey(watchId, key).then(

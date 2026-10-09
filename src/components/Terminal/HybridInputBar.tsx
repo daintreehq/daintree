@@ -138,6 +138,12 @@ export interface HybridInputBarProps {
    * to the pane that registered it.
    */
   isolated?: boolean;
+  /**
+   * Sends the composer's text and says whether the terminal took it, in place
+   * of the fire-and-forget `onSend`: the draft is cleared and kept in history
+   * only once it resolves `true`, so a refused send leaves the text in place.
+   */
+  submitText?: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
 }
 
 /** The draft and history scope of an isolated composer, apart from every project's. */
@@ -240,9 +246,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       disabled = false,
       className,
       isolated = false,
+      submitText,
     },
     ref
   ) => {
+    const submitTextRef = useRef(submitText);
+    useEffect(() => {
+      submitTextRef.current = submitText;
+    });
     const getDraftInput = useTerminalInputStore((s) => s.getDraftInput);
     const setDraftInput = useTerminalInputStore((s) => s.setDraftInput);
     const clearDraftInput = useTerminalInputStore((s) => s.clearDraftInput);
@@ -601,7 +612,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       };
     }, [terminalId]);
 
-    const { sendText } = useTokenResolution({
+    const { sendText: sendResolvedText } = useTokenResolution({
       latestRef,
       applyEditorValue,
       setIsExpanded,
@@ -610,6 +621,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       cwd,
       agentId,
     });
+
+    // Every way this composer sends — Enter, a picked slash command, a prompt
+    // from the command picker — goes through `submitText` when it is given, so
+    // a refused send never eats the draft, whichever path sent it.
+    const sendText: typeof sendResolvedText = (text, options) => {
+      const submit = submitTextRef.current;
+      if (!submit || options?.submit) return sendResolvedText(text, options);
+      const imagePaths = options?.imagePaths ?? [];
+      return sendResolvedText(text, {
+        ...options,
+        submit: (outgoing: string) => submit(outgoing, imagePaths),
+      });
+    };
 
     // The outside-write revision the effect below last brought into the editor.
     // While the store's count is ahead of it, a write sits in the draft store

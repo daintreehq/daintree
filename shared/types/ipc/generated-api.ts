@@ -102,6 +102,9 @@ export interface GeneratedElectronAPI {
     unarchive(
       ...args: IpcInvokeMap["canopy:unarchive"]["args"]
     ): Promise<IpcInvokeMap["canopy:unarchive"]["result"]>;
+    untrash(
+      ...args: IpcInvokeMap["canopy:untrash"]["args"]
+    ): Promise<IpcInvokeMap["canopy:untrash"]["result"]>;
     unwatchTerminal(
       ...args: IpcInvokeMap["canopy:unwatch-terminal"]["args"]
     ): Promise<IpcInvokeMap["canopy:unwatch-terminal"]["result"]>;

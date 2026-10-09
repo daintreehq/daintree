@@ -245,6 +245,14 @@ export interface CanopyTrashRequest {
 }
 
 /**
+ * The user took back a trash made from Canopy. The view holding the pane puts
+ * it back from the trash as its own Undo would, host restore included.
+ */
+export interface CanopyRestoreRequest {
+  runId: string;
+}
+
+/**
  * The user renamed a run from Canopy. The view that holds its pane renames the
  * pane as the user's own rename there would; an empty title puts back the one
  * Daintree gives it.

@@ -20,6 +20,7 @@ interface ComposerProps {
   disabled: boolean;
   onSend: (payload: { text: string; imagePaths?: string[] }) => void;
   onSendKey: (key: string) => void;
+  submitText?: (text: string, imagePaths: string[]) => Promise<boolean>;
 }
 
 interface TerminalProps {
@@ -142,6 +143,7 @@ function handlers() {
     onSendFailed: vi.fn<CanopyCardHandlers["onSendFailed"]>(),
     onAnswer: vi.fn<CanopyCardHandlers["onAnswer"]>(),
     onRename: vi.fn<CanopyCardHandlers["onRename"]>(async () => {}),
+    onLeavePane: vi.fn<CanopyCardHandlers["onLeavePane"]>(),
   };
 }
 
@@ -228,16 +230,116 @@ describe("CanopyCard", () => {
     expect(h.onSent).not.toHaveBeenCalled();
   });
 
-  it("passes the composer's keys straight to the terminal", async () => {
+  it("tells the composer a refused send failed, so the draft stays where it was typed", async () => {
+    const { h } = renderCard(itemFor("question"));
+    await streamOpens({ watchId: 7 });
+    const bar = await composer();
+    submit.mockRejectedValueOnce(new Error("gone"));
+    let took: boolean | undefined;
+    await act(async () => {
+      took = await bar.submitText!("hello", []);
+    });
+    expect(took).toBe(false);
+    expect(h.onSendFailed).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      took = await bar.submitText!("hello again", []);
+    });
+    expect(took).toBe(true);
+    expect(h.onSent).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the composer's keys to the terminal, but Escape goes back to the list", async () => {
     renderCard(itemFor("approval", { options: ["Yes", "No"] }));
     const { h } = { h: currentHandlers! };
     await streamOpens({ watchId: 7 });
+    // Escape leaves the reply rather than interrupting the agent's turn.
     await act(async () => (await composer()).onSendKey("escape"));
-    expect(sendKey).toHaveBeenCalledWith(7, "escape");
-    // Escape steers the agent's menu; only Enter answers and moves the panel on.
+    expect(sendKey).not.toHaveBeenCalled();
+    expect(h.onLeavePane).toHaveBeenCalledTimes(1);
+    // Arrows steer the agent's menu; only Enter answers and moves the panel on.
+    await act(async () => (await composer()).onSendKey("up"));
+    expect(sendKey).toHaveBeenCalledWith(7, "up");
     expect(h.onSent).not.toHaveBeenCalled();
     await act(async () => (await composer()).onSendKey("enter"));
     expect(h.onSent).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes the first choice on Y only when the readers judged the action safe", () => {
+    const h = handlers();
+    const ref = createRef<CanopyCardHandle>();
+    const options = ["Yes", "No"];
+    const { rerender } = render(
+      <CanopyCard
+        ref={ref}
+        item={itemFor("approval", { options, risk: "unknown" })}
+        {...PROPS}
+        {...h}
+      />
+    );
+    act(() => {
+      ref.current!.handleKey(keyPress("y"));
+    });
+    expect(h.onAnswer).not.toHaveBeenCalled();
+    rerender(
+      <CanopyCard
+        ref={ref}
+        item={itemFor("approval", { options, risk: "none" })}
+        {...PROPS}
+        {...h}
+      />
+    );
+    act(() => {
+      ref.current!.handleKey(keyPress("y"));
+    });
+    expect(h.onAnswer).toHaveBeenCalledWith(expect.anything(), "Yes");
+  });
+
+  it("answers a risky action's choice only on a second press of its number", () => {
+    vi.useFakeTimers();
+    try {
+      const h = handlers();
+      const ref = createRef<CanopyCardHandle>();
+      const { container } = render(
+        <CanopyCard
+          ref={ref}
+          item={itemFor("approval", {
+            options: ["Yes", "Yes, allow all edits during this session"],
+            risk: "caution",
+            riskReason: "Rewrites every saved profile",
+          })}
+          {...PROPS}
+          {...h}
+        />
+      );
+      act(() => {
+        ref.current!.handleKey(keyPress("2"));
+      });
+      expect(h.onAnswer).not.toHaveBeenCalled();
+      expect(container.querySelector("[data-canopy-answer-armed]")?.textContent).toContain(
+        "Press 2 again"
+      );
+      // Another number arms that one instead; it does not confirm the first.
+      act(() => {
+        ref.current!.handleKey(keyPress("1"));
+      });
+      expect(h.onAnswer).not.toHaveBeenCalled();
+      act(() => {
+        vi.advanceTimersByTime(TRASH_CONFIRM_MS);
+      });
+      expect(container.querySelector("[data-canopy-answer-armed]")).toBeNull();
+      act(() => {
+        ref.current!.handleKey(keyPress("2"));
+      });
+      act(() => {
+        ref.current!.handleKey(keyPress("2"));
+      });
+      expect(h.onAnswer).toHaveBeenCalledWith(
+        expect.anything(),
+        "Yes, allow all edits during this session"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps a secret out of the composer, which records history", async () => {
