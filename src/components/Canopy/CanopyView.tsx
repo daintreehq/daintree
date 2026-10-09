@@ -60,6 +60,12 @@ import { useListReorderMotion } from "./useListReorderMotion";
 
 /** Ages are minute-grained, as in Pilot. */
 const AGE_TICK_MS = 30_000;
+
+/** "3m ago", or "just now" — never "just now ago". */
+function agoPhrase(sinceMs: number, nowMs: number): string {
+  const age = formatWaitAge(sinceMs, nowMs);
+  return age === "just now" ? age : `${age} ago`;
+}
 /** An ask that pages the user: placed in the list at once, whatever is held. */
 function isUrgentItem(item: CanopyItem): boolean {
   const card = item.card;
@@ -219,6 +225,30 @@ export function CanopyView() {
     still === null ? undefined : (
       <img src={still} alt="" draggable={false} className="h-screen w-screen max-w-none" />
     );
+
+  // Main hasn't said yet whether Canopy is on: neither the offer nor the
+  // inbox, so neither flashes before the other replaces it.
+  if (activated === null) {
+    return (
+      <AppDialog
+        isOpen={isOpen}
+        onClose={close}
+        size="workspace"
+        maxHeight="h-[min(90vh,1100px)]"
+        // Nothing to land on yet, and Close is no place for a reflexive Enter.
+        initialFocus="none"
+        backdrop={backdrop}
+        data-testid="canopy-dialog"
+      >
+        <AppDialog.Header>
+          <AppDialog.Title icon={<Telescope />}>Canopy</AppDialog.Title>
+          <span className="flex-1" />
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+        <div className="flex-1" aria-busy="true" />
+      </AppDialog>
+    );
+  }
 
   // Until the user turns it on, Canopy is offered, not run: no list, no
   // terminals, and nothing read.
@@ -1262,6 +1292,17 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       openPaneNow(item.runId, "composer");
     },
     onToggleRead: toggleRead,
+    onReread: (item) =>
+      safeFireAndForget(
+        window.electron.canopy
+          .reread(item.runId, { spawnedAt: item.row.run.spawnedAt })
+          .catch((error: unknown) =>
+            failToast("Couldn't read the screen again", error, {
+              label: "Go to terminal",
+              onClick: () => handlers.onOpen(item),
+            })
+          )
+      ),
     onArchive: handlers.onArchive,
     onRename: askRename,
     onTrash: (item) => {
@@ -1305,7 +1346,9 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
     fleet === null
       ? "Reading agents…"
       : items.length === 0
-        ? "No agents are running"
+        ? scope === "project" && fleet.runs.length > 0
+          ? "No agents in this project"
+          : "No agents are running"
         : // What needs you leads; what is new follows. The list's own heading
           // counts the agents.
           [
@@ -1382,20 +1425,30 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
         onKeyDown={onNavigationKeyDown}
       >
         {canopy?.tier === "free" && <BetaNotice />}
-        {canopy?.lastError && (
+        {(fleet?.degraded === true || canopy?.lastError) && (
           <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
+            {/* Daintree can't see its agents right now: the rows are the last
+                it saw, and nothing is read until it can again. */}
+            {fleet?.degraded === true && (
+              <Callout severity="warning" size="compact" title="Agent status is unavailable">
+                {fleet.lastSuccessfulAt !== null
+                  ? `These are the agents Daintree saw ${agoPhrase(fleet.lastSuccessfulAt, nowMs)}. Canopy reads them again once it can.`
+                  : "Daintree hasn't been able to list its agents yet. Canopy reads them once it can."}
+              </Callout>
+            )}
             {canopy?.lastError && (
               <Callout
                 severity="warning"
                 size="compact"
-                title="Some screens couldn't be read"
+                title="Canopy couldn't read some screens"
                 action={
                   <Button variant="outline" size="xs" onClick={refresh}>
                     Retry
                   </Button>
                 }
               >
-                {canopy.lastError}. Rows marked Read failed show what was read before.
+                {canopy.lastError} Rows marked “Read failed” keep what was read before, and Canopy
+                keeps trying.
               </Callout>
             )}
           </div>
@@ -1419,12 +1472,17 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
                 count={listed.length}
                 trailing={
                   <span className="flex items-center gap-1">
-                    {/* Said only while it is so, never as a standing label. */}
-                    {updating && (
-                      <span role="status" className="mr-1 text-2xs text-text-secondary">
-                        Updating summaries…
-                      </span>
-                    )}
+                    {/* Said only while it is so, never as a standing label: a
+                        hold-up first, since summaries are slow because of it. */}
+                    <span role="status" className="mr-1 text-2xs text-text-secondary">
+                      {canopy?.waiting === "waking"
+                        ? "Starting Canopy's service…"
+                        : canopy?.waiting === "retrying"
+                          ? "Waiting to retry…"
+                          : updating
+                            ? "Updating summaries…"
+                            : ""}
+                    </span>
                     <Button
                       variant="ghost"
                       size="xs"
@@ -1484,7 +1542,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
                           showProject={manyProjects}
                           nowMs={nowMs}
                           asideLabel={
-                            replied !== null ? `Replied ${formatWaitAge(replied, nowMs)} ago` : null
+                            replied !== null ? `Replied ${agoPhrase(replied, nowMs)}` : null
                           }
                           onSelect={() => selectRow(item.runId)}
                           onClick={() => readNow(item)}
@@ -1535,7 +1593,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
                             nowMs={nowMs}
                             asideLabel={
                               item.disposition
-                                ? `Archived ${formatWaitAge(item.disposition.at, nowMs)} ago`
+                                ? `Archived ${agoPhrase(item.disposition.at, nowMs)}`
                                 : null
                             }
                             onSelect={() => selectRow(item.runId)}
@@ -1585,8 +1643,22 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
           </div>
         )}
         {fleet !== null && items.length === 0 && (
-          <div className="flex flex-1 items-center justify-center">
-            <p className="text-sm text-text-secondary">Launch an agent and it shows up here.</p>
+          <div className="flex flex-1 flex-col items-center justify-center gap-3">
+            {scope === "project" && fleet.runs.length > 0 ? (
+              <>
+                <p className="text-sm text-text-secondary">
+                  No agents in this project. Other projects have{" "}
+                  {pluralize(fleet.runs.length, "agent")}.
+                </p>
+                <Button variant="outline" size="sm" onClick={() => setScope("all")}>
+                  Show all projects
+                </Button>
+              </>
+            ) : (
+              <p className="text-sm text-text-secondary">
+                Launch an agent from the toolbar and it shows up here.
+              </p>
+            )}
           </div>
         )}
       </div>

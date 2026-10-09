@@ -87,6 +87,7 @@ const canopyBackend = vi.hoisted(() => ({
   classifyWithCanopy: vi.fn(),
   describeWithCanopy: vi.fn(),
   wakeCanopy: vi.fn(),
+  canopyWaking: vi.fn(() => false),
 }));
 vi.mock("../../../services/canopy/canopyBackend.js", () => canopyBackend);
 vi.mock("../../utils.js", async (importOriginal) => ({
@@ -688,6 +689,13 @@ describe("canopy IPC", () => {
     // A second Undo has nothing left to take back.
     const again = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), receipt));
     expect(again.ok).toBe(false);
+  });
+
+  it("refuses to read again a run Canopy hasn't read", async () => {
+    const result = await outcome(
+      invoke(CANOPY_METHOD_CHANNELS.reread, fakeSender(1), "run-1", { spawnedAt: 100 })
+    );
+    expect(result.ok).toBe(false);
   });
 
   it("refuses a receipt it never gave, or one for a terminal respawned since", async () => {

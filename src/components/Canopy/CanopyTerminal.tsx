@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { Terminal } from "@xterm/xterm";
 import type { WebglAddon } from "@xterm/addon-webgl";
 import type { CanopyTerminalData, CanopyTerminalView } from "@shared/types/ipc/canopy";
@@ -54,6 +55,8 @@ interface CanopyTerminalProps {
   onStreamChange?: (state: CanopyStreamState) => void;
   /** Return was typed straight into the terminal and the run took it. */
   onSubmitted?: () => void;
+  /** Go to the run's own pane: the way to see a screen this view couldn't show. */
+  onGoTo?: () => void;
 }
 
 /**
@@ -80,6 +83,7 @@ export function CanopyTerminal({
   spawnedAt,
   onStreamChange,
   onSubmitted,
+  onGoTo,
 }: CanopyTerminalProps) {
   const frameRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -390,11 +394,23 @@ export function CanopyTerminal({
           column; wider when the PTY is, and the frame scrolls. */}
       <div ref={hostRef} className="min-w-full shrink-0" />
       {(status === "failed" || status === "ended") && (
-        <p className="absolute inset-x-0 top-3 text-center text-xs text-text-secondary">
-          {status === "ended"
-            ? "This terminal has exited."
-            : "Couldn't show this terminal. Go to it to see its screen."}
-        </p>
+        <div
+          role="status"
+          className="absolute inset-x-0 top-3 flex flex-col items-center gap-2 text-center text-xs text-text-secondary"
+        >
+          {status === "ended" ? (
+            <p>This terminal has exited. Archive it, or trash it to clear it away.</p>
+          ) : (
+            <>
+              <p>Couldn't show this terminal here</p>
+              {onGoTo && (
+                <Button variant="outline" size="xs" onClick={onGoTo}>
+                  Go to terminal
+                </Button>
+              )}
+            </>
+          )}
+        </div>
       )}
     </div>
   );

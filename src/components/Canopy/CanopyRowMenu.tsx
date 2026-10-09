@@ -15,6 +15,8 @@ export interface CanopyRowMenuActions {
   onOpen: (item: CanopyItem) => void;
   onReply: (item: CanopyItem) => void;
   onToggleRead: (item: CanopyItem) => void;
+  /** Read the run's screen again, words included: for a reading that looks wrong. */
+  onReread: (item: CanopyItem) => void;
   onArchive: (item: CanopyItem) => void;
   /** Rename the run's terminal, in its title bar. */
   onRename: (item: CanopyItem) => void;
@@ -75,6 +77,9 @@ export function CanopyRowMenu({
             {item.unread ? "Mark as read" : "Mark as unread"}
             <ContextMenuShortcut shortcut="U" />
           </ContextMenuItem>
+        )}
+        {!archived && (
+          <ContextMenuItem onSelect={() => actions.onReread(item)}>Read again</ContextMenuItem>
         )}
         <ContextMenuItem aria-keyshortcuts="E" onSelect={() => actions.onArchive(item)}>
           {archived ? "Move to inbox" : "Archive"}

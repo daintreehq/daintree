@@ -16,6 +16,7 @@ import {
   CANOPY_COLD_START_GRACE_MS,
   CANOPY_FAILURE_BACKOFF_MAX_MS,
   CanopyService,
+  failureMessage,
   type CanopyServiceDeps,
 } from "../CanopyService.js";
 import {
@@ -2006,7 +2007,7 @@ describe("CanopyService", () => {
     h.runs.push(run("a"));
     h.screens.set("a", "screen");
     await h.service.scan();
-    expect(h.service.getSnapshot().lastError).toBe("Canopy request failed");
+    expect(h.service.getSnapshot().lastError).toBe("Canopy couldn't read some screens.");
 
     // A failing service is not asked again on the very next poll.
     fail = false;
@@ -2062,7 +2063,7 @@ describe("CanopyService", () => {
     expect(h.service.getSnapshot().lastError).toBeNull();
     clock += CANOPY_TRANSIENT_GRACE_MS;
     await h.service.scan();
-    expect(h.service.getSnapshot().lastError).toBe("Describer: request timed out");
+    expect(h.service.getSnapshot().lastError).toBe("Canopy's service took too long to answer.");
   });
 
   it("keeps a notable busy agent in the notable band after its card is written", async () => {
@@ -2115,12 +2116,12 @@ describe("CanopyService", () => {
     h.screens.set("b", "fine");
     await h.service.scan();
     expect(h.service.getSnapshot()).toMatchObject({
-      lastError: "Canopy request failed",
+      lastError: "Canopy couldn't read some screens.",
       failedRuns: ["a"],
     });
     h.screens.set("b", "fine, and moving");
     await h.service.scan();
-    expect(h.service.getSnapshot().lastError).toBe("Canopy request failed");
+    expect(h.service.getSnapshot().lastError).toBe("Canopy couldn't read some screens.");
 
     h.runs.splice(0, 1);
     h.service.onFleetChanged();
@@ -2149,7 +2150,7 @@ describe("CanopyService", () => {
 
     clock += CANOPY_TRANSIENT_GRACE_MS;
     await h.service.scan();
-    expect(h.service.getSnapshot().lastError).toBe("Classifier: HTTP 429");
+    expect(h.service.getSnapshot().lastError).toBe("Canopy's service is busy right now.");
 
     // A reading that lands ends the spell, and the next one gets the whole grace again.
     fail = false;
@@ -2187,7 +2188,7 @@ describe("CanopyService", () => {
     expect(h.service.getSnapshot().lastError).toBeNull();
     clock += CANOPY_TRANSIENT_GRACE_MS;
     await h.service.scan();
-    expect(h.service.getSnapshot().lastError).toBe("Classifier: service waking");
+    expect(h.service.getSnapshot().lastError).toBe("Canopy's service is still starting.");
   });
 
   it("reports a service that never comes up, however often it is woken", async () => {
@@ -2207,7 +2208,163 @@ describe("CanopyService", () => {
     expect(h.service.getSnapshot().lastError).toBeNull();
     clock += CANOPY_FAILURE_BACKOFF_MAX_MS;
     await h.service.scan();
-    expect(h.service.getSnapshot().lastError).toBe("Classifier: request timed out");
+    expect(h.service.getSnapshot().lastError).toBe("Canopy's service took too long to answer.");
+  });
+
+  it("says a failed read in the user's words, never a stage or status code", () => {
+    const said = (message: string, transient = false) =>
+      failureMessage(new CanopyProviderError("describer", message, transient));
+    expect(said("HTTP 429", true)).toBe("Canopy's service is busy right now.");
+    expect(said("request failed", true)).toBe(
+      "Couldn't reach Canopy's service. Check your connection."
+    );
+    expect(said("HTTP 503", true)).toBe("Canopy's service ran into a problem.");
+    expect(said("card cut off")).toBe("Canopy's service sent back an answer it couldn't use.");
+    expect(said("stream failed: rate_limited")).toBe("Canopy's service is busy right now.");
+    expect(said("stream failed: inference_failed")).toBe("Canopy's service ran into a problem.");
+    expect(said("stream failed: bad_request")).toBe("Canopy's service turned the request down.");
+    expect(said("stream ended early", true)).toBe(
+      "Canopy's service stopped partway through a reading."
+    );
+    expect(said("stream failed", true)).toBe("Canopy's service stopped partway through a reading.");
+    expect(said("service waking", true)).toBe("Canopy's service is still starting.");
+    for (const message of ["HTTP 429", "HTTP 503", "stream failed: inference_failed"]) {
+      expect(said(message)).not.toMatch(/describer|classifier|HTTP|\d{3}|_/i);
+    }
+  });
+
+  it("says reads are held up while the service starts or a failed read waits to be tried again", async () => {
+    let waking = true;
+    const h = await makeHarness({
+      serviceWaking: () => waking,
+      classify: async () => {
+        throw new CanopyProviderError("classifier", "HTTP 429", true);
+      },
+    });
+    expect(h.service.getSnapshot().waiting).toBe("waking");
+    waking = false;
+    expect(h.service.getSnapshot().waiting).toBeUndefined();
+    h.runs.push(run("a"));
+    h.screens.set("a", "screen");
+    await h.service.scan();
+    expect(h.service.getSnapshot()).toMatchObject({ waiting: "retrying", lastError: null });
+  });
+
+  it("reads one unchanged screen again on request, words included, as the same prompt", async () => {
+    const h = await makeHarness({
+      classify: async () => ({
+        category: "approval",
+        confidence: 0.95,
+        attention: 0.95,
+        question: "Do you want to proceed?",
+      }),
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
+    h.screens.set("a", APPROVAL_SCREEN);
+    await h.service.refresh();
+    const before = h.service.getSnapshot().cards[0]!;
+    expect(h.describe).toHaveBeenCalledTimes(1);
+
+    // Unchanged: a refresh reads nothing new.
+    await h.service.refresh();
+    expect(h.classify).toHaveBeenCalledTimes(1);
+
+    expect(await h.service.reread("a", before.spawnedAt)).toBe(true);
+    expect(h.classify).toHaveBeenCalledTimes(2);
+    expect(h.describe).toHaveBeenCalledTimes(2);
+    // The same prompt: nothing about it reads as new.
+    expect(h.service.getSnapshot().cards[0]!.revision).toBe(before.revision);
+    // Another incarnation's request is refused.
+    expect(await h.service.reread("a", before.spawnedAt + 1)).toBe(false);
+  });
+
+  it.each([
+    ["a finished turn the classifier thinks needs nothing", "finished", 0.2],
+    ["an idle session", "idle", 0.1],
+  ] as const)(
+    "reads %s again, words included, keeping its words until new ones land",
+    async (_label, category, attention) => {
+      const h = await makeHarness({
+        classify: async () => ({ category, confidence: 0.9, attention, question: null }),
+      });
+      h.runs.push(run("a", { agentState: "completed" }));
+      h.screens.set("a", "All done. Committed as abc123.");
+      await h.service.refresh();
+      const describedBefore = h.describe.mock.calls.length;
+      const spawnedAt = h.runs[0]!.spawnedAt;
+      expect(await h.service.reread("a", spawnedAt)).toBe(true);
+      expect(h.classify).toHaveBeenCalledTimes(2);
+      expect(h.describe.mock.calls.length).toBe(describedBefore + 1);
+      expect(h.service.getSnapshot().cards[0]!.headline).toBe("Headline");
+    }
+  );
+
+  it("reads a replied run again on request, without bringing it back unread", async () => {
+    const h = await makeHarness({
+      classify: async () => ({
+        category: "question",
+        confidence: 0.95,
+        attention: 0.95,
+        question: "Push now?",
+      }),
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "question" }));
+    h.screens.set("a", "Push now?");
+    await h.service.refresh();
+    const spawnedAt = h.runs[0]!.spawnedAt;
+    h.service.markHandled("a", spawnedAt);
+    const mark = () => h.service.getSnapshot().reads.find((m) => m.runId === "a");
+    h.service.setRead("a", spawnedAt, true, mark()?.turn);
+    const before = mark();
+    const describes = h.describe.mock.calls.length;
+    await h.service.reread("a", spawnedAt);
+    expect(h.describe.mock.calls.length).toBe(describes + 1);
+    expect(mark()).toEqual(before);
+  });
+
+  it("doesn't make an unchanged screen news when a re-read finds the question an earlier read missed", async () => {
+    let question: string | null = null;
+    const h = await makeHarness({
+      classify: async () => ({
+        category: question ? "question" : "idle",
+        confidence: 0.9,
+        attention: question ? 0.9 : 0.1,
+        question,
+      }),
+    });
+    h.runs.push(run("a", { agentState: "idle" }));
+    // The turn is taken on one screen; the next one is read as needing nothing.
+    h.screens.set("a", "Done with the first part.");
+    await h.service.refresh();
+    h.screens.set("a", "Done. Want me to push this?");
+    await h.service.refresh();
+    const spawnedAt = h.runs[0]!.spawnedAt;
+    const mark = () => h.service.getSnapshot().reads.find((m) => m.runId === "a");
+    h.service.setRead("a", spawnedAt, true, mark()?.turn);
+    const before = mark();
+    question = "Want me to push this?";
+    await h.service.reread("a", spawnedAt);
+    expect(mark()).toEqual(before);
+  });
+
+  it("stops saying it is waiting to retry once no retry is due", async () => {
+    let clock = 1_000_000;
+    let fail = true;
+    const h = await makeHarness({
+      now: () => clock,
+      classify: async () => {
+        if (fail) throw new CanopyProviderError("classifier", "HTTP 429", true);
+        return { category: "idle", confidence: 0.9, attention: 0.1, question: null };
+      },
+    });
+    h.runs.push(run("a"));
+    h.screens.set("a", "screen");
+    await h.service.scan();
+    expect(h.service.getSnapshot().waiting).toBe("retrying");
+    fail = false;
+    clock += CANOPY_FAILURE_BACKOFF_MAX_MS;
+    await h.service.scan();
+    expect(h.service.getSnapshot().waiting).toBeUndefined();
   });
 
   describe("the describer's note", () => {

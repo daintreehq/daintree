@@ -528,6 +528,7 @@ export function CanopyCard({
           spawnedAt={run.spawnedAt}
           onStreamChange={setStream}
           onSubmitted={() => onSent(item, "terminal")}
+          onGoTo={() => onOpen(item)}
         />
         {canReply ? (
           <div data-keybindings-isolated="" className="contents">
