@@ -725,6 +725,23 @@ describe("canopy IPC", () => {
     expect(undone.ok).toBe(true);
   });
 
+  it("refuses an Undo whose trash lapses while the host is asked", async () => {
+    vi.useFakeTimers();
+    try {
+      const receipt = await trashReceipt();
+      vi.advanceTimersByTime(TRASH_TTL_MS - 10);
+      ptyClient.getTerminalAsync.mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(20);
+        return state.record;
+      });
+      const late = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), receipt));
+      expect(late.ok).toBe(false);
+      expect(ptyClient.restore).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refuses an Undo whose terminal was restored elsewhere while the host was asked", async () => {
     const receipt = await trashReceipt();
     ptyClient.getTerminalAsync.mockImplementationOnce(async () => {

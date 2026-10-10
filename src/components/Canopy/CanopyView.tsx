@@ -227,6 +227,19 @@ export function CanopyView() {
     () => (openerRef.current?.isConnected ? openerRef.current : null),
     []
   );
+  // A dialog replaced while the panel stays open — loading giving way to the
+  // offer or the inbox, the offer to the inbox — hands the keyboard straight
+  // to the one replacing it: back on the opener, even for the frames before
+  // the next one places it, keys would reach a terminal behind the panel.
+  const restoreOnReplace = useCallback(() => {
+    if (useCanopyStore.getState().isOpen) {
+      const successor = document.querySelector<HTMLElement>(
+        '[data-testid="canopy-dialog"] [tabindex="-1"]'
+      );
+      if (successor?.isConnected) return successor;
+    }
+    return restoreOpener();
+  }, [restoreOpener]);
   const loadingRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!isOpen || activated !== null) return;
@@ -263,7 +276,7 @@ export function CanopyView() {
         maxHeight="h-[min(90vh,1100px)]"
         // Nothing to land on yet, and Close is no place for a reflexive Enter.
         initialFocus="none"
-        restoreFocusTo={restoreOpener}
+        restoreFocusTo={restoreOnReplace}
         preferRestoreFocusTo
         backdrop={backdrop}
         data-testid="canopy-dialog"
@@ -291,7 +304,7 @@ export function CanopyView() {
         backdrop={backdrop}
         onTurnOn={() => window.electron.canopy.setMode("on").then(applySnapshot)}
         onHide={hideCanopy}
-        restoreFocusTo={restoreOpener}
+        restoreFocusTo={restoreOnReplace}
       />
     );
   }
