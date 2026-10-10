@@ -130,13 +130,22 @@ export interface WorktreeLaunchAgentItem {
 export type WorktreeDevServerMenuState = "running" | "restorable" | "none";
 
 export interface WorktreeMenuItemsProps {
-  worktree: WorktreeState;
+  /**
+   * Absent for a workspace that has no worktrees — a scratch, or a folder
+   * opened without git (#13225). The body then withholds every group that is
+   * worktree- or git-shaped itself (Review, Git, Sessions, Runtime, Linked work,
+   * Organize, Extensions, Delete, and the git-only Copy rows) rather than trust
+   * each caller to omit the right callbacks: those rows are absent, not
+   * disabled, there (#11499).
+   */
+  worktree?: WorktreeState;
   components: WorktreeMenuComponents;
   launchAgents: WorktreeLaunchAgentItem[];
   recipes: Array<{ id: string; name: string }>;
   runningRecipeId: string | null;
   isPinned?: boolean;
-  counts: {
+  /** Sessions and save-layout read these; a workspace root offers neither. */
+  counts?: {
     grid: number;
     dock: number;
     /** Live PTY-bearing panels for this worktree. */
@@ -152,10 +161,10 @@ export interface WorktreeMenuItemsProps {
   canMoveUp?: boolean;
   canMoveDown?: boolean;
   onCopyContextFull: () => void;
-  onCopyContextModified: () => void;
+  onCopyContextModified?: () => void;
   onCopyPath: () => void;
-  onCopyBranchName: () => void;
-  onOpenEditor: () => void;
+  onCopyBranchName?: () => void;
+  onOpenEditor?: () => void;
   onRevealInFinder: () => void;
   onOpenIssueExternal?: () => void;
   onOpenPRExternal?: () => void;
@@ -187,15 +196,17 @@ export interface WorktreeMenuItemsProps {
   onTogglePin?: () => void;
   onToggleCollapse?: () => void;
   isCollapsed?: boolean;
-  onDockAll: () => void;
-  onMaximizeAll: () => void;
-  onResetRenderers: () => void;
-  onSelectAllAgents: () => void;
-  onSelectWaitingAgents: () => void;
-  onSelectWorkingAgents: () => void;
-  onCloseAll: () => void;
-  onTerminateAll: () => void;
-  onClearHistory: () => void;
+  // Optional only so a workspace root needn't pass inert handlers: the
+  // `worktree.sessions.*` actions resolve a worktree id and no-op without one.
+  onDockAll?: () => void;
+  onMaximizeAll?: () => void;
+  onResetRenderers?: () => void;
+  onSelectAllAgents?: () => void;
+  onSelectWaitingAgents?: () => void;
+  onSelectWorkingAgents?: () => void;
+  onCloseAll?: () => void;
+  onTerminateAll?: () => void;
+  onClearHistory?: () => void;
   /**
    * Receives the resolved surface source. The callback lives in the card body,
    * outside any menu Root, so it can't resolve `menu` vs `context-menu` itself
@@ -403,10 +414,12 @@ export function WorktreeMenuItems({
             Browse files
           </C.Item>
         )}
-        <C.Item onSelect={onOpenEditor}>
-          <ExternalLink className={ICON} />
-          Open in editor
-        </C.Item>
+        {onOpenEditor && (
+          <C.Item onSelect={onOpenEditor}>
+            <ExternalLink className={ICON} />
+            Open in editor
+          </C.Item>
+        )}
         <C.Item onSelect={onRevealInFinder}>
           <FolderOpen className={ICON} />
           {fileManagerRevealLabel()}
@@ -416,32 +429,34 @@ export function WorktreeMenuItems({
   );
 
   // ---------------------------------------------------------------- Review
-  const changedFileCount = worktree.worktreeChanges?.changes.length ?? 0;
-  const reviewRows = [
-    onOpenReviewHub && (
-      <C.Item key="review-hub" onSelect={onOpenReviewHub}>
-        <GitCommitHorizontal className={ICON} />
-        Review worktree
-      </C.Item>
-    ),
-    onOpenChanges && (
-      <C.Item
-        key="open-changes"
-        onSelect={onOpenChanges}
-        {...counted("View uncommitted changes", changedFileCount)}
-      >
-        <FileDiff className={ICON} />
-        View uncommitted changes
-        <C.Meta>{changedFileCount}</C.Meta>
-      </C.Item>
-    ),
-    onCompareDiff && (
-      <C.Item key="compare" onSelect={onCompareDiff}>
-        <GitCompare className={ICON} />
-        Compare with another worktree…
-      </C.Item>
-    ),
-  ].filter(Boolean);
+  const changedFileCount = worktree?.worktreeChanges?.changes.length ?? 0;
+  const reviewRows = !worktree
+    ? []
+    : [
+        onOpenReviewHub && (
+          <C.Item key="review-hub" onSelect={onOpenReviewHub}>
+            <GitCommitHorizontal className={ICON} />
+            Review worktree
+          </C.Item>
+        ),
+        onOpenChanges && (
+          <C.Item
+            key="open-changes"
+            onSelect={onOpenChanges}
+            {...counted("View uncommitted changes", changedFileCount)}
+          >
+            <FileDiff className={ICON} />
+            View uncommitted changes
+            <C.Meta>{changedFileCount}</C.Meta>
+          </C.Item>
+        ),
+        onCompareDiff && (
+          <C.Item key="compare" onSelect={onCompareDiff}>
+            <GitCompare className={ICON} />
+            Compare with another worktree…
+          </C.Item>
+        ),
+      ].filter(Boolean);
 
   const reviewSub = reviewRows.length > 0 && (
     <C.Sub key="review">
@@ -463,7 +478,7 @@ export function WorktreeMenuItems({
   // `isDetached` because the status pass leaves a stale branch name behind when
   // a worktree detaches — a pull/push row would name a branch that is not
   // checked out. Fetch has no such problem: it only moves remote-tracking refs.
-  const gitBranch = copyableBranchName(worktree);
+  const gitBranch = worktree ? copyableBranchName(worktree) : null;
   // `tracking` is the explicit upstream field, and it only exists once the
   // status pass has run. Reading `aheadCount === undefined` instead would
   // conflate "no upstream" with "not measured yet" and make a freshly created
@@ -471,7 +486,7 @@ export function WorktreeMenuItems({
   // this menu has no business asserting. `undefined` here means exactly that:
   // unknown.
   const hasUpstream =
-    worktree.worktreeChanges == null ? undefined : Boolean(worktree.worktreeChanges.tracking);
+    worktree?.worktreeChanges == null ? undefined : Boolean(worktree.worktreeChanges.tracking);
   // Stays live even at `behindCount === 0`: the snapshot is a cached read, and
   // pulling is how you find out it was stale. It also stays live while the
   // upstream is unknown — the action's own error is a better answer than a row
@@ -484,10 +499,10 @@ export function WorktreeMenuItems({
   // whenever the count is unknown, and the push dialog resolves the real
   // destination, so the worst case is a disabled row on a config where
   // ReviewHub and the palette still push.
-  const nothingToPush = worktree.aheadCount === 0;
+  const nothingToPush = worktree?.aheadCount === 0;
   // Only a measured "none": an unknown answer keeps Fetch live, since the
   // click itself is how an unread repo finds out.
-  const noRemote = worktree.hasRemote === false;
+  const noRemote = worktree?.hasRemote === false;
   const showForcePush = gitBranch !== null && Boolean(onGitForcePush) && Boolean(canForcePush);
 
   // Acting on the base branch the card already measures itself against
@@ -501,22 +516,22 @@ export function WorktreeMenuItems({
   // useful next move and it is not "start another rebase" — and the main-process
   // handler refuses that anyway, so a disabled row would only restate a
   // prohibition the menu is already able to express by omission.
-  const baseBranchName = worktree.baseBranchName ?? null;
-  const baseOperation = toRepoOperationState(worktree.repoState);
+  const baseBranchName = worktree?.baseBranchName ?? null;
+  const baseOperation = toRepoOperationState(worktree?.repoState);
   // `worktreeChanges`, NOT `repoState`: the snapshot only publishes `repoState`
   // while an operation is in progress (`GitStatusPass` skips the CLEAN/DIRTY
   // publication entirely), so reading dirtiness from it would call every clean
   // worktree dirty and every dirty one clean.
-  const hasUncommittedChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
-  const isStatusUnknown = worktree.worktreeChanges == null;
-  const baseBehind = worktree.baseBehindCount ?? null;
+  const hasUncommittedChanges = (worktree?.worktreeChanges?.changedFileCount ?? 0) > 0;
+  const isStatusUnknown = worktree?.worktreeChanges == null;
+  const baseBehind = worktree?.baseBehindCount ?? null;
 
   // Ordered by which the user can act on first, and every one of them is a
   // reason the operation would fail rather than a guess at intent — a row
   // disabled for a reason the user cannot see reads as arbitrary.
   const baseBlockedReason = !baseBranchName
     ? "No base branch"
-    : worktree.isDetached
+    : worktree?.isDetached
       ? "No branch checked out"
       : isStatusUnknown
         ? "Checking status…"
@@ -536,126 +551,132 @@ export function WorktreeMenuItems({
   // raise the toast themselves, from the classified `gitReason`, for every
   // dispatch source rather than just this one.
   const dispatchGit = (actionId: ActionId, args: Record<string, unknown>) =>
-    void actionService.dispatch(actionId, { worktreeId: worktree.id, ...args }, { source });
+    void actionService.dispatch(actionId, { worktreeId: worktree?.id, ...args }, { source });
 
-  const gitRows = [
-    gitBranch !== null && onGitPullRebase && (
-      <C.Item
-        key="pull-rebase"
-        onSelect={() => onGitPullRebase(source)}
-        disabled={!canPullRebase}
-        aria-label={canPullRebase ? "Pull and rebase" : "Pull and rebase, no upstream"}
-      >
-        <ArrowDown className={ICON} />
-        Pull and rebase
-        {!canPullRebase && <C.Meta>No upstream</C.Meta>}
-      </C.Item>
-    ),
-    gitBranch !== null && onGitPush && (
-      <C.Item
-        key="push"
-        onSelect={() => onGitPush(source)}
-        disabled={nothingToPush}
-        aria-label={nothingToPush ? "Push, nothing to push" : "Push"}
-      >
-        <ArrowUp className={ICON} />
-        Push
-        {nothingToPush && <C.Meta>Nothing to push</C.Meta>}
-      </C.Item>
-    ),
-    <C.Item
-      key="fetch"
-      onSelect={() =>
-        void actionService.dispatch("git.fetch", { worktreeId: worktree.id }, { source })
-      }
-      disabled={noRemote}
-      aria-label={noRemote ? "Fetch, no remote configured" : "Fetch"}
-    >
-      <RefreshCw className={ICON} />
-      Fetch
-      {noRemote && <C.Meta>No remote</C.Meta>}
-    </C.Item>,
-    <C.Item
-      key="fetch-prune"
-      onSelect={() =>
-        void actionService.dispatch(
-          "git.fetch",
-          { worktreeId: worktree.id, prune: true },
-          { source }
-        )
-      }
-      disabled={noRemote}
-      aria-label={noRemote ? "Fetch and prune, no remote configured" : "Fetch and prune"}
-    >
-      <Scissors className={ICON} />
-      Fetch and prune
-      {noRemote && <C.Meta>No remote</C.Meta>}
-    </C.Item>,
-    ...(baseOperation
-      ? [
+  // Every row here acts on a repository, and Fetch and the base-branch rows are
+  // unconditional for a worktree — so a workspace root gets none of them.
+  const gitRows = !worktree
+    ? []
+    : [
+        gitBranch !== null && onGitPullRebase && (
           <C.Item
-            key="git-continue"
-            onSelect={() => dispatchGit("git.continueRepositoryOperation", {})}
+            key="pull-rebase"
+            onSelect={() => onGitPullRebase(source)}
+            disabled={!canPullRebase}
+            aria-label={canPullRebase ? "Pull and rebase" : "Pull and rebase, no upstream"}
           >
-            <Play className={ICON} />
-            Continue {OPERATION_LABEL[baseOperation].toLowerCase()}
-          </C.Item>,
+            <ArrowDown className={ICON} />
+            Pull and rebase
+            {!canPullRebase && <C.Meta>No upstream</C.Meta>}
+          </C.Item>
+        ),
+        gitBranch !== null && onGitPush && (
           <C.Item
-            key="git-abort"
-            onSelect={() =>
-              dispatchGit("git.abortRepositoryOperation", { operation: baseOperation })
-            }
-            destructive
+            key="push"
+            onSelect={() => onGitPush(source)}
+            disabled={nothingToPush}
+            aria-label={nothingToPush ? "Push, nothing to push" : "Push"}
           >
-            <OctagonX className={ICON} />
-            Abort {OPERATION_LABEL[baseOperation].toLowerCase()}…
-          </C.Item>,
-        ]
-      : [
-          <C.Item
-            key="git-rebase-onto-base"
-            onSelect={() => dispatchGit("git.rebaseOntoBase", { baseBranch: baseBranchName ?? "" })}
-            disabled={baseBlockedReason !== null}
-            aria-label={
-              baseBlockedReason
-                ? `${rebaseLabel}, ${baseBlockedReason}`
-                : baseBehind != null && baseBehind > 0
-                  ? `${rebaseLabel}, ${baseBehind} behind`
-                  : undefined
-            }
-          >
-            <GitBranch className={ICON} />
-            {rebaseLabel}
-            {baseBlockedReason ? (
-              <C.Meta>{baseBlockedReason}</C.Meta>
-            ) : (
-              baseBehind != null && baseBehind > 0 && <C.Meta>{baseBehind}</C.Meta>
-            )}
-          </C.Item>,
-          <C.Item
-            key="git-merge-base"
-            onSelect={() =>
-              dispatchGit("git.mergeBaseIntoBranch", { baseBranch: baseBranchName ?? "" })
-            }
-            disabled={baseBlockedReason !== null}
-            aria-label={baseBlockedReason ? `${mergeLabel}, ${baseBlockedReason}` : undefined}
-          >
-            <GitMerge className={ICON} />
-            {mergeLabel}
-            {baseBlockedReason && <C.Meta>{baseBlockedReason}</C.Meta>}
-          </C.Item>,
-        ]),
-    // Rules off the one row here that discards published commits. The
-    // separator rides with the row so it can never strand when the lease is
-    // absent, which is the common case.
-    showForcePush && <C.Separator key="force-push-rule" />,
-    showForcePush && (
-      <C.Item key="force-push" onSelect={() => onGitForcePush?.(source)} destructive>
-        <ArrowUpFromLine className={ICON} />
-        Force push with lease…
-      </C.Item>
-    ),
-  ].filter(Boolean);
+            <ArrowUp className={ICON} />
+            Push
+            {nothingToPush && <C.Meta>Nothing to push</C.Meta>}
+          </C.Item>
+        ),
+        <C.Item
+          key="fetch"
+          onSelect={() =>
+            void actionService.dispatch("git.fetch", { worktreeId: worktree?.id }, { source })
+          }
+          disabled={noRemote}
+          aria-label={noRemote ? "Fetch, no remote configured" : "Fetch"}
+        >
+          <RefreshCw className={ICON} />
+          Fetch
+          {noRemote && <C.Meta>No remote</C.Meta>}
+        </C.Item>,
+        <C.Item
+          key="fetch-prune"
+          onSelect={() =>
+            void actionService.dispatch(
+              "git.fetch",
+              { worktreeId: worktree?.id, prune: true },
+              { source }
+            )
+          }
+          disabled={noRemote}
+          aria-label={noRemote ? "Fetch and prune, no remote configured" : "Fetch and prune"}
+        >
+          <Scissors className={ICON} />
+          Fetch and prune
+          {noRemote && <C.Meta>No remote</C.Meta>}
+        </C.Item>,
+        ...(baseOperation
+          ? [
+              <C.Item
+                key="git-continue"
+                onSelect={() => dispatchGit("git.continueRepositoryOperation", {})}
+              >
+                <Play className={ICON} />
+                Continue {OPERATION_LABEL[baseOperation].toLowerCase()}
+              </C.Item>,
+              <C.Item
+                key="git-abort"
+                onSelect={() =>
+                  dispatchGit("git.abortRepositoryOperation", { operation: baseOperation })
+                }
+                destructive
+              >
+                <OctagonX className={ICON} />
+                Abort {OPERATION_LABEL[baseOperation].toLowerCase()}…
+              </C.Item>,
+            ]
+          : [
+              <C.Item
+                key="git-rebase-onto-base"
+                onSelect={() =>
+                  dispatchGit("git.rebaseOntoBase", { baseBranch: baseBranchName ?? "" })
+                }
+                disabled={baseBlockedReason !== null}
+                aria-label={
+                  baseBlockedReason
+                    ? `${rebaseLabel}, ${baseBlockedReason}`
+                    : baseBehind != null && baseBehind > 0
+                      ? `${rebaseLabel}, ${baseBehind} behind`
+                      : undefined
+                }
+              >
+                <GitBranch className={ICON} />
+                {rebaseLabel}
+                {baseBlockedReason ? (
+                  <C.Meta>{baseBlockedReason}</C.Meta>
+                ) : (
+                  baseBehind != null && baseBehind > 0 && <C.Meta>{baseBehind}</C.Meta>
+                )}
+              </C.Item>,
+              <C.Item
+                key="git-merge-base"
+                onSelect={() =>
+                  dispatchGit("git.mergeBaseIntoBranch", { baseBranch: baseBranchName ?? "" })
+                }
+                disabled={baseBlockedReason !== null}
+                aria-label={baseBlockedReason ? `${mergeLabel}, ${baseBlockedReason}` : undefined}
+              >
+                <GitMerge className={ICON} />
+                {mergeLabel}
+                {baseBlockedReason && <C.Meta>{baseBlockedReason}</C.Meta>}
+              </C.Item>,
+            ]),
+        // Rules off the one row here that discards published commits. The
+        // separator rides with the row so it can never strand when the lease is
+        // absent, which is the common case.
+        showForcePush && <C.Separator key="force-push-rule" />,
+        showForcePush && (
+          <C.Item key="force-push" onSelect={() => onGitForcePush?.(source)} destructive>
+            <ArrowUpFromLine className={ICON} />
+            Force push with lease…
+          </C.Item>
+        ),
+      ].filter(Boolean);
 
   const gitSub = gitRows.length > 0 && (
     <C.Sub key="git">
@@ -668,16 +689,17 @@ export function WorktreeMenuItems({
   );
 
   // -------------------------------------------------------------- Sessions
-  const hasLivePanels = counts.active > 0;
-  const hasFleetTargets = counts.all > 0;
-  const sessionsSub = (
+  // The `worktree.sessions.*` actions and fleet selection resolve a worktree id
+  // and silently no-op without one, so a workspace root gets no Sessions group
+  // rather than a submenu of rows that report doing something and don't.
+  const sessionsSub = worktree && counts && (
     <C.Sub key="sessions">
       <C.SubTrigger>
         <Layers className={ICON} />
         Sessions
       </C.SubTrigger>
       <C.SubContent>
-        {hasLivePanels && (
+        {counts.active > 0 && (
           <>
             <C.Label>Layout</C.Label>
             <C.Item
@@ -701,7 +723,7 @@ export function WorktreeMenuItems({
           </>
         )}
 
-        {hasFleetTargets && (
+        {counts.all > 0 && (
           <>
             <C.Label>Fleet selection</C.Label>
             <C.Item onSelect={onSelectAllAgents} {...counted("Select all terminals", counts.all)}>
@@ -730,7 +752,7 @@ export function WorktreeMenuItems({
           </>
         )}
 
-        {hasLivePanels && (
+        {counts.active > 0 && (
           <>
             <C.Label>Maintenance</C.Label>
             <C.Item onSelect={onResetRenderers} {...counted("Redraw all terminals", counts.active)}>
@@ -741,7 +763,7 @@ export function WorktreeMenuItems({
           </>
         )}
 
-        {(hasLivePanels || hasFleetTargets) && <C.Separator />}
+        {(counts.active > 0 || counts.all > 0) && <C.Separator />}
 
         {/* Deletion, not repair: clearing history destroys journal records
             permanently, so it sits with the destructive End all rather than
@@ -776,7 +798,8 @@ export function WorktreeMenuItems({
 
   // --------------------------------------------------------------- Recipes
   const hasRecipes = recipes.length > 0;
-  const canSaveLayout = Boolean(onSaveLayout) && counts.active > 0;
+  // Saving a layout captures one worktree's panels, so a root never offers it.
+  const canSaveLayout = Boolean(worktree && onSaveLayout) && (counts?.active ?? 0) > 0;
   const recipesSub = (hasRecipes || canSaveLayout) && (
     <C.Sub key="recipes">
       <C.SubTrigger>
@@ -815,26 +838,28 @@ export function WorktreeMenuItems({
   const isLocalEnvironment = !worktreeMode || worktreeMode === "local";
   const lifecycle = resourceLifecycleVisibility(resourceStatus);
 
-  const devServerRows = [
-    devServerState === "restorable" && onStartDevServer && (
-      <C.Item key="start" onSelect={() => onStartDevServer(worktree.id)}>
-        <Play className={ICON} />
-        Start dev server
-      </C.Item>
-    ),
-    devServerState === "running" && onRestartDevServer && (
-      <C.Item key="restart" onSelect={() => onRestartDevServer(worktree.id)}>
-        <RotateCw className={ICON} />
-        Restart dev server
-      </C.Item>
-    ),
-    devServerState === "running" && onStopDevServer && (
-      <C.Item key="stop" onSelect={() => onStopDevServer(worktree.id)}>
-        <CircleStop className={ICON} />
-        Stop dev server
-      </C.Item>
-    ),
-  ].filter(Boolean);
+  const devServerRows = !worktree
+    ? []
+    : [
+        devServerState === "restorable" && onStartDevServer && (
+          <C.Item key="start" onSelect={() => onStartDevServer(worktree.id)}>
+            <Play className={ICON} />
+            Start dev server
+          </C.Item>
+        ),
+        devServerState === "running" && onRestartDevServer && (
+          <C.Item key="restart" onSelect={() => onRestartDevServer(worktree.id)}>
+            <RotateCw className={ICON} />
+            Restart dev server
+          </C.Item>
+        ),
+        devServerState === "running" && onStopDevServer && (
+          <C.Item key="stop" onSelect={() => onStopDevServer(worktree.id)}>
+            <CircleStop className={ICON} />
+            Stop dev server
+          </C.Item>
+        ),
+      ].filter(Boolean);
 
   // Resource status is free-form text from the project's own status command, so
   // it can narrow the pair of mutually-exclusive lifecycle rows but must never
@@ -847,77 +872,81 @@ export function WorktreeMenuItems({
   // In local mode the six remote commands are not "temporarily unavailable",
   // they don't apply — so the section is just the switcher rather than a wall
   // of disabled rows the user can't act on.
-  const environmentRows = hasResourceConfig
-    ? [
-        hasEnvironments && (
-          <C.Sub key="switch-env">
-            <C.SubTrigger>
-              <Server className={ICON} />
-              Switch environment
-            </C.SubTrigger>
-            <C.SubContent>
-              <C.RadioGroup
-                value={isLocalEnvironment ? "local" : worktreeMode}
-                onValueChange={(value: string) => onSwitchEnvironment?.(value)}
-              >
-                <C.RadioItem value="local" disabled={!onSwitchEnvironment}>
-                  Local
-                </C.RadioItem>
-                {/* Settings only rejects blank and duplicate environment names,
+  const environmentRows =
+    worktree && hasResourceConfig
+      ? [
+          hasEnvironments && (
+            <C.Sub key="switch-env">
+              <C.SubTrigger>
+                <Server className={ICON} />
+                Switch environment
+              </C.SubTrigger>
+              <C.SubContent>
+                <C.RadioGroup
+                  value={isLocalEnvironment ? "local" : worktreeMode}
+                  onValueChange={(value: string) => onSwitchEnvironment?.(value)}
+                >
+                  <C.RadioItem value="local" disabled={!onSwitchEnvironment}>
+                    Local
+                  </C.RadioItem>
+                  {/* Settings only rejects blank and duplicate environment names,
                     so a key literally called "local" is representable — and it
                     would render a second radio carrying the fixed row's value,
                     leaving two items marked checked. The fixed row already
                     selects it. */}
-                {resourceEnvironmentKeys
-                  ?.filter((key) => key !== "local")
-                  .map((key) => (
-                    <C.RadioItem key={key} value={key} disabled={!onSwitchEnvironment}>
-                      {key}
-                    </C.RadioItem>
-                  ))}
-              </C.RadioGroup>
-            </C.SubContent>
-          </C.Sub>
-        ),
-        !isLocalEnvironment && onResourceStatus && (
-          <C.Item key="status" onSelect={onResourceStatus}>
-            <Activity className={ICON} />
-            Check status
-          </C.Item>
-        ),
-        !isLocalEnvironment && onResourceConnect && (
-          <C.Item key="connect" onSelect={onResourceConnect}>
-            <Plug className={`${ICON} text-status-info`} />
-            Connect
-          </C.Item>
-        ),
-        !isLocalEnvironment && onResourceProvision && (
-          <C.Item key="provision" onSelect={onResourceProvision}>
-            <Play className={ICON} />
-            Provision
-          </C.Item>
-        ),
-        !isLocalEnvironment && onResourceResume && showResume && (
-          <C.Item key="resume" onSelect={onResourceResume}>
-            <Play className={ICON} />
-            Resume
-          </C.Item>
-        ),
-        !isLocalEnvironment && onResourcePause && showPause && (
-          <C.Item key="pause" onSelect={onResourcePause}>
-            <Pause className={ICON} />
-            Pause
-          </C.Item>
-        ),
-      ].filter(Boolean)
-    : [];
+                  {resourceEnvironmentKeys
+                    ?.filter((key) => key !== "local")
+                    .map((key) => (
+                      <C.RadioItem key={key} value={key} disabled={!onSwitchEnvironment}>
+                        {key}
+                      </C.RadioItem>
+                    ))}
+                </C.RadioGroup>
+              </C.SubContent>
+            </C.Sub>
+          ),
+          !isLocalEnvironment && onResourceStatus && (
+            <C.Item key="status" onSelect={onResourceStatus}>
+              <Activity className={ICON} />
+              Check status
+            </C.Item>
+          ),
+          !isLocalEnvironment && onResourceConnect && (
+            <C.Item key="connect" onSelect={onResourceConnect}>
+              <Plug className={`${ICON} text-status-info`} />
+              Connect
+            </C.Item>
+          ),
+          !isLocalEnvironment && onResourceProvision && (
+            <C.Item key="provision" onSelect={onResourceProvision}>
+              <Play className={ICON} />
+              Provision
+            </C.Item>
+          ),
+          !isLocalEnvironment && onResourceResume && showResume && (
+            <C.Item key="resume" onSelect={onResourceResume}>
+              <Play className={ICON} />
+              Resume
+            </C.Item>
+          ),
+          !isLocalEnvironment && onResourcePause && showPause && (
+            <C.Item key="pause" onSelect={onResourcePause}>
+              <Pause className={ICON} />
+              Pause
+            </C.Item>
+          ),
+        ].filter(Boolean)
+      : [];
 
-  const teardownRow = hasResourceConfig && !isLocalEnvironment && onResourceTeardown && (
-    <C.Item key="teardown" onSelect={onResourceTeardown} destructive>
-      <Trash2 className={ICON} />
-      Tear down environment…
-    </C.Item>
-  );
+  const teardownRow = worktree &&
+    hasResourceConfig &&
+    !isLocalEnvironment &&
+    onResourceTeardown && (
+      <C.Item key="teardown" onSelect={onResourceTeardown} destructive>
+        <Trash2 className={ICON} />
+        Tear down environment…
+      </C.Item>
+    );
 
   const hasEnvironmentSection = environmentRows.length > 0 || Boolean(teardownRow);
   const runtimeSub = (devServerRows.length > 0 || hasEnvironmentSection) && (
@@ -946,11 +975,11 @@ export function WorktreeMenuItems({
   );
 
   // ----------------------------------------------------------- Linked work
-  const hasIssue = Boolean(worktree.issueNumber);
+  const hasIssue = Boolean(worktree?.issueNumber);
   const hasIssueItem = hasIssue && Boolean(onOpenIssueExternal);
-  const hasPRItem = Boolean(worktree.linked?.pr && onOpenPRExternal);
+  const hasPRItem = Boolean(worktree?.linked?.pr && onOpenPRExternal);
   const linkedOpenRows = [
-    onViewPlan && (
+    worktree && onViewPlan && (
       <C.Item key="plan" onSelect={onViewPlan}>
         <FileText className={ICON} />
         View plan
@@ -959,19 +988,19 @@ export function WorktreeMenuItems({
     hasIssueItem && (
       <C.Item key="issue" onSelect={onOpenIssueExternal}>
         <CircleDot className={ICON} />
-        Open issue #{worktree.issueNumber}
+        Open issue #{worktree?.issueNumber}
       </C.Item>
     ),
     hasPRItem && (
       <C.Item key="pr" onSelect={onOpenPRExternal}>
         <GitPullRequest className={ICON} />
-        Open PR #{worktree.linked?.pr?.ref.number}
+        Open PR #{worktree?.linked?.pr?.ref.number}
       </C.Item>
     ),
   ].filter(Boolean);
 
   const linkedAssociationRows = [
-    onAttachIssue && (
+    worktree && onAttachIssue && (
       <C.Item key="attach" onSelect={onAttachIssue}>
         <Link className={ICON} />
         {hasIssue ? "Change linked issue…" : "Attach issue…"}
@@ -980,7 +1009,7 @@ export function WorktreeMenuItems({
     hasIssue && onUnlinkIssue && (
       <C.Item key="unlink" onSelect={onUnlinkIssue}>
         <Link2Off className={ICON} />
-        Unlink issue #{worktree.issueNumber}
+        Unlink issue #{worktree?.issueNumber}
       </C.Item>
     ),
   ].filter(Boolean);
@@ -1000,7 +1029,8 @@ export function WorktreeMenuItems({
   );
 
   // ------------------------------------------------------------------ Copy
-  const canCopyBranchName = copyableBranchName(worktree) !== null;
+  const canCopyBranchName = Boolean(onCopyBranchName) && gitBranch !== null;
+  const canCopyModified = Boolean(worktree && onCopyContextModified);
   const copySub = (
     <C.Sub key="copy">
       <C.SubTrigger>
@@ -1012,10 +1042,12 @@ export function WorktreeMenuItems({
           <Folders className={ICON} />
           Full context
         </C.Item>
-        <C.Item onSelect={onCopyContextModified}>
-          <FileDiff className={ICON} />
-          Modified files only
-        </C.Item>
+        {canCopyModified && (
+          <C.Item onSelect={onCopyContextModified}>
+            <FileDiff className={ICON} />
+            Modified files only
+          </C.Item>
+        )}
         <C.Separator />
         <C.Item onSelect={onCopyPath}>
           <Copy className={ICON} />
@@ -1032,9 +1064,13 @@ export function WorktreeMenuItems({
   );
 
   // -------------------------------------------------------------- Organize
-  const canPin = Boolean(onTogglePin) && !worktree.isMainWorktree && !isExternalWorktree(worktree);
+  const canPin =
+    worktree !== undefined &&
+    Boolean(onTogglePin) &&
+    !worktree.isMainWorktree &&
+    !isExternalWorktree(worktree);
   const hasMoveRows = Boolean(onMoveUp || onMoveDown);
-  const organizeSub = (canPin || onToggleCollapse || hasMoveRows) && (
+  const organizeSub = worktree && (canPin || onToggleCollapse || hasMoveRows) && (
     <C.Sub key="organize">
       <C.SubTrigger>
         <ArrowUpDown className={ICON} />
@@ -1099,7 +1135,9 @@ export function WorktreeMenuItems({
     if (bucket) bucket.push(entry);
     else pluginsById.set(entry.pluginId, [entry]);
   }
-  const pluginGroups = [...pluginsById.entries()];
+  // Contributions register against the worktree menu location; whether any of
+  // them works on a bare workspace root is unverified, so a root shows none.
+  const pluginGroups = worktree ? [...pluginsById.entries()] : [];
   const extensionsSub = pluginGroups.length > 0 && (
     <C.Sub key="extensions">
       <C.SubTrigger>
@@ -1138,7 +1176,7 @@ export function WorktreeMenuItems({
   // callback for it. Restating the rule here is deliberate: pinning is gated
   // the same way, and a shared menu that renders a destructive row purely on
   // callback presence puts the whole safeguard in one caller's hands.
-  const deleteItem = onDeleteWorktree && !worktree.isMainWorktree && (
+  const deleteItem = worktree && onDeleteWorktree && !worktree.isMainWorktree && (
     <C.Item key="delete" onSelect={onDeleteWorktree} destructive>
       <Trash2 className={ICON} />
       Delete worktree…

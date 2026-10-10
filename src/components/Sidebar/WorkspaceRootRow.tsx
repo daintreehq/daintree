@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { FlaskConical, FolderOpen, FolderTree } from "lucide-react";
+import { FlaskConical, FolderOpen, FolderTree, MoreHorizontal } from "lucide-react";
 import type { WorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { NO_WORKTREE } from "@/store/slices/panelRegistry/worktreeIndex";
@@ -8,19 +8,19 @@ import { summarizeSessionStates } from "@/components/Worktree/terminalStateConfi
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import {
-  ContextMenu,
-  ContextMenuActionItem,
-  ContextMenuContent,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { CONTEXT_COMPONENTS, WorktreeMenuItems } from "@/components/Worktree/WorktreeMenuItems";
+import { DROPDOWN_COMPONENTS } from "@/components/Worktree/WorktreeCard/WorktreeActionsToolbar";
 import { actionService } from "@/services/ActionService";
 import { formatPath } from "@/utils/textParsing";
-import { fileManagerRevealLabel } from "@/lib/platform";
 import { SIDEBAR_HEADER_ACTION } from "./sidebarHeader";
+import { useWorkspaceRootMenuActions } from "./useWorkspaceRootMenuActions";
 import { pluralize } from "@/lib/pluralize";
-
-const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
 /**
  * How a workspace with no git worktrees describes itself. A scratch says so
@@ -40,7 +40,8 @@ function kindLabel(workspace: WorkspaceRoot): string {
  * hangs off that card is git-shaped (review, diffs, branch labels, delete), and
  * a row that looks identical to a worktree row with half its menu inert is a
  * bigger lie than the dead toggle this fixes. The git-shaped actions are absent
- * here, not disabled.
+ * here, not disabled: the ⋯ and right-click menus share the worktree menu body
+ * in its workspace-root mode, which carries only what acts on a plain folder.
  *
  * Terminal counts come from the `NO_WORKTREE` bucket — the index key panels
  * launched without a worktree already carry (`worktreeIndex.ts`), so the row
@@ -59,6 +60,7 @@ export function WorkspaceRootRow({
   homeDir?: string;
 }) {
   const { counts } = useWorktreeTerminals(NO_WORKTREE);
+  const menuActions = useWorkspaceRootMenuActions(workspace);
 
   const { visibleStates, label: sessionAriaLabel } = useMemo(
     () => summarizeSessionStates(counts.byState, counts.total),
@@ -106,6 +108,34 @@ export function WorkspaceRootRow({
                   </TooltipTrigger>
                   <TooltipContent side="bottom">Browse files</TooltipContent>
                 </Tooltip>
+                <DropdownMenu>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          className={SIDEBAR_HEADER_ACTION}
+                          aria-label="More actions"
+                          data-testid="workspace-root-actions-menu"
+                        >
+                          <MoreHorizontal aria-hidden="true" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">More actions</TooltipContent>
+                  </Tooltip>
+                  {/* Portaled, so a right-click inside it would otherwise
+                      bubble through React to the row's context menu. */}
+                  <DropdownMenuContent
+                    align="end"
+                    side="bottom"
+                    onContextMenu={(e) => e.stopPropagation()}
+                    className="w-64"
+                  >
+                    <WorktreeMenuItems components={DROPDOWN_COMPONENTS} {...menuActions} />
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             </div>
             {/* Kind rides the secondary line rather than a pill: origin has to
@@ -122,14 +152,7 @@ export function WorkspaceRootRow({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuActionItem actionId="worktree.openFileBrowserPanel">
-            <FolderTree className={ICON_CLASS} />
-            Browse files
-          </ContextMenuActionItem>
-          <ContextMenuActionItem actionId="system.openPath" args={{ path: workspace.path }}>
-            <FolderOpen className={ICON_CLASS} />
-            {fileManagerRevealLabel()}
-          </ContextMenuActionItem>
+          <WorktreeMenuItems components={CONTEXT_COMPONENTS} {...menuActions} />
         </ContextMenuContent>
       </ContextMenu>
     </div>
