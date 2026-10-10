@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { NO_WORKTREE } from "@/store/slices/panelRegistry/worktreeIndex";
 import type { AgentState } from "@/types";
 import type { WorkspaceRoot } from "@/hooks/useWorkspaceRoot";
+import { fileManagerRevealLabel } from "@/lib/platform";
 
 // The row's name, path and session pips are all tooltip triggers, and Radix
 // throws outright without a provider in scope. AppLayout supplies one in the
@@ -123,12 +124,18 @@ vi.mock("@/components/ui/context-menu", async (importOriginal) => {
   };
 });
 
-/** The right-click menu's root rows: submenu triggers, in order. */
+/** The right-click menu's root rows — submenu triggers and flat items, in order. */
 function contextMenuRootRows(): string[] {
   const menu = screen.getByTestId("row-context-menu");
   return Array.from(
-    menu.querySelectorAll(":scope > [data-testid='menu-sub'] > [data-sub-trigger]")
+    menu.querySelectorAll(
+      ":scope > [role='menuitem'], :scope > [data-testid='menu-sub'] > [data-sub-trigger]"
+    )
   ).map((el) => el.textContent?.trim() ?? "");
+}
+
+function dispatchedIds(): string[] {
+  return dispatch.mock.calls.map(([id]) => id);
 }
 
 function clickMenuItem(name: string) {
@@ -293,28 +300,30 @@ describe("WorkspaceRootSidebar", () => {
     render(<WorkspaceRootSidebar workspace={PLAIN_FOLDER} />);
 
     clickMenuItem("Open in editor");
+    clickMenuItem(fileManagerRevealLabel());
 
     expect(dispatch).toHaveBeenCalledWith(
       "file.openInEditor",
       { path: "/home/me/notes" },
       { source: "user" }
     );
-    // `worktree.openEditor` resolves a worktree id and returns without one.
-    expect(dispatch).not.toHaveBeenCalledWith(
-      "worktree.openEditor",
-      expect.anything(),
-      expect.anything()
+    expect(dispatch).toHaveBeenCalledWith(
+      "system.openPath",
+      { path: "/home/me/notes" },
+      { source: "user" }
     );
+    // `worktree.openEditor` resolves a worktree id and returns without one.
+    expect(dispatchedIds()).not.toContain("worktree.openEditor");
   });
 
-  it("launches with no worktree id, so the launcher resolves the workspace root", () => {
+  it("launches at the workspace root with no worktree id", () => {
     render(<WorkspaceRootSidebar workspace={SCRATCH} />);
 
     clickMenuItem("Terminal");
 
     expect(dispatch).toHaveBeenCalledWith(
       "agent.launch",
-      { agentId: "terminal", location: "grid" },
+      { agentId: "terminal", location: "grid", cwd: SCRATCH.path },
       { source: "user" }
     );
   });
@@ -336,7 +345,47 @@ describe("WorkspaceRootSidebar", () => {
     expect(runRecipeWithResults).toHaveBeenCalledWith("r1", "/home/me/notes", undefined, {
       worktreePath: "/home/me/notes",
     });
-    expect(notifyRecipeSpawnFailures).toHaveBeenCalled();
+    expect(notifyRecipeSpawnFailures).toHaveBeenCalledWith(
+      { spawned: [], failed: [] },
+      expect.objectContaining({ recipeName: "Two agents" })
+    );
+  });
+
+  it("runs a recipe once per press, and again after a failed run settles", async () => {
+    recipes = [{ id: "r1", name: "Two agents" }];
+    let reject!: (error: Error) => void;
+    runRecipeWithResults.mockImplementationOnce(() => new Promise((_, rej) => (reject = rej)));
+    render(<WorkspaceRootSidebar workspace={PLAIN_FOLDER} />);
+
+    // Both presses land before the running state commits — only the ref stops
+    // the second.
+    act(() => {
+      clickMenuItem("Two agents");
+      clickMenuItem("Two agents");
+    });
+    expect(runRecipeWithResults).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      reject(new Error("spawn exploded"));
+    });
+
+    await act(async () => {
+      clickMenuItem("Two agents");
+    });
+    expect(runRecipeWithResults).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens the same menu from the more-actions button", () => {
+    render(<WorkspaceRootSidebar workspace={PLAIN_FOLDER} />);
+
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+
+    const dropdown = screen.getByRole("menu");
+    const rows = Array.from(dropdown.querySelectorAll("[role='menuitem']")).map(
+      (el) => el.textContent?.trim() ?? ""
+    );
+    expect(rows).toEqual(["Launch", "Open", "Copy"]);
   });
 
   it("exposes no worktree-shaped control outside the menu either", () => {

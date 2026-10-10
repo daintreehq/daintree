@@ -21,8 +21,8 @@ import type { WorktreeMenuActions } from "@/components/Worktree/WorktreeMenuItem
  * right-click menu, so the two can't drift.
  *
  * Only rows that act on the workspace root are wired, and every one of them
- * dispatches without a worktree id: the launch and copy paths fall back to the
- * root (`resolveWorkspaceCwd`, #13210), and stamping `workspace.id` or
+ * dispatches without a worktree id — launch carries the root as its cwd, copy
+ * falls back to it (#13210) — and stamping `workspace.id` or
  * `NO_WORKTREE` onto a dispatch would read as a worktree that doesn't exist.
  * Sessions, save-layout and the dev-server rows are left out because their
  * actions resolve a worktree id and silently no-op without one.
@@ -88,10 +88,13 @@ export function useWorkspaceRootMenuActions(workspace: WorkspaceRoot): WorktreeM
     launchAgents,
     recipes,
     runningRecipeId,
+    // An explicit cwd, still with no worktree id: left to the launcher, the
+    // root resolves through the globally broadcast `currentScratch`, which a
+    // second window switching scratches repoints in this view too.
     onLaunchAgent: (agentId) => {
       void actionService.dispatch(
         "agent.launch",
-        { agentId, location: "grid" },
+        { agentId, location: "grid", cwd: workspace.path },
         { source: "user" }
       );
     },
