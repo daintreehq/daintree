@@ -1034,12 +1034,22 @@ function CanopyInbox({
       // Escape from the pane lands on the run's row; a run folded away in
       // Archived has no row to land on, so the keyboard takes the fold instead
       // — still in the list, where the next Escape closes the panel.
+      // With no row to land on (folded into Archived, or hidden by Unread),
+      // the fold takes it, else the list's first row, else Refresh: always
+      // somewhere in the list, where the next Escape closes the panel.
       onLeavePane: (item) => {
         if (document.getElementById(canopyCardDomId(item.runId))) {
           focusCardNow(item.runId);
           return;
         }
-        document.querySelector<HTMLElement>('[aria-controls="canopy-archived"]')?.focus();
+        const fold = document.querySelector<HTMLElement>('[aria-controls="canopy-archived"]');
+        if (fold) {
+          fold.focus();
+          return;
+        }
+        const first = visibleRef.current[0];
+        if (first) focusCardNow(first.runId);
+        else refreshRef.current?.focus();
       },
       onSent: (item, via) => {
         readNow(item);

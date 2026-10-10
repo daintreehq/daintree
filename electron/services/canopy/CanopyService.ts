@@ -1625,8 +1625,10 @@ export class CanopyService {
     // re-read asked for on a screen whose first reading never landed is that
     // screen's first reading, and a new ask on it is news like any other.
     const correction = forced && entry.card?.revision === entry.revision;
-    if (correction && !isBusy(run) && classified.question !== null) {
-      const corrected = promptKey(classified.question);
+    // A correction to no question at all is adopted too: a mistaken ask left
+    // behind would make that question, really drawn later, read as old news.
+    if (correction && !isBusy(run)) {
+      const corrected = classified.question !== null ? promptKey(classified.question) : null;
       adoptAsk(entry.reads, corrected, screen.hash);
       // A reply or archive made on this very screen was made to the
       // corrected ask: the same one drawn again must not bring it back.

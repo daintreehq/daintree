@@ -400,14 +400,35 @@ export function CanopyCard({
     if (!canReply) return false;
     cancelAnimationFrame(focusFrameRef.current);
     // The composer is a lazy chunk: on a cold pane it may not exist yet, so
-    // the handoff keeps trying while it loads, as the pane's own does.
+    // the handoff keeps trying while it loads, as the pane's own does — until
+    // the user puts the keyboard somewhere themselves, which then stands.
+    let interrupted = false;
+    const interrupt = () => {
+      interrupted = true;
+    };
+    const stopListening = () => {
+      window.removeEventListener("pointerdown", interrupt, true);
+      window.removeEventListener("keydown", interrupt, true);
+    };
+    // Registered after this frame, so the press that chose Reply isn't one.
+    requestAnimationFrame(() => {
+      if (interrupted) return;
+      window.addEventListener("pointerdown", interrupt, true);
+      window.addEventListener("keydown", interrupt, true);
+    });
     const attempt = (tries: number) => {
+      if (interrupted || !canReplyRef.current) {
+        stopListening();
+        return;
+      }
       composerRef.current?.focus();
       const landed = sectionRef.current
         ?.querySelector(".cm-editor")
         ?.contains(document.activeElement);
       if (!landed && tries < 240) {
         focusFrameRef.current = requestAnimationFrame(() => attempt(tries + 1));
+      } else {
+        stopListening();
       }
     };
     focusFrameRef.current = requestAnimationFrame(() => attempt(1));
