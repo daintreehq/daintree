@@ -1156,6 +1156,11 @@ describe("CanopyView", () => {
     });
     // By the receipt the trash gave, so only that trash of that terminal comes back.
     expect(canopy.untrash).toHaveBeenCalledWith(7);
+    // The toast's Undo, pressed after Z, finds it done: once only.
+    await act(async () => {
+      undo!.onClick();
+    });
+    expect(canopy.untrash).toHaveBeenCalledTimes(1);
   });
 
   it("says nothing needs you only once the open's readings are in, and qualifies it when reads fail", async () => {

@@ -394,44 +394,41 @@ export function CanopyCard({
   // Asked for from the row's menu, the handoff waits for the menu to close —
   // its focus trap would take the keyboard straight back — and is confirmed
   // from the DOM, trying again for a few frames until it lands.
-  const focusFrameRef = useRef(0);
-  useEffect(() => () => cancelAnimationFrame(focusFrameRef.current), []);
+  // One handoff at a time, and every way it ends — landed, given up, the user
+  // going elsewhere, another Reply, the pane unmounting — stops its frames
+  // and its listeners together.
+  const stopHandoffRef = useRef<() => void>(() => {});
+  useEffect(() => () => stopHandoffRef.current(), []);
   const focusComposer = (): boolean => {
     if (!canReply) return false;
-    cancelAnimationFrame(focusFrameRef.current);
+    stopHandoffRef.current();
     // The composer is a lazy chunk: on a cold pane it may not exist yet, so
     // the handoff keeps trying while it loads, as the pane's own does — until
     // the user puts the keyboard somewhere themselves, which then stands.
-    let interrupted = false;
-    const interrupt = () => {
-      interrupted = true;
+    let frame = 0;
+    let listenFrame = 0;
+    const stop = () => {
+      cancelAnimationFrame(frame);
+      cancelAnimationFrame(listenFrame);
+      window.removeEventListener("pointerdown", stop, true);
+      window.removeEventListener("keydown", stop, true);
     };
-    const stopListening = () => {
-      window.removeEventListener("pointerdown", interrupt, true);
-      window.removeEventListener("keydown", interrupt, true);
-    };
-    // Registered after this frame, so the press that chose Reply isn't one.
-    requestAnimationFrame(() => {
-      if (interrupted) return;
-      window.addEventListener("pointerdown", interrupt, true);
-      window.addEventListener("keydown", interrupt, true);
+    stopHandoffRef.current = stop;
+    // Listened for after this frame, so the press that chose Reply isn't one.
+    listenFrame = requestAnimationFrame(() => {
+      window.addEventListener("pointerdown", stop, true);
+      window.addEventListener("keydown", stop, true);
     });
     const attempt = (tries: number) => {
-      if (interrupted || !canReplyRef.current) {
-        stopListening();
-        return;
-      }
+      if (!canReplyRef.current) return stop();
       composerRef.current?.focus();
       const landed = sectionRef.current
         ?.querySelector(".cm-editor")
         ?.contains(document.activeElement);
-      if (!landed && tries < 240) {
-        focusFrameRef.current = requestAnimationFrame(() => attempt(tries + 1));
-      } else {
-        stopListening();
-      }
+      if (landed || tries >= 240) return stop();
+      frame = requestAnimationFrame(() => attempt(tries + 1));
     };
-    focusFrameRef.current = requestAnimationFrame(() => attempt(1));
+    frame = requestAnimationFrame(() => attempt(1));
     return true;
   };
   useImperativeHandle(ref, () => ({ handleKey, focusComposer }));
