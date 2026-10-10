@@ -7,6 +7,7 @@ import type {
   TerminalFlowStatus,
 } from "../../shared/types/pty-host.js";
 import type { ExitReason } from "./pty/types.js";
+import type { AgentEndObservation } from "../../shared/types/ipc/agent.js";
 
 export type { EventCategory };
 
@@ -741,6 +742,7 @@ export type DaintreeEventMap = {
     defaultTitle?: string;
     timestamp: number;
     exitKind?: "subcommand" | "terminal";
+    agentEnd?: AgentEndObservation;
   };
 
   /**

@@ -414,6 +414,16 @@ export function setupIdentityListeners(): DisposableStore {
             },
           };
         });
+
+        // Loaded on demand: only a launched run's end needs it, and it pulls in
+        // the restart and resume machinery this listener otherwise never touches.
+        if (data.agentEnd?.launchedRun) {
+          void import("@/services/terminal/agentEndRecovery")
+            .then(({ handleAgentEnd }) => handleAgentEnd(data))
+            .catch((error: unknown) => {
+              logWarn("[IdentityListener] Agent end recovery failed", { terminalId, error });
+            });
+        }
       })
     )
   );

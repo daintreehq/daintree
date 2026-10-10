@@ -92,10 +92,14 @@ function evictRecords(
       const clone = { ...r };
       winners.set(r.sessionId, clone);
       deduped.push(clone);
-    } else if (!existing.bookmark && r.bookmark && existing.agentId === r.agentId) {
+    } else if (existing.agentId === r.agentId) {
       // Carry a pin forward only within the same agent — a cross-agent sessionId
       // collision must never attach one agent's bookmark to another's record.
-      existing.bookmark = r.bookmark;
+      if (!existing.bookmark && r.bookmark) existing.bookmark = r.bookmark;
+      // A titleless winner is a session journaled from the id it was launched
+      // with, which never knows its own title (#13226). An older record of the
+      // same session does, so re-journaling it must not blank its name.
+      if (!existing.title && r.title) existing.title = r.title;
     }
   }
 

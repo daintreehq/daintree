@@ -100,6 +100,9 @@ const PTY_FIELD_CLASSIFICATION = {
   // Transient restore-time signal (#9802) — drives the "Session no longer
   // reachable" banner; must never be persisted or it resurfaces every restart.
   sessionLostOnRestore: false,
+  // Live offer to reopen an ended launch's conversation (#13226) — a prompt
+  // about a process that no longer exists after a restart.
+  agentResumeOffer: false,
   restartError: false,
   reconnectError: false,
   scrollbackRestoreError: false,

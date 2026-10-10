@@ -101,6 +101,10 @@ export const config: AgentConfig = {
         "Codex's ambient animation behind the prompt. Off keeps idle panes from repainting continuously.",
     },
     supportsBracketedPaste: true,
+    // "Update now" on the startup prompt runs the installer and exits without
+    // relaunching, dropping a resumed pane back to its shell (#13226). Verified
+    // against `codex-cli 0.162.1`.
+    selfUpdateSuccessPattern: "Update ran successfully! Please restart Codex\\.",
     // Composer shows `[Image #N]` for a lone bracketed-pasted image path (#12792).
     imageInput: "bracketed-path",
     softNewlineSequence: "\n",

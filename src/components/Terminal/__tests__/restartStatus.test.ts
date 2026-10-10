@@ -387,4 +387,49 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
     });
     expect(result).toEqual({ type: "session-resume-unavailable", reason: "no-resume-command" });
   });
+
+  describe("agent-resume-offer (#13226)", () => {
+    const shell: RestartBannerInput = { ...base, isExited: false, exitCode: null };
+    const offer = { agentId: "codex", sessionId: "s1" };
+
+    it("offers the conversation when the launched run quit to the shell", () => {
+      expect(getRestartBannerVariant({ ...shell, agentResumeOffer: offer })).toEqual({
+        type: "agent-resume-offer",
+        agentId: "codex",
+        sessionId: "s1",
+      });
+    });
+
+    it("gives way to the shell's own exit once that exits too", () => {
+      expect(
+        getRestartBannerVariant({ ...shell, agentResumeOffer: offer, isExited: true, exitCode: 1 })
+      ).toEqual({ type: "exit-error", exitCode: 1 });
+    });
+
+    it("yields to an in-flight restart", () => {
+      expect(
+        getRestartBannerVariant({ ...shell, agentResumeOffer: offer, isRestarting: true })
+      ).toEqual({ type: "restarting" });
+    });
+
+    it("yields to a lost-session acknowledgement", () => {
+      expect(
+        getRestartBannerVariant({
+          ...shell,
+          agentResumeOffer: offer,
+          sessionLostOnRestore: "no-resume-command",
+        }).type
+      ).toBe("session-resume-unavailable");
+    });
+
+    it("stays hidden behind a spawn error", () => {
+      expect(
+        getRestartBannerVariant({
+          ...shell,
+          agentResumeOffer: offer,
+          spawnError: { code: "EIO", message: "boom" },
+        }).type
+      ).not.toBe("agent-resume-offer");
+    });
+  });
 });

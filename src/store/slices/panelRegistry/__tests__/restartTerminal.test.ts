@@ -1748,3 +1748,124 @@ describe("restartTerminal keeps the caller's own launch flags", () => {
     ).toBeUndefined();
   });
 });
+
+describe("restartTerminal forced resume of an ended launch (#13226)", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    const { agentSettingsClient, projectClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (projectClient.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  const demotedCodex = {
+    ...agentPanelBase,
+    launchAgentId: "codex",
+    title: "Codex",
+    agentLaunchFlags: ["--persisted-flag"],
+    // A demoted shell has its agent command cleared (#5764).
+    command: undefined,
+    agentState: "exited" as const,
+    agentSessionId: "launch-id",
+    agentResumeOffer: { agentId: "codex", sessionId: "launch-id" },
+  };
+
+  it("relaunches a demoted pane as its agent, into exactly the named conversation", async () => {
+    const { buildResumeCommand } = await import("@shared/types");
+    (buildResumeCommand as ReturnType<typeof vi.fn>).mockImplementation(
+      (_agent: string, sessionId: string) => `codex resume ${sessionId} -C .`
+    );
+    usePanelStore.setState({
+      panelsById: { [demotedCodex.id]: demotedCodex },
+      panelIds: [demotedCodex.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1", { resumeSessionId: "launch-id" });
+
+    // The agent already quit: there is nothing live to quit and capture.
+    expect(mockGracefulKill).not.toHaveBeenCalled();
+    expect(mockKill).toHaveBeenCalledWith("test-1", { forRestart: true });
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.launchAgentId).toBe("codex");
+    expect(payload.command).toBe("codex resume launch-id -C .");
+    expect(payload.agentSessionId).toBe("launch-id");
+
+    const after = usePanelStore.getState().panelsById["test-1"];
+    expect(after && isPtyPanel(after) ? after.agentState : null).toBe("working");
+    expect(after && isPtyPanel(after) ? after.agentSessionId : null).toBe("launch-id");
+    expect(after && isPtyPanel(after) ? after.agentResumeOffer : null).toBeUndefined();
+    (buildResumeCommand as ReturnType<typeof vi.fn>).mockReturnValue(null);
+  });
+
+  it("keeps the pane's launch profile, so the conversation is found where it was filed", async () => {
+    const { buildResumeCommand } = await import("@shared/types");
+    (buildResumeCommand as ReturnType<typeof vi.fn>).mockReturnValue("codex resume launch-id -C .");
+    const pane = { ...demotedCodex, env: { CODEX_HOME: "/profiles/work" } };
+    usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1", { resumeSessionId: "launch-id" });
+
+    expect(mockSpawn.mock.calls[0]![0].env).toMatchObject({ CODEX_HOME: "/profiles/work" });
+    (buildResumeCommand as ReturnType<typeof vi.fn>).mockReturnValue(null);
+  });
+
+  it("abandons the resume when something new runs in the shell", async () => {
+    const pane = { ...demotedCodex, detectedProcessId: "npm" };
+    usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1", { resumeSessionId: "launch-id" });
+
+    // `reset()` in beforeEach kills the previous test's pane; only a restart
+    // kill would mean the shell was torn down.
+    expect(mockKill).not.toHaveBeenCalledWith("test-1", { forRestart: true });
+    expect(mockSpawn).not.toHaveBeenCalled();
+    const after = usePanelStore.getState().panelsById["test-1"];
+    expect(after && isPtyPanel(after) ? after.isRestarting : null).toBeFalsy();
+    // Still on offer, since nothing was relaunched.
+    expect(after && isPtyPanel(after) ? after.agentResumeOffer : null).toEqual(
+      demotedCodex.agentResumeOffer
+    );
+  });
+
+  it("refuses up front, leaving live state alone, when a job is busy in the shell", async () => {
+    const pane = {
+      ...demotedCodex,
+      activityType: "background" as const,
+      flowStatus: "paused-backpressure" as const,
+    };
+    usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1", { resumeSessionId: "launch-id" });
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    const after = usePanelStore.getState().panelsById["test-1"];
+    expect(after && isPtyPanel(after) ? after.flowStatus : null).toBe("paused-backpressure");
+    expect(after && isPtyPanel(after) ? after.isRestarting : null).toBeFalsy();
+  });
+
+  it("still restarts a demoted pane as a plain shell without the option", async () => {
+    usePanelStore.setState({
+      panelsById: { [demotedCodex.id]: demotedCodex },
+      panelIds: [demotedCodex.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.launchAgentId).toBeUndefined();
+    expect(payload.command).toBeUndefined();
+  });
+});

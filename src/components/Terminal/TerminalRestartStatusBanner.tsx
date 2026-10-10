@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, RotateCw, XCircle } from "lucide-react";
+import { AlertTriangle, Play, RotateCw, XCircle } from "lucide-react";
+import { getAgentConfig } from "@/config/agents";
 import { Spinner } from "@/components/ui/Spinner";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import type { RestartBannerVariant } from "./restartStatus";
@@ -22,6 +23,8 @@ export interface TerminalRestartStatusBannerProps {
    * doesn't. Only meaningful for the `session-resume-unavailable` variant.
    */
   findSessionSlot?: ReactNode;
+  /** Reopen the offered conversation; only read for the `agent-resume-offer` variant. */
+  onResumeConversation?: () => void;
 }
 
 export function TerminalRestartStatusBanner({
@@ -30,6 +33,7 @@ export function TerminalRestartStatusBanner({
   onDismiss,
   onDismissAll,
   findSessionSlot,
+  onResumeConversation,
 }: TerminalRestartStatusBannerProps) {
   switch (variant.type) {
     case "none":
@@ -106,6 +110,37 @@ export function TerminalRestartStatusBanner({
                 ]
               : undefined
           }
+        />
+      );
+    }
+
+    case "agent-resume-offer": {
+      const copy = RESTART_BANNER_COPY["agent-resume-offer"]({
+        agentName: getAgentConfig(variant.agentId)?.name ?? variant.agentId,
+        hasSession: variant.sessionId !== undefined,
+      });
+      return (
+        <InlineStatusBanner
+          title={copy.title}
+          description={copy.description}
+          severity="info"
+          animated={false}
+          role="status"
+          ariaLive="polite"
+          layout="pane"
+          action={
+            variant.sessionId !== undefined && onResumeConversation
+              ? {
+                  id: "resume-conversation",
+                  label: copy.resumeLabel,
+                  icon: Play,
+                  variant: "primary",
+                  onClick: onResumeConversation,
+                }
+              : undefined
+          }
+          trailingSlot={variant.sessionId === undefined ? findSessionSlot : undefined}
+          onClose={onDismiss}
         />
       );
     }
