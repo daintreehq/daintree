@@ -527,8 +527,14 @@ async function restoreThroughOwningViews(receipt: number): Promise<void> {
     recentlyTrashed.delete(receipt);
     throw leftTheTrash();
   }
-  // Restored elsewhere while the host was asked: that restore spent it.
+  // Restored elsewhere while the host was asked: that restore spent it. Or the
+  // trash let it go meanwhile: the host is ending it, and a restore now would
+  // come back to nothing.
   if (!recentlyTrashed.has(receipt)) throw leftTheTrash();
+  if (Date.now() - trashed.at > TRASH_TTL_MS) {
+    recentlyTrashed.delete(receipt);
+    throw leftTheTrash();
+  }
   forgetReceiptsFor(trashed.runId, trashed.spawnedAt);
   // The host's word that this restore landed is ours, not news of someone
   // else's: it must not spend a receipt for a trash made after it.

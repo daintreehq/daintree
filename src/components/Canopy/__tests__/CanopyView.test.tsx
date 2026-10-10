@@ -930,6 +930,33 @@ describe("CanopyView", () => {
     expect(document.activeElement).toBe(dialog.querySelector("[aria-busy=true]"));
   });
 
+  it("hands the keyboard straight from the loading panel to the inbox replacing it", async () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    try {
+      useCanopyStore.setState({ snapshot: null });
+      const canopy = installElectron();
+      let answer: (snapshot: CanopySnapshot) => void = () => {};
+      canopy.setActive.mockReturnValue(
+        new Promise<CanopySnapshot>((resolve) => {
+          answer = resolve;
+        })
+      );
+      render(<CanopyView />);
+      await frames();
+      // Main answers: the inbox replaces the loading panel.
+      await act(async () => {
+        answer(canopySnapshot);
+      });
+      // Never back on the opener in between, where keys reach the grid.
+      expect(document.activeElement).not.toBe(opener);
+      expect(document.activeElement?.closest("[data-testid=canopy-dialog]")).not.toBeNull();
+    } finally {
+      opener.remove();
+    }
+  });
+
   it("reads a row's screen again from its menu, for a reading that looks wrong", async () => {
     const canopy = installElectron();
     const { container } = render(<CanopyView />);

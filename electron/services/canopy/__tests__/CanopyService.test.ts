@@ -2415,6 +2415,31 @@ describe("CanopyService", () => {
     expect(h.service.getSnapshot().cards[0]!.headline).toBe("Approve running npm test");
   });
 
+  it("keeps a reply made on a screen through a re-read that corrects its question", async () => {
+    let question = "Push now?";
+    const h = await makeHarness({
+      classify: async () => ({
+        category: "question",
+        confidence: 0.95,
+        attention: 0.95,
+        question,
+      }),
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "question" }));
+    h.screens.set("a", "Push now? Or open a PR first?");
+    await h.service.refresh();
+    const spawnedAt = h.runs[0]!.spawnedAt;
+    h.service.markHandled("a", spawnedAt);
+    // The re-read reads the same screen's question better.
+    question = "Push now, or open a PR first?";
+    await h.service.reread("a", spawnedAt);
+    expect(h.service.getSnapshot().dispositions.map((d) => d.kind)).toEqual(["replied"]);
+    // The same question redrawn is not a new ask: the reply stands.
+    h.screens.set("a", "All tests pass.\nPush now? Or open a PR first?");
+    await h.service.refresh();
+    expect(h.service.getSnapshot().dispositions.map((d) => d.kind)).toEqual(["replied"]);
+  });
+
   it("lets a re-read of a new ask whose first read failed bring it back unread", async () => {
     let failClassify = false;
     let question: string | null = null;

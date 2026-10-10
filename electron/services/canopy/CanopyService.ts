@@ -1626,7 +1626,13 @@ export class CanopyService {
     // screen's first reading, and a new ask on it is news like any other.
     const correction = forced && entry.card?.revision === entry.revision;
     if (correction && !isBusy(run) && classified.question !== null) {
-      adoptAsk(entry.reads, promptKey(classified.question), screen.hash);
+      const corrected = promptKey(classified.question);
+      adoptAsk(entry.reads, corrected, screen.hash);
+      // A reply or archive made on this very screen was made to the
+      // corrected ask: the same one drawn again must not bring it back.
+      if (entry.disposition !== null && entry.disposition.contentHash === screen.hash) {
+        entry.disposition.question = corrected;
+      }
     }
     if (
       !correction &&
