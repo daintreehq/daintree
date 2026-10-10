@@ -68,7 +68,10 @@ export interface CanopyCardHandlers {
 export interface CanopyCardHandle {
   /** Handle a key aimed at the list's selected row; true when it was used. */
   handleKey: (event: KeyboardEvent<HTMLElement>) => boolean;
-  /** Put the keyboard in the reply, when the run takes one; false when it doesn't. */
+  /**
+   * Put the keyboard in the reply — or, while a secret is asked for and
+   * there is no reply, in the live terminal. Always lands somewhere in the pane.
+   */
   focusComposer: () => boolean;
 }
 
@@ -400,8 +403,19 @@ export function CanopyCard({
   const stopHandoffRef = useRef<() => void>(() => {});
   useEffect(() => () => stopHandoffRef.current(), []);
   const focusComposer = (): boolean => {
-    if (!canReply) return false;
     stopHandoffRef.current();
+    // No reply here (a secret is being asked for, perhaps before the card
+    // knows it): the keyboard goes to the live terminal, where it is typed,
+    // once the menu that asked has closed.
+    if (!canReply) {
+      const frame = requestAnimationFrame(() => {
+        sectionRef.current
+          ?.querySelector<HTMLElement>("[data-canopy-terminal] textarea")
+          ?.focus({ preventScroll: true });
+      });
+      stopHandoffRef.current = () => cancelAnimationFrame(frame);
+      return true;
+    }
     // The composer is a lazy chunk: on a cold pane it may not exist yet, so
     // the handoff keeps trying while it loads, as the pane's own does — until
     // the user puts the keyboard somewhere themselves, which then stands.
