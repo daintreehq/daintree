@@ -1,4 +1,4 @@
-import type { PanelExitBehavior, SessionLostReason } from "@shared/types/panel";
+import type { AgentResumeOffer, PanelExitBehavior, SessionLostReason } from "@shared/types/panel";
 import type { TerminalRestartError, SpawnError, TerminalReconnectError } from "@/types";
 import type { BackendStatus } from "@/store/panelStore";
 
@@ -6,6 +6,7 @@ export type RestartBannerVariant =
   | { type: "auto-restarting" }
   | { type: "restarting" }
   | { type: "session-resume-unavailable"; reason: SessionLostReason }
+  | { type: "agent-resume-offer"; agentId: string; sessionId: string | undefined }
   | { type: "exit-error"; exitCode: number }
   | { type: "none" };
 
@@ -30,6 +31,11 @@ export interface RestartBannerInput {
    * fresh session (issue #10823).
    */
   sessionLostOnRestore?: SessionLostReason;
+  /**
+   * The pane's launched run quit to the shell without leaving a resume hint
+   * (#13226). Dismissal and restart both clear it in the panel store.
+   */
+  agentResumeOffer?: AgentResumeOffer;
 }
 
 export function getRestartBannerVariant(input: RestartBannerInput): RestartBannerVariant {
@@ -66,6 +72,23 @@ export function getRestartBannerVariant(input: RestartBannerInput): RestartBanne
     !input.spawnError
   ) {
     return { type: "session-resume-unavailable", reason: input.sessionLostOnRestore };
+  }
+
+  // The agent quit to a live shell, so there is no exit code to compete with;
+  // an in-flight restart or a host error still says more.
+  if (
+    input.agentResumeOffer &&
+    !input.isRestarting &&
+    !input.isAutoRestarting &&
+    !input.restartError &&
+    !input.reconnectError &&
+    !input.spawnError
+  ) {
+    return {
+      type: "agent-resume-offer",
+      agentId: input.agentResumeOffer.agentId,
+      sessionId: input.agentResumeOffer.sessionId,
+    };
   }
 
   if (

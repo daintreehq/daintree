@@ -36,6 +36,10 @@ import { useTerminalVisibilityObserver } from "./useTerminalVisibilityObserver";
 import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
 import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
 import { FindCodexSessionAction } from "./FindCodexSessionAction";
+import {
+  dismissAgentResumeOffer,
+  resumeFromAgentEndOffer,
+} from "@/services/terminal/agentEndRecovery";
 import { RestoreRecoveryGate } from "./RestoreRecoveryGate";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { PluginKindSetupStrip } from "@/components/Plugin/PluginSetupStrip";
@@ -454,6 +458,10 @@ function TerminalPaneComponent({
   const clearReconnectError = usePanelStore((state) => state.clearReconnectError);
   const clearScrollbackRestoreError = usePanelStore((state) => state.clearScrollbackRestoreError);
   const sessionLostBanner = useSessionLostBanner(id);
+  const agentResumeOffer = usePanelStore((state) => {
+    const panel = state.panelsById[id];
+    return panel && isPtyPanel(panel) ? panel.agentResumeOffer : undefined;
+  });
 
   const cliDetails = useCliAvailabilityStore((state) => state.details);
   const getPanelCliDetail = (): AgentCliDetail | undefined => {
@@ -1305,6 +1313,7 @@ function TerminalPaneComponent({
     spawnError,
     backendStatus,
     sessionLostOnRestore: sessionLostBanner.sessionLostOnRestore,
+    agentResumeOffer,
   });
   // Backend-dependent banners (restart / spawn / reconnect) describe failures
   // whose only recovery path runs through the host, so they're hidden while
@@ -1323,6 +1332,8 @@ function TerminalPaneComponent({
   const showScrollbackRestoreError =
     !suppressParseError && Boolean(scrollbackRestoreError) && !restartError;
   const showRestartStatus = restartBannerVariant.type !== "none";
+  const offeredSessionId =
+    restartBannerVariant.type === "agent-resume-offer" ? restartBannerVariant.sessionId : undefined;
 
   // Submit-lane status (#11875). `slow` stays ambient in the header pill; only
   // the escalated states get a banner, and only when the backend is healthy
@@ -1503,7 +1514,12 @@ function TerminalPaneComponent({
           onDismiss={() =>
             restartBannerVariant.type === "session-resume-unavailable"
               ? sessionLostBanner.dismiss()
-              : setDismissedRestartPrompt(true)
+              : restartBannerVariant.type === "agent-resume-offer"
+                ? dismissAgentResumeOffer(id)
+                : setDismissedRestartPrompt(true)
+          }
+          onResumeConversation={
+            offeredSessionId ? () => void resumeFromAgentEndOffer(id, offeredSessionId) : undefined
           }
           onDismissAll={
             restartBannerVariant.type === "session-resume-unavailable"
@@ -1514,6 +1530,12 @@ function TerminalPaneComponent({
             restartBannerVariant.type === "session-resume-unavailable" &&
             effectiveAgentId === "codex" ? (
               <FindCodexSessionAction panelId={id} />
+            ) : restartBannerVariant.type === "agent-resume-offer" &&
+              restartBannerVariant.agentId === "codex" ? (
+              <FindCodexSessionAction
+                panelId={id}
+                onOpenSession={(sessionId) => resumeFromAgentEndOffer(id, sessionId)}
+              />
             ) : undefined
           }
         />

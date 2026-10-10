@@ -237,6 +237,7 @@ export const createRestartActions = (
   restartTerminal: async (id, options) => {
     const allowResumeLatest = options?.allowResumeLatest !== false;
     const terminal = get().panelsById[id];
+    const forcedResumeSessionId = options?.resumeSessionId;
 
     if (!terminal) {
       logWarn("[TerminalStore] Cannot restart: terminal not found", { id });
@@ -318,6 +319,7 @@ export const createRestartActions = (
           // session-lost restore signal has been acknowledged — clear it so the
           // banner doesn't linger across the restart (issue #9802).
           sessionLostOnRestore: undefined,
+          agentResumeOffer: undefined,
           ...(wasFailed ? { spawnStatus: undefined } : {}),
         };
       })
@@ -419,10 +421,14 @@ export const createRestartActions = (
     // its shell) has `command` cleared — without this, a demoted shell whose
     // restart then fails to spawn would wrongly re-promote to an agent (#5764).
     const failedAgentLaunch = wasFailed && currentTerminal.command !== undefined;
+    // An explicit resume names the conversation to reopen, so the pane relaunches
+    // as its agent whatever it is running now (#13226).
+    const forcedResume = !!effectiveAgentId && !!forcedResumeSessionId;
     const isAgent =
-      !!effectiveAgentId &&
-      (currentTerminal.agentState !== "exited" || failedAgentLaunch) &&
-      currentTerminal.exitCode === undefined;
+      forcedResume ||
+      (!!effectiveAgentId &&
+        (currentTerminal.agentState !== "exited" || failedAgentLaunch) &&
+        currentTerminal.exitCode === undefined);
     const isDemotedAgent = !!effectiveAgentId && !isAgent;
     let loadedRuntimeSettings: LoadedAgentRuntimeSettings | undefined;
     let runtimeSettingsLoaded = false;
@@ -678,7 +684,9 @@ export const createRestartActions = (
           // A failed spawn (`wasFailed`) has no live process to quit — bare
           // kill keeps PtyManager's missing-terminal cleanup (session-file
           // delete), which the graceful channel skips on a registry miss.
-          if (isAgent && !wasFailed) {
+          // A forced resume of a pane whose agent already quit has nothing live
+          // to quit and capture; the shell it left behind just goes.
+          if (isAgent && !wasFailed && !(forcedResume && currentTerminal.agentState === "exited")) {
             try {
               return await terminalClient.gracefulKill(id, { forRestart: true });
             } catch (error) {
@@ -722,7 +730,9 @@ export const createRestartActions = (
           (currentTerminal.detectedAgentId === undefined ||
             currentTerminal.detectedAgentId === effectiveAgentId);
         const sessionId =
-          (captureTrusted ? capturedSessionId : null) ?? currentTerminal.agentSessionId;
+          forcedResumeSessionId ??
+          (captureTrusted ? capturedSessionId : null) ??
+          currentTerminal.agentSessionId;
         if (sessionId) {
           // An exact candidate never degrades to resume-latest: if its
           // command can't be built, the safe outcome is a fresh launch, not
@@ -767,8 +777,12 @@ export const createRestartActions = (
       // too, so no copy of it survives in panel state (#11782).
       // An absent command stays absent: coercing it to "" would flip the
       // strict `command !== undefined` gate on `failedAgentLaunch` above.
+      // A demoted pane has no stored command left, so a forced resume keeps the
+      // fresh launch command the next restart would rebuild anyway.
       const durableSource =
-        consumedSessionId || usedResumeLatest ? currentTerminal.command : spawnCommand;
+        consumedSessionId || usedResumeLatest
+          ? (currentTerminal.command ?? (forcedResume ? freshCommand : undefined))
+          : spawnCommand;
       const durableCommand = durableSource
         ? stripAssignedSessionIdArgs(durableSource, effectiveAgentId)
         : durableSource;
@@ -777,8 +791,12 @@ export const createRestartActions = (
       // pane's conversation addressable without waiting on a teardown scrape.
       // Agents that mint their own id keep the previous behaviour of clearing
       // it and re-capturing at the next teardown.
+      // A forced resume names its conversation outright, so the pane holds it
+      // exactly as a resume-palette launch does.
       const nextSessionId =
-        isAgent && supportsSessionIdAssignment(currentTerminal.launchAgentId)
+        isAgent &&
+        (supportsSessionIdAssignment(currentTerminal.launchAgentId) ||
+          (forcedResume && consumedSessionId === forcedResumeSessionId))
           ? consumedSessionId
           : undefined;
 

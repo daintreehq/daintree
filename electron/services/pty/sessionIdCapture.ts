@@ -69,6 +69,31 @@ function tailWindow(text: string, lines: number): string {
 }
 
 /**
+ * Whether `patternSource` matches within the same ANSI-stripped tail window the
+ * session-id matcher reads. `false` for an absent or uncompilable pattern, for
+ * the same reason {@link createSessionIdMatcher} returns `null` on one.
+ */
+export function tailMatchesPattern(
+  raw: string,
+  patternSource: string | undefined,
+  options: Pick<SessionIdMatchOptions, "tailLines" | "tailChars">
+): boolean {
+  if (!patternSource) return false;
+  let pattern: RegExp;
+  try {
+    pattern = new RegExp(patternSource);
+  } catch {
+    return false;
+  }
+  const stripped = stripAnsiCodes(raw);
+  let text = options.tailLines ? tailWindow(stripped, options.tailLines) : stripped;
+  if (options.tailChars && text.length > options.tailChars) {
+    text = text.slice(-options.tailChars);
+  }
+  return pattern.test(text);
+}
+
+/**
  * Every `sessionIdPattern` captures with `[\w-]+`, which also matches a CLI
  * flag. Daintree types the launch command into the shell, so a pane launched
  * with `resumeLatestArgs` echoes `codex resume --last` into its own output — and

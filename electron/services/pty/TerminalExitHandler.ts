@@ -6,6 +6,7 @@ import type { IdentityWatcher } from "./IdentityWatcher.js";
 import type { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
 import type { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
 import type { SessionSnapshotter } from "./SessionSnapshotter.js";
+import type { AgentEndObservation } from "../../../shared/types/ipc/agent.js";
 import { captureAgentEndSession } from "./agentEndCapture.js";
 import { computeDefaultTitle } from "./terminalTitle.js";
 import { logTerminalExit } from "./terminalKillAudit.js";
@@ -92,8 +93,9 @@ export class TerminalExitHandler {
     // backstop on the strength of the previous conversation's id.
     const teardownHoldsThisSession =
       terminal.wasKilled && !!terminal.agentSessionId && previousAgent === terminal.launchAgentId;
+    let agentEnd: AgentEndObservation | undefined;
     if (previousAgent && !teardownHoldsThisSession) {
-      captureAgentEndSession({
+      agentEnd = captureAgentEndSession({
         terminalId: this.host.id,
         terminal,
         agentId: previousAgent,
@@ -119,6 +121,7 @@ export class TerminalExitHandler {
         defaultTitle: previousAgent ? nextTitle : undefined,
         timestamp: Date.now(),
         ...(previousAgent ? { exitKind: "terminal" as const } : {}),
+        ...(agentEnd ? { agentEnd } : {}),
       });
     }
 

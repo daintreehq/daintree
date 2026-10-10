@@ -34,6 +34,14 @@ export interface RestartTerminalOptions {
    * Defaults to `true` (resume enabled).
    */
   allowResumeLatest?: boolean;
+  /**
+   * Relaunch the pane's launch agent into exactly this conversation, even when
+   * the agent has already quit to the shell — the one case a demoted pane
+   * restarts as its agent rather than a plain shell (#5764). Used to reopen
+   * the conversation a launched run ended without (#13226). Ignored for a pane
+   * with no launch agent.
+   */
+  resumeSessionId?: string;
 }
 
 export interface TrashedTerminalGroupMetadata {
