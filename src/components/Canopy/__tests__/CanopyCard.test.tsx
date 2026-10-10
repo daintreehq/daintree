@@ -264,6 +264,24 @@ describe("CanopyCard", () => {
     expect(h.onSent).toHaveBeenCalledTimes(1);
   });
 
+  it("hands Reply to the live terminal while it asks for a secret", async () => {
+    const h = handlers();
+    const ref = createRef<CanopyCardHandle>();
+    const { container } = render(
+      <CanopyCard ref={ref} item={itemFor("question")} {...PROPS} {...h} />
+    );
+    await composer();
+    // The live screen asks for a password before the card knows it.
+    await streamOpens({ watchId: 7, secretPrompt: true });
+    const textarea = document.createElement("textarea");
+    container.querySelector("[data-canopy-terminal]")!.appendChild(textarea);
+    expect(ref.current!.focusComposer()).toBe(true);
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(document.activeElement).toBe(textarea);
+  });
+
   it("goes back to the list on Escape from a reply whose terminal has gone", async () => {
     const h = handlers();
     const { container } = render(<CanopyCard item={itemFor("question")} {...PROPS} {...h} />);
