@@ -8,6 +8,15 @@ export const CANOPY_RANK_SPACING_MS = 10_000;
  */
 export const CANOPY_REVEAL_MS = 15_000;
 
+/**
+ * How far one run's priority must beat another's to pass it. The readers
+ * refine a score by a few points as they write words — on the traces, most
+ * refinements land within this of the score the background read gave, and
+ * those that land further change what the run needs — so a smaller difference
+ * is noise to hold still through, not a reason to move.
+ */
+export const CANOPY_RANK_MARGIN = 10;
+
 /** One scope's order: each scope ranks its own runs, so switching never buries another's. */
 export interface CanopyOrder {
   ids: readonly string[];
@@ -62,8 +71,18 @@ export type CanopyRankStep =
  * other row where it is.
  */
 export function nextCanopyOrder(order: CanopyOrder | null, input: CanopyRankInput): CanopyRankStep {
+  // A rank records what is urgent now, so an ask newly urgent is placed by it
+  // as it would be by the promotion below — the margin holds near scores, not
+  // an ask the user is paged for.
   const ranked: CanopyOrder = {
-    ids: order === null ? input.fresh : rerank(order.ids, input.fresh, input.priorities),
+    ids:
+      order === null
+        ? input.fresh
+        : promote(
+            rerank(order.ids, input.fresh, input.priorities),
+            input.urgent.filter((id) => !order.urgent.includes(id)),
+            input.fresh
+          ),
     rankedFor: input.refreshedAt,
     urgent: input.urgent,
   };
@@ -122,9 +141,17 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
 
 /**
  * The list ranked again with as little movement as the new priorities allow:
- * rows pass one another only where one's priority now beats the other's, and
- * rows that tie keep the places they had. New runs join in the readers' order
- * before the sort places them.
+ * a row moves only when it beats a row above it by `CANOPY_RANK_MARGIN` or
+ * more, and no row is left below one that beats it by that much. Rows nearer
+ * than that keep their places — unless a row moving past a clearly lower one
+ * has to pass them on the way, since holding every near pair would leave a
+ * run below one it clearly outranks, through a chain of small steps. New runs
+ * join in the readers' order before they are placed.
+ *
+ * Highest first, each row moves up to just above the highest row it clearly
+ * beats. A row placed earlier ranks at least as high, so it beats whatever a
+ * later row beats and is already above it: no later move passes it, and no
+ * row ends up below one that clearly beats it.
  */
 function rerank(
   current: readonly string[],
@@ -133,11 +160,22 @@ function rerank(
 ): string[] {
   const live = new Set(fresh);
   const placed = new Set(current);
-  const rows = [...current.filter((id) => live.has(id)), ...fresh.filter((id) => !placed.has(id))];
-  return rows
-    .map((id, index) => ({ id, index, priority: priorities.get(id) ?? 0 }))
-    .sort((a, b) => b.priority - a.priority || a.index - b.index)
+  let rows = [...current.filter((id) => live.has(id)), ...fresh.filter((id) => !placed.has(id))];
+  const priority = (id: string) => priorities.get(id) ?? 0;
+  const highestFirst = rows
+    .map((id, index) => ({ id, index }))
+    .sort((a, b) => priority(b.id) - priority(a.id) || a.index - b.index)
     .map((row) => row.id);
+  for (const id of highestFirst) {
+    const from = rows.indexOf(id);
+    const to = rows.findIndex(
+      (other, index) => index < from && priority(id) - priority(other) >= CANOPY_RANK_MARGIN
+    );
+    if (to === -1) continue;
+    rows = rows.filter((other) => other !== id);
+    rows.splice(to, 0, id);
+  }
+  return rows;
 }
 
 /**

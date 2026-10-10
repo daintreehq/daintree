@@ -55,6 +55,7 @@ import {
 import { CanopyRow } from "./CanopyRow";
 import { CanopyRowMenu, type CanopyRowMenuActions } from "./CanopyRowMenu";
 import { SectionBar } from "./CanopySectionBar";
+import { CanopyStatusBar } from "./CanopyStatusBar";
 import { CanopyPlace } from "./CanopyPlace";
 import { CanopyPitch } from "./CanopyPitch";
 import { CANOPY_BETA_TERMS, CANOPY_WAITLIST_URL } from "./canopyTerms";
@@ -1448,8 +1449,6 @@ function CanopyInbox({
     );
   };
   const unreadCount = inbox.inbox.filter((item) => item.unread).length;
-  // Words being written for some run right now: said once for the list, only while it lasts.
-  const updating = (canopy?.cards ?? []).some((card) => card.describing);
   // A project's name on every row says nothing while every row is in it.
   const manyProjects = new Set(items.map((item) => item.workspaceId)).size > 1;
 
@@ -1581,143 +1580,81 @@ function CanopyInbox({
           // folded away beneath it, and the selected agent's own terminal beside
           // it, drawn as its pane.
           <div className="flex min-h-0 flex-1">
-            <div
-              className="canopy-inbox flex min-h-0 w-[28rem] shrink-0 flex-col self-stretch overflow-y-auto border-r border-border-default select-none"
-              data-canopy-list=""
-              // Its rows have menus of their own: the app's Shift+F10 stands down here.
-              data-row-menu=""
-              // Still placing runs as the open's readings land.
-              data-revealing={revealed ? undefined : "true"}
-            >
-              <SectionBar
-                id="canopy-inbox-label"
-                label="Inbox"
-                count={listed.length}
-                trailing={
-                  <span className="flex items-center gap-1">
-                    {/* Said only while it is so, never as a standing label: a
-                        hold-up first, since summaries are slow because of it. */}
-                    <span role="status" className="mr-1 text-2xs text-text-secondary">
-                      {canopy?.waiting === "waking"
-                        ? "Starting Canopy's service…"
-                        : canopy?.waiting === "retrying"
-                          ? "Waiting to retry…"
-                          : updating
-                            ? "Updating summaries…"
-                            : ""}
+            <div className="canopy-inbox-column flex min-h-0 w-[28rem] shrink-0 flex-col self-stretch border-r border-border-default">
+              <div
+                className="canopy-inbox flex min-h-0 flex-1 flex-col overflow-y-auto select-none"
+                data-canopy-list=""
+                // Its rows have menus of their own: the app's Shift+F10 stands down here.
+                data-row-menu=""
+                // Still placing runs as the open's readings land.
+                data-revealing={revealed ? undefined : "true"}
+              >
+                <SectionBar
+                  id="canopy-inbox-label"
+                  label="Inbox"
+                  count={listed.length}
+                  trailing={
+                    <span className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        pressed={unreadOnly}
+                        onClick={() => setUnreadOnly(!unreadOnly)}
+                      >
+                        Unread
+                        {unreadCount > 0 && <span className="tabular-nums">{unreadCount}</span>}
+                      </Button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            disabled={unreadCount === 0}
+                            onClick={markAllRead}
+                          >
+                            Mark all read
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">
+                          <KbdChord shortcut="Alt+U" />
+                        </TooltipContent>
+                      </Tooltip>
                     </span>
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      pressed={unreadOnly}
-                      onClick={() => setUnreadOnly(!unreadOnly)}
-                    >
-                      Unread
-                      {unreadCount > 0 && <span className="tabular-nums">{unreadCount}</span>}
-                    </Button>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          disabled={unreadCount === 0}
-                          onClick={markAllRead}
-                        >
-                          Mark all read
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">
-                        <KbdChord shortcut="Alt+U" />
-                      </TooltipContent>
-                    </Tooltip>
-                  </span>
-                }
-              />
-              {listed.length > 0 ? (
-                <div
-                  ref={listRef}
-                  role="listbox"
-                  aria-labelledby="canopy-inbox-label"
-                  // A mouse or pen resting over a row; a touch has no hover to hold for.
-                  onPointerEnter={(event) => {
-                    if (event.pointerType !== "touch") setPointerInList(true);
-                  }}
-                  onPointerLeave={() => {
-                    // Leaving releases the hold, it doesn't move the list:
-                    // the idle wait starts from here.
-                    lastInteractionRef.current = Date.now();
-                    setPointerInList(false);
-                  }}
-                >
-                  {listed.map((item, index) => {
-                    const replied = repliedAt(item);
-                    return (
-                      <CanopyRowMenu key={item.runId} item={item} {...rowMenu}>
-                        <CanopyRow
-                          item={item}
-                          domId={canopyCardDomId(item.runId)}
-                          isSelected={focusedItem?.runId === item.runId}
-                          // Words are coming whenever screens are read, so the slot
-                          // for them is held from the start.
-                          reserveDetail
-                          tabbable={tabStop(listed, item, index)}
-                          unread={item.unread}
-                          showProject={manyProjects}
-                          nowMs={nowMs}
-                          asideLabel={
-                            replied !== null ? `Replied ${agoPhrase(replied, nowMs)}` : null
-                          }
-                          onSelect={() => selectRow(item.runId)}
-                          onClick={() => readNow(item)}
-                          onOpen={() => handlers.onOpen(item)}
-                          onArchive={() => handlers.onArchive(item)}
-                        />
-                      </CanopyRowMenu>
-                    );
-                  })}
-                </div>
-              ) : (
-                <p className="px-3 pb-3 text-xs text-text-secondary">
-                  {unreadOnly && inbox.inbox.length > 0
-                    ? "Nothing unread. Each agent shows here again when it does something new."
-                    : "Every agent is archived. Each comes back when it has something new to say."}
-                </p>
-              )}
-              {inbox.archived.length > 0 && (
-                <>
-                  <SectionBar
-                    id="canopy-archived-label"
-                    label="Archived"
-                    count={inbox.archived.length}
-                    fold={{
-                      expanded: archivedExpanded,
-                      controls: "canopy-archived",
-                      onToggle: () => setArchivedExpanded(!archivedExpanded),
-                      onEnter: () => focusCardNow(inbox.archived[0]!.runId),
+                  }
+                />
+                {listed.length > 0 ? (
+                  <div
+                    ref={listRef}
+                    role="listbox"
+                    aria-labelledby="canopy-inbox-label"
+                    // A mouse or pen resting over a row; a touch has no hover to hold for.
+                    onPointerEnter={(event) => {
+                      if (event.pointerType !== "touch") setPointerInList(true);
                     }}
-                  />
-                  {archivedExpanded && (
-                    <div
-                      id="canopy-archived"
-                      role="listbox"
-                      aria-labelledby="canopy-archived-label"
-                    >
-                      {inbox.archived.map((item, index) => (
+                    onPointerLeave={() => {
+                      // Leaving releases the hold, it doesn't move the list:
+                      // the idle wait starts from here.
+                      lastInteractionRef.current = Date.now();
+                      setPointerInList(false);
+                    }}
+                  >
+                    {listed.map((item, index) => {
+                      const replied = repliedAt(item);
+                      return (
                         <CanopyRowMenu key={item.runId} item={item} {...rowMenu}>
                           <CanopyRow
                             item={item}
                             domId={canopyCardDomId(item.runId)}
                             isSelected={focusedItem?.runId === item.runId}
-                            reserveDetail={false}
-                            tabbable={tabStop(inbox.archived, item, index)}
-                            unread={false}
+                            // Words are coming whenever screens are read, so the slot
+                            // for them is held from the start.
+                            reserveDetail
+                            tabbable={tabStop(listed, item, index)}
+                            unread={item.unread}
                             showProject={manyProjects}
-                            compact
                             nowMs={nowMs}
                             asideLabel={
-                              item.disposition
-                                ? `Archived ${agoPhrase(item.disposition.at, nowMs)}`
-                                : null
+                              replied !== null ? `Replied ${agoPhrase(replied, nowMs)}` : null
                             }
                             onSelect={() => selectRow(item.runId)}
                             onClick={() => readNow(item)}
@@ -1725,11 +1662,65 @@ function CanopyInbox({
                             onArchive={() => handlers.onArchive(item)}
                           />
                         </CanopyRowMenu>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="px-3 pb-3 text-xs text-text-secondary">
+                    {unreadOnly && inbox.inbox.length > 0
+                      ? "Nothing unread. Each agent shows here again when it does something new."
+                      : "Every agent is archived. Each comes back when it has something new to say."}
+                  </p>
+                )}
+                {inbox.archived.length > 0 && (
+                  <>
+                    <SectionBar
+                      id="canopy-archived-label"
+                      label="Archived"
+                      count={inbox.archived.length}
+                      fold={{
+                        expanded: archivedExpanded,
+                        controls: "canopy-archived",
+                        onToggle: () => setArchivedExpanded(!archivedExpanded),
+                        onEnter: () => focusCardNow(inbox.archived[0]!.runId),
+                      }}
+                    />
+                    {archivedExpanded && (
+                      <div
+                        id="canopy-archived"
+                        role="listbox"
+                        aria-labelledby="canopy-archived-label"
+                      >
+                        {inbox.archived.map((item, index) => (
+                          <CanopyRowMenu key={item.runId} item={item} {...rowMenu}>
+                            <CanopyRow
+                              item={item}
+                              domId={canopyCardDomId(item.runId)}
+                              isSelected={focusedItem?.runId === item.runId}
+                              reserveDetail={false}
+                              tabbable={tabStop(inbox.archived, item, index)}
+                              unread={false}
+                              showProject={manyProjects}
+                              compact
+                              nowMs={nowMs}
+                              asideLabel={
+                                item.disposition
+                                  ? `Archived ${agoPhrase(item.disposition.at, nowMs)}`
+                                  : null
+                              }
+                              onSelect={() => selectRow(item.runId)}
+                              onClick={() => readNow(item)}
+                              onOpen={() => handlers.onOpen(item)}
+                              onArchive={() => handlers.onArchive(item)}
+                            />
+                          </CanopyRowMenu>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              <CanopyStatusBar link={canopy?.link} waiting={canopy?.waiting} />
             </div>
             <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas px-2 pb-2">
               {focusedItem && (

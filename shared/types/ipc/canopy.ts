@@ -368,6 +368,18 @@ export interface CanopyRunGlance {
   glance: CanopyGlance;
 }
 
+/** Canopy's requests to its service, as the status bar shows them. */
+export interface CanopyLink {
+  /** The service's host, as the requests address it. */
+  host: string;
+  /** Requests to it under way now. */
+  inFlight: number;
+  /** The mean time of the latest classifier reads, in ms; null before the first. */
+  classifyMs: number | null;
+  /** The mean time of the latest summary reads, in ms; null before the first. */
+  readMs: number | null;
+}
+
 export interface CanopySnapshot {
   /**
    * Rises with every snapshot main hands out, pulled or pushed, so a view
@@ -416,6 +428,8 @@ export interface CanopySnapshot {
    * cards, and so their place in the list, are about to change.
    */
   wordsDue?: string[];
+  /** The requests to Canopy's service; absent while Canopy is off. */
+  link?: CanopyLink;
 }
 
 /**

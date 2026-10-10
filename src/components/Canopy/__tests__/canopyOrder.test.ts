@@ -40,12 +40,42 @@ function idsOf(step: ReturnType<typeof nextCanopyOrder>): readonly string[] | nu
 
 describe("nextCanopyOrder", () => {
   it("moves rows past one another only where one's priority now beats the other's", () => {
-    // b and c tie, so they keep their places; d now outranks both.
+    // b and c tie, so they keep their places; d now clearly outranks both.
     const step = nextCanopyOrder(
       order(["a", "b", "c", "d"]),
-      input({ a: 90, c: 55, b: 55, d: 60 })
+      input({ a: 90, c: 55, b: 55, d: 70 })
     );
     expect(idsOf(step)).toEqual(["a", "d", "b", "c"]);
+  });
+
+  it("holds through a refinement of a few points, and moves for one that clearly outranks", () => {
+    // A score refined from 50 to 58 is still 50's neighbour: nothing moves.
+    expect(idsOf(nextCanopyOrder(order(["a", "b", "c"]), input({ a: 50, b: 52, c: 58 })))).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+    // At 60 it clearly beats a and b and goes above both, in one move.
+    expect(idsOf(nextCanopyOrder(order(["a", "b", "c"]), input({ a: 50, b: 50, c: 60 })))).toEqual([
+      "c",
+      "a",
+      "b",
+    ]);
+  });
+
+  it("never leaves a row below one it clearly beats, however small each step between them", () => {
+    // Each neighbour is within the margin of the next, but 86 beats 70 by 16.
+    const ids = idsOf(nextCanopyOrder(order(["a", "b", "c"]), input({ a: 70, b: 78, c: 86 })));
+    expect(ids).not.toBeNull();
+    const priorities: Record<string, number> = { a: 70, b: 78, c: 86 };
+    for (const [i, above] of ids!.entries()) {
+      for (const below of ids!.slice(i + 1)) {
+        expect(priorities[below]! - priorities[above]!).toBeLessThan(10);
+      }
+    }
+    // And it moved only what it had to: c above a, passing b on the way since
+    // it can't be above a and below b; b keeps its place.
+    expect(ids).toEqual(["c", "a", "b"]);
   });
 
   it("holds the order until the user has paused and the last rank is a while ago", () => {
@@ -113,6 +143,32 @@ describe("nextCanopyOrder", () => {
     );
     // d is urgent now, but b outranks it: d stays below b.
     expect(idsOf(step)).toEqual(["a", "b", "d"]);
+  });
+
+  it("places an ask newly urgent by the readers on an open or a Refresh, however near the row above", () => {
+    // b turns urgent while the list is closed, a few points above a.
+    const left = order(["a", "b"]);
+    const priorities = { a: 84, b: 90 };
+    expect(
+      idsOf(nextCanopyOrder(left, input(priorities, { opening: true, urgent: ["b"] })))
+    ).toEqual(["b", "a"]);
+    expect(
+      idsOf(
+        nextCanopyOrder(
+          order(["a", "b"], { rankedFor: 2 }),
+          input(priorities, { requested: true, urgent: ["b"] })
+        )
+      )
+    ).toEqual(["b", "a"]);
+    // Already urgent at the last rank: the margin holds it like any other row.
+    expect(
+      idsOf(
+        nextCanopyOrder(
+          order(["a", "b"], { urgent: ["b"] }),
+          input(priorities, { opening: true, urgent: ["b"] })
+        )
+      )
+    ).toEqual(["a", "b"]);
   });
 
   it("places an ask again when it stops being urgent and later asks again", () => {

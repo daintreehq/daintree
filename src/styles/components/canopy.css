@@ -9,6 +9,11 @@
    only non-fill cue still clears WCAG 1.4.11's 3:1 on every theme (a faded
    accent fell to 2.7:1 on namib; the lift alone measures about 1.03:1). The
    selected row is the focused row and draws no ring on top (#8094). */
+/* The list and the status bar under it, on one surface. */
+.canopy-inbox-column {
+  background: var(--theme-surface-sidebar);
+}
+
 .canopy-inbox {
   background: var(--theme-surface-sidebar);
   /* Rows brought into view stop below the pinned heading, never under it. */

@@ -22,6 +22,7 @@ import { readPluginTerminalScreen } from "../../services/plugin/pluginTerminalSc
 import { CanopyService } from "../../services/canopy/CanopyService.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
 import {
+  canopyServiceUrl,
   canopyWaking,
   classifyWithCanopy,
   describeWithCanopy,
@@ -255,6 +256,16 @@ function getService(): CanopyService {
         describeWithCanopy(input, classifierSays, signal, onPartial)
       ),
     serviceWaking: () => canopyWaking(),
+    serviceHost: () => {
+      // A mistyped DAINTREE_CANOPY_URL is a failed read for the reads, and
+      // shown as given here: never a throw out of a snapshot.
+      const url = canopyServiceUrl();
+      try {
+        return new URL(url).host;
+      } catch {
+        return url;
+      }
+    },
     broadcast: (snapshot) =>
       typedBroadcast<"canopy:snapshot-updated">(CHANNELS.CANOPY_SNAPSHOT_UPDATED, snapshot),
   });
