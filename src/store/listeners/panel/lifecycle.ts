@@ -11,6 +11,12 @@ import { isTerminalRestarting } from "@/store/restartExitSuppression";
 import { usePanelStore, type PanelGridState } from "@/store/panelStore";
 import { useUIStore } from "@/store/uiStore";
 
+/**
+ * Panes this view brought back for Canopy before the host said so: the host's
+ * restored event for each is an echo of that, not news of another restore.
+ */
+const canopyRestores = new Set<string>();
+
 /** An overlay (Canopy, a dialog, a palette) holds the keyboard in this view. */
 function overlayHoldsKeyboard(): boolean {
   return useUIStore.getState().overlayStack.length > 0;
@@ -296,6 +302,7 @@ export function setupLifecycleListeners(): DisposableStore {
         onCanopyRestore(({ runId }) => {
           const panel = usePanelStore.getState().panelsById[runId];
           if (!panel || panel.location !== "trash") return;
+          canopyRestores.add(runId);
           usePanelStore.getState().restoreTerminal(runId, undefined, {
             hostRestored: true,
             // Canopy is in front of the grid here: the pane must not take the
@@ -326,6 +333,14 @@ export function setupLifecycleListeners(): DisposableStore {
     toDisposable(
       terminalRegistryController.onRestored((data: { id: string }) => {
         const { id } = data;
+        // The host's word on a restore Canopy already applied here: if the
+        // pane has been trashed again since, that newer trash stands.
+        if (
+          canopyRestores.delete(id) &&
+          usePanelStore.getState().panelsById[id]?.location === "trash"
+        ) {
+          return;
+        }
         usePanelStore.getState().markAsRestored(id);
         const {
           focusedId: previousFocusedId,

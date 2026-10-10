@@ -649,6 +649,21 @@ describe("onRestoreRequested — Canopy trash undone", () => {
     }
   });
 
+  it("keeps a newer trash through the host's late word on Canopy's restore", () => {
+    setupPanel();
+    restoredHandlers.length = 0;
+    const { trash, restoreRequest } = getHandlers();
+    const hostRestored = restoredHandlers.at(-1)!;
+    trash({ runId: "term-1" });
+    restoreRequest({ runId: "term-1" });
+    // Trashed again in the grid before the host's restored event arrives.
+    usePanelStore.getState().trashPanel("term-1");
+    expect(usePanelStore.getState().panelsById["term-1"]?.location).toBe("trash");
+    hostRestored({ id: "term-1" });
+    expect(usePanelStore.getState().panelsById["term-1"]?.location).toBe("trash");
+    expect(usePanelStore.getState().trashedTerminals.has("term-1")).toBe(true);
+  });
+
   it("ignores a pane that isn't in the trash, or one it does not hold", () => {
     setupPanel();
     const { restoreRequest, restore } = getHandlers();

@@ -730,6 +730,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const view = editorViewRef.current;
       if (!view) return;
       view.focus();
+      // The second look a frame later wins focus back from the grid pane's own
+      // focus pass. An isolated composer has no pane behind it, and a late
+      // refocus there would undo the user leaving it in the meantime.
+      if (isolated) return;
       const gen = focusGenerationRef.current;
       requestAnimationFrame(() => {
         if (focusGenerationRef.current !== gen) return;
