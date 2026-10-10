@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render as rtlRender, screen } from "@testing-library/react";
+import { render as rtlRender, screen, fireEvent, act } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { NO_WORKTREE } from "@/store/slices/panelRegistry/worktreeIndex";
@@ -37,33 +37,108 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
+const handleCopyTree = vi.fn<(worktree: unknown) => Promise<void>>(() => Promise.resolve());
+const copyWithToast = vi.fn<(label: string, value: string) => void>();
+const notifyRecipeSpawnFailures = vi.fn();
+const runRecipeWithResults = vi.fn<
+  (id: string, path: string, worktreeId?: string, context?: unknown) => Promise<unknown>
+>(() => Promise.resolve({ spawned: [], failed: [] }));
+let recipes: Array<{ id: string; name: string; worktreeId?: string }> = [];
+
+vi.mock("@/hooks/useWorktreeActions", () => ({
+  useWorktreeActions: () => ({ handleCopyTree }),
+}));
+vi.mock("@/lib/copyWithToast", () => ({
+  copyWithToast: (label: string, value: string) => copyWithToast(label, value),
+}));
+vi.mock("@/utils/recipeNotify", () => ({
+  notifyRecipeSpawnFailures: (...args: unknown[]) => notifyRecipeSpawnFailures(...args),
+}));
+vi.mock("@/store/agentSettingsStore", () => ({
+  useAgentSettingsStore: (selector: (s: unknown) => unknown) =>
+    selector({ settings: { agents: { claude: { pinned: true } } } }),
+}));
+vi.mock("@/store/cliAvailabilityStore", () => ({
+  useCliAvailabilityStore: (selector: (s: unknown) => unknown) =>
+    selector({ availability: { claude: "ready" } }),
+}));
+vi.mock("@/store/recipeStore", () => {
+  const state = () => ({
+    recipes,
+    runRecipeWithResults,
+    currentProjectId: null,
+    getRecipeById: (id: string) => recipes.find((r) => r.id === id),
+  });
+  const useRecipeStore = (selector: (s: unknown) => unknown) => selector(state());
+  useRecipeStore.getState = state;
+  return { useRecipeStore };
+});
+
 // Radix keeps the row's context menu closed, so its items never reach the DOM
 // and an "absent, not disabled" assertion over the real menu would pass
 // vacuously. Rendering the content inline is what makes that contract testable.
 // Partial, for the same reason as Sidebar.contextMenu.test.tsx: this module's
 // components render each other, so a full replacement throws on whichever
 // export the graph reaches that the factory didn't list.
-vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/components/ui/context-menu")>()),
-  ContextMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
-  ContextMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
-  ContextMenuContent: ({ children }: { children: ReactNode }) => (
-    <div data-testid="row-context-menu">{children}</div>
-  ),
-  ContextMenuSeparator: () => <hr />,
-  ContextMenuActionItem: ({
-    actionId,
+vi.mock("@/components/ui/context-menu", async (importOriginal) => {
+  const Item = ({
     children,
+    onSelect,
+    disabled,
   }: {
-    actionId: string;
-    args?: unknown;
-    children: ReactNode;
+    children?: ReactNode;
+    onSelect?: () => void;
+    disabled?: boolean;
   }) => (
-    <div role="menuitem" data-action-id={actionId}>
+    <div role="menuitem" aria-disabled={disabled} onClick={disabled ? undefined : onSelect}>
       {children}
     </div>
-  ),
-}));
+  );
+  const Pass = ({ children }: { children?: ReactNode }) => <>{children}</>;
+  return {
+    ...(await importOriginal<typeof import("@/components/ui/context-menu")>()),
+    ContextMenu: Pass,
+    ContextMenuTrigger: Pass,
+    ContextMenuContent: ({ children }: { children: ReactNode }) => (
+      <div data-testid="row-context-menu">{children}</div>
+    ),
+    ContextMenuItem: Item,
+    ContextMenuLabel: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+    ContextMenuSeparator: () => <hr />,
+    ContextMenuShortcut: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+    ContextMenuMeta: ({ children }: { children?: ReactNode }) => (
+      <span aria-hidden="true">{children}</span>
+    ),
+    ContextMenuSub: ({ children }: { children?: ReactNode }) => (
+      <div data-testid="menu-sub">{children}</div>
+    ),
+    ContextMenuSubTrigger: ({ children }: { children?: ReactNode }) => (
+      <div role="menuitem" data-sub-trigger="">
+        {children}
+      </div>
+    ),
+    ContextMenuSubContent: Pass,
+    ContextMenuRadioGroup: Pass,
+    ContextMenuRadioItem: Item,
+  };
+});
+
+/** The right-click menu's root rows: submenu triggers, in order. */
+function contextMenuRootRows(): string[] {
+  const menu = screen.getByTestId("row-context-menu");
+  return Array.from(
+    menu.querySelectorAll(":scope > [data-testid='menu-sub'] > [data-sub-trigger]")
+  ).map((el) => el.textContent?.trim() ?? "");
+}
+
+function clickMenuItem(name: string) {
+  const menu = screen.getByTestId("row-context-menu");
+  const item = Array.from(menu.querySelectorAll("[role='menuitem']")).find(
+    (el) => el.textContent?.trim() === name
+  );
+  if (!item) throw new Error(`no menu item "${name}"`);
+  fireEvent.click(item);
+}
 
 const { WorkspaceRootSidebar } = await import("../WorkspaceRootSidebar");
 
@@ -90,6 +165,7 @@ beforeEach(() => {
     byState: { working: 0, waiting: 0, directing: 0, idle: 0, completed: 0, exited: 0 },
   };
   useWorktreeTerminals.mockImplementation(() => ({ counts }));
+  recipes = [];
 });
 
 describe("WorkspaceRootSidebar", () => {
@@ -186,23 +262,88 @@ describe("WorkspaceRootSidebar", () => {
     });
   });
 
-  it("carries only the row actions a worktree-less workspace can honour", () => {
+  it("carries only the menu groups a worktree-less workspace can honour", () => {
     // Absent, not disabled. A row that looks like a worktree row with half its
     // menu inert is a bigger lie than the dead toggle this replaces. Asserted as
-    // an exact set so a git-shaped action can't be added back unnoticed.
+    // an exact list so a git-shaped group can't be added back unnoticed.
+    render(<WorkspaceRootSidebar workspace={SCRATCH} />);
+    expect(contextMenuRootRows()).toEqual(["Launch", "Open", "Copy"]);
+  });
+
+  it("puts the more-actions button last in the row, after Browse files", () => {
+    render(<WorkspaceRootSidebar workspace={PLAIN_FOLDER} />);
+
+    const browse = screen.getByRole("button", { name: "Browse files" });
+    const more = screen.getByRole("button", { name: "More actions" });
+    expect(browse.parentElement).toBe(more.parentElement);
+    expect(more.parentElement?.lastElementChild).toBe(more);
+  });
+
+  it("copies the workspace root, not a worktree", () => {
+    render(<WorkspaceRootSidebar workspace={PLAIN_FOLDER} />);
+
+    clickMenuItem("Full context");
+    clickMenuItem("Path");
+
+    expect(handleCopyTree).toHaveBeenCalledWith(null);
+    expect(copyWithToast).toHaveBeenCalledWith("Path", "/home/me/notes");
+  });
+
+  it("opens and reveals the workspace path itself", () => {
+    render(<WorkspaceRootSidebar workspace={PLAIN_FOLDER} />);
+
+    clickMenuItem("Open in editor");
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "file.openInEditor",
+      { path: "/home/me/notes" },
+      { source: "user" }
+    );
+    // `worktree.openEditor` resolves a worktree id and returns without one.
+    expect(dispatch).not.toHaveBeenCalledWith(
+      "worktree.openEditor",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("launches with no worktree id, so the launcher resolves the workspace root", () => {
     render(<WorkspaceRootSidebar workspace={SCRATCH} />);
 
-    const actionIds = screen
-      .getAllByRole("menuitem")
-      .map((el) => el.getAttribute("data-action-id"));
+    clickMenuItem("Terminal");
 
-    expect(actionIds).toEqual(["worktree.openFileBrowserPanel", "system.openPath"]);
+    expect(dispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      { agentId: "terminal", location: "grid" },
+      { source: "user" }
+    );
+  });
+
+  it("runs a project-wide recipe at the workspace root", async () => {
+    recipes = [
+      { id: "r1", name: "Two agents" },
+      { id: "r2", name: "Elsewhere", worktreeId: "wt-9" },
+    ];
+    render(<WorkspaceRootSidebar workspace={PLAIN_FOLDER} />);
+
+    expect(contextMenuRootRows()).toEqual(["Launch", "Open", "Recipes", "Copy"]);
+    expect(screen.queryByText("Elsewhere")).toBeNull();
+
+    await act(async () => {
+      clickMenuItem("Two agents");
+    });
+
+    expect(runRecipeWithResults).toHaveBeenCalledWith("r1", "/home/me/notes", undefined, {
+      worktreePath: "/home/me/notes",
+    });
+    expect(notifyRecipeSpawnFailures).toHaveBeenCalled();
   });
 
   it("exposes no worktree-shaped control outside the menu either", () => {
     render(<WorkspaceRootSidebar workspace={SCRATCH} />);
 
-    for (const forbidden of [/review/i, /commit/i, /diff/i, /branch/i, /arm/i, /refresh/i]) {
+    // Word-bounded: Launch's "Dev preview" is not a review action.
+    for (const forbidden of [/\breview/i, /commit/i, /diff/i, /branch/i, /\barm/i, /refresh/i]) {
       expect(screen.queryAllByRole("button", { name: forbidden })).toHaveLength(0);
       expect(screen.queryAllByRole("menuitem", { name: forbidden })).toHaveLength(0);
     }

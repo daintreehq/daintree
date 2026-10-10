@@ -166,6 +166,32 @@ export function renderWorktreeMenu(
 }
 
 /**
+ * The workspace-root mode (#13225): no worktree, and only the callbacks a
+ * scratch or non-git folder row wires. Overrides can still pass worktree-only
+ * callbacks, to prove the body withholds their groups on its own.
+ */
+export function renderWorkspaceRootMenu(
+  overrides: Partial<Omit<WorktreeMenuItemsProps, "components" | "worktree">> = {},
+  source: MenuActionSourceValue = "menu"
+) {
+  return render(
+    <MenuActionSourceContext.Provider value={source}>
+      <WorktreeMenuItems
+        components={menuComponents}
+        launchAgents={[]}
+        recipes={[]}
+        runningRecipeId={null}
+        onCopyContextFull={vi.fn()}
+        onCopyPath={vi.fn()}
+        onRevealInFinder={vi.fn()}
+        onRunRecipe={vi.fn()}
+        {...overrides}
+      />
+    </MenuActionSourceContext.Provider>
+  );
+}
+
+/**
  * The root rows in document order: submenu triggers plus the flat destructive
  * item, excluding everything nested inside a submenu's content.
  */
