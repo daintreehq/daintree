@@ -1,5 +1,5 @@
 import type { AgentExitedPayload } from "@shared/types";
-import { isPtyPanel } from "@shared/types/panel";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { getAgentConfig } from "@/config/agents";
 import { usePanelStore } from "@/store/panelStore";
 import {
@@ -19,8 +19,48 @@ const PICKER_AGENTS: ReadonlySet<string> = new Set(["codex"]);
  */
 const autoResumed = new Set<string>();
 
+/**
+ * Conversations a resume from this module is reopening right now, held from
+ * the pick until the restart settles: the new pane publishes its
+ * `agentSessionId` only once it spawns, so two picks of the same conversation
+ * would otherwise both pass the sibling check (#11461).
+ */
+const resumingSessionKeys = new Set<string>();
+
 export function _resetAgentEndRecoveryForTests(): void {
   autoResumed.clear();
+  resumingSessionKeys.clear();
+}
+
+/** The shell the run left behind is still idle: nothing new runs in it. */
+function isIdleShell(panel: PtyPanelData): boolean {
+  return panel.detectedAgentId === undefined && panel.detectedProcessId === undefined;
+}
+
+/**
+ * Restart `panel` into `sessionId` unless another pane holds or is already
+ * reopening that conversation.
+ */
+async function reopenInPlace(
+  panel: PtyPanelData,
+  agentId: string,
+  sessionId: string
+): Promise<RestoreRecoveryLaunchResult> {
+  const state = usePanelStore.getState();
+  const sessionKey = `${agentId}\u0000${sessionId}`;
+  if (
+    resumingSessionKeys.has(sessionKey) ||
+    siblingHeldSessionIds(state.panelsById, panel.id, agentId).has(sessionId)
+  ) {
+    return "held-elsewhere";
+  }
+  resumingSessionKeys.add(sessionKey);
+  try {
+    await state.restartTerminal(panel.id, { resumeSessionId: sessionId });
+    return "launched";
+  } finally {
+    resumingSessionKeys.delete(sessionKey);
+  }
 }
 
 /**
@@ -41,20 +81,22 @@ export function handleAgentEnd(payload: AgentExitedPayload): void {
   const panel = state.panelsById[payload.terminalId];
   if (!panel || !isPtyPanel(panel) || panel.launchAgentId !== agentId) return;
   if (panel.location !== "grid" && panel.location !== "dock") return;
-  if (panel.restoreRecovery || panel.isRestarting) return;
+  if (panel.restoreRecovery || panel.isRestarting || !isIdleShell(panel)) return;
   if (getAgentConfig(agentId)?.resume?.kind !== "session-id") return;
 
   const sessionId = panel.agentSessionId;
   if (end.selfUpdateSucceeded && sessionId) {
     const key = `${panel.id}\u0000${agentId}\u0000${sessionId}`;
-    const heldElsewhere = siblingHeldSessionIds(state.panelsById, panel.id, agentId).has(sessionId);
+    const heldElsewhere =
+      resumingSessionKeys.has(`${agentId}\u0000${sessionId}`) ||
+      siblingHeldSessionIds(state.panelsById, panel.id, agentId).has(sessionId);
     if (!autoResumed.has(key) && !heldElsewhere) {
       autoResumed.add(key);
       logInfo("[agentEndRecovery] Relaunching conversation after agent self-update", {
         terminalId: panel.id,
         agentId,
       });
-      void state.restartTerminal(panel.id, { resumeSessionId: sessionId });
+      void reopenInPlace(panel, agentId, sessionId);
       return;
     }
   }
@@ -86,16 +128,11 @@ export async function resumeFromAgentEndOffer(
   panelId: string,
   sessionId: string
 ): Promise<RestoreRecoveryLaunchResult> {
-  const state = usePanelStore.getState();
-  const panel = state.panelsById[panelId];
+  const panel = usePanelStore.getState().panelsById[panelId];
   if (!panel || !isPtyPanel(panel) || !panel.launchAgentId || panel.isRestarting) {
     return "unavailable";
   }
-  if (siblingHeldSessionIds(state.panelsById, panelId, panel.launchAgentId).has(sessionId)) {
-    return "held-elsewhere";
-  }
-  await state.restartTerminal(panelId, { resumeSessionId: sessionId });
-  return "launched";
+  return reopenInPlace(panel, panel.launchAgentId, sessionId);
 }
 
 export function dismissAgentResumeOffer(panelId: string): void {

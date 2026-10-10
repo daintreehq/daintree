@@ -165,6 +165,14 @@ describe("handleAgentEnd", () => {
     expect(current().agentResumeOffer).toBeUndefined();
   });
 
+  it("leaves a shell the user has already carried on in", () => {
+    store.state.panelsById = { "pane-a": pane({ detectedProcessId: "npm" }) };
+    handleAgentEnd(exited({ selfUpdateSucceeded: true }));
+
+    expect(store.state.restartTerminal).not.toHaveBeenCalled();
+    expect(current().agentResumeOffer).toBeUndefined();
+  });
+
   it("ignores a pane that is trashed or already restarting", () => {
     store.state.panelsById = { "pane-a": pane({ location: "trash" }) };
     handleAgentEnd(exited({ selfUpdateSucceeded: true }));
@@ -181,6 +189,20 @@ describe("resume offer actions", () => {
     expect(store.state.restartTerminal).toHaveBeenCalledWith("pane-a", {
       resumeSessionId: "picked",
     });
+  });
+
+  it("lets only one of two concurrent picks reopen the same conversation", async () => {
+    store.state.panelsById["pane-b"] = pane({ id: "pane-b", agentSessionId: undefined });
+    let release: () => void = () => {};
+    store.state.restartTerminal.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (release = resolve))
+    );
+
+    const first = resumeFromAgentEndOffer("pane-a", "picked");
+    await expect(resumeFromAgentEndOffer("pane-b", "picked")).resolves.toBe("held-elsewhere");
+    release();
+    await expect(first).resolves.toBe("launched");
+    expect(store.state.restartTerminal).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a conversation a sibling pane holds", async () => {

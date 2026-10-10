@@ -287,6 +287,7 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
 
         if (sessionId) {
           terminal.agentSessionId = sessionId;
+          terminal.sessionIdCapturedAtTeardown = true;
         }
 
         // Logged before kill() so a throwing kill can't erase the diagnostic, and

@@ -283,6 +283,7 @@ describe("passive agent session capture", () => {
       mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n`);
       // What gracefulShutdown's finish() does on a successful capture.
       terminal.getInfo().agentSessionId = SESSION_ID;
+      terminal.getInfo().sessionIdCapturedAtTeardown = true;
       terminal.kill("graceful-shutdown");
       mockPty(terminal).__emitExit(0);
 
@@ -753,6 +754,22 @@ describe("passive agent session capture", () => {
       } finally {
         off();
       }
+    });
+
+    it("journals the launch id when a graceful close of a restored pane captured nothing", async () => {
+      // A restored `codex resume <id>` holds its id from launch; a quit the
+      // agent swallowed leaves nothing scraped, and the close must not lose it.
+      const terminal = track(createTerminal({ agentSessionId: LAUNCH_ID }));
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData("thinking…\n");
+      terminal.kill("graceful-shutdown");
+      mockPty(terminal).__emitExit(0);
+
+      await flushCapture();
+      expect(captured).toHaveLength(1);
+      expect(captured[0].record.sessionId).toBe(LAUNCH_ID);
+      expect(captured[0].record.title).toBeNull();
+      expect(captured[0].boundary).toBe("exit");
     });
 
     it("stays silent for an anonymous launch with no id to fall back on", async () => {

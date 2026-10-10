@@ -74,10 +74,11 @@ export function getRestartBannerVariant(input: RestartBannerInput): RestartBanne
     return { type: "session-resume-unavailable", reason: input.sessionLostOnRestore };
   }
 
-  // The agent quit to a live shell, so there is no exit code to compete with;
-  // an in-flight restart or a host error still says more.
+  // The agent quit to a live shell. Once that shell exits too, its own exit is
+  // the newer observation and the offer stops describing the pane.
   if (
     input.agentResumeOffer &&
+    !input.isExited &&
     !input.isRestarting &&
     !input.isAutoRestarting &&
     !input.restartError &&

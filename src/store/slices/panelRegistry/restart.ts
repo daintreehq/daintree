@@ -319,7 +319,6 @@ export const createRestartActions = (
           // session-lost restore signal has been acknowledged — clear it so the
           // banner doesn't linger across the restart (issue #9802).
           sessionLostOnRestore: undefined,
-          agentResumeOffer: undefined,
           ...(wasFailed ? { spawnStatus: undefined } : {}),
         };
       })
@@ -644,6 +643,27 @@ export const createRestartActions = (
       }
     }
 
+    // A forced resume reopens a conversation in a shell its agent left behind.
+    // Anything now running there — a command the user typed, another agent —
+    // means they carried on in the meantime, and tearing it down for the old
+    // conversation would discard their work (#13226). Checked last, after every
+    // settings await, as the final gate before the shell is killed.
+    if (forcedResume) {
+      const live = get().panelsById[id];
+      if (
+        !live ||
+        !isPtyPanel(live) ||
+        live.location === "trash" ||
+        live.detectedAgentId !== undefined ||
+        live.detectedProcessId !== undefined
+      ) {
+        unmarkTerminalRestarting(id);
+        set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
+        logWarn("[TerminalStore] Forced resume abandoned: the pane moved on", { id });
+        return;
+      }
+    }
+
     try {
       // CAPTURE LIVE DIMENSIONS before destroying the frontend
       const managedInstance = terminalInstanceService.get(id);
@@ -837,6 +857,9 @@ export const createRestartActions = (
           conversationCwd: consumedSessionId ? t.conversationCwd : undefined,
           isRestarting: true,
           restartError: undefined,
+          // Answered only once the replacement is actually spawning, so a
+          // restart that fails validation leaves the offer to try again.
+          agentResumeOffer: undefined,
           exitCode: undefined,
           // Drop the prior session's parsed check result (#10682) — a fresh
           // run hasn't produced one yet, and a stale pass/fail would mislead.
@@ -906,7 +929,13 @@ export const createRestartActions = (
         ...restartTitle,
         command: isAgent ? spawnCommand : undefined,
         restore: false,
-        env: restartEnv,
+        // A forced resume reopens a conversation filed under the profile the
+        // pane launched with — a redirected CODEX_HOME — so its captured launch
+        // layer rides on top, exactly as a restore replays it (#10922).
+        env:
+          forcedResume && currentTerminal.env
+            ? { ...restartEnv, ...currentTerminal.env }
+            : restartEnv,
         agentLaunchFlags: isAgent ? nextAgentLaunchFlags : undefined,
         agentModelId: isAgent ? currentTerminal.agentModelId : undefined,
         // Without this the pty-host record loses its worktree for the rest of

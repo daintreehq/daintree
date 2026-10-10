@@ -400,6 +400,12 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
       });
     });
 
+    it("gives way to the shell's own exit once that exits too", () => {
+      expect(
+        getRestartBannerVariant({ ...shell, agentResumeOffer: offer, isExited: true, exitCode: 1 })
+      ).toEqual({ type: "exit-error", exitCode: 1 });
+    });
+
     it("yields to an in-flight restart", () => {
       expect(
         getRestartBannerVariant({ ...shell, agentResumeOffer: offer, isRestarting: true })
