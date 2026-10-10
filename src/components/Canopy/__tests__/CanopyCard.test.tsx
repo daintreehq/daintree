@@ -264,6 +264,18 @@ describe("CanopyCard", () => {
     expect(h.onSent).toHaveBeenCalledTimes(1);
   });
 
+  it("goes back to the list on Escape from a reply whose terminal has gone", async () => {
+    const h = handlers();
+    const { container } = render(<CanopyCard item={itemFor("question")} {...PROPS} {...h} />);
+    await composer();
+    // No stream: the composer is disabled and leaves Escape unhandled.
+    const editor = document.createElement("div");
+    editor.className = "cm-editor";
+    container.querySelector("[data-testid=composer]")!.appendChild(editor);
+    fireEvent.keyDown(editor, { key: "Escape" });
+    expect(h.onLeavePane).toHaveBeenCalledTimes(1);
+  });
+
   it("takes the first choice on Y only when the readers judged the action safe", () => {
     const h = handlers();
     const ref = createRef<CanopyCardHandle>();

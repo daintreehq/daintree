@@ -47,6 +47,8 @@ interface CanopyPitchProps {
   onTurnOn: () => Promise<void>;
   /** The user doesn't want Canopy: its ways in go, all but Settings. */
   onHide: () => Promise<void>;
+  /** Where the keyboard goes when the offer closes: what had it when the panel opened. */
+  restoreFocusTo?: () => HTMLElement | null;
 }
 
 const FAILED: Record<"on" | "hide", string> = {
@@ -59,7 +61,14 @@ const FAILED: Record<"on" | "hide", string> = {
  * playing a made-up fleet through the moments it is for, and what turning it on
  * sends where. Nothing here reads a terminal; nothing is read until they agree.
  */
-export function CanopyPitch({ isOpen, onClose, backdrop, onTurnOn, onHide }: CanopyPitchProps) {
+export function CanopyPitch({
+  isOpen,
+  onClose,
+  backdrop,
+  onTurnOn,
+  onHide,
+  restoreFocusTo,
+}: CanopyPitchProps) {
   const [pending, setPending] = useState<"on" | "hide" | null>(null);
   const [failed, setFailed] = useState<"on" | "hide" | null>(null);
   // The keyboard lands on the offer's heading, not on Turn on: a reflexive
@@ -92,6 +101,7 @@ export function CanopyPitch({ isOpen, onClose, backdrop, onTurnOn, onHide }: Can
       size="workspace"
       maxHeight="h-[min(90vh,1100px)]"
       initialFocus="none"
+      {...(restoreFocusTo ? { restoreFocusTo, preferRestoreFocusTo: true } : {})}
       backdrop={backdrop}
       data-testid="canopy-dialog"
     >

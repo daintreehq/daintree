@@ -184,11 +184,13 @@ export interface PanelRegistrySlice {
    * Bring a panel back from the trash and tell the PTY host. `hostRestored` is
    * for a terminal main has already restored on the host: the pane follows
    * without a second host restore, which could undo a trash made since.
+   * `keepFocus` leaves focus where it is, for a restore made while an overlay
+   * holds the keyboard: the pane comes back without taking it from behind.
    */
   restoreTerminal: (
     id: string,
     targetWorktreeId?: string,
-    options?: { hostRestored?: boolean }
+    options?: { hostRestored?: boolean; keepFocus?: boolean }
   ) => void;
   /** Restore all panels with the given groupRestoreId, recreating the tab group */
   restoreTrashedGroup: (groupRestoreId: string, targetWorktreeId?: string) => void;
