@@ -901,7 +901,15 @@ function CanopyInbox({
     };
     undoRef.current = undo;
     return {
-      land: (restore: () => void, toast?: { title: string; message: string }) => {
+      land: (restoreOnce: () => void, toast?: { title: string; message: string }) => {
+        // Z and the toast's Undo take back the same one action, once: the
+        // second of them finds it done.
+        let done = false;
+        const restore = () => {
+          if (done) return;
+          done = true;
+          restoreOnce();
+        };
         landed = restore;
         if (asked) {
           restore();
