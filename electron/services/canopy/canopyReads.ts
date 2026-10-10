@@ -197,7 +197,7 @@ export function observeFleet(track: ReadTrack, busy: boolean, at: number): void 
  * screen: it becomes the ask that screen's turn is about, without being a
  * turn of its own — so the same ask drawn again later is no news either.
  */
-export function adoptAsk(track: ReadTrack, ask: string, hash: string): void {
+export function adoptAsk(track: ReadTrack, ask: string | null, hash: string): void {
   track.ask = ask;
   track.hash = hash;
 }

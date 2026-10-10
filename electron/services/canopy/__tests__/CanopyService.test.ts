@@ -2440,6 +2440,33 @@ describe("CanopyService", () => {
     expect(h.service.getSnapshot().dispositions.map((d) => d.kind)).toEqual(["replied"]);
   });
 
+  it("forgets a question a re-read finds was never asked, so it is news when it really is", async () => {
+    let question: string | null = "Want me to push this?";
+    const h = await makeHarness({
+      classify: async () => ({
+        category: question ? "question" : "idle",
+        confidence: 0.9,
+        attention: question ? 0.9 : 0.1,
+        question,
+      }),
+    });
+    h.runs.push(run("a", { agentState: "idle" }));
+    h.screens.set("a", "Done. Pushed to origin.");
+    await h.service.refresh();
+    const spawnedAt = h.runs[0]!.spawnedAt;
+    const mark = () => h.service.getSnapshot().reads.find((m) => m.runId === "a");
+    h.service.setRead("a", spawnedAt, true, mark()?.turn);
+    // The re-read finds no question on that screen.
+    question = null;
+    await h.service.reread("a", spawnedAt);
+    const before = mark()!;
+    // Now the agent really asks it.
+    question = "Want me to push this?";
+    h.screens.set("a", "Done. Want me to push this?");
+    await h.service.refresh();
+    expect(mark()!.turn).toBeGreaterThan(before.turn);
+  });
+
   it("lets a re-read of a new ask whose first read failed bring it back unread", async () => {
     let failClassify = false;
     let question: string | null = null;
