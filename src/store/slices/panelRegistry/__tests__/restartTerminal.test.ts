@@ -1833,11 +1833,27 @@ describe("restartTerminal forced resume of an ended launch (#13226)", () => {
     expect(mockKill).not.toHaveBeenCalledWith("test-1", { forRestart: true });
     expect(mockSpawn).not.toHaveBeenCalled();
     const after = usePanelStore.getState().panelsById["test-1"];
-    expect(after && isPtyPanel(after) ? after.isRestarting : null).toBe(false);
+    expect(after && isPtyPanel(after) ? after.isRestarting : null).toBeFalsy();
     // Still on offer, since nothing was relaunched.
     expect(after && isPtyPanel(after) ? after.agentResumeOffer : null).toEqual(
       demotedCodex.agentResumeOffer
     );
+  });
+
+  it("refuses up front, leaving live state alone, when a job is busy in the shell", async () => {
+    const pane = {
+      ...demotedCodex,
+      activityType: "background" as const,
+      flowStatus: "paused-backpressure" as const,
+    };
+    usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1", { resumeSessionId: "launch-id" });
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    const after = usePanelStore.getState().panelsById["test-1"];
+    expect(after && isPtyPanel(after) ? after.flowStatus : null).toBe("paused-backpressure");
+    expect(after && isPtyPanel(after) ? after.isRestarting : null).toBeFalsy();
   });
 
   it("still restarts a demoted pane as a plain shell without the option", async () => {

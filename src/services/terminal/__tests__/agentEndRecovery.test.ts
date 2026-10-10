@@ -165,6 +165,13 @@ describe("handleAgentEnd", () => {
     expect(current().agentResumeOffer).toBeUndefined();
   });
 
+  it("leaves a shell busy with a job no detector recognises", () => {
+    store.state.panelsById = { "pane-a": pane({ activityType: "background" }) };
+    handleAgentEnd(exited({ selfUpdateSucceeded: true }));
+
+    expect(store.state.restartTerminal).not.toHaveBeenCalled();
+  });
+
   it("leaves a shell the user has already carried on in", () => {
     store.state.panelsById = { "pane-a": pane({ detectedProcessId: "npm" }) };
     handleAgentEnd(exited({ selfUpdateSucceeded: true }));
@@ -203,6 +210,17 @@ describe("resume offer actions", () => {
     release();
     await expect(first).resolves.toBe("launched");
     expect(store.state.restartTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares its reservation with restore recovery", async () => {
+    const { reserveResumeSession } = await import("../restoreRecoveryLaunch");
+    const release = reserveResumeSession("codex", "picked");
+    try {
+      await expect(resumeFromAgentEndOffer("pane-a", "picked")).resolves.toBe("held-elsewhere");
+    } finally {
+      release?.();
+    }
+    expect(store.state.restartTerminal).not.toHaveBeenCalled();
   });
 
   it("refuses a conversation a sibling pane holds", async () => {

@@ -32,7 +32,12 @@ import { getAgentConfig } from "@/config/agents";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { isPtyPanel, type PanelInstance, type PanelTitleMode } from "@shared/types/panel";
+import {
+  isPtyPanel,
+  type PanelInstance,
+  type PanelTitleMode,
+  type PtyPanelData,
+} from "@shared/types/panel";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
@@ -143,6 +148,19 @@ async function buildRestartEnv(
       : Promise.resolve({} as Record<string, string>),
   ]);
   return mergeSpawnEnv(globalEnv, projectEnv, runtimeEnv);
+}
+
+/**
+ * Something new runs in the shell an agent left behind: another agent, a
+ * recognised process, or any busy foreground job (`background` is what a busy
+ * plain shell reports). A forced resume would tear it down (#13226).
+ */
+function shellMovedOn(panel: PtyPanelData): boolean {
+  return (
+    panel.detectedAgentId !== undefined ||
+    panel.detectedProcessId !== undefined ||
+    panel.activityType === "background"
+  );
 }
 
 // Helper to update a single terminal field in the normalized store
@@ -263,6 +281,13 @@ export const createRestartActions = (
     // Guard against concurrent restart attempts
     if (terminal.isRestarting) {
       logWarn("[TerminalStore] Terminal is already restarting, ignoring", { id });
+      return;
+    }
+
+    // Refused before anything is reset, so a pane the user has carried on in
+    // keeps its live state untouched; re-checked once more before the kill.
+    if (forcedResumeSessionId && terminal.launchAgentId && shellMovedOn(terminal)) {
+      logWarn("[TerminalStore] Forced resume refused: the pane moved on", { id });
       return;
     }
 
@@ -650,13 +675,7 @@ export const createRestartActions = (
     // settings await, as the final gate before the shell is killed.
     if (forcedResume) {
       const live = get().panelsById[id];
-      if (
-        !live ||
-        !isPtyPanel(live) ||
-        live.location === "trash" ||
-        live.detectedAgentId !== undefined ||
-        live.detectedProcessId !== undefined
-      ) {
+      if (!live || !isPtyPanel(live) || live.location === "trash" || shellMovedOn(live)) {
         unmarkTerminalRestarting(id);
         set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
         logWarn("[TerminalStore] Forced resume abandoned: the pane moved on", { id });

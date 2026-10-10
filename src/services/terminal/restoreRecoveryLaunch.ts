@@ -116,6 +116,24 @@ const launchingPanelIds = new Set<string>();
 const resumingSessionKeys = new Set<string>();
 
 /**
+ * Conversations being reopened right now by any in-place resume, held from the
+ * pick until the launch settles: the replacement publishes its `agentSessionId`
+ * only once it spawns, so a sibling check alone lets two picks both through.
+ * Shared with the ended-launch resume (#13226) so the two surfaces can't each
+ * open the same conversation.
+ */
+export function reserveResumeSession(agentId: string, sessionId: string): (() => void) | null {
+  const key = `${agentId}\u0000${sessionId}`;
+  if (resumingSessionKeys.has(key)) return null;
+  resumingSessionKeys.add(key);
+  return () => resumingSessionKeys.delete(key);
+}
+
+export function isResumeSessionReserved(agentId: string, sessionId: string): boolean {
+  return resumingSessionKeys.has(`${agentId}\u0000${sessionId}`);
+}
+
+/**
  * Launch a held pane in place, on the user's choice (#12434).
  *
  * A pane launches at most once at a time, and a conversation is reserved from
