@@ -7,10 +7,14 @@ import type {
   ProjectStatusEntry,
   ProjectStatusMap,
 } from "@shared/types/ipc/project";
+import type { ProjectPresenceSnapshot } from "@shared/types";
+import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 import { notify } from "@/lib/notify";
+import { projectPresenceClient } from "@/clients/projectPresenceClient";
+import { terminalClient } from "@/clients/terminalClient";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useProjectStore } from "@/store/projectStore";
 import { selectIdleProjects, useSleepIdleProjects } from "../useSleepIdleProjects";
@@ -32,6 +36,10 @@ function entry(overrides: Partial<ProjectStatusEntry> = {}): ProjectStatusEntry 
   };
 }
 
+function terminal(agentState: BackendTerminalInfo["agentState"]): BackendTerminalInfo {
+  return { id: "t", cwd: "/", spawnedAt: 0, agentState };
+}
+
 describe("selectIdleProjects", () => {
   it("offers background projects whose agents are only waiting, never the one on screen", () => {
     const projects = [
@@ -43,6 +51,7 @@ describe("selectIdleProjects", () => {
       project("active-elsewhere", "active"),
       project("no-stats"),
       project("assistant-working"),
+      project("assistant-directing"),
     ];
     const stats: ProjectStatusMap = {
       current: entry(),
@@ -52,6 +61,7 @@ describe("selectIdleProjects", () => {
       missing: entry(),
       "active-elsewhere": entry(),
       "assistant-working": entry({ assistantState: "working" }),
+      "assistant-directing": entry({ assistantState: "directing" }),
     };
 
     expect(selectIdleProjects(projects, stats, "current")).toEqual([
@@ -60,7 +70,7 @@ describe("selectIdleProjects", () => {
         name: "Project waiting",
         path: "/repos/waiting",
         waitingAgentCount: 3,
-        processCount: 4,
+        terminalCount: 4,
       },
     ]);
   });
@@ -74,11 +84,19 @@ describe("useSleepIdleProjects", () => {
   };
   const sleepProject = vi.fn<(id: string) => Promise<ProjectSleepResult>>();
   const initialSleep = useProjectStore.getState().sleepProject;
+  let presence: ProjectPresenceSnapshot;
+  let terminalsByProject: Record<string, BackendTerminalInfo[]>;
 
   beforeEach(() => {
     vi.mocked(notify).mockClear();
     sleepProject.mockReset();
     sleepProject.mockResolvedValue(SLEPT);
+    presence = { thisWindow: [], otherWindows: [] };
+    terminalsByProject = {};
+    vi.spyOn(projectPresenceClient, "getSnapshot").mockImplementation(async () => presence);
+    vi.spyOn(terminalClient, "getForProject").mockImplementation(
+      async (id) => terminalsByProject[id] ?? []
+    );
     useProjectStore.setState({
       projects: [project("a"), project("b"), project("c")],
       currentProject: null,
@@ -89,16 +107,59 @@ describe("useSleepIdleProjects", () => {
 
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
     useProjectStore.setState({ projects: [], currentProject: null, sleepProject: initialSleep });
     useProjectStatsStore.setState({ stats: {} });
   });
 
-  it("sleeps only what the preview showed, skipping anything that has since become busy", async () => {
+  const sleptIds = () => sleepProject.mock.calls.map(([id]) => id);
+
+  async function openAndConfirm(result: { current: ReturnType<typeof useSleepIdleProjects> }) {
+    await act(async () => {
+      await result.current.openPreview();
+    });
+    await act(async () => {
+      await result.current.confirm();
+    });
+  }
+
+  it("leaves out a project with a working assistant the stats can't see, or one shown in another window", async () => {
+    terminalsByProject.b = [terminal("waiting"), terminal("working")];
+    presence = {
+      thisWindow: [],
+      otherWindows: [
+        { projectId: "c", windowId: 2, state: "foreground" },
+        { projectId: "a", windowId: 3, state: "cached" },
+      ],
+    };
     const { result } = renderHook(() => useSleepIdleProjects());
-    act(() => result.current.openPreview());
+    expect(result.current.idleProjects.map((p) => p.id)).toEqual(["a", "b", "c"]);
+
+    await act(async () => {
+      await result.current.openPreview();
+    });
+    expect(result.current.preview?.map((p) => p.id)).toEqual(["a"]);
+  });
+
+  it("re-checks each project right before its own sleep, and never swaps one in", async () => {
+    let releaseA!: () => void;
+    sleepProject.mockImplementation(async (id) => {
+      if (id === "a") await new Promise<void>((resolve) => (releaseA = resolve));
+      return SLEPT;
+    });
+    const { result } = renderHook(() => useSleepIdleProjects());
+    await act(async () => {
+      await result.current.openPreview();
+    });
     expect(result.current.preview?.map((p) => p.id)).toEqual(["a", "b", "c"]);
 
-    // A project that turns idle later is not swapped in; one that started work is dropped.
+    let confirmed!: Promise<void>;
+    act(() => {
+      confirmed = result.current.confirm();
+    });
+    await vi.waitFor(() => expect(sleptIds()).toEqual(["a"]));
+
+    // While A is still going down, B starts work and D turns idle.
     act(() => {
       useProjectStore.setState({
         projects: [project("a"), project("b"), project("c"), project("d")],
@@ -107,45 +168,64 @@ describe("useSleepIdleProjects", () => {
         stats: { a: entry(), b: entry({ activeAgentCount: 1 }), c: entry(), d: entry() },
       });
     });
-
     await act(async () => {
-      await result.current.confirm();
+      releaseA();
+      await confirmed;
     });
-    expect(sleepProject.mock.calls.map(([id]) => id)).toEqual(["a", "c"]);
+
+    expect(sleptIds()).toEqual(["a", "c"]);
     expect(result.current.preview).toBeNull();
+    expect(result.current.isSleeping).toBe(false);
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it("carries on past a failure and reports the failures once, with a retry for them", async () => {
+  it("carries on past failures, reports each project once in a toast, and retries through the same checks", async () => {
     sleepProject.mockImplementation(async (id) => {
-      if (id === "b") throw new Error("host did not acknowledge");
+      if (id !== "a") throw new Error("host did not acknowledge");
       return SLEPT;
     });
     const { result } = renderHook(() => useSleepIdleProjects());
-    act(() => result.current.openPreview());
-    await act(async () => {
-      await result.current.confirm();
-    });
+    await openAndConfirm(result);
 
-    expect(sleepProject.mock.calls.map(([id]) => id)).toEqual(["a", "b", "c"]);
+    expect(sleptIds()).toEqual(["a", "b", "c"]);
     expect(notify).toHaveBeenCalledTimes(1);
     const payload = vi.mocked(notify).mock.calls[0]![0];
-    expect(payload.title).toBe("Couldn't sleep project");
-    expect(String(payload.message)).toContain("Project b");
+    expect(payload.title).toBe("Couldn't sleep projects");
+    expect(payload.priority).toBe("high");
+    expect(String(payload.message)).toContain("'Project b', 'Project c'");
     expect(payload.context?.eventKind).toBe("uiFeedback");
     expect(payload.actions?.map((a) => a.label)).toEqual(["Try again"]);
 
-    sleepProject.mockClear();
+    // C started work before the retry: only B is tried again.
+    sleepProject.mockReset();
     sleepProject.mockResolvedValue(SLEPT);
+    terminalsByProject.c = [terminal("working")];
     await payload.actions?.[0]?.onClick();
-    expect(sleepProject.mock.calls.map(([id]) => id)).toEqual(["b"]);
+    expect(sleptIds()).toEqual(["b"]);
   });
 
-  it("opens nothing when no project is idle", () => {
-    useProjectStatsStore.setState({ stats: {} });
+  it("names the one project and its reason when only one fails", async () => {
+    useProjectStore.setState({ projects: [project("a")] });
+    sleepProject.mockRejectedValue(new Error("host did not acknowledge"));
     const { result } = renderHook(() => useSleepIdleProjects());
-    expect(result.current.idleProjects).toEqual([]);
-    act(() => result.current.openPreview());
+    await openAndConfirm(result);
+
+    const payload = vi.mocked(notify).mock.calls[0]![0];
+    expect(payload.title).toBe("Couldn't sleep project");
+    expect(String(payload.message)).toBe("'Project a' is still open. host did not acknowledge");
+  });
+
+  it("says so instead of opening an empty confirmation when nothing checks out idle", async () => {
+    terminalsByProject = { a: [terminal("working")], b: [terminal("working")] };
+    presence = {
+      thisWindow: [{ projectId: "c", windowId: 1, state: "activating" }],
+      otherWindows: [],
+    };
+    const { result } = renderHook(() => useSleepIdleProjects());
+    await act(async () => {
+      await result.current.openPreview();
+    });
     expect(result.current.preview).toBeNull();
+    expect(vi.mocked(notify).mock.calls[0]![0].title).toBe("No idle projects");
   });
 });

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { logDebug, logInfo, logWarn } from "../utils/logger.js";
 import { readElectronSwapUsage, type SwapUsage } from "../utils/systemMemory.js";
-import { recordSwapPressure } from "./systemSwapPressure.js";
+import { recordSwapPressure, SWAP_PRESSURE_STALE_MS } from "./systemSwapPressure.js";
 import type { SystemMemoryPressurePayload } from "../../shared/types/ipc/system.js";
 
 /**
@@ -80,6 +80,11 @@ export interface SystemMemoryPressureMonitorDeps {
    */
   onSwapPressure?: (confirmed: boolean) => void;
   now?: () => number;
+  /**
+   * Wall clock for the swap-pressure run. The monotonic `now` stops while the
+   * machine sleeps, which is exactly the gap this has to see.
+   */
+  wallNow?: () => number;
 }
 
 export interface SystemMemoryPressureMonitor {
@@ -218,16 +223,30 @@ export function createSystemMemoryPressureMonitor(
    * keeps the previous value rather than reading as a change.
    */
   let seenCauses: OverCauses | null = null;
+  const wallNow = deps.wallNow ?? (() => Date.now());
   let swapPressureStreak = 0;
   let swapPressureConfirmed = false;
+  let lastSwapSampleAt = Number.NEGATIVE_INFINITY;
 
   /**
    * A failed reading breaks the run like any other: a missing measurement
-   * cannot confirm pressure.
+   * cannot confirm pressure. So does a sample whose probes outlived their
+   * timeout (they straddled a sleep, so their figures predate the wake), and a
+   * gap longer than a verdict stays fresh — two samples an hour apart are not
+   * consecutive.
    */
-  function recordSwapPressureSample(sample: SystemMemorySample, swapUsedPercent: number | null) {
+  function recordSwapPressureSample(
+    sample: SystemMemorySample,
+    swapUsedPercent: number | null,
+    startedAt: number
+  ) {
     const { swap, kernelPressureLevel } = sample;
+    const finishedAt = wallNow();
+    const spannedSuspend = finishedAt - startedAt > PROBE_TIMEOUT_MS * 2;
+    if (finishedAt - lastSwapSampleAt > SWAP_PRESSURE_STALE_MS) swapPressureStreak = 0;
+    lastSwapSampleAt = finishedAt;
     const qualifies =
+      !spannedSuspend &&
       kernelPressureLevel !== null &&
       kernelPressureLevel >= KERNEL_PRESSURE_WARN &&
       swap !== null &&
@@ -248,14 +267,14 @@ export function createSystemMemoryPressureMonitor(
     deps.onSwapPressure?.(confirmed);
   }
 
-  function record(sample: SystemMemorySample): void {
+  function record(sample: SystemMemorySample, startedAt: number): void {
     const { swap, fseventsdRssMb, kernelPressureLevel } = sample;
     const swapUsedPercent =
       swap === null ? null : swap.totalMb > 0 ? (swap.usedMb / swap.totalMb) * 100 : 0;
     const swapOver = swapUsedPercent !== null && swapUsedPercent > SWAP_USED_PERCENT_THRESHOLD;
     const fseventsdOver = fseventsdRssMb !== null && fseventsdRssMb > FSEVENTSD_RSS_THRESHOLD_MB;
     const kernelOver = kernelPressureLevel !== null && kernelPressureLevel >= KERNEL_PRESSURE_WARN;
-    recordSwapPressureSample(sample, swapUsedPercent);
+    recordSwapPressureSample(sample, swapUsedPercent, startedAt);
     const figures = {
       swapUsedPercent: swapUsedPercent === null ? null : Math.round(swapUsedPercent),
       swapUsedMb: swap === null ? null : Math.round(swap.usedMb),
@@ -328,12 +347,13 @@ export function createSystemMemoryPressureMonitor(
   }
 
   async function takeSample(): Promise<void> {
+    const startedAt = wallNow();
     const [swap, fseventsdRssMb, kernelPressureLevel] = await Promise.all([
       deps.readSwap().catch(() => null),
       deps.isDarwin ? deps.readFseventsdRssMb().catch(() => null) : Promise.resolve(null),
       deps.isDarwin ? deps.readKernelPressureLevel().catch(() => null) : Promise.resolve(null),
     ]);
-    record({ swap, fseventsdRssMb, kernelPressureLevel });
+    record({ swap, fseventsdRssMb, kernelPressureLevel }, startedAt);
   }
 
   return {

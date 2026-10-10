@@ -4,6 +4,8 @@ import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Project } from "@shared/types/project";
 import type { ProjectSleepResult, ProjectStatusEntry } from "@shared/types/ipc/project";
+import { projectPresenceClient } from "@/clients/projectPresenceClient";
+import { terminalClient } from "@/clients/terminalClient";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useSystemMemoryNoticeStore } from "@/store/systemMemoryNoticeStore";
@@ -24,6 +26,7 @@ const initialSleep = useProjectStore.getState().sleepProject;
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   useSystemMemoryNoticeStore.setState({ notice: null });
   useProjectStore.setState({ projects: [], currentProject: null, sleepProject: initialSleep });
   useProjectStatsStore.setState({ stats: {} });
@@ -137,9 +140,16 @@ describe("SidebarMemoryNotice", () => {
         .getState()
         .setNotice({ reading: READING, detail: DETAIL, action: null });
     });
+    vi.spyOn(projectPresenceClient, "getSnapshot").mockResolvedValue({
+      thisWindow: [],
+      otherWindows: [],
+    });
+    vi.spyOn(terminalClient, "getForProject").mockResolvedValue([]);
     const { container } = renderRow();
 
-    fireEvent.click(container.querySelector("[data-sidebar-memory-sleep]")!);
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-sidebar-memory-sleep]")!);
+    });
     const dialog = document.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain("Sleep 2 idle projects?");
     const listed = Array.from(
@@ -147,6 +157,7 @@ describe("SidebarMemoryNotice", () => {
       (li) => li.textContent
     );
     expect(listed).toEqual(["Project a/repos/a", "Project b/repos/b"]);
+    expect(dialog.textContent).toContain("Their terminals will be stopped");
     expect(dialog.textContent).toContain("4 waiting agents");
     expect(sleepProject).not.toHaveBeenCalled();
 

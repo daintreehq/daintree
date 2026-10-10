@@ -212,7 +212,7 @@ export function evictStaleViews(
   host: ProjectViewManager,
   reason: EvictionReason,
   forcePressure = false,
-  sampledAvailableMb?: number,
+  sampledAvailableMb?: number | null,
   systemPressure = false
 ): number {
   // Override the user-configured cap when system memory is low so we can
@@ -227,8 +227,11 @@ export function evictStaleViews(
   // that skips the minimum age (#12363).
   //
   // `systemPressure` is the sampler's confirmed kernel-plus-swap reading
-  // (#13223), handed over for the same reason.
-  const availableMb = sampledAvailableMb ?? getAvailableMemoryMb();
+  // (#13223), handed over for the same reason. Under it the sampler can also
+  // hand over a reading that failed (`null`); a fresh read here could then
+  // classify the pass by a figure it never counted.
+  const availableMb =
+    sampledAvailableMb !== undefined ? sampledAvailableMb : getAvailableMemoryMb();
   const policy = host.memoryPressurePolicy;
   const { level, targetMax } =
     policy != null && (availableMb != null || systemPressure)
@@ -611,7 +614,9 @@ export function evictStaleViews(
       // reclaim can land at any band, and a sampler tick reading "critical"
       // still sheds gradually. `forced` carries the aggressiveness.
       pressureLevel: level,
-      pressureSource,
+      // Only the sampler classifies its own band; a forced pass's cause lives
+      // in ProcessMemoryMonitor's ladder, which this function cannot see.
+      ...(criticalPressure ? {} : { pressureSource }),
       forced: criticalPressure,
       configuredMax: host.maxCachedViews,
       effectiveMax,
@@ -868,7 +873,7 @@ export function maybeEvictUnderPressure(host: ProjectViewManager): void {
   ) {
     return;
   }
-  evictStaleViews(host, "pressure", false, availableMb ?? undefined, swapPressure);
+  evictStaleViews(host, "pressure", false, availableMb, swapPressure);
 }
 
 /**

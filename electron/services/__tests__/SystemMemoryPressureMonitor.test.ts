@@ -158,6 +158,7 @@ describe("createSystemMemoryPressureMonitor", () => {
       publish,
       onSwapPressure: opts.onSwapPressure,
       now: () => now,
+      wallNow: () => now,
     });
     const tick = async (count = 1) => {
       for (let i = 0; i < count; i++) {
@@ -225,6 +226,36 @@ describe("createSystemMemoryPressureMonitor", () => {
       });
       await small.tick(4);
       expect(FULL_SWAP.usedMb).toBeLessThan(SWAP_PRESSURE_MIN_USED_MB);
+      expect(onSwapPressure).not.toHaveBeenCalledWith(true);
+    });
+
+    it("does not count two samples a long sleep apart as consecutive", async () => {
+      const onSwapPressure = vi.fn();
+      const { tick } = makeMonitor({
+        swap: () => bigSwapAt(94),
+        kernelPressureLevel: () => 2,
+        onSwapPressure,
+      });
+      await tick();
+      now += SWAP_PRESSURE_STALE_MS;
+      await tick();
+      expect(onSwapPressure).not.toHaveBeenCalledWith(true);
+      await tick();
+      expect(onSwapPressure).toHaveBeenLastCalledWith(true);
+    });
+
+    it("discards a sample whose probes straddled a sleep", async () => {
+      const onSwapPressure = vi.fn();
+      const { tick } = makeMonitor({
+        swap: () => bigSwapAt(94),
+        kernelPressureLevel: () => {
+          // The machine slept while this probe was in flight.
+          now += 60 * 60_000;
+          return 2;
+        },
+        onSwapPressure,
+      });
+      await tick(3);
       expect(onSwapPressure).not.toHaveBeenCalledWith(true);
     });
 
@@ -831,6 +862,12 @@ describe("createDefaultSystemMemoryPressureMonitor", () => {
 
 describe("systemSwapPressure", () => {
   afterEach(() => recordSwapPressure(false));
+
+  it("refuses a verdict the clock has stepped back past, and keeps refusing it", () => {
+    recordSwapPressure(true, 10_000);
+    expect(isSwapPressureConfirmed(9_999)).toBe(false);
+    expect(isSwapPressureConfirmed(10_000)).toBe(false);
+  });
 
   it("holds a confirmation only until it goes stale, and drops it when cleared", () => {
     recordSwapPressure(true, 1_000);

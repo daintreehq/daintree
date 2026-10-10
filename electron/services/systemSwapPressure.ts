@@ -17,6 +17,11 @@ export function recordSwapPressure(confirmed: boolean, now: number = Date.now())
   confirmedAt = confirmed ? now : null;
 }
 
+/** A clock that stepped backwards is no evidence the verdict is still fresh. */
 export function isSwapPressureConfirmed(now: number = Date.now()): boolean {
-  return confirmedAt !== null && now - confirmedAt <= SWAP_PRESSURE_STALE_MS;
+  if (confirmedAt === null) return false;
+  const ageMs = now - confirmedAt;
+  if (ageMs >= 0 && ageMs <= SWAP_PRESSURE_STALE_MS) return true;
+  confirmedAt = null;
+  return false;
 }

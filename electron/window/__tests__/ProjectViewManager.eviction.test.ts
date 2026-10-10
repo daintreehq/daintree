@@ -4169,6 +4169,24 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
       expect(evictedProjectIds()).toEqual(["proj-a", "proj-b"]);
     });
 
+    it("still sheds on swap alone when availability cannot be read", async () => {
+      setAvailableMb(2500);
+      await seedThreeViews(manager);
+      ageViewsPastPressureFloor(manager);
+      Object.defineProperty(process, "getSystemMemoryInfo", {
+        configurable: true,
+        value: undefined,
+      });
+      recordSwapPressure(true);
+      tickPressureCheck(manager);
+      tickPressureCheck(manager);
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+      expect(logged("projectview.pressure-override")[0]).toMatchObject({
+        availableMb: null,
+        pressureSource: "kernel-swap",
+      });
+    });
+
     it("ignores a verdict that has gone stale", async () => {
       setAvailableMb(2500);
       await seedThreeViews(manager);

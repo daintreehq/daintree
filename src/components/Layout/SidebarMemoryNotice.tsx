@@ -65,7 +65,7 @@ function MemoryNoticeRow({ notice }: { notice: SystemMemoryNotice }) {
           type="button"
           data-sidebar-memory-sleep=""
           aria-label="Sleep idle projects"
-          onClick={sleep.openPreview}
+          onClick={() => void sleep.openPreview()}
           className={ACTION_CLASS}
         >
           <span>
@@ -110,7 +110,7 @@ function SleepIdleProjectsDialog({
   onConfirm: () => Promise<void>;
 }) {
   const waitingAgentCount = projects.reduce((sum, p) => sum + p.waitingAgentCount, 0);
-  const processCount = projects.reduce((sum, p) => sum + p.processCount, 0);
+  const terminalCount = projects.reduce((sum, p) => sum + p.terminalCount, 0);
   const single = projects.length === 1;
   return (
     <ConfirmDialog
@@ -136,18 +136,19 @@ function SleepIdleProjectsDialog({
             </li>
           ))}
         </ul>
-        {(waitingAgentCount > 0 || processCount > 0) && (
-          <Callout severity="warning" title="Running processes will be stopped">
+        <Callout
+          severity="warning"
+          title={single ? "Its terminals will be stopped" : "Their terminals will be stopped"}
+        >
+          {(terminalCount > 0 || waitingAgentCount > 0) && (
             <div>
-              {processCount > 0 && (
-                <div>• {pluralize(processCount, "running process", "running processes")}</div>
-              )}
+              {terminalCount > 0 && <div>• {pluralize(terminalCount, "terminal")}</div>}
               {waitingAgentCount > 0 && (
                 <div>• {pluralize(waitingAgentCount, "waiting agent")}</div>
               )}
             </div>
-          </Callout>
-        )}
+          )}
+        </Callout>
         <div className="text-xs text-text-secondary">
           The layout, terminal scrollback, and agent sessions come back when you reopen{" "}
           {single ? "the project" : "each project"}.
