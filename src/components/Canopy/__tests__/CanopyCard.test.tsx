@@ -272,6 +272,9 @@ describe("CanopyCard", () => {
     const editor = document.createElement("div");
     editor.className = "cm-editor";
     container.querySelector("[data-testid=composer]")!.appendChild(editor);
+    // Mid-composition, Escape is the input method's.
+    fireEvent.keyDown(editor, { key: "Escape", isComposing: true });
+    expect(h.onLeavePane).not.toHaveBeenCalled();
     fireEvent.keyDown(editor, { key: "Escape" });
     expect(h.onLeavePane).toHaveBeenCalledTimes(1);
   });

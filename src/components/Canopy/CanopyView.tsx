@@ -218,6 +218,9 @@ export function CanopyView() {
   useLayoutEffect(() => {
     if (!isOpen) return;
     const active = document.activeElement;
+    // Reopened while the last close is still animating: the keyboard is on
+    // Canopy's own outgoing dialog, and the opener saved before stands.
+    if (active?.closest('[data-testid="canopy-dialog"]')) return;
     openerRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
   }, [isOpen]);
   const restoreOpener = useCallback(
