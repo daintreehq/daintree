@@ -565,8 +565,11 @@ export function CanopyCard({
             // A reply hands Escape to the list through `onSendKey`; one that is
             // disabled (its terminal gone) never handles the key at all, so a
             // reply that left it unhandled goes back to the list from here.
+            // Not mid-composition: there Escape is the input method's.
             if (
               !event.defaultPrevented &&
+              !event.nativeEvent.isComposing &&
+              event.keyCode !== 229 &&
               event.target instanceof Element &&
               event.target.closest(".cm-editor") !== null
             ) {

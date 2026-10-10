@@ -85,7 +85,7 @@ async function pip() {
 describe("CanopyToolbarButton", () => {
   it("lights for an agent Canopy reads as blocked on the user", async () => {
     main = snapshot(true, { cards: [card("r1", 92), card("r2", 50)] });
-    expect(await pip()).toEqual({ label: "Canopy, 1 asking you", visible: "true", glyph: "1" });
+    expect(await pip()).toEqual({ label: "Canopy, 1 urgent", visible: "true", glyph: "1" });
   });
 
   it("counts every urgent run, capping the glyph at 9+ but not the spoken count", async () => {
@@ -99,9 +99,9 @@ describe("CanopyToolbarButton", () => {
       },
     });
     main = snapshot(true, { cards: ids.slice(0, 3).map((id) => card(id, 92)) });
-    expect(await pip()).toMatchObject({ label: "Canopy, 3 asking you", glyph: "3" });
+    expect(await pip()).toMatchObject({ label: "Canopy, 3 urgent", glyph: "3" });
     main = snapshot(true, { cards: ids.map((id) => card(id, 92)) });
-    expect(await pip()).toMatchObject({ label: "Canopy, 12 asking you", glyph: "9+" });
+    expect(await pip()).toMatchObject({ label: "Canopy, 12 urgent", glyph: "9+" });
   });
 
   it("follows the count on one mounted badge, and keeps the last one while it fades out", async () => {
@@ -153,7 +153,7 @@ describe("CanopyToolbarButton", () => {
     const apply = (cards: CanopyCard[]) =>
       act(() => useCanopyStore.getState().applySnapshot(snapshot(true, { cards })));
 
-    expect(read()).toEqual(["Canopy, 2 asking you", "true"]);
+    expect(read()).toEqual(["Canopy, 2 urgent", "true"]);
     // The panel lists both runs, so both prompts count as seen.
     act(() => useCanopyStore.getState().open());
     act(() => useCanopyStore.getState().acknowledge(["r1", "r2"]));
@@ -164,7 +164,7 @@ describe("CanopyToolbarButton", () => {
     apply([card("r1", 92), card("r2", 92)]);
     expect(read()).toEqual(["Canopy", "false"]);
     apply([card("r1", 92, { revision: 2 }), card("r2", 92)]);
-    expect(read()).toEqual(["Canopy, 1 asking you", "true"]);
+    expect(read()).toEqual(["Canopy, 1 urgent", "true"]);
 
     // A prompt that arrives while the panel is open was shown there.
     act(() => useCanopyStore.getState().toggle());
@@ -180,7 +180,7 @@ describe("CanopyToolbarButton", () => {
     act(() => useCanopyStore.getState().open());
     act(() => useCanopyStore.getState().close());
     main = snapshot(true, { cards: [card("r1", 92)] });
-    expect(await pip()).toMatchObject({ label: "Canopy, 1 asking you", visible: "true" });
+    expect(await pip()).toMatchObject({ label: "Canopy, 1 urgent", visible: "true" });
   });
 
   it("keeps the asks of runs a scoped panel doesn't list", async () => {
@@ -192,7 +192,7 @@ describe("CanopyToolbarButton", () => {
     act(() => useCanopyStore.getState().open());
     act(() => useCanopyStore.getState().acknowledge(["r1"]));
     act(() => useCanopyStore.getState().close());
-    expect(button.getAttribute("aria-label")).toBe("Canopy, 1 asking you");
+    expect(button.getAttribute("aria-label")).toBe("Canopy, 1 urgent");
   });
 
   it("clears when a sibling project view opened the panel", async () => {
