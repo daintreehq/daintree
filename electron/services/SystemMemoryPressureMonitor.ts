@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { logDebug, logInfo, logWarn } from "../utils/logger.js";
 import { readElectronSwapUsage, type SwapUsage } from "../utils/systemMemory.js";
+import { recordSwapPressure, SWAP_PRESSURE_STALE_MS } from "./systemSwapPressure.js";
 import type { SystemMemoryPressurePayload } from "../../shared/types/ipc/system.js";
 
 /**
@@ -11,6 +12,19 @@ import type { SystemMemoryPressurePayload } from "../../shared/types/ipc/system.
 export const SAMPLE_INTERVAL_MS = 60_000;
 export const SWAP_USED_PERCENT_THRESHOLD = 80;
 export const FSEVENTSD_RSS_THRESHOLD_MB = 8 * 1024;
+/**
+ * Swap in use, beyond the percentage, before kernel-plus-swap pressure counts
+ * toward cached-view reclaim (#13223). macOS swap is dynamic, so the percentage
+ * is relative to whatever swapfiles exist right now: a single small swapfile
+ * reads 90% full on a machine that is barely swapping.
+ */
+export const SWAP_PRESSURE_MIN_USED_MB = 4096;
+/**
+ * Consecutive samples meeting the kernel-plus-swap test before reclaim may act
+ * on it. Shorter than {@link EPISODE_OPEN_SAMPLES}: the cache sampler applies
+ * its own confirmation and minimum view age on top.
+ */
+export const SWAP_PRESSURE_CONFIRM_SAMPLES = 2;
 /** Consecutive over-threshold samples that open an episode. */
 export const EPISODE_OPEN_SAMPLES = 3;
 /**
@@ -57,7 +71,20 @@ export interface SystemMemoryPressureMonitorDeps {
   readFseventsdRssMb: () => Promise<number | null>;
   readKernelPressureLevel: () => Promise<KernelPressureLevel | null>;
   publish: (payload: SystemMemoryPressurePayload) => void;
+  /**
+   * Called with every sample's verdict on kernel-plus-swap pressure — kernel
+   * warning or worse while swap is both over {@link SWAP_USED_PERCENT_THRESHOLD}
+   * and {@link SWAP_PRESSURE_MIN_USED_MB}, for
+   * {@link SWAP_PRESSURE_CONFIRM_SAMPLES} samples in a row. The kernel level
+   * alone never qualifies: since #12815 a warning only asks renderers to trim.
+   */
+  onSwapPressure?: (confirmed: boolean) => void;
   now?: () => number;
+  /**
+   * Wall clock for the swap-pressure run. The monotonic `now` stops while the
+   * machine sleeps, which is exactly the gap this has to see.
+   */
+  wallNow?: () => number;
 }
 
 export interface SystemMemoryPressureMonitor {
@@ -196,14 +223,61 @@ export function createSystemMemoryPressureMonitor(
    * keeps the previous value rather than reading as a change.
    */
   let seenCauses: OverCauses | null = null;
+  const wallNow = deps.wallNow ?? (() => Date.now());
+  let swapPressureStreak = 0;
+  let swapPressureConfirmed = false;
+  let lastSwapSampleAt = Number.NEGATIVE_INFINITY;
 
-  function record(sample: SystemMemorySample): void {
+  /**
+   * A failed reading breaks the run like any other: a missing measurement
+   * cannot confirm pressure. So does a sample whose probes outlived their
+   * timeout (they straddled a sleep, so their figures predate the wake), and a
+   * gap longer than a verdict stays fresh — two samples an hour apart are not
+   * consecutive.
+   */
+  function recordSwapPressureSample(
+    sample: SystemMemorySample,
+    swapUsedPercent: number | null,
+    startedAt: number
+  ) {
+    const { swap, kernelPressureLevel } = sample;
+    const finishedAt = wallNow();
+    // A clock that stepped backwards can hide a sleep, so it counts as one.
+    const probeMs = finishedAt - startedAt;
+    const spannedSuspend = probeMs < 0 || probeMs > PROBE_TIMEOUT_MS * 2;
+    const gapMs = finishedAt - lastSwapSampleAt;
+    if (gapMs < 0 || gapMs > SWAP_PRESSURE_STALE_MS) swapPressureStreak = 0;
+    lastSwapSampleAt = finishedAt;
+    const qualifies =
+      !spannedSuspend &&
+      kernelPressureLevel !== null &&
+      kernelPressureLevel >= KERNEL_PRESSURE_WARN &&
+      swap !== null &&
+      swapUsedPercent !== null &&
+      swapUsedPercent > SWAP_USED_PERCENT_THRESHOLD &&
+      swap.usedMb >= SWAP_PRESSURE_MIN_USED_MB;
+    swapPressureStreak = qualifies ? swapPressureStreak + 1 : 0;
+    const confirmed = swapPressureStreak >= SWAP_PRESSURE_CONFIRM_SAMPLES;
+    if (confirmed !== swapPressureConfirmed) {
+      swapPressureConfirmed = confirmed;
+      logInfo("system-health-swap-pressure", {
+        state: confirmed ? "confirmed" : "cleared",
+        kernelPressureLevel,
+        swapUsedPercent: swapUsedPercent === null ? null : Math.round(swapUsedPercent),
+        swapUsedMb: swap === null ? null : Math.round(swap.usedMb),
+      });
+    }
+    deps.onSwapPressure?.(confirmed);
+  }
+
+  function record(sample: SystemMemorySample, startedAt: number): void {
     const { swap, fseventsdRssMb, kernelPressureLevel } = sample;
     const swapUsedPercent =
       swap === null ? null : swap.totalMb > 0 ? (swap.usedMb / swap.totalMb) * 100 : 0;
     const swapOver = swapUsedPercent !== null && swapUsedPercent > SWAP_USED_PERCENT_THRESHOLD;
     const fseventsdOver = fseventsdRssMb !== null && fseventsdRssMb > FSEVENTSD_RSS_THRESHOLD_MB;
     const kernelOver = kernelPressureLevel !== null && kernelPressureLevel >= KERNEL_PRESSURE_WARN;
+    recordSwapPressureSample(sample, swapUsedPercent, startedAt);
     const figures = {
       swapUsedPercent: swapUsedPercent === null ? null : Math.round(swapUsedPercent),
       swapUsedMb: swap === null ? null : Math.round(swap.usedMb),
@@ -276,12 +350,13 @@ export function createSystemMemoryPressureMonitor(
   }
 
   async function takeSample(): Promise<void> {
+    const startedAt = wallNow();
     const [swap, fseventsdRssMb, kernelPressureLevel] = await Promise.all([
       deps.readSwap().catch(() => null),
       deps.isDarwin ? deps.readFseventsdRssMb().catch(() => null) : Promise.resolve(null),
       deps.isDarwin ? deps.readKernelPressureLevel().catch(() => null) : Promise.resolve(null),
     ]);
-    record({ swap, fseventsdRssMb, kernelPressureLevel });
+    record({ swap, fseventsdRssMb, kernelPressureLevel }, startedAt);
   }
 
   return {
@@ -364,5 +439,6 @@ export function createDefaultSystemMemoryPressureMonitor(
       parseFseventsdRssMb(await execText("/bin/ps", ["-axo", "rss=,ucomm="], PS_MAX_BUFFER)),
     readKernelPressureLevel: readDarwinKernelPressureLevel,
     publish,
+    onSwapPressure: (confirmed) => recordSwapPressure(confirmed),
   });
 }

@@ -159,6 +159,26 @@ describe("effectiveCachedProjectViews", () => {
 describe("memoryPressureTarget", () => {
   const band = { criticalMb: 1024, warningMb: 2048 };
 
+  it("targets the critical band under confirmed system pressure, whatever availability reads (#13223)", () => {
+    const systemPressure = { systemPressure: true };
+    expect(memoryPressureTarget(64 * 1024, band, 5, systemPressure)).toEqual({
+      level: "critical",
+      targetMax: 1,
+    });
+    expect(memoryPressureTarget(1800, band, 5, systemPressure)).toEqual({
+      level: "critical",
+      targetMax: 1,
+    });
+    expect(memoryPressureTarget(Number.NaN, band, 5, systemPressure)).toEqual({
+      level: "critical",
+      targetMax: 1,
+    });
+    expect(memoryPressureTarget(64 * 1024, band, 5, { systemPressure: false })).toEqual({
+      level: "none",
+      targetMax: 5,
+    });
+  });
+
   it("leaves the configured cap alone at or above the warning edge", () => {
     expect(memoryPressureTarget(band.warningMb, band, 5)).toEqual({ level: "none", targetMax: 5 });
     expect(memoryPressureTarget(64 * 1024, band, 5)).toEqual({ level: "none", targetMax: 5 });

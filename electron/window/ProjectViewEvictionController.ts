@@ -13,6 +13,7 @@ import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { EvictionReason, ViewEntry } from "./ProjectViewManagerTypes.js";
 import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 import { memoryPressureTarget } from "../utils/cachedProjectViews.js";
+import { isSwapPressureConfirmed } from "../services/systemSwapPressure.js";
 import {
   isWorkspaceKeepResident,
   recordWorkspaceEviction,
@@ -194,9 +195,12 @@ export function backgroundRestoreCapacity(
 ): "available" | "capacity" | "pressure" {
   const availableMb = getAvailableMemoryMb();
   const policy = host.memoryPressurePolicy;
+  const systemPressure = isSwapPressureConfirmed();
   const { level, targetMax } =
-    policy != null && availableMb != null
-      ? memoryPressureTarget(availableMb, policy, host.maxCachedViews)
+    policy != null && (availableMb != null || systemPressure)
+      ? memoryPressureTarget(availableMb ?? Number.NaN, policy, host.maxCachedViews, {
+          systemPressure,
+        })
       : { level: "none" as const, targetMax: host.maxCachedViews };
 
   if (host.views.size >= host.maxCachedViews) return "capacity";
@@ -208,7 +212,8 @@ export function evictStaleViews(
   host: ProjectViewManager,
   reason: EvictionReason,
   forcePressure = false,
-  sampledAvailableMb?: number
+  sampledAvailableMb?: number | null,
+  systemPressure = false
 ): number {
   // Override the user-configured cap when system memory is low so we can
   // reclaim Chromium renderers (~100–500 MB each) before the OS hits
@@ -220,12 +225,27 @@ export function evictStaleViews(
   // on the figure it counted. A fresh read landing above the warning edge would
   // turn its one-view gradual pass into an unbudgeted trim to the configured cap
   // that skips the minimum age (#12363).
-  const availableMb = sampledAvailableMb ?? getAvailableMemoryMb();
+  //
+  // `systemPressure` is the sampler's confirmed kernel-plus-swap reading
+  // (#13223), handed over for the same reason. Under it the sampler can also
+  // hand over a reading that failed (`null`); a fresh read here could then
+  // classify the pass by a figure it never counted.
+  const availableMb =
+    sampledAvailableMb !== undefined ? sampledAvailableMb : getAvailableMemoryMb();
   const policy = host.memoryPressurePolicy;
   const { level, targetMax } =
-    policy != null && availableMb != null
-      ? memoryPressureTarget(availableMb, policy, host.maxCachedViews)
+    policy != null && (availableMb != null || systemPressure)
+      ? memoryPressureTarget(availableMb ?? Number.NaN, policy, host.maxCachedViews, {
+          systemPressure,
+        })
       : { level: "none" as const, targetMax: host.maxCachedViews };
+  // What put the pass in its band. Availability below `criticalMb` keeps its
+  // own name even when swap agrees, so the shorter critical age floor below
+  // still answers to it alone.
+  const pressureSource: "available-memory" | "kernel-swap" =
+    systemPressure && !(policy != null && availableMb != null && availableMb < policy.criticalMb)
+      ? "kernel-swap"
+      : "available-memory";
 
   // A one-pass collapse to the active view happens ONLY on the forced tier-2
   // reclaim. It used to also fire whenever `level === "critical"`, which let
@@ -273,8 +293,13 @@ export function evictStaleViews(
     evictionBudget = Number.POSITIVE_INFINITY;
   }
   const effectiveReason: EvictionReason = criticalPressure || gradualPressure ? "pressure" : reason;
+  // Kernel-plus-swap pressure keeps the soft band's age floor: it can hold for
+  // hours on a machine that runs hot, and the view the user just left is still
+  // the likeliest next switch (#13223).
   const minimumAgeMs =
-    level === "critical" ? MIN_CRITICAL_PRESSURE_EVICTION_AGE_MS : MIN_PRESSURE_EVICTION_AGE_MS;
+    level === "critical" && pressureSource === "available-memory"
+      ? MIN_CRITICAL_PRESSURE_EVICTION_AGE_MS
+      : MIN_PRESSURE_EVICTION_AGE_MS;
 
   if (host.views.size <= baseMax || host.activeProjectId === null) {
     // Nothing is over target, so whatever the last pass reported has ended; a
@@ -589,6 +614,9 @@ export function evictStaleViews(
       // reclaim can land at any band, and a sampler tick reading "critical"
       // still sheds gradually. `forced` carries the aggressiveness.
       pressureLevel: level,
+      // Only the sampler classifies its own band; a forced pass's cause lives
+      // in ProcessMemoryMonitor's ladder, which this function cannot see.
+      ...(criticalPressure ? {} : { pressureSource }),
       forced: criticalPressure,
       configuredMax: host.maxCachedViews,
       effectiveMax,
@@ -768,6 +796,15 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
  * Destroying renderers that free no memory the OS will report only buys cold
  * reloads.
  *
+ * Confirmed kernel-plus-swap pressure from `SystemMemoryPressureMonitor` opens
+ * the gate too, whatever availability reads, and targets the critical band
+ * (#13223). macOS counts file-backed pages as available, so a machine 94% into
+ * swap can read comfortably inside the soft band while every renderer stalls on
+ * page-ins. Those passes keep the confirmation, the one-view budget and the
+ * soft band's minimum age, but not the backoff latch: it judges a pass by
+ * availability, which is the figure that failed to show this pressure at all.
+ * The kernel's warning level alone never qualifies (#12815).
+ *
  * Never escalates to a one-pass collapse, at any band. This sampler is
  * per-window, holds no cooldown of its own beyond that latch, and has no view
  * of whether a cheaper mitigation is already in flight — the combination that let it destroy a
@@ -793,11 +830,10 @@ export function maybeEvictUnderPressure(host: ProjectViewManager): void {
     host.softPressureUnproductivePasses > 0 ||
     host.softPressureBackoffLatched;
   const availableMb = needsReading ? getAvailableMemoryMb() : null;
-  if (availableMb == null || availableMb >= policy.warningMb) {
-    host.pressureSampleStreak = 0;
-    // The episode is over; the next one reports afresh even if it looks the same.
-    host.lastPressureOverrideLog = null;
-    host.lastEvictionSkippedLog = null;
+  const swapPressure = host.views.size > 1 && isSwapPressureConfirmed();
+  if (availableMb != null && availableMb < policy.warningMb) {
+    settleSoftPressureEviction(host, availableMb, policy.warningMb);
+  } else {
     if (availableMb == null) {
       // No evidence either way: drop the comparison, keep the verdict so far.
       host.pendingSoftPressureEviction = null;
@@ -810,10 +846,14 @@ export function maybeEvictUnderPressure(host: ProjectViewManager): void {
       }
       clearSoftPressureBackoff(host);
     }
-    return;
+    if (!swapPressure) {
+      host.pressureSampleStreak = 0;
+      // The episode is over; the next one reports afresh even if it looks the same.
+      host.lastPressureOverrideLog = null;
+      host.lastEvictionSkippedLog = null;
+      return;
+    }
   }
-
-  settleSoftPressureEviction(host, availableMb, policy.warningMb);
 
   if (host.views.size <= 1) {
     host.pressureSampleStreak = 0;
@@ -825,8 +865,15 @@ export function maybeEvictUnderPressure(host: ProjectViewManager): void {
   // (#12885). A critical reading is not held back: there the cache converges on
   // the active view whatever the last evictions achieved, and tier 2 — not this
   // latch — decides whether a harder reclaim is worth it.
-  if (host.softPressureBackoffLatched && availableMb >= policy.criticalMb) return;
-  evictStaleViews(host, "pressure", false, availableMb);
+  if (
+    !swapPressure &&
+    host.softPressureBackoffLatched &&
+    availableMb != null &&
+    availableMb >= policy.criticalMb
+  ) {
+    return;
+  }
+  evictStaleViews(host, "pressure", false, availableMb, swapPressure);
 }
 
 /**
