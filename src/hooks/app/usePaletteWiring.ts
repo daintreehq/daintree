@@ -10,7 +10,6 @@ import { useQuickSwitcher } from "@/hooks/useQuickSwitcher";
 import { useWorktreePalette } from "@/hooks/useWorktreePalette";
 import { useQuickCreatePalette } from "@/hooks/useQuickCreatePalette";
 import { useSendToAgentPalette } from "@/hooks/useSendToAgentPalette";
-import { useDoubleShift } from "@/hooks/useDoubleShift";
 import { useProjectMruSwitcher } from "@/hooks/useProjectMruSwitcher";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { usePaletteStore } from "@/store";
@@ -51,7 +50,6 @@ export function usePaletteWiring({ isWorktreeOverviewOpen }: { isWorktreeOvervie
   const actionPalette = useActionPalette();
   const quickSwitcher = useQuickSwitcher();
   const sendToAgentPalette = useSendToAgentPalette();
-  useDoubleShift(actionPalette.toggle);
   useProjectMruSwitcher();
   const worktreePalette = useWorktreePalette({ worktrees });
   const quickCreatePalette = useQuickCreatePalette();

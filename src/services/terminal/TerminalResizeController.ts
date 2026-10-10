@@ -349,6 +349,12 @@ interface CachedMetricGrid {
 
 export class TerminalResizeController {
   private resizeLocks = new Map<string, number>();
+  /**
+   * Terminals another view is drawing at its own size (Canopy's live pane),
+   * counted because two can overlap. Unlike a lock it has no TTL and no other
+   * unlock clears it: it lasts exactly as long as that view holds the PTY.
+   */
+  private geometryHolds = new Map<string, number>();
   private settledResizeRequests = new Map<string, SettledResizeRequest>();
   private deps: ResizeControllerDeps;
 
@@ -427,7 +433,7 @@ export class TerminalResizeController {
     } else {
       this.resizeLocks.delete(id);
       const managed = this.deps.getInstance(id);
-      if (managed && managed.pendingBackgroundResize) {
+      if (managed && managed.pendingBackgroundResize && !this.geometryHolds.has(id)) {
         const { width, height } = managed.pendingBackgroundResize;
         managed.pendingBackgroundResize = undefined;
         this.applyBackgroundResize(id, width, height);
@@ -435,7 +441,39 @@ export class TerminalResizeController {
     }
   }
 
+  /**
+   * Freeze this pane's grid while another view holds the PTY at its own size:
+   * no re-fit, no PTY resize — not even the lock-exempt reveal reconcile, which
+   * would read the held size as a split to repair and take the PTY back.
+   */
+  holdGeometry(id: string): void {
+    this.geometryHolds.set(id, (this.geometryHolds.get(id) ?? 0) + 1);
+    this.clearSettledTimer(id);
+    const managed = this.deps.getInstance(id);
+    if (managed) this.clearResizeJob(managed);
+  }
+
+  /** True when this was the last hold, so the caller can re-measure the pane. */
+  releaseGeometry(id: string): boolean {
+    const count = this.geometryHolds.get(id);
+    if (count === undefined) return false;
+    if (count > 1) {
+      this.geometryHolds.set(id, count - 1);
+      return false;
+    }
+    this.geometryHolds.delete(id);
+    if (this.isResizeLocked(id)) return false;
+    const managed = this.deps.getInstance(id);
+    if (managed?.pendingBackgroundResize) {
+      const { width, height } = managed.pendingBackgroundResize;
+      managed.pendingBackgroundResize = undefined;
+      this.applyBackgroundResize(id, width, height);
+    }
+    return true;
+  }
+
   isResizeLocked(id: string): boolean {
+    if (this.geometryHolds.has(id)) return true;
     const expiry = this.resizeLocks.get(id);
     if (!expiry) return false;
 
@@ -1118,6 +1156,8 @@ export class TerminalResizeController {
   reconcileGeometryFresh(id: string, options: TerminalResyncOptions = {}): boolean {
     const managed = this.deps.getInstance(id);
     if (!managed) return false;
+    // Held by another view: the split is deliberate, and nothing to retry.
+    if (this.geometryHolds.has(id)) return true;
     if (!managed.hostElement.checkVisibility()) return false;
 
     const rect = managed.hostElement.getBoundingClientRect();
@@ -1322,6 +1362,7 @@ export class TerminalResizeController {
   }
 
   private postPtyResize(managed: ManagedTerminal, id: string, cols: number, rows: number): void {
+    if (this.geometryHolds.has(id)) return;
     managed.ptyCols = cols;
     managed.ptyRows = rows;
     terminalClient.resize(id, cols, rows);

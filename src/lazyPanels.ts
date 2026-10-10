@@ -47,6 +47,12 @@ export const LazyPilotView = lazyWithPreload(
 );
 export const preloadPilotView = LazyPilotView.preload;
 
+export const LazyCanopyView = lazyWithPreload(
+  () => import("./components/Canopy/CanopyView"),
+  (m) => m.CanopyView
+);
+export const preloadCanopyView = LazyCanopyView.preload;
+
 export const LazyQuickCreatePalette = lazyWithPreload(
   () => import("./components/Worktree/QuickCreatePalette"),
   (m) => m.QuickCreatePalette

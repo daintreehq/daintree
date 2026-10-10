@@ -59,9 +59,13 @@ describe("kit icons", () => {
     expect(frame.childElementCount).toBe(0);
     const box = ["width", "height", "viewBox", "class"].map((name) => frame.getAttribute(name));
 
-    await waitFor(() => {
-      if (glyphIn(container).hasAttribute("data-kit-icon-loading")) throw new Error("loading");
-    });
+    // The glyph loads cold, which a busy CI worker can stretch past a second.
+    await waitFor(
+      () => {
+        if (glyphIn(container).hasAttribute("data-kit-icon-loading")) throw new Error("loading");
+      },
+      { timeout: 10_000 }
+    );
     const glyph = glyphIn(container);
     expect(glyph.childElementCount).toBeGreaterThan(0);
     expect(glyph.getAttribute("width")).toBe(box[0]);

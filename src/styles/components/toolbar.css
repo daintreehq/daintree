@@ -584,6 +584,31 @@
   box-shadow: 0 0 0 1px var(--color-surface-sidebar);
 }
 
+/* A pip that carries a count (Canopy's "needs you"). Same corner and cut-out
+ * ring as .toolbar-pip, grown to a 12px pill. The digits are black or white,
+ * whichever the fill is lighter or darker than: the surface colour read as
+ * a cut-out but fell to 3.2:1 on the light themes' darker ambers, and 9px
+ * digits need 4.5. The 0.56 OKLCH split sits between the lightest fill that
+ * wants white (bali, 0.54) and the darkest that wants black (table-mountain,
+ * 0.57), so every built-in theme clears 4.5:1. */
+.toolbar-count {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  height: 12px;
+  min-width: 12px;
+  padding: 0 3px;
+  border-radius: 9999px;
+  box-shadow: 0 0 0 1px var(--color-surface-sidebar);
+  color: oklch(from var(--color-state-waiting) clamp(0, (0.56 - l) * 1000, 1) 0 0);
+  font-size: var(--text-4xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 12px;
+  letter-spacing: -0.02em;
+  text-align: center;
+}
+
 /* ── Badge entrance / exit ──
  * Tier 2 timing from animationUtils.ts: 200ms enter (UI_ENTER_DURATION),
  * 120ms exit (UI_EXIT_DURATION). @starting-style + allow-discrete handle
@@ -804,5 +829,9 @@
    * structure, not disabled text, so not GrayText. */
   .toolbar-divider {
     background-color: CanvasText;
+  }
+
+  .toolbar-count {
+    color: Canvas;
   }
 }

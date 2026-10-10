@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useUIStore } from "@/store/uiStore";
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { usePanelStore } from "@/store/panelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -417,6 +418,19 @@ describe("onRestored — dock popover preservation (#8368)", () => {
     return handler;
   }
 
+  it("leaves focus where it is while an overlay holds the keyboard", () => {
+    setupPanel({ location: "grid" });
+    usePanelStore.setState({ focusedId: "other" });
+    useUIStore.setState({ overlayStack: ["canopy"] });
+    try {
+      getRestoredHandler()({ id: "term-1" });
+      // Focusing the pane would send the keys behind Canopy.
+      expect(usePanelStore.getState().focusedId).toBe("other");
+    } finally {
+      useUIStore.setState({ overlayStack: [] });
+    }
+  });
+
   it("does not clear an unrelated open dock popover when a background terminal restores", () => {
     setupPanel();
     usePanelStore.setState({ activeDockTerminalId: "dock-1", focusedId: "dock-1" });
@@ -516,6 +530,197 @@ describe("onTrashed — maximize trio clear (#9935)", () => {
       gridItemCount: 2,
       worktreeId: undefined,
     });
+  });
+});
+
+// Canopy trashes a terminal from main. The host's own trashed event is dropped
+// for a pane not already in the trash, so the owning view moves it itself.
+describe("onTrashRequested — Canopy trash", () => {
+  afterEach(() => {
+    delete (window as { electron?: unknown }).electron;
+  });
+
+  function getTrashRequestHandler() {
+    const handlers: Array<(request: { runId: string }) => void> = [];
+    const trash = vi.fn(async () => {});
+    Object.defineProperty(window, "electron", {
+      value: {
+        canopy: {
+          onTrashRequested: (handler: (request: { runId: string }) => void) => {
+            handlers.push(handler);
+            return () => {};
+          },
+        },
+        terminal: { trash },
+      },
+      configurable: true,
+      writable: true,
+    });
+    setupLifecycleListeners();
+    const handler = handlers.at(-1);
+    if (!handler) throw new Error("onTrashRequested handler was not registered");
+    return { handler, trash };
+  }
+
+  it("moves the pane to the trash the way closing it in place would", () => {
+    setupPanel();
+    usePanelStore.setState({ focusedId: "term-1" });
+    const { handler, trash } = getTrashRequestHandler();
+
+    handler({ runId: "term-1" });
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["term-1"]?.location).toBe("trash");
+    // Main has trashed it on the host; a second host trash would land after
+    // an Undo elsewhere and trash the restored terminal again.
+    expect(trash).not.toHaveBeenCalled();
+    expect(state.trashedTerminals.has("term-1")).toBe(true);
+    expect(state.focusedId).not.toBe("term-1");
+  });
+
+  it("ignores a terminal this view does not hold, or one already in the trash", () => {
+    setupPanel({ location: "trash" });
+    const before = usePanelStore.getState();
+    const { handler } = getTrashRequestHandler();
+    handler({ runId: "term-1" });
+    handler({ runId: "elsewhere" });
+    expect(usePanelStore.getState().trashedTerminals).toBe(before.trashedTerminals);
+    expect(usePanelStore.getState().panelsById).toBe(before.panelsById);
+  });
+});
+
+// Canopy takes back its own trash: main restores it on the host, and the view
+// holding the pane brings it out of the trash without restoring it again.
+describe("onRestoreRequested — Canopy trash undone", () => {
+  afterEach(() => {
+    delete (window as { electron?: unknown }).electron;
+  });
+
+  function getHandlers() {
+    const trashHandlers: Array<(request: { runId: string }) => void> = [];
+    const restoreHandlers: Array<(request: { runId: string }) => void> = [];
+    const restore = vi.fn(async () => {});
+    Object.defineProperty(window, "electron", {
+      value: {
+        canopy: {
+          onTrashRequested: (handler: (request: { runId: string }) => void) => {
+            trashHandlers.push(handler);
+            return () => {};
+          },
+          onRestoreRequested: (handler: (request: { runId: string }) => void) => {
+            restoreHandlers.push(handler);
+            return () => {};
+          },
+        },
+        terminal: { trash: vi.fn(async () => {}), restore },
+      },
+      configurable: true,
+      writable: true,
+    });
+    setupLifecycleListeners();
+    return { trash: trashHandlers.at(-1)!, restoreRequest: restoreHandlers.at(-1)!, restore };
+  }
+
+  it("brings a pane Canopy trashed back out of the trash", () => {
+    setupPanel();
+    const { trash, restoreRequest, restore } = getHandlers();
+    trash({ runId: "term-1" });
+    expect(usePanelStore.getState().panelsById["term-1"]?.location).toBe("trash");
+    restoreRequest({ runId: "term-1" });
+    expect(usePanelStore.getState().panelsById["term-1"]?.location).not.toBe("trash");
+    // Main restored it on the host already: a second restore could undo a
+    // trash another window made in between.
+    expect(restore).not.toHaveBeenCalled();
+  });
+
+  it("brings the pane back without taking the keyboard from behind Canopy", () => {
+    setupPanel();
+    usePanelStore.setState({ focusedId: "other" });
+    const { trash, restoreRequest } = getHandlers();
+    trash({ runId: "term-1" });
+    usePanelStore.setState({ focusedId: "other" });
+    useUIStore.setState({ overlayStack: ["canopy"] });
+    try {
+      restoreRequest({ runId: "term-1" });
+      expect(usePanelStore.getState().panelsById["term-1"]?.location).not.toBe("trash");
+      expect(usePanelStore.getState().focusedId).toBe("other");
+    } finally {
+      useUIStore.setState({ overlayStack: [] });
+    }
+  });
+
+  it("keeps a newer trash through the host's late word on Canopy's restore", () => {
+    setupPanel();
+    restoredHandlers.length = 0;
+    const { trash, restoreRequest } = getHandlers();
+    const hostRestored = restoredHandlers.at(-1)!;
+    trash({ runId: "term-1" });
+    restoreRequest({ runId: "term-1" });
+    // Trashed again in the grid before the host's restored event arrives.
+    usePanelStore.getState().trashPanel("term-1");
+    expect(usePanelStore.getState().panelsById["term-1"]?.location).toBe("trash");
+    hostRestored({ id: "term-1" });
+    expect(usePanelStore.getState().panelsById["term-1"]?.location).toBe("trash");
+    expect(usePanelStore.getState().trashedTerminals.has("term-1")).toBe(true);
+  });
+
+  it("ignores a pane that isn't in the trash, or one it does not hold", () => {
+    setupPanel();
+    const { restoreRequest, restore } = getHandlers();
+    const before = usePanelStore.getState().panelsById;
+    restoreRequest({ runId: "term-1" });
+    restoreRequest({ runId: "elsewhere" });
+    expect(usePanelStore.getState().panelsById).toBe(before);
+    expect(restore).not.toHaveBeenCalled();
+  });
+});
+
+// Canopy renames a terminal from main, which writes the host and the saved
+// state; the view holding the pane renames it as the user's own rename would.
+describe("onRenameRequested — Canopy rename", () => {
+  afterEach(() => {
+    delete (window as { electron?: unknown }).electron;
+  });
+
+  function getRenameRequestHandler() {
+    const handlers: Array<(request: { runId: string; title: string }) => void> = [];
+    Object.defineProperty(window, "electron", {
+      value: {
+        canopy: {
+          onRenameRequested: (handler: (request: { runId: string; title: string }) => void) => {
+            handlers.push(handler);
+            return () => {};
+          },
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+    setupLifecycleListeners();
+    const handler = handlers.at(-1);
+    if (!handler) throw new Error("onRenameRequested handler was not registered");
+    return handler;
+  }
+
+  it("renames the pane, locked against automation like a hand rename", () => {
+    setupPanel();
+    const handler = getRenameRequestHandler();
+    handler({ runId: "term-1", title: "auth fix" });
+    expect(usePanelStore.getState().panelsById["term-1"]).toMatchObject({
+      title: "auth fix",
+      titleMode: "user",
+    });
+  });
+
+  it("puts back the default for an empty title, and ignores a pane it does not hold", () => {
+    setupPanel();
+    const handler = getRenameRequestHandler();
+    handler({ runId: "term-1", title: "auth fix" });
+    handler({ runId: "term-1", title: "" });
+    expect(usePanelStore.getState().panelsById["term-1"]?.titleMode).toBe("default");
+    const before = usePanelStore.getState().panelsById;
+    handler({ runId: "elsewhere", title: "x" });
+    expect(usePanelStore.getState().panelsById).toBe(before);
   });
 });
 

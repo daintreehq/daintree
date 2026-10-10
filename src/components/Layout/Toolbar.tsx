@@ -114,6 +114,7 @@ import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
+import { useCanopyStore } from "@/store/canopyStore";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -147,6 +148,7 @@ import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
+import { CanopyToolbarButton } from "./CanopyToolbarButton";
 import { AppMenuButton } from "./AppMenuButton";
 import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
 import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
@@ -223,6 +225,7 @@ for (const [id, meta] of Object.entries(TOOLBAR_BUTTON_METADATA)) {
 const OVERFLOW_KEYBINDING_BY_ID: Partial<Record<string, string>> = {
   "copy-tree": "worktree.copyTree",
   "notification-center": "notifications.toggle",
+  canopy: "canopy.toggle",
   "command-palette": "action.palette.open",
   "resume-sessions": "terminal.resumeSessions",
   "dev-server": "devServer.start",
@@ -794,6 +797,7 @@ export function Toolbar({
 
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
+  const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
   const positionAgentButton = useToolbarPreferencesStore((state) => state.positionAgentButton);
   const toggleButtonVisibility = useToolbarPreferencesStore(
@@ -1485,6 +1489,12 @@ export function Toolbar({
           ),
         isAvailable: true,
       },
+      canopy: {
+        render: () => <CanopyToolbarButton key="canopy" data-toolbar-item="" />,
+        // Hidden, the slot goes and the pin stays: showing Canopy again puts
+        // the button back where it was.
+        isAvailable: !canopyHidden,
+      },
       "notification-center": {
         render: () => (
           <NotificationCenterToolbarButton key="notification-center" data-toolbar-item="" />
@@ -1736,6 +1746,7 @@ export function Toolbar({
       topologyWatcherDark,
       showDeveloperTools,
       notificationsEnabled,
+      canopyHidden,
       pluginButtonIds,
       pluginConfigs,
       devServerCombo,
@@ -2168,6 +2179,9 @@ export function Toolbar({
       },
       "notification-center": () => {
         void actionService.dispatch("notifications.toggle", undefined, { source: "user" });
+      },
+      canopy: () => {
+        void actionService.dispatch("canopy.toggle", undefined, { source: "user" });
       },
       "copy-tree": () => {
         void handleCopyTreeClick();

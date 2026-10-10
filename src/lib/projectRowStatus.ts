@@ -299,17 +299,17 @@ export interface ProjectRowStatus {
   allowsResumeMark?: true;
 }
 
-/** Compact duration for a wait that is already minutes old. Sub-minute reads as "just now". */
+/**
+ * Compact duration for a wait that is already minutes old, in its largest unit
+ * only, so the clock column keeps one width. Sub-minute reads as "just now".
+ */
 export function formatWaitAge(sinceMs: number, nowMs: number): string {
   const elapsed = Math.max(0, nowMs - sinceMs);
   const minutes = Math.floor(elapsed / 60_000);
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) {
-    const remainder = minutes % 60;
-    return remainder === 0 ? `${hours}h` : `${hours}h ${remainder}m`;
-  }
+  if (hours < 24) return `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
 }
 

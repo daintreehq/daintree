@@ -84,6 +84,19 @@ describe("classifyRun", () => {
       "not-an-agent"
     );
   });
+
+  it("keeps an agent that died within a minute of launch, but not one quit after its work", () => {
+    const exited = (afterMs: number) =>
+      agent({
+        launchAgentId: "gemini",
+        everDetectedAgent: true,
+        agentState: "exited",
+        spawnedAt: 1_000_000,
+        lastStateChange: 1_000_000 + afterMs,
+      });
+    expect(classifyRun(exited(5_000), isHelp)).toBeNull();
+    expect(classifyRun(exited(30 * 60_000), isHelp)).toBe("not-an-agent");
+  });
 });
 
 describe("computeProjectAgentCounts", () => {

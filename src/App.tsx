@@ -55,6 +55,9 @@ import {
   useErrorRetry,
   useActiveWorktreeSync,
   useAgentActivityBroadcast,
+  useCanopySeenTracking,
+  useCanopySnapshotSync,
+  useCanopyDoubleShift,
 } from "./hooks/app";
 import { useResourceProfile } from "./hooks/useResourceProfile";
 import { AppLayout } from "./components/Layout";
@@ -230,6 +233,9 @@ function AppInner() {
 
   const { activeWorktreeId: liveActiveWorktreeId, defaultTerminalCwd } = useActiveWorktreeSync();
   useAgentActivityBroadcast();
+  useCanopySnapshotSync();
+  useCanopySeenTracking();
+  useCanopyDoubleShift();
   const resumeSession = useResumeAgentSession();
 
   const {

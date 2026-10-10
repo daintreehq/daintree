@@ -623,6 +623,7 @@ Keybindings map a key combination to an action.
 | `fleetArmed`      | boolean | At least one terminal is armed for fleet broadcast.            |
 | `fleetWaiting`    | boolean | At least one armed terminal's agent is in the `waiting` state. |
 | `sidebarVisible`  | boolean | The worktree sidebar is currently visible.                     |
+| `canopyHidden`    | boolean | The user hid Canopy; its panel cannot open.                    |
 
 Note: this context applies to keybinding `when` clauses, which resolve in the renderer. Native menu-item `when` clauses (the `menuItems` contribution) are evaluated once at menu build time against an empty context — only literal/negation expressions are useful there.
 

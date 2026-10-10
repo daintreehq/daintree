@@ -182,6 +182,22 @@ describe("KeybindingService", () => {
       expect(windows.findMatchingAction(ctrlPeriod)?.actionId).toBe("voiceInput.toggle");
     });
 
+    it("lists every combo an action fires on, a second binding such as Windows' Ctrl+F4 included", () => {
+      const service = new KeybindingService();
+      const first = service.getEffectiveCombo("terminal.close")!;
+      service.registerBinding({
+        actionId: "terminal.close",
+        combo: "Ctrl+F4",
+        scope: "global",
+        priority: 10,
+        description: "Close focused terminal",
+        category: "Terminal",
+      });
+      expect(service.getTriggerCombos("terminal.close")).toEqual([first, "Ctrl+F4"]);
+      // The one-combo view leaves the second binding out.
+      expect(service.getEffectiveCombos("terminal.close")).toEqual([first]);
+    });
+
     it("keeps ⌘. distinct from the ⌘⇧. and ⌘⌥. defaults on macOS", () => {
       setPlatform("MacIntel");
 
@@ -2504,6 +2520,20 @@ describe("when-clause context provider", () => {
 
     service.setWhenContext({ testFlag: true });
     expect(service.resolveKeybinding(event).match?.actionId).toBe("test.whenGatedStatic");
+  });
+
+  it("lets Canopy's key go past it, unconsumed, while Canopy is hidden", () => {
+    setPlatform("MacIntel");
+    const service = new KeybindingService();
+    const event = createKeyboardEvent({ key: "e", code: "KeyE", metaKey: true });
+
+    service.setWhenContextProvider(() => ({ canopyHidden: false }));
+    expect(service.resolveKeybinding(event).match?.actionId).toBe("canopy.toggle");
+
+    service.setWhenContextProvider(() => ({ canopyHidden: true }));
+    const hidden = service.resolveKeybinding(event);
+    expect(hidden.match).toBeUndefined();
+    expect(hidden.shouldConsume).toBe(false);
   });
 });
 

@@ -448,7 +448,11 @@ export function EnvVarEditor({
   const [pendingFocusKey, setPendingFocusKey] = useState<string | null>(null);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const importButtonRef = useRef<HTMLButtonElement>(null);
-  const focus = useRowFocus();
+  const {
+    register: registerRow,
+    registerFallback: registerAddButton,
+    focusAfterDelete,
+  } = useRowFocus();
   // Per-row "Pasted text normalized" inline indicator. Auto-clears after 2s.
   const [normalizedRows, setNormalizedRows] = useState<Set<string>>(() => new Set());
   const normalizeTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -549,7 +553,7 @@ export function EnvVarEditor({
   };
 
   const handleRemove = (rowId: string) => {
-    focus.focusAfterDelete(
+    focusAfterDelete(
       rows.map((r) => r.rowId),
       rows.findIndex((r) => r.rowId === rowId)
     );
@@ -751,7 +755,7 @@ export function EnvVarEditor({
       variant="outline"
       size="sm"
       onClick={handleAdd}
-      ref={focus.registerFallback}
+      ref={registerAddButton}
       data-testid="env-editor-add"
     >
       <Plus aria-hidden="true" />
@@ -874,7 +878,7 @@ export function EnvVarEditor({
                 onSelect={handleKeySelect}
                 registerRef={(id, el) => {
                   registerKeyInput(id, el);
-                  focus.register(id)(el);
+                  registerRow(id)(el);
                 }}
               />
               {/* Value cell */}

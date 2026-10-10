@@ -1,0 +1,99 @@
+/* The canopy inbox borrows the worktree sidebar's row language (sidebar.css):
+   full-bleed square planes on the sidebar card material, cut apart by a 2px
+   gutter of the sidebar colour, a lighter step on hover, and selection as a lift
+   plus one full-height accent mark on the RIGHT edge — the side facing the pane
+   the row opens. The mark is the sidebar's own, solid accent at 2px, so the
+   selected agent reads the way the active worktree does. Once the keyboard
+   moves into the terminal or the reply beside it, the mark turns neutral, as an
+   unfocused list's selection does on macOS: secondary ink, so the selection's
+   only non-fill cue still clears WCAG 1.4.11's 3:1 on every theme (a faded
+   accent fell to 2.7:1 on namib; the lift alone measures about 1.03:1). The
+   selected row is the focused row and draws no ring on top (#8094). */
+/* The list and the status bar under it, on one surface. */
+.canopy-inbox-column {
+  background: var(--theme-surface-sidebar);
+}
+
+.canopy-inbox {
+  background: var(--theme-surface-sidebar);
+  /* Rows brought into view stop below the pinned heading, never under it. */
+  scroll-padding-top: 2.25rem;
+}
+
+/* Each section's heading stays at the top while its rows scroll beneath, and
+   the next section's slides over it. Opaque, so no row shows through. */
+.canopy-inbox-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background-color: var(--theme-surface-sidebar);
+}
+
+button.canopy-inbox-heading:hover {
+  background-image: linear-gradient(
+    var(--sidebar-hover-bg, rgba(255, 255, 255, 0.048)),
+    var(--sidebar-hover-bg, rgba(255, 255, 255, 0.048))
+  );
+}
+
+.canopy-inbox-row {
+  position: relative;
+  background: var(--sidebar-card-bg, rgba(255, 255, 255, 0.03));
+  border-bottom: 2px solid var(--theme-surface-sidebar);
+  /* Transparent rather than none, so forced colours still draw an outline. */
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: background-color var(--duration-150) var(--ease-out-expo);
+}
+
+.canopy-inbox-row::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: var(--canopy-row-edge, 0 0 #0000);
+  transition: box-shadow var(--duration-150) var(--ease-out-expo);
+}
+
+.canopy-inbox-row:not([aria-selected="true"]):hover {
+  background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.048));
+}
+
+.canopy-inbox-row[aria-selected="true"] {
+  background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.065));
+  --canopy-row-edge: inset -2px 0 0 var(--theme-accent-primary);
+}
+
+.canopy-inbox:not(:focus-within) .canopy-inbox-row[aria-selected="true"] {
+  --canopy-row-edge: inset -2px 0 0 var(--theme-text-secondary);
+}
+
+/* "Reading the screen…" is words, not a bone: it keeps the skeletons' Doherty
+   delay but not their pulse, whose 70% trough takes secondary text below 4.5:1. */
+.canopy-reading {
+  animation: skeleton-reveal var(--duration-200) ease-out var(--anti-flicker-delay) backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .canopy-inbox-row,
+  .canopy-inbox-row::after {
+    transition: none;
+  }
+  .canopy-reading {
+    animation-duration: 0s;
+  }
+}
+
+/* Forced colours drop box-shadow and repaint backgrounds: the edge becomes a
+   real border in the system highlight colour, so selection still shows. */
+@media (forced-colors: active) {
+  .canopy-inbox-row[aria-selected="true"]::after {
+    box-shadow: none;
+    border-right: 2px solid Highlight;
+  }
+  /* Inset: the rows are full-bleed inside a scroller, so an outline drawn
+     outside them loses its sides. */
+  .canopy-inbox-row:focus-visible {
+    outline-offset: -2px !important;
+  }
+}

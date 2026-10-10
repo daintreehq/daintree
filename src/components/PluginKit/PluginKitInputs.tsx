@@ -495,8 +495,11 @@ function KitNumberInput(props: PluginNumberInputProps) {
   const allowStepper = withStepper && readOnly !== true;
   // In a column too narrow for the value's floor and both buttons, the pair
   // hides together rather than one being clipped; the keys still step.
-  const stepperRoomState = useStepperRoom(allowStepper, suffix ?? "");
-  const showStepper = allowStepper && !stepperRoomState.hidden;
+  const { hidden: stepperHidden, setFrame: setStepperFrame } = useStepperRoom(
+    allowStepper,
+    suffix ?? ""
+  );
+  const showStepper = allowStepper && !stepperHidden;
 
   // The value, the unit and the buttons are laid side by side in the frame, so
   // the text keeps its own room and never runs under the unit. The frame draws
@@ -504,7 +507,7 @@ function KitNumberInput(props: PluginNumberInputProps) {
   // give it the Input's height at either density.
   return (
     <div
-      ref={stepperRoomState.setFrame}
+      ref={setStepperFrame}
       data-number-field=""
       className={cn(
         inputVariants({ density: compact ? "compact" : "default", invalid: shownInvalid }),

@@ -114,6 +114,123 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
   };
+  "canopy:answer": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget, label: string];
+    result: void;
+  };
+  "canopy:archive": {
+    args: [
+      runId: string,
+      target: import("./canopy.js").CanopyTarget,
+      expectTurn?: number | undefined,
+    ];
+    result: import("./canopy.js").CanopyReadMark | null;
+  };
+  "canopy:capture-backdrop": {
+    args: [];
+    result: Uint8Array<ArrayBufferLike> | null;
+  };
+  "canopy:get-snapshot": {
+    args: [];
+    result: import("./canopy.js").CanopySnapshot;
+  };
+  "canopy:mark-all-read": {
+    args: [targets: import("./canopy.js").CanopyReadTarget[]];
+    result: import("./canopy.js").CanopyReadMark[];
+  };
+  "canopy:mark-seen": {
+    args: [
+      runId: string,
+      looking?: boolean | undefined,
+      place?: import("./canopy.js").CanopyLookPlace | undefined,
+    ];
+    result: void;
+  };
+  "canopy:note-sent": {
+    args: [runId: string];
+    result: void;
+  };
+  "canopy:refresh": {
+    args: [];
+    result: void;
+  };
+  "canopy:rename": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget, title: string];
+    result: void;
+  };
+  "canopy:reread": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: void;
+  };
+  "canopy:restore-reads": {
+    args: [restores: import("./canopy.js").CanopyReadRestore[]];
+    result: void;
+  };
+  "canopy:run-branch": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: string | null;
+  };
+  "canopy:set-active": {
+    args: [active: boolean];
+    result: import("./canopy.js").CanopySnapshot;
+  };
+  "canopy:set-mode": {
+    args: [mode: import("./canopy.js").CanopyMode, expectRevision?: number | undefined];
+    result: import("./canopy.js").CanopySnapshot;
+  };
+  "canopy:set-read": {
+    args: [
+      runId: string,
+      target: import("./canopy.js").CanopyTarget,
+      read: boolean,
+      turn?: number | undefined,
+    ];
+    result: import("./canopy.js").CanopyReadMark | null;
+  };
+  "canopy:set-scope": {
+    args: [workspaceId: string | null];
+    result: void;
+  };
+  "canopy:set-shown": {
+    args: [runIds: string[]];
+    result: void;
+  };
+  "canopy:terminal-input": {
+    args: [watchId: number, data: string];
+    result: void;
+  };
+  "canopy:terminal-resize": {
+    args: [watchId: number, cols: number, rows: number];
+    result: void;
+  };
+  "canopy:terminal-send-key": {
+    args: [watchId: number, key: string];
+    result: void;
+  };
+  "canopy:terminal-submit": {
+    args: [watchId: number, text: string, imagePaths?: string[] | undefined];
+    result: void;
+  };
+  "canopy:trash": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: number | null;
+  };
+  "canopy:unarchive": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: void;
+  };
+  "canopy:untrash": {
+    args: [receipt: number];
+    result: void;
+  };
+  "canopy:unwatch-terminal": {
+    args: [];
+    result: void;
+  };
+  "canopy:watch-terminal": {
+    args: [runId: string, target: import("./canopy.js").CanopyTarget];
+    result: import("./canopy.js").CanopyTerminalView;
+  };
   "claude:list-subagents": {
     args: [__0: { terminalId: string }];
     result: import("./agentSubagents.js").AgentSubagentsResult;
@@ -1901,7 +2018,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "terminal-config:set-screen-reader-mode": {
-    args: [mode: "off" | "auto" | "on"];
+    args: [mode: "on" | "off" | "auto"];
     result: void;
   };
   "terminal-config:set-scrollback": {

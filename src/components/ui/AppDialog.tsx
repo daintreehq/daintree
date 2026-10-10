@@ -123,6 +123,12 @@ export interface AppDialogProps {
    * opened it (a viewer stepped to another item returns focus to that item).
    */
   preferRestoreFocusTo?: boolean;
+  /**
+   * Painted under the scrim, over the app — for a dialog that holds a still of
+   * the app behind itself. The scrim's tint and blur stay live on top of it, and
+   * it fades with the scrim. Takes no pointer events.
+   */
+  backdrop?: React.ReactNode;
   "data-testid"?: string;
 }
 
@@ -199,6 +205,7 @@ export function AppDialog({
   initialFocus,
   restoreFocusTo,
   preferRestoreFocusTo = false,
+  backdrop,
   "data-testid": dataTestId,
 }: AppDialogProps) {
   // A dock popover renders above the standard modal tier, so a dialog opened
@@ -564,6 +571,24 @@ export function AppDialog({
         registerDescription,
       }}
     >
+      {backdrop !== undefined && (
+        // Same layer as the scrim, and first, so the scrim paints over it.
+        <div
+          aria-hidden="true"
+          className={cn(
+            "pointer-events-none fixed inset-0 overflow-hidden transition-opacity",
+            effectiveZIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
+            isVisible ? "opacity-100" : "opacity-0"
+          )}
+          style={{
+            right: portalOffset,
+            transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
+            transitionTimingFunction: UI_SCRIM_EASING,
+          }}
+        >
+          {backdrop}
+        </div>
+      )}
       <div
         className={cn(
           "fixed inset-0 flex bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur)] backdrop-saturate-[var(--theme-material-saturation)]",

@@ -246,54 +246,62 @@ export function GitHubListItem({
   // activate it. The shortcuts are the keys the search field answers to for
   // this row, so the menu teaches them; Enter opens the forge only when the row
   // has nothing local to do.
-  const menuItems: DropdownMenuEntry[] = [];
-  if (primaryAction.kind === "switch" && onSwitchToWorktree && !isActiveWorktree) {
-    const worktreeId = primaryAction.worktreeId;
-    menuItems.push({
-      label: "Switch to worktree",
-      icon: "worktree",
-      shortcut: "Enter",
-      onSelect: () => onSwitchToWorktree(worktreeId),
-    });
-  }
-  if (primaryAction.kind === "create" && onCreateWorktree) {
-    menuItems.push({
-      label: "Create worktree",
-      icon: "worktree",
-      shortcut: "Enter",
-      onSelect: () => onCreateWorktree(item),
-    });
-  }
-  menuItems.push(
+  // One literal rather than pushes: the entries close over a ref-holding copy
+  // handler, and handing those closures to a function during render is, to the
+  // compiler, a ref read during render.
+  const worktreeId = primaryAction.kind === "switch" ? primaryAction.worktreeId : null;
+  const menuItems: DropdownMenuEntry[] = [
+    ...(worktreeId !== null && onSwitchToWorktree && !isActiveWorktree
+      ? [
+          {
+            label: "Switch to worktree",
+            icon: "worktree",
+            shortcut: "Enter",
+            onSelect: () => onSwitchToWorktree(worktreeId),
+          } satisfies DropdownMenuEntry,
+        ]
+      : []),
+    ...(primaryAction.kind === "create" && onCreateWorktree
+      ? [
+          {
+            label: "Create worktree",
+            icon: "worktree",
+            shortcut: "Enter",
+            onSelect: () => onCreateWorktree(item),
+          } satisfies DropdownMenuEntry,
+        ]
+      : []),
     {
       label: "Open on GitHub",
       icon: "external-link",
       shortcut: primaryAction.kind === "open" ? "Enter" : "Cmd+Enter",
       onSelect: () => handleOpenExternal(),
     },
-    { label: "Copy number", icon: "copy", onSelect: () => void handleCopyNumber() }
-  );
-  if (linkedPR) {
-    menuItems.push({
-      label: `Open pull request #${linkedPR.number}`,
-      icon: "git-pull-request",
-      onSelect: () => handleOpenLinkedPR(),
-    });
-  }
-  // Selection's only accessible, non-hover entry point. The checkbox on the
-  // state icon is a pointer shortcut for the same command, not the way you are
-  // meant to find it.
-  if (onToggleSelect) {
-    menuItems.push(
-      { type: "separator" },
-      {
-        label: isSelected ? "Deselect" : "Select",
-        icon: "list-checks",
-        shortcut: "Shift+Space",
-        onSelect: () => onToggleSelect({ shiftKey: false }),
-      }
-    );
-  }
+    { label: "Copy number", icon: "copy", onSelect: () => void handleCopyNumber() },
+    ...(linkedPR
+      ? [
+          {
+            label: `Open pull request #${linkedPR.number}`,
+            icon: "git-pull-request",
+            onSelect: () => handleOpenLinkedPR(),
+          } satisfies DropdownMenuEntry,
+        ]
+      : []),
+    // Selection's only accessible, non-hover entry point. The checkbox on the
+    // state icon is a pointer shortcut for the same command, not the way you are
+    // meant to find it.
+    ...(onToggleSelect
+      ? ([
+          { type: "separator" },
+          {
+            label: isSelected ? "Deselect" : "Select",
+            icon: "list-checks",
+            shortcut: "Shift+Space",
+            onSelect: () => onToggleSelect({ shiftKey: false }),
+          },
+        ] satisfies DropdownMenuEntry[])
+      : []),
+  ];
   // A conflict only blocks an open PR; a closed or merged one keeps its last CI word.
   const linkedPRCIVisual = linkedPR
     ? getPRStatusVisual(

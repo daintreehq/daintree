@@ -17,6 +17,9 @@ import { applyMarkdownEdit, formatMarkdown } from "@/components/PluginKit/kitMar
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
+  // The editor's preview is the kit's lazy Markdown: loaded here, so a busy CI
+  // worker's cold import never eats a waitFor's budget.
+  await import("@/components/Markdown/PluginMarkdown");
 });
 
 afterEach(cleanup);
@@ -768,9 +771,13 @@ describe("MarkdownEditor", () => {
     );
     const field = textarea(screen.getByTestId("md"));
     field.setSelectionRange(0, 1);
+    // Cmd+E, GitHub's code combo, opens Canopy: it stays the app's.
     fireEvent.keyDown(field, { key: "e", metaKey: true });
     fireEvent.keyDown(field, { key: "e", ctrlKey: true });
-    expect(onChange).toHaveBeenCalledWith("`x`");
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.keyDown(field, { key: "i", metaKey: true });
+    fireEvent.keyDown(field, { key: "i", ctrlKey: true });
+    expect(onChange).toHaveBeenCalledWith("_x_");
   });
 
   it("shows source and preview side by side in the split layout", () => {

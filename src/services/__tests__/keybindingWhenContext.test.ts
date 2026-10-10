@@ -6,6 +6,7 @@ import { usePaletteStore, usePanelStore } from "@/store";
 import type { PaletteId } from "@/store/paletteStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
+import { useCanopyStore } from "@/store/canopyStore";
 
 function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -29,6 +30,7 @@ function eventFrom(target: Element | null): KeyboardEvent {
 }
 
 afterEach(() => {
+  useCanopyStore.setState({ mode: "unset" });
   usePaletteStore.setState({ activePaletteId: null });
   useFleetArmingStore.setState({ armedIds: new Set<string>() });
   usePanelStore.setState({ panelsById: {} });
@@ -36,6 +38,17 @@ afterEach(() => {
 });
 
 describe("buildKeybindingWhenContext", () => {
+  it("reports canopyHidden only while the user has hidden Canopy", () => {
+    for (const [mode, hidden] of [
+      ["unset", false],
+      ["on", false],
+      ["hidden", true],
+    ] as const) {
+      useCanopyStore.setState({ mode });
+      expect(buildKeybindingWhenContext(eventFrom(null)).canopyHidden).toBe(hidden);
+    }
+  });
+
   it("reports terminalFocused only for targets inside an xterm host", () => {
     const xterm = document.createElement("div");
     xterm.className = "xterm";

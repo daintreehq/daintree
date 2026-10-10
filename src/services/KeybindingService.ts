@@ -162,6 +162,19 @@ class KeybindingService {
     return this.getBinding(actionId)?.combo;
   }
 
+  /**
+   * Every combo that triggers the action right now: all of an override's, else
+   * every binding registered for it — platform extras such as Windows' Ctrl+F4
+   * close included, which `getEffectiveCombos` leaves out.
+   */
+  getTriggerCombos(actionId: string): string[] {
+    const override = this.overrides.get(actionId);
+    if (override) return override.filter(Boolean);
+    return (this.bindings.get(actionId) ?? [])
+      .map((binding) => binding.combo)
+      .filter((combo): combo is string => Boolean(combo));
+  }
+
   /** Every combo that triggers the action: all of an override's, else its default. */
   getEffectiveCombos(actionId: string): string[] {
     const override = this.overrides.get(actionId);

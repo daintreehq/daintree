@@ -205,6 +205,12 @@ export interface HydrateResult {
   runningUnderRosetta?: boolean;
   /** True when the user permanently dismissed the Rosetta translation warning. */
   rosettaWarningDismissed?: boolean;
+  /**
+   * Where the user stands on Canopy, so a hidden Canopy's toolbar button never
+   * paints and then vanishes. Optional for backward compat with older main
+   * processes.
+   */
+  canopyMode?: import("./canopy.js").CanopyMode;
   /** Number of saved panels skipped due to safe-mode boot (0 when safe mode is inactive). */
   skippedPanelCount?: number;
   /**

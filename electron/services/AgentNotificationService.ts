@@ -67,6 +67,14 @@ interface BurstWaitingEntry {
   ownerWebContentsId?: NotificationOwnerId;
 }
 
+/** An agent Canopy read as asking the user something. */
+export interface CanopyAskNotice {
+  terminalId: string;
+  worktreeId?: string;
+  agentId?: string;
+  kind: "approval" | "question";
+}
+
 class AgentNotificationService {
   private completionTimers = new Map<string, NodeJS.Timeout>();
   private waitingEscalationTimers = new Map<string, NodeJS.Timeout>();
@@ -102,6 +110,18 @@ class AgentNotificationService {
   private completionBurstTimer: NodeJS.Timeout | null = null;
   private completionBurstSoundFile: string | undefined;
   private waitingTerminalIds = new Set<string>();
+  /**
+   * Waits Daintree's own banner already went out for, until the agent stops
+   * waiting or is dealt with — so Canopy reading the same wait doesn't page twice.
+   */
+  private announcedWaitingIds = new Set<string>();
+  /** The same, the other way round: asks Canopy paged for, until the agent works again or is dealt with. */
+  private canopyAnnouncedIds = new Set<string>();
+  /** Each with the panels that list it: what's in front of one ask says nothing of another's. */
+  private canopyAskBuffer: Array<
+    CanopyAskNotice & { canopyOpenIn: () => readonly NotificationOwnerId[] }
+  > = [];
+  private canopyAskTimer: NodeJS.Timeout | null = null;
   /** Tracks when each agent spawned to suppress sounds during the grace period */
   private agentSpawnTimestamps = new Map<string, number>();
   /** Timestamp when the service was initialized — sounds are suppressed during boot */
@@ -432,6 +452,7 @@ class AgentNotificationService {
     // Cancel waiting escalation when agent leaves "waiting"
     if (previousState === "waiting" && state !== "waiting" && terminalId) {
       this.waitingTerminalIds.delete(terminalId);
+      this.announcedWaitingIds.delete(terminalId);
       this.clearWaitingEscalation(terminalId);
       notificationService.closeNotificationsForPanel(terminalId);
     }
@@ -446,6 +467,12 @@ class AgentNotificationService {
     // other terminals intact.
     if ((state === "completed" || state === "exited") && terminalId) {
       this.dropBufferedWaiting(terminalId);
+    }
+
+    // Back at work: a buffered ask is answered, and the next one is new.
+    if (ACTIVE_AGENT_STATES.has(state) && !ACTIVE_AGENT_STATES.has(previousState) && terminalId) {
+      this.canopyAnnouncedIds.delete(terminalId);
+      this.canopyAskBuffer = this.canopyAskBuffer.filter((ask) => ask.terminalId !== terminalId);
     }
 
     // Cancel working pulse when agent leaves "working"
@@ -660,6 +687,8 @@ class AgentNotificationService {
       // quick waiting → working → waiting flap still delivers once the
       // renderer's one-shot unwatch has stopped a second entry being buffered.
       if (item.terminalId && !this.waitingTerminalIds.has(item.terminalId)) return false;
+      // Canopy already paged for this wait.
+      if (item.terminalId && this.canopyAnnouncedIds.has(item.terminalId)) return false;
       if (!item.worktreeId) return true;
       const owner = this.emitOwner(item.terminalId, item.ownerWebContentsId);
       if (!notificationService.isOwnerViewFocused(owner)) return true;
@@ -674,6 +703,7 @@ class AgentNotificationService {
     const closeWithPanels = dedupedItems.flatMap((item) =>
       item.terminalId ? [item.terminalId] : []
     );
+    for (const id of closeWithPanels) this.announcedWaitingIds.add(id);
     this.playNotificationSound(first.soundEnabled, first.soundFile);
 
     const ownerWebContentsId = this.emitOwner(first.terminalId, first.ownerWebContentsId);
@@ -826,6 +856,90 @@ class AgentNotificationService {
     }
   }
 
+  /**
+   * Canopy's classifier read an agent asking the user something on its screen.
+   * Canopy is turned on by the user to be told exactly this, so it pages
+   * without the per-panel watch the waiting banner needs — including for a
+   * prompt Daintree's own state never saw. It stays quiet with notifications
+   * off, in the grace after boot or spawn, when Daintree's banner already went
+   * out for this wait, while Canopy is open in front of the user, and when
+   * the user is looking at the agent's worktree.
+   */
+  notifyCanopyAsk(ask: CanopyAskNotice, canopyOpenIn: () => readonly NotificationOwnerId[]): void {
+    const settings = projectStore.getEffectiveNotificationSettings();
+    if (settings.enabled === false) return;
+    if (this.isWithinBootGrace() || this.isWithinSpawnGrace(ask.agentId, ask.terminalId)) return;
+    if (this.announcedWaitingIds.has(ask.terminalId)) return;
+    if (this.isCanopyInFront(canopyOpenIn)) return;
+    this.canopyAskBuffer = this.canopyAskBuffer.filter(
+      (entry) => entry.terminalId !== ask.terminalId
+    );
+    this.canopyAskBuffer.push({ ...ask, canopyOpenIn });
+    this.canopyAskTimer ??= setTimeout(() => this.flushCanopyAsks(), BURST_WINDOW_MS);
+  }
+
+  /** A panel listing the ask is open in a focused view: the user is looking at it already. */
+  private isCanopyInFront(canopyOpenIn: () => readonly NotificationOwnerId[]): boolean {
+    return canopyOpenIn().some((owner) => notificationService.isOwnerViewFocused(owner));
+  }
+
+  private flushCanopyAsks(): void {
+    this.canopyAskTimer = null;
+    const settings = projectStore.getEffectiveNotificationSettings();
+    if (settings.enabled === false) {
+      this.canopyAskBuffer = [];
+      return;
+    }
+    let presence: UserPresence | undefined;
+    let activeWorktreeId: string | null | undefined;
+    const asks = this.canopyAskBuffer.splice(0).filter((ask) => {
+      if (this.announcedWaitingIds.has(ask.terminalId)) return false;
+      // Each ask by the panels that list it, read again now the burst is out.
+      if (this.isCanopyInFront(ask.canopyOpenIn)) return false;
+      if (!ask.worktreeId) return true;
+      // A terminal never watched has no known owner: the focused window
+      // showing its worktree is the best evidence the user is looking at it.
+      const owner = this.resolveOwner(ask.terminalId);
+      const inFront =
+        owner === undefined
+          ? notificationService.isWindowFocused()
+          : notificationService.isOwnerViewFocused(owner);
+      if (!inFront) return true;
+      activeWorktreeId ??= store.get("appState").activeWorktreeId ?? null;
+      if (activeWorktreeId !== ask.worktreeId) return true;
+      presence ??= notificationService.getUserPresence();
+      return presence !== "present";
+    });
+    if (asks.length === 0) return;
+    for (const ask of asks) this.canopyAnnouncedIds.add(ask.terminalId);
+
+    const first = asks[0];
+    this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
+    const navigation = {
+      channel: CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
+      context: this.makeContext(first.terminalId, first.agentId, first.worktreeId),
+    };
+    const options = {
+      ownerWebContentsId: this.resolveOwner(first.terminalId),
+      navigation,
+      closeWithPanels: asks.map((ask) => ask.terminalId),
+    };
+    if (asks.length === 1) {
+      notificationService.showNativeNotification(
+        "Agent waiting",
+        describeWaiting(this.getLabel(first.agentId, first.worktreeId), first.kind),
+        options
+      );
+      return;
+    }
+    const uniform = asks.every((ask) => ask.kind === first.kind) ? first.kind : undefined;
+    notificationService.showNativeNotification(
+      "Agents waiting",
+      describeWaitingMany(asks.length, uniform),
+      options
+    );
+  }
+
   acknowledgeWaiting(terminalId: string): void {
     this.dismissWaitingAlerts(terminalId);
   }
@@ -839,8 +953,11 @@ class AgentNotificationService {
     // Out of the escalation group too, or a sibling's grouped reminder would
     // name this pane again. Its next waiting transition puts it back.
     this.waitingTerminalIds.delete(terminalId);
+    this.announcedWaitingIds.delete(terminalId);
+    this.canopyAnnouncedIds.delete(terminalId);
     this.clearWaitingEscalation(terminalId);
     this.dropBufferedWaiting(terminalId);
+    this.canopyAskBuffer = this.canopyAskBuffer.filter((ask) => ask.terminalId !== terminalId);
     notificationService.closeNotificationsForPanel(terminalId);
   }
 
@@ -1085,6 +1202,14 @@ class AgentNotificationService {
       this.waitingBurstTimer = null;
     }
     this.waitingBurstBuffer = [];
+
+    if (this.canopyAskTimer) {
+      clearTimeout(this.canopyAskTimer);
+      this.canopyAskTimer = null;
+    }
+    this.canopyAskBuffer = [];
+    this.announcedWaitingIds.clear();
+    this.canopyAnnouncedIds.clear();
 
     if (this.completionBurstTimer) {
       clearTimeout(this.completionBurstTimer);

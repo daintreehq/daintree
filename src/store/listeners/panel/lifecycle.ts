@@ -9,6 +9,18 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logError } from "@/utils/logger";
 import { isTerminalRestarting } from "@/store/restartExitSuppression";
 import { usePanelStore, type PanelGridState } from "@/store/panelStore";
+import { useUIStore } from "@/store/uiStore";
+
+/**
+ * Panes this view brought back for Canopy before the host said so: the host's
+ * restored event for each is an echo of that, not news of another restore.
+ */
+const canopyRestores = new Set<string>();
+
+/** An overlay (Canopy, a dialog, a palette) holds the keyboard in this view. */
+function overlayHoldsKeyboard(): boolean {
+  return useUIStore.getState().overlayStack.length > 0;
+}
 import {
   enqueueFlowStatusUpdate,
   enqueueHeldDurationUpdate,
@@ -262,10 +274,73 @@ export function setupLifecycleListeners(): DisposableStore {
     )
   );
 
+  // Canopy trashed a terminal this view holds. The host's own trashed event is
+  // dropped for a pane that isn't in the trash already (see `markAsTrashed`),
+  // so the pane takes the path closing it in place would — minus the host
+  // trash, which main has done: sent again, it would re-trash a terminal an
+  // Undo elsewhere restored in between.
+  const onCanopyTrash = window.electron?.canopy?.onTrashRequested;
+  if (onCanopyTrash) {
+    d.add(
+      toDisposable(
+        onCanopyTrash(({ runId }) => {
+          const panel = usePanelStore.getState().panelsById[runId];
+          if (!panel || panel.location === "trash") return;
+          usePanelStore.getState().trashPanel(runId, { hostTrashed: true });
+        })
+      )
+    );
+  }
+
+  // Canopy took back its trash of a terminal this view holds: main has
+  // restored it on the host, so the pane comes back from the trash without a
+  // second host restore, which could undo a trash another window made since.
+  const onCanopyRestore = window.electron?.canopy?.onRestoreRequested;
+  if (onCanopyRestore) {
+    d.add(
+      toDisposable(
+        onCanopyRestore(({ runId }) => {
+          const panel = usePanelStore.getState().panelsById[runId];
+          if (!panel || panel.location !== "trash") return;
+          canopyRestores.add(runId);
+          usePanelStore.getState().restoreTerminal(runId, undefined, {
+            hostRestored: true,
+            // Canopy is in front of the grid here: the pane must not take the
+            // keyboard from behind it.
+            keepFocus: overlayHoldsKeyboard(),
+          });
+        })
+      )
+    );
+  }
+
+  // Canopy renamed a terminal this view holds: the pane takes it as the user's
+  // own rename here would, user-locked — or, for an empty title, back to the
+  // default this view works out for it.
+  const onCanopyRename = window.electron?.canopy?.onRenameRequested;
+  if (onCanopyRename) {
+    d.add(
+      toDisposable(
+        onCanopyRename(({ runId, title }) => {
+          if (!usePanelStore.getState().panelsById[runId]) return;
+          usePanelStore.getState().updateTitle(runId, title, "user");
+        })
+      )
+    );
+  }
+
   d.add(
     toDisposable(
       terminalRegistryController.onRestored((data: { id: string }) => {
         const { id } = data;
+        // The host's word on a restore Canopy already applied here: if the
+        // pane has been trashed again since, that newer trash stands.
+        if (
+          canopyRestores.delete(id) &&
+          usePanelStore.getState().panelsById[id]?.location === "trash"
+        ) {
+          return;
+        }
         usePanelStore.getState().markAsRestored(id);
         const {
           focusedId: previousFocusedId,
@@ -279,6 +354,12 @@ export function setupLifecycleListeners(): DisposableStore {
         // silently dismiss an unrelated dock session the user is typing into
         // (#8368).
         const clearsActiveDock = activeDockTerminalId === id && panelsById[id]?.location !== "dock";
+        // A restore made from inside an overlay (Canopy's Undo) leaves focus
+        // where it is: focusing the pane would send the keys behind the overlay.
+        if (overlayHoldsKeyboard()) {
+          if (clearsActiveDock) usePanelStore.setState({ activeDockTerminalId: null });
+          return;
+        }
         usePanelStore.setState({
           focusedId: id,
           ...(clearsActiveDock && { activeDockTerminalId: null }),

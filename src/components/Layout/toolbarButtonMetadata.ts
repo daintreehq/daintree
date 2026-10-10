@@ -10,7 +10,7 @@ import {
   SquareMenu,
   SquareTerminal,
 } from "lucide-react";
-import { FolderTree, Folders, History, Package, Plus } from "@/components/icons";
+import { FolderTree, Folders, History, Package, Plus, Telescope } from "@/components/icons";
 import {
   BUILT_IN_AGENT_IDS,
   isBuiltInAgentId,
@@ -98,6 +98,11 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
     label: "Repository activity",
     icon: GitPullRequest,
     description: "Issues, PRs, and commits",
+  },
+  canopy: {
+    label: "Canopy",
+    icon: Telescope,
+    description: "Every agent's screen, read and ordered by what it needs",
   },
   "notification-center": {
     label: "Notifications",

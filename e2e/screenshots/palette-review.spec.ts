@@ -187,26 +187,13 @@ async function step(page: Page, name: string, fn: () => Promise<void>): Promise<
 }
 
 /**
- * Double-Shift first, then the canonical `action.palette.open` binding as the
- * fallback. NOT Cmd+K — that starts a chord and raises the command HUD, which
- * then sits on top of whatever is captured next.
- *
- * The gate has to be `waitFor`, not `isVisible`: the latter resolves against the
- * current DOM without waiting, so it reports false during the palette's own
- * mount frame and the fallback fires on top of an already-open palette.
+ * The canonical `action.palette.open` binding. NOT Cmd+K — that starts a chord
+ * and raises the command HUD, which then sits on top of whatever is captured
+ * next — and not double-Shift, which opens Canopy.
  */
 async function openCommandPalette(page: Page): Promise<void> {
-  const dialog = page.locator(SEL.actionPalette.dialog);
-  await page.keyboard.press("Shift");
-  await page.keyboard.press("Shift");
-  const opened = await dialog
-    .waitFor({ state: "visible", timeout: 3000 })
-    .then(() => true)
-    .catch(() => false);
-  if (!opened) {
-    await page.keyboard.press(`${MOD}+Shift+P`);
-    await dialog.waitFor({ state: "visible", timeout: 5000 });
-  }
+  await page.keyboard.press(`${MOD}+Shift+P`);
+  await page.locator(SEL.actionPalette.dialog).waitFor({ state: "visible", timeout: 5000 });
 }
 
 /**
@@ -322,8 +309,7 @@ test("palette review — every surface in the family", async () => {
       await closeOverlay(page);
     });
 
-    // 4. Command palette. Double-Shift is the primary opener; Cmd+K is the
-    // documented fallback and the one that survives a missed first press.
+    // 4. Command palette, from its Cmd+Shift+P binding.
     await step(page, "command-palette", async () => {
       await openCommandPalette(page);
       await snapSurface(page, "13-command-palette", SEL.actionPalette.dialog);

@@ -60,11 +60,20 @@ describe("formatWaitAge", () => {
     expect(formatWaitAge(NOW - 30_000, NOW)).toBe("just now");
   });
 
-  it("uses minutes, then hours, then days", () => {
+  it("uses its largest unit only: minutes, then hours, then days", () => {
     expect(formatWaitAge(NOW - 42 * 60_000, NOW)).toBe("42m");
     expect(formatWaitAge(NOW - 60 * 60_000, NOW)).toBe("1h");
-    expect(formatWaitAge(NOW - 95 * 60_000, NOW)).toBe("1h 35m");
+    expect(formatWaitAge(NOW - 95 * 60_000, NOW)).toBe("1h");
+    expect(formatWaitAge(NOW - (13 * 60 + 44) * 60_000, NOW)).toBe("13h");
     expect(formatWaitAge(NOW - 50 * 3600_000, NOW)).toBe("2d");
+  });
+
+  it("rounds down to each unit's boundary", () => {
+    expect(formatWaitAge(NOW - 3600_000 + 1_000, NOW)).toBe("59m");
+    expect(formatWaitAge(NOW - 2 * 3600_000 + 1_000, NOW)).toBe("1h");
+    expect(formatWaitAge(NOW - 2 * 3600_000, NOW)).toBe("2h");
+    expect(formatWaitAge(NOW - 24 * 3600_000 + 60_000, NOW)).toBe("23h");
+    expect(formatWaitAge(NOW - 24 * 3600_000, NOW)).toBe("1d");
   });
 
   it("never reports a negative age from a clock skew", () => {
@@ -264,6 +273,20 @@ describe("getProjectRowStatus", () => {
     );
 
     expect(demandLine(status)).toBe("2 ready for review · 8m ago");
+  });
+
+  it("collapses the range when completions fall in the same hour", () => {
+    const status = getProjectRowStatus(
+      project({
+        completedAgentCount: 2,
+        unacknowledgedCompletedAgentCount: 2,
+        latestUnacknowledgedCompletionAt: NOW - 65 * 60_000,
+        oldestUnacknowledgedCompletionAt: NOW - 115 * 60_000,
+      }),
+      NOW
+    );
+
+    expect(demandLine(status)).toBe("2 ready for review · 1h ago");
   });
 
   it("ranks a wait above a completion, and a completion above running work", () => {

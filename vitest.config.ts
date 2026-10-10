@@ -7,6 +7,13 @@ import path from "path";
 // — so the bytes have to arrive as a virtual JS module instead.
 import { pluginStyleContract } from "./scripts/lib/plugin-style-contract.mjs";
 
+// The suite asserts en-US number formatting — the plugin kit formats with the
+// default locale — so a developer on another locale (en_ZA groups digits with
+// spaces) saw kit tests fail that CI never shows. The forked workers inherit
+// this, and their ICU reads it when they start.
+process.env.LANG = "en_US.UTF-8";
+process.env.LC_ALL = "en_US.UTF-8";
+
 export default defineConfig({
   plugins: [pluginStyleContract()],
   resolve: {
