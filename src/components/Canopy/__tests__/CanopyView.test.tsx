@@ -246,6 +246,19 @@ function stuckCard(runId: string): CanopyCard {
   };
 }
 
+/** A question read as a quiet one: worth answering, not paging for. */
+function quietQuestion(runId: string): CanopyCard {
+  return {
+    ...stuckCard(runId),
+    category: "question",
+    wordsCategory: "question",
+    attentionScore: 70,
+    priority: 70,
+    headline: "Asks which port to use",
+    question: "Which port should the server use?",
+  };
+}
+
 /** A run with turns the user hasn't read. */
 function unreadMark(runId: string, turn: number) {
   return { runId, spawnedAt: NOW - 3_600_000, turn, readTurn: 0, markedUnreadAt: null, version: 1 };
@@ -1310,7 +1323,12 @@ describe("CanopyView", () => {
         snapshot: {
           ...canopySnapshot,
           refreshedAt: NOW + 10_000,
-          cards: [{ ...stuckCard("working"), priority: 84, attentionScore: 84 }],
+          // The question read as less pressing than it looked, and the working
+          // agent clearly above it.
+          cards: [
+            { ...stuckCard("working"), priority: 84, attentionScore: 84 },
+            quietQuestion("asking"),
+          ],
         },
       })
     );
@@ -1354,7 +1372,12 @@ describe("CanopyView", () => {
       useCanopyStore.setState({
         snapshot: {
           ...canopySnapshot,
-          cards: [{ ...stuckCard("working"), priority: 84, attentionScore: 84 }],
+          // The question read as less pressing than it looked, and the working
+          // agent clearly above it.
+          cards: [
+            { ...stuckCard("working"), priority: 84, attentionScore: 84 },
+            quietQuestion("asking"),
+          ],
         },
       })
     );
@@ -1434,6 +1457,25 @@ describe("CanopyView", () => {
     expect(order()).toEqual(["waiting", "asking", "working"]);
   });
 
+  it("keeps the inbox's heading still while summaries are written, and says so in its footer", async () => {
+    const reading = {
+      ...canopySnapshot,
+      cards: [{ ...stuckCard("working"), describing: true }],
+      link: { host: "canopy.daintree.org", inFlight: 1, classifyMs: 380, readMs: null },
+    };
+    installElectron(reading);
+    useCanopyStore.setState({ snapshot: reading });
+    const { container } = render(<CanopyView />);
+    await frames();
+    const heading = container.ownerDocument.querySelector("#canopy-inbox-label")!.parentElement!;
+    expect(heading.textContent).not.toMatch(/Updating|Starting|retry/);
+    const footer = container.ownerDocument.querySelector("[data-canopy-status]")!;
+    expect(footer.textContent).toBe("canopy.daintree.org1 in flight · classify 380 ms");
+    // Under the list, in the same column, not over the pane beside it.
+    const column = container.ownerDocument.querySelector("[data-canopy-list]")!.parentElement!;
+    expect(column.lastElementChild).toBe(footer);
+  });
+
   it("opens in the order it was left, or ranked before it shows when something was read meanwhile", async () => {
     installElectron();
     const first = render(<CanopyView />);
@@ -1451,6 +1493,8 @@ describe("CanopyView", () => {
     second.unmount();
 
     // Read while closed: the list opens in its new order, with no move to see.
+    // The stuck agent turned urgent meanwhile, so it opens in the readers'
+    // place for it, however near the approval above.
     act(() =>
       useCanopyStore.setState({
         snapshot: { ...canopySnapshot, refreshedAt: NOW + 10_000, cards: [stuckCard("working")] },

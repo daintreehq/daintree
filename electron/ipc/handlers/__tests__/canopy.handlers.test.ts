@@ -88,6 +88,7 @@ const canopyBackend = vi.hoisted(() => ({
   describeWithCanopy: vi.fn(),
   wakeCanopy: vi.fn(),
   canopyWaking: vi.fn(() => false),
+  canopyServiceUrl: vi.fn(() => "https://canopy.daintree.org"),
 }));
 vi.mock("../../../services/canopy/canopyBackend.js", () => canopyBackend);
 vi.mock("../../utils.js", async (importOriginal) => ({

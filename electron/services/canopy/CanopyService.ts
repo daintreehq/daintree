@@ -7,6 +7,7 @@ import {
   type CanopyCategory,
   type CanopyDisposition,
   type CanopyGlance,
+  type CanopyLink,
   type CanopyLookPlace,
   type CanopyPlan,
   type CanopyReadMark,
@@ -107,6 +108,9 @@ export const CANOPY_STATE_CHANGE_SCAN_MS = 400;
  * for the waits Daintree's own state misses.
  */
 export const CANOPY_BACKGROUND_POLL_MS = 15_000;
+
+/** How many of the latest reads of each kind the status bar's mean time is taken over. */
+const LINK_TIMES_KEPT = 10;
 
 /** A close this soon after an open is a bounce, not the panel going away. */
 export const CANOPY_CLOSE_GRACE_MS = 300;
@@ -211,6 +215,8 @@ export interface CanopyServiceDeps {
    * are its start, not a fault, so the grace before one is reported waits for it.
    */
   serviceWaking?: () => boolean;
+  /** The host Canopy's service is reached at, for the status bar. */
+  serviceHost?: () => string;
 }
 
 export interface ScreenRead {
@@ -399,6 +405,12 @@ export class CanopyService {
   /** The next scan reads every changed screen, held or not: the user pressed Refresh. */
   private forceNextScan = false;
   private inFlight = 0;
+  /** Requests to the service under way, and the times of the latest that came back. */
+  private readonly link = {
+    inFlight: 0,
+    classifier: [] as number[],
+    describer: [] as number[],
+  };
   private refreshedAt: number | null = null;
   private broadcastTimer: ReturnType<typeof setTimeout> | null = null;
   /** A scan due once the redraws after a resize have settled, and when. */
@@ -582,7 +594,49 @@ export class CanopyService {
         .map(([runId]) => runId),
       ...this.waitingState(),
       ...(wordsDue.length > 0 ? { wordsDue } : {}),
+      ...this.linkState(),
     };
+  }
+
+  /** What the status bar says of the requests: only while Canopy reads at all. */
+  private linkState(): { link?: CanopyLink } {
+    if (!this.isRunning || !this.deps.serviceHost) return {};
+    const mean = (times: readonly number[]) =>
+      times.length === 0 ? null : Math.round(times.reduce((sum, ms) => sum + ms, 0) / times.length);
+    return {
+      link: {
+        host: this.deps.serviceHost(),
+        inFlight: this.link.inFlight,
+        classifyMs: mean(this.link.classifier),
+        readMs: mean(this.link.describer),
+      },
+    };
+  }
+
+  /**
+   * One request to the service, counted while it is under way and timed when
+   * it comes back. A failed or abandoned one says nothing about how fast the
+   * service answers, so only answers are timed.
+   */
+  private async timed<T>(kind: "classifier" | "describer", request: () => Promise<T>): Promise<T> {
+    const started = this.now();
+    this.link.inFlight++;
+    this.linkChanged();
+    try {
+      const result = await request();
+      const times = this.link[kind];
+      times.push(this.now() - started);
+      if (times.length > LINK_TIMES_KEPT) times.shift();
+      return result;
+    } finally {
+      this.link.inFlight--;
+      this.linkChanged();
+    }
+  }
+
+  /** Only an open panel shows the requests: a closed one is not woken for them. */
+  private linkChanged(): void {
+    if (this.active) this.scheduleBroadcast();
   }
 
   /**
@@ -1580,7 +1634,7 @@ export class CanopyService {
       classified = await this.classifierSlots.run(() => {
         // Checked again once a slot frees up: the queue can outlast the panel.
         if (!this.stillWanted(run, entry, seq, epoch)) throw new StaleCanopyPass();
-        return this.deps.classify(input, signal);
+        return this.timed("classifier", () => this.deps.classify(input, signal));
       });
     } catch (error) {
       this.recordFailure(run, entry, seq, epoch, error);
@@ -1846,23 +1900,25 @@ export class CanopyService {
             }
             const digest = read?.digest ?? null;
             digestRead = digest;
-            return this.deps.describe(
-              {
-                ...input,
-                ...(progress ? { previousReading: earlier } : {}),
-                digest,
-                currentTask: this.lockedTask(entry, digest),
-                note: noteFor(entry, this.now()),
-                sinceLastReading:
-                  last !== null && read !== null
-                    ? scrolledSince(last.lines, read.history, screen.lines)
-                    : null,
-                failureRepeatsCap:
-                  last !== null && last.hash === screen.hash ? last.failureRepeats : null,
-              },
-              classified.category,
-              cardSignal,
-              (partial) => this.applyPartial(run, entry, seq, epoch, partial)
+            return this.timed("describer", () =>
+              this.deps.describe(
+                {
+                  ...input,
+                  ...(progress ? { previousReading: earlier } : {}),
+                  digest,
+                  currentTask: this.lockedTask(entry, digest),
+                  note: noteFor(entry, this.now()),
+                  sinceLastReading:
+                    last !== null && read !== null
+                      ? scrolledSince(last.lines, read.history, screen.lines)
+                      : null,
+                  failureRepeatsCap:
+                    last !== null && last.hash === screen.hash ? last.failureRepeats : null,
+                },
+                classified.category,
+                cardSignal,
+                (partial) => this.applyPartial(run, entry, seq, epoch, partial)
+              )
             );
           });
         });
@@ -2280,7 +2336,14 @@ export class CanopyService {
       const snapshot = this.getSnapshot();
       // `busy` alone flips on every poll and nothing shows it: a scan that
       // changed nothing else is not news to any view.
-      const sent = JSON.stringify({ ...snapshot, busy: false, sequence: 0 });
+      // The requests are shown only by an open panel, which a closed one's
+      // reads must not wake every view for.
+      const sent = JSON.stringify({
+        ...snapshot,
+        busy: false,
+        sequence: 0,
+        ...(this.active ? {} : { link: undefined }),
+      });
       if (sent === this.lastBroadcast) return;
       this.lastBroadcast = sent;
       this.deps.broadcast(snapshot);

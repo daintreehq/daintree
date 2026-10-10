@@ -82,6 +82,7 @@ async function makeHarness(options: {
   backgroundPollMs?: number;
   onAsk?: CanopyServiceDeps["onAsk"];
   serviceWaking?: () => boolean;
+  serviceHost?: () => string;
   /** Leave the panel closed after construction. */
   closed?: boolean;
   /** False while the fleet should read as unknown (degraded). */
@@ -138,6 +139,7 @@ async function makeHarness(options: {
     backgroundPollMs: options.backgroundPollMs ?? 0,
     ...(options.onAsk ? { onAsk: options.onAsk } : {}),
     ...(options.serviceWaking ? { serviceWaking: options.serviceWaking } : {}),
+    ...(options.serviceHost ? { serviceHost: options.serviceHost } : {}),
     ...(options.stateChangeScanMs !== undefined
       ? { stateChangeScanMs: options.stateChangeScanMs }
       : {}),
@@ -592,6 +594,98 @@ describe("CanopyService", () => {
     h.runs[0] = run("a", { spawnedAt: 8 });
     h.service.onFleetChanged();
     expect(h.service.getSnapshot().seen).toEqual([]);
+  });
+
+  it("counts requests to the service while they are out, and times the ones that answer", async () => {
+    let clock = 1_000;
+    const gates: Array<() => void> = [];
+    const gate = () => new Promise<void>((resolve) => gates.push(resolve));
+    const h = await makeHarness({
+      now: () => clock,
+      serviceHost: () => "canopy.daintree.org",
+      classify: async () => {
+        await gate();
+        return { category: "working", confidence: 0.99, attention: 0.1, question: null };
+      },
+      describe: async (_input, says) => {
+        await gate();
+        return {
+          category: says,
+          headline: "Headline",
+          summary: "Summary",
+          attentionScore: 10,
+          task: null,
+          risk: "unknown",
+          riskReason: null,
+          action: null,
+          progress: null,
+          tests: "unknown",
+          changes: "unknown",
+          question: null,
+          options: [],
+        };
+      },
+    });
+    const link = () => h.service.getSnapshot().link;
+    expect(link()).toEqual({
+      host: "canopy.daintree.org",
+      inFlight: 0,
+      classifyMs: null,
+      readMs: null,
+    });
+    h.runs.push(run("a"), run("b"));
+    h.screens.set("a", "Building the parser");
+    h.screens.set("b", "Writing the tests");
+    const scan = h.service.scan();
+    await vi.waitFor(() => expect(link()?.inFlight).toBe(2));
+    clock += 300;
+    gates.shift()!();
+    await vi.waitFor(() => expect(link()?.classifyMs).toBe(300));
+    clock += 200;
+    gates.shift()!();
+    // Both classified, the first at 300 ms and the second at 500: the bar
+    // says their mean, then the summaries they set going are out.
+    await vi.waitFor(() => expect(link()?.classifyMs).toBe(400));
+    await vi.waitFor(() => expect(link()?.inFlight).toBe(2));
+    // They went out as each classification came back, 200 ms apart, and both
+    // answer now: 2.2 s and 2.0 s.
+    clock += 2_000;
+    while (gates.length > 0) gates.shift()!();
+    await scan;
+    await vi.waitFor(() => expect(link()).toMatchObject({ inFlight: 0, readMs: 2_100 }));
+  });
+
+  it("lets a failed request go without counting it out or timing it", async () => {
+    let clock = 1_000;
+    let fail = true;
+    const h = await makeHarness({
+      now: () => clock,
+      serviceHost: () => "canopy.daintree.org",
+      classify: async () => {
+        clock += 5_000;
+        if (fail) throw new Error("HTTP 503");
+        return { category: "idle", confidence: 0.99, attention: 0.1, question: null };
+      },
+    });
+    h.runs.push(run("a", { agentState: "idle" }));
+    h.screens.set("a", "dev@studio app % ");
+    await h.service.scan();
+    expect(h.service.getSnapshot().link).toMatchObject({ inFlight: 0, classifyMs: null });
+    // Tried again past its backoff, the answer is the first time there is.
+    fail = false;
+    clock += 10 * 60_000;
+    await h.service.scan();
+    await vi.waitFor(() =>
+      expect(h.service.getSnapshot().link).toMatchObject({ inFlight: 0, classifyMs: 5_000 })
+    );
+  });
+
+  it("says nothing of requests until Canopy is turned on", async () => {
+    const h = await makeHarness({
+      serviceHost: () => "canopy.daintree.org",
+      plan: { mode: "unset", activated: false, tier: "priority" },
+    });
+    expect(h.service.getSnapshot().link).toBeUndefined();
   });
 
   it("broadcasts a look only to an open panel", async () => {
