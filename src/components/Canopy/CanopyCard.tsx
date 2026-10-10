@@ -225,8 +225,15 @@ export function CanopyCard({
       if (!section) return;
       // The user put the keyboard somewhere else meanwhile — clicked a row,
       // say: that wins over a handoff still waiting for the pane to be ready.
+      // A menu still closing (Reply, picked from a row's menu) is not the
+      // user going elsewhere: the handoff waits it out.
       const active = document.activeElement;
-      if (active !== null && active !== document.body && !section.contains(active)) {
+      if (
+        active !== null &&
+        active !== document.body &&
+        !section.contains(active) &&
+        active.closest('[role="menu"]') === null
+      ) {
         settle();
         return;
       }
@@ -555,6 +562,16 @@ export function CanopyCard({
         // menu — so it must not also close the dialog around it.
         onKeyDown={(event) => {
           if (event.key === "Escape") {
+            // A reply hands Escape to the list through `onSendKey`; one that is
+            // disabled (its terminal gone) never handles the key at all, so a
+            // reply that left it unhandled goes back to the list from here.
+            if (
+              !event.defaultPrevented &&
+              event.target instanceof Element &&
+              event.target.closest(".cm-editor") !== null
+            ) {
+              onLeavePane(item);
+            }
             event.stopPropagation();
             event.preventDefault();
           }

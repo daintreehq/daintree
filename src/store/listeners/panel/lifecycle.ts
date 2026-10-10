@@ -9,6 +9,12 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logError } from "@/utils/logger";
 import { isTerminalRestarting } from "@/store/restartExitSuppression";
 import { usePanelStore, type PanelGridState } from "@/store/panelStore";
+import { useUIStore } from "@/store/uiStore";
+
+/** An overlay (Canopy, a dialog, a palette) holds the keyboard in this view. */
+function overlayHoldsKeyboard(): boolean {
+  return useUIStore.getState().overlayStack.length > 0;
+}
 import {
   enqueueFlowStatusUpdate,
   enqueueHeldDurationUpdate,
@@ -290,7 +296,12 @@ export function setupLifecycleListeners(): DisposableStore {
         onCanopyRestore(({ runId }) => {
           const panel = usePanelStore.getState().panelsById[runId];
           if (!panel || panel.location !== "trash") return;
-          usePanelStore.getState().restoreTerminal(runId, undefined, { hostRestored: true });
+          usePanelStore.getState().restoreTerminal(runId, undefined, {
+            hostRestored: true,
+            // Canopy is in front of the grid here: the pane must not take the
+            // keyboard from behind it.
+            keepFocus: overlayHoldsKeyboard(),
+          });
         })
       )
     );
@@ -328,6 +339,12 @@ export function setupLifecycleListeners(): DisposableStore {
         // silently dismiss an unrelated dock session the user is typing into
         // (#8368).
         const clearsActiveDock = activeDockTerminalId === id && panelsById[id]?.location !== "dock";
+        // A restore made from inside an overlay (Canopy's Undo) leaves focus
+        // where it is: focusing the pane would send the keys behind the overlay.
+        if (overlayHoldsKeyboard()) {
+          if (clearsActiveDock) usePanelStore.setState({ activeDockTerminalId: null });
+          return;
+        }
         usePanelStore.setState({
           focusedId: id,
           ...(clearsActiveDock && { activeDockTerminalId: null }),

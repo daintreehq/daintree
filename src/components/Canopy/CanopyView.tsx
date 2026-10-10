@@ -211,6 +211,19 @@ export function CanopyView() {
   const applySnapshot = useCanopyStore((s) => s.applySnapshot);
   useOverlayClaim("canopy", isOpen);
   const still = useFrozenBackdrop(isOpen);
+  // What had the keyboard when the panel opened, kept here because the dialog
+  // can be replaced while open (loading, then the offer or the inbox), and a
+  // new one would take the old one's own content for its opener.
+  const openerRef = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    const active = document.activeElement;
+    openerRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
+  }, [isOpen]);
+  const restoreOpener = useCallback(
+    () => (openerRef.current?.isConnected ? openerRef.current : null),
+    []
+  );
   const loadingRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!isOpen || activated !== null) return;
@@ -247,6 +260,8 @@ export function CanopyView() {
         maxHeight="h-[min(90vh,1100px)]"
         // Nothing to land on yet, and Close is no place for a reflexive Enter.
         initialFocus="none"
+        restoreFocusTo={restoreOpener}
+        preferRestoreFocusTo
         backdrop={backdrop}
         data-testid="canopy-dialog"
       >
@@ -273,10 +288,11 @@ export function CanopyView() {
         backdrop={backdrop}
         onTurnOn={() => window.electron.canopy.setMode("on").then(applySnapshot)}
         onHide={hideCanopy}
+        restoreFocusTo={restoreOpener}
       />
     );
   }
-  return <CanopyInbox backdrop={backdrop} />;
+  return <CanopyInbox backdrop={backdrop} restoreOpener={restoreOpener} />;
 }
 
 interface ShortcutRow {
@@ -397,7 +413,14 @@ function CanopyShortcuts() {
   );
 }
 
-function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
+function CanopyInbox({
+  backdrop,
+  restoreOpener,
+}: {
+  backdrop: React.ReactNode;
+  /** What had the keyboard when the panel opened, while it is still there. */
+  restoreOpener: () => HTMLElement | null;
+}) {
   const isOpen = useCanopyStore((s) => s.isOpen);
   const close = useCanopyStore((s) => s.close);
   const canopy = useCanopyStore((s) => s.snapshot);
@@ -1443,7 +1466,7 @@ function CanopyInbox({ backdrop }: { backdrop: React.ReactNode }) {
       // first-control focus would race it. With no rows to land on, the first
       // control takes focus instead of leaving it on whatever opened the panel.
       initialFocus={listed.length > 0 ? "none" : "first"}
-      restoreFocusTo={() => focusAfterCloseRef.current}
+      restoreFocusTo={() => focusAfterCloseRef.current ?? restoreOpener()}
       preferRestoreFocusTo
       backdrop={backdrop}
       data-testid="canopy-dialog"

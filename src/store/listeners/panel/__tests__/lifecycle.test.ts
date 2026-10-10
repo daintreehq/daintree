@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useUIStore } from "@/store/uiStore";
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { usePanelStore } from "@/store/panelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -417,6 +418,19 @@ describe("onRestored — dock popover preservation (#8368)", () => {
     return handler;
   }
 
+  it("leaves focus where it is while an overlay holds the keyboard", () => {
+    setupPanel({ location: "grid" });
+    usePanelStore.setState({ focusedId: "other" });
+    useUIStore.setState({ overlayStack: ["canopy"] });
+    try {
+      getRestoredHandler()({ id: "term-1" });
+      // Focusing the pane would send the keys behind Canopy.
+      expect(usePanelStore.getState().focusedId).toBe("other");
+    } finally {
+      useUIStore.setState({ overlayStack: [] });
+    }
+  });
+
   it("does not clear an unrelated open dock popover when a background terminal restores", () => {
     setupPanel();
     usePanelStore.setState({ activeDockTerminalId: "dock-1", focusedId: "dock-1" });
@@ -617,6 +631,22 @@ describe("onRestoreRequested — Canopy trash undone", () => {
     // Main restored it on the host already: a second restore could undo a
     // trash another window made in between.
     expect(restore).not.toHaveBeenCalled();
+  });
+
+  it("brings the pane back without taking the keyboard from behind Canopy", () => {
+    setupPanel();
+    usePanelStore.setState({ focusedId: "other" });
+    const { trash, restoreRequest } = getHandlers();
+    trash({ runId: "term-1" });
+    usePanelStore.setState({ focusedId: "other" });
+    useUIStore.setState({ overlayStack: ["canopy"] });
+    try {
+      restoreRequest({ runId: "term-1" });
+      expect(usePanelStore.getState().panelsById["term-1"]?.location).not.toBe("trash");
+      expect(usePanelStore.getState().focusedId).toBe("other");
+    } finally {
+      useUIStore.setState({ overlayStack: [] });
+    }
   });
 
   it("ignores a pane that isn't in the trash, or one it does not hold", () => {
