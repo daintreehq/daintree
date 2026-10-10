@@ -64,70 +64,79 @@ function currentCandidates(): IdleProject[] {
 /**
  * The subset of `ids` that is still idle by every live reading: the stats, any
  * window showing it, and every terminal it owns — assistants included, hidden
- * or not. A reading that fails rules the project out.
+ * or not. Local eligibility is read again after the awaits, so a project that
+ * came on screen or started work meanwhile drops out. A reading that fails, or
+ * that finds no terminals for a project the stats say has some (a host shard
+ * that didn't answer reads as empty), rules the project out.
  */
 async function confirmStillIdle(ids: readonly string[]): Promise<IdleProject[]> {
   const wanted = new Set(ids);
-  const candidates = currentCandidates().filter((project) => wanted.has(project.id));
-  if (candidates.length === 0) return [];
-  let shownElsewhere: Set<string>;
+  if (!currentCandidates().some((project) => wanted.has(project.id))) return [];
+  let shownSomewhere: Set<string>;
+  let terminals: Awaited<ReturnType<typeof terminalClient.getAll>>;
   try {
-    const presence = await projectPresenceClient.getSnapshot();
-    shownElsewhere = new Set(
+    const [presence, all] = await Promise.all([
+      projectPresenceClient.getSnapshot(),
+      terminalClient.getAll(),
+    ]);
+    shownSomewhere = new Set(
       [...presence.thisWindow, ...presence.otherWindows]
         .filter((entry) => entry.state !== "cached")
         .map((entry) => entry.projectId)
     );
+    terminals = all;
   } catch {
     return [];
   }
-  const checked = await Promise.all(
-    candidates.map(async (project) => {
-      if (shownElsewhere.has(project.id)) return null;
-      try {
-        const terminals = await terminalClient.getForProject(project.id);
-        const busy = terminals.some(
-          (t) => t.agentState === "working" || t.agentState === "directing"
-        );
-        return busy ? null : project;
-      } catch {
-        return null;
-      }
-    })
-  );
-  return checked.filter((project): project is IdleProject => project !== null);
+  const liveByProject = new Map<string, { count: number; busy: boolean }>();
+  for (const t of terminals) {
+    // An exited agent can keep a stale `working` on its record.
+    if (!t.projectId || t.isTrashed || t.hasPty === false) continue;
+    const live = liveByProject.get(t.projectId) ?? { count: 0, busy: false };
+    live.count++;
+    if (t.agentState === "working" || t.agentState === "directing") live.busy = true;
+    liveByProject.set(t.projectId, live);
+  }
+  return currentCandidates().filter((project) => {
+    if (!wanted.has(project.id) || shownSomewhere.has(project.id)) return false;
+    const live = liveByProject.get(project.id);
+    if (live?.busy) return false;
+    return project.terminalCount === 0 || (live?.count ?? 0) > 0;
+  });
 }
 
 /**
- * One batch at a time, app-wide for this view. Module scope rather than
- * component state: the notice that owns the button clears on recovery, and a
- * batch it started has to keep its guard until it settles.
+ * Batches run one after another, app-wide for this view: a retry landing while
+ * a confirmed batch is still going waits its turn rather than overlapping it or
+ * being dropped. Module scope rather than component state, because the notice
+ * that owns the button clears on recovery and a batch it started must outlive
+ * it.
  */
-let batchInFlight = false;
+let batchQueue: Promise<void> = Promise.resolve();
+
+function sleepProjects(ids: readonly string[]): Promise<void> {
+  const run = batchQueue.then(() => runBatch(ids));
+  batchQueue = run;
+  return run;
+}
 
 /**
  * Sleeps each project in turn through the store, so each gets the project
  * switcher's ordered teardown. Each is re-checked right before its own sleep —
  * an earlier one in the batch can take a while, and nothing in main refuses a
  * project that started work since the preview. A failure doesn't stop the
- * rest; the failures are reported together, once.
+ * rest; the failures are reported together, once. Never rejects.
  */
-async function sleepProjects(ids: readonly string[]): Promise<void> {
-  if (batchInFlight) return;
-  batchInFlight = true;
+async function runBatch(ids: readonly string[]): Promise<void> {
   const failed: Array<{ project: IdleProject; error: unknown }> = [];
-  try {
-    for (const id of ids) {
-      const [project] = await confirmStillIdle([id]);
-      if (!project) continue;
-      try {
-        await useProjectStore.getState().sleepProject(project.id);
-      } catch (error) {
-        failed.push({ project, error });
-      }
+  for (const id of ids) {
+    const [project] = await confirmStillIdle([id]);
+    if (!project) continue;
+    try {
+      await useProjectStore.getState().sleepProject(project.id);
+    } catch (error) {
+      failed.push({ project, error });
     }
-  } finally {
-    batchInFlight = false;
   }
   if (failed.length === 0) return;
 
@@ -179,7 +188,6 @@ export function useSleepIdleProjects(): SleepIdleProjects {
   const [isSleeping, setIsSleeping] = useState(false);
 
   const openPreview = useCallback(async () => {
-    if (batchInFlight) return;
     const checked = await confirmStillIdle(idleProjects.map((project) => project.id));
     if (checked.length > 0) {
       setPreview(checked);
@@ -199,16 +207,13 @@ export function useSleepIdleProjects(): SleepIdleProjects {
   }, [isSleeping]);
 
   const confirm = useCallback(async () => {
-    if (!preview || isSleeping || batchInFlight) return;
+    if (!preview || isSleeping) return;
     setIsSleeping(true);
-    try {
-      // Only ever narrows what the user saw: a project that changed since the
-      // preview is skipped, never swapped in.
-      await sleepProjects(preview.map((project) => project.id));
-    } finally {
-      setIsSleeping(false);
-      setPreview(null);
-    }
+    // Only ever narrows what the user saw: a project that changed since the
+    // preview is skipped, never swapped in.
+    await sleepProjects(preview.map((project) => project.id));
+    setIsSleeping(false);
+    setPreview(null);
   }, [preview, isSleeping]);
 
   return { idleProjects, preview, isSleeping, openPreview, closePreview, confirm };

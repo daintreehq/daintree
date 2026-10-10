@@ -4187,6 +4187,30 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
       });
     });
 
+    it("acts on the reading it counted rather than reading again", async () => {
+      setAvailableMb(2500);
+      await seedThreeViews(manager);
+      // Past the critical floor, short of the swap one.
+      for (const entry of manager.views.values()) {
+        entry.lastUsed -= MIN_CRITICAL_PRESSURE_EVICTION_AGE_MS + 30_000;
+      }
+      // The sampler's own reads fail; a third, fresh read would land critical
+      // and swap the five-minute floor for the one-minute one.
+      let reads = 0;
+      Object.defineProperty(process, "getSystemMemoryInfo", {
+        configurable: true,
+        value: () => {
+          reads++;
+          return { free: reads <= 2 ? Number.NaN : 500 * 1024, total: 8 * 1024 * 1024 };
+        },
+      });
+      recordSwapPressure(true);
+      tickPressureCheck(manager);
+      tickPressureCheck(manager);
+      expect(reads).toBe(2);
+      expect(evictedProjectIds()).toEqual([]);
+    });
+
     it("ignores a verdict that has gone stale", async () => {
       setAvailableMb(2500);
       await seedThreeViews(manager);

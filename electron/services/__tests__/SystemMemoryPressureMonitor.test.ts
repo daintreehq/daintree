@@ -244,6 +244,31 @@ describe("createSystemMemoryPressureMonitor", () => {
       expect(onSwapPressure).toHaveBeenLastCalledWith(true);
     });
 
+    it("does not count across a wall clock that stepped backwards", async () => {
+      const onSwapPressure = vi.fn();
+      let wall = 1_000_000;
+      const monitor = createSystemMemoryPressureMonitor({
+        isDarwin: true,
+        swapKind: "swap",
+        readSwap: async () => bigSwapAt(94),
+        readFseventsdRssMb: async () => 100,
+        readKernelPressureLevel: async () => 2,
+        publish,
+        onSwapPressure,
+        now: () => now,
+        wallNow: () => wall,
+      });
+      await monitor.sample();
+      now += SAMPLE_INTERVAL_MS;
+      wall -= 10 * 60_000;
+      await monitor.sample();
+      expect(onSwapPressure).not.toHaveBeenCalledWith(true);
+      now += SAMPLE_INTERVAL_MS;
+      wall += SAMPLE_INTERVAL_MS;
+      await monitor.sample();
+      expect(onSwapPressure).toHaveBeenLastCalledWith(true);
+    });
+
     it("discards a sample whose probes straddled a sleep", async () => {
       const onSwapPressure = vi.fn();
       const { tick } = makeMonitor({

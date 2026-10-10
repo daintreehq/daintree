@@ -242,8 +242,11 @@ export function createSystemMemoryPressureMonitor(
   ) {
     const { swap, kernelPressureLevel } = sample;
     const finishedAt = wallNow();
-    const spannedSuspend = finishedAt - startedAt > PROBE_TIMEOUT_MS * 2;
-    if (finishedAt - lastSwapSampleAt > SWAP_PRESSURE_STALE_MS) swapPressureStreak = 0;
+    // A clock that stepped backwards can hide a sleep, so it counts as one.
+    const probeMs = finishedAt - startedAt;
+    const spannedSuspend = probeMs < 0 || probeMs > PROBE_TIMEOUT_MS * 2;
+    const gapMs = finishedAt - lastSwapSampleAt;
+    if (gapMs < 0 || gapMs > SWAP_PRESSURE_STALE_MS) swapPressureStreak = 0;
     lastSwapSampleAt = finishedAt;
     const qualifies =
       !spannedSuspend &&

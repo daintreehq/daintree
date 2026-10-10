@@ -32,7 +32,7 @@ afterEach(() => {
   useProjectStatsStore.setState({ stats: {} });
 });
 
-function seedIdleProjects(ids: string[]) {
+function seedIdleProjects(ids: string[], waitingAgentCount = 2) {
   useProjectStore.setState({
     projects: ids.map((id): Project => ({
       id,
@@ -50,7 +50,7 @@ function seedIdleProjects(ids: string[]) {
         id,
         {
           activeAgentCount: 0,
-          waitingAgentCount: 2,
+          waitingAgentCount,
           processCount: 0,
           blockedAgentCount: 0,
           completedAgentCount: 0,
@@ -144,7 +144,7 @@ describe("SidebarMemoryNotice", () => {
       thisWindow: [],
       otherWindows: [],
     });
-    vi.spyOn(terminalClient, "getForProject").mockResolvedValue([]);
+    vi.spyOn(terminalClient, "getAll").mockResolvedValue([]);
     const { container } = renderRow();
 
     await act(async () => {
@@ -168,5 +168,28 @@ describe("SidebarMemoryNotice", () => {
       fireEvent.click(confirm);
     });
     expect(sleepProject.mock.calls.map(([id]) => id)).toEqual(["a", "b"]);
+  });
+
+  it("says the terminals stop even when it has no counts to show", async () => {
+    act(() => {
+      seedIdleProjects(["a"], 0);
+      useSystemMemoryNoticeStore
+        .getState()
+        .setNotice({ reading: READING, detail: DETAIL, action: null });
+    });
+    vi.spyOn(projectPresenceClient, "getSnapshot").mockResolvedValue({
+      thisWindow: [],
+      otherWindows: [],
+    });
+    vi.spyOn(terminalClient, "getAll").mockResolvedValue([]);
+    const { container } = renderRow();
+
+    await act(async () => {
+      fireEvent.click(container.querySelector("[data-sidebar-memory-sleep]")!);
+    });
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("Sleep 'Project a'?");
+    expect(dialog.textContent).toContain("Its terminals will be stopped");
+    expect(dialog.textContent).not.toContain("waiting agent");
   });
 });
