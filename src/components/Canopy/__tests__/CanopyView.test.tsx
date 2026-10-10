@@ -957,6 +957,28 @@ describe("CanopyView", () => {
     }
   });
 
+  it("hands the keyboard to the offer when reading is turned off while the inbox is open", async () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    try {
+      installElectron();
+      render(<CanopyView />);
+      await frames();
+      expect(document.activeElement?.closest("[data-testid=canopy-dialog]")).not.toBeNull();
+      // Turned off from another view: the offer replaces the inbox.
+      await act(async () => {
+        useCanopyStore
+          .getState()
+          .applySnapshot({ ...canopySnapshot, mode: "unset", activated: false });
+      });
+      expect(document.activeElement).not.toBe(opener);
+      expect(document.activeElement?.closest("[data-testid=canopy-dialog]")).not.toBeNull();
+    } finally {
+      opener.remove();
+    }
+  });
+
   it("reads a row's screen again from its menu, for a reading that looks wrong", async () => {
     const canopy = installElectron();
     const { container } = render(<CanopyView />);

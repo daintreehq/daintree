@@ -397,14 +397,16 @@ export function CanopyCard({
   const focusFrameRef = useRef(0);
   useEffect(() => () => cancelAnimationFrame(focusFrameRef.current), []);
   const focusComposer = (): boolean => {
-    if (!canReply || !composerRef.current) return false;
+    if (!canReply) return false;
     cancelAnimationFrame(focusFrameRef.current);
+    // The composer is a lazy chunk: on a cold pane it may not exist yet, so
+    // the handoff keeps trying while it loads, as the pane's own does.
     const attempt = (tries: number) => {
       composerRef.current?.focus();
       const landed = sectionRef.current
         ?.querySelector(".cm-editor")
         ?.contains(document.activeElement);
-      if (!landed && tries < 30) {
+      if (!landed && tries < 240) {
         focusFrameRef.current = requestAnimationFrame(() => attempt(tries + 1));
       }
     };

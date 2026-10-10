@@ -308,7 +308,7 @@ export function CanopyView() {
       />
     );
   }
-  return <CanopyInbox backdrop={backdrop} restoreOpener={restoreOpener} />;
+  return <CanopyInbox backdrop={backdrop} restoreOpener={restoreOnReplace} />;
 }
 
 interface ShortcutRow {
