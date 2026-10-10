@@ -238,7 +238,9 @@ import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapsho
 import {
   MIN_CRITICAL_PRESSURE_EVICTION_AGE_MS,
   MIN_PRESSURE_EVICTION_AGE_MS,
+  backgroundRestoreCapacity,
 } from "../ProjectViewEvictionController.js";
+import { recordSwapPressure, SWAP_PRESSURE_STALE_MS } from "../../services/systemSwapPressure.js";
 
 // The shared snapshot is module-level state; without a reset, a test could be
 // served metrics cached by the previous test's differently-mocked sweep.
@@ -4064,6 +4066,127 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
       expect(mgr.softPressureUnproductivePasses).toBe(0);
       for (let tick = 0; tick < 3; tick++) tickPressureCheck(mgr);
       expect(evictedProjectIds()).toEqual(["proj-a", "proj-b"]);
+    });
+  });
+
+  describe("kernel-plus-swap pressure (#13223)", () => {
+    const logged = (event: string) =>
+      vi
+        .mocked(logInfo)
+        .mock.calls.filter(([name]) => name === event)
+        .map(([, ctx]) => ctx as Record<string, unknown>);
+
+    afterEach(() => recordSwapPressure(false));
+
+    it("sheds a view per confirmed tick toward the active view while availability reads healthy", async () => {
+      setAvailableMb(2500);
+      await seedThreeViews(manager);
+      ageViewsPastPressureFloor(manager);
+      recordSwapPressure(true);
+
+      tickPressureCheck(manager);
+      expect(evictedProjectIds()).toEqual([]);
+      tickPressureCheck(manager);
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+      tickPressureCheck(manager);
+      expect(evictedProjectIds()).toEqual(["proj-a", "proj-b"]);
+
+      expect(logged("projectview.pressure-override")[0]).toMatchObject({
+        pressureLevel: "critical",
+        pressureSource: "kernel-swap",
+        forced: false,
+        evictionBudget: 1,
+      });
+    });
+
+    it("targets the critical band from inside the soft band, past the backoff latch", async () => {
+      setAvailableMb(2500);
+      const mgr = makeManager(5);
+      mgr.setMemoryPressurePolicy(BAND);
+      mgr.registerInitialView(
+        { webContents: createMockWebContents(), setBounds: vi.fn() } as never,
+        "proj-a",
+        "/path/a"
+      );
+      for (const id of ["b", "c", "d", "e"]) {
+        await mgr.switchTo(`proj-${id}`, `/path/${id}`);
+        await flushImmediates();
+      }
+      // 1800MB is the reporter's reading: soft, with a settled target of four.
+      setAvailableMb(1800);
+      armPressureLadder(mgr);
+      tickPressureCheck(mgr);
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+      for (let tick = 0; tick < 3; tick++) tickPressureCheck(mgr);
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+
+      // Lower, still soft: availability alone latches after two flat passes.
+      setAvailableMb(1300);
+      for (let tick = 0; tick < 4; tick++) tickPressureCheck(mgr);
+      expect(mgr.softPressureBackoffLatched).toBe(true);
+      const beforeSwap = evictedProjectIds().length;
+
+      recordSwapPressure(true);
+      tickPressureCheck(mgr);
+      tickPressureCheck(mgr);
+      expect(evictedProjectIds().length).toBe(beforeSwap + 2);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-e"]);
+      // Swap passes leave no availability verdict behind to latch on.
+      expect(mgr.pendingSoftPressureEviction).toBeNull();
+    });
+
+    it("keeps the soft band's minimum age for a view the user only just left", async () => {
+      setAvailableMb(2500);
+      await seedThreeViews(manager);
+      recordSwapPressure(true);
+      tickPressureCheck(manager);
+      tickPressureCheck(manager);
+      expect(evictedProjectIds()).toEqual([]);
+      expect(
+        vi
+          .mocked(logInfo)
+          .mock.calls.filter(([event]) => event === "projectview.eviction-deferred")
+          .map(([, ctx]) => (ctx as { minimumAgeMs: number }).minimumAgeMs)
+      ).toContain(MIN_PRESSURE_EVICTION_AGE_MS);
+    });
+
+    it("stops, and needs a fresh confirmation, once the swap verdict clears", async () => {
+      setAvailableMb(2500);
+      await seedThreeViews(manager);
+      ageViewsPastPressureFloor(manager);
+      recordSwapPressure(true);
+      tickPressureCheck(manager);
+      tickPressureCheck(manager);
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+
+      recordSwapPressure(false);
+      tickPressureCheck(manager);
+      expect(manager.pressureSampleStreak).toBe(0);
+      recordSwapPressure(true);
+      tickPressureCheck(manager);
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+      tickPressureCheck(manager);
+      expect(evictedProjectIds()).toEqual(["proj-a", "proj-b"]);
+    });
+
+    it("ignores a verdict that has gone stale", async () => {
+      setAvailableMb(2500);
+      await seedThreeViews(manager);
+      ageViewsPastPressureFloor(manager);
+      recordSwapPressure(true, Date.now() - SWAP_PRESSURE_STALE_MS - 1);
+      tickPressureCheck(manager);
+      tickPressureCheck(manager);
+      expect(evictedProjectIds()).toEqual([]);
+    });
+
+    it("refuses a background restore while it holds", async () => {
+      setAvailableMb(2500);
+      const mgr = makeManager(5);
+      mgr.setMemoryPressurePolicy(BAND);
+      await seedThreeViews(mgr);
+      expect(backgroundRestoreCapacity(mgr)).toBe("available");
+      recordSwapPressure(true);
+      expect(backgroundRestoreCapacity(mgr)).toBe("pressure");
     });
   });
 });
