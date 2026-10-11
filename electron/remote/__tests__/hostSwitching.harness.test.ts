@@ -170,6 +170,8 @@ vi.mock("../../window/windowRef.js", async (importOriginal) => ({
             windowId: shellWindow.id,
             browserWindow: shellWindow,
             services: { projectViewManager: fakePvm },
+            // The window's own cleanup, as WindowContext has; this window is never closed here.
+            cleanup: { add: () => undefined },
           }
         : undefined,
   }),
