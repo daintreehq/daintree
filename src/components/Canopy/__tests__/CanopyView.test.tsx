@@ -922,15 +922,21 @@ describe("CanopyView", () => {
     delete (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__;
   });
 
-  it("reads a run the arrow keys move onto, as a click would", async () => {
-    installElectron();
+  it("looks at a run the arrow keys move onto, leaving the reading to the look", async () => {
+    const canopy = installElectron({
+      ...canopySnapshot,
+      reads: [unreadMark("waiting", 2), unreadMark("asking", 1)],
+    });
     const { container } = render(<CanopyView />);
     await frames();
     const [first, second] = cards(container);
+    canopy.markSeen.mockClear();
     fireEvent.keyDown(first!, { key: "ArrowDown" });
     expect(document.activeElement).toBe(second);
-    expect(second!.hasAttribute("data-unread")).toBe(false);
     expect(liveRun(container)).toBe("asking");
+    // A look begins there; arrowing past reads nothing by itself, unlike a click.
+    expect(canopy.markSeen).toHaveBeenCalledWith("asking", true, "panel");
+    expect(canopy.setRead).not.toHaveBeenCalled();
   });
 
   it("opens a run's terminal on a click, not a hover, and reads it through the turn it showed", async () => {
@@ -1519,7 +1525,11 @@ describe("CanopyView", () => {
         snapshot: {
           ...canopySnapshot,
           refreshedAt: NOW + 20_000,
-          cards: [{ ...stuckCard("working"), priority: 84, attentionScore: 84 }],
+          // Far enough above the quiet question to pass it, were the list not held.
+          cards: [
+            { ...stuckCard("working"), priority: 84, attentionScore: 84 },
+            quietQuestion("asking"),
+          ],
         },
       })
     );
@@ -1565,7 +1575,11 @@ describe("CanopyView", () => {
         snapshot: {
           ...owed,
           refreshedAt: NOW + 20_000,
-          cards: [{ ...stuckCard("working"), priority: 84, attentionScore: 84 }],
+          // Far enough above the quiet question to pass it, were the list not held.
+          cards: [
+            { ...stuckCard("working"), priority: 84, attentionScore: 84 },
+            quietQuestion("asking"),
+          ],
         },
       })
     );

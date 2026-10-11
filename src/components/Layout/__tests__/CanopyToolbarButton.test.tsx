@@ -177,7 +177,9 @@ describe("CanopyToolbarButton", () => {
   it("does not swallow a prompt that turns urgent after the panel showed it calm", async () => {
     main = snapshot(true, { cards: [card("r1", 60)] });
     await pip();
+    // The open panel showed it, calm: what it acknowledged was no urgent prompt.
     act(() => useCanopyStore.getState().open());
+    act(() => useCanopyStore.getState().acknowledge(["r1"]));
     act(() => useCanopyStore.getState().close());
     main = snapshot(true, { cards: [card("r1", 92)] });
     expect(await pip()).toMatchObject({ label: "Canopy, 1 urgent", visible: "true" });

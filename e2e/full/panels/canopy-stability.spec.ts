@@ -178,9 +178,15 @@ let binDir: string;
 /** Every reader call the app makes, one JSON line each (`DAINTREE_CANOPY_TRACE`). */
 let tracePath: string;
 
-/** The reader calls made since `since`: which stage, for which pane. */
-/** The reader calls that answered since `since`: which stage, for which pane. */
-function readsSince(since: number): Array<{ stage: string; run: string }> {
+/**
+ * The reader calls made since `since`: which stage, for which pane. Every call
+ * by default — a read that failed or was cancelled was still a read — or only
+ * those that answered.
+ */
+function readsSince(
+  since: number,
+  { answered = false }: { answered?: boolean } = {}
+): Array<{ stage: string; run: string }> {
   if (!existsSync(tracePath)) return [];
   const calls: Array<{ at: number; stage: string; error?: string; input?: { runId?: string } }> =
     [];
@@ -192,7 +198,7 @@ function readsSince(since: number): Array<{ stage: string; run: string }> {
     }
   }
   return calls
-    .filter((call) => call.at >= since && call.error === undefined)
+    .filter((call) => call.at >= since && (!answered || call.error === undefined))
     .map((call) => ({ stage: call.stage, run: call.input?.runId ?? "" }));
 }
 let cleanupFixture: (() => void) | undefined;
@@ -893,8 +899,9 @@ test.describe("Canopy stability against the live service", () => {
     await expect
       .poll(
         () =>
-          readsSince(asked).filter((call) => call.run === question && call.stage === "classifier")
-            .length,
+          readsSince(asked, { answered: true }).filter(
+            (call) => call.run === question && call.stage === "classifier"
+          ).length,
         { timeout: 60_000, intervals: [1_000] }
       )
       .toBeGreaterThan(0);

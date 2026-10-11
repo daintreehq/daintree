@@ -4,7 +4,8 @@ import { renderHook } from "@testing-library/react";
 
 const useDoubleShift = vi.hoisted(() => vi.fn());
 vi.mock("@/hooks/useDoubleShift", () => ({ useDoubleShift }));
-vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() } }));
+const dispatch = vi.hoisted(() => vi.fn());
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useCanopyStore } from "@/store/canopyStore";
@@ -14,6 +15,7 @@ afterEach(() => {
   useCanopyStore.setState({ mode: "unset" });
   usePreferencesStore.setState({ doubleShiftOpensCanopy: true });
   useDoubleShift.mockClear();
+  dispatch.mockClear();
 });
 
 describe("useCanopyDoubleShift", () => {
@@ -30,5 +32,14 @@ describe("useCanopyDoubleShift", () => {
     expect(enabledFor("on", false)).toBe(false);
     expect(enabledFor("unset", true)).toBe(false);
     expect(enabledFor("hidden", true)).toBe(false);
+  });
+
+  it("toggles Canopy through its action when the gesture fires", () => {
+    useCanopyStore.setState({ mode: "on" });
+    renderHook(() => useCanopyDoubleShift());
+    expect(dispatch).not.toHaveBeenCalled();
+    const fire = useDoubleShift.mock.calls.at(-1)?.[0] as () => void;
+    fire();
+    expect(dispatch.mock.calls).toEqual([["canopy.toggle", undefined, { source: "keybinding" }]]);
   });
 });

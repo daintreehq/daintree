@@ -372,6 +372,14 @@ describe("CanopyTerminal", () => {
     expect(pane.events).toEqual(["hold run-1", "handed back", "release run-1"]);
   });
 
+  it("freezes no pane for a stream that opens only after the view went away", async () => {
+    const { unmount } = mount();
+    unmount();
+    await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+    expect(pane.events).toEqual([]);
+    expect(window.electron.canopy.unwatchTerminal).toHaveBeenCalled();
+  });
+
   it("says it couldn't show a terminal the host had no screen for, with the way to see it", async () => {
     const onGoTo = vi.fn();
     const { container } = mount(onGoTo);

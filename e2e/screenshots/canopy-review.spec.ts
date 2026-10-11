@@ -253,8 +253,11 @@ for (const theme of THEMES) {
     await expect(page.getByText("In a reply or the terminal")).toBeVisible();
     written.push(await snap(page, `${theme}--12-shortcuts.png`, FLEET_CARDS));
 
+    // The theme's own prefix, then a numbered panel capture: theme ids carry
+    // hyphens of their own, and the row tests write `--r…` captures beside these.
+    const prefix = `${theme}--`;
     const onDisk = readdirSync(OUT_DIR).filter(
-      (f) => /^[^-]+--\d/.test(f) && f.startsWith(`${theme}--`)
+      (f) => f.startsWith(prefix) && /^\d.*\.png$/.test(f.slice(prefix.length))
     );
     expect(onDisk.sort()).toEqual(written.map((f) => path.basename(f)).sort());
   });

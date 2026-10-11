@@ -1070,7 +1070,7 @@ export async function refreshActiveWindow(app: ElectronApplication, oldPage?: Pa
     // silently dropped on macOS even when the document has focus. Pressing
     // and releasing a harmless modifier here ensures the input channel is
     // primed before tests send their real shortcut presses. Avoid bare Shift:
-    // the app intentionally treats double-Shift as the Action Palette toggle.
+    // a double tap of it opens Canopy.
     await newWindow.keyboard.press("Control").catch(() => {});
   } catch {
     // Best-effort focus; tests can still proceed.
