@@ -639,16 +639,26 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
             </p>
           )
         )}
-        {isMac() && (
+        {(isMac() || probe?.platform === "darwin") && (
           <div>
             <p className="font-medium text-text-primary">Local network</p>
-            <p className="text-text-secondary">
-              macOS may ask whether Daintree can find devices on your local network. Whether a
-              connection needs it depends on how macOS routes to that host, not on its address, so
-              allow it if you use hosts on your network. If it&apos;s denied, connections macOS
-              treats as local fail until Daintree is turned on in System Settings → Privacy &amp;
-              Security → Local Network.
-            </p>
+            {isMac() && (
+              <p className="text-text-secondary">
+                macOS may ask whether Daintree can find devices on your local network. Whether a
+                connection needs it depends on how macOS routes to that host, not on its address, so
+                allow it if you use hosts on your network. If it&apos;s denied, connections macOS
+                treats as local fail until Daintree is turned on in System Settings → Privacy &amp;
+                Security → Local Network.
+              </p>
+            )}
+            {probe?.platform === "darwin" && (
+              <p className="text-text-secondary">
+                {hostLabel} asks the same on its own screen, for everything its terminals and agents
+                run. Until someone allows Daintree there, or turns it on in that Mac&apos;s Local
+                Network settings, they can&apos;t reach other machines on your network, and names
+                like .local can take half a minute to look up.
+              </p>
+            )}
           </div>
         )}
         {(probe?.suggestedCommands ?? []).map((c) => (

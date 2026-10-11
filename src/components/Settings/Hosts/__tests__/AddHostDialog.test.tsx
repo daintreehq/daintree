@@ -375,6 +375,33 @@ describe("AddHostDialog", () => {
     ).toBeTruthy();
   });
 
+  it("tells a Mac host's terminals need Local Network approved there, and says nothing of it for Linux", async () => {
+    const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    try {
+      const advise = async () => {
+        render(<AddHostDialog isOpen onClose={() => {}} />);
+        fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
+          target: { value: "greg@studio" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+        await screen.findByText("Keychain");
+      };
+      await advise();
+      const copy = screen.getByText(/asks the same on its own screen/).textContent!;
+      expect(copy).toContain("terminals and agents");
+      expect(screen.queryByText(/find devices on your local network/)).toBeNull();
+      cleanup();
+
+      remoteHosts.probe!.mockResolvedValue(probeResult({ platform: "linux" }));
+      await advise();
+      expect(screen.queryByText("Local network")).toBeNull();
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
   it("explains Local Network permission by routing, never promising tailnet hosts work", async () => {
     const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
     try {
