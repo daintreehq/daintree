@@ -2,14 +2,15 @@
  * Cosmetic cleanup for agent-emitted OSC task titles before display.
  *
  * Agents decorate their window titles with status glyphs: leading spinner
- * sets (Claude's `✳ ✻ ✶ …`, the braille spinners U+2800–U+28FF used by Codex
- * and Grok) and trailing state glyphs (Gemini's `✦/◇/✋`). Daintree renders
- * its own agent state indicators, so the glyph is noise — and it flips with
+ * sets (Claude's `✳ ✻ ✶ …` and its working-title half circles `◐ ◓ ◑ ◒`, the
+ * braille spinners U+2800–U+28FF used by Codex and Grok) and trailing state
+ * glyphs (Gemini's `✦/◇/✋`). Daintree renders its own agent state
+ * indicators, so the glyph is noise — and it flips with
  * agent state, which would make composed tab titles churn. Strip glyph
  * clusters from both ends for display; the raw title stays in
  * `lastObservedTitle` and session history records.
  */
-const STATUS_GLYPHS = "✢✳✶✻✽✼✾✦✧⟡◇◆○●★☆✋⏺∙∘◎◉⠀-⣿🌑-🌘";
+const STATUS_GLYPHS = "✢✳✶✻✽✼✾✦✧⟡◇◆○●◐-◓★☆✋⏺∙∘◎◉⠀-⣿🌑-🌘";
 // `· • *` are plausible trailing text ("document glob *"), so they only
 // count as spinner noise in the leading position.
 const LEADING_ONLY_GLYPHS = "·•*░█";

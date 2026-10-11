@@ -135,6 +135,7 @@ import type {
 } from "../../shared/types/terminal.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
+import { terminalAnswerOf, type TerminalAnswer } from "../../shared/utils/terminalSubmission.js";
 import type { TerminalHandback } from "../../shared/types/handback.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -336,6 +337,17 @@ function withCurrentWindowsPath(options: PtyHostSpawnOptions): PtyHostSpawnOptio
   return { ...options, env: { ...(options.env ?? {}), PATH: currentPath } };
 }
 
+/**
+ * Input that answered what a terminal's screen asked, whoever sent it: Return,
+ * a submitted line, or a key that answers an approval menu by itself (see
+ * `terminalAnswerOf`). Emitted as `"terminal-input"` with the terminal id, so a
+ * reader of the screen can tell it was answered without waiting for the screen
+ * to change. Typing that answers nothing is not reported.
+ */
+export interface TerminalInputNotice {
+  answer: TerminalAnswer;
+}
+
 export class PtyClient extends EventEmitter {
   private config: ResolvedPtyClientConfig;
   private isDisposed = false;
@@ -402,7 +414,11 @@ export class PtyClient extends EventEmitter {
    * replay (#12498). Keyed by id, tagged with the displacing generation.
    */
   private displacedSpawns = new Map<string, { byGeneration: number; entry: PtyHostSpawnOptions }>();
+  /** Terminals the host mirrors to Main: an explicit enable or any live lease. */
   private ipcDataMirrorIds = new Set<string>();
+  private ipcDataMirrorExplicit = new Set<string>();
+  /** Live leases by terminal, each its own token so a stale release finds nothing. */
+  private ipcDataMirrorLeases = new Map<string, Set<object>>();
   private pendingKillCount: Map<string, number> = new Map();
   // Main spans every renderer view; a view-local restart guard cannot protect
   // its siblings. Consumed by the old exit or retired when its successor starts.
@@ -1135,6 +1151,9 @@ export class PtyClient extends EventEmitter {
       }
       const generation = ledger.recordLaunch(id, ledgerFactsFromSpawnOptions(options));
       this.restartExitSuppression.delete(id);
+      // Whatever a duplicate spawn displaced died with the host: the replay is
+      // the incarnation now, not the one a refusal would put back.
+      this.displacedSpawns.delete(id);
       const stamped: PtyHostSpawnOptions = { ...options, launchGeneration: generation };
       this.pendingSpawns.set(id, stamped);
       this.sendSpawnWithPostInput(shard, id, stamped);
@@ -1840,6 +1859,8 @@ export class PtyClient extends EventEmitter {
 
   write(id: string, data: string, traceId?: string): void {
     this.shardForTerminal(id).send({ type: "write", id, data, traceId });
+    const answer = terminalAnswerOf(data);
+    if (answer !== null) this.emit("terminal-input", id, { answer } satisfies TerminalInputNotice);
   }
 
   submit(
@@ -1859,6 +1880,11 @@ export class PtyClient extends EventEmitter {
       ...(guard !== undefined ? { guard } : {}),
       ...(imagePaths !== undefined && imagePaths.length > 0 ? { imagePaths: [...imagePaths] } : {}),
     });
+    // A guarded submission is Daintree waking an idle agent, not anyone
+    // answering it, and the host may yet refuse it.
+    if (guard === undefined) {
+      this.emit("terminal-input", id, { answer: "submit" } satisfies TerminalInputNotice);
+    }
   }
 
   /**
@@ -1899,6 +1925,10 @@ export class PtyClient extends EventEmitter {
     for (const [shard, shardIds] of this.groupByOwnerShard(validIds)) {
       shard.send({ type: "batch-double-escape", ids: shardIds });
     }
+    // Escape declines an approval, as a single one sent by name does.
+    for (const id of validIds) {
+      this.emit("terminal-input", id, { answer: "key" } satisfies TerminalInputNotice);
+    }
   }
 
   /**
@@ -1914,6 +1944,11 @@ export class PtyClient extends EventEmitter {
     if (validIds.length === 0) return;
     for (const [shard, shardIds] of this.groupByOwnerShard(validIds)) {
       shard.send({ type: "broadcast-write", ids: shardIds, data, reportSuccess });
+    }
+    const answer = terminalAnswerOf(data);
+    if (answer === null) return;
+    for (const id of validIds) {
+      this.emit("terminal-input", id, { answer } satisfies TerminalInputNotice);
     }
   }
 
@@ -1949,6 +1984,8 @@ export class PtyClient extends EventEmitter {
     this.pendingSpawns.delete(id);
     this.displacedSpawns.delete(id);
     this.ipcDataMirrorIds.delete(id);
+    this.ipcDataMirrorExplicit.delete(id);
+    this.ipcDataMirrorLeases.delete(id);
 
     // Only track pendingKillCount for ids we've seen locally. An "exit"
     // decrement only arrives for terminals the host actually owned, so
@@ -1991,6 +2028,32 @@ export class PtyClient extends EventEmitter {
    */
   getLaunchGeneration(id: string): number | null {
     return this.pendingSpawns.get(id)?.launchGeneration ?? null;
+  }
+
+  /**
+   * The launch generation of the incarnation running under `id`, as far as main
+   * can tell: while a duplicate spawn awaits the host's answer, the one it
+   * displaced, which is still running — the host refuses a spawn over a live
+   * id, and that one is put back. Null for an unknown terminal.
+   */
+  getLiveGeneration(id: string): number | null {
+    return (
+      this.displacedSpawns.get(id)?.entry.launchGeneration ??
+      this.pendingSpawns.get(id)?.launchGeneration ??
+      null
+    );
+  }
+
+  /**
+   * Whether `generation` is the incarnation running under `id`: the one main
+   * tracks, or one a duplicate spawn still awaiting the host's answer has
+   * displaced (see `getLiveGeneration`).
+   */
+  isLiveGeneration(id: string, generation: number): boolean {
+    return (
+      this.pendingSpawns.get(id)?.launchGeneration === generation ||
+      this.displacedSpawns.get(id)?.entry.launchGeneration === generation
+    );
   }
 
   /**
@@ -2120,10 +2183,42 @@ export class PtyClient extends EventEmitter {
    */
   setIpcDataMirror(id: string, enabled: boolean): void {
     if (enabled) {
-      this.ipcDataMirrorIds.add(id);
+      this.ipcDataMirrorExplicit.add(id);
     } else {
-      this.ipcDataMirrorIds.delete(id);
+      this.ipcDataMirrorExplicit.delete(id);
     }
+    this.syncIpcDataMirror(id);
+  }
+
+  /**
+   * Mirror a terminal to Main for as long as the caller holds the lease. Leases
+   * and {@link setIpcDataMirror} stack: the mirror stays on while anyone still
+   * wants it, so a short-lived viewer can never switch off a dev preview's copy.
+   */
+  acquireIpcDataMirror(id: string): () => void {
+    const lease = {};
+    let held = this.ipcDataMirrorLeases.get(id);
+    if (!held) {
+      held = new Set();
+      this.ipcDataMirrorLeases.set(id, held);
+    }
+    held.add(lease);
+    this.syncIpcDataMirror(id);
+    return () => {
+      // A kill drops the terminal's leases; one taken out before it must not
+      // release a lease taken out since, on the terminal's next incarnation.
+      const current = this.ipcDataMirrorLeases.get(id);
+      if (!current?.delete(lease)) return;
+      if (current.size === 0) this.ipcDataMirrorLeases.delete(id);
+      this.syncIpcDataMirror(id);
+    };
+  }
+
+  private syncIpcDataMirror(id: string): void {
+    const enabled = this.ipcDataMirrorExplicit.has(id) || this.ipcDataMirrorLeases.has(id);
+    if (enabled === this.ipcDataMirrorIds.has(id)) return;
+    if (enabled) this.ipcDataMirrorIds.add(id);
+    else this.ipcDataMirrorIds.delete(id);
     this.shardForTerminal(id).send({ type: "set-ipc-data-mirror", id, enabled });
   }
 
@@ -3153,6 +3248,8 @@ export class PtyClient extends EventEmitter {
     this.windowProjectContexts.clear();
     this.windowFocusedTerminals.clear();
     this.ipcDataMirrorIds.clear();
+    this.ipcDataMirrorExplicit.clear();
+    this.ipcDataMirrorLeases.clear();
     this.terminalPids.clear();
     this.terminalOwners.clear();
     this.projectShardOverrides.clear();

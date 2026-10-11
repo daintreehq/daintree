@@ -181,7 +181,13 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
     // own event so the TERMINAL_DATA broadcast in ipc/handlers/terminal/events
     // never re-delivers it to renderers.
     case "data-mirror":
-      emitter.emit("data-mirror", event.id, event.data);
+      emitter.emit("data-mirror", event.id, event.data, event.streamEnd);
+      return true;
+
+    // Typing that reached the PTY over a renderer's MessagePort, which Main
+    // never sees otherwise; re-emitted as PtyClient's own `terminal-input`.
+    case "terminal-input":
+      emitter.emit("terminal-input", event.id, { answer: event.answer });
       return true;
 
     case "exit": {

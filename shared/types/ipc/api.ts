@@ -888,6 +888,29 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onSnapshotUpdated(callback: (snapshot: import("./fleet.js").FleetSnapshot) => void): () => void;
   };
+  /**
+   * Canopy cards for every agent run. The pulls are generated; only the push
+   * subscription is declared by hand, like `fleet`.
+   */
+  canopy: GeneratedElectronAPI["canopy"] & {
+    onSnapshotUpdated(
+      callback: (snapshot: import("./canopy.js").CanopySnapshot) => void
+    ): () => void;
+    /** Output of the terminal `watchTerminal` started streaming to this view. */
+    onTerminalData(callback: (chunk: import("./canopy.js").CanopyTerminalData) => void): () => void;
+    /** Canopy trashed a terminal this view owns: trash its pane as the user's own close would. */
+    onTrashRequested(
+      callback: (request: import("./canopy.js").CanopyTrashRequest) => void
+    ): () => void;
+    /** Canopy took back a trash of a terminal this view owns: restore its pane from the trash. */
+    onRestoreRequested(
+      callback: (request: import("./canopy.js").CanopyRestoreRequest) => void
+    ): () => void;
+    /** Canopy renamed a terminal this view owns: rename its pane as the user's own rename would. */
+    onRenameRequested(
+      callback: (request: import("./canopy.js").CanopyRenameRequest) => void
+    ): () => void;
+  };
   scratch: {
     getAll(): Promise<import("../scratch.js").Scratch[]>;
     getCurrent(): Promise<import("../scratch.js").Scratch | null>;

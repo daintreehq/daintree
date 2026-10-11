@@ -83,6 +83,51 @@ describe("getTerminalTaskTitle", () => {
     );
   });
 
+  it("Codex 0.160 frames: drops the status badge and the folder, clipped or whole", () => {
+    const base = {
+      title: "Codex",
+      detectedAgentId: "codex" as const,
+      agentState: "waiting" as const,
+      cwd: "/repo/canopy-demo-wt-cook-endpoint",
+    };
+    expect(
+      getTerminalTaskTitle({
+        ...base,
+        lastObservedTitle:
+          "[ ! ] Action Required | Implement what-can-I-cook feature | canopy-demo-wt-cook-endpoint",
+      })
+    ).toBe("Implement what-can-I-cook feature");
+    expect(
+      getTerminalTaskTitle({
+        ...base,
+        lastObservedTitle: "⠦ Implement what-can-I-cook feature | canopy-demo-wt-cook-e...",
+      })
+    ).toBe("Implement what-can-I-cook feature");
+    // A trailing segment that only shares a word with the folder is the task's own.
+    expect(getTerminalTaskTitle({ ...base, lastObservedTitle: "Wire the endpoint | cook" })).toBe(
+      "Wire the endpoint | cook"
+    );
+    // A clip too short to be sure of is left alone.
+    expect(
+      getTerminalTaskTitle({ ...base, lastObservedTitle: "Wire the endpoint | cano..." })
+    ).toBe("Wire the endpoint | cano...");
+  });
+
+  it("leaves other agents' bracketed and folder-like titles alone", () => {
+    const claude = {
+      title: "Claude",
+      detectedAgentId: "claude" as const,
+      agentState: "working" as const,
+      cwd: "/repo/tests",
+    };
+    expect(
+      getTerminalTaskTitle({ ...claude, lastObservedTitle: "[x] Fix auth: add coverage" })
+    ).toBe("[x] Fix auth: add coverage");
+    expect(getTerminalTaskTitle({ ...claude, lastObservedTitle: "Refactor parser - tests" })).toBe(
+      "Refactor parser - tests"
+    );
+  });
+
   it("workspace echo: a title that is just the cwd folder name is not a task (Codex idle)", () => {
     const codex = ptyPanel({
       detectedAgentId: "codex",

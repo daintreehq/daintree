@@ -98,3 +98,29 @@ export function ExitedCircle({ className, ...props }: CircleProps) {
     </svg>
   );
 }
+
+// The waiting ring with a question mark in it: an agent that is waiting and is
+// asking the user something. A refinement of the hollow circle, never a new
+// hue, so it still reads as waiting first.
+export function AskingCircle({ className, ...props }: CircleProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      className={className}
+      aria-hidden="true"
+      data-agent-state-glyph=""
+      {...props}
+    >
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.333" />
+      <path
+        d="M6.4 6.5a1.65 1.65 0 0 1 3.2.55c0 1.1-1.6 1.45-1.6 1.45"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="8" cy="10.75" r="0.75" fill="currentColor" />
+    </svg>
+  );
+}

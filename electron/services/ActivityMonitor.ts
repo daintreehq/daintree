@@ -38,6 +38,7 @@ import { CompletionTimer } from "./pty/CompletionTimer.js";
 import { BootDetector } from "./pty/BootDetector.js";
 import {
   classifyWaitingReason,
+  WAITING_REASON_CHECKLIST_ROWS,
   WAITING_REASON_SCAN_LINE_COUNT,
 } from "./pty/WaitingReasonClassifier.js";
 import { CpuHighStateTracker } from "./pty/CpuHighStateTracker.js";
@@ -959,6 +960,21 @@ export class ActivityMonitor {
     return createVisibleContentSnapshot(this.getVisibleLines(AGENT_OUTPUT_ACTIVITY_LINE_COUNT));
   }
 
+  /**
+   * Why the agent is waiting, read over the caller's own window — at least the
+   * classifier's, which is wider than the prompt scan since an approval's
+   * selector sits above the input box — with room beneath for the task
+   * checklist Claude Code draws under an open dialog, which is set aside
+   * rather than counted against the window.
+   */
+  private classifyReason(lines: string[], isPromptDetected: boolean): WaitingReason {
+    const rows = Math.max(lines.length, WAITING_REASON_SCAN_LINE_COUNT);
+    const wanted = rows + WAITING_REASON_CHECKLIST_ROWS;
+    const read =
+      this.getVisibleLines && lines.length < wanted ? this.getVisibleLines(wanted) : lines;
+    return classifyWaitingReason(read, isPromptDetected, rows);
+  }
+
   // The viewport can keep mutating after these signals without new PTY data
   // (async reflow/redraw), so restart the settle clock rather than just
   // dropping the cached frame.
@@ -1593,7 +1609,7 @@ export class ActivityMonitor {
       this.state = "idle";
       this.idleSince = now;
       this.patternBuf.clear();
-      const waitingReason = classifyWaitingReason(lines, true);
+      const waitingReason = this.classifyReason(lines, true);
       this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
         trigger: "pattern",
         waitingReason,
@@ -1650,7 +1666,7 @@ export class ActivityMonitor {
       this.state = "idle";
       this.idleSince = now;
       this.patternBuf.clear();
-      const waitingReason = classifyWaitingReason(lines, isPrompt);
+      const waitingReason = this.classifyReason(lines, isPrompt);
       this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
         trigger: "timeout",
         waitingReason,
@@ -1849,11 +1865,7 @@ export class ActivityMonitor {
       // Classification scans a wider window than prompt detection: approval
       // dialogs put the question + selector rows above the input-box chrome,
       // outside the 6-line prompt window.
-      const reasonLines =
-        WAITING_REASON_SCAN_LINE_COUNT > this.promptDetectorConfig.promptScanLineCount
-          ? this.getVisibleLines(WAITING_REASON_SCAN_LINE_COUNT)
-          : lines;
-      waitingReason = classifyWaitingReason(reasonLines, promptResult.isPrompt);
+      waitingReason = this.classifyReason(lines, promptResult.isPrompt);
     }
     this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
       trigger: "timeout",

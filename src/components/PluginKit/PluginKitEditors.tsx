@@ -253,9 +253,10 @@ interface FormatControl {
   icon: ReactElement;
 }
 
-// GitHub's comment-box bindings, so a hand trained there works here. Cmd+B and
-// Cmd+K are Daintree's own by default (the sidebar, the chord prefix); a combo
-// the app is bound to stays the app's and is never advertised.
+// GitHub's comment-box bindings, so a hand trained there works here. Cmd+B,
+// Cmd+E and Cmd+K are Daintree's own by default on macOS (the sidebar, Canopy,
+// the chord prefix); a combo the app is bound to stays the app's and is never
+// advertised.
 const FORMAT_CONTROLS: readonly FormatControl[] = [
   { format: "bold", label: "Bold", combo: "Cmd+B", icon: <Bold /> },
   { format: "italic", label: "Italic", combo: "Cmd+I", icon: <Italic /> },

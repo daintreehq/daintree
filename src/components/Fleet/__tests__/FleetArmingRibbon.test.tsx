@@ -652,6 +652,30 @@ describe("FleetArmingRibbon", () => {
     dispatchSpy.mockRestore();
   });
 
+  it("bare Escape Escape inside a modal's terminal leaves the fleet alone", async () => {
+    // The canopy dialog holds a live xterm of one agent; Escape there goes to
+    // that agent (and keeps the dialog open), never to the armed fleet.
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.innerHTML = '<div class="xterm"><textarea></textarea></div>';
+    document.body.appendChild(dialog);
+    const helper = dialog.querySelector("textarea")!;
+    try {
+      fireEvent.keyDown(helper, { key: "Escape" });
+      fireEvent.keyDown(helper, { key: "Escape" });
+      expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    } finally {
+      dialog.remove();
+    }
+    dispatchSpy.mockRestore();
+  });
+
   it("⌘Esc from a textarea still triggers the exit chord", () => {
     // The composer textarea is the primary input surface when armed —
     // the chord must fire from it, not be swallowed by focus heuristics.

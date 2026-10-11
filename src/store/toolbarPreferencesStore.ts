@@ -54,6 +54,7 @@ const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
   "voice-recording",
   "forge-stats",
   "plugin-tray",
+  "canopy",
   "notification-center",
   "copy-tree",
   "resume-sessions",

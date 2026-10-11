@@ -13,6 +13,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 import { ExternalLink, History, MessageCircle, Settings2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { reportCanopySent } from "@/lib/canopySeen";
 import { Button } from "@/components/ui/button";
 import { ChoiceCard } from "@/components/ui/card";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -1662,6 +1663,7 @@ export function HelpPanel({
                     onSend={({ text, imagePaths }) => {
                       if (terminalPty?.isInputLocked === true) return;
                       terminalInstanceService.notifyUserInput(terminalId);
+                      reportCanopySent(terminalId);
                       // submit can now reject for dead PTYs (#8706); swallow
                       // to log so the unhandled rejection doesn't leak — the
                       // help panel is a one-shot send with no recovery UI.
@@ -1676,6 +1678,7 @@ export function HelpPanel({
                     onSendKey={(key) => {
                       if (terminalPty?.isInputLocked === true) return;
                       terminalInstanceService.notifyUserInput(terminalId);
+                      if (key === "enter") reportCanopySent(terminalId);
                       terminalClient.sendKey(terminalId, key);
                     }}
                   />

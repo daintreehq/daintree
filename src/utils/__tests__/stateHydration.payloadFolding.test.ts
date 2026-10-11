@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { useCanopyStore } from "@/store/canopyStore";
 
 const appClientMock = {
   hydrate: vi.fn(),
@@ -600,6 +601,24 @@ describe("hydrateAppState", () => {
       setActiveWorktree: vi.fn(),
       loadRecipes: vi.fn().mockResolvedValue(undefined),
       openDiagnosticsDock: vi.fn(),
+    });
+
+    it("takes Canopy's mode from the payload, so a hidden Canopy's button never paints", async () => {
+      useCanopyStore.setState({ mode: "unset", snapshot: null });
+      await hydrateAppState({
+        ...baseOptions(),
+        prefetchedHydrateResult: {
+          appState: { terminals: [] },
+          terminalConfig,
+          project,
+          agentSettings,
+          gpuWebGLHardware: true,
+          canopyMode: "hidden",
+        } as unknown as import("@shared/types/ipc/app").HydrateResult,
+      });
+
+      expect(useCanopyStore.getState().mode).toBe("hidden");
+      useCanopyStore.setState({ mode: "unset" });
     });
 
     it("uses systemTmpDir from the prefetched payload and skips the getTmpDir IPC call", async () => {

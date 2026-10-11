@@ -100,6 +100,7 @@ import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
 import { buildWindowChromePreloadBindings } from "./ipc/handlers/windowChrome.preload.js";
 import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
+import { buildCanopyPreloadBindings } from "./ipc/handlers/canopy.preload.js";
 import { buildProjectHistoryPreloadBindings } from "./ipc/handlers/projectHistory.preload.js";
 import { buildWorkspacePreloadBindings } from "./ipc/handlers/workspace.preload.js";
 import { buildProjectRelocationPreloadBindings } from "./ipc/handlers/projectRelocation.preload.js";
@@ -2241,6 +2242,31 @@ function buildElectronApi(): ElectronAPI {
       onSnapshotUpdated: (
         callback: (snapshot: import("../shared/types/ipc/fleet.js").FleetSnapshot) => void
       ) => _typedOn(CHANNELS.FLEET_SNAPSHOT_UPDATED, callback),
+    },
+
+    // Canopy panel cards, built in main from every agent run's screen.
+    canopy: {
+      ...buildCanopyPreloadBindings(_unwrappingInvoke),
+
+      onSnapshotUpdated: (
+        callback: (snapshot: import("../shared/types/ipc/canopy.js").CanopySnapshot) => void
+      ) => _typedOn(CHANNELS.CANOPY_SNAPSHOT_UPDATED, callback),
+
+      onTerminalData: (
+        callback: (chunk: import("../shared/types/ipc/canopy.js").CanopyTerminalData) => void
+      ) => _typedOn(CHANNELS.CANOPY_TERMINAL_DATA, callback),
+
+      onTrashRequested: (
+        callback: (request: import("../shared/types/ipc/canopy.js").CanopyTrashRequest) => void
+      ) => _typedOn(CHANNELS.CANOPY_TRASH_REQUESTED, callback),
+
+      onRestoreRequested: (
+        callback: (request: import("../shared/types/ipc/canopy.js").CanopyRestoreRequest) => void
+      ) => _typedOn(CHANNELS.CANOPY_RESTORE_REQUESTED, callback),
+
+      onRenameRequested: (
+        callback: (request: import("../shared/types/ipc/canopy.js").CanopyRenameRequest) => void
+      ) => _typedOn(CHANNELS.CANOPY_RENAME_REQUESTED, callback),
     },
 
     // Scratch (one-off agent workspace) API

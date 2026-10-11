@@ -40,6 +40,7 @@ import {
 import { isDaintreeEnvEnabled } from "@/utils/env";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { useDistributionStore } from "@/store/distributionStore";
+import { useCanopyStore } from "@/store/canopyStore";
 import { useResourceProfileStore } from "@/store/resourceProfileStore";
 import type { AgentPreset } from "@/config/agents";
 import type { HydrationBatchToken } from "@/store/slices/panelRegistry/types";
@@ -240,6 +241,8 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     terminalInstanceService.setGPUHardwareAvailable(gpuWebGLHardware ?? true);
 
     useDistributionStore.getState().setIsWindowsStore(Boolean(hydrateResult.isWindowsStore));
+    // Before the toolbar first paints, so a hidden Canopy's button never shows.
+    if (hydrateResult.canopyMode) useCanopyStore.getState().seedMode(hydrateResult.canopyMode);
 
     if (hydrateResult.safeMode) {
       useSafeModeStore.getState().setSafeMode(true, {

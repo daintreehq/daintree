@@ -290,6 +290,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { DRAG_GHOST_OPACITY } from "@/lib/animationUtils";
 import { TOOLBAR_BUTTON_METADATA } from "@/components/Layout/toolbarButtonMetadata";
 import { LAUNCHER_PANEL_BUTTON_IDS } from "@shared/types/toolbar";
+import { useCanopyStore } from "@/store/canopyStore";
 import { ToolbarSettingsTab } from "../ToolbarSettingsTab";
 
 function agentSettings(overrides: Record<string, { pinned?: boolean }>): AgentSettings {
@@ -1500,5 +1501,34 @@ describe("ToolbarSettingsTab — reset", () => {
     payload.action.onClick();
     expect(restored().layout.leftButtons).toBe(changed.leftButtons);
     expect(restored().layout.rightButtons).toBe(changed.rightButtons);
+  });
+});
+
+describe("ToolbarSettingsTab — a hidden Canopy", () => {
+  beforeEach(() => {
+    clearStoreMocks();
+    vi.mocked(useSortable).mockImplementation(defaultSortable);
+    mockAgentSettings = null;
+    mockToolbarState = makeToolbarState({
+      leftButtons: ["launcher", "terminal"],
+      rightButtons: ["canopy", "settings"],
+      pinnedButtons: {},
+    });
+  });
+
+  afterEach(() => {
+    useCanopyStore.setState({ mode: "unset" });
+    mockToolbarState = makeToolbarState();
+  });
+
+  it("drops Canopy's row while hidden, keeping its place for when it is shown", () => {
+    const shown = render(<ToolbarSettingsTab />);
+    expect(switchNamesIn(rightColumn(shown.container))).toContain(switchName("Canopy"));
+    shown.unmount();
+
+    useCanopyStore.setState({ mode: "hidden" });
+    const { container } = render(<ToolbarSettingsTab />);
+    expect(switchNamesIn(container)).not.toContain(switchName("Canopy"));
+    expect(setRightButtonsMock).not.toHaveBeenCalled();
   });
 });

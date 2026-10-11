@@ -880,7 +880,23 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Project",
   },
   {
-    // The sibling one step IN from the chord above: same surface, same rows,
+    // The app's main view, so it gets the one-modifier slot apps give their
+    // headline feature, and E is the agent-manager letter (Cursor's agent
+    // layout, Antigravity's Agent Manager). Cmd keys never reach the PTY on
+    // macOS, so it works from inside a terminal; Windows and Linux, where Cmd
+    // folds to Ctrl and Ctrl+E is readline's end-of-line, take a replacement
+    // below. Double-Shift (useCanopyDoubleShift) opens it on every platform.
+    actionId: "canopy.toggle",
+    combo: "Cmd+E",
+    scope: "global",
+    priority: 0,
+    description: "Open Canopy",
+    category: "Project",
+    // Hidden, the key is no shortcut at all: it reaches whatever has focus.
+    when: "!canopyHidden",
+  },
+  {
+    // The sibling one step IN from pilot.toggle's Cmd+Alt+O: same surface, same rows,
     // scoped to the project this view owns and grouped by worktree. Adjacent
     // letter because the two are one pair — O for the whole fleet, I for the
     // project you are already inside.
@@ -1167,6 +1183,23 @@ const WINDOWS_ONLY_KEYBINDINGS: KeybindingConfig[] = [
   },
 ];
 
+// Windows and Linux replacements for core rows whose Cmd folds to a Ctrl key
+// the terminal owns. Ctrl+E is readline's end-of-line, reserved for the PTY
+// while a terminal has focus, so Canopy would never open from one. O carries
+// over from the overview family, and Ctrl+Shift+O is none of the keys Daintree
+// reserves for the PTY.
+const NON_MAC_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
+  {
+    actionId: "canopy.toggle",
+    combo: "Ctrl+Shift+O",
+    scope: "global",
+    priority: 0,
+    description: "Open Canopy",
+    category: "Project",
+    when: "!canopyHidden",
+  },
+];
+
 // Replacements, not additions: each entry displaces the core row with the same
 // actionId and scope. Ctrl+. is the IBus emoji picker on GNOME, and Ctrl+Alt+.
 // is taken by agent.focusNextWorking once Cmd folds to Ctrl.
@@ -1188,14 +1221,16 @@ const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
  * the host OS it runs on.
  */
 export function buildDefaultKeybindings(isWindows: boolean, isLinux = false): KeybindingConfig[] {
-  if (isWindows) return [...CORE_KEYBINDINGS, ...WINDOWS_ONLY_KEYBINDINGS];
-  if (!isLinux) return [...CORE_KEYBINDINGS];
-  return CORE_KEYBINDINGS.map(
+  if (!isWindows && !isLinux) return [...CORE_KEYBINDINGS];
+  const replacements = isLinux
+    ? [...NON_MAC_REPLACEMENT_KEYBINDINGS, ...LINUX_REPLACEMENT_KEYBINDINGS]
+    : NON_MAC_REPLACEMENT_KEYBINDINGS;
+  const replaced = CORE_KEYBINDINGS.map(
     (binding) =>
-      LINUX_REPLACEMENT_KEYBINDINGS.find(
-        (r) => r.actionId === binding.actionId && r.scope === binding.scope
-      ) ?? binding
+      replacements.find((r) => r.actionId === binding.actionId && r.scope === binding.scope) ??
+      binding
   );
+  return isWindows ? [...replaced, ...WINDOWS_ONLY_KEYBINDINGS] : replaced;
 }
 
 export const KEYBINDING_PRIORITY = {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { createElement, createRef, useState, type ReactNode } from "react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 
@@ -17,6 +17,9 @@ import { applyMarkdownEdit, formatMarkdown } from "@/components/PluginKit/kitMar
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
+  // The editor's preview is the kit's lazy Markdown: loaded here, so a busy CI
+  // worker's cold import never eats a waitFor's budget.
+  await import("@/components/Markdown/PluginMarkdown");
 });
 
 afterEach(cleanup);
@@ -759,7 +762,11 @@ describe("MarkdownEditor", () => {
     expect(field.value.slice(field.selectionStart, field.selectionEnd)).toBe("bug");
   });
 
-  it("formats from the keyboard with a combo the app is not bound to", () => {
+  it("formats from the keyboard with a combo the app is not bound to, on the Mac", () => {
+    // The Mac's table, as jsdom loads it: there Cmd+E opens Canopy. Off the Mac
+    // Canopy is Ctrl+Shift+O, and Ctrl+E is free to format.
+    const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    onTestFinished(() => platform.mockRestore());
     const onChange = vi.fn();
     render(
       withTooltips(
@@ -768,9 +775,11 @@ describe("MarkdownEditor", () => {
     );
     const field = textarea(screen.getByTestId("md"));
     field.setSelectionRange(0, 1);
+    // Cmd+E, GitHub's code combo, opens Canopy: it stays the app's.
     fireEvent.keyDown(field, { key: "e", metaKey: true });
-    fireEvent.keyDown(field, { key: "e", ctrlKey: true });
-    expect(onChange).toHaveBeenCalledWith("`x`");
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.keyDown(field, { key: "i", metaKey: true });
+    expect(onChange).toHaveBeenCalledWith("_x_");
   });
 
   it("shows source and preview side by side in the split layout", () => {
