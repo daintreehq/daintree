@@ -1,8 +1,9 @@
 import crypto from "crypto";
 import os from "os";
 import path from "path";
-import { chmod, lstat, mkdir, open, readdir, rm, stat } from "fs/promises";
+import { open, readdir, rm, stat } from "fs/promises";
 import { logWarn } from "../utils/logger.js";
+import { ensureOwnerOnlyDir } from "../utils/fs.js";
 
 /**
  * Temp-file plumbing for file-backed CopyTree generation (#11528).
@@ -27,7 +28,9 @@ import { logWarn } from "../utils/logger.js";
  * `TMPDIR` happened to be when this module was first touched.
  */
 export function contextDir(): string {
-  return path.join(os.tmpdir(), "daintree-context");
+  // Per user: on a shared /tmp another user can't hold the name first.
+  const uid = typeof process.getuid === "function" ? `-${process.getuid()}` : "";
+  return path.join(os.tmpdir(), `daintree-context${uid}`);
 }
 
 /**
@@ -117,25 +120,12 @@ export function buildContextFileName(options: {
  * on Windows.
  */
 async function ensureContextDir(dir: string): Promise<void> {
-  // `lstat` rather than `stat`, and before `mkdir`: a symlink sitting on this
-  // name would be followed by mkdir, by the writes, and by the prune sweep,
-  // redirecting all three into whatever it points at. On a shared `/tmp` that
-  // target is another user's choice. This cannot close the replace-after-check
-  // race on its own, which is why pruning is also restricted to names this
-  // module generates.
-  const existing = await lstat(dir).catch(() => null);
-  if (existing && !existing.isDirectory()) {
-    throw new Error("Context directory is not a directory");
-  }
-
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32") {
-    try {
-      await chmod(dir, 0o700);
-    } catch {
-      // Best effort — the 0o600 file mode still protects the contents.
-    }
-  }
+  // A symlink on this name would be followed by mkdir, the writes and the
+  // prune sweep; a folder another user made could have its bundles swapped,
+  // and a bundle is pasted into an agent. Either refuses rather than writes:
+  // privacy that can't be guaranteed is no privacy. Pruning is also kept to
+  // names this module generates.
+  await ensureOwnerOnlyDir(dir);
 }
 
 /**

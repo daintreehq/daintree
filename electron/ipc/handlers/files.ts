@@ -90,6 +90,8 @@ export function registerFilesHandlers(): () => void {
     // from circular symlinks (realpath) or O_NOFOLLOW final-component
     // symlink rejection (open); both are containment failures.
     function fsErrorToAppError(error: unknown, fallbackMessage: string): AppError {
+      // A refusal already decided here keeps its own code.
+      if (error instanceof AppError) return error;
       const errCode = (error as NodeJS.ErrnoException).code;
       if (errCode === "ENOENT") {
         return new AppError({
@@ -199,14 +201,47 @@ export function registerFilesHandlers(): () => void {
     // final-component symlink injected after the realpath check is rejected
     // with ELOOP. On Windows O_NOFOLLOW is 0 (no-op); realpath containment
     // still applies.
+    // O_NONBLOCK so a FIFO swapped in can't hang the open (and a libuv worker
+    // with it); the descriptor is then held to what was checked: a regular
+    // file, in budget, the very file the contained real path names.
     let buffer: Buffer;
     let fileHandle: Awaited<ReturnType<typeof fs.open>>;
     try {
-      fileHandle = await fs.open(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      fileHandle = await fs.open(
+        filePath,
+        fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | (fs.constants.O_NONBLOCK ?? 0)
+      );
     } catch (error) {
       throw fsErrorToAppError(error, "Could not open file");
     }
     try {
+      const opened = await fileHandle.stat();
+      if (opened.isDirectory()) {
+        throw Object.assign(new Error("Path is a directory"), { code: "EISDIR" });
+      }
+      if (!opened.isFile()) {
+        throw new AppError({
+          code: "NOT_A_FILE",
+          message: "Path is not a regular file",
+          userMessage: "This isn't a file that can be previewed.",
+          context: { filePath },
+        });
+      }
+      if (opened.size > FILE_PREVIEW_MAX_BYTES) {
+        throw new AppError({
+          code: "FILE_TOO_LARGE",
+          message: `File exceeds ${FILE_PREVIEW_MAX_BYTES} byte limit`,
+          userMessage: "This file is too large to preview.",
+          context: { filePath, size: opened.size, limit: FILE_PREVIEW_MAX_BYTES },
+        });
+      }
+      if (String(opened.ino) !== String(stat.ino) || String(opened.dev) !== String(stat.dev)) {
+        throw new AppError({
+          code: "OUTSIDE_ROOT",
+          message: "The file changed while it was being opened",
+          context: { filePath, rootPath },
+        });
+      }
       buffer = await fileHandle.readFile();
     } catch (error) {
       throw fsErrorToAppError(error, "Could not read file");

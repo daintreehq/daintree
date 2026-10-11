@@ -171,6 +171,14 @@ async function walkBeneath(
         remaining = remaining.slice(1);
       }
       if (restart) continue;
+      // Without openat (macOS) each step opened a full path, so a folder
+      // swapped for a link mid-walk and back could have sent a later step
+      // elsewhere. Once at the end, every held step must still be what its
+      // path names; a swap that is quick enough to beat this too remains.
+      if (!viaProc) {
+        const held = await Promise.all(steps.map((step) => isSameEntry(step.handle, step.path)));
+        if (held.some((same) => !same)) return null;
+      }
       const end = steps[steps.length - 1]!.handle;
       const stat = await end.stat();
       if (want === "file" ? !stat.isFile() : !stat.isDirectory()) return "wrong-kind";

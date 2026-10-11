@@ -1815,7 +1815,10 @@ export function createPluginProtocolHandler(
     // (no-op); realpath containment still applies. Mirrors daintree-file://.
     let fileHandle: Awaited<ReturnType<typeof fs.open>>;
     try {
-      fileHandle = await fs.open(candidatePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      fileHandle = await fs.open(
+        candidatePath,
+        fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | (fs.constants.O_NONBLOCK ?? 0)
+      );
     } catch (err) {
       const errCode = (err as NodeJS.ErrnoException).code;
       if (errCode === "ELOOP" || errCode === "ENOENT" || errCode === "EISDIR") {
@@ -1837,6 +1840,12 @@ export function createPluginProtocolHandler(
       // through to 404 instead of returning 304. Mirrors app://.
       if (!fileStats.isFile()) {
         return pluginNotFound("not-a-file", authority, url.pathname);
+      }
+      // The descriptor must be the file the contained real path names: an
+      // ancestor swapped between the realpath and the open can't send it elsewhere.
+      const realStats = await fs.stat(realFile).catch(() => null);
+      if (!realStats || realStats.ino !== fileStats.ino || realStats.dev !== fileStats.dev) {
+        return pluginNotFound("outside-root", authority, url.pathname);
       }
 
       const mimeType = getMimeType(realFile);

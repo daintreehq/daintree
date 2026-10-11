@@ -853,6 +853,18 @@ describe("CopyTree bundles", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
+  it("refuses a recorded bundle that another file has taken the place of", async () => {
+    const { transport, service, endpoint, bundle } = await bundleSetup();
+    service.recordBundle(endpoint, bundle);
+    // Let the record take the generated file's identity, then swap it.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await fs.rm(bundle);
+    await fs.writeFile(bundle, "<injected/>");
+    await expect(
+      transport.download(HOST, bundle, { webContentsId: 7, destinationDir: downloads })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
   it("refuses a recorded bundle that was replaced by a symlink", async () => {
     const { transport, service, endpoint, bundle } = await bundleSetup();
     service.recordBundle(endpoint, bundle);

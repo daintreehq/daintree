@@ -117,9 +117,13 @@ interface HostDownload {
   controller: AbortController;
 }
 
+type FileIdentity = { dev: bigint; ino: bigint };
+
 interface RecordedBundle {
   projectId: string;
   expiresAt: number;
+  /** The file CopyTree wrote, as it was when recorded: a file put in its place later isn't it. */
+  identity: Promise<FileIdentity | null>;
 }
 
 interface Located {
@@ -127,6 +131,8 @@ interface Located {
   components: string[];
   /** Other spellings of the anchor an absolute symlink target may use (e.g. /tmp for /private/tmp). */
   anchorSpellings?: string[];
+  /** For a recorded bundle: the file it must still be. */
+  identity?: FileIdentity | null;
 }
 
 function newId(): string {
@@ -257,9 +263,16 @@ export class HostFileService {
     const key = path.normalize(filePath);
     recorded.delete(key);
     if (recorded.size >= MAX_BUNDLES_PER_ENDPOINT) recorded.delete(recorded.keys().next().value!);
+    const identity = fs
+      .lstat(key, { bigint: true })
+      .then((stats): FileIdentity | null =>
+        stats.isFile() ? { dev: stats.dev, ino: stats.ino } : null
+      )
+      .catch(() => null);
     recorded.set(key, {
       projectId: endpoint.projectId,
       expiresAt: Date.now() + (this.options.bundleTtlMs ?? DEFAULT_BUNDLE_TTL_MS),
+      identity,
     });
   }
 
@@ -414,8 +427,10 @@ export class HostFileService {
       return null;
     }
     if (bundle.projectId !== projectId) return null;
+    const identity = await bundle.identity;
+    if (identity === null) return null;
     const anchor = await fs.realpath(path.dirname(key)).catch(() => null);
-    return anchor === null ? null : { anchor, components: [path.basename(key)] };
+    return anchor === null ? null : { anchor, components: [path.basename(key)], identity };
   }
 
   /** Whether what was admitted still holds after the awaits that followed admission. */
@@ -637,6 +652,13 @@ export class HostFileService {
         throw new AppError({ code: "NOT_A_FILE", message: "Only files can be downloaded" });
       }
       if (!opened) throw notInProject();
+      if (located?.identity) {
+        const now = await opened.handle.stat({ bigint: true }).catch(() => null);
+        if (!now || now.dev !== located.identity.dev || now.ino !== located.identity.ino) {
+          await opened.handle.close().catch(() => {});
+          throw notInProject();
+        }
+      }
       const source = await downloadSourceFrom(
         opened.handle,
         this.options.maxDownloadBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES

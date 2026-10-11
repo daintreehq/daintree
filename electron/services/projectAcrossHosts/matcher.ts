@@ -1,3 +1,4 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -98,12 +99,31 @@ export async function findRegisteredMatches(
   return results.filter((c): c is ProjectMatchCandidate => c !== null).sort(byPreference);
 }
 
+const MAX_REPO_CONFIG_BYTES = 1024 * 1024;
+
 async function readRepoConfig(dir: string): Promise<string | null> {
   const dotGit = path.join(dir, ".git");
   const stat = await fs.lstat(dotGit).catch(() => null);
   // A `.git` file is a worktree or submodule pointer: its repository is elsewhere.
   if (!stat?.isDirectory()) return null;
-  return fs.readFile(path.join(dotGit, "config"), "utf8").catch(() => null);
+  // Never blocks on a FIFO planted as `config`, follows no link, reads only a
+  // regular file of a sane size.
+  const handle = await fs
+    .open(
+      path.join(dotGit, "config"),
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | (fsConstants.O_NONBLOCK ?? 0)
+    )
+    .catch(() => null);
+  if (!handle) return null;
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.size > MAX_REPO_CONFIG_BYTES) return null;
+    return await handle.readFile("utf8");
+  } catch {
+    return null;
+  } finally {
+    await handle.close().catch(() => {});
+  }
 }
 
 /**

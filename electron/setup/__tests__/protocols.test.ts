@@ -1672,6 +1672,7 @@ describe("protocol registration", () => {
     const fs = await import("fs/promises");
     const appProtocol = await import("../../utils/appProtocol.js");
     vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({} as never);
     vi.mocked(fs.open).mockResolvedValue({
       readFile: vi.fn().mockResolvedValue(Buffer.from("data")),
       close: vi.fn().mockResolvedValue(undefined),
@@ -1709,6 +1710,7 @@ describe("protocol registration", () => {
     const fs = await import("fs/promises");
     const appProtocol = await import("../../utils/appProtocol.js");
     vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.stat).mockResolvedValue({} as never);
     vi.mocked(fs.open).mockResolvedValue({
       readFile: vi.fn().mockResolvedValue(Buffer.from("data")),
       close: vi.fn().mockResolvedValue(undefined),
@@ -3064,6 +3066,8 @@ describe("createPluginProtocolHandler", () => {
     vi.clearAllMocks();
     const fs = await import("fs/promises");
     vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    // The descriptor and the real path name the same file unless a test says otherwise.
+    vi.mocked(fs.stat).mockResolvedValue({} as never);
     vi.mocked(fs.open).mockResolvedValue(
       makeFileHandle() as unknown as Awaited<ReturnType<typeof fs.open>>
     );
@@ -3083,7 +3087,9 @@ describe("createPluginProtocolHandler", () => {
     expect(fs.open).toHaveBeenCalledTimes(1);
     const openArgs = vi.mocked(fs.open).mock.calls[0];
     expect(openArgs[0]).toBe(path.join(PLUGIN_ROOT, "dist", "index.js"));
-    expect(openArgs[1]).toBe(fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    expect(openArgs[1]).toBe(
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
+    );
   });
 
   it("resolves a view-generation namespace to the same file on disk (#11301)", async () => {

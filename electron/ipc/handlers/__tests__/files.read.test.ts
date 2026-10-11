@@ -13,15 +13,16 @@ vi.mock("electron", () => ({
 type FileHandleLike = {
   readFile: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  stat?: ReturnType<typeof vi.fn>;
 };
 
 const fsMock = vi.hoisted(() => {
   return {
-    stat: vi.fn<(p: string) => Promise<{ size: number }>>(),
+    stat: vi.fn<(p: string) => Promise<{ size: number; ino?: number; dev?: number }>>(),
     realpath: vi.fn<(p: string) => Promise<string>>(),
     open: vi.fn<(p: string, flags: number) => Promise<FileHandleLike>>(),
     readFile: vi.fn<(p: string) => Promise<Buffer>>(),
-    constants: { O_RDONLY: 0, O_NOFOLLOW: 0x100 },
+    constants: { O_RDONLY: 0, O_NOFOLLOW: 0x100, O_NONBLOCK: 0x4 },
   };
 });
 
@@ -86,6 +87,12 @@ function makeFileHandle(buffer: Buffer): FileHandleLike {
   return {
     readFile: vi.fn().mockResolvedValue(buffer),
     close: vi.fn().mockResolvedValue(undefined),
+    // The same file the real path's stat named (the stat mocks carry no inode).
+    stat: vi.fn().mockResolvedValue({
+      isFile: () => true,
+      isDirectory: () => false,
+      size: buffer.length,
+    }),
   };
 }
 
@@ -343,13 +350,48 @@ describe("files:read handler", () => {
 
     expect(fsMock.open).toHaveBeenCalledWith(
       file,
-      fsMock.constants.O_RDONLY | fsMock.constants.O_NOFOLLOW
+      fsMock.constants.O_RDONLY | fsMock.constants.O_NOFOLLOW | fsMock.constants.O_NONBLOCK
     );
+  });
+
+  it("never reads a FIFO or a file swapped in after the checks, and opens without blocking", async () => {
+    fsMock.stat.mockResolvedValue({ size: 10, ino: 1, dev: 1 });
+    registerFilesHandlers();
+    for (const opened of [
+      { isFile: () => false, isDirectory: () => false, size: 0, ino: 1, dev: 1 },
+      { isFile: () => true, isDirectory: () => false, size: 10, ino: 2, dev: 1 },
+    ]) {
+      const handle = {
+        stat: vi.fn().mockResolvedValue(opened),
+        readFile: vi.fn().mockResolvedValue(Buffer.from("secret")),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      fsMock.open.mockResolvedValue(handle);
+      await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toBeDefined();
+      expect(handle.readFile).not.toHaveBeenCalled();
+      expect(handle.close).toHaveBeenCalled();
+    }
+    const flags = fsMock.open.mock.calls.at(-1)![1];
+    expect(flags & fsMock.constants.O_NONBLOCK).toBe(fsMock.constants.O_NONBLOCK);
+  });
+
+  it("reports a folder (a submodule's checkout) as not a file, as before", async () => {
+    fsMock.stat.mockResolvedValue({ size: 0 });
+    registerFilesHandlers();
+    fsMock.open.mockResolvedValue({
+      stat: vi.fn().mockResolvedValue({ isFile: () => false, isDirectory: () => true, size: 0 }),
+      readFile: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    });
+    await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
+      code: "NOT_A_FILE",
+    });
   });
 
   it("closes the file handle even when readFile rejects", async () => {
     fsMock.stat.mockResolvedValue({ size: 100 });
     const handle = {
+      stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 100 }),
       readFile: vi
         .fn()
         .mockRejectedValue(Object.assign(new Error("file disappeared"), { code: "ENOENT" })),
@@ -379,6 +421,7 @@ describe("files:read handler", () => {
   it("throws AppError(NOT_FOUND) when stat succeeds but readFile raises ENOENT (TOCTOU)", async () => {
     fsMock.stat.mockResolvedValue({ size: 100 });
     const handle = {
+      stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 100 }),
       readFile: vi
         .fn()
         .mockRejectedValue(Object.assign(new Error("file disappeared"), { code: "ENOENT" })),
@@ -399,6 +442,7 @@ describe("files:read handler", () => {
     // succeed (#12309).
     fsMock.stat.mockResolvedValue({ size: 128 });
     const handle = {
+      stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 100 }),
       readFile: vi
         .fn()
         .mockRejectedValue(Object.assign(new Error("illegal operation"), { code: "EISDIR" })),
@@ -416,6 +460,7 @@ describe("files:read handler", () => {
   it("throws AppError(PERMISSION) when readFile raises EACCES", async () => {
     fsMock.stat.mockResolvedValue({ size: 100 });
     const handle = {
+      stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 100 }),
       readFile: vi
         .fn()
         .mockRejectedValue(Object.assign(new Error("permission denied"), { code: "EACCES" })),
@@ -478,6 +523,7 @@ describe("files:read handler", () => {
   it("returns the readFile error (not the close error) when both reject", async () => {
     fsMock.stat.mockResolvedValue({ size: 100 });
     const handle = {
+      stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 100 }),
       readFile: vi
         .fn()
         .mockRejectedValue(Object.assign(new Error("file disappeared"), { code: "ENOENT" })),

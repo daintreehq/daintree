@@ -67,7 +67,12 @@ export function createDefaultProjectAcrossHostsDeps(): ProjectAcrossHostsDeps {
     },
     probeGitLfs: () => probeGitLfsAvailable(),
     homeDir: () => os.homedir(),
-    bundleDir: () => path.join(app.getPath("temp"), "daintree-bundles"),
+    // Per user: on a shared /tmp another user can't hold the name first.
+    bundleDir: () =>
+      path.join(
+        app.getPath("temp"),
+        `daintree-bundles${typeof process.getuid === "function" ? `-${process.getuid()}` : ""}`
+      ),
   };
 }
 
