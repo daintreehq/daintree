@@ -97,6 +97,33 @@ const PAYLOAD_SCHEMAS = {
 
 const ACTIONS = Object.keys(PAYLOAD_SCHEMAS) as [WorktreePortAction, ...WorktreePortAction[]];
 
+/**
+ * The actions that change a project: only its lease holder may send them,
+ * as for the IPC channels that do the same (`worktree:create`/`delete` are
+ * `driver`). The active worktree is the project's, not one view's: the
+ * driver's window follows it and the host saves it, so a watcher may not
+ * move it. The rest read or refresh what everyone sees.
+ */
+export const WORKTREE_DRIVER_ACTIONS: ReadonlySet<WorktreePortAction> = new Set([
+  "create-worktree",
+  "delete-worktree",
+  "set-active",
+  "run-lifecycle-setup",
+  "approve-lifecycle-commands",
+  "switch-worktree-environment",
+]);
+
+/** Whether a checked request changes the project (a resource's `status` only reads it). */
+export function requiresDriving(request: {
+  action: WorktreePortAction;
+  payload: unknown;
+}): boolean {
+  if (request.action === "resource-action") {
+    return (request.payload as { action?: unknown } | undefined)?.action !== "status";
+  }
+  return WORKTREE_DRIVER_ACTIONS.has(request.action);
+}
+
 const EnvelopeSchema = z.object({
   id: requestId,
   action: z.enum(ACTIONS),

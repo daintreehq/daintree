@@ -4,7 +4,10 @@ import {
   getProjectStatsService,
 } from "../../ipc/handlers/projectCrud/index.js";
 import { createDriveLeaseGate, getDriveLeaseService } from "../../services/DriveLeaseService.js";
-import { createLeaseTargetResolvers } from "../../services/driveLeaseTargetResolvers.js";
+import {
+  createLeaseTargetResolvers,
+  describeTerminalForScope,
+} from "../../services/driveLeaseTargetResolvers.js";
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
 import { setMcpDriveTargetResolver } from "../../services/mcp-server/driveTarget.js";
 import type { AttachedClientInfo } from "../../../shared/types/ipc/hostMode.js";
@@ -33,6 +36,7 @@ import { initRemoteHostsHost } from "./initHost.js";
 import { installHostMetricsHost } from "../metrics/hostMetricsHost.js";
 import { observeAgents } from "../metrics/hostSources.js";
 import type { RemoteViewEndpoint } from "./RemoteViewEndpoint.js";
+import { createRemoteScopeGate } from "../../ipc/channelRemoteScope.js";
 
 declare module "../runtime.js" {
   interface RemoteServices {
@@ -178,6 +182,12 @@ async function buildHostListener(
   // project the call targets.
   teardowns.push(
     getIpcDispatcher().setLeaseGate(createDriveLeaseGate(lease, createLeaseTargetResolvers()))
+  );
+  // A remote view reads only its own project's terminals, images and history.
+  teardowns.push(
+    getIpcDispatcher().setScopeGate(
+      createRemoteScopeGate(createLeaseTargetResolvers(), describeTerminalForScope)
+    )
   );
   teardowns.push(
     setMcpDriveTargetResolver((projectId) => {

@@ -47,6 +47,7 @@ export const HelloSchema = z.object({
   token: z.string().min(1).max(256),
   client: ClientInfoSchema,
   resumeSessionId: id.nullable(),
+  resumeSecret: z.string().max(256).nullable().optional(),
 });
 
 const WelcomeSchema = z.object({
@@ -54,6 +55,7 @@ const WelcomeSchema = z.object({
   hostName: z.string().max(256),
   sessionId: id,
   resumed: z.boolean(),
+  resumeSecret: z.string().max(256).optional(),
 });
 
 const RejectSchema = z.object({

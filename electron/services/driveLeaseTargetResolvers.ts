@@ -5,6 +5,7 @@ import { getOperationRegistry, normalizeOperationId } from "./operations/index.j
 import { probeGitCommonDir } from "../utils/gitUtils.js";
 import { getPtyClient } from "../window/serviceRefs.js";
 import type { LeaseTargetResolvers } from "./driveLeaseTargets.js";
+import type { TerminalRecord } from "../ipc/channelRemoteScope.js";
 
 /** A lookup that takes longer than this can't vouch for a call, which is then refused. */
 const PATH_LOOKUP_TIMEOUT_MS = 5_000;
@@ -94,7 +95,9 @@ async function projectsForPathOwnership(
   target: string
 ): Promise<string[]> {
   const { real, existing } = await realSpelling(target);
-  const probe = await probeGitCommonDir(existing, GIT_PROBE_TIMEOUT_MS);
+  // git needs a folder to run in: a path naming a file is asked about from its own folder.
+  const probeDir = (await fs.stat(existing)).isDirectory() ? existing : path.dirname(existing);
+  const probe = await probeGitCommonDir(probeDir, GIT_PROBE_TIMEOUT_MS);
   if (probe.path === null && probe.failure === "transient") {
     throw new Error("git could not say which repository owns the path");
   }
@@ -127,6 +130,25 @@ async function projectsForPathOwnership(
 }
 
 /** The lease gate's lookups, over this Host's project registry, pty-host and services. */
+/**
+ * What the host knows of a terminal for scoping a remote view's reads: gone,
+ * or the project it belongs to (null for one with none). A lookup that fails
+ * answers "no project", which no view may read.
+ */
+export function describeTerminalForScope(
+  terminalId: string
+): TerminalRecord | Promise<TerminalRecord> {
+  const pty = getPtyClient();
+  if (!pty) return "missing";
+  const tracked = pty.getTerminalProjectId(terminalId);
+  if (tracked) return { projectId: tracked };
+  // Strict: a lookup that times out throws rather than reading as "no such terminal".
+  return pty.getTerminalAsync(terminalId, undefined, { strict: true }).then(
+    (info): TerminalRecord => (info ? { projectId: info.projectId || null } : "missing"),
+    (): TerminalRecord => ({ projectId: null })
+  );
+}
+
 export function createLeaseTargetResolvers(): LeaseTargetResolvers {
   return {
     projectsForPath(target) {

@@ -449,6 +449,52 @@ function samePath(a: string, b: string): boolean {
   return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
+/**
+ * The bytes an untracked or added file contributes to its diff, as git would
+ * show them: a symlink is its target path, never what it points at, and a
+ * file reached through a linked folder (a path git itself never lists) is
+ * refused. The caller names the path and its status, so neither may turn a
+ * diff into a read of something outside the worktree.
+ */
+async function readWorktreeFileForDiff(
+  cwd: string,
+  absolutePath: string,
+  readFile: (file: string) => Promise<Buffer>
+): Promise<Buffer> {
+  const { lstat, open, readlink, realpath } = await import("fs/promises");
+  const { constants } = await import("fs");
+  const { dirname, isAbsolute, relative } = await import("path");
+  const outside = (): never => {
+    const error = new Error("The file is outside the worktree") as NodeJS.ErrnoException;
+    error.code = "EACCES";
+    throw error;
+  };
+  const realRoot = await realpath(cwd);
+  const contained = async (): Promise<void> => {
+    const rel = relative(realRoot, await realpath(dirname(absolutePath)));
+    if (rel.startsWith("..") || isAbsolute(rel)) outside();
+  };
+  await contained();
+  const stats = await lstat(absolutePath);
+  if (stats.isSymbolicLink()) return Buffer.from(await readlink(absolutePath), "utf-8");
+  if (stats.isDirectory()) return readFile(absolutePath);
+  // The last step can't be a link (it would refuse to open), the descriptor
+  // must be the file the contained path still names, and its folder must
+  // still be inside: what was read is what was checked.
+  const handle = await open(
+    absolutePath,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)
+  );
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.ino !== stats.ino || opened.dev !== stats.dev) outside();
+    await contained();
+    return await handle.readFile();
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
 export class WorkspaceService {
   private monitors = new Map<string, WorktreeMonitor>();
   private readonly statusTiming = new StatusTimingRecorder();
@@ -5458,7 +5504,7 @@ export class WorkspaceService {
         // claims something the request cannot know.
         let buffer: Buffer | null = null;
         try {
-          buffer = await readFile(absolutePath);
+          buffer = await readWorktreeFileForDiff(cwd, absolutePath, readFile);
         } catch (error) {
           const isDirectory = (error as NodeJS.ErrnoException).code === "EISDIR";
           if (!isDirectory || status !== "added") throw error;

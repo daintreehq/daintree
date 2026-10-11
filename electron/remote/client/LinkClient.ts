@@ -92,6 +92,8 @@ export class LinkClient {
   private connection: LinkTransportConnection | null = null;
   private current: LinkSession | null = null;
   private sessionId: string | null = null;
+  /** The secret the last WELCOME carried, presented with `sessionId` to resume. */
+  private resumeSecret: string | null = null;
   private lastSeenAt: number | null = null;
   private generation = 0;
   private readonly releasing = new Set<Promise<void>>();
@@ -250,6 +252,7 @@ export class LinkClient {
             token,
             client: this.options.client,
             resumeSessionId: this.sessionId,
+            resumeSecret: this.sessionId === null ? null : this.resumeSecret,
           },
         });
       } catch (err) {
@@ -272,6 +275,7 @@ export class LinkClient {
     }
     this.current = session;
     this.sessionId = welcome.sessionId;
+    this.resumeSecret = welcome.resumeSecret ?? null;
     this.failures = 0;
     this.attempt = 0;
     this.lastSeenAt = this.now();

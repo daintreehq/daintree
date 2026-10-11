@@ -26,7 +26,9 @@ function scopeOf(ctx: IpcContext): { projectId: string | null } | null {
 function visibleTo(ctx: IpcContext, record: OperationRecord | null): record is OperationRecord {
   if (!record) return false;
   const scope = scopeOf(ctx);
-  return scope === null || record.projectId === scope.projectId;
+  // A remote view with no project sees none, not every operation that has none
+  // (a clone over the link is recorded before its project exists).
+  return scope === null || (scope.projectId !== null && record.projectId === scope.projectId);
 }
 
 export const operationsNamespace = defineIpcNamespace({

@@ -71,6 +71,7 @@ import { wrapSuccess } from "../../../shared/utils/ipcErrorSerialization.js";
 import type { ClientEndpoint, ClientRef, RemoteRouter } from "../endpoint.js";
 import type { IpcContext } from "../types.js";
 import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
+import { createRemoteScopeGate } from "../channelRemoteScope.js";
 
 const HOST_CHANNEL = "git:get-file-diff";
 const SHELL_CHANNEL = "window:new";
@@ -817,5 +818,136 @@ describe("drive-lease gate", () => {
       wrapSuccess("ran")
     );
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("remote scope gate", () => {
+  const P1 = "/repos/one";
+  const P2 = "/repos/two";
+
+  function installScope() {
+    cleanups.push(
+      getIpcDispatcher().setScopeGate(
+        createRemoteScopeGate(
+          {
+            projectsForPath: (p) =>
+              p.startsWith(`${P1}/nested-wt-of-2`)
+                ? ["proj-1", "proj-2"]
+                : p.startsWith(P1)
+                  ? ["proj-1"]
+                  : p.startsWith(P2)
+                    ? ["proj-2"]
+                    : [],
+            projectForTerminal: (id) => (id === "t1" ? "proj-1" : id === "t2" ? "proj-2" : null),
+            projectsForOperation: () => [],
+            projectsForDevPreviewPanel: () => [],
+            projectsForHelpSession: () => [],
+            currentProjectId: () => null,
+          },
+          (id) =>
+            id === "t1"
+              ? { projectId: "proj-1" }
+              : id === "t2"
+                ? { projectId: "proj-2" }
+                : id === "host-shell"
+                  ? { projectId: null }
+                  : "missing"
+        )
+      )
+    );
+  }
+
+  function handle(channel: string) {
+    const handler = vi.fn(() => "ran");
+    cleanups.push(typedHandleWithContext(channel as never, handler as never));
+    return handler;
+  }
+
+  const ask = (endpoint: ClientEndpoint, channel: string, args: unknown[]) =>
+    getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, channel, args);
+
+  it("lets a remote view read only its own project's terminals and repositories", async () => {
+    installScope();
+    const snapshot = handle("terminal:get-serialized-state");
+    const status = handle("git:get-staging-status");
+    const { endpoint } = makeRemoteEndpoint(-3, "proj-1");
+
+    expect((await ask(endpoint, "terminal:get-serialized-state", ["t1"])).ok).toBe(true);
+    const other = await ask(endpoint, "terminal:get-serialized-state", ["t2"]);
+    expect(other.ok ? null : other.error.code).toBe("PERMISSION");
+    expect(snapshot).toHaveBeenCalledTimes(1);
+
+    expect((await ask(endpoint, "git:get-staging-status", [`${P1}/wt`])).ok).toBe(true);
+    expect((await ask(endpoint, "git:get-staging-status", [P2])).ok).toBe(false);
+    expect((await ask(endpoint, "git:get-staging-status", ["/etc"])).ok).toBe(false);
+    expect(status).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks every terminal of a batch, letting gone ones through for the handler to answer", async () => {
+    installScope();
+    const batch = handle("terminal:get-serialized-states");
+    const { endpoint } = makeRemoteEndpoint(-3, "proj-1");
+    expect((await ask(endpoint, "terminal:get-serialized-states", [["t1", "gone"]])).ok).toBe(true);
+    expect((await ask(endpoint, "terminal:get-serialized-states", [["t1", "t2"]])).ok).toBe(false);
+    expect(batch).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the host's clipboard inbox through, but not another project's file", async () => {
+    installScope();
+    handle("clipboard:thumbnail-from-path");
+    const { endpoint } = makeRemoteEndpoint(-3, "proj-1");
+    expect((await ask(endpoint, "clipboard:thumbnail-from-path", ["/tmp/inbox/a.png"])).ok).toBe(
+      true
+    );
+    expect((await ask(endpoint, "clipboard:thumbnail-from-path", [`${P2}/a.png`])).ok).toBe(false);
+  });
+
+  it("refuses a terminal that exists with no project, and passes one that has gone", async () => {
+    installScope();
+    handle("terminal:get-serialized-state");
+    handle("terminal:get-serialized-states");
+    const { endpoint } = makeRemoteEndpoint(-3, "proj-1");
+    expect((await ask(endpoint, "terminal:get-serialized-state", ["host-shell"])).ok).toBe(false);
+    expect((await ask(endpoint, "terminal:get-serialized-state", ["gone"])).ok).toBe(true);
+    expect((await ask(endpoint, "terminal:get-serialized-states", [["t1", "host-shell"]])).ok).toBe(
+      false
+    );
+  });
+
+  it("lets either project read a worktree of one kept in the other's folder", async () => {
+    installScope();
+    handle("git:get-staging-status");
+    const nested = `${P1}/nested-wt-of-2`;
+    expect(
+      (await ask(makeRemoteEndpoint(-3, "proj-1").endpoint, "git:get-staging-status", [nested])).ok
+    ).toBe(true);
+    expect(
+      (await ask(makeRemoteEndpoint(-4, "proj-2").endpoint, "git:get-staging-status", [nested])).ok
+    ).toBe(true);
+    expect(
+      (await ask(makeRemoteEndpoint(-5, "proj-3").endpoint, "git:get-staging-status", [nested])).ok
+    ).toBe(false);
+  });
+
+  it("refuses an id a handler would trim into another terminal", async () => {
+    installScope();
+    handle("claude:list-subagents");
+    const { endpoint } = makeRemoteEndpoint(-3, "proj-1");
+    expect((await ask(endpoint, "claude:list-subagents", [{ terminalId: " t2 " }])).ok).toBe(false);
+    expect((await ask(endpoint, "claude:list-subagents", [{ terminalId: "t1" }])).ok).toBe(true);
+  });
+
+  it("leaves terminal info host-wide, for the processes list", async () => {
+    installScope();
+    handle("terminal:get-info");
+    const { endpoint } = makeRemoteEndpoint(-3, "proj-1");
+    expect((await ask(endpoint, "terminal:get-info", ["t2"])).ok).toBe(true);
+  });
+
+  it("refuses a view with no project anything a project owns", async () => {
+    installScope();
+    handle("terminal:get-serialized-state");
+    const { endpoint } = makeRemoteEndpoint(-3, null);
+    expect((await ask(endpoint, "terminal:get-serialized-state", ["t1"])).ok).toBe(false);
   });
 });

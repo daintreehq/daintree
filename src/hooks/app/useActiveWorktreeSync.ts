@@ -1,4 +1,5 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { getDriveLeaseSnapshot } from "@/services/terminal/inputGate";
 import type { WorktreeSnapshot } from "@shared/types";
 import { useWorktreeStore, useWorktreeStoreApi } from "@/hooks/useWorktreeStore";
 import { getNormalizedWorktreeList } from "@/hooks/useWorktrees";
@@ -158,6 +159,11 @@ export function useActiveWorktreeSync() {
 
     lastSyncedActiveRef.current = { projectId, worktreeId: selectedWorktreeId };
     retryActivationRef.current = false;
+    // While another screen drives the project, the host's active worktree is
+    // theirs to move: this view's selection stays its own, and asking would
+    // only be refused again on every update.
+    const lease = getDriveLeaseSnapshot();
+    if (lease?.projectId === projectId && lease.holder && !lease.drivingHere) return;
     // The selection is already applied locally; the origin tag lets the
     // `worktree-activated` echo be skipped instead of re-selecting an id this
     // view may have moved past by the time it lands (#12370). Whether it was

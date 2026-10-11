@@ -277,6 +277,50 @@ function drivenElsewhere(): AppError {
   });
 }
 
+const MAX_OPERATION_OWNERS = 512;
+
+/**
+ * Which session started each clone or worktree placement, by the opId the
+ * Shell names it with. Host-wide, so a session can't claim an id another
+ * already started; keyed by the session's grants, which outlive a resumed
+ * link. Only that session may follow or cancel the operation. A claim is
+ * made once the operation is accepted, and a running one is never forgotten
+ * to make room.
+ */
+export class HostOperationOwners {
+  private readonly owners = new Map<string, object>();
+
+  constructor(private readonly isRunning: (opId: string) => boolean = () => false) {}
+
+  /** Whether `owner` may start `opId`: nobody has, or it did. */
+  mayClaim(opId: string, owner: object): boolean {
+    const existing = this.owners.get(opId);
+    return existing === undefined || existing === owner;
+  }
+
+  claim(opId: string, owner: object): void {
+    this.owners.delete(opId);
+    this.owners.set(opId, owner);
+    if (this.owners.size <= MAX_OPERATION_OWNERS) return;
+    for (const id of this.owners.keys()) {
+      if (this.owners.size <= MAX_OPERATION_OWNERS) break;
+      if (id !== opId && !this.isRunning(id)) this.owners.delete(id);
+    }
+  }
+
+  owns(opId: string, owner: object): boolean {
+    return this.owners.get(opId) === owner;
+  }
+}
+
+function operationNotYours(): AppError {
+  return new AppError({
+    code: "PERMISSION",
+    message: "That operation was started by another session",
+    userMessage: "That was started from another screen.",
+  });
+}
+
 export interface AttachProjectsHostOptions {
   /** The host's id for the session, whose views and lease the mutations are checked against. */
   sessionId?: string | null;
@@ -284,6 +328,8 @@ export interface AttachProjectsHostOptions {
   grants?: ProjectHostGrants;
   /** Shared by every session, so a Shell back on a fresh one can still ask about its push. */
   pushRecords?: HostPushRecords;
+  /** Shared by every session, so no session can claim another's operation id. */
+  operationOwners?: HostOperationOwners;
 }
 
 export interface ProjectsHostServer {
@@ -309,6 +355,7 @@ export function attachProjectsHost(
   const authority = options.authority ?? defaultProjectsHostAuthority;
   const grants = options.grants ?? new ProjectHostGrants();
   const pushRecords = options.pushRecords ?? new HostPushRecords();
+  const operationOwners = options.operationOwners ?? new HostOperationOwners();
   // Every push this link started, so the link closing can stop them all.
   const running = new Set<AbortController>();
   // Stands for this link when a push is cancelled by opId: only the link that
@@ -332,6 +379,26 @@ export function attachProjectsHost(
     if (bound.length === 0) throw notAttached();
     if (!bound.some((endpoint) => authority.isDriving(projectId, endpoint))) {
       throw drivenElsewhere();
+    }
+  };
+
+  /**
+   * The operation an id names: a start the registry folded into one already
+   * running (same work, another id) names that one, so ownership follows the
+   * work and a session can't take another's clone by asking for it again.
+   */
+  const canonicalOperation = (opId: string): string => {
+    try {
+      return service.canonicalOperationId(opId) ?? opId;
+    } catch {
+      return opId;
+    }
+  };
+  const claimStarted = (opId: string): void => {
+    operationOwners.claim(opId, grants);
+    const canonical = canonicalOperation(opId);
+    if (canonical !== opId && operationOwners.mayClaim(canonical, grants)) {
+      operationOwners.claim(canonical, grants);
     }
   };
 
@@ -402,13 +469,26 @@ export function attachProjectsHost(
         userMessage: "Check the folder on this host again, then clone.",
       });
     }
+    if (!operationOwners.mayClaim(p.opId, grants)) throw operationNotYours();
     // Registered synchronously, so a status call right after this answer
     // finds the record; the Shell follows it by opId, surviving a link drop.
+    // A refusal throws before anything is recorded, and before the id is claimed.
     void service.cloneAndOpen(p).catch(() => {});
+    claimStarted(p.opId);
     return null;
   });
-  on(ProjectLinkMethod.OPERATION_STATUS, OpIdSchema, ({ opId }) => service.operationStatus(opId));
-  on(ProjectLinkMethod.OPERATION_CANCEL, OpIdSchema, ({ opId }) => service.cancelOperation(opId));
+  // Another session's clone is none of this one's business: its outcome names
+  // the project and folder it made.
+  on(ProjectLinkMethod.OPERATION_STATUS, OpIdSchema, ({ opId }) =>
+    operationOwners.owns(canonicalOperation(opId), grants)
+      ? service.operationStatus(opId)
+      : { status: "unknown" as const }
+  );
+  on(ProjectLinkMethod.OPERATION_CANCEL, OpIdSchema, ({ opId }) => {
+    // Stopping a clone or placement is for the session that started it.
+    if (!operationOwners.owns(canonicalOperation(opId), grants)) throw operationNotYours();
+    return service.cancelOperation(opId);
+  });
   on(ProjectLinkMethod.OPEN, OpenSchema, async (p) => {
     // Opening may make the branch's worktree only while no other session's
     // window holds the project; otherwise it is offered as a checkout.
@@ -445,9 +525,11 @@ export function attachProjectsHost(
         if (!grants.usePlacement(projectId, p.opId)) throw notAttached();
       },
     };
+    if (!operationOwners.mayClaim(p.opId, grants)) throw operationNotYours();
     // Registered synchronously, so a status call right after this answer finds
-    // the record; a refusal throws before anything is recorded.
+    // the record; a refusal throws before anything is recorded or claimed.
     void service.placeWorktree(p, sessionPlacement).catch(() => {});
+    claimStarted(p.opId);
     return null;
   });
   on(ProjectLinkMethod.IDENTIFY, IdentifySchema, (p) => service.identify(p));
@@ -510,6 +592,13 @@ export function installProjectsHost(
 ): () => void {
   const grantsBySession = new Map<string, ProjectHostGrants>();
   const pushRecords = new HostPushRecords();
+  const operationOwners = new HostOperationOwners((opId) => {
+    try {
+      return service.operationStatus(opId).status === "running";
+    } catch {
+      return false;
+    }
+  });
   const offSession = server.onSession(({ session, sessionId }) => {
     let grants: ProjectHostGrants | undefined;
     if (sessionId !== undefined) {
@@ -519,7 +608,12 @@ export function installProjectsHost(
         grantsBySession.set(sessionId, grants);
       }
     }
-    attachProjectsHost(session, service, { sessionId: sessionId ?? null, grants, pushRecords });
+    attachProjectsHost(session, service, {
+      sessionId: sessionId ?? null,
+      grants,
+      pushRecords,
+      operationOwners,
+    });
   });
   const offExpired = server.onSessionExpired?.(({ sessionId }) => {
     grantsBySession.delete(sessionId);

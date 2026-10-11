@@ -16,6 +16,7 @@ import type {
   SendListener,
 } from "./endpoint.js";
 import type { IpcContext } from "./types.js";
+import type { RemoteScopeGate } from "./channelRemoteScope.js";
 
 /**
  * Produces the IPC envelope for one invocation: arg-count and payload budget
@@ -100,6 +101,7 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
   private router: RemoteRouter | null = null;
   // Installed by Host mode alongside the drive lease; with none, nothing is gated.
   private leaseGate: LeaseGate | null = null;
+  private scopeGate: RemoteScopeGate | null = null;
   private enveloper: InvokeEnveloper = unconfiguredEnveloper;
   // Several ipcMain.on listeners can share one channel; a forwarded send must
   // leave this process once per message, not once per listener.
@@ -145,6 +147,23 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
     return () => {
       if (this.leaseGate === gate) this.leaseGate = null;
     };
+  }
+
+  /** Hold remote views' link calls to their own project (`channelRemoteScope.ts`). */
+  setScopeGate(gate: RemoteScopeGate | null): () => void {
+    this.scopeGate = gate;
+    return () => {
+      if (this.scopeGate === gate) this.scopeGate = null;
+    };
+  }
+
+  private checkLinkCallScope(
+    channel: string,
+    endpoint: ClientEndpoint,
+    args: readonly unknown[]
+  ): LeaseVerdict {
+    if (endpoint.kind !== "remote-view" || this.scopeGate === null) return null;
+    return this.scopeGate(channel, endpoint, args);
   }
 
   private checkLease(
@@ -215,8 +234,10 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
     }
     const ctx = buildEndpointContext(invocation);
     return this.enveloper(channel, args, () =>
-      afterLease(this.checkLinkCallLease(channel, invocation.endpoint, args), () =>
-        listener!(ctx, ...args)
+      afterLease(this.checkLinkCallScope(channel, invocation.endpoint, args), () =>
+        afterLease(this.checkLinkCallLease(channel, invocation.endpoint, args), () =>
+          listener!(ctx, ...args)
+        )
       )
     );
   }
@@ -230,9 +251,11 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
     }
     const ctx = buildEndpointContext(invocation);
     void this.enveloper(channel, args, () =>
-      afterLease(this.checkLinkCallLease(channel, invocation.endpoint, args), () => {
-        for (const listener of [...listeners!]) listener(ctx, ...args);
-      })
+      afterLease(this.checkLinkCallScope(channel, invocation.endpoint, args), () =>
+        afterLease(this.checkLinkCallLease(channel, invocation.endpoint, args), () => {
+          for (const listener of [...listeners!]) listener(ctx, ...args);
+        })
+      )
     ).then((envelope) => {
       if (!envelope.ok) {
         console.warn(`[IPC] Link send on ${channel} failed: ${envelope.error.message}`);

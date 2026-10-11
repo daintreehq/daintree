@@ -23,7 +23,7 @@ afterEach(async () => {
 
 const PROJECT_ROOT = "/repos/project-a";
 
-async function setup(projectRoot: string | null = PROJECT_ROOT) {
+async function setup(projectRoot: string | null = PROJECT_ROOT, mayDrive?: () => boolean) {
   let workspace: FakePeer | null = null;
   let renderer: FakePeer | null = null;
   const opened: string[] = [];
@@ -43,6 +43,7 @@ async function setup(projectRoot: string | null = PROJECT_ROOT) {
       workspace?.close();
     },
     resolveProjectRoot: (projectId) => (projectId === "project-a" ? projectRoot : null),
+    ...(mayDrive ? { mayDrive } : {}),
   });
   const relay: WorktreePortClientRelay = new WorktreePortClientRelay({
     endpointId: "ep-1",
@@ -113,6 +114,65 @@ describe("worktree port over the link", () => {
       id: "worktree-1",
       result: { states: [{ id: "w1" }] },
     });
+  });
+
+  it("lets only the project's driver change its worktrees, while anyone may read them", async () => {
+    let driving = false;
+    const h = await setup(PROJECT_ROOT, () => driving);
+    await h.connect();
+    h.renderer().post({
+      id: "del",
+      action: "delete-worktree",
+      payload: { worktreeId: "/w/a", force: true },
+    });
+    h.renderer().post({ id: "read", action: "get-all-states", payload: {} });
+    await waitFor(() => h.renderer().received.length === 1 && h.workspace().received.length === 1);
+    expect(h.renderer().received[0]).toMatchObject({
+      id: "del",
+      error: expect.stringContaining("driving"),
+    });
+    expect(h.workspace().received).toEqual([{ id: "read", action: "get-all-states", payload: {} }]);
+
+    driving = true;
+    h.renderer().post({ id: "del2", action: "delete-worktree", payload: { worktreeId: "/w/a" } });
+    await waitFor(() => h.workspace().received.length === 2);
+    expect(h.workspace().received[1]).toMatchObject({ id: "del2", action: "delete-worktree" });
+  });
+
+  it("holds every action that changes the project to the lease, and lets a resource's status through", async () => {
+    const h = await setup(PROJECT_ROOT, () => false);
+    await h.connect();
+    const changes: Array<[string, unknown]> = [
+      [
+        "create-worktree",
+        { rootPath: PROJECT_ROOT, options: { baseBranch: "main", newBranch: "x", path: "/w/x" } },
+      ],
+      ["delete-worktree", { worktreeId: "/w/a" }],
+      ["set-active", { worktreeId: "/w/a" }],
+      ["run-lifecycle-setup", { worktreeId: "/w/a" }],
+      ["approve-lifecycle-commands", { worktreeId: "/w/a", fingerprint: "f" }],
+      ["switch-worktree-environment", { worktreeId: "/w/a", envKey: "dev" }],
+      ["resource-action", { worktreeId: "/w/a", action: "teardown" }],
+    ];
+    changes.forEach(([action, payload], i) => h.renderer().post({ id: `c${i}`, action, payload }));
+    h.renderer().post({
+      id: "status",
+      action: "resource-action",
+      payload: { worktreeId: "/w/a", action: "status" },
+    });
+    await waitFor(
+      () => h.renderer().received.length === changes.length && h.workspace().received.length === 1
+    );
+    expect(
+      h.renderer().received.every((m) => typeof (m as { error?: unknown }).error === "string")
+    ).toBe(true);
+    expect(h.workspace().received).toEqual([
+      {
+        id: "status",
+        action: "resource-action",
+        payload: { worktreeId: "/w/a", action: "status" },
+      },
+    ]);
   });
 
   it("carries error responses and pushed events", async () => {

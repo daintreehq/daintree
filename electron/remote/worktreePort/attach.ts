@@ -12,6 +12,7 @@ import type { LinkSession } from "../link/session.js";
 import type { RemoteStreamEndpoint } from "../terminal/hostAttach.js";
 import { wrapMainPort } from "../terminal/ports.js";
 import { WorktreePortClientRelay, WorktreePortHostBridge } from "./WorktreePortBridge.js";
+import { getDriveLeaseService } from "../../services/DriveLeaseService.js";
 
 /**
  * Production wiring for worktree ports over the link: on the host, a bridge
@@ -87,6 +88,9 @@ export function attachWorktreePortBridge(
         getWorktreePortBrokerRef()?.releaseEndpointPort(handle);
       },
       resolveProjectRoot: (projectId) => projectStore.getProjectById(projectId)?.path ?? null,
+      mayDrive: () =>
+        endpoint.projectId !== null &&
+        getDriveLeaseService().drivingLeaseId(endpoint.projectId, endpoint) !== false,
     });
     const closeSub = endpoint.onClose(() => detachWorktreePortBridge(endpoint.endpointId));
     const offChange = getEndpointRegistry().onChange(() => {

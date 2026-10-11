@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -304,6 +304,16 @@ describe("createLeaseTargetResolvers", () => {
     expect(() => r.projectsForPath("relative/path")).toThrow();
     // Git follows the link, so the project it leads into is the one changed.
     await expect(lookup(r, path.join(repoA, "into-b"))).resolves.toEqual(["b"]);
+  });
+
+  it("traces a path naming a file, asking git from the file's folder", async () => {
+    const r = createLeaseTargetResolvers();
+    const file = path.join(repoB, "image.png");
+    writeFileSync(file, "png");
+    await expect(lookup(r, file)).resolves.toEqual(["b"]);
+    const outside = path.join(root, "inbox-image.png");
+    writeFileSync(outside, "png");
+    await expect(lookup(r, outside)).resolves.toEqual([]);
   });
 
   it("names the owning repository's project for a linked worktree nested inside another project, and the enclosing one too", async () => {

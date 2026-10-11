@@ -793,6 +793,11 @@ export interface McpServerStatusSnapshot {
   port: number | null;
   configuredPort: number | null;
   apiKey: string;
+  /**
+   * The key exists but is withheld: a window on another machine never sees
+   * the host's key (`apiKey` is then empty).
+   */
+  apiKeyRedacted?: boolean;
 }
 
 /**

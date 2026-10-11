@@ -1157,6 +1157,12 @@ export class ProjectAcrossHostsService {
     return record && OWN_OPERATION_KINDS.has(record.kind) ? record.outcome : { status: "unknown" };
   }
 
+  /** The id an operation's work is recorded under: a start folded into a running one names that. */
+  canonicalOperationId(opId: string): string | null {
+    const id = normalizeOperationId(opId);
+    return id ? this.deps.operations().canonicalId(id) : null;
+  }
+
   cancelOperation(opId: string): boolean {
     const id = normalizeOperationId(opId);
     if (!id) throw invalid("Invalid operation id");

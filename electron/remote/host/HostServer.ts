@@ -13,6 +13,7 @@ import { LinkSession, type LinkCloseInfo, type LinkSessionOptions } from "../lin
 import { assertSocketPathFits, type HostSocketLocation } from "./hostSocketPath.js";
 import { removeDiscoveryFile, tokensEqual, writeDiscoveryFile } from "./discoveryFile.js";
 import { withHostSocketLock } from "./hostSocketLock.js";
+import { LOCAL_CLIENT_ID } from "../../ipc/endpoint.js";
 
 /**
  * Host mode's listener: a 0600 Unix socket in a 0700 directory, a per-launch
@@ -108,6 +109,8 @@ export class HostServer {
   private readonly sockets = new Set<net.Socket>();
   private readonly live = new Map<string, HostSessionContext>();
   private readonly resumable = new Map<string, Resumable>();
+  /** Each session's current resume secret, handed out only in its WELCOME. */
+  private readonly resumeSecrets = new Map<string, string>();
   private readonly sessionListeners = new Set<(ctx: HostSessionContext) => void>();
   private readonly expiredListeners = new Set<(info: HostSessionExpired) => void>();
 
@@ -254,6 +257,7 @@ export class HostServer {
     this.live.clear();
     for (const entry of this.resumable.values()) clearTimeout(entry.timer);
     this.resumable.clear();
+    this.resumeSecrets.clear();
   }
 
   private async closeListener(server: net.Server): Promise<void> {
@@ -338,9 +342,21 @@ export class HostServer {
     }
 
     const clientId = hello.client.clientId;
+    // "local" names this host's own windows to the lease; no Shell may claim it.
+    if (clientId === LOCAL_CLIENT_ID) {
+      session.reject({ reason: "protocol", handshake: null, detail: null });
+      return;
+    }
     let sessionId: string | null = null;
     const resumeId = hello.resumeSessionId;
-    if (resumeId !== null) {
+    // A session id is seen by every Shell (lease holders, summaries); resuming
+    // also takes the secret only that session's own WELCOME carried.
+    const secret = resumeId === null ? undefined : this.resumeSecrets.get(resumeId);
+    const mayResume =
+      secret !== undefined &&
+      typeof hello.resumeSecret === "string" &&
+      tokensEqual(hello.resumeSecret, secret);
+    if (resumeId !== null && mayResume) {
       const parked = this.resumable.get(resumeId);
       const attached = this.live.get(resumeId);
       if (parked && parked.clientId === clientId) {
@@ -362,11 +378,19 @@ export class HostServer {
     const id = sessionId ?? crypto.randomUUID();
 
     const ctx: HostSessionContext = { sessionId: id, client: hello.client, resumed, session };
+    const resumeSecret = crypto.randomBytes(32).toString("base64url");
+    this.resumeSecrets.set(id, resumeSecret);
     session.open();
     session.post({
       lane: Lane.CONTROL,
       kind: ControlKind.WELCOME,
-      body: { handshake: local, hostName: this.options.hostName, sessionId: id, resumed },
+      body: {
+        handshake: local,
+        hostName: this.options.hostName,
+        sessionId: id,
+        resumed,
+        resumeSecret,
+      },
     });
     this.live.set(id, ctx);
     session.onClose((info) => this.park(ctx, info));
@@ -423,6 +447,7 @@ export class HostServer {
   }
 
   private expire(sessionId: string, clientId: string): void {
+    this.resumeSecrets.delete(sessionId);
     const info = { sessionId, clientId };
     for (const listener of this.expiredListeners) {
       try {

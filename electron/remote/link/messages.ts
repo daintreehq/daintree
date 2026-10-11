@@ -74,6 +74,11 @@ export interface HelloMessage {
   client: LinkClientInfo;
   /** Present when resuming: the session id from the previous WELCOME. */
   resumeSessionId: string | null;
+  /**
+   * With `resumeSessionId`: the secret that WELCOME carried. The session id
+   * travels in lease and summary records other Shells see; this never does.
+   */
+  resumeSecret?: string | null;
 }
 
 export interface WelcomeMessage {
@@ -81,6 +86,8 @@ export interface WelcomeMessage {
   hostName: string;
   sessionId: string;
   resumed: boolean;
+  /** What a later HELLO must present to resume this session; new on every WELCOME. */
+  resumeSecret?: string;
 }
 
 export type RejectReason =

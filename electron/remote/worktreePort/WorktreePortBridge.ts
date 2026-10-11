@@ -3,7 +3,7 @@ import { Lane } from "../link/frames.js";
 import { InteractiveKind } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
 import { safePost, type PortLike } from "../terminal/ports.js";
-import { checkRemoteWorktreePortRequest } from "./requestSchema.js";
+import { checkRemoteWorktreePortRequest, requiresDriving } from "./requestSchema.js";
 
 /**
  * The worktree RPC port over the link. The renderer's preload client posts
@@ -61,7 +61,16 @@ export interface WorktreePortHostBridgeOptions {
    * or forgotten since the port opened is judged by where it is now.
    */
   resolveProjectRoot(projectId: string): string | null;
+  /**
+   * Whether this endpoint may change its project now: it holds the lease, or
+   * nobody does. Asked per request for those {@link requiresDriving} names.
+   * Absent means always.
+   */
+  mayDrive?(): boolean;
 }
+
+const DRIVEN_ELSEWHERE =
+  "Another screen is driving this project. Take it over to change its worktrees.";
 
 /** Host side: one remote endpoint's port to its project's workspace host. */
 export class WorktreePortHostBridge {
@@ -165,6 +174,13 @@ export class WorktreePortHostBridge {
       if (checked.id !== null) {
         postWorktree(this.session, this.endpointId, { id: checked.id, error: checked.error });
       }
+      return;
+    }
+    if (requiresDriving(checked.request) && this.opts.mayDrive?.() === false) {
+      postWorktree(this.session, this.endpointId, {
+        id: checked.request.id,
+        error: DRIVEN_ELSEWHERE,
+      });
       return;
     }
     if (!safePost(this.port, checked.request)) {

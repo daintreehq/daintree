@@ -31,6 +31,7 @@ import {
 import { acceptClientBundleTransfer } from "../bundleSinks.js";
 import {
   attachProjectsHost,
+  HostOperationOwners,
   HostPushRecords,
   ProjectHostGrants,
   type ProjectsHostAuthority,
@@ -88,6 +89,8 @@ interface Rig {
   reconnects: number;
   views: Views;
   grants: ProjectHostGrants;
+  pushRecords: HostPushRecords;
+  operationOwners: HostOperationOwners;
   /** Runs when the Shell waits for the host to come back. */
   onReconnect: (() => Promise<void>) | null;
   /** Close the link and open a new one, the host serving it as it does a resumed session. */
@@ -111,6 +114,7 @@ async function rig(): Promise<Rig> {
   const grants = new ProjectHostGrants();
   // Host-wide, as Host mode keeps them: a new link can still ask about a push.
   const pushRecords = new HostPushRecords();
+  const operationOwners = new HostOperationOwners();
   const link = async (): Promise<LinkSession> => {
     const pair = await openSessionPair(socketDir);
     sessions.push(pair.host, pair.client);
@@ -119,6 +123,7 @@ async function rig(): Promise<Rig> {
       authority,
       grants,
       pushRecords,
+      operationOwners,
     });
     // What the host file client does once wired: accept only bundles this Shell asked for.
     pair.client.transfers.setSinkFactory((begin) => {
@@ -138,6 +143,8 @@ async function rig(): Promise<Rig> {
     drops,
     reconnects: 0,
     views,
+    pushRecords,
+    operationOwners,
     grants,
     onReconnect: null,
     relink: async () => {
@@ -542,6 +549,79 @@ describe("what the host checks for itself", () => {
     expect(r.studio.clone).toHaveBeenCalledTimes(1);
   });
 
+  it("lets only the session that started a clone stop it, or reuse its id", async () => {
+    const r = await rig();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    r.studio.clone.mockImplementation(async (options: ExecuteCloneOptions) => {
+      await gate;
+      await plainClone(options);
+    });
+    const destination = path.join(root, "owned-clone");
+    const grantFor = async (client: LinkSession, dest: string) =>
+      (
+        (await client.call(ProjectLinkMethod.CHECK_DESTINATION, {
+          path: dest,
+          remoteUrls: [URL],
+          mintGrant: true,
+        })) as { grant: string }
+      ).grant;
+    const start = (client: LinkSession, id: string, dest: string, grant: string) =>
+      client.call(ProjectLinkMethod.START_CLONE, {
+        opId: id,
+        source: { kind: "remote", url: URL },
+        destination: dest,
+        branch: null,
+        options: { submodules: false, depth: "full" },
+        setupRecipeId: null,
+        destinationGrant: grant,
+      });
+    const id = opId();
+    await expect(
+      start(r.client, id, destination, await grantFor(r.client, destination))
+    ).resolves.toBeNull();
+
+    // Another Shell on this host: its own session and grants, the same host-wide records.
+    const pair = await openSessionPair(socketDir);
+    sessions.push(pair.host, pair.client);
+    attachProjectsHost(pair.host, r.studio.service, {
+      sessionId: "other-session",
+      grants: new ProjectHostGrants(),
+      pushRecords: r.pushRecords,
+      operationOwners: r.operationOwners,
+    });
+    await expect(
+      pair.client.call(ProjectLinkMethod.OPERATION_CANCEL, { opId: id })
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+    // Nor learn how it went: its outcome names what it made.
+    await expect(
+      pair.client.call(ProjectLinkMethod.OPERATION_STATUS, { opId: id })
+    ).resolves.toEqual({ status: "unknown" });
+    // A placement the host refuses claims nothing.
+    const refused = opId();
+    await expect(
+      pair.client.call(ProjectLinkMethod.START_PLACE_WORKTREE, {
+        opId: refused,
+        projectId: "no-such-project",
+        branch: "x",
+        path: path.join(root, "nowhere-wt"),
+      })
+    ).rejects.toBeDefined();
+    expect(r.operationOwners.mayClaim(refused, r.grants)).toBe(true);
+    const elsewhere = path.join(root, "owned-clone-2");
+    await expect(
+      start(pair.client, id, elsewhere, await grantFor(pair.client, elsewhere))
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+
+    // Its own session may.
+    await r.client.call(ProjectLinkMethod.OPERATION_CANCEL, { opId: id });
+    release();
+    await vi.waitFor(() => expect(r.studio.registry.status(id).status).not.toBe("running"), {
+      timeout: 10_000,
+      interval: 10,
+    });
+  });
+
   it("opens the branch's worktree as part of opening, and refuses a checkout it never offered", async () => {
     const r = await rig();
     const existing = path.join(root, "authz-checkout");
@@ -789,5 +869,33 @@ describe("a push whose answer was lost with the link", () => {
       })
     ).resolves.toEqual({ localSha: project.tip, remoteSha, remoteReachable: true });
     expect(git(project.bare, ["rev-parse", "main"])).toBe(remoteSha);
+  });
+});
+
+describe("HostOperationOwners", () => {
+  it("lets one session start an id, and no other", () => {
+    const owners = new HostOperationOwners();
+    const a = {};
+    const b = {};
+    expect(owners.mayClaim("op-1", a)).toBe(true);
+    owners.claim("op-1", a);
+    expect(owners.mayClaim("op-1", a)).toBe(true);
+    expect(owners.mayClaim("op-1", b)).toBe(false);
+    expect(owners.owns("op-1", a)).toBe(true);
+    expect(owners.owns("op-1", b)).toBe(false);
+  });
+
+  it("never forgets a running operation to make room, however many settled ones arrive", () => {
+    const running = new Set(["victim"]);
+    const owners = new HostOperationOwners((opId) => running.has(opId));
+    const victim = {};
+    const flood = {};
+    owners.claim("victim", victim);
+    for (let i = 0; i < 2000; i++) owners.claim(`spam-${i}`, flood);
+    expect(owners.owns("victim", victim)).toBe(true);
+    expect(owners.mayClaim("victim", flood)).toBe(false);
+    // Settled ones go first: the oldest spam is gone.
+    expect(owners.owns("spam-0", flood)).toBe(false);
+    expect(owners.owns("spam-1999", flood)).toBe(true);
   });
 });

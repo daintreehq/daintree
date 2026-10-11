@@ -485,6 +485,105 @@ describe("HostServer session resume", () => {
     raw.socket.destroy();
   });
 
+  it("does not resume a session for its own client id without the secret its WELCOME carried", async () => {
+    const server = await startServer();
+    const seen: HostSessionContext[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    startClient(server);
+    await waitFor(() => seen.length === 1);
+    const { clientId } = seen[0]!.client;
+    for (const resumeSecret of [undefined, null, "guess"]) {
+      const raw = await rawConnect();
+      raw.socket.write(
+        encodeFrame(
+          messageToFrame({
+            lane: Lane.CONTROL,
+            kind: ControlKind.HELLO,
+            body: {
+              handshake: TEST_HANDSHAKE,
+              token: server.token,
+              client: { clientId, clientName: "n", platform: "linux" },
+              resumeSessionId: seen[0]!.sessionId,
+              ...(resumeSecret === undefined ? {} : { resumeSecret }),
+            },
+          })
+        )
+      );
+      await waitFor(() => seen.length > 1);
+      const taken = seen.pop()!;
+      expect(taken.resumed).toBe(false);
+      expect(taken.sessionId).not.toBe(seen[0]!.sessionId);
+      expect(seen[0]!.session.isOpen).toBe(true);
+      raw.socket.destroy();
+    }
+  });
+
+  it("resumes only for the same client with the current secret, never a replayed one", async () => {
+    const server = await startServer();
+    const seen: HostSessionContext[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    const hello = async (clientId: string, resume: { id: string; secret: string } | null) => {
+      const raw = await rawConnect();
+      raw.socket.write(
+        encodeFrame(
+          messageToFrame({
+            lane: Lane.CONTROL,
+            kind: ControlKind.HELLO,
+            body: {
+              handshake: TEST_HANDSHAKE,
+              token: server.token,
+              client: { clientId, clientName: "n", platform: "linux" },
+              resumeSessionId: resume?.id ?? null,
+              resumeSecret: resume?.secret ?? null,
+            },
+          })
+        )
+      );
+      await waitFor(() => raw.frames.some((f) => frameToMessage(f)?.kind === ControlKind.WELCOME));
+      const welcome = raw.frames.map(frameToMessage).find((m) => m?.kind === ControlKind.WELCOME)!
+        .body as {
+        sessionId: string;
+        resumed: boolean;
+        resumeSecret: string;
+      };
+      return { raw, welcome };
+    };
+    const drop = async (raw: { socket: net.Socket }) => {
+      const before = seen.length;
+      raw.socket.destroy();
+      await closedSocket(raw.socket);
+      await waitFor(() => !seen[before - 1]!.session.isOpen);
+    };
+
+    const first = await hello("shell-a", null);
+    await drop(first.raw);
+    const resume = { id: first.welcome.sessionId, secret: first.welcome.resumeSecret };
+
+    const intruder = await hello("shell-b", resume);
+    expect(intruder.welcome.resumed).toBe(false);
+    intruder.raw.socket.destroy();
+
+    const back = await hello("shell-a", resume);
+    expect(back.welcome).toMatchObject({ sessionId: resume.id, resumed: true });
+    expect(back.welcome.resumeSecret).not.toBe(resume.secret);
+    await drop(back.raw);
+
+    const replay = await hello("shell-a", resume);
+    expect(replay.welcome.resumed).toBe(false);
+    replay.raw.socket.destroy();
+  });
+
+  it("refuses the client id this host's own windows go by", async () => {
+    const server = await startServer();
+    const seen: HostSessionContext[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    const raw = await rawHello(server.token, "local");
+    await closedSocket(raw.socket);
+    expect(seen).toHaveLength(0);
+    const reject = raw.frames.map(frameToMessage).find((m) => m?.kind === ControlKind.REJECT);
+    expect(reject?.body).toMatchObject({ reason: "protocol" });
+  });
+
   it("expires a session at once when the client leaves with GOODBYE", async () => {
     const server = await startServer();
     const seen: HostSessionContext[] = [];
