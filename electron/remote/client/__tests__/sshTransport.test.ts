@@ -446,8 +446,12 @@ describe("SshTransport with an injected ssh", () => {
     });
   });
 
-  it("refuses a discovery file whose socket isn't beside it, or that ssh would expand", async () => {
-    const open = (home: string, socketPath: string) => {
+  it("refuses a discovery file whose socket isn't beside it, and never hands ssh a path it would expand", async () => {
+    const open = (
+      home: string,
+      socketPath: string,
+      launch = ["/Applications/Daintree.app/Contents/MacOS/Daintree"]
+    ) => {
       const after: string[][] = [];
       const streams: string[][] = [];
       const ensureRunning = vi.fn(async () => true);
@@ -463,7 +467,7 @@ describe("SshTransport with an injected ssh", () => {
               socketPath,
               token: "a".repeat(64),
               pid: 1,
-              command: ["/Applications/Daintree.app/Contents/MacOS/Daintree"],
+              command: launch,
             })
           );
         else {
@@ -504,10 +508,24 @@ describe("SshTransport with an injected ssh", () => {
     await expectRefused(open("/Users/g", "/tmp/other.sock"), "not beside it");
     await expectRefused(open("/Users/g", "/x/${OPENAI_API_KEY}/host.sock"), "not beside it");
 
-    // A host can't get an expansion in through its $HOME either.
+    // A host can't get an expansion in through its $HOME either: a home like
+    // that is reached over the attach bridge, which never names the socket to
+    // ssh, and refused when the host gives no bridge to start.
     for (const home of ["/Users/${OPENAI_API_KEY}", "/Users/%u"]) {
       const socket = remoteHostSocketLocation({ platform: "darwin", uid: 501, home }).socketPath;
-      await expectRefused(open(home, socket), "can't forward as written");
+      const bridged = open(home, socket);
+      await bridged.opened.catch(() => {});
+      // No forward was set up; every attempt went over the bridge, never naming the socket.
+      expect(bridged.after).toEqual([]);
+      expect(bridged.streams.length).toBeGreaterThan(0);
+      for (const args of bridged.streams) {
+        expect(args.some((arg) => arg.includes(socket))).toBe(false);
+        expect(args.at(-1)).toBe(
+          "'/Applications/Daintree.app/Contents/MacOS/Daintree' --attach-stdio"
+        );
+      }
+
+      await expectRefused(open(home, socket, ["relative/Daintree"]), "can't forward as written");
     }
   });
 

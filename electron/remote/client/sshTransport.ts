@@ -594,12 +594,20 @@ export class SshTransport implements LinkTransport {
         `The host's discovery file names a socket at ${info.socketPath}, not beside it at ${location.socketPath}`
       );
     }
-    if (!isForwardablePath(info.socketPath)) {
-      throw new DiscoveryRejectedError(
-        `The host's socket path has characters ssh can't forward as written (":", "\${" or "%"): ${info.socketPath}`
-      );
-    }
     const remoteSocket = info.socketPath;
+    // A home folder with ":", "${" or "%" in its name puts them in the socket
+    // path, which ssh would read as forwarding syntax. The attach bridge
+    // reaches the same socket without naming it to ssh at all.
+    if (!isForwardablePath(remoteSocket)) {
+      if (!(this.options.attachCommand ?? attachCommandFor(info))) {
+        throw new DiscoveryRejectedError(
+          `The host's socket path has characters ssh can't forward as written (":", "\${" or "%"), and the host didn't say how to start its attach bridge: ${remoteSocket}`
+        );
+      }
+      const connection = await this.openOverStdio(controlPath, info, signal);
+      this.lastRoute = "attach-stdio";
+      return connection;
+    }
 
     if (this.streamLocal === "unverified") {
       this.streamLocal = await this.checkStreamLocal(controlPath, remoteSocket, signal);
