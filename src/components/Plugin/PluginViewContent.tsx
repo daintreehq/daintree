@@ -77,9 +77,15 @@ import { logWarn } from "@/utils/logger";
 import {
   isPluginNotOnHostError,
   isRemoteUnsupportedError,
+  pluginViewHostId,
   pluginViewImportPath,
 } from "./remotePluginView";
 import { PluginRemoteUnsupportedPlaceholder } from "./PluginRemoteUnsupportedPlaceholder";
+import {
+  PluginViewBlockedError,
+  PluginViewBlockedPlaceholder,
+  isPluginViewBlockedError,
+} from "./PluginViewBlockedPlaceholder";
 import { PluginNotOnHostPlaceholder } from "./PluginNotOnHostPlaceholder";
 
 /**
@@ -402,6 +408,12 @@ export function makePluginViewContent(
     if (isRemoteUnsupportedError(error)) {
       return <PluginRemoteUnsupportedPlaceholder pluginDisplayName={pluginDisplayName} />;
     }
+    // This computer didn't run the host's view: the person's choice, not a bug.
+    if (isPluginViewBlockedError(error)) {
+      return (
+        <PluginViewBlockedPlaceholder pluginDisplayName={pluginDisplayName} onRetry={resetError} />
+      );
+    }
     // The window's host doesn't have this plugin (any more). Also not broken.
     if (isPluginNotOnHostError(error)) {
       return (
@@ -631,6 +643,14 @@ export function makePluginViewContent(
     requestRecoveryPath: boolean,
     timing: ViewLoadTiming
   ): Promise<ComponentType<PanelViewProps>> => {
+    // A host's view runs here only once this computer says so. The question
+    // is settled before the load deadline starts, so reading it can't time
+    // the view out, and it is parented to this window.
+    if (pluginViewHostId() !== null) {
+      const url = pluginViewImportPath(recoveryComponentPath ?? componentPath);
+      const allowed = await window.electron?.remoteHosts?.preparePluginView?.({ url });
+      if (allowed !== true) throw new PluginViewBlockedError(pluginId);
+    }
     const mod: unknown = await withLoadTimeout(
       (async () => {
         // Implicit lazy activation (#10523): force the owning plugin to

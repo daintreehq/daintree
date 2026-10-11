@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { stripPluginViewGeneration } from "../../../shared/utils/pluginViewUrl.js";
@@ -7,9 +8,15 @@ import type { LinkSession } from "../link/session.js";
 import {
   PLUGIN_ASSET_MAX_BYTES,
   PLUGIN_ASSET_METHOD,
+  PLUGIN_VIEW_MANIFEST_MAX_BYTES,
+  PLUGIN_VIEW_MANIFEST_MAX_FILES,
+  PLUGIN_VIEW_MANIFEST_METHOD,
   PluginAssetRequestSchema,
+  PluginViewManifestRequestSchema,
   type PluginAssetRequest,
   type PluginAssetResponse,
+  type PluginViewManifestRequest,
+  type PluginViewManifestResponse,
 } from "./assetLinkMethods.js";
 
 export type HostPluginAssetEndpoint = Pick<
@@ -35,6 +42,63 @@ export interface HostPluginAssetServiceOptions {
   fetchAsset(request: Request): Promise<Response>;
   /** Size of the file an asset path names, or null when it isn't a file inside `root`. */
   assetSize?(root: string, encodedPath: string): Promise<number | null>;
+  /** Every servable file under `root` with its sha256, or null past the manifest bounds. */
+  listFiles?(root: string): Promise<Array<{ path: string; sha256: string }> | null>;
+}
+
+async function sha256OfFile(file: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);
+  return hash.digest("hex");
+}
+
+/**
+ * Every file the plugin's `plugin://` root could serve, with its sha256: the
+ * walk follows a symlink only when it resolves inside the root (as the
+ * protocol handler does), skips version-control metadata and files too big to
+ * serve, and gives up (null) past the manifest's file and byte bounds.
+ */
+export async function listPluginFiles(
+  root: string
+): Promise<Array<{ path: string; sha256: string }> | null> {
+  const realRoot = await fs.realpath(root);
+  const out: Array<{ path: string; sha256: string }> = [];
+  let total = 0;
+  // A directory reached again through a link is listed under each path that
+  // reaches it (the handler serves every one); only a loop back up is cut.
+  const walk = async (dir: string, rel: string, ancestors: Set<string>): Promise<boolean> => {
+    const realDir = await fs.realpath(dir);
+    if (ancestors.has(realDir)) return true;
+    const below = new Set(ancestors).add(realDir);
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of entries) {
+      if (entry.name === ".git") continue;
+      const full = path.join(dir, entry.name);
+      const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+      let real: string;
+      try {
+        real = await fs.realpath(full);
+      } catch {
+        continue;
+      }
+      const within = path.relative(realRoot, real);
+      if (within.startsWith("..") || path.isAbsolute(within)) continue;
+      const stat = await fs.stat(real);
+      if (stat.isDirectory()) {
+        if (!(await walk(full, childRel, below))) return false;
+        continue;
+      }
+      if (!stat.isFile() || stat.size > PLUGIN_ASSET_MAX_BYTES) continue;
+      total += stat.size;
+      if (out.length >= PLUGIN_VIEW_MANIFEST_MAX_FILES || total > PLUGIN_VIEW_MANIFEST_MAX_BYTES) {
+        return false;
+      }
+      out.push({ path: childRel, sha256: await sha256OfFile(real) });
+    }
+    return true;
+  };
+  return (await walk(root, "", new Set())) ? out : null;
 }
 
 /**
@@ -106,6 +170,11 @@ export class HostPluginAssetService {
         session.registerCallHandler(PLUGIN_ASSET_METHOD, PluginAssetRequestSchema, (payload) =>
           this.serve(created.endpoints, payload)
         ),
+        session.registerCallHandler(
+          PLUGIN_VIEW_MANIFEST_METHOD,
+          PluginViewManifestRequestSchema,
+          (payload) => this.manifest(created.endpoints, payload)
+        ),
         session.onClose(() => {
           for (const dispose of created.unregister.splice(0)) dispose();
           created.endpoints.clear();
@@ -165,6 +234,32 @@ export class HostPluginAssetService {
       return answer(304, { pluginId: plugin.instanceId, etag, lastModified });
     }
     return answer(200, { pluginId: plugin.instanceId, etag, lastModified, body: bytes });
+  }
+
+  /** Every file of the plugin's bundle with its sha256, for the same Shells that may load it. */
+  private async manifest(
+    endpoints: Map<string, HostPluginAssetEndpoint>,
+    payload: PluginViewManifestRequest
+  ): Promise<PluginViewManifestResponse> {
+    const refuse = (status: number): PluginViewManifestResponse => ({
+      status,
+      pluginId: null,
+      files: null,
+    });
+    if (this.disposed) return refuse(503);
+    const root = this.options.rootForAuthority(payload.authority);
+    if (!root) return refuse(404);
+    const plugin = await this.admit(endpoints, payload.endpointIds, root);
+    if (plugin === "driven-elsewhere") return refuse(403);
+    if (!plugin) return refuse(404);
+    let files: Array<{ path: string; sha256: string }> | null;
+    try {
+      files = await (this.options.listFiles ?? listPluginFiles)(root);
+    } catch {
+      return refuse(500);
+    }
+    if (files === null) return refuse(413);
+    return { status: 200, pluginId: plugin.instanceId, files };
   }
 
   private async admit(

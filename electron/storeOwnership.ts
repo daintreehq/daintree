@@ -101,6 +101,8 @@ export const STORE_KEY_OWNERSHIP = {
   remoteHostsPreferences: "device",
   // What this machine lets a host's plugins do with its clipboard.
   remoteHostPluginClipboardGrants: "device",
+  // Which host plugins may run their view code on this machine, and what code.
+  remoteHostPluginViewConsent: "device",
 } as const satisfies Record<keyof StoreSchema, SettingOwner | "split">;
 
 /** terminalConfig: behaviour runs where the terminals run; appearance is how this screen draws them. */

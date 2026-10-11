@@ -11,6 +11,7 @@ vi.mock("@/clients/remoteHostsClient", () => ({
     connect: vi.fn(async () => undefined),
     forget: vi.fn(async () => undefined),
     listClipboardGrants: vi.fn(async () => []),
+    listPluginViewConsents: vi.fn(async () => []),
     resetClipboardGrants: vi.fn(async () => undefined),
   },
 }));

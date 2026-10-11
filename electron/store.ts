@@ -734,6 +734,13 @@ export interface StoreSchema {
     string,
     Record<string, Partial<Record<"read" | "write", "allow" | "deny">>>
   >;
+  /**
+   * The host plugins this machine lets run their view code here: host id →
+   * plugin instance id → the digest of the exact bundle allowed (the host's
+   * list of the plugin's files and their sha256). Additive key with no
+   * numbered migration; a missing or malformed entry means not allowed.
+   */
+  remoteHostPluginViewConsent?: Record<string, Record<string, { digest: string }>>;
 }
 
 const storeOptions = {

@@ -1124,15 +1124,24 @@ export interface GeneratedElectronAPI {
     listHostProjects(
       ...args: IpcInvokeMap["remote-hosts:list-host-projects"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:list-host-projects"]["result"]>;
+    listPluginViewConsents(
+      ...args: IpcInvokeMap["remote-hosts:list-plugin-view-consents"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:list-plugin-view-consents"]["result"]>;
     planInstall(
       ...args: IpcInvokeMap["remote-hosts:plan-install"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:plan-install"]["result"]>;
+    preparePluginView(
+      ...args: IpcInvokeMap["remote-hosts:prepare-plugin-view"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:prepare-plugin-view"]["result"]>;
     probe(
       ...args: IpcInvokeMap["remote-hosts:probe"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:probe"]["result"]>;
     resetClipboardGrants(
       ...args: IpcInvokeMap["remote-hosts:reset-clipboard-grants"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:reset-clipboard-grants"]["result"]>;
+    resetPluginViewConsent(
+      ...args: IpcInvokeMap["remote-hosts:reset-plugin-view-consent"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:reset-plugin-view-consent"]["result"]>;
     startHostMode(
       ...args: IpcInvokeMap["remote-hosts:start-host-mode"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:start-host-mode"]["result"]>;

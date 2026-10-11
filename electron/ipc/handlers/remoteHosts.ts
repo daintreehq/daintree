@@ -30,6 +30,9 @@ import type {
   HostPluginClipboardGrant,
   PlanInstallPayload,
   ResetClipboardGrantsPayload,
+  ResetPluginViewConsentPayload,
+  PluginViewConsentEntry,
+  PreparePluginViewPayload,
   SwitchWindowHostPayload,
   SwitchWindowHostResult,
   UpdateHostPayload,
@@ -176,7 +179,25 @@ export const remoteHostsNamespace = defineIpcNamespace({
         if (__DAINTREE_REMOTE_HOSTS__) {
           const { persistedClipboardGrants } =
             await import("../../remote/plugins/clipboardGrants.js");
-          return persistedClipboardGrants.list(hostId);
+          const { runClipboardReadGrants } = await import("../../remote/plugins/shellRequests.js");
+          // A read allowed "always" lives only in memory this run, and one
+          // kept on disk by an earlier build no longer counts: list what holds.
+          const runReads = new Set(runClipboardReadGrants(hostId));
+          const byPlugin = new Map<string, HostPluginClipboardGrant>();
+          for (const grant of persistedClipboardGrants.list(hostId)) {
+            const entry: HostPluginClipboardGrant = { pluginId: grant.pluginId };
+            if (grant.read === "deny") entry.read = "deny";
+            if (grant.write) entry.write = grant.write;
+            byPlugin.set(grant.pluginId, entry);
+          }
+          for (const pluginId of runReads) {
+            const entry = byPlugin.get(pluginId) ?? { pluginId };
+            entry.read ??= "allow";
+            byPlugin.set(pluginId, entry);
+          }
+          return [...byPlugin.values()]
+            .filter((grant) => grant.read !== undefined || grant.write !== undefined)
+            .sort((a, b) => a.pluginId.localeCompare(b.pluginId));
         }
         return [];
       }
@@ -190,11 +211,70 @@ export const remoteHostsNamespace = defineIpcNamespace({
         }
         const hostId = requireHostId(payload);
         if (__DAINTREE_REMOTE_HOSTS__) {
-          const { persistedClipboardGrants } =
-            await import("../../remote/plugins/clipboardGrants.js");
+          const [{ persistedClipboardGrants }, { forgetRunClipboardGrants }] = await Promise.all([
+            import("../../remote/plugins/clipboardGrants.js"),
+            import("../../remote/plugins/shellRequests.js"),
+          ]);
+          // Void open questions first, then clear, with nothing awaited between.
+          forgetRunClipboardGrants(hostId, pluginId);
           persistedClipboardGrants.reset(hostId, pluginId);
         }
       }
+    ),
+    // This machine's yes to running a host plugin's view code here.
+    listPluginViewConsents: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.listPluginViewConsents,
+      async (payload: ListHostProjectsPayload): Promise<PluginViewConsentEntry[]> => {
+        const hostId = requireHostId(payload);
+        if (__DAINTREE_REMOTE_HOSTS__) {
+          const { persistedPluginViewConsent } =
+            await import("../../remote/plugins/pluginViewConsent.js");
+          const { pluginViewRefusals } = await import("../../remote/plugins/install.js");
+          // A "Don't run" this run wins over an earlier yes to another version.
+          const refused = new Set(pluginViewRefusals(hostId));
+          const allowed = persistedPluginViewConsent.list(hostId).filter((id) => !refused.has(id));
+          return [
+            ...allowed.map((pluginId) => ({ pluginId, state: "allowed" as const })),
+            ...[...refused].map((pluginId) => ({ pluginId, state: "refused" as const })),
+          ].sort((a, b) => a.pluginId.localeCompare(b.pluginId));
+        }
+        return [];
+      }
+    ),
+    resetPluginViewConsent: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.resetPluginViewConsent,
+      async (payload: ResetPluginViewConsentPayload): Promise<void> => {
+        const pluginId = (payload as Partial<ResetPluginViewConsentPayload> | null)?.pluginId;
+        if (pluginId !== undefined && typeof pluginId !== "string") {
+          throw new AppError({ code: "VALIDATION", message: "pluginId must be a string" });
+        }
+        const hostId = requireHostId(payload);
+        if (__DAINTREE_REMOTE_HOSTS__) {
+          const [{ persistedPluginViewConsent }, { revokePluginViewDecisions }] = await Promise.all(
+            [
+              import("../../remote/plugins/pluginViewConsent.js"),
+              import("../../remote/plugins/install.js"),
+            ]
+          );
+          // Void anything in flight first, then clear, with nothing awaited between.
+          revokePluginViewDecisions(hostId, pluginId);
+          persistedPluginViewConsent.reset(hostId, pluginId);
+        }
+      }
+    ),
+    // A remote view settles consent for a host plugin's bundle before importing it.
+    preparePluginView: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.preparePluginView,
+      async (ctx, payload: PreparePluginViewPayload): Promise<boolean> => {
+        const url = (payload as Partial<PreparePluginViewPayload> | null)?.url;
+        if (typeof url !== "string" || url.length > 8192) {
+          throw new AppError({ code: "VALIDATION", message: "url must be a string" });
+        }
+        if (!__DAINTREE_REMOTE_HOSTS__) return false;
+        const { preparePluginView } = await import("../../remote/plugins/install.js");
+        return preparePluginView(ctx.webContentsId, url);
+      },
+      { withContext: true }
     ),
     isInUse: op(REMOTE_HOSTS_METHOD_CHANNELS.isInUse, (): boolean => remoteHostsInUse()),
     getLocalHandshake: op(REMOTE_HOSTS_METHOD_CHANNELS.getLocalHandshake, (): HostHandshakeInfo =>

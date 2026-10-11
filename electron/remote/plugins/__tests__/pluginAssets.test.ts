@@ -1,8 +1,15 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
 import type { LinkSession } from "../../link/session.js";
 import { PLUGIN_ASSET_METHOD } from "../assetLinkMethods.js";
 import { ClientPluginAssets } from "../ClientPluginAssets.js";
+import { createMemoryPluginViewConsent } from "../pluginViewConsent.js";
+import {
+  PluginViewGate,
+  type PluginViewAdmitter,
+  type PluginViewQuestion,
+} from "../pluginViewGate.js";
 import {
   HostPluginAssetService,
   type HostPluginAssetEndpoint,
@@ -55,6 +62,9 @@ function setup(options: {
   body?: string;
   endpointProject?: string | null;
   size?: number | null;
+  gate?: PluginViewAdmitter;
+  /** The files the host lists for the bundle. */
+  listed?: string[];
 }) {
   let body = options.body ?? "export default 1;";
   let driving = options.driving ?? true;
@@ -79,13 +89,19 @@ function setup(options: {
     isDriving: () => driving,
     fetchAsset,
     assetSize: async () => (options.size !== undefined ? options.size : body.length),
+    // The bundle as the host lists it: every file it serves is the current body.
+    listFiles: async () =>
+      (options.listed ?? ["dist/view.js", "dist/chunk.js"]).map((file) => ({
+        path: file,
+        sha256: createHash("sha256").update(body).digest("hex"),
+      })),
   });
   const { session, calls } = fakeLink();
   const endpoint = hostEndpoint(
     options.endpointProject === undefined ? PROJECT : options.endpointProject
   );
   service.attach(session as unknown as LinkSession, endpoint);
-  const client = new ClientPluginAssets();
+  const client = new ClientPluginAssets(options.gate ?? { admit: async () => true });
   client.noteEndpointOpened(HOST, { session, webContentsId: 9, endpointId: "ep-1" });
   return {
     client,
@@ -103,6 +119,100 @@ const request = {
   path: "__dtv-3/dist/view.js",
   method: "GET" as const,
 };
+
+describe("this machine's own gate on a host's view code", () => {
+  function gated(ask: (question: PluginViewQuestion) => Promise<boolean>) {
+    const consent = createMemoryPluginViewConsent();
+    const asked = vi.fn(ask);
+    const gate = new PluginViewGate({ consent, ask: asked });
+    return { gate, consent, asked };
+  }
+
+  /** What the view's prepare call does over IPC before it imports anything. */
+  function prepare(gate: PluginViewGate, client: ClientPluginAssets) {
+    return gate.prepare({
+      hostId: HOST,
+      authority: "pi-abc",
+      webContentsId: 9,
+      loadManifest: () => client.loadManifest(HOST, "pi-abc"),
+    });
+  }
+
+  it("serves nothing the person here hasn't said yes to, and asks only from prepare", async () => {
+    const { gate, asked } = gated(async () => false);
+    const { client } = setup({ gate });
+    // A file fetched before any yes is refused without a question on the file path.
+    expect((await client.proxy(request)).status).toBe(403);
+    expect(asked).not.toHaveBeenCalled();
+    expect(await prepare(gate, client)).toBe(false);
+    expect(asked).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostId: HOST,
+        pluginId: "acme.graph",
+        kind: "new",
+        webContentsId: 9,
+      })
+    );
+    // A no holds for the rest of the run: a restored layout doesn't ask again.
+    expect(await prepare(gate, client)).toBe(false);
+    expect((await client.proxy(request)).status).toBe(403);
+    expect(asked).toHaveBeenCalledTimes(1);
+    expect(client.size).toBe(0);
+  });
+
+  it("runs the exact bundle allowed, across reloads, without asking again", async () => {
+    const { gate, consent, asked } = gated(async () => true);
+    const { client } = setup({ gate });
+    expect(await prepare(gate, client)).toBe(true);
+    expect((await client.proxy(request)).status).toBe(200);
+    expect((await client.proxy({ ...request, path: "__dtv-4/dist/chunk.js" })).status).toBe(200);
+    expect(await prepare(gate, client)).toBe(true);
+    expect(asked).toHaveBeenCalledTimes(1);
+    expect(consent.allowedDigest(HOST, "acme.graph")).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("refuses a file the host's list doesn't have, without asking", async () => {
+    const { gate, asked } = gated(async () => true);
+    const { client } = setup({ gate });
+    await prepare(gate, client);
+    expect((await client.proxy({ ...request, path: "__dtv-3/dist/extra.js" })).status).toBe(403);
+    // Paths the host would normalize to another file never get as far as the gate.
+    expect((await client.proxy({ ...request, path: "__dtv-3/dist//view.js" })).status).toBe(403);
+    expect((await client.proxy({ ...request, path: "__dtv-3/dist/../dist/view.js" })).status).toBe(
+      403
+    );
+    expect(asked).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses changed code on the file path and asks about it on the next prepare", async () => {
+    const { gate, asked } = gated(async () => true);
+    const { client, setBody } = setup({ gate });
+    await prepare(gate, client);
+    expect((await client.proxy(request)).status).toBe(200);
+    setBody("export default 'something else';");
+    expect((await client.proxy({ ...request, path: "__dtv-5/dist/view.js" })).status).toBe(403);
+    expect(asked).toHaveBeenCalledTimes(1);
+    asked.mockImplementation(async () => false);
+    expect(await prepare(gate, client)).toBe(false);
+    expect(asked).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "changed" }));
+  });
+
+  it("checks a cached copy against the gate too, so a reset here takes effect at once", async () => {
+    const { gate, consent, asked } = gated(async () => true);
+    const { client, calls } = setup({ gate });
+    await prepare(gate, client);
+    expect((await client.proxy(request)).status).toBe(200);
+    expect(client.size).toBe(1);
+    gate.revoke(HOST);
+    consent.reset(HOST);
+    const again = await client.proxy(request);
+    // The host answered "unchanged"; the cached bytes were still refused.
+    const assetCalls = calls.mock.calls.filter(([method]) => method === PLUGIN_ASSET_METHOD);
+    expect(assetCalls.at(-1)![1]).toMatchObject({ ifMatch: expect.any(String) });
+    expect(again.status).toBe(403);
+    expect(asked).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("host plugin view assets", () => {
   it("serves a view bundle to the driving Shell and caches it by host, plugin and generation", async () => {

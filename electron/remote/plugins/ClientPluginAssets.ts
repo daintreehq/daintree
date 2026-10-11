@@ -1,11 +1,16 @@
+import crypto from "node:crypto";
+import path from "node:path";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { stripPluginViewGeneration } from "../../../shared/utils/pluginViewUrl.js";
 import type { RemotePluginAsset, RemotePluginAssetProxy } from "../../setup/protocols.js";
 import {
   PLUGIN_ASSET_METHOD,
+  PLUGIN_VIEW_MANIFEST_METHOD,
   PluginAssetResponseSchema,
+  PluginViewManifestResponseSchema,
   type PluginAssetRequest,
 } from "./assetLinkMethods.js";
+import type { PluginViewAdmitter, PluginViewManifest } from "./pluginViewGate.js";
 
 /** The slice of a link session the asset client calls through. */
 export interface AssetSession {
@@ -21,6 +26,8 @@ interface CachedAsset {
   etag: string;
   lastModified: number | null;
   body: Uint8Array;
+  /** sha256 (hex) of `body`, worked out here. */
+  sha256: string;
   lastUsed: number;
 }
 
@@ -39,6 +46,10 @@ const DEFAULT_CACHE_BYTES = 64 * 1024 * 1024;
  * may still see the plugin, so a closed project or a moved drive lease revokes
  * access on the next read, and the refusal drops the copy here too. Everything
  * a host holds is dropped when its last endpoint here closes.
+ *
+ * The host deciding is not enough for this machine to run the code, though:
+ * every file, fresh or cached, passes this machine's own gate first, which
+ * holds it to the exact bundle the person here allowed.
  */
 export class ClientPluginAssets {
   private readonly endpoints = new Map<
@@ -49,7 +60,10 @@ export class ClientPluginAssets {
   private cachedBytes = 0;
   private clock = 0;
 
-  constructor(private readonly maxCacheBytes = DEFAULT_CACHE_BYTES) {}
+  constructor(
+    private readonly gate: PluginViewAdmitter,
+    private readonly maxCacheBytes = DEFAULT_CACHE_BYTES
+  ) {}
 
   noteEndpointOpened(
     hostId: HostId,
@@ -83,11 +97,35 @@ export class ClientPluginAssets {
     return this.cache.size;
   }
 
-  readonly proxy: RemotePluginAssetProxy = async ({ hostId, authority, path, method }) => {
+  /** The host's list of a plugin bundle's files, through this machine's newest open endpoint. */
+  async loadManifest(hostId: HostId, authority: string): Promise<PluginViewManifest | null> {
+    const open = this.openEndpoints(hostId);
+    if (open.length === 0) return null;
+    const parsed = PluginViewManifestResponseSchema.safeParse(
+      await open[open.length - 1]![1].session.call(PLUGIN_VIEW_MANIFEST_METHOD, {
+        endpointIds: open.map(([id]) => id).slice(-64),
+        authority,
+      })
+    );
+    if (!parsed.success || parsed.data.status !== 200) return null;
+    const { pluginId, files } = parsed.data;
+    if (!pluginId || !files) return null;
+    return { pluginId, files: new Map(files.map((file) => [file.path, file.sha256])) };
+  }
+
+  private openEndpoints(hostId: HostId) {
     const byId = this.endpoints.get(hostId);
-    const open = byId ? [...byId.entries()].filter(([, ep]) => ep.session.isOpen) : [];
+    return byId ? [...byId.entries()].filter(([, ep]) => ep.session.isOpen) : [];
+  }
+
+  readonly proxy: RemotePluginAssetProxy = async ({ hostId, authority, path, method }) => {
+    const open = this.openEndpoints(hostId);
     if (open.length === 0) return { status: 503, body: null };
-    const session = open[open.length - 1]![1].session;
+    const [, newest] = open[open.length - 1]!;
+    const session = newest.session;
+    const filePath = pinPathOf(path);
+    // A path the host's handler would normalize to another file is never admitted.
+    if (filePath === null) return { status: 403, body: null };
     const key = `${hostId}\0${authority}\0${path}`;
     const cached = this.cache.get(key);
     const request: PluginAssetRequest = {
@@ -103,6 +141,13 @@ export class ClientPluginAssets {
     if (!parsed.success) return { status: 502, body: null };
     const answer = parsed.data;
     if (answer.status === 304 && cached) {
+      if (answer.pluginId !== null && answer.pluginId !== cached.pluginId) {
+        this.drop(key);
+        return { status: 403, body: null };
+      }
+      if (!(await this.admit(hostId, authority, cached, filePath, newest.webContentsId))) {
+        return { status: 403, body: null };
+      }
       cached.lastUsed = ++this.clock;
       return this.toAsset(cached);
     }
@@ -123,11 +168,33 @@ export class ClientPluginAssets {
       etag: answer.etag,
       lastModified: answer.lastModified,
       body: answer.body,
+      sha256: crypto.createHash("sha256").update(answer.body).digest("hex"),
       lastUsed: ++this.clock,
     };
+    if (!(await this.admit(hostId, authority, entry, filePath, newest.webContentsId))) {
+      return { status: 403, body: null };
+    }
     this.store(key, entry);
     return this.toAsset(entry);
   };
+
+  private admit(
+    hostId: HostId,
+    authority: string,
+    entry: CachedAsset,
+    filePath: string,
+    webContentsId: number
+  ): Promise<boolean> {
+    return this.gate.admit({
+      hostId,
+      authority,
+      webContentsId,
+      loadManifest: () => this.loadManifest(hostId, authority),
+      pluginId: entry.pluginId,
+      path: filePath,
+      sha256: entry.sha256,
+    });
+  }
 
   private toAsset(entry: CachedAsset): RemotePluginAsset {
     return {
@@ -161,6 +228,27 @@ export class ClientPluginAssets {
   private revoke(match: (entry: CachedAsset) => boolean): void {
     for (const [key, entry] of [...this.cache]) if (match(entry)) this.drop(key);
   }
+}
+
+/**
+ * The file's normalized path within the plugin, without the view generation
+ * a reload adds; null for anything the host could resolve to a different file
+ * than the one named (`..`, `.`, empty segments, NUL, backslash).
+ */
+function pinPathOf(encodedPath: string): string | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(encodedPath);
+  } catch {
+    return null;
+  }
+  const stripped = stripPluginViewGeneration(decoded);
+  if (!stripped || decoded.includes("\0") || decoded.includes("\\")) return null;
+  const segments = stripped.path.split("/");
+  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+    return null;
+  }
+  return path.posix.normalize(stripped.path);
 }
 
 function generationOf(encodedPath: string): number | null {

@@ -80,7 +80,35 @@ function malformed(method: string): AppError {
   return refuse(`Malformed ${method} request from the host`);
 }
 
-function defaultHostName(hostId: HostId): string {
+/**
+ * Clipboard reads allowed "always" this run, by host, plugin and access key;
+ * never written to disk. Module scope so Settings can list and reset them.
+ */
+const readGrantsThisRun = new Set<string>();
+/** Bumped by a reset, so a grant question asked before it decides nothing. */
+const grantEpochs = new Map<HostId, number>();
+
+/** The plugins on `hostId` allowed to read this machine's clipboard this run. */
+export function runClipboardReadGrants(hostId: HostId): string[] {
+  const prefix = `${hostId}\0`;
+  return [...readGrantsThisRun]
+    .filter((key) => key.startsWith(prefix))
+    .map((key) => key.split("\0")[1]!)
+    .sort();
+}
+
+/** Forget this run's clipboard answers for a host, or one plugin; open questions decide nothing. */
+export function forgetRunClipboardGrants(hostId: HostId, pluginId?: string): void {
+  grantEpochs.set(hostId, (grantEpochs.get(hostId) ?? 0) + 1);
+  for (const key of [...readGrantsThisRun]) {
+    const [host, plugin] = key.split("\0");
+    if (host === hostId && (pluginId === undefined || plugin === pluginId)) {
+      readGrantsThisRun.delete(key);
+    }
+  }
+}
+
+export function defaultHostName(hostId: HostId): string {
   try {
     const entry = getRemoteService("remoteHostsClient")
       ?.list()
@@ -227,8 +255,10 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
 
   /**
    * Whether the person lets this host's plugin have `access` to this
-   * machine's clipboard. Asked once per host and plugin, in this machine's own
-   * dialog, and remembered here; the host has no say in the answer.
+   * machine's clipboard. Asked in this machine's own dialog; the host has no
+   * say in the answer. The host names the plugin asking, so an "always" for
+   * reading lasts only until Daintree quits here: kept for good, it would let
+   * the host read the clipboard under that plugin's name whenever it liked.
    */
   const clipboardGranted = async (
     wc: Electron.WebContents,
@@ -236,11 +266,14 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
     pluginId: string,
     access: ClipboardAccess
   ): Promise<boolean> => {
-    const known = clipboardGrants.get(hostId, pluginId, access);
-    if (known !== null) return known === "allow";
     const key = `${hostId}\0${pluginId}\0${access}`;
+    const known = clipboardGrants.get(hostId, pluginId, access);
+    if (known === "deny") return false;
+    if (access === "write" && known === "allow") return true;
+    if (access === "read" && readGrantsThisRun.has(key)) return true;
     let question = openGrantQuestions.get(key);
     if (!question) {
+      const epoch = grantEpochs.get(hostId) ?? 0;
       question = (async () => {
         let outcome: PluginCapabilityConsentOutcome;
         try {
@@ -248,8 +281,11 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
         } catch {
           outcome = "undeliverable";
         }
+        // Reset in Settings while this was open: the answer decides nothing.
+        if ((grantEpochs.get(hostId) ?? 0) !== epoch) return false;
         if (outcome === "approved-and-pin") {
-          clipboardGrants.set(hostId, pluginId, access, "allow");
+          if (access === "read") readGrantsThisRun.add(key);
+          else clipboardGrants.set(hostId, pluginId, access, "allow");
           return true;
         }
         if (outcome === "approved-once") return true;

@@ -85,6 +85,25 @@ export interface ResetClipboardGrantsPayload {
   pluginId?: string;
 }
 
+/** A host plugin this machine was asked about running the view code of. */
+export interface PluginViewConsentEntry {
+  pluginId: string;
+  /** "allowed": a yes kept here; "refused": a "Don't run" this run. */
+  state: "allowed" | "refused";
+}
+
+export interface PreparePluginViewPayload {
+  /** The `plugin://…/__dth-<host>/…` URL the view is about to import. */
+  url: string;
+}
+
+/** Forget this machine's yes to a host plugin's view code; it is asked again. */
+export interface ResetPluginViewConsentPayload {
+  hostId: HostId;
+  /** One plugin; omitted, every plugin on that host. */
+  pluginId?: string;
+}
+
 /** A machine discovery saw. Reachability only; whether Daintree runs there is learned by connecting. */
 export interface DiscoveredHost {
   name: string;

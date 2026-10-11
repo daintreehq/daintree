@@ -13,6 +13,7 @@ import type {
   InstallHostPayload,
   InstallHostResult,
   HostPluginClipboardGrant,
+  PluginViewConsentEntry,
   PlanInstallPayload,
   RemoteHostsEvent,
   StartHostModeResult,
@@ -45,6 +46,14 @@ export const remoteHostsClient = {
     window.electron.remoteHosts.listClipboardGrants({ hostId }),
   resetClipboardGrants: (hostId: string, pluginId?: string): Promise<void> =>
     window.electron.remoteHosts.resetClipboardGrants(
+      pluginId === undefined ? { hostId } : { hostId, pluginId }
+    ),
+  listPluginViewConsents: (hostId: string): Promise<PluginViewConsentEntry[]> =>
+    window.electron.remoteHosts.listPluginViewConsents({ hostId }),
+  preparePluginView: (url: string): Promise<boolean> =>
+    window.electron.remoteHosts.preparePluginView({ url }),
+  resetPluginViewConsent: (hostId: string, pluginId?: string): Promise<void> =>
+    window.electron.remoteHosts.resetPluginViewConsent(
       pluginId === undefined ? { hostId } : { hostId, pluginId }
     ),
   onEvent: (callback: (event: RemoteHostsEvent) => void): (() => void) =>

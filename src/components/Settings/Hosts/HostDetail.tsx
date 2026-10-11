@@ -19,6 +19,7 @@ import { useSettingsSubpage } from "../SettingsSubpage";
 import { AddHostDialog } from "./AddHostDialog";
 import { HostPluginsSection } from "./HostPluginsSection";
 import { HostClipboardGrants } from "./HostClipboardGrants";
+import { HostPluginViewConsents } from "./HostPluginViewConsents";
 import { buildLabel, connectionLabel, describeBuildDifference, platformLabel } from "./hostLabels";
 import { describeHostForge } from "@/components/Hosts/hostForges";
 
@@ -311,6 +312,7 @@ export function HostDetail({
       </SettingsSection>
 
       <HostPluginsSection hostId={descriptor.id} hostName={hostName} connected={connected} />
+      <HostPluginViewConsents hostId={descriptor.id} hostName={hostName} />
       <HostClipboardGrants hostId={descriptor.id} hostName={hostName} />
 
       <SettingsSection title="Remove host">

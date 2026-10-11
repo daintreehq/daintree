@@ -110,7 +110,9 @@ function startClient(options: StartRemoteHostsOptions): void {
     // Dropped, pasted and attached files, sent from this machine to the view's host.
     teardowns.push(installHostUploadClient(endpointFeed, hostForView));
     // Host plugins' prompts, consent and view bundles for the views driving their projects.
-    teardowns.push(installPluginClient(endpointFeed));
+    teardowns.push(
+      installPluginClient(endpointFeed, (webContentsId) => hostForView(webContentsId))
+    );
     // This machine's agents, terminals and projects are not a remote view's.
     teardowns.push(
       setRemoteBoundViewFilter(

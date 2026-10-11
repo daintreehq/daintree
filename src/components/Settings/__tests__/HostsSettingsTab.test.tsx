@@ -47,6 +47,7 @@ beforeEach(() => {
     connect: vi.fn(async () => ({ status: "connecting", attempt: 1 })),
     discover: vi.fn(async () => []),
     listClipboardGrants: vi.fn(async () => []),
+    listPluginViewConsents: vi.fn(async () => []),
     resetClipboardGrants: vi.fn(async () => {}),
     onEvent: vi.fn((cb: (event: RemoteHostsEvent) => void) => {
       listeners.push(cb);

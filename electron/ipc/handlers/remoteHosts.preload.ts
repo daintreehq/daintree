@@ -21,6 +21,9 @@ export const REMOTE_HOSTS_METHOD_CHANNELS = {
   listHostProjects: "remote-hosts:list-host-projects",
   listClipboardGrants: "remote-hosts:list-clipboard-grants",
   resetClipboardGrants: "remote-hosts:reset-clipboard-grants",
+  listPluginViewConsents: "remote-hosts:list-plugin-view-consents",
+  resetPluginViewConsent: "remote-hosts:reset-plugin-view-consent",
+  preparePluginView: "remote-hosts:prepare-plugin-view",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof REMOTE_HOSTS_METHOD_CHANNELS;

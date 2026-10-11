@@ -2006,9 +2006,17 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./remoteHosts.js").ListHostProjectsPayload];
     result: import("./remoteHosts.js").HostProjectSummary[];
   };
+  "remote-hosts:list-plugin-view-consents": {
+    args: [payload: import("./remoteHosts.js").ListHostProjectsPayload];
+    result: import("./remoteHosts.js").PluginViewConsentEntry[];
+  };
   "remote-hosts:plan-install": {
     args: [payload: import("./remoteHosts.js").PlanInstallPayload];
     result: import("./remoteHosts.js").HostInstallPlan;
+  };
+  "remote-hosts:prepare-plugin-view": {
+    args: [payload: import("./remoteHosts.js").PreparePluginViewPayload];
+    result: boolean;
   };
   "remote-hosts:probe": {
     args: [payload: import("./remoteHosts.js").HostSetupTarget];
@@ -2016,6 +2024,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "remote-hosts:reset-clipboard-grants": {
     args: [payload: import("./remoteHosts.js").ResetClipboardGrantsPayload];
+    result: void;
+  };
+  "remote-hosts:reset-plugin-view-consent": {
+    args: [payload: import("./remoteHosts.js").ResetPluginViewConsentPayload];
     result: void;
   };
   "remote-hosts:start-host-mode": {

@@ -65,7 +65,11 @@ import {
   REMOTE_CLIPBOARD_TIMEOUT_MS,
 } from "../../../services/plugin/pluginFrontendRequests.js";
 import type { PluginCapabilityConsentOutcome } from "../../../../shared/types/pluginCapabilityConsent.js";
-import { installPluginShellRequests } from "../shellRequests.js";
+import {
+  forgetRunClipboardGrants,
+  installPluginShellRequests,
+  runClipboardReadGrants,
+} from "../shellRequests.js";
 import type { ClipboardGrantStore } from "../clipboardGrants.js";
 
 function memoryGrants() {
@@ -116,6 +120,7 @@ describe("Shell answers for a host's plugins", () => {
   >;
 
   beforeEach(() => {
+    forgetRunClipboardGrants(HOST);
     registry.views.clear();
     vi.clearAllMocks();
     _resetReverseRequestMethodsForTesting();
@@ -363,7 +368,7 @@ describe("Shell answers for a host's plugins", () => {
   });
 
   it("uses this machine's clipboard only from the view in front", async () => {
-    grants.set(HOST, "acme.deploy", "read", "allow");
+    askGrant.mockResolvedValueOnce("approved-and-pin");
     grants.set(HOST, "acme.deploy", "write", "allow");
     makeView(undefined, true);
     await expect(
@@ -382,7 +387,47 @@ describe("Shell answers for a host's plugins", () => {
     await expect(
       ask(PluginFrontendMethod.CLIPBOARD, { op: "readText", pluginId: "acme.deploy" })
     ).rejects.toMatchObject({ code: "PERMISSION" });
-    expect(askGrant).not.toHaveBeenCalled();
+    // Asked once; the read stays allowed for the rest of this run.
+    expect(askGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it("forgets this run's always-read when Settings resets it, voiding any open question", async () => {
+    makeView(undefined, true);
+    askGrant.mockResolvedValueOnce("approved-and-pin");
+    await ask(PluginFrontendMethod.CLIPBOARD, { op: "readText", pluginId: "acme.deploy" });
+    expect(runClipboardReadGrants(HOST)).toEqual(["acme.deploy"]);
+    forgetRunClipboardGrants(HOST, "acme.deploy");
+    expect(runClipboardReadGrants(HOST)).toEqual([]);
+    // An answer to a question asked before a reset decides nothing.
+    let answer!: (outcome: "approved-and-pin") => void;
+    askGrant.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    const read = ask(PluginFrontendMethod.CLIPBOARD, { op: "readText", pluginId: "acme.deploy" });
+    await vi.waitFor(() => expect(answer).toBeTypeOf("function"));
+    forgetRunClipboardGrants(HOST);
+    answer("approved-and-pin");
+    await expect(read).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(runClipboardReadGrants(HOST)).toEqual([]);
+  });
+
+  it("keeps an always-read only for this run, since the host names the plugin asking", async () => {
+    // A read allowed for good by an earlier build is asked about again.
+    grants.set(HOST, "acme.deploy", "read", "allow");
+    const writes = vi.spyOn(grants, "set");
+    makeView(undefined, true);
+    askGrant.mockResolvedValueOnce("approved-and-pin");
+    await expect(
+      ask(PluginFrontendMethod.CLIPBOARD, { op: "readText", pluginId: "acme.deploy" })
+    ).resolves.toBe("shell clipboard");
+    await expect(
+      ask(PluginFrontendMethod.CLIPBOARD, { op: "readText", pluginId: "acme.deploy" })
+    ).resolves.toBe("shell clipboard");
+    expect(askGrant).toHaveBeenCalledTimes(1);
+    // Nothing about reading is written to disk.
+    expect(writes).not.toHaveBeenCalled();
+    grants.set(HOST, "acme.deploy", "read", "deny");
+    await expect(
+      ask(PluginFrontendMethod.CLIPBOARD, { op: "readText", pluginId: "acme.deploy" })
+    ).rejects.toMatchObject({ code: "PERMISSION" });
   });
 
   it("carries out a first call the person took a minute to approve", async () => {

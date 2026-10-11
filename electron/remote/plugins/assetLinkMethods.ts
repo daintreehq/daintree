@@ -42,3 +42,39 @@ export const PluginAssetResponseSchema = z.object({
   body: z.instanceof(Uint8Array).nullable(),
 });
 export type PluginAssetResponse = z.infer<typeof PluginAssetResponseSchema>;
+
+/**
+ * Session CALL a Shell uses to learn every file of a host plugin's bundle and
+ * its sha256, before running any of it. This machine's consent is given to the
+ * digest of that list, so a file that isn't in it, or doesn't match it, is
+ * never run, and a changed list is asked about again.
+ */
+export const PLUGIN_VIEW_MANIFEST_METHOD = "plugins.view-manifest";
+
+/** Bounds on a bundle listed for consent; a plugin past them can't be verified, so isn't run. */
+export const PLUGIN_VIEW_MANIFEST_MAX_FILES = 4000;
+export const PLUGIN_VIEW_MANIFEST_MAX_BYTES = 256 * 1024 * 1024;
+
+export const PluginViewManifestRequestSchema = z.object({
+  endpointIds: z.array(z.string().min(1).max(256)).min(1).max(64),
+  authority: z
+    .string()
+    .min(1)
+    .max(256)
+    .regex(/^[A-Za-z0-9._@-]+$/),
+});
+export type PluginViewManifestRequest = z.infer<typeof PluginViewManifestRequestSchema>;
+
+export const PluginViewManifestFileSchema = z.object({
+  /** Normalized POSIX path under the plugin root. */
+  path: z.string().min(1).max(4096),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+});
+
+export const PluginViewManifestResponseSchema = z.object({
+  /** 200 with the list, 403 driven elsewhere, 404 not visible, 413 too large to list. */
+  status: z.number().int().min(200).max(599),
+  pluginId: z.string().min(1).max(256).nullable(),
+  files: z.array(PluginViewManifestFileSchema).max(PLUGIN_VIEW_MANIFEST_MAX_FILES).nullable(),
+});
+export type PluginViewManifestResponse = z.infer<typeof PluginViewManifestResponseSchema>;

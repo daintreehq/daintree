@@ -1306,6 +1306,9 @@ export const CHANNELS = {
   REMOTE_HOSTS_LIST_HOST_PROJECTS: "remote-hosts:list-host-projects",
   REMOTE_HOSTS_LIST_CLIPBOARD_GRANTS: "remote-hosts:list-clipboard-grants",
   REMOTE_HOSTS_RESET_CLIPBOARD_GRANTS: "remote-hosts:reset-clipboard-grants",
+  REMOTE_HOSTS_LIST_PLUGIN_VIEW_CONSENTS: "remote-hosts:list-plugin-view-consents",
+  REMOTE_HOSTS_RESET_PLUGIN_VIEW_CONSENT: "remote-hosts:reset-plugin-view-consent",
+  REMOTE_HOSTS_PREPARE_PLUGIN_VIEW: "remote-hosts:prepare-plugin-view",
   REMOTE_HOSTS_EVENT: "remote-hosts:event",
 
   // Remote Hosts: hostMode (shell).
