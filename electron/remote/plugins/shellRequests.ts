@@ -37,6 +37,8 @@ import type { ViewReverseRequest } from "../client/RemoteHostManager.js";
 import { registerReverseRequestMethod } from "../client/reverseRequests.js";
 import { getRemoteService } from "../runtime.js";
 import { isHostPluginDispatchable } from "./pluginDispatchAllowlist.js";
+import { admitHostNotice } from "../hybrid/hostNoticeBudget.js";
+import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
 import {
   persistedClipboardGrants,
   type ClipboardAccess,
@@ -358,11 +360,14 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
     if (!parsed.success) throw malformed("toast");
     const { pluginId, type, message, durationMs } = parsed.data;
     const wc = scopeView(request, pluginId);
+    // Every plugin on a host draws on the host's one budget, so naming more
+    // plugins can't raise more toasts; past it, a toast is dropped quietly.
+    if (!admitHostNotice(request.hostId)) return null;
     // Straight to the one view: the push filter keeps this machine's own
     // toasts out of a host's window, and this one is the host's.
     wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
       type,
-      message,
+      message: displaySafeText(message),
       duration: durationMs,
       rateLimitKey: `plugin:${request.hostId}:${pluginId}:${type}`,
     });

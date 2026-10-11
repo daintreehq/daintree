@@ -20,14 +20,16 @@ vi.mock("electron", () => ({
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: vi.fn(() => null),
   getAppWebContents: vi.fn(() => ({ isDestroyed: () => false, send: vi.fn() })),
+  getProjectForWebContents: vi.fn(() => null),
 }));
 
 import { CHANNELS } from "../../channels.js";
 import { registerPortalHandlers } from "../portal.js";
+import { setRemoteWebviewSrcGate } from "../../../window/webviewSrcGate.js";
 
 function createPortalManager() {
   return {
-    createTab: vi.fn<(tabId: string, url: string, partition?: string) => void>(),
+    createTab: vi.fn<(tabId: string, url: string, partition?: string, options?: unknown) => void>(),
     markRestoring: vi.fn<(tabId: string) => void>(),
     showTab: vi.fn(),
     hideAll: vi.fn(),
@@ -175,5 +177,46 @@ describe("portal create handler partition override", () => {
     await expect(handler({ sender: {} }, { tabId: "tab-1" })).rejects.toThrow("Invalid url");
     expect(fromPartitionMock).not.toHaveBeenCalled();
     expect(portalManager.createTab).not.toHaveBeenCalled();
+  });
+
+  it("gives a window attached to a host its host's own portal session, never persist:portal", async () => {
+    const dispose = setRemoteWebviewSrcGate(
+      (id, src) => (id === 9 ? src.startsWith("http://localhost:5173/") : null),
+      (id) => id === 9,
+      (id) => (id === 9 ? "studio" : null)
+    );
+    try {
+      const handler = getHandler(CHANNELS.PORTAL_CREATE);
+      await handler({ sender: { id: 9 } }, { tabId: "tab-1", url: "http://localhost:5173/" });
+      const partition = portalManager.createTab.mock.calls[0]![2]!;
+      expect(partition).not.toBe("persist:portal");
+      expect(partition.startsWith("persist:browser-remote__studio__")).toBe(true);
+      // Its popups open outside only where the window's webviews may go.
+      const { isPopupAllowed } = portalManager.createTab.mock.calls[0]![3] as unknown as {
+        isPopupAllowed: (url: string) => boolean;
+      };
+      expect(isPopupAllowed("http://localhost:8080/admin")).toBe(false);
+      expect(isPopupAllowed("http://localhost:5173/")).toBe(true);
+      expect(isPopupAllowed("https://github.com/")).toBe(true);
+
+      // A preview partition of this machine's (or another host's) isn't the host's to open.
+      await handler(
+        { sender: { id: 9 } },
+        {
+          tabId: "tab-2",
+          url: "http://localhost:5173/",
+          partition: "persist:dev-preview-proj-wt-p",
+        }
+      );
+      expect(portalManager.createTab.mock.calls[1]![2]).toBe(partition);
+      const own = "persist:dev-preview-remote__studio__p1-main-panel";
+      await handler(
+        { sender: { id: 9 } },
+        { tabId: "tab-3", url: "http://localhost:5173/", partition: own }
+      );
+      expect(portalManager.createTab.mock.calls[2]![2]).toBe(own);
+    } finally {
+      dispose();
+    }
   });
 });

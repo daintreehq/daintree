@@ -237,7 +237,10 @@ describe("view reverse requests", () => {
     installViewReverseRequests();
     const payload = { title: "Done", body: "claude finished", silent: false };
     await expect(ask("notification.show", payload)).resolves.toBeNull();
-    expect(m.showHostNotification).toHaveBeenCalledWith(11, payload);
+    expect(m.showHostNotification).toHaveBeenCalledWith(11, payload, {
+      id: "studio",
+      name: "Studio Mac",
+    });
 
     m.showHostNotification.mockReturnValueOnce(false);
     await expect(ask("notification.show", { title: 1 })).rejects.toMatchObject({

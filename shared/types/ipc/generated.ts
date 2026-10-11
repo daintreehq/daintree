@@ -2462,7 +2462,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "webview:capture-screenshot": {
-    args: [panelId: string];
+    args: [panelId: string, options?: { forHost?: boolean | undefined } | undefined];
     result: { pngBase64: string; width: number; height: number };
   };
   "webview:get-navigation-history": {

@@ -3,6 +3,7 @@ import type { IpcMainInvokeEvent } from "electron";
 import { types as utilTypes } from "node:util";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { classifyPartition } from "../utils/webviewCsp.js";
+import { isRemotePortalPartition } from "../../shared/utils/partitionUtils.js";
 import {
   wrapSuccess,
   wrapError,
@@ -566,6 +567,12 @@ export function setupPermissionLockdown(): void {
       const type = classifyPartition(partition);
       if (type === "project" || type === "portal") {
         return; // already statically locked down above
+      }
+      // A window attached to a host gets its own portal session, allowed what
+      // this machine's portal is (clipboard writes for copy buttons) and no more.
+      if (isRemotePortalPartition(partition)) {
+        lockdownTrustedPermissions(ses, "portal", PORTAL_SESSION_PERMISSIONS);
+        return;
       }
       lockdownUntrustedPermissions(ses, partition);
       console.log(`[SECURITY] Default-locked new session partition: ${partition || "(none)"}`);

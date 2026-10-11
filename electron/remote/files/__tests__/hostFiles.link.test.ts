@@ -469,6 +469,53 @@ describe("save locally", () => {
     await expectEventuallyEmpty(downloads);
   });
 
+  it("names a download for the file that was asked for, whatever the host calls it", async () => {
+    const { host, client } = await openSessionPair(socketDir);
+    sessions.push(host, client);
+    const bytes = new Uint8Array(64).fill(3);
+    host.registerCallHandler(FileLinkMethod.DOWNLOAD, FileDownloadPayloadSchema, ({ token }) => {
+      void host.transfers
+        .send(
+          {
+            size: bytes.byteLength,
+            sha256: sha256(bytes),
+            read: async (o, l) => bytes.subarray(o, o + l),
+          },
+          {
+            name: "invoice\u202egpj.app",
+            destination: { kind: "path", path: `${DOWNLOAD_SINK_PREFIX}${token}` },
+          }
+        )
+        .catch(() => {});
+      return { name: "invoice\u202egpj.app", size: bytes.byteLength };
+    });
+    const transport = new ClientFileTransport();
+    transport.noteEndpointOpened(HOST, { session: client, webContentsId: 7, endpointId: "view-7" });
+
+    const saved = await transport.download(HOST, "/work/notes\u202etxt.sh", {
+      webContentsId: 7,
+      destinationDir: downloads,
+    });
+    expect(path.basename(saved.localPath)).toBe("notestxt.sh");
+    if (process.platform === "darwin") {
+      const { execFileSync } = await import("node:child_process");
+      // Only where this volume takes extended attributes: elsewhere the tag is skipped by design.
+      const probe = path.join(downloads, ".xattr-probe");
+      await fs.writeFile(probe, "");
+      let tagsWork = true;
+      try {
+        execFileSync("/usr/bin/xattr", ["-w", "dev.daintree.probe", "1", probe]);
+      } catch {
+        tagsWork = false;
+      }
+      await fs.rm(probe, { force: true });
+      if (tagsWork) {
+        const tag = execFileSync("/usr/bin/xattr", ["-p", "com.apple.quarantine", saved.localPath]);
+        expect(tag.toString()).toMatch(/^0081;[0-9a-f]+;Daintree;/);
+      }
+    }
+  });
+
   it("refuses a transfer to a destination it never asked for", async () => {
     const { host, client } = await setup();
     const sent = host.transfers.send(

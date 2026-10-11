@@ -96,6 +96,11 @@ import { AppError } from "../../utils/errorTypes.js";
 import { PLUGIN_INVOKE_MAX_ARGS_BYTES } from "../../../shared/config/pluginBudgets.js";
 import { deserializeError } from "../../../shared/utils/ipcErrorSerialization.js";
 import { observeIpcEnvelopeRejections } from "../../ipc/envelopeRejections.js";
+import {
+  buildBrowserPartition,
+  partitionProjectKey,
+  remotePortalPartition,
+} from "../../../shared/utils/partitionUtils.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockWebContents = {} as any;
@@ -243,6 +248,19 @@ describe("setupPermissionLockdown", () => {
       const handler = getCheckHandler(lockdownDynamicBrowserSession());
       expect(handler(mockWebContents, "clipboard-read", "http://localhost:3000", {})).toBe(false);
       expect(handler(mockWebContents, "media", "http://localhost:3000", {})).toBe(false);
+    });
+    it("gives a host's portal session the portal's allowance, and a host's project panel none", () => {
+      const portal = getRequestHandler(
+        lockdownDynamicBrowserSession(remotePortalPartition("studio"))
+      );
+      expect(testPermissionRequest(portal, "clipboard-sanitized-write")).toBe(true);
+      expect(testPermissionRequest(portal, "clipboard-read")).toBe(false);
+      const panel = getRequestHandler(
+        lockdownDynamicBrowserSession(
+          buildBrowserPartition(partitionProjectKey("-portal", "studio"))
+        )
+      );
+      expect(testPermissionRequest(panel, "clipboard-sanitized-write")).toBe(false);
     });
   });
 

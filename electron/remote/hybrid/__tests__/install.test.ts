@@ -64,6 +64,9 @@ import {
   showHostNotification,
 } from "../index.js";
 import { NOTIFICATION_SHOW_METHOD } from "../notifications.js";
+import { resetHostNoticeBudget } from "../hostNoticeBudget.js";
+
+const STUDIO = { id: "studio", name: "Studio Mac" };
 
 function fakeDispatcher() {
   const splits = new Map<string, unknown>();
@@ -84,6 +87,7 @@ function fakeDispatcher() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetHostNoticeBudget();
   mocks.relay = null;
   mocks.sink = null;
   mocks.endpoints.clear();
@@ -174,10 +178,10 @@ describe("showHostNotification", () => {
       context: { panelId: "t1", panelTitle: "Claude" },
     };
     expect(
-      showHostNotification(12, { title: "t", body: "b", category: "waiting", navigation })
+      showHostNotification(12, { title: "t", body: "b", category: "waiting", navigation }, STUDIO)
     ).toBe(true);
     expect(mocks.playFile).toHaveBeenCalledWith("ping.wav");
-    expect(mocks.showNativeNotification).toHaveBeenCalledWith("t", "b", {
+    expect(mocks.showNativeNotification).toHaveBeenCalledWith("Studio Mac: t", "b", {
       silent: true,
       ownerWebContentsId: 12,
       navigation,
@@ -186,9 +190,9 @@ describe("showHostNotification", () => {
 
   it("plays nothing when this device has sound off, and no sound for an info notification", () => {
     mocks.notificationSettings = { soundEnabled: false, waitingSoundFile: "ping.wav" };
-    showHostNotification(12, { title: "t", body: "b", category: "waiting" });
+    showHostNotification(12, { title: "t", body: "b", category: "waiting" }, STUDIO);
     mocks.notificationSettings = { soundEnabled: true, waitingSoundFile: "ping.wav" };
-    showHostNotification(12, { title: "t", body: "b", category: "info" });
+    showHostNotification(12, { title: "t", body: "b", category: "info" }, STUDIO);
     expect(mocks.playFile).not.toHaveBeenCalled();
     expect(mocks.showNativeNotification).toHaveBeenCalledTimes(2);
   });
@@ -196,29 +200,62 @@ describe("showHostNotification", () => {
   it("holds back a completion while this screen's session is muted, but not a waiting agent", () => {
     mocks.isSessionMuted.mockReturnValue(true);
     mocks.notificationSettings = { soundEnabled: true, waitingSoundFile: "ping.wav" };
-    expect(showHostNotification(12, { title: "done", body: "b", category: "completed" })).toBe(
-      true
-    );
+    expect(
+      showHostNotification(12, { title: "done", body: "b", category: "completed" }, STUDIO)
+    ).toBe(true);
     expect(mocks.showNativeNotification).not.toHaveBeenCalled();
-    showHostNotification(12, { title: "waiting", body: "b", category: "waiting" });
+    showHostNotification(12, { title: "waiting", body: "b", category: "waiting" }, STUDIO);
     expect(mocks.showNativeNotification).toHaveBeenCalledTimes(1);
     expect(mocks.playFile).toHaveBeenCalledWith("ping.wav");
   });
 
   it("rejects a presentation instead of a category", () => {
-    expect(showHostNotification(12, { title: "t", body: "b", silent: false })).toBe(false);
+    expect(showHostNotification(12, { title: "t", body: "b", silent: false }, STUDIO)).toBe(false);
   });
 
   it("rejects a host that names another renderer channel", () => {
     expect(
-      showHostNotification(12, {
-        title: "t",
-        body: "b",
-        category: "waiting",
-        navigation: { channel: "window:new", context: { panelId: "x", panelTitle: "x" } },
-      })
+      showHostNotification(
+        12,
+        {
+          title: "t",
+          body: "b",
+          category: "waiting",
+          navigation: { channel: "window:new", context: { panelId: "x", panelTitle: "x" } },
+        },
+        STUDIO
+      )
     ).toBe(false);
     expect(mocks.showNativeNotification).not.toHaveBeenCalled();
+  });
+
+  it("drops a host's notifications past its share for the minute, and lets them through after", () => {
+    const show = (now: number) =>
+      showHostNotification(12, { title: "t", body: "b", category: "waiting" }, STUDIO, now);
+    for (let i = 0; i < 6 + 3; i++) expect(show(1_000 + i)).toBe(true);
+    expect(mocks.showNativeNotification).toHaveBeenCalledTimes(6);
+    showHostNotification(
+      12,
+      { title: "t", body: "b", category: "waiting" },
+      { id: "other", name: "Other" },
+      2_000
+    );
+    expect(mocks.showNativeNotification).toHaveBeenCalledTimes(7);
+    show(1_000 + 61_000);
+    expect(mocks.showNativeNotification).toHaveBeenCalledTimes(8);
+  });
+
+  it("keeps a host's text from reordering or hiding what this machine adds", () => {
+    showHostNotification(
+      12,
+      { title: "\u202eUpdate macOS\u2066", body: "line\u0085two\u200b", category: "info" },
+      STUDIO
+    );
+    expect(mocks.showNativeNotification).toHaveBeenCalledWith(
+      "Studio Mac: Update macOS",
+      "line two",
+      expect.anything()
+    );
   });
 });
 

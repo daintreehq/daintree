@@ -45,7 +45,8 @@ import { useDevPreviewLoadLifecycle, type SessionStorageEntry } from "./useDevPr
 import { blockedNavReducer } from "./BlockedNavBanner";
 import { looksLikeOAuthUrl } from "@shared/utils/urlUtils";
 import { buildDevPreviewProxyOrigin } from "@shared/utils/devPreviewProxy";
-import { buildDevPreviewPartition } from "@shared/utils/partitionUtils";
+import { buildDevPreviewPartition, partitionProjectKey } from "@shared/utils/partitionUtils";
+import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
 import { Badge } from "@/components/ui/badge";
 
 async function captureWebviewSessionStorage(
@@ -166,7 +167,12 @@ export function DevPreviewPane({
   });
 
   const webviewPartition = useMemo(
-    () => buildDevPreviewPartition(currentProjectId, worktreeId, id),
+    () =>
+      buildDevPreviewPartition(
+        partitionProjectKey(currentProjectId, pluginViewHostId()),
+        worktreeId,
+        id
+      ),
     [currentProjectId, worktreeId, id]
   );
 

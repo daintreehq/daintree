@@ -11,6 +11,8 @@ import {
 } from "../../services/NotificationService.js";
 import { soundService } from "../../services/SoundService.js";
 import { store } from "../../store.js";
+import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
+import { admitHostNotice } from "./hostNoticeBudget.js";
 
 /**
  * Host → Shell request: a notification the host decided on. It carries what
@@ -75,17 +77,27 @@ function deviceSoundFile(category: NotificationCategory): string | null {
 }
 
 /**
- * Shell side: present a host's notification as this machine's own, owned by
- * the local view it was addressed to, so a click lands back in that view.
- * This screen's session mute holds back a completion (a waiting agent still
- * pages through, as it does locally) and its own sound settings pick the
- * sound. Returns false for a payload that does not validate.
+ * Shell side: present a host's notification, owned by the local view it was
+ * addressed to so a click lands back in that view. The title says which host
+ * it came from, in this device's own name for it, so a host can't pass its
+ * words off as this machine's; a host past its share for the minute is
+ * dropped quietly. This screen's session mute holds back a completion (a
+ * waiting agent still pages through, as it does locally) and its own sound
+ * settings pick the sound. Returns false for a payload that does not validate.
  */
-export function showHostNotification(webContentsId: number, payload: unknown): boolean {
+export function showHostNotification(
+  webContentsId: number,
+  payload: unknown,
+  host: { id: string; name: string },
+  now = Date.now()
+): boolean {
   const parsed = NotificationShowSchema.safeParse(payload);
   if (!parsed.success) return false;
-  const { title, body, category, navigation } = parsed.data;
+  const { category, navigation } = parsed.data;
   if (category === "completed" && agentNotificationService.isSessionMuted()) return true;
+  if (!admitHostNotice(host.id, now)) return true;
+  const title = `${displaySafeText(host.name).trim() || host.id}: ${displaySafeText(parsed.data.title)}`;
+  const body = displaySafeText(parsed.data.body);
   const soundFile = deviceSoundFile(category);
   if (soundFile) soundService.playFile(soundFile);
   notificationService.showNativeNotification(title, body, {

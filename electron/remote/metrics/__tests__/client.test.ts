@@ -19,11 +19,13 @@ import {
 } from "../../link/__tests__/linkTestUtils.js";
 import { HostMetricsClient, type HostMetricsClientOptions } from "../client.js";
 import { MetricsLinkMethod } from "../linkMethods.js";
+import { resetHostNoticeBudget } from "../../hybrid/hostNoticeBudget.js";
 
 let dir: string;
 const open: LinkSession[] = [];
 
 beforeEach(async () => {
+  resetHostNoticeBudget();
   dir = await makeTempDir();
 });
 
@@ -244,6 +246,26 @@ describe("HostMetricsClient", () => {
         quiet: true,
       },
     ]);
+    h.client.dispose();
+  });
+
+  it("holds a host's attention to its notice budget and shows its names as plain text", async () => {
+    const h = harness([descriptor("loud", true)]);
+    h.client.start();
+    const loud = await openSessionPair(dir);
+    open.push(loud.host, loud.client);
+    h.openSession("loud", loud.client);
+    for (let i = 0; i < 8; i++) {
+      await loud.host.call(MetricsLinkMethod.ATTENTION, {
+        kind: "waiting",
+        terminalId: `t${i}`,
+        projectName: "\u202eppa",
+        agentName: null,
+        quiet: false,
+      });
+    }
+    expect(h.attention).toHaveLength(6);
+    expect(h.attention[0]).toMatchObject({ projectName: "ppa", agentName: null });
     h.client.dispose();
   });
 

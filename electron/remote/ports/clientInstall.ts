@@ -247,7 +247,8 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
         const subdomain = proxySubdomainOf(src, getDevPreviewProxyPort());
         return subdomain !== null && claimPreview(subdomain, webContentsId, hostId);
       },
-      (webContentsId) => deps.hostForView(webContentsId) !== null
+      (webContentsId) => deps.hostForView(webContentsId) !== null,
+      (webContentsId) => deps.hostForView(webContentsId)
     ),
   ];
 

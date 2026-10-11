@@ -46,18 +46,22 @@ async function loadMcpServerService() {
   return mcpServerService;
 }
 
-/** The host as the person at this screen knows it, for the confirm dialog's "Requested by" row. */
-function describeHost(hostId: string): McpBearerIdentity {
-  let name = hostId;
+/** What this device calls a host, or its id. */
+function hostName(hostId: string): string {
   try {
     const entry = getRemoteService("remoteHostsClient")
       ?.list()
       .find((candidate) => candidate.descriptor.id === hostId);
-    if (entry) name = entry.descriptor.name;
+    if (entry) return entry.descriptor.name;
   } catch {
     // The id is still an honest name.
   }
-  return { userAgent: `Agent on host "${name}"`, token4LastChars: hostId.slice(-4) };
+  return hostId;
+}
+
+/** The host as the person at this screen knows it, for the confirm dialog's "Requested by" row. */
+function describeHost(hostId: string): McpBearerIdentity {
+  return { userAgent: `Agent on host "${hostName(hostId)}"`, token4LastChars: hostId.slice(-4) };
 }
 
 async function dispatchAction(
@@ -129,8 +133,8 @@ export function installViewReverseRequests(): () => void {
     registerReverseRequestMethod(MCP_GET_MANIFEST_METHOD, ({ webContentsId }) =>
       requestManifest(webContentsId)
     ),
-    registerReverseRequestMethod(NOTIFICATION_SHOW_METHOD, ({ webContentsId, payload }) => {
-      if (!showHostNotification(webContentsId, payload)) {
+    registerReverseRequestMethod(NOTIFICATION_SHOW_METHOD, ({ hostId, webContentsId, payload }) => {
+      if (!showHostNotification(webContentsId, payload, { id: hostId, name: hostName(hostId) })) {
         throw new AppError({ code: "VALIDATION", message: "Malformed notification from the host" });
       }
       return null;

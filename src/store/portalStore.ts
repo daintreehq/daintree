@@ -246,6 +246,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
         url: tab.url,
         title: tab.title,
         icon: tab.icon,
+        ...(tab.partition ? { partition: tab.partition } : {}),
       };
       set((s) => ({
         tabs: [...s.tabs, newTab],

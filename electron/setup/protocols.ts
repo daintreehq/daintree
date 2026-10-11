@@ -306,8 +306,22 @@ export function buildDaintreeFileErrorHeaders(): Record<string, string> {
 // Audio rides the same path as video: a 4 MB podcast episode would 413 against
 // the 512 KB buffered cap, and the renderer plays both through the same
 // fetch-to-blob flow (#11425).
-function isMediaMimeType(mimeType: string): boolean {
+export function isMediaMimeType(mimeType: string): boolean {
   return mimeType.startsWith("video/") || mimeType.startsWith("audio/");
+}
+
+/**
+ * The most bytes a whole-response preview of `filePath` under `scheme` may
+ * carry, as this machine's own handler holds it; null for audio and video,
+ * which stream (a host-served preview is held to the same).
+ */
+export function previewByteCeiling(
+  scheme: "daintree-file" | "daintree-media" | "daintree-pdf",
+  filePath: string
+): number | null {
+  if (scheme === "daintree-pdf") return DAINTREE_PDF_MAX_BYTES;
+  if (isMediaMimeType(getMimeType(filePath))) return null;
+  return maxBytesForFile(filePath, "file");
 }
 
 type ParsedByteRange = { start: number; end: number } | "unsatisfiable" | null;
@@ -1301,7 +1315,7 @@ function shouldPreservePreviewResponseHeaders(url: string | undefined): boolean 
  * would both use that. Ships a quoted ASCII fallback plus an RFC 5987
  * `filename*` so non-ASCII names survive.
  */
-function buildPdfContentDisposition(realFile: string): string {
+export function buildPdfContentDisposition(realFile: string): string {
   const base = path.basename(realFile);
   // Drop everything outside printable ASCII (control chars, CR/LF) before
   // neutralizing the quote and backslash that would otherwise escape the

@@ -71,6 +71,7 @@ import {
   runClipboardReadGrants,
 } from "../shellRequests.js";
 import type { ClipboardGrantStore } from "../clipboardGrants.js";
+import { resetHostNoticeBudget } from "../../hybrid/hostNoticeBudget.js";
 
 function memoryGrants() {
   const decisions = new Map<string, "allow" | "deny">();
@@ -479,6 +480,7 @@ describe("host plugin toasts", () => {
   beforeEach(() => {
     registry.views.clear();
     _resetReverseRequestMethodsForTesting();
+    resetHostNoticeBudget();
     teardown = installPluginShellRequests({ hostName: (id) => id });
   });
   afterEach(() => teardown());
@@ -496,6 +498,19 @@ describe("host plugin toasts", () => {
       duration: undefined,
       rateLimitKey: `plugin:${HOST}:acme.deploy:success`,
     });
+  });
+
+  it("draws every plugin's toasts from the host's one budget, shown as plain text", async () => {
+    const wc = makeView();
+    for (let i = 0; i < 10; i++) {
+      await ask(PluginFrontendMethod.TOAST, {
+        pluginId: `acme.p${i}`,
+        type: "info",
+        message: "\u202eevil\u0007",
+      });
+    }
+    expect(wc.send).toHaveBeenCalledTimes(6);
+    expect(wc.send.mock.calls[0]![1]).toMatchObject({ message: "evil " });
   });
 });
 

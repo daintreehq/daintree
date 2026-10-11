@@ -2,6 +2,11 @@ import { webContents } from "electron";
 import { defineIpcNamespace, op } from "../define.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
 import { AppError } from "../../utils/errorTypes.js";
+import {
+  guestDocument,
+  isGuestPageReadableByHost,
+  isRemoteView,
+} from "../../window/webviewSrcGate.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import { WEBVIEW_CAPTURE_METHOD_CHANNELS } from "./webviewCapture.preload.js";
 
@@ -10,7 +15,7 @@ export const webviewCaptureNamespace = defineIpcNamespace({
   ops: {
     captureScreenshot: op(
       WEBVIEW_CAPTURE_METHOD_CHANNELS.captureScreenshot,
-      async (ctx: IpcContext, panelId: string) => {
+      async (ctx: IpcContext, panelId: string, options?: { forHost?: boolean }) => {
         // The renderer only has the panel id; resolve the live webContentsId
         // from the panel registry (populated by both browser and dev-preview
         // webviews) so this works for either panel kind.
@@ -53,6 +58,28 @@ export const webviewCaptureNamespace = defineIpcNamespace({
           });
         }
 
+        // A capture the host asked for, from a window attached to it: never a
+        // page on this computer's own network, nor one that loaded anything
+        // from it, which isn't the host's to see. Judged again once the pixels
+        // are in, so a page that navigates meanwhile is never what's handed over.
+        const forHost = options?.forHost === true && isRemoteView(ctx.webContentsId);
+        const notForHost = () =>
+          new AppError({
+            code: "PERMISSION",
+            message: "The page shows content from this computer's own network",
+            userMessage:
+              "This page shows content from this computer's own network, so it isn't shown to the host.",
+            context: { panelId },
+          });
+        const shown = forHost ? guestDocument(webContentsId) : null;
+        if (forHost) {
+          if (shown === null || shown.localNetwork) throw notForHost();
+          const readable = await isGuestPageReadableByHost(ctx.webContentsId, url, async (host) =>
+            (await wc.session.resolveHost(host)).endpoints.map((endpoint) => endpoint.address)
+          );
+          if (!readable) throw notForHost();
+        }
+
         let image: Electron.NativeImage;
         try {
           image = await wc.capturePage();
@@ -67,6 +94,18 @@ export const webviewCaptureNamespace = defineIpcNamespace({
             context: { panelId, webContentsId },
             cause: err instanceof Error ? err : undefined,
           });
+        }
+        if (forHost) {
+          const now = guestDocument(webContentsId);
+          if (
+            now === null ||
+            now.generation !== shown!.generation ||
+            now.localNetwork ||
+            wc.isDestroyed() ||
+            wc.getURL() !== url
+          ) {
+            throw notForHost();
+          }
         }
         if (image.isEmpty()) {
           throw new AppError({

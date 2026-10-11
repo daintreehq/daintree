@@ -1296,9 +1296,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     setDeviceEmulation(
       payload: import("./webviewEmulation.js").DeviceEmulationRequest
     ): Promise<{ applied: boolean }>;
-    /** Capture the panel's webview viewport as a PNG, returned base64-encoded */
+    /**
+     * Capture the panel's webview viewport as a PNG, returned base64-encoded.
+     * `forHost`: the window's host asked for it, so a page on this computer's
+     * own network is refused.
+     */
     captureScreenshot(
-      panelId: string
+      panelId: string,
+      options?: { forHost?: boolean }
     ): Promise<{ pngBase64: string; width: number; height: number }>;
     /** Read Chromium navigation history for the webview */
     getNavigationHistory(

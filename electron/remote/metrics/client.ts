@@ -28,6 +28,8 @@ import {
 } from "./linkMethods.js";
 import { HOST_METRICS_INTERVAL_MS } from "./sampler.js";
 import { connectionKey } from "../client/connection.js";
+import { admitHostNotice } from "../hybrid/hostNoticeBudget.js";
+import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
 
 /** ~15 minutes of summaries at the sample cadence. */
 export const HOST_METRICS_RING_SIZE = Math.ceil((15 * 60_000) / HOST_METRICS_INTERVAL_MS);
@@ -294,14 +296,16 @@ export class HostMetricsClient {
       const descriptor = this.options.registry.get(hostId);
       // Opt-in per host, and off until the user turns it on.
       if (descriptor?.notificationsEnabled !== true) return null;
+      // The host's one notice budget, and its names shown as text, never as layout.
+      if (!admitHostNotice(hostId)) return null;
       this.options.deliverAttention({
         type: "attention",
         hostId,
         hostName: descriptor.name,
         kind: payload.kind,
         terminalId: payload.terminalId,
-        projectName: payload.projectName,
-        agentName: payload.agentName,
+        projectName: payload.projectName === null ? null : displaySafeText(payload.projectName),
+        agentName: payload.agentName === null ? null : displaySafeText(payload.agentName),
         quiet: payload.quiet,
       });
       return null;

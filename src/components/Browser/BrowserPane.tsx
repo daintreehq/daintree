@@ -47,7 +47,8 @@ import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useFindInPage } from "@/hooks/useFindInPage";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { logError } from "@/utils/logger";
-import { buildBrowserPartition } from "@shared/utils/partitionUtils";
+import { buildBrowserPartition, partitionProjectKey } from "@shared/utils/partitionUtils";
+import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
 import { notify } from "@/lib/notify";
 import { panelNotificationAddress } from "@/lib/notificationAddress";
 
@@ -132,7 +133,10 @@ export function BrowserPane({
   // synchronously by preload (mirrors projectStore.getLocationProjectId) to attach
   // with the correct partition on first render rather than persist:browser-default.
   const projectId = storeProjectId ?? window.__DAINTREE_INITIAL_PROJECT__?.id;
-  const webviewPartition = useMemo(() => buildBrowserPartition(projectId), [projectId]);
+  const webviewPartition = useMemo(
+    () => buildBrowserPartition(partitionProjectKey(projectId, pluginViewHostId())),
+    [projectId]
+  );
   const devServerLoadTimeout = useProjectSettingsStore(
     (state) => state.settings?.devServerLoadTimeout
   );

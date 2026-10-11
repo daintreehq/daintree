@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -85,11 +86,18 @@ function transferFailure(reason: TransferReason | string): AppError {
   return new AppError({ code: "INTERNAL", message: `Transfer failed: ${reason}` });
 }
 
-/** A file name from the host, made safe to create here. */
+/**
+ * A file name made safe to create here: one path segment, no control
+ * characters, and none of the formatting characters (bidi overrides, zero
+ * widths) that can make `gpj.exe` read as `exe.jpg`.
+ */
 export function sanitizeDownloadName(name: string): string {
   const base = name.split(/[\\/]/).pop() ?? "";
-  // eslint-disable-next-line no-control-regex -- stripping control characters is the point
-  let cleaned = base.replace(/[\u0000-\u001f\u007f]/g, "").replace(/[<>:"|?*]/g, "_");
+  let cleaned = base
+    // eslint-disable-next-line no-control-regex -- stripping control characters is the point
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, "")
+    .replace(/[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, "")
+    .replace(/[<>:"|?*]/g, "_");
   cleaned = cleaned.replace(/^\.+/, "").trim();
   if (cleaned.length > MAX_NAME_LENGTH) {
     const ext = path.extname(cleaned).slice(0, 20);
@@ -105,6 +113,25 @@ function candidateName(name: string, attempt: number): string {
 }
 
 /** Move the finished part file to the first free name; never overwrites. */
+/**
+ * macOS: tag a file that came from another machine the way a browser tags a
+ * download, so Gatekeeper checks it before it first opens or runs. Best
+ * effort: a volume without extended attributes, or an xattr that fails or
+ * times out, still gets the file, untagged.
+ */
+async function markDownloaded(file: string): Promise<void> {
+  if (process.platform !== "darwin") return;
+  const stamp = Math.floor(Date.now() / 1000).toString(16);
+  await new Promise<void>((resolve) => {
+    execFile(
+      "/usr/bin/xattr",
+      ["-w", "com.apple.quarantine", `0081;${stamp};Daintree;`, file],
+      { timeout: 5_000 },
+      () => resolve()
+    );
+  });
+}
+
 async function placeUnique(partPath: string, dir: string, name: string): Promise<string> {
   for (let attempt = 0; attempt < MAX_UNIQUE_ATTEMPTS; attempt++) {
     const target = path.join(dir, candidateName(name, attempt));
@@ -340,7 +367,8 @@ export class ClientFileTransport {
     const createSink = async (begin: TransferBeginMessage): Promise<TransferSink> => {
       if (signal?.aborted) throw new Error("cancelled");
       await fs.mkdir(options.destinationDir, { recursive: true });
-      const name = sanitizeDownloadName(begin.name);
+      // Named for the file that was asked for, never what the host calls it.
+      const name = sanitizeDownloadName(path.posix.basename(hostPath));
       const partPath = path.join(options.destinationDir, `.${newToken()}.daintree-part`);
       const handle = await fs.open(
         partPath,
@@ -386,6 +414,9 @@ export class ClientFileTransport {
           } finally {
             await close();
           }
+          // Tagged before the last look at cancellation, so a cancel while
+          // xattr runs is still honoured.
+          await markDownloaded(partPath);
           // Cancelled after the last byte: never place it.
           if (signal?.aborted) throw new Error("cancelled");
           try {
