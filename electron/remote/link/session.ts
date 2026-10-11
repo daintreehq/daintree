@@ -178,6 +178,7 @@ export class LinkSession {
 
   private _rttMs: number | null = null;
   private _lastReceivedAt: number;
+  private _framesSinceOpen = 0;
 
   constructor(
     private readonly socket: Duplex,
@@ -239,6 +240,11 @@ export class LinkSession {
 
   get lastReceivedAt(): number {
     return this._lastReceivedAt;
+  }
+
+  /** Frames the peer has sent since the handshake succeeded. */
+  get framesSinceOpen(): number {
+    return this._framesSinceOpen;
   }
 
   get closedWith(): LinkCloseInfo | null {
@@ -593,6 +599,7 @@ export class LinkSession {
     for (const frame of frames) {
       if (this.isClosed) return;
       this._lastReceivedAt = this.now();
+      if (this.state === "open") this._framesSinceOpen++;
       // During the handshake, only its own kinds are worth decoding at all.
       if (
         this.state === "handshake" &&

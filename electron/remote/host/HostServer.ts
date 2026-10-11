@@ -117,8 +117,13 @@ export class HostServer {
   private readonly live = new Map<string, HostSessionContext>();
   private readonly resumable = new Map<string, Resumable>();
   private readonly pendingHandshakes = new Set<LinkSession>();
-  /** Each session's current resume secret, handed out only in its WELCOME. */
-  private readonly resumeSecrets = new Map<string, string>();
+  /**
+   * Each session's resume secret, handed out only in its WELCOME, and the one
+   * before it while the Shell hasn't yet been seen to have the new one: a
+   * WELCOME lost on its way must not leave the Shell holding a secret that no
+   * longer resumes its session.
+   */
+  private readonly resumeSecrets = new Map<string, { current: string; previous: string | null }>();
   private readonly sessionListeners = new Set<(ctx: HostSessionContext) => void>();
   private readonly expiredListeners = new Set<(info: HostSessionExpired) => void>();
   private readonly detachedListeners = new Set<(info: HostSessionExpired) => void>();
@@ -376,11 +381,16 @@ export class HostServer {
     const resumeId = hello.resumeSessionId;
     // A session id is seen by every Shell (lease holders, summaries); resuming
     // also takes the secret only that session's own WELCOME carried.
-    const secret = resumeId === null ? undefined : this.resumeSecrets.get(resumeId);
+    const secrets = resumeId === null ? undefined : this.resumeSecrets.get(resumeId);
+    // A Shell that has spoken on the session since its WELCOME had the new secret.
+    const speaking = resumeId === null ? undefined : this.live.get(resumeId);
+    if (secrets && speaking && speaking.session.framesSinceOpen > 0) secrets.previous = null;
+    const presented = typeof hello.resumeSecret === "string" ? hello.resumeSecret : null;
     const mayResume =
-      secret !== undefined &&
-      typeof hello.resumeSecret === "string" &&
-      tokensEqual(hello.resumeSecret, secret);
+      secrets !== undefined &&
+      presented !== null &&
+      (tokensEqual(presented, secrets.current) ||
+        (secrets.previous !== null && tokensEqual(presented, secrets.previous)));
     if (resumeId !== null && mayResume) {
       const parked = this.resumable.get(resumeId);
       const attached = this.live.get(resumeId);
@@ -404,7 +414,12 @@ export class HostServer {
 
     const ctx: HostSessionContext = { sessionId: id, client: hello.client, resumed, session };
     const resumeSecret = crypto.randomBytes(32).toString("base64url");
-    this.resumeSecrets.set(id, resumeSecret);
+    // The secret the Shell just resumed with stays good until it is seen to
+    // have this one; a new session has nothing before it.
+    this.resumeSecrets.set(id, {
+      current: resumeSecret,
+      previous: resumed ? presented : null,
+    });
     session.open();
     session.post({
       lane: Lane.CONTROL,
@@ -455,6 +470,9 @@ export class HostServer {
     if (this.closing) return;
     const { sessionId } = ctx;
     const clientId = ctx.client.clientId;
+    // It spoke after its WELCOME, so it holds the newest secret: the one before is spent.
+    const secrets = this.resumeSecrets.get(sessionId);
+    if (secrets && ctx.session.framesSinceOpen > 0) secrets.previous = null;
     for (const listener of this.detachedListeners) {
       try {
         listener({ sessionId, clientId });

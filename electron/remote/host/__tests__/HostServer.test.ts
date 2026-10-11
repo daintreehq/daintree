@@ -99,6 +99,48 @@ async function rawHello(token: string, clientId: string) {
   return raw;
 }
 
+/** A HELLO from a hand-driven client, resuming `resume` when given; resolves with its WELCOME. */
+async function helloOn(
+  server: HostServer,
+  clientId: string,
+  resume: { id: string; secret: string } | null
+) {
+  const raw = await rawConnect();
+  raw.socket.write(
+    encodeFrame(
+      messageToFrame({
+        lane: Lane.CONTROL,
+        kind: ControlKind.HELLO,
+        body: {
+          handshake: TEST_HANDSHAKE,
+          token: server.token,
+          client: { clientId, clientName: "n", platform: "linux" },
+          resumeSessionId: resume?.id ?? null,
+          resumeSecret: resume?.secret ?? null,
+        },
+      })
+    )
+  );
+  await waitFor(() => raw.frames.some((f) => frameToMessage(f)?.kind === ControlKind.WELCOME));
+  const welcome = raw.frames
+    .map((frame) => frameToMessage(frame))
+    .find((m) => m?.kind === ControlKind.WELCOME)!.body as {
+    sessionId: string;
+    resumed: boolean;
+    resumeSecret: string;
+  };
+  return { raw, welcome };
+}
+
+/** Something from the client after its WELCOME, as any live Shell soon sends. */
+function ping(raw: { socket: net.Socket }): void {
+  raw.socket.write(
+    encodeFrame(
+      messageToFrame({ lane: Lane.CONTROL, kind: ControlKind.PING, body: { sentAt: Date.now() } })
+    )
+  );
+}
+
 function closedSocket(socket: net.Socket): Promise<void> {
   return new Promise((resolve) => {
     if (socket.destroyed) resolve();
@@ -591,11 +633,35 @@ describe("HostServer session resume", () => {
     const back = await hello("shell-a", resume);
     expect(back.welcome).toMatchObject({ sessionId: resume.id, resumed: true });
     expect(back.welcome.resumeSecret).not.toBe(resume.secret);
+    // The Shell speaks on the resumed session: it has the new secret, and the old one is spent.
+    const resumedSession = seen.at(-1)!.session;
+    ping(back.raw);
+    await waitFor(() => resumedSession.framesSinceOpen > 0);
     await drop(back.raw);
 
     const replay = await hello("shell-a", resume);
     expect(replay.welcome.resumed).toBe(false);
     replay.raw.socket.destroy();
+  });
+
+  it("still resumes with the previous secret when the WELCOME carrying the new one was lost", async () => {
+    const server = await startServer();
+    const seen: HostSessionContext[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    const first = await helloOn(server, "shell-a", null);
+    first.raw.socket.destroy();
+    await waitFor(() => !seen[0]!.session.isOpen);
+    const resume = { id: first.welcome.sessionId, secret: first.welcome.resumeSecret };
+
+    // Resumed, but the link dies before the Shell reads the WELCOME: it still holds the old secret.
+    const lost = await helloOn(server, "shell-a", resume);
+    expect(lost.welcome.resumed).toBe(true);
+    lost.raw.socket.destroy();
+    await waitFor(() => !seen[1]!.session.isOpen);
+
+    const again = await helloOn(server, "shell-a", resume);
+    expect(again.welcome).toMatchObject({ sessionId: resume.id, resumed: true });
+    again.raw.socket.destroy();
   });
 
   it("closes connections past the cap on sockets waiting to say HELLO", async () => {
