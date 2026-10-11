@@ -104,6 +104,15 @@ export async function observeAgents(): Promise<ObservedAgents | null> {
  * Worktrees across the open projects, or null when any project's workspace
  * couldn't answer: a partial sum would read as fewer worktrees than there are.
  */
+/** Working trees git lists for the repository at `path`, its main one included; null when git can't say. */
+async function gitWorktreeCount(path: string): Promise<number | null> {
+  const out = await runCommand("git", ["-C", path, "worktree", "list", "--porcelain"]);
+  if (out === null) return null;
+  const entries = out.split("\n\n").filter((entry) => entry.startsWith("worktree "));
+  // A bare main repository has no working tree of its own.
+  return entries.filter((entry) => !/^bare$/m.test(entry)).length;
+}
+
 async function countWorktrees(
   projects: ReadonlyArray<{ id: string; path: string }>
 ): Promise<number | null> {
@@ -114,9 +123,17 @@ async function countWorktrees(
       projects.map((project) => client.getAllStatesForProjectResultAsync(project.path, project.id))
     );
     let count = 0;
-    for (const result of results) {
-      if (result.status !== "ok") return null;
-      count += result.states.length;
+    for (const [index, result] of results.entries()) {
+      if (result.status === "ok") {
+        count += result.states.length;
+        continue;
+      }
+      // A project nobody has opened since the host started has no workspace
+      // to ask (a windowless host's usual case): git itself can count it.
+      if (result.reason !== "project-unavailable") return null;
+      const listed = await gitWorktreeCount(projects[index]!.path);
+      if (listed === null) return null;
+      count += listed;
     }
     return count;
   } catch {

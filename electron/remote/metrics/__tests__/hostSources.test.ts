@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const workspace = vi.hoisted(() => ({
@@ -25,13 +29,15 @@ vi.mock("../../../window/serviceRefs.js", () => ({
   getResourceProfileService: () => null,
   getWorkspaceClientRef: () => workspace.client,
 }));
+const store = vi.hoisted(() => ({
+  projects: [] as Array<{ id: string; path: string; status: string }>,
+}));
+const DEFAULT_PROJECTS = [
+  { id: "p1", path: "/p1", status: "active" },
+  { id: "p2", path: "/p2", status: "background" },
+];
 vi.mock("../../../services/ProjectStore.js", () => ({
-  projectStore: {
-    getAllProjects: () => [
-      { id: "p1", path: "/p1", status: "active" },
-      { id: "p2", path: "/p2", status: "background" },
-    ],
-  },
+  projectStore: { getAllProjects: () => store.projects },
 }));
 vi.mock("../../../services/ScratchStore.js", () => ({
   scratchStore: { getAllScratches: () => [] },
@@ -64,6 +70,7 @@ import { createHostSampleSources, observeAgents } from "../hostSources.js";
 const WORKING = { id: "t1", projectId: "p1", agentState: "working" };
 
 beforeEach(() => {
+  store.projects = DEFAULT_PROJECTS;
   workspace.client = null;
   pty.client = {
     getAllTerminalsWithCompletenessAsync: vi.fn(async () => ({
@@ -149,5 +156,35 @@ describe("createHostSampleSources", () => {
       projectCount: 2,
       worktreeCount: null,
     });
+  });
+
+  it("counts a project no workspace has loaded yet from git's own worktree list", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "rh-wt-"));
+    try {
+      const repo = path.join(root, "repo");
+      const git = (...args: string[]) =>
+        execFileSync("git", ["-C", repo, ...args], { stdio: "ignore" });
+      fs.mkdirSync(repo);
+      git("init", "-q");
+      git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "i");
+      git("worktree", "add", "-q", path.join(root, "wt"));
+      store.projects = [
+        { id: "loaded", path: "/loaded", status: "active" },
+        { id: "unloaded", path: repo, status: "background" },
+      ];
+      workspace.client = {
+        getAllStatesForProjectResultAsync: vi.fn(async (projectPath: string) =>
+          projectPath === "/loaded"
+            ? { status: "ok", projectId: "loaded", states: [{}] }
+            : { status: "unavailable", reason: "project-unavailable" }
+        ),
+      };
+      await expect(createHostSampleSources().projects()).resolves.toEqual({
+        projectCount: 2,
+        worktreeCount: 3,
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
