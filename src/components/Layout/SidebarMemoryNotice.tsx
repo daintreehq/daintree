@@ -1,4 +1,4 @@
-import { useRef, type RefObject } from "react";
+import { useRef } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { MemoryStick } from "@/components/icons";
 import { SidebarFooterGlyph } from "@/components/Layout/SidebarFooterGlyph";
@@ -54,9 +54,11 @@ function MemoryNoticeRow({ notice }: { notice: SystemMemoryNotice }) {
   const { action } = notice;
   const sleep = useSleepIdleProjects();
   const canSleep = sleep.idleProjects.length > 0;
-  // The confirmation opens from a menu item that unmounts with the menu, so
-  // it has no opener left to hand focus back to on cancel.
-  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  // A picked action runs once the menu has handed focus back to its trigger.
+  // Run straight from the item, a confirmation or diagnostic panel that opens
+  // during the menu's exit animation has its focus pulled back to the trigger,
+  // and the confirmation captures no opener to return to on cancel.
+  const pendingActionRef = useRef<(() => void) | null>(null);
 
   return (
     <div data-sidebar-memory-notice="" className="flex min-h-7 w-full shrink-0 items-stretch">
@@ -75,12 +77,15 @@ function MemoryNoticeRow({ notice }: { notice: SystemMemoryNotice }) {
         </TruncatedTooltip>
       </div>
       {(canSleep || action) && (
-        <DropdownMenu>
+        <DropdownMenu
+          onOpenChange={(open) => {
+            if (open) pendingActionRef.current = null;
+          }}
+        >
           <Tooltip>
             <TooltipTrigger asChild>
               <DropdownMenuTrigger asChild>
                 <button
-                  ref={menuTriggerRef}
                   type="button"
                   data-sidebar-memory-menu=""
                   aria-label="Memory actions"
@@ -92,12 +97,23 @@ function MemoryNoticeRow({ notice }: { notice: SystemMemoryNotice }) {
             </TooltipTrigger>
             <TooltipContent side="top">Memory actions</TooltipContent>
           </Tooltip>
-          <DropdownMenuContent side="top" align="end">
+          <DropdownMenuContent
+            side="top"
+            align="end"
+            onCloseAutoFocus={() => {
+              const run = pendingActionRef.current;
+              pendingActionRef.current = null;
+              // A microtask, so it lands after the restoration this event drives.
+              if (run) queueMicrotask(run);
+            }}
+          >
             {action && (
               <DropdownMenuItem
                 data-sidebar-memory-action=""
                 aria-label={action.label}
-                onSelect={() => void action.onClick()}
+                onSelect={() => {
+                  pendingActionRef.current = () => void action.onClick();
+                }}
               >
                 Ask agent about memory
               </DropdownMenuItem>
@@ -105,7 +121,9 @@ function MemoryNoticeRow({ notice }: { notice: SystemMemoryNotice }) {
             {canSleep && (
               <DropdownMenuItem
                 data-sidebar-memory-sleep=""
-                onSelect={() => void sleep.openPreview()}
+                onSelect={() => {
+                  pendingActionRef.current = () => void sleep.openPreview();
+                }}
               >
                 Sleep idle projects
               </DropdownMenuItem>
@@ -119,7 +137,6 @@ function MemoryNoticeRow({ notice }: { notice: SystemMemoryNotice }) {
           isSleeping={sleep.isSleeping}
           onClose={sleep.closePreview}
           onConfirm={sleep.confirm}
-          restoreFocusTo={menuTriggerRef}
         />
       )}
     </div>
@@ -131,13 +148,11 @@ function SleepIdleProjectsDialog({
   isSleeping,
   onClose,
   onConfirm,
-  restoreFocusTo,
 }: {
   projects: IdleProject[];
   isSleeping: boolean;
   onClose: () => void;
   onConfirm: () => Promise<void>;
-  restoreFocusTo: RefObject<HTMLButtonElement | null>;
 }) {
   const waitingAgentCount = projects.reduce((sum, p) => sum + p.waitingAgentCount, 0);
   const terminalCount = projects.reduce((sum, p) => sum + p.terminalCount, 0);
@@ -156,7 +171,6 @@ function SleepIdleProjectsDialog({
       onConfirm={onConfirm}
       isConfirmLoading={isSleeping}
       variant="default"
-      restoreFocusTo={restoreFocusTo}
     >
       <div className="space-y-3">
         <ul data-sleep-idle-projects="" className="space-y-2">

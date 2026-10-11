@@ -28,6 +28,14 @@ function openMenu(container: HTMLElement): HTMLElement {
   return document.querySelector<HTMLElement>('[role="menu"]')!;
 }
 
+function findDialog(): Promise<HTMLElement> {
+  return waitFor(() => {
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+    if (!dialog) throw new Error("confirmation not open");
+    return dialog;
+  });
+}
+
 function menuItemLabels(menu: HTMLElement): string[] {
   return Array.from(menu.querySelectorAll('[role="menuitem"]'), (el) => el.textContent ?? "");
 }
@@ -96,7 +104,7 @@ describe("SidebarMemoryNotice", () => {
     expect(row.outerHTML).not.toMatch(/status-(warning|danger|error)/);
   });
 
-  it("offers the diagnosis and clears when the store does", () => {
+  it("offers the diagnosis and clears when the store does", async () => {
     const onClick = vi.fn();
     act(() =>
       useSystemMemoryNoticeStore.getState().setNotice({
@@ -117,7 +125,7 @@ describe("SidebarMemoryNotice", () => {
     expect(item.getAttribute("aria-label")).toBe("Ask agent about memory");
 
     fireEvent.click(item);
-    expect(onClick).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClick).toHaveBeenCalledTimes(1));
 
     act(() => useSystemMemoryNoticeStore.getState().clearNotice());
     expect(container.querySelector("[data-sidebar-memory-notice]")).toBeNull();
@@ -180,10 +188,8 @@ describe("SidebarMemoryNotice", () => {
     const { container } = renderRow();
 
     const sleepItem = openMenu(container).querySelector("[data-sidebar-memory-sleep]")!;
-    await act(async () => {
-      fireEvent.click(sleepItem);
-    });
-    const dialog = document.querySelector('[role="dialog"]')!;
+    fireEvent.click(sleepItem);
+    const dialog = await findDialog();
     expect(dialog.textContent).toContain("Sleep 2 idle projects?");
     const listed = Array.from(
       dialog.querySelectorAll("[data-sleep-idle-projects] li"),
@@ -218,16 +224,14 @@ describe("SidebarMemoryNotice", () => {
     const { container } = renderRow();
 
     const sleepItem = openMenu(container).querySelector("[data-sidebar-memory-sleep]")!;
-    await act(async () => {
-      fireEvent.click(sleepItem);
-    });
-    const dialog = document.querySelector('[role="dialog"]')!;
+    fireEvent.click(sleepItem);
+    const dialog = await findDialog();
     expect(dialog.textContent).toContain("Sleep 'Project a'?");
     expect(dialog.textContent).toContain("Its terminals will be stopped");
     expect(dialog.textContent).not.toContain("waiting agent");
   });
 
-  it("hands focus back to the menu button when the confirmation is cancelled", async () => {
+  it("hands focus to the confirmation, and back to the menu button on cancel", async () => {
     act(() => {
       seedIdleProjects(["a"]);
       useSystemMemoryNoticeStore
@@ -241,17 +245,68 @@ describe("SidebarMemoryNotice", () => {
     vi.spyOn(terminalClient, "getAll").mockResolvedValue([]);
     const { container } = renderRow();
     const trigger = container.querySelector<HTMLButtonElement>("[data-sidebar-memory-menu]")!;
+    trigger.focus();
 
-    const sleepItem = openMenu(container).querySelector("[data-sidebar-memory-sleep]")!;
+    fireEvent.click(openMenu(container).querySelector("[data-sidebar-memory-sleep]")!);
+    const dialog = await findDialog();
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    // The menu's own restoration has already run; nothing pulls focus back out.
     await act(async () => {
-      fireEvent.click(sleepItem);
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    const cancel = Array.from(
-      document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')
-    ).find((b) => b.textContent === "Cancel")!;
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    const cancel = Array.from(dialog.querySelectorAll("button")).find(
+      (b) => b.textContent === "Cancel"
+    )!;
     await act(async () => {
       fireEvent.click(cancel);
     });
     await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("leaves focus where the agent action put it", async () => {
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    const onClick = vi.fn(() => elsewhere.focus());
+    act(() =>
+      useSystemMemoryNoticeStore.getState().setNotice({
+        reading: READING,
+        detail: DETAIL,
+        action: { label: "Ask agent about memory", onClick },
+      })
+    );
+    const { container } = renderRow();
+    container.querySelector<HTMLButtonElement>("[data-sidebar-memory-menu]")!.focus();
+
+    fireEvent.click(openMenu(container).querySelector("[data-sidebar-memory-action]")!);
+    await waitFor(() => expect(onClick).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(document.activeElement).toBe(elsewhere);
+    elsewhere.remove();
+  });
+
+  it("runs nothing when the menu is dismissed", async () => {
+    const onClick = vi.fn();
+    act(() => {
+      seedIdleProjects(["a"]);
+      useSystemMemoryNoticeStore.getState().setNotice({
+        reading: READING,
+        detail: DETAIL,
+        action: { label: "Ask agent about memory", onClick },
+      });
+    });
+    const { container } = renderRow();
+
+    const menu = openMenu(container);
+    fireEvent.keyDown(menu, { key: "Escape" });
+    await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(onClick).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 });
