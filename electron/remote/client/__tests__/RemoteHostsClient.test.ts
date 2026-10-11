@@ -320,12 +320,16 @@ describe("RemoteHostsClient", () => {
       expect(bindings.get(1)).toBe("local");
     });
 
-    it("opens a new window on the host's project list when there is nothing to return to", async () => {
+    it("opens a new window here that offers the host's projects when there is nothing to return to", async () => {
       manager.readiness = "unreachable";
+      windows.offerHostProjects = vi.fn();
       await expect(
         client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: true })
       ).resolves.toEqual({ outcome: "window-opened", hostId: "studio-01" });
-      expect(bindings.get(7)).toBe("studio-01");
+      // Not bound until a project is picked: a bound window with no host view
+      // routed to the host while everything on screen said This Mac.
+      expect(bindings.get(7)).toBe("local");
+      expect(windows.offerHostProjects).toHaveBeenCalledWith(7, "studio-01");
       expect(windows.openRemoteProject).not.toHaveBeenCalled();
     });
 
@@ -384,6 +388,7 @@ describe("RemoteHostsClient", () => {
   });
 
   it("opens a new window for a Cmd/Ctrl-click and leaves the current one alone", async () => {
+    manager.last = { projectId: "proj-9", path: "/srv/proj-9", name: "proj-9" };
     await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: true });
     expect(windows.openWindow).toHaveBeenCalled();
     expect(bindings.get(7)).toBe("studio-01");

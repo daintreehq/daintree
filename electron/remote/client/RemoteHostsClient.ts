@@ -52,6 +52,11 @@ export interface WindowControl {
   lastProjectOnHost?(windowId: number | null, hostId: HostId): string | null;
   /** Call `onClosed` once when the window closes. */
   watchWindow(windowId: number, onClosed: () => void): void;
+  /**
+   * Have a window on this machine offer a host's project list (`host.switch`
+   * run in it): the window moves to the host once a project is picked there.
+   */
+  offerHostProjects?(windowId: number, hostId: HostId): void;
 }
 
 export interface RemoteHostsClientOptions {
@@ -436,6 +441,14 @@ export class RemoteHostsClient {
       // one waited behind the window's previous switch.
       const late = superseded();
       if (late) return late;
+      // Only a new window reaches here without a project. It stays on this
+      // machine and offers the host's project list: binding it with no view of
+      // the host's behind it made a window whose calls went to the host while
+      // its chip, copy and pickers all said This Mac.
+      if (targetProjectId === undefined) {
+        this.options.windows.offerHostProjects?.(windowId, hostId);
+        return { outcome: "window-opened", hostId };
+      }
       const previousHost = this.options.bindings.get(windowId);
       const nextHost = remote ? hostId : LOCAL_HOST_ID;
       this.options.bindings.set(windowId, nextHost);
@@ -448,9 +461,6 @@ export class RemoteHostsClient {
         });
       }
 
-      // Only a new window reaches here without a project: its unbound view
-      // follows the binding and lists the host's projects.
-      if (targetProjectId === undefined) return { outcome: "window-opened", hostId };
       try {
         if (!remote) {
           await this.options.windows.openLocalProject(windowId, targetProjectId);
