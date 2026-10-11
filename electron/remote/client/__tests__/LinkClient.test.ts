@@ -189,17 +189,20 @@ describe("LinkClient quiet link", () => {
         handshake: TEST_HANDSHAKE,
         client: { clientId: "c", clientName: "n", platform: "linux" },
         session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
-        quietAfterMs: 60,
+        quietAfterMs: 200,
+      });
+      // Every report, since a cleared quiet only lasts until the silence runs long again.
+      const quietSince: Array<number | null> = [];
+      client.onStateChange((state) => {
+        if (state.status === "connected") quietSince.push(state.quietSince);
       });
       client.start();
       await waitFor(() => client!.getState().status === "connected");
       expect(client.getState()).toMatchObject({ quietSince: null });
-      await waitFor(() => {
-        const state = client!.getState();
-        return state.status === "connected" && state.quietSince !== null;
-      });
+      await waitFor(() => quietSince.some((at) => at !== null));
       const heard = client.session!.lastReceivedAt;
-      expect(client.getState()).toMatchObject({ status: "connected", quietSince: heard });
+      expect(quietSince.find((at) => at !== null)).toBe(heard);
+      const reports = quietSince.length;
 
       const event: LinkMessage = {
         lane: Lane.EVENTS,
@@ -207,12 +210,65 @@ describe("LinkClient quiet link", () => {
         body: { endpointId: null, channel: "x:event", args: [] },
       };
       peer!.write(Buffer.from(encodeFrame(messageToFrame(event))));
-      await waitFor(() => {
-        const state = client!.getState();
-        return state.status === "connected" && state.quietSince === null;
-      });
+      await waitFor(() => quietSince.slice(reports).includes(null));
     } finally {
       await client?.stop();
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+});
+
+describe("LinkClient session loss", () => {
+  it("stops reading as connected the moment its session closes, before the old forward is released", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "d.sock");
+    let peer: net.Socket | null = null;
+    const server = net.createServer((socket) => {
+      peer = socket;
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind !== ControlKind.HELLO) continue;
+          const welcome: LinkMessage = {
+            lane: Lane.CONTROL,
+            kind: ControlKind.WELCOME,
+            body: { handshake: TEST_HANDSHAKE, hostName: "h", sessionId: "s1", resumed: false },
+          };
+          socket.write(Buffer.from(encodeFrame(messageToFrame(welcome))));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    const direct = createDirectTransport({ socketPath, token: "t" });
+    let opens = 0;
+    // A forward whose release hangs, as an ssh forward does through a stalled master.
+    const transport: LinkTransport = {
+      async open(signal) {
+        opens++;
+        const connection = await direct.open(signal);
+        return { ...connection, dispose: () => new Promise<void>(() => {}) };
+      },
+    };
+    try {
+      client = new LinkClient({
+        transport,
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+        quietAfterMs: 0,
+      });
+      client.start();
+      await waitFor(() => client!.getState().status === "connected");
+      peer!.destroy();
+      await waitFor(() => client!.getState().status !== "connected");
+      expect(client.getState()).toEqual({ status: "connecting", attempt: 1 });
+      // Still waiting on the release: no second attempt has started.
+      expect(opens).toBe(1);
+    } finally {
+      const stopping = client?.stop();
+      client = null;
+      void stopping;
       server.close();
       await removeTempDir(dir);
     }

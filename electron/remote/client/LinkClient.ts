@@ -292,7 +292,7 @@ export class LinkClient {
     this.lastSeenAt = this.now();
     const establishedAt = this.now();
     let rttMs: number | null = null;
-    let quiet = false;
+    let quietSince: number | null = null;
     const connected = (): LinkClientState => ({
       status: "connected",
       rttMs,
@@ -300,14 +300,14 @@ export class LinkClient {
       hostName: welcome.hostName,
       sessionId: welcome.sessionId,
       buildMismatch,
-      quietSince: quiet ? session.lastReceivedAt : null,
+      quietSince,
     });
     this.setState(connected());
     session.onRtt((rtt) => {
       if (this.current === session) {
         this.lastSeenAt = this.now();
         rttMs = rtt;
-        quiet = false;
+        quietSince = null;
         this.setState(connected());
       }
     });
@@ -319,12 +319,13 @@ export class LinkClient {
         ? setInterval(
             () => {
               if (this.current !== session) return;
-              const silent = this.now() - session.lastReceivedAt > quietAfterMs;
-              if (silent === quiet) return;
-              quiet = silent;
+              const heard = session.lastReceivedAt;
+              const next = this.now() - heard > quietAfterMs ? heard : null;
+              if (next === quietSince) return;
+              quietSince = next;
               this.setState(connected());
             },
-            Math.min(QUIET_CHECK_MS, quietAfterMs)
+            Math.max(10, Math.min(QUIET_CHECK_MS, Math.floor(quietAfterMs / 4)))
           )
         : null;
     quietTimer?.unref?.();
@@ -332,6 +333,9 @@ export class LinkClient {
       if (quietTimer) clearInterval(quietTimer);
       if (this.current !== session) return;
       this.current = null;
+      // Down from now: releasing the old forward can take as long as a stalled
+      // transport does, and the link must not read as connected meanwhile.
+      this.setState({ status: "connecting", attempt: this.attempt + 1 });
       this.lastSeenAt = Math.max(this.lastSeenAt ?? 0, session.lastReceivedAt);
       const generation = this.generation;
       // Release the old forward before the next attempt sets up a new one.
