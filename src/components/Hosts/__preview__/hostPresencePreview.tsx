@@ -16,6 +16,7 @@ import { useProjectStore } from "@/store/projectStore";
 import type { TerminalInputBlock } from "@/services/terminal/inputGate";
 import type { AttachedClientInfo, HostModeStatus } from "@shared/types/ipc/hostMode";
 import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
+import type { Project } from "@shared/types/project";
 import { AttachedMachinesIndicator } from "../AttachedMachinesIndicator";
 import "@/index.css";
 
@@ -177,8 +178,11 @@ export const PRESENCE_STATES: Record<string, PresenceState> = {
   },
 };
 
-const state = PRESENCE_STATES[stateName];
-if (!state) throw new Error(`unknown state "${stateName}"`);
+const requestedState = PRESENCE_STATES[stateName];
+if (!requestedState) throw new Error(`unknown state "${stateName}"`);
+// Named with its type so the component functions below, hoisted above the
+// check, see it as present.
+const state: PresenceState = requestedState;
 
 const hostStatus: HostModeStatus = {
   supported: true,
@@ -212,14 +216,28 @@ if (state.side === "client") {
     hostId: "studio-01",
     hostName: "studio-01",
     everConnected: true,
-    connection: { status: "connected" },
-  } as Parameters<typeof useHostConnectionStore.setState>[0]);
+    connection: {
+      status: "connected",
+      rttMs: 12,
+      handshake: {
+        version: "0.43.0",
+        commit: "preview",
+        protocolVersion: 1,
+        platform: "linux",
+        arch: "x64",
+      },
+    },
+  });
 }
+const previewProject = (id: string, name: string): Project => ({
+  id,
+  name,
+  path: `/Users/preview/${name}`,
+  emoji: "🌲",
+  lastOpened: 0,
+});
 useProjectStore.setState({
-  projects: [
-    { id: THIS_PROJECT, name: "daintree" },
-    { id: OTHER_PROJECT, name: "pagesugar" },
-  ] as unknown as ReturnType<typeof useProjectStore.getState>["projects"],
+  projects: [previewProject(THIS_PROJECT, "daintree"), previewProject(OTHER_PROJECT, "pagesugar")],
 });
 seedDriveLeaseView(state.lease);
 

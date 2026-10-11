@@ -30,7 +30,16 @@ import {
 } from "../../services/canopy/canopyBackend.js";
 import { store } from "../../store.js";
 import { traced } from "../../services/canopy/canopyTrace.js";
-import { checkRateLimit, getProjectRendererTargets, typedBroadcast } from "../utils.js";
+import {
+  checkRateLimit,
+  endpointPushTarget,
+  getProjectPushTargets,
+  typedBroadcast,
+  type ProjectPushTarget,
+} from "../utils.js";
+import type { IpcContext } from "../types.js";
+import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { CANOPY_METHOD_CHANNELS } from "./canopy.preload.js";
@@ -391,7 +400,7 @@ async function renameThroughOwningViews(run: FleetRunRow, title: string): Promis
   const shown = named || defaultTitleOf(run);
   requirePtyClient().updateTitle(run.runId, shown, titleMode);
   events.emit("terminal:title-changed", { id: run.runId, timestamp: Date.now() });
-  for (const view of getProjectRendererTargets(run.workspaceId)) {
+  for (const view of getProjectPushTargets(run.workspaceId, CHANNELS.CANOPY_RENAME_REQUESTED)) {
     try {
       view.send(CHANNELS.CANOPY_RENAME_REQUESTED, {
         runId: run.runId,
@@ -453,7 +462,7 @@ function trashThroughOwningViews(runId: string, spawnedAt: number): number | nul
     at: Date.now(),
   };
   recentlyTrashed.set(receipt, trashed);
-  const views = getProjectRendererTargets(run.workspaceId);
+  const views = getProjectPushTargets(run.workspaceId, CHANNELS.CANOPY_TRASH_REQUESTED);
   for (const view of views) {
     try {
       view.send(CHANNELS.CANOPY_TRASH_REQUESTED, { runId } satisfies CanopyTrashRequest);
@@ -576,7 +585,10 @@ async function restoreThroughOwningViews(receipt: number): Promise<void> {
   // Trashed while its project was closed, and the project opened since: it
   // came up without the pane, so a terminal brought back would have nowhere to
   // show and nothing to keep it.
-  if (trashed.layoutSaved && getProjectRendererTargets(trashed.workspaceId).length > 0) {
+  if (
+    trashed.layoutSaved &&
+    getProjectPushTargets(trashed.workspaceId, CHANNELS.CANOPY_RESTORE_REQUESTED).length > 0
+  ) {
     recentlyTrashed.delete(receipt);
     throw new AppError({
       code: "NOT_FOUND",
@@ -611,7 +623,10 @@ async function restoreThroughOwningViews(receipt: number): Promise<void> {
         );
       });
   }
-  for (const view of getProjectRendererTargets(trashed.workspaceId)) {
+  for (const view of getProjectPushTargets(
+    trashed.workspaceId,
+    CHANNELS.CANOPY_RESTORE_REQUESTED
+  )) {
     try {
       view.send(CHANNELS.CANOPY_RESTORE_REQUESTED, {
         runId: trashed.runId,
@@ -665,9 +680,29 @@ function forgetView(id: number): void {
   service?.setScope(reconciledScope());
 }
 
-function watchView(sender: Electron.WebContents): void {
-  const id = sender.id;
+/** The view a call came from, as something a push can reach: local or remote. */
+function viewOf(ctx: IpcContext): ProjectPushTarget {
+  return ctx.event?.sender ?? endpointPushTarget(ctx.endpoint);
+}
+
+/**
+ * Forget a view's panel once it stops showing it without saying so: a local
+ * view by its own lifecycle, a remote one when its endpoint closes. A remote
+ * view's reload keeps its endpoint, so its panel is forgotten when it next
+ * opens it or the view goes.
+ */
+function watchView(ctx: IpcContext): void {
+  const id = ctx.webContentsId;
   if (watchedViews.has(id)) return;
+  const sender = ctx.event?.sender;
+  if (!sender) {
+    const closed = ctx.endpoint.onClose(() => {
+      watchedViews.delete(id);
+      forgetView(id);
+    });
+    watchedViews.set(id, () => closed.dispose());
+    return;
+  }
   // One set of listeners per WebContents for its whole life, not one per
   // opening: re-adding on every open leaked a `destroyed` listener each time
   // the panel was closed and reopened.
@@ -677,17 +712,38 @@ function watchView(sender: Electron.WebContents): void {
     if (details.isMainFrame && !details.isSameDocument) forgetView(id);
   };
   const onGone = () => forgetView(id);
-  const onDestroyed = () => {
-    watchedViews.delete(id);
-    forgetView(id);
-  };
   sender.on("did-start-navigation", onNavigate);
   sender.on("render-process-gone", onGone);
-  sender.once("destroyed", onDestroyed);
+  const unwatchDestroyed = onWebContentsDestroyed(sender, () => {
+    watchedViews.delete(id);
+    forgetView(id);
+  });
   watchedViews.set(id, () => {
     sender.removeListener("did-start-navigation", onNavigate);
     sender.removeListener("render-process-gone", onGone);
-    sender.removeListener("destroyed", onDestroyed);
+    unwatchDestroyed();
+  });
+}
+
+/**
+ * Typing into, resizing or putting back a run's terminal is its project's
+ * driver's to do while a drive lease is held, as through `terminal:input`. The
+ * run names the project, not the caller's view, so the handler checks it.
+ */
+function drivesRun(ctx: IpcContext, runId: string): boolean {
+  const lease = peekDriveLeaseService();
+  if (!lease) return true;
+  const projectId = requirePtyClient().getTerminalProjectId(runId);
+  return projectId === null || lease.isDriving(projectId, ctx.endpoint);
+}
+
+function assertDrivesRun(ctx: IpcContext, runId: string): void {
+  if (drivesRun(ctx, runId)) return;
+  throw new AppError({
+    code: "DRIVEN_ELSEWHERE",
+    message: `terminal ${runId} is driven elsewhere; only its driver may type to it`,
+    userMessage: "This project is being driven from another screen.",
+    context: { terminalId: runId },
   });
 }
 
@@ -713,7 +769,7 @@ export const canopyNamespace = defineIpcNamespace({
         const id = ctx.webContentsId;
         if (active) {
           activeViews.add(id);
-          watchView(ctx.event.sender);
+          watchView(ctx);
           wakeService();
         } else {
           activeViews.delete(id);
@@ -754,7 +810,7 @@ export const canopyNamespace = defineIpcNamespace({
         const ticket = beginWatchRequest(viewId);
         // The pane's effect can run before the panel's own `setActive` lands,
         // so a watch carries its own lifecycle cleanup rather than requiring it.
-        watchView(ctx.event.sender);
+        watchView(ctx);
         // Taken before validating, so a respawn while the host is asked can't
         // bind the stream to the successor of the terminal it checked.
         const ptyClient = requirePtyClient();
@@ -764,14 +820,7 @@ export const canopyNamespace = defineIpcNamespace({
         if (generation !== null && !ptyClient.isLiveGeneration(runId, generation)) {
           throw new Error("That agent isn't running any more.");
         }
-        return watchTerminal(
-          ptyClient,
-          ctx.event.sender,
-          runId,
-          target.spawnedAt,
-          ticket,
-          generation
-        );
+        return watchTerminal(ptyClient, viewOf(ctx), runId, target.spawnedAt, ticket, generation);
       },
       { withContext: true }
     ),
@@ -841,6 +890,8 @@ export const canopyNamespace = defineIpcNamespace({
       CANOPY_METHOD_CHANNELS.captureBackdrop,
       async (ctx): Promise<Uint8Array | null> => {
         checkRateLimit(CANOPY_METHOD_CHANNELS.captureBackdrop, 10, 10_000);
+        // A Shell channel: only a view on this machine asks, for its own pixels.
+        if (!ctx.event) return null;
         const image = await ctx.event.sender.capturePage();
         if (image.isEmpty()) return null;
         return new Uint8Array(image.toJPEG(BACKDROP_JPEG_QUALITY));
@@ -857,6 +908,7 @@ export const canopyNamespace = defineIpcNamespace({
           throw new Error("Invalid input");
         }
         const watched = requireWatched(ctx.webContentsId, watchId);
+        assertDrivesRun(ctx, watched.runId);
         requirePtyClient().write(watched.runId, data);
         // Return submits a line: the user has answered what the screen showed.
         if (terminalAnswerOf(data) === "submit") {
@@ -876,6 +928,10 @@ export const canopyNamespace = defineIpcNamespace({
       async (ctx, watchId: number, cols: number, rows: number): Promise<void> => {
         requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.terminalResize, 60, 10_000);
+        // Ignored rather than refused, as `terminal:resize` ignores one: the
+        // panel keeps reading at whatever size the driver's pane gave it.
+        const watched = watchedTerminal(ctx.webContentsId, watchId);
+        if (watched && !drivesRun(ctx, watched.runId)) return;
         resizeWatchedTerminal(requirePtyClient(), ctx.webContentsId, watchId, cols, rows);
       },
       { withContext: true }
@@ -890,6 +946,7 @@ export const canopyNamespace = defineIpcNamespace({
           throw new Error("Invalid key");
         }
         const watched = requireWatched(ctx.webContentsId, watchId);
+        assertDrivesRun(ctx, watched.runId);
         requirePtyClient().sendKey(watched.runId, key);
         if (key === "enter") {
           service?.noteUserSent(watched.runId, watched.spawnedAt);
@@ -929,6 +986,7 @@ export const canopyNamespace = defineIpcNamespace({
         ) {
           throw new Error("That agent isn't running any more.");
         }
+        assertDrivesRun(ctx, watched.runId);
         if (imagePaths !== undefined && imagePaths.length > 0) {
           requirePtyClient().submit(
             watched.runId,
@@ -993,11 +1051,20 @@ export const canopyNamespace = defineIpcNamespace({
      */
     // Not gated on Canopy being on: putting back a terminal it trashed reads
     // nothing, and turning Canopy off must not strand one in the trash.
-    untrash: op(CANOPY_METHOD_CHANNELS.untrash, async (receipt: number): Promise<void> => {
-      checkRateLimit(CANOPY_METHOD_CHANNELS.untrash, 20, 10_000);
-      if (!Number.isSafeInteger(receipt) || receipt <= 0) throw new Error("Invalid trash receipt");
-      await restoreThroughOwningViews(receipt);
-    }),
+    untrash: op(
+      CANOPY_METHOD_CHANNELS.untrash,
+      async (ctx, receipt: number): Promise<void> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.untrash, 20, 10_000);
+        if (!Number.isSafeInteger(receipt) || receipt <= 0) {
+          throw new Error("Invalid trash receipt");
+        }
+        // The receipt, not an argument the lease gate can read, names the run.
+        const trashed = recentlyTrashed.get(receipt);
+        if (trashed) assertDrivesRun(ctx, trashed.runId);
+        await restoreThroughOwningViews(receipt);
+      },
+      { withContext: true }
+    ),
 
     /**
      * The user renamed a run from Canopy: any project's, as a rename of its
@@ -1048,11 +1115,12 @@ export const canopyNamespace = defineIpcNamespace({
      */
     answer: op(
       CANOPY_METHOD_CHANNELS.answer,
-      async (runId: string, target: CanopyTarget, label: string): Promise<void> => {
+      async (ctx, runId: string, target: CanopyTarget, label: string): Promise<void> => {
         requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.answer, 30, 10_000);
         assertRunId(runId);
         assertTarget(target);
+        assertDrivesRun(ctx, runId);
         if (typeof label !== "string" || label.trim() === "" || label.length > MAX_LABEL_LENGTH) {
           throw new Error("Invalid option");
         }
@@ -1095,7 +1163,8 @@ export const canopyNamespace = defineIpcNamespace({
         }
         service?.noteUserSent(runId, target.spawnedAt);
         service?.markHandled(runId, target.spawnedAt);
-      }
+      },
+      { withContext: true }
     ),
 
     unarchive: op(
@@ -1130,7 +1199,7 @@ export const canopyNamespace = defineIpcNamespace({
           return;
         }
         // A look lasts until the view says it ended, or goes away without saying so.
-        watchView(ctx.event.sender);
+        watchView(ctx);
         getService().markSeen(runId, {
           viewId: ctx.webContentsId,
           place: place ?? "pane",
@@ -1233,7 +1302,7 @@ export const canopyNamespace = defineIpcNamespace({
         }
         for (const runId of runIds) assertRunId(runId);
         viewShown.set(ctx.webContentsId, new Set(runIds));
-        watchView(ctx.event.sender);
+        watchView(ctx);
       },
       { withContext: true }
     ),
@@ -1251,7 +1320,7 @@ export const canopyNamespace = defineIpcNamespace({
         // Each view's choice is its own: another window's panel keeps reading
         // what it shows.
         viewScopes.set(ctx.webContentsId, workspaceId);
-        watchView(ctx.event.sender);
+        watchView(ctx);
         if (activeViews.has(ctx.webContentsId)) getService().setScope(reconciledScope());
       },
       { withContext: true }

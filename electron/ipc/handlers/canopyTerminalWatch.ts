@@ -1,8 +1,8 @@
-import type { WebContents } from "electron";
 import type { CanopyTerminalData, CanopyTerminalView } from "../../../shared/types/ipc/canopy.js";
 import type { TerminalResizeResult } from "../../../shared/types/pty-host.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import { CHANNELS } from "../channels.js";
+import type { ProjectPushTarget } from "../utils.js";
 
 interface GridSize {
   cols: number;
@@ -71,7 +71,9 @@ export function isCurrentWatchRequest(webContentsId: number, ticket: number): bo
 }
 
 /**
- * Stream one terminal's output to one view, starting from a snapshot.
+ * Stream one terminal's output to one view, starting from a snapshot. The view
+ * is a local one's WebContents or a remote one's endpoint, keyed by the id its
+ * calls report.
  *
  * The bytes ride the host's Main-process mirror, which reaches any project's
  * terminal, rather than the view's own port, which only carries its project.
@@ -89,7 +91,7 @@ export function isCurrentWatchRequest(webContentsId: number, ticket: number): bo
  */
 export async function watchTerminal(
   ptyClient: PtyClient,
-  sender: WebContents,
+  sender: ProjectPushTarget,
   runId: string,
   spawnedAt: number,
   ticket: number,

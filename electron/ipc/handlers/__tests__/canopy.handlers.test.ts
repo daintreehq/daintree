@@ -34,6 +34,15 @@ const ptyClient = vi.hoisted(() => ({
   off: vi.fn(),
   acquireIpcDataMirror: vi.fn(() => state.releaseMirror),
   getSerializedStateAsync: vi.fn(async () => ({ data: "screen", cols: 80, rows: 24 })),
+  getTerminalProjectId: vi.fn((_id: string): string | null => "project-1"),
+  resize: vi.fn(),
+}));
+
+/** Another screen drives every project while set; null is no lease service at all. */
+const lease = vi.hoisted(() => ({ drivenElsewhere: false }));
+vi.mock("../../../services/DriveLeaseService.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/DriveLeaseService.js")>()),
+  peekDriveLeaseService: () => (lease.drivenElsewhere ? { isDriving: () => false } : null),
 }));
 
 vi.mock("electron", () => ({
@@ -99,16 +108,21 @@ vi.mock("../../../services/canopy/canopyBackend.js", () => canopyBackend);
 const broadcasts = vi.hoisted(() => vi.fn());
 vi.mock("../../utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../utils.js")>()),
-  getProjectRendererTargets: vi.fn(() => state.views),
+  getProjectPushTargets: vi.fn(() => state.views),
   typedBroadcast: broadcasts,
 }));
 
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { wrapError, wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
 import { events } from "../../../services/events.js";
 import { getDefaultPanelTitle } from "../../../../shared/config/panelKindRegistry.js";
 import { canopyPanelsListing, registerCanopyHandlers } from "../canopy.js";
 import { CANOPY_METHOD_CHANNELS } from "../canopy.preload.js";
+import { activeTerminalWatches } from "../canopyTerminalWatch.js";
+import { getIpcDispatcher } from "../../dispatcher.js";
+import type { ClientEndpoint } from "../../endpoint.js";
+import { CHANNELS } from "../../channels.js";
 
 type Handler = (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>;
 
@@ -167,6 +181,7 @@ describe("canopy IPC", () => {
     state.mode = "on";
     state.packaged = false;
     state.generation = 1;
+    lease.drivenElsewhere = false;
     saved.state = null;
     // setMode is rate-limited across the file; each case starts with the window clear.
     _resetRateLimitQueuesForTest();
@@ -1067,6 +1082,122 @@ describe("canopy IPC", () => {
       };
       expect((view.data ?? view).watchId).toBeNull();
       expect(ptyClient.acquireIpcDataMirror).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a view on another machine", () => {
+    beforeEach(() => {
+      getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, call) => {
+        try {
+          return wrapSuccess(await call());
+        } catch (error) {
+          return wrapError(error);
+        }
+      });
+    });
+
+    afterEach(() => {
+      getIpcDispatcher().setInvokeEnveloper(null);
+    });
+
+    function remoteView(handle: number) {
+      let closeListener: (() => void) | null = null;
+      const endpoint: ClientEndpoint = {
+        endpointId: `remote:${handle}`,
+        clientId: "client-greg-mbp",
+        projectId: "project-1",
+        kind: "remote-view",
+        handle,
+        send: vi.fn(),
+        request: vi.fn(),
+        onClose: (listener: () => void) => {
+          closeListener = listener;
+          return {
+            dispose: () => {
+              closeListener = null;
+            },
+          };
+        },
+        isClosed: () => false,
+      };
+      const call = (channel: string, ...args: unknown[]) =>
+        getIpcDispatcher().invokeForEndpoint(
+          {
+            endpoint,
+            client: {
+              clientId: endpoint.clientId,
+              clientName: "greg-mbp",
+              platform: "darwin",
+              kind: "remote",
+            },
+          },
+          channel,
+          args
+        );
+      return { endpoint, call, close: () => closeListener?.() };
+    }
+
+    it("streams a watched terminal through the view's endpoint, and ends it when the endpoint closes", async () => {
+      const release = vi.fn();
+      state.releaseMirror = release;
+      const view = remoteView(-7);
+      const opened = (await view.call(CANOPY_METHOD_CHANNELS.watchTerminal, "run-1", {
+        spawnedAt: 100,
+      })) as { ok: boolean; data: { watchId: number } };
+      expect(opened.ok).toBe(true);
+
+      const forward = ptyClient.on.mock.calls.find(([event]) => event === "data-mirror")?.[1] as (
+        id: string,
+        data: string,
+        streamEnd: number
+      ) => void;
+      forward("run-1", "hello", 10);
+      expect(view.endpoint.send).toHaveBeenCalledWith({
+        type: "event",
+        channel: CHANNELS.CANOPY_TERMINAL_DATA,
+        args: [expect.objectContaining({ kind: "data", runId: "run-1", data: "hello" })],
+      });
+
+      view.close();
+      expect(activeTerminalWatches().has(-7)).toBe(false);
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("a run whose project another screen drives", () => {
+    async function openStream(sender = fakeSender(4)) {
+      const view = (await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, "run-1", {
+        spawnedAt: 100,
+      })) as { data?: { watchId: number }; watchId?: number };
+      return { sender, watchId: (view.data ?? view).watchId! };
+    }
+
+    it("refuses typing, keys, submits and answers from a screen that doesn't drive it", async () => {
+      const { sender, watchId } = await openStream();
+      lease.drivenElsewhere = true;
+
+      const attempts = await Promise.all([
+        outcome(invoke(CANOPY_METHOD_CHANNELS.terminalInput, sender, watchId, "y")),
+        outcome(invoke(CANOPY_METHOD_CHANNELS.terminalSendKey, sender, watchId, "escape")),
+        outcome(invoke(CANOPY_METHOD_CHANNELS.terminalSubmit, sender, watchId, "navy")),
+        outcome(invoke(CANOPY_METHOD_CHANNELS.answer, sender, "run-1", { spawnedAt: 100 }, "Yes")),
+      ]);
+
+      expect(attempts.map((attempt) => attempt.ok)).toEqual([false, false, false, false]);
+      expect(state.writes).toEqual([]);
+      expect(state.submits).toEqual([]);
+      expect(ptyClient.sendKey).not.toHaveBeenCalled();
+    });
+
+    it("leaves the PTY at the driver's size rather than the panel's", async () => {
+      const { sender, watchId } = await openStream();
+      lease.drivenElsewhere = true;
+      await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+      expect(ptyClient.resize).not.toHaveBeenCalled();
+
+      lease.drivenElsewhere = false;
+      await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+      expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 100, 30);
     });
   });
 });

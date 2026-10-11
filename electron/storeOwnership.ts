@@ -50,6 +50,8 @@ export const STORE_KEY_OWNERSHIP = {
   worktreeIssueMap: "host",
   wslGitByWorktree: "host",
   rosettaWarningDismissed: "device",
+  // Consent to read the agents of the machine Canopy runs on, which is the host.
+  canopyMode: "host",
   appTheme: "device",
   privacy: "device",
   agentSessionHistory: "host",

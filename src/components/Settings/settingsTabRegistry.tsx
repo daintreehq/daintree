@@ -1767,6 +1767,7 @@ export const SETTINGS_REGISTRY = [
     id: "canopy",
     scope: "global",
     group: "Integrations",
+    owner: "host",
     label: "Canopy",
     icon: <Telescope className="w-4 h-4" />,
     importKind: "lazy",
