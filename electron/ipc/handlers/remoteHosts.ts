@@ -270,9 +270,12 @@ export const remoteHostsNamespace = defineIpcNamespace({
         if (typeof url !== "string" || url.length > 8192) {
           throw new AppError({ code: "VALIDATION", message: "url must be a string" });
         }
-        if (!__DAINTREE_REMOTE_HOSTS__) return false;
-        const { preparePluginView } = await import("../../remote/plugins/install.js");
-        return preparePluginView(ctx.webContentsId, url);
+        // The direct `if` form: esbuild drops the import only inside it, not after an early return.
+        if (__DAINTREE_REMOTE_HOSTS__) {
+          const { preparePluginView } = await import("../../remote/plugins/install.js");
+          return preparePluginView(ctx.webContentsId, url);
+        }
+        return false;
       },
       { withContext: true }
     ),
