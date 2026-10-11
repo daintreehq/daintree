@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Project } from "@shared/types/project";
 import type { ProjectSleepResult, ProjectStatusEntry } from "@shared/types/ipc/project";
@@ -20,6 +20,16 @@ function renderRow() {
       <SidebarMemoryNotice />
     </TooltipProvider>
   );
+}
+
+function openMenu(container: HTMLElement): HTMLElement {
+  const trigger = container.querySelector<HTMLButtonElement>("[data-sidebar-memory-menu]")!;
+  fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+  return document.querySelector<HTMLElement>('[role="menu"]')!;
+}
+
+function menuItemLabels(menu: HTMLElement): string[] {
+  return Array.from(menu.querySelectorAll('[role="menuitem"]'), (el) => el.textContent ?? "");
 }
 
 const initialSleep = useProjectStore.getState().sleepProject;
@@ -79,7 +89,7 @@ describe("SidebarMemoryNotice", () => {
     const status = container.querySelector('[role="status"]');
     expect(status?.textContent).toBe(READING);
     expect(container.querySelector('[role="alert"]')).toBeNull();
-    expect(container.querySelector("[data-sidebar-memory-action]")).toBeNull();
+    expect(container.querySelector("[data-sidebar-memory-menu]")).toBeNull();
     // Ambient chrome: no accent outside the focus ring, no status colour.
     const row = container.querySelector("[data-sidebar-memory-notice]")!;
     expect(row.outerHTML).not.toMatch(/(?<!outline-)accent-primary/);
@@ -97,13 +107,16 @@ describe("SidebarMemoryNotice", () => {
     );
     const { container } = renderRow();
 
-    const button = container.querySelector<HTMLButtonElement>("[data-sidebar-memory-action]")!;
-    expect(button.getAttribute("aria-label")).toBe("Ask agent about memory");
-    expect(button.textContent).toBe("Ask agent about memory");
-    // The action sits outside the live region so it isn't re-announced.
-    expect(container.querySelector('[role="status"]')?.contains(button)).toBe(false);
+    const trigger = container.querySelector<HTMLButtonElement>("[data-sidebar-memory-menu]")!;
+    // The menu sits outside the live region so it isn't re-announced.
+    expect(container.querySelector('[role="status"]')?.contains(trigger)).toBe(false);
 
-    fireEvent.click(button);
+    const menu = openMenu(container);
+    expect(menuItemLabels(menu)).toEqual(["Ask agent about memory"]);
+    const item = menu.querySelector<HTMLElement>("[data-sidebar-memory-action]")!;
+    expect(item.getAttribute("aria-label")).toBe("Ask agent about memory");
+
+    fireEvent.click(item);
     expect(onClick).toHaveBeenCalledTimes(1);
 
     act(() => useSystemMemoryNoticeStore.getState().clearNotice());
@@ -117,14 +130,33 @@ describe("SidebarMemoryNotice", () => {
         .setNotice({ reading: READING, detail: DETAIL, action: null })
     );
     const { container } = renderRow();
-    expect(container.querySelector("[data-sidebar-memory-sleep]")).toBeNull();
+    expect(container.querySelector("[data-sidebar-memory-menu]")).toBeNull();
 
     act(() => seedIdleProjects(["a"]));
-    const button = container.querySelector<HTMLButtonElement>("[data-sidebar-memory-sleep]")!;
-    expect(button.getAttribute("aria-label")).toBe("Sleep idle projects");
-    expect(container.querySelector('[role="status"]')?.contains(button)).toBe(false);
+    const trigger = container.querySelector<HTMLButtonElement>("[data-sidebar-memory-menu]")!;
+    expect(container.querySelector('[role="status"]')?.contains(trigger)).toBe(false);
     const row = container.querySelector("[data-sidebar-memory-notice]")!;
     expect(row.outerHTML).not.toMatch(/(?<!outline-)accent-primary/);
+    expect(menuItemLabels(openMenu(container))).toEqual(["Sleep idle projects"]);
+  });
+
+  it("collapses both actions into one button so the reading keeps the row", () => {
+    act(() => {
+      seedIdleProjects(["a"]);
+      useSystemMemoryNoticeStore.getState().setNotice({
+        reading: READING,
+        detail: DETAIL,
+        action: { label: "Ask agent about memory", onClick: vi.fn() },
+      });
+    });
+    const { container } = renderRow();
+
+    const row = container.querySelector("[data-sidebar-memory-notice]")!;
+    expect(row.querySelectorAll("button")).toHaveLength(1);
+    expect(menuItemLabels(openMenu(container))).toEqual([
+      "Ask agent about memory",
+      "Sleep idle projects",
+    ]);
   });
 
   it("names every project in the confirmation, and sleeps them on confirm", async () => {
@@ -147,8 +179,9 @@ describe("SidebarMemoryNotice", () => {
     vi.spyOn(terminalClient, "getAll").mockResolvedValue([]);
     const { container } = renderRow();
 
+    const sleepItem = openMenu(container).querySelector("[data-sidebar-memory-sleep]")!;
     await act(async () => {
-      fireEvent.click(container.querySelector("[data-sidebar-memory-sleep]")!);
+      fireEvent.click(sleepItem);
     });
     const dialog = document.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain("Sleep 2 idle projects?");
@@ -184,12 +217,41 @@ describe("SidebarMemoryNotice", () => {
     vi.spyOn(terminalClient, "getAll").mockResolvedValue([]);
     const { container } = renderRow();
 
+    const sleepItem = openMenu(container).querySelector("[data-sidebar-memory-sleep]")!;
     await act(async () => {
-      fireEvent.click(container.querySelector("[data-sidebar-memory-sleep]")!);
+      fireEvent.click(sleepItem);
     });
     const dialog = document.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain("Sleep 'Project a'?");
     expect(dialog.textContent).toContain("Its terminals will be stopped");
     expect(dialog.textContent).not.toContain("waiting agent");
+  });
+
+  it("hands focus back to the menu button when the confirmation is cancelled", async () => {
+    act(() => {
+      seedIdleProjects(["a"]);
+      useSystemMemoryNoticeStore
+        .getState()
+        .setNotice({ reading: READING, detail: DETAIL, action: null });
+    });
+    vi.spyOn(projectPresenceClient, "getSnapshot").mockResolvedValue({
+      thisWindow: [],
+      otherWindows: [],
+    });
+    vi.spyOn(terminalClient, "getAll").mockResolvedValue([]);
+    const { container } = renderRow();
+    const trigger = container.querySelector<HTMLButtonElement>("[data-sidebar-memory-menu]")!;
+
+    const sleepItem = openMenu(container).querySelector("[data-sidebar-memory-sleep]")!;
+    await act(async () => {
+      fireEvent.click(sleepItem);
+    });
+    const cancel = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')
+    ).find((b) => b.textContent === "Cancel")!;
+    await act(async () => {
+      fireEvent.click(cancel);
+    });
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 });
