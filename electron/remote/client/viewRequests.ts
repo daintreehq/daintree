@@ -59,9 +59,13 @@ function hostName(hostId: string): string {
   return hostId;
 }
 
-/** The host as the person at this screen knows it, for the confirm dialog's "Requested by" row. */
+/**
+ * The host as the person at this screen knows it, for the confirm dialog's
+ * "Requested by" row. No token suffix: no bearer of this machine's is involved,
+ * and a slice of the host's id beside its name only repeated it.
+ */
 function describeHost(hostId: string): McpBearerIdentity {
-  return { userAgent: `Agent on host "${hostName(hostId)}"`, token4LastChars: hostId.slice(-4) };
+  return { userAgent: `Agent on host "${hostName(hostId)}"`, token4LastChars: "" };
 }
 
 async function dispatchAction(

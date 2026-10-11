@@ -95,7 +95,7 @@ describe("view reverse requests", () => {
       undefined,
       "external",
       undefined,
-      { userAgent: 'Agent on host "Studio Mac"', token4LastChars: "udio" }
+      { userAgent: 'Agent on host "Studio Mac"', token4LastChars: "" }
     );
     // No reusable approval goes back to the host.
     expect(answer).toEqual({
@@ -209,7 +209,7 @@ describe("view reverse requests", () => {
         undefined,
         "external",
         undefined,
-        { userAgent: 'Agent on host "Studio Mac"', token4LastChars: "udio" }
+        { userAgent: 'Agent on host "Studio Mac"', token4LastChars: "" }
       );
     }
   );

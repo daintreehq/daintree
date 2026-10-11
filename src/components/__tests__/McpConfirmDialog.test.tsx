@@ -609,6 +609,17 @@ describe("McpConfirmDialog", () => {
     expect(screen.getByText("…1234")).toBeTruthy();
   });
 
+  it("names a host's agent with no token suffix when it carries none", () => {
+    void enqueue({
+      actionTitle: "Get current worktree",
+      callerInfo: { token4LastChars: "", userAgent: 'Agent on host "studio-01"' },
+    });
+    render(<McpConfirmDialog />, { wrapper: TooltipProvider });
+
+    expect(screen.getByText('Agent on host "studio-01"')).toBeTruthy();
+    expect(document.body.textContent).not.toContain("…");
+  });
+
   // The client-supplied name leads and the token trails: the user agent is what
   // a human recognises, the token suffix is the corroborating detail.
   it("orders the caller's own name before the token suffix", () => {
