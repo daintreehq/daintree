@@ -601,6 +601,19 @@ describe("RemoteHostsClient", () => {
     expect(bindings.get(1)).toBe("local");
   });
 
+  it("forgetting a host puts a fresh local window in place of one with no project here to return to", async () => {
+    manager.last = { projectId: "proj-9", path: "/srv/proj-9", name: "proj-9" };
+    await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false });
+    vi.mocked(windows.lastLocalProjectId).mockReturnValue(null);
+    windows.replaceWithLocalWindow = vi.fn(async () => {});
+    await client.forget({ hostId: "studio-01" });
+    expect(windows.replaceWithLocalWindow).toHaveBeenCalledWith(1);
+    expect(windows.openLocalProject).not.toHaveBeenCalled();
+    expect(vi.mocked(windows.replaceWithLocalWindow).mock.invocationCallOrder[0]).toBeLessThan(
+      manager.disconnect.mock.invocationCallOrder[0]!
+    );
+  });
+
   it("doesn't let a local project that never finishes activating hold the host's removal", async () => {
     const slow = new RemoteHostsClient({
       registry,

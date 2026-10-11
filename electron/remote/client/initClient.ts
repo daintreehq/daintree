@@ -311,6 +311,15 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
     },
     lastLocalProjectId,
     lastProjectOnHost,
+    async replaceWithLocalWindow(windowId) {
+      const old = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
+      if (!old || old.isDestroyed() || !windowOpener) return;
+      const bounds = old.getBounds();
+      const next = await windowOpener();
+      const created = getWindowRegistry()?.getByWindowId(next)?.browserWindow;
+      if (created && !created.isDestroyed()) created.setBounds(bounds);
+      if (!old.isDestroyed()) old.close();
+    },
     offerHostProjects(windowId) {
       const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
       if (!win || win.isDestroyed()) return;

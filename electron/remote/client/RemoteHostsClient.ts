@@ -53,6 +53,12 @@ export interface WindowControl {
   /** Call `onClosed` once when the window closes. */
   watchWindow(windowId: number, onClosed: () => void): void;
   /**
+   * Put a fresh window on this machine (its project picker) where `windowId`
+   * is, and close that one: for a window whose host is going away with no
+   * project of this machine's to return to, since a view's host is fixed.
+   */
+  replaceWithLocalWindow?(windowId: number): Promise<void>;
+  /**
    * Tell a window's view, if it is up, that it has a host's project list to
    * offer ({@link RemoteHostsClient.takeProjectOffer}). A view still loading
    * asks once it can show the list.
@@ -193,14 +199,24 @@ export class RemoteHostsClient {
     await Promise.all(
       [...this.options.bindings.windowsOn(hostId)].map(async (windowId) => {
         const projectId = this.options.windows.lastLocalProjectId(windowId);
-        if (projectId === null) return;
-        const moved = this.switchWindow(
-          windowId,
-          { hostId: LOCAL_HOST_ID, newWindow: false, projectId },
-          () => this.options.bindings.get(windowId) === hostId
-        ).catch((error: unknown) => {
-          console.warn("[RemoteHosts] Couldn't bring a window back from a forgotten host:", error);
-        });
+        const moved =
+          projectId === null
+            ? // Nothing here to show: a fresh window on this machine's picker takes its place.
+              (this.options.windows.replaceWithLocalWindow?.(windowId) ?? Promise.resolve()).catch(
+                (error: unknown) => {
+                  console.warn("[RemoteHosts] Couldn't replace a forgotten host's window:", error);
+                }
+              )
+            : this.switchWindow(
+                windowId,
+                { hostId: LOCAL_HOST_ID, newWindow: false, projectId },
+                () => this.options.bindings.get(windowId) === hostId
+              ).catch((error: unknown) => {
+                console.warn(
+                  "[RemoteHosts] Couldn't bring a window back from a forgotten host:",
+                  error
+                );
+              });
         let timer: ReturnType<typeof setTimeout> | undefined;
         const waited = new Promise<void>((resolve) => {
           timer = setTimeout(resolve, waitMs);
