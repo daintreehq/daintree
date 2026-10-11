@@ -399,6 +399,33 @@ describe("opening what the target already has", () => {
   });
 });
 
+describe("opening a folder picked on the host", () => {
+  it("registers the repository there over the link and reports the opened project", async () => {
+    const r = await rig();
+    const folder = path.join(root, "open-folder-repo");
+    git(root, ["clone", "-q", URL, folder]);
+    const result = await r.service.execute(ctx, {
+      kind: "open-folder",
+      opId: opId(),
+      toHostId: STUDIO,
+      path: folder,
+    });
+    expect(result).toMatchObject({ kind: "opened", hostId: STUDIO, projectPath: folder });
+    expect(r.studio.projects.map((p) => p.path)).toEqual([folder]);
+    expect(r.local.projects).toEqual([]);
+  });
+
+  it("states the host's refusal for a folder that isn't a repository", async () => {
+    const r = await rig();
+    const plain = path.join(root, "open-folder-plain");
+    fs.mkdirSync(plain, { recursive: true });
+    await expect(
+      r.service.execute(ctx, { kind: "open-folder", opId: opId(), toHostId: STUDIO, path: plain })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(r.studio.projects).toEqual([]);
+  });
+});
+
 describe("a clone across a real reconnect", () => {
   it("follows the same operation on the host over a new link", async () => {
     const r = await rig();

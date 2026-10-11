@@ -25,6 +25,7 @@ import {
   ListDirectorySchema,
   MatchSchema,
   OpIdSchema,
+  OpenFolderSchema,
   OpenSchema,
   ProjectLinkMethod,
   PushBranchSchema,
@@ -504,6 +505,11 @@ export function attachProjectsHost(
     if (opened.canCheckOutBranch && p.branch) {
       grants.offerCheckout(opened.projectId, p.branch);
     }
+    grants.offerPlacement(opened.projectId);
+    return opened;
+  });
+  on(ProjectLinkMethod.OPEN_FOLDER, OpenFolderSchema, async ({ path: folder }) => {
+    const opened = await service.openFolder(folder);
     grants.offerPlacement(opened.projectId);
     return opened;
   });

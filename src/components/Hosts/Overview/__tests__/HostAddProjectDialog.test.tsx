@@ -220,4 +220,54 @@ describe("HostAddProjectDialog", () => {
     fireEvent.change(urlField, { target: { value: `${URL}x` } });
     expect(screen.queryByRole("alert")).toBeNull();
   });
+
+  it("opens a repository already on the host, picked there, without cloning anything", async () => {
+    const opened = {
+      kind: "opened",
+      hostId: "studio-01",
+      projectId: "host-notes",
+      projectPath: "/home/greg/notes",
+      projectName: "notes",
+      worktreePath: null,
+      canCheckOutBranch: false,
+      branchNote: null,
+      setupRecipeId: null,
+    };
+    execute.mockResolvedValue(opened);
+    pickHostPaths.mockResolvedValue(["/home/greg/notes"]);
+    const onOpened = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Open a folder on studio-01" }));
+    await waitFor(() => expect(onOpened).toHaveBeenCalledWith(opened));
+    expect(pickHostPaths).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "directory", hostId: "studio-01" })
+    );
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "open-folder",
+        toHostId: "studio-01",
+        path: "/home/greg/notes",
+      })
+    );
+  });
+
+  it("does nothing when the folder picker is dismissed, and states a folder the host refuses", async () => {
+    pickHostPaths.mockResolvedValueOnce(null);
+    const onOpened = renderDialog();
+    const open = screen.getByRole("button", { name: "Open a folder on studio-01" });
+    fireEvent.click(open);
+    await waitFor(() => expect(pickHostPaths).toHaveBeenCalledTimes(1));
+    expect(execute).not.toHaveBeenCalled();
+
+    pickHostPaths.mockResolvedValueOnce(["/home/greg/plain"]);
+    execute.mockRejectedValue(
+      new Error(
+        "[AppError|VALIDATION|That%20folder%20isn't%20a%20git%20repository's%20main%20folder.] That folder isn't a git repository's main folder."
+      )
+    );
+    fireEvent.click(open);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("studio-01 can't open this folder");
+    expect(alert.textContent).toContain("That folder isn't a git repository's main folder.");
+    expect(onOpened).not.toHaveBeenCalled();
+  });
 });

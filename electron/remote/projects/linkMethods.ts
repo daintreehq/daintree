@@ -42,6 +42,8 @@ export const ProjectLinkMethod = {
   OPERATION_STATUS: "projects.operation-status",
   OPERATION_CANCEL: "projects.operation-cancel",
   OPEN: "projects.open",
+  /** A git repository already on the host, chosen there, opened (and registered) as a project. */
+  OPEN_FOLDER: "projects.open-folder",
   CHECK_OUT: "projects.check-out",
   BUNDLE_CREATE: "projects.bundle-create",
   /** The host sends one of its bundles to the Shell, into a sink the Shell minted. */
@@ -130,6 +132,7 @@ export const OpenSchema = z.object({
   branch: branchTarget.nullable(),
   branchRemoteUrl: z.string().max(4096).nullable(),
 });
+export const OpenFolderSchema = z.object({ path: hostPath });
 export const CheckOutSchema = z.object({
   projectId,
   branch: branchTarget,

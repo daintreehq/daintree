@@ -72,6 +72,8 @@ export interface HostGateway {
   operationStatus(opId: string): Promise<OperationOutcome>;
   cancelOperation(opId: string): Promise<boolean>;
   open(payload: OpenOnHostPayload): Promise<HostProjectOpened>;
+  /** A git repository the person chose on the host, opened as a project there. */
+  openFolder(path: string): Promise<HostProjectOpened>;
   checkOut(payload: CheckOutBranchPayload): Promise<HostProjectOpened>;
   createBundle(projectId: string): Promise<{ token: string; size: number }>;
   discardBundle(token: string): Promise<void>;
@@ -133,6 +135,9 @@ export class LocalHostGateway implements HostGateway {
       import("../../services/projectAcrossHosts/service.js"),
     ]);
     return this.service.open(payload, localPlacementAuthority(peekDriveLeaseService()));
+  }
+  openFolder(folder: string) {
+    return this.service.openFolder(folder);
   }
   checkOut(payload: CheckOutBranchPayload) {
     return this.service.checkOut(payload);
@@ -300,6 +305,9 @@ export class RemoteHostGateway implements HostGateway {
   }
   open(payload: OpenOnHostPayload) {
     return this.call(ProjectLinkMethod.OPEN, payload, OpenedSchema, 0);
+  }
+  openFolder(folder: string) {
+    return this.call(ProjectLinkMethod.OPEN_FOLDER, { path: folder }, OpenedSchema, 0);
   }
   checkOut(payload: CheckOutBranchPayload) {
     return this.call(ProjectLinkMethod.CHECK_OUT, payload, OpenedSchema, 0);

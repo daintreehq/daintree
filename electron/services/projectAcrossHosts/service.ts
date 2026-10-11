@@ -868,14 +868,8 @@ export class ProjectAcrossHostsService {
    * remotes share one with the repository being opened. Where the Shell
    * found it — this host's scan or a person with the picker — doesn't matter.
    */
-  private async adoptCandidate(payload: OpenOnHostPayload): Promise<Project> {
-    if (payload.projectId) return this.requireProject(payload.projectId);
-    if (typeof payload.path !== "string" || !path.isAbsolute(payload.path)) {
-      throw invalid("path must be an absolute path");
-    }
-    const resolved = path.resolve(payload.path);
-    const known = this.deps.listProjects().find((p) => path.resolve(p.path) === resolved);
-    if (known) return known;
+  /** A folder this host may register as a project: there, and a git repository's main folder. */
+  private async requireRepositoryFolder(resolved: string): Promise<void> {
     const refuse = (detail: string): AppError =>
       new AppError({ code: "VALIDATION", message: detail, userMessage: detail });
     const stat = await fs.lstat(resolved).catch(() => null);
@@ -889,6 +883,17 @@ export class ProjectAcrossHostsService {
     if (real === null || realTop !== real) {
       throw refuse("That folder isn't a git repository's main folder.");
     }
+  }
+
+  private async adoptCandidate(payload: OpenOnHostPayload): Promise<Project> {
+    if (payload.projectId) return this.requireProject(payload.projectId);
+    if (typeof payload.path !== "string" || !path.isAbsolute(payload.path)) {
+      throw invalid("path must be an absolute path");
+    }
+    const resolved = path.resolve(payload.path);
+    const known = this.deps.listProjects().find((p) => path.resolve(p.path) === resolved);
+    if (known) return known;
+    await this.requireRepositoryFolder(resolved);
     const remoteUrls = Array.isArray(payload.remoteUrls) ? payload.remoteUrls : [];
     const check = await checkDestination(resolved, remoteUrls);
     if (check.status !== "same-repository") {
@@ -899,6 +904,33 @@ export class ProjectAcrossHostsService {
       });
     }
     return this.deps.registerProject(resolved);
+  }
+
+  /**
+   * Open a git repository already on this host as a project (Add project… →
+   * Open a folder): a project it has is opened as it is, any other main folder
+   * of a repository is registered first. Unlike {@link open}, nothing has to
+   * match: the person chose this folder on this host.
+   */
+  async openFolder(folder: string): Promise<HostProjectOpened> {
+    if (typeof folder !== "string" || !path.isAbsolute(folder)) {
+      throw invalid("path must be an absolute path");
+    }
+    const resolved = path.resolve(folder);
+    let project = this.deps.listProjects().find((p) => path.resolve(p.path) === resolved);
+    if (!project) {
+      await this.requireRepositoryFolder(resolved);
+      project = await this.deps.registerProject(resolved);
+    }
+    return {
+      projectId: project.id,
+      projectPath: project.path,
+      projectName: project.name,
+      worktreePath: null,
+      canCheckOutBranch: false,
+      branchNote: null,
+      setupRecipeId: null,
+    };
   }
 
   /**

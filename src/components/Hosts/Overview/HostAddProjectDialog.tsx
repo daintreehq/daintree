@@ -51,7 +51,8 @@ function repoName(url: string): string {
  * Add project… on one host's overview card: a repository URL, cloned by that
  * host with its own credentials into a folder it checked, registered there,
  * then opened. The same host-side clone the switch dialog runs, with no
- * project on this machine behind it.
+ * project on this machine behind it. A repository already on the host is
+ * picked there instead and opened as it is.
  */
 export function HostAddProjectDialog({
   hostId,
@@ -204,43 +205,73 @@ export function HostAddProjectDialog({
     const opId = mintOperationId();
     setRunning(opId);
     setStatus(null);
-    try {
-      const result = await window.electron.hostSwitch.execute({
+    const result = await window.electron.hostSwitch
+      .execute({
         kind: "clone-url",
         opId,
         toHostId: hostId,
         url: trimmedUrl,
         destination: check.path,
         options: { submodules, depth },
+      })
+      .catch((error: unknown) => {
+        const code = clientErrorCode(error);
+        if (code !== "CANCELLED") {
+          setFailure({
+            // A request the host turned down never started.
+            title:
+              code === "VALIDATION"
+                ? `${hostName} can't clone this`
+                : `Cloning on ${hostName} didn't finish`,
+            gitText: clientErrorText(error, "Something went wrong."),
+            fix: null,
+          });
+        }
+        return null;
       });
-      if (result.kind === "git-failed") {
-        setFailure(
-          describeCloneFailure({
-            reason: result.reason,
-            message: result.message,
-            hostName,
-            url: trimmedUrl,
-          })
-        );
-        return;
-      }
-      if (result.kind === "opened") onOpened(result);
-    } catch (error) {
-      const code = clientErrorCode(error);
-      if (code !== "CANCELLED") {
-        setFailure({
-          // A request the host turned down never started.
-          title:
-            code === "VALIDATION"
-              ? `${hostName} can't clone this`
-              : `Cloning on ${hostName} didn't finish`,
-          gitText: clientErrorText(error, "Something went wrong."),
-          fix: null,
-        });
-      }
-    } finally {
-      setRunning(null);
+    setRunning(null);
+    if (result?.kind === "git-failed") {
+      setFailure(
+        describeCloneFailure({
+          reason: result.reason,
+          message: result.message,
+          hostName,
+          url: trimmedUrl,
+        })
+      );
+      return;
     }
+    if (result?.kind === "opened") onOpened(result);
+  };
+
+  /** A repository already on the host: picked there, opened (and registered) as it is. */
+  const openFolder = async () => {
+    const picked = await pickHostPaths({
+      mode: "directory",
+      title: `Open a project folder on ${hostName}`,
+      buttonLabel: "Open",
+      hostId,
+    });
+    const folder = picked?.[0];
+    if (!folder) return;
+    setFailure(null);
+    const opId = mintOperationId();
+    setRunning(opId);
+    setStatus(null);
+    const result = await window.electron.hostSwitch
+      .execute({ kind: "open-folder", opId, toHostId: hostId, path: folder })
+      .catch((error: unknown) => {
+        if (clientErrorCode(error) !== "CANCELLED") {
+          setFailure({
+            title: `${hostName} can't open this folder`,
+            gitText: clientErrorText(error, "Something went wrong."),
+            fix: null,
+          });
+        }
+        return null;
+      });
+    setRunning(null);
+    if (result?.kind === "opened") onOpened(result);
   };
 
   const cancel = () => {
@@ -381,6 +412,18 @@ export function HostAddProjectDialog({
         <p className="text-xs text-text-secondary">
           {hostName} clones with its own git credentials; nothing from this machine is sent.
         </p>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm text-text-secondary">Already on {hostName}?</p>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => void openFolder()}
+            aria-label={`Open a folder on ${hostName}`}
+          >
+            Open a folder…
+          </Button>
+        </div>
         {failure && <GitFailureCallout failure={failure} />}
       </div>
       <AppDialog.Footer hint={hint}>

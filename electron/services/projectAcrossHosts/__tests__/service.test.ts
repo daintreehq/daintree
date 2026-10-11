@@ -268,6 +268,46 @@ describe("repository bundles", () => {
   });
 });
 
+describe("opening a folder picked on the host", () => {
+  it("registers any repository's main folder, whatever its remotes, and reopens a registered one as it is", async () => {
+    const host = createTestHost(root, "studio-of");
+    const repo = makeRepo(
+      path.join(root, "studio-of-home"),
+      "notes",
+      "git@github.com:else/where.git"
+    );
+    const opened = await host.service.openFolder(repo);
+    expect(opened).toMatchObject({
+      projectPath: repo,
+      worktreePath: null,
+      canCheckOutBranch: false,
+    });
+    expect(host.registerProject).toHaveBeenCalledWith(repo);
+    expect(host.projects.map((p) => p.path)).toEqual([repo]);
+
+    host.registerProject.mockClear();
+    const again = await host.service.openFolder(`${repo}${path.sep}`);
+    expect(again.projectId).toBe(opened.projectId);
+    expect(host.registerProject).not.toHaveBeenCalled();
+  });
+
+  it("refuses a folder that isn't a repository's main folder, registering nothing", async () => {
+    const host = createTestHost(root, "studio-og");
+    const repo = makeRepo(path.join(root, "studio-og-home"), "app", bare);
+    const subfolder = path.join(repo, "src");
+    fs.mkdirSync(subfolder);
+    const plain = path.join(root, "studio-og-home", "plain");
+    fs.mkdirSync(plain);
+    for (const folder of [subfolder, plain, path.join(root, "studio-og-missing")]) {
+      await expect(host.service.openFolder(folder)).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    await expect(host.service.openFolder("relative/app")).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    expect(host.projects).toEqual([]);
+  });
+});
+
 describe("opening a project the host already has", () => {
   it("focuses the worktree that already has the branch instead of making a suffixed one", async () => {
     const host = createTestHost(root, "studio-g");

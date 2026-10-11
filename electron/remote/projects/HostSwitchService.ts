@@ -343,6 +343,17 @@ export class HostSwitchService {
         };
         break;
       }
+      case "open-folder": {
+        const to = this.gateway(payload.toHostId);
+        if (typeof payload.path !== "string" || payload.path.length === 0) {
+          throw invalid("path must be a folder on the host");
+        }
+        run = async (track) => {
+          this.stage(track, "opening", "Opening the project");
+          return opened(to.hostId, await to.openFolder(payload.path));
+        };
+        break;
+      }
       case "clone-url": {
         const to = this.gateway(payload.toHostId);
         const url = requireCloneUrl(payload.url);

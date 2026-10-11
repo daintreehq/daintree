@@ -118,6 +118,13 @@ export type HostSwitchExecutePayload =
       destination: string;
       options: import("./projectMatch.js").HostCloneOptions;
     }
+  /** Open a git repository already on a host, picked there, as a project (Add project…). */
+  | {
+      kind: "open-folder";
+      opId: string;
+      toHostId: HostId;
+      path: string;
+    }
   /** Create the worktree asked for in the new-worktree dialog, in a project the target has. */
   | {
       kind: "create-worktree";
