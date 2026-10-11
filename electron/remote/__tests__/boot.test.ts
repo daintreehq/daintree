@@ -20,6 +20,7 @@ const m = vi.hoisted(() => {
       server.expiredListeners.add(l);
       return () => server.expiredListeners.delete(l);
     }),
+    onSessionDetached: vi.fn(() => () => undefined),
   };
 
   const openedListeners = new Set<(endpoint: unknown, handle: unknown) => void>();
@@ -181,7 +182,10 @@ const m = vi.hoisted(() => {
       noteEndpointOpened: vi.fn(),
       noteEndpointClosed: vi.fn(),
       noteViewActivated: vi.fn(),
+      noteWindowClosed: vi.fn(),
     },
+    /** What each fake window's cleanup was handed, by window id. */
+    windowCleanups: [] as Array<[number, { dispose(): void }]>,
   };
 });
 
@@ -211,7 +215,12 @@ vi.mock("../../window/portDistribution.js", () => ({
 }));
 vi.mock("../../window/serviceRefs.js", () => ({ getPtyClient: () => ({ pty: true }) }));
 vi.mock("../../window/windowRef.js", () => ({
-  getWindowRegistry: () => ({ getByWindowId: (id: number) => ({ windowId: id }) }),
+  getWindowRegistry: () => ({
+    getByWindowId: (id: number) => ({
+      windowId: id,
+      cleanup: { add: (d: { dispose(): void }) => m.windowCleanups.push([id, d]) },
+    }),
+  }),
 }));
 vi.mock("../client/initClient.js", () => ({
   initRemoteHostsClient: m.initRemoteHostsClient,
@@ -707,7 +716,10 @@ describe("startRemoteHosts", () => {
     await startRemoteHosts({ hostMode: false });
     const wc = { id: 11 };
     m.clientHooks.current.onRemoteViewActivated?.(3, wc, true);
-    expect(m.releaseWindowTerminalPort).toHaveBeenCalledWith({ windowId: 3 }, { pty: true });
+    expect(m.releaseWindowTerminalPort).toHaveBeenCalledWith(
+      expect.objectContaining({ windowId: 3 }),
+      { pty: true }
+    );
     expect(m.redeliverClientWorktreePort).not.toHaveBeenCalled();
     m.clientHooks.current.onRemoteViewActivated?.(3, wc, false);
     expect(m.redeliverClientWorktreePort).toHaveBeenCalledWith(wc);
@@ -727,13 +739,24 @@ describe("startRemoteHosts", () => {
       endpointId: "view-11",
     });
 
+    m.windowCleanups.length = 0;
     m.clientHooks.current.onRemoteViewActivated?.(3, { id: 11 }, true);
     expect(m.visibility.noteViewActivated).toHaveBeenCalledWith(3, 11);
+    m.clientHooks.current.onRemoteViewActivated?.(3, { id: 11 }, false);
+    // One close watch per window, however often it shows a host view.
+    expect(m.windowCleanups.map(([id]) => id)).toEqual([3]);
+
+    // Moving the window back to this machine reports its host view hidden.
+    m.clientHooks.current.onLocalViewActivated?.(3, { id: 20 });
+    expect(m.visibility.noteViewActivated).toHaveBeenLastCalledWith(3, 20);
 
     for (const l of m.clientClosedListeners) {
       l("studio-01", { webContentsId: 11, endpointId: "view-11" });
     }
     expect(m.visibility.noteEndpointClosed).toHaveBeenCalledWith(11, "view-11");
+
+    m.windowCleanups[0]![1].dispose();
+    expect(m.visibility.noteWindowClosed).toHaveBeenCalledWith(3);
   });
 
   it("reports no visibility for an endpoint whose view belongs to another host", async () => {

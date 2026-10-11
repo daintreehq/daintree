@@ -61,11 +61,17 @@ vi.mock("../../services/PluginService.js", async () => ({
 const scratches = vi.hoisted(
   () => new Map<string, { id: string; name: string; path: string; lastOpened: number }>()
 );
+/** The scratch last made this machine's current one. */
+const currentScratch = vi.hoisted(() => ({ id: null as string | null }));
 vi.mock("../../services/ScratchStore.js", () => ({
   scratchStore: {
     getAllScratches: () => [...scratches.values()],
     getCurrentScratch: () => null,
     getScratchById: (id: string) => scratches.get(id) ?? null,
+    setCurrentScratch: (id: string) => {
+      currentScratch.id = id;
+      return scratches.get(id)!;
+    },
   },
 }));
 
@@ -397,6 +403,8 @@ describe("switching hosts (integration harness)", () => {
         client.client.switchWindowHost(from(activeView()), { hostId: "local", newWindow: false })
       ).resolves.toEqual({ outcome: "switched", hostId: "local", projectId: scratchId });
       expect(pvmState.active).toBe(scratchId);
+      // Activated as a scratch switch would: it is this machine's current workspace again.
+      expect(currentScratch.id).toBe(scratchId);
     },
     TEST_TIMEOUT_MS
   );

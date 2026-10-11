@@ -7,7 +7,6 @@
  * and never invoke `WorktreeService` (non-git directories) or
  * `ProjectSwitchService` (which validates against `projects`).
  */
-import { randomUUID } from "crypto";
 import { dialog, type WebContentsView } from "electron";
 import fs from "fs/promises";
 import path from "path";
@@ -15,14 +14,10 @@ import { CHANNELS } from "../../channels.js";
 import { broadcastToRenderer } from "../../utils.js";
 import { defineIpcNamespace, op } from "../../define.js";
 import { SCRATCH_METHOD_CHANNELS } from "./preload.js";
+import { activateScratchInWindow } from "./activation.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
-import { distributePortsToView } from "../../../window/portDistribution.js";
-import { scheduleOpenWindowsSave } from "../../../window/openWindowsTracker.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
-import { projectStore } from "../../../services/ProjectStore.js";
 import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
-import { refreshProjectMenuState } from "../../../projectMenuState.js";
-import { notificationService } from "../../../services/NotificationService.js";
 import { addProjectByPath } from "../projectCrud/crud.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
 import { createHardenedGit } from "../../../utils/hardenedGit.js";
@@ -171,54 +166,15 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
             history.record(scratchId);
           }
 
-          // Now commit canonical pointers — scratch active, project cleared.
-          // Mutually exclusive with project: clear the project pointer so the
-          // renderer's `getCurrentProject` does not race-restore the previous project.
-          const updated = scratchStore.setCurrentScratch(scratchId);
-          projectStore.clearCurrentProject();
-
-          // Re-persist which workspace each window is showing (#11492), the
-          // same call `project:switch` makes after its own commit. Placed after
-          // the PVM swap because the manifest is built from
-          // `getActiveProjectId()` across every window — it has to read the
-          // committed state, not the switch that is still landing.
-          //
-          // Best-effort for an abrupt exit, not a guarantee: the write is
-          // trailing-debounced, so a crash inside that window still relaunches
-          // into the workspace the user had left. A graceful quit is covered
-          // regardless — `freezeAndSnapshotOpenWindows()` captures whatever the
-          // pending debounce still owed (#11958).
-          scheduleOpenWindowsSave();
-
-          // A scratch is not a project: the window's PVM now holds a scratch id
-          // with no project row, so the File-menu project gates must drop.
-          refreshProjectMenuState();
-          notificationService.refreshTitles();
-
-          // Tell the PTY host the active workspace changed. PtyClient treats the ID
-          // as an opaque string and the path as a working directory, so passing a
-          // scratch UUID + scratch dir is supported by the existing protocol.
-          const windowId = senderWindow?.id ?? deps.mainWindow?.id;
-          if (windowId !== undefined && deps.ptyClient) {
-            deps.ptyClient.onProjectSwitch(windowId, scratchId, scratch.path);
-          }
-
-          // Distribute a fresh PTY MessagePort to the active view. Without this,
-          // terminals spawned in the scratch can't reach the PTY host.
-          if (windowId !== undefined && senderWindow && deps.windowRegistry) {
-            const wctx = deps.windowRegistry.getByWindowId(senderWindow.id);
-            if (wctx) {
-              const targetWc = activeView?.webContents ?? ctx.event?.sender;
-              if (targetWc && !targetWc.isDestroyed()) {
-                distributePortsToView(senderWindow, wctx, targetWc, deps.ptyClient ?? null);
-              }
-            }
-          }
-
-          const switchId = randomUUID();
-          broadcastToRenderer(CHANNELS.SCRATCH_ON_SWITCH, { scratch: updated, switchId });
-
-          return updated;
+          // Now commit canonical pointers, the manifest, menu, PTY workspace and port.
+          return activateScratchInWindow({
+            scratch,
+            windowId: senderWindow?.id ?? deps.mainWindow?.id,
+            window: senderWindow,
+            view: activeView?.webContents ?? ctx.event?.sender,
+            windowRegistry: deps.windowRegistry,
+            ptyClient: deps.ptyClient,
+          });
         },
         { withContext: true }
       ),

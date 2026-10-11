@@ -76,6 +76,10 @@ export const memoryProjectStore = {
     harnessState.projects.set(id, { ...project, status: "active" });
     harnessState.currentProjectId = id;
   },
+  /** A scratch became current: no project is, as ProjectStore clears it. */
+  clearCurrentProject(): void {
+    harnessState.currentProjectId = null;
+  },
   getAllProjects: () => [...harnessState.projects.values()],
   getAllProjectIdentities: () =>
     [...harnessState.projects.values()].map(({ id, path, name }) => ({ id, path, name })),

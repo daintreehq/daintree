@@ -7,6 +7,7 @@ import { releaseWindowTerminalPort, setRemoteViewHooks } from "../window/portDis
 import { getPtyClient } from "../window/serviceRefs.js";
 import { resolveLiveWebContents } from "../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../window/windowRef.js";
+import { toDisposable } from "../utils/lifecycle.js";
 import { initRemoteHostsClient } from "./client/initClient.js";
 import { closeSshMasters } from "./client/sshTransport.js";
 import { installViewReverseRequests } from "./client/viewRequests.js";
@@ -88,6 +89,20 @@ function startClient(options: StartRemoteHostsOptions): void {
   // Tells each host which of its views a window is actually showing, so its
   // close and background guards protect exactly those projects.
   const visibility = new ViewVisibilityReporter();
+  const visibilityWatched = new Set<number>();
+  // A closed window's record goes with it, once per window that ever showed a host.
+  const watchWindowForVisibility = (windowId: number): void => {
+    if (visibilityWatched.has(windowId)) return;
+    const ctx = getWindowRegistry()?.getByWindowId(windowId);
+    if (!ctx) return;
+    visibilityWatched.add(windowId);
+    ctx.cleanup.add(
+      toDisposable(() => {
+        visibilityWatched.delete(windowId);
+        visibility.noteWindowClosed(windowId);
+      })
+    );
+  };
 
   // Everything a remote view needs beyond the host list, installed the first
   // time a host is actually used so a user who never adds one runs none of it.
@@ -166,7 +181,11 @@ function startClient(options: StartRemoteHostsOptions): void {
       if (ctx) releaseWindowTerminalPort(ctx, getPtyClient());
       if (!isNew) redeliverClientWorktreePort(wc);
       visibility.noteViewActivated(windowId, wc.id);
+      watchWindowForVisibility(windowId);
     },
+    // The host hears its view went to the background, or it keeps counting
+    // that project as on screen and refuses to close or background it.
+    onLocalViewActivated: (windowId, wc) => visibility.noteViewActivated(windowId, wc.id),
   });
   hostForView = client.hostForView;
   teardowns.push(() => client.dispose());

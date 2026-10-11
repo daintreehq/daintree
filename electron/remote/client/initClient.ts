@@ -29,6 +29,7 @@ import {
 import { getWindowRegistry } from "../../window/windowRef.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { completeLocalProjectActivation } from "../../window/localProjectActivation.js";
+import { activateScratchInWindow } from "../../ipc/handlers/scratch/activation.js";
 import {
   getPtyClient,
   getWorkspaceClientRef,
@@ -159,6 +160,8 @@ export interface RemoteHostsClientHooks {
   onFirstUse?: () => void;
   /** A window now shows a remote project view: newly created, or a cached one reactivated. */
   onRemoteViewActivated?: (windowId: number, webContents: WebContents, isNew: boolean) => void;
+  /** A window this client moved back to a workspace on this machine now shows its view. */
+  onLocalViewActivated?: (windowId: number, webContents: WebContents) => void;
 }
 
 /**
@@ -273,8 +276,18 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         const from = pvm.getActiveProjectId();
         const { view, isNew } = await pvm.switchTo(workspace.id, workspace.path);
         recordWindowSwitch(windowId, from, workspace.id);
-        const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
-        if (project && win && !win.isDestroyed()) {
+        const registry = getWindowRegistry();
+        const win = registry?.getByWindowId(windowId)?.browserWindow;
+        if (scratch && win && !win.isDestroyed()) {
+          activateScratchInWindow({
+            scratch,
+            windowId,
+            window: win,
+            view: view.webContents,
+            windowRegistry: registry,
+            ptyClient: getPtyClient(),
+          });
+        } else if (project && win && !win.isDestroyed()) {
           await completeLocalProjectActivation({
             targetWindow: win,
             project,
@@ -291,6 +304,8 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
           });
         }
         refreshWindowTitles();
+        const wc = view.webContents;
+        if (wc && !wc.isDestroyed()) hooks.onLocalViewActivated?.(windowId, wc);
       });
     },
     lastLocalProjectId,

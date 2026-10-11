@@ -177,4 +177,28 @@ describe("ViewVisibilityReporter", () => {
     reporter.noteViewActivated(1, 10);
     expect(next.call).not.toHaveBeenCalled();
   });
+
+  it("reports a window's host view hidden once it shows a view on this machine, and forgets closed windows", () => {
+    const reporter = new ViewVisibilityReporter();
+    const s = session();
+    reporter.noteEndpointOpened({ session: s as never, webContentsId: 10, endpointId: "view-10" });
+    reporter.noteViewActivated(1, 10);
+    s.call.mockClear();
+
+    // View 20 is local: it has no endpoint, so only the host view's report goes out.
+    reporter.noteViewActivated(1, 20);
+    expect(s.call.mock.calls).toEqual([
+      [ENDPOINT_VISIBILITY_METHOD, { endpointId: "view-10", visible: false }],
+    ]);
+
+    reporter.noteViewActivated(1, 10);
+    reporter.noteWindowClosed(1);
+    s.call.mockClear();
+    // A later re-report (a resumed session) no longer counts the closed window's view as shown.
+    reporter.noteEndpointOpened({ session: s as never, webContentsId: 10, endpointId: "view-10" });
+    expect(s.call).toHaveBeenCalledWith(ENDPOINT_VISIBILITY_METHOD, {
+      endpointId: "view-10",
+      visible: false,
+    });
+  });
 });
