@@ -34,7 +34,10 @@ export function ProjectMatchChooser({
   selected,
   onSelect,
   disabled,
+  hostName,
 }: {
+  /** The host the copies are on, as the dialog names it. */
+  hostName: string;
   candidates: ProjectMatchCandidate[];
   sourceRemotes: Array<{ name: string; url: string }>;
   selected: number;
@@ -47,8 +50,8 @@ export function ProjectMatchChooser({
       <div className="space-y-1">
         <p className="text-sm text-text-primary">
           {only.source === "on-disk"
-            ? `A clone of this repository is on the host, not yet added as a project.`
-            : `The host already has ${only.name}.`}
+            ? `${hostName} has a clone of this repository that isn't added as a project yet.`
+            : `${hostName} already has this project.`}
         </p>
         <p className="text-xs text-text-secondary break-all">
           {describeCandidate(only, sourceRemotes)}

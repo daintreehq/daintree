@@ -126,8 +126,13 @@ export class LocalHostGateway implements HostGateway {
   async cancelOperation(opId: string) {
     return this.service.cancelOperation(opId);
   }
-  open(payload: OpenOnHostPayload) {
-    return this.service.open(payload);
+  /** Held to the project's lease like a placement: a project a remote Shell drives gets the checkout offered. */
+  async open(payload: OpenOnHostPayload) {
+    const [{ peekDriveLeaseService }, { localPlacementAuthority }] = await Promise.all([
+      import("../../services/DriveLeaseService.js"),
+      import("../../services/projectAcrossHosts/service.js"),
+    ]);
+    return this.service.open(payload, localPlacementAuthority(peekDriveLeaseService()));
   }
   checkOut(payload: CheckOutBranchPayload) {
     return this.service.checkOut(payload);

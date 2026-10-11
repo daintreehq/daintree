@@ -61,7 +61,7 @@ export function describeBranchHandoff(
     case "same-tip":
       return {
         summary: `On ${check.remote} at the same commit`,
-        detail: `A worktree for ${branch} is created after cloning.`,
+        detail: `It opens in a worktree for ${branch}.`,
         tone: "ok",
         choices: [],
         defaultPlan: "worktree",
@@ -69,7 +69,7 @@ export function describeBranchHandoff(
     case "behind":
       return {
         summary: `On ${check.remote}, which has ${pluralize(check.behind, "newer commit")}`,
-        detail: `A worktree for ${branch} is created from ${check.remote}'s version.`,
+        detail: `It opens in a worktree for ${branch}, from ${check.remote}'s version.`,
         tone: "ok",
         choices: [],
         defaultPlan: "worktree",
@@ -188,9 +188,35 @@ export function candidateRelation(
   if (!primaryUrl) return null;
   const match = sourceRemotes.find((r) => normalizeGitRemoteUrl(r.url) === primaryUrl);
   if (!match) return null;
-  if (match.name === "origin") return "Clone of your fork";
-  if (match.name === "upstream") return "Clone of upstream";
-  return `Clone of ${match.name}`;
+  // Named for the remote it matched; whether that is a fork is not ours to guess.
+  return `Same repository as your ${match.name}`;
+}
+
+/**
+ * Nothing to decide: the host has exactly one copy that is already a project,
+ * the branch is on the remote as it is here, and nothing would stay behind.
+ * The dialog then opens it straight away instead of asking.
+ */
+export function opensWithoutQuestion(
+  prep: Pick<
+    HostSwitchPreparation,
+    | "candidates"
+    | "branch"
+    | "branchCheck"
+    | "hasUncommittedChanges"
+    | "usesLfs"
+    | "targetGitLfsAvailable"
+  >,
+  placedWorktree: boolean
+): boolean {
+  if (placedWorktree) return false;
+  const only = prep.candidates.length === 1 ? prep.candidates[0]! : null;
+  // Matched by remote, never by a committed id alone: a fork inherits that id.
+  if (!only || only.source !== "registered" || only.matchedBy !== "remote-url") return false;
+  if (prep.hasUncommittedChanges) return false;
+  if (prep.usesLfs && !prep.targetGitLfsAvailable) return false;
+  const handoff = describeBranchHandoff(prep, "");
+  return handoff.tone === "ok" && handoff.choices.length === 0;
 }
 
 /** The dialog's opening view, from what the target already has and the source's remotes. */

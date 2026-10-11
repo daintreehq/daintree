@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BranchCheck } from "@shared/types/ipc/hostSwitch";
 import {
+  opensWithoutQuestion,
   candidateRelation,
   describeBranchHandoff,
   describeCloneFailure,
@@ -96,19 +97,19 @@ describe("candidateRelation", () => {
     { name: "upstream", url: "https://github.com/daintreehq/daintree" },
   ];
 
-  it("marks a clone of the fork and a clone of the upstream", () => {
+  it("names the remote a clone matches, without guessing which is a fork", () => {
     expect(
       candidateRelation(
         { remotes: [{ name: "origin", url: "https://github.com/greg/daintree" }] },
         source
       )
-    ).toBe("Clone of your fork");
+    ).toBe("Same repository as your origin");
     expect(
       candidateRelation(
         { remotes: [{ name: "origin", url: "git@github.com:daintreehq/daintree.git" }] },
         source
       )
-    ).toBe("Clone of upstream");
+    ).toBe("Same repository as your upstream");
   });
 
   it("says nothing when the source tracks one repository", () => {
@@ -172,5 +173,55 @@ describe("describePlacedWorktree", () => {
     expect(
       describePlacedWorktree({ ...base, useExistingBranch: true, relativePath: null }, "studio-01")
     ).toBe("Checks out the existing branch on studio-01, where studio-01 puts new worktrees.");
+  });
+});
+
+describe("opensWithoutQuestion", () => {
+  const candidate = (overrides: Record<string, unknown> = {}) => ({
+    projectId: "host-p1",
+    path: "/home/greg/code/daintree",
+    name: "daintree",
+    remotes: [{ name: "origin", url: "https://github.com/daintreehq/daintree" }],
+    source: "registered" as const,
+    matchedBy: "remote-url" as const,
+    lastOpenedAt: null,
+    ...overrides,
+  });
+  const prep = (overrides: Record<string, unknown> = {}) =>
+    ({
+      candidates: [candidate()],
+      branch: "feature/x",
+      branchCheck: { kind: "same-tip", remote: "origin", sha: "abc" },
+      hasUncommittedChanges: false,
+      usesLfs: false,
+      targetGitLfsAvailable: true,
+      ...overrides,
+    }) as Parameters<typeof opensWithoutQuestion>[0];
+
+  it("opens without asking only when there is exactly nothing to decide", () => {
+    expect(opensWithoutQuestion(prep(), false)).toBe(true);
+    expect(opensWithoutQuestion(prep(), true)).toBe(false);
+    expect(opensWithoutQuestion(prep({ hasUncommittedChanges: true }), false)).toBe(false);
+    expect(opensWithoutQuestion(prep({ candidates: [candidate(), candidate()] }), false)).toBe(
+      false
+    );
+    expect(
+      opensWithoutQuestion(prep({ candidates: [candidate({ source: "on-disk" })] }), false)
+    ).toBe(false);
+    expect(
+      opensWithoutQuestion(
+        prep({ branchCheck: { kind: "ahead", remote: "origin", ahead: 1 } }),
+        false
+      )
+    ).toBe(false);
+    expect(opensWithoutQuestion(prep({ usesLfs: true, targetGitLfsAvailable: false }), false)).toBe(
+      false
+    );
+  });
+
+  it("never opens a copy matched only by its committed project id: a fork inherits it", () => {
+    expect(
+      opensWithoutQuestion(prep({ candidates: [candidate({ matchedBy: "committed-id" })] }), false)
+    ).toBe(false);
   });
 });

@@ -542,7 +542,7 @@ describe("what the host checks for itself", () => {
     expect(r.studio.clone).toHaveBeenCalledTimes(1);
   });
 
-  it("checks out a branch it offered when it opened the project, unless someone else drives it", async () => {
+  it("opens the branch's worktree as part of opening, and refuses a checkout it never offered", async () => {
     const r = await rig();
     const existing = path.join(root, "authz-checkout");
     git(root, ["clone", "-q", URL, existing]);
@@ -565,29 +565,42 @@ describe("what the host checks for itself", () => {
       branch,
       branchRemoteUrl: URL,
     });
-    expect(opened).toMatchObject({ kind: "opened", canCheckOutBranch: true });
-    // Only the exact branch target it offered.
-    await expect(
-      r.client.call(ProjectLinkMethod.CHECK_OUT, {
-        ...checkout,
-        branch: { name: branch.name, remoteBranch: "main" },
-      })
-    ).rejects.toMatchObject({ code: "PERMISSION" });
-    r.views.holder = "remote:another-session:view-1";
-    await expect(r.client.call(ProjectLinkMethod.CHECK_OUT, checkout)).rejects.toMatchObject({
-      code: "DRIVEN_ELSEWHERE",
+    expect(opened).toMatchObject({
+      kind: "opened",
+      worktreePath: expect.any(String),
+      canCheckOutBranch: false,
     });
-    // A view of this same session holding it is no one else.
-    r.views.holder = `remote:${SESSION}:another-view`;
-    const result = await r.service.execute(ctx, {
-      kind: "checkout",
+    // Nothing was offered, so a checkout call stays refused.
+    await expect(r.client.call(ProjectLinkMethod.CHECK_OUT, checkout)).rejects.toMatchObject({
+      code: "PERMISSION",
+    });
+  });
+
+  it("makes no worktree for a project another session drives, and offers the checkout instead", async () => {
+    const r = await rig();
+    const existing = path.join(root, "authz-driven");
+    git(root, ["clone", "-q", URL, existing]);
+    const project = r.studio.addProject(existing);
+    r.views.holder = "remote:another-session:view-1";
+
+    const opened = await r.service.execute(ctx, {
+      kind: "open",
       opId: opId(),
       toHostId: STUDIO,
-      projectId: project.id,
+      candidate: { projectId: project.id, path: existing },
+      remoteUrls: [URL],
       branch,
       branchRemoteUrl: URL,
     });
-    expect(result).toMatchObject({ kind: "opened", worktreePath: expect.any(String) });
+    expect(opened).toMatchObject({ kind: "opened", worktreePath: null, canCheckOutBranch: true });
+    // Taking the offer is held to the lease: the other session still drives.
+    await expect(
+      r.client.call(ProjectLinkMethod.CHECK_OUT, {
+        projectId: project.id,
+        branch,
+        branchRemoteUrl: URL,
+      })
+    ).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
   });
 
   /**

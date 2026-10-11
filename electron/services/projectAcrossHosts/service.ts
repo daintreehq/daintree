@@ -877,7 +877,15 @@ export class ProjectAcrossHostsService {
    * background, and find the branch's working tree or say whether the branch
    * can be checked out here.
    */
-  async open(payload: OpenOnHostPayload): Promise<HostProjectOpened> {
+  /**
+   * `authority` decides whether opening may also make the branch's worktree:
+   * a project another screen drives gets the checkout offered instead, which
+   * goes through that check itself when taken.
+   */
+  async open(
+    payload: OpenOnHostPayload,
+    authority?: PlacementAuthority
+  ): Promise<HostProjectOpened> {
     const project = await this.adoptCandidate(payload);
     const remoteName = await this.matchingRemote(project.path, payload.branchRemoteUrl ?? null);
     const base = {
@@ -931,14 +939,23 @@ export class ProjectAcrossHostsService {
     const git = await this.deps.git.local(project.path);
     const onRemote =
       fetched && (await refExists(git, `refs/remotes/${remoteName}/${target.remoteBranch}`));
-    return {
-      ...base,
-      worktreePath: null,
-      canCheckOutBranch: onRemote,
-      branchNote: onRemote
-        ? null
-        : (branchNote ?? `${target.remoteBranch} isn't on ${remoteName}.`),
-    };
+    if (!onRemote) {
+      return {
+        ...base,
+        worktreePath: null,
+        canCheckOutBranch: false,
+        branchNote: branchNote ?? `${target.remoteBranch} isn't on ${remoteName}.`,
+      };
+    }
+    // Opening the project for this branch was the request: its worktree is made
+    // here, not offered as a second question, unless another screen drives the
+    // project, when it stays an offer the lease-checked checkout answers.
+    try {
+      authority?.assertMayPlace(project.id);
+    } catch {
+      return { ...base, worktreePath: null, canCheckOutBranch: true, branchNote: null };
+    }
+    return { ...base, ...(await this.ensureBranchWorktree(project, target, remoteName)) };
   }
 
   /** "Check out <branch> here": the exact branch, from this host's copy of the remote. */

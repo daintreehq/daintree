@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
+import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { remoteHostsClient } from "@/clients/remoteHostsClient";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useRemoteHosts } from "@/hooks/useRemoteHosts";
 import { formatHostConnection, type HostId } from "@shared/types/remoteHosts";
 import HostModeGroup from "../HostModeGroup";
@@ -19,6 +24,26 @@ export default function HostsSettingsTab() {
   const { hosts, loaded, loadError, refresh } = useRemoteHosts();
   const [addOpen, setAddOpen] = useState(false);
   const [detailHostId, setDetailHostId] = useState<HostId | null>(null);
+  const [forgetTarget, setForgetTarget] = useState<{ id: HostId; name: string } | null>(null);
+  const [forgetError, setForgetError] = useState<string | null>(null);
+  const [forgetting, setForgetting] = useState(false);
+  const confirmForget = () => {
+    const target = forgetTarget;
+    if (!target || forgetting) return;
+    setForgetting(true);
+    setForgetError(null);
+    remoteHostsClient.forget(target.id).then(
+      () => {
+        setForgetting(false);
+        // Only the dialog this answer belongs to closes.
+        setForgetTarget((current) => (current?.id === target.id ? null : current));
+      },
+      (err: unknown) => {
+        setForgetting(false);
+        setForgetError(formatErrorMessage(err, "Couldn't forget the host"));
+      }
+    );
+  };
   // Each "Update …" request remounts the detail so its update flow opens again.
   const [updateRequest, setUpdateRequest] = useState<{ hostId: HostId; seq: number } | null>(null);
   const [pluginsRequest, setPluginsRequest] = useState<{ hostId: HostId; seq: number } | null>(
@@ -117,14 +142,32 @@ export default function HostsSettingsTab() {
                   </>
                 }
                 control={
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    aria-label={`Open ${descriptor.name}`}
-                    onClick={() => setDetailHostId(descriptor.id)}
-                  >
-                    Details
-                  </Button>
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Open ${descriptor.name}`}
+                      onClick={() => setDetailHostId(descriptor.id)}
+                    >
+                      Details
+                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost-danger"
+                          size="icon-sm"
+                          aria-label={`Forget ${descriptor.name}`}
+                          onClick={() => {
+                            setForgetError(null);
+                            setForgetTarget({ id: descriptor.id, name: descriptor.name });
+                          }}
+                        >
+                          <Trash2 aria-hidden="true" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Forget host</TooltipContent>
+                    </Tooltip>
+                  </div>
                 }
               />
             ))
@@ -135,6 +178,22 @@ export default function HostsSettingsTab() {
       <HostModeGroup />
 
       {addOpen && <AddHostDialog isOpen onClose={() => setAddOpen(false)} />}
+      <ConfirmDialog
+        isOpen={forgetTarget !== null}
+        onClose={() => setForgetTarget(null)}
+        variant="destructive"
+        title={`Forget '${forgetTarget?.name ?? "host"}'?`}
+        description="It leaves your host list, its connection closes, and windows attached to it return to this machine. Daintree on the host keeps running."
+        confirmLabel="Forget host"
+        onConfirm={confirmForget}
+        isConfirmLoading={forgetting}
+      >
+        {forgetError && (
+          <p role="alert" className="text-xs text-status-error select-text">
+            {forgetError}
+          </p>
+        )}
+      </ConfirmDialog>
     </div>
   );
 }

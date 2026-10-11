@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { HostListEntry } from "@shared/types/remoteHosts";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import { useRemoteHostsStore } from "@/store/remoteHostsStore";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import HostsSettingsTab from "../Hosts/HostsSettingsTab";
 import { requestHostUpdate, takePendingHostUpdate } from "../Hosts/hostUpdateRequests";
 
@@ -79,7 +80,11 @@ afterEach(() => {
 
 describe("HostsSettingsTab", () => {
   it("offers to add a host when there are none", async () => {
-    render(<HostsSettingsTab />);
+    render(
+      <TooltipProvider>
+        <HostsSettingsTab />
+      </TooltipProvider>
+    );
     expect(
       await screen.findByText(
         "Add a Mac or Linux machine to run projects and agents on it from here"
@@ -89,7 +94,11 @@ describe("HostsSettingsTab", () => {
   });
 
   it("gives the hosts list and this machine's Host mode their own sections", async () => {
-    const { container } = render(<HostsSettingsTab />);
+    const { container } = render(
+      <TooltipProvider>
+        <HostsSettingsTab />
+      </TooltipProvider>
+    );
     expect(await screen.findByText("Allow this machine to be a host")).toBeTruthy();
     const headings = [...container.querySelectorAll("[data-settings-section-title]")].map(
       (heading) => heading.textContent
@@ -102,7 +111,11 @@ describe("HostsSettingsTab", () => {
 
   it("lists hosts with what was observed, and follows host list events", async () => {
     remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
-    render(<HostsSettingsTab />);
+    render(
+      <TooltipProvider>
+        <HostsSettingsTab />
+      </TooltipProvider>
+    );
     expect(await screen.findByText("studio-03")).toBeTruthy();
     expect(
       screen.getByText(/greg@studio-03 · Linux · x64 · Daintree 1.4.0 \(abcdef0\)/)
@@ -120,7 +133,11 @@ describe("HostsSettingsTab", () => {
 
   it("opens a host's detail and forgets it only after confirming", async () => {
     remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
-    render(<HostsSettingsTab />);
+    render(
+      <TooltipProvider>
+        <HostsSettingsTab />
+      </TooltipProvider>
+    );
     fireEvent.click(await screen.findByRole("button", { name: "Open studio-03" }));
     expect(screen.getByText("Agent CLIs")).toBeTruthy();
     expect(screen.getByText("Connect to this host to see the agent CLIs it reports")).toBeTruthy();
@@ -132,10 +149,49 @@ describe("HostsSettingsTab", () => {
     await waitFor(() => expect(remoteHosts.forget).toHaveBeenCalledWith({ hostId: "studio-03" }));
   });
 
+  it("forgets a host from its row, only after confirming", async () => {
+    remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
+    render(
+      <TooltipProvider>
+        <HostsSettingsTab />
+      </TooltipProvider>
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Forget studio-03" }));
+    expect(remoteHosts.forget).not.toHaveBeenCalled();
+    expect(await screen.findByText("Forget 'studio-03'?")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Forget host" }));
+    await waitFor(() => expect(remoteHosts.forget).toHaveBeenCalledWith({ hostId: "studio-03" }));
+  });
+
+  it("sends one forget at a time, and keeps what forgetting does in view beside a failure", async () => {
+    remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
+    let refuse: (error: Error) => void = () => {};
+    remoteHosts.forget!.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (refuse = reject))
+    );
+    render(
+      <TooltipProvider>
+        <HostsSettingsTab />
+      </TooltipProvider>
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Forget studio-03" }));
+    const confirm = await screen.findByRole("button", { name: "Forget host" });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect(remoteHosts.forget).toHaveBeenCalledTimes(1);
+    await act(async () => refuse(new Error("link down")));
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByText(/windows attached to it return to this machine/)).toBeTruthy();
+  });
+
   it("shows a failed Connect inline and retries it", async () => {
     remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
     remoteHosts.connect!.mockRejectedValueOnce(new Error("Permission denied (publickey)"));
-    render(<HostsSettingsTab />);
+    render(
+      <TooltipProvider>
+        <HostsSettingsTab />
+      </TooltipProvider>
+    );
     fireEvent.click(await screen.findByRole("button", { name: "Open studio-03" }));
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     expect((await screen.findByRole("alert")).textContent).toContain(
@@ -151,14 +207,22 @@ describe("HostsSettingsTab", () => {
   it("opens a host's update flow when asked before the tab was showing", async () => {
     remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
     requestHostUpdate("studio-03");
-    render(<HostsSettingsTab />);
+    render(
+      <TooltipProvider>
+        <HostsSettingsTab />
+      </TooltipProvider>
+    );
     expect(await screen.findByText("Update studio-03")).toBeTruthy();
     expect(takePendingHostUpdate()).toBeNull();
   });
 
   it("opens a host's update flow when asked while the tab is showing", async () => {
     remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
-    render(<HostsSettingsTab />);
+    render(
+      <TooltipProvider>
+        <HostsSettingsTab />
+      </TooltipProvider>
+    );
     await screen.findByRole("button", { name: "Open studio-03" });
     act(() => requestHostUpdate("studio-03"));
     expect(await screen.findByText("Update studio-03")).toBeTruthy();

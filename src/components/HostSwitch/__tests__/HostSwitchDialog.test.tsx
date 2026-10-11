@@ -270,10 +270,51 @@ describe("HostSwitchDialog", () => {
     });
   });
 
+  it("opens straight away, without a question, when there is nothing to decide", async () => {
+    prepare.mockResolvedValue(
+      preparation({
+        hasUncommittedChanges: false,
+        candidates: [
+          {
+            projectId: "host-p1",
+            path: "/home/greg/code/daintree",
+            name: "daintree",
+            remotes: [{ name: "origin", url: "https://github.com/daintreehq/daintree" }],
+            source: "registered",
+            matchedBy: "remote-url",
+            lastOpenedAt: null,
+          },
+        ],
+      })
+    );
+    execute.mockResolvedValue({
+      kind: "opened",
+      hostId: "studio-01",
+      projectId: "host-p1",
+      projectPath: "/home/greg/code/daintree",
+      projectName: "daintree",
+      worktreePath: "/home/greg/code/daintree-worktrees/feature-host-chip",
+      canCheckOutBranch: false,
+      branchNote: null,
+      setupRecipeId: null,
+    });
+    const onClose = vi.fn();
+    render(<HostSwitchDialog request={request} onClose={onClose} />);
+    // Nothing is clicked: the open runs and the dialog closes by itself.
+    await waitFor(() => expect(switchToHost).toHaveBeenCalledWith("studio-01", false, "host-p1"));
+    expect(onClose).toHaveBeenCalled();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]![0]).toMatchObject({
+      kind: "open",
+      candidate: { projectId: "host-p1" },
+      branch: { name: "feature/host-chip" },
+    });
+  });
+
   it("just switches host without touching the project", async () => {
     prepare.mockResolvedValue(preparation());
     render(<HostSwitchDialog request={request} onClose={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Just switch host" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Switch host only" }));
     expect(switchToHost).toHaveBeenCalledWith("studio-01", false);
     expect(execute).not.toHaveBeenCalled();
   });

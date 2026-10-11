@@ -15,7 +15,12 @@ import { hostModeClient } from "@/clients/hostModeClient";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { actionService } from "@/services/ActionService";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import type { AttachedClientInfo } from "@shared/types/ipc/hostMode";
+import type { AttachedClientInfo, HostModeStatus } from "@shared/types/ipc/hostMode";
+
+/** Who is attached, from a status that may be missing (no Host mode answer yet). */
+function attachedOf(status: HostModeStatus | null | undefined): AttachedClientInfo[] {
+  return status?.listening ? (status.attachedClients ?? []) : [];
+}
 
 /** The machines attached to this one now, kept current by Host mode's pushes. */
 function useAttachedMachines(enabled: boolean): AttachedClientInfo[] {
@@ -28,12 +33,12 @@ function useAttachedMachines(enabled: boolean): AttachedClientInfo[] {
     const off = hostModeClient.onEvent((event) => {
       if (active && event.type === "status-changed") {
         pushed = true;
-        setClients(event.status.listening ? event.status.attachedClients : []);
+        setClients(attachedOf(event.status));
       }
     });
     hostModeClient.getStatus().then(
       (status) => {
-        if (active && !pushed) setClients(status.listening ? status.attachedClients : []);
+        if (active && !pushed) setClients(attachedOf(status));
       },
       () => {}
     );

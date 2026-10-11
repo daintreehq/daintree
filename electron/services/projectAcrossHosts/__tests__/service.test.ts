@@ -260,7 +260,7 @@ describe("opening a project the host already has", () => {
     expect(host.focusWorktree).toHaveBeenCalledWith(project.id, existing);
   });
 
-  it("offers the branch for checkout when it is on the remote, then checks out that exact name", async () => {
+  it("opens the branch in its own worktree when it is on the remote, with no second question", async () => {
     const host = createTestHost(root, "studio-h");
     const clone = path.join(root, "studio-h-clone");
     git(root, ["clone", "-q", "--single-branch", "-b", "main", URL, clone]);
@@ -273,17 +273,18 @@ describe("opening a project the host already has", () => {
       branch,
       branchRemoteUrl: URL,
     });
-    expect(opened).toMatchObject({ worktreePath: null, canCheckOutBranch: true });
-
-    const checkedOut = await host.service.checkOut({
-      projectId: project.id,
-      branch,
-      branchRemoteUrl: URL,
+    expect(opened).toMatchObject({
+      worktreePath: path.join(`${clone}-worktrees`, "feature-host-chip"),
+      canCheckOutBranch: false,
+      branchNote: null,
     });
-    expect(checkedOut.worktreePath).toBe(path.join(`${clone}-worktrees`, "feature-host-chip"));
     expect(host.createWorktree).toHaveBeenCalledWith(
       clone,
       expect.objectContaining({ collisionPolicy: "error", newBranch: "feature/host-chip" })
+    );
+    expect(host.focusWorktree).toHaveBeenCalledWith(
+      project.id,
+      path.join(`${clone}-worktrees`, "feature-host-chip")
     );
   });
 

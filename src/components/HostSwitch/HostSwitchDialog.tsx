@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useEffectEvent, useId, useMemo, useState } from "react";
 import { FolderGit2, GitBranch, Server } from "lucide-react";
 import type {
   HostSwitchExecutePayload,
@@ -44,6 +44,7 @@ import {
   destinationInFolder,
   hostDisplayName,
   initialView,
+  opensWithoutQuestion,
   type BranchPlan,
 } from "./hostSwitchModel";
 import { GitFailureCallout, type HostGitFailure } from "./GitFailureCallout";
@@ -165,6 +166,10 @@ export function HostSwitchDialog({
   const [status, setStatus] = useState<HostSwitchStatus | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [checkoutOffer, setCheckoutOffer] = useState<CheckoutOffer | null>(null);
+  /** Opening without a question was started once; a failure then shows the full dialog. */
+  const [autoOpenStarted, setAutoOpenStarted] = useState(false);
+  /** That opening is still out; once it settles without closing the dialog, the dialog shows. */
+  const [autoOpening, setAutoOpening] = useState(false);
   const submodulesId = useId();
   const showLoading = useDeferredLoading(prep === null && loadError === null, UI_DOHERTY_THRESHOLD);
 
@@ -474,6 +479,18 @@ export function HostSwitchDialog({
       ? `Open ${projectName} on ${targetName}`
       : `${projectName} isn't on ${targetName} yet`;
   const busy = running !== null;
+  const autoOpen = prep !== null && !autoOpenStarted && opensWithoutQuestion(prep, placed !== null);
+
+  // Nothing to decide: open it there instead of asking.
+  const openWithoutAsking = useEffectEvent(() => {
+    setAutoOpenStarted(true);
+    setAutoOpening(true);
+    void openExisting().finally(() => setAutoOpening(false));
+  });
+  useEffect(() => {
+    if (autoOpen) openWithoutAsking();
+  }, [autoOpen]);
+  const quietlyOpening = autoOpening && failure === null && checkoutOffer === null;
   const lfsWarning =
     prep?.usesLfs && !prep.targetGitLfsAvailable
       ? `This repository uses Git LFS, and git lfs isn't installed on ${targetName}. Files kept in LFS would arrive as pointer files; install it there first.`
@@ -727,6 +744,12 @@ export function HostSwitchDialog({
         <Spinner size="sm" /> Checking {projectName} on {sourceName} and {targetName}
       </div>
     ) : null;
+  } else if (quietlyOpening) {
+    body = (
+      <div className="flex items-center gap-2 text-sm text-text-secondary" aria-live="polite">
+        <Spinner size="sm" /> Opening {projectName} on {targetName}
+      </div>
+    );
   } else if (checkoutOffer) {
     const branch = prep.branch ?? "";
     body = (
@@ -741,12 +764,13 @@ export function HostSwitchDialog({
       </div>
     );
     primary = checkoutOffer.result.canCheckOutBranch
-      ? { label: `Check out ${branch} here`, onClick: () => void checkOutHere() }
+      ? { label: "Check out here", onClick: () => void checkOutHere() }
       : { label: "Open without it", onClick: () => finish(checkoutOffer.result) };
   } else if (view === "existing") {
     body = (
       <div className="space-y-4">
         <ProjectMatchChooser
+          hostName={targetName}
           candidates={prep.candidates}
           sourceRemotes={prep.remotes}
           selected={candidateIndex}
@@ -864,7 +888,7 @@ export function HostSwitchDialog({
             </Button>
           ) : (
             <Button variant="ghost" onClick={justSwitch}>
-              Just switch host
+              Switch host only
             </Button>
           )}
           {primary && (

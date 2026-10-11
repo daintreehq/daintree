@@ -410,7 +410,17 @@ export function attachProjectsHost(
   on(ProjectLinkMethod.OPERATION_STATUS, OpIdSchema, ({ opId }) => service.operationStatus(opId));
   on(ProjectLinkMethod.OPERATION_CANCEL, OpIdSchema, ({ opId }) => service.cancelOperation(opId));
   on(ProjectLinkMethod.OPEN, OpenSchema, async (p) => {
-    const opened = await service.open(p);
+    // Opening may make the branch's worktree only while no other session's
+    // window holds the project; otherwise it is offered as a checkout.
+    const openAuthority = {
+      assertMayPlace(projectId: string): void {
+        const holder = authority.holderEndpointId(projectId);
+        if (holder !== null && (sessionId === null || !isSessionEndpoint(sessionId, holder))) {
+          throw drivenElsewhere();
+        }
+      },
+    };
+    const opened = await service.open(p, openAuthority);
     if (opened.canCheckOutBranch && p.branch) {
       grants.offerCheckout(opened.projectId, p.branch);
     }
