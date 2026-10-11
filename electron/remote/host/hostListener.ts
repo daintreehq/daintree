@@ -248,6 +248,10 @@ async function buildHostListener(
     })
   );
 
+  // A Shell whose link dropped is no longer attached, though it may resume:
+  // the attached-machines list says so now rather than at expiry.
+  teardowns.push(server.onSessionDetached(() => notify()));
+
   teardowns.push(
     server.onSessionExpired(({ sessionId }) => {
       const endpoints = endpointsBySession.get(sessionId);

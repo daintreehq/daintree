@@ -121,6 +121,7 @@ export class HostServer {
   private readonly resumeSecrets = new Map<string, string>();
   private readonly sessionListeners = new Set<(ctx: HostSessionContext) => void>();
   private readonly expiredListeners = new Set<(info: HostSessionExpired) => void>();
+  private readonly detachedListeners = new Set<(info: HostSessionExpired) => void>();
 
   constructor(private readonly options: HostServerOptions) {
     this.token = options.token ?? crypto.randomBytes(32).toString("hex");
@@ -142,6 +143,15 @@ export class HostServer {
   onSession(listener: (ctx: HostSessionContext) => void): () => void {
     this.sessionListeners.add(listener);
     return () => this.sessionListeners.delete(listener);
+  }
+
+  /**
+   * A session's link dropped: it is no longer among {@link sessions}, though
+   * it may still resume within its grace window.
+   */
+  onSessionDetached(listener: (info: HostSessionExpired) => void): () => void {
+    this.detachedListeners.add(listener);
+    return () => this.detachedListeners.delete(listener);
   }
 
   /** A dropped session's grace window passed without a resume. */
@@ -445,6 +455,13 @@ export class HostServer {
     if (this.closing) return;
     const { sessionId } = ctx;
     const clientId = ctx.client.clientId;
+    for (const listener of this.detachedListeners) {
+      try {
+        listener({ sessionId, clientId });
+      } catch {
+        // Ignore subscriber failures.
+      }
+    }
     const deliberate = close.by === "remote" || close.reason.startsWith("protocol error");
     if (deliberate) {
       this.expire(sessionId, clientId);

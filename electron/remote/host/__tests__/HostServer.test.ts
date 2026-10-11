@@ -440,6 +440,29 @@ describe("HostServer session resume", () => {
     expect(client.getState()).toMatchObject({ sessionId: firstId });
   });
 
+  it("says a session detached the moment its link drops, before its grace window ends", async () => {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const seen: HostSessionContext[] = [];
+    const detached: string[] = [];
+    const stillAttached: boolean[] = [];
+    const expired: string[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    server.onSessionDetached((info) => {
+      detached.push(info.sessionId);
+      stillAttached.push(server.sessions.some((ctx) => ctx.sessionId === info.sessionId));
+    });
+    server.onSessionExpired((info) => expired.push(info.sessionId));
+    const client = startClient(server, { backoff: { initialMs: 5_000, maxMs: 5_000, jitter: 0 } });
+    await waitFor(() => seen.length === 1);
+    const firstId = seen[0]!.sessionId;
+    (seen[0]!.session as unknown as { socket: net.Socket }).socket.destroy();
+    await waitFor(() => detached.includes(firstId));
+    // Already gone from the attached sessions when listeners hear of it.
+    expect(stillAttached).toEqual([false]);
+    expect(expired).toEqual([]);
+    void client;
+  });
+
   it("starts a fresh session once the grace window has passed", async () => {
     const server = await startServer({ resumeGraceMs: 20 });
     const seen: HostSessionContext[] = [];
