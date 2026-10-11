@@ -14,6 +14,7 @@ import type {
 } from "../../services/plugin-capability/PluginCapabilityConsentService.js";
 import { getMainWindow } from "../../window/windowRef.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import type { ClientEndpoint } from "../endpoint.js";
 import { resolvePluginFrontend } from "../../services/plugin/pluginFrontendRouting.js";
 import {
@@ -197,14 +198,7 @@ export function requestConsentInWebContents(
     // A renderer that goes away can no longer show or answer the prompt. Before
     // acknowledgement that is a delivery failure; after it, the dialog the user
     // was looking at vanished — neither is a decision they made.
-    const onDestroyed = () => settleConsent(requestId, "undeliverable");
-    const cleanup = () => {
-      try {
-        wc.removeListener("destroyed", onDestroyed);
-      } catch {
-        // best-effort — the WebContents may already be torn down
-      }
-    };
+    const cleanup = onWebContentsDestroyed(wc, () => settleConsent(requestId, "undeliverable"));
 
     const push = () => {
       wc.send(CHANNELS.EVENTS_PUSH, {
@@ -256,7 +250,6 @@ export function requestConsentInWebContents(
       decisionTimer: null,
       acknowledged: false,
     });
-    wc.once("destroyed", onDestroyed);
     try {
       push();
     } catch {

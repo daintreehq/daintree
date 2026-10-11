@@ -1,6 +1,7 @@
 import { ipcMain } from "electron";
 import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import type { PanelReloadResult } from "../../../shared/types/plugin.js";
 import type {
   PluginPanelReloadRejection,
@@ -130,7 +131,7 @@ export class PluginPanelReloadDispatcher {
       };
       const onDestroyed = () => settleUnavailable();
       const timer = setTimeout(settleUnavailable, PLUGIN_PANEL_RELOAD_TIMEOUT_MS);
-      webContents.once("destroyed", onDestroyed);
+      const destroyedCleanup = onWebContentsDestroyed(webContents, onDestroyed);
       this.pending.set(requestId, {
         pluginId,
         panelId,
@@ -138,13 +139,7 @@ export class PluginPanelReloadDispatcher {
         resolve,
         reject,
         timer,
-        destroyedCleanup: () => {
-          try {
-            webContents.removeListener("destroyed", onDestroyed);
-          } catch {
-            // best-effort; the WebContents may already be gone
-          }
-        },
+        destroyedCleanup,
       });
       try {
         webContents.send(CHANNELS.PLUGIN_PANEL_RELOAD_REQUEST, {

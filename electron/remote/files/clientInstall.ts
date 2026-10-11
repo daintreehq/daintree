@@ -14,6 +14,7 @@ import { setHostFileRequestProxy } from "../../setup/protocols.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { ensureOwnerOnlyDir } from "../../utils/fs.js";
 import { resolveLiveWebContents } from "../../window/webContentsRegistry.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import type { LinkSession } from "../link/session.js";
 import { registerRemoteService } from "../runtime.js";
 import { ClientFileTransport, type DownloadOutcome } from "./ClientFileTransport.js";
@@ -216,14 +217,7 @@ function watchView(webContentsId: number, onGone: () => void): () => void {
     queueMicrotask(onGone);
     return () => {};
   }
-  wc.once("destroyed", onGone);
-  return () => {
-    try {
-      wc.removeListener("destroyed", onGone);
-    } catch {
-      // Already torn down.
-    }
-  };
+  return onWebContentsDestroyed(wc, onGone);
 }
 
 /**

@@ -5,6 +5,7 @@ import { projectStore } from "../../services/ProjectStore.js";
 import type { WorktreePortHost } from "../../services/WorktreePortBroker.js";
 import { getWorkspaceClientRef, getWorktreePortBrokerRef } from "../../window/serviceRefs.js";
 import { resolveLiveWebContents } from "../../window/webContentsRegistry.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { WORKTREE_PORT_REDELIVER_METHOD } from "../../ipc/endpoint.js";
 import { registerReverseRequestMethod } from "../client/reverseRequests.js";
 import type { LinkSession } from "../link/session.js";
@@ -155,13 +156,11 @@ export function attachClientWorktreeRelay(
         return true;
       },
     };
-    const onDestroyed = () => detachClientWorktreeRelay(wcId);
-    viewWebContents.once("destroyed", onDestroyed);
     entry = {
       relay,
       hostId,
       host,
-      cleanup: () => viewWebContents.removeListener("destroyed", onDestroyed),
+      cleanup: onWebContentsDestroyed(viewWebContents, () => detachClientWorktreeRelay(wcId)),
     };
     clientRelays.set(wcId, entry);
   }

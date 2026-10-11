@@ -27,6 +27,7 @@ import {
   resolveLiveWebContents,
 } from "../../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { completeLocalProjectActivation } from "../../window/localProjectActivation.js";
 import {
   getPtyClient,
@@ -123,14 +124,7 @@ function createViewSink(hostOf: (webContentsId: number) => HostId | null): ViewS
         queueMicrotask(onGone);
         return () => {};
       }
-      wc.once("destroyed", onGone);
-      return () => {
-        try {
-          wc.removeListener("destroyed", onGone);
-        } catch {
-          // Already torn down.
-        }
-      };
+      return onWebContentsDestroyed(wc, onGone);
     },
     resync(webContentsId, hostId, reason) {
       const event: RemoteHostsEvent = { type: "resync-required", hostId, reason };

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
 import type { ClientEndpoint } from "../../ipc/endpoint.js";
 import { resolveTargetWebContents, type PluginTargetProjectId } from "./rendererTargeting.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import {
   promptOpensDialog,
   type PluginUiPromptParams,
@@ -410,7 +411,7 @@ export class PluginUIPromptDispatcher {
         this.pending.delete(promptId);
         resolve(opensDialog ? cancelValue : timeoutValueFor(params));
       };
-      target.once("destroyed", onDestroyed);
+      const stopWatchingTarget = onWebContentsDestroyed(target, onDestroyed);
 
       // Settles this one prompt when its caller goes away. Scoped by `promptId`
       // so a late abort can only ever dismiss the request it belongs to — never
@@ -466,11 +467,7 @@ export class PluginUIPromptDispatcher {
         if (timer !== undefined) clearTimeout(timer);
         const entry = this.pending.get(promptId);
         if (entry?.abortAckTimer !== undefined) clearTimeout(entry.abortAckTimer);
-        try {
-          target.removeListener("destroyed", onDestroyed);
-        } catch {
-          // best-effort; webContents may already be gone
-        }
+        stopWatchingTarget();
         if (opensDialog) signal?.removeEventListener("abort", onAbort);
       };
 

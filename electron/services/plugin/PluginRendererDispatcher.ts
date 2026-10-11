@@ -2,6 +2,7 @@ import { ipcMain } from "electron";
 import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getWindowRegistry, getProjectViewManager } from "../../window/windowRef.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { resolveTargetWebContents, type PluginTargetProjectId } from "./rendererTargeting.js";
 import { thawThenSend } from "../../utils/thawThenSend.js";
 import type { ClientEndpoint } from "../../ipc/endpoint.js";
@@ -395,14 +396,7 @@ export class PluginRendererDispatcher {
           },
         });
       };
-      webContents.once("destroyed", onDestroyed);
-      const destroyedCleanup = () => {
-        try {
-          webContents.removeListener("destroyed", onDestroyed);
-        } catch {
-          // best-effort; webContents may already be gone
-        }
-      };
+      const destroyedCleanup = onWebContentsDestroyed(webContents, onDestroyed);
 
       this.pendingPluginDispatches.set(requestId, {
         resolve,
@@ -687,14 +681,7 @@ export class PluginRendererDispatcher {
         this.pendingActionsRequests.delete(requestId);
         resolve(opts.fallback);
       };
-      webContents.once("destroyed", onDestroyed);
-      const destroyedCleanup = () => {
-        try {
-          webContents.removeListener("destroyed", onDestroyed);
-        } catch {
-          // best-effort; webContents may already be gone
-        }
-      };
+      const destroyedCleanup = onWebContentsDestroyed(webContents, onDestroyed);
 
       this.pendingActionsRequests.set(requestId, {
         resolve: resolve as (value: unknown) => void,

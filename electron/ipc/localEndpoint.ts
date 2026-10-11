@@ -1,6 +1,7 @@
 import { hostname } from "node:os";
 import type { WebContents } from "electron";
 import { getProjectForWebContents } from "../window/webContentsRegistry.js";
+import { onWebContentsDestroyed } from "../window/webContentsDestroyed.js";
 import { AppError } from "../utils/errorTypes.js";
 import { LOCAL_CLIENT_ID } from "./endpoint.js";
 import type { ClientEndpoint, ClientRef, Disposable, HostFrame } from "./endpoint.js";
@@ -107,6 +108,7 @@ class LocalViewEndpoint implements ClientEndpoint {
 }
 
 const endpointsByWebContentsId = new Map<number, LocalViewEndpoint>();
+const unwatchByWebContentsId = new Map<number, () => void>();
 
 /**
  * The endpoint for a local sender, created on first use and disposed when its
@@ -128,11 +130,14 @@ export function getLocalEndpoint(webContents: WebContents): ClientEndpoint {
   endpointsByWebContentsId.set(webContents.id, endpoint);
   getEndpointRegistry().add(endpoint);
   if (typeof webContents.once === "function") {
-    webContents.once("destroyed", () => {
-      if (endpointsByWebContentsId.get(endpoint.handle) === endpoint) {
-        disposeLocalEndpoint(endpoint.handle);
-      }
-    });
+    unwatchByWebContentsId.set(
+      webContents.id,
+      onWebContentsDestroyed(webContents, () => {
+        if (endpointsByWebContentsId.get(endpoint.handle) === endpoint) {
+          disposeLocalEndpoint(endpoint.handle);
+        }
+      })
+    );
   }
   return endpoint;
 }
@@ -141,6 +146,8 @@ export function disposeLocalEndpoint(webContentsId: number): void {
   const endpoint = endpointsByWebContentsId.get(webContentsId);
   if (!endpoint) return;
   endpointsByWebContentsId.delete(webContentsId);
+  unwatchByWebContentsId.get(webContentsId)?.();
+  unwatchByWebContentsId.delete(webContentsId);
   endpoint.close();
   getEndpointRegistry().remove(endpoint.endpointId);
 }
@@ -149,5 +156,7 @@ export function disposeLocalEndpoint(webContentsId: number): void {
 export function _resetLocalEndpointsForTesting(): void {
   for (const endpoint of endpointsByWebContentsId.values()) endpoint.close();
   endpointsByWebContentsId.clear();
+  for (const unwatch of unwatchByWebContentsId.values()) unwatch();
+  unwatchByWebContentsId.clear();
   localClient = null;
 }

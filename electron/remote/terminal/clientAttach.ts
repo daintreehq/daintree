@@ -1,6 +1,7 @@
 import type { WebContents } from "electron";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { postTerminalPortToView, setTerminalPortOverride } from "../../window/portDistribution.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import type { LinkSession } from "../link/session.js";
 import { ClientTerminalRelay } from "./ClientTerminalRelay.js";
 import { wrapMainPort } from "./ports.js";
@@ -57,7 +58,7 @@ export function attachClientTerminalRelay(
     ) => {
       if (details.isMainFrame && !details.isSameDocument) markDocumentChanged();
     };
-    viewWebContents.once("destroyed", onDestroyed);
+    const stopWatching = onWebContentsDestroyed(viewWebContents, onDestroyed);
     // Both ends of a navigation: a port posted between its start and commit
     // reached the outgoing document, so the commit invalidates it again.
     viewWebContents.on("did-start-navigation", onNavigation);
@@ -67,7 +68,7 @@ export function attachClientTerminalRelay(
       hostId,
       documentChanged: false,
       cleanup: () => {
-        viewWebContents.removeListener("destroyed", onDestroyed);
+        stopWatching();
         viewWebContents.removeListener("did-start-navigation", onNavigation);
         viewWebContents.removeListener("did-navigate", markDocumentChanged);
       },
