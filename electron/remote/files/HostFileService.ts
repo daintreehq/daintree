@@ -662,7 +662,7 @@ export class HostFileService {
           ? new AppError({
               code: "DRIVEN_ELSEWHERE",
               message: "Another window drives this project",
-              userMessage: "Another window is driving this project. Take it over to download.",
+              userMessage: "Another window has control of this project. Take control to download.",
             })
           : notInProject();
       }

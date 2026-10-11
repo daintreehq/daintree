@@ -68,7 +68,7 @@ async function assertDrivesRecordedProjects(
         code: "DRIVEN_ELSEWHERE",
         message: `processes:kill-closed-terminal-processes ends processes of ${projectId}, which another window drives`,
         userMessage:
-          "These processes belong to a project driven from another screen. Take it over first.",
+          "These processes belong to a project another screen has control of. Take control first.",
         context: { projectId },
       });
     }

@@ -129,7 +129,7 @@ describe("worktree port over the link", () => {
     await waitFor(() => h.renderer().received.length === 1 && h.workspace().received.length === 1);
     expect(h.renderer().received[0]).toMatchObject({
       id: "del",
-      error: expect.stringContaining("driving"),
+      error: expect.stringContaining("has control of this project"),
     });
     expect(h.workspace().received).toEqual([{ id: "read", action: "get-all-states", payload: {} }]);
 

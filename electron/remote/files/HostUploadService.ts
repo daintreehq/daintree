@@ -325,7 +325,7 @@ export class HostUploadService {
       throw new AppError({
         code: "DRIVEN_ELSEWHERE",
         message: "Another window drives this project",
-        userMessage: "Another window is driving this project. Take it over to add files.",
+        userMessage: "Another window has control of this project. Take control to add files.",
       });
     }
     return { endpoint, projectId };

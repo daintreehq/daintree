@@ -198,7 +198,7 @@ describe("drive lease, operation outcomes and state after takeover (integration 
 
       const refused = await r.invoke(CHANNELS.WORKTREE_CREATE, b, createPayload(r, "from-b"));
       expect(errorCode(refused)).toBe("DRIVEN_ELSEWHERE");
-      expect(refused.ok ? "" : refused.error.userMessage).toContain("Take it over first");
+      expect(refused.ok ? "" : refused.error.userMessage).toContain("Take control first");
       expect(worktrees.creates).toEqual([]);
       // Reads stay open to it: it still sees the project.
       expect((await r.invoke(CHANNELS.OPERATIONS_LIST, b, { projectId: "proj-1" })).ok).toBe(true);

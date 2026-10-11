@@ -243,7 +243,7 @@ export class ClientUploadTransport {
         throw new AppError({
           code: "DRIVEN_ELSEWHERE",
           message: "Another window drives this project",
-          userMessage: `Another window is driving this project on ${hostLabel}. Take it over to add files.`,
+          userMessage: `Another window has control of this project on ${hostLabel}. Take control to add files.`,
         });
       }
       if (errorCode(error) === "VALIDATION") {

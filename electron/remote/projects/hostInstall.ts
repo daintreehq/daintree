@@ -273,7 +273,7 @@ function drivenElsewhere(): AppError {
   return new AppError({
     code: "DRIVEN_ELSEWHERE",
     message: "Another window drives this project",
-    userMessage: "Another window is driving this project. Take it over first.",
+    userMessage: "Another window has control of this project. Take control first.",
   });
 }
 

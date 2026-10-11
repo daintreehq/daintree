@@ -594,8 +594,8 @@ function drivenElsewhereError(
     code: "DRIVEN_ELSEWHERE",
     message: `${channel} changes ${projectId ?? "a project"}, which another window drives`,
     userMessage: holder
-      ? `This project is being driven from ${holder.clientName}. Take it over first.`
-      : "This project is being driven from another screen. Take it over first.",
+      ? `${holder.clientName} has control of this project. Take control first.`
+      : "Another screen has control of this project. Take control first.",
     context: { channel, projectId },
   });
 }
@@ -631,7 +631,7 @@ export function createDriveLeaseGate(
           code: "DRIVEN_ELSEWHERE",
           message: `${channel} targets ${resolution.reason}, and another window drives a project here`,
           userMessage:
-            "Another screen is driving a project on this host, and this change couldn't be matched to a project. Take it over first.",
+            "Another screen has control of a project on this host, and this change couldn't be matched to a project. Take control first.",
           context: { channel },
         });
       }

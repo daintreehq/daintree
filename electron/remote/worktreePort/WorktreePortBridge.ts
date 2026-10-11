@@ -70,7 +70,7 @@ export interface WorktreePortHostBridgeOptions {
 }
 
 const DRIVEN_ELSEWHERE =
-  "Another screen is driving this project. Take it over to change its worktrees.";
+  "Another screen has control of this project. Take control to change its worktrees.";
 
 /** Host side: one remote endpoint's port to its project's workspace host. */
 export class WorktreePortHostBridge {

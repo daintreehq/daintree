@@ -183,7 +183,7 @@ export function localPlacementAuthority(
         throw new AppError({
           code: "DRIVEN_ELSEWHERE",
           message: "Another screen drives this project",
-          userMessage: `This project is being driven from ${holder.clientName}. Take it over first.`,
+          userMessage: `${holder.clientName} has control of this project. Take control first.`,
           context: { projectId },
         });
       }
