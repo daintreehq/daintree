@@ -28,6 +28,14 @@ interface SenderReport {
   seq: number;
 }
 
+/** A view on another machine, as its Shell resolved it: native focus is only observable there. */
+interface RemoteReport {
+  workspaceId: string | null;
+  panel: PluginFocusedPanel;
+  focused: boolean;
+  seq: number;
+}
+
 export interface FocusedPanelSenderChecks {
   /** The reporting webContents holds native keyboard focus in its window. */
   isFocused: (webContentsId: number) => boolean;
@@ -50,9 +58,12 @@ export interface FocusedPanelSenderChecks {
  */
 export class FocusedPanelTracker {
   private readonly reports = new Map<number, SenderReport>();
+  private readonly remoteReports = new Map<number, RemoteReport>();
   private readonly portalFocusedWindows = new Set<number>();
   private focusedWindowId: number | null = null;
   private seq = 0;
+  /** When this machine's own screen last gained focus or reported a panel, on the shared `seq` clock. */
+  private localActivitySeq = 0;
   private current: FocusedPanelState = NO_FOCUSED_PANEL_STATE;
   private readonly listeners = new Set<(state: FocusedPanelState) => void>();
   private checks: Partial<FocusedPanelSenderChecks>;
@@ -86,6 +97,7 @@ export class FocusedPanelTracker {
 
   setFocusedWindow(windowId: number | null): void {
     this.focusedWindowId = windowId;
+    if (windowId !== null) this.localActivitySeq = ++this.seq;
     this.recompute();
   }
 
@@ -108,12 +120,48 @@ export class FocusedPanelTracker {
     workspaceId: string | null,
     payload: unknown
   ): void {
+    const seq = ++this.seq;
     this.reports.set(webContentsId, {
       windowId,
       workspaceId,
       panel: toPluginFocusedPanel(payload),
-      seq: ++this.seq,
+      seq,
     });
+    if (windowId === this.focusedWindowId) this.localActivitySeq = seq;
+    this.recompute();
+  }
+
+  /**
+   * A view attached from another machine (Host mode), keyed by its endpoint
+   * handle. Its Shell decides `focused` from that machine's own window and view
+   * focus. Gaining focus, or a new panel while focused, counts as the latest
+   * activity, so a person at the Shell and one at this machine's screen each
+   * take over the answer by acting.
+   */
+  reportRemote(
+    handle: number,
+    workspaceId: string | null,
+    payload: unknown,
+    focused: boolean
+  ): void {
+    const panel = toPluginFocusedPanel(payload);
+    const previous = this.remoteReports.get(handle);
+    const moved =
+      focused &&
+      (previous === undefined ||
+        !previous.focused ||
+        !pluginFocusedPanelEquals(previous.panel, panel));
+    this.remoteReports.set(handle, {
+      workspaceId,
+      panel,
+      focused,
+      seq: moved ? ++this.seq : (previous?.seq ?? 0),
+    });
+    this.recompute();
+  }
+
+  removeRemote(handle: number): void {
+    if (!this.remoteReports.delete(handle)) return;
     this.recompute();
   }
 
@@ -132,6 +180,19 @@ export class FocusedPanelTracker {
   }
 
   private resolve(): FocusedPanelState {
+    let remote: RemoteReport | null = null;
+    for (const report of this.remoteReports.values()) {
+      if (!report.focused || report.panel.kind === null) continue;
+      if (remote === null || report.seq > remote.seq) remote = report;
+    }
+    const local = this.resolveLocal();
+    if (remote === null) return local;
+    if (local !== NO_FOCUSED_PANEL_STATE && this.localActivitySeq > remote.seq) return local;
+    if (remote.panel.kind === "portal") return PORTAL_FOCUSED_STATE;
+    return { panel: remote.panel, workspaceId: remote.workspaceId };
+  }
+
+  private resolveLocal(): FocusedPanelState {
     const windowId = this.focusedWindowId;
     if (windowId === null) return NO_FOCUSED_PANEL_STATE;
     if (this.portalFocusedWindows.has(windowId)) return PORTAL_FOCUSED_STATE;

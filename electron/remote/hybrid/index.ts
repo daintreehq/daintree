@@ -4,6 +4,7 @@ import { getIpcDispatcher } from "../../ipc/dispatcher.js";
 import { installNotificationHostRelay, installRemoteNotificationSink } from "./notifications.js";
 import { installRemoteProjectResidency } from "./residency.js";
 import { HYBRID_HOST_LEGS, HYBRID_SPLITS } from "./splits.js";
+import { installFocusedPanelHostRelay } from "./focusedPanel.js";
 import { installEndpointVisibility } from "./visibility.js";
 
 export { acceptHostPush, acceptLocalPushForRemoteView, eventsPushSource } from "./eventsPush.js";
@@ -33,7 +34,10 @@ export function installHybridSplits(
   const disposers = Object.entries(HYBRID_SPLITS).map(([channel, split]) =>
     dispatcher.registerHybridSplit(channel, split)
   );
-  if (options.router) disposers.push(installNotificationHostRelay(options.router));
+  if (options.router) {
+    disposers.push(installNotificationHostRelay(options.router));
+    disposers.push(installFocusedPanelHostRelay(options.router));
+  }
   return disposeAll(disposers);
 }
 

@@ -4,7 +4,7 @@ import path from "path";
 const ipcUtilsMock = vi.hoisted(() => ({
   broadcastToRenderer: vi.fn(),
   broadcastToProjectRenderers: vi.fn(),
-  getProjectRendererTargets: vi.fn((_projectId: string | null): unknown[] => []),
+  getProjectPushTargets: vi.fn((_projectId: string | null): unknown[] => []),
 }));
 const serviceRefsMock = vi.hoisted(() => ({
   getPtyClient: vi.fn((): unknown => null),
@@ -19,7 +19,7 @@ vi.mock("electron", () => ({
 vi.mock("../../../ipc/utils.js", () => ({
   broadcastToRenderer: ipcUtilsMock.broadcastToRenderer,
   broadcastToProjectRenderers: ipcUtilsMock.broadcastToProjectRenderers,
-  getProjectRendererTargets: ipcUtilsMock.getProjectRendererTargets,
+  getProjectPushTargets: ipcUtilsMock.getProjectPushTargets,
 }));
 vi.mock("../../../window/serviceRefs.js", () => ({
   getPtyClient: serviceRefsMock.getPtyClient,
@@ -579,7 +579,7 @@ describe("createHost renderer pushes", () => {
     );
     // Plugin pushes resolve their renderers through the batcher at flush time,
     // same scope, once per flush.
-    const pushScopes = ipcUtilsMock.getProjectRendererTargets.mock.calls.map((c) => c[0]);
+    const pushScopes = ipcUtilsMock.getProjectPushTargets.mock.calls.map((c) => c[0]);
     expect(pushScopes).toEqual([PROJECT_A]);
   });
 
@@ -593,7 +593,7 @@ describe("createHost renderer pushes", () => {
 
     expect(ipcUtilsMock.broadcastToProjectRenderers).not.toHaveBeenCalled();
     expect(ipcUtilsMock.broadcastToRenderer).toHaveBeenCalledTimes(1);
-    expect(ipcUtilsMock.getProjectRendererTargets.mock.calls.map((c) => c[0])).toEqual([null]);
+    expect(ipcUtilsMock.getProjectPushTargets.mock.calls.map((c) => c[0])).toEqual([null]);
   });
 });
 

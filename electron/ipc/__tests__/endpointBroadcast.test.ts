@@ -1,14 +1,17 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
-const { localViews, hasProjectViewsMock, projectViewsMock } = vi.hoisted(() => ({
-  localViews: [] as Array<{
-    id: number;
-    isDestroyed: () => boolean;
-    send: ReturnType<typeof vi.fn>;
-  }>,
-  hasProjectViewsMock: vi.fn(() => false),
-  projectViewsMock: vi.fn((_projectId: string) => [] as unknown[]),
-}));
+const { localViews, hasProjectViewsMock, projectViewsMock, registeredViewsMock } = vi.hoisted(
+  () => ({
+    localViews: [] as Array<{
+      id: number;
+      isDestroyed: () => boolean;
+      send: ReturnType<typeof vi.fn>;
+    }>,
+    hasProjectViewsMock: vi.fn(() => false),
+    projectViewsMock: vi.fn((_projectId: string) => [] as unknown[]),
+    registeredViewsMock: vi.fn(() => [] as unknown[]),
+  })
+);
 
 vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
@@ -22,11 +25,14 @@ vi.mock("../../window/webContentsRegistry.js", () => ({
   getAllAppWebContents: vi.fn(() => localViews),
   getWebContentsForProject: projectViewsMock,
   hasRegisteredProjectViews: hasProjectViewsMock,
+  getRegisteredProjectViews: registeredViewsMock,
   isCachedViewWebContents: vi.fn(() => false),
 }));
 
 import {
+  broadcastSlicedToProjectRenderers,
   broadcastToProjectRenderers,
+  getProjectPushTargets,
   broadcastToProjectRenderersExcept,
   broadcastToRenderer,
   broadcastToVisibleRenderers,
@@ -68,6 +74,7 @@ beforeEach(() => {
   localViews.length = 0;
   hasProjectViewsMock.mockReset().mockReturnValue(false);
   projectViewsMock.mockReset().mockReturnValue([]);
+  registeredViewsMock.mockReset().mockReturnValue([]);
 });
 
 describe("broadcast helpers with no remote endpoints", () => {
@@ -271,5 +278,114 @@ describe("sendToRendererContext", () => {
     sendToRendererContext(ctx, "x:reply", 1);
 
     expect(local.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("getProjectPushTargets", () => {
+  it("adds the project's remote views to its local ones, as stable targets", () => {
+    const view = localView(1);
+    hasProjectViewsMock.mockReturnValue(true);
+    projectViewsMock.mockReturnValue([view]);
+    const mine = endpoint(-1, "proj-1");
+    const other = endpoint(-2, "proj-2");
+    getEndpointRegistry().add(mine);
+    getEndpointRegistry().add(other);
+    getEndpointRegistry().add(endpoint(5, "proj-1", "local-view"));
+
+    const targets = getProjectPushTargets("proj-1", "plugin-push:batch");
+    expect(targets.map((t) => t.id)).toEqual([1, -1]);
+    expect(getProjectPushTargets("proj-1", "plugin-push:batch")[1]).toBe(targets[1]);
+
+    targets[1]!.send("plugin-push:batch", [["plugin:a:x", {}]]);
+    expect(mine.send).toHaveBeenCalledWith({
+      type: "event",
+      channel: "plugin-push:batch",
+      args: [[["plugin:a:x", {}]]],
+    });
+    expect(other.send).not.toHaveBeenCalled();
+  });
+
+  it("reaches every remote view for an app-global scope", () => {
+    getEndpointRegistry().add(endpoint(-1, "proj-1"));
+    getEndpointRegistry().add(endpoint(-2, null));
+    expect(getProjectPushTargets(null, "plugin-push:batch").map((t) => t.id)).toEqual([-1, -2]);
+  });
+
+  it("drops a local view the remote-bound filter withholds", () => {
+    const shown = localView(1);
+    const bound = localView(2);
+    localViews.push(shown, bound);
+    const off = setRemoteBoundViewFilter((id) => id !== 2);
+    try {
+      expect(getProjectPushTargets(null, "plugin-push:batch").map((t) => t.id)).toEqual([1]);
+    } finally {
+      off();
+    }
+  });
+});
+
+describe("broadcastSlicedToProjectRenderers with remote endpoints", () => {
+  const wrap = (slice: Record<string, number>) => ({ slice });
+
+  it("gives each remote view its own project's slice beside local views", () => {
+    const view = localView(1);
+    hasProjectViewsMock.mockReturnValue(true);
+    registeredViewsMock.mockReturnValue([{ webContents: view, projectId: "proj-1" }]);
+    const remote = endpoint(-1, "proj-2");
+    getEndpointRegistry().add(remote);
+
+    broadcastSlicedToProjectRenderers(
+      "terminal:resource-metrics",
+      { a: 1, b: 2, c: 3 },
+      (key) => ({ a: "proj-1", b: "proj-2" })[key] ?? null,
+      wrap
+    );
+
+    expect(view.send).toHaveBeenCalledWith("terminal:resource-metrics", { slice: { a: 1, c: 3 } });
+    expect(remote.send).toHaveBeenCalledWith({
+      type: "event",
+      channel: "terminal:resource-metrics",
+      args: [{ slice: { b: 2, c: 3 } }],
+    });
+  });
+
+  it("scopes remote views by project even when this machine has no project views", () => {
+    const remote = endpoint(-1, "proj-2");
+    getEndpointRegistry().add(remote);
+    broadcastSlicedToProjectRenderers(
+      "terminal:resource-metrics",
+      { a: 1, b: 2 },
+      (key) => ({ a: "proj-1", b: "proj-2" })[key] ?? null,
+      wrap
+    );
+    // proj-1 has no audience here, so its entry is shared.
+    expect(remote.send).toHaveBeenCalledWith({
+      type: "event",
+      channel: "terminal:resource-metrics",
+      args: [{ slice: { b: 2, a: 1 } }],
+    });
+  });
+
+  it("withholds the batch from a local view bound to a remote host", () => {
+    const shown = localView(1);
+    const bound = localView(2);
+    hasProjectViewsMock.mockReturnValue(true);
+    registeredViewsMock.mockReturnValue([
+      { webContents: shown, projectId: "proj-1" },
+      { webContents: bound, projectId: "proj-1" },
+    ]);
+    const off = setRemoteBoundViewFilter((id) => id !== 2);
+    try {
+      broadcastSlicedToProjectRenderers(
+        "terminal:resource-metrics",
+        { a: 1 },
+        () => "proj-1",
+        wrap
+      );
+    } finally {
+      off();
+    }
+    expect(shown.send).toHaveBeenCalled();
+    expect(bound.send).not.toHaveBeenCalled();
   });
 });

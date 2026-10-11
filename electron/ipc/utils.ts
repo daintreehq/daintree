@@ -476,14 +476,68 @@ export function broadcastToProjectRenderers(
 }
 
 /**
- * The live renderers {@link broadcastToProjectRenderers} would reach, for
- * callers that deliver per renderer themselves (the plugin push batcher).
+ * The live local renderers {@link broadcastToProjectRenderers} would reach.
+ * Remote views are not among them; {@link getProjectPushTargets} adds those.
  */
 export function getProjectRendererTargets(projectId: string | null): WebContents[] {
   if (projectId !== null && hasRegisteredProjectViews()) {
     return getWebContentsForProject(projectId);
   }
   return getAllAppWebContents().filter((wc) => !wc.isDestroyed());
+}
+
+/**
+ * One recipient of a push a caller delivers per renderer itself: a local
+ * `WebContents`, or a remote view's endpoint, whose `id` is its (negative)
+ * handle — the same number its IPC context reports as `webContentsId`.
+ */
+export interface ProjectPushTarget {
+  readonly id: number;
+  isDestroyed(): boolean;
+  send(channel: string, ...args: unknown[]): void;
+}
+
+// One adapter per endpoint, so a caller keying recipients by identity sees a
+// remote view as the same target from one flush to the next.
+const endpointPushTargets = new WeakMap<ClientEndpoint, ProjectPushTarget>();
+
+/** A remote view as a {@link ProjectPushTarget}, for a caller replaying state to one view. */
+export function endpointPushTarget(endpoint: ClientEndpoint): ProjectPushTarget {
+  let target = endpointPushTargets.get(endpoint);
+  if (!target) {
+    target = {
+      id: endpoint.handle,
+      isDestroyed: () => endpoint.isClosed(),
+      send: (channel, ...args) => endpoint.send({ type: "event", channel, args }),
+    };
+    endpointPushTargets.set(endpoint, target);
+  }
+  return target;
+}
+
+/**
+ * Everyone {@link broadcastToProjectRenderers} would reach with `channel`, for
+ * callers that deliver per renderer themselves (the plugin push batcher and
+ * its listener signal): the project's local views, less any bound to a remote
+ * host that must not see this machine's `channel`, plus the remote views
+ * attached to the project. `null` is every renderer and every remote view.
+ */
+export function getProjectPushTargets(
+  projectId: string | null,
+  channel: string
+): ProjectPushTarget[] {
+  const targets: ProjectPushTarget[] = getProjectRendererTargets(projectId).filter(
+    (wc) => !isWithheldFromView(wc.id, channel, [])
+  );
+  const registry = getEndpointRegistry();
+  if (!registry.hasRemote()) return targets;
+  const endpoints = projectId !== null ? registry.getForProject(projectId) : registry.getRemote();
+  for (const endpoint of endpoints) {
+    if (endpoint.kind === "remote-view" && !endpoint.isClosed()) {
+      targets.push(endpointPushTarget(endpoint));
+    }
+  }
+  return targets;
 }
 
 /**
@@ -559,29 +613,61 @@ export function broadcastSlicedToProjectRenderers<T>(
   wrap: (slice: Record<string, T>) => unknown
 ): void {
   const views = hasRegisteredProjectViews() ? getRegisteredProjectViews() : [];
-  if (views.length === 0) {
-    broadcastToRenderer(channel, wrap(entries));
-    return;
-  }
+  const registry = getEndpointRegistry();
+  // Remote views are always bound to one project (or none), so they get their
+  // own project's slice whether or not this machine has local views.
+  const remotes = registry.hasRemote()
+    ? registry.getRemote().filter((e) => e.kind === "remote-view" && !e.isClosed())
+    : [];
   const byProject = new Map<string, Record<string, T>>();
   for (const { projectId } of views) byProject.set(projectId, {});
+  for (const endpoint of remotes) {
+    if (endpoint.projectId !== null) byProject.set(endpoint.projectId, {});
+  }
   const shared: Record<string, T> = {};
   for (const [key, value] of Object.entries(entries)) {
     const owner = ownerOf(key);
     const slice = owner === null ? undefined : byProject.get(owner);
     (slice ?? shared)[key] = value;
   }
-  const payloads = new Map<string, unknown>();
-  for (const { webContents, projectId } of views) {
+  const payloads = new Map<string | null, unknown>();
+  const payloadFor = (projectId: string | null): unknown => {
     let payload = payloads.get(projectId);
     if (payload === undefined) {
-      payload = wrap({ ...byProject.get(projectId), ...shared });
+      const own = projectId === null ? undefined : byProject.get(projectId);
+      payload = wrap({ ...own, ...shared });
       payloads.set(projectId, payload);
     }
+    return payload;
+  };
+
+  if (views.length === 0) {
+    // No project views here: every local renderer gets the whole batch, as before.
+    const whole = [wrap(entries)];
+    for (const wc of getAllAppWebContents()) {
+      if (wc.isDestroyed() || isWithheldFromView(wc.id, channel, whole)) continue;
+      try {
+        wc.send(channel, ...whole);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+  } else {
+    for (const { webContents, projectId } of views) {
+      const payload = payloadFor(projectId);
+      if (isWithheldFromView(webContents.id, channel, [payload])) continue;
+      try {
+        webContents.send(channel, payload);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+  }
+  for (const endpoint of remotes) {
     try {
-      webContents.send(channel, payload);
+      endpoint.send({ type: "event", channel, args: [payloadFor(endpoint.projectId)] });
     } catch {
-      // Silently ignore send failures during window initialization/disposal.
+      // A closing link must not break delivery to the remaining endpoints.
     }
   }
 }

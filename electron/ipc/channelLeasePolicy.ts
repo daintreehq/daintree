@@ -433,8 +433,8 @@ export const CHANNEL_LEASE_POLICY = {
   "pr:cleared": "free",
   "pr:detected": "free",
   "processes:get-snapshot": "free",
-  // A closed terminal's leftovers belong to no project a lease could name.
-  "processes:kill-closed-terminal-processes": "free",
+  // Checked per process against the project the lineage ledger recorded it under.
+  "processes:kill-closed-terminal-processes": "handler",
   "project-match:find": "free",
   "project-match:find-worktree-for-branch": "free",
   "project-match:scan": "free",

@@ -24,6 +24,18 @@ vi.mock("../../utils.js", () => ({
   typedHandleWithContextValidated: vi.fn(() => () => {}),
 }));
 
+const dispatcherMock = vi.hoisted(() => ({
+  sendListeners: new Map<string, (ctx: unknown, ...args: unknown[]) => void>(),
+}));
+vi.mock("../../dispatcher.js", () => ({
+  getIpcDispatcher: () => ({
+    registerSend: (channel: string, listener: (ctx: unknown, ...args: unknown[]) => void) => {
+      dispatcherMock.sendListeners.set(channel, listener);
+      return () => dispatcherMock.sendListeners.delete(channel);
+    },
+  }),
+}));
+
 import { CHANNELS } from "../../channels.js";
 import { MAX_REPORTS_PER_SECOND, registerPluginMetricsHandlers } from "../pluginMetrics.js";
 import {
@@ -369,5 +381,87 @@ describe("perf snapshot subscription", () => {
     emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, sender);
     await flush();
     expect(acquire).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("a view on another machine", () => {
+  function endpoint(handle: number, projectId: string | null) {
+    const closers: Array<() => void> = [];
+    let closed = false;
+    return {
+      kind: "remote-view" as const,
+      handle,
+      projectId,
+      send: vi.fn(),
+      isClosed: () => closed,
+      onClose: (cb: () => void) => {
+        closers.push(cb);
+        return { dispose: () => closers.splice(closers.indexOf(cb), 1) };
+      },
+      close: () => {
+        closed = true;
+        closers.splice(0).forEach((cb) => cb());
+      },
+    };
+  }
+  const link = (channel: string, ep: ReturnType<typeof endpoint>, payload?: unknown) =>
+    dispatcherMock.sendListeners.get(channel)!({ endpoint: ep }, payload);
+
+  it("reports through the link, scoped to its endpoint's project", async () => {
+    link(
+      CHANNELS.PLUGIN_REPORT_VIEW_METRICS,
+      endpoint(-1, "proj-b"),
+      envelopes(validReport(PROJECT_A_PLUGIN))
+    );
+    link(
+      CHANNELS.PLUGIN_REPORT_VIEW_METRICS,
+      endpoint(-2, "proj-a"),
+      envelopes(validReport(PROJECT_A_PLUGIN))
+    );
+    await flush();
+    expect(metrics.getSnapshot(PROJECT_A_PLUGIN)!.viewLoads).toHaveLength(1);
+  });
+
+  it("subscribes over the link, gets its project's snapshots, and is dropped when it closes", async () => {
+    vi.useFakeTimers();
+    try {
+      const ep = endpoint(-1, "proj-b");
+      link(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, ep);
+      await vi.advanceTimersByTimeAsync(0);
+      metrics.recordInvoke("acme.demo", 1, "ok");
+      metrics.recordInvoke(PROJECT_A_PLUGIN, 1, "ok");
+      await vi.advanceTimersByTimeAsync(1_000);
+      const frame = ep.send.mock.calls.at(-1)![0] as {
+        type: string;
+        channel: string;
+        args: [Array<{ pluginId: string }>];
+      };
+      expect(frame.type).toBe("event");
+      expect(frame.channel).toBe(CHANNELS.PLUGIN_PERF_SNAPSHOTS_CHANGED);
+      expect(frame.args[0].map((snapshot) => snapshot.pluginId)).toEqual(["acme.demo"]);
+
+      ep.close();
+      ep.send.mockClear();
+      metrics.recordInvoke("acme.demo", 1, "ok");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(ep.send).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("unsubscribes over the link", async () => {
+    vi.useFakeTimers();
+    try {
+      const ep = endpoint(-1, null);
+      link(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, ep);
+      await vi.advanceTimersByTimeAsync(0);
+      link(CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE, ep);
+      metrics.recordInvoke("acme.demo", 1, "ok");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(ep.send).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

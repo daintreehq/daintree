@@ -13,7 +13,18 @@ vi.mock("electron", () => ({
     }),
   },
 }));
-vi.mock("../../utils.js", () => ({ getProjectRendererTargets: vi.fn(() => []) }));
+vi.mock("../../utils.js", () => ({ getProjectPushTargets: vi.fn(() => []) }));
+const dispatcherMock = vi.hoisted(() => ({
+  sendListeners: new Map<string, (ctx: unknown, ...args: unknown[]) => void>(),
+}));
+vi.mock("../../dispatcher.js", () => ({
+  getIpcDispatcher: () => ({
+    registerSend: (channel: string, listener: (ctx: unknown, ...args: unknown[]) => void) => {
+      dispatcherMock.sendListeners.set(channel, listener);
+      return () => dispatcherMock.sendListeners.delete(channel);
+    },
+  }),
+}));
 const scopeMock = vi.hoisted(() => ({ listeners: new Set<() => void>() }));
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   onRendererScopeChanged: vi.fn((listener: () => void) => {
@@ -137,5 +148,60 @@ describe("parsePushListenerReport", () => {
     ["too many entries", Array.from({ length: MAX_REPORTED_PUSH_LISTENERS + 1 }, () => [CH, null])],
   ])("refuses %s", (_label, payload) => {
     expect(parsePushListenerReport(payload)).toBeNull();
+  });
+});
+
+describe("plugin:report-push-listeners from a remote view", () => {
+  function endpoint(handle: number) {
+    const closers: Array<() => void> = [];
+    return {
+      kind: "remote-view" as const,
+      handle,
+      projectId: "proj-r",
+      isClosed: () => false,
+      onClose: (cb: () => void) => {
+        closers.push(cb);
+        return { dispose: () => {} };
+      },
+      close: () => closers.forEach((cb) => cb()),
+    };
+  }
+
+  it("records it under the endpoint's handle, the id its push target carries", () => {
+    const ep = endpoint(-4);
+    const registry = new PluginPushListenerRegistry(() => [{ id: -4, isDestroyed: () => false }]);
+    const cleanup = registerPluginPushListenerHandlers(registry);
+    try {
+      const report = dispatcherMock.sendListeners.get(CHANNELS.PLUGIN_REPORT_PUSH_LISTENERS)!;
+      expect(registry.hasListeners("proj-r", CH)).toBe(true);
+      report({ endpoint: ep }, []);
+      expect(registry.hasListeners("proj-r", CH)).toBe(false);
+      report({ endpoint: ep }, [[CH, "panel-1"]]);
+      expect(registry.reportedListeners(-4)).toEqual([[CH, "panel-1"]]);
+      expect(registry.hasListeners("proj-r", CH)).toBe(true);
+
+      ep.close();
+      expect(registry.isReported(-4)).toBe(false);
+      // A closed endpoint's late report cannot resurrect it.
+      report({ endpoint: ep }, [[CH, null]]);
+      expect(registry.isReported(-4)).toBe(false);
+    } finally {
+      cleanup();
+    }
+    expect(dispatcherMock.sendListeners.has(CHANNELS.PLUGIN_REPORT_PUSH_LISTENERS)).toBe(false);
+  });
+
+  it("ignores a local endpoint on the link path", () => {
+    const registry = new PluginPushListenerRegistry(() => []);
+    const cleanup = registerPluginPushListenerHandlers(registry);
+    try {
+      dispatcherMock.sendListeners.get(CHANNELS.PLUGIN_REPORT_PUSH_LISTENERS)!(
+        { endpoint: { kind: "local-view", handle: 7 } },
+        [[CH, null]]
+      );
+      expect(registry.isReported(7)).toBe(false);
+    } finally {
+      cleanup();
+    }
   });
 });

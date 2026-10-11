@@ -71,6 +71,13 @@ function replaySnapshots(endpoint: RemoteViewEndpoint): void {
   // What a local view gets on onViewReady; a remote view has no such hook.
   getProjectStatsService()?.pushSnapshotToEndpoint(endpoint);
   getFleetSnapshotService()?.pushSnapshotToEndpoint(endpoint);
+  // Plugin contributions, badges, panel menus and running actions: what a local
+  // view's did-finish-load replay gives it.
+  void import("../../services/PluginService.js")
+    .then((m) => m.pluginService.pushSnapshotToEndpoint(endpoint))
+    .catch((error: unknown) => {
+      console.warn("[RemoteHosts] Plugin snapshot for a remote view failed:", error);
+    });
   void import("../../services/runHistory/runHistoryService.js")
     .then((m) => m.pushRunHistorySnapshotToEndpoint(endpoint))
     .catch((error: unknown) => {

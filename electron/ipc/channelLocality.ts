@@ -592,7 +592,7 @@ export const CHANNEL_LOCALITY = {
   "plugin:perf-snapshots-get": "host",
   "plugin:perf-snapshots-subscribe": "host",
   "plugin:perf-snapshots-unsubscribe": "host",
-  "plugin:report-focused-panel": "host",
+  "plugin:report-focused-panel": "hybrid",
   "plugin:report-push-listeners": "host",
   "plugin:report-view-metrics": "host",
   "plugin:tours-get": "host",
@@ -1028,6 +1028,8 @@ export const CHANNEL_LOCALITY = {
  * the split can route by event type.
  */
 export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
+  // Every `plugin:{pluginId}:{channel}` push, batched (pluginPushProtocol.ts).
+  "plugin-push:batch": "host",
   "agent-session:recorded": "host",
   "agent:all-clear": "host",
   "agent:detected": "host",

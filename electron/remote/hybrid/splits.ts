@@ -463,6 +463,8 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
  * answering it wholesale would leak this machine's Shell half.
  */
 export const HYBRID_HOST_LEGS: readonly string[] = [
+  // A remote view's focused panel, relayed with the focus only its Shell can see.
+  CHANNELS.PLUGIN_REPORT_FOCUSED_PANEL,
   CHANNELS.APP_HYDRATE,
   CHANNELS.APP_GET_STATE,
   CHANNELS.APP_SET_STATE,

@@ -276,8 +276,12 @@ import { PluginRecipeMetadataStore } from "./plugin/PluginRecipeMetadataStore.js
 import {
   broadcastToRenderer,
   broadcastToProjectRenderers,
+  endpointPushTarget,
   getProjectRendererTargets,
+  type ProjectPushTarget,
 } from "../ipc/utils.js";
+import type { ClientEndpoint } from "../ipc/endpoint.js";
+import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import { PLUGIN_INVOKE_MAX_RESULT_BYTES } from "../../shared/config/pluginBudgets.js";
 import { assertPayloadWithinLimit, estimatePayloadBytes } from "./plugin/pluginPayloadLimits.js";
 import { getPluginPushBatcher, routePluginPush } from "./plugin/pluginPushBatcher.js";
@@ -6137,6 +6141,13 @@ export class PluginService {
     for (const wc of targets) {
       await this.broadcaster.pushSnapshotTo(wc, projectId);
     }
+    // Remote views attached to the project (Host mode).
+    const registry = getEndpointRegistry();
+    if (!registry.hasRemote()) return;
+    for (const endpoint of registry.getForProject(projectId)) {
+      if (endpoint.kind !== "remote-view" || endpoint.isClosed()) continue;
+      await this.broadcaster.pushSnapshotTo(endpointPushTarget(endpoint), projectId);
+    }
   }
 
   unloadPlugin(pluginId: string, options?: { reload: true }): void {
@@ -7512,8 +7523,28 @@ export class PluginService {
    * each plugin to next re-emit from a subscription callback.
    */
   async pushSnapshotTo(webContents: Electron.WebContents): Promise<void> {
-    await this.broadcaster.pushSnapshotTo(webContents);
+    await this.pushSnapshot(webContents);
+  }
+
+  /**
+   * {@link pushSnapshotTo} for a view attached from another machine (Host
+   * mode). A remote view has no `did-finish-load` here, so the host replays
+   * when it attaches, scoped to the project its endpoint is bound to.
+   */
+  async pushSnapshotToEndpoint(endpoint: ClientEndpoint): Promise<void> {
+    if (endpoint.kind !== "remote-view") return;
+    await this.pushSnapshot(endpointPushTarget(endpoint), endpoint.projectId);
+  }
+
+  private async pushSnapshot(webContents: ProjectPushTarget, projectId?: string | null) {
+    await this.broadcaster.pushSnapshotTo(webContents, projectId);
     if (webContents.isDestroyed()) return;
+    // A local view's project is read from its registration, which a cached
+    // view keeps; a remote view's is the one its endpoint is bound to.
+    const inView = (owningProjectId: string): boolean =>
+      projectId === undefined
+        ? getProjectRendererTargets(owningProjectId).some((wc) => wc.id === webContents.id)
+        : owningProjectId === projectId;
     // Each send is independently guarded against a TOCTOU destroy, matching the
     // broadcaster's defensive pattern above.
     for (const pluginId of this.pluginBadges.keys()) {
@@ -7530,12 +7561,7 @@ export class PluginService {
     // belong to its own project's views.
     for (const pluginId of this.pluginPanelMenus.keys()) {
       const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
-      if (
-        owningProjectId !== null &&
-        !getProjectRendererTargets(owningProjectId).some((wc) => wc.id === webContents.id)
-      ) {
-        continue;
-      }
+      if (owningProjectId !== null && !inView(owningProjectId)) continue;
       try {
         webContents.send(CHANNELS.EVENTS_PUSH, {
           name: "plugin:panel-menus-changed",
@@ -7547,12 +7573,7 @@ export class PluginService {
     }
     for (const [pluginId, byAction] of this.runningActions) {
       const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
-      if (
-        owningProjectId !== null &&
-        !getProjectRendererTargets(owningProjectId).some((wc) => wc.id === webContents.id)
-      ) {
-        continue;
-      }
+      if (owningProjectId !== null && !inView(owningProjectId)) continue;
       try {
         webContents.send(CHANNELS.EVENTS_PUSH, {
           name: "plugin:actions-running-changed",

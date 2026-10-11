@@ -2,7 +2,7 @@ import {
   PLUGIN_PUSH_MAX_BATCH_SIZE,
   PLUGIN_PUSH_MAX_PAYLOAD_BYTES,
 } from "../../../shared/config/pluginBudgets.js";
-import { getProjectRendererTargets } from "../../ipc/utils.js";
+import { getProjectPushTargets } from "../../ipc/utils.js";
 import { PLUGIN_PUSH_BATCH_CHANNEL, type PluginPushBatchEntry } from "./pluginPushProtocol.js";
 
 /** The slice of `Electron.WebContents` the batcher sends through. */
@@ -49,7 +49,7 @@ export interface PluginPushRoute {
   locatePanel?: (panelId: string, pluginId: string) => PluginPushPanelLocation;
 }
 
-/** The renderers a scope covers: the project's views, or every renderer for `null`. */
+/** The renderers a scope covers: the project's views (remote ones too), or every renderer for `null`. */
 export type PluginPushScopeResolver = (projectId: string | null) => readonly PluginPushTarget[];
 
 interface QueuedPush {
@@ -93,7 +93,8 @@ export class PluginPushBatcher {
     this.maxBatchSize = Math.max(1, options.maxBatchSize ?? PLUGIN_PUSH_MAX_BATCH_SIZE);
     this.maxBatchBytes = options.maxBatchBytes ?? PLUGIN_PUSH_MAX_PAYLOAD_BYTES;
     this.resolveScope =
-      options.resolveScope ?? ((projectId) => getProjectRendererTargets(projectId));
+      options.resolveScope ??
+      ((projectId) => getProjectPushTargets(projectId, PLUGIN_PUSH_BATCH_CHANNEL));
   }
 
   /** Install (or with `null`, remove) the per-flush metering hook. */

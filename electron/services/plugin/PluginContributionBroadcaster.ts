@@ -686,7 +686,7 @@ export class PluginContributionBroadcaster {
    * unload sweep.
    */
   async pushSnapshotTo(
-    webContents: Electron.WebContents,
+    webContents: Pick<Electron.WebContents, "id" | "isDestroyed" | "send">,
     projectId?: string | null
   ): Promise<void> {
     await this.deps.initPromise;
