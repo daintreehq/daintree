@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { StrictMode } from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 
@@ -43,6 +44,18 @@ describe("HostSwitchDialogHost", () => {
     takeProjectOffer.mockResolvedValue("studio-01");
     render(<HostSwitchDialogHost />);
     expect(await screen.findByText("Projects on studio-01")).toBeTruthy();
+  });
+
+  it("shows an offer handed out only once even when StrictMode replays the effect", async () => {
+    // Main hands the offer to the first ask and nothing to the next.
+    takeProjectOffer.mockResolvedValueOnce("studio-01").mockResolvedValue(null);
+    render(
+      <StrictMode>
+        <HostSwitchDialogHost />
+      </StrictMode>
+    );
+    expect(await screen.findByText("Projects on studio-01")).toBeTruthy();
+    expect(takeProjectOffer).toHaveBeenCalledTimes(2);
   });
 
   it("asks again when main says an offer is waiting for a view already up", async () => {

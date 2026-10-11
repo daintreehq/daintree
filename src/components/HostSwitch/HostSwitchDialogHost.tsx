@@ -51,23 +51,22 @@ export function HostSwitchDialogHost() {
   useEffect(() => {
     const remoteHosts = window.electron?.remoteHosts;
     if (typeof remoteHosts?.takeProjectOffer !== "function") return;
-    let cancelled = false;
+    // The offer is handed out once, so an answer is never dropped: one that
+    // lands after this effect was torn down (StrictMode's replay, a remount)
+    // goes to whichever picker host is mounted by then, and requesting it is
+    // refused when none is.
     const take = () => {
       remoteHosts.takeProjectOffer().then(
         (hostId) => {
-          if (hostId !== null && !cancelled) requestHostProjectPicker(hostId);
+          if (hostId !== null) requestHostProjectPicker(hostId);
         },
         () => {}
       );
     };
     take();
-    const off = remoteHosts.onEvent?.((event) => {
+    return remoteHosts.onEvent?.((event) => {
       if (event.type === "project-offer") take();
     });
-    return () => {
-      cancelled = true;
-      off?.();
-    };
   }, []);
 
   useEffect(() => {
