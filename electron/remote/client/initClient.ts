@@ -27,6 +27,12 @@ import {
   resolveLiveWebContents,
 } from "../../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
+import { completeLocalProjectActivation } from "../../window/localProjectActivation.js";
+import {
+  getPtyClient,
+  getWorkspaceClientRef,
+  getWorktreePortBrokerRef,
+} from "../../window/serviceRefs.js";
 import { toDisposable } from "../../utils/lifecycle.js";
 import { getLocalHandshakeInfo } from "../handshakeInfo.js";
 import type { LinkSession } from "../link/session.js";
@@ -180,6 +186,11 @@ function isOpenLocalWorkspace(workspaceId: string): boolean {
   return project !== null && project !== undefined && project.status !== "closed";
 }
 
+/** A view key naming one of this machine's projects: not a scratch, not a host's. */
+function isLocalProjectKey(key: string): boolean {
+  return isLocalHostId(parseHostScopedKey(key).hostId) && !isScratchWorkspaceId(key);
+}
+
 function lastLocalProjectId(windowId: number | null): string | null {
   if (windowId !== null) {
     for (const key of getProjectHistory(windowId).snapshot().entries) {
@@ -255,17 +266,36 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
     },
     async openLocalProject(windowId, projectId) {
       // A scratch is a workspace a view shows like a project, with no project row.
-      const project = isScratchWorkspaceId(projectId)
+      const scratch = isScratchWorkspaceId(projectId)
         ? scratchStore.getScratchById(projectId)
-        : projectStore.getProjectById(projectId);
-      if (!project) {
+        : null;
+      const project = scratch ? null : projectStore.getProjectById(projectId);
+      const workspace = scratch ?? project;
+      if (!workspace) {
         throw new AppError({ code: "NOT_FOUND", message: `No local project ${projectId}` });
       }
       await inTurn(windowId, async () => {
         const pvm = managerFor(windowId);
         const from = pvm.getActiveProjectId();
-        await pvm.switchTo(project.id, project.path);
-        recordWindowSwitch(windowId, from, project.id);
+        const { view, isNew } = await pvm.switchTo(workspace.id, workspace.path);
+        recordWindowSwitch(windowId, from, workspace.id);
+        const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
+        if (project && win && !win.isDestroyed()) {
+          await completeLocalProjectActivation({
+            targetWindow: win,
+            project,
+            view,
+            isNew,
+            outgoingProjectId: from !== null && isLocalProjectKey(from) ? from : null,
+            switchId: crypto.randomUUID(),
+            clients: {
+              workspace: getWorkspaceClientRef(),
+              broker: getWorktreePortBrokerRef(),
+              pty: getPtyClient(),
+            },
+            logPrefix: "[RemoteHosts]",
+          });
+        }
         refreshWindowTitles();
       });
     },
@@ -432,6 +462,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     emit: broadcastLocal,
   });
   const unregister = registerRemoteService("remoteHostsClient", client);
+  const unregisterWindowHosts = registerRemoteService("windowHosts", client);
   const unregisterSetup = registerRemoteService("hostSetup", setup);
   return {
     client,
@@ -444,6 +475,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     registry,
     async dispose() {
       unregister();
+      unregisterWindowHosts();
       unregisterSetup();
       await client.dispose();
     },

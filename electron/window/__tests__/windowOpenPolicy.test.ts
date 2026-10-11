@@ -306,3 +306,52 @@ describe("decideProjectOpenTarget — rule 4: preference and origin", () => {
     expect(decideProjectOpenTarget(external(), world([], "off"))).toEqual({ kind: "create" });
   });
 });
+
+describe("decideProjectOpenTarget — windows on a remote host", () => {
+  const onHost = (windowId: number, overrides: Partial<OpenWorldWindow> = {}) =>
+    win(windowId, { onRemoteHost: true, ...overrides });
+
+  it("never fills a host window showing the host's project list with a folder from this machine", () => {
+    expect(decideProjectOpenTarget(external(), world([onHost(4), win(2)]))).toEqual({
+      kind: "activate",
+      windowId: 2,
+      reason: "empty",
+    });
+    expect(decideProjectOpenTarget(external(), world([onHost(4)]))).toEqual({ kind: "create" });
+  });
+
+  it("off skips a focused host window for the most recent window on this machine", () => {
+    const windows = [onHost(3, { activeProjectId: "studio-01:p3" }), occupied(1)];
+    expect(decideProjectOpenTarget(external(), world(windows, "off"))).toEqual({
+      kind: "activate",
+      windowId: 1,
+      reason: "current",
+    });
+    expect(
+      decideProjectOpenTarget(
+        external(),
+        world([onHost(3, { activeProjectId: "studio-01:p3" })], "off")
+      )
+    ).toEqual({ kind: "create" });
+  });
+
+  it("current never lands in an asking window that is on a host", () => {
+    const decision = decideProjectOpenTarget(
+      inApp(3, { disposition: "current" }),
+      world([onHost(3, { activeProjectId: "studio-01:p3" }), occupied(1)])
+    );
+    expect(decision).toEqual({ kind: "activate", windowId: 1, reason: "current" });
+  });
+
+  it("still sends the folder to a host window that holds its cached view", () => {
+    const holder = onHost(5, {
+      activeProjectId: "studio-01:p5",
+      viewProjectIds: ["studio-01:p5", "dropped"],
+    });
+    expect(decideProjectOpenTarget(external(), world([win(2), holder]))).toEqual({
+      kind: "activate",
+      windowId: 5,
+      reason: "owner",
+    });
+  });
+});

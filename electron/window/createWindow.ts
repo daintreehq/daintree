@@ -6,6 +6,7 @@ import {
   registerAppView,
 } from "./webContentsRegistry.js";
 import { getWindowRegistry } from "./windowRef.js";
+import { routeNewWindowRequest } from "./windowHost.js";
 import { toggleWindowFullscreen } from "./fullscreen.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import path from "path";
@@ -80,7 +81,12 @@ function registerWindowIpcHandlers(onCreateWindow?: CreateWindowHandler): void {
     // back in it (#12594).
     ipcMain.handle(CHANNELS.WINDOW_NEW, (event, projectPath?: string) => {
       const bw = getWindowForWebContents(event.sender);
-      return onCreateWindow(projectPath ?? undefined, bw && !bw.isDestroyed() ? bw.id : null);
+      return routeNewWindowRequest(
+        event.sender.id,
+        bw && !bw.isDestroyed() ? bw.id : null,
+        projectPath ?? undefined,
+        onCreateWindow
+      );
     });
   }
 

@@ -232,6 +232,40 @@ export class RemoteHostsClient {
     };
   }
 
+  /** The host a window is attached to: this machine unless a switch put it on a host. */
+  windowHost(windowId: number): HostId {
+    return this.options.bindings.get(windowId);
+  }
+
+  /**
+   * Bring a window that is on a host back to this machine, showing one of its
+   * projects: how main opens a folder of this machine in such a window, so the
+   * window's binding and its view move together.
+   */
+  switchWindowToLocal(windowId: number, projectId: string): Promise<SwitchWindowHostResult> {
+    return this.switchWindow(windowId, { hostId: LOCAL_HOST_ID, newWindow: false, projectId });
+  }
+
+  /**
+   * Open a host's project in a new window on that host, the project named by
+   * its path there: what a remote view's "open in new window" hands main.
+   */
+  async openHostProjectInNewWindow(
+    hostId: HostId,
+    projectPath: string
+  ): Promise<SwitchWindowHostResult> {
+    const projects = await this.listHostProjects({ hostId });
+    const project = projects.find((candidate) => candidate.path === projectPath);
+    if (!project) {
+      throw new AppError({
+        code: "NOT_FOUND",
+        message: `Host ${hostId} has no project at ${projectPath}`,
+        userMessage: "This project isn't on that host.",
+      });
+    }
+    return this.switchWindow(null, { hostId, newWindow: true, projectId: project.id });
+  }
+
   /**
    * Put a window (or a new one) on a host. With a project named, that project
    * opens there. Without one the window returns to the project it last showed
@@ -241,8 +275,15 @@ export class RemoteHostsClient {
    * is only ever rebound together with the view it shows, so its binding and
    * its view never name different hosts.
    */
-  async switchWindowHost(
+  switchWindowHost(
     ctx: IpcContext,
+    payload: SwitchWindowHostPayload
+  ): Promise<SwitchWindowHostResult> {
+    return this.switchWindow(this.windowOf(ctx), payload);
+  }
+
+  private async switchWindow(
+    askingWindowId: number | null,
     payload: SwitchWindowHostPayload
   ): Promise<SwitchWindowHostResult> {
     const hostId = hostIdOf(payload);
@@ -259,7 +300,7 @@ export class RemoteHostsClient {
 
     const remote = !isLocalHostId(hostId);
     if (remote) this.options.registry.require(hostId);
-    const sourceWindowId = newWindow ? null : this.windowOf(ctx);
+    const sourceWindowId = newWindow ? null : askingWindowId;
     // The latest request for a window wins: one still waiting on its host when
     // a newer one arrives resolves as superseded and never moves the window.
     const ticket = sourceWindowId === null ? null : this.takeSwitchTicket(sourceWindowId);
@@ -427,7 +468,8 @@ export class RemoteHostsClient {
     this.detached.remember(hostId, views);
   }
 
-  private viewHost(webContentsId: number): HostId {
+  /** A view's host: a project view's is in its key, and a view with no project follows its window. */
+  viewHost(webContentsId: number): HostId {
     const key = this.options.senders.projectKeyFor(webContentsId);
     if (key !== null) return parseHostScopedKey(key).hostId;
     const windowId = this.options.senders.windowIdFor(webContentsId);

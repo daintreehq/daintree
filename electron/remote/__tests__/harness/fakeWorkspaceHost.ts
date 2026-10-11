@@ -52,8 +52,16 @@ export class FakeWorkspaceHost {
 
 /** The WorkspaceClient surface the remote modules reach, over one fake host per project path. */
 export function createFakeWorkspaceClient(hosts: Map<string, FakeWorkspaceHost>) {
+  /** The projects main loaded into a window, as a local switch does. */
+  const loads: Array<{ projectPath: string; windowId: number }> = [];
   return {
+    loads,
     getHostForProject: (projectPath: string) => hosts.get(projectPath) ?? null,
+    loadProject: async (projectPath: string, windowId: number) => {
+      loads.push({ projectPath, windowId });
+      return "warm" as const;
+    },
+    attachDirectPort: () => undefined,
     prewarmProject: () => undefined,
     waitForReady: async () => undefined,
     isWorktreeOwnedByProject: async () => null,

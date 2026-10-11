@@ -307,6 +307,11 @@ describe("switching hosts (integration harness)", () => {
       ).resolves.toEqual({ outcome: "switched", hostId: "local", projectId: "proj-2" });
       expect(pvmState.active).toBe("proj-2");
       expect(client.hostForView(LOCAL_VIEW)).toBeNull();
+      // Activated as a local switch is: current again, and the pty-host told,
+      // since showing the host's view retired the window's local terminal pair.
+      expect(harnessState.currentProjectId).toBe("proj-2");
+      expect(harnessState.projects.get("proj-2")?.status).toBe("active");
+      expect(harness.pty.projectSwitches.at(-1)).toMatchObject({ projectId: "proj-2" });
 
       // "Switch to previous workspace" from the local view points across hosts.
       const back = data<ProjectHistoryTarget | null>(

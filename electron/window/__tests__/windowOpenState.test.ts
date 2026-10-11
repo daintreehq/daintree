@@ -17,6 +17,7 @@ import {
 import { getProjectHistory, resetProjectHistory } from "../../services/ProjectHistoryService.js";
 import { claimProjectActivation } from "../projectActivationClaims.js";
 import { decideProjectOpenTarget } from "../windowOpenPolicy.js";
+import { registerRemoteService } from "../../remote/runtime.js";
 
 interface FakePvm {
   getActiveProjectId: () => string | null;
@@ -75,6 +76,7 @@ describe("snapshotOpenWorld", () => {
           ready: true,
           reservations: [],
           unboundOpens: [],
+          onRemoteHost: false,
         },
         {
           windowId: 1,
@@ -84,9 +86,46 @@ describe("snapshotOpenWorld", () => {
           ready: false,
           reservations: [],
           unboundOpens: [],
+          onRemoteHost: false,
         },
       ],
     });
+  });
+
+  it("marks a window on a remote host, so a folder from this machine never reuses it", () => {
+    const unregister = registerRemoteService("windowHosts", {
+      windowHost: (windowId: number) => (windowId === 2 ? "studio-01" : "local"),
+      viewHost: () => "local",
+      switchWindowToLocal: vi.fn(),
+      openHostProjectInNewWindow: vi.fn(),
+    });
+    try {
+      const onHost = ctx(2, pvm(null));
+      const local = ctx(1, pvm(null));
+      markWindowReadyForOpens(onHost.browserWindow);
+      markWindowReadyForOpens(local.browserWindow);
+
+      const world = snapshotOpenWorld(registryOf([onHost, local]), "default");
+      expect(world.windows.map((w) => [w.windowId, w.onRemoteHost])).toEqual([
+        [2, true],
+        [1, false],
+      ]);
+      expect(
+        decideProjectOpenTarget(
+          {
+            projectId: null,
+            projectPath: "/work/dropped",
+            source: "external",
+            intent: "open",
+            disposition: "default",
+            initiatingWindowId: null,
+          },
+          world
+        )
+      ).toEqual({ kind: "activate", windowId: 1, reason: "empty" });
+    } finally {
+      unregister();
+    }
   });
 
   it("skips destroyed windows and tolerates a missing registry", () => {

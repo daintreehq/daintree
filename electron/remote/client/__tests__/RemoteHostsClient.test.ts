@@ -424,6 +424,91 @@ describe("RemoteHostsClient", () => {
     expect(windows.openLocalProject).toHaveBeenCalledWith(1, "abc");
   });
 
+  it("names the host a window is on, for main code that holds a window rather than a sender", async () => {
+    expect(client.windowHost(1)).toBe("local");
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+    });
+    expect(client.windowHost(1)).toBe("studio-01");
+    expect(client.windowHost(2)).toBe("local");
+  });
+
+  it("brings a window on a host back to this machine to show a local project", async () => {
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+    });
+    await expect(client.switchWindowToLocal(1, "abc")).resolves.toEqual({
+      outcome: "switched",
+      hostId: "local",
+      projectId: "abc",
+    });
+    expect(bindings.get(1)).toBe("local");
+    expect(windows.openLocalProject).toHaveBeenCalledWith(1, "abc");
+  });
+
+  it("lets main's switch back to this machine supersede a host switch still waiting on its link", async () => {
+    let releaseSlow!: (value: string) => void;
+    manager
+      .connect("studio-01")
+      .whenReady.mockImplementationOnce(
+        () => new Promise<string>((resolve) => (releaseSlow = resolve))
+      );
+    const slow = client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+    });
+    await vi.waitFor(() => expect(releaseSlow).toBeTypeOf("function"));
+
+    await expect(client.switchWindowToLocal(1, "abc")).resolves.toEqual({
+      outcome: "switched",
+      hostId: "local",
+      projectId: "abc",
+    });
+    releaseSlow("ready");
+
+    await expect(slow).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+    expect(windows.openRemoteProject).not.toHaveBeenCalled();
+    expect(bindings.get(1)).toBe("local");
+  });
+
+  it("keeps the window on its host when the local view can't be shown", async () => {
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+    });
+    vi.mocked(windows.openLocalProject).mockRejectedValueOnce(new Error("view failed"));
+    await expect(client.switchWindowToLocal(1, "abc")).rejects.toThrow("view failed");
+    expect(bindings.get(1)).toBe("studio-01");
+  });
+
+  it("opens a host project named by its host path in a new window on that host", async () => {
+    manager.connect("studio-01");
+    await expect(client.openHostProjectInNewWindow("studio-01", "/srv/app")).resolves.toEqual({
+      outcome: "switched",
+      hostId: "studio-01",
+      projectId: "proj-1",
+    });
+    expect(windows.openWindow).toHaveBeenCalledTimes(1);
+    expect(bindings.get(7)).toBe("studio-01");
+    expect(bindings.get(1)).toBe("local");
+    expect(windows.openRemoteProject).toHaveBeenCalledWith(7, "studio-01", "proj-1", "/srv/proj-1");
+  });
+
+  it("opens no window for a path the host has no project at", async () => {
+    manager.connect("studio-01");
+    await expect(
+      client.openHostProjectInNewWindow("studio-01", "/Users/greg/app")
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(windows.openWindow).not.toHaveBeenCalled();
+    expect(windows.openRemoteProject).not.toHaveBeenCalled();
+  });
+
   it("forgets a host: disconnects it and returns its windows to this machine", async () => {
     manager.last = { projectId: "proj-9", path: "/srv/proj-9", name: "proj-9" };
     await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false });

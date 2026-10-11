@@ -11,6 +11,7 @@ export interface HarnessProject {
   id: string;
   name: string;
   path: string;
+  status?: "active" | "background" | "closed";
 }
 
 export interface OwnedProcessRecord {
@@ -23,6 +24,8 @@ export const harnessState = {
   userDataDir: "/nonexistent-harness-user-data",
   store: new Map<string, unknown>(),
   projects: new Map<string, HarnessProject>(),
+  /** ProjectStore's current-project pointer. */
+  currentProjectId: null as string | null,
   /** Saved project state (layout, terminals), as ProjectStore would persist it. */
   projectStates: new Map<string, unknown>(),
   /** Host-side terminal bridges by the Shell's endpoint id (the id stream messages carry). */
@@ -37,6 +40,7 @@ export function resetHarnessState(userDataDir: string): void {
   harnessState.userDataDir = userDataDir;
   harnessState.store.clear();
   harnessState.projects.clear();
+  harnessState.currentProjectId = null;
   harnessState.projectStates.clear();
   harnessState.bridges.clear();
   harnessState.client = null;
@@ -60,6 +64,18 @@ export const memoryStore = {
 
 export const memoryProjectStore = {
   getProjectById: (id: string) => harnessState.projects.get(id) ?? null,
+  getCurrentProjectId: () => harnessState.currentProjectId,
+  /** The pointer and the active/background statuses, as ProjectStore moves them. */
+  async setCurrentProject(id: string, outgoingProjectId?: string | null): Promise<void> {
+    const project = harnessState.projects.get(id);
+    if (!project) throw new Error(`Project not found: ${id}`);
+    const previous =
+      outgoingProjectId === undefined ? harnessState.currentProjectId : outgoingProjectId;
+    const left = previous && previous !== id ? harnessState.projects.get(previous) : undefined;
+    if (left) harnessState.projects.set(left.id, { ...left, status: "background" });
+    harnessState.projects.set(id, { ...project, status: "active" });
+    harnessState.currentProjectId = id;
+  },
   getAllProjects: () => [...harnessState.projects.values()],
   getAllProjectIdentities: () =>
     [...harnessState.projects.values()].map(({ id, path, name }) => ({ id, path, name })),

@@ -40,8 +40,11 @@ export class FakePtyHost {
   private readonly contexts = new Map<number, string>();
   private readonly writeListeners = new Set<(id: string, data: string) => void>();
   private readonly encoder = new TextEncoder();
+  /** Each window's project switches, as main tells the pty-host about them. */
+  readonly projectSwitches: Array<{ windowId: number; projectId: string; projectPath: string }> =
+    [];
 
-  /** The PtyClient surface the host's terminal bridge uses. */
+  /** The PtyClient surface the host's terminal bridge and main's switches use. */
   readonly client = {
     registerAuxConnectionContext: (connectionId: number, projectId: string) => {
       this.contexts.set(connectionId, projectId);
@@ -57,6 +60,9 @@ export class FakePtyHost {
       connection.port.close();
     },
     getTerminalProjectId: (id: string) => this.terminals.get(id)?.projectId ?? null,
+    onProjectSwitch: (windowId: number, projectId: string, projectPath: string) => {
+      this.projectSwitches.push({ windowId, projectId, projectPath });
+    },
   };
 
   spawn(id: string, projectId: string, options: { echo?: boolean } = {}): FakeTerminal {

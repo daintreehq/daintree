@@ -5,6 +5,7 @@ import type { OpenWorld, OpenWorldWindow, WindowOpenReservation } from "./window
 import { getProjectHistory } from "../services/ProjectHistoryService.js";
 import { logError } from "../utils/logger.js";
 import { getPendingActivationProjectIds } from "./projectActivationClaims.js";
+import { isWindowOnRemoteHost } from "./windowHost.js";
 
 /**
  * Process-wide world state behind `decideProjectOpenTarget` (#12593): which
@@ -154,6 +155,7 @@ export function snapshotOpenWorld(
     const win = ctx.browserWindow;
     if (win.isDestroyed()) continue;
     live.add(ctx.windowId);
+    const onRemoteHost = isWindowOnRemoteHost(ctx.windowId);
     // An in-app switch or menu open that has committed to a project but whose
     // view isn't registered yet (#12596) is an open in flight too, so an
     // external open of that project focuses this window rather than building a
@@ -192,6 +194,7 @@ export function snapshotOpenWorld(
         ready: pvm !== undefined && readyWindows.has(win),
         reservations: held,
         unboundOpens: [...(unboundOpens.get(ctx.windowId)?.claims ?? [])],
+        onRemoteHost,
       });
     } catch (error) {
       logError("window-open-snapshot-manager-failed", error, { windowId: ctx.windowId });
@@ -203,6 +206,7 @@ export function snapshotOpenWorld(
         ready: false,
         reservations: held,
         unboundOpens: [...(unboundOpens.get(ctx.windowId)?.claims ?? [])],
+        onRemoteHost,
       });
     }
   }
