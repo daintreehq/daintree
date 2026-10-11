@@ -76,6 +76,48 @@ async function forwardForFlow(hostId: string, remotePort: number, label: string)
 }
 
 /**
+ * The URL a browser panel in this view loads for `text`: a `localhost` URL in
+ * a view on a host means the host's localhost, so its port is forwarded here
+ * (kept until stopped, like one forwarded by hand, since the page keeps using
+ * it) to the same port, and the URL is unchanged. Anything else, and every URL
+ * in a view on this machine, comes back untouched. Rejects when the forward
+ * can't be made at that port: loading the URL anyway would reach this
+ * machine's own server.
+ */
+export async function resolveBrowserUrlForView(text: string): Promise<string> {
+  const hostId = remoteHostOfView();
+  if (!hostId) return text;
+  const loopback = parseLoopbackLink(text);
+  if (!loopback) return text;
+  const forward = await window.electron.portForwards.forward({
+    hostId,
+    remotePort: loopback.port,
+    origin: "manual",
+    label: "Browser panel",
+  });
+  // The page keeps the host's address: it is what the panel shows, saves and
+  // forwards again after a reload, and a dev server's absolute URLs and
+  // sockets name it too. A port taken here can't stand in for it.
+  if (forward.localPort !== loopback.port) throw new HostPortInUseError(loopback.port);
+  return loopback.url.toString();
+}
+
+/** The host's port is taken on this machine, so its page can't open here at the same address. */
+export class HostPortInUseError extends Error {
+  constructor(readonly port: number) {
+    super(
+      `Port ${port} is in use on this machine, so the host's page can't open here at the same address. Stop what's using it here, then try again.`
+    );
+    this.name = "HostPortInUseError";
+  }
+}
+
+/** Whether a browser panel in this view has to forward `text`'s port before loading it. */
+export function needsHostForward(text: string): boolean {
+  return remoteHostOfView() !== null && parseLoopbackLink(text) !== null;
+}
+
+/**
  * The URL to open on this machine for a link printed by a terminal in this
  * view. Local views get the link back untouched. Rejects when a needed
  * forward can't be made: opening the link anyway would reach this machine's

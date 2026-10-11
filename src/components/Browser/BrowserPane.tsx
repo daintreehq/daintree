@@ -51,6 +51,14 @@ import { buildBrowserPartition, partitionProjectKey } from "@shared/utils/partit
 import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
 import { notify } from "@/lib/notify";
 import { panelNotificationAddress } from "@/lib/notificationAddress";
+import {
+  HostPortInUseError,
+  needsHostForward,
+  parseLoopbackLink,
+  resolveBrowserUrlForView,
+} from "@/services/terminal/remoteLoopbackLinks";
+import { isClientAppError } from "@/utils/clientAppError";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export interface BrowserPaneProps extends BasePanelProps {
   initialUrl: string;
@@ -67,6 +75,19 @@ export interface BrowserPaneProps extends BasePanelProps {
 // ERR_ABORTED (-3) fires when a pending load is superseded by a new navigation —
 // benign. Any other rejection is unexpected and worth a log; did-fail-load
 // surfaces user-visible failures, so this only catches non-event paths.
+/** Why a host's localhost page couldn't be forwarded here, in the host's own words where it gave some. */
+function hostForwardFailure(url: string, error: unknown): string {
+  if (error instanceof HostPortInUseError) return error.message;
+  const port = parseLoopbackLink(url)?.port;
+  const reason =
+    isClientAppError(error) && error.userMessage
+      ? error.userMessage
+      : formatErrorMessage(error, "The host didn't answer.");
+  return port === undefined
+    ? reason
+    : `Port ${port} on the host couldn't be forwarded to this machine. ${reason}`;
+}
+
 function loadWebviewUrl(webview: Electron.WebviewTag, url: string): void {
   const result = (webview.loadURL as (url: string) => unknown)(url);
   if (
@@ -228,6 +249,24 @@ export function BrowserPane({
     lastPartitionRef.current = webviewPartition;
     initialUrlRef.current = history.present;
   }
+  // In a view on a host, a localhost page is the host's, so its port is
+  // forwarded to this machine before the <webview> attaches: main refuses to
+  // attach a loopback src no forward holds, and a refused attach never loads
+  // anything afterwards, leaving the pane loading forever.
+  const [hostForward, setHostForwardState] = useState<"ready" | "forwarding" | "failed">(() =>
+    needsHostForward(history.present) ? "forwarding" : "ready"
+  );
+  // Read from callbacks, which may outlive the render that created them.
+  const hostForwardRef = useRef(hostForward);
+  const setHostForward = useCallback((next: "ready" | "forwarding" | "failed") => {
+    hostForwardRef.current = next;
+    setHostForwardState(next);
+  }, []);
+  // Every navigation takes a number; a forward that settles after a newer
+  // navigation began decides nothing.
+  const navigationGenRef = useRef(0);
+  // A host page whose forward failed, for Retry and Reload to try again.
+  const failedHostUrlRef = useRef<string | null>(null);
   // Track if webview has been mounted and is ready
   const [isWebviewReady, setIsWebviewReady] = useState(false);
 
@@ -425,13 +464,37 @@ export function BrowserPane({
   });
 
   useEffect(() => {
+    if (hostForward !== "forwarding") return;
+    let cancelled = false;
+    const generation = navigationGenRef.current;
+    const url = initialUrlRef.current;
+    resolveBrowserUrlForView(url).then(
+      () => {
+        if (cancelled || generation !== navigationGenRef.current) return;
+        failedHostUrlRef.current = null;
+        setHostForward("ready");
+      },
+      (error: unknown) => {
+        if (cancelled || generation !== navigationGenRef.current) return;
+        failedHostUrlRef.current = url;
+        setIsLoading(false);
+        setLoadError({ kind: "network", message: hostForwardFailure(url, error) });
+        setHostForward("failed");
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [hostForward, setHostForward]);
+
+  useEffect(() => {
     if (!isWebviewReady || !webviewElement || !pendingNavigationRef.current) return;
     const url = pendingNavigationRef.current;
     pendingNavigationRef.current = null;
     loadWebviewUrl(webviewElement, url);
   }, [isWebviewReady, webviewElement]);
 
-  const commitNavigation = useCallback(
+  const commitResolvedNavigation = useCallback(
     (url: string) => {
       isInitialRestoredLoadRef.current = false;
       setBlockedNav(null);
@@ -441,6 +504,15 @@ export function BrowserPane({
       setLoadError(null);
       lastSetUrlRef.current = url;
 
+      // No <webview> yet (its first page couldn't be forwarded): this URL
+      // needs no forward or has one now, so it attaches with it.
+      if (hostForwardRef.current !== "ready") {
+        initialUrlRef.current = url;
+        pendingNavigationRef.current = null;
+        setHostForward("ready");
+        return;
+      }
+
       const webview = webviewRef.current;
       if (webview && isWebviewReady) {
         pendingNavigationRef.current = null;
@@ -449,8 +521,53 @@ export function BrowserPane({
         pendingNavigationRef.current = url;
       }
     },
-    [isWebviewReady]
+    [isWebviewReady, setHostForward]
   );
+
+  const commitNavigation = useCallback(
+    (url: string) => {
+      const generation = ++navigationGenRef.current;
+      failedHostUrlRef.current = null;
+      if (!needsHostForward(url)) {
+        commitResolvedNavigation(url);
+        return;
+      }
+      setBlockedNav(null);
+      setPendingApproval(null);
+      setIsLoading(true);
+      setLoadError(null);
+      resolveBrowserUrlForView(url).then(
+        (resolved) => {
+          if (generation === navigationGenRef.current) commitResolvedNavigation(resolved);
+        },
+        (error: unknown) => {
+          if (generation !== navigationGenRef.current) return;
+          failedHostUrlRef.current = url;
+          setIsLoading(false);
+          setLoadError({ kind: "network", message: hostForwardFailure(url, error) });
+        }
+      );
+    },
+    [commitResolvedNavigation]
+  );
+
+  /**
+   * Forward a host page whose forward failed once more. True when there was
+   * one, so Retry and Reload don't reload a <webview> that never attached.
+   */
+  const retryHostForward = useCallback((): boolean => {
+    const failedHostUrl = failedHostUrlRef.current;
+    if (failedHostUrl === null) return false;
+    setLoadError(null);
+    setIsLoading(true);
+    if (hostForwardRef.current === "failed") {
+      initialUrlRef.current = failedHostUrl;
+      setHostForward("forwarding");
+    } else {
+      commitNavigation(failedHostUrl);
+    }
+    return true;
+  }, [commitNavigation, setHostForward]);
 
   const handleNavigate = useCallback(
     (url: string) => {
@@ -573,6 +690,7 @@ export function BrowserPane({
   }, [history, isWebviewReady]);
 
   const handleReload = useCallback(() => {
+    if (retryHostForward()) return;
     setBlockedNav(null);
     setIsLoading(true);
     setLoadError(null);
@@ -580,7 +698,7 @@ export function BrowserPane({
     setCrashDetails(null);
     crashTimestampsRef.current = [];
     webviewRef.current?.reload();
-  }, []);
+  }, [retryHostForward]);
 
   // Auto-reload uses a raw webview.reload() — explicitly NOT going through
   // handleReload, which clears crashTimestampsRef and would break the second-
@@ -680,6 +798,8 @@ export function BrowserPane({
   }, []);
 
   const handleRetryFromError = useCallback(() => {
+    // A host page whose forward failed is forwarded again, not reloaded.
+    if (retryHostForward()) return;
     setLoadError(null);
     setIsLoading(true);
     if (currentUrl) {
@@ -691,9 +811,10 @@ export function BrowserPane({
     } else {
       webviewRef.current?.reload();
     }
-  }, [currentUrl]);
+  }, [currentUrl, retryHostForward]);
 
   const handleHardReload = useCallback(() => {
+    if (retryHostForward()) return;
     setBlockedNav(null);
     setIsLoading(true);
     setLoadError(null);
@@ -707,7 +828,7 @@ export function BrowserPane({
     } catch {
       webview.reload();
     }
-  }, [isWebviewReady, id]);
+  }, [isWebviewReady, id, retryHostForward]);
 
   const handleCaptureScreenshot = useCallback(async () => {
     const webview = webviewRef.current;
@@ -1055,24 +1176,26 @@ export function BrowserPane({
                 />
               )}
               {findInPage.isOpen && <FindBar find={findInPage} />}
-              <webview
-                ref={setWebviewNode}
-                // Remount if the partition ever changes after attach (e.g. a window
-                // seeded only via ?projectId= where the store resolves later) so the
-                // webview never keeps a stale cross-project session (#9965).
-                key={webviewPartition}
-                // Seed-only: never re-bind to navigation state (#9940). On a
-                // key-driven remount the ref re-initializes to the current URL.
-                src={initialUrlRef.current}
-                partition={webviewPartition}
-                // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
-                allowpopups=""
-                className={cn(
-                  "w-full h-full border-0",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                  isDragging && "invisible pointer-events-none"
-                )}
-              />
+              {hostForward === "ready" && (
+                <webview
+                  ref={setWebviewNode}
+                  // Remount if the partition ever changes after attach (e.g. a window
+                  // seeded only via ?projectId= where the store resolves later) so the
+                  // webview never keeps a stale cross-project session (#9965).
+                  key={webviewPartition}
+                  // Seed-only: never re-bind to navigation state (#9940). On a
+                  // key-driven remount the ref re-initializes to the current URL.
+                  src={initialUrlRef.current}
+                  partition={webviewPartition}
+                  // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
+                  allowpopups=""
+                  className={cn(
+                    "w-full h-full border-0",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                    isDragging && "invisible pointer-events-none"
+                  )}
+                />
+              )}
               <WebviewDialog dialog={currentDialog} onRespond={handleDialogRespond} />
             </div>
           </>

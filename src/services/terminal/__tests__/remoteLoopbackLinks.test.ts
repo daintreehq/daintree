@@ -12,7 +12,9 @@ vi.mock("@/store/panelStore", () => ({
 
 import {
   callbackPortOf,
+  needsHostForward,
   parseLoopbackLink,
+  resolveBrowserUrlForView,
   resolveTerminalLinkForView,
 } from "../remoteLoopbackLinks";
 import { TerminalLinkHandler } from "../TerminalLinkHandler";
@@ -47,6 +49,56 @@ beforeEach(() => {
 });
 
 afterEach(() => bindView(null));
+
+describe("browser panel URLs", () => {
+  it("leaves every URL alone in a view on this machine", async () => {
+    bindView(null);
+    expect(needsHostForward("http://localhost:3000/")).toBe(false);
+    expect(await resolveBrowserUrlForView("http://localhost:3000/")).toBe("http://localhost:3000/");
+    expect(forward).not.toHaveBeenCalled();
+  });
+
+  it("forwards a host's localhost port for good, to the same port, keeping the address", async () => {
+    bindView("studio-01");
+    forward.mockImplementationOnce(async ({ hostId, remotePort, origin }) => ({
+      forwardId: "f1",
+      hostId,
+      remotePort,
+      localPort: remotePort,
+      origin,
+      label: null,
+      createdAt: 1,
+    }));
+    expect(needsHostForward("localhost:3000")).toBe(true);
+    expect(await resolveBrowserUrlForView("http://localhost:3000/app?x=1")).toBe(
+      "http://localhost:3000/app?x=1"
+    );
+    expect(forward).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "studio-01", remotePort: 3000, origin: "manual" })
+    );
+  });
+
+  it("refuses when the port is taken here, rather than show the page at another address", async () => {
+    bindView("studio-01");
+    // The default mock lands on another local port, as a busy one would.
+    await expect(resolveBrowserUrlForView("http://localhost:3000/")).rejects.toThrow(
+      "Port 3000 is in use on this machine"
+    );
+  });
+
+  it("loads an internet page in a host's view as it is", async () => {
+    bindView("studio-01");
+    expect(needsHostForward("https://github.com/")).toBe(false);
+    expect(await resolveBrowserUrlForView("https://github.com/")).toBe("https://github.com/");
+    expect(forward).not.toHaveBeenCalled();
+  });
+
+  it("refuses rather than fall back to this machine's own localhost", async () => {
+    bindView("studio-01");
+    forward.mockRejectedValueOnce(new Error("host gone"));
+    await expect(resolveBrowserUrlForView("http://localhost:3000/")).rejects.toThrow("host gone");
+  });
+});
 
 describe("link parsing", () => {
   it("finds the port a loopback link names", () => {

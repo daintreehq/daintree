@@ -311,6 +311,80 @@ describe("BrowserPane webview lifecycle regression", () => {
     expect(webview.hasAttribute("allowpopups")).toBe(true);
   });
 
+  describe("a view on another machine", () => {
+    const forwardTo = (localPort: number) =>
+      vi.fn(async ({ hostId, remotePort }: { hostId: string; remotePort: number }) => ({
+        forwardId: "f1",
+        hostId,
+        remotePort,
+        localPort,
+        origin: "manual",
+        label: null,
+        createdAt: 1,
+      }));
+
+    afterEach(() => {
+      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+    });
+
+    it("forwards the host's localhost port before the webview attaches, at the same address", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      const forward = forwardTo(5173);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).electron.portForwards = { forward };
+      const { container } = render(<BrowserPane {...baseProps} />);
+      // Main refuses a loopback src no forward holds, and a refused attach never loads.
+      expect(container.querySelector("webview")).toBeNull();
+      await act(async () => {});
+      expect(forward).toHaveBeenCalledWith(
+        expect.objectContaining({ hostId: "studio-01", remotePort: 5173 })
+      );
+      expect(getWebviewElement(container).getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("forwards again on Retry once a failed forward is fixed, and only then attaches", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      const forward = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("host gone"))
+        .mockImplementation(forwardTo(5173));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).electron.portForwards = { forward };
+      const { container, getByRole } = render(<BrowserPane {...baseProps} />);
+      await act(async () => {});
+      expect(container.querySelector("webview")).toBeNull();
+      await act(async () => {
+        getByRole("button", { name: /retry/i }).click();
+      });
+      await act(async () => {});
+      expect(forward).toHaveBeenCalledTimes(2);
+      expect(getWebviewElement(container).getAttribute("src")).toBe("http://localhost:5173/");
+    });
+
+    it("says the port is taken here instead of showing the page at another address", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).electron.portForwards = { forward: forwardTo(15173) };
+      const { container } = render(<BrowserPane {...baseProps} />);
+      await act(async () => {});
+      expect(container.querySelector("webview")).toBeNull();
+      expect(container.textContent).toContain("Port 5173 is in use on this machine");
+    });
+
+    it("says why the page can't open instead of loading forever when the forward fails", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      const forward = vi.fn(async () => {
+        throw new Error("host gone");
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).electron.portForwards = { forward };
+      const { container } = render(<BrowserPane {...baseProps} />);
+      await act(async () => {});
+      expect(container.querySelector("webview")).toBeNull();
+      expect(container.textContent).toContain("Port 5173 on the host couldn't be forwarded");
+    });
+  });
+
   it("forwards the single-panel dock restore control", () => {
     render(<BrowserPane {...baseProps} location="dock" showRestoreControl />);
 
