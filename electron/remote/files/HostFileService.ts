@@ -117,7 +117,32 @@ interface HostDownload {
   controller: AbortController;
 }
 
-type FileIdentity = { dev: bigint; ino: bigint };
+/**
+ * A file as it was recorded. Device and inode alone aren't enough: a file
+ * deleted and written again at the same path can get the same inode number
+ * back (Linux reuses them freely), but never the same change time.
+ */
+type FileIdentity = { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint };
+
+function identityOf(stats: import("node:fs").BigIntStats): FileIdentity {
+  return {
+    dev: stats.dev,
+    ino: stats.ino,
+    size: stats.size,
+    mtimeNs: stats.mtimeNs,
+    ctimeNs: stats.ctimeNs,
+  };
+}
+
+function sameFile(a: FileIdentity, b: FileIdentity): boolean {
+  return (
+    a.dev === b.dev &&
+    a.ino === b.ino &&
+    a.size === b.size &&
+    a.mtimeNs === b.mtimeNs &&
+    a.ctimeNs === b.ctimeNs
+  );
+}
 
 interface RecordedBundle {
   projectId: string;
@@ -265,9 +290,7 @@ export class HostFileService {
     if (recorded.size >= MAX_BUNDLES_PER_ENDPOINT) recorded.delete(recorded.keys().next().value!);
     const identity = fs
       .lstat(key, { bigint: true })
-      .then((stats): FileIdentity | null =>
-        stats.isFile() ? { dev: stats.dev, ino: stats.ino } : null
-      )
+      .then((stats): FileIdentity | null => (stats.isFile() ? identityOf(stats) : null))
       .catch(() => null);
     recorded.set(key, {
       projectId: endpoint.projectId,
@@ -654,7 +677,7 @@ export class HostFileService {
       if (!opened) throw notInProject();
       if (located?.identity) {
         const now = await opened.handle.stat({ bigint: true }).catch(() => null);
-        if (!now || now.dev !== located.identity.dev || now.ino !== located.identity.ino) {
+        if (!now || !sameFile(identityOf(now), located.identity)) {
           await opened.handle.close().catch(() => {});
           throw notInProject();
         }
