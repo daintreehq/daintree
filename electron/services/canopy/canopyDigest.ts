@@ -62,7 +62,7 @@ const PROMPT = /^(?:❯|›|>|→)\s+(\S.*)$/;
  * npm's script banner, which an agent's tool output prints at the start of a
  * row ("> pantry@0.3.0 test", then "> node --test …"): `>` that no user typed.
  */
-const NPM_BANNER = /^>\s+\S+@\S+\s+\S+/;
+const NPM_BANNER = /^>\s+@?[^\s@]+@\S+\s+\S/;
 /** An input box is drawn between rules; its contents are a draft, not a request. */
 const RULE = /^\s*[─━╌]{8,}\s*$/;
 /** Where an echoed request ends: agent output, a dialog, a status line. */

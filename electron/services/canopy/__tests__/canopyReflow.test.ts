@@ -131,6 +131,29 @@ describe("sameAfterReflow", () => {
     ).toBe(false);
   });
 
+  it("never takes new lines above the input box for a redraw, though one of them is cut", () => {
+    const more = [
+      REPORT,
+      "⏺ Bash(git push --force origin main --no-verify --follow-tags --set-upstream origin main)",
+      "  ⎿  Error: protected branch hook declined",
+      "⏺ Should I open a PR instead?",
+    ].join("\n");
+    expect(sameAfterReflow(reflowPrint(screen(REPORT, 120)), reflowPrint(screen(more, 64)))).toBe(
+      false
+    );
+  });
+
+  it("reads a line cut at two widths, showing more of itself at one, as the same", () => {
+    expect(screen(REPORT, 64)).toContain("…)");
+    expect(screen(REPORT, 90)).toContain("…)");
+    expect(sameAfterReflow(reflowPrint(screen(REPORT, 64)), reflowPrint(screen(REPORT, 90)))).toBe(
+      true
+    );
+    expect(sameAfterReflow(reflowPrint(screen(REPORT, 90)), reflowPrint(screen(REPORT, 64)))).toBe(
+      true
+    );
+  });
+
   it("keeps the spaces between a command's words", () => {
     expect(
       sameAfterReflow(

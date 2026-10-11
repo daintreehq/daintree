@@ -629,10 +629,10 @@ function requirePtyClient() {
 }
 
 /**
- * The workspaces to read: the one every open panel shows, when they agree;
- * otherwise every workspace, each panel showing its own. With no panel open
- * the background watch reads everything, since it lights the toolbar for
- * every project.
+ * The workspace the open panels show, when they agree: its runs are read at a
+ * panel's pace and given words. Otherwise every workspace, each panel showing
+ * its own. Runs outside it are still watched as the background watch watches
+ * them, since that lights the toolbar and pages for every project.
  */
 function reconciledScope(): string | null {
   const scopes = new Set([...activeViews].map((id) => viewScopes.get(id) ?? null));

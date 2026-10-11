@@ -24,7 +24,7 @@ const ECHO = /^(?:❯|›|>)\s+\S/;
 /** A menu's cursor on its selected option ("› 1. Yes, proceed"), which is not the user's message. */
 const MENU_CURSOR = /^(?:❯|›|>)\s+\d+[.)]\s/;
 /** npm's script banner in tool output, which opens with a `>` nobody typed. */
-const NPM_BANNER = /^>\s+\S+@\S+\s+\S+/;
+const NPM_BANNER = /^>\s+@?[^\s@]+@\S+\s+\S/;
 /** A message the agent writes opens on its bullet: Claude's ⏺, Codex's •, Gemini's ✦. */
 const BULLET = /^(?:(?:⏺|•|✦|●)\s*)+(.*)$/;
 /** Tool output hangs off its call on a branch. */
@@ -82,10 +82,18 @@ export function glanceScreen(lines: readonly string[]): CanopyGlance {
   };
 }
 
+/** How much of a recap's end can hold Claude's "(disable recaps …)" hint. */
+const RECAP_TAIL_CHARS = 200;
+
 function findRecap(rows: readonly string[], request: number): string | null {
   for (let i = rows.length - 1; i > request; i--) {
     const match = RECAP.exec(rows[i]!);
-    if (match) return clipText(match[1]!.replace(RECAP_TAIL, ""));
+    if (!match) continue;
+    // Only the end is searched for the hint: the whole of a long row would be
+    // searched again from every opening bracket in it.
+    const text = match[1]!;
+    const tailAt = Math.max(0, text.length - RECAP_TAIL_CHARS);
+    return clipText(text.slice(0, tailAt) + text.slice(tailAt).replace(RECAP_TAIL, ""));
   }
   return null;
 }

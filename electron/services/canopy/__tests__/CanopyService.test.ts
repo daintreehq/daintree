@@ -27,6 +27,7 @@ import {
   type CanopyScreenInput,
 } from "../canopyProviders.js";
 import { CANOPY_REFLOW_MS } from "../canopyReflow.js";
+import { CANOPY_TURN_HOLD_MS } from "../canopyReads.js";
 
 /** A classifier reading; `blocked` defaults to the attention of an ask, else 0. */
 type Reading = Omit<ClassifierResult, "blocked"> & { blocked?: number };
@@ -51,6 +52,8 @@ interface Harness {
   service: CanopyService;
   screens: Map<string, string>;
   runs: FleetRunRow[];
+  /** Every request's abort signal, classifier and describer alike, in the order made. */
+  signals: AbortSignal[];
   classify: ReturnType<typeof vi.fn<(input: CanopyScreenInput) => Promise<Reading>>>;
   describe: ReturnType<typeof vi.fn<DescribeFn>>;
   snapshots: CanopySnapshot[];
@@ -87,6 +90,8 @@ async function makeHarness(options: {
   closed?: boolean;
   /** False while the fleet should read as unknown (degraded). */
   fleetKnown?: () => boolean;
+  /** Awaited before every screen read, to hold a scan part way. */
+  screenGate?: () => Promise<void>;
 }): Promise<Harness> {
   const screens = new Map<string, string>();
   const runs: FleetRunRow[] = [];
@@ -118,11 +123,15 @@ async function makeHarness(options: {
       }))
   );
   const snapshots: CanopySnapshot[] = [];
+  const signals: AbortSignal[] = [];
   const deps: CanopyServiceDeps = {
     // Most tests read each change at once; the floor has tests of its own.
     rereadMs: options.rereadMs ?? 0,
     getRuns: () => (options.fleetKnown?.() === false ? null : runs),
-    readScreen: async (runId) => screens.get(runId) ?? null,
+    readScreen: async (runId) => {
+      await options.screenGate?.();
+      return screens.get(runId) ?? null;
+    },
     // A real history read is the scrollback above the screen and the screen itself.
     ...(options.history
       ? {
@@ -130,8 +139,14 @@ async function makeHarness(options: {
             `${options.history!.get(runId) ?? ""}\n${screens.get(runId) ?? ""}`,
         }
       : {}),
-    classify: async (input) => withBlocked(await classify(input)),
-    describe: (input, says, _signal, onPartial) => describe(input, says, onPartial),
+    classify: async (input, signal) => {
+      signals.push(signal);
+      return withBlocked(await classify(input));
+    },
+    describe: (input, says, signal, onPartial) => {
+      signals.push(signal);
+      return describe(input, says, onPartial);
+    },
     broadcast: (snapshot) => snapshots.push(snapshot),
     ...(options.now ? { now: options.now } : {}),
     closeGraceMs: options.closeGraceMs ?? 0,
@@ -144,7 +159,15 @@ async function makeHarness(options: {
       ? { stateChangeScanMs: options.stateChangeScanMs }
       : {}),
   };
-  harness = { service: new CanopyService(deps), screens, runs, classify, describe, snapshots };
+  harness = {
+    service: new CanopyService(deps),
+    screens,
+    runs,
+    signals,
+    classify,
+    describe,
+    snapshots,
+  };
   if (!options.closed) harness.service.setActive(true);
   await settle();
   return harness;
@@ -316,9 +339,18 @@ describe("CanopyService streaming a card", () => {
 
   it("offers nothing to act on from a card still being written", async () => {
     const { h, partial, finish } = await streaming();
-    partial({ category: "approval", headline: "Approve running npm test" });
-    await settle();
-    expect(h.service.getSnapshot().cards[0]!.stage).not.toBe("described");
+    partial({
+      category: "approval",
+      headline: "Approve running npm test",
+      summary: "Runs it.",
+    });
+    await vi.waitFor(() =>
+      expect(h.service.getSnapshot().cards[0]!.headline).toBe("Approve running npm test")
+    );
+    const card = h.service.getSnapshot().cards[0]!;
+    expect(card.stage).not.toBe("described");
+    expect(card.options).toEqual([]);
+    expect(card.action).toBeNull();
     finish(FINAL);
   });
 
@@ -326,7 +358,7 @@ describe("CanopyService streaming a card", () => {
     const { h, partial, finish } = await streaming();
     finish(FINAL);
     await vi.waitFor(() => expect(h.service.getSnapshot().cards[0]!.describing).toBe(false));
-    partial({ category: "working", headline: "Stale words" });
+    partial({ category: "working", headline: "Stale words", summary: "Stale summary." });
     await settle();
     expect(h.service.getSnapshot().cards[0]!.headline).toBe("Approve running npm test");
   });
@@ -1017,7 +1049,9 @@ describe("CanopyService", () => {
   });
 
   it("counts work the fleet saw between polls as the agent saying something new", async () => {
+    let clock = 1_000_000;
     const h = await makeHarness({
+      now: () => clock,
       classify: async () => ({
         category: "finished",
         confidence: 0.9,
@@ -1032,10 +1066,92 @@ describe("CanopyService", () => {
     // It ran and stopped again between two scans; only the fleet saw it busy.
     h.runs[0] = run("a", { agentState: "working" });
     h.service.onFleetChanged();
+    clock += CANOPY_TURN_HOLD_MS;
     h.runs[0] = run("a", { agentState: "completed" });
+    h.service.onFleetChanged();
     h.screens.set("a", "Done with the next part.");
     await h.service.refresh();
     expect(h.service.getSnapshot().dispositions).toEqual([]);
+  });
+
+  it("brings back an archived run whose new ask was read while its work went on, once that work ends", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({
+      now: () => clock,
+      classify: async () => ({
+        category: "approval",
+        confidence: 0.95,
+        attention: 0.95,
+        question: "Do you want to proceed?",
+      }),
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
+    h.screens.set("a", APPROVAL_SCREEN);
+    await h.service.scan();
+    h.service.archive("a", 1);
+    // Its next approval is read before the work in between has held long enough to count.
+    h.runs[0] = run("a", { agentState: "working", since: clock });
+    h.service.onFleetChanged();
+    h.screens.set("a", APPROVAL_SCREEN.replace("npm test", "npm run build"));
+    await h.service.refresh();
+    expect(h.service.getSnapshot().dispositions).toHaveLength(1);
+    clock += CANOPY_TURN_HOLD_MS;
+    h.runs[0] = run("a", { agentState: "waiting", waitingReason: "approval", since: clock });
+    h.service.onFleetChanged();
+    await h.service.refresh();
+    expect(h.service.getSnapshot().dispositions).toEqual([]);
+  });
+
+  it("brings back an archived run once a read while it still works shows that work held", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({
+      now: () => clock,
+      classify: async () => ({
+        category: "approval",
+        confidence: 0.95,
+        attention: 0.95,
+        question: "Do you want to proceed?",
+      }),
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
+    h.screens.set("a", APPROVAL_SCREEN);
+    await h.service.scan();
+    h.service.archive("a", 1);
+    h.runs[0] = run("a", { agentState: "working", since: clock });
+    h.service.onFleetChanged();
+    h.screens.set("a", APPROVAL_SCREEN.replace("npm test", "npm run build"));
+    await h.service.refresh();
+    expect(h.service.getSnapshot().dispositions).toHaveLength(1);
+    // Daintree still sees it working, now for longer than a flicker.
+    clock += CANOPY_TURN_HOLD_MS;
+    await h.service.refresh();
+    expect(h.service.getSnapshot().dispositions).toEqual([]);
+  });
+
+  it("keeps a run put aside through a flicker of work, its screen moving or not", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({
+      now: () => clock,
+      classify: async () => ({
+        category: "finished",
+        confidence: 0.9,
+        attention: 0.9,
+        question: null,
+      }),
+    });
+    h.runs.push(run("a", { agentState: "completed" }));
+    h.screens.set("a", "Done.");
+    await h.service.scan();
+    h.service.archive("a", 1);
+    // Output alone — a recap drawn under the finished turn — flips the state for a moment.
+    h.runs[0] = run("a", { agentState: "working" });
+    h.service.onFleetChanged();
+    clock += 200;
+    h.runs[0] = run("a", { agentState: "completed" });
+    h.service.onFleetChanged();
+    h.screens.set("a", "Done.\n※ recap: fixed the rounding bug");
+    await h.service.refresh();
+    expect(h.service.getSnapshot().dispositions).toHaveLength(1);
   });
 
   it("keeps a run archived before its screen was ever read, taking the first read as its baseline", async () => {
@@ -1073,7 +1189,7 @@ describe("CanopyService", () => {
     expect(h.describe).toHaveBeenCalledTimes(1);
   });
 
-  it("reads a screen again once back in scope when its read was dropped by a scope change", async () => {
+  it("keeps reading a run that leaves the panel's scope, and writes its words once it is back", async () => {
     const finished: Reading = {
       category: "finished",
       confidence: 0.9,
@@ -1084,7 +1200,7 @@ describe("CanopyService", () => {
     let held = false;
     const h = await makeHarness({
       classify: (input) => {
-        // The first read of B is still with the provider when the scope changes.
+        // The first read of B is still with the service when the scope changes.
         if (input.screen !== "B" || held) return Promise.resolve(finished);
         held = true;
         return new Promise((resolve) => {
@@ -1100,10 +1216,17 @@ describe("CanopyService", () => {
     h.service.setScope("one");
     release();
     await scan;
-    expect(h.service.getSnapshot().cards.map((card) => card.runId)).toEqual(["a"]);
-    h.service.setScope(null);
-    await h.service.refresh();
     await settle();
+    // B's reading lands — its asks would still page — but its words wait for a
+    // panel that shows it.
+    const describedFor = () => h.describe.mock.calls.map(([input]) => input.screen).sort();
+    expect(describedFor()).toEqual(["A"]);
+    expect(h.service.getSnapshot().wordsDue).toEqual(["b"]);
+    h.service.setScope(null);
+    await settle();
+    // Written from the read the watch made, not read again.
+    expect(describedFor()).toEqual(["A", "B"]);
+    expect(h.classify).toHaveBeenCalledTimes(2);
     expect(
       h.service
         .getSnapshot()
@@ -1112,8 +1235,46 @@ describe("CanopyService", () => {
     ).toEqual(["a", "b"]);
   });
 
-  it("reads only the screens in scope", async () => {
-    const h = await makeHarness({});
+  it("reads the panel's project at its pace, and the rest at the watch's, for the classifier alone", async () => {
+    let clock = 1_000_000;
+    const onAsk = vi.fn();
+    const h = await makeHarness({
+      now: () => clock,
+      backgroundPollMs: 15_000,
+      onAsk,
+      classify: async (input) =>
+        input.screen.startsWith("B")
+          ? { category: "approval", confidence: 0.98, attention: 0.95, question: "Ship it?" }
+          : { category: "idle", confidence: 0.9, attention: 0.1, question: null },
+    });
+    h.runs.push(run("a", { workspaceId: "one" }), run("b", { workspaceId: "two" }));
+    h.screens.set("a", "A");
+    h.screens.set("b", "B");
+    h.service.setScope("one");
+    await settle();
+    clock += 15_000;
+    await h.service.refresh();
+    await settle();
+    const classified = () => h.classify.mock.calls.map(([input]) => input.screen).sort();
+    expect(classified()).toEqual(["A", "B"]);
+    // The ask in the project the panel doesn't show still pages; no words are
+    // written for it.
+    expect(onAsk).toHaveBeenCalledTimes(1);
+    expect(h.describe.mock.calls.map(([input]) => input.screen)).not.toContain("B");
+
+    // A change there waits for the watch's next read, not the panel's.
+    h.screens.set("b", "B, moved");
+    h.screens.set("a", "A, moved");
+    clock += CANOPY_POLL_MS;
+    await h.service.scan();
+    expect(classified()).toEqual(["A", "A, moved", "B"]);
+    clock += 15_000;
+    await h.service.scan();
+    expect(classified()).toEqual(["A", "A, moved", "B", "B, moved"]);
+  });
+
+  it("reads only the screens in scope while the background watch is off", async () => {
+    const h = await makeHarness({ backgroundPollMs: 0 });
     h.runs.push(run("a", { workspaceId: "one" }), run("b", { workspaceId: "two" }));
     h.screens.set("a", "A");
     h.screens.set("b", "B");
@@ -1388,8 +1549,8 @@ describe("CanopyService", () => {
     expect(h.describe.mock.calls.some(([, says]) => says === "question")).toBe(false);
   });
 
-  it("sends nothing while no panel is open", async () => {
-    const h = await makeHarness({});
+  it("sends nothing while no panel is open and the background watch is off", async () => {
+    const h = await makeHarness({ backgroundPollMs: 0 });
     h.service.setActive(false);
     h.runs.push(run("a"));
     h.screens.set("a", "screen");
@@ -1934,6 +2095,8 @@ describe("CanopyService", () => {
     expect(h.describe).toHaveBeenCalledTimes(1);
     h.screens.set("a", "");
     await h.service.scan();
+    // Its words are not coming: the row draws none as on their way.
+    expect(h.service.getSnapshot().cards[0]!.describing).toBe(false);
     card.release();
     await h.service.refresh();
     expect(h.service.getSnapshot().cards[0]!.headline).toBeNull();
@@ -2037,7 +2200,7 @@ describe("CanopyService", () => {
 
     // The screen moved but still asks: the line stays while the read fails.
     fail = true;
-    h.screens.set("a", `${APPROVAL_SCREEN}\n`);
+    h.screens.set("a", `⏺ Read 2 files\n${APPROVAL_SCREEN}`);
     await h.service.scan();
     expect(h.service.getSnapshot().cards[0]!.statusLine).toBe("Do you want to proceed?");
 
@@ -2296,13 +2459,77 @@ describe("CanopyService", () => {
     });
     h.runs.push(run("a"));
     h.screens.set("a", "screen");
+    const start = clock;
     await h.service.scan();
-    clock += CANOPY_COLD_START_GRACE_MS - 1;
-    await h.service.scan();
+    // Tried again as each backoff runs out, for as long as a cold start may take.
+    while (clock - start < CANOPY_COLD_START_GRACE_MS - CANOPY_FAILURE_BACKOFF_MAX_MS) {
+      clock += CANOPY_FAILURE_BACKOFF_MAX_MS;
+      await h.service.scan();
+    }
     expect(h.service.getSnapshot().lastError).toBeNull();
-    clock += CANOPY_FAILURE_BACKOFF_MAX_MS;
+    // Past any backoff's jitter, and past the cold start's grace.
+    clock += CANOPY_FAILURE_BACKOFF_MAX_MS * 1.5;
     await h.service.scan();
     expect(h.service.getSnapshot().lastError).toBe("Canopy's service took too long to answer.");
+  });
+
+  it("keeps an outage one spell when the background watch only reads every few minutes", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({
+      now: () => clock,
+      closed: true,
+      backgroundPollMs: 120_000,
+      classify: async () => {
+        throw new CanopyProviderError("classifier", "request timed out", true);
+      },
+    });
+    h.runs.push(run("a"));
+    h.screens.set("a", "screen");
+    await h.service.scan();
+    clock += 120_000;
+    await h.service.scan();
+    expect(h.service.getSnapshot().lastError).toBe("Canopy's service took too long to answer.");
+  });
+
+  it("drops what a retired spell reported once a new one begins", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({
+      now: () => clock,
+      classify: async () => {
+        throw new CanopyProviderError("classifier", "request timed out", true);
+      },
+    });
+    h.runs.push(run("a"));
+    h.screens.set("a", "screen");
+    await h.service.scan();
+    clock += CANOPY_TRANSIENT_GRACE_MS;
+    h.screens.set("a", "screen, moved");
+    await h.service.scan();
+    expect(h.service.getSnapshot().lastError).not.toBeNull();
+    // Not read for an hour, then a passing failure: a new spell, in its grace.
+    clock += 60 * 60_000;
+    h.screens.set("a", "screen, an hour on");
+    await h.service.scan();
+    expect(h.service.getSnapshot().lastError).toBeNull();
+  });
+
+  it("gives a failure long after the last its own grace, as a new spell", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({
+      now: () => clock,
+      classify: async () => {
+        throw new CanopyProviderError("classifier", "request timed out", true);
+      },
+    });
+    h.runs.push(run("a"));
+    h.screens.set("a", "screen");
+    await h.service.scan();
+    // Nothing asked of the service for an hour — the panel closed, the watch off.
+    clock += 60 * 60_000;
+    h.screens.set("a", "screen, later");
+    await h.service.scan();
+    // One passing failure is not yet worth a word.
+    expect(h.service.getSnapshot().lastError).toBeNull();
   });
 
   it("says a failed read in the user's words, never a stage or status code", () => {
@@ -2945,8 +3172,8 @@ describe("CanopyService", () => {
     expect(h.classify.mock.calls[1]![0].screen).toContain("proceed");
   });
 
-  it("does not scan on a state change while the panel is closed", async () => {
-    const h = await makeHarness({ stateChangeScanMs: 0 });
+  it("does not scan on a state change while the panel is closed and the watch is off", async () => {
+    const h = await makeHarness({ stateChangeScanMs: 0, backgroundPollMs: 0 });
     h.service.setActive(false);
     h.runs.push(run("a", { agentState: "waiting" }));
     h.screens.set("a", APPROVAL_SCREEN);
@@ -3530,9 +3757,10 @@ describe("CanopyService", () => {
       expect(onAsk).toHaveBeenCalledTimes(1);
       expect(onAsk.mock.calls[0]![1]).toEqual({ kind: "approval", question: "Ship it?" });
 
-      // Redrawn, still the same ask.
-      h.screens.set("a", `${APPROVAL_SCREEN}\n `);
+      // The screen moved, still the same ask.
+      h.screens.set("a", `⏺ Read 2 files\n${APPROVAL_SCREEN}`);
       await h.service.refresh();
+      expect(h.classify).toHaveBeenCalledTimes(2);
       expect(onAsk).toHaveBeenCalledTimes(1);
 
       // It worked in between, unseen by any scan: the next ask is new.
@@ -3541,6 +3769,119 @@ describe("CanopyService", () => {
       h.service.onFleetChanged();
       h.runs[0] = run("a", { agentState: "waiting" });
       h.screens.set("a", `${APPROVAL_SCREEN}\nagain`);
+      await h.service.refresh();
+      expect(onAsk).toHaveBeenCalledTimes(2);
+    });
+
+    it("tells onAsk of the next ask after the user answered one, though no work was seen", async () => {
+      const onAsk = vi.fn();
+      let question = "Ship it?";
+      const h = await makeHarness({
+        classify: async () => ({
+          category: "approval",
+          confidence: 0.98,
+          attention: 0.95,
+          blocked: 0.97,
+          question,
+        }),
+        onAsk,
+      });
+      h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
+      h.screens.set("a", APPROVAL_SCREEN);
+      await h.service.refresh();
+      h.service.markHandled("a", 1);
+      // The next dialog drawn in its place before any scan saw the answer land.
+      question = "Deploy it?";
+      h.screens.set("a", APPROVAL_SCREEN.replace("npm test", "npm run deploy"));
+      await h.service.refresh();
+      expect(onAsk).toHaveBeenCalledTimes(2);
+    });
+
+    it("tells onAsk once for an ask whose run only flickered to working", async () => {
+      const onAsk = vi.fn();
+      const h = await makeHarness({ classify: reading("approval", 0.97), onAsk });
+      h.runs.push(run("a", { agentState: "waiting" }));
+      h.screens.set("a", APPROVAL_SCREEN);
+      await h.service.refresh();
+      h.service.onFleetChanged();
+      h.runs[0] = run("a", { agentState: "working" });
+      h.service.onFleetChanged();
+      h.runs[0] = run("a", { agentState: "waiting" });
+      h.service.onFleetChanged();
+      await h.service.refresh();
+      expect(onAsk).toHaveBeenCalledTimes(1);
+    });
+
+    it("tells onAsk again when a snooze put on a told ask runs out", async () => {
+      const onAsk = vi.fn();
+      const h = await makeHarness({ classify: reading("approval", 0.97), onAsk });
+      h.runs.push(run("a", { agentState: "waiting" }));
+      h.screens.set("a", APPROVAL_SCREEN);
+      await h.service.refresh();
+      expect(onAsk).toHaveBeenCalledTimes(1);
+      const snooze = { until: Date.now() + 60_000 } as unknown as FleetRunRow["snooze"];
+      h.runs[0] = run("a", { agentState: "waiting", snooze });
+      await h.service.refresh();
+      h.runs[0] = run("a", { agentState: "waiting" });
+      await h.service.refresh();
+      expect(onAsk).toHaveBeenCalledTimes(2);
+    });
+
+    it("tells onAsk of the same ask shown again after real work", async () => {
+      let clock = 1_000_000;
+      const onAsk = vi.fn();
+      const h = await makeHarness({ classify: reading("approval", 0.97), onAsk, now: () => clock });
+      h.runs.push(run("a", { agentState: "waiting" }));
+      h.screens.set("a", APPROVAL_SCREEN);
+      await h.service.refresh();
+      h.service.onFleetChanged();
+      h.runs[0] = run("a", { agentState: "working", since: clock });
+      h.service.onFleetChanged();
+      clock += CANOPY_TURN_HOLD_MS;
+      h.runs[0] = run("a", { agentState: "waiting", since: clock });
+      h.service.onFleetChanged();
+      await h.service.refresh();
+      expect(onAsk).toHaveBeenCalledTimes(2);
+    });
+
+    it("tells onAsk of the same ask after real work, though a read during the work saw it", async () => {
+      let clock = 1_000_000;
+      const onAsk = vi.fn();
+      const h = await makeHarness({ classify: reading("approval", 0.97), onAsk, now: () => clock });
+      h.runs.push(run("a", { agentState: "waiting" }));
+      h.screens.set("a", APPROVAL_SCREEN);
+      await h.service.refresh();
+      h.service.onFleetChanged();
+      h.runs[0] = run("a", { agentState: "working", since: clock });
+      h.service.onFleetChanged();
+      // Read while it works, the dialog still drawn: the same ask, not told again.
+      await h.service.refresh();
+      expect(onAsk).toHaveBeenCalledTimes(1);
+      clock += CANOPY_TURN_HOLD_MS;
+      h.runs[0] = run("a", { agentState: "waiting", since: clock });
+      h.service.onFleetChanged();
+      await h.service.refresh();
+      expect(onAsk).toHaveBeenCalledTimes(2);
+    });
+
+    it("tells onAsk of a different ask drawn in place of a told one, with nothing seen between", async () => {
+      const onAsk = vi.fn();
+      let question = "Ship it?";
+      const h = await makeHarness({
+        classify: async () => ({
+          category: "approval",
+          confidence: 0.98,
+          attention: 0.95,
+          blocked: 0.97,
+          question,
+        }),
+        onAsk,
+      });
+      h.runs.push(run("a", { agentState: "waiting" }));
+      h.screens.set("a", APPROVAL_SCREEN);
+      await h.service.refresh();
+      question = "Deploy it?";
+      h.screens.set("a", APPROVAL_SCREEN.replace("npm test", "npm run deploy"));
       await h.service.refresh();
       expect(onAsk).toHaveBeenCalledTimes(2);
     });
@@ -4145,5 +4486,184 @@ describe("CanopyService reads", () => {
     expect(readOf(h)).toBeUndefined();
     h.service.setRead("a", 1, true);
     expect(readOf(h)).toBeUndefined();
+  });
+});
+
+describe("CanopyService failures and broadcasts", () => {
+  it("drops a failure writing a run's words once none are owed for its screen", async () => {
+    let clock = 1_000_000;
+    const h = await makeHarness({
+      now: () => clock,
+      classify: async () => ({
+        category: "approval",
+        confidence: 0.95,
+        attention: 0.95,
+        question: "Allow?",
+      }),
+      describe: async () => {
+        throw new Error("model broke");
+      },
+    });
+    h.runs.push(run("a"));
+    h.screens.set("a", APPROVAL_SCREEN);
+    await h.service.scan();
+    await settle();
+    expect(h.service.getSnapshot().lastError).not.toBeNull();
+    h.service.archive("a", 1);
+    clock += CANOPY_FAILURE_BACKOFF_MAX_MS * 2;
+    h.screens.set("a", `⏺ Read 2 files\n${APPROVAL_SCREEN}`);
+    await h.service.refresh();
+    await settle();
+    expect(h.service.getSnapshot().lastError).toBeNull();
+  });
+
+  it("keeps a run archived on a prompt the words quoted otherwise, while it is still drawn", async () => {
+    const screen = [
+      "⏺ Bash(npm test)",
+      "Allow npm test to run?",
+      "Do you want to proceed?",
+      "❯ 1. Yes",
+      "  2. No",
+    ].join("\n");
+    const h = await makeHarness({
+      classify: async () => ({
+        category: "approval",
+        confidence: 0.95,
+        attention: 0.95,
+        question: "Do you want to proceed?",
+      }),
+      describe: async (_input, says) => ({
+        category: says,
+        headline: "Approve npm test",
+        summary: "Runs the tests.",
+        attentionScore: 92,
+        task: null,
+        risk: "none",
+        riskReason: null,
+        action: null,
+        progress: null,
+        tests: "unknown",
+        changes: "unknown",
+        question: "Allow npm test to run?",
+        options: ["Yes", "No"],
+      }),
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
+    h.screens.set("a", screen);
+    await h.service.scan();
+    await settle();
+    expect(h.service.getSnapshot().cards[0]!.question).toBe("Allow npm test to run?");
+    h.service.archive("a", 1);
+    // Something above the dialog moved; the dialog is the one archived.
+    h.screens.set("a", `⏺ Read 2 files\n${screen}`);
+    await h.service.refresh();
+    expect(h.service.getSnapshot().dispositions).toHaveLength(1);
+  });
+
+  it("tells a view a scan ended, though nothing else changed after it said one began", async () => {
+    let gate: Promise<void> | null = null;
+    const h = await makeHarness({ screenGate: () => gate ?? Promise.resolve() });
+    h.runs.push(run("a"));
+    h.screens.set("a", "screen");
+    await h.service.scan();
+    await settle();
+    let release!: () => void;
+    gate = new Promise((resolve) => (release = resolve));
+    const scan = h.service.scan();
+    // Something else the snapshot carries changes while the scan is under way.
+    h.service.setRead("a", 1, false);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(h.snapshots.at(-1)!.busy).toBe(true);
+    gate = null;
+    release();
+    await scan;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(h.snapshots.at(-1)!.busy).toBe(false);
+  });
+});
+
+describe("CanopyService stopping what is in flight", () => {
+  const asking = async (): Promise<Reading> => ({
+    category: "approval",
+    confidence: 0.95,
+    attention: 0.95,
+    question: "Do you want to proceed?",
+  });
+  const never = <T>(): Promise<T> => new Promise<T>(() => {});
+  const OFF: CanopyPlan = { mode: "unset", activated: false, tier: "free" };
+  const ON: CanopyPlan = { mode: "on", activated: true, tier: "free" };
+
+  it("aborts a read under way when Canopy is turned off", async () => {
+    const h = await makeHarness({ classify: never });
+    h.runs.push(run("a"));
+    h.screens.set("a", APPROVAL_SCREEN);
+    void h.service.scan();
+    await vi.waitFor(() => expect(h.signals).toHaveLength(1));
+    h.service.setPlan(OFF);
+    expect(h.signals[0]!.aborted).toBe(true);
+  });
+
+  it("aborts the words being written when the last panel closes, and when it is disposed", async () => {
+    const h = await makeHarness({ classify: asking, describe: never });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
+    h.screens.set("a", APPROVAL_SCREEN);
+    void h.service.scan();
+    await vi.waitFor(() => expect(h.describe).toHaveBeenCalledTimes(1));
+    const words = h.signals.at(-1)!;
+    h.service.setActive(false);
+    expect(words.aborted).toBe(true);
+
+    h.service.setActive(true);
+    await vi.waitFor(() => expect(h.describe).toHaveBeenCalledTimes(2));
+    const again = h.signals.at(-1)!;
+    h.service.dispose();
+    expect(again.aborted).toBe(true);
+  });
+
+  it("aborts the words being written for a screen that moved on to another prompt", async () => {
+    const h = await makeHarness({ classify: asking, describe: never });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
+    h.screens.set("a", APPROVAL_SCREEN);
+    void h.service.scan();
+    await vi.waitFor(() => expect(h.describe).toHaveBeenCalledTimes(1));
+    const words = h.signals.at(-1)!;
+    h.screens.set("a", APPROVAL_SCREEN.replace("npm test", "npm run deploy"));
+    await h.service.scan();
+    expect(words.aborted).toBe(true);
+  });
+
+  it("sends no note it kept before Canopy was turned off once it is back on", async () => {
+    const h = await makeHarness({ classify: asking });
+    h.describe.mockImplementation(async (_input, says) => ({
+      category: says,
+      headline: "Approve npm test",
+      summary: "Runs the tests.",
+      attentionScore: 92,
+      task: null,
+      risk: "none",
+      riskReason: null,
+      action: null,
+      progress: null,
+      tests: "unknown",
+      changes: "unknown",
+      question: null,
+      options: [],
+      note: "Goal: fix the rounding bug",
+    }));
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "approval" }));
+    h.screens.set("a", APPROVAL_SCREEN);
+    await h.service.scan();
+    await settle();
+    h.screens.set("a", APPROVAL_SCREEN.replace("npm test", "npm run lint"));
+    await h.service.scan();
+    await settle();
+    expect(h.classify.mock.calls.at(-1)![0].note?.text).toBe("Goal: fix the rounding bug");
+
+    h.service.setPlan(OFF);
+    h.service.setPlan(ON);
+    h.screens.set("a", APPROVAL_SCREEN.replace("npm test", "npm run build"));
+    await h.service.scan();
+    await settle();
+    expect(h.classify.mock.calls.at(-1)![0].note ?? null).toBeNull();
   });
 });

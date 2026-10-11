@@ -36,6 +36,13 @@ const RETRY_WAIT_MAX_MS = 4_000;
 /** How long a worker is given to wake on a ping before the ping gives up. */
 const WAKE_TIMEOUT_MS = 300_000;
 /**
+ * The most text one event, or one classify answer, may run to: far past any
+ * card, and short of a runaway stream holding the main process's memory.
+ */
+const MAX_RESPONSE_CHARS = 1_000_000;
+/** How long the classify endpoint is left alone after a 404 before it is asked again. */
+const CLASSIFY_RECHECK_MS = 10 * 60_000;
+/**
  * The card fields worth showing before the card is finished: its words. Its
  * state and score wait for the whole card (see `CanopyPartialDescription`).
  */
@@ -56,7 +63,7 @@ let holdUntil = 0;
 export function __resetCanopyBackendForTests(): void {
   holdUntil = 0;
   waking = null;
-  classifyEndpoint = true;
+  classifyMissingAt = null;
 }
 
 type Stage = "classifier" | "describer";
@@ -265,18 +272,36 @@ async function readOnce(
     let classifier: ClassifierResult | null = null;
     let card: Record<string, unknown> | null = null;
     let done = false;
-    const dispatch = (event: string, data: string) => {
+    /** `atEnd`: the stream closed with this event unfinished, so it may be cut short. */
+    const dispatch = (event: string, data: string, atEnd = false) => {
       if (event === "error") throw streamError(stage, data);
       if (event === "" || data === "") return;
       let parsed: unknown;
       try {
         parsed = JSON.parse(data);
       } catch {
+        // Cut off mid-line by a closing connection, not a service answering badly.
+        if (atEnd) throw new CanopyProviderError(stage, "stream ended early", true);
         throw new CanopyProviderError(stage, "response was not JSON");
+      }
+      if (event === "done") {
+        done = true;
+        return;
+      }
+      if (typeof parsed !== "object" || parsed === null) {
+        throw new CanopyProviderError(stage, "unexpected response shape");
       }
       if (event === "classifier") {
         clearTimeout(firstEvent);
-        classifier = toClassifierResult(parsed);
+        try {
+          classifier = toClassifierResult(parsed);
+        } catch (error) {
+          // A card read's failure is the describer's, whatever part of it broke.
+          if (error instanceof CanopyProviderError && error.provider !== stage) {
+            throw new CanopyProviderError(stage, error.message, error.transient);
+          }
+          throw error;
+        }
       } else if (event === "field") {
         const field = parsed as { name?: unknown; value?: unknown };
         if (typeof field.name === "string") handlers.onField?.(field.name, field.value);
@@ -285,14 +310,24 @@ async function readOnce(
         // Generation stopped part way: as broken as a stream cut off.
         if (raw._incomplete === true) throw new CanopyProviderError("describer", "card cut off");
         card = raw;
-      } else if (event === "done") {
-        done = true;
       }
+    };
+
+    // An event's data, one more `data:` line on: refused once it runs past any card.
+    const withData = (data: string, line: string): string => {
+      const next = (data === "" ? "" : `${data}\n`) + line.slice(5).replace(/^ /, "");
+      if (next.length > MAX_RESPONSE_CHARS) {
+        throw new CanopyProviderError(stage, "response too large");
+      }
+      return next;
     };
 
     try {
       const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
       let buffer = "";
+      // How much of `buffer` is known to hold no line break, so a long line
+      // arriving in many chunks is not searched again from its start each time.
+      let searched = 0;
       let event = "";
       let data = "";
       for (;;) {
@@ -300,9 +335,10 @@ async function readOnce(
         if (done) break;
         buffer += value;
         let newline: number;
-        while ((newline = buffer.indexOf("\n")) >= 0) {
+        while ((newline = buffer.indexOf("\n", searched)) >= 0) {
           const line = buffer.slice(0, newline).replace(/\r$/, "");
           buffer = buffer.slice(newline + 1);
+          searched = 0;
           if (line === "") {
             dispatch(event, data);
             event = "";
@@ -310,28 +346,33 @@ async function readOnce(
           } else if (line.startsWith("event:")) {
             event = line.slice(6).trim();
           } else if (line.startsWith("data:")) {
-            data += (data === "" ? "" : "\n") + line.slice(5).replace(/^ /, "");
+            data = withData(data, line);
           }
+        }
+        searched = buffer.length;
+        // A line still arriving, past any event's length.
+        if (buffer.length > MAX_RESPONSE_CHARS) {
+          throw new CanopyProviderError(stage, "response too large");
         }
       }
       // A last line the stream ended without a newline after.
       const last = buffer.replace(/\r$/, "");
-      if (last.startsWith("data:"))
-        data += (data === "" ? "" : "\n") + last.slice(5).replace(/^ /, "");
+      if (last.startsWith("data:")) data = withData(data, last);
       else if (last.startsWith("event:")) event = last.slice(6).trim();
-      dispatch(event, data);
+      dispatch(event, data, true);
     } catch (error) {
       return fail(error);
     }
     // A stream closed by a cancel or a timeout ends quietly; say which it was.
     if (signal?.aborted) throw new CanopyProviderError(stage, "request cancelled");
     if (timedOut) return fail(new Error("timed out"));
-    if (classifier === null) throw new CanopyProviderError("classifier", "stream ended early");
+    // Cut before the service said it was done: a connection lost, which passes.
+    if (!done) throw new CanopyProviderError(stage, "stream ended early", true);
+    // Done, and still short of what was asked for: the service's own fault.
+    if (classifier === null) throw new CanopyProviderError(stage, "stream ended early");
     if (describe === "always" && card === null) {
       throw new CanopyProviderError("describer", "stream ended early");
     }
-    // Everything came but the end: a connection cut before the service was done.
-    if (!done) throw new CanopyProviderError(stage, "stream ended early", true);
     return { classifier, card };
   } finally {
     clearTimeout(firstEvent);
@@ -398,10 +439,32 @@ function read(
 }
 
 /**
- * Whether the service has the classifier-only endpoint. A service from before
- * it answers 404 once, and is read through the streamed path from then on.
+ * When the classifier-only endpoint last answered 404; null while it is there.
+ * A service from before it answers 404 and is read through the streamed path
+ * meanwhile — asked again after `CLASSIFY_RECHECK_MS`, since one 404 can be a
+ * deploy or an edge's passing fault rather than an old service.
  */
-let classifyEndpoint = true;
+let classifyMissingAt: number | null = null;
+
+function classifyEndpointUp(): boolean {
+  return classifyMissingAt === null || Date.now() - classifyMissingAt >= CLASSIFY_RECHECK_MS;
+}
+
+/** A body's text, refused past `max` characters rather than held whole. */
+async function boundedText(stage: Stage, response: Response, max: number): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let body = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return body;
+    body += value;
+    if (body.length > max) {
+      void reader.cancel().catch(() => {});
+      throw new CanopyProviderError(stage, "response too large");
+    }
+  }
+}
 
 /**
  * One classifier-only reading through `POST /v1/classify`: one JSON answer, no
@@ -443,7 +506,7 @@ async function classifyOnce(
       return fail();
     }
     if (response.status === 404) {
-      classifyEndpoint = false;
+      classifyMissingAt = Date.now();
       return (await readOnce(input, "never", null, signal, {})).classifier;
     }
     if (response.status === 429) {
@@ -467,8 +530,9 @@ async function classifyOnce(
     }
     let body: string;
     try {
-      body = await response.text();
-    } catch {
+      body = await boundedText(stage, response, MAX_RESPONSE_CHARS);
+    } catch (error) {
+      if (error instanceof CanopyProviderError) throw error;
       // Cut off on the way: the same passing failure as no answer at all.
       return fail();
     }
@@ -483,7 +547,11 @@ async function classifyOnce(
       typeof data === "object" && data !== null
         ? (data as Record<string, unknown>).classifier
         : undefined;
-    return toClassifierResult(classifier);
+    const result = toClassifierResult(classifier);
+    // Only a reading says the endpoint is there: an error answer from an old
+    // service, landing after its 404, says nothing of the kind.
+    classifyMissingAt = null;
+    return result;
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
@@ -498,7 +566,7 @@ export async function classifyWithCanopy(
 ): Promise<ClassifierResult> {
   // Chosen per attempt, so a retry after the 404 stays on the streamed path.
   return withRetry("classifier", signal, async () =>
-    classifyEndpoint
+    classifyEndpointUp()
       ? classifyOnce(input, signal)
       : (await readOnce(input, "never", null, signal, {})).classifier
   );

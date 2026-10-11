@@ -231,6 +231,58 @@ describe("classifyWithCanopy", () => {
     await expect(classifyWithCanopy(INPUT)).rejects.toThrow("stream ended early");
   });
 
+  it("asks for /v1/classify again a while after a 404, which can be a passing fault", async () => {
+    vi.useFakeTimers({ now: 0, toFake: ["Date"] });
+    const fetchMock = stubFetch(
+      NO_CLASSIFY,
+      streamOf([sse("classifier", CLASSIFIER), DONE]),
+      classified(CLASSIFIER)
+    );
+    await classifyWithCanopy(INPUT);
+    vi.setSystemTime(11 * 60_000);
+    await classifyWithCanopy(INPUT);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://canopy.daintree.org/v1/classify",
+      "https://canopy.daintree.org/v1/read",
+      "https://canopy.daintree.org/v1/classify",
+    ]);
+  });
+
+  it("keeps the 404 it heard through an old service's later error answer", async () => {
+    let answerLate!: (response: Response) => void;
+    const late = new Promise<Response>((resolve) => (answerLate = resolve));
+    const responses: Array<Response | Promise<Response>> = [
+      NO_CLASSIFY(),
+      late,
+      streamOf([sse("classifier", CLASSIFIER), DONE]),
+      streamOf([sse("classifier", CLASSIFIER), DONE]),
+    ];
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url.endsWith("/ping")) return new Response(null, { status: 200 });
+      return responses.shift()!;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    // Two reads at once: the first learns the endpoint is missing; the second
+    // hears back later, with an error that says nothing about it either way.
+    const first = classifyWithCanopy(INPUT);
+    const second = classifyWithCanopy(INPUT);
+    await first;
+    answerLate(new Response("busy", { status: 503, headers: { "retry-after": "0" } }));
+    await second;
+    const reads = fetchMock.mock.calls.map(([url]) => url).filter((url) => !url.endsWith("/ping"));
+    expect(reads).toEqual([
+      "https://canopy.daintree.org/v1/classify",
+      "https://canopy.daintree.org/v1/classify",
+      "https://canopy.daintree.org/v1/read",
+      "https://canopy.daintree.org/v1/read",
+    ]);
+  });
+
+  it("refuses a classify answer longer than any reading", async () => {
+    stubFetch(new Response("x".repeat(1_100_000), { status: 200 }));
+    await expect(classifyWithCanopy(INPUT)).rejects.toThrow("response too large");
+  });
+
   it("refuses a classify answer that is not JSON", async () => {
     stubFetch(new Response("<html>", { status: 200 }));
     await expect(classifyWithCanopy(INPUT)).rejects.toThrow("response was not JSON");
@@ -365,6 +417,51 @@ describe("describeWithCanopy", () => {
     await expect(describeWithCanopy(INPUT, "approval")).rejects.toMatchObject({
       message: "stream failed: inference_failed",
       transient: false,
+    });
+  });
+
+  it("counts a card read cut before anything came as the describer's passing failure", async () => {
+    stubFetch(streamOf([]));
+    await expect(describeWithCanopy(INPUT, "approval")).rejects.toMatchObject({
+      provider: "describer",
+      message: "stream ended early",
+      transient: true,
+    });
+  });
+
+  it("counts a stream cut part way through an event as ended early, which passes", async () => {
+    stubFetch(streamOf([sse("classifier", CLASSIFIER), 'event: card\ndata: {"category":']));
+    await expect(describeWithCanopy(INPUT, "approval")).rejects.toMatchObject({
+      provider: "describer",
+      message: "stream ended early",
+      transient: true,
+    });
+  });
+
+  it("takes an event that is not an object as a bad answer, not a lost connection", async () => {
+    const fetchMock = stubFetch(
+      streamOf([sse("classifier", CLASSIFIER), "event: card\ndata: null\n\n", DONE])
+    );
+    await expect(describeWithCanopy(INPUT, "approval")).rejects.toMatchObject({
+      provider: "describer",
+      message: "unexpected response shape",
+      transient: false,
+    });
+    // No wake ping: nothing says a worker is asleep.
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/ping"))).toBe(false);
+  });
+
+  it.each([
+    ["still arriving", [`event: card\ndata: ${"a".repeat(1_100_000)}`]],
+    ["arrived whole", [`event: card\ndata: ${"a".repeat(1_100_000)}\n\n`, DONE]],
+    [
+      "built from lines each short of the limit",
+      [`event: card\n${`data: ${"a".repeat(400_000)}\n`.repeat(3)}\n`, DONE],
+    ],
+  ])("refuses an event that runs on past any card, %s", async (_shape, chunks) => {
+    stubFetch(streamOf([sse("classifier", CLASSIFIER), ...chunks]));
+    await expect(describeWithCanopy(INPUT, "approval")).rejects.toMatchObject({
+      message: "response too large",
     });
   });
 

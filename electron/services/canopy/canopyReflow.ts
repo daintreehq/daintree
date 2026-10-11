@@ -96,11 +96,13 @@ export function sameAfterReflow(whole: string, redrawn: string): boolean {
     const gained = after.slice(prev.b + prev.length, next.b);
     // A cut line shows more or less of itself: one side lost or gained text
     // at the cut, and nothing was put in its place but the cut itself (and the
-    // space the line ended with).
-    const atCut = lost.includes(CUT) || gained.includes(CUT) || before[next.a] === CUT;
+    // space the line ended with). The cut is on the side showing less of the
+    // line — or starts what follows — never only among the words the other
+    // side has: new lines, one of them cut, are new lines.
     const bare = (side: string) => side.replace(/[\0\s]/g, "") === "";
-    const oneSided = bare(lost) || bare(gained);
-    if (!atCut || !oneSided) return false;
+    if (!bare(lost) && !bare(gained)) return false;
+    const showingLess = bare(lost) ? lost : gained;
+    if (!showingLess.includes(CUT) && before[next.a] !== CUT) return false;
   }
   return true;
 }
