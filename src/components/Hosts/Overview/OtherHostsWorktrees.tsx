@@ -2,7 +2,6 @@ import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import type { HostWorktreeEntry } from "@shared/types/ipc/hostMetrics";
 import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { cn } from "@/lib/utils";
@@ -11,6 +10,7 @@ import { hasRemoteHosts, useHostList } from "../hostList";
 import { buildHostMenuRows, clientPlatform, type HostMenuRow } from "../hostModel";
 import { switchToHost, isNewWindowClick } from "../hostSwitching";
 import { isLive } from "./overviewModel";
+import { clientErrorText } from "@/utils/clientAppError";
 
 type HostWorktrees =
   | { hostId: HostId; name: string; kind: "loaded"; entries: HostWorktreeEntry[] }
@@ -41,7 +41,7 @@ export async function loadOtherHostsWorktrees(
             hostId: row.hostId,
             name: row.name,
             kind: "failed",
-            message: formatErrorMessage(error, "Couldn't list its worktrees"),
+            message: clientErrorText(error, "Couldn't list its worktrees"),
           };
         }
       })

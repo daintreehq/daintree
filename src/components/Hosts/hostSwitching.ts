@@ -3,8 +3,7 @@ import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
 import type { SwitchWindowHostResult } from "@shared/types/ipc/remoteHosts";
 import { isMac } from "@/lib/platform";
 import { notify } from "@/lib/notify";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { isClientAppError } from "@/utils/clientAppError";
+import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import { requestHostProjectPicker } from "@/components/HostSwitch/hostProjectPickerRequests";
 import { getHostListSnapshot } from "./hostList";
 import { clientPlatform, localHostLabel } from "./hostModel";
@@ -61,7 +60,7 @@ export async function switchToHost(
       type: "error",
       context: { eventKind: "connectivity" },
       title: `Couldn't switch to ${hostName(hostId)}`,
-      message: formatErrorMessage(error, "The window stayed on its current host."),
+      message: clientErrorText(error, "The window stayed on its current host."),
       actions: update
         ? [
             {

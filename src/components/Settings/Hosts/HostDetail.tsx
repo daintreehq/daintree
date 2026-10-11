@@ -3,7 +3,6 @@ import { ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { getAgentConfig } from "@shared/config/agentRegistry";
 import {
   formatHostConnection,
@@ -22,6 +21,7 @@ import { HostClipboardGrants } from "./HostClipboardGrants";
 import { HostPluginViewConsents } from "./HostPluginViewConsents";
 import { buildLabel, connectionLabel, describeBuildDifference, platformLabel } from "./hostLabels";
 import { describeHostForge } from "@/components/Hosts/hostForges";
+import { clientErrorText } from "@/utils/clientAppError";
 
 interface HostDetailProps {
   entry: HostListEntry;
@@ -42,7 +42,7 @@ function useCommittedField(initial: string, commit: (value: string) => Promise<u
     if (draft.trim() === initial) return;
     commit(draft.trim()).then(
       () => setError(undefined),
-      (err: unknown) => setError(formatErrorMessage(err, "Couldn't save"))
+      (err: unknown) => setError(clientErrorText(err, "Couldn't save"))
     );
   };
   return { draft, setDraft, error, save };
@@ -97,7 +97,7 @@ export function HostDetail({
       () => setNotifyDraft(null),
       (err: unknown) => {
         setNotifyDraft(null);
-        setNotifyError(formatErrorMessage(err, "Couldn't save this setting"));
+        setNotifyError(clientErrorText(err, "Couldn't save this setting"));
       }
     );
   };
@@ -130,7 +130,7 @@ export function HostDetail({
       () => setConnecting(false),
       (err: unknown) => {
         setConnecting(false);
-        setConnectError(formatErrorMessage(err, "Couldn't connect"));
+        setConnectError(clientErrorText(err, "Couldn't connect"));
       }
     );
   };
@@ -147,7 +147,7 @@ export function HostDetail({
       },
       (err: unknown) => {
         setRemoving(false);
-        setRemoveError(formatErrorMessage(err, "Couldn't remove the host"));
+        setRemoveError(clientErrorText(err, "Couldn't remove the host"));
       }
     );
   };

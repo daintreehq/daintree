@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useRemoteHosts } from "@/hooks/useRemoteHosts";
 import { formatHostConnection, type HostId } from "@shared/types/remoteHosts";
 import HostModeGroup from "../HostModeGroup";
@@ -20,6 +19,7 @@ import {
 } from "./hostSettingsRequests";
 import { onHostUpdateRequest, takePendingHostUpdate } from "./hostUpdateRequests";
 import { onHostPluginsRequest, takePendingHostPlugins } from "./hostPluginRequests";
+import { clientErrorText } from "@/utils/clientAppError";
 
 /**
  * Settings → Hosts: the machines this one opens projects on, adding one, and
@@ -52,7 +52,7 @@ export default function HostsSettingsTab() {
       },
       (err: unknown) => {
         setForgetting(false);
-        setForgetError(formatErrorMessage(err, "Couldn't remove the host"));
+        setForgetError(clientErrorText(err, "Couldn't remove the host"));
       }
     );
   };

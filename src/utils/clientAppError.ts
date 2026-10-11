@@ -1,5 +1,6 @@
 import type { AppErrorCode, AppErrorDetails } from "../../shared/types/appError";
 import { pickAppErrorDetails } from "@shared/utils/ipcErrorSerialization";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 /**
  * Renderer-side mirror of the main-process `AppError`. Reconstructed by the
@@ -100,8 +101,7 @@ export function isClientAppError(
  */
 export function clientErrorText(error: unknown, fallback: string): string {
   if (isClientAppError(error)) return error.userMessage ?? error.message;
-  if (error instanceof Error) return error.message;
-  return typeof error === "string" ? error : fallback;
+  return formatErrorMessage(error, fallback);
 }
 
 /** An IPC error's AppError code, decoded from the wire prefix; undefined for any other error. */

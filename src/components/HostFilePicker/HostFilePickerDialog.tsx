@@ -6,7 +6,6 @@ import type {
   HostPickRequest,
   HostPickerRoots,
 } from "@shared/types/ipc/hostFiles";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
@@ -26,6 +25,7 @@ import {
   resolveChoice,
 } from "./hostFilePickerModel";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { clientErrorText } from "@/utils/clientAppError";
 
 /**
  * Where the picker reads folders from: the window's own host, or — when the
@@ -135,7 +135,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
       })
       .catch((cause: unknown) => {
         if (cancelled) return;
-        setLoadError(formatErrorMessage(cause, "Couldn't open that folder"));
+        setLoadError(clientErrorText(cause, "Couldn't open that folder"));
         setPathDraft(directory);
       })
       .finally(() => {

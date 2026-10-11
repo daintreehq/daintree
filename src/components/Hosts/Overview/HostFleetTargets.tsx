@@ -1,7 +1,6 @@
 import { useState } from "react";
 import type { HostFleetTarget } from "@shared/types/ipc/hostMetrics";
 import type { HostId } from "@shared/types/remoteHosts";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -10,6 +9,7 @@ import {
   disarmCrossHostTarget,
   useArmedCrossHostTargets,
 } from "@/components/Fleet/crossHostFleet";
+import { clientErrorText } from "@/utils/clientAppError";
 
 interface HostFleetTargetsProps {
   hostId: HostId;
@@ -46,7 +46,7 @@ export function HostFleetTargets({ hostId, hostName }: HostFleetTargetsProps) {
     window.electron.hostMetrics.listFleetTargets({ hostId }).then(
       (list) => setState({ kind: "loaded", targets: list.targets, complete: list.complete }),
       (error: unknown) =>
-        setState({ kind: "failed", message: formatErrorMessage(error, "Couldn't list agents") })
+        setState({ kind: "failed", message: clientErrorText(error, "Couldn't list agents") })
     );
   };
 

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { HostPluginClipboardGrant } from "@shared/types/ipc/remoteHosts";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
+import { clientErrorText } from "@/utils/clientAppError";
 
 interface HostClipboardGrantsProps {
   hostId: string;
@@ -38,7 +38,7 @@ export function HostClipboardGrants({ hostId, hostName }: HostClipboardGrantsPro
         setGrants(next);
         setError(null);
       },
-      (err: unknown) => setError(formatErrorMessage(err, "Couldn't load clipboard access"))
+      (err: unknown) => setError(clientErrorText(err, "Couldn't load clipboard access"))
     );
   }, [hostId]);
 
@@ -50,7 +50,7 @@ export function HostClipboardGrants({ hostId, hostName }: HostClipboardGrantsPro
     remoteHostsClient
       .resetClipboardGrants(hostId, pluginId)
       .then(load, (err: unknown) =>
-        setError(formatErrorMessage(err, "Couldn't reset clipboard access"))
+        setError(clientErrorText(err, "Couldn't reset clipboard access"))
       );
   };
 

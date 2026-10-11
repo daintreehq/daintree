@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { PluginViewConsentEntry } from "@shared/types/ipc/remoteHosts";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
+import { clientErrorText } from "@/utils/clientAppError";
 
 interface HostPluginViewConsentsProps {
   hostId: string;
@@ -32,7 +32,7 @@ export function HostPluginViewConsents({ hostId, hostName }: HostPluginViewConse
         setPlugins(next);
         setError(null);
       },
-      (err: unknown) => setError(formatErrorMessage(err, "Couldn't load plugin views"))
+      (err: unknown) => setError(clientErrorText(err, "Couldn't load plugin views"))
     );
   }, [hostId]);
 
@@ -44,7 +44,7 @@ export function HostPluginViewConsents({ hostId, hostName }: HostPluginViewConse
     remoteHostsClient
       .resetPluginViewConsent(hostId, pluginId)
       .then(load, (err: unknown) =>
-        setError(formatErrorMessage(err, "Couldn't reset the plugin view"))
+        setError(clientErrorText(err, "Couldn't reset the plugin view"))
       );
   };
 

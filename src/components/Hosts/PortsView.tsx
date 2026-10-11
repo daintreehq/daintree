@@ -1,7 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import type { HostListeningPort, PortForward } from "@shared/types/ipc/portForwards";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -12,6 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useHostList } from "./hostList";
+import { clientErrorText } from "@/utils/clientAppError";
 
 const ORIGIN_LABELS: Record<PortForward["origin"], string> = {
   "dev-preview": "Dev preview",
@@ -104,7 +104,7 @@ export function PortsView({ hostId: preferredHostId }: PortsViewProps) {
           setScan({
             hostId,
             ports: null,
-            error: formatErrorMessage(err, "Couldn't list the host's ports"),
+            error: clientErrorText(err, "Couldn't list the host's ports"),
           });
         }
       }
@@ -128,7 +128,7 @@ export function PortsView({ hostId: preferredHostId }: PortsViewProps) {
         setError(null);
         if (origin === "manual") setDraft("");
       },
-      (err: unknown) => setError(formatErrorMessage(err, `Couldn't forward port ${port}`))
+      (err: unknown) => setError(clientErrorText(err, `Couldn't forward port ${port}`))
     );
   };
 
@@ -143,7 +143,7 @@ export function PortsView({ hostId: preferredHostId }: PortsViewProps) {
 
   const stop = (forwardId: string) => {
     window.electron.portForwards.stop({ forwardId }).catch((err: unknown) => {
-      setError(formatErrorMessage(err, "Couldn't stop the forward"));
+      setError(clientErrorText(err, "Couldn't stop the forward"));
     });
   };
 
