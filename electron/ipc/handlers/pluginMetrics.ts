@@ -1,6 +1,7 @@
 import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import { getIpcDispatcher } from "../dispatcher.js";
+import { onRemoteViewEndpointOpened, relaySendToHost } from "../hostSendRelay.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { PLUGIN_METRICS_METHOD_CHANNELS } from "./pluginMetrics.preload.js";
 import { parseRendererMetricsEnvelopes } from "../../schemas/pluginMetrics.js";
@@ -173,9 +174,52 @@ export function registerPluginMetricsHandlers(options?: {
     stopFeedIfIdle();
   }
 
+  // Shell side: a view bound to a remote host subscribes to its host's feed,
+  // not this machine's. Its subscription is kept here, where its reloads and
+  // teardown are visible, ended on the host when the view navigates or goes,
+  // and re-sent whenever the view gets an endpoint again.
+  const relayedSubscribers = new Map<number, { sender: Electron.WebContents; off: () => void }>();
+  const endRelayed = (id: number, tellHost: boolean): void => {
+    const entry = relayedSubscribers.get(id);
+    if (!entry) return;
+    relayedSubscribers.delete(id);
+    entry.off();
+    if (tellHost) relaySendToHost(id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE, []);
+  };
+  const relaySubscribe = (sender: Electron.WebContents): boolean => {
+    if (!relaySendToHost(sender.id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, [])) return false;
+    if (relayedSubscribers.has(sender.id)) return true;
+    const id = sender.id;
+    const onGone = (): void => endRelayed(id, false);
+    const onNavigate = (): void => endRelayed(id, true);
+    sender.once("destroyed", onGone);
+    sender.once("did-navigate", onNavigate);
+    relayedSubscribers.set(id, {
+      sender,
+      off: () => {
+        sender.removeListener("destroyed", onGone);
+        sender.removeListener("did-navigate", onNavigate);
+      },
+    });
+    return true;
+  };
+  cleanups.push(
+    onRemoteViewEndpointOpened((webContentsId) => {
+      const entry = relayedSubscribers.get(webContentsId);
+      if (!entry) return;
+      if (entry.sender.isDestroyed() || !relaySubscribe(entry.sender)) {
+        endRelayed(webContentsId, false);
+      }
+    })
+  );
+  cleanups.push(() => {
+    for (const id of [...relayedSubscribers.keys()]) endRelayed(id, false);
+  });
+
   const handleSubscribe = (event: Electron.IpcMainEvent): void => {
     const sender = event.sender;
     if (sender.isDestroyed() || subscribers.has(sender)) return;
+    if (relaySubscribe(sender)) return;
     const onGone = (): void => removeSubscriber(sender);
     // A reload starts a fresh preload that re-subscribes if it still wants the feed.
     const onNavigate = (): void => removeSubscriber(sender);
@@ -193,13 +237,17 @@ export function registerPluginMetricsHandlers(options?: {
     startFeed();
   };
   const handleUnsubscribe = (event: Electron.IpcMainEvent): void => {
+    if (relayedSubscribers.has(event.sender.id)) {
+      endRelayed(event.sender.id, true);
+      return;
+    }
     removeSubscriber(event.sender);
   };
   ipcMain.on(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, handleSubscribe);
   ipcMain.on(CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE, handleUnsubscribe);
-  // A remote view subscribes through its endpoint, which closes when the view
-  // goes, its project changes or the link drops; its Shell re-subscribes a view
-  // that still wants the feed.
+  // Host side: a remote view subscribes through its endpoint, which closes
+  // when the view goes, its project changes or the link drops; its Shell ends
+  // the subscription on a reload and re-sends it on a new endpoint.
   cleanups.push(
     getIpcDispatcher().registerSend(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, (ctx) => {
       const endpoint = ctx.endpoint;

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { app } from "electron";
 import { ensureWorkspaceClient, isWorkspaceClientStarting } from "../boot/hostServices.js";
+import { notifyRemoteViewEndpointOpened } from "../ipc/hostSendRelay.js";
 import { setRemoteBoundViewFilter } from "../ipc/utils.js";
 import { releaseWindowTerminalPort, setRemoteViewHooks } from "../window/portDistribution.js";
 import { getPtyClient } from "../window/serviceRefs.js";
@@ -134,6 +135,7 @@ function startClient(options: StartRemoteHostsOptions): void {
         visibility.noteEndpointOpened({ session, webContentsId, endpointId });
         attachClientTerminalRelay(session, wc, endpointId, hostId);
         attachClientWorktreeRelay(session, wc, endpointId, hostId);
+        notifyRemoteViewEndpointOpened(webContentsId);
       })
     );
     teardowns.push(

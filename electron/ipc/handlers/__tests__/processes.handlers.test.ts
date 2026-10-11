@@ -200,8 +200,20 @@ describe("ending a closed terminal's processes under drive leases", () => {
     );
 
     await kill(ctxFor("driver", "client-b"), [{ pid: 101, startTime: "t101" }]);
-    // A process recorded with no project, or one the request does not name, has no lease to consult.
+    // A process recorded with no project has no lease to consult.
     await kill(ctxFor("observer", "client-c"), [{ pid: 202, startTime: "t202" }]);
     expect(killClosedTerminalProcesses).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses a target the census can't place, rather than assuming it is free", async () => {
+    _resetDriveLeaseServiceForTesting(new DriveLeaseService());
+    const { kill, killClosedTerminalProcesses } = setup();
+    await expect(
+      kill(ctxFor("driver", "client-b"), [
+        { pid: 101, startTime: "t101" },
+        { pid: 101, startTime: "a-reused-pid" },
+      ])
+    ).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+    expect(killClosedTerminalProcesses).not.toHaveBeenCalled();
   });
 });

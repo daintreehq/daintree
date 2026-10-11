@@ -463,8 +463,12 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
  * answering it wholesale would leak this machine's Shell half.
  */
 export const HYBRID_HOST_LEGS: readonly string[] = [
-  // A remote view's focused panel, relayed with the focus only its Shell can see.
+  // Relayed by the Shell's own handler (see ipc/hostSendRelay.ts): a remote
+  // view's focused panel with the focus only its Shell can see, and its plugin
+  // perf subscription, which the Shell ends when the view reloads.
   CHANNELS.PLUGIN_REPORT_FOCUSED_PANEL,
+  CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE,
+  CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE,
   CHANNELS.APP_HYDRATE,
   CHANNELS.APP_GET_STATE,
   CHANNELS.APP_SET_STATE,

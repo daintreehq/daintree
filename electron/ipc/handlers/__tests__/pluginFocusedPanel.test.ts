@@ -70,10 +70,8 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
 }));
 
 import { CHANNELS } from "../../channels.js";
-import {
-  registerPluginFocusedPanelHandlers,
-  setFocusedPanelHostRelay,
-} from "../pluginFocusedPanel.js";
+import { registerPluginFocusedPanelHandlers } from "../pluginFocusedPanel.js";
+import { notifyRemoteViewEndpointOpened, setHostSendRelay } from "../../hostSendRelay.js";
 import { FocusedPanelTracker } from "../../../services/FocusedPanelTracker.js";
 
 type Listener = () => void;
@@ -167,7 +165,7 @@ describe("plugin:report-focused-panel", () => {
 
     beforeEach(() => {
       relayed = [];
-      offRelay = setFocusedPanelHostRelay((sender, channel, args) => {
+      offRelay = setHostSendRelay((sender, channel, args) => {
         if (sender !== 7) return false;
         expect(channel).toBe(CHANNELS.PLUGIN_REPORT_FOCUSED_PANEL);
         relayed.push({ sender, args });
@@ -198,6 +196,16 @@ describe("plugin:report-focused-panel", () => {
       const count = relayed.length;
       win.fire("blur");
       expect(relayed).toHaveLength(count);
+    });
+
+    it("re-sends its last report when its endpoint reattaches, even with nothing changed", () => {
+      send(sender(7), { kind: "diff" });
+      const count = relayed.length;
+      notifyRemoteViewEndpointOpened(7);
+      expect(relayed).toHaveLength(count + 1);
+      expect(relayed.at(-1)).toEqual({ sender: 7, args: [{ kind: "diff" }, true] });
+      notifyRemoteViewEndpointOpened(99);
+      expect(relayed).toHaveLength(count + 1);
     });
 
     it("falls back to the local tracker once the view is no longer bound", () => {

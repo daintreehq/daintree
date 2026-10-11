@@ -31,9 +31,8 @@ async function getPluginService(): Promise<PluginServiceSingleton> {
 /**
  * A closed terminal's leftovers still belong to the project the ledger
  * recorded them under, so while drive leases are in force (Host mode) only
- * that project's driver may end them. A target the record no longer names
- * has no project to consult and is left to the pty-host, which refuses to
- * signal anything it isn't tracking.
+ * that project's driver may end them. One recorded with no project has no
+ * lease to consult.
  */
 async function assertDrivesRecordedProjects(
   ctx: IpcContext,
@@ -42,21 +41,36 @@ async function assertDrivesRecordedProjects(
 ): Promise<void> {
   const lease = peekDriveLeaseService();
   if (!lease || targets.length === 0) return;
-  const wanted = new Set(targets.map(({ pid, startTime }) => `${pid}@${startTime}`));
-  const { inventories } = await ptyClient.getProcessInventory();
+  const owners = new Map<string, string | null>();
+  const { inventories, shardsFailed } = await ptyClient.getProcessInventory();
   for (const inventory of inventories) {
     for (const recorded of inventory.closedTerminalProcesses ?? []) {
-      const projectId = recorded.origin?.projectId;
-      if (!projectId || !wanted.has(`${recorded.pid}@${recorded.startTime}`)) continue;
-      if (!lease.isDriving(projectId, ctx.endpoint)) {
-        throw new AppError({
-          code: "DRIVEN_ELSEWHERE",
-          message: `processes:kill-closed-terminal-processes ends processes of ${projectId}, which another window drives`,
-          userMessage:
-            "These processes belong to a project driven from another screen. Take it over first.",
-          context: { projectId },
-        });
-      }
+      owners.set(`${recorded.pid}@${recorded.startTime}`, recorded.origin?.projectId ?? null);
+    }
+  }
+  for (const { pid, startTime } of targets) {
+    const key = `${pid}@${startTime}`;
+    // Fail closed: a target the census can't place right now (a shard that
+    // didn't answer, the listing's cap, a survivor too new to list) might be
+    // any project's, so it is refused rather than assumed free.
+    if (!owners.has(key)) {
+      throw new AppError({
+        code: "DRIVEN_ELSEWHERE",
+        message: `processes:kill-closed-terminal-processes can't place ${key}${shardsFailed > 0 ? " (a terminal host didn't answer)" : ""} while drive leases are in force`,
+        userMessage:
+          "Couldn't confirm which project these processes belong to. Refresh the list and try again.",
+        context: { pid },
+      });
+    }
+    const projectId = owners.get(key);
+    if (projectId && !lease.isDriving(projectId, ctx.endpoint)) {
+      throw new AppError({
+        code: "DRIVEN_ELSEWHERE",
+        message: `processes:kill-closed-terminal-processes ends processes of ${projectId}, which another window drives`,
+        userMessage:
+          "These processes belong to a project driven from another screen. Take it over first.",
+        context: { projectId },
+      });
     }
   }
 }

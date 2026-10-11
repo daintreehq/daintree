@@ -2,6 +2,7 @@ import { ipcMain, type BrowserWindow, type IpcMainEvent, type WebContents } from
 import { CHANNELS } from "../channels.js";
 import { getIpcDispatcher } from "../dispatcher.js";
 import type { ClientEndpoint } from "../endpoint.js";
+import { onRemoteViewEndpointOpened, relaySendToHost } from "../hostSendRelay.js";
 import {
   getProjectForWebContents,
   getWindowForWebContents,
@@ -12,26 +13,6 @@ import {
   getFocusedPanelTracker,
   type FocusedPanelTracker,
 } from "../../services/FocusedPanelTracker.js";
-
-/**
- * Hands a remote-bound view's report to the host its window is attached to.
- * Returns false when the sender is not bound to a host, which leaves the report
- * to this machine's own tracker. Installed by the Remote Hosts Shell boot.
- */
-export type FocusedPanelHostRelay = (
-  senderWebContentsId: number,
-  channel: string,
-  args: unknown[]
-) => boolean;
-
-let hostRelay: FocusedPanelHostRelay | null = null;
-
-export function setFocusedPanelHostRelay(relay: FocusedPanelHostRelay | null): () => void {
-  hostRelay = relay;
-  return () => {
-    if (hostRelay === relay) hostRelay = null;
-  };
-}
 
 /**
  * Wire the fire-and-forget channel through which each project view reports the
@@ -64,7 +45,7 @@ export function registerPluginFocusedPanelHandlers(
     const focused = isNativelyFocused(sender);
     const previous = relayed.get(sender.id);
     if (!force && previous && previous.focused === focused) return true;
-    if (!hostRelay?.(sender.id, CHANNELS.PLUGIN_REPORT_FOCUSED_PANEL, [payload, focused])) {
+    if (!relaySendToHost(sender.id, CHANNELS.PLUGIN_REPORT_FOCUSED_PANEL, [payload, focused])) {
       relayed.delete(sender.id);
       return false;
     }
@@ -139,12 +120,19 @@ export function registerPluginFocusedPanelHandlers(
   // A view reports before it is registered to its project (the first view
   // loads first), and an unchanged answer is never re-sent, so re-attribute
   // when scope membership changes.
+  // A relay sent while the link was down was dropped, and a fresh endpoint
+  // starts with nothing: re-send the view's last report when it reattaches.
+  const offReopen = onRemoteViewEndpointOpened((webContentsId) => {
+    const entry = relayed.get(webContentsId);
+    if (entry) relay(entry.sender, entry.payload, true);
+  });
   const offScope = onRendererScopeChanged(() => {
     tracker.refresh();
     refreshRelays();
   });
   return () => {
     offScope();
+    offReopen();
     offRemote();
     ipcMain.removeListener(CHANNELS.PLUGIN_REPORT_FOCUSED_PANEL, handleReport);
     for (const window of watchedWindows) {

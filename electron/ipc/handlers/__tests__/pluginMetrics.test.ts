@@ -38,6 +38,7 @@ vi.mock("../../dispatcher.js", () => ({
 
 import { CHANNELS } from "../../channels.js";
 import { MAX_REPORTS_PER_SECOND, registerPluginMetricsHandlers } from "../pluginMetrics.js";
+import { notifyRemoteViewEndpointOpened, setHostSendRelay } from "../../hostSendRelay.js";
 import {
   MAX_REPORTED_COMMITS,
   MAX_REPORTS_PER_MESSAGE,
@@ -462,6 +463,60 @@ describe("a view on another machine", () => {
       expect(ep.send).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+describe("a local view bound to a remote host (Shell side)", () => {
+  it("subscribes on its host, ends it when the view navigates, and re-sends on a new endpoint", async () => {
+    vi.useFakeTimers();
+    const view = makeSender();
+    const relayed: Array<[number, string]> = [];
+    const off = setHostSendRelay((id, channel) => {
+      if (id !== view.id) return false;
+      relayed.push([id, channel]);
+      return true;
+    });
+    try {
+      emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, view);
+      expect(relayed).toEqual([[view.id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE]]);
+      // This machine's feed never reaches it.
+      await vi.advanceTimersByTimeAsync(0);
+      metrics.recordInvoke("acme.demo", 1, "ok");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(view.send).not.toHaveBeenCalled();
+
+      notifyRemoteViewEndpointOpened(view.id);
+      expect(relayed.at(-1)).toEqual([view.id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE]);
+
+      view.emit("did-navigate");
+      expect(relayed.at(-1)).toEqual([view.id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE]);
+      const count = relayed.length;
+      notifyRemoteViewEndpointOpened(view.id);
+      expect(relayed).toHaveLength(count);
+    } finally {
+      off();
+      vi.useRealTimers();
+    }
+  });
+
+  it("relays an explicit unsubscribe to its host", () => {
+    const view = makeSender();
+    const channels: string[] = [];
+    const off = setHostSendRelay((id, channel) => {
+      if (id !== view.id) return false;
+      channels.push(channel);
+      return true;
+    });
+    try {
+      emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, view);
+      emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE, view);
+      expect(channels).toEqual([
+        CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE,
+        CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE,
+      ]);
+    } finally {
+      off();
     }
   });
 });

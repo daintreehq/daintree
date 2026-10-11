@@ -433,8 +433,7 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
       `touch '${started}'; sleep 600; echo "slept=$((1+1))through"`
     );
     await expect.poll(() => existsSync(started), { timeout: 15_000 }).toBe(true);
-    await panel.locator(".xterm").first().click();
-    await page.keyboard.press("Control+C");
+    await pressCtrlC(page, panel);
     await runTerminalCommand(page, panel, 'echo "after-int=$((5*5))"');
     await waitForTerminalText(panel, "after-int=25", 15_000);
     expect(await getTerminalText(panel)).not.toContain("slept=2through");
@@ -481,10 +480,27 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
       await waitForTerminalReady(page, panel, 60_000);
       const file = path.join(run.hostProject.dir, `.multi-${NONCE}-${i}`);
       marks.push(file);
+      const pid = async () => (existsSync(file) ? (await fs.readFile(file, "utf8")).trim() : "");
       await runTerminalCommand(page, panel, `echo $$ > '${file}'`);
+      // A pane the new ones just squeezed redraws its prompt on the resize, and
+      // the shell can drop input typed into that redraw (a lost `echo ` runs
+      // the bare pid as a command). What this checks is four shells, so a
+      // swallowed submit is sent once more rather than counted as a pid.
+      const landed = await expect
+        .poll(pid, { timeout: 5_000 })
+        .toMatch(/^\d+$/)
+        .then(
+          () => true,
+          () => false
+        );
+      if (!landed) await runTerminalCommand(page, panel, `echo $$ > '${file}'`);
     }
     for (const file of marks) {
-      await expect.poll(() => existsSync(file), { timeout: 15_000 }).toBe(true);
+      await expect
+        .poll(async () => (existsSync(file) ? (await fs.readFile(file, "utf8")).trim() : ""), {
+          timeout: 15_000,
+        })
+        .toMatch(/^\d+$/);
     }
     // Four distinct shells, not one echoed four times.
     const pids = new Set(
@@ -626,8 +642,7 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
         { timeout: 15_000 }
       )
       .toBe("closed");
-    await panel.locator(".xterm").first().click();
-    await page.keyboard.press("Control+C");
+    await pressCtrlC(page, panel);
     await runTerminalCommand(page, panel, `cd '${run.hostProject.dir}'`);
   });
 
@@ -640,11 +655,21 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
       panel,
       `git worktree add -q -b e2e-${NONCE} '${wtPath}' && echo "wt=$((2+2))ok" || echo "wt=$((3+3))bad"`
     );
+    let seen = "";
     await expect
-      .poll(async () => /wt=(4ok|6bad)/.exec(await getTerminalText(panel))?.[1] ?? null, {
-        timeout: 30_000,
-      })
-      .toBe("4ok");
+      .poll(
+        async () => {
+          seen = await getTerminalText(panel);
+          return /wt=(4ok|6bad)/.exec(seen)?.[1] ?? null;
+        },
+        { timeout: 30_000 }
+      )
+      .toBe("4ok")
+      .catch((err: unknown) => {
+        throw new Error(`git worktree add never reported; the pane shows:\n${seen.slice(-1500)}`, {
+          cause: err,
+        });
+      });
     await page.evaluate(() => window.electron.worktree.refresh());
     await expect
       .poll(
@@ -999,6 +1024,25 @@ async function restartSshd(previous: PrivateSshd, port: number): Promise<Private
  * Submit as `runTerminalCommand` does and return the refusal's code, or null
  * when the host took the input.
  */
+/**
+ * A real Ctrl-C keystroke into the pane's terminal. A click on the xterm
+ * doesn't reliably leave its input focused once several panes share the grid,
+ * so focus the input itself and prove it holds focus first.
+ */
+async function pressCtrlC(page: Page, panel: import("@playwright/test").Locator): Promise<void> {
+  const input = panel.locator(".xterm-helper-textarea").first();
+  await expect
+    .poll(
+      async () => {
+        await input.focus().catch(() => undefined);
+        return input.evaluate((el) => el === document.activeElement).catch(() => false);
+      },
+      { timeout: 10_000, message: "the terminal's input never took focus" }
+    )
+    .toBe(true);
+  await page.keyboard.press("Control+C");
+}
+
 async function submitRefusal(
   page: Page,
   panel: import("@playwright/test").Locator,

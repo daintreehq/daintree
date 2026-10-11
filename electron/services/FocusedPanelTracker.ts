@@ -109,8 +109,12 @@ export class FocusedPanelTracker {
   }
 
   setPortalFocused(windowId: number, focused: boolean): void {
-    if (focused) this.portalFocusedWindows.add(windowId);
-    else this.portalFocusedWindows.delete(windowId);
+    if (focused) {
+      this.portalFocusedWindows.add(windowId);
+      if (windowId === this.focusedWindowId) this.localActivitySeq = ++this.seq;
+    } else {
+      this.portalFocusedWindows.delete(windowId);
+    }
     this.recompute();
   }
 
@@ -146,6 +150,8 @@ export class FocusedPanelTracker {
   ): void {
     const panel = toPluginFocusedPanel(payload);
     const previous = this.remoteReports.get(handle);
+    // Gaining focus, or any change of panel while focused (to none included),
+    // is that screen's newest activity.
     const moved =
       focused &&
       (previous === undefined ||
@@ -179,15 +185,22 @@ export class FocusedPanelTracker {
     this.recompute();
   }
 
+  /**
+   * The newest screen with focus decides, local or remote, and its answer
+   * stands even when it is "no panel" (a sidebar, a dialog): a newer screen
+   * focusing nothing in particular must not leave an older one's panel showing.
+   */
   private resolve(): FocusedPanelState {
     let remote: RemoteReport | null = null;
     for (const report of this.remoteReports.values()) {
-      if (!report.focused || report.panel.kind === null) continue;
+      if (!report.focused) continue;
       if (remote === null || report.seq > remote.seq) remote = report;
     }
-    const local = this.resolveLocal();
-    if (remote === null) return local;
-    if (local !== NO_FOCUSED_PANEL_STATE && this.localActivitySeq > remote.seq) return local;
+    const localFocused = this.focusedWindowId !== null;
+    if (remote === null || (localFocused && this.localActivitySeq > remote.seq)) {
+      return this.resolveLocal();
+    }
+    if (remote.panel.kind === null) return NO_FOCUSED_PANEL_STATE;
     if (remote.panel.kind === "portal") return PORTAL_FOCUSED_STATE;
     return { panel: remote.panel, workspaceId: remote.workspaceId };
   }
