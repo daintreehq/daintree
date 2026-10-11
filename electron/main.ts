@@ -1223,9 +1223,14 @@ if (!gotTheLock) {
             // Published before the start resolves, so a quit during it still
             // stops whatever the start got as far as.
             stopRemoteHosts = remoteHosts.stopRemoteHosts;
-            remoteHosts.setRemoteHostsWindowOpener(async () => {
+            remoteHosts.setRemoteHostsWindowOpener(async (options) => {
               let id = -1;
-              await createWindow(null, undefined, { onRegistered: (w) => (id = w) });
+              await createWindow(null, undefined, {
+                onRegistered: (w) => {
+                  id = w;
+                  options?.onRegistered?.(w);
+                },
+              });
               return id;
             });
             await remoteHosts.startRemoteHosts({

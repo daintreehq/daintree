@@ -614,6 +614,21 @@ describe("RemoteHostsClient", () => {
     );
   });
 
+  it("still removes the host when no replacement window could be opened", async () => {
+    manager.last = { projectId: "proj-9", path: "/srv/proj-9", name: "proj-9" };
+    await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false });
+    vi.mocked(windows.lastLocalProjectId).mockReturnValue(null);
+    windows.replaceWithLocalWindow = vi.fn(async () => {
+      throw new Error("The replacement window didn't open");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(client.forget({ hostId: "studio-01" })).resolves.toBeUndefined();
+    expect(manager.disconnect).toHaveBeenCalledWith("studio-01");
+    expect(registry.list()).toEqual([]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it("doesn't let a local project that never finishes activating hold the host's removal", async () => {
     const slow = new RemoteHostsClient({
       registry,

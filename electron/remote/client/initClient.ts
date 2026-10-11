@@ -85,7 +85,8 @@ export function setHostWorkingAgentsSource(source: WorkingAgentsSource | null): 
   workingAgentsSource = source;
 }
 
-type WindowOpener = () => Promise<number>;
+/** `onRegistered` runs synchronously, before window setup awaits anything. */
+type WindowOpener = (options?: { onRegistered?: (windowId: number) => void }) => Promise<number>;
 
 let windowOpener: WindowOpener | null = null;
 
@@ -313,12 +314,34 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
     lastProjectOnHost,
     async replaceWithLocalWindow(windowId) {
       const old = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
-      if (!old || old.isDestroyed() || !windowOpener) return;
-      const bounds = old.getBounds();
-      const next = await windowOpener();
-      const created = getWindowRegistry()?.getByWindowId(next)?.browserWindow;
-      if (created && !created.isDestroyed()) created.setBounds(bounds);
-      if (!old.isDestroyed()) old.close();
+      if (!old || old.isDestroyed()) return;
+      if (!windowOpener) throw new Error("No window can be opened yet");
+      const opener = windowOpener;
+      const bounds = old.getNormalBounds();
+      const maximized = old.isMaximized();
+      const fullScreen = old.isFullScreen();
+      let replaced = false;
+      // The old window closes the moment its successor exists, synchronously:
+      // nothing (a switch, a quit's window snapshot) can come between the two,
+      // and there is never a moment with neither window open.
+      await opener({
+        onRegistered: (nextId) => {
+          const created = getWindowRegistry()?.getByWindowId(nextId)?.browserWindow;
+          if (!created || created.isDestroyed() || old.isDestroyed()) return;
+          // In the old window's place and mode, over whatever the last window's saved state was.
+          if (created.isMaximized()) created.unmaximize();
+          created.setBounds(bounds);
+          if (maximized) created.maximize();
+          if (fullScreen) {
+            created.once("show", () => {
+              if (!created.isDestroyed()) created.setFullScreen(true);
+            });
+          }
+          old.close();
+          replaced = true;
+        },
+      });
+      if (!replaced && !old.isDestroyed()) throw new Error("The replacement window didn't open");
     },
     offerHostProjects(windowId) {
       const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
