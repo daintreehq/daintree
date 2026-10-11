@@ -55,6 +55,7 @@ import { SshTransport } from "./sshTransport.js";
 import { TransportError, type LinkTransport } from "./transport.js";
 import { WindowHostBinding } from "./WindowHostBinding.js";
 import { defaultCommandRunner } from "./commandRunner.js";
+import { readOrCreateDeviceId } from "./deviceId.js";
 import { detectClientBundle, downloadArtifact } from "./clientBuild.js";
 import { HostSetupService, RELEASE_FEED_PREFIXES } from "./HostSetupService.js";
 
@@ -394,6 +395,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       // Per launch: a session only resumes within one run of this app.
       clientId: crypto.randomUUID(),
       clientName: os.hostname(),
+      deviceId: readOrCreateDeviceId(clientDir),
       platform:
         process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux",
     },

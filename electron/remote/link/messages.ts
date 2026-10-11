@@ -66,6 +66,12 @@ export interface LinkClientInfo {
   clientId: string;
   clientName: string;
   platform: HostPlatform | "win32";
+  /**
+   * Stable for this Daintree install (its own user data), unlike `clientId`,
+   * which is minted per launch, and unlike `clientName`, which two machines
+   * (or two installs on one) can share. Absent from older Shells.
+   */
+  deviceId?: string;
 }
 
 export interface HelloMessage {

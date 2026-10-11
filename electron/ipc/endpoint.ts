@@ -11,6 +11,8 @@ export interface ClientRef {
   clientName: string;
   platform: HostPlatform | "win32";
   kind: "local" | "remote";
+  /** A remote Shell's install, stable across its launches; absent from older Shells. */
+  deviceId?: string;
 }
 
 /** The local Shell of this process. */

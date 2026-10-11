@@ -40,6 +40,7 @@ const ClientInfoSchema = z.object({
   clientId: id,
   clientName: z.string().max(256),
   platform: z.enum(["darwin", "linux", "win32"]),
+  deviceId: id.optional(),
 });
 
 export const HelloSchema = z.object({

@@ -131,6 +131,11 @@ function defaultHostInfo(): HostInfo {
   };
 }
 
+/** What a Shell's remembered project is filed under: its install, or its machine name if it doesn't say. */
+function rememberedKey(client: ClientRef): string {
+  return client.deviceId ? `device:${client.deviceId}` : `name:${client.clientName}`;
+}
+
 export class SessionHost {
   private readonly states = new Map<string, SessionState>();
   private readonly openedListeners = new Set<EndpointOpenedListener>();
@@ -176,13 +181,15 @@ export class SessionHost {
 
   /**
    * Remember which project a Shell last showed, so switching back to this host
-   * lands there. Keyed by the Shell's machine name rather than its client id:
-   * the id is minted per launch, and "the project you had open there" should
-   * outlive a restart of the Shell. Only a project this host has is kept.
+   * lands there. Keyed by the Shell's install rather than its client id: the
+   * id is minted per launch, and "the project you had open there" should
+   * outlive a restart of the Shell. A Shell too old to say which install it is
+   * falls back to its machine name, which two machines can share. Only a
+   * project this host has is kept.
    */
   noteActiveProject(client: ClientRef, projectId: string): void {
     if (!this.options.describeProject?.(projectId)) return;
-    const key = client.clientName;
+    const key = rememberedKey(client);
     this.lastActiveByClient.delete(key);
     this.lastActiveByClient.set(key, projectId);
     while (this.lastActiveByClient.size > MAX_REMEMBERED_CLIENTS) {
@@ -194,10 +201,11 @@ export class SessionHost {
 
   /** The project the Shell last showed here, or null when it showed none or the host no longer has it. */
   lastActiveProject(client: ClientRef): ProjectDescription | null {
-    const projectId = this.lastActiveByClient.get(client.clientName);
+    const key = rememberedKey(client);
+    const projectId = this.lastActiveByClient.get(key);
     if (projectId === undefined) return null;
     const description = this.options.describeProject?.(projectId) ?? null;
-    if (!description) this.lastActiveByClient.delete(client.clientName);
+    if (!description) this.lastActiveByClient.delete(key);
     return description;
   }
 
@@ -230,6 +238,7 @@ export class SessionHost {
           clientName: ctx.client.clientName,
           platform: ctx.client.platform,
           kind: "remote",
+          ...(ctx.client.deviceId ? { deviceId: ctx.client.deviceId } : {}),
         },
         link: null,
         detach: [],

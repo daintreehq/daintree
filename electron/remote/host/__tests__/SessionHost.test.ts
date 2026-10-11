@@ -398,6 +398,23 @@ describe("SessionHost: the project a Shell last showed here", () => {
     sessions.dispose();
   });
 
+  it("tells apart two installs that share a machine name, by the install each says it is", () => {
+    const sessions = remembering();
+    const first = { ...client("greg-mbp"), deviceId: "d-first" };
+    const second = { ...client("greg-mbp"), deviceId: "d-second" };
+    sessions.noteActiveProject(first, "p1");
+    sessions.noteActiveProject(second, "p2");
+    expect(sessions.lastActiveProject({ ...first, clientId: "first-relaunched" })?.projectId).toBe(
+      "p1"
+    );
+    expect(sessions.lastActiveProject(second)?.projectId).toBe("p2");
+    // A Shell too old to say which install it is still finds its machine's.
+    sessions.noteActiveProject(client("greg-mbp"), "p2");
+    expect(sessions.lastActiveProject(client("greg-mbp"))?.projectId).toBe("p2");
+    expect(sessions.lastActiveProject(first)?.projectId).toBe("p1");
+    sessions.dispose();
+  });
+
   it("keeps only projects this host has, and forgets one it no longer has", () => {
     const sessions = remembering();
     sessions.noteActiveProject(client("greg-mbp"), "p1");
