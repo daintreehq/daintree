@@ -133,6 +133,20 @@ async function projectsForPathOwnership(
     addOwners(mainRoot);
     const realMainRoot = await realpathOrNull(mainRoot);
     if (realMainRoot) addOwners(realMainRoot);
+  } else if (commonDir) {
+    // A repository made with `--separate-git-dir` keeps its git directory
+    // away from its files, and nothing in it says where they are: the project
+    // that shares it is found by asking each its own (cached) common dir.
+    const realCommon = await realpathOrNull(commonDir);
+    const shared = await Promise.all(
+      projects.map(async (project) => {
+        const own = await probeGitCommonDir(project.root, GIT_PROBE_TIMEOUT_MS);
+        if (own.path === null) return null;
+        const realOwn = await realpathOrNull(own.path);
+        return realOwn !== null && realOwn === realCommon ? project.id : null;
+      })
+    );
+    for (const id of shared) if (id) owners.add(id);
   }
   addOwners(real);
   return [...owners];

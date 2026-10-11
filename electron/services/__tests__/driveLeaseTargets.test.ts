@@ -239,6 +239,8 @@ describe("createLeaseTargetResolvers", () => {
   let repoB: string;
   let linked: string;
   let nestedInA: string;
+  let repoD: string;
+  let linkedD: string;
 
   const git = (cwd: string, ...args: string[]) =>
     execFileSync("git", args, {
@@ -281,10 +283,29 @@ describe("createLeaseTargetResolvers", () => {
     // Project C registered through a link inside A that leads to another folder of A.
     mkdirSync(path.join(repoA, "c-real"));
     symlinkSync(path.join(repoA, "c-real"), path.join(repoA, "c-link"));
+    // Project D keeps its git directory elsewhere (--separate-git-dir), with a worktree outside.
+    repoD = path.join(root, "d");
+    mkdirSync(repoD);
+    git(repoD, "init", "-q", "-b", "main", "--separate-git-dir", path.join(root, "d-git"));
+    git(
+      repoD,
+      "-c",
+      "user.email=t@t",
+      "-c",
+      "user.name=t",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "i"
+    );
+    linkedD = path.join(root, "d-worktrees", "feature");
+    git(repoD, "worktree", "add", "-q", "-b", "feature", linkedD);
     projects.push(
       { id: "a", path: repoA, name: "a" },
       { id: "b", path: repoB, name: "b" },
-      { id: "c", path: path.join(repoA, "c-link"), name: "c" }
+      { id: "c", path: path.join(repoA, "c-link"), name: "c" },
+      { id: "d", path: repoD, name: "d" }
     );
   });
 
@@ -310,6 +331,12 @@ describe("createLeaseTargetResolvers", () => {
     // ".." after a link climbs from where the link leads, as git's cwd does,
     // never back into the folder that holds the link.
     await expect(lookup(r, `${repoA}/into-b-sub/..`)).resolves.toEqual(["b"]);
+  });
+
+  it("traces a worktree of a repository whose git directory is kept elsewhere to its project", async () => {
+    const r = createLeaseTargetResolvers();
+    await expect(lookup(r, repoD)).resolves.toEqual(["d"]);
+    await expect(lookup(r, linkedD)).resolves.toEqual(["d"]);
   });
 
   it("traces a path naming a file, asking git from the file's folder", async () => {
