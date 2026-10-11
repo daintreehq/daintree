@@ -328,7 +328,12 @@ export class HostConnection {
       case "connecting":
         return { status: "connecting", attempt: state.attempt };
       case "connected":
-        return { status: "connected", rttMs: state.rttMs, handshake: state.handshake };
+        return {
+          status: "connected",
+          rttMs: state.rttMs,
+          handshake: state.handshake,
+          ...(state.buildMismatch ? { buildMismatch: state.buildMismatch } : {}),
+        };
       case "unreachable":
         return {
           status: "unreachable",

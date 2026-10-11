@@ -546,7 +546,7 @@ describe("remote session wiring", () => {
     );
   });
 
-  it("routes nothing to a host running a different build", async () => {
+  it("routes nothing to a host on a different link protocol", async () => {
     await startHarness();
     const registry = new HostRegistry(memoryStore());
     registry.add({ name: HOST_ID, connection: { kind: "ssh", target: "studio.example" } });
@@ -554,7 +554,7 @@ describe("remote session wiring", () => {
       registry,
       createTransport: () =>
         createDirectTransport({ socketPath: h.server.socketPath, token: h.server.token }),
-      handshake: () => ({ ...TEST_HANDSHAKE, version: "9.9.9" }),
+      handshake: () => ({ ...TEST_HANDSHAKE, protocolVersion: TEST_HANDSHAKE.protocolVersion + 1 }),
       client: { clientId: "client-2", clientName: "other", platform: "darwin" },
       views: recordingSink().sink,
       session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
@@ -577,6 +577,39 @@ describe("remote session wiring", () => {
     expect(hostContexts).toHaveLength(0);
     expect(getEndpointRegistry().getRemote()).toHaveLength(0);
     expect(registry.get(HOST_ID)?.lastHandshake?.version).toBe("1.2.3");
+  });
+
+  it("routes to a host on a different version, best effort, carrying the difference", async () => {
+    await startHarness();
+    const registry = new HostRegistry(memoryStore());
+    registry.add({ name: HOST_ID, connection: { kind: "ssh", target: "studio.example" } });
+    const differing = new RemoteHostManager({
+      registry,
+      createTransport: () =>
+        createDirectTransport({ socketPath: h.server.socketPath, token: h.server.token }),
+      handshake: () => ({ ...TEST_HANDSHAKE, version: "9.9.9" }),
+      client: { clientId: "client-2", clientName: "other", platform: "darwin" },
+      views: recordingSink().sink,
+      session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+    });
+    cleanups.push(() => differing.disposeAll());
+    getIpcDispatcher().setRemoteRouter(
+      new RemoteRouterImpl(differing, new WindowHostBinding(), {
+        projectKeyFor: (id) => projectKeys.get(id) ?? null,
+        windowIdFor: () => null,
+      })
+    );
+
+    differing.connect(HOST_ID);
+    await waitFor(() => differing.connectionState(HOST_ID).status === "connected");
+    expect(differing.connectionState(HOST_ID)).toMatchObject({
+      status: "connected",
+      buildMismatch: { kind: "version", local: "9.9.9", remote: "1.2.3" },
+    });
+
+    const envelope = await invoke(HOST_CHANNEL, VIEW_A, {});
+    expect(envelope.ok).toBe(true);
+    expect(hostContexts).toHaveLength(1);
   });
 
   it("records when the host was last seen and its handshake", async () => {

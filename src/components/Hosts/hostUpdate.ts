@@ -17,11 +17,17 @@ export interface HostUpdateOffer {
  */
 export function hostUpdateOffer(entry: HostListEntry): HostUpdateOffer | null {
   const connection = entry.connection;
-  if (connection.status !== "version-mismatch") return null;
+  const mismatch =
+    connection.status === "version-mismatch"
+      ? connection.mismatch
+      : connection.status === "connected"
+        ? (connection.buildMismatch ?? null)
+        : null;
+  if (!mismatch) return null;
   return {
     hostId: entry.descriptor.id,
-    target: updateTargetFor(connection.mismatch),
-    label: updateActionLabel(connection.mismatch, entry.descriptor.name),
+    target: updateTargetFor(mismatch),
+    label: updateActionLabel(mismatch, entry.descriptor.name),
   };
 }
 

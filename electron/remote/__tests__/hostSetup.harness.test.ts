@@ -71,16 +71,25 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 /** The host's own build, when it should differ from the Shell's. */
-const hostBuild = vi.hoisted(() => ({ commit: null as string | null }));
+const hostBuild = vi.hoisted(() => ({
+  commit: null as string | null,
+  /** Only a different protocol is refused; a different commit alone connects. */
+  protocolVersion: null as number | null,
+}));
 vi.mock("../host/HostServer.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../host/HostServer.js")>();
   class HostServerOnItsOwnBuild extends original.HostServer {
     constructor(options: ConstructorParameters<typeof original.HostServer>[0]) {
-      super(
-        hostBuild.commit
-          ? { ...options, handshake: { ...options.handshake, commit: hostBuild.commit } }
-          : options
-      );
+      super({
+        ...options,
+        handshake: {
+          ...options.handshake,
+          ...(hostBuild.commit ? { commit: hostBuild.commit } : {}),
+          ...(hostBuild.protocolVersion !== null
+            ? { protocolVersion: hostBuild.protocolVersion }
+            : {}),
+        },
+      });
     }
   }
   return { ...original, HostServer: HostServerOnItsOwnBuild };
@@ -144,6 +153,7 @@ afterEach(async () => {
   root = null;
   homeState.home = null;
   hostBuild.commit = null;
+  hostBuild.protocolVersion = null;
   agents.working = 0;
   agents.observed = 0;
   electronMock.app.isPackaged = false;
@@ -263,8 +273,9 @@ describe("host setup over the harness", () => {
     30_000
   );
 
-  it("tells a Shell on another build how many agents are working, so it can wait for idle", async () => {
+  it("tells a Shell on another protocol how many agents are working, so it can wait for idle", async () => {
     hostBuild.commit = "0123456789abcdef";
+    hostBuild.protocolVersion = 99;
     agents.working = 2;
     // Short, so setup's ssh control socket path fits.
     root = await makeShortTempRoot();

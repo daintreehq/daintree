@@ -313,6 +313,16 @@ function beginSync(): () => void {
           resyncPending = true;
         }
         if (next.connection?.status === "connected" && prev.connection?.status !== "connected") {
+          const { buildMismatch, handshake: remoteBuild } = next.connection;
+          if (buildMismatch) {
+            // Loaded on use: a matching build never pays for the notice.
+            safeFireAndForget(
+              import("@/components/Hosts/buildMismatchNotice").then(({ noticeBuildMismatch }) =>
+                noticeBuildMismatch(hostId, hostLabel(), buildMismatch, remoteBuild)
+              ),
+              { context: "Warning about a host's different build" }
+            );
+          }
           if (resyncPending) {
             resyncPending = false;
             // After an explicit disconnect the link that comes back is a new session.

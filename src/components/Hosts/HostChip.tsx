@@ -10,6 +10,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Server } from "@/components/icons";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { drivenElsewhereBy, getViewHostId } from "@/hooks/useHostConnection";
@@ -121,9 +123,10 @@ function hostUpdateOffers(
 }
 
 /**
- * The window's host, left of the project switcher. Hidden until a host other
+ * The window's host, right of the project switcher. Hidden until a host other
  * than this machine exists, and never in a build without Remote Hosts. Neutral
  * on purpose: which machine the window is on is context, not a call to act.
+ * A window on this machine shows only an icon; a window on a host names it.
  */
 export function HostChip() {
   const supported = isRemoteShellSupported();
@@ -156,7 +159,13 @@ export function HostChip() {
     : (storeHostName ?? currentRow.name ?? windowHostId);
   const status = hostChipStatus(isLocalWindow, connection, drivenElsewhereBy(lease));
   const statusText = hostChipStatusText(status);
-  const mismatch = connection?.status === "version-mismatch" ? connection.mismatch : null;
+  const compact = isLocalWindow && statusText === null;
+  const mismatch =
+    connection?.status === "version-mismatch"
+      ? connection.mismatch
+      : connection?.status === "connected"
+        ? (connection.buildMismatch ?? null)
+        : null;
   const updates = hostUpdateOffers(
     hostList.hosts.map(hostUpdateOffer),
     mismatch && !isLocalWindow
@@ -180,28 +189,46 @@ export function HostChip() {
     void switchToHost(row.hostId, newWindow);
   };
 
+  const trigger = (
+    <DropdownMenuTrigger asChild>
+      <button
+        type="button"
+        data-toolbar-item=""
+        data-testid="host-chip"
+        data-host-status={status}
+        aria-label={statusText ? `Host: ${name}, ${statusText}` : `Host: ${name}`}
+        className={cn(
+          "app-no-drag pointer-events-auto ml-1.5 flex h-7 min-w-0 shrink items-center rounded-[var(--radius-md)] text-xs",
+          compact ? "w-7 shrink-0 justify-center" : "max-w-48 gap-1.5 px-2",
+          "text-text-secondary transition-colors hover:bg-overlay-subtle hover:text-text-primary aria-expanded:bg-overlay-subtle aria-expanded:text-text-primary",
+          "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-2"
+        )}
+      >
+        {compact ? (
+          <Server className="h-3.5 w-3.5" aria-hidden="true" />
+        ) : (
+          <>
+            <PlatformGlyph platform={currentRow.platform} className="shrink-0" />
+            <span className="min-w-0 truncate font-medium">{name}</span>
+            {statusText && <span className="shrink-0 text-2xs">{statusText}</span>}
+            <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
+          </>
+        )}
+      </button>
+    </DropdownMenuTrigger>
+  );
+
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          data-toolbar-item=""
-          data-testid="host-chip"
-          data-host-status={status}
-          aria-label={statusText ? `Host: ${name}, ${statusText}` : `Host: ${name}`}
-          className={cn(
-            "app-no-drag pointer-events-auto mr-2 flex h-7 min-w-0 max-w-48 shrink items-center gap-1.5 rounded-[var(--radius-md)] px-2 text-xs",
-            "text-text-secondary transition-colors hover:bg-overlay-subtle hover:text-text-primary aria-expanded:bg-overlay-subtle aria-expanded:text-text-primary",
-            "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-2"
-          )}
-        >
-          <PlatformGlyph platform={currentRow.platform} className="shrink-0" />
-          <span className="min-w-0 truncate font-medium">{name}</span>
-          {statusText && <span className="shrink-0 text-2xs">{statusText}</span>}
-          <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-80">
+      {compact ? (
+        <Tooltip>
+          <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+          <TooltipContent side="bottom">Hosts</TooltipContent>
+        </Tooltip>
+      ) : (
+        trigger
+      )}
+      <DropdownMenuContent align="end" className="w-80">
         <DropdownMenuLabel>Hosts</DropdownMenuLabel>
         {rows.map((row) => (
           <HostMenuItem key={row.hostId} row={row} onPick={pick} />

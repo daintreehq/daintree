@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import {
   compareHandshake,
+  isBlockingMismatch,
   type HandshakeMismatch,
   type HostHandshakeInfo,
 } from "../../../shared/types/remoteHosts.js";
@@ -329,8 +330,9 @@ export class HostServer {
       session.reject({ reason: "unauthorized", handshake: null, detail: null });
       return;
     }
+    // A different version or commit is let in: the client warns and runs best effort.
     const mismatch = compareHandshake(local, hello.handshake);
-    if (mismatch) {
+    if (mismatch && isBlockingMismatch(mismatch)) {
       void this.rejectBuild(session, mismatch);
       return;
     }

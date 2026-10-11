@@ -1,5 +1,6 @@
 import {
   compareHandshake,
+  isBlockingMismatch,
   type HandshakeMismatch,
   type HostHandshakeInfo,
 } from "../../../shared/types/remoteHosts.js";
@@ -33,6 +34,8 @@ export type LinkClientState =
       handshake: HostHandshakeInfo;
       hostName: string;
       sessionId: string;
+      /** The host runs a different version or commit; the link is up best effort. */
+      buildMismatch: HandshakeMismatch | null;
     }
   | {
       status: "unreachable";
@@ -188,13 +191,13 @@ export class LinkClient {
 
     if (outcome.kind === "welcome") {
       const mismatch = compareHandshake(this.options.handshake, outcome.welcome.handshake);
-      if (mismatch) {
+      if (mismatch && isBlockingMismatch(mismatch)) {
         session.close("version mismatch");
         await this.release(connection);
         this.mismatch(mismatch, outcome.welcome.handshake, null);
         return;
       }
-      this.established(session, connection, outcome.welcome);
+      this.established(session, connection, outcome.welcome, mismatch);
       return;
     }
 
@@ -259,7 +262,8 @@ export class LinkClient {
   private established(
     session: LinkSession,
     connection: LinkTransportConnection,
-    welcome: WelcomeMessage
+    welcome: WelcomeMessage,
+    buildMismatch: HandshakeMismatch | null
   ): void {
     if (session.isClosed) {
       void this.release(connection);
@@ -278,6 +282,7 @@ export class LinkClient {
       handshake: welcome.handshake,
       hostName: welcome.hostName,
       sessionId: welcome.sessionId,
+      buildMismatch,
     });
     this.setState(connected(null));
     session.onRtt((rtt) => {

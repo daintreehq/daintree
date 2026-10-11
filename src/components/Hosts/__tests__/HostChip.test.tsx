@@ -37,6 +37,7 @@ vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
 }));
 
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { HostChip } from "../HostChip";
 import { _resetHostListForTesting } from "../hostList";
 import { requestHostMenu } from "../hostMenuRequests";
@@ -114,7 +115,11 @@ afterEach(() => {
 
 async function renderWithHosts(hosts: HostListEntry[]) {
   list.mockResolvedValue(hosts);
-  const utils = render(<HostChip />);
+  const utils = render(
+    <TooltipProvider>
+      <HostChip />
+    </TooltipProvider>
+  );
   await act(async () => {
     await Promise.resolve();
   });
@@ -160,10 +165,11 @@ describe("HostChip", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
-  it("names this machine in a local window, with no state and no accent", async () => {
+  it("is an icon in a local window, naming this machine only to assistive tech, with no accent", async () => {
     const { container } = await renderWithHosts([host("h1", "studio-01")]);
     const chip = container.querySelector<HTMLElement>("[data-testid='host-chip']")!;
-    expect(chip.textContent).toContain("This Mac");
+    expect(chip.textContent).toBe("");
+    expect(chip.getAttribute("aria-label")).toBe("Host: This Mac");
     expect(chip.getAttribute("data-host-status")).toBe("local");
     expect(chip.className).not.toMatch(/accent/);
     for (const el of chip.querySelectorAll("*")) {
@@ -278,6 +284,30 @@ describe("HostChip", () => {
         },
       });
       await renderWithHosts([host("h1", "studio-01")]);
+      const menu = await openMenu();
+      expect(menu.textContent).toContain("Update studio-01");
+    } finally {
+      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+    }
+  });
+
+  it("says a host it connected to anyway runs a different build, and offers its update", async () => {
+    window.__DAINTREE_HOST_ID__ = { id: "h1" };
+    try {
+      useHostConnectionStore.setState({
+        hostId: "h1",
+        hostName: "studio-01",
+        connection: {
+          status: "connected",
+          rttMs: 4,
+          handshake: { ...HANDSHAKE, version: "1.3.0" },
+          buildMismatch: { kind: "version", local: "1.4.0", remote: "1.3.0" },
+        },
+      });
+      const { container } = await renderWithHosts([host("h1", "studio-01")]);
+      const chip = container.querySelector<HTMLElement>("[data-testid='host-chip']")!;
+      expect(chip.getAttribute("data-host-status")).toBe("build-differs");
+      expect(chip.textContent).toContain("different build");
       const menu = await openMenu();
       expect(menu.textContent).toContain("Update studio-01");
     } finally {

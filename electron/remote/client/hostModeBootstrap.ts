@@ -233,13 +233,7 @@ export async function bootstrapHostMode(
       userMessage: "Install Daintree on this host first.",
     });
   }
-  if (probe.matchesClient === false) {
-    throw new AppError({
-      code: "UNSUPPORTED",
-      message: "The host runs a different build",
-      userMessage: `Update Daintree on ${hostLabel} first: it runs a different build.`,
-    });
-  }
+  // A different build is turned on as it is: it connects best effort, with a warning.
 
   const pollUntil = async (
     done: (outcome: ProbeOutcome) => boolean,

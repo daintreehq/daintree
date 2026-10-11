@@ -113,6 +113,15 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+/**
+ * ssh splits `-o` values on whitespace, and the control directory sits under
+ * userData (`~/Library/Application Support/...` on macOS), so the path is
+ * double-quoted with ssh's own escapes.
+ */
+export function controlPathOption(controlPath: string): string {
+  return `ControlPath="${controlPath.replace(/[\\"]/g, "\\$&")}"`;
+}
+
 export function isValidSshTarget(target: string): boolean {
   return /^[A-Za-z0-9_.@%+[\]-]{1,255}$/.test(target) && !target.startsWith("-");
 }
@@ -166,7 +175,7 @@ export function sshCommonArgs(controlPath: string, controlPersist = "10m"): stri
     "-o",
     `ControlPersist=${controlPersist}`,
     "-o",
-    `ControlPath=${controlPath}`,
+    controlPathOption(controlPath),
   ];
 }
 
@@ -201,7 +210,7 @@ export function buildMuxForwardArgs(
 ): string[] {
   return [
     "-o",
-    `ControlPath=${controlPath}`,
+    controlPathOption(controlPath),
     "-O",
     "forward",
     "-L",
@@ -246,7 +255,7 @@ export function buildCancelArgs(
 ): string[] {
   return [
     "-o",
-    `ControlPath=${controlPath}`,
+    controlPathOption(controlPath),
     "-O",
     "cancel",
     "-L",
@@ -316,7 +325,7 @@ export function buildAttachArgs(
 }
 
 export function buildExitArgs(target: string, controlPath: string): string[] {
-  return ["-o", `ControlPath=${controlPath}`, "-O", "exit", "--", target];
+  return ["-o", controlPathOption(controlPath), "-O", "exit", "--", target];
 }
 
 /**

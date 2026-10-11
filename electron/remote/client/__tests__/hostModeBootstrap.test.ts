@@ -227,17 +227,25 @@ describe("bootstrapHostMode on a Mac", () => {
     expect(result.probe.hostModeListening).toBe(true);
   });
 
-  it("refuses a host on another build rather than start something that can't be reached", async () => {
+  it("turns Host mode on for a host on another build as it is: that build connects best effort", async () => {
     const { channel, calls } = scripted();
-    const other = mac({}).replace(BUILD, BUILD.replace("abcdef0123", "0000000000"));
-    await expect(
-      bootstrapHostMode({ kind: "ssh", target: "studio" }, await outcomeOf(other), {
-        channel,
-        probe: probes([other]).probe,
-        sleep: async () => {},
-      })
-    ).rejects.toThrow(/runs a different build/);
-    expect(calls).toEqual([]);
+    const otherBuild = (stdout: string) =>
+      stdout.replace(BUILD, BUILD.replace("abcdef0123", "0000000000"));
+    const other = otherBuild(mac({}));
+    const seen = probes([
+      otherBuild(mac({ listening: false })),
+      otherBuild(mac({ listening: true, agent: true, state: state() })),
+    ]);
+    const before = await outcomeOf(other);
+    expect(before.result.matchesClient).toBe(false);
+    const result = await bootstrapHostMode({ kind: "ssh", target: "studio" }, before, {
+      channel,
+      probe: seen.probe,
+      sleep: async () => {},
+      now: clock(),
+    });
+    expect(calls.map((c) => c.script)).toEqual([MAC_ENABLE_SCRIPT]);
+    expect(result.probe.hostModeState).toMatchObject({ enabled: true, startAtLogin: true });
   });
 });
 

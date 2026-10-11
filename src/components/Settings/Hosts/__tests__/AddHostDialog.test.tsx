@@ -91,7 +91,7 @@ afterEach(() => {
 });
 
 async function walkToAddHost() {
-  fireEvent.change(screen.getByPlaceholderText("user@studio-03"), {
+  fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
     target: { value: "greg@studio" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Check host" }));
@@ -101,11 +101,57 @@ async function walkToAddHost() {
 }
 
 describe("AddHostDialog", () => {
+  it("offers the .local name when ssh can't resolve a bare host name, and checks that instead", async () => {
+    remoteHosts.probe!.mockResolvedValueOnce(
+      probeResult({
+        reachable: false,
+        sshError:
+          "ssh: Could not resolve hostname studio: nodename nor servname provided, or not known",
+        platform: null,
+        install: null,
+        hostModeListening: false,
+        matchesClient: null,
+      })
+    );
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
+      target: { value: "greg@studio" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Try greg@studio.local" }));
+    await waitFor(() => expect(remoteHosts.probe).toHaveBeenCalledTimes(2));
+    expect(remoteHosts.probe!.mock.calls[1]![0]).toEqual({
+      connection: { kind: "ssh", target: "greg@studio.local" },
+    });
+    expect(await screen.findByText("Works")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Try / })).toBeNull();
+  });
+
+  it("offers no .local name when the target already has a domain or ssh failed otherwise", async () => {
+    remoteHosts.probe!.mockResolvedValueOnce(
+      probeResult({
+        reachable: false,
+        sshError: "ssh: Could not resolve hostname studio.lan: nodename nor servname provided",
+        platform: null,
+        install: null,
+        hostModeListening: false,
+        matchesClient: null,
+      })
+    );
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
+      target: { value: "greg@studio.lan" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    expect(await screen.findByText("Didn't connect")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Try / })).toBeNull();
+  });
+
   it("shows a discovery failure with Retry rather than an empty scan", async () => {
     remoteHosts.discover!.mockRejectedValueOnce(new Error("tailscale crashed"));
     render(<AddHostDialog isOpen onClose={() => {}} />);
     expect(await screen.findByText(/Couldn't look for machines: tailscale crashed/)).toBeTruthy();
-    expect(screen.queryByText(/Nothing found/)).toBeNull();
+    expect(screen.queryByText(/No machines answered/)).toBeNull();
 
     remoteHosts.discover!.mockResolvedValueOnce([
       {
@@ -235,7 +281,7 @@ describe("AddHostDialog", () => {
       })
     );
     render(<AddHostDialog isOpen onClose={() => {}} />);
-    fireEvent.change(screen.getByPlaceholderText("user@studio-03"), {
+    fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
       target: { value: "greg@studio" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Check host" }));
@@ -301,7 +347,7 @@ describe("AddHostDialog", () => {
       lingerRefused: "Could not enable linger: Interactive authentication required.",
     });
     render(<AddHostDialog isOpen onClose={() => {}} />);
-    fireEvent.change(screen.getByPlaceholderText("user@studio-03"), {
+    fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
       target: { value: "greg@bigbox" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Check host" }));
@@ -333,7 +379,7 @@ describe("AddHostDialog", () => {
     const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
     try {
       render(<AddHostDialog isOpen onClose={() => {}} />);
-      fireEvent.change(screen.getByPlaceholderText("user@studio-03"), {
+      fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
         target: { value: "greg@studio" },
       });
       fireEvent.click(screen.getByRole("button", { name: "Check host" }));

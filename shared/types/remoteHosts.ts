@@ -73,9 +73,10 @@ export type HandshakeMismatch =
   | { kind: "commit"; local: string; remote: string };
 
 /**
- * v1 rule: same app version, same source commit, same wire protocol. Platform
- * and arch may differ (a Mac client and a Linux host run different binaries
- * built from one commit). Returns null when compatible.
+ * How two builds differ, protocol first, then app version, then source commit;
+ * null when they match. Platform and arch may differ (a Mac client and a Linux
+ * host run different binaries built from one commit). Whether a difference
+ * stops the link is {@link isBlockingMismatch}.
  */
 export function compareHandshake(
   local: HostHandshakeInfo,
@@ -91,6 +92,15 @@ export function compareHandshake(
     return { kind: "commit", local: local.commit, remote: remote.commit };
   }
   return null;
+}
+
+/**
+ * Only a different wire protocol stops a link: neither side can read the
+ * other. A different app version or commit connects best effort, with a
+ * warning, since most of what crosses the link is unchanged between builds.
+ */
+export function isBlockingMismatch(mismatch: HandshakeMismatch): boolean {
+  return mismatch.kind === "protocol";
 }
 
 /** How a host was found. Discovery only proves reachability. */
@@ -181,7 +191,13 @@ export type HostConnectionState =
   | { status: "local" }
   | { status: "disconnected" }
   | { status: "connecting"; attempt: number }
-  | { status: "connected"; rttMs: number | null; handshake: HostHandshakeInfo }
+  | {
+      status: "connected";
+      rttMs: number | null;
+      handshake: HostHandshakeInfo;
+      /** Connected anyway with a different version or commit; absent when the builds match. */
+      buildMismatch?: HandshakeMismatch;
+    }
   /** Never a guessed cause: we say what we saw. */
   | { status: "unreachable"; lastSeenAt: number | null; detail: string | null }
   | { status: "version-mismatch"; mismatch: HandshakeMismatch; remote: HostHandshakeInfo }

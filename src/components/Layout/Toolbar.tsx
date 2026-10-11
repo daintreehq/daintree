@@ -2494,7 +2494,6 @@ export function Toolbar({
                   />
                 </Suspense>
               )}
-              <HostChip />
               <Tooltip
                 open={workspaceIdentity.kind !== "none" ? pillTooltipOpen : false}
                 onOpenChange={
@@ -2655,6 +2654,7 @@ export function Toolbar({
                   </TooltipContent>
                 )}
               </Tooltip>
+              <HostChip />
             </div>
 
             {/* RIGHT GROUP */}

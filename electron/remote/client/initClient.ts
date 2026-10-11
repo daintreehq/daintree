@@ -367,7 +367,12 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       const existing = manager.get(hostId);
       if (!existing) return null;
       const readiness: HostReadiness = await client.connectAndWait(hostId, 30_000);
-      return readiness === "ready" ? true : readiness === "version-mismatch" ? false : null;
+      if (readiness === "version-mismatch") return false;
+      if (readiness !== "ready") return null;
+      // Confirming an update takes the exact build answering: a different one
+      // still connects, best effort, so being connected alone proves nothing.
+      const state = manager.get(hostId)?.linkState;
+      return state?.status === "connected" && state.buildMismatch === null;
     },
     download: (url, destination, signal) =>
       downloadArtifact({ url, destination, signal, allowedPrefixes: RELEASE_FEED_PREFIXES }),

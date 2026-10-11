@@ -4,7 +4,13 @@ import type {
   CommandResult,
   CommandRunner,
 } from "./commandRunner.js";
-import { buildExitArgs, noteSshMaster, shellQuote, sshCommonArgs } from "./sshTransport.js";
+import {
+  buildExitArgs,
+  controlPathOption,
+  noteSshMaster,
+  shellQuote,
+  sshCommonArgs,
+} from "./sshTransport.js";
 import { sshExecutable } from "./sshExecutable.js";
 
 /**
@@ -57,7 +63,7 @@ export function scpArgs(
     "-o",
     "ControlMaster=auto",
     "-o",
-    `ControlPath=${controlPath}`,
+    controlPathOption(controlPath),
     "--",
     localPath,
     `${target}:${remotePath}`,

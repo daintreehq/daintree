@@ -1,4 +1,5 @@
 import type {
+  HandshakeMismatch,
   HostArch,
   HostConnectionState,
   HostDescriptor,
@@ -20,6 +21,18 @@ export function platformLabel(platform: HostPlatform | null, arch: HostArch | nu
 
 export function shortCommit(commit: string | null | undefined): string | null {
   return commit ? commit.slice(0, 7) : null;
+}
+
+/** What differs about a host's build, as the handshake reported it: "different build (0.43.0)". */
+export function describeBuildMismatch(mismatch: HandshakeMismatch): string {
+  switch (mismatch.kind) {
+    case "protocol":
+      return `different link protocol (${mismatch.remote})`;
+    case "version":
+      return `different build (${mismatch.remote})`;
+    case "commit":
+      return `different build (${shortCommit(mismatch.remote)})`;
+  }
 }
 
 export function buildLabel(descriptor: HostDescriptor): string {
@@ -49,8 +62,10 @@ export function connectionLabel(state: HostConnectionState): string {
       return "Not connected";
     case "connecting":
       return state.attempt > 1 ? `Connecting (attempt ${state.attempt})` : "Connecting";
-    case "connected":
-      return state.rttMs === null ? "Connected" : `Connected · ${Math.round(state.rttMs)} ms`;
+    case "connected": {
+      const base = state.rttMs === null ? "Connected" : `Connected · ${Math.round(state.rttMs)} ms`;
+      return state.buildMismatch ? `${base} · ${describeBuildMismatch(state.buildMismatch)}` : base;
+    }
     case "unreachable":
       return `Unreachable · ${formatSeen(state.lastSeenAt)}`;
     case "version-mismatch":
@@ -83,6 +98,23 @@ export function deliveryLabel(plan: HostInstallPlan): string {
 export function defaultHostName(sshTarget: string): string {
   const host = sshTarget.slice(sshTarget.lastIndexOf("@") + 1);
   return host.split(".")[0] || host;
+}
+
+/**
+ * `user@studio.local` for `user@studio` when ssh couldn't resolve that bare
+ * name itself: on a LAN a machine usually answers only by its Bonjour name.
+ * Null when the name already has a domain, or ssh failed on some other name
+ * (an ~/.ssh/config alias's HostName, a jump host), where `.local` would
+ * bypass that configuration.
+ */
+export function localNameSuggestion(sshTarget: string, sshError: string | null): string | null {
+  const unresolved = /Could not resolve hostname ([^\s:]+)/i.exec(sshError ?? "")?.[1];
+  if (!unresolved) return null;
+  const at = sshTarget.lastIndexOf("@");
+  const host = sshTarget.slice(at + 1);
+  if (!host || host.includes(".") || host.includes(":") || host.startsWith("[")) return null;
+  if (unresolved.toLowerCase() !== host.toLowerCase()) return null;
+  return `${sshTarget.slice(0, at + 1)}${host}.local`;
 }
 
 /**

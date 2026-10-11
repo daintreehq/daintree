@@ -307,9 +307,21 @@ describe("HostServer authentication", () => {
     expect(seen).toHaveLength(0);
   });
 
-  it("rejects a different build and the client reports the mismatch without retrying", async () => {
+  it("lets a different version or commit in, and the client carries the difference", async () => {
     const server = await startServer();
     const other = { ...TEST_HANDSHAKE, commit: "def456" };
+    const client = startClient(server, { handshake: other });
+    await waitFor(() => client.getState().status === "connected");
+    expect(client.getState()).toMatchObject({
+      status: "connected",
+      handshake: TEST_HANDSHAKE,
+      buildMismatch: { kind: "commit", local: "def456", remote: "abc123" },
+    });
+  });
+
+  it("rejects a different wire protocol and the client reports the mismatch without retrying", async () => {
+    const server = await startServer();
+    const other = { ...TEST_HANDSHAKE, protocolVersion: TEST_HANDSHAKE.protocolVersion + 1 };
     let attempts = 0;
     const client = startClient(server, { handshake: other });
     client.onStateChange((s) => {
@@ -318,7 +330,11 @@ describe("HostServer authentication", () => {
     await waitFor(() => client.getState().status === "version-mismatch");
     expect(client.getState()).toEqual({
       status: "version-mismatch",
-      mismatch: { kind: "commit", local: "def456", remote: "abc123" },
+      mismatch: {
+        kind: "protocol",
+        local: other.protocolVersion,
+        remote: TEST_HANDSHAKE.protocolVersion,
+      },
       local: other,
       remote: TEST_HANDSHAKE,
       // This server wasn't given a way to see its agents, so it says nothing about them.
@@ -329,10 +345,12 @@ describe("HostServer authentication", () => {
     expect(attempts).toBe(0);
   });
 
-  it("tells a client on another build what its agents are doing, fresh on every handshake", async () => {
+  it("tells a client on another protocol what its agents are doing, fresh on every handshake", async () => {
     let working: number | null = 2;
     const server = await startServer({ observeWorkingAgents: async () => working });
-    const client = startClient(server, { handshake: { ...TEST_HANDSHAKE, commit: "def456" } });
+    const client = startClient(server, {
+      handshake: { ...TEST_HANDSHAKE, protocolVersion: TEST_HANDSHAKE.protocolVersion + 1 },
+    });
     await waitFor(() => client.getState().status === "version-mismatch");
     const first = client.getState();
     expect(first).toMatchObject({ observed: { workingAgents: 2 } });
@@ -349,7 +367,9 @@ describe("HostServer authentication", () => {
     const server = await startServer({
       observeWorkingAgents: () => new Promise<number | null>(() => {}),
     });
-    const client = startClient(server, { handshake: { ...TEST_HANDSHAKE, commit: "def456" } });
+    const client = startClient(server, {
+      handshake: { ...TEST_HANDSHAKE, protocolVersion: TEST_HANDSHAKE.protocolVersion + 1 },
+    });
     await waitFor(() => client.getState().status === "version-mismatch", 5_000);
     expect(client.getState()).toMatchObject({ observed: { workingAgents: null } });
   });

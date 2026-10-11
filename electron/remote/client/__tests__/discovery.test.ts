@@ -1,4 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// A bare system hostname that a remote `studio.local` must never be mistaken for.
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, default: { ...actual, hostname: () => "studio" } };
+});
 import type { CommandResult, CommandRunner } from "../commandRunner.js";
 import {
   discoverHosts,
@@ -165,6 +171,31 @@ describe("dns-sd parsing", () => {
     expect(parseDnsSdBrowse(text)).toEqual([{ instance: "studio 03", domain: "local." }]);
   });
 
+  it("reads lines whose hour is space-padded, as dns-sd prints them before 10:00", () => {
+    const text = [
+      "Browsing for _daintree._tcp",
+      "DATE: ---Sun 11 Oct 2026---",
+      " 7:37:59.921  ...STARTING...",
+      "Timestamp     A/R    Flags  if Domain               Service Type         Instance Name",
+      " 7:37:59.921  Add        3  18 local.               _daintree._tcp.      studio-01",
+      " 7:37:59.921  Add        2  18 local.               _daintree._tcp.      studio-02",
+    ].join("\n");
+    expect(parseDnsSdBrowse(text)).toEqual([
+      { instance: "studio-01", domain: "local." },
+      { instance: "studio-02", domain: "local." },
+    ]);
+  });
+
+  it("keeps only the service type it was asked for", () => {
+    const text = [
+      " 7:37:41.752  Add        3  18 local.               _ssh._tcp.           studio-04",
+      " 7:37:41.752  Add        3  18 local.               _daintree._tcp.      studio-01",
+    ].join("\n");
+    expect(parseDnsSdBrowse(text, "_ssh._tcp")).toEqual([
+      { instance: "studio-04", domain: "local." },
+    ]);
+  });
+
   it("reads the host and TXT record from a lookup", () => {
     const text = [
       "Lookup studio 03._daintree._tcp.local",
@@ -173,6 +204,7 @@ describe("dns-sd parsing", () => {
     ].join("\n");
     expect(parseDnsSdLookup(text)).toEqual({
       host: "studio-03.local.",
+      port: 22,
       txt: { platform: "darwin", version: "1.0.0" },
     });
     expect(parseDnsSdLookup("nothing resolved")).toBeNull();
@@ -213,6 +245,96 @@ describe("discoverHosts", () => {
       ["lanbox", "lanbox.local", "bonjour", false],
     ]);
     expect(calls.some((c) => c.startsWith("avahi-browse"))).toBe(false);
+  });
+
+  it("lists Remote Login machines, prefers the Daintree advert and never offers this machine", async () => {
+    const browse: Record<string, string[]> = {
+      "_daintree._tcp": ["studio-01", "this-mac"],
+      "_ssh._tcp": ["studio-01", "studio-03", "this-mac"],
+    };
+    const run: CommandRunner = async (command, args) => {
+      if (command !== "dns-sd") return missing;
+      const type = args[0] === "-B" ? args[1]! : args[2]!;
+      if (args[0] === "-B") {
+        return ok(
+          (browse[type] ?? [])
+            .map(
+              (name) => ` 7:37:41.752  Add        3  18 local.               ${type}.      ${name}`
+            )
+            .join("\n")
+        );
+      }
+      const txt = type === "_daintree._tcp" ? "\n txtvers=1 platform=darwin" : "";
+      return ok(
+        ` 7:38:01.926  ${args[1]}.${type}.local. can be reached at ${args[1]}.local.:22 (interface 18)${txt}`
+      );
+    };
+    const hosts = await discoverHosts({
+      run,
+      platform: "darwin",
+      knownConnections: [],
+      localHostNames: ["this-mac.local"],
+    });
+    expect(hosts.map((h) => [h.connection.target, h.platform])).toEqual([
+      ["studio-01.local", "darwin"],
+      ["studio-03.local", null],
+    ]);
+  });
+
+  it("skips adverts on another ssh port, which a bare target can't reach", async () => {
+    const run: CommandRunner = async (command, args) => {
+      if (command !== "dns-sd") return missing;
+      if (args[0] === "-B") {
+        return ok(
+          args[1] === "_ssh._tcp"
+            ? [
+                " 7:37:41.752  Add        3  18 local.               _ssh._tcp.           odd-port",
+                " 7:37:41.752  Add        3  18 local.               _ssh._tcp.           plain",
+              ].join("\n")
+            : ""
+        );
+      }
+      const port = args[1] === "odd-port" ? 2222 : 22;
+      return ok(
+        ` 7:38:01.926  ${args[1]}._ssh._tcp.local. can be reached at ${args[1]}.local.:${port} (interface 18)`
+      );
+    };
+    const hosts = await discoverHosts({
+      run,
+      platform: "darwin",
+      knownConnections: [],
+      localHostNames: [],
+    });
+    expect(hosts.map((h) => h.connection.target)).toEqual(["plain.local"]);
+    expect(
+      parseAvahiBrowse("=;eth0;IPv4;box;_ssh._tcp;local;box.local;192.168.1.9;2222;").map(
+        (c) => c.sshTarget
+      )
+    ).toEqual([]);
+  });
+
+  it("hides this Mac by its Bonjour name, never a remote machine sharing its system hostname", async () => {
+    const run: CommandRunner = async (command, args) => {
+      if (command === "scutil") return ok("laptop\n");
+      if (command !== "dns-sd") return missing;
+      if (args[0] === "-B") {
+        return ok(
+          args[1] === "_ssh._tcp"
+            ? [
+                " 7:37:41.752  Add        3  18 local.               _ssh._tcp.           laptop",
+                " 7:37:41.752  Add        3  18 local.               _ssh._tcp.           studio",
+              ].join("\n")
+            : ""
+        );
+      }
+      return ok(
+        ` 7:38:01.926  ${args[1]}._ssh._tcp.local. can be reached at ${args[1]}.local.:22 (interface 18)`
+      );
+    };
+    const hosts = await discoverHosts({ run, platform: "darwin", knownConnections: [] });
+    const targets = hosts.map((h) => h.connection.target);
+    expect(targets).not.toContain("laptop.local");
+    expect(targets).toContain("studio.local");
   });
 
   it("keeps whole IP addresses apart and matches known hosts by an address the tailnet vouches for", async () => {
@@ -259,9 +381,11 @@ describe("discoverHosts", () => {
         },
       ],
     });
-    const run: CommandRunner = async (command) => {
+    const avahiArgs: Array<readonly string[]> = [];
+    const run: CommandRunner = async (command, args) => {
       if (command === "tailscale") return ok(status);
       if (command === "avahi-browse") {
+        avahiArgs.push(args);
         return ok(
           [
             '=;eth0;IPv4;box;_daintree._tcp;local;box.local;100.64.0.4;22;"platform=linux"',
@@ -273,6 +397,8 @@ describe("discoverHosts", () => {
     };
     const hosts = await discoverHosts({ run, platform: "linux", knownConnections: [] });
     expect(hosts.map((h) => h.connection.target)).toEqual(["box.ts.net", "box-2.local"]);
+    // avahi leaves out this machine's own services itself.
+    expect(avahiArgs.every((args) => args[0] === "-rptl")).toBe(true);
   });
 
   it("falls back to the macOS app's bundled CLI and survives every tool being absent", async () => {

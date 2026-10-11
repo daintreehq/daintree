@@ -11,6 +11,7 @@ import { getAgentConfig } from "@shared/config/agentRegistry";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { isMac, isWindows } from "@/lib/platform";
 import { pluralize } from "@/lib/pluralize";
+import { describeBuildMismatch } from "@/components/Settings/Hosts/hostLabels";
 
 /** Action the host menu's "Hosts overview…" entry dispatches, once something registers it. */
 export const HOSTS_OVERVIEW_ACTION_ID = "host.overview.open";
@@ -118,8 +119,13 @@ export function describeHostRowStatus(row: HostMenuRow, now: number = Date.now()
         return `Driven from ${connection.driver.clientName}`;
     }
   }
+  // Connected anyway to a different build: said on every line the row shows.
+  const differs =
+    connection?.status === "connected" && connection.buildMismatch
+      ? ` · ${describeBuildMismatch(connection.buildMismatch)}`
+      : "";
   const summary = liveSummary(row);
-  if (!summary) return row.isLocal ? null : "Connected";
+  if (!summary) return row.isLocal ? null : `Connected${differs}`;
   const agents: string[] = [];
   const observed = summary.agentsObserved;
   if (observed && observed.working > 0) agents.push(`${observed.working} working`);
@@ -128,7 +134,9 @@ export function describeHostRowStatus(row: HostMenuRow, now: number = Date.now()
   const projects =
     summary.projectCount === null ? "Projects unknown" : pluralize(summary.projectCount, "project");
   // Agent states are what the host's output heuristics saw, and say so.
-  return agents.length > 0 ? `${projects} · ${agents.join(" · ")} (observed)` : projects;
+  return agents.length > 0
+    ? `${projects} · ${agents.join(" · ")} (observed)${differs}`
+    : `${projects}${differs}`;
 }
 
 /** CPU and memory pressure as last reported; null when the host measured neither. */
@@ -159,6 +167,7 @@ export type HostChipStatus =
   | "connecting"
   | "unreachable"
   | "version-mismatch"
+  | "build-differs"
   | "disconnected"
   | "driven-elsewhere";
 
@@ -175,6 +184,8 @@ export function hostChipStatus(
   if (connection === null) return "connecting";
   switch (connection.status) {
     case "connected":
+      if (drivenBy) return "driven-elsewhere";
+      return connection.buildMismatch ? "build-differs" : "connected";
     case "local":
       return drivenBy ? "driven-elsewhere" : "connected";
     default:
@@ -190,6 +201,7 @@ export function hostChipStatusText(status: HostChipStatus): string | null {
     case "unreachable":
       return "unreachable";
     case "version-mismatch":
+    case "build-differs":
       return "different build";
     case "disconnected":
       return "not connected";

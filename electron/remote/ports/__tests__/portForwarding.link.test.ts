@@ -444,7 +444,7 @@ describe("ssh -O forward on the ControlMaster", () => {
     expect(forward.localPort).toBe(remotePort);
     expect(calls[0]).toEqual([
       "-o",
-      "ControlPath=/tmp/rh/cm-abc",
+      'ControlPath="/tmp/rh/cm-abc"',
       "-O",
       "forward",
       "-L",
@@ -456,7 +456,7 @@ describe("ssh -O forward on the ControlMaster", () => {
     await m.stop(forward.forwardId);
     expect(calls[1]).toEqual([
       "-o",
-      "ControlPath=/tmp/rh/cm-abc",
+      'ControlPath="/tmp/rh/cm-abc"',
       "-O",
       "cancel",
       "-L",

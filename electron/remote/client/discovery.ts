@@ -1,3 +1,4 @@
+import os from "node:os";
 import {
   sshConnection,
   type HostConnection,
@@ -10,14 +11,18 @@ import { isValidSshTarget } from "./sshTransport.js";
 
 /**
  * Finding machines to add: tailnet peers from `tailscale status --json`, and
- * hosts advertising `_daintree._tcp` on the LAN (dns-sd on macOS, avahi on
- * Linux). Discovery only says a machine answered; whether Daintree runs there
+ * hosts advertising `_daintree._tcp` (Host mode on) or `_ssh._tcp` (a Mac with
+ * Remote Login, a Linux box running avahi's ssh service) on the LAN (dns-sd on
+ * macOS, avahi on Linux). Discovery only says a machine answered; whether Daintree runs there
  * is learned by probing it. Every machine found is reached over ssh (a
  * tailnet name, a LAN address). Every source is optional: a missing tool is an
  * empty list, never an error.
  */
 
 export const BONJOUR_SERVICE_TYPE = "_daintree._tcp";
+export const SSH_SERVICE_TYPE = "_ssh._tcp";
+/** Daintree adverts first: they carry the platform, so they win the merge with a plain ssh one. */
+const LAN_SERVICE_TYPES = [BONJOUR_SERVICE_TYPE, SSH_SERVICE_TYPE] as const;
 
 /** The CLI on PATH first, then the macOS app's bundled one (GUI and App Store builds). */
 export const TAILSCALE_CANDIDATES = [
@@ -122,6 +127,16 @@ function parseTxt(parts: string[]): Record<string, string> {
   return txt;
 }
 
+/**
+ * An advert's port is the ssh port (`transport=ssh` for Daintree's own), and a
+ * target string can't carry one, so only port 22 (or none given) is offered.
+ * Another port is reachable through an ~/.ssh/config alias entered by hand.
+ */
+function isDefaultSshPort(port: string | number | undefined): boolean {
+  if (port === undefined || port === "") return true;
+  return Number(port) === 22;
+}
+
 function bonjourTarget(host: string, txt: Record<string, string>): string | null {
   const bare = stripDot(host.trim());
   if (!bare) return null;
@@ -141,6 +156,7 @@ export function parseAvahiBrowse(text: string): DiscoveryCandidate[] {
     const host = unescapeDecimal(fields[6] ?? "");
     const txtRaw = fields.slice(9).join(";");
     const txt = parseTxt(txtRaw.match(/"[^"]*"/g) ?? []);
+    if (!isDefaultSshPort(fields[8])) continue;
     const target = bonjourTarget(host, txt);
     if (!target) continue;
     const address = (fields[7] ?? "").trim();
@@ -156,12 +172,16 @@ export function parseAvahiBrowse(text: string): DiscoveryCandidate[] {
   return out;
 }
 
-/** Instance names from `dns-sd -B _daintree._tcp` (added, not removed, in the local domain). */
-export function parseDnsSdBrowse(text: string): Array<{ instance: string; domain: string }> {
+/** Instance names from `dns-sd -B <type>` (added, not removed, in the local domain). */
+export function parseDnsSdBrowse(
+  text: string,
+  serviceType: string = BONJOUR_SERVICE_TYPE
+): Array<{ instance: string; domain: string }> {
   const added = new Map<string, { instance: string; domain: string }>();
   for (const rawLine of text.split("\n")) {
     const line = rawLine.replace(/\r$/, "");
-    const match = /^\S+\s+(Add|Rmv)\s+\d+\s+\d+\s+(\S+)\s+(\S+)\s+(.+)$/.exec(line);
+    // The timestamp's hour is space-padded (` 7:37:59.921`) before 10:00.
+    const match = /^\s*\S+\s+(Add|Rmv)\s+\d+\s+\d+\s+(\S+)\s+(\S+)\s+(.+)$/.exec(line);
     if (!match) continue;
     const [, action, domain, type, instance] = match as unknown as [
       string,
@@ -170,7 +190,7 @@ export function parseDnsSdBrowse(text: string): Array<{ instance: string; domain
       string,
       string,
     ];
-    if (!type.startsWith(BONJOUR_SERVICE_TYPE)) continue;
+    if (!type.startsWith(serviceType)) continue;
     const key = `${instance}\u0000${domain}`;
     if (action === "Add") added.set(key, { instance: instance.trim(), domain });
     else added.delete(key);
@@ -178,18 +198,18 @@ export function parseDnsSdBrowse(text: string): Array<{ instance: string; domain
   return [...added.values()];
 }
 
-/** The host name and TXT record from `dns-sd -L <instance> _daintree._tcp <domain>`. */
+/** The host name and TXT record from `dns-sd -L <instance> <type> <domain>`. */
 export function parseDnsSdLookup(
   text: string
-): { host: string; txt: Record<string, string> } | null {
+): { host: string; port: number; txt: Record<string, string> } | null {
   const lines = text.split("\n").map((line) => line.replace(/\r$/, ""));
   const index = lines.findIndex((line) => line.includes(" can be reached at "));
   if (index < 0) return null;
-  const match = / can be reached at (\S+?):\d+/.exec(lines[index]!);
+  const match = / can be reached at (\S+?):(\d+)/.exec(lines[index]!);
   if (!match) return null;
   const txtLine = lines[index + 1] ?? "";
   const txt = /^\s/.test(txtLine) ? parseTxt(txtLine.trim().split(/\s+/)) : {};
-  return { host: match[1]!, txt };
+  return { host: match[1]!, port: Number(match[2]), txt };
 }
 
 export interface DiscoverDeps {
@@ -199,6 +219,8 @@ export interface DiscoverDeps {
   knownConnections: readonly HostConnection[];
   /** How long to listen for LAN advertisements. */
   browseMs?: number;
+  /** This machine's own mDNS names, so its own adverts aren't offered; read from the system unless given. */
+  localHostNames?: readonly string[];
   signal?: AbortSignal;
 }
 
@@ -216,23 +238,28 @@ async function discoverTailscale(deps: DiscoverDeps): Promise<DiscoveryCandidate
 }
 
 async function discoverBonjourMac(deps: DiscoverDeps): Promise<DiscoveryCandidate[]> {
+  const found = await Promise.all(LAN_SERVICE_TYPES.map((type) => browseDnsSd(deps, type)));
+  return found.flat();
+}
+
+async function browseDnsSd(deps: DiscoverDeps, serviceType: string): Promise<DiscoveryCandidate[]> {
   const browseMs = deps.browseMs ?? 2_000;
-  const browse = await deps.run("dns-sd", ["-B", BONJOUR_SERVICE_TYPE], {
+  const browse = await deps.run("dns-sd", ["-B", serviceType], {
     collectForMs: browseMs,
     timeoutMs: browseMs + 2_000,
     signal: deps.signal,
   });
   if (browse.spawnError !== null) return [];
-  const instances = parseDnsSdBrowse(browse.stdout).slice(0, 32);
+  const instances = parseDnsSdBrowse(browse.stdout, serviceType).slice(0, 32);
   const resolved = await Promise.all(
     instances.map(async ({ instance, domain }) => {
-      const lookup = await deps.run("dns-sd", ["-L", instance, BONJOUR_SERVICE_TYPE, domain], {
+      const lookup = await deps.run("dns-sd", ["-L", instance, serviceType, domain], {
         collectForMs: 1_500,
         timeoutMs: 3_500,
         signal: deps.signal,
       });
       const parsed = parseDnsSdLookup(lookup.stdout);
-      if (!parsed) return null;
+      if (!parsed || !isDefaultSshPort(parsed.port)) return null;
       const target = bonjourTarget(parsed.host, parsed.txt);
       if (!target) return null;
       const candidate: DiscoveryCandidate = {
@@ -249,12 +276,34 @@ async function discoverBonjourMac(deps: DiscoverDeps): Promise<DiscoveryCandidat
 }
 
 async function discoverBonjourLinux(deps: DiscoverDeps): Promise<DiscoveryCandidate[]> {
-  const result = await deps.run("avahi-browse", ["-rpt", BONJOUR_SERVICE_TYPE], {
-    timeoutMs: (deps.browseMs ?? 2_000) + 4_000,
+  const found = await Promise.all(
+    LAN_SERVICE_TYPES.map(async (type) => {
+      // `-l`: avahi's own flag for this machine's services, whatever name it publishes under.
+      const result = await deps.run("avahi-browse", ["-rptl", type], {
+        timeoutMs: (deps.browseMs ?? 2_000) + 4_000,
+        signal: deps.signal,
+      });
+      return result.spawnError !== null ? [] : parseAvahiBrowse(result.stdout);
+    })
+  );
+  return found.flat();
+}
+
+/**
+ * The names this Mac answers to on the LAN: its LocalHostName (which can
+ * differ from the system hostname) and the system hostname. dns-sd has no
+ * flag for local services; on Linux, avahi's `-l` leaves them out instead.
+ */
+async function localMdnsNames(deps: DiscoverDeps): Promise<string[]> {
+  if (deps.platform !== "darwin") return [];
+  const names = [os.hostname()];
+  const result = await deps.run("scutil", ["--get", "LocalHostName"], {
+    timeoutMs: 2_000,
     signal: deps.signal,
   });
-  if (result.spawnError !== null) return [];
-  return parseAvahiBrowse(result.stdout);
+  const local = result.code === 0 ? result.stdout.trim() : "";
+  if (local) names.push(`${local}.local`);
+  return names;
 }
 
 function isIpAddress(value: string): boolean {
@@ -287,18 +336,24 @@ export async function discoverHosts(deps: DiscoverDeps): Promise<DiscoveredHost[
       : deps.platform === "linux"
         ? discoverBonjourLinux(deps)
         : Promise.resolve([]);
-  const [tailnet, lan] = await Promise.all([
+  const [tailnet, lan, selfNames] = await Promise.all([
     discoverTailscale(deps).catch(() => []),
     bonjour.catch(() => []),
+    deps.localHostNames
+      ? Promise.resolve(deps.localHostNames)
+      : localMdnsNames(deps).catch(() => []),
   ]);
   const knownTargets = deps.knownConnections
     .map(sshTargetOf)
     .filter((target): target is string => target !== null);
   const known = new Set(knownTargets.map((t) => t.toLowerCase()));
   const knownMachines = new Set(knownTargets.map(machineKey));
+  // This machine's own LAN adverts (Remote Login, Host mode) are never a host to add.
+  const self = new Set(selfNames.map(machineKey));
   const seen = new Set<string>();
   const out: DiscoveredHost[] = [];
   for (const candidate of [...tailnet, ...lan]) {
+    if (candidate.source === "bonjour" && self.has(machineKey(candidate.sshTarget))) continue;
     const keys = [candidate.sshTarget, ...(candidate.aliases ?? [])].map(machineKey);
     if (keys.some((key) => seen.has(key))) continue;
     for (const key of keys) seen.add(key);

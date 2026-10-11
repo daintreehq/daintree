@@ -22,6 +22,7 @@ import {
   buildProbeArgs,
   buildStreamLocalCheckArgs,
   controlPathFor,
+  controlPathOption,
   isValidSshTarget,
   parseProbeOutput,
   type SshChild,
@@ -44,10 +45,17 @@ const COMMON = [
   "-o",
   "ControlPersist=10m",
   "-o",
-  "ControlPath=/cp/cm-%C",
+  'ControlPath="/cp/cm-%C"',
 ];
 
 describe("ssh argument construction", () => {
+  it("quotes the control path so ssh keeps a path with spaces as one value", () => {
+    expect(controlPathOption("/Users/g/Library/Application Support/Daintree/rh/cm-%C")).toBe(
+      'ControlPath="/Users/g/Library/Application Support/Daintree/rh/cm-%C"'
+    );
+    expect(controlPathOption('/tmp/a"b\\c/cm-%C')).toBe('ControlPath="/tmp/a\\"b\\\\c/cm-%C"');
+  });
+
   it("builds the probe, discovery read and forward commands", () => {
     expect(buildProbeArgs("studio", "/cp/cm-%C")).toEqual([
       ...COMMON,
@@ -71,7 +79,7 @@ describe("ssh argument construction", () => {
       buildMuxForwardArgs("studio", "/cp/cm-%C", "/l/l.sock", "/run/user/1/daintree/host.sock")
     ).toEqual([
       "-o",
-      "ControlPath=/cp/cm-%C",
+      'ControlPath="/cp/cm-%C"',
       "-O",
       "forward",
       "-L",
@@ -249,7 +257,7 @@ describe("SshTransport with an injected ssh", () => {
     );
     expect(calls[3]!.slice(0, 5)).toEqual([
       "-o",
-      `ControlPath=${controlPathFor(clientDir, "greg@studio")}`,
+      controlPathOption(controlPathFor(clientDir, "greg@studio")),
       "-O",
       "forward",
       "-L",
@@ -562,9 +570,9 @@ describe("closing masters when the app quits", () => {
     expect(exits).toEqual([]);
     await closeSshMasters(1_000);
     expect(exits).toEqual([
-      ["-o", `ControlPath=${controlPathFor(clientDir, "studio")}`, "-O", "exit", "--", "studio"],
-      ["-o", `ControlPath=${controlPathFor(clientDir, "bigbox")}`, "-O", "exit", "--", "bigbox"],
-      ["-o", `ControlPath=${controlPathFor(clientDir, "down")}`, "-O", "exit", "--", "down"],
+      ["-o", controlPathOption(controlPathFor(clientDir, "studio")), "-O", "exit", "--", "studio"],
+      ["-o", controlPathOption(controlPathFor(clientDir, "bigbox")), "-O", "exit", "--", "bigbox"],
+      ["-o", controlPathOption(controlPathFor(clientDir, "down")), "-O", "exit", "--", "down"],
     ]);
     await closeSshMasters(1_000);
     expect(exits).toHaveLength(3);

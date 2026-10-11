@@ -128,7 +128,7 @@ export function HostDetail({
           {sshTarget !== null ? (
             <SettingsInput
               label="SSH target"
-              description="What `ssh` is given: user@host, a tailnet name, or an ~/.ssh/config alias"
+              description="What ssh is given: user@host, a .local or tailnet name, or an ~/.ssh/config alias"
               layout="inline"
               spellCheck={false}
               value={target.draft}

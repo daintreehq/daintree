@@ -25,6 +25,10 @@ const HANDSHAKE = {
 } as const;
 
 const CONNECTED: HostConnectionState = { status: "connected", rttMs: 1, handshake: HANDSHAKE };
+const CONNECTED_OTHER_BUILD: HostConnectionState = {
+  ...CONNECTED,
+  buildMismatch: { kind: "version", local: "1.0.0", remote: "1.1.0" },
+};
 
 function descriptor(id: string, name: string, extra: Partial<HostDescriptor> = {}): HostDescriptor {
   return {
@@ -139,6 +143,15 @@ describe("describeHostRowStatus", () => {
     expect(text).not.toMatch(/asleep|timeout/i);
   });
 
+  it("says a host connected best effort runs a different build, with or without numbers", () => {
+    const [, bare] = rowsFor([entry("h1", "studio-01", CONNECTED_OTHER_BUILD)]);
+    expect(describeHostRowStatus(bare!, now)).toBe("Connected · different build (1.1.0)");
+    const [, counted] = rowsFor([entry("h1", "studio-01", CONNECTED_OTHER_BUILD, summary("h1"))]);
+    expect(describeHostRowStatus(counted!, now)).toBe(
+      "2 projects · 6 working · 1 waiting (observed) · different build (1.1.0)"
+    );
+  });
+
   it("never shows a disconnected host's stale numbers", () => {
     const [, row] = rowsFor([
       entry("h1", "studio-01", { status: "disconnected" }, summary("h1"), { lastSeenAt: null }),
@@ -192,6 +205,8 @@ describe("hostChipStatus", () => {
   it("follows the link for a remote window", () => {
     expect(hostChipStatus(false, null, null)).toBe("connecting");
     expect(hostChipStatus(false, CONNECTED, null)).toBe("connected");
+    expect(hostChipStatus(false, CONNECTED_OTHER_BUILD, null)).toBe("build-differs");
+    expect(hostChipStatusText("build-differs")).toBe(hostChipStatusText("version-mismatch"));
     expect(
       hostChipStatus(false, { status: "unreachable", lastSeenAt: null, detail: null }, null)
     ).toBe("unreachable");

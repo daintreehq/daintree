@@ -1,4 +1,4 @@
-import { isValidSshTarget, type SshSpawner } from "../client/sshTransport.js";
+import { controlPathOption, isValidSshTarget, type SshSpawner } from "../client/sshTransport.js";
 
 /**
  * Port forwards added to (and removed from) the ControlMaster the link's own
@@ -37,7 +37,7 @@ export function buildPortForwardArgs(
   }
   return [
     "-o",
-    `ControlPath=${mux.controlPath}`,
+    controlPathOption(mux.controlPath),
     "-O",
     operation,
     "-L",

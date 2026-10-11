@@ -34,6 +34,7 @@ import { HostCommand } from "./HostCommand";
 import {
   defaultHostName,
   deliveryLabel,
+  localNameSuggestion,
   hostModeSwitchedOn,
   installLabel,
   platformLabel,
@@ -164,15 +165,18 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     );
   };
 
-  const check = () =>
+  const check = (nextTarget?: string) => {
+    if (nextTarget !== undefined) setTarget(nextTarget);
+    const connection = nextTarget !== undefined ? sshConnection(nextTarget) : connectionFor();
     run(
-      () => remoteHostsClient.probe(connectionFor()),
+      () => remoteHostsClient.probe(connection),
       (result) => {
         setProbe(result);
         if (result.install?.packaging === "appimage") setLinuxPackage("appimage");
         setStep("check");
       }
     );
+  };
 
   const loadPlan = (pkg: LinuxPackagePreference) =>
     run(
@@ -254,6 +258,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
 
   let primary: DialogAction | undefined;
   let secondary: DialogAction | undefined = { label: "Cancel", onClick: onClose };
+  let leading: DialogAction | undefined;
   let body: React.ReactNode;
 
   if (added) {
@@ -277,7 +282,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     body = (
       <div className="space-y-4">
         <div>
-          <p className="mb-2 text-sm font-medium text-text-primary">On your tailnet and network</p>
+          <p className="mb-2 text-sm font-medium text-text-primary">Machines found</p>
           {discoverError !== null ? (
             <div className="flex items-start justify-between gap-3">
               <p role="alert" className="text-sm text-text-secondary select-text">
@@ -295,7 +300,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
             ) : null
           ) : discovered.length === 0 ? (
             <p className="text-sm text-text-secondary">
-              Nothing found. Enter the machine&apos;s SSH target below.
+              No machines answered on your tailnet or local network. Enter an SSH target below.
             </p>
           ) : (
             <ul className="divide-y divide-border-subtle rounded-[var(--radius-lg)] border border-border-default">
@@ -303,7 +308,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                 <li key={`${host.source}:${formatHostConnection(host.connection)}`}>
                   <button
                     type="button"
-                    disabled={host.alreadyAdded}
+                    disabled={host.alreadyAdded || busy}
                     aria-pressed={target === sshTargetOf(host.connection)}
                     onClick={() => {
                       setTarget(sshTargetOf(host.connection) ?? "");
@@ -332,29 +337,32 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
               ))}
             </ul>
           )}
-          <p className="mt-2 text-xs text-text-secondary">
-            Listed machines answered on the network. Whether Daintree is ready there is checked
-            next.
-          </p>
+          {discovered !== null && discovered.length > 0 && (
+            <p className="mt-2 text-xs text-text-secondary">
+              Pick one to fill in its SSH target, or enter one below. Whether Daintree is ready
+              there is checked next.
+            </p>
+          )}
         </div>
         <Field>
           <FieldLabel>SSH target</FieldLabel>
           <Input
             value={target}
-            placeholder="user@studio-03"
+            placeholder="user@devbox.local"
+            disabled={busy}
             spellCheck={false}
             autoCapitalize="off"
             onChange={(e) => setTarget(e.target.value)}
           />
           <FieldDescription>
-            Anything `ssh` accepts here: user@host, a tailnet name, or an ~/.ssh/config alias
+            Anything ssh accepts: user@host, a .local or tailnet name, or an ~/.ssh/config alias
           </FieldDescription>
         </Field>
         <Field>
           <FieldLabel>Name</FieldLabel>
           <Input
             value={name}
-            placeholder={target ? defaultHostName(target) : "studio-03"}
+            placeholder={target ? defaultHostName(target) : "devbox"}
             onChange={(e) => setName(e.target.value)}
           />
         </Field>
@@ -362,11 +370,17 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     );
     primary = {
       label: "Check host",
-      onClick: check,
+      onClick: () => check(),
       disabled: busy || target.trim().length === 0,
       loading: busy,
     };
   } else if (step === "check") {
+    const localSuggestion =
+      // Only while adding: an existing host keeps its saved target, which a
+      // reconnect after install or Host mode would still dial.
+      !existing && probe && !probe.reachable
+        ? localNameSuggestion(target.trim(), probe.sshError)
+        : null;
     body = !probe ? (
       <p className="flex items-center gap-2 text-sm text-text-secondary">
         <Spinner size="sm" /> Checking {target}
@@ -378,6 +392,21 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           <pre className="mt-1 whitespace-pre-wrap rounded-[var(--radius-md)] bg-surface-input p-2 text-xs text-text-secondary select-text">
             {probe.sshError}
           </pre>
+        )}
+        {localSuggestion && (
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <p className="text-xs text-text-secondary">
+              On a local network, a machine usually answers by its .local name.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => check(localSuggestion)}
+            >
+              Try {localSuggestion}
+            </Button>
+          </div>
         )}
         {probe.reachable && (
           <>
@@ -398,14 +427,14 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         )}
         {!probe.reachable && (
           <p className="mt-3 text-xs text-text-secondary">
-            Daintree connects with your own `ssh` and never asks for a password. On a Mac, turn on
+            Daintree connects with your own ssh and never asks for a password. On a Mac, turn on
             Remote Login in System Settings → General → Sharing.
           </p>
         )}
       </div>
     );
     if (probe && !probe.reachable) {
-      primary = { label: "Check again", onClick: check, disabled: busy, loading: busy };
+      primary = { label: "Check again", onClick: () => check(), disabled: busy, loading: busy };
     } else if (probe?.matchesClient === true) {
       primary = { label: "Continue", onClick: () => setStep("enable") };
     } else if (probe) {
@@ -415,10 +444,16 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         disabled: busy,
         loading: busy,
       };
+      // A different build still connects, best effort, with a warning.
+      if (probe.install) {
+        leading = { label: "Continue anyway", onClick: () => setStep("enable"), disabled: busy };
+      }
     } else {
-      primary = { label: "Check host", onClick: check, disabled: busy, loading: busy };
+      primary = { label: "Check host", onClick: () => check(), disabled: busy, loading: busy };
     }
-    if (!existing) secondary = { label: "Back", onClick: () => setStep("discover") };
+    // Not while a check runs: its result would land against an edited target.
+    if (!existing)
+      secondary = { label: "Back", onClick: () => setStep("discover"), disabled: busy };
   } else if (step === "install") {
     const progress = install?.progress ?? null;
     body = plan ? (
@@ -512,7 +547,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       primary = { label: "Installing", onClick: () => {}, disabled: true, loading: true };
       secondary = { label: "Stop", onClick: cancelInstall };
     } else if (installResult?.status === "needs-user-command") {
-      primary = { label: "Check again", onClick: check, disabled: busy, loading: busy };
+      primary = { label: "Check again", onClick: () => check(), disabled: busy, loading: busy };
     } else if (plan?.kind === "up-to-date") {
       primary = { label: "Continue", onClick: () => setStep("enable") };
     } else if (plan?.kind === "install" && installResult?.status !== "agents-working") {
@@ -634,7 +669,11 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         {body}
         {error && <ErrorLine message={error} />}
       </AppDialog.Body>
-      <AppDialog.Footer primaryAction={primary} secondaryAction={secondary} />
+      <AppDialog.Footer
+        primaryAction={primary}
+        secondaryAction={secondary}
+        leadingAction={leading}
+      />
       <ConfirmDialog
         isOpen={confirmProceed}
         onClose={() => setConfirmProceed(false)}
