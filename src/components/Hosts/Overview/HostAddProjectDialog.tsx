@@ -3,8 +3,8 @@ import { FolderPlus } from "lucide-react";
 import type { HostSwitchExecuteResult, HostSwitchStatus } from "@shared/types/ipc/hostSwitch";
 import type { DestinationCheck, HostCloneDepth } from "@shared/types/ipc/projectMatch";
 import type { HostId } from "@shared/types/remoteHosts";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
@@ -36,8 +36,15 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-function errorCode(error: unknown): unknown {
-  return error instanceof Error && "code" in error ? error.code : undefined;
+/** The folder name a clone of `url` gets, as git would name it. */
+function repoName(url: string): string {
+  return (
+    url
+      .replace(/\/+$/, "")
+      .replace(/\.git$/, "")
+      .split(/[/:]/)
+      .pop() || "project"
+  );
 }
 
 /**
@@ -61,6 +68,8 @@ export function HostAddProjectDialog({
   const [destination, setDestination] = useState("");
   // Set once the person edits the folder; a new URL then no longer moves it.
   const [destinationTouched, setDestinationTouched] = useState(false);
+  // A folder chosen with Change…: the clone's own folder in it follows the URL until one is typed.
+  const [pickedFolder, setPickedFolder] = useState<string | null>(null);
   const [check, setCheck] = useState<DestinationCheck | null>(null);
   const [checkedInput, setCheckedInput] = useState<string | null>(null);
   // The URL the check was made for: a folder vetted for one repository never clones another.
@@ -128,7 +137,7 @@ export function HostAddProjectDialog({
           if (cancelled) return;
           setCheck(null);
           setCheckedInput(null);
-          setCheckError(formatErrorMessage(error, "The host didn't answer."));
+          setCheckError(clientErrorText(error, "The host didn't answer."));
         });
     }, CHECK_DELAY_MS);
     return () => {
@@ -164,15 +173,25 @@ export function HostAddProjectDialog({
     });
     const folder = picked?.[0];
     if (!folder) return;
-    const name = trimmedUrl
-      .replace(/\/+$/, "")
-      .replace(/\.git$/, "")
-      .split(/[/:]/)
-      .pop();
+    const name = repoName(trimmedUrl);
+    const next = destinationInFolder(folder, destination, name);
     setDestinationTouched(true);
-    setDestination(destinationInFolder(folder, destination, name || "project"));
+    // Only a name taken from the URL follows it; one the person typed stays.
+    setPickedFolder(next.slice(next.lastIndexOf("/") + 1) === name ? folder : null);
+    setDestination(next);
     setCheck(null);
     setCheckedInput(null);
+    setFailure(null);
+  };
+
+  const changeUrl = (next: string) => {
+    setUrl(next);
+    setFailure(null);
+    if (pickedFolder !== null) {
+      setDestination(destinationInFolder(pickedFolder, "", repoName(next.trim())));
+      setCheck(null);
+      setCheckedInput(null);
+    }
   };
 
   const clone = async () => {
@@ -203,10 +222,15 @@ export function HostAddProjectDialog({
       }
       if (result.kind === "opened") onOpened(result);
     } catch (error) {
-      if (errorCode(error) !== "CANCELLED") {
+      const code = clientErrorCode(error);
+      if (code !== "CANCELLED") {
         setFailure({
-          title: `Cloning on ${hostName} didn't finish`,
-          gitText: formatErrorMessage(error, "Something went wrong."),
+          // A request the host turned down never started.
+          title:
+            code === "VALIDATION"
+              ? `${hostName} can't clone this`
+              : `Cloning on ${hostName} didn't finish`,
+          gitText: clientErrorText(error, "Something went wrong."),
           fix: null,
         });
       }
@@ -249,7 +273,7 @@ export function HostAddProjectDialog({
             spellCheck={false}
             autoComplete="off"
             disabled={busy}
-            onChange={(event) => setUrl(event.target.value)}
+            onChange={(event) => changeUrl(event.target.value)}
           />
         </Row>
         <Row label="Into">
@@ -264,9 +288,11 @@ export function HostAddProjectDialog({
               invalid={check !== null && check.status !== "free"}
               onChange={(event) => {
                 setDestinationTouched(true);
+                setPickedFolder(null);
                 setDestination(event.target.value);
                 setCheck(null);
                 setCheckedInput(null);
+                setFailure(null);
               }}
             />
             <Button
@@ -295,6 +321,7 @@ export function HostAddProjectDialog({
                     className="underline underline-offset-2 text-text-primary"
                     onClick={() => {
                       setDestinationTouched(true);
+                      setPickedFolder(null);
                       setDestination(check.suggestion!);
                       setCheck(null);
                       setCheckedInput(null);

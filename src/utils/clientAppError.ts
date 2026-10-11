@@ -93,3 +93,18 @@ export function isClientAppError(
   // Same-realm fallback (no contextBridge crossing).
   return e.name === "AppError" && typeof (e as { code?: unknown }).code === "string";
 }
+
+/**
+ * What to tell the person about an IPC error: the AppError's own words when it
+ * has them, its decoded message otherwise, never the `[AppError|…]` wire prefix.
+ */
+export function clientErrorText(error: unknown, fallback: string): string {
+  if (isClientAppError(error)) return error.userMessage ?? error.message;
+  if (error instanceof Error) return error.message;
+  return typeof error === "string" ? error : fallback;
+}
+
+/** An IPC error's AppError code, decoded from the wire prefix; undefined for any other error. */
+export function clientErrorCode(error: unknown): string | undefined {
+  return isClientAppError(error) ? error.code : undefined;
+}

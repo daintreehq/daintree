@@ -155,4 +155,53 @@ describe("HostAddProjectDialog", () => {
     fireEvent.change(urlField, { target: { value: "git@github.com:someone/else.git" } });
     expect(clone.getAttribute("aria-disabled")).toBe("true");
   });
+
+  it("names the clone's folder after a URL entered once a folder was already chosen", async () => {
+    pickHostPaths.mockResolvedValue(["/data"]);
+    renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Choose a folder on studio-01" }));
+    const folder = screen.getByRole("textbox", { name: "Folder on studio-01" }) as HTMLInputElement;
+    await waitFor(() => expect(folder.value).toBe("/data/project"));
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Repository URL to clone on studio-01" }),
+      { target: { value: URL } }
+    );
+    expect(folder.value).toBe("/data/api");
+    expect(suggestCloneDestination).not.toHaveBeenCalled();
+  });
+
+  it("keeps a folder name the person typed when the URL changes", async () => {
+    pickHostPaths.mockResolvedValue(["/data"]);
+    renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Choose a folder on studio-01" }));
+    const folder = screen.getByRole("textbox", { name: "Folder on studio-01" }) as HTMLInputElement;
+    await waitFor(() => expect(folder.value).toBe("/data/project"));
+    fireEvent.change(folder, { target: { value: "/data/mine" } });
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Repository URL to clone on studio-01" }),
+      { target: { value: URL } }
+    );
+    expect(folder.value).toBe("/data/mine");
+  });
+
+  it("states a refused request plainly, without the wire prefix, and clears it once the URL changes", async () => {
+    execute.mockRejectedValue(
+      new Error(
+        "[AppError|VALIDATION|Only%20HTTP(S)%20and%20SSH%20remotes%20can%20be%20cloned] Only HTTP(S) and SSH remotes can be cloned"
+      )
+    );
+    renderDialog();
+    const urlField = screen.getByRole("textbox", { name: "Repository URL to clone on studio-01" });
+    fireEvent.change(urlField, { target: { value: URL } });
+    const clone = screen.getByRole("button", { name: "Clone and open" }) as HTMLButtonElement;
+    await waitFor(() => expect(clone.getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(clone);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("studio-01 can't clone this");
+    expect(alert.textContent).toContain("Only HTTP(S) and SSH remotes can be cloned");
+    expect(alert.textContent).not.toContain("[AppError");
+    expect(alert.textContent).not.toContain("didn't finish");
+    fireEvent.change(urlField, { target: { value: `${URL}x` } });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
 });

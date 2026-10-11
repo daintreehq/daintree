@@ -12,8 +12,8 @@ import type {
   HostCloneDepth,
 } from "@shared/types/ipc/projectMatch";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
@@ -69,10 +69,6 @@ type StepPayload = HostSwitchExecutePayload extends infer P
     : never
   : never;
 
-function errorCode(error: unknown): unknown {
-  return error instanceof Error && "code" in error ? error.code : undefined;
-}
-
 function runStep(
   opId: string,
   payload: StepPayload,
@@ -80,10 +76,10 @@ function runStep(
   onFailure: (failure: Failure) => void
 ): Promise<HostSwitchExecuteResult | null> {
   return window.electron.hostSwitch.execute({ ...payload, opId }).catch((error: unknown) => {
-    if (errorCode(error) !== "CANCELLED") {
+    if (clientErrorCode(error) !== "CANCELLED") {
       onFailure({
         title: `${label} didn't finish`,
-        gitText: formatErrorMessage(error, "Something went wrong."),
+        gitText: clientErrorText(error, "Something went wrong."),
         fix: null,
       });
     }
@@ -201,7 +197,7 @@ export function HostSwitchDialog({
         );
       })
       .catch((error: unknown) => {
-        if (!cancelled) setLoadError(formatErrorMessage(error, "Couldn't look at the project."));
+        if (!cancelled) setLoadError(clientErrorText(error, "Couldn't look at the project."));
       });
     return () => {
       cancelled = true;
@@ -243,7 +239,7 @@ export function HostSwitchDialog({
           // An earlier answer no longer vouches for the folder.
           setDestinationCheck(null);
           setCheckedInput(null);
-          setCheckError(formatErrorMessage(error, "The host didn't answer."));
+          setCheckError(clientErrorText(error, "The host didn't answer."));
         });
     }, DESTINATION_CHECK_DELAY_MS);
     return () => {

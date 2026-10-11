@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isClientAppError } from "../clientAppError";
+import { isClientAppError, clientErrorCode, clientErrorText } from "../clientAppError";
 
 // Mirrors the preload's `_reconstructAppError` encoding.
 function encode(code: string, message: string, userMessage?: string, details?: unknown): Error {
@@ -55,5 +55,26 @@ describe("isClientAppError", () => {
     const e = decoded(new Error("[AppError|INTERNAL|#%7Bnot-json] boom"));
     expect(e.details).toBeUndefined();
     expect(e.message).toBe("boom");
+  });
+});
+
+describe("clientErrorText / clientErrorCode", () => {
+  it("shows the AppError's own words and code, never the wire prefix", () => {
+    const wire = new Error(
+      "[AppError|VALIDATION|Only%20HTTP(S)%20and%20SSH%20remotes%20can%20be%20cloned] Only HTTP(S) and SSH remotes can be cloned"
+    );
+    expect(clientErrorCode(wire)).toBe("VALIDATION");
+    expect(clientErrorText(wire, "fallback")).toBe("Only HTTP(S) and SSH remotes can be cloned");
+    expect(clientErrorText(wire, "fallback")).not.toContain("[AppError");
+  });
+
+  it("decodes a CANCELLED that crossed the bridge, so a cancel isn't shown as a failure", () => {
+    expect(clientErrorCode(new Error("[AppError|CANCELLED] stopped"))).toBe("CANCELLED");
+  });
+
+  it("falls back to the message, then the fallback, for anything else", () => {
+    expect(clientErrorCode(new Error("plain"))).toBeUndefined();
+    expect(clientErrorText(new Error("plain"), "fallback")).toBe("plain");
+    expect(clientErrorText({ odd: true }, "fallback")).toBe("fallback");
   });
 });
