@@ -290,6 +290,12 @@ export type RemoteHostsEvent =
       hostId: HostId;
       reason: "overflow" | "reattached" | "reconnected";
     }
+  /**
+   * Sent to the view of a new window opened onto a host that had no project
+   * to show: it has that host's project list to offer, taken with
+   * `takeProjectOffer`.
+   */
+  | { type: "project-offer" }
   /** An install or update this client is running on a host. */
   | {
       type: "install-progress";

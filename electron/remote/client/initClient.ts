@@ -295,23 +295,17 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
     },
     lastLocalProjectId,
     lastProjectOnHost,
-    offerHostProjects(windowId, hostId) {
+    offerHostProjects(windowId) {
       const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
       if (!win || win.isDestroyed()) return;
       // A window with no project shows its first view.
       const view = win.contentView.children[0] as
         { webContents?: Electron.WebContents } | undefined;
       const wc = view?.webContents;
-      if (!wc || wc.isDestroyed()) return;
-      // The same switch the host menu runs, in that window: its last project
-      // there if it has one by then, else the host's list to pick from.
-      const send = (): void => {
-        if (wc.isDestroyed()) return;
-        wc.send(CHANNELS.MENU_ACTION, { actionId: "host.switch", args: { hostId } });
-      };
-      // A send before the view's page has loaded is dropped with no queue.
-      if (wc.isLoadingMainFrame()) wc.once("did-finish-load", send);
-      else send();
+      // A view still loading asks for the offer itself once it can show it.
+      if (!wc || wc.isDestroyed() || wc.isLoadingMainFrame()) return;
+      const event: RemoteHostsEvent = { type: "project-offer" };
+      wc.send("remote-hosts:event", event);
     },
     watchWindow(windowId, onClosed) {
       const ctx = getWindowRegistry()?.getByWindowId(windowId);

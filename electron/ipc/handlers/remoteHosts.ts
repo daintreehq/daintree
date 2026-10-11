@@ -11,6 +11,7 @@ import {
   type HostConnectionState,
   type HostDescriptor,
   type HostHandshakeInfo,
+  type HostId,
   type HostListEntry,
   isLocalHostId,
   type OperationId,
@@ -121,6 +122,12 @@ export const remoteHostsNamespace = defineIpcNamespace({
       REMOTE_HOSTS_METHOD_CHANNELS.getWindowHost,
       async (ctx: IpcContext): Promise<WindowHostInfo> =>
         getRemoteService("remoteHostsClient")?.getWindowHost(ctx) ?? localWindowHost(),
+      { withContext: true }
+    ),
+    takeProjectOffer: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.takeProjectOffer,
+      async (ctx: IpcContext): Promise<HostId | null> =>
+        getRemoteService("remoteHostsClient")?.takeProjectOffer(ctx) ?? null,
       { withContext: true }
     ),
     switchWindowHost: op(

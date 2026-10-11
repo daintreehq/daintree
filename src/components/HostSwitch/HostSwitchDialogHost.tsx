@@ -7,6 +7,7 @@ import {
   currentHostProjectPickerRequest,
   dismissHostProjectPicker,
   registerHostProjectPickerHost,
+  requestHostProjectPicker,
   subscribeHostProjectPicker,
 } from "./hostProjectPickerRequests";
 import { HostSetupRecipeConfirm } from "./HostSetupRecipeConfirm";
@@ -43,6 +44,31 @@ export function HostSwitchDialogHost() {
 
   useEffect(() => registerHostSwitchDialogHost(), []);
   useEffect(() => registerHostProjectPickerHost(), []);
+
+  // A new window opened onto a host with nothing to show there offers that
+  // host's project list. Asked on mount, since a send before this view
+  // listened would be lost, and again when main says one is waiting.
+  useEffect(() => {
+    const remoteHosts = window.electron?.remoteHosts;
+    if (typeof remoteHosts?.takeProjectOffer !== "function") return;
+    let cancelled = false;
+    const take = () => {
+      remoteHosts.takeProjectOffer().then(
+        (hostId) => {
+          if (hostId !== null && !cancelled) requestHostProjectPicker(hostId);
+        },
+        () => {}
+      );
+    };
+    take();
+    const off = remoteHosts.onEvent?.((event) => {
+      if (event.type === "project-offer") take();
+    });
+    return () => {
+      cancelled = true;
+      off?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (!projectId) return;

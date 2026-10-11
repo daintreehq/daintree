@@ -782,6 +782,7 @@ export const CHANNEL_LOCALITY = {
   "remote-hosts:forget": "shell",
   "remote-hosts:get-local-handshake": "shell",
   "remote-hosts:get-window-host": "shell",
+  "remote-hosts:take-project-offer": "shell",
   "remote-hosts:is-in-use": "shell",
   "remote-hosts:list": "shell",
   "remote-hosts:probe": "shell",

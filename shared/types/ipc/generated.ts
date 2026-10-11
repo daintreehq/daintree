@@ -2038,6 +2038,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./remoteHosts.js").SwitchWindowHostPayload];
     result: import("./remoteHosts.js").SwitchWindowHostResult;
   };
+  "remote-hosts:take-project-offer": {
+    args: [];
+    result: string | null;
+  };
   "remote-hosts:update": {
     args: [payload: import("./remoteHosts.js").UpdateHostPayload];
     result: import("../remoteHosts.js").HostDescriptor;

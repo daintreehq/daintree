@@ -53,10 +53,11 @@ export interface WindowControl {
   /** Call `onClosed` once when the window closes. */
   watchWindow(windowId: number, onClosed: () => void): void;
   /**
-   * Have a window on this machine offer a host's project list (`host.switch`
-   * run in it): the window moves to the host once a project is picked there.
+   * Tell a window's view, if it is up, that it has a host's project list to
+   * offer ({@link RemoteHostsClient.takeProjectOffer}). A view still loading
+   * asks once it can show the list.
    */
-  offerHostProjects?(windowId: number, hostId: HostId): void;
+  offerHostProjects?(windowId: number): void;
 }
 
 export interface RemoteHostsClientOptions {
@@ -112,6 +113,8 @@ function hostIdOf(payload: unknown): HostId {
 export class RemoteHostsClient {
   private routerInstalled = false;
   private readonly watchedWindows = new Set<number>();
+  /** New windows opened onto a host with no project there: the host whose list each offers. */
+  private readonly projectOffers = new Map<number, HostId>();
   private readonly switchSeq = new Map<number, number>();
   private readonly switchChains = new Map<number, Promise<void>>();
   private readonly unsubscribe: Array<() => void> = [];
@@ -245,6 +248,19 @@ export class RemoteHostsClient {
       });
     }
     return connection.listProjects();
+  }
+
+  /**
+   * The host whose project list the sender's window was opened to offer, handed
+   * out once: a send before the view listened would be lost, so the view asks.
+   * Null when there is none, or the host has since been removed.
+   */
+  takeProjectOffer(ctx: IpcContext): HostId | null {
+    const windowId = this.windowOf(ctx);
+    if (windowId === null) return null;
+    const hostId = this.projectOffers.get(windowId) ?? null;
+    this.projectOffers.delete(windowId);
+    return hostId !== null && this.options.registry.get(hostId) ? hostId : null;
   }
 
   getWindowHost(ctx: IpcContext): WindowHostInfo {
@@ -446,7 +462,9 @@ export class RemoteHostsClient {
       // the host's behind it made a window whose calls went to the host while
       // its chip, copy and pickers all said This Mac.
       if (targetProjectId === undefined) {
-        this.options.windows.offerHostProjects?.(windowId, hostId);
+        this.projectOffers.set(windowId, hostId);
+        this.options.windows.watchWindow(windowId, () => this.projectOffers.delete(windowId));
+        this.options.windows.offerHostProjects?.(windowId);
         return { outcome: "window-opened", hostId };
       }
       const previousHost = this.options.bindings.get(windowId);

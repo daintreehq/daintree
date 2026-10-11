@@ -1148,6 +1148,9 @@ export interface GeneratedElectronAPI {
     switchWindowHost(
       ...args: IpcInvokeMap["remote-hosts:switch-window-host"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:switch-window-host"]["result"]>;
+    takeProjectOffer(
+      ...args: IpcInvokeMap["remote-hosts:take-project-offer"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:take-project-offer"]["result"]>;
     update(
       ...args: IpcInvokeMap["remote-hosts:update"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:update"]["result"]>;

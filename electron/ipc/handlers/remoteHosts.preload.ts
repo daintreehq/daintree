@@ -8,6 +8,7 @@ export const REMOTE_HOSTS_METHOD_CHANNELS = {
   connect: "remote-hosts:connect",
   disconnect: "remote-hosts:disconnect",
   getWindowHost: "remote-hosts:get-window-host",
+  takeProjectOffer: "remote-hosts:take-project-offer",
   switchWindowHost: "remote-hosts:switch-window-host",
   discover: "remote-hosts:discover",
   probe: "remote-hosts:probe",

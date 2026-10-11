@@ -329,8 +329,25 @@ describe("RemoteHostsClient", () => {
       // Not bound until a project is picked: a bound window with no host view
       // routed to the host while everything on screen said This Mac.
       expect(bindings.get(7)).toBe("local");
-      expect(windows.offerHostProjects).toHaveBeenCalledWith(7, "studio-01");
+      expect(windows.offerHostProjects).toHaveBeenCalledWith(7);
       expect(windows.openRemoteProject).not.toHaveBeenCalled();
+      // The new window's view asks once it can show the list, and gets it once.
+      expect(client.takeProjectOffer(ctxFor(9, 7))).toBe("studio-01");
+      expect(client.takeProjectOffer(ctxFor(9, 7))).toBeNull();
+      // Another window was never offered anything.
+      expect(client.takeProjectOffer(ctxFor(5, 1))).toBeNull();
+    });
+
+    it("drops a window's project offer when it closes, or when its host is removed", async () => {
+      manager.readiness = "unreachable";
+      await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: true });
+      const closed = vi.mocked(windows.watchWindow).mock.calls.find(([id]) => id === 7)![1];
+      closed();
+      expect(client.takeProjectOffer(ctxFor(9, 7))).toBeNull();
+
+      await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: true });
+      registry.forget("studio-01");
+      expect(client.takeProjectOffer(ctxFor(9, 7))).toBeNull();
     });
 
     it("returns to this window's own last project on the host before the host's memory of this machine", async () => {
