@@ -229,8 +229,9 @@ export function PortsView({ hostId: preferredHostId }: PortsViewProps) {
             <li key={f.forwardId} className="flex items-center gap-3 py-1.5 text-xs">
               <span className="font-mono text-text-primary">localhost:{f.localPort}</span>
               <span className="min-w-0 flex-1 truncate text-text-secondary">
-                {f.label ? `${f.label} · ` : ""}port {f.remotePort} on {hostName(f.hostId)} ·{" "}
-                {ORIGIN_LABELS[f.origin]}
+                {/* A label that only repeats where the forward came from is said once. */}
+                {f.label && f.label !== ORIGIN_LABELS[f.origin] ? `${f.label} · ` : ""}port{" "}
+                {f.remotePort} on {hostName(f.hostId)} · {ORIGIN_LABELS[f.origin]}
               </span>
               <Button
                 variant="ghost"

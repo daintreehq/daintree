@@ -88,6 +88,23 @@ describe("PortsView", () => {
     expect(api.stop).toHaveBeenCalledWith({ forwardId: "f1" });
   });
 
+  it("says a dev preview forward's origin once, and keeps a label that adds something", async () => {
+    api.list.mockResolvedValueOnce([
+      forwardRow({ label: "Dev preview" }),
+      forwardRow({
+        forwardId: "f9",
+        remotePort: 3000,
+        localPort: 3001,
+        label: "web",
+        origin: "manual",
+      }),
+    ]);
+    render(<PortsView hostId="studio-01" />);
+    const row = (await screen.findByText("localhost:5173")).closest("li")!;
+    expect(row.textContent!.match(/Dev preview/g)).toHaveLength(1);
+    expect(screen.getByText(/web · port 3000 on Studio · Forwarded by you/)).toBeTruthy();
+  });
+
   it("rejects a port out of range without asking main", async () => {
     render(<PortsView hostId="studio-01" />);
     fireEvent.change(screen.getByLabelText("Port on Studio"), { target: { value: "70000" } });
