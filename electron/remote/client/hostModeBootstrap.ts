@@ -170,7 +170,10 @@ export function linuxHandoffScript(target: ReturnType<typeof linuxLaunchTarget>)
  * this run on a Mac (no saved setting touched, unlike {@link MAC_ENABLE_SCRIPT}),
  * the existing user service on Linux (never written here).
  */
-export const MAC_START_SCRIPT = `open -g -a ${sq(MAC_APP_PATH)} --args ${HOST_MODE_FLAG}`;
+// `-n`: without it LaunchServices only reactivates a Daintree already running
+// (one whose listener failed) and drops the arguments; a new instance hands
+// them to it through second-instance, or becomes Daintree if none is running.
+export const MAC_START_SCRIPT = `open -n -g -a ${sq(MAC_APP_PATH)} --args ${HOST_MODE_FLAG}`;
 export const LINUX_START_SCRIPT = `systemctl --user start ${LINUX_UNIT_NAME}`;
 
 export const MAC_ENABLE_SCRIPT = `open -n -g -a ${sq(MAC_APP_PATH)} --args ${HOST_MODE_FLAG} ${ENABLE_HOST_MODE_FLAG}`;

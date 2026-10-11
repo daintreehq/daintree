@@ -259,7 +259,7 @@ describe("HostSetupService", () => {
       return { run, scripts };
     };
     const started = (scripts: string[]) =>
-      scripts.some((c) => c.includes("open -g -a") || c.includes("systemctl --user start"));
+      scripts.some((c) => c.includes("open -n -g -a") || c.includes("systemctl --user start"));
     const studio = { kind: "ssh", target: "studio" } as const;
 
     it("starts a Mac that was a host before, after a power cut left it stopped", async () => {
@@ -273,7 +273,6 @@ describe("HostSetupService", () => {
       expect(started(scripts)).toBe(true);
       // Started as it was set up: Host mode for this run, no saved setting or login item touched.
       expect(scripts.some((c) => c.includes("--enable-host-mode"))).toBe(false);
-      expect(scripts.some((c) => c.includes("open -n"))).toBe(false);
     });
 
     it("starts a Linux host's existing service and writes nothing, even after /run was cleared", async () => {
