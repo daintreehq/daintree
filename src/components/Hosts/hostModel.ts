@@ -165,6 +165,13 @@ export function describeHostMenuState(
   if (!connection) return { state: null, note: null };
   switch (connection.status) {
     case "connected":
+      if (connection.quietSince !== undefined) {
+        return {
+          state: "No reply",
+          note: `Last heard ${formatRelativeTime(connection.quietSince, now)}`,
+        };
+      }
+      return { state: "Connected", note: null };
     case "local":
       return { state: "Connected", note: null };
     case "connecting":
@@ -209,6 +216,7 @@ export function describeHostAgentClis(row: HostMenuRow): string | null {
 export type HostChipStatus =
   | "local"
   | "connected"
+  | "quiet"
   | "connecting"
   | "unreachable"
   | "version-mismatch"
@@ -229,6 +237,8 @@ export function hostChipStatus(
   if (connection === null) return "connecting";
   switch (connection.status) {
     case "connected":
+      // Silence on the link is what the person feels first: typing goes nowhere.
+      if (connection.quietSince !== undefined) return "quiet";
       if (drivenBy) return "driven-elsewhere";
       return connection.buildMismatch ? "build-differs" : "connected";
     case "local":
@@ -241,6 +251,8 @@ export function hostChipStatus(
 /** The chip's short trailing state, or null when the name alone says it all. */
 export function hostChipStatusText(status: HostChipStatus): string | null {
   switch (status) {
+    case "quiet":
+      return "no reply";
     case "connecting":
       return "connecting…";
     case "unreachable":

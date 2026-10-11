@@ -333,6 +333,7 @@ export class HostConnection {
           rttMs: state.rttMs,
           handshake: state.handshake,
           ...(state.buildMismatch ? { buildMismatch: state.buildMismatch } : {}),
+          ...(state.quietSince !== null ? { quietSince: state.quietSince } : {}),
         };
       case "unreachable":
         return {

@@ -8,6 +8,7 @@ import type {
 import {
   buildHostMenuRows,
   describeHostAgentClis,
+  describeHostMenuState,
   describeHostRowMetrics,
   describeHostRowStatus,
   hostChipStatus,
@@ -201,6 +202,17 @@ describe("describeHostAgentClis", () => {
   });
 });
 
+describe("describeHostMenuState", () => {
+  it("names a quiet host's last word in the menu instead of calling it connected", () => {
+    const [, row] = rowsFor([entry("h1", "studio-01", { ...CONNECTED, quietSince: 50_000 })]);
+    const state = describeHostMenuState(row!, 62_000);
+    expect(state.state).toBe("No reply");
+    expect(state.note).toMatch(/^Last heard /);
+    const [, steady] = rowsFor([entry("h1", "studio-01")]);
+    expect(describeHostMenuState(steady!, 62_000)).toEqual({ state: "Connected", note: null });
+  });
+});
+
 describe("hostChipStatus", () => {
   it("follows the link for a remote window", () => {
     expect(hostChipStatus(false, null, null)).toBe("connecting");
@@ -222,6 +234,13 @@ describe("hostChipStatus", () => {
     ).toBe("unreachable");
     expect(hostChipStatus(true, null, "greg-mbp")).toBe("driven-elsewhere");
     expect(hostChipStatus(true, null, null)).toBe("local");
+  });
+
+  it("says when a connected host has gone quiet, before a lease held elsewhere", () => {
+    const quiet: HostConnectionState = { ...CONNECTED, quietSince: 1_000 };
+    expect(hostChipStatus(false, quiet, null)).toBe("quiet");
+    expect(hostChipStatus(false, quiet, "greg-mbp")).toBe("quiet");
+    expect(hostChipStatusText("quiet")).toBe("no reply");
   });
 
   it("adds no trailing text when the name says it all", () => {

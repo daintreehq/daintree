@@ -75,6 +75,9 @@ export function connectionLabel(state: HostConnectionState): string {
     case "connecting":
       return state.attempt > 1 ? `Connecting (attempt ${state.attempt})` : "Connecting";
     case "connected": {
+      if (state.quietSince !== undefined) {
+        return `Connected · no reply since ${new Date(state.quietSince).toLocaleTimeString()}`;
+      }
       // A build that differs but connected is the Build row's to say, not the link's.
       return state.rttMs === null ? "Connected" : `Connected · ${Math.round(state.rttMs)} ms`;
     }

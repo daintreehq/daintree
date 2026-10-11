@@ -161,3 +161,60 @@ describe("LinkClient session start", () => {
     }
   });
 });
+
+describe("LinkClient quiet link", () => {
+  it("reports when the host last spoke once it goes quiet, and clears it when it speaks again", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "q.sock");
+    let peer: net.Socket | null = null;
+    const server = net.createServer((socket) => {
+      peer = socket;
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind !== ControlKind.HELLO) continue;
+          const welcome: LinkMessage = {
+            lane: Lane.CONTROL,
+            kind: ControlKind.WELCOME,
+            body: { handshake: TEST_HANDSHAKE, hostName: "h", sessionId: "s1", resumed: false },
+          };
+          socket.write(Buffer.from(encodeFrame(messageToFrame(welcome))));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    try {
+      client = new LinkClient({
+        transport: createDirectTransport({ socketPath, token: "t" }),
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+        quietAfterMs: 60,
+      });
+      client.start();
+      await waitFor(() => client!.getState().status === "connected");
+      expect(client.getState()).toMatchObject({ quietSince: null });
+      await waitFor(() => {
+        const state = client!.getState();
+        return state.status === "connected" && state.quietSince !== null;
+      });
+      const heard = client.session!.lastReceivedAt;
+      expect(client.getState()).toMatchObject({ status: "connected", quietSince: heard });
+
+      const event: LinkMessage = {
+        lane: Lane.EVENTS,
+        kind: EventKind.EVENT,
+        body: { endpointId: null, channel: "x:event", args: [] },
+      };
+      peer!.write(Buffer.from(encodeFrame(messageToFrame(event))));
+      await waitFor(() => {
+        const state = client!.getState();
+        return state.status === "connected" && state.quietSince === null;
+      });
+    } finally {
+      await client?.stop();
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+});

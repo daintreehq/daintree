@@ -197,6 +197,12 @@ export type HostConnectionState =
       handshake: HostHandshakeInfo;
       /** Connected anyway with a different version or commit; absent when the builds match. */
       buildMismatch?: HandshakeMismatch;
+      /**
+       * When the host was last heard from, present only once nothing has
+       * arrived for several seconds. Observed silence, never a cause: the link
+       * stays connected until its idle timeout gives up on it.
+       */
+      quietSince?: number;
     }
   /** Never a guessed cause: we say what we saw. */
   | { status: "unreachable"; lastSeenAt: number | null; detail: string | null }

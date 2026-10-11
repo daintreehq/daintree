@@ -36,6 +36,12 @@ export type LinkClientState =
       sessionId: string;
       /** The host runs a different version or commit; the link is up best effort. */
       buildMismatch: HandshakeMismatch | null;
+      /**
+       * When the last frame from the host arrived, once nothing has for a
+       * while (a ping and its answer are overdue); null while it answers. What
+       * we saw, not why: the link stays up until the idle timeout gives up.
+       */
+      quietSince: number | null;
     }
   | {
       status: "unreachable";
@@ -73,9 +79,14 @@ export interface LinkClientOptions {
   backoff?: { initialMs?: number; maxMs?: number; jitter?: number };
   random?: () => number;
   now?: () => number;
+  /** Silence from the host, in ms, before the link is reported quiet; 0 never reports it. */
+  quietAfterMs?: number;
 }
 
 const SHORT_SESSION_MS = 5_000;
+/** Past the 5 s ping and its answer: long enough that one is overdue, well short of the 20 s idle timeout. */
+const QUIET_AFTER_MS = 7_000;
+const QUIET_CHECK_MS = 1_000;
 
 type HandshakeOutcome =
   | { kind: "welcome"; welcome: WelcomeMessage }
@@ -280,22 +291,45 @@ export class LinkClient {
     this.attempt = 0;
     this.lastSeenAt = this.now();
     const establishedAt = this.now();
-    const connected = (rttMs: number | null): LinkClientState => ({
+    let rttMs: number | null = null;
+    let quiet = false;
+    const connected = (): LinkClientState => ({
       status: "connected",
       rttMs,
       handshake: welcome.handshake,
       hostName: welcome.hostName,
       sessionId: welcome.sessionId,
       buildMismatch,
+      quietSince: quiet ? session.lastReceivedAt : null,
     });
-    this.setState(connected(null));
+    this.setState(connected());
     session.onRtt((rtt) => {
       if (this.current === session) {
         this.lastSeenAt = this.now();
-        this.setState(connected(rtt));
+        rttMs = rtt;
+        quiet = false;
+        this.setState(connected());
       }
     });
+    // A stalled link only closes at the idle timeout; until then it says
+    // nothing has arrived, so a keystroke that goes nowhere isn't a mystery.
+    const quietAfterMs = this.options.quietAfterMs ?? QUIET_AFTER_MS;
+    const quietTimer =
+      quietAfterMs > 0
+        ? setInterval(
+            () => {
+              if (this.current !== session) return;
+              const silent = this.now() - session.lastReceivedAt > quietAfterMs;
+              if (silent === quiet) return;
+              quiet = silent;
+              this.setState(connected());
+            },
+            Math.min(QUIET_CHECK_MS, quietAfterMs)
+          )
+        : null;
+    quietTimer?.unref?.();
     session.onClose((info) => {
+      if (quietTimer) clearInterval(quietTimer);
       if (this.current !== session) return;
       this.current = null;
       this.lastSeenAt = Math.max(this.lastSeenAt ?? 0, session.lastReceivedAt);
