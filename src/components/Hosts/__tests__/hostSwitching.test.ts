@@ -6,6 +6,7 @@ const m = vi.hoisted(() => ({
   hosts: [] as HostListEntry[],
   switchWindowHost: vi.fn(),
   checkForUpdates: vi.fn(() => Promise.resolve()),
+  dispatchEvent: vi.fn((_event: Event) => true),
 }));
 
 vi.mock("@/lib/notify", () => ({ notify: m.notify }));
@@ -56,7 +57,9 @@ beforeEach(() => {
   m.notify.mockClear();
   m.switchWindowHost.mockReset();
   m.hosts = [];
+  m.dispatchEvent.mockClear();
   (globalThis as unknown as { window: unknown }).window = {
+    dispatchEvent: m.dispatchEvent,
     electron: {
       remoteHosts: { switchWindowHost: m.switchWindowHost },
       update: { checkForUpdates: m.checkForUpdates },
@@ -103,6 +106,10 @@ describe("switchToHost", () => {
     expect(toast.actions.map((action) => action.label)).toEqual(["Update studio-01"]);
     toast.actions[0]!.onClick();
     expect(takePendingHostUpdate()).toBe("h1");
+    // The update flow lives in Settings → Hosts, which the request opens.
+    const opened = m.dispatchEvent.mock.calls[0]![0] as CustomEvent<{ tab: string }>;
+    expect(opened.type).toBe("daintree:open-settings-tab");
+    expect(opened.detail).toEqual({ tab: "hosts" });
   });
 
   it("offers a retry for any other failure", async () => {

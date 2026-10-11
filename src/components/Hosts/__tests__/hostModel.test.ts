@@ -206,7 +206,9 @@ describe("hostChipStatus", () => {
     expect(hostChipStatus(false, null, null)).toBe("connecting");
     expect(hostChipStatus(false, CONNECTED, null)).toBe("connected");
     expect(hostChipStatus(false, CONNECTED_OTHER_BUILD, null)).toBe("build-differs");
-    expect(hostChipStatusText("build-differs")).toBe(hostChipStatusText("version-mismatch"));
+    // A build that connected anyway is noted in the host's details, not on the chip.
+    expect(hostChipStatusText("build-differs")).toBeNull();
+    expect(hostChipStatusText("version-mismatch")).toBe("can't connect");
     expect(
       hostChipStatus(false, { status: "unreachable", lastSeenAt: null, detail: null }, null)
     ).toBe("unreachable");

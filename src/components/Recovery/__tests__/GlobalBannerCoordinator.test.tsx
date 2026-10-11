@@ -153,7 +153,7 @@ describe("GlobalBannerCoordinator", () => {
     useHostConnectionStore.getState().reset();
   });
 
-  it("shows who drives the project below a backend crash but above the watchdog", () => {
+  it("shows who has control below a backend crash but above the watchdog", () => {
     seedDriveLeaseView({
       projectId: "p1",
       holder: {
@@ -171,14 +171,14 @@ describe("GlobalBannerCoordinator", () => {
     try {
       usePanelStore.setState({ watchdogStatus: "disabled" });
       const { unmount } = render(<GlobalBannerCoordinator />);
-      expect(screen.getByText("Being driven from greg-mbp")).toBeTruthy();
+      expect(screen.getByText("greg-mbp has control of this project")).toBeTruthy();
       expect(screen.queryByText("Crash watchdog disabled")).toBeNull();
       unmount();
 
       usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: null });
       render(<GlobalBannerCoordinator />);
       expect(screen.getByText("Terminal service crashed")).toBeTruthy();
-      expect(screen.queryByText("Being driven from greg-mbp")).toBeNull();
+      expect(screen.queryByText("greg-mbp has control of this project")).toBeNull();
     } finally {
       _resetDriveLeaseBannerForTesting();
     }

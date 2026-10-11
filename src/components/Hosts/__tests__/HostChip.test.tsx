@@ -109,7 +109,19 @@ beforeEach(() => {
   });
 });
 
+/** The Settings tabs asked to open, in order: Update <host> opens Settings → Hosts. */
+let openedSettingsTabs: string[] = [];
+const recordSettingsTab = (event: Event) => {
+  openedSettingsTabs.push((event as CustomEvent<{ tab: string }>).detail.tab);
+};
+
+beforeEach(() => {
+  openedSettingsTabs = [];
+  window.addEventListener("daintree:open-settings-tab", recordSettingsTab);
+});
+
 afterEach(() => {
+  window.removeEventListener("daintree:open-settings-tab", recordSettingsTab);
   cleanup();
 });
 
@@ -319,7 +331,7 @@ describe("HostChip", () => {
     }
   });
 
-  it("says a host it connected to anyway runs a different build, and offers its update", async () => {
+  it("leaves a different build it connected to anyway to the host's details", async () => {
     window.__DAINTREE_HOST_ID__ = { id: "h1" };
     try {
       useHostConnectionStore.setState({
@@ -335,9 +347,9 @@ describe("HostChip", () => {
       const { container } = await renderWithHosts([host("h1", "studio-01")]);
       const chip = container.querySelector<HTMLElement>("[data-testid='host-chip']")!;
       expect(chip.getAttribute("data-host-status")).toBe("build-differs");
-      expect(chip.textContent).toContain("different build");
+      expect(chip.textContent).not.toContain("different build");
       const menu = await openMenu();
-      expect(menu.textContent).toContain("Update studio-01");
+      expect(menu.textContent).not.toContain("Update studio-01");
     } finally {
       delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
     }
@@ -359,9 +371,7 @@ describe("HostChip", () => {
       await openMenu();
       fireEvent.click(screen.getByText("Update studio-01"));
       expect(takePendingHostUpdate()).toBe("h1");
-      await waitFor(() =>
-        expect(dispatch).toHaveBeenCalledWith("host.add", undefined, { source: "user" })
-      );
+      expect(openedSettingsTabs).toEqual(["hosts"]);
     } finally {
       delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
     }
@@ -381,9 +391,7 @@ describe("HostChip", () => {
     expect(menu.textContent).not.toContain("Update studio-02");
     fireEvent.click(screen.getByText("Update studio-01"));
     expect(takePendingHostUpdate()).toBe("h1");
-    await waitFor(() =>
-      expect(dispatch).toHaveBeenCalledWith("host.add", undefined, { source: "user" })
-    );
+    expect(openedSettingsTabs).toEqual(["hosts"]);
   });
 
   it("offers to update this machine once, however many hosts are ahead of it", async () => {

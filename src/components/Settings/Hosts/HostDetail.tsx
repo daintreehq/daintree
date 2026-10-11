@@ -195,7 +195,12 @@ export function HostDetail({
           <SettingsRow
             label="Status"
             description={connectionLabel(connection)}
-            error={connectError ? `Couldn't connect: ${connectError}` : undefined}
+            error={
+              // Announced: it answers one press of Connect.
+              connectError ? (
+                <span role="alert">{`Couldn't connect: ${connectError}`}</span>
+              ) : undefined
+            }
             control={
               connected ? undefined : (
                 <Button

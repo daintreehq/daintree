@@ -67,7 +67,7 @@ describe("AttachedMachinesIndicator", () => {
     getStatus.mockResolvedValue(status({ attachedClients: [machine("greg-mbp", ["p1"])] }));
     const { container } = render(<AttachedMachinesIndicator />);
     await act(async () => {});
-    expect(pill(container)?.textContent).toBe("In use from greg-mbp");
+    expect(pill(container)?.textContent).toBe("greg-mbp controls 1 project");
 
     act(() => push?.({ type: "status-changed", status: status({ attachedClients: [] }) }));
     expect(pill(container)).toBeNull();
@@ -79,7 +79,8 @@ describe("AttachedMachinesIndicator", () => {
     );
     const { container } = render(<AttachedMachinesIndicator />);
     await act(async () => {});
-    expect(pill(container)?.textContent).toBe("In use from 2 machines");
+    // Connected is not in control: neither drives a project here.
+    expect(pill(container)?.textContent).toBe("2 machines connected");
 
     act(() =>
       push?.({

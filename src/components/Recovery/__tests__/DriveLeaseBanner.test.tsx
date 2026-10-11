@@ -256,7 +256,7 @@ describe("DriveLeaseBanner", () => {
       "studio-01"
     );
     expect(await screen.findByText(copy.title)).toBeTruthy();
-    expect(copy.title).toBe("studio-01 is being driven from greg-mbp");
+    expect(copy.title).toBe("greg-mbp has control of this project");
 
     takeOver.mockRejectedValue(new Error("gone"));
     fireEvent.click(screen.getByRole("button", { name: copy.actionLabel }));

@@ -129,9 +129,9 @@ describe("input gate wording", () => {
         driverName: "studio-01",
         driverIsHostScreen: true,
       })
-    ).toBe("Read-only while studio-01 is driven from its own screen");
+    ).toBe("Read-only · studio-01's own screen has control");
     expect(
       gate.getTerminalInputBlockMessage({ kind: "driven-elsewhere", driverName: "greg-mbp" })
-    ).toBe("Read-only while greg-mbp is driving this project");
+    ).toBe("Read-only · greg-mbp has control");
   });
 });

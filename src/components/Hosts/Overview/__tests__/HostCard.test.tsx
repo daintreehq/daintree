@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactElement } from "react";
-import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { describe, expect, it, vi } from "vitest";
 import { HostCard } from "../HostCard";
@@ -9,8 +9,14 @@ import { makeRow, makeSummary } from "./fixtures";
 // The app mounts one TooltipProvider at its root; truncated text discloses through it.
 const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
 
+/** The value the card's facts list gives `label`, or null when it lists none. */
+function fact(card: HTMLElement, label: string): string | null {
+  const term = [...card.querySelectorAll("dt")].find((dt) => dt.textContent === label);
+  return term?.nextElementSibling?.textContent ?? null;
+}
+
 describe("HostCard", () => {
-  it("shows a connected host's load, observed agents, version, link and driver", () => {
+  it("shows a connected host's load, observed agents, link and driver", () => {
     const summary = makeSummary({
       driver: {
         leaseId: 1,
@@ -20,18 +26,28 @@ describe("HostCard", () => {
         isHostLocal: false,
         acquiredAt: 1,
       },
-      agentClis: [{ agentId: "claude", version: "2.1.0" }],
     });
-    render(<HostCard row={makeRow({ summary })} history={[summary]} onSwitch={() => {}} />);
+    render(
+      <HostCard
+        row={makeRow({ summary })}
+        history={[summary, summary, summary]}
+        onSwitch={() => {}}
+      />
+    );
     const card = screen.getByTestId("host-overview-card");
     expect(card.textContent).toContain("CPU 20%");
-    expect(card.textContent).toContain("Memory normal");
+    expect(card.textContent).toContain("Memory pressure normal");
     expect(card.textContent).toContain("1 working · 2 waiting · 3 idle (observed)");
-    expect(card.textContent).toContain("0.38.0");
-    expect(card.textContent).toContain("12 ms link");
-    expect(card.textContent).toContain("Driven from greg-mbp");
-    expect(card.textContent).toContain("2.1.0");
+    expect(fact(card, "Link")).toBe("12 ms");
+    expect(fact(card, "Driving")).toBe("Driven from greg-mbp");
     expect(screen.getAllByTestId("host-sparkline")).toHaveLength(2);
+  });
+
+  it("draws no trend until it has a few samples", () => {
+    const summary = makeSummary();
+    render(<HostCard row={makeRow({ summary })} history={[summary]} onSwitch={() => {}} />);
+    expect(screen.queryAllByTestId("host-sparkline")).toHaveLength(0);
+    expect(screen.getAllByText("Collecting history…")).toHaveLength(2);
   });
 
   it("leaves metrics the host doesn't report absent instead of zero", () => {
@@ -46,7 +62,7 @@ describe("HostCard", () => {
     render(<HostCard row={makeRow({ summary })} history={[summary]} onSwitch={() => {}} />);
     const card = screen.getByTestId("host-overview-card");
     expect(card.textContent).toContain("CPU not measured");
-    expect(card.textContent).toContain("Memory not measured");
+    expect(card.textContent).toContain("Memory pressure not measured");
     expect(card.textContent).not.toContain("Swap");
     expect(card.textContent).not.toContain("Thermal");
     expect(card.textContent).not.toMatch(/CPU 0%/);
@@ -61,9 +77,8 @@ describe("HostCard", () => {
     render(<HostCard row={row} history={[makeSummary()]} onSwitch={() => {}} />);
     const card = screen.getByTestId("host-overview-card");
     expect(card.getAttribute("data-live")).toBe("false");
-    expect(screen.getByTestId("host-overview-status").textContent).toMatch(
-      /^Unreachable · last seen 2 hours ago$/
-    );
+    expect(screen.getByTestId("host-overview-status").textContent).toBe("Unreachable");
+    expect(card.textContent).toContain("Last seen 2 hours ago");
     expect(screen.queryAllByTestId("host-sparkline")).toHaveLength(0);
     expect(card.textContent).not.toContain("working");
   });
@@ -98,10 +113,11 @@ describe("HostCard", () => {
       />
     );
     const list = screen.getByTestId("host-overview-projects");
-    const buttons = list.querySelectorAll("button");
-    expect(buttons).toHaveLength(6);
-    expect(buttons[0]!.textContent).toBe("project-a");
-    expect(list.textContent).toContain("and 2 more");
+    const opens = () => list.querySelectorAll("li button");
+    expect(opens()).toHaveLength(6);
+    expect(opens()[0]!.textContent).toBe("project-a");
+    fireEvent.click(screen.getByRole("button", { name: "Show 2 more projects" }));
+    expect(opens()).toHaveLength(8);
     fireEvent.click(screen.getByRole("button", { name: `Open project-a on ${row.name}` }), {
       metaKey: true,
       ctrlKey: true,
@@ -114,9 +130,11 @@ describe("HostCard", () => {
     const { rerender } = render(
       <HostCard row={row} history={[]} onSwitch={() => {}} projects={[]} />
     );
-    expect(screen.getByTestId("host-overview-projects").textContent).toBe(
-      `No projects on ${row.name} yet.`
-    );
+    expect(
+      within(screen.getByTestId("host-overview-projects")).getByText(
+        `No projects on ${row.name} yet`
+      )
+    ).toBeTruthy();
     rerender(<HostCard row={row} history={[]} onSwitch={() => {}} />);
     expect(screen.queryByTestId("host-overview-projects")).toBeNull();
   });

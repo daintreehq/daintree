@@ -5,7 +5,10 @@ import type { PortForward, PortForwardsEvent } from "@shared/types/ipc/portForwa
 
 vi.mock("../hostList", () => ({
   useHostList: () => ({
-    hosts: [{ descriptor: { id: "studio-01", name: "Studio" } }],
+    // Forwarding picks among connected hosts.
+    hosts: [
+      { descriptor: { id: "studio-01", name: "Studio" }, connection: { status: "connected" } },
+    ],
     localSummary: null,
   }),
 }));
@@ -65,7 +68,7 @@ describe("PortsView", () => {
     render(<PortsView hostId="studio-01" />);
     await screen.findByText("localhost:5173");
 
-    fireEvent.change(screen.getByLabelText("Port on the host"), { target: { value: "8080" } });
+    fireEvent.change(screen.getByLabelText("Port on Studio"), { target: { value: "8080" } });
     fireEvent.click(screen.getByRole("button", { name: "Forward port" }));
     expect(api.forward).toHaveBeenCalledWith({
       hostId: "studio-01",
@@ -87,7 +90,7 @@ describe("PortsView", () => {
 
   it("rejects a port out of range without asking main", async () => {
     render(<PortsView hostId="studio-01" />);
-    fireEvent.change(screen.getByLabelText("Port on the host"), { target: { value: "70000" } });
+    fireEvent.change(screen.getByLabelText("Port on Studio"), { target: { value: "70000" } });
     fireEvent.click(screen.getByRole("button", { name: "Forward port" }));
     expect((await screen.findByRole("alert")).textContent).toContain("1 to 65535");
     expect(api.forward).not.toHaveBeenCalled();
@@ -98,6 +101,7 @@ describe("PortsView", () => {
     await screen.findByText("localhost:5173");
     act(() => emit?.({ type: "changed", forwards: [] }));
     expect(screen.queryByText("localhost:5173")).toBeNull();
-    expect(api.listHostPorts).not.toHaveBeenCalled();
+    // With no host of its own, it forwards from the first connected one.
+    expect(api.listHostPorts).toHaveBeenCalledWith({ hostId: "studio-01" });
   });
 });

@@ -97,14 +97,14 @@ describe("TerminalInputBlockBanner", () => {
     render(<TerminalInputBlockBanner block={block} />);
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Take over" }));
+      fireEvent.click(screen.getByRole("button", { name: "Take control" }));
     });
 
     expect(takeOver).toHaveBeenCalledWith({ projectId: "proj-1" });
     expect(getTerminalInputBlock()).toBeNull();
   });
 
-  it("says take back on the host's own screen", () => {
+  it("offers the host's own screen the same Take control", () => {
     render(
       <TerminalInputBlockBanner
         block={{
@@ -115,7 +115,7 @@ describe("TerminalInputBlockBanner", () => {
         }}
       />
     );
-    expect(screen.getByRole("button", { name: "Take back" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Take control" })).toBeTruthy();
   });
 
   it("keeps the block when the host refuses the takeover", async () => {
@@ -129,7 +129,7 @@ describe("TerminalInputBlockBanner", () => {
     render(<TerminalInputBlockBanner block={block} />);
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Take over" }));
+      fireEvent.click(screen.getByRole("button", { name: "Take control" }));
     });
 
     expect(getTerminalInputBlock()).toEqual(block);

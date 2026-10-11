@@ -153,9 +153,9 @@ describe("HostsOverviewDialog projects", () => {
   it("offers Add project… on every reachable host, each cloning onto that host", () => {
     const onClose = vi.fn();
     render(<HostsOverviewDialog onClose={onClose} />);
-    expect(screen.getByRole("button", { name: /^Add a project on This / })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Add a project on studio-02" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Add a project on studio-01" }));
+    expect(screen.getByRole("button", { name: /^Add project on This / })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add project on studio-02" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Add project on studio-01" }));
     const dialog = screen.getByTestId("add-project-dialog");
     expect(dialog.getAttribute("data-host-id")).toBe("studio-01");
     fireEvent.click(screen.getByText("finish clone"));

@@ -117,9 +117,8 @@ describe("HostsSettingsTab", () => {
       </TooltipProvider>
     );
     expect(await screen.findByText("studio-03")).toBeTruthy();
-    expect(
-      screen.getByText(/greg@studio-03 · Linux · x64 · Daintree 1.4.0 \(abcdef0\)/)
-    ).toBeTruthy();
+    // The build it last reported is in the host's details, not its row.
+    expect(screen.getByText(/greg@studio-03 · Linux/)).toBeTruthy();
     expect(screen.getByText(/Unreachable · never seen/)).toBeTruthy();
 
     listeners.forEach((l) =>
@@ -131,39 +130,41 @@ describe("HostsSettingsTab", () => {
     expect(await screen.findByText("bigbox")).toBeTruthy();
   });
 
-  it("opens a host's detail and forgets it only after confirming", async () => {
+  it("opens a host's detail and removes it only after confirming", async () => {
     remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
     render(
       <TooltipProvider>
         <HostsSettingsTab />
       </TooltipProvider>
     );
-    fireEvent.click(await screen.findByRole("button", { name: "Open studio-03" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Details for studio-03" }));
     expect(screen.getByText("Agent CLIs")).toBeTruthy();
-    expect(screen.getByText("Connect to this host to see the agent CLIs it reports")).toBeTruthy();
+    expect(screen.getByText("Connect to studio-03 to see its agent CLIs")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Forget host" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove host" }));
     expect(remoteHosts.forget).not.toHaveBeenCalled();
-    const confirm = await screen.findAllByRole("button", { name: "Forget host" });
+    const confirm = await screen.findAllByRole("button", { name: "Remove host" });
     fireEvent.click(confirm[confirm.length - 1]!);
     await waitFor(() => expect(remoteHosts.forget).toHaveBeenCalledWith({ hostId: "studio-03" }));
   });
 
-  it("forgets a host from its row, only after confirming", async () => {
+  it("removes a host from its row, only after confirming", async () => {
     remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
     render(
       <TooltipProvider>
         <HostsSettingsTab />
       </TooltipProvider>
     );
-    fireEvent.click(await screen.findByRole("button", { name: "Forget studio-03" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Remove studio-03 from this device" })
+    );
     expect(remoteHosts.forget).not.toHaveBeenCalled();
-    expect(await screen.findByText("Forget 'studio-03'?")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Forget host" }));
+    expect(await screen.findByText("Remove 'studio-03' from this device?")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Remove host" }));
     await waitFor(() => expect(remoteHosts.forget).toHaveBeenCalledWith({ hostId: "studio-03" }));
   });
 
-  it("sends one forget at a time, and keeps what forgetting does in view beside a failure", async () => {
+  it("sends one removal at a time, and keeps what removing does in view beside a failure", async () => {
     remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
     let refuse: (error: Error) => void = () => {};
     remoteHosts.forget!.mockImplementationOnce(
@@ -174,8 +175,10 @@ describe("HostsSettingsTab", () => {
         <HostsSettingsTab />
       </TooltipProvider>
     );
-    fireEvent.click(await screen.findByRole("button", { name: "Forget studio-03" }));
-    const confirm = await screen.findByRole("button", { name: "Forget host" });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Remove studio-03 from this device" })
+    );
+    const confirm = await screen.findByRole("button", { name: "Remove host" });
     fireEvent.click(confirm);
     fireEvent.click(confirm);
     expect(remoteHosts.forget).toHaveBeenCalledTimes(1);
@@ -192,7 +195,7 @@ describe("HostsSettingsTab", () => {
         <HostsSettingsTab />
       </TooltipProvider>
     );
-    fireEvent.click(await screen.findByRole("button", { name: "Open studio-03" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Details for studio-03" }));
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     expect((await screen.findByRole("alert")).textContent).toContain(
       "Couldn't connect: Permission denied (publickey)"
@@ -223,7 +226,7 @@ describe("HostsSettingsTab", () => {
         <HostsSettingsTab />
       </TooltipProvider>
     );
-    await screen.findByRole("button", { name: "Open studio-03" });
+    await screen.findByRole("button", { name: "Details for studio-03" });
     act(() => requestHostUpdate("studio-03"));
     expect(await screen.findByText("Update studio-03")).toBeTruthy();
   });

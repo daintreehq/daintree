@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { pluralize } from "@/lib/pluralize";
-import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import type { HostMetricsSummary } from "@shared/types/remoteHosts";
 import { cn } from "@/lib/utils";
 import { PlatformGlyph } from "../PlatformGlyph";
@@ -257,7 +257,7 @@ export function HostCard({
             />
           </div>
           <span className="text-2xs text-text-secondary">
-            Last {span} · updated {formatRelativeTime(summary.sampledAt, Date.now())}
+            Last {span} · updated <TimeAgo timestamp={summary.sampledAt} verbose />
           </span>
         </div>
       )}
