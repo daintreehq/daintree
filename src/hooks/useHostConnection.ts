@@ -7,6 +7,7 @@ import { useHostConnectionStore, isHostLinkUp } from "@/store/hostConnectionStor
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { resyncHostTerminals } from "@/store/hostTerminalResync";
 import { rehydrateHostProjectState } from "@/store/hostProjectRehydrate";
+import { notifyHostResync } from "@/store/hostResyncSignal";
 import {
   dropDeferredHostOwnedWrites,
   setHostOwnedWriteFlushBarrier,
@@ -127,6 +128,8 @@ async function runResyncPass(projectState: boolean): Promise<void> {
       },
     ],
     ["drive lease", () => lease],
+    // Dev previews and anything else kept from host events refetch for themselves.
+    ["event-fed state", async () => notifyHostResync()],
   ];
   if (projectState && projectId) {
     steps.push([

@@ -48,6 +48,7 @@ function buildState(overrides: Partial<DevPreviewSessionState>): DevPreviewSessi
 }
 
 import { useDevServer, _resetPersistedEnsureCacheForTests } from "../useDevServer";
+import { notifyHostResync } from "@/store/hostResyncSignal";
 
 describe("useDevServer adversarial races", () => {
   let ensureMock: ReturnType<typeof vi.fn>;
@@ -1947,5 +1948,24 @@ describe("useDevServer adversarial races", () => {
       });
       expect(ensureMock).not.toHaveBeenCalled();
     });
+  });
+
+  it("asks the host again after a resync, for a state change lost while the link was down", async () => {
+    const { result } = renderHook(() =>
+      useDevServer({ panelId: "panel-1", devCommand: "npm run dev", cwd: "/repo" })
+    );
+    await waitFor(() => expect(result.current.status).toBe("starting"));
+    getStateMock.mockResolvedValueOnce(
+      buildState({
+        panelId: "panel-1",
+        projectId: "project-1",
+        status: "running",
+        url: "http://127.0.0.1:5638/",
+        terminalId: "term-project-1",
+      })
+    );
+    act(() => notifyHostResync());
+    await waitFor(() => expect(result.current.status).toBe("running"));
+    expect(result.current.url).toBe("http://127.0.0.1:5638/");
   });
 });

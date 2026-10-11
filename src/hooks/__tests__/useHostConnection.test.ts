@@ -48,6 +48,7 @@ import {
   takeOverDrive,
 } from "../useHostConnection";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
+import { onHostResync } from "@/store/hostResyncSignal";
 import type { resolveUnknownOutcome } from "@/utils/resolveUnknownOutcome";
 import {
   _resetTerminalInputGateForTesting,
@@ -276,6 +277,8 @@ describe("host connection sync", () => {
 
   it("rehydrates once per resync request and coalesces overlapping ones", async () => {
     const { electron, emitHost } = installElectron();
+    const resyncListener = vi.fn();
+    const offResync = onHostResync(resyncListener);
     bindView("studio-01");
     const stop = startHostConnectionSync();
     await flush();
@@ -295,6 +298,9 @@ describe("host connection sync", () => {
     expect(electron.terminal.getForProject).toHaveBeenCalledWith("proj-1");
     expect(pluginRefresh).toHaveBeenCalledTimes(3);
     expect(electron.driveLease.get).toHaveBeenCalledWith({ projectId: "proj-1" });
+    // State kept from host events (dev previews) refetches on every pass.
+    expect(resyncListener).toHaveBeenCalledTimes(3);
+    offResync();
     stop();
   });
 

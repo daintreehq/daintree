@@ -4,6 +4,7 @@ import type { DevServerError } from "../../shared/utils/devServerErrors";
 import type { DevPreviewSessionState } from "../../shared/types/ipc/devPreview";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { onHostResync } from "@/store/hostResyncSignal";
 
 export type DevPreviewStatus =
   "stopped" | "starting" | "installing" | "running" | "stopping" | "error" | "restored-stopped";
@@ -423,6 +424,16 @@ export function useDevServer({
       cancelled = true;
     };
   }, [panelId, currentProjectId, applyState, applyInvokeError]);
+
+  // A state change sent while the link to the host was down is lost: ask again once it's back.
+  useEffect(() => {
+    if (!currentProjectId) return;
+    return onHostResync(() => {
+      window.electron.devPreview
+        .getState({ panelId, projectId: currentProjectId })
+        .then(applyState, () => {});
+    });
+  }, [panelId, currentProjectId, applyState]);
 
   useEffect(() => {
     if (!currentProjectId) return;

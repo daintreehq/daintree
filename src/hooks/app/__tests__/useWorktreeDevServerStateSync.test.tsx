@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { useWorktreeDevServerStateSync } from "../useWorktreeDevServerStateSync";
 import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
+import { notifyHostResync } from "@/store/hostResyncSignal";
 import type {
   DevPreviewSessionState,
   DevPreviewStateChangedPayload,
@@ -34,15 +35,18 @@ function makeSession(
 describe("useWorktreeDevServerStateSync", () => {
   let listeners: Listener[];
   let unsubscribe: () => void;
+  let sessions: DevPreviewSessionState[];
 
   beforeEach(() => {
     listeners = [];
+    sessions = [];
     unsubscribe = vi.fn() as () => void;
     useWorktreeDevServerStore.getState().reset();
     vi.stubGlobal("window", {
       ...window,
       electron: {
         devPreview: {
+          getAllSessions: async () => sessions,
           onStateChanged: (cb: Listener) => {
             listeners.push(cb);
             // Mirror the real IPC contract: the returned cleanup detaches the
@@ -93,5 +97,16 @@ describe("useWorktreeDevServerStateSync", () => {
     // The cleanup detached the handler, so a late broadcast reaches no listener.
     emit({ state: makeSession("w1", "running") });
     expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId).toEqual({});
+  });
+
+  it("takes the host's current sessions after a resync, for broadcasts lost while the link was down", async () => {
+    renderHook(() => useWorktreeDevServerStateSync());
+    emit({ state: makeSession("w1", "starting") });
+    sessions = [makeSession("w1", "running", 2), makeSession(undefined, "running", 2)];
+    notifyHostResync();
+    await vi.waitFor(() =>
+      expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1?.status).toBe("running")
+    );
+    expect(Object.keys(useWorktreeDevServerStore.getState().sessionsByWorktreeId)).toEqual(["w1"]);
   });
 });

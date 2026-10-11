@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
+import { onHostResync } from "@/store/hostResyncSignal";
 
 /**
  * App-level singleton that mirrors every `DEV_PREVIEW_STATE_CHANGED` broadcast
@@ -17,6 +18,22 @@ export function useWorktreeDevServerStateSync(): void {
       const worktreeId = state.worktreeId?.trim();
       if (!worktreeId) return;
       useWorktreeDevServerStore.getState().setSession(worktreeId, state);
+    });
+  }, []);
+
+  // Broadcasts sent while the link to a host was down are lost: take the
+  // host's current sessions once it's back.
+  useEffect(() => {
+    return onHostResync(() => {
+      window.electron.devPreview.getAllSessions().then(
+        (sessions) => {
+          for (const state of sessions) {
+            const worktreeId = state.worktreeId?.trim();
+            if (worktreeId) useWorktreeDevServerStore.getState().setSession(worktreeId, state);
+          }
+        },
+        () => {}
+      );
     });
   }, []);
 }
