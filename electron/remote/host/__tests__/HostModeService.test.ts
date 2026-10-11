@@ -159,6 +159,31 @@ function row(status: HostModeStatus, id: string) {
 }
 
 describe("HostModeService enable and disable", () => {
+  it("runs a turn-off's cleanup again when it is retried, even with the setting already off", async () => {
+    const remove = vi.fn(async () => {});
+    const { service } = makeService({
+      startAtLogin: {
+        kind: "systemd-user",
+        path: "/home/greg/.config/systemd/user/daintree-host.service",
+        install: async () => {},
+        remove,
+        isInstalled: async () => true,
+        observe: async () => ({
+          kind: "systemd-user",
+          path: "/x",
+          installed: true,
+          current: true,
+          unitState: null,
+          linger: null,
+          userName: "greg",
+        }),
+      },
+    });
+    await service.setEnabled({ enabled: false });
+    expect(remove).toHaveBeenCalled();
+    await service.dispose();
+  });
+
   it("takes the advertise choice before hosting is ever on, and never advertises once it starts", async () => {
     const { service, advertise, settings } = makeService();
     const off = await service.setEnabled({ enabled: false, advertise: false });

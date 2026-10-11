@@ -207,9 +207,16 @@ export class HostModeService {
     if (this.disposed) return this.snapshot();
     const previous = this.deps.readSettings();
     if (!payload.enabled) {
-      // The advertise choice can be made before hosting is ever turned on.
+      // The advertise choice can be made before hosting is ever turned on. Only
+      // a change to it, with nothing listening, skips the turn-off: a retry of
+      // a turn-off whose cleanup failed must run the cleanup again.
       const advertise = payload.advertise ?? previous.advertise;
-      if (!previous.enabled) {
+      const advertiseOnly =
+        payload.advertise !== undefined &&
+        payload.advertise !== previous.advertise &&
+        !previous.enabled &&
+        this.listener?.isListening() !== true;
+      if (advertiseOnly) {
         this.deps.writeSettings({ ...previous, advertise });
         this.push();
         return this.snapshot();

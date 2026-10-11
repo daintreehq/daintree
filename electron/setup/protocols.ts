@@ -1831,6 +1831,7 @@ export function createPluginProtocolHandler(
       });
     }
 
+    let handedOff = false;
     try {
       // Stat via the open handle (no realpath/stat TOCTOU window) so the 304
       // shortcut and the Last-Modified validator share one source of truth.
@@ -1850,11 +1851,12 @@ export function createPluginProtocolHandler(
 
       const mimeType = getMimeType(realFile);
       // Tour narration (#12773) plays by `<audio>` tag, which seeks with byte
-      // ranges; hand it to the range-aware streamer, which reopens the same
-      // contained path with the same O_NOFOLLOW discipline.
+      // ranges; hand it to the range-aware streamer, on the descriptor just
+      // checked, so what plays is the file that passed (the streamer owns and
+      // closes it from here).
       if (isMediaMimeType(mimeType)) {
-        const streamed = await streamContainedMediaFile(candidatePath, mimeType, request);
-        // The streamer reopens the file, so it can still miss after the checks above.
+        handedOff = true;
+        const streamed = await streamOpenedMediaFile(fileHandle, mimeType, request);
         if (streamed.status === 404) logPluginNotFound("media", authority, url.pathname);
         // Keep the trusted-document read a view's own fetch() of its bundled
         // media had before narration was streamed (WebAudio, blob playback).
@@ -1893,7 +1895,7 @@ export function createPluginProtocolHandler(
       });
     } finally {
       // Swallow close errors so they don't mask a preceding readFile failure.
-      await fileHandle.close().catch(() => {});
+      if (!handedOff) await fileHandle.close().catch(() => {});
     }
   };
 }
