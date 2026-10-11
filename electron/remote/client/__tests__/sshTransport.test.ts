@@ -730,12 +730,53 @@ describe("when the ssh server refuses socket forwarding", () => {
     expect(host.calls.some((args) => args.includes("forward"))).toBe(false);
     expect(host.calls.filter((args) => args.includes("-W"))).toHaveLength(1);
 
-    // A dropped bridge reconnects the same way, without asking the server again.
+    // A dropped bridge asks the server once more (ssh words a socket nobody
+    // listens on as a refusal too), and a server that still refuses keeps the bridge.
     host.bridges[0]!.kill();
     await waitFor(() => host.streams.length === 2);
     await waitFor(() => client!.getState().status === "connected");
-    expect(host.calls.filter((args) => args.includes("-W"))).toHaveLength(1);
+    expect(host.calls.filter((args) => args.includes("-W"))).toHaveLength(2);
     expect(transport.route).toBe("attach-stdio");
+  });
+
+  it("goes back to the socket forward once a host that was restarting listens again", async () => {
+    // The first check lands while the restarted host's old socket file has no
+    // listener, which ssh words exactly as a refusal; the next one goes through.
+    const host = await refusingHost();
+    let checks = 0;
+    const proxies: net.Server[] = [];
+    const spawner: SshSpawner = (args) => {
+      if (args.includes("-W")) {
+        checks += 1;
+        const child = new FakeChild();
+        if (checks === 1) child.finish(255, "", REFUSED_VIA_MASTER);
+        else child.finish(0);
+        return child;
+      }
+      if (args.includes("forward")) {
+        proxies.push(fakeForward(args, DARWIN_SOCKET, host.hostLoc.socketPath));
+        const child = new FakeChild();
+        child.finish(0);
+        return child;
+      }
+      return host.spawner(args);
+    };
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+      spawnStream: host.spawnStream,
+    });
+    const first = await transport.open(new AbortController().signal);
+    expect(transport.route).toBe("attach-stdio");
+    first.socket.destroy();
+    await waitFor(() => first.socket.destroyed);
+    const second = await transport.open(new AbortController().signal);
+    expect(transport.route).toBe("forward");
+    expect(checks).toBe(2);
+    await first.dispose();
+    await second.dispose();
+    for (const p of proxies) p.close();
   });
 
   it("keeps the socket forward when the check failed for some other reason", async () => {

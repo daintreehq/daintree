@@ -524,7 +524,8 @@ export class SshTransport implements LinkTransport {
   private readonly spawnStream: SshStreamSpawner;
   /**
    * Whether the server lets a channel reach the host socket. Checked once,
-   * and again after a forwarded connection closed having carried nothing.
+   * again after a forwarded connection closed having carried nothing, and
+   * again after a connection the bridge carried closes.
    */
   private streamLocal: StreamLocalState = "unverified";
   private lastRoute: "forward" | "attach-stdio" | null = null;
@@ -606,6 +607,14 @@ export class SshTransport implements LinkTransport {
     if (this.streamLocal === "refused") {
       const connection = await this.openOverStdio(controlPath, info, signal);
       this.lastRoute = "attach-stdio";
+      // ssh words a socket nobody listens on (a host that just crashed or is
+      // restarting, its old socket file still there) exactly as a server that
+      // refuses socket forwarding, so the verdict lasts only this connection:
+      // the next one checks again, rather than every reconnect for the rest
+      // of the app's life riding the bridge.
+      connection.socket.once("close", () => {
+        if (this.streamLocal === "refused") this.streamLocal = "unverified";
+      });
       return connection;
     }
     const connection = await this.openForward(controlPath, remoteSocket, info.token, signal);
