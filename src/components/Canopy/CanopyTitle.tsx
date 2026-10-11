@@ -103,8 +103,9 @@ export function CanopyTitle({ title, onRename, renameRequest }: CanopyTitleProps
     // Every key here is the field's: none reaches Canopy's own keys, and Escape
     // leaves the rename rather than closing the panel.
     event.stopPropagation();
+    // An input method's own Enter or Escape picks or drops its candidate.
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key === "Enter") {
-      if (event.nativeEvent.isComposing) return;
       event.preventDefault();
       commit(true);
       backToTitle();

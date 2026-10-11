@@ -1,4 +1,13 @@
-import { Suspense, lazy, useEffect, useImperativeHandle, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { KeyboardEvent } from "react";
 import {
   Archive,
@@ -207,6 +216,25 @@ export function CanopyCard({
   useEffect(() => {
     canReplyRef.current = canReply;
   });
+  // The reply goes away under the user's typing when a secret is asked for:
+  // the keyboard goes to the terminal, where the secret is typed — not to
+  // nowhere, and from there to the list, where every letter is a command.
+  // Whether the reply held it is read as it unmounts, before its editor leaves.
+  const replyHadFocusRef = useRef(false);
+  const replyHostRef = useCallback((node: HTMLDivElement | null) => {
+    if (node === null) return;
+    replyHadFocusRef.current = false;
+    return () => {
+      replyHadFocusRef.current = node.contains(document.activeElement);
+    };
+  }, []);
+  useLayoutEffect(() => {
+    if (canReply || !replyHadFocusRef.current) return;
+    replyHadFocusRef.current = false;
+    sectionRef.current
+      ?.querySelector<HTMLElement>("[data-canopy-terminal] textarea")
+      ?.focus({ preventScroll: true });
+  }, [canReply]);
 
   // Moved here with ⌘↑/⌘↓ from inside another agent's composer or terminal:
   // the keyboard lands in the same place on this one. The composer is a lazy
@@ -623,7 +651,7 @@ export function CanopyCard({
           onGoTo={() => onOpen(item)}
         />
         {canReply ? (
-          <div data-keybindings-isolated="" className="contents">
+          <div ref={replyHostRef} data-keybindings-isolated="" className="contents">
             <Suspense fallback={null}>
               <LazyHybridInputBar
                 ref={composerRef}

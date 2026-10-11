@@ -17,7 +17,11 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { CANOPY_URGENT_PRIORITY, type CanopyReadMark } from "@shared/types/ipc/canopy";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CANOPY_SEEN_HEARTBEAT_MS, canopyViewIsWatched, reportCanopySeen } from "@/lib/canopySeen";
-import { subscribeProjectViewObservability } from "@/lib/viewCacheState";
+import {
+  isProjectViewCached,
+  subscribeProjectViewLifecycle,
+  subscribeProjectViewObservability,
+} from "@/lib/viewCacheState";
 import { useOverlayClaim } from "@/hooks/useOverlayState";
 import { useEffectiveCombo } from "@/hooks";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -103,6 +107,8 @@ function failToast(
  */
 function agentStepOf(event: KeyboardEvent<HTMLElement>): -1 | 1 | null {
   if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return null;
+  // An input method's own keys: switching agents would unmount what it is composing in.
+  if (event.nativeEvent.isComposing || event.keyCode === 229) return null;
   if (event.shiftKey) return null;
   const chord = isMac()
     ? event.metaKey && !event.ctrlKey && !event.altKey
@@ -212,6 +218,21 @@ export function CanopyView() {
   const applySnapshot = useCanopyStore((s) => s.applySnapshot);
   useOverlayClaim("canopy", isOpen);
   const still = useFrozenBackdrop(isOpen);
+  // A view put in the background — another project shown in its place — can
+  // be seen by no one: an inbox left open there would acknowledge asks nobody
+  // saw, keep its pages held back, and hold an agent's terminal at its size.
+  useEffect(() => {
+    if (!isOpen) return;
+    // Already there: opened by a key while the panel's code loaded, and the
+    // project switched away before it mounted.
+    if (isProjectViewCached()) {
+      close();
+      return;
+    }
+    return subscribeProjectViewLifecycle((phase) => {
+      if (phase === "cached") close();
+    });
+  }, [isOpen, close]);
   // What had the keyboard when the panel opened, kept here because the dialog
   // can be replaced while open (loading, then the offer or the inbox), and a
   // new one would take the old one's own content for its opener.
@@ -219,9 +240,6 @@ export function CanopyView() {
   useLayoutEffect(() => {
     if (!isOpen) return;
     const active = document.activeElement;
-    // Reopened while the last close is still animating: the keyboard is on
-    // Canopy's own outgoing dialog, and the opener saved before stands.
-    if (active?.closest('[data-testid="canopy-dialog"]')) return;
     openerRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
   }, [isOpen]);
   const restoreOpener = useCallback(
@@ -655,8 +673,6 @@ function CanopyInbox({
         : inbox.inbox,
     [unreadOnly, inbox, keptUnread]
   );
-  // What a reply answers: the runs that need you, in the list's order.
-  const queue = useMemo(() => listed.filter(itemNeedsAttention), [listed]);
   const archivedExpanded = useCanopyStore((s) => s.archivedExpanded);
   const setArchivedExpanded = useCanopyStore((s) => s.setArchivedExpanded);
   // What the keyboard walks: the list, then the archived runs once they are shown.
@@ -669,7 +685,8 @@ function CanopyInbox({
   // Before paint, so a close in the same moment can't lose it.
   const acknowledge = useCanopyStore((s) => s.acknowledge);
   useLayoutEffect(() => {
-    if (!isOpen) return;
+    // A view nobody can see acknowledges nothing, for the moment before it closes.
+    if (!isOpen || isProjectViewCached()) return;
     acknowledge(visible.map((item) => item.runId));
   }, [isOpen, visible, acknowledge]);
   // Main holds a native page back only for an ask the panel shows: told the
@@ -701,11 +718,18 @@ function CanopyInbox({
     focusedIndex !== -1
       ? visible[focusedIndex]!
       : (items.find((item) => item.runId === focusedId) ?? listed[0] ?? null);
-  const queueRef = useRef(queue);
   const visibleRef = useRef<CanopyItem[]>([]);
   const selectedRef = useRef<string | null>(null);
+  // An answer or a reply settles after the panel may have closed, and a new
+  // one opened over the same ids: only this one's own may move the keyboard.
+  const mountedRef = useRef(false);
   useEffect(() => {
-    queueRef.current = queue;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  useEffect(() => {
     visibleRef.current = visible;
     selectedRef.current = focusedItem?.runId ?? null;
   });
@@ -923,7 +947,7 @@ function CanopyInbox({
           title: toast.title,
           message: toast.message,
           context: { eventKind: "agent" },
-          duration: 6000,
+          duration: UNDO_TOAST_DURATION_MS,
           actions: [
             {
               label: "Undo",
@@ -1066,9 +1090,9 @@ function CanopyInbox({
         // or a prompt may have more to ask. The reply still moves the run out
         // of the queue, and its pane stays open where the user is typing.
         if (via === "terminal") return;
-        // The user moved to another run while the reply was on its way: their
-        // choice stands.
-        if (selectedRef.current !== item.runId) return;
+        // The user moved to another run while the reply was on its way, or
+        // closed the panel: their choice stands.
+        if (!mountedRef.current || selectedRef.current !== item.runId) return;
         // Replied from the composer: on to the next run that needs you, into
         // its composer, as Send moves on in a mail queue. The answered one
         // leaves the queue when main's handled reading lands.
@@ -1095,9 +1119,13 @@ function CanopyInbox({
           );
           return;
         }
-        // The cursor moves on before the run leaves, as archiving does in mail.
-        const next = nextAfter(item.runId);
-        if (next) focusCardNow(next.runId);
+        // The cursor moves on before the run leaves, as archiving does in mail —
+        // only off the run it is on: a row archived from its hover button
+        // leaves the user where they were.
+        if (selectedRef.current === item.runId) {
+          const next = nextAfter(item.runId);
+          if (next) focusCardNow(next.runId);
+        }
         const before = item.readMark;
         // No toast: the user archived it and watched it leave, and Z takes it back.
         const undo = reserveUndo();
@@ -1128,7 +1156,7 @@ function CanopyInbox({
         safeFireAndForget(
           window.electron.canopy.answer(item.runId, target(item), label).then(
             () => {
-              if (selectedRef.current !== item.runId) return;
+              if (!mountedRef.current || selectedRef.current !== item.runId) return;
               if (next && next.runId !== item.runId) focusCardNow(next.runId);
             },
             (error: unknown) => failToast("Couldn't answer", error, goTo(item))
@@ -1747,10 +1775,21 @@ function CanopyInbox({
                 />
               ) : (
                 <div className="flex flex-1 flex-col items-center justify-center gap-1 text-center">
-                  <p className="text-sm text-text-primary">Nothing in the inbox</p>
-                  <p className="text-xs text-text-secondary">
-                    Open an archived agent to see its terminal here.
-                  </p>
+                  {unreadOnly && inbox.inbox.length > 0 ? (
+                    <>
+                      <p className="text-sm text-text-primary">Nothing unread</p>
+                      <p className="text-xs text-text-secondary">
+                        Turn off Unread to see every agent's terminal here.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm text-text-primary">Nothing in the inbox</p>
+                      <p className="text-xs text-text-secondary">
+                        Open an archived agent to see its terminal here.
+                      </p>
+                    </>
+                  )}
                 </div>
               )}
             </div>

@@ -51,6 +51,16 @@ describe("CanopyTitle", () => {
     expect(onPanelKey).not.toHaveBeenCalled();
   });
 
+  it("leaves an input method's own Escape to the input method, keeping the rename", () => {
+    const { name, field } = renderTitle(
+      <CanopyTitle title="Claude" onRename={vi.fn(async () => {})} />
+    );
+    fireEvent.keyDown(name()!, { key: "F2" });
+    fireEvent.change(field()!, { target: { value: "かな" } });
+    fireEvent.keyDown(field()!, { key: "Escape", isComposing: true });
+    expect(field()?.value).toBe("かな");
+  });
+
   it("puts back the default on an empty Enter, but never clears the name on leaving", () => {
     const onRename = vi.fn(async () => {});
     const { name, field } = renderTitle(<CanopyTitle title="auth fix" onRename={onRename} />);

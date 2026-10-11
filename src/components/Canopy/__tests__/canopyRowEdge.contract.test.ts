@@ -35,16 +35,15 @@ describe("canopy row edge", () => {
     );
   });
 
-  it("turns the edge neutral once the keyboard leaves the list, in the same shape", () => {
+  it("turns the edge neutral once the keyboard leaves the row, in the same shape", () => {
     const selected = edge(
       ruleBody(CANOPY_CSS, '.canopy-inbox-row[aria-selected="true"]'),
       "--canopy-row-edge"
     );
+    // Off the row, not off the list: a control in the list that takes the
+    // keyboard wears the accent ring, and one accent is all a region shows.
     const receded = edge(
-      ruleBody(
-        CANOPY_CSS,
-        '.canopy-inbox:not(:focus-within) .canopy-inbox-row[aria-selected="true"]'
-      ),
+      ruleBody(CANOPY_CSS, '.canopy-inbox-row[aria-selected="true"]:not(:focus-within)'),
       "--canopy-row-edge"
     );
     // Accent tints fall below 3:1 on some themes; a text token clears it on all.

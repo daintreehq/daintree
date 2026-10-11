@@ -46,6 +46,16 @@ vi.mock("../CanopyTerminal", () => ({
 }));
 vi.mock("@/components/Terminal/HybridInputBar", () => ({ HybridInputBar: () => null }));
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+const lifecycle = vi.hoisted(() => new Set<(phase: string) => void>());
+const viewCached = vi.hoisted(() => ({ current: false }));
+vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/viewCacheState")>()),
+  isProjectViewCached: () => viewCached.current,
+  subscribeProjectViewLifecycle: (listener: (phase: string) => void) => {
+    lifecycle.add(listener);
+    return () => lifecycle.delete(listener);
+  },
+}));
 
 import { notify } from "@/lib/notify";
 import { CanopyView } from "../CanopyView";
@@ -523,6 +533,20 @@ describe("CanopyView", () => {
     expect(liveRun(container)).toBe("waiting");
   });
 
+  it("leaves ⌘↓ to an input method composing in the terminal", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    terminalInput(container).focus();
+    fireEvent.keyDown(terminalInput(container), {
+      key: "ArrowDown",
+      metaKey: true,
+      isComposing: true,
+    });
+    expect(liveRun(container)).toBe("waiting");
+  });
+
   it("steps between agents with Alt+↑/↓ off the Mac, and leaves Ctrl+↑/↓ to the terminal", async () => {
     vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
     installElectron();
@@ -534,6 +558,97 @@ describe("CanopyView", () => {
     fireEvent.keyDown(first!, { key: "ArrowDown", altKey: true });
     expect(liveRun(container)).toBe("asking");
     expect(document.activeElement).toBe(second);
+  });
+
+  it("closes when its project's view goes into the background", async () => {
+    installElectron();
+    render(<CanopyView />);
+    await frames();
+    act(() => {
+      for (const listener of lifecycle) listener("cached");
+    });
+    expect(useCanopyStore.getState().isOpen).toBe(false);
+  });
+
+  it("closes at once when it mounts in a view already in the background, acknowledging nothing", async () => {
+    installElectron({ ...canopySnapshot, cards: [stuckCard("working")] });
+    useCanopyStore.setState({ snapshot: { ...canopySnapshot, cards: [stuckCard("working")] } });
+    const acknowledged = useCanopyStore.getState().acknowledged;
+    viewCached.current = true;
+    try {
+      render(<CanopyView />);
+      await frames();
+      expect(useCanopyStore.getState().isOpen).toBe(false);
+      expect(useCanopyStore.getState().acknowledged).toBe(acknowledged);
+    } finally {
+      viewCached.current = false;
+    }
+  });
+
+  it("archives a row from its hover button without moving the user off the row they are on", async () => {
+    const canopy = installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    const [first, , third] = cards(container);
+    act(() => third!.focus());
+    await act(async () => {
+      fireEvent.click(first!.querySelector<HTMLElement>("[data-canopy-row-archive]")!);
+    });
+    expect(canopy.archive).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 });
+    expect(document.activeElement).toBe(third);
+  });
+
+  it("lets an answer that lands after the panel closed move nothing in the panel opened since", async () => {
+    const canopy = installElectron({
+      ...canopySnapshot,
+      cards: [
+        {
+          ...stuckCard("waiting"),
+          category: "approval",
+          wordsCategory: "approval",
+          question: "Do you want to proceed?",
+          options: ["Yes", "No"],
+          risk: "none",
+        },
+      ],
+    });
+    useCanopyStore.setState({
+      snapshot: {
+        ...canopySnapshot,
+        cards: [
+          {
+            ...stuckCard("waiting"),
+            category: "approval",
+            wordsCategory: "approval",
+            question: "Do you want to proceed?",
+            options: ["Yes", "No"],
+            risk: "none",
+          },
+        ],
+      },
+    });
+    let settle!: () => void;
+    const answer = vi.fn(
+      (_runId: string, _target: { spawnedAt: number }, _label: string) =>
+        new Promise<void>((resolve) => (settle = resolve))
+    );
+    Object.assign(canopy, { answer });
+    const before = render(<CanopyView />);
+    await frames();
+    const row = cards(before.container).find((card) => card.id.includes("waiting"))!;
+    act(() => row.focus());
+    await act(async () => {
+      fireEvent.keyDown(row, { key: "1" });
+    });
+    expect(answer).toHaveBeenCalledWith("waiting", { spawnedAt: NOW - 3_600_000 }, "Yes");
+    before.unmount();
+
+    const after = render(<CanopyView />);
+    await frames();
+    const chosen = cards(after.container).find((card) => card.id.includes("working"))!;
+    act(() => chosen.focus());
+    await act(async () => settle());
+    expect(document.activeElement).toBe(chosen);
   });
 
   it("archives the selected run with E and moves the cursor on to the next", async () => {

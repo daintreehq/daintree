@@ -4,8 +4,9 @@
    plus one full-height accent mark on the RIGHT edge — the side facing the pane
    the row opens. The mark is the sidebar's own, solid accent at 2px, so the
    selected agent reads the way the active worktree does. Once the keyboard
-   moves into the terminal or the reply beside it, the mark turns neutral, as an
-   unfocused list's selection does on macOS: secondary ink, so the selection's
+   leaves the row — into the terminal or the reply beside it, or onto a control
+   in the list, whose own ring is then the one accent — the mark turns neutral,
+   as an unfocused list's selection does on macOS: secondary ink, so the selection's
    only non-fill cue still clears WCAG 1.4.11's 3:1 on every theme (a faded
    accent fell to 2.7:1 on namib; the lift alone measures about 1.03:1). The
    selected row is the focused row and draws no ring on top (#8094). */
@@ -64,7 +65,7 @@ button.canopy-inbox-heading:hover {
   --canopy-row-edge: inset -2px 0 0 var(--theme-accent-primary);
 }
 
-.canopy-inbox:not(:focus-within) .canopy-inbox-row[aria-selected="true"] {
+.canopy-inbox-row[aria-selected="true"]:not(:focus-within) {
   --canopy-row-edge: inset -2px 0 0 var(--theme-text-secondary);
 }
 

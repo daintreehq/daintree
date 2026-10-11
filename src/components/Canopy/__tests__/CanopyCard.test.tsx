@@ -282,6 +282,38 @@ describe("CanopyCard", () => {
     expect(document.activeElement).toBe(textarea);
   });
 
+  it("moves the keyboard into the terminal when the reply it was in goes for a secret", async () => {
+    const h = handlers();
+    const { container, getByTestId } = render(
+      <CanopyCard item={itemFor("question")} {...PROPS} {...h} />
+    );
+    await composer();
+    await streamOpens({ watchId: 7 });
+    const textarea = document.createElement("textarea");
+    container.querySelector("[data-canopy-terminal]")!.appendChild(textarea);
+    const reply = document.createElement("input");
+    getByTestId("composer").appendChild(reply);
+    reply.focus();
+    await streamOpens({ watchId: 7, secretPrompt: true });
+    expect(document.activeElement).toBe(textarea);
+  });
+
+  it("leaves the keyboard where it was when a secret takes a reply it wasn't in", async () => {
+    const h = handlers();
+    const { container } = render(<CanopyCard item={itemFor("question")} {...PROPS} {...h} />);
+    await composer();
+    await streamOpens({ watchId: 7 });
+    container
+      .querySelector("[data-canopy-terminal]")!
+      .appendChild(document.createElement("textarea"));
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    elsewhere.focus();
+    await streamOpens({ watchId: 7, secretPrompt: true });
+    expect(document.activeElement).toBe(elsewhere);
+    elsewhere.remove();
+  });
+
   it("goes back to the list on Escape from a reply whose terminal has gone", async () => {
     const h = handlers();
     const { container } = render(<CanopyCard item={itemFor("question")} {...PROPS} {...h} />);
