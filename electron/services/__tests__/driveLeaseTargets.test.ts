@@ -275,6 +275,9 @@ describe("createLeaseTargetResolvers", () => {
     symlinkSync(repoA, path.join(root, "a-link"));
     // A link inside project A that leads into project B.
     symlinkSync(repoB, path.join(repoA, "into-b"));
+    // And one into a folder of B, which "into-b-sub/.." climbs out of into B itself.
+    mkdirSync(path.join(repoB, "sub"));
+    symlinkSync(path.join(repoB, "sub"), path.join(repoA, "into-b-sub"));
     // Project C registered through a link inside A that leads to another folder of A.
     mkdirSync(path.join(repoA, "c-real"));
     symlinkSync(path.join(repoA, "c-real"), path.join(repoA, "c-link"));
@@ -304,6 +307,9 @@ describe("createLeaseTargetResolvers", () => {
     expect(() => r.projectsForPath("relative/path")).toThrow();
     // Git follows the link, so the project it leads into is the one changed.
     await expect(lookup(r, path.join(repoA, "into-b"))).resolves.toEqual(["b"]);
+    // ".." after a link climbs from where the link leads, as git's cwd does,
+    // never back into the folder that holds the link.
+    await expect(lookup(r, `${repoA}/into-b-sub/..`)).resolves.toEqual(["b"]);
   });
 
   it("traces a path naming a file, asking git from the file's folder", async () => {

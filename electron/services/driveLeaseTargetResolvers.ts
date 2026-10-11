@@ -16,8 +16,17 @@ interface ProjectRoot {
   root: string;
 }
 
+/**
+ * One spelling for names the file system treats as one. macOS does not tell
+ * NFC from NFD; Linux keeps them as two different folders, so there the bytes
+ * are compared as they are.
+ */
+function unicodeForm(p: string): string {
+  return process.platform === "darwin" ? p.normalize("NFC") : p;
+}
+
 function normalize(p: string): string {
-  return path.resolve(p).normalize("NFC");
+  return unicodeForm(path.resolve(p));
 }
 
 /** The deepest registered project whose folder holds `candidate`. */
@@ -36,7 +45,7 @@ function containing(projects: readonly ProjectRoot[], candidate: string): string
 
 async function realpathOrNull(p: string): Promise<string | null> {
   return fs.realpath(p).then(
-    (real) => real.normalize("NFC"),
+    (real) => unicodeForm(real),
     () => null
   );
 }
@@ -56,7 +65,7 @@ async function realSpelling(target: string): Promise<{ real: string; existing: s
   const tail: string[] = [];
   for (;;) {
     try {
-      const real = (await fs.realpath(existing)).normalize("NFC");
+      const real = unicodeForm(await fs.realpath(existing));
       return { real: tail.length ? path.join(real, ...tail.reverse()) : real, existing: real };
     } catch (error) {
       const parent = path.dirname(existing);
@@ -156,7 +165,9 @@ export function createLeaseTargetResolvers(): LeaseTargetResolvers {
       const projects = projectStore
         .getAllProjectIdentities()
         .map((project) => ({ id: project.id, root: normalize(project.path) }));
-      return withTimeout(projectsForPathOwnership(projects, normalize(target)));
+      // The caller's own spelling, not a lexical tidy-up of it: "A/link/.." is
+      // wherever the link leads, up one, which is where the handler's git runs.
+      return withTimeout(projectsForPathOwnership(projects, unicodeForm(target)));
     },
 
     projectForTerminal(terminalId) {
