@@ -68,7 +68,11 @@ vi.mock("@xterm/addon-webgl", () => {
   throw new Error("no WebGL in jsdom");
 });
 
-import { CanopyTerminal, type CanopyStreamState } from "../CanopyTerminal";
+import {
+  CanopyTerminal,
+  _resetCanopyWatchBurstForTests,
+  type CanopyStreamState,
+} from "../CanopyTerminal";
 
 let pushChunk: (chunk: CanopyTerminalData) => void = () => {};
 let openStream: (view: CanopyTerminalView) => void = () => {};
@@ -89,6 +93,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  _resetCanopyWatchBurstForTests();
   terminalInput.mockClear();
   pane.events.length = 0;
   Object.defineProperty(window, "electron", {
@@ -135,6 +140,9 @@ function mount(onGoTo?: () => void) {
   );
   return { ...view, states, frame: view.container.querySelector("[data-canopy-terminal]")! };
 }
+
+/** Long enough for xterm's composition timer, and the gesture's, to have run. */
+const COMPOSITION_SENT_MS = 10;
 
 async function open(view: CanopyTerminalView) {
   await act(async () => openStream(view));
@@ -193,6 +201,58 @@ describe("CanopyTerminal", () => {
     fireEvent.keyDown(frame, { key: "y" });
     xterm.current!.emitData("y");
     expect(terminalInput).toHaveBeenCalledWith(7, "y");
+  });
+
+  it("takes text an input method composes, which xterm sends a task after the composition ends", async () => {
+    const { frame } = mount();
+    await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+    fireEvent.compositionEnd(frame, { data: "é" });
+    // xterm's own composition timer, queued after the gesture's.
+    setTimeout(() => xterm.current!.emitData("é"), 0);
+    await act(() => new Promise((resolve) => setTimeout(resolve, COMPOSITION_SENT_MS)));
+    expect(terminalInput).toHaveBeenCalledWith(7, "é");
+  });
+
+  it("never sends the terminal's own replies, even inside a gesture", async () => {
+    const { frame } = mount();
+    await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+    fireEvent.keyDown(frame, { key: "y" });
+    // A cursor-position report parsed while the key was going in.
+    xterm.current!.emitData("\x1b[24;1R");
+    xterm.current!.emitData("y");
+    // Focusing the view tells the agent nothing.
+    fireEvent.mouseDown(frame);
+    xterm.current!.emitData("\x1b[I");
+    expect(terminalInput.mock.calls).toEqual([[7, "y"]]);
+  });
+
+  it("takes a key an input method holds, which xterm sends a task later", async () => {
+    const { frame } = mount();
+    await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+    fireEvent.keyDown(frame, { key: "Process", keyCode: 229 });
+    setTimeout(() => xterm.current!.emitData("あ"), 0);
+    await act(() => new Promise((resolve) => setTimeout(resolve, COMPOSITION_SENT_MS)));
+    expect(terminalInput).toHaveBeenCalledWith(7, "あ");
+  });
+
+  it("opens a stream at once, but waits out a burst of selections for the one that settles", () => {
+    vi.useFakeTimers();
+    try {
+      const watch = vi.fn(() => new Promise<CanopyTerminalView>(() => {}));
+      window.electron.canopy.watchTerminal = watch;
+      mount().unmount();
+      expect(watch).toHaveBeenCalledTimes(1);
+      mount().unmount();
+      const settled = mount();
+      expect(watch).toHaveBeenCalledTimes(1);
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(watch).toHaveBeenCalledTimes(2);
+      settled.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("takes no input before the stream opens or after its terminal ends", async () => {

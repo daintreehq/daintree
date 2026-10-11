@@ -394,6 +394,30 @@ describe("hasRateLimitMessage (#12797)", () => {
     expect(classifyWaitingReason(lines, true)).toBe("prompt");
   });
 
+  it("reads a screen not yet filled over the caller's own window, blank rows included", () => {
+    const lines = [
+      "Do you trust the files in this folder?",
+      "❯ 1. Yes, proceed",
+      "  2. No, exit",
+      ...Array.from({ length: 35 }, () => ""),
+    ];
+    // The boot scan's 50 rows reach the dialog; the 12-row window never did.
+    expect(classifyWaitingReason(lines, false, 50)).toBe("approval");
+    expect(classifyWaitingReason(lines, false)).toBe("prompt");
+  });
+
+  it("reads the caller's own window when it is wider than its own", () => {
+    const lines = [
+      "Do you want to proceed?",
+      "❯ 1. Yes",
+      "  2. No",
+      ...Array.from({ length: 12 }, () => ""),
+      "  Esc to cancel",
+    ];
+    expect(classifyWaitingReason(lines, true)).toBe("prompt");
+    expect(classifyWaitingReason(lines, true, 16)).toBe("approval");
+  });
+
   it("keeps a dialog's own checkbox rows", () => {
     const lines = ["Allow this tool?", "❯ ☐ Allow once", "  ☐ Always allow"];
     expect(classifyWaitingReason(lines, true)).toBe("approval");

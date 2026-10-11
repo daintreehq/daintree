@@ -29,10 +29,14 @@ interface Watch {
   pendingHolds: GridSize[];
   /** What the PTY last reported holding; a hold is resent until it matches. */
   appliedSize: GridSize | null;
-  /** The PTY incarnation the echoes are from; a different one is a respawn. */
+  /** The PTY incarnation the stream is for; a different one is a respawn. */
   launchGeneration: number | null;
   /** Stop listening; `restore` hands the PTY back to its pane's size first. */
   stop: (restore: boolean) => void;
+  /** The terminal under the id is still the incarnation the stream was opened for. */
+  isCurrent: () => boolean;
+  /** End the stream, telling the view, with no size to hand back. */
+  end: () => void;
 }
 
 /** At most one terminal per view: the one its canopy panel has selected. */
@@ -88,7 +92,12 @@ export async function watchTerminal(
   sender: WebContents,
   runId: string,
   spawnedAt: number,
-  ticket: number
+  ticket: number,
+  /**
+   * The incarnation the caller validated `spawnedAt` against, taken before it
+   * awaited anything; by default, the one running now.
+   */
+  launchGeneration: number | null = ptyClient.getLiveGeneration(runId)
 ): Promise<CanopyTerminalView> {
   stopWatch(sender.id);
   const watchId = ++nextWatchId;
@@ -107,6 +116,12 @@ export async function watchTerminal(
   let forwardedTo = -1;
   const forward = (id: string, data: string | Uint8Array, ...rest: unknown[]) => {
     if (id !== runId) return;
+    // A restart under the same id retires the old exit without announcing it,
+    // so the successor's first bytes are what say this stream is over.
+    if (!watch.isCurrent()) {
+      end();
+      return;
+    }
     // `data` passes routing before the offset; `data-mirror` passes the offset alone.
     const streamEnd = rest.find((value): value is number => typeof value === "number");
     // A port-recovery resend can repeat a chunk the mirror already carried.
@@ -124,7 +139,7 @@ export async function watchTerminal(
   };
   const onResize = (id: string, result: TerminalResizeResult) => {
     if (id !== runId) return;
-    if (result.launchGeneration !== null) {
+    if (result.launchGeneration != null) {
       if (watch.launchGeneration === null) {
         watch.launchGeneration = result.launchGeneration;
       } else if (watch.launchGeneration !== result.launchGeneration) {
@@ -157,11 +172,23 @@ export async function watchTerminal(
     heldSize: null,
     pendingHolds: [],
     appliedSize: null,
-    launchGeneration: null,
+    // Bound now, not at the first resize echo: a restart before any echo would
+    // otherwise hand the successor's generation to this stream.
+    launchGeneration,
+    isCurrent: () =>
+      watch.launchGeneration === null || ptyClient.isLiveGeneration(runId, watch.launchGeneration),
+    end: () => end(),
     stop: (restore) => {
       const held = holders.get(runId) === sender.id;
       if (held) holders.delete(runId);
-      if (restore && held && watch.heldSize !== null && watch.ownerSize !== null) {
+      // A successor under the same id has a pane size of its own, never this one's.
+      if (
+        restore &&
+        held &&
+        watch.heldSize !== null &&
+        watch.ownerSize !== null &&
+        watch.isCurrent()
+      ) {
         const current = watch.appliedSize ?? watch.heldSize;
         if (!sameSize(current, watch.ownerSize)) {
           ptyClient.resize(runId, watch.ownerSize.cols, watch.ownerSize.rows);
@@ -211,6 +238,11 @@ export async function watchTerminal(
   if (watches.get(sender.id) !== watch || !isCurrentWatchRequest(sender.id, ticket)) {
     // Overtaken or cancelled while the snapshot was read; the view has moved on.
     if (watches.get(sender.id) === watch) stopWatch(sender.id);
+    return { watchId: null, snapshot: null };
+  }
+  // Respawned while the snapshot was read: it may be the successor's screen.
+  if (!watch.isCurrent()) {
+    stopWatch(sender.id, false);
     return { watchId: null, snapshot: null };
   }
   if (snapshot && watch.ownerSize === null) {
@@ -265,6 +297,11 @@ export function resizeWatchedTerminal(
   }
   const watch = watches.get(webContentsId);
   if (!watch || watch.watchId !== watchId) throw new Error("Terminal stream is not open");
+  // A size held for the terminal the stream was opened for, never a successor's.
+  if (!watch.isCurrent()) {
+    watch.end();
+    return;
+  }
   if (watch.ownerSize === null) return;
   const holder = holders.get(watch.runId);
   if (holder !== undefined && holder !== webContentsId) return;
@@ -304,9 +341,12 @@ export function watchedTerminal(
   watchId: number
 ): { runId: string; spawnedAt: number } | null {
   const watch = watches.get(webContentsId);
-  return watch && watch.watchId === watchId
-    ? { runId: watch.runId, spawnedAt: watch.spawnedAt }
-    : null;
+  if (!watch || watch.watchId !== watchId) return null;
+  if (!watch.isCurrent()) {
+    watch.end();
+    return null;
+  }
+  return { runId: watch.runId, spawnedAt: watch.spawnedAt };
 }
 
 /** Test seam: what each view is watching. */

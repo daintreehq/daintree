@@ -6,11 +6,16 @@ import { UNIVERSAL_APPROVAL_HINT_PATTERNS } from "./terminalActivityPatterns.js"
  * Number of trailing visible lines the classifier wants to see. Wider than
  * promptScanLineCount (6) because approval dialogs are multi-row: the
  * question sits above 2-4 selector rows, and the input-box chrome below can
- * push it out of a 6-line window. Claude Code also draws its task checklist
- * under an open dialog — up to ten rows — which put the selector out of a
- * 12-row window on most real approvals.
+ * push it out of a 6-line window.
  */
-export const WAITING_REASON_SCAN_LINE_COUNT = 24;
+export const WAITING_REASON_SCAN_LINE_COUNT = 12;
+
+/**
+ * Rows Claude Code's task checklist can take under an open dialog — its
+ * summary, up to ten items and a fold. A reader adds them to its window, so a
+ * checklist is set aside rather than pushing the dialog out of view.
+ */
+export const WAITING_REASON_CHECKLIST_ROWS = 12;
 
 /**
  * Claude Code's task checklist, drawn at the very bottom under whatever the
@@ -23,15 +28,13 @@ const CHECKLIST_SUMMARY = /^\s*\d+ tasks? \(\d+ done/;
 const CHECKLIST_ITEM =
   /^\s*(?:⎿\s*)?(?:✔|◼|◻)\s+\S|^\s*…\s*\+\d+\s+(?:completed|pending|open|in progress)\b/;
 
-/** The rows the classifier always looked at — the old physical window. */
-const REASON_WINDOW_ROWS = 12;
-
 /**
- * `lines` without a checklist block at the bottom, cut to the old physical
- * window, so a dialog above the checklist is seen exactly as it was before
- * Claude drew a checklist under it, and nothing older comes into view.
+ * `lines` without a checklist block at the bottom (and the blank rows under
+ * it), cut to `rows`: a dialog above the checklist is seen exactly as it was
+ * before Claude drew a checklist under it, and nothing older comes into view.
+ * With no checklist, the bottom `rows` are read as drawn, blank rows included.
  */
-function withoutTrailingChecklist(lines: string[]): string[] {
+function withoutTrailingChecklist(lines: string[], rows: number): string[] {
   let end = lines.length;
   while (end > 0 && lines[end - 1]!.trim() === "") end--;
   let start = end;
@@ -40,8 +43,7 @@ function withoutTrailingChecklist(lines: string[]): string[] {
   if (hasSummary) start--;
   // A checklist is its summary line plus items, or at least two items.
   const isChecklist = start < end && (hasSummary || end - start >= 2);
-  const kept = isChecklist ? lines.slice(0, start) : lines;
-  return kept.slice(-REASON_WINDOW_ROWS);
+  return (isChecklist ? lines.slice(0, start) : lines).slice(-rows);
 }
 
 // Universal hints that are too weak to *classify* on: they appear in ordinary
@@ -181,8 +183,20 @@ const PROMPT_CHROME_LINE = /^[\s>❯›⟩$%#│╭╰─╮╯]*$/;
 const APPROVAL_SCAN_LINES = 10;
 const ERROR_SCAN_LINES = 4;
 
-export function classifyWaitingReason(lines: string[], isPromptDetected: boolean): WaitingReason {
-  const strippedLines = withoutTrailingChecklist(lines.map((l) => stripAnsi(l)));
+/**
+ * Why an agent that went idle is waiting, from the bottom `rows` of its screen
+ * once a trailing task checklist is set aside; `lines` may carry the checklist's
+ * rows on top of them (`WAITING_REASON_CHECKLIST_ROWS`).
+ */
+export function classifyWaitingReason(
+  lines: string[],
+  isPromptDetected: boolean,
+  rows = WAITING_REASON_SCAN_LINE_COUNT
+): WaitingReason {
+  const strippedLines = withoutTrailingChecklist(
+    lines.map((l) => stripAnsi(l)),
+    rows
+  );
   const nonEmpty = strippedLines.filter((l) => l.trim().length > 0);
 
   // Priority 1: approval selector visible. Checked before the prompt flag —

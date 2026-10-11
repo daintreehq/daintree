@@ -1151,6 +1151,9 @@ export class PtyClient extends EventEmitter {
       }
       const generation = ledger.recordLaunch(id, ledgerFactsFromSpawnOptions(options));
       this.restartExitSuppression.delete(id);
+      // Whatever a duplicate spawn displaced died with the host: the replay is
+      // the incarnation now, not the one a refusal would put back.
+      this.displacedSpawns.delete(id);
       const stamped: PtyHostSpawnOptions = { ...options, launchGeneration: generation };
       this.pendingSpawns.set(id, stamped);
       this.sendSpawnWithPostInput(shard, id, stamped);
@@ -2025,6 +2028,32 @@ export class PtyClient extends EventEmitter {
    */
   getLaunchGeneration(id: string): number | null {
     return this.pendingSpawns.get(id)?.launchGeneration ?? null;
+  }
+
+  /**
+   * The launch generation of the incarnation running under `id`, as far as main
+   * can tell: while a duplicate spawn awaits the host's answer, the one it
+   * displaced, which is still running — the host refuses a spawn over a live
+   * id, and that one is put back. Null for an unknown terminal.
+   */
+  getLiveGeneration(id: string): number | null {
+    return (
+      this.displacedSpawns.get(id)?.entry.launchGeneration ??
+      this.pendingSpawns.get(id)?.launchGeneration ??
+      null
+    );
+  }
+
+  /**
+   * Whether `generation` is the incarnation running under `id`: the one main
+   * tracks, or one a duplicate spawn still awaiting the host's answer has
+   * displaced (see `getLiveGeneration`).
+   */
+  isLiveGeneration(id: string, generation: number): boolean {
+    return (
+      this.pendingSpawns.get(id)?.launchGeneration === generation ||
+      this.displacedSpawns.get(id)?.entry.launchGeneration === generation
+    );
   }
 
   /**

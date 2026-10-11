@@ -52,6 +52,7 @@ import { events } from "../../services/events.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { getDefaultPanelTitle } from "../../../shared/config/panelKindRegistry.js";
 import type { FleetRunRow } from "../../../shared/types/ipc/fleet.js";
+import type { PanelLocation } from "../../../shared/types/panel.js";
 import { TRASH_TTL_MS } from "../../../shared/config/trash.js";
 
 const MAX_INPUT_LENGTH = 64_000;
@@ -64,7 +65,8 @@ const BACKDROP_JPEG_QUALITY = 85;
 const ANSWER_SCREEN_LINES = 40;
 /** Between keys, so a TUI reading a burst as one chunk still sees each one. */
 const ANSWER_KEY_GAP_MS = 80;
-/** Why a one-key answer pressed nothing, in words the panel shows as is. */
+/** Runs a one-key answer is still pressing keys into. */
+const answering = new Set<string>();
 /**
  * Canopy acts on nothing until the user has turned it on. Checked here as well
  * as in the panel, so no other caller can reach a terminal through it.
@@ -130,6 +132,7 @@ function hiddenOrIdleSnapshot(): CanopySnapshot {
   };
 }
 
+/** Why a one-key answer pressed nothing, in words the panel shows as is. */
 function answerRefused(reason: string): AppError {
   return new AppError({ code: "NOT_FOUND", message: reason, userMessage: reason });
 }
@@ -188,19 +191,13 @@ function subscribeInput(): void {
 }
 
 /**
- * The views whose open panel lists a run in this workspace: every panel set to
- * all projects, and those set to this one. Only these are in front of its ask;
- * a panel scoped to another project hides nothing, so it holds no page back.
+ * The views whose open panel lists the run, as each last said, scope and
+ * filters applied: only these are in front of its ask. A panel that hasn't
+ * said yet lists nothing for certain: better a page the user may not need
+ * than an ask held back for a row they can't see.
  */
-export function canopyPanelsListing(workspaceId: string, runId?: string): number[] {
-  return [...activeViews].filter((view) => {
-    // What the panel says it shows, its filters included, when it has said.
-    // A panel that hasn't said yet lists nothing for certain: better a page
-    // the user may not need than an ask held back for a row they can't see.
-    if (runId !== undefined) return viewShown.get(view)?.has(runId) ?? false;
-    const scope = viewScopes.get(view) ?? null;
-    return scope === null || scope === workspaceId;
-  });
+export function canopyPanelsListing(runId: string): number[] {
+  return [...activeViews].filter((view) => viewShown.get(view)?.has(runId) ?? false);
 }
 
 function getService(): CanopyService {
@@ -225,7 +222,7 @@ function getService(): CanopyService {
           ...(run.agentId !== undefined ? { agentId: run.agentId } : {}),
           kind: ask.kind,
         },
-        () => canopyPanelsListing(run.workspaceId, run.runId)
+        () => canopyPanelsListing(run.runId)
       ),
     readScreen: async (runId, lines) => {
       const result = await readPluginTerminalScreen(getPtyClient(), runId, null, lines, null, {
@@ -449,18 +446,38 @@ function trashThroughOwningViews(runId: string, spawnedAt: number): number | nul
   if (!run) return null;
   const receipt = ++trashReceipts;
   pruneTrashReceipts();
-  recentlyTrashed.set(receipt, {
+  const trashed: TrashedRun = {
     runId,
     spawnedAt,
     workspaceId: run.workspaceId,
     at: Date.now(),
-  });
-  for (const view of getProjectRendererTargets(run.workspaceId)) {
+  };
+  recentlyTrashed.set(receipt, trashed);
+  const views = getProjectRendererTargets(run.workspaceId);
+  for (const view of views) {
     try {
       view.send(CHANNELS.CANOPY_TRASH_REQUESTED, { runId } satisfies CanopyTrashRequest);
     } catch {
       // A view torn down mid-send has no pane left to move.
     }
+  }
+  // No view of the project is open to move the pane, so its saved layout is
+  // what would bring it back: opened later, the project would restore the
+  // trashed agent. The saved pane goes to the trash there instead, as a view
+  // saving its own trash would leave it, and an Undo puts it back.
+  if (views.length === 0) {
+    trashed.layoutSaved = true;
+    void projectStore
+      .enqueueProjectStateUpdate(run.workspaceId, (state) => {
+        const saved = state?.terminals?.find((terminal) => terminal.id === runId);
+        if (!state || !saved || saved.location === "trash") return null;
+        trashed.savedLocation = saved.location;
+        saved.location = "trash";
+        return state;
+      })
+      .catch((error: unknown) => {
+        console.warn("[Canopy] Saving a trash to its project's layout failed:", error);
+      });
   }
   return receipt;
 }
@@ -472,10 +489,20 @@ function trashThroughOwningViews(runId: string, spawnedAt: number): number | nul
  * terminal respawned under the same id, or a later trash of it. Kept only for
  * as long as the trash keeps the terminal.
  */
-const recentlyTrashed = new Map<
-  number,
-  { runId: string; spawnedAt: number; workspaceId: string; at: number }
->();
+interface TrashedRun {
+  runId: string;
+  spawnedAt: number;
+  workspaceId: string;
+  at: number;
+  /**
+   * No view of the project was open to move the pane, so the trash was saved
+   * to the project's layout instead, in its queue; Undo puts it back there.
+   */
+  layoutSaved?: boolean;
+  /** Where that saved layout had the pane, once the queued save has run. */
+  savedLocation?: PanelLocation;
+}
+const recentlyTrashed = new Map<number, TrashedRun>();
 let trashReceipts = 0;
 
 /** A terminal brought back from the trash: that incarnation's receipts are spent. */
@@ -546,11 +573,44 @@ async function restoreThroughOwningViews(receipt: number): Promise<void> {
     recentlyTrashed.delete(receipt);
     throw leftTheTrash();
   }
+  // Trashed while its project was closed, and the project opened since: it
+  // came up without the pane, so a terminal brought back would have nowhere to
+  // show and nothing to keep it.
+  if (trashed.layoutSaved && getProjectRendererTargets(trashed.workspaceId).length > 0) {
+    recentlyTrashed.delete(receipt);
+    throw new AppError({
+      code: "NOT_FOUND",
+      message: "Terminal's project opened since it was trashed",
+      userMessage: "That terminal's project has opened since. Nothing was restored.",
+    });
+  }
   forgetReceiptsFor(trashed.runId, trashed.spawnedAt);
   // The host's word that this restore landed is ours, not news of someone
   // else's: it must not spend a receipt for a trash made after it.
   ownRestores.set(trashed.runId, Date.now() + OWN_RESTORE_ACK_MS);
   ptyClient.restore(trashed.runId);
+  if (trashed.layoutSaved) {
+    // Queued behind the trash's own save, so it reads where that save found
+    // the pane even when the queue had not reached it when Undo was pressed.
+    await projectStore
+      .enqueueProjectStateUpdate(trashed.workspaceId, (state) => {
+        const savedLocation = trashed.savedLocation;
+        const saved = state?.terminals?.find((terminal) => terminal.id === trashed.runId);
+        if (!state || !saved || savedLocation === undefined || saved.location !== "trash") {
+          return null;
+        }
+        saved.location = savedLocation;
+        return state;
+      })
+      .catch((error: unknown) => {
+        // The host has the terminal back; only a later open of the project
+        // would leave its pane in the trash.
+        console.warn(
+          "[Canopy] Putting a restored pane back in its project's layout failed:",
+          error
+        );
+      });
+  }
   for (const view of getProjectRendererTargets(trashed.workspaceId)) {
     try {
       view.send(CHANNELS.CANOPY_RESTORE_REQUESTED, {
@@ -635,8 +695,10 @@ export const canopyNamespace = defineIpcNamespace({
   name: "canopy",
   ops: {
     getSnapshot: op(CANOPY_METHOD_CHANNELS.getSnapshot, async (): Promise<CanopySnapshot> => {
-      // Hidden, there is nothing to show and nothing is started to show it.
-      if (!service && readCanopyMode() === "hidden") return hiddenOrIdleSnapshot();
+      // Not on, there is nothing to show and nothing is started to show it:
+      // every view asks at launch, and a user who never turned Canopy on pays
+      // for none of it until they open the panel.
+      if (!service && readCanopyMode() !== "on") return hiddenOrIdleSnapshot();
       return getService().getSnapshot();
     }),
 
@@ -681,7 +743,9 @@ export const canopyNamespace = defineIpcNamespace({
       CANOPY_METHOD_CHANNELS.watchTerminal,
       async (ctx, runId: string, target: CanopyTarget): Promise<CanopyTerminalView> => {
         requireActivated();
-        checkRateLimit(CANOPY_METHOD_CHANNELS.watchTerminal, 30, 10_000);
+        // One stream per view, and a newer request overtakes an older one, so
+        // this only bounds a runaway view: arrowing down the list opens one per row.
+        checkRateLimit(CANOPY_METHOD_CHANNELS.watchTerminal, 120, 10_000);
         assertRunId(runId);
         assertTarget(target);
         const viewId = ctx.webContentsId;
@@ -691,9 +755,23 @@ export const canopyNamespace = defineIpcNamespace({
         // The pane's effect can run before the panel's own `setActive` lands,
         // so a watch carries its own lifecycle cleanup rather than requiring it.
         watchView(ctx.event.sender);
+        // Taken before validating, so a respawn while the host is asked can't
+        // bind the stream to the successor of the terminal it checked.
+        const ptyClient = requirePtyClient();
+        const generation = ptyClient.getLiveGeneration(runId);
         await assertSameTerminal(runId, target);
         if (!isCurrentWatchRequest(viewId, ticket)) return { watchId: null, snapshot: null };
-        return watchTerminal(requirePtyClient(), ctx.event.sender, runId, target.spawnedAt, ticket);
+        if (generation !== null && !ptyClient.isLiveGeneration(runId, generation)) {
+          throw new Error("That agent isn't running any more.");
+        }
+        return watchTerminal(
+          ptyClient,
+          ctx.event.sender,
+          runId,
+          target.spawnedAt,
+          ticket,
+          generation
+        );
       },
       { withContext: true }
     ),
@@ -739,6 +817,13 @@ export const canopyNamespace = defineIpcNamespace({
         if (mode !== was) modeRevision++;
         store.set("canopyMode", mode);
         if (mode !== "on") stopAllTerminalWatches();
+        // Nothing was started, and nothing is wanted: no service to tell, but
+        // every view still hears the change, as a service would have told them.
+        if (!service && mode !== "on") {
+          const idle = hiddenOrIdleSnapshot();
+          typedBroadcast<"canopy:snapshot-updated">(CHANNELS.CANOPY_SNAPSHOT_UPDATED, idle);
+          return idle;
+        }
         const canopy = getService();
         canopy.setPlan(currentPlan());
         wakeService();
@@ -971,21 +1056,42 @@ export const canopyNamespace = defineIpcNamespace({
         if (typeof label !== "string" || label.trim() === "" || label.length > MAX_LABEL_LENGTH) {
           throw new Error("Invalid option");
         }
-        const pty = requirePtyClient();
-        const record = await pty.getTerminalAsync(runId);
-        // Nothing is pressed unless the dialog is still there to answer.
-        if (!record || record.spawnedAt !== target.spawnedAt || record.isExited === true) {
-          throw answerRefused("That terminal has moved on since the list showed it.");
+        // One answer at a time per run: a second, planned from a screen the
+        // first is still pressing keys into, would land its Enter on whatever
+        // dialog comes next.
+        if (answering.has(runId)) {
+          throw answerRefused("Still answering that agent. Nothing more was pressed.");
         }
-        const screen = await readPluginTerminalScreen(pty, runId, null, ANSWER_SCREEN_LINES);
-        if (screen.status !== "ok") {
-          throw answerRefused("Couldn't read the terminal to find that option.");
-        }
-        const plan = planChoice(screen.text, label);
-        if (!plan.ok) throw answerRefused(`${plan.reason} Nothing was pressed.`);
-        for (const [index, key] of plan.keys.entries()) {
-          if (index > 0) await new Promise((resolve) => setTimeout(resolve, ANSWER_KEY_GAP_MS));
-          pty.write(runId, ANSWER_KEY_SEQUENCES[key] ?? key);
+        answering.add(runId);
+        try {
+          const pty = requirePtyClient();
+          const generation = pty.getLiveGeneration(runId);
+          const record = await pty.getTerminalAsync(runId);
+          // Nothing is pressed unless the dialog is still there to answer.
+          if (!record || record.spawnedAt !== target.spawnedAt || record.isExited === true) {
+            throw answerRefused("That terminal has moved on since the list showed it.");
+          }
+          const screen = await readPluginTerminalScreen(pty, runId, null, ANSWER_SCREEN_LINES);
+          if (screen.status !== "ok") {
+            throw answerRefused("Couldn't read the terminal to find that option.");
+          }
+          const plan = planChoice(screen.text, label);
+          if (!plan.ok) throw answerRefused(`${plan.reason} Nothing was pressed.`);
+          for (const [index, key] of plan.keys.entries()) {
+            if (index > 0) await new Promise((resolve) => setTimeout(resolve, ANSWER_KEY_GAP_MS));
+            // Every key, not just the first, is for the terminal the screen was
+            // read from, while Canopy is still on: a restart under the same id
+            // or Canopy turned off between keys stops the rest.
+            if (
+              !currentPlan().activated ||
+              (generation !== null && !pty.isLiveGeneration(runId, generation))
+            ) {
+              throw answerRefused("That terminal has moved on since the list showed it.");
+            }
+            pty.write(runId, ANSWER_KEY_SEQUENCES[key] ?? key);
+          }
+        } finally {
+          answering.delete(runId);
         }
         service?.noteUserSent(runId, target.spawnedAt);
         service?.markHandled(runId, target.spawnedAt);
@@ -1011,7 +1117,9 @@ export const canopyNamespace = defineIpcNamespace({
       CANOPY_METHOD_CHANNELS.markSeen,
       async (ctx, runId: string, looking?: boolean, place?: CanopyLookPlace): Promise<void> => {
         requireActivated();
-        checkRateLimit(CANOPY_METHOD_CHANNELS.markSeen, 120, 10_000);
+        // A look ending is never refused: one dropped would keep reading the
+        // run for the look's whole lease, a row the user only passed over.
+        if (looking !== false) checkRateLimit(CANOPY_METHOD_CHANNELS.markSeen, 120, 10_000);
         assertRunId(runId);
         if (looking !== undefined && typeof looking !== "boolean") throw new Error("Invalid look");
         if (place !== undefined && place !== "pane" && place !== "panel") {
@@ -1112,7 +1220,6 @@ export const canopyNamespace = defineIpcNamespace({
       }
     ),
 
-    /** Read only this workspace's agents (its id), or every workspace's (null). */
     /**
      * The runs this view's open panel lists right now — scope, Unread filter
      * and folded Archived applied: only those are in front of the user, so
@@ -1131,6 +1238,7 @@ export const canopyNamespace = defineIpcNamespace({
       { withContext: true }
     ),
 
+    /** Read only this workspace's agents (its id), or every workspace's (null). */
     setScope: op(
       CANOPY_METHOD_CHANNELS.setScope,
       async (ctx, workspaceId: string | null): Promise<void> => {

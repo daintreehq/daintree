@@ -17,10 +17,13 @@ const state = vi.hoisted(() => ({
   releaseMirror: (() => {}) as () => void,
   mode: "on" as string,
   packaged: false,
+  generation: 1 as number | null,
 }));
 
 const ptyClient = vi.hoisted(() => ({
   getTerminalAsync: vi.fn(async () => state.record),
+  getLiveGeneration: vi.fn((_id: string) => state.generation),
+  isLiveGeneration: vi.fn((_id: string, live: number) => live === state.generation),
   write: vi.fn((_id: string, data: string) => state.writes.push(data)),
   submit: vi.fn((_id: string, text: string) => state.submits.push(text)),
   sendKey: vi.fn(),
@@ -46,7 +49,9 @@ vi.mock("electron", () => ({
 }));
 vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => ptyClient }));
 const saved = vi.hoisted(() => ({
-  state: null as { terminals: Array<{ id: string; title: string; titleMode?: string }> } | null,
+  state: null as {
+    terminals: Array<{ id: string; title: string; titleMode?: string; location?: string }>;
+  } | null,
 }));
 const projectStore = vi.hoisted(() => ({
   enqueueProjectStateUpdate: vi.fn(
@@ -91,9 +96,11 @@ const canopyBackend = vi.hoisted(() => ({
   canopyServiceUrl: vi.fn(() => "https://canopy.daintree.org"),
 }));
 vi.mock("../../../services/canopy/canopyBackend.js", () => canopyBackend);
+const broadcasts = vi.hoisted(() => vi.fn());
 vi.mock("../../utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../utils.js")>()),
   getProjectRendererTargets: vi.fn(() => state.views),
+  typedBroadcast: broadcasts,
 }));
 
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
@@ -159,6 +166,8 @@ describe("canopy IPC", () => {
     state.submits = [];
     state.mode = "on";
     state.packaged = false;
+    state.generation = 1;
+    saved.state = null;
     // setMode is rate-limited across the file; each case starts with the window clear.
     _resetRateLimitQueuesForTest();
     // No test reaches the real service, whatever the shell sets.
@@ -229,6 +238,105 @@ describe("canopy IPC", () => {
       invoke(CANOPY_METHOD_CHANNELS.answer, sender, "run-1", { spawnedAt: 100 }, "Yes")
     );
     expect(after.ok).toBe(true);
+  });
+
+  it.each([
+    ["refresh", []],
+    ["watchTerminal", ["run-1", { spawnedAt: 100 }]],
+    ["terminalInput", [1, "y"]],
+    ["terminalResize", [1, 80, 24]],
+    ["terminalSendKey", [1, "enter"]],
+    ["terminalSubmit", [1, "hi"]],
+    ["trash", ["run-1", { spawnedAt: 100 }]],
+    ["reread", ["run-1", { spawnedAt: 100 }]],
+    ["rename", ["run-1", { spawnedAt: 100 }, "Login fix"]],
+    ["archive", ["run-1", { spawnedAt: 100 }]],
+    ["answer", ["run-1", { spawnedAt: 100 }, "Yes"]],
+    ["unarchive", ["run-1", { spawnedAt: 100 }]],
+    ["markSeen", ["run-1", true, "pane"]],
+    ["setRead", ["run-1", { spawnedAt: 100 }, true]],
+    ["markAllRead", [[{ runId: "run-1", spawnedAt: 100, turn: 0 }]]],
+    ["restoreReads", [[]]],
+    ["runBranch", ["run-1", { spawnedAt: 100 }]],
+  ] as const)("refuses %s until Canopy is turned on, touching nothing", async (name, args) => {
+    state.mode = "unset";
+    const channel = CANOPY_METHOD_CHANNELS[name as keyof typeof CANOPY_METHOD_CHANNELS];
+    const result = await outcome(invoke(channel, fakeSender(5), ...args));
+    expect(result).toEqual({ ok: false, message: expect.stringContaining("isn't turned on") });
+    expect(state.writes).toEqual([]);
+    expect(state.submits).toEqual([]);
+    for (const call of [ptyClient.trash, ptyClient.updateTitle, ptyClient.sendKey, ptyClient.on]) {
+      expect(call).not.toHaveBeenCalled();
+    }
+  });
+
+  it("hears the user's sends only while Canopy is on, building nothing to hear them", async () => {
+    state.mode = "unset";
+    expect(
+      (await outcome(invoke(CANOPY_METHOD_CHANNELS.noteSent, fakeSender(5), "run-1"))).ok
+    ).toBe(true);
+    expect(ptyClient.on).not.toHaveBeenCalled();
+  });
+
+  describe("one-key answers", () => {
+    const answer = (label: string) =>
+      outcome(
+        invoke(CANOPY_METHOD_CHANNELS.answer, fakeSender(5), "run-1", { spawnedAt: 100 }, label)
+      );
+    const NO = "No, and tell Claude what to do differently";
+    const inKeyGap = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+    it("presses the keys that reach the option from the highlight, as drawn now", async () => {
+      expect((await answer("Yes")).ok).toBe(true);
+      expect(state.writes).toEqual(["\r"]);
+      state.writes = [];
+      expect((await answer(NO)).ok).toBe(true);
+      expect(state.writes).toEqual(["\x1b[B", "\r"]);
+    });
+
+    it("presses nothing for an option no longer drawn, a respawned terminal or an unreadable screen", async () => {
+      const missing = await answer("Always allow");
+      expect(missing).toEqual({
+        ok: false,
+        message: expect.stringContaining("Nothing was pressed"),
+      });
+
+      state.record = { spawnedAt: 200 };
+      expect((await answer("Yes")).ok).toBe(false);
+
+      state.record = { spawnedAt: 100 };
+      const { readPluginTerminalScreen } =
+        await import("../../../services/plugin/pluginTerminalScreenRead.js");
+      vi.mocked(readPluginTerminalScreen).mockResolvedValueOnce({ status: "unavailable" });
+      expect((await answer("Yes")).ok).toBe(false);
+      expect(state.writes).toEqual([]);
+    });
+
+    it("answers a run once at a time: a second press while keys are going in presses nothing", async () => {
+      const first = answer(NO);
+      await inKeyGap();
+      expect(state.writes).toEqual(["\x1b[B"]);
+      const second = await answer("Yes");
+      expect(second).toEqual({ ok: false, message: expect.stringContaining("Still answering") });
+      expect((await first).ok).toBe(true);
+      expect(state.writes).toEqual(["\x1b[B", "\r"]);
+    });
+
+    it("stops pressing keys once the terminal is respawned under the same id", async () => {
+      const pressing = answer(NO);
+      await inKeyGap();
+      state.generation = 2;
+      expect((await pressing).ok).toBe(false);
+      expect(state.writes).toEqual(["\x1b[B"]);
+    });
+
+    it("stops pressing keys once Canopy is turned off", async () => {
+      const pressing = answer(NO);
+      await inKeyGap();
+      state.mode = "unset";
+      expect((await pressing).ok).toBe(false);
+      expect(state.writes).toEqual(["\x1b[B"]);
+    });
   });
 
   it("hides Canopy, which stops reading, and shows it again only as off", async () => {
@@ -430,33 +538,25 @@ describe("canopy IPC", () => {
     expect(state.mode).toBe("on");
   });
 
-  it("answers a hidden Canopy's snapshot without starting it", async () => {
-    state.mode = "hidden";
-    const sender = fakeSender(5);
-    const result = (await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, sender)) as {
-      data?: { mode: string; cards: unknown[] };
-    };
-    // Sequence 0: never newer than anything a service pushes once one is made.
-    expect(result.data ?? result).toMatchObject({
-      sequence: 0,
-      mode: "hidden",
-      activated: false,
-      cards: [],
-    });
-    // Nothing was made to show it: no service, so nothing listening to terminals.
-    expect(ptyClient.on).not.toHaveBeenCalled();
-  });
-
-  it("counts only panels that list a run's project as in front of its ask", async () => {
-    const all = fakeSender(21);
-    const elsewhere = fakeSender(22);
-    await invoke(CANOPY_METHOD_CHANNELS.setActive, all, true);
-    await invoke(CANOPY_METHOD_CHANNELS.setActive, elsewhere, true);
-    await invoke(CANOPY_METHOD_CHANNELS.setScope, elsewhere, "project-2");
-    // A panel scoped to another project hides project-1's ask from no one.
-    expect(canopyPanelsListing("project-1")).toEqual([21]);
-    expect(canopyPanelsListing("project-2").sort()).toEqual([21, 22]);
-  });
+  it.each(["hidden", "unset"] as const)(
+    "answers the snapshot of a Canopy that is %s without starting it",
+    async (mode) => {
+      state.mode = mode;
+      const sender = fakeSender(5);
+      const result = (await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, sender)) as {
+        data?: { mode: string; cards: unknown[] };
+      };
+      // Sequence 0: never newer than anything a service pushes once one is made.
+      expect(result.data ?? result).toMatchObject({
+        sequence: 0,
+        mode,
+        activated: false,
+        cards: [],
+      });
+      // Nothing was made to show it: no service, so nothing listening to terminals.
+      expect(ptyClient.on).not.toHaveBeenCalled();
+    }
+  );
 
   it("wakes the service when a panel opens on Canopy turned on, and not before", async () => {
     state.mode = "unset";
@@ -692,6 +792,89 @@ describe("canopy IPC", () => {
     expect(again.ok).toBe(false);
   });
 
+  describe("a trash made while the run's project is closed", () => {
+    const dock = () => {
+      saved.state = { terminals: [{ id: "run-1", title: "Claude", location: "dock" }] };
+    };
+
+    it("goes to the trash in the project's saved layout, and Undo puts the pane back", async () => {
+      dock();
+      const receipt = await trashReceipt();
+      // Opened later, the project would not bring the trashed agent back.
+      expect(saved.state?.terminals[0]?.location).toBe("trash");
+      state.runs = [];
+      const undone = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), receipt));
+      expect(undone.ok).toBe(true);
+      expect(ptyClient.restore).toHaveBeenCalledWith("run-1");
+      expect(saved.state?.terminals[0]?.location).toBe("dock");
+    });
+
+    it("puts the pane back even when Undo comes before the project's queue saved the trash", async () => {
+      dock();
+      let release!: () => void;
+      let queue = new Promise<void>((resolve) => (release = resolve));
+      // The project's state queue, busy with an earlier save: first in, first applied.
+      const queued = (_projectId: string, updater: (state: unknown) => unknown) => {
+        const run = queue.then(async () => {
+          const next = await updater(saved.state);
+          if (next !== null) saved.state = next as typeof saved.state;
+        });
+        queue = run;
+        return run;
+      };
+      projectStore.enqueueProjectStateUpdate
+        .mockImplementationOnce(queued)
+        .mockImplementationOnce(queued);
+      const receipt = await trashReceipt();
+      state.runs = [];
+      const undo = outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), receipt));
+      release();
+      expect((await undo).ok).toBe(true);
+      expect(saved.state?.terminals[0]?.location).toBe("dock");
+    });
+
+    it("refuses Undo once the project has opened without the pane", async () => {
+      dock();
+      const receipt = await trashReceipt();
+      state.views = [{ send: vi.fn() }];
+      const undone = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), receipt));
+      expect(undone).toEqual({ ok: false, message: expect.stringContaining("opened since") });
+      expect(ptyClient.restore).not.toHaveBeenCalled();
+    });
+
+    it("leaves the saved layout alone when a view of the project moved the pane itself", async () => {
+      dock();
+      state.views = [{ send: vi.fn() }];
+      await trashReceipt();
+      expect(saved.state?.terminals[0]?.location).toBe("dock");
+    });
+  });
+
+  it("never refuses a look ending, however many looks came before it", async () => {
+    const sender = fakeSender(5);
+    for (let i = 0; i < 120; i++) {
+      await invoke(CANOPY_METHOD_CHANNELS.markSeen, sender, "run-1", true, "panel");
+    }
+    const begun = await outcome(
+      invoke(CANOPY_METHOD_CHANNELS.markSeen, sender, "run-1", true, "panel")
+    );
+    expect(begun.ok).toBe(false);
+    const ended = await outcome(
+      invoke(CANOPY_METHOD_CHANNELS.markSeen, sender, "run-1", false, "panel")
+    );
+    expect(ended.ok).toBe(true);
+  });
+
+  it("tells every view a mode change made before Canopy was ever started", async () => {
+    state.mode = "unset";
+    await invoke(CANOPY_METHOD_CHANNELS.setMode, fakeSender(5), "hidden");
+    expect(broadcasts).toHaveBeenCalledWith(
+      "canopy:snapshot-updated",
+      expect.objectContaining({ mode: "hidden", activated: false })
+    );
+    expect(ptyClient.on).not.toHaveBeenCalled();
+  });
+
   it("takes back its trash with Canopy turned off since, and of an agent that has exited", async () => {
     state.record = { spawnedAt: 100, isExited: true };
     const receipt = await trashReceipt();
@@ -767,13 +950,13 @@ describe("canopy IPC", () => {
     const sender = fakeSender(31);
     await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true);
     // Open but not yet said what it lists: it holds no page back.
-    expect(canopyPanelsListing("project-1", "run-1")).toEqual([]);
+    expect(canopyPanelsListing("run-1")).toEqual([]);
     await invoke(CANOPY_METHOD_CHANNELS.setShown, sender, ["run-1"]);
-    expect(canopyPanelsListing("project-1", "run-1")).toEqual([31]);
+    expect(canopyPanelsListing("run-1")).toEqual([31]);
     // The Unread filter hides run-1: the panel isn't in front of its ask.
     await invoke(CANOPY_METHOD_CHANNELS.setShown, sender, ["run-2"]);
-    expect(canopyPanelsListing("project-1", "run-1")).toEqual([]);
-    expect(canopyPanelsListing("project-1", "run-2")).toEqual([31]);
+    expect(canopyPanelsListing("run-1")).toEqual([]);
+    expect(canopyPanelsListing("run-2")).toEqual([31]);
   });
 
   it("refuses to read again a run Canopy hasn't read", async () => {

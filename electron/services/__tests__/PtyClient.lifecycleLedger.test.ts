@@ -415,6 +415,18 @@ describe("PtyClient lifecycle ledger", () => {
       expect(client.getTerminalProjectId("t1")).toBe("p-live");
     });
 
+    it("reports the running incarnation as live while a duplicate awaits the host", () => {
+      const client = createReadyClient();
+      client.spawn("t1", baseOptions); // generation 1
+      client.spawn("t1", baseOptions); // generation 2, a duplicate
+      expect(client.getLiveGeneration("t1")).toBe(1);
+      expect(client.isLiveGeneration("t1", 1)).toBe(true);
+
+      refuseAsLive(2);
+      expect(client.getLiveGeneration("t1")).toBe(1);
+      expect(client.isLiveGeneration("t1", 2)).toBe(false);
+    });
+
     it("restores the running spawn, not an earlier refused one, when duplicates overlap", () => {
       const client = createReadyClient();
       client.spawn("t1", { ...baseOptions, projectId: "p-live" }); // generation 1

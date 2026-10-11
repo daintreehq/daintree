@@ -17,6 +17,7 @@ import {
   useTerminalColorSchemeStore,
 } from "@/store/terminalColorSchemeStore";
 import { streamRangeOf, stripCoveredOutput } from "@/services/terminal/streamFence";
+import { isTerminalReply } from "@/services/terminal/inputUtils";
 import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
@@ -25,6 +26,18 @@ const SCROLLBACK = 2_000;
 const MIN_COLS = 20;
 const MIN_ROWS = 5;
 const SIZE_SETTLE_MS = 120;
+/**
+ * A stream asked for this soon after the last waits this long first, so arrowing
+ * down the list opens a stream for the row the user stops on rather than one
+ * per row passed: each one has the host serialize the whole terminal.
+ */
+const WATCH_BURST_MS = 150;
+/** When this view last asked main for a stream, in `performance.now()` time. */
+let lastWatchAt = Number.NEGATIVE_INFINITY;
+
+export function _resetCanopyWatchBurstForTests(): void {
+  lastWatchAt = Number.NEGATIVE_INFINITY;
+}
 /** The frame's padding — a grid pane's xterm inset — which the grid cannot use. */
 const FRAME_PADDING_PX = 24;
 /** DOM events in which xterm turns what the user did into terminal input. */
@@ -268,14 +281,26 @@ export function CanopyTerminal({
 
     let gesture = false;
     let gestureTimer: ReturnType<typeof setTimeout> | null = null;
-    const markGesture = () => {
+    const markGesture = (event: Event) => {
       gesture = true;
       if (gestureTimer !== null) clearTimeout(gestureTimer);
-      // xterm turns the event into input synchronously, within its own handler.
-      gestureTimer = setTimeout(() => {
+      const end = () => {
         gesture = false;
         gestureTimer = null;
-      }, 0);
+      };
+      // xterm turns most events into input synchronously, within its own
+      // handler. Composed text is the exception — an IME or a dead-key accent
+      // ending its composition, or a key the input method holds (keyCode 229)
+      // — which xterm sends from a timer of its own, queued after this one, so
+      // the gesture lasts one task longer.
+      const deferred =
+        event.type === "compositionend" ||
+        (event instanceof KeyboardEvent && (event.isComposing || event.keyCode === 229));
+      gestureTimer = deferred
+        ? setTimeout(() => {
+            gestureTimer = setTimeout(end, 0);
+          }, 0)
+        : setTimeout(end, 0);
     };
     for (const type of GESTURE_EVENTS) frame.addEventListener(type, markGesture, true);
     // A sideways gesture over a grid wider than the pane scrolls the pane. xterm
@@ -291,7 +316,10 @@ export function CanopyTerminal({
     frame.addEventListener("wheel", sideways, { capture: true, passive: false });
     const input = terminal.onData((data) => {
       const watchId = stream.watchId;
-      if (!gesture || watchId === null) return;
+      // A reply to the program's own query, or a focus change, can fall
+      // inside a gesture: the terminal's own pane answers those, and focus
+      // here must never tell the agent it is being looked at.
+      if (!gesture || watchId === null || isTerminalReply(data)) return;
       window.electron.canopy.terminalInput(watchId, data).then(
         () => {
           if (isTerminalSubmission(data)) onSubmittedRef.current?.();
@@ -300,50 +328,62 @@ export function CanopyTerminal({
       );
     });
 
-    window.electron.canopy.watchTerminal(runId, { spawnedAt }).then(
-      (opened) => {
-        if (disposed) return;
-        if (opened.watchId === null || opened.snapshot === null) {
-          setStatus("failed");
-          return;
-        }
-        view = opened;
-        releasePane = terminalInstanceService.holdGeometry(runId);
-        const snapshot = opened.snapshot;
-        ptySize = { cols: snapshot.cols, rows: snapshot.rows };
-        terminal.resize(snapshot.cols, snapshot.rows);
-        const continuation = snapshot.continuation;
-        fence = continuation?.streamOffset;
-        // The escape sequence the host's parser was inside, so the chunks
-        // after the fence land in the same parser state they were written in.
-        const tail = fence !== undefined ? (continuation?.pendingEscapeTail ?? "") : "";
-        terminal.write(snapshot.data + tail, checkSecret);
-        requestAnimationFrame(() => {
-          if (!disposed) fit();
-        });
-        // Without a fence nothing says which early chunks the snapshot already
-        // holds; painting them could draw output twice, so they are dropped and
-        // the next redraw brings the screen up to date.
-        const queued = early.splice(0);
-        if (fence !== undefined) {
-          for (const chunk of queued) apply(chunk);
-        } else {
-          for (const chunk of queued) if (chunk.kind !== "data") apply(chunk);
-        }
-        if (stream.ended) return;
-        publish({ watchId: opened.watchId });
-        setStatus("live");
-        requestPanelSize();
-      },
-      (error: unknown) => {
-        if (disposed) return;
-        logWarn("[Canopy] couldn't open the terminal stream", { error });
+    const openStream = () => {
+      lastWatchAt = performance.now();
+      window.electron.canopy.watchTerminal(runId, { spawnedAt }).then(onOpened, onOpenFailed);
+    };
+    const onOpened = (opened: CanopyTerminalView) => {
+      if (disposed) return;
+      if (opened.watchId === null || opened.snapshot === null) {
         setStatus("failed");
+        return;
       }
-    );
+      view = opened;
+      releasePane = terminalInstanceService.holdGeometry(runId);
+      const snapshot = opened.snapshot;
+      ptySize = { cols: snapshot.cols, rows: snapshot.rows };
+      terminal.resize(snapshot.cols, snapshot.rows);
+      const continuation = snapshot.continuation;
+      fence = continuation?.streamOffset;
+      // The escape sequence the host's parser was inside, so the chunks
+      // after the fence land in the same parser state they were written in.
+      const tail = fence !== undefined ? (continuation?.pendingEscapeTail ?? "") : "";
+      terminal.write(snapshot.data + tail, checkSecret);
+      requestAnimationFrame(() => {
+        if (!disposed) fit();
+      });
+      // Without a fence nothing says which early chunks the snapshot already
+      // holds; painting them could draw output twice, so they are dropped and
+      // the next redraw brings the screen up to date.
+      const queued = early.splice(0);
+      if (fence !== undefined) {
+        for (const chunk of queued) apply(chunk);
+      } else {
+        for (const chunk of queued) if (chunk.kind !== "data") apply(chunk);
+      }
+      if (stream.ended) return;
+      publish({ watchId: opened.watchId });
+      setStatus("live");
+      requestPanelSize();
+    };
+    const onOpenFailed = (error: unknown) => {
+      if (disposed) return;
+      logWarn("[Canopy] couldn't open the terminal stream", { error });
+      setStatus("failed");
+    };
+    let openTimer: ReturnType<typeof setTimeout> | null = null;
+    if (performance.now() - lastWatchAt < WATCH_BURST_MS) {
+      openTimer = setTimeout(() => {
+        openTimer = null;
+        openStream();
+      }, WATCH_BURST_MS);
+    } else {
+      openStream();
+    }
 
     return () => {
       disposed = true;
+      if (openTimer !== null) clearTimeout(openTimer);
       offData();
       input.dispose();
       bufferChange.dispose();

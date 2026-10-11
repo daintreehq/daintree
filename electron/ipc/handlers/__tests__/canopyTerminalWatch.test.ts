@@ -16,7 +16,11 @@ function fakePty(snapshot: unknown = { data: "screen", cols: 120, rows: 36 }) {
   const emitter = new EventEmitter();
   const releases: Array<ReturnType<typeof vi.fn>> = [];
   const pending: Array<(value: unknown) => void> = [];
+  /** The launch generation the host tracks for every id; bumped by a respawn. */
+  const generation = { current: 1 };
   const pty = Object.assign(emitter, {
+    getLiveGeneration: vi.fn(() => generation.current),
+    isLiveGeneration: vi.fn((_id: string, live: number) => live === generation.current),
     acquireIpcDataMirror: vi.fn(() => {
       const release = vi.fn();
       releases.push(release);
@@ -34,6 +38,7 @@ function fakePty(snapshot: unknown = { data: "screen", cols: 120, rows: 36 }) {
   return {
     pty: pty as unknown as PtyClient,
     emitter,
+    generation,
     releases,
     resolveSnapshots: (value: unknown) => pending.splice(0).forEach((resolve) => resolve(value)),
   };
@@ -285,6 +290,51 @@ describe("resizeWatchedTerminal", () => {
     expect(sent.at(-1)).toEqual({ kind: "ended", watchId: view.watchId, runId: "run-1" });
     stopTerminalWatch(sender.id);
     expect(resizes(pty)).toEqual([[90, 30]]);
+  });
+
+  it("ends the stream when the id is respawned before any echo, typing nothing into the successor", async () => {
+    const { pty, emitter, generation } = fakePty();
+    const { sender, sent } = fakeSender();
+    const view = await open(pty, sender, "run-1");
+    // A restart under the same id: the old exit is retired without a word.
+    generation.current = 2;
+    expect(watchedTerminal(sender.id, view.watchId!)).toBeNull();
+    expect(sent.at(-1)).toEqual({ kind: "ended", watchId: view.watchId, runId: "run-1" });
+    // Nor does the successor's output reach the view.
+    emitter.emit("data-mirror", "run-1", "successor", 50);
+    expect(sent.some((payload) => (payload as { data?: string }).data === "successor")).toBe(false);
+  });
+
+  it("never sizes a successor under the same id, nor hands it the old pane's size", async () => {
+    const { pty, generation } = fakePty();
+    const { sender, sent } = fakeSender();
+    const view = await open(pty, sender, "run-1");
+    resizeWatchedTerminal(pty, sender.id, view.watchId!, 90, 30);
+    generation.current = 2;
+    resizeWatchedTerminal(pty, sender.id, view.watchId!, 100, 40);
+    expect(sent.at(-1)).toEqual({ kind: "ended", watchId: view.watchId, runId: "run-1" });
+    stopTerminalWatch(sender.id);
+    expect(resizes(pty)).toEqual([[90, 30]]);
+  });
+
+  it("opens nothing for a terminal respawned while its snapshot was read", async () => {
+    const { pty, generation, resolveSnapshots } = fakePty("manual");
+    const { sender } = fakeSender();
+    const opening = open(pty, sender, "run-1");
+    generation.current = 2;
+    resolveSnapshots({ data: "successor", cols: 80, rows: 24 });
+    expect(await opening).toEqual({ watchId: null, snapshot: null });
+    expect(activeTerminalWatches().size).toBe(0);
+  });
+
+  it("ends the stream on the successor's first output after a respawn", async () => {
+    const { pty, emitter, generation } = fakePty();
+    const { sender, sent } = fakeSender();
+    const view = await open(pty, sender, "run-1");
+    generation.current = 2;
+    emitter.emit("data-mirror", "run-1", "successor", 50);
+    expect(sent).toEqual([{ kind: "ended", watchId: view.watchId, runId: "run-1" }]);
+    expect(activeTerminalWatches().size).toBe(0);
   });
 
   it("hands back the size when the panel moves on to another run", async () => {

@@ -185,11 +185,163 @@ describe("redactSecrets", () => {
     const ghp = `ghp_${"x".repeat(36)}`;
     expect(redactSecrets(`cloning with ${ghp} now`)).toBe("cloning with [redacted] now");
     expect(redactSecrets("key AKIAABCDEFGHIJKLMNOP")).toBe("key [redacted]");
+    for (const key of [
+      `sk_live_${"a1".repeat(12)}`,
+      `rk_test_${"a1".repeat(12)}`,
+      `whsec_${"a1".repeat(12)}`,
+      `glpat-${"a1".repeat(12)}`,
+      `npm_${"a1".repeat(18)}`,
+      `hf_${"a1".repeat(17)}`,
+      `xapp-1-${"a1".repeat(8)}`,
+      `xoxe-1-${"a1".repeat(8)}`,
+      `ya29.${"a1".repeat(12)}`,
+      `sk-ant-api03-${"a1".repeat(12)}`,
+    ]) {
+      expect(redactSecrets(`using ${key} here`)).toBe("using [redacted] here");
+    }
+  });
+
+  it("catches secrets whose names end in a key rather than a secret or token", () => {
+    const secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+    expect(redactSecrets(`export AWS_SECRET_ACCESS_KEY=${secret}`)).toBe(
+      "export AWS_SECRET_ACCESS_KEY=[redacted]"
+    );
+    expect(redactSecrets(`SECRET_KEY="${secret}"`)).toBe("SECRET_KEY=[redacted]");
+    expect(redactSecrets("STRIPE_KEY: abcdef123456")).toBe("STRIPE_KEY: [redacted]");
+    expect(redactSecrets("GPG_PASSPHRASE=correct-horse")).toBe("GPG_PASSPHRASE=[redacted]");
+    expect(redactSecrets("SECRET_KEY_BASE=abcdef0123456789")).toBe("SECRET_KEY_BASE=[redacted]");
+    expect(redactSecrets("API_KEY_PROD: abcdef012345")).toBe("API_KEY_PROD: [redacted]");
+    expect(redactSecrets("deploy --password hunter2 --verbose")).toBe(
+      "deploy --password [redacted] --verbose"
+    );
+    expect(redactSecrets('deploy --password "correct horse" --verbose')).toBe(
+      "deploy --password [redacted] --verbose"
+    );
+    expect(redactSecrets("deploy --token 'abc def'")).toBe("deploy --token [redacted]");
+    expect(redactSecrets('login --client-secret "opaque-value"')).toBe(
+      "login --client-secret [redacted]"
+    );
+    expect(redactSecrets("login --access-token=opaquevalue123 now")).toBe(
+      "login --access-token=[redacted] now"
+    );
+    expect(
+      redactSecrets(
+        "-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQOYBF\n-----END PGP PRIVATE KEY BLOCK-----"
+      )
+    ).toBe("[redacted]");
+    expect(redactSecrets("Authorization: Basic dXNlcjpwYXNzd29yZA==")).toBe(
+      "Authorization: Basic [redacted]"
+    );
+    expect(redactSecrets("Authorization: token abcdef1234567890")).toBe(
+      "Authorization: token [redacted]"
+    );
+  });
+
+  it("reads a name in any style, camelCase and dotted included", () => {
+    expect(redactSecrets("secretAccessKey: wJalrXUtnFEMI/K7MDENG")).toBe(
+      "secretAccessKey: [redacted]"
+    );
+    expect(redactSecrets('privateKey = "0xabcdef1234567890"')).toBe("privateKey = [redacted]");
+    expect(redactSecrets("accessToken: eyJhbGciOiJIUz")).toBe("accessToken: [redacted]");
+    expect(redactSecrets("spring.datasource.password=xyz")).toBe(
+      "spring.datasource.password=[redacted]"
+    );
+    expect(redactSecrets("X-Api-Key: abcdef123456")).toBe("X-Api-Key: [redacted]");
+  });
+
+  it("keeps a value whose name is about a secret rather than one, or is no secret's", () => {
+    for (const line of [
+      "token_count: 123456",
+      "API_KEY_FILE=/etc/keys/api",
+      "maxTokens: 131072",
+      "primaryKey: user_id",
+      "foreign_key: users.id",
+      "sort_key: created_at",
+      "keyDown: ArrowLeft",
+      "public_key: ssh-ed25519AAAA",
+      "credential: undefined",
+      "secretary: Margaret",
+      "key: value12345",
+      "PWD=/Users/dev/project",
+    ]) {
+      expect(redactSecrets(line)).toBe(line);
+    }
+  });
+
+  it("finds a secret inside another assignment's value, and in a name it ends", () => {
+    expect(redactSecrets('message="password=hunter22"')).toBe('message="password=[redacted]"');
+    expect(redactSecrets("url=https://example.test/?token=abcdef123456")).toBe(
+      "url=https://example.test/?token=[redacted]"
+    );
+    for (const name of [
+      "MYPASSWORD",
+      "DBPassword",
+      "mytoken",
+      "_TOKEN",
+      `${"A".repeat(90)}_TOKEN`,
+    ]) {
+      expect(redactSecrets(`${name}=abcdef123456`)).toBe(`${name}=[redacted]`);
+    }
+    expect(redactSecrets("STRIPE_KEY_LIVE=abcdef123456")).toBe("STRIPE_KEY_LIVE=[redacted]");
+    expect(redactSecrets("session_cookie=abcdef123456")).toBe("session_cookie=[redacted]");
+  });
+
+  it("takes a quoted value whole, wrapped across lines or longer than a screen", () => {
+    expect(redactSecrets('password="first\nsecond" next')).toBe("password=[redacted] next");
+    expect(redactSecrets(`password="${"a".repeat(3_000)}"`)).toBe("password=[redacted]");
+    expect(redactSecrets('password="correct horse" next')).toBe("password=[redacted] next");
+    expect(redactSecrets("password: |\n  hunter22\nnext: value")).toBe(
+      "password: [redacted]\nnext: value"
+    );
+  });
+
+  it("catches the header, flag and key shapes a screen shows them in", () => {
+    expect(redactSecrets('{"Authorization":"Basic dXNlcjpwYXNzd29yZA=="}')).toBe(
+      '{"Authorization":"Basic [redacted]"}'
+    );
+    expect(redactSecrets('--password "hunter22')).toBe("--password [redacted]");
+    expect(redactSecrets("--passphrase correct-horse")).toBe("--passphrase [redacted]");
+    expect(redactSecrets("AWS_ACCESS_KEY_ID=ASIAABCDEFGHIJKLMNOP")).toBe(
+      "AWS_ACCESS_KEY_ID=[redacted]"
+    );
+  });
+
+  it("drops the rest of a line whose quote never closes, and nothing past it", () => {
+    expect(redactSecrets("password: 'unterminated\nI can't stop now")).toBe(
+      "password: [redacted]\nI can't stop now"
+    );
   });
 
   it("leaves ordinary output alone", () => {
-    const text = "Tests  212 passed (212)\nDuration  9.41s";
+    const text = [
+      "Tests  212 passed (212)",
+      "Duration  9.41s",
+      "Token usage: total=12,345 input=10,000",
+      "max_tokens=131072",
+      "input_tokens: 100000",
+      '"total_tokens": "123456"',
+      "secrets_manager: enabled",
+      "↓ 12.3k tokens · esc to interrupt",
+    ].join("\n");
     expect(redactSecrets(text)).toBe(text);
+  });
+
+  it("stays fast on long runs of the words it looks for", () => {
+    for (const run of [
+      "secret".repeat(5_000),
+      "_key".repeat(8_000),
+      "api_key".repeat(4_000),
+      "aKeyB".repeat(6_000),
+      'password="'.repeat(3_000),
+      "secret_key = ".repeat(2_500),
+      "a=password=".repeat(3_000),
+      `${"A".repeat(30_000)}_TOKEN=abcdef123456`,
+      "password: |\n  x\n".repeat(2_000),
+    ]) {
+      const start = performance.now();
+      redactSecrets(run);
+      expect(performance.now() - start).toBeLessThan(500);
+    }
   });
 });
 
@@ -198,12 +350,19 @@ describe("isSecretPrompt", () => {
     "Password:",
     "Enter passphrase for key '/Users/dev/.ssh/id_ed25519':",
     "Paste your token:",
+    "Enter your OpenAI API key:",
+    "AWS secret access key:",
+    "Enter the verification code we sent:",
+    "MFA code:",
   ])("recognises %s", (prompt) => expect(isSecretPrompt(prompt)).toBe(true));
 
-  it.each(["Do you want to proceed?", "Which approach do you want?", null])(
-    "does not flag %s",
-    (prompt) => expect(isSecretPrompt(prompt)).toBe(false)
-  );
+  it.each([
+    "Do you want to proceed?",
+    "Which approach do you want?",
+    "Should I rotate the API key?",
+    "Summary of the keyboard shortcuts:",
+    null,
+  ])("does not flag %s", (prompt) => expect(isSecretPrompt(prompt)).toBe(false));
 
   it("drops Claude Code's manual-mode footer, so it is never a row's activity", () => {
     const screen = prepareScreen(["⏺ Done.", "", "⏸ manual mode on · ← for agents"].join("\n"));
