@@ -45,7 +45,12 @@ export function formatBuildInfo(version, commit) {
 }
 
 function writeBuildInfo() {
-  const { version } = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  // A packaging step that stamps its own version (a local build's
+  // extraMetadata.version) names it here, so the marker matches what the app
+  // reports and what a host install checks against.
+  const version =
+    process.env.DAINTREE_BUILD_VERSION ||
+    JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version;
   const target = path.join(root, "dist-electron/build-info.json");
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, formatBuildInfo(version, buildCommit), "utf8");
