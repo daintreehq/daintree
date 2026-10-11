@@ -50,7 +50,10 @@ export const CHANNEL_REMOTE_SCOPE: Readonly<Record<string, RemoteScopeTarget>> =
   "diff-media:read-file-versions": CWD_FIELD,
   // Its own roots also hold the host's clipboard inbox, which is in no project.
   "clipboard:thumbnail-from-path": [{ from: "path", at: [0], unowned: "allow" }],
-  "git:mark-safe-directory": CWD_ARG,
+  // Its recovery runs before the repository is a project (adding it is what
+  // failed), as `project:init-git` does: a folder in no project is allowed,
+  // another project's is not.
+  "git:mark-safe-directory": [{ from: "path", at: [0], unowned: "allow" }],
   "git:get-file-diff": CWD_FIELD,
   "git:get-working-diff": CWD_FIELD,
   "git:get-staging-status": CWD_ARG,

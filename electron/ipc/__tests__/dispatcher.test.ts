@@ -902,6 +902,18 @@ describe("remote scope gate", () => {
     expect((await ask(endpoint, "clipboard:thumbnail-from-path", [`${P2}/a.png`])).ok).toBe(false);
   });
 
+  it("lets a view mark a repository it is adding safe, but never another project's", async () => {
+    installScope();
+    const mark = handle("git:mark-safe-directory");
+    const { endpoint } = makeRemoteEndpoint(-3, "proj-1");
+    // Adding it is what failed, so the repository is in no project yet.
+    expect((await ask(endpoint, "git:mark-safe-directory", ["/srv/new-repo"])).ok).toBe(true);
+    expect((await ask(endpoint, "git:mark-safe-directory", [P1])).ok).toBe(true);
+    const other = await ask(endpoint, "git:mark-safe-directory", [P2]);
+    expect(other.ok ? null : other.error.code).toBe("PERMISSION");
+    expect(mark).toHaveBeenCalledTimes(2);
+  });
+
   it("refuses a terminal that exists with no project, and passes one that has gone", async () => {
     installScope();
     handle("terminal:get-serialized-state");
