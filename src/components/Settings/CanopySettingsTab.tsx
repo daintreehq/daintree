@@ -48,7 +48,7 @@ export function CanopySettingsTab() {
   return (
     <div className="space-y-8">
       <SettingsSection
-        title="Canopy"
+        title="Reading"
         description={`One inbox of every agent, read off its screen. ${CANOPY_SENDS} ${CANOPY_REDACTION}`}
         id="canopy-activation"
       >

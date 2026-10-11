@@ -505,7 +505,9 @@ class KeybindingService {
     for (const arr of this.bindings.values()) {
       for (const binding of arr) {
         if (!this.scopeAllows(binding.scope)) continue;
-        if (binding.when && !evaluateWhenClause(binding.when, resolveWhenCtx())) continue;
+        // Asked only of a binding whose keys matched: building the context reads
+        // the document, and most keys match no binding at all.
+        const whenHolds = () => !binding.when || evaluateWhenClause(binding.when, resolveWhenCtx());
 
         // Every combo an override holds triggers the action, matching what the
         // settings list shows and what conflict detection checks.
@@ -526,7 +528,8 @@ class KeybindingService {
             if (this.pendingChord) {
               if (
                 combosFieldsEqual(this.pendingChord, chordParts[0]!, mac) &&
-                this.matchesEventInternal(event, chordParts[1]!, mac, eventKey)
+                this.matchesEventInternal(event, chordParts[1]!, mac, eventKey) &&
+                whenHolds()
               ) {
                 if (binding.priority > chordCompletionPriority) {
                   chordCompletionMatch = binding;
@@ -535,7 +538,7 @@ class KeybindingService {
               }
             } else {
               // Check if this is the start of a chord
-              if (this.matchesEventInternal(event, chordParts[0]!, mac, eventKey)) {
+              if (this.matchesEventInternal(event, chordParts[0]!, mac, eventKey) && whenHolds()) {
                 foundChordPrefix = true;
               }
             }
@@ -543,7 +546,8 @@ class KeybindingService {
             // Regular non-chord binding - only consider if no chord is pending
             if (
               !this.pendingChord &&
-              this.matchesEventInternal(event, effectiveCombo, mac, eventKey)
+              this.matchesEventInternal(event, effectiveCombo, mac, eventKey) &&
+              whenHolds()
             ) {
               if (binding.priority > bestPriority) {
                 bestMatch = binding;

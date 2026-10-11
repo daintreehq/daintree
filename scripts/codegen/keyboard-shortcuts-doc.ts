@@ -130,7 +130,7 @@ function generate(): string {
   );
   lines.push("");
   lines.push(
-    "Tapping Shift twice opens Canopy from anywhere, a focused terminal included. It is a gesture rather than a binding, so it can't be rebound, only turned off in Settings → Keyboard."
+    "Once Canopy is on, tapping Shift twice opens it from anywhere, a focused terminal included. It is a gesture rather than a binding, so it can't be rebound, only turned off in Settings → Keyboard."
   );
   lines.push("");
   return lines.join("\n");

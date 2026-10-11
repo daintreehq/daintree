@@ -1700,21 +1700,21 @@ export const SETTINGS_REGISTRY = [
     sections: [
       {
         id: "canopy-show",
-        section: "Canopy",
+        section: "Reading",
         title: "Show Canopy",
         description: "Its toolbar button, shortcut and command palette entry",
         keywords: ["canopy", "hide", "show", "disable", "remove", "toolbar", "shortcut", "ai"],
       },
       {
         id: "canopy-read-terminals",
-        section: "Canopy",
+        section: "Reading",
         title: "Read agent terminals",
         description: "Send agents' terminal output to Daintree's servers to be read",
         keywords: ["canopy", "privacy", "consent", "activate", "turn on", "servers"],
       },
       {
         id: "canopy-plan",
-        section: "Canopy",
+        section: "Reading",
         title: "Plan",
         description: "Free and unlimited during the beta",
         keywords: ["beta", "free", "paid", "subscription", "plan", "pricing"],

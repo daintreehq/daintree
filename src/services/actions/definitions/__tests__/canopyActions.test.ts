@@ -20,10 +20,23 @@ describe("canopy actions", () => {
 
   const definition = (id: string) => registry.get(id)!();
 
-  it.each(["canopy.toggle", "canopy.markAllRead"])(
+  it("offers Mark all read only once Canopy is on, saying how to turn it on before then", () => {
+    useCanopyStore.setState({ mode: "unset" });
+    const markAllRead = definition("canopy.markAllRead");
+    expect(markAllRead.isVisible?.({})).toBe(true);
+    expect(markAllRead.isEnabled?.({})).toBe(false);
+    expect(markAllRead.disabledReason?.({})).toMatch(/isn't on/);
+    useCanopyStore.setState({ mode: "on" });
+    expect(markAllRead.isEnabled?.({})).toBe(true);
+  });
+
+  it.each([
+    ["canopy.toggle", ["unset", "on"] as const],
+    ["canopy.markAllRead", ["on"] as const],
+  ])(
     "%s is listed and runs until the user hides Canopy, and then says where to show it",
-    (id) => {
-      for (const mode of ["unset", "on"] as const) {
+    (id, modes) => {
+      for (const mode of modes) {
         useCanopyStore.setState({ mode });
         expect(definition(id).isVisible?.({})).toBe(true);
         expect(definition(id).isEnabled?.({})).toBe(true);

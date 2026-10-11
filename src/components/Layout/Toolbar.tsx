@@ -148,7 +148,7 @@ import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
-import { CanopyToolbarButton } from "./CanopyToolbarButton";
+import { CanopyToolbarButton, useCanopyUrgentCount } from "./CanopyToolbarButton";
 import { AppMenuButton } from "./AppMenuButton";
 import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
 import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
@@ -245,6 +245,8 @@ interface OverflowMenuProps {
   severity: OverflowBadgeSeverity;
   errorCount: number;
   notificationUnreadCount: number;
+  /** Asks Canopy reads as urgent, said when its button is folded in here. */
+  canopyUrgentCount: number;
   // Per-session agent states behind the badge, already worded — derived by
   // the same rule as `severity`, so the name never says less than the dot.
   agentObservations: readonly string[];
@@ -289,6 +291,7 @@ function OverflowMenu({
   severity,
   errorCount,
   notificationUnreadCount,
+  canopyUrgentCount,
   agentObservations,
   agentAttentionStates,
   canCopyTree,
@@ -355,6 +358,9 @@ function OverflowMenu({
   if (overflowIds.includes("notification-center") && notificationUnreadCount > 0) {
     observations.push(`${notificationUnreadCount} unread`);
   }
+  if (overflowIds.includes("canopy") && canopyUrgentCount > 0) {
+    observations.push(`${canopyUrgentCount} urgent`);
+  }
   observations.push(...agentObservations);
   const tooltipText = `More — ${n} hidden${observations.length > 0 ? ` · ${observations.join(" · ")}` : ""}`;
   const ariaLabel = `More toolbar items — ${n} hidden${observations.length > 0 ? `, ${observations.join(", ")}` : ""}`;
@@ -362,6 +368,7 @@ function OverflowMenu({
   const overflowCount = (id: AnyToolbarButtonId) => {
     if (id === "problems" && errorCount > 0) return errorCount;
     if (id === "notification-center" && notificationUnreadCount > 0) return notificationUnreadCount;
+    if (id === "canopy" && canopyUrgentCount > 0) return canopyUrgentCount;
     return null;
   };
 
@@ -757,6 +764,7 @@ export function Toolbar({
   // AgentButton) rather than extending useOverflowBadgeSeverity to return a
   // composite map (would risk the selector-identity churn of lesson #3730).
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
+  const canopyUrgentCount = useCanopyUrgentCount();
   // Per-agent pip state across panels in the active worktree, used to draw
   // the agent-state dot on overflow menu items. Shares the launcher's
   // derivation so the overflow dot matches the visible agent button; computed
@@ -1987,8 +1995,16 @@ export function Toolbar({
     [rightOverflow, hasActiveVoiceRecording]
   );
 
-  const leftOverflowSeverity = useOverflowBadgeSeverity(visibleLeftOverflow, errorCount);
-  const rightOverflowSeverity = useOverflowBadgeSeverity(visibleRightOverflow, errorCount);
+  const leftOverflowSeverity = useOverflowBadgeSeverity(
+    visibleLeftOverflow,
+    errorCount,
+    canopyUrgentCount
+  );
+  const rightOverflowSeverity = useOverflowBadgeSeverity(
+    visibleRightOverflow,
+    errorCount,
+    canopyUrgentCount
+  );
   const leftAgentObservations = useOverflowAgentObservations(visibleLeftOverflow);
   const rightAgentObservations = useOverflowAgentObservations(visibleRightOverflow);
 
@@ -2259,6 +2275,7 @@ export function Toolbar({
       severity={severity}
       errorCount={errorCount}
       notificationUnreadCount={notificationUnreadCount}
+      canopyUrgentCount={canopyUrgentCount}
       agentObservations={agentObservations}
       agentAttentionStates={agentAttentionStates}
       canCopyTree={canCopyTree}

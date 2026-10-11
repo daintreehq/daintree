@@ -115,6 +115,16 @@ describe("useOverflowBadgeSeverity", () => {
     expect(result.current).toBeNull();
   });
 
+  it("warns of urgent Canopy asks only while Canopy's own button is folded in", () => {
+    expect(renderHook(() => useOverflowBadgeSeverity(["canopy"], 0, 2)).result.current).toBe(
+      "warning"
+    );
+    expect(renderHook(() => useOverflowBadgeSeverity(["canopy"], 0, 0)).result.current).toBeNull();
+    expect(
+      renderHook(() => useOverflowBadgeSeverity(["copy-tree"], 0, 2)).result.current
+    ).toBeNull();
+  });
+
   it("returns critical when problems is overflowed and errorCount > 0", () => {
     const { result } = renderHook(() => useOverflowBadgeSeverity(["problems"], 3));
     expect(result.current).toBe("critical");

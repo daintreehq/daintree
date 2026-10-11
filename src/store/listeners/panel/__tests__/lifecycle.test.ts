@@ -578,6 +578,51 @@ describe("onTrashRequested — Canopy trash", () => {
     expect(state.focusedId).not.toBe("term-1");
   });
 
+  it("hands the grid's focus on only once Canopy, in front of it, has closed", () => {
+    setupPanel();
+    const first = usePanelStore.getState().panelsById["term-1"]!;
+    usePanelStore.setState({
+      panelsById: { "term-1": first, "term-2": { ...first, id: "term-2" } },
+      panelIds: ["term-1", "term-2"],
+      focusedId: "term-1",
+    });
+    useUIStore.setState({ overlayStack: ["canopy"] });
+    try {
+      const { handler } = getTrashRequestHandler();
+      handler({ runId: "term-1" });
+      // No pane behind the panel takes the keyboard from it.
+      expect(usePanelStore.getState().focusedId).toBeNull();
+      useUIStore.setState({ overlayStack: [] });
+      expect(usePanelStore.getState().focusedId).toBe("term-2");
+    } finally {
+      useUIStore.setState({ overlayStack: [] });
+    }
+  });
+
+  it("hands focus to a pane still there when the one picked was trashed too before Canopy closed", () => {
+    setupPanel();
+    const first = usePanelStore.getState().panelsById["term-1"]!;
+    usePanelStore.setState({
+      panelsById: {
+        "term-1": first,
+        "term-2": { ...first, id: "term-2" },
+        "term-3": { ...first, id: "term-3" },
+      },
+      panelIds: ["term-1", "term-2", "term-3"],
+      focusedId: "term-1",
+    });
+    useUIStore.setState({ overlayStack: ["canopy"] });
+    try {
+      const { handler } = getTrashRequestHandler();
+      handler({ runId: "term-1" });
+      handler({ runId: "term-2" });
+      useUIStore.setState({ overlayStack: [] });
+      expect(usePanelStore.getState().focusedId).toBe("term-3");
+    } finally {
+      useUIStore.setState({ overlayStack: [] });
+    }
+  });
+
   it("ignores a terminal this view does not hold, or one already in the trash", () => {
     setupPanel({ location: "trash" });
     const before = usePanelStore.getState();

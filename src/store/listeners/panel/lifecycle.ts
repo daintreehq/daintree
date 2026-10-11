@@ -280,13 +280,40 @@ export function setupLifecycleListeners(): DisposableStore {
   // trash, which main has done: sent again, it would re-trash a terminal an
   // Undo elsewhere restored in between.
   const onCanopyTrash = window.electron?.canopy?.onTrashRequested;
+  // The focus a Canopy trash put off until the panel closes: one at a time.
+  let deferredFocus: (() => void) | null = null;
+  d.add(toDisposable(() => deferredFocus?.()));
   if (onCanopyTrash) {
     d.add(
       toDisposable(
         onCanopyTrash(({ runId }) => {
-          const panel = usePanelStore.getState().panelsById[runId];
+          const state = usePanelStore.getState();
+          const panel = state.panelsById[runId];
           if (!panel || panel.location === "trash") return;
-          usePanelStore.getState().trashPanel(runId, { hostTrashed: true });
+          const heldFocus = state.focusedId === runId && overlayHoldsKeyboard();
+          state.trashPanel(runId, { hostTrashed: true });
+          // Canopy is in front of the grid: the pane picked to take the trashed
+          // one's focus must not take the keyboard from behind it. It takes it
+          // once the panel — and anything else holding the keyboard — closes.
+          const fallback = usePanelStore.getState().focusedId;
+          if (!heldFocus || fallback === null) return;
+          usePanelStore.setState({ focusedId: null });
+          deferredFocus?.();
+          const stop = useUIStore.subscribe((ui) => {
+            if (ui.overlayStack.length > 0) return;
+            stop();
+            deferredFocus = null;
+            const now = usePanelStore.getState();
+            if (now.focusedId !== null) return;
+            // The pane picked may itself have been trashed meanwhile.
+            const live = (id: string) => {
+              const panel = now.panelsById[id];
+              return panel !== undefined && panel.location === "grid";
+            };
+            const target = live(fallback) ? fallback : now.panelIds.find(live);
+            if (target !== undefined) usePanelStore.setState({ focusedId: target });
+          });
+          deferredFocus = stop;
         })
       )
     );

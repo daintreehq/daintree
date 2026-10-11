@@ -50,6 +50,15 @@ function urgentCount(
   }).length;
 }
 
+/** Urgent asks the toolbar shows for Canopy: none until it is turned on. */
+export function useCanopyUrgentCount(): number {
+  const activated = useCanopyStore((s) => s.snapshot?.activated === true);
+  const canopy = useCanopyStore((s) => s.snapshot);
+  const runs = useFleetSnapshotStore((s) => s.snapshot?.runs ?? null);
+  const acknowledged = useCanopyStore((s) => s.acknowledged);
+  return activated && canopy ? urgentCount(canopy, runs, acknowledged) : 0;
+}
+
 /** Two characters at most, so the badge stays a dot-sized pill. */
 function countGlyph(count: number): string {
   return count > 9 ? "9+" : String(count);

@@ -5,6 +5,7 @@ import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { isCanopyUnread } from "@shared/types/ipc/canopy";
 import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
+import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 const CANOPY_HIDDEN_REASON = "Canopy is hidden. Show it from Settings > Canopy.";
@@ -15,6 +16,12 @@ function canopyShown(): boolean {
 }
 
 const AGENTS_UNKNOWN_REASON = "Canopy hasn't listed this project's agents yet.";
+const CANOPY_OFF_REASON = "Canopy isn't on. Turn it on from its panel or Settings > Canopy.";
+
+/** Turned on: until then Canopy has read nothing, so nothing is unread. */
+function canopyOn(): boolean {
+  return useCanopyStore.getState().mode === "on";
+}
 
 /**
  * Which runs, by incarnation, are this project's — known only once the fleet
@@ -65,13 +72,15 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     scope: "renderer",
     nonRepeatable: true,
     isVisible: canopyShown,
-    isEnabled: () => canopyShown() && projectRunsInScope() !== undefined,
+    isEnabled: () => canopyOn() && projectRunsInScope() !== undefined,
     disabledReason: () =>
       !canopyShown()
         ? CANOPY_HIDDEN_REASON
-        : projectRunsInScope() === undefined
-          ? AGENTS_UNKNOWN_REASON
-          : undefined,
+        : !canopyOn()
+          ? CANOPY_OFF_REASON
+          : projectRunsInScope() === undefined
+            ? AGENTS_UNKNOWN_REASON
+            : undefined,
     keywords: ["canopy", "inbox", "read", "unread", "clear", "agents"],
     run: async () => {
       const snapshot = useCanopyStore.getState().snapshot;
@@ -109,7 +118,7 @@ export function registerCanopyActions(actions: ActionRegistry): void {
         title: "Marked as read",
         message: pluralize(unread.length, "agent"),
         context: { eventKind: "agent" },
-        duration: 6000,
+        duration: UNDO_TOAST_DURATION_MS,
         actions: [
           {
             label: "Undo",

@@ -1085,3 +1085,29 @@ registerPersistedStore({
   persistedStateType:
     "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; doubleShiftOpensCanopy: boolean; diffViewType: DiffViewType; diffWrapLines: boolean | null; diffMarkdownRendered: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; markdownFontSize: MarkdownFontSize; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; lastSelectedWorktreeAgentIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; projectSwitcherCollapsedBands: Record<string, boolean>; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean; keyboardLayoutConfirmationsByBinding: Record<string, number> }",
 });
+
+// Turning double-Shift off in one project view must reach every other view at
+// once: it is the switch for people it fires on by accident, and each view
+// otherwise keeps the value it loaded until it reloads.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== "daintree-preferences") return;
+    // What the store holds now, not what the event carried: events queue, and
+    // an older one must not undo a newer change.
+    let enabled: unknown;
+    try {
+      const latest = window.localStorage.getItem("daintree-preferences");
+      if (latest === null) return;
+      enabled = (JSON.parse(latest) as { state?: { doubleShiftOpensCanopy?: unknown } }).state
+        ?.doubleShiftOpensCanopy;
+    } catch {
+      return;
+    }
+    if (
+      typeof enabled === "boolean" &&
+      enabled !== usePreferencesStore.getState().doubleShiftOpensCanopy
+    ) {
+      usePreferencesStore.setState({ doubleShiftOpensCanopy: enabled });
+    }
+  });
+}

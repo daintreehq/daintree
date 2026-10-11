@@ -31,6 +31,8 @@ export function useDoubleShift(callback: () => void, enabled: boolean = true): v
     let cooldownUntil = 0;
     const shiftsDown = new Set<string>();
     const keysDown = new Set<string>();
+    // Keys that went down while Cmd was held, whose keyups macOS may never send.
+    const keysUnderMeta = new Set<string>();
 
     const breakSequence = () => {
       lastTapAt = 0;
@@ -40,6 +42,7 @@ export function useDoubleShift(callback: () => void, enabled: boolean = true): v
       breakSequence();
       shiftsDown.clear();
       keysDown.clear();
+      keysUnderMeta.clear();
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -52,14 +55,27 @@ export function useDoubleShift(callback: () => void, enabled: boolean = true): v
         if (!cleanPress) lastTapAt = 0;
         return;
       }
-      // Any other key breaks the sequence: Shift+A is typing, not a tap.
-      keysDown.add(e.code || e.key);
+      // Any other key breaks the sequence: Shift+A is typing, not a tap. A
+      // lock key is no key held: Caps Lock's release comes only when the lock
+      // is turned off again.
+      if (e.key !== "CapsLock") {
+        keysDown.add(e.code || e.key);
+        if (e.metaKey && e.key !== "Meta") keysUnderMeta.add(e.code || e.key);
+      }
       breakSequence();
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key !== "Shift") {
+        // macOS sends no keyup for a key let go while Cmd is held (Cmd+C), so
+        // Cmd's own release clears the keys pressed under it; a key held from
+        // before stays held.
+        if (e.key === "Meta") {
+          for (const held of keysUnderMeta) keysDown.delete(held);
+          keysUnderMeta.clear();
+        }
         keysDown.delete(e.code || e.key);
+        keysUnderMeta.delete(e.code || e.key);
         return;
       }
       shiftsDown.delete(e.code || "Shift");

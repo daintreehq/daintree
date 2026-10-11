@@ -2522,6 +2522,15 @@ describe("when-clause context provider", () => {
     expect(service.resolveKeybinding(event).match?.actionId).toBe("test.whenGatedStatic");
   });
 
+  it("builds no context for a key that matches no binding", () => {
+    setPlatform("MacIntel");
+    const service = new KeybindingService();
+    const provider = vi.fn(() => ({ canopyHidden: false }));
+    service.setWhenContextProvider(provider);
+    service.resolveKeybinding(createKeyboardEvent({ key: "j", code: "KeyJ" }));
+    expect(provider).not.toHaveBeenCalled();
+  });
+
   it("lets Canopy's key go past it, unconsumed, while Canopy is hidden", () => {
     setPlatform("MacIntel");
     const service = new KeybindingService();

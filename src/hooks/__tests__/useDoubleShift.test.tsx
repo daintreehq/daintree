@@ -91,10 +91,45 @@ describe("useDoubleShift", () => {
     const textarea = terminalInput();
     key(textarea, "keydown", { key: "Shift", shiftKey: true });
     key(textarea, "keydown", { key: "A", shiftKey: true });
+    key(textarea, "keyup", { key: "A", shiftKey: true });
     key(textarea, "keyup", { key: "Shift" });
     now += 100;
     tap(textarea);
     expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("still works after a Cmd shortcut whose key macOS never sent a keyup for", () => {
+    const callback = vi.fn();
+    renderHook(() => useDoubleShift(callback));
+    key(document.body, "keydown", { key: "Meta", code: "MetaLeft", metaKey: true });
+    key(document.body, "keydown", { key: "c", code: "KeyC", metaKey: true });
+    key(document.body, "keyup", { key: "Meta", code: "MetaLeft" });
+    now += 100;
+    tap(document.body);
+    tap(document.body);
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a key held from before Cmd held through Cmd's release", () => {
+    const callback = vi.fn();
+    renderHook(() => useDoubleShift(callback));
+    key(document.body, "keydown", { key: "a", code: "KeyA" });
+    key(document.body, "keydown", { key: "Meta", code: "MetaLeft", metaKey: true });
+    key(document.body, "keyup", { key: "Meta", code: "MetaLeft" });
+    now += 100;
+    tap(document.body);
+    tap(document.body);
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("still works with Caps Lock on, whose keyup waits for it to be turned off", () => {
+    const callback = vi.fn();
+    renderHook(() => useDoubleShift(callback));
+    key(document.body, "keydown", { key: "CapsLock", code: "CapsLock" });
+    now += 100;
+    tap(document.body);
+    tap(document.body);
+    expect(callback).toHaveBeenCalledTimes(1);
   });
 
   it("stays out of an IME composition and a shortcut recorder", () => {

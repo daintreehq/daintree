@@ -30,6 +30,7 @@ import {
 import type { CompletionTrigger } from "@shared/types";
 import { CommandPickerHost } from "@/components/Commands";
 import { PromptHistoryPalette } from "./PromptHistoryPalette";
+import { useCanopyStore } from "@/store/canopyStore";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore, useVoiceRecordingStore } from "@/store";
@@ -272,6 +273,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const stashEditorState = useTerminalInputStore((s) => s.stashEditorState);
     const popStashedEditorState = useTerminalInputStore((s) => s.popStashedEditorState);
     const isFocusedTerminal = usePanelStore((s) => !isolated && s.focusedId === terminalId);
+    const canopyOpen = useCanopyStore((s) => s.isOpen);
     const hasStash = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
       return s.stashedEditorStates.has(key);
@@ -1318,15 +1320,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                     </TooltipContent>
                   </Tooltip>
                 )}
-                <VoiceInputButton
-                  panelId={terminalId}
-                  panelTitle={agentId ? getAgentConfig(agentId)?.name : undefined}
-                  projectId={currentProject?.id}
-                  projectName={currentProject?.name}
-                  worktreeId={panelWorktreeId}
-                  worktreeLabel={panelWorktreeLabel}
-                  disabled={disabled}
-                />
+                {/* Dictation writes to the pane's own draft, in the current
+                    project: an isolated composer's draft is its own, so it
+                    offers none rather than filling the pane's behind it. */}
+                {!isolated && (
+                  <VoiceInputButton
+                    panelId={terminalId}
+                    panelTitle={agentId ? getAgentConfig(agentId)?.name : undefined}
+                    projectId={currentProject?.id}
+                    projectName={currentProject?.name}
+                    worktreeId={panelWorktreeId}
+                    worktreeLabel={panelWorktreeLabel}
+                    disabled={disabled}
+                  />
+                )}
               </div>
             </div>
           </div>
@@ -1400,6 +1407,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                       node.appendChild(view.dom);
                     }
                   }}
+                  // The expanded editor portals out of the isolated composer's
+                  // wrapper: it keeps that isolation, or the grid's shortcuts
+                  // would act on the pane behind Canopy.
+                  {...(isolated ? { "data-keybindings-isolated": "" } : {})}
                   className="flex-1 min-h-[200px] overflow-auto text-text-primary p-4"
                 />
               </ContextMenuTrigger>
@@ -1410,7 +1421,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             {isDragOverModal && <FileDropOverlay />}
           </div>
         </AppDialog>
-        {(isFocusedTerminal || isolated) && (
+        {/* One palette per id: while Canopy is open its own composer's is the
+            one, not the grid pane's behind it. */}
+        {((isFocusedTerminal && !canopyOpen) || isolated) && (
           <PromptHistoryPalette
             terminalId={terminalId}
             projectId={projectId}
