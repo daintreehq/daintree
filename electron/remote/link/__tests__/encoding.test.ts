@@ -140,6 +140,17 @@ describe("link encoding", () => {
     expect(() => encodeValue({ ["\uD800"]: 1 })).toThrow(/key/);
   });
 
+  it("decodes a large string with lone surrogates exactly, in bulk", () => {
+    const unit = "ab\uD800c\uDC00";
+    const big = unit.repeat(400_000);
+    const started = performance.now();
+    const back = roundTrip(big) as string;
+    expect(back.length).toBe(big.length);
+    expect(back === big).toBe(true);
+    // A unit-at-a-time decode took seconds here; in bulk it is a fraction of that.
+    expect(performance.now() - started).toBeLessThan(5_000);
+  });
+
   it("refuses an oversized string before encoding it", () => {
     const limits = { ...DEFAULT_ENCODING_LIMITS, maxBytes: 32 };
     expect(() => encodeValue("x".repeat(1000), limits)).toThrow(/size limit/);

@@ -11,6 +11,7 @@ import {
   hostModeLaunchArguments,
   parseLinger,
   systemdQuote,
+  runningAppImage,
   systemdUnitFor,
 } from "../startAtLogin.js";
 
@@ -147,6 +148,16 @@ WantedBy=default.target
     expect(systemdQuote('/home/g "x"/100%/$HOME\\a')).toBe('"/home/g \\"x\\"/100%%/$$HOME\\\\a"');
   });
 
+  it("refuses an argument that would end the directive and start another", () => {
+    for (const arg of [
+      "/opt/d\nExecStartPre=/bin/sh -c evil",
+      "/opt/d\r\n[Install]",
+      "/opt/d\0x",
+    ]) {
+      expect(() => systemdQuote(arg)).toThrow(/line break/);
+    }
+  });
+
   it("parses loginctl's Linger property", () => {
     expect(parseLinger("Linger=yes\n")).toBe("yes");
     expect(parseLinger("Linger=no")).toBe("no");
@@ -256,5 +267,25 @@ describe("AppImage without FUSE", () => {
     );
     expect(written).toBe(systemdUnitFor(target));
     expect((await controller.observe()).current).toBe(true);
+  });
+});
+
+describe("runningAppImage", () => {
+  const image = "/home/g/Apps/Daintree.AppImage";
+  const mount = "/tmp/.mount_DaintrABC";
+
+  it("names the image this binary was started from", () => {
+    expect(runningAppImage({ APPIMAGE: image, APPDIR: mount }, `${mount}/daintree`)).toBe(image);
+  });
+
+  it("ignores an APPIMAGE this binary wasn't started from", () => {
+    expect(runningAppImage({ APPIMAGE: image }, "/opt/Daintree/daintree")).toBeNull();
+    expect(
+      runningAppImage({ APPIMAGE: image, APPDIR: mount }, "/opt/Daintree/daintree")
+    ).toBeNull();
+    expect(
+      runningAppImage({ APPIMAGE: "relative.AppImage", APPDIR: mount }, `${mount}/d`)
+    ).toBeNull();
+    expect(runningAppImage({}, `${mount}/daintree`)).toBeNull();
   });
 });

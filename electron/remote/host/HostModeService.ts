@@ -22,6 +22,8 @@ declare module "../runtime.js" {
 export interface HostModeSettings {
   enabled: boolean;
   startAtLogin: boolean;
+  /** Say so on the local network (mDNS) while hosting. */
+  advertise: boolean;
 }
 
 export interface HostModeAdvertiser {
@@ -106,7 +108,7 @@ export class HostModeService {
         }
         this.listener = listener;
         this.offListener = listener.onChange(() => this.pushSoon());
-        this.advertiser.start();
+        if (this.deps.readSettings().advertise) this.advertiser.start();
       } catch (error) {
         if (abort.signal.aborted) return;
         this.listenError = messageOf(error);
@@ -205,7 +207,14 @@ export class HostModeService {
     if (this.disposed) return this.snapshot();
     const previous = this.deps.readSettings();
     if (!payload.enabled) {
-      this.deps.writeSettings({ enabled: false, startAtLogin: false });
+      // The advertise choice can be made before hosting is ever turned on.
+      const advertise = payload.advertise ?? previous.advertise;
+      if (!previous.enabled) {
+        this.deps.writeSettings({ ...previous, advertise });
+        this.push();
+        return this.snapshot();
+      }
+      this.deps.writeSettings({ enabled: false, startAtLogin: false, advertise });
       await this.stopListening();
       // A unit left behind would bring the host back at the next login, so
       // this one is reported rather than swallowed.
@@ -218,7 +227,9 @@ export class HostModeService {
     // Start at login needs the user's explicit yes: an omitted value keeps
     // what they chose before, and never turns it on by itself.
     const startAtLogin = payload.startAtLogin ?? previous.startAtLogin;
-    this.deps.writeSettings({ enabled: true, startAtLogin });
+    const advertise = payload.advertise ?? previous.advertise;
+    this.deps.writeSettings({ enabled: true, startAtLogin, advertise });
+    const wasListening = this.listener?.isListening() === true;
     try {
       await this.startListening();
     } catch (error) {
@@ -226,6 +237,11 @@ export class HostModeService {
       throw error;
     }
     if (this.disposed) return this.snapshot();
+    // Already listening: follow the advertise switch now; a fresh start just followed it.
+    if (wasListening) {
+      if (advertise) this.advertiser.start();
+      else this.advertiser.stop();
+    }
 
     this.installError = null;
     if (startAtLogin) {
@@ -234,7 +250,7 @@ export class HostModeService {
         await this.deps.startAtLogin.install();
       } catch (error) {
         this.installError = messageOf(error);
-        this.deps.writeSettings({ enabled: true, startAtLogin: false });
+        this.deps.writeSettings({ enabled: true, startAtLogin: false, advertise });
         // Don't leave a half-installed unit behind a setting that says off.
         await this.removeStartAtLogin();
       }
@@ -318,6 +334,7 @@ export class HostModeService {
       supported: true,
       enabled: settings.enabled,
       startAtLogin: settings.startAtLogin,
+      advertise: settings.advertise,
       socketPath: this.deps.socketPath,
       listening,
       attachedClients,

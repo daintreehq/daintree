@@ -262,6 +262,10 @@ describe("showHostNotification", () => {
 describe("events:push split", () => {
   const push = (name: string) => [{ name, payload: {} }];
 
+  it("keeps a push on a channel nobody classified away from a remote view", () => {
+    expect(acceptLocalPushForRemoteView("made-up:channel", [])).toBe(false);
+  });
+
   it("takes host events from the host and Shell events from here", () => {
     expect(acceptHostPush(CHANNELS.EVENTS_PUSH, push("agent:state-changed"))).toBe(true);
     expect(acceptHostPush(CHANNELS.EVENTS_PUSH, push("system:wake"))).toBe(false);

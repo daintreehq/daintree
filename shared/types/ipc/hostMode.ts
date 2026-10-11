@@ -21,6 +21,8 @@ export interface HostModeStatus {
   supported: boolean;
   enabled: boolean;
   startAtLogin: boolean;
+  /** Whether this machine says it is a host on the local network (mDNS) while hosting; on when absent. */
+  advertise?: boolean;
   socketPath: string | null;
   listening: boolean;
   attachedClients: AttachedClientInfo[];
@@ -30,6 +32,8 @@ export interface HostModeStatus {
 export interface SetHostModePayload {
   enabled: boolean;
   startAtLogin?: boolean;
+  /** Omitted keeps what was chosen before. */
+  advertise?: boolean;
 }
 
 export type HostModeEvent = { type: "status-changed"; status: HostModeStatus };

@@ -1208,6 +1208,19 @@ describe("sanitizeErrorForRenderer", () => {
     expect(sanitizeErrorForRenderer("simple error")).toBe("simple error");
   });
 
+  it("strips any absolute path, not only home and temp folders, and leaves URLs alone", () => {
+    for (const p of [
+      "/Volumes/Data/repo/a.ts",
+      "/opt/app/main.js",
+      "/root/.ssh/id",
+      "~/notes/a.md",
+    ]) {
+      expect(sanitizeErrorForRenderer(`failed at ${p}:3`)).toBe("failed at <path>:3");
+    }
+    const prose = "see https://github.com/a/b and/or port 3000/tcp";
+    expect(sanitizeErrorForRenderer(prose)).toBe(prose);
+  });
+
   it("handles the empty string", () => {
     expect(sanitizeErrorForRenderer("")).toBe("");
   });

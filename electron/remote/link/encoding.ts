@@ -52,6 +52,9 @@ export const DEFAULT_ENCODING_LIMITS: EncodingLimits = {
   maxBigIntDigits: 1024,
 };
 
+/** Code units turned into a string at once: well under any engine's argument limit. */
+const UTF16_DECODE_SLICE = 8192;
+
 export class LinkEncodingError extends Error {
   constructor(message: string) {
     super(message);
@@ -454,10 +457,16 @@ function decodeFrom(r: Reader, depth: number, limits: EncodingLimits): unknown {
     case TAG.STRING_UTF16: {
       const units = r.u32();
       const bytes = r.bytes(units * 2);
-      let out = "";
-      for (let i = 0; i < units; i++)
-        out += String.fromCharCode((bytes[i * 2]! << 8) | bytes[i * 2 + 1]!);
-      return out;
+      // Exact code units, lone surrogates included (a TextDecoder would
+      // replace them), built a slice at a time: one concatenation per unit
+      // made a 16 MiB frame millions of steps on the main thread.
+      const codes = new Uint16Array(units);
+      for (let i = 0; i < units; i++) codes[i] = (bytes[i * 2]! << 8) | bytes[i * 2 + 1]!;
+      const parts: string[] = [];
+      for (let i = 0; i < units; i += UTF16_DECODE_SLICE) {
+        parts.push(String.fromCharCode(...codes.subarray(i, i + UTF16_DECODE_SLICE)));
+      }
+      return parts.join("");
     }
     case TAG.OBJECT: {
       const n = containerLength(r, limits, 5);

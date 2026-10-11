@@ -13,6 +13,7 @@ import { HostModeService, type HostModeSettings } from "./HostModeService.js";
 import { writeHostModeStatusFile } from "./hostModeStatusFile.js";
 import type { HostSocketLocation } from "./hostSocketPath.js";
 import {
+  runningAppImage,
   APPIMAGE_EXTRACT_AND_RUN_ENV,
   createLaunchAgentController,
   createSystemdUserController,
@@ -24,17 +25,22 @@ const BUNDLE_ID = "org.daintree.app";
 
 function readSettings(): HostModeSettings {
   const stored = store.get("hostMode");
-  return { enabled: stored?.enabled === true, startAtLogin: stored?.startAtLogin === true };
+  return {
+    enabled: stored?.enabled === true,
+    startAtLogin: stored?.startAtLogin === true,
+    // On unless turned off: discovery is how a new Shell finds this machine.
+    advertise: stored?.advertise !== false,
+  };
 }
 
 function launchTarget(): HostLaunchTarget {
+  const appImage = runningAppImage();
   return {
     // An AppImage's execPath is inside its temporary mount; the unit must run the image.
-    executable: process.env.APPIMAGE || process.execPath,
+    executable: appImage ?? process.execPath,
     // `electron .` in dev: the binary needs the app directory to know what to run.
     appPath: process.defaultApp ? app.getAppPath() : null,
-    appImageExtractAndRun:
-      Boolean(process.env.APPIMAGE) && process.env[APPIMAGE_EXTRACT_AND_RUN_ENV] === "1",
+    appImageExtractAndRun: appImage !== null && process.env[APPIMAGE_EXTRACT_AND_RUN_ENV] === "1",
   };
 }
 

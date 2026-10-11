@@ -80,6 +80,7 @@ export default function HostModeGroup() {
   const startAtLogin = pending
     ? pending.enabled && (pending.startAtLogin ?? status?.startAtLogin ?? false)
     : (status?.startAtLogin ?? false);
+  const advertise = pending?.advertise ?? status?.advertise ?? true;
   const locked = status === null || pending !== null;
   const rows = status?.rows;
   const startRow = rowById(rows, "start-at-login");
@@ -160,6 +161,20 @@ export default function HostModeGroup() {
             </>
           )}
         </SettingsDependents>
+        <SettingsRow
+          label="Advertise on this network"
+          description="Lets Daintree on other machines nearby find this one by name, platform and architecture. Turn off on networks you don't trust; you can still add it by its SSH address"
+          id="host-mode-advertise"
+          control={({ labelId, descriptionId, disabled }) => (
+            <SettingsSwitch
+              checked={advertise}
+              onCheckedChange={(next) => void host.setEnabled({ enabled, advertise: next })}
+              disabled={disabled || locked}
+              aria-labelledby={labelId}
+              aria-describedby={descriptionId}
+            />
+          )}
+        />
       </SettingsGroup>
       {saveFailure && (
         <SettingsLoadErrorBanner

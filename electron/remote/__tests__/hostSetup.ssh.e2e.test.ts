@@ -416,7 +416,7 @@ describe.skipIf(!ENABLED)(
           uid: process.getuid!(),
           home: sshd!.home,
         });
-        let settings = { enabled: false, startAtLogin: false };
+        let settings = { enabled: false, startAtLogin: false, advertise: true };
         const service = new HostModeService({
           platform: "darwin",
           readSettings: () => settings,

@@ -56,13 +56,14 @@ export function acceptHostPush(channel: string, args: readonly unknown[]): boole
 /**
  * A push produced on this machine, about to reach a view bound to a remote
  * host. This machine's agents, terminals and projects are not that view's,
- * so only Shell-owned pushes reach it. Channels with no classification keep
- * today's delivery rather than silently going dark.
+ * so only Shell-owned pushes reach it. A channel with no classification
+ * stays here: every real channel has one, so an unknown one is never the
+ * remote view's to hear.
  */
 export function acceptLocalPushForRemoteView(channel: string, args: readonly unknown[]): boolean {
   if (channel === CHANNELS.EVENTS_PUSH) return eventsPushSource(args) === "shell";
   const locality = getChannelLocality(channel);
-  if (locality === null) return true;
+  if (locality === null) return false;
   const source = pushSource(channel, args);
   return source === "shell" || source === "both";
 }

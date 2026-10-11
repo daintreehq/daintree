@@ -19,7 +19,11 @@ function notRunningStatus(): HostModeStatus {
 
 // Start at login is consent: only an explicit boolean from the renderer counts.
 const setEnabledSchema = z
-  .object({ enabled: z.boolean(), startAtLogin: z.boolean().optional() })
+  .object({
+    enabled: z.boolean(),
+    startAtLogin: z.boolean().optional(),
+    advertise: z.boolean().optional(),
+  })
   .strict();
 
 export const hostModeNamespace = defineIpcNamespace({

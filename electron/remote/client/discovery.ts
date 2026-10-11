@@ -8,6 +8,7 @@ import type { DiscoveredHost } from "../../../shared/types/ipc/remoteHosts.js";
 import type { CommandRunner } from "./commandRunner.js";
 import { sshTargetOf } from "./connection.js";
 import { isValidSshTarget } from "./sshTransport.js";
+import { displaySafeText } from "../../../shared/utils/displaySafeText.js";
 
 /**
  * Finding machines to add: tailnet peers from `tailscale status --json`, and
@@ -358,7 +359,9 @@ export async function discoverHosts(deps: DiscoverDeps): Promise<DiscoveredHost[
     if (keys.some((key) => seen.has(key))) continue;
     for (const key of keys) seen.add(key);
     out.push({
-      name: candidate.name,
+      // A name off the network is the network's to choose: shown as plain text,
+      // so bidi or zero-width characters can't pass one machine off as another.
+      name: displaySafeText(candidate.name).trim() || candidate.sshTarget,
       connection: sshConnection(candidate.sshTarget),
       source: candidate.source,
       platform: candidate.platform,

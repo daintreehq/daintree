@@ -6,7 +6,8 @@ import type { OwnedProcess, ProcessSpawner } from "./hostCommands.js";
  * mode is on, through the system's own mDNS tools: `dns-sd -R` on macOS and
  * `avahi-publish-service` on Linux when Avahi is installed. Discovery only
  * says the machine is there; clients still connect over SSH, so the port
- * advertised is SSH's and the TXT record carries the build, never a secret.
+ * advertised is SSH's and the TXT record carries the platform, never a secret.
+ * It can be turned off on its own (Settings → Hosts → This machine as a host).
  */
 
 export const DAINTREE_SERVICE_TYPE = "_daintree._tcp";
@@ -17,15 +18,13 @@ export type AdvertiseState =
   | { status: "advertising"; tool: string; instanceName: string }
   | { status: "unavailable"; reason: string };
 
+/**
+ * What the record says about this machine: only what a Shell needs to offer
+ * it (its platform and architecture). The build stays off it, so a network
+ * this machine joins learns nothing that would date its software.
+ */
 export function advertiseTxtRecords(handshake: HostHandshakeInfo): string[] {
-  return [
-    `txtvers=1`,
-    `version=${handshake.version}`,
-    `commit=${handshake.commit}`,
-    `platform=${handshake.platform}`,
-    `arch=${handshake.arch}`,
-    `transport=ssh`,
-  ];
+  return [`txtvers=1`, `platform=${handshake.platform}`, `arch=${handshake.arch}`, `transport=ssh`];
 }
 
 /** mDNS instance names are at most 63 bytes; keep the machine name readable. */

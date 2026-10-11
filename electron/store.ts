@@ -721,7 +721,7 @@ export interface StoreSchema {
   /** Hosts this client can attach to. Device-owned: never synced between machines. */
   remoteHosts?: { hosts: HostDescriptor[] };
   /** This machine as a host: whether it listens for Shells and starts at login. */
-  hostMode?: { enabled: boolean; startAtLogin: boolean };
+  hostMode?: { enabled: boolean; startAtLogin: boolean; advertise?: boolean };
   /** Client-side behaviour while a window is attached to a remote host. */
   remoteHostsPreferences?: { interceptCtrlVImages: boolean };
   /**

@@ -8,7 +8,8 @@ import { encodeFrame, FrameDecoder, Lane, type LinkFrame } from "../../link/fram
 import { ControlKind, frameToMessage, messageToFrame } from "../../link/messages.js";
 import { LinkClient, type LinkClientState } from "../../client/LinkClient.js";
 import { createDirectTransport } from "../../client/transport.js";
-import { HostServer, type HostSessionContext } from "../HostServer.js";
+import { HostServer, MAX_PENDING_HANDSHAKES, type HostSessionContext } from "../HostServer.js";
+import { HANDSHAKE_MAX_FRAME_BYTES } from "../../link/session.js";
 import {
   SocketPathTooLongError,
   hostSocketLocation,
@@ -540,8 +541,9 @@ describe("HostServer session resume", () => {
         )
       );
       await waitFor(() => raw.frames.some((f) => frameToMessage(f)?.kind === ControlKind.WELCOME));
-      const welcome = raw.frames.map(frameToMessage).find((m) => m?.kind === ControlKind.WELCOME)!
-        .body as {
+      const welcome = raw.frames
+        .map((frame) => frameToMessage(frame))
+        .find((m) => m?.kind === ControlKind.WELCOME)!.body as {
         sessionId: string;
         resumed: boolean;
         resumeSecret: string;
@@ -573,6 +575,54 @@ describe("HostServer session resume", () => {
     replay.raw.socket.destroy();
   });
 
+  it("closes connections past the cap on sockets waiting to say HELLO", async () => {
+    await startServer();
+    const waiting = [];
+    for (let i = 0; i < MAX_PENDING_HANDSHAKES; i++) waiting.push(await rawConnect());
+    const extra = await rawConnect();
+    await closedSocket(extra.socket);
+    for (const raw of waiting) expect(raw.socket.destroyed).toBe(false);
+    for (const raw of waiting) raw.socket.destroy();
+  });
+
+  it("never buffers a large frame from a socket that hasn't said HELLO", async () => {
+    await startServer();
+    const raw = await rawConnect();
+    const big = encodeFrame(
+      {
+        lane: Lane.CONTROL,
+        kind: ControlKind.HELLO,
+        streamId: 0,
+        payload: new Uint8Array(HANDSHAKE_MAX_FRAME_BYTES + 1),
+      },
+      HANDSHAKE_MAX_FRAME_BYTES * 2
+    );
+    // Only the header goes: the host refuses on the length, before any body arrives.
+    raw.socket.write(big.subarray(0, 16));
+    await closedSocket(raw.socket);
+    const goodbye = raw.frames
+      .map((frame) => frameToMessage(frame))
+      .find((m) => m?.kind === ControlKind.GOODBYE);
+    expect(String((goodbye?.body as { reason?: string } | undefined)?.reason)).toMatch(
+      /frame length/
+    );
+  });
+
+  it("refuses anything but a handshake kind before HELLO, without decoding it", async () => {
+    await startServer();
+    const raw = await rawConnect();
+    raw.socket.write(
+      encodeFrame({ lane: Lane.RPC, kind: 1, streamId: 0, payload: new Uint8Array(8) })
+    );
+    await closedSocket(raw.socket);
+    const goodbye = raw.frames
+      .map((frame) => frameToMessage(frame))
+      .find((m) => m?.kind === ControlKind.GOODBYE);
+    expect(String((goodbye?.body as { reason?: string } | undefined)?.reason)).toMatch(
+      /before handshake/
+    );
+  });
+
   it("refuses the client id this host's own windows go by", async () => {
     const server = await startServer();
     const seen: HostSessionContext[] = [];
@@ -580,7 +630,9 @@ describe("HostServer session resume", () => {
     const raw = await rawHello(server.token, "local");
     await closedSocket(raw.socket);
     expect(seen).toHaveLength(0);
-    const reject = raw.frames.map(frameToMessage).find((m) => m?.kind === ControlKind.REJECT);
+    const reject = raw.frames
+      .map((frame) => frameToMessage(frame))
+      .find((m) => m?.kind === ControlKind.REJECT);
     expect(reject?.body).toMatchObject({ reason: "protocol" });
   });
 

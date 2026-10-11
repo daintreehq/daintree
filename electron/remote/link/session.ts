@@ -117,6 +117,13 @@ const HANDSHAKE_KINDS: Record<LinkRole, ReadonlySet<number>> = {
   client: new Set([ControlKind.WELCOME, ControlKind.REJECT, ControlKind.GOODBYE]),
 };
 
+/**
+ * The largest frame a host reads before HELLO: a handshake is a few hundred
+ * bytes, and nobody has shown the token yet, so a 16 MiB frame is never
+ * buffered, let alone decoded, for a socket that may not be a Shell at all.
+ */
+export const HANDSHAKE_MAX_FRAME_BYTES = 64 * 1024;
+
 const MAX_REQUEST_ID = 0xffffffff;
 const END_GRACE_MS = 2_000;
 const DEFAULT_MAX_PENDING_REQUESTS = 4096;
@@ -181,7 +188,11 @@ export class LinkSession {
     this.maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
     this.encodingLimits = options.encodingLimits;
     this.now = options.now ?? Date.now;
-    this.decoder = new FrameDecoder(this.maxFrameBytes);
+    this.decoder = new FrameDecoder(
+      this.role === "host"
+        ? Math.min(HANDSHAKE_MAX_FRAME_BYTES, this.maxFrameBytes)
+        : this.maxFrameBytes
+    );
     this.scheduler = new LaneScheduler(options.laneLimits ?? DEFAULT_LANE_LIMITS);
     this._lastReceivedAt = this.now();
     this.transfers = new LinkTransfers(
@@ -253,6 +264,7 @@ export class LinkSession {
   open(options: { holdInbound?: boolean } = {}): void {
     if (this.state !== "handshake") return;
     this.state = "open";
+    this.decoder.setMaxFrameBytes(this.maxFrameBytes);
     if (options.holdInbound) this.held = [];
     this.clearHandshakeTimer();
     this._lastReceivedAt = this.now();
@@ -581,6 +593,14 @@ export class LinkSession {
     for (const frame of frames) {
       if (this.isClosed) return;
       this._lastReceivedAt = this.now();
+      // During the handshake, only its own kinds are worth decoding at all.
+      if (
+        this.state === "handshake" &&
+        (frame.lane !== Lane.CONTROL || !HANDSHAKE_KINDS[this.role].has(frame.kind))
+      ) {
+        this.protocolError("message before handshake");
+        return;
+      }
       let message: LinkMessage;
       try {
         message = parseInboundFrame(frame, this.encodingLimits);

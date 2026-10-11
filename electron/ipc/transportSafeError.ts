@@ -1,9 +1,16 @@
 import type { SerializedError } from "../../shared/types/ipc/errors.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 
+/**
+ * Any absolute POSIX path: not only home and temp folders (`/Volumes`, `/opt`,
+ * `/root`, a project anywhere). A slash after a word character, `:` or
+ * another slash starts no path, so URLs, ratios and "and/or" are left alone.
+ */
+const POSIX_PATH = /(?<![\w:/.~-])(?:~)?\/(?:[^\s/:'"`<>()[\]{},;]+\/)*[^\s/:'"`<>()[\]{},;]+/g;
+
 function sanitizePaths(msg: string): string {
   return msg
-    .replace(/\/(?:Users|home|tmp|private|var)\/[^\s:]+/gi, "<path>")
+    .replace(POSIX_PATH, "<path>")
     .replace(/[A-Z]:[/\\](?:Users|Program Files|Windows|ProgramData)[^\s:]*/gi, "<path>")
     .replace(/\\\\(?:[^\s\\]+)\\(?:[^\s:]+)/g, "<path>");
 }

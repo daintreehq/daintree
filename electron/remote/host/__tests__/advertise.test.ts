@@ -29,15 +29,10 @@ function fakeProcess() {
 }
 
 describe("advertise commands", () => {
-  it("carries the build in TXT records and nothing else", () => {
-    expect(advertiseTxtRecords(HANDSHAKE)).toEqual([
-      "txtvers=1",
-      "version=0.38.0",
-      "commit=abc1234",
-      "platform=darwin",
-      "arch=arm64",
-      "transport=ssh",
-    ]);
+  it("says only the platform in its TXT record, never the build", () => {
+    const txt = advertiseTxtRecords(HANDSHAKE);
+    expect(txt).toEqual(["txtvers=1", "platform=darwin", "arch=arm64", "transport=ssh"]);
+    expect(txt.join(" ")).not.toMatch(/version|commit|0\.38\.0|abc1234/);
   });
 
   it("uses dns-sd on macOS and avahi-publish-service on Linux", () => {

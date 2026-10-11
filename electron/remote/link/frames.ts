@@ -95,7 +95,12 @@ export class FrameDecoder {
   private end = 0;
   private failed = false;
 
-  constructor(private readonly maxFrameBytes = DEFAULT_MAX_FRAME_BYTES) {}
+  constructor(private maxFrameBytes = DEFAULT_MAX_FRAME_BYTES) {}
+
+  /** Change the frame ceiling for frames not yet begun (a session past its handshake). */
+  setMaxFrameBytes(bytes: number): void {
+    this.maxFrameBytes = bytes;
+  }
 
   push(chunk: Uint8Array): LinkFrame[] {
     if (this.failed) throw new FrameProtocolError("decoder already failed");

@@ -132,7 +132,7 @@ export function createRemoteScopeGate(
     }
     const target = CHANNEL_REMOTE_SCOPE[channel]!;
     const projectId = endpoint.projectId;
-    if (!Array.isArray(target)) {
+    if ("terminals" in target) {
       const named = readArg(args, target.terminals);
       const ids = target.list ? named : [named];
       // An id a handler would trim into another is checked as itself only when it is itself.

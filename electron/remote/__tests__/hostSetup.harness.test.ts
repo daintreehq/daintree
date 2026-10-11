@@ -262,7 +262,11 @@ describe("host setup over the harness", () => {
       // No app is installed in the temp HOME, but the listener runs this build.
       expect(result.probe.matchesClient).toBe(true);
       // Saved as the Settings switch saves it, with the LaunchAgent in the host's home.
-      expect(memoryStore.get("hostMode")).toEqual({ enabled: true, startAtLogin: true });
+      expect(memoryStore.get("hostMode")).toEqual({
+        enabled: true,
+        startAtLogin: true,
+        advertise: true,
+      });
       const plist = await fs.readFile(
         path.join(home, "Library", "LaunchAgents", "org.daintree.app.host.plist"),
         "utf8"

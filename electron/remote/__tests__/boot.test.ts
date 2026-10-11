@@ -382,7 +382,7 @@ vi.mock("../host/hostModeDefaults.js", async () => {
     createHostModeService: () =>
       new HostModeService({
         platform: "linux",
-        readSettings: () => ({ enabled: true, startAtLogin: false }),
+        readSettings: () => ({ enabled: true, startAtLogin: false, advertise: true }),
         writeSettings: () => {},
         socketPath: "/run/user/501/daintree-dev/host.sock",
         startListener: (signal) => startHostListener({ signal }),

@@ -73,6 +73,13 @@ interface Resumable {
 }
 
 const DEFAULT_RESUME_GRACE_MS = 10 * 60 * 1000;
+
+/**
+ * Sockets that may sit before HELLO at once. Each costs a session and a
+ * handshake timer until it shows the token or times out; past this a new
+ * connection is closed straight away.
+ */
+export const MAX_PENDING_HANDSHAKES = 16;
 const DEFAULT_MAX_SESSIONS = 32;
 const CLOSE_GRACE_MS = 1_000;
 const STALE_PROBE_TIMEOUT_MS = 2_000;
@@ -109,6 +116,7 @@ export class HostServer {
   private readonly sockets = new Set<net.Socket>();
   private readonly live = new Map<string, HostSessionContext>();
   private readonly resumable = new Map<string, Resumable>();
+  private readonly pendingHandshakes = new Set<LinkSession>();
   /** Each session's current resume secret, handed out only in its WELCOME. */
   private readonly resumeSecrets = new Map<string, string>();
   private readonly sessionListeners = new Set<(ctx: HostSessionContext) => void>();
@@ -278,10 +286,17 @@ export class HostServer {
       socket.destroy();
       return;
     }
+    if (this.pendingHandshakes.size >= MAX_PENDING_HANDSHAKES) {
+      socket.destroy();
+      return;
+    }
     this.sockets.add(socket);
     socket.once("close", () => this.sockets.delete(socket));
     const session = new LinkSession(socket, { ...this.options.session, role: "host" });
+    this.pendingHandshakes.add(session);
+    session.onClose(() => this.pendingHandshakes.delete(session));
     session.onHandshake((message) => {
+      this.pendingHandshakes.delete(session);
       if (message.lane === Lane.CONTROL && message.kind === ControlKind.HELLO) {
         this.onHello(session, message.body);
       } else {

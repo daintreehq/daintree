@@ -110,7 +110,11 @@ function fakeKeychain(overrides: Partial<KeychainProbe> = {}): KeychainProbe {
 }
 
 function makeService(overrides: Partial<HostModeServiceDeps> = {}, initial?: HostModeSettings) {
-  let settings: HostModeSettings = initial ?? { enabled: false, startAtLogin: false };
+  let settings: HostModeSettings = initial ?? {
+    enabled: false,
+    startAtLogin: false,
+    advertise: true,
+  };
   const pushes: HostModeStatus[] = [];
   const advertise: { state: AdvertiseState; calls: string[] } = {
     state: { status: "off" },
@@ -155,6 +159,33 @@ function row(status: HostModeStatus, id: string) {
 }
 
 describe("HostModeService enable and disable", () => {
+  it("takes the advertise choice before hosting is ever on, and never advertises once it starts", async () => {
+    const { service, advertise, settings } = makeService();
+    const off = await service.setEnabled({ enabled: false, advertise: false });
+    expect(off).toMatchObject({ enabled: false, listening: false, advertise: false });
+    expect(settings()).toEqual({ enabled: false, startAtLogin: false, advertise: false });
+    await service.setEnabled({ enabled: true });
+    expect(advertise.calls).toEqual([]);
+    await service.dispose();
+  });
+
+  it("stops and starts advertising with its own switch, and keeps it across restarts", async () => {
+    const { service, advertise, settings } = makeService();
+    await service.setEnabled({ enabled: true });
+    expect(advertise.calls).toEqual(["start"]);
+    const off = await service.setEnabled({ enabled: true, advertise: false });
+    expect(off.advertise).toBe(false);
+    expect(advertise.calls).toEqual(["start", "stop"]);
+    expect(settings()).toMatchObject({ advertise: false });
+    await service.setEnabled({ enabled: false });
+    await service.setEnabled({ enabled: true });
+    // Back on, the choice holds: hosting resumes without advertising.
+    expect(advertise.calls.filter((call) => call === "start")).toHaveLength(1);
+    await service.setEnabled({ enabled: true, advertise: true });
+    expect(advertise.calls.at(-1)).toBe("start");
+    await service.dispose();
+  });
+
   it("listens and advertises when switched on, and drops every session when switched off", async () => {
     const { service, advertise, settings } = makeService();
 
@@ -183,7 +214,7 @@ describe("HostModeService enable and disable", () => {
 
     const off = await service.setEnabled({ enabled: false });
     expect(off).toMatchObject({ enabled: false, listening: false, attachedClients: [] });
-    expect(settings()).toEqual({ enabled: false, startAtLogin: false });
+    expect(settings()).toEqual({ enabled: false, startAtLogin: false, advertise: true });
     expect(existsSync(location.socketPath)).toBe(false);
     expect(existsSync(location.discoveryPath)).toBe(false);
     expect(advertise.calls).toEqual(["start", "stop"]);
@@ -197,7 +228,7 @@ describe("HostModeService enable and disable", () => {
       },
     });
     await expect(service.setEnabled({ enabled: true })).rejects.toThrow("already listening");
-    expect(settings()).toEqual({ enabled: false, startAtLogin: false });
+    expect(settings()).toEqual({ enabled: false, startAtLogin: false, advertise: true });
     const status = await service.getStatus();
     expect(row(status, "socket")).toMatchObject({
       state: "unavailable",
@@ -253,7 +284,7 @@ describe("HostModeService enable and disable", () => {
     await service.setEnabled({ enabled: true, startAtLogin: true });
     await service.dispose();
     expect(existsSync(location.socketPath)).toBe(false);
-    expect(settings()).toEqual({ enabled: true, startAtLogin: true });
+    expect(settings()).toEqual({ enabled: true, startAtLogin: true, advertise: true });
     expect(fs.files.size).toBe(1);
   });
 });
@@ -352,7 +383,7 @@ describe("HostModeService start at login consent", () => {
     const { service, settings } = makeService({ startAtLogin: controller, run: runner.run });
     const status = await service.setEnabled({ enabled: true, startAtLogin: true });
     expect(status.listening).toBe(true);
-    expect(settings()).toEqual({ enabled: true, startAtLogin: false });
+    expect(settings()).toEqual({ enabled: true, startAtLogin: false, advertise: true });
     // No half-installed unit is left behind a setting that says off.
     expect(fs.files.has(unitPath)).toBe(false);
     expect(row(status, "start-at-login")).toMatchObject({
@@ -486,7 +517,7 @@ describe("HostModeService enabling from host setup", () => {
     });
 
     await service.enableFromSetup();
-    expect(settings()).toEqual({ enabled: true, startAtLogin: true });
+    expect(settings()).toEqual({ enabled: true, startAtLogin: true, advertise: true });
     expect(fs.files.get("/home/greg/.config/systemd/user/daintree-host.service")).toBe(
       buildSystemdUnit({ programArguments: ["/opt/Daintree/daintree", "--host-mode"] })
     );
