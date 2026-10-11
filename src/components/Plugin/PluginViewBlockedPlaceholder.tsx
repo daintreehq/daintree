@@ -1,7 +1,10 @@
-import { ShieldOff } from "lucide-react";
+import { useEffect, useRef } from "react";
+import { ShieldOff, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { useHostConnection } from "@/hooks/useHostConnection";
+import { drivenElsewhereBy, useHostConnection } from "@/hooks/useHostConnection";
+import { useDriveLeaseView } from "@/components/Recovery/driveLeaseState";
+import { takeControl, useTakeControlPending } from "@/components/Recovery/takeControl";
 
 /** Thrown when this computer won't run a host plugin's view: the person said no, or it couldn't be checked. */
 export class PluginViewBlockedError extends Error {
@@ -29,6 +32,49 @@ export function PluginViewBlockedPlaceholder({
 }) {
   const { hostName } = useHostConnection();
   const machine = hostName ?? "this window's host";
+  const lease = useDriveLeaseView();
+  const driver = drivenElsewhereBy(lease);
+  // The host serves a plugin's view only to the window driving its project:
+  // once this one drives it, the view loads without being asked.
+  const wasDrivenElsewhere = useRef(driver !== null);
+  useEffect(() => {
+    if (driver !== null) {
+      wasDrivenElsewhere.current = true;
+      return;
+    }
+    if (wasDrivenElsewhere.current && lease?.drivingHere) {
+      wasDrivenElsewhere.current = false;
+      onRetry();
+    }
+  }, [driver, lease?.drivingHere, onRetry]);
+
+  const taking = useTakeControlPending(lease?.projectId ?? null);
+  if (driver !== null && lease) {
+    const projectId = lease.projectId;
+    return (
+      <div className="flex h-full w-full" data-testid="plugin-view-driven-elsewhere">
+        <EmptyState
+          variant="zero-data"
+          scale="canvas"
+          className="my-auto w-full shrink-0"
+          icon={<Users />}
+          title={`${pluginDisplayName} shows in the window driving this project`}
+          description={`${driver} has control of it on ${machine}. Take control to show ${pluginDisplayName} here.`}
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              loading={taking}
+              onClick={() => void takeControl(projectId)}
+            >
+              Take control
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full w-full" data-testid="plugin-view-blocked">
       <EmptyState
