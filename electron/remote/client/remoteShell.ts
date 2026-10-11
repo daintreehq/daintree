@@ -4,13 +4,7 @@ import type {
   CommandResult,
   CommandRunner,
 } from "./commandRunner.js";
-import {
-  buildExitArgs,
-  controlPathOption,
-  noteSshMaster,
-  shellQuote,
-  sshCommonArgs,
-} from "./sshTransport.js";
+import { buildExitArgs, noteSshMaster, shellQuote, sshCommonArgs } from "./sshTransport.js";
 import { sshExecutable } from "./sshExecutable.js";
 
 /**
@@ -50,7 +44,12 @@ export function remoteShellArgs(target: string, controlPath: string, script: str
   ];
 }
 
-/** `-S` so a copy runs the same ssh as everything else (`DAINTREE_SSH`), not scp's built-in one. */
+/**
+ * `-S` so a copy runs the same ssh as everything else (`DAINTREE_SSH`), not
+ * scp's built-in one, with the same options: a copy may start the host's
+ * master when the probe's has gone, and a master it starts must not carry the
+ * user's agent, X11 or configured forwards any more than one ssh starts.
+ */
 export function scpArgs(
   target: string,
   controlPath: string,
@@ -62,12 +61,7 @@ export function scpArgs(
     "-q",
     "-S",
     sshPath,
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "ControlMaster=auto",
-    "-o",
-    controlPathOption(controlPath),
+    ...sshCommonArgs(controlPath),
     "--",
     localPath,
     `${target}:${remotePath}`,

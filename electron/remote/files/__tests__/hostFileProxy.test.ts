@@ -90,6 +90,29 @@ describe("host file previews", () => {
     expect(response.headers.get("content-type")).toBe("text/plain");
   });
 
+  it("serves an empty file the host answered without a stream, as a local preview does", async () => {
+    const { ask } = proxyFor({
+      status: 200,
+      headers: { "content-length": "0" },
+      text: null,
+      streamId: null,
+    });
+    const response = await ask("daintree-media", "/p/new.mp4");
+    expect(response.status).toBe(200);
+    expect(response.body).toBeNull();
+    expect(response.headers.get("content-type")).toBe("video/mp4");
+  });
+
+  it("still refuses a streamless 200 that claims any bytes", async () => {
+    const { ask } = proxyFor({
+      status: 200,
+      headers: { "content-length": "3" },
+      text: null,
+      streamId: null,
+    });
+    expect((await ask("daintree-media", "/p/new.mp4")).status).toBe(502);
+  });
+
   it("answers HEAD with no body, letting go of any stream the host opened", async () => {
     const { ask, cancelStream } = proxyFor(streamed(200, hostile));
     const response = await ask("daintree-file", "/p/a.png", { method: "HEAD" });

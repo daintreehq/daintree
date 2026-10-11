@@ -42,8 +42,12 @@ export interface PluginViewAdmitter {
 
 export interface PluginViewGateDeps {
   consent: PluginViewConsentStore;
-  /** Ask the person here; true only for an explicit yes. */
-  ask(question: PluginViewQuestion): Promise<boolean>;
+  /**
+   * Ask the person here; true only for an explicit yes. Null when nobody was
+   * asked (too many questions already waiting), which decides nothing: the
+   * view's next load asks again.
+   */
+  ask(question: PluginViewQuestion): Promise<boolean | null>;
 }
 
 /** The digest consent is given to: the plugin and its sorted file list. */
@@ -177,6 +181,8 @@ export class PluginViewGate implements PluginViewAdmitter {
           .catch(() => false);
         // Reset while the question was open: its answer decides nothing.
         if (this.epochOf(hostId) !== epoch) return false;
+        // Not asked at all: no answer to hold for the rest of the run.
+        if (yes === null) return false;
         if (!yes) {
           this.refused.add(`${hostId}\0${manifest.pluginId}`);
           return false;

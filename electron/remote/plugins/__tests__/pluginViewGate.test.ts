@@ -15,7 +15,7 @@ function manifest(files: Record<string, string>, pluginId = "acme.graph"): Plugi
   return { pluginId, files: new Map(Object.entries(files)) };
 }
 
-function setup(ask: (q: PluginViewQuestion) => Promise<boolean>) {
+function setup(ask: (q: PluginViewQuestion) => Promise<boolean | null>) {
   const consent = createMemoryPluginViewConsent();
   const asked = vi.fn(ask);
   const gate = new PluginViewGate({ consent, ask: asked });
@@ -71,6 +71,16 @@ describe("PluginViewGate", () => {
     });
     expect(await gate.prepare(request)).toBe(false);
     expect(gate.refusals(HOST)).toEqual(["acme.graph"]);
+  });
+
+  it("holds nothing against a plugin when nobody was asked (too many questions waiting)", async () => {
+    const { gate, request, asked } = setup(async () => null);
+    expect(await gate.prepare(request)).toBe(false);
+    expect(gate.refusals(HOST)).toEqual([]);
+    // The next load asks, and a yes then runs it.
+    asked.mockImplementation(async () => true);
+    expect(await gate.prepare(request)).toBe(true);
+    expect(asked).toHaveBeenCalledTimes(2);
   });
 
   it("lets a reset void a question still open, whatever its answer", async () => {

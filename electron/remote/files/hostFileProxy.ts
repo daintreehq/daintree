@@ -192,8 +192,14 @@ export function createHostFileProxy(
       if (streamId !== null) void transport.cancelStream(hostId, streamId);
       return new Response(null, { status: answer.status, headers });
     }
-    // File bytes only ever arrive as a stream: a successful GET without one is refused.
-    if (streamId === null) return plain(502, "Bad Gateway");
+    // File bytes only ever arrive as a stream: a successful GET without one is
+    // refused, except an empty file, which a local preview answers with no body too.
+    if (streamId === null) {
+      if (answer.status === 200 && declared === 0) {
+        return new Response(null, { status: 200, headers });
+      }
+      return plain(502, "Bad Gateway");
+    }
 
     // Never more than the host said it would send, nor than a local preview may be.
     const limit = Math.min(declared ?? Infinity, ceiling ?? Infinity);

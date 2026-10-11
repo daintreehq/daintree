@@ -89,6 +89,20 @@ describe("the ssh command channel", () => {
     );
   });
 
+  it("starts a master from a copy with the same forwarding off as any ssh call", async () => {
+    const { run, calls } = recording({ scp: result(0) });
+    const channel = createSshCommandChannel({ target: "bigbox", controlPath: "/cm", run });
+    await channel.sendFile("/l/a.deb", "/tmp/s/a.deb");
+    expect(calls[0]!.args).toEqual(
+      expect.arrayContaining([
+        "ForwardAgent=no",
+        "ForwardX11=no",
+        "ClearAllForwardings=yes",
+        "ControlPersist=10m",
+      ])
+    );
+  });
+
   it("streams the file over the same ssh login when scp is refused (no sftp subsystem)", async () => {
     const { run, calls } = recording({ scp: result(255, "subsystem request failed on channel 0") });
     const channel = createSshCommandChannel({ target: "bigbox", controlPath: "/cm", run });

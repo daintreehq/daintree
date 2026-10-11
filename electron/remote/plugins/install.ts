@@ -120,7 +120,7 @@ function pluginLabel(pluginId: string): string {
 
 let dialogs: Promise<unknown> = Promise.resolve();
 let waitingDialogs = 0;
-/** Questions queued past this are refused outright: a host can't stack dialogs. */
+/** Questions queued past this aren't asked: a host can't stack dialogs. */
 const MAX_WAITING_DIALOGS = 3;
 
 /**
@@ -128,8 +128,9 @@ const MAX_WAITING_DIALOGS = 3;
  * drawn in the renderer could be answered by host code already running there.
  * One at a time, and only a few waiting.
  */
-function askToRunPluginView(question: PluginViewQuestion): Promise<boolean> {
-  if (waitingDialogs >= MAX_WAITING_DIALOGS) return Promise.resolve(false);
+function askToRunPluginView(question: PluginViewQuestion): Promise<boolean | null> {
+  // Not a no: the view isn't run now, and its next load asks again.
+  if (waitingDialogs >= MAX_WAITING_DIALOGS) return Promise.resolve(null);
   waitingDialogs++;
   const answer = dialogs.then(() => showPluginViewDialog(question));
   dialogs = answer.catch(() => {});
