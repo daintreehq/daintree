@@ -214,11 +214,15 @@ describe("plugin:report-focused-panel", () => {
       s.fire("render-process-gone");
       expect(relayed.at(-1)).toEqual({ sender: 7, args: [null, false] });
       // Re-sent on the next endpoint, in case the link was down for the first.
+      let count = relayed.length;
       notifyRemoteViewEndpointOpened(7);
+      expect(relayed).toHaveLength(count + 1);
       expect(relayed.at(-1)).toEqual({ sender: 7, args: [null, false] });
       // A reloaded page that reports again is relayed as usual from then on.
       send(s, { kind: "diff" });
+      count = relayed.length;
       notifyRemoteViewEndpointOpened(7);
+      expect(relayed).toHaveLength(count + 1);
       expect(relayed.at(-1)).toEqual({ sender: 7, args: [{ kind: "diff" }, true] });
     });
 
