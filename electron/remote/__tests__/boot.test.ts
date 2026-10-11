@@ -43,6 +43,7 @@ const m = vi.hoisted(() => {
     current: {
       onFirstUse?: () => void;
       onRemoteViewActivated?: (windowId: number, wc: unknown, isNew: boolean) => void;
+      onLocalViewActivated?: (windowId: number, wc: unknown) => void;
     };
   } = { current: {} };
   const hostEntries: Array<{
