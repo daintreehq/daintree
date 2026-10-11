@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { FolderPlus } from "lucide-react";
 import type { HostSwitchExecuteResult, HostSwitchStatus } from "@shared/types/ipc/hostSwitch";
 import type { DestinationCheck, HostCloneDepth } from "@shared/types/ipc/projectMatch";
@@ -81,6 +81,9 @@ export function HostAddProjectDialog({
   const [depth, setDepth] = useState<HostCloneDepth>("full");
   const [submodules, setSubmodules] = useState(false);
   const [running, setRunning] = useState<string | null>(null);
+  /** An open of a folder already on the host, which Cancel stops waiting for (it can't be undone there). */
+  const openingOp = useRef<string | null>(null);
+  const [opening, setOpening] = useState(false);
   const [status, setStatus] = useState<HostSwitchStatus | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const submodulesId = useId();
@@ -256,12 +259,14 @@ export function HostAddProjectDialog({
     if (!folder) return;
     setFailure(null);
     const opId = mintOperationId();
+    openingOp.current = opId;
+    setOpening(true);
     setRunning(opId);
     setStatus(null);
     const result = await window.electron.hostSwitch
       .execute({ kind: "open-folder", opId, toHostId: hostId, path: folder })
       .catch((error: unknown) => {
-        if (clientErrorCode(error) !== "CANCELLED") {
+        if (openingOp.current === opId && clientErrorCode(error) !== "CANCELLED") {
           setFailure({
             title: `${hostName} can't open this folder`,
             gitText: clientErrorText(error, "Something went wrong."),
@@ -270,12 +275,22 @@ export function HostAddProjectDialog({
         }
         return null;
       });
+    // Cancelled meanwhile: whatever the host answers now, nothing opens.
+    if (openingOp.current !== opId) return;
+    openingOp.current = null;
+    setOpening(false);
     setRunning(null);
     if (result?.kind === "opened") onOpened(result);
   };
 
   const cancel = () => {
     if (!running) return;
+    if (openingOp.current !== null) {
+      openingOp.current = null;
+      setOpening(false);
+      setRunning(null);
+      return;
+    }
     safeFireAndForget(window.electron.hostSwitch.cancel({ opId: running }), {
       context: "Cancelling a clone on a host",
     });
@@ -284,7 +299,7 @@ export function HostAddProjectDialog({
   const hint = running ? (
     <span className="flex items-center gap-2 text-xs text-text-secondary" aria-live="polite">
       <Spinner size="xs" />
-      {status?.message ?? "Cloning"}
+      {status?.message ?? (opening ? "Opening" : "Cloning")}
       {status?.fraction != null && ` · ${Math.round(status.fraction * 100)}%`}
     </span>
   ) : undefined;

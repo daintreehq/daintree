@@ -16,7 +16,12 @@ vi.mock("@/components/ui/AppDialog", () => {
   AppDialog.Header = ({ children }: { children: ReactNode }) => <div>{children}</div>;
   AppDialog.Title = ({ children }: { children: ReactNode }) => <h2>{children}</h2>;
   AppDialog.CloseButton = () => null;
-  AppDialog.Footer = ({ children }: { children: ReactNode }) => <div>{children}</div>;
+  AppDialog.Footer = ({ children, hint }: { children: ReactNode; hint?: ReactNode }) => (
+    <div>
+      {hint}
+      {children}
+    </div>
+  );
   return { AppDialog };
 });
 const pickHostPaths = vi.fn<(request: unknown) => Promise<string[] | null>>();
@@ -269,5 +274,33 @@ describe("HostAddProjectDialog", () => {
     expect(alert.textContent).toContain("studio-01 can't open this folder");
     expect(alert.textContent).toContain("That folder isn't a git repository's main folder.");
     expect(onOpened).not.toHaveBeenCalled();
+  });
+
+  it("says it's opening while the host registers the folder, and Cancel stops waiting for it", async () => {
+    let answer: (value: unknown) => void = () => {};
+    execute.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    pickHostPaths.mockResolvedValue(["/home/greg/notes"]);
+    const onOpened = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Open a folder on studio-01" }));
+    expect(await screen.findByText("Opening")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText("Opening")).toBeNull();
+    answer({
+      kind: "opened",
+      hostId: "studio-01",
+      projectId: "host-notes",
+      projectPath: "/home/greg/notes",
+      projectName: "notes",
+      worktreePath: null,
+      canCheckOutBranch: false,
+      branchNote: null,
+      setupRecipeId: null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onOpened).not.toHaveBeenCalled();
+    expect(
+      (screen.getByRole("button", { name: "Open a folder on studio-01" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
   });
 });

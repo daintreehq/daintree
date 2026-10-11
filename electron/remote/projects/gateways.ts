@@ -307,7 +307,8 @@ export class RemoteHostGateway implements HostGateway {
     return this.call(ProjectLinkMethod.OPEN, payload, OpenedSchema, 0);
   }
   openFolder(folder: string) {
-    return this.call(ProjectLinkMethod.OPEN_FOLDER, { path: folder }, OpenedSchema, 0);
+    // Bounded, unlike a clone: registering a folder that's there is quick, and a stalled disk shouldn't hold the dialog.
+    return this.call(ProjectLinkMethod.OPEN_FOLDER, { path: folder }, OpenedSchema);
   }
   checkOut(payload: CheckOutBranchPayload) {
     return this.call(ProjectLinkMethod.CHECK_OUT, payload, OpenedSchema, 0);
