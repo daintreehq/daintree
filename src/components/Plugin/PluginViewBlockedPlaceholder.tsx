@@ -13,6 +13,17 @@ export class PluginViewBlockedError extends Error {
   }
 }
 
+/**
+ * The shared take-control action, loaded on use: it reaches the panel store,
+ * which a plugin pane's placeholder has no other reason to pull in. Outside
+ * the component, where the compiler doesn't have to lower an `import()`.
+ */
+function takeControlOf(projectId: string): void {
+  void import("@/components/Recovery/takeControl").then(({ takeControl }) =>
+    takeControl(projectId)
+  );
+}
+
 export function isPluginViewBlockedError(error: unknown): boolean {
   return error instanceof Error && error.name === "PluginViewBlockedError";
 }
@@ -59,17 +70,7 @@ export function PluginViewBlockedPlaceholder({
           title={`${pluginDisplayName} shows in the window driving this project`}
           description={`${driver} has control of it on ${machine}. Take control to show ${pluginDisplayName} here.`}
           action={
-            <Button
-              variant="outline"
-              size="sm"
-              // Loaded on use: the shared action reaches the panel store, which
-              // a plugin pane's placeholder has no other reason to pull in.
-              onClick={() =>
-                void import("@/components/Recovery/takeControl").then(({ takeControl }) =>
-                  takeControl(projectId)
-                )
-              }
-            >
+            <Button variant="outline" size="sm" onClick={() => takeControlOf(projectId)}>
               Take control
             </Button>
           }
