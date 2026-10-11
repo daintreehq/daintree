@@ -42,9 +42,11 @@ export function useHostReparent({
     const compactHost = compactEditorHostRef.current;
     const modalHost = modalEditorHostRef.current;
     const previousExpanded = previousExpandedRef.current;
-    const isInitialAttach = previousExpanded === null;
     previousExpandedRef.current = isExpanded;
-    const shouldRestoreFocus = !isInitialAttach;
+    // Only a real move between hosts hands the caret on. The first attach, and
+    // React re-running this effect on an unchanged host (StrictMode's mount
+    // replay), must not pull focus into an editor nobody asked for.
+    const shouldRestoreFocus = previousExpanded !== null && previousExpanded !== isExpanded;
     let rafId: number | null = null;
     let nestedRafId: number | null = null;
 

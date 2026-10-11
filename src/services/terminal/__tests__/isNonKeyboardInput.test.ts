@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Terminal } from "@xterm/headless";
 import { isNonKeyboardInput } from "../TerminalInstanceService";
+import { isTerminalReply } from "../inputUtils";
 
 describe("isNonKeyboardInput", () => {
   describe("mouse sequences", () => {
@@ -272,5 +273,28 @@ describe("isNonKeyboardInput", () => {
       expect(isNonKeyboardInput("\x1b[32;1;1K")).toBe(false);
       expect(isNonKeyboardInput("\x1b[32;1;1m")).toBe(false);
     });
+  });
+});
+
+describe("isTerminalReply", () => {
+  it.each([
+    ["a cursor-position report", "\x1b[24;1R"],
+    ["a device-attributes reply", "\x1b[?62;22c"],
+    ["a mode report", "\x1b[?2004;1$y"],
+    ["a colour reply", "\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\"],
+    ["a version reply", "\x1bP>|xterm.js(6.1)\x1b\\"],
+    ["a focus change", "\x1b[I"],
+  ])("recognises %s", (_name, data) => {
+    expect(isTerminalReply(data)).toBe(true);
+  });
+
+  it.each([
+    ["a letter", "y"],
+    ["Return", "\r"],
+    ["an arrow", "\x1b[A"],
+    ["a mouse click", "\x1b[<0;12;8M"],
+    ["Alt+]", "\x1b]"],
+  ])("leaves %s to the user", (_name, data) => {
+    expect(isTerminalReply(data)).toBe(false);
   });
 });

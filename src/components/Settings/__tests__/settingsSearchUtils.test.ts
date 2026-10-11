@@ -475,6 +475,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       integrations: "Integrations",
       hosts: "Hosts",
       voice: "Voice input",
+      canopy: "Canopy",
       assistant: "Daintree Assistant",
 
       mcp: "MCP server",
@@ -517,6 +518,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       notifications: "Notifications",
       integrations: "Integrations",
       voice: "Voice input",
+      canopy: "Canopy",
       assistant: "Daintree Assistant",
 
       mcp: "MCP server",

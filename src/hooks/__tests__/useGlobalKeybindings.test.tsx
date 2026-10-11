@@ -24,6 +24,9 @@ const mocks = vi.hoisted(() => ({
     clearPendingChord: vi.fn(),
     popPendingChord: vi.fn(),
     getEffectiveCombo: vi.fn<(actionId: string) => string | undefined>(() => undefined),
+    // By default every action fires on just its effective combo; tests that
+    // need a second binding (Windows' Ctrl+F4) set their own.
+    getTriggerCombos: vi.fn<(actionId: string) => string[]>(() => []),
     getChordCompletions: vi.fn<
       () => Array<{ actionId: string; secondKey: string; description: string }>
     >(() => []),
@@ -131,6 +134,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.keybindingService.getPendingChord.mockReturnValue(null);
   mocks.keybindingService.isCapturingShortcut.mockReturnValue(false);
+  mocks.keybindingService.getTriggerCombos.mockImplementation((actionId: string) => {
+    const combo = mocks.keybindingService.getEffectiveCombo(actionId);
+    return combo ? [combo] : [];
+  });
   mocks.actionService.dispatch.mockResolvedValue({ ok: true, result: undefined });
   vi.mocked(usePaletteStore.getState).mockReturnValue(makePaletteState(null));
 });
@@ -149,6 +156,281 @@ describe("useGlobalKeybindings — shortcut recorder owns the keyboard", () => {
 
     expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
     expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+  });
+});
+
+describe("useGlobalKeybindings — isolated surfaces", () => {
+  function pressIn(target: HTMLElement, init: KeyboardEventInit) {
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })
+    );
+  }
+
+  it("keeps pane and fleet shortcuts away from a terminal typed to outside the grid", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "fleet.armFocused" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const surface = document.createElement("div");
+    surface.setAttribute("data-keybindings-isolated", "");
+    surface.innerHTML = '<div class="xterm"><textarea></textarea></div>';
+    document.body.appendChild(surface);
+    try {
+      pressIn(surface.querySelector("textarea")!, { key: "j", metaKey: true });
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    } finally {
+      surface.remove();
+    }
+  });
+
+  it("still lets the surface's own toggle through", () => {
+    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) =>
+      id === "canopy.toggle" ? "Cmd+Shift+O" : undefined
+    );
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "canopy.toggle" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const surface = document.createElement("div");
+    surface.setAttribute("data-keybindings-isolated", "");
+    const field = document.createElement("textarea");
+    surface.appendChild(field);
+    document.body.appendChild(surface);
+    try {
+      pressIn(field, { key: "o", code: "KeyO", metaKey: true, shiftKey: true });
+      expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalled();
+    } finally {
+      surface.remove();
+    }
+  });
+});
+
+describe("useGlobalKeybindings — Cmd+W in a surface that owns its close", () => {
+  function closeOwner(isolated: boolean) {
+    const owner = document.createElement("section");
+    owner.setAttribute("data-close-owner", "");
+    const field = document.createElement("textarea");
+    if (isolated) {
+      const pane = document.createElement("div");
+      pane.setAttribute("data-keybindings-isolated", "");
+      pane.appendChild(field);
+      owner.appendChild(pane);
+    } else {
+      owner.appendChild(field);
+    }
+    document.body.appendChild(owner);
+    const requests = vi.fn((event: Event) => event.preventDefault());
+    owner.addEventListener("daintree:close-request", requests);
+    return { owner, field, requests };
+  }
+
+  beforeEach(() => {
+    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) =>
+      id === "terminal.close" ? "Cmd+W" : undefined
+    );
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "terminal.close" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+  });
+
+  it.each([
+    ["its isolated terminal or reply", true],
+    ["its own controls", false],
+  ])(
+    "hands Cmd+W from %s to the surface, and leaves the dialog around it open",
+    (_where, isolated) => {
+      const escapeHandler = vi.fn();
+      registerEscape(escapeHandler);
+      render(<Host />);
+      const { owner, field, requests } = closeOwner(isolated);
+      try {
+        field.focus();
+        act(() => {
+          field.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "w",
+              metaKey: true,
+              bubbles: true,
+              cancelable: true,
+            })
+          );
+        });
+        expect(requests).toHaveBeenCalledTimes(1);
+        expect(escapeHandler).not.toHaveBeenCalled();
+        expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+      } finally {
+        owner.remove();
+      }
+    }
+  );
+
+  it("lets a second close binding in too, such as Windows' Ctrl+F4", () => {
+    mocks.keybindingService.getTriggerCombos.mockImplementation((id: string) =>
+      id === "terminal.close" ? ["Cmd+W", "Ctrl+F4"] : []
+    );
+    render(<Host />);
+    const { owner, field, requests } = closeOwner(true);
+    try {
+      field.focus();
+      act(() => {
+        field.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "F4",
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+      });
+      expect(requests).toHaveBeenCalledTimes(1);
+    } finally {
+      owner.remove();
+    }
+  });
+
+  it("lets in only the allowed actions, even when another action shares their keys", () => {
+    // A plugin's binding on the same keys as the toggle resolves instead.
+    mocks.keybindingService.getTriggerCombos.mockImplementation((id: string) =>
+      id === "canopy.toggle" ? ["Cmd+Shift+O"] : []
+    );
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "plugin.something" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const { owner, field } = closeOwner(true);
+    try {
+      field.focus();
+      const event = new KeyboardEvent("keydown", {
+        key: "o",
+        metaKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        field.dispatchEvent(event);
+      });
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+      // Left for the terminal or composer, not swallowed.
+      expect(event.defaultPrevented).toBe(false);
+    } finally {
+      owner.remove();
+    }
+  });
+
+  it("abandons a chord begun outside, so the surface's own close still works", () => {
+    mocks.keybindingService.getPendingChord.mockReturnValue("Cmd+K");
+    render(<Host />);
+    const { owner, field, requests } = closeOwner(true);
+    try {
+      field.focus();
+      act(() => {
+        field.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "w", metaKey: true, bubbles: true, cancelable: true })
+        );
+      });
+      expect(mocks.keybindingService.clearPendingChord).toHaveBeenCalled();
+      // Cleared before the key is resolved, so it resolves standalone.
+      expect(mocks.keybindingService.clearPendingChord.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.keybindingService.resolveKeybinding.mock.invocationCallOrder[0]!
+      );
+      expect(requests).toHaveBeenCalledTimes(1);
+    } finally {
+      owner.remove();
+    }
+  });
+
+  it("never opens the grid pane's menu from inside the isolated surface", () => {
+    // Close rebound to Shift+F10, pressed on a control in the pane (a text
+    // field keeps unmodified keys for itself, by the editable rule).
+    mocks.keybindingService.getTriggerCombos.mockImplementation((id: string) =>
+      id === "terminal.close" ? ["Shift+F10"] : []
+    );
+    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) =>
+      id === "terminal.contextMenu" ? "Shift+F10" : undefined
+    );
+    render(<Host />);
+    const owner = document.createElement("section");
+    owner.setAttribute("data-close-owner", "");
+    const pane = document.createElement("div");
+    pane.setAttribute("data-keybindings-isolated", "");
+    const control = document.createElement("div");
+    control.tabIndex = 0;
+    pane.appendChild(control);
+    owner.appendChild(pane);
+    document.body.appendChild(owner);
+    const requests = vi.fn((event: Event) => event.preventDefault());
+    owner.addEventListener("daintree:close-request", requests);
+    try {
+      control.focus();
+      act(() => {
+        control.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "F10",
+            shiftKey: true,
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+      });
+      expect(requests).toHaveBeenCalledTimes(1);
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalledWith(
+        "terminal.contextMenu",
+        expect.anything(),
+        expect.anything()
+      );
+    } finally {
+      owner.remove();
+    }
+  });
+
+  it("lets no chord-bound close into the isolated surface, whose other keys stay its own", () => {
+    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) =>
+      id === "terminal.close" ? "Cmd+K W" : undefined
+    );
+    render(<Host />);
+    const { owner, field, requests } = closeOwner(true);
+    try {
+      act(() => {
+        field.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true, cancelable: true })
+        );
+      });
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(requests).not.toHaveBeenCalled();
+    } finally {
+      owner.remove();
+    }
+  });
+
+  it("keeps every other shortcut away from the isolated surface", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "fleet.armFocused" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const { owner, field, requests } = closeOwner(true);
+    try {
+      act(() => {
+        field.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "j", metaKey: true, bubbles: true, cancelable: true })
+        );
+      });
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(requests).not.toHaveBeenCalled();
+    } finally {
+      owner.remove();
+    }
   });
 });
 

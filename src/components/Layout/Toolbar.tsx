@@ -114,6 +114,7 @@ import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
+import { useCanopyStore } from "@/store/canopyStore";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -150,6 +151,7 @@ import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
+import { CanopyToolbarButton, useCanopyUrgentCount } from "./CanopyToolbarButton";
 import { AppMenuButton } from "./AppMenuButton";
 import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
 import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
@@ -226,6 +228,7 @@ for (const [id, meta] of Object.entries(TOOLBAR_BUTTON_METADATA)) {
 const OVERFLOW_KEYBINDING_BY_ID: Partial<Record<string, string>> = {
   "copy-tree": "worktree.copyTree",
   "notification-center": "notifications.toggle",
+  canopy: "canopy.toggle",
   "command-palette": "action.palette.open",
   "resume-sessions": "terminal.resumeSessions",
   "dev-server": "devServer.start",
@@ -245,6 +248,8 @@ interface OverflowMenuProps {
   severity: OverflowBadgeSeverity;
   errorCount: number;
   notificationUnreadCount: number;
+  /** Asks Canopy reads as urgent, said when its button is folded in here. */
+  canopyUrgentCount: number;
   // Per-session agent states behind the badge, already worded — derived by
   // the same rule as `severity`, so the name never says less than the dot.
   agentObservations: readonly string[];
@@ -289,6 +294,7 @@ function OverflowMenu({
   severity,
   errorCount,
   notificationUnreadCount,
+  canopyUrgentCount,
   agentObservations,
   agentAttentionStates,
   canCopyTree,
@@ -355,6 +361,9 @@ function OverflowMenu({
   if (overflowIds.includes("notification-center") && notificationUnreadCount > 0) {
     observations.push(`${notificationUnreadCount} unread`);
   }
+  if (overflowIds.includes("canopy") && canopyUrgentCount > 0) {
+    observations.push(`${canopyUrgentCount} urgent`);
+  }
   observations.push(...agentObservations);
   const tooltipText = `More — ${n} hidden${observations.length > 0 ? ` · ${observations.join(" · ")}` : ""}`;
   const ariaLabel = `More toolbar items — ${n} hidden${observations.length > 0 ? `, ${observations.join(", ")}` : ""}`;
@@ -362,6 +371,7 @@ function OverflowMenu({
   const overflowCount = (id: AnyToolbarButtonId) => {
     if (id === "problems" && errorCount > 0) return errorCount;
     if (id === "notification-center" && notificationUnreadCount > 0) return notificationUnreadCount;
+    if (id === "canopy" && canopyUrgentCount > 0) return canopyUrgentCount;
     return null;
   };
 
@@ -757,6 +767,7 @@ export function Toolbar({
   // AgentButton) rather than extending useOverflowBadgeSeverity to return a
   // composite map (would risk the selector-identity churn of lesson #3730).
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
+  const canopyUrgentCount = useCanopyUrgentCount();
   // Per-agent pip state across panels in the active worktree, used to draw
   // the agent-state dot on overflow menu items. Shares the launcher's
   // derivation so the overflow dot matches the visible agent button; computed
@@ -797,6 +808,7 @@ export function Toolbar({
 
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
+  const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
   const positionAgentButton = useToolbarPreferencesStore((state) => state.positionAgentButton);
   const toggleButtonVisibility = useToolbarPreferencesStore(
@@ -1488,6 +1500,12 @@ export function Toolbar({
           ),
         isAvailable: true,
       },
+      canopy: {
+        render: () => <CanopyToolbarButton key="canopy" data-toolbar-item="" />,
+        // Hidden, the slot goes and the pin stays: showing Canopy again puts
+        // the button back where it was.
+        isAvailable: !canopyHidden,
+      },
       "notification-center": {
         render: () => (
           <NotificationCenterToolbarButton key="notification-center" data-toolbar-item="" />
@@ -1739,6 +1757,7 @@ export function Toolbar({
       topologyWatcherDark,
       showDeveloperTools,
       notificationsEnabled,
+      canopyHidden,
       pluginButtonIds,
       pluginConfigs,
       devServerCombo,
@@ -1979,8 +1998,16 @@ export function Toolbar({
     [rightOverflow, hasActiveVoiceRecording]
   );
 
-  const leftOverflowSeverity = useOverflowBadgeSeverity(visibleLeftOverflow, errorCount);
-  const rightOverflowSeverity = useOverflowBadgeSeverity(visibleRightOverflow, errorCount);
+  const leftOverflowSeverity = useOverflowBadgeSeverity(
+    visibleLeftOverflow,
+    errorCount,
+    canopyUrgentCount
+  );
+  const rightOverflowSeverity = useOverflowBadgeSeverity(
+    visibleRightOverflow,
+    errorCount,
+    canopyUrgentCount
+  );
   const leftAgentObservations = useOverflowAgentObservations(visibleLeftOverflow);
   const rightAgentObservations = useOverflowAgentObservations(visibleRightOverflow);
 
@@ -2172,6 +2199,9 @@ export function Toolbar({
       "notification-center": () => {
         void actionService.dispatch("notifications.toggle", undefined, { source: "user" });
       },
+      canopy: () => {
+        void actionService.dispatch("canopy.toggle", undefined, { source: "user" });
+      },
       "copy-tree": () => {
         void handleCopyTreeClick();
       },
@@ -2248,6 +2278,7 @@ export function Toolbar({
       severity={severity}
       errorCount={errorCount}
       notificationUnreadCount={notificationUnreadCount}
+      canopyUrgentCount={canopyUrgentCount}
       agentObservations={agentObservations}
       agentAttentionStates={agentAttentionStates}
       canCopyTree={canCopyTree}

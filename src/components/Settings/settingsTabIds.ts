@@ -21,6 +21,7 @@ export const GLOBAL_SETTINGS_TAB_IDS = [
   "integrations",
   "hosts",
   "voice",
+  "canopy",
   "portal",
   "mcp",
   "plugins",

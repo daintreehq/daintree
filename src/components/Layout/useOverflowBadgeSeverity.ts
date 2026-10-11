@@ -104,7 +104,9 @@ const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentSt
  */
 export function useOverflowBadgeSeverity(
   overflowIds: readonly AnyToolbarButtonId[],
-  errorCount: number
+  errorCount: number,
+  /** Asks Canopy reads as urgent, for its button folded into the menu. */
+  canopyUrgentCount = 0
 ): OverflowBadgeSeverity {
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   // A boolean, not `panelsById`, so activity/headline flushes that replace
@@ -138,6 +140,10 @@ export function useOverflowBadgeSeverity(
       warning = true;
     }
 
+    if (overflowIds.includes("canopy") && canopyUrgentCount > 0) {
+      warning = true;
+    }
+
     if (overflowIds.includes("notification-center") && notificationUnreadCount > 0) {
       info = true;
     }
@@ -159,6 +165,7 @@ export function useOverflowBadgeSeverity(
   }, [
     overflowIds,
     errorCount,
+    canopyUrgentCount,
     hasOverflowAgentState,
     notificationUnreadCount,
     availability,

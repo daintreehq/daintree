@@ -549,11 +549,11 @@ export function useRecipeRunner({
           handleCreate();
         }
       } else if (
-        e.key === "e" &&
-        // Ctrl+E in a text input means "move cursor to end of line" on
-        // Linux/Windows (readline binding) — don't steal it. Cmd+E on macOS
-        // doesn't conflict with input editing, so allow it from any target.
-        (e.metaKey || (e.ctrlKey && !(e.target instanceof HTMLInputElement)))
+        // F2 edits the selected item, as it renames one on Windows and in VS
+        // Code. Not Cmd+E, which opens Canopy from anywhere on macOS. Ctrl+E
+        // stays outside a text input, where it is readline's end of line.
+        e.key === "F2" ||
+        (e.key === "e" && e.ctrlKey && !e.metaKey && !(e.target instanceof HTMLInputElement))
       ) {
         e.preventDefault();
         const flat = getFlatRecipes();

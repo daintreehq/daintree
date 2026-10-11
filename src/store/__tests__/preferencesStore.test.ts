@@ -1290,3 +1290,43 @@ describe("diffMarkdownRendered (v20 migration, #12171)", () => {
     expect(migrated).toMatchObject({ diffMarkdownRendered: true });
   });
 });
+
+describe("doubleShiftOpensCanopy", () => {
+  it("is on until turned off", async () => {
+    const store = await loadStore();
+    expect(store.getState().doubleShiftOpensCanopy).toBe(true);
+    store.getState().setDoubleShiftOpensCanopy(false);
+    expect(store.getState().doubleShiftOpensCanopy).toBe(false);
+  });
+
+  it("follows another view's change from the shared storage, as it stands now", async () => {
+    const store = await loadStore();
+    store.setState({ doubleShiftOpensCanopy: true });
+    // Another view wrote it off, then on again; the first event arrives late.
+    const written = (enabled: boolean) =>
+      JSON.stringify({ state: { doubleShiftOpensCanopy: enabled }, version: 20 });
+    storage[STORAGE_KEY] = written(false);
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: STORAGE_KEY, newValue: written(false) })
+    );
+    expect(store.getState().doubleShiftOpensCanopy).toBe(false);
+    storage[STORAGE_KEY] = written(true);
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: STORAGE_KEY, newValue: written(false) })
+    );
+    expect(store.getState().doubleShiftOpensCanopy).toBe(true);
+    storage[STORAGE_KEY] = "{not json";
+    window.dispatchEvent(new StorageEvent("storage", { key: STORAGE_KEY }));
+    expect(store.getState().doubleShiftOpensCanopy).toBe(true);
+  });
+
+  it("hydrates a saved choice, and a missing or malformed one as on", async () => {
+    const store = await loadStore();
+    const merge = store.persist.getOptions().merge!;
+    const current = store.getState();
+    expect(merge({ doubleShiftOpensCanopy: false }, current).doubleShiftOpensCanopy).toBe(false);
+    expect(merge({ dockDensity: "compact" }, current).doubleShiftOpensCanopy).toBe(true);
+    expect(merge({ doubleShiftOpensCanopy: null }, current).doubleShiftOpensCanopy).toBe(true);
+    expect(merge({ doubleShiftOpensCanopy: "false" }, current).doubleShiftOpensCanopy).toBe(true);
+  });
+});

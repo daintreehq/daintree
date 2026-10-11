@@ -15,4 +15,6 @@ export interface KeybindingConfig {
   priority: number; // Higher priority wins in conflicts (default 0)
   description?: string;
   category?: string; // Category for organization in UI (e.g., "Terminal", "Panels")
+  /** Context expression gating the binding, as a plugin binding's: false, the key goes past it. */
+  when?: string;
 }

@@ -164,7 +164,12 @@ export function AutomationTab({
   const hasPathPatternError = pathPatternValidation !== null && !pathPatternValidation.valid;
   useSettingsTabValidation("project:automation", hasPathPatternError);
   const pathPatternErrorId = useId();
-  const focus = useRowFocus();
+  const {
+    register: registerRow,
+    registerFallback: registerAddButton,
+    focusRow,
+    focusAfterDelete,
+  } = useRowFocus();
 
   const effectivePathPattern = trimmedWorktreePathPattern || globalPathPattern;
   const pathPatternPreview =
@@ -193,11 +198,11 @@ export function AutomationTab({
   const addRunCommand = () => {
     const id = `cmd-${crypto.randomUUID()}`;
     onRunCommandsChange([...runCommands, { id, name: "", command: "" }]);
-    focus.focusRow(id);
+    focusRow(id);
   };
 
   const deleteRunCommand = (index: number) => {
-    focus.focusAfterDelete(
+    focusAfterDelete(
       runCommands.map((c) => c.id),
       index
     );
@@ -205,7 +210,7 @@ export function AutomationTab({
   };
 
   const addRunCommandButton = (
-    <Button variant="outline" size="sm" onClick={addRunCommand} ref={focus.registerFallback}>
+    <Button variant="outline" size="sm" onClick={addRunCommand} ref={registerAddButton}>
       <Plus />
       Add command
     </Button>
@@ -248,7 +253,7 @@ export function AutomationTab({
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <Input
-                      ref={focus.register(cmd.id)}
+                      ref={registerRow(cmd.id)}
                       type="text"
                       value={cmd.name}
                       onChange={(e) => updateRunCommand(index, { name: e.target.value })}

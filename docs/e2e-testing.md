@@ -83,7 +83,7 @@ Current launch call sites (`launchApp` / `launchWithSamplePlugin`) per gated buc
 | full-worktree   | 14         | 18                |
 | full-presets    | 5          | 7                 |
 | full-platform   | 12         | 16                |
-| full-panels     | 21         | 24                |
+| full-panels     | 22         | 25                |
 | full-resilience | 19         | 27                |
 | full-plugins    | 4          | 4                 |
 | nightly         | 4          | 6                 |

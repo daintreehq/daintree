@@ -9,6 +9,7 @@ import { markPerformance } from "../../utils/performance.js";
 import { PortBatcher, type PortBatcherFailedBatch } from "../index.js";
 import type { PtyHostDriveLease } from "../../../shared/types/pty-host.js";
 import type { HandlerMap, HostContext } from "./types.js";
+import { createTypingNotifier } from "../typingNotice.js";
 
 function batchDataToString(data: Uint8Array): string {
   return Buffer.from(data).toString("utf8");
@@ -129,6 +130,8 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
         `[PtyHost] MessagePort received from Main for window ${windowId}, starting listener...`
       );
 
+      const noteTypedInput = createTypingNotifier(sendEvent);
+
       const handler = (event: MessageEvent) => {
         const portMsg = event?.data ? event.data : event;
 
@@ -145,6 +148,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
           ) {
             if (!ptyManager.mayDriveFrom(portMsg.id, windowId, leaseStamp(portMsg))) return;
             ptyManager.write(portMsg.id, portMsg.data, portMsg.traceId);
+            noteTypedInput(portMsg.id, portMsg.data);
             // PERF-120 T2 attribution mark (no-op unless DAINTREE_PERF_CAPTURE):
             // paired with terminal_interactive_echo_dispatched to expose the
             // host-internal slice of the keystroke round trip.

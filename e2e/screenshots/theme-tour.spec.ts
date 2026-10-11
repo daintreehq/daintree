@@ -27,6 +27,7 @@ import path from "path";
 import { BUILT_IN_APP_SCHEMES } from "../../shared/theme/index.js";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { openAndOnboardProject } from "../helpers/project";
+import { dispatchAction } from "../helpers/actions";
 import { dismissBlockingPalette } from "../helpers/overlays";
 import { setAppTheme } from "../helpers/theme";
 import { installTourHud, type TourSceneMeta, type TourState } from "../helpers/themeTour";
@@ -481,16 +482,11 @@ const SCENES: TourScene[] = [
     note: "Selected row = raised fill + neutral leading rail (`selection-outline`), no accent. Is the selected row unambiguous?",
     run: async (page) => {
       const dialog = page.locator(SEL.actionPalette.dialog);
-      // Double-Shift is the only route to THIS palette. The Cmd/Ctrl+K fallback
-      // that used to sit here opens the separate Command Picker, which then
-      // rendered on top of the action palette — so the capture showed two
-      // stacked surfaces and the scene's note described neither of them.
-      for (let i = 0; i < 3; i++) {
-        await page.keyboard.press("Shift");
-        await page.keyboard.press("Shift");
-        if (await dialog.isVisible({ timeout: 1500 }).catch(() => false)) break;
-        await page.waitForTimeout(200);
-      }
+      // Its own action, not a key: Cmd/Ctrl+K opens the separate Command
+      // Picker, which rendered on top of this palette and left the capture two
+      // stacked surfaces, and double Shift now opens Canopy.
+      await dispatchAction(page, "action.palette.open");
+      await dialog.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
       await page
         .locator(SEL.actionPalette.searchInput)
         .fill("worktree")

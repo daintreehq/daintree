@@ -25,6 +25,18 @@ markIpcSecurityReady();
 // a later one.
 process.env.DAINTREE_USER_DATA = path.join(os.tmpdir(), `daintree-vitest-userdata-${process.pid}`);
 
+// A developer's own Canopy settings must not reach the suite: a trace path would
+// have tests append fixture readings to the real training-data file, and a
+// service URL or tier would change what the backend tests send.
+for (const name of [
+  "DAINTREE_CANOPY_TRACE",
+  "DAINTREE_CANOPY_URL",
+  "DAINTREE_CANOPY_TIER",
+  "DAINTREE_CANOPY_BACKGROUND_POLL_MS",
+]) {
+  delete process.env[name];
+}
+
 // Tests render Radix wrappers synchronously, but our production wrappers
 // dynamic-import the Radix primitive chunk on demand. Prime the loader once
 // at setup so the module-level cache is populated and wrappers render Radix
