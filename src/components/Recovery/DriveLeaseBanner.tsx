@@ -59,6 +59,9 @@ export function DriveLeaseBanner() {
       severity="neutral"
       role="status"
       animated={false}
+      // One line: who drives is context, not an alarm, and the window's
+      // own sessions are what fill it.
+      layout="inline"
       action={{
         id: "take-over",
         label: copy.actionLabel,

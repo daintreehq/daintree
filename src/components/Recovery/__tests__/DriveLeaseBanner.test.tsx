@@ -186,9 +186,11 @@ describe("DriveLeaseBanner", () => {
     });
   });
 
-  it("shows a remote view's banner once the lookup retried on reconnect answers", async () => {
+  it("shows a remote view's banner when it couldn't claim the project and the lookup retried on reconnect answers", async () => {
     window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
     useHostConnectionStore.setState({ hostId: "studio-01", hostName: "studio-01" });
+    // The view's claim on open is refused both times, so it falls back to who drives.
+    takeOver.mockRejectedValue(new Error("refused"));
     get.mockRejectedValueOnce(new Error("link down"));
     get.mockResolvedValue(view({ viewerIsHostLocal: false }));
     const { container } = render(<Harness />);

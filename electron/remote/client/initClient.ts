@@ -18,7 +18,8 @@ import { projectStore } from "../../services/ProjectStore.js";
 import { getProjectHistory } from "../../services/ProjectHistoryService.js";
 import { scratchStore } from "../../services/ScratchStore.js";
 import { isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
-import { AppError } from "../../utils/errorTypes.js";
+import { AppError, isAppError } from "../../utils/errorTypes.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   getAllAppWebContents,
   getProjectForWebContents,
@@ -26,6 +27,7 @@ import {
   resolveLiveWebContents,
 } from "../../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
+import { toDisposable } from "../../utils/lifecycle.js";
 import { getLocalHandshakeInfo } from "../handshakeInfo.js";
 import type { LinkSession } from "../link/session.js";
 import { registerRemoteService } from "../runtime.js";
@@ -42,7 +44,7 @@ import { RemoteRouterImpl, type SenderLookup } from "./RemoteRouter.js";
 import { answerReverseRequest } from "./reverseRequests.js";
 import { unsupportedConnection } from "./connection.js";
 import { SshTransport } from "./sshTransport.js";
-import type { LinkTransport } from "./transport.js";
+import { TransportError, type LinkTransport } from "./transport.js";
 import { WindowHostBinding } from "./WindowHostBinding.js";
 import { defaultCommandRunner } from "./commandRunner.js";
 import { detectClientBundle, downloadArtifact } from "./clientBuild.js";
@@ -248,21 +250,28 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
     },
     lastLocalProjectId,
     watchWindow(windowId, onClosed) {
-      const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
-      if (!win || win.isDestroyed()) {
+      const ctx = getWindowRegistry()?.getByWindowId(windowId);
+      if (!ctx || ctx.browserWindow.isDestroyed()) {
         queueMicrotask(onClosed);
         return;
       }
-      win.once("closed", onClosed);
+      // The window's own cleanup, not another "closed" listener: the main
+      // window already carries ten, and an unpackaged build exits on the
+      // eleventh (devDiagnostics' MaxListenersExceededWarning guard).
+      ctx.cleanup.add(toDisposable(onClosed));
     },
   };
 }
 
 /** How a host's link is opened, by how it is reached. */
-function transportFor(connection: HostConnection, clientDir: string): LinkTransport {
+function transportFor(
+  connection: HostConnection,
+  clientDir: string,
+  ensureRunning?: (signal: AbortSignal) => Promise<boolean>
+): LinkTransport {
   switch (connection.kind) {
     case "ssh":
-      return new SshTransport({ target: connection.target, clientDir });
+      return new SshTransport({ target: connection.target, clientDir, ensureRunning });
     default:
       // A new kind brings its own transport (WSL: a command stream over `wsl.exe`).
       throw unsupportedConnection(connection, "Connecting");
@@ -300,7 +309,11 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const manager = new RemoteHostManager({
     registry,
     createTransport:
-      hooks.createTransport ?? ((descriptor) => transportFor(descriptor.connection, clientDir)),
+      hooks.createTransport ??
+      ((descriptor) =>
+        transportFor(descriptor.connection, clientDir, (signal) =>
+          ensureHostRunning(descriptor.connection, signal)
+        )),
     handshake: getLocalHandshakeInfo,
     client: {
       // Per launch: a session only resumes within one run of this app.
@@ -327,6 +340,24 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     onFirstUse: hooks.onFirstUse,
     onForget: (descriptor): Promise<void> => setup.forgetArtifacts(descriptor),
   });
+  /**
+   * A host reachable over ssh whose Daintree isn't serving (a reboot, a power
+   * cut) is started rather than reported unreachable; its own reason for not
+   * starting is what the user sees.
+   */
+  const ensureHostRunning = async (
+    connection: HostConnection,
+    signal: AbortSignal
+  ): Promise<boolean> => {
+    try {
+      return (await setup.ensureHostRunning(connection, signal)) !== "not-startable";
+    } catch (error) {
+      const reason = isAppError(error)
+        ? (error.userMessage ?? error.message)
+        : formatErrorMessage(error, "Daintree couldn't be started on the host");
+      throw new TransportError(reason, reason);
+    }
+  };
   const setup: HostSetupService = new HostSetupService({
     run: defaultCommandRunner,
     clientDir,

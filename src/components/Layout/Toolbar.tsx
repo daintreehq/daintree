@@ -143,6 +143,7 @@ import {
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { ToolbarProjectPill, ToolbarProjectPillTooltipBody } from "./ToolbarProjectPill";
 import { HostChip } from "@/components/Hosts/HostChip";
+import { AttachedMachinesIndicator } from "@/components/Hosts/AttachedMachinesIndicator";
 import { shortSha } from "@/utils/textParsing";
 import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
@@ -2655,6 +2656,7 @@ export function Toolbar({
                 )}
               </Tooltip>
               <HostChip />
+              <AttachedMachinesIndicator />
             </div>
 
             {/* RIGHT GROUP */}

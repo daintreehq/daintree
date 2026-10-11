@@ -1,12 +1,14 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type {
-  HostConnection,
-  HostDescriptor,
-  HostId,
-  OperationId,
-  OperationOutcome,
+import {
+  formatHostConnection,
+  sameHostConnection,
+  type HostConnection,
+  type HostDescriptor,
+  type HostId,
+  type OperationId,
+  type OperationOutcome,
 } from "../../../shared/types/remoteHosts.js";
 import type {
   DiscoveredHost,
@@ -28,10 +30,10 @@ import type { CommandRunner } from "./commandRunner.js";
 import { connectionKey, requireHostConnection, unsupportedConnection } from "./connection.js";
 import { discoverHosts } from "./discovery.js";
 import { runHostInstall } from "./hostInstaller.js";
-import { bootstrapHostMode } from "./hostModeBootstrap.js";
+import { bootstrapHostMode, LINUX_START_SCRIPT, MAC_START_SCRIPT } from "./hostModeBootstrap.js";
 import { probeHost, type ProbeOutcome } from "./hostProbe.js";
 import { NIGHTLY_FEED_URL, STABLE_FEED_URL, type ClientBuild, planInstall } from "./installPlan.js";
-import { createSshCommandChannel, type HostCommandChannel } from "./remoteShell.js";
+import { createSshCommandChannel, failureDetail, type HostCommandChannel } from "./remoteShell.js";
 import { closeSshMaster, controlPathFor } from "./sshTransport.js";
 
 /**
@@ -66,6 +68,9 @@ function requireTarget(payload: unknown): HostConnection {
 }
 
 /** Per-machine cache key: an ssh host keeps the key of its target alone. */
+/** How long a host started for a connection gets to begin listening. */
+const START_LISTEN_TIMEOUT_MS = 60_000;
+
 function targetKey(connection: HostConnection): string {
   let key: string;
   switch (connection.kind) {
@@ -230,6 +235,77 @@ export class HostSetupService {
       sleep: this.deps.sleep ?? abortableSleep,
       now: this.deps.now,
     });
+  }
+
+  /**
+   * Start Daintree on a host where it is set up but not serving, as after a
+   * reboot or a power cut, so a connection can carry on. Starts it as it was
+   * set up and changes nothing about it: never installs, never writes a
+   * service, never turns on Host mode or start at login. Consent is what
+   * survives a reboot there: a Mac's own Host mode record saying on, a Linux
+   * user service that setup installed. Skipped while an install or update for
+   * the host runs (it stops and starts the host itself). Throws why it
+   * couldn't start (no logged-in session on a Mac, a failed service).
+   */
+  async ensureHostRunning(
+    connection: HostConnection,
+    signal?: AbortSignal
+  ): Promise<"listening" | "started" | "not-startable"> {
+    if (this.installRunningFor(connection)) return "not-startable";
+    const channel = this.shellFor(connection);
+    const outcome = await this.probeOutcome(connection, channel, signal);
+    const probe = outcome.result;
+    if (!outcome.parsed || !probe.reachable || !probe.install) return "not-startable";
+    if (probe.hostModeListening) return "listening";
+    if (probe.hostModeState?.enabled === false) return "not-startable";
+    const script =
+      probe.platform === "darwin" && probe.hostModeState?.enabled === true
+        ? MAC_START_SCRIPT
+        : probe.platform === "linux" && probe.advice.hostModeUnit === true
+          ? LINUX_START_SCRIPT
+          : null;
+    if (!script) return "not-startable";
+    // Last look before changing anything on the host.
+    if (signal?.aborted || this.installRunningFor(connection)) return "not-startable";
+    const label = formatHostConnection(connection);
+    const started = await channel.exec(script, { timeoutMs: 30_000, signal });
+    if (started.code !== 0) {
+      throw new AppError({
+        code: "INTERNAL",
+        message: `Couldn't start Daintree on the host: ${failureDetail(started, "ssh failed")}`,
+        userMessage:
+          probe.platform === "darwin"
+            ? `Couldn't start Daintree on ${label}. Log in there (or turn on automatic login), then connect again.`
+            : `Couldn't start Daintree's service on ${label}: ${failureDetail(started, "systemctl failed")}`,
+      });
+    }
+    const sleep = this.deps.sleep ?? abortableSleep;
+    const now = this.deps.now ?? Date.now;
+    const deadline = now() + START_LISTEN_TIMEOUT_MS;
+    while (now() < deadline) {
+      if (signal?.aborted) return "not-startable";
+      await sleep(1_000, signal ?? new AbortController().signal);
+      const next = await this.probeOutcome(connection, channel, signal);
+      if (next.result.hostModeListening) return "started";
+    }
+    throw new AppError({
+      code: "INTERNAL",
+      message: "The host's Daintree started but never listened",
+      userMessage: `Daintree started on ${label} but didn't begin listening within a minute.`,
+    });
+  }
+
+  /** An install or update for this host is running: it stops and starts Daintree there itself. */
+  private installRunningFor(connection: HostConnection): boolean {
+    for (const [opId, target] of this.targets) {
+      if (
+        sameHostConnection(target, connection) &&
+        this.operations.status(opId).status === "running"
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Forgetting a host drops what reaching it left here (an SSH master and control socket) and any cached bundles. */

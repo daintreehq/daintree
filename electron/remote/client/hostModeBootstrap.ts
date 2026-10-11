@@ -165,6 +165,14 @@ export function linuxHandoffScript(target: ReturnType<typeof linuxLaunchTarget>)
 }
 
 /** Launch (or hand over to) Daintree on a Mac, in its logged-in session. */
+/**
+ * Start a host that is already set up, exactly as it was set up: Host mode for
+ * this run on a Mac (no saved setting touched, unlike {@link MAC_ENABLE_SCRIPT}),
+ * the existing user service on Linux (never written here).
+ */
+export const MAC_START_SCRIPT = `open -g -a ${sq(MAC_APP_PATH)} --args ${HOST_MODE_FLAG}`;
+export const LINUX_START_SCRIPT = `systemctl --user start ${LINUX_UNIT_NAME}`;
+
 export const MAC_ENABLE_SCRIPT = `open -n -g -a ${sq(MAC_APP_PATH)} --args ${HOST_MODE_FLAG} ${ENABLE_HOST_MODE_FLAG}`;
 
 /** Host mode is on for good there: listening, saved, and start at login in place. */

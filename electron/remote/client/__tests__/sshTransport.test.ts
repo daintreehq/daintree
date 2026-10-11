@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostServer } from "../../host/HostServer.js";
 import { hostSocketLocation } from "../../host/hostSocketPath.js";
 import { LinkClient, type LinkClientState } from "../LinkClient.js";
@@ -377,6 +377,81 @@ describe("SshTransport with an injected ssh", () => {
     });
     await expect(transport.open(new AbortController().signal)).rejects.toMatchObject({
       detail: "cat: /run/user/1000/daintree/host.json: No such file or directory",
+    });
+  });
+
+  describe("a host whose Daintree isn't running", () => {
+    const missingDiscovery =
+      (reads: { count: number }): SshSpawner =>
+      (args) => {
+        const child = new FakeChild();
+        if (args.at(-1) === PROBE_COMMAND) child.finish(0, "Darwin\n501\n/Users/g\n");
+        else if (args.at(-1)?.startsWith("cat -- ")) {
+          reads.count++;
+          child.finish(1, "", "cat: host.json: No such file or directory\n");
+        } else child.finish(0);
+        return child;
+      };
+
+    it("asks once to start it after ssh reached the host, then tries again", async () => {
+      const reads = { count: 0 };
+      const ensureRunning = vi.fn(async () => true);
+      const transport = new SshTransport({
+        target: "studio",
+        clientDir: path.join(root, "c"),
+        spawn: missingDiscovery(reads),
+        ensureRunning,
+      });
+      await expect(transport.open(new AbortController().signal)).rejects.toMatchObject({
+        detail: "cat: host.json: No such file or directory",
+      });
+      expect(ensureRunning).toHaveBeenCalledTimes(1);
+      expect(reads.count).toBe(2);
+    });
+
+    it("never asks when ssh itself couldn't reach the host", async () => {
+      const ensureRunning = vi.fn(async () => true);
+      const spawner: SshSpawner = () => {
+        const child = new FakeChild();
+        child.finish(255, "", "ssh: connect to host studio port 22: Connection refused\n");
+        return child;
+      };
+      const transport = new SshTransport({
+        target: "studio",
+        clientDir: path.join(root, "c"),
+        spawn: spawner,
+        ensureRunning,
+      });
+      await expect(transport.open(new AbortController().signal)).rejects.toBeInstanceOf(
+        TransportError
+      );
+      expect(ensureRunning).not.toHaveBeenCalled();
+    });
+
+    it("reports why it couldn't be started, and leaves it there when it can't be", async () => {
+      const reads = { count: 0 };
+      const refused = new SshTransport({
+        target: "studio",
+        clientDir: path.join(root, "c"),
+        spawn: missingDiscovery(reads),
+        ensureRunning: async () => {
+          throw new TransportError("Log in on studio once", "Log in on studio once");
+        },
+      });
+      await expect(refused.open(new AbortController().signal)).rejects.toMatchObject({
+        detail: "Log in on studio once",
+      });
+      const notStartable = new SshTransport({
+        target: "studio",
+        clientDir: path.join(root, "c"),
+        spawn: missingDiscovery(reads),
+        ensureRunning: async () => false,
+      });
+      reads.count = 0;
+      await expect(notStartable.open(new AbortController().signal)).rejects.toMatchObject({
+        detail: "cat: host.json: No such file or directory",
+      });
+      expect(reads.count).toBe(1);
     });
   });
 });

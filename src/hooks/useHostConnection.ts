@@ -227,6 +227,48 @@ export async function takeOverDrive(projectId: string): Promise<void> {
   });
 }
 
+/**
+ * Opening a host's project from here is taking it over: the sessions there are
+ * this user's own, so the view takes the project as {@link takeOverDrive} does
+ * (held saves dropped, the host's state read back as authoritative). Once per
+ * view, not per sync mount (the layout remounts once after hydration), and
+ * only until it succeeds; a machine that takes the project over later is
+ * offered back through the banner, never fought for.
+ */
+const openClaim = { projectId: null as string | null, done: false, inFlight: false, owed: false };
+
+function openClaimOutstanding(projectId: string): boolean {
+  return openClaim.projectId !== projectId || !openClaim.done;
+}
+
+function claimOpenedProject(projectId: string, isLive: () => boolean): void {
+  if (openClaim.projectId !== projectId) {
+    Object.assign(openClaim, { projectId, done: false, inFlight: false, owed: false });
+  }
+  if (openClaim.done || !isLive()) return;
+  // A link that came up while an attempt was out gets one more once it settles.
+  if (openClaim.inFlight) {
+    openClaim.owed = true;
+    return;
+  }
+  openClaim.inFlight = true;
+  openClaim.owed = false;
+  void takeOverDrive(projectId)
+    .then(
+      () => {
+        openClaim.done = true;
+      },
+      async (error: unknown) => {
+        logWarn("[HostConnection] Couldn't take the project over on open", { error });
+        if (isLive()) await refreshLease();
+      }
+    )
+    .finally(() => {
+      openClaim.inFlight = false;
+      if (!openClaim.done && openClaim.owed && isLive()) claimOpenedProject(projectId, isLive);
+    });
+}
+
 let syncRefs = 0;
 let stopSync: (() => void) | null = null;
 
@@ -256,6 +298,7 @@ function beginSync(): () => void {
   const hostId = getViewHostId();
   const projectId = getViewWorkspaceId();
   let disposed = false;
+  const isLive = () => !disposed;
 
   // Fetched up front so the first preview this view builds already carries it.
   if (hostId !== null) void primeHostPreviewCapability();
@@ -282,7 +325,10 @@ function beginSync(): () => void {
       // Until the host says who drives, a remote view could be typing over
       // someone else, so it starts read-only.
       setLeaseInputBlock({ kind: "lease-unknown", hostName: hostLabel() });
-      void refreshLease();
+      // Once, at open (or when the link first comes up, if it was down); a
+      // machine that takes it over later is offered back through the banner,
+      // never fought for.
+      claimOpenedProject(projectId, isLive);
     } else {
       void remoteDrivingPossible().then((possible) => {
         if (possible && !disposed) void refreshLease();
@@ -323,13 +369,16 @@ function beginSync(): () => void {
               { context: "Warning about a host's different build" }
             );
           }
+          const claimOutstanding = projectId !== null && openClaimOutstanding(projectId);
           if (resyncPending) {
             resyncPending = false;
             // After an explicit disconnect the link that comes back is a new session.
             void resyncFromHost({ freshSession: true });
-          } else if (getLeaseInputBlock()?.kind === "lease-unknown") {
+          } else if (!claimOutstanding && getLeaseInputBlock()?.kind === "lease-unknown") {
             void refreshLease();
           }
+          // A view whose claim on open hasn't gone through yet makes it now.
+          if (claimOutstanding) claimOpenedProject(projectId, isLive);
         }
       })
     );
@@ -495,4 +544,5 @@ export function _resetHostConnectionSyncForTesting(): void {
   resyncRunning = null;
   resyncAgain = false;
   resyncProjectStateOwed = false;
+  Object.assign(openClaim, { projectId: null, done: false, inFlight: false, owed: false });
 }

@@ -148,7 +148,7 @@ export function getDriveLeaseBannerCopy(
   if (state.kind === "taken-from-host") {
     return {
       title: `Being driven from ${state.driverName}`,
-      description: "Terminals here are read-only while it drives. Take back to type here again.",
+      description: "Read-only here",
       actionLabel: "Take back",
     };
   }
@@ -156,7 +156,7 @@ export function getDriveLeaseBannerCopy(
     title: state.driverIsHostScreen
       ? `${hostName} is being driven from its own screen`
       : `${hostName} is being driven from ${state.driverName}`,
-    description: "Terminals here are read-only while it drives. Take over to type here instead.",
+    description: "Read-only here",
     actionLabel: "Take over",
   };
 }

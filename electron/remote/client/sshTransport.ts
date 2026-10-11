@@ -75,6 +75,12 @@ export interface SshTransportOptions {
   controlPersist?: string;
   /** Remote userData directory name on macOS (the packaged app's by default). */
   macAppDirName?: string;
+  /**
+   * Called once when ssh reached the host but Daintree there didn't answer:
+   * start it if it can be (installed, Host mode last on), resolving true when
+   * the link should be tried again. Rejects with why it couldn't start.
+   */
+  ensureRunning?: (signal: AbortSignal) => Promise<boolean>;
   linuxDirName?: string;
 }
 
@@ -449,6 +455,22 @@ export class SshTransport implements LinkTransport {
   }
 
   async open(signal: AbortSignal): Promise<LinkTransportConnection> {
+    let reached = false;
+    try {
+      return await this.openOnce(signal, () => (reached = true));
+    } catch (error) {
+      // ssh itself failing (unreachable, refused key) is not Daintree being down.
+      const ensureRunning = this.options.ensureRunning;
+      if (!reached || !ensureRunning || signal.aborted) throw error;
+      if (!(await ensureRunning(signal))) throw error;
+      return this.openOnce(signal, () => {});
+    }
+  }
+
+  private async openOnce(
+    signal: AbortSignal,
+    onReached: () => void
+  ): Promise<LinkTransportConnection> {
     const { target, clientDir } = this.options;
     await fs.mkdir(clientDir, { recursive: true, mode: 0o700 });
     await fs.chmod(clientDir, 0o700);
@@ -463,6 +485,7 @@ export class SshTransport implements LinkTransport {
     if (!remote) {
       throw new TransportError("Unrecognised reply from the host", probe.stdout.trim() || null);
     }
+    onReached();
     const location = remoteHostSocketLocation({
       ...remote,
       macAppDirName: this.options.macAppDirName,

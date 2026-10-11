@@ -226,6 +226,121 @@ describe("HostSetupService", () => {
     ).toBe(true);
   });
 
+  describe("ensureHostRunning: a host whose Daintree stopped", () => {
+    const hostState = (enabled: boolean) =>
+      JSON.stringify({
+        daintreeHostMode: 1,
+        pid: 4242,
+        enabled,
+        startAtLogin: true,
+        startAtLoginInstalled: true,
+        startAtLoginError: null,
+        keychain: { state: "ok", detail: "Keychain answered", checked: true },
+      });
+    const MAC_STOPPED = (enabled: boolean) =>
+      [
+        "@@dt:uname Darwin arm64",
+        "@@dt:install app-bundle /Applications/Daintree.app",
+        "@@dt:version 1.4.0",
+        '@@dt:buildinfo {"daintreeBuildInfo":1,"version":"1.4.0","commit":"abcdef0123"}',
+        "@@dt:download yes",
+        `@@dt:hostmodestate ${hostState(enabled)}`,
+        "@@dt:end",
+      ].join("\n");
+    const recording = (outputs: string[]) => {
+      const scripts: string[] = [];
+      const run: CommandRunner = async (_command, args) => {
+        const script = args.at(-1) ?? "";
+        scripts.push(script);
+        if (script.includes("@@dt:uname"))
+          return ok(outputs.length > 1 ? outputs.shift()! : outputs[0]!);
+        return ok();
+      };
+      return { run, scripts };
+    };
+    const started = (scripts: string[]) =>
+      scripts.some((c) => c.includes("open -g -a") || c.includes("systemctl --user start"));
+    const studio = { kind: "ssh", target: "studio" } as const;
+
+    it("starts a Mac that was a host before, after a power cut left it stopped", async () => {
+      const running = MAC_STOPPED(true).replace(
+        "@@dt:end",
+        "@@dt:running yes\n@@dt:listening yes\n@@dt:hostpid 4242\n@@dt:launchagent yes\n@@dt:end"
+      );
+      const { run, scripts } = recording([MAC_STOPPED(true), MAC_STOPPED(true), running]);
+      const { setup } = service("", { run });
+      await expect(setup.ensureHostRunning(studio)).resolves.toBe("started");
+      expect(started(scripts)).toBe(true);
+      // Started as it was set up: Host mode for this run, no saved setting or login item touched.
+      expect(scripts.some((c) => c.includes("--enable-host-mode"))).toBe(false);
+      expect(scripts.some((c) => c.includes("open -n"))).toBe(false);
+    });
+
+    it("starts a Linux host's existing service and writes nothing, even after /run was cleared", async () => {
+      const linux = (listening: boolean) =>
+        [
+          "@@dt:uname Linux x86_64",
+          "@@dt:install deb /opt/Daintree",
+          "@@dt:version 1.4.0",
+          "@@dt:unit yes",
+          ...(listening ? ["@@dt:running yes", "@@dt:listening yes"] : []),
+          "@@dt:end",
+        ].join("\n");
+      const { run, scripts } = recording([linux(false), linux(false), linux(true)]);
+      await expect(service("", { run }).setup.ensureHostRunning(studio)).resolves.toBe("started");
+      const actions = scripts.filter((c) => !c.includes("@@dt:uname"));
+      expect(actions).toEqual([
+        expect.stringContaining("systemctl --user start daintree-host.service"),
+      ]);
+
+      const noUnit = recording([linux(false).replace("@@dt:unit yes", "@@dt:unit no")]);
+      await expect(service("", { run: noUnit.run }).setup.ensureHostRunning(studio)).resolves.toBe(
+        "not-startable"
+      );
+      expect(started(noUnit.scripts)).toBe(false);
+    });
+
+    it("starts nothing for a connection already cancelled", async () => {
+      const { run, scripts } = recording([MAC_STOPPED(true)]);
+      const abort = new AbortController();
+      abort.abort();
+      await expect(
+        service("", { run }).setup.ensureHostRunning(studio, abort.signal)
+      ).resolves.toBe("not-startable");
+      expect(started(scripts)).toBe(false);
+    });
+
+    it("leaves alone a host whose user switched Host mode off, or that never ran it", async () => {
+      const off = recording([MAC_STOPPED(false)]);
+      await expect(service("", { run: off.run }).setup.ensureHostRunning(studio)).resolves.toBe(
+        "not-startable"
+      );
+      expect(started(off.scripts)).toBe(false);
+
+      const never = recording([MAC_STOPPED(true).replace(/@@dt:hostmodestate .*\n/, "")]);
+      await expect(service("", { run: never.run }).setup.ensureHostRunning(studio)).resolves.toBe(
+        "not-startable"
+      );
+      expect(started(never.scripts)).toBe(false);
+    });
+
+    it("never installs: a host without Daintree is left as it is", async () => {
+      const bare = recording(["@@dt:uname Darwin arm64\n@@dt:download yes\n@@dt:end"]);
+      await expect(service("", { run: bare.run }).setup.ensureHostRunning(studio)).resolves.toBe(
+        "not-startable"
+      );
+      expect(bare.scripts.filter((c) => !c.includes("@@dt:uname"))).toEqual([]);
+    });
+
+    it("does nothing to a host that is already listening", async () => {
+      const up = recording([MAC_RUNNING_OLD]);
+      await expect(service("", { run: up.run }).setup.ensureHostRunning(studio)).resolves.toBe(
+        "listening"
+      );
+      expect(started(up.scripts)).toBe(false);
+    });
+  });
+
   it("drops the SSH master and cached bundles when a host is forgotten", async () => {
     const { setup, calls } = service(LINUX_NO_UNIT);
     const key = crypto.createHash("sha256").update("studio").digest("hex").slice(0, 16);

@@ -62,6 +62,7 @@ export {
   Plug, // agent (integration that plugs into the host system); also a terminal handed to an agent pane, paired with Unplug to take it back
   Plus, // the toolbar launcher — "make me a new thing" (agent, panel)
   Radar, // an agent pane waiting to hear about other terminals, which Daintree may type a notice into — distinct from BellDot, the user's own watch alert
+  ScreenShare, // this machine is being used from another one — the host's "in use from" pill
   Server, // a machine a window runs on — the toolbar's host switcher, beside the project pill
   ServerCog, // a worktree's runtime — dev-server and remote-environment lifecycle
   Sprout, // origin / first step (main worktree, first agent launch)
