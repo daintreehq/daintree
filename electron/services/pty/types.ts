@@ -112,6 +112,12 @@ export interface TerminalPublicState {
   hasPty?: boolean;
   /** Captured agent session ID from graceful shutdown */
   agentSessionId?: string;
+  /**
+   * `agentSessionId` was written by a graceful-shutdown scrape, not carried in
+   * from launch. A restored `codex resume <id>` pane holds its id from the
+   * start, so the id alone can't say the teardown observed anything (#13226).
+   */
+  sessionIdCapturedAtTeardown?: boolean;
   /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */

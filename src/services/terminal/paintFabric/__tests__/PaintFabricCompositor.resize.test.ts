@@ -47,6 +47,40 @@ describe("PaintFabricCompositor resize coordination", () => {
     expect(b.cancelActiveResizePass).not.toHaveBeenCalled();
   });
 
+  it("leads a burst with an immediate pass and coalesces the rest behind it", async () => {
+    const { compositor, a, b } = makeCompositor();
+    await compositor.getOrCreate("t1-b", undefined, {});
+    await compositor.getOrCreate("t2-a", undefined, {});
+
+    compositor.scheduleBatchResize(["t1-b"], { leading: true });
+    expect(b.runResizePass).toHaveBeenCalledWith(["t1-b"], { immediate: true });
+
+    compositor.scheduleBatchResize(["t2-a"], { leading: true });
+    expect(a.runResizePass).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(GRID_RESIZE_COALESCE_MS + 16);
+    expect(a.runResizePass).toHaveBeenCalledWith(["t2-a"], { immediateIds: new Set(["t2-a"]) });
+    expect(b.runResizePass).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps leading requests inside a burst immediate in the trailing pass", async () => {
+    const { compositor, a, b } = makeCompositor();
+    await compositor.getOrCreate("t1-b", undefined, {});
+    await compositor.getOrCreate("t2-a", undefined, {});
+
+    compositor.scheduleBatchResize(["t1-b"]);
+    vi.advanceTimersByTime(GRID_RESIZE_COALESCE_MS);
+    // The trailing pass is waiting on its frame: still the same burst.
+    compositor.scheduleBatchResize(["t2-a"], { leading: true });
+    expect(a.runResizePass).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(16 + GRID_RESIZE_COALESCE_MS + 16);
+    expect(b.runResizePass).toHaveBeenCalledWith(["t1-b"]);
+    expect(a.runResizePass).toHaveBeenCalledWith(["t2-a"], {
+      immediateIds: new Set(["t2-a"]),
+    });
+  });
+
   it("a scoped pass preserves active work on surfaces outside the pass", async () => {
     const { compositor, a, b } = makeCompositor();
     await compositor.getOrCreate("t1-b", undefined, {});

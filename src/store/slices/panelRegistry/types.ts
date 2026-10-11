@@ -34,6 +34,14 @@ export interface RestartTerminalOptions {
    * Defaults to `true` (resume enabled).
    */
   allowResumeLatest?: boolean;
+  /**
+   * Relaunch the pane's launch agent into exactly this conversation, even when
+   * the agent has already quit to the shell — the one case a demoted pane
+   * restarts as its agent rather than a plain shell (#5764). Used to reopen
+   * the conversation a launched run ended without (#13226). Ignored for a pane
+   * with no launch agent.
+   */
+  resumeSessionId?: string;
 }
 
 export interface TrashedTerminalGroupMetadata {
@@ -84,7 +92,7 @@ export interface PanelRegistrySlice {
   /** Explicit tab group storage - single source of truth for tab membership and order */
   tabGroups: Map<string, TabGroup>;
 
-  addPanel: (options: AddPanelOptions) => Promise<string | null>;
+  addPanel: (options: AddPanelOptions, commit?: AddPanelCommitOptions) => Promise<string | null>;
   /**
    * Hydration-only: collect subsequent `addPanel` mutations into one batched commit
    * instead of applying each individually. Every `addPanel` between begin and flush
@@ -405,3 +413,21 @@ export type PanelRegistryMiddleware = {
 };
 
 export type PanelRegistryStoreApi = StoreApi<PanelRegistrySlice>;
+
+/** Renderer-internal extras for the store wrapper's call into the registry. */
+export interface AddPanelCommitOptions {
+  /**
+   * Focus the new panel in the same `set()` that adds it, when it lands in the
+   * grid. Focusing in a follow-up `set()` after the registry returns costs a
+   * second full grid render before the new pane's first frame.
+   */
+  focus?: {
+    previousFocusedId: string | null;
+    /**
+     * Re-checked inside the commit: the add awaits before committing, and a
+     * panel maximized in that gap must keep focus until the wrapper leaves
+     * fullscreen.
+     */
+    stillApplies: () => boolean;
+  };
+}

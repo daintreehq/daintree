@@ -100,7 +100,7 @@ CI runs `npm run check:help` (folded into `npm run check`) to catch drift betwee
 
 ## Tier Model
 
-Help sessions run one of two tool sets, selected under Settings → Assistant → Daintree Assistant → Tool set. The local `daintree` MCP server filters its `ListTools` response and rejects out-of-set `CallTool` requests with `TIER_NOT_PERMITTED`. `full` is `core` plus addons. Both assistants run at the selected set, and both prompts explain it. The set decides what is reachable; an action's own `danger: "confirm"` still pauses it for the user.
+Help sessions run one of two tool sets, selected under Settings → Daintree Assistant → Security → Tool set. The local `daintree` MCP server filters its `ListTools` response and rejects out-of-set `CallTool` requests with `TIER_NOT_PERMITTED`. `full` is `core` plus addons. Both assistants run at the selected set, and both prompts explain it. The set decides what is reachable; an action's own `danger: "confirm"` still pauses it for the user.
 
 | Tool set | Trigger | Capabilities (categories) |
 | --- | --- | --- |
@@ -111,7 +111,7 @@ Nothing outside `full` is reachable over MCP: no git or forge writes, no file re
 
 These are the **help-assistant** tool sets. They are distinct from the `external` tier that API-key clients connect at, a separately budgeted allowlist — see [`docs/architecture/mcp-server.md`](../docs/architecture/mcp-server.md).
 
-Tool set and `bypassPermissions` (skip Claude's per-tool prompt) are independent settings — both are configured under Settings → Assistant → Daintree Assistant.
+Tool set and `bypassPermissions` (skip Claude's per-tool prompt) are independent settings — both are configured under Settings → Daintree Assistant → Security.
 
 The authoritative definitions live in `shared/config/helpAssistantTierAllowlists.ts` (`CORE_TIER_TOOLS`, `FULL_TIER_ADDONS`); `electron/services/mcp-server/shared.ts` lifts them into Sets for dispatch-time lookup. When local MCP is disabled in settings, the `daintree` server is omitted from the per-session config entirely (Claude's `.mcp.json` and Codex's `-c` flags alike) — the assistant loses app control but keeps its docs and local tools.
 
@@ -154,7 +154,7 @@ All documentation is served exclusively through MCP — there are no bundled fal
 
 ## Runbook Search Server
 
-While **Follow runbooks** (Settings → Assistant → Daintree Assistant → Behavior) is on, and Daintree control with it, every help session also gets the `daintree-runbooks` MCP server at `https://assistant.daintree.org/v1/daintree/mcp`. It is the stateless runbook search from the `assistant-backend` repo: one tool, `search_runbooks`, which ranks the runbook catalog against a task and returns the matching procedures, marking the ones its classifier would load as `selected`. The setting is on by default.
+While **Follow runbooks** (Settings → Daintree Assistant → Behavior) is on, and Daintree control with it, every help session also gets the `daintree-runbooks` MCP server at `https://assistant.daintree.org/v1/daintree/mcp`. It is the stateless runbook search from the `assistant-backend` repo: one tool, `search_runbooks`, which ranks the runbook catalog against a task and returns the matching procedures, marking the ones its classifier would load as `selected`. The setting is on by default.
 
 The rule that makes the assistant use it is not in the generated prompts. Both templates carry an empty `<!-- DAINTREE_RUNBOOKS_START/END -->` slot right after the role, and `HelpSessionService` fills it (`electron/services/helpSessionRunbooks.ts`) only while runbooks are on, emptying it again when they are off — so the rule is among the first things the agent reads, and the prompt never has to say "unless disabled". It requires a search before the first `daintree` call on any request to do something, and it prescribes the query: one sentence of 8–15 words in the user's voice with specifics removed. That shape was measured against the selector — it routed as well as the raw user message, while three-word phrases dropped halves of compound tasks and third-person or "ask …" phrasings were misrouted to the agent-question runbooks.
 

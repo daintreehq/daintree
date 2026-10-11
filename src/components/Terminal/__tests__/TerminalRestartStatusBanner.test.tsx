@@ -345,4 +345,40 @@ describe("TerminalRestartStatusBanner", () => {
       });
     });
   });
+
+  describe("agent-resume-offer variant (#13226)", () => {
+    it("resumes the offered conversation and can be dismissed", () => {
+      const onResume = vi.fn();
+      const onDismiss = vi.fn();
+      render(
+        <TerminalRestartStatusBanner
+          variant={{ type: "agent-resume-offer", agentId: "codex", sessionId: "s1" }}
+          onRestart={vi.fn()}
+          onDismiss={onDismiss}
+          onResumeConversation={onResume}
+          findSessionSlot={<button type="button">Find session</button>}
+        />
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Resume conversation" }));
+      expect(onResume).toHaveBeenCalledTimes(1);
+      // A known conversation needs no picker.
+      expect(screen.queryByText("Find session")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+      expect(onDismiss).toHaveBeenCalledTimes(1);
+    });
+
+    it("offers the picker instead when the launch had no conversation id", () => {
+      render(
+        <TerminalRestartStatusBanner
+          variant={{ type: "agent-resume-offer", agentId: "codex", sessionId: undefined }}
+          onRestart={vi.fn()}
+          onDismiss={vi.fn()}
+          onResumeConversation={vi.fn()}
+          findSessionSlot={<button type="button">Find session</button>}
+        />
+      );
+      expect(screen.getByText("Find session")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Resume conversation" })).toBeNull();
+    });
+  });
 });

@@ -1010,6 +1010,7 @@ describe("preferences action hardening", () => {
       "help.shortcutsAlt",
       "help.displayImage",
       "help.openCommandsFolder",
+      "help.resumePastSession",
       "help.gettingStarted.show",
       "help.tour.show",
       "help.launchAgent",

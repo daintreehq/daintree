@@ -32,7 +32,12 @@ import { getAgentConfig } from "@/config/agents";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { isPtyPanel, type PanelInstance, type PanelTitleMode } from "@shared/types/panel";
+import {
+  isPtyPanel,
+  type PanelInstance,
+  type PanelTitleMode,
+  type PtyPanelData,
+} from "@shared/types/panel";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
@@ -145,6 +150,19 @@ async function buildRestartEnv(
   return mergeSpawnEnv(globalEnv, projectEnv, runtimeEnv);
 }
 
+/**
+ * Something new runs in the shell an agent left behind: another agent, a
+ * recognised process, or any busy foreground job (`background` is what a busy
+ * plain shell reports). A forced resume would tear it down (#13226).
+ */
+function shellMovedOn(panel: PtyPanelData): boolean {
+  return (
+    panel.detectedAgentId !== undefined ||
+    panel.detectedProcessId !== undefined ||
+    panel.activityType === "background"
+  );
+}
+
 // Helper to update a single terminal field in the normalized store
 function updateTerminal(
   state: PanelRegistrySlice,
@@ -237,6 +255,7 @@ export const createRestartActions = (
   restartTerminal: async (id, options) => {
     const allowResumeLatest = options?.allowResumeLatest !== false;
     const terminal = get().panelsById[id];
+    const forcedResumeSessionId = options?.resumeSessionId;
 
     if (!terminal) {
       logWarn("[TerminalStore] Cannot restart: terminal not found", { id });
@@ -262,6 +281,13 @@ export const createRestartActions = (
     // Guard against concurrent restart attempts
     if (terminal.isRestarting) {
       logWarn("[TerminalStore] Terminal is already restarting, ignoring", { id });
+      return;
+    }
+
+    // Refused before anything is reset, so a pane the user has carried on in
+    // keeps its live state untouched; re-checked once more before the kill.
+    if (forcedResumeSessionId && terminal.launchAgentId && shellMovedOn(terminal)) {
+      logWarn("[TerminalStore] Forced resume refused: the pane moved on", { id });
       return;
     }
 
@@ -419,10 +445,14 @@ export const createRestartActions = (
     // its shell) has `command` cleared — without this, a demoted shell whose
     // restart then fails to spawn would wrongly re-promote to an agent (#5764).
     const failedAgentLaunch = wasFailed && currentTerminal.command !== undefined;
+    // An explicit resume names the conversation to reopen, so the pane relaunches
+    // as its agent whatever it is running now (#13226).
+    const forcedResume = !!effectiveAgentId && !!forcedResumeSessionId;
     const isAgent =
-      !!effectiveAgentId &&
-      (currentTerminal.agentState !== "exited" || failedAgentLaunch) &&
-      currentTerminal.exitCode === undefined;
+      forcedResume ||
+      (!!effectiveAgentId &&
+        (currentTerminal.agentState !== "exited" || failedAgentLaunch) &&
+        currentTerminal.exitCode === undefined);
     const isDemotedAgent = !!effectiveAgentId && !isAgent;
     let loadedRuntimeSettings: LoadedAgentRuntimeSettings | undefined;
     let runtimeSettingsLoaded = false;
@@ -638,6 +668,21 @@ export const createRestartActions = (
       }
     }
 
+    // A forced resume reopens a conversation in a shell its agent left behind.
+    // Anything now running there — a command the user typed, another agent —
+    // means they carried on in the meantime, and tearing it down for the old
+    // conversation would discard their work (#13226). Checked last, after every
+    // settings await, as the final gate before the shell is killed.
+    if (forcedResume) {
+      const live = get().panelsById[id];
+      if (!live || !isPtyPanel(live) || live.location === "trash" || shellMovedOn(live)) {
+        unmarkTerminalRestarting(id);
+        set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
+        logWarn("[TerminalStore] Forced resume abandoned: the pane moved on", { id });
+        return;
+      }
+    }
+
     try {
       // CAPTURE LIVE DIMENSIONS before destroying the frontend
       const managedInstance = terminalInstanceService.get(id);
@@ -678,7 +723,9 @@ export const createRestartActions = (
           // A failed spawn (`wasFailed`) has no live process to quit — bare
           // kill keeps PtyManager's missing-terminal cleanup (session-file
           // delete), which the graceful channel skips on a registry miss.
-          if (isAgent && !wasFailed) {
+          // A forced resume of a pane whose agent already quit has nothing live
+          // to quit and capture; the shell it left behind just goes.
+          if (isAgent && !wasFailed && !(forcedResume && currentTerminal.agentState === "exited")) {
             try {
               return await terminalClient.gracefulKill(id, { forRestart: true });
             } catch (error) {
@@ -722,7 +769,9 @@ export const createRestartActions = (
           (currentTerminal.detectedAgentId === undefined ||
             currentTerminal.detectedAgentId === effectiveAgentId);
         const sessionId =
-          (captureTrusted ? capturedSessionId : null) ?? currentTerminal.agentSessionId;
+          forcedResumeSessionId ??
+          (captureTrusted ? capturedSessionId : null) ??
+          currentTerminal.agentSessionId;
         if (sessionId) {
           // An exact candidate never degrades to resume-latest: if its
           // command can't be built, the safe outcome is a fresh launch, not
@@ -767,8 +816,12 @@ export const createRestartActions = (
       // too, so no copy of it survives in panel state (#11782).
       // An absent command stays absent: coercing it to "" would flip the
       // strict `command !== undefined` gate on `failedAgentLaunch` above.
+      // A demoted pane has no stored command left, so a forced resume keeps the
+      // fresh launch command the next restart would rebuild anyway.
       const durableSource =
-        consumedSessionId || usedResumeLatest ? currentTerminal.command : spawnCommand;
+        consumedSessionId || usedResumeLatest
+          ? (currentTerminal.command ?? (forcedResume ? freshCommand : undefined))
+          : spawnCommand;
       const durableCommand = durableSource
         ? stripAssignedSessionIdArgs(durableSource, effectiveAgentId)
         : durableSource;
@@ -777,8 +830,12 @@ export const createRestartActions = (
       // pane's conversation addressable without waiting on a teardown scrape.
       // Agents that mint their own id keep the previous behaviour of clearing
       // it and re-capturing at the next teardown.
+      // A forced resume names its conversation outright, so the pane holds it
+      // exactly as a resume-palette launch does.
       const nextSessionId =
-        isAgent && supportsSessionIdAssignment(currentTerminal.launchAgentId)
+        isAgent &&
+        (supportsSessionIdAssignment(currentTerminal.launchAgentId) ||
+          (forcedResume && consumedSessionId === forcedResumeSessionId))
           ? consumedSessionId
           : undefined;
 
@@ -819,6 +876,9 @@ export const createRestartActions = (
           conversationCwd: consumedSessionId ? t.conversationCwd : undefined,
           isRestarting: true,
           restartError: undefined,
+          // Answered only once the replacement is actually spawning, so a
+          // restart that fails validation leaves the offer to try again.
+          agentResumeOffer: undefined,
           exitCode: undefined,
           // Drop the prior session's parsed check result (#10682) — a fresh
           // run hasn't produced one yet, and a stale pass/fail would mislead.
@@ -888,7 +948,13 @@ export const createRestartActions = (
         ...restartTitle,
         command: isAgent ? spawnCommand : undefined,
         restore: false,
-        env: restartEnv,
+        // A forced resume reopens a conversation filed under the profile the
+        // pane launched with — a redirected CODEX_HOME — so its captured launch
+        // layer rides on top, exactly as a restore replays it (#10922).
+        env:
+          forcedResume && currentTerminal.env
+            ? { ...restartEnv, ...currentTerminal.env }
+            : restartEnv,
         agentLaunchFlags: isAgent ? nextAgentLaunchFlags : undefined,
         agentModelId: isAgent ? currentTerminal.agentModelId : undefined,
         // Without this the pty-host record loses its worktree for the rest of

@@ -11,6 +11,11 @@ export interface RestartBannerCopyMap {
   "auto-restarting": { title: string };
   restarting: { title: string };
   "session-resume-unavailable": (args: { reason: SessionLostReason }) => SessionLostCopy;
+  "agent-resume-offer": (args: { agentName: string; hasSession: boolean }) => {
+    title: string;
+    description: string;
+    resumeLabel: string;
+  };
   "exit-error": (args: { exitCode: number }) => { title: string };
 }
 
@@ -55,5 +60,14 @@ export const RESTART_BANNER_COPY: RestartBannerCopyMap = {
   "auto-restarting": { title: "Auto-restarting…" },
   restarting: { title: "Restarting…" },
   "session-resume-unavailable": ({ reason }) => ({ ...SESSION_LOST_COPY[reason], ...DISMISS_ALL }),
+  // Says what was seen — the agent is back at the shell — and never why: the
+  // same exit follows a crash, a cancelled update, or a quit (#13226).
+  "agent-resume-offer": ({ agentName, hasSession }) => ({
+    title: `${agentName} quit to the shell`,
+    description: hasSession
+      ? "Resume the conversation this pane opened, or carry on in the shell."
+      : "Find the conversation to reopen it here, or carry on in the shell.",
+    resumeLabel: "Resume conversation",
+  }),
   "exit-error": ({ exitCode }) => ({ title: `Session exited with code ${exitCode}` }),
 };

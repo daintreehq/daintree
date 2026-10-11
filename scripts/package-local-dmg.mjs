@@ -84,7 +84,7 @@ const isDir = dirIdx !== -1;
 if (isDir) passthrough.splice(dirIdx, 1);
 const target = isDir ? "--dir" : "dmg";
 
-// `--install` copies the freshly built app into /Applications and relaunches it.
+// `--install` copies the freshly built app into /Applications without quitting a running Daintree.
 const installIdx = passthrough.indexOf("--install");
 const doInstall = installIdx !== -1;
 if (doInstall) passthrough.splice(installIdx, 1);
@@ -188,5 +188,5 @@ run("npx", [
 
 if (doInstall) {
   const { installApp } = await import("./install-local.mjs");
-  await installApp(root, { relaunch: true });
+  await installApp(root);
 }

@@ -777,6 +777,10 @@ export interface GeneratedIpcInvokeMap {
     args: [patch: Partial<import("./api.js").HelpAssistantSettings>];
     result: void;
   };
+  "help:discard-conversation": {
+    args: [projectId: string, rawSlot?: number | undefined];
+    result: void;
+  };
   "help:get-folder-path": {
     args: [];
     result: string | null;
@@ -784,6 +788,10 @@ export interface GeneratedIpcInvokeMap {
   "help:get-pinned-action-context": {
     args: [sessionId: string];
     result: import("./help.js").PinnedActionContextSnapshot | null;
+  };
+  "help:list-past-sessions": {
+    args: [projectId: string];
+    result: import("./help.js").HelpPastSession[];
   };
   "help:list-pending-hibernation-slots": {
     args: [projectId: string];

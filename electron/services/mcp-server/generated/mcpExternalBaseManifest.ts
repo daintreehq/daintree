@@ -230,12 +230,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         notify: {
           description:
-            "When this agent next stops, Daintree types a notice quoting its screen into your prompt; end your turn, don't poll. Agent panes and assistants only.",
+            "When this agent next stops, Daintree types its handback summary, else its screen, into your prompt; end your turn, don't poll. Agent panes and assistants only.",
           type: "boolean",
         },
         replyLines: {
           description:
-            "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker.",
+            "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker. Set, it quotes despite a summary.",
           type: "integer",
           minimum: 0,
           maximum: 200,
@@ -620,7 +620,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "copyTree",
     danger: "safe",
     description:
-      "Bundle a worktree's context to a file and put it on the system clipboard, replacing what the user copied: the file on macOS and Linux, its path on Windows. Agent and MCP callers must name the worktree. Never returned inline; check the budget flags for completeness.",
+      "Bundle a worktree's context to a file and put it on the system clipboard, replacing what the user copied: the file on macOS/Linux, its path on Windows. Agents must name the worktree, or omit it if none exist to copy the root. Never returned inline; check budget flags.",
     enabled: true,
     id: "copyTree.generateAndCopyFile",
     inputSchema: {
@@ -2170,12 +2170,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         notify: {
           description:
-            "When this agent next stops, Daintree types a notice quoting its screen into your prompt; end your turn, don't poll. Agent panes and assistants only.",
+            "When this agent next stops, Daintree types its handback summary, else its screen, into your prompt; end your turn, don't poll. Agent panes and assistants only.",
           type: "boolean",
         },
         replyLines: {
           description:
-            "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker.",
+            "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker. Set, it quotes despite a summary.",
           type: "integer",
           minimum: 0,
           maximum: 200,

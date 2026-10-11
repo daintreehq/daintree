@@ -123,7 +123,12 @@ export interface CopyTreeGeneratePayload {
 }
 
 export interface CopyTreeGenerateAndCopyFilePayload {
-  worktreeId: string;
+  /**
+   * The worktree to bundle. Absent means the requesting view's own workspace
+   * root — the project or scratch folder — which is all a worktree-less
+   * workspace has. A supplied id never falls back to that root (#13210).
+   */
+  worktreeId?: string;
   options?: CopyTreeOptions;
   /** See {@link CopyTreeGeneratePayload.name}. */
   name?: string;

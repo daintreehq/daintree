@@ -381,4 +381,112 @@ Body.
       await fsp.rm(projectRoot, { recursive: true, force: true });
     }
   });
+
+  it("surfaces personal Codex skills from ~/.agents/skills, outranking $CODEX_HOME/skills", async () => {
+    const homeRoot = await makeTempDir();
+    const projectRoot = await makeTempDir();
+    const codexHome = await makeTempDir();
+    const prev = overrideHome(homeRoot);
+    process.env.CODEX_HOME = codexHome;
+    const engine = new CompletionDiscoveryEngine();
+    const skill = (description: string) => `---
+description: "${description}"
+---
+
+Body.
+`;
+
+    try {
+      await fsp.mkdir(path.join(projectRoot, ".git"));
+      await writeFile(
+        path.join(homeRoot, ".agents", "skills", "personal", "SKILL.md"),
+        skill("personal skill")
+      );
+      await writeFile(
+        path.join(codexHome, "skills", "installed", "SKILL.md"),
+        skill("installed skill")
+      );
+      await writeFile(
+        path.join(homeRoot, ".agents", "skills", "shared", "SKILL.md"),
+        skill("agents shared")
+      );
+      await writeFile(
+        path.join(codexHome, "skills", "shared", "SKILL.md"),
+        skill("codex-home shared")
+      );
+      await writeFile(
+        path.join(homeRoot, ".agents", "skills", "proj", "SKILL.md"),
+        skill("agents proj")
+      );
+      await writeFile(
+        path.join(projectRoot, ".agents", "skills", "proj", "SKILL.md"),
+        skill("project proj")
+      );
+      // `~/.agents` is not relocated by CODEX_HOME.
+      await writeFile(
+        path.join(codexHome, ".agents", "skills", "decoy", "SKILL.md"),
+        skill("decoy skill")
+      );
+
+      const codex = await engine.list("codex", projectRoot);
+      const byLabel = (label: string) => codex.filter((c) => c.label === label);
+
+      expect(byLabel("$personal")).toEqual([
+        expect.objectContaining({ kind: "skill", scope: "user", description: "personal skill" }),
+      ]);
+      expect(byLabel("$installed")).toEqual([
+        expect.objectContaining({ scope: "user", description: "installed skill" }),
+      ]);
+      expect(byLabel("$shared")).toEqual([
+        expect.objectContaining({
+          scope: "user",
+          description: "agents shared",
+          sourcePath: path.join(homeRoot, ".agents", "skills", "shared", "SKILL.md"),
+        }),
+      ]);
+      expect(byLabel("$proj")).toEqual([
+        expect.objectContaining({ scope: "project", description: "project proj" }),
+      ]);
+      expect(byLabel("$decoy")).toEqual([]);
+    } finally {
+      restoreHome(prev);
+      await fsp.rm(homeRoot, { recursive: true, force: true });
+      await fsp.rm(projectRoot, { recursive: true, force: true });
+      await fsp.rm(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  it("reads both ~/.agents/skills and ~/.codex/skills when CODEX_HOME is unset", async () => {
+    const homeRoot = await makeTempDir();
+    const projectRoot = await makeTempDir();
+    const prev = overrideHome(homeRoot);
+    const engine = new CompletionDiscoveryEngine();
+    const skill = (description: string) => `---
+description: "${description}"
+---
+
+Body.
+`;
+
+    try {
+      await fsp.mkdir(path.join(projectRoot, ".git"));
+      await writeFile(
+        path.join(homeRoot, ".agents", "skills", "personal", "SKILL.md"),
+        skill("personal skill")
+      );
+      await writeFile(
+        path.join(homeRoot, ".codex", "skills", "installed", "SKILL.md"),
+        skill("installed skill")
+      );
+
+      const codex = await engine.list("codex", projectRoot);
+      const labels = codex.filter((c) => c.trigger === "$").map((c) => c.label);
+      expect(labels).toContain("$personal");
+      expect(labels).toContain("$installed");
+    } finally {
+      restoreHome(prev);
+      await fsp.rm(homeRoot, { recursive: true, force: true });
+      await fsp.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
 });

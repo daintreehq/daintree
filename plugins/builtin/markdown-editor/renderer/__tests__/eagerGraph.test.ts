@@ -19,9 +19,15 @@ import { posix, walkEagerGraph } from "../../../../../scripts/lib/static-import-
 const here = dirname(fileURLToPath(import.meta.url));
 const pluginRoot = resolve(here, "../..");
 const ENTRY = resolve(here, "../index.ts");
+const VIEW = resolve(here, "../MarkdownEditorView.tsx");
 
-const graph = () => walkEagerGraph(ENTRY, pluginRoot);
-const reachedFiles = () => graph().files.map((file) => posix(relative(pluginRoot, file)));
+const graph = (entry = ENTRY) => walkEagerGraph(entry, pluginRoot);
+const reachedFiles = (entry = ENTRY) =>
+  graph(entry).files.map((file) => posix(relative(pluginRoot, file)));
+const zodImporters = (entry = ENTRY) =>
+  [...graph(entry).bare]
+    .filter(([, specifiers]) => specifiers.some((specifier) => /^zod(\/|$)/.test(specifier)))
+    .map(([file]) => posix(relative(pluginRoot, file)));
 
 describe("eager renderer entry graph", () => {
   it("resolves every relative import it follows", () => {
@@ -29,10 +35,7 @@ describe("eager renderer entry graph", () => {
   });
 
   it("never reaches zod", () => {
-    const offenders = [...graph().bare]
-      .filter(([, specifiers]) => specifiers.some((specifier) => /^zod(\/|$)/.test(specifier)))
-      .map(([file]) => posix(relative(pluginRoot, file)));
-    expect(offenders).toEqual([]);
+    expect(zodImporters()).toEqual([]);
   });
 
   it("never reaches shared/protocol", () => {
@@ -42,5 +45,30 @@ describe("eager renderer entry graph", () => {
   it("walks the files it is meant to walk", () => {
     expect(reachedFiles()).toContain("renderer/recoverDrafts.ts");
     expect(reachedFiles()).toContain("shared/ids.ts");
+  });
+});
+
+/**
+ * The lazy view chunk is off the first-render path, but zod still has no
+ * business there: the renderer never validates, and a production build of the
+ * view with `shared/protocol.ts` in its graph shipped a chunk that referenced
+ * zod's `z` without importing it, so Edit mode threw on load.
+ */
+describe("lazy editor view graph", () => {
+  it("resolves every relative import it follows", () => {
+    expect(graph(VIEW).unresolved).toEqual([]);
+  });
+
+  it("never reaches zod", () => {
+    expect(zodImporters(VIEW)).toEqual([]);
+  });
+
+  it("never reaches shared/protocol", () => {
+    expect(reachedFiles(VIEW)).not.toContain("shared/protocol.ts");
+  });
+
+  it("walks the files it is meant to walk", () => {
+    expect(reachedFiles(VIEW)).toContain("renderer/documentController.ts");
+    expect(reachedFiles(VIEW)).toContain("shared/ids.ts");
   });
 });

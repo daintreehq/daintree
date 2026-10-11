@@ -525,6 +525,7 @@ export const BUILT_IN_ACTION_IDS = [
   "help.tour.show",
   "help.displayImage",
   "help.openCommandsFolder",
+  "help.resumePastSession",
 
   // -- uiActions --
   "ui.sidebar.resetWidth",

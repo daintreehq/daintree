@@ -10,12 +10,13 @@ export interface ResolvedFilePath {
 // requires a path separator ('/' or '\') and a trailing `.ext`, so bare words
 // and slash-commands (`/help`, `/api/v1`) never match. Global so the terminal
 // link scanner can walk every match on a line. Home-relative `~/` (and `~\`)
-// is the only addition to the historical FileLinksAddon regex; every other
-// token matches exactly as it always has. The tilde must sit on a token
-// boundary and be followed by a separator, so `HEAD~1/x.ts`, `foo~/x.ts` and
-// `~user/x.ts` stay unlinked.
+// must sit on a token boundary and be followed by a separator, so
+// `HEAD~1/x.ts`, `foo~/x.ts` and `~user/x.ts` stay unlinked. A bare relative
+// path may open on a hidden directory (`.github/workflows/ci.yml`), but only
+// as one dot followed by a letter or underscore, so `.../x.ts`, `..foo/x.ts`
+// and `.5/x.y` stay unlinked.
 export const FILE_PATH_REGEX =
-  /(?:^|[\s(])((?:\\\\wsl(?:\$|\.localhost)\\[^\\]+(?:\\[\w.-]+)+|\/[\w./-]+|~[\\/][\w./\\-]+|[a-zA-Z]:[\\/][\w./\\-]+|(?:\.\.?[\\/])+[\w./\\-]+|[\w-]+[\\/][\w./\\-]+)\.[\w]+(?::\d+(?::\d+)?)?)/g;
+  /(?:^|[\s(])((?:\\\\wsl(?:\$|\.localhost)\\[^\\]+(?:\\[\w.-]+)+|\/[\w./-]+|~[\\/][\w./\\-]+|[a-zA-Z]:[\\/][\w./\\-]+|(?:\.\.?[\\/])+[\w./\\-]+|(?:\.(?=[A-Za-z_]))?[\w-]+[\\/][\w./\\-]+)\.[\w]+(?::\d+(?::\d+)?)?)/g;
 
 const WINDOWS_ABS = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
 
@@ -39,11 +40,12 @@ export interface SpacedFilePathCandidate {
 // Quoted and shell-escaped forms carry their own boundaries, so they need no
 // filesystem confirmation. Only space-containing spellings are taken here —
 // a space-free quoted path stays the business of FILE_PATH_REGEX. A quoted
-// path must open with a root or `./`/`../`: quotes bound text, not paths, and
-// `'cat src/a.ts'` would otherwise swallow the real `src/a.ts` link.
+// path must open with a root, `./`/`../` or a hidden directory: quotes bound
+// text, not paths, and `'cat src/a.ts'` would otherwise swallow the real
+// `src/a.ts` link.
 const QUOTED_PATH_REGEX = /(?:^|[\s(=:])(["'`])([^"'`\s][^"'`]*?)\1/g;
 const QUOTED_PATH_SHAPE =
-  /^(?:[a-zA-Z]:[\\/]|\.{0,2}[\\/]|~[\\/])[\w./\\ -]*\.\w+(?::\d+(?::\d+)?)?$/;
+  /^(?:[a-zA-Z]:[\\/]|\.{0,2}[\\/]|~[\\/]|\.[A-Za-z_][\w-]*[\\/])[\w./\\ -]*\.\w+(?::\d+(?::\d+)?)?$/;
 const ESCAPED_PATH_REGEX = /(?:^|[\s(])((?:~(?=\/))?(?:[\w./-]|\\ )+\.\w+(?::\d+(?::\d+)?)?)/g;
 
 // Unquoted: anchored on an absolute root and grown word by word, each word

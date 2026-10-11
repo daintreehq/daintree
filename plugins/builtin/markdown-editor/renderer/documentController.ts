@@ -13,12 +13,14 @@ import {
   PUSH_CHANNELS,
   type DocumentChangedPush,
   type DocumentIdentity,
-  type DocumentReadResult,
-  type DocumentRevalidateResult,
-  type DocumentSaveAsResult,
-  type DocumentSaveResult,
-  type DraftPutResult,
-  type DraftRecord,
+} from "../shared/ids.js";
+import type {
+  DocumentReadResult,
+  DocumentRevalidateResult,
+  DocumentSaveAsResult,
+  DocumentSaveResult,
+  DraftPutResult,
+  DraftRecord,
 } from "../shared/protocol.js";
 import {
   createDocumentRecord,

@@ -5,6 +5,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getAppWebContents } from "../window/webContentsRegistry.js";
 import { unthrottleCpuWebContents } from "../utils/webContentsLifecycle.js";
+import { getFocusedPanelTracker } from "./FocusedPanelTracker.js";
 
 export const PORTAL_MAX_LIVE_TABS = 3;
 
@@ -35,10 +36,21 @@ export class PortalManager {
   private readonly backgroundColor: string;
   private readonly attachedViews = new Set<WebContentsView>();
   private readonly lastShownBounds = new Map<string, { width: number; height: number }>();
+  // The tab whose webContents holds focus, so a background tab's teardown
+  // can't clear the Portal's focus in the plugin focus tracker (#13221).
+  private focusedTabId: string | null = null;
 
   constructor(window: BrowserWindow, backgroundColor: string = "#000000") {
     this.window = window;
     this.backgroundColor = backgroundColor;
+  }
+
+  private setTabFocused(tabId: string, focused: boolean): void {
+    if (focused) this.focusedTabId = tabId;
+    else if (this.focusedTabId === tabId) this.focusedTabId = null;
+    else return;
+    if (!this.window || this.window.isDestroyed()) return;
+    getFocusedPanelTracker().setPortalFocused(this.window.id, this.focusedTabId !== null);
   }
 
   private sendToApp(channel: string, ...args: unknown[]): void {
@@ -199,6 +211,7 @@ export class PortalManager {
       });
 
       view.webContents.once("destroyed", () => {
+        this.setTabFocused(tabId, false);
         this.viewMap.delete(tabId);
         this.lruOrder.delete(tabId);
         this.lastShownBounds.delete(tabId);
@@ -221,10 +234,12 @@ export class PortalManager {
       });
 
       view.webContents.on("focus", () => {
+        this.setTabFocused(tabId, true);
         this.sendToApp(CHANNELS.PORTAL_FOCUS);
       });
 
       view.webContents.on("blur", () => {
+        this.setTabFocused(tabId, false);
         this.sendToApp(CHANNELS.PORTAL_BLUR);
       });
 
@@ -431,6 +446,9 @@ export class PortalManager {
     if (this.activeView) {
       this.activeView.setBounds(OFFSCREEN_BOUNDS);
       this.hidden = true;
+      // A parked page isn't where the user is working, whether or not the
+      // focus return below produces a blur.
+      if (this.focusedTabId !== null) this.setTabFocused(this.focusedTabId, false);
       // Parked like showTab() parks: not frozen, not CPU-throttled (#12456).
 
       // Return focus to the main app webContents. The old removeChildView

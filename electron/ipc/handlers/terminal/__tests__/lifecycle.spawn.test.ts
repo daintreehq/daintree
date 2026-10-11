@@ -236,6 +236,10 @@ const mockGetAssistantScratchEnv = vi.hoisted(() =>
 
 const mockIsHelpTerminal = vi.hoisted(() => vi.fn<(terminalId: string) => boolean>(() => false));
 
+const mockRecordLaneLaunchForToken = vi.hoisted(() =>
+  vi.fn<(token: string, agentSessionId?: string) => Promise<void>>(() => Promise.resolve())
+);
+
 vi.mock("../../../../services/HelpSessionService.js", () => ({
   helpSessionService: {
     validateToken: (token: string) => mockValidateToken(token),
@@ -249,6 +253,8 @@ vi.mock("../../../../services/HelpSessionService.js", () => ({
       mockMarkTerminalForToken(token, terminalId, expectedAgentId),
     unbindTerminal: (terminalId: string) => mockUnbindTerminal(terminalId),
     isHelpTerminal: (terminalId: string) => mockIsHelpTerminal(terminalId),
+    recordLaneLaunchForToken: (token: string, agentSessionId?: string) =>
+      mockRecordLaneLaunchForToken(token, agentSessionId),
   },
 }));
 
@@ -329,6 +335,7 @@ function getSpawnHandler() {
 
 beforeEach(() => {
   mockEnsureReady.mockReset();
+  mockRecordLaneLaunchForToken.mockClear();
   mockEnsureReady.mockResolvedValue(false);
 });
 
@@ -2418,6 +2425,54 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     // agents, which have no launch-arg getter to supply one (#12262).
     expect(mockMarkTerminalForToken).toHaveBeenCalledWith("help-token", id, "claude");
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("records the assistant lane's conversation id as its durable pointer at spawn (#13205)", async () => {
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "claude --session-id 11111111-2222-3333-4444-555555555555",
+        launchAgentId: "claude",
+        agentSessionId: "11111111-2222-3333-4444-555555555555",
+        env: { DAINTREE_MCP_TOKEN: "help-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(mockRecordLaneLaunchForToken).toHaveBeenCalledWith(
+      "help-token",
+      "11111111-2222-3333-4444-555555555555"
+    );
+  });
+
+  it("does not record a lane pointer for a non-help launch (#13205)", async () => {
+    mockValidateToken.mockReturnValue(false);
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "claude",
+        launchAgentId: "claude",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(mockRecordLaneLaunchForToken).not.toHaveBeenCalled();
   });
 
   it("refuses to spawn an assistant PTY when markTerminalForToken returns false (#7509)", async () => {

@@ -120,12 +120,14 @@ import {
   isPluginMenuCommandId,
   pluginMenuCommandActionId,
   readPanelKindMenuCapabilities,
+  resolvePluginMenuItems,
   type GenericPanelMenuCommandId,
 } from "./genericPanelMenu";
 import {
   getRegisteredPluginActionsSnapshot,
   subscribeToRegisteredPluginActions,
 } from "@/services/plugin/registeredPluginActions";
+import { usePanelViewMenuItems, usePanelWorkerMenus } from "@/store/pluginPanelMenuStore";
 
 import {
   getPanelKindRegistrySnapshot,
@@ -459,6 +461,9 @@ function PanelHeaderComponent({
     registeredPluginActions
   );
   const kindTour = storedKindCapabilities.tour;
+  // What the plugin published for this panel at runtime (#13213).
+  const publishedViewMenuItems = usePanelViewMenuItems(id);
+  const publishedWorkerMenus = usePanelWorkerMenus(id);
   const pluginSettingsId = storedKindCapabilities.pluginSettingsId;
   const pluginBackupId = storedKindCapabilities.pluginBackupId;
   // Recorded on select and spent by the menu's close hook, after it has handed
@@ -576,7 +581,12 @@ function PanelHeaderComponent({
         tourLabel: kindTour?.label,
         hasPluginSettings: pluginSettingsId !== null,
         hasPluginDatabases: pluginBackupId !== null,
-        pluginMenuItems: storedKindCapabilities.pluginMenuItems,
+        pluginMenuItems: resolvePluginMenuItems(
+          storedKindCapabilities,
+          publishedViewMenuItems,
+          publishedWorkerMenus,
+          registeredPluginActions
+        ),
       })
     : null;
   const handleGenericMenuCommand = (commandId: GenericPanelMenuCommandId) => {

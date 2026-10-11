@@ -630,3 +630,49 @@ describe("home-relative paths (#13177)", () => {
     expect(resolveSelectedFilePath("see ~/src/a.ts here", "/cwd", HOME)).toBeNull();
   });
 });
+
+describe("hidden-directory relative paths (#13216)", () => {
+  const pathsIn = (text: string) => [...text.matchAll(FILE_PATH_REGEX)].map((m) => m[1]);
+
+  it("matches a bare path whose first segment is a dot directory", () => {
+    expect(pathsIn("Saved to .neo-issue/reviews/336/x.jpg")).toEqual([
+      ".neo-issue/reviews/336/x.jpg",
+    ]);
+    expect(pathsIn("(.github/workflows/ci.yml:12:3)")).toEqual([".github/workflows/ci.yml:12:3"]);
+    expect(pathsIn(".github\\workflows\\ci.yml")).toEqual([".github\\workflows\\ci.yml"]);
+    expect(pathsIn("._cache/a.ts and __pycache__/b.py")).toEqual([
+      "._cache/a.ts",
+      "__pycache__/b.py",
+    ]);
+  });
+
+  it("does not match dots that are not a single hidden-directory prefix", () => {
+    expect(pathsIn(".../foo/x.ts")).toEqual([]);
+    expect(pathsIn("..foo/x.ts")).toEqual([]);
+    expect(pathsIn(".5/x.y")).toEqual([]);
+    expect(pathsIn(".-x/a.ts")).toEqual([]);
+    expect(pathsIn("foo.hidden/x.ts")).toEqual([]);
+    expect(pathsIn("git show HEAD~1/x.ts")).toEqual([]);
+    expect(pathsIn("/help and /api/v1")).toEqual([]);
+  });
+
+  it("resolves against the cwd, keeping line and col", () => {
+    expect(resolveFilePathCandidate(".github/workflows/ci.yml:12:3", "/p")).toEqual({
+      absolutePath: "/p/.github/workflows/ci.yml",
+      line: 12,
+      col: 3,
+    });
+    expect(resolveSelectedFilePath(" .neo-issue/reviews/336/x.jpg ", "/p")?.absolutePath).toBe(
+      "/p/.neo-issue/reviews/336/x.jpg"
+    );
+  });
+
+  it("links a quoted spaced path that opens on a hidden directory", () => {
+    const text = 'open ".neo-issue/my dir/a.md" now';
+    expect(findSpacedFilePathCandidates(text)).toEqual([
+      { startIndex: 6, endIndex: 28, path: ".neo-issue/my dir/a.md" },
+    ]);
+    expect(findSpacedFilePathCandidates('"..foo/my dir/a.md"')).toEqual([]);
+    expect(findSpacedFilePathCandidates('".5/my dir/a.md"')).toEqual([]);
+  });
+});

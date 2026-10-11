@@ -13,6 +13,7 @@ export type PaletteId =
   | "bulk-command"
   | "theme"
   | "resume-sessions"
+  | "assistant-sessions"
   | "log-level";
 
 interface PaletteState {

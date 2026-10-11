@@ -144,11 +144,11 @@ export const PanelContributionObjectSchema = z
  * to the built-in dockable `terminal` at creation (`addPanel.ts`), so the
  * opt-out could never be honored and would silently vanish; surface the
  * conflict to the author at manifest-write time instead of swallowing it at
- * runtime (#11375). `hasPty` with menu entries is rejected for the same reason: a
- * PTY kind uses the terminal menus, where the entries would never show. Toolbar
- * entries likewise: the terminal header has no room for a plugin's buttons.
- * `hasPty` has already defaulted to `false` here, so an omitted `hasPty` never
- * trips either.
+ * runtime (#11375). `hasPty` with toolbar entries is rejected for the same
+ * reason: the terminal header has no room for a plugin's buttons. Menu entries
+ * are allowed: the terminal's right-click menu draws the kind's own group
+ * (#13213). `hasPty` has already defaulted to `false` here, so an omitted
+ * `hasPty` never trips either.
  */
 export const PanelContributionSchema = PanelContributionObjectSchema.superRefine((panel, ctx) => {
   if (panel.hasPty === true && panel.dockable === false) {
@@ -158,15 +158,6 @@ export const PanelContributionSchema = PanelContributionObjectSchema.superRefine
       message:
         "A PTY-backed panel (hasPty: true) cannot opt out of the dock with dockable: false — plugin PTY panels render as terminals, which are always dockable. Remove the dockable flag.",
       params: { errorCode: "pty_panel_dock_opt_out_unsupported" },
-    });
-  }
-  if (panel.hasPty === true && panel.menu !== undefined && panel.menu.length > 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["menu"],
-      message:
-        "A PTY-backed panel (hasPty: true) renders as a terminal and uses the terminal's menus, so its menu entries would never appear. Remove the menu, or put the actions on a view panel.",
-      params: { errorCode: "pty_panel_menu_unsupported" },
     });
   }
   if (panel.hasPty === true && panel.toolbar !== undefined && panel.toolbar.length > 0) {

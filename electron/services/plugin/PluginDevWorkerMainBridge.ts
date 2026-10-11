@@ -44,6 +44,7 @@ import type {
   PostToPanelParams,
   ReloadPanelParams,
   SetPanelBadgeParams,
+  SetPanelMenuItemsParams,
   RegisterActionParams,
   RegisterFileDecorationProviderParams,
   RegisterHandlerParams,
@@ -1211,6 +1212,11 @@ export class PluginDevWorkerMainBridge {
         await this.host.setPanelBadge(p.panelId, p.badge);
         return;
       }
+      case "setPanelMenuItems": {
+        const p = params as SetPanelMenuItemsParams;
+        await this.host.setPanelMenuItems(p.panelId, p.items);
+        return;
+      }
       case "registerFileDecorationProvider": {
         const { descriptor } = params as RegisterFileDecorationProviderParams;
         const providerId = descriptor.id;
@@ -1437,6 +1443,10 @@ export class PluginDevWorkerMainBridge {
         });
       } else if (kind === "all-agents") {
         dispose = await this.host.onDidChangeAllAgents((snapshot) => push(snapshot), {
+          debounceMs: msg.debounceMs,
+        });
+      } else if (kind === "focused-panel") {
+        dispose = await this.host.onDidChangeFocusedPanel((focus) => push(focus), {
           debounceMs: msg.debounceMs,
         });
       } else if (kind === "panel-lifecycle") {

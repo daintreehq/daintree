@@ -91,6 +91,9 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   // plugin push channels the renderer has subscribers for, so main skips
   // pushes nothing there would receive.
   "plugin:report-push-listeners",
+  // fire-and-forget — renderer→main report of the kind of panel holding DOM
+  // focus in a project view, for `host.onDidChangeFocusedPanel` (#13221).
+  "plugin:report-focused-panel",
 
   // fire-and-forget — main→renderer broadcast for in-app demo command
   // forwarding (`sendCommandAndAwait` in handlers/demo.ts). The renderer

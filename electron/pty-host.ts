@@ -1564,6 +1564,7 @@ events.on("agent:exited", (payload) => {
     defaultTitle: payload.defaultTitle,
     timestamp: payload.timestamp,
     exitKind: payload.exitKind,
+    ...(payload.agentEnd ? { agentEnd: payload.agentEnd } : {}),
   });
 });
 

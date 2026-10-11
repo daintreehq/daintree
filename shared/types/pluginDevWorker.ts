@@ -31,6 +31,7 @@ import type {
   PluginPtyProcessSpawnOptions,
   PluginProcessMode,
   PluginPanelBadge,
+  PanelMenuItemContribution,
   BuiltInPluginCapability,
   PluginFsWriteOptions,
   PluginMcpCaller,
@@ -105,6 +106,7 @@ export type PluginHostNotifyMethod =
   | "postToPanel"
   | "invalidateFileDecorations"
   | "setPanelBadge"
+  | "setPanelMenuItems"
   | "registerFileDecorationProvider"
   | "unregisterFileDecorationProvider"
   | "mcp.registerTools"
@@ -145,6 +147,7 @@ export type PluginWorkerSubscriptionKind =
   | "storage"
   | "agent-state"
   | "all-agents"
+  | "focused-panel"
   | "panel-lifecycle"
   | "system-wake"
   | "push-listeners"
@@ -414,6 +417,12 @@ export interface InvalidateFileDecorationsParams {
 export interface SetPanelBadgeParams {
   panelId: string;
   badge: PluginPanelBadge | null;
+}
+
+/** Params for `setPanelMenuItems` (`host-notify`). `null` clears the list. */
+export interface SetPanelMenuItemsParams {
+  panelId: string;
+  items: readonly PanelMenuItemContribution[] | null;
 }
 
 /**

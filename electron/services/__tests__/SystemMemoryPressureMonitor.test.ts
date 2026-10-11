@@ -29,8 +29,15 @@ import {
   parseKernelPressureLevel,
   type KernelPressureLevel,
   SAMPLE_INTERVAL_MS,
+  SWAP_PRESSURE_CONFIRM_SAMPLES,
+  SWAP_PRESSURE_MIN_USED_MB,
   SWAP_USED_PERCENT_THRESHOLD,
 } from "../SystemMemoryPressureMonitor.js";
+import {
+  isSwapPressureConfirmed,
+  recordSwapPressure,
+  SWAP_PRESSURE_STALE_MS,
+} from "../systemSwapPressure.js";
 
 const SWAP_TOTAL_MB = 4096;
 const swapAt = (percent: number): SwapUsage => ({
@@ -135,6 +142,7 @@ describe("createSystemMemoryPressureMonitor", () => {
     swap: () => SwapUsage | null;
     fseventsdRssMb?: () => number | null;
     kernelPressureLevel?: () => KernelPressureLevel | null;
+    onSwapPressure?: (confirmed: boolean) => void;
   }) {
     const readSwap = vi.fn(async () => opts.swap());
     const readFseventsdRssMb = vi.fn(async () => (opts.fseventsdRssMb ?? (() => 100))());
@@ -148,7 +156,9 @@ describe("createSystemMemoryPressureMonitor", () => {
       readFseventsdRssMb,
       readKernelPressureLevel,
       publish,
+      onSwapPressure: opts.onSwapPressure,
       now: () => now,
+      wallNow: () => now,
     });
     const tick = async (count = 1) => {
       for (let i = 0; i < count; i++) {
@@ -158,6 +168,141 @@ describe("createSystemMemoryPressureMonitor", () => {
     };
     return { monitor, readSwap, readFseventsdRssMb, readKernelPressureLevel, tick };
   }
+
+  describe("kernel-plus-swap pressure for cached-view reclaim (#13223)", () => {
+    const BIG_SWAP_TOTAL_MB = 20 * 1024;
+    const bigSwapAt = (percent: number): SwapUsage => ({
+      usedMb: (BIG_SWAP_TOTAL_MB * percent) / 100,
+      totalMb: BIG_SWAP_TOTAL_MB,
+    });
+
+    it("confirms after two samples of a kernel warning with heavy swap", async () => {
+      const onSwapPressure = vi.fn();
+      const { tick } = makeMonitor({
+        swap: () => bigSwapAt(94),
+        kernelPressureLevel: () => 2,
+        onSwapPressure,
+      });
+      await tick(SWAP_PRESSURE_CONFIRM_SAMPLES);
+      expect(onSwapPressure.mock.calls.map(([confirmed]) => confirmed)).toEqual([false, true]);
+      expect(
+        vi.mocked(logInfo).mock.calls.filter(([event]) => event === "system-health-swap-pressure")
+      ).toEqual([
+        [
+          "system-health-swap-pressure",
+          expect.objectContaining({
+            state: "confirmed",
+            kernelPressureLevel: 2,
+            swapUsedPercent: 94,
+          }),
+        ],
+      ]);
+    });
+
+    it("never confirms on the kernel warning alone (#12815)", async () => {
+      const onSwapPressure = vi.fn();
+      const { tick } = makeMonitor({
+        swap: () => bigSwapAt(20),
+        kernelPressureLevel: () => 4,
+        onSwapPressure,
+      });
+      await tick(4);
+      expect(onSwapPressure).not.toHaveBeenCalledWith(true);
+    });
+
+    it("never confirms on swap alone, or on a small swapfile however full", async () => {
+      const onSwapPressure = vi.fn();
+      const normal = makeMonitor({
+        swap: () => bigSwapAt(94),
+        kernelPressureLevel: () => 1,
+        onSwapPressure,
+      });
+      await normal.tick(4);
+      // 91% of 4 GB is under the absolute floor.
+      const small = makeMonitor({
+        swap: () => swapAt(91),
+        kernelPressureLevel: () => 2,
+        onSwapPressure,
+      });
+      await small.tick(4);
+      expect(FULL_SWAP.usedMb).toBeLessThan(SWAP_PRESSURE_MIN_USED_MB);
+      expect(onSwapPressure).not.toHaveBeenCalledWith(true);
+    });
+
+    it("does not count two samples a long sleep apart as consecutive", async () => {
+      const onSwapPressure = vi.fn();
+      const { tick } = makeMonitor({
+        swap: () => bigSwapAt(94),
+        kernelPressureLevel: () => 2,
+        onSwapPressure,
+      });
+      await tick();
+      now += SWAP_PRESSURE_STALE_MS;
+      await tick();
+      expect(onSwapPressure).not.toHaveBeenCalledWith(true);
+      await tick();
+      expect(onSwapPressure).toHaveBeenLastCalledWith(true);
+    });
+
+    it("does not count across a wall clock that stepped backwards", async () => {
+      const onSwapPressure = vi.fn();
+      let wall = 1_000_000;
+      const monitor = createSystemMemoryPressureMonitor({
+        isDarwin: true,
+        swapKind: "swap",
+        readSwap: async () => bigSwapAt(94),
+        readFseventsdRssMb: async () => 100,
+        readKernelPressureLevel: async () => 2,
+        publish,
+        onSwapPressure,
+        now: () => now,
+        wallNow: () => wall,
+      });
+      await monitor.sample();
+      now += SAMPLE_INTERVAL_MS;
+      wall -= 10 * 60_000;
+      await monitor.sample();
+      expect(onSwapPressure).not.toHaveBeenCalledWith(true);
+      now += SAMPLE_INTERVAL_MS;
+      wall += SAMPLE_INTERVAL_MS;
+      await monitor.sample();
+      expect(onSwapPressure).toHaveBeenLastCalledWith(true);
+    });
+
+    it("discards a sample whose probes straddled a sleep", async () => {
+      const onSwapPressure = vi.fn();
+      const { tick } = makeMonitor({
+        swap: () => bigSwapAt(94),
+        kernelPressureLevel: () => {
+          // The machine slept while this probe was in flight.
+          now += 60 * 60_000;
+          return 2;
+        },
+        onSwapPressure,
+      });
+      await tick(3);
+      expect(onSwapPressure).not.toHaveBeenCalledWith(true);
+    });
+
+    it("clears on the first sample that fails the test, or fails to read", async () => {
+      const onSwapPressure = vi.fn();
+      let swap: SwapUsage | null = bigSwapAt(94);
+      const { tick } = makeMonitor({
+        swap: () => swap,
+        kernelPressureLevel: () => 2,
+        onSwapPressure,
+      });
+      await tick(2);
+      swap = null;
+      await tick();
+      expect(onSwapPressure).toHaveBeenLastCalledWith(false);
+      swap = bigSwapAt(94);
+      await tick();
+      expect(onSwapPressure).toHaveBeenLastCalledWith(false);
+      await tick();
+      expect(onSwapPressure).toHaveBeenLastCalledWith(true);
+    });
+  });
 
   it("samples at most once per interval however often the poll calls it", async () => {
     const { monitor, readSwap } = makeMonitor({ swap: () => HEALTHY_SWAP });
@@ -737,5 +882,23 @@ describe("createDefaultSystemMemoryPressureMonitor", () => {
       fseventsdRssMb: null,
       kernelPressureLevel: null,
     });
+  });
+});
+
+describe("systemSwapPressure", () => {
+  afterEach(() => recordSwapPressure(false));
+
+  it("refuses a verdict the clock has stepped back past, and keeps refusing it", () => {
+    recordSwapPressure(true, 10_000);
+    expect(isSwapPressureConfirmed(9_999)).toBe(false);
+    expect(isSwapPressureConfirmed(10_000)).toBe(false);
+  });
+
+  it("holds a confirmation only until it goes stale, and drops it when cleared", () => {
+    recordSwapPressure(true, 1_000);
+    expect(isSwapPressureConfirmed(1_000 + SWAP_PRESSURE_STALE_MS)).toBe(true);
+    expect(isSwapPressureConfirmed(1_000 + SWAP_PRESSURE_STALE_MS + 1)).toBe(false);
+    recordSwapPressure(false, 2_000);
+    expect(isSwapPressureConfirmed(2_000)).toBe(false);
   });
 });

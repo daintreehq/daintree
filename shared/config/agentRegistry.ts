@@ -697,6 +697,14 @@ export interface AgentConfig {
      * refused rather than silently discarding the CLI's own instructions.
      */
     appendSystemPrompt?: { flag: string; configKey?: string };
+    /**
+     * Regex source for the line the CLI prints when its own startup updater
+     * finished and it exited asking to be started again (#13226). Observed at
+     * the end of the agent's output only; it never changes how the CLI is
+     * launched. A launched run that ends on this line is relaunched once into
+     * the conversation it was opened with.
+     */
+    selfUpdateSuccessPattern?: string;
     /** Whether the agent CLI supports bracketed paste input (default: true) */
     supportsBracketedPaste?: boolean;
     /**

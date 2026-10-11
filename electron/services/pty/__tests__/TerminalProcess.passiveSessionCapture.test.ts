@@ -283,6 +283,7 @@ describe("passive agent session capture", () => {
       mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n`);
       // What gracefulShutdown's finish() does on a successful capture.
       terminal.getInfo().agentSessionId = SESSION_ID;
+      terminal.getInfo().sessionIdCapturedAtTeardown = true;
       terminal.kill("graceful-shutdown");
       mockPty(terminal).__emitExit(0);
 
@@ -629,6 +630,162 @@ describe("passive agent session capture", () => {
 
       await flushCapture();
       expect(captured[0].record.title).toBe("Fixing the parser");
+    });
+  });
+
+  describe("a launched run that ends without a farewell (#13226)", () => {
+    const LAUNCH_ID = "01a124b5-0000-7000-8000-000000000001";
+
+    /** Codex's real success line, so a registry pattern change fails these tests. */
+    function updateSuccessOutput(): string {
+      const pattern = getAgentConfig("codex")?.capabilities?.selfUpdateSuccessPattern;
+      const line = "Update ran successfully! Please restart Codex.";
+      if (!pattern || !new RegExp(pattern).test(line)) {
+        throw new Error("codex must declare a selfUpdateSuccessPattern matching its output");
+      }
+      const npm = Array.from({ length: 20 }, (_, i) => `npm http fetch GET 200 package-${i}`);
+      return [
+        ...npm,
+        "changed 1 package in 4s",
+        `\x1b[32m${line}\x1b[0m`,
+        "user@host project % ",
+      ].join("\n");
+    }
+
+    function captureExited(): {
+      exited: DaintreeEventMap["agent:exited"][];
+      off: () => void;
+    } {
+      const exited: DaintreeEventMap["agent:exited"][] = [];
+      const off = events.on("agent:exited", (payload) => exited.push(payload));
+      return { exited, off };
+    }
+
+    it("reports a successful self-update and journals the launch id, titleless", async () => {
+      const { exited, off } = captureExited();
+      try {
+        const terminal = track(createTerminal({ agentSessionId: LAUNCH_ID }));
+        promoteCodex(terminal);
+        terminal.getInfo().lastObservedTitle = "Some other conversation";
+        mockPty(terminal).__emitData(updateSuccessOutput());
+        demote(terminal);
+
+        await flushCapture();
+        expect(exited[0].agentEnd).toEqual({
+          launchedRun: true,
+          resumeHintSeen: false,
+          selfUpdateSucceeded: true,
+        });
+        expect(captured).toHaveLength(1);
+        expect(captured[0].record.sessionId).toBe(LAUNCH_ID);
+        // The pane's title may name a conversation `/resume` switched to.
+        expect(captured[0].record.title).toBeNull();
+        expect(captured[0].launchGeneration).toBeNull();
+      } finally {
+        off();
+      }
+    });
+
+    it("keeps a scraped farewell authoritative over the launch id", async () => {
+      const { exited, off } = captureExited();
+      try {
+        const terminal = track(createTerminal({ agentSessionId: LAUNCH_ID }));
+        promoteCodex(terminal);
+        terminal.getInfo().lastObservedTitle = "Switched conversation";
+        mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
+        demote(terminal);
+
+        await flushCapture();
+        expect(captured).toHaveLength(1);
+        expect(captured[0].record.sessionId).toBe(SESSION_ID);
+        expect(captured[0].record.title).toBe("Switched conversation");
+        expect(exited[0].agentEnd).toMatchObject({
+          resumeHintSeen: true,
+          selfUpdateSucceeded: false,
+        });
+      } finally {
+        off();
+      }
+    });
+
+    it("does not report an update that failed", async () => {
+      const { exited, off } = captureExited();
+      try {
+        const terminal = track(createTerminal({ agentSessionId: LAUNCH_ID }));
+        promoteCodex(terminal);
+        mockPty(terminal).__emitData("Update failed with exit code 1\n$ ");
+        demote(terminal);
+
+        await flushCapture();
+        expect(exited[0].agentEnd).toEqual({
+          launchedRun: true,
+          resumeHintSeen: false,
+          selfUpdateSucceeded: false,
+        });
+        // Still reachable from history.
+        expect(captured[0].record.sessionId).toBe(LAUNCH_ID);
+      } finally {
+        off();
+      }
+    });
+
+    it("treats a later agent run in the same shell as not the launched one", async () => {
+      const { exited, off } = captureExited();
+      try {
+        const terminal = track(createTerminal({ agentSessionId: LAUNCH_ID }));
+        promoteCodex(terminal);
+        mockPty(terminal).__emitData("goodbye\n$ ");
+        demote(terminal);
+        // What the real AgentStateService does when a new agent takes over a
+        // shell its last one left: the incarnation advances.
+        terminal.getInfo().agentIncarnation = 1;
+        promoteCodex(terminal);
+        mockPty(terminal).__emitData(updateSuccessOutput());
+        demote(terminal);
+
+        await flushCapture();
+        expect(exited[1].agentEnd).toEqual({
+          launchedRun: false,
+          resumeHintSeen: false,
+          selfUpdateSucceeded: false,
+        });
+        // Only the launched run journaled the launch id.
+        expect(captured).toHaveLength(1);
+      } finally {
+        off();
+      }
+    });
+
+    it("journals the launch id when a graceful close of a restored pane captured nothing", async () => {
+      // A restored `codex resume <id>` holds its id from launch; a quit the
+      // agent swallowed leaves nothing scraped, and the close must not lose it.
+      const terminal = track(createTerminal({ agentSessionId: LAUNCH_ID }));
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData("thinking…\n");
+      terminal.kill("graceful-shutdown");
+      mockPty(terminal).__emitExit(0);
+
+      await flushCapture();
+      expect(captured).toHaveLength(1);
+      expect(captured[0].record.sessionId).toBe(LAUNCH_ID);
+      expect(captured[0].record.title).toBeNull();
+      expect(captured[0].boundary).toBe("exit");
+    });
+
+    it("stays silent for an anonymous launch with no id to fall back on", async () => {
+      const { exited, off } = captureExited();
+      try {
+        const terminal = track(createTerminal());
+        promoteCodex(terminal);
+        mockPty(terminal).__emitData(updateSuccessOutput());
+        demote(terminal);
+
+        await flushCapture();
+        expect(captured).toHaveLength(0);
+        expect(exited[0].agentEnd).toMatchObject({ launchedRun: true, selfUpdateSucceeded: true });
+      } finally {
+        off();
+      }
     });
   });
 

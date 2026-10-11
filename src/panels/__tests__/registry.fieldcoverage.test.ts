@@ -49,6 +49,7 @@ const PTY_FIELD_CLASSIFICATION = {
   extensionState: false,
   extensionStateVersion: false,
   pluginId: false,
+  pluginPanelKindId: false,
   // PtyPanelData persisted fields
   launchAgentId: true,
   cwd: true,
@@ -99,6 +100,9 @@ const PTY_FIELD_CLASSIFICATION = {
   // Transient restore-time signal (#9802) — drives the "Session no longer
   // reachable" banner; must never be persisted or it resurfaces every restart.
   sessionLostOnRestore: false,
+  // Live offer to reopen an ended launch's conversation (#13226) — a prompt
+  // about a process that no longer exists after a restart.
+  agentResumeOffer: false,
   restartError: false,
   reconnectError: false,
   scrollbackRestoreError: false,
@@ -167,6 +171,7 @@ const BROWSER_FIELD_CLASSIFICATION = {
   extensionState: false,
   extensionStateVersion: false,
   pluginId: false,
+  pluginPanelKindId: false,
   // BrowserPanelData persisted fields
   browserUrl: true,
   browserHistory: true,
@@ -195,6 +200,7 @@ const DEV_PREVIEW_FIELD_CLASSIFICATION = {
   extensionState: false,
   extensionStateVersion: false,
   pluginId: false,
+  pluginPanelKindId: false,
   // DevPreviewPanelData persisted fields
   cwd: true,
   devCommand: true,
@@ -238,6 +244,7 @@ const FILE_FIELD_CLASSIFICATION = {
   extensionState: false,
   extensionStateVersion: false,
   pluginId: false,
+  pluginPanelKindId: false,
   // FilePanelData persisted fields
   filePath: true,
   fileViewMode: true,
@@ -270,6 +277,7 @@ const DIFF_FIELD_CLASSIFICATION = {
   extensionState: false,
   extensionStateVersion: false,
   pluginId: false,
+  pluginPanelKindId: false,
   // DiffPanelData persisted fields — the reconstruction recipe, not the content
   filePath: true,
   fileStatus: true,
@@ -303,6 +311,7 @@ const FILE_BROWSER_FIELD_CLASSIFICATION = {
   extensionState: false,
   extensionStateVersion: false,
   pluginId: false,
+  pluginPanelKindId: false,
   // FileBrowserPanelData persisted fields — all user intent (where they are in
   // the tree and how it's laid out), which is exactly what a pinned panel keeps.
   browserSelectedPath: true,

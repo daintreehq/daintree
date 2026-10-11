@@ -55,6 +55,7 @@ import {
   WorktreeChangeTracker,
   createSubscriptionCoalescer,
   resolveSubscriptionDebounceMs,
+  resolveSubscriptionDebounceMsOr,
 } from "./pluginSubscriptionCoalescing.js";
 import { isChannelSchema } from "./PluginChannelRegistry.js";
 import { abortErrorFor } from "./pluginAbortError.js";
@@ -102,6 +103,11 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import { PluginPanelBadgeSchema, PluginToastOptionsSchema } from "../../schemas/plugin.js";
+import {
+  normalizePanelMenuItems,
+  samePanelMenuItems,
+  type PublishedPanelMenuItem,
+} from "../../../shared/utils/pluginPanelMenuItems.js";
 import { makeForgeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import {
   toPluginWorktreeSnapshot,
@@ -115,6 +121,12 @@ import {
   toPluginAllAgentsSnapshot,
   UNAVAILABLE_PLUGIN_ALL_AGENTS_SNAPSHOT,
 } from "../../../shared/utils/pluginAllAgentsSnapshot.js";
+import {
+  NO_FOCUSED_PANEL,
+  pluginFocusedPanelEquals,
+} from "../../../shared/utils/pluginFocusedPanel.js";
+import { PLUGIN_FOCUSED_PANEL_DEFAULT_DEBOUNCE_MS } from "../../../shared/config/pluginBudgets.js";
+import { getFocusedPanelTracker, type FocusedPanelState } from "../FocusedPanelTracker.js";
 import type { FleetSnapshotService } from "../FleetSnapshotService.js";
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import {
@@ -152,6 +164,7 @@ import type {
   PluginStorageScope,
   PluginAgentSnapshot,
   PluginAllAgentsSnapshot,
+  PluginFocusedPanel,
   PluginSendToAgentRefusalReason,
   PluginSendToAgentResult,
   PluginPanelLifecycleEvent,
@@ -196,6 +209,13 @@ import type {
  * scope-wide invalidation (no `paths`) is the correct fallback anyway.
  */
 const MAX_FILE_DECORATION_PATHS = 1000;
+
+/**
+ * Most panels one plugin may hold a runtime menu on at once. Main keeps the
+ * lists for replay and cannot tell a closed panel from one moving between
+ * windows, so a plugin that never clears is bounded rather than trusted.
+ */
+const PLUGIN_PANEL_MENUS_MAX_PANELS = 256;
 /**
  * Ceiling for a `host.fs.watch` `debounceMs`. Node clamps any timer delay past
  * 2^31-1 ms to 1 ms, so an unbounded value would turn "almost never" into
@@ -493,6 +513,8 @@ export interface PluginHostFactoryDeps {
   pluginActionOwners: Map<string, Set<string>>;
   actionValidators: Map<string, ValidateFn>;
   pluginBadges: Map<string, Map<string, PluginPanelBadge>>;
+  /** Runtime panel menus set via `host.setPanelMenuItems`, `pluginId → panelId → items`. */
+  pluginPanelMenus: Map<string, Map<string, readonly PublishedPanelMenuItem[]>>;
   pluginFsWatchers: Map<string, Set<() => void>>;
   broadcaster: PluginContributionBroadcaster;
   panelLifecycleBroker: PluginPanelLifecycleBroker;
@@ -542,6 +564,9 @@ export interface PluginHostFactoryDeps {
     fields?: Record<string, unknown>
   ) => void;
   serializePluginBadges: (pluginId: string) => Record<string, PluginPanelBadge>;
+  serializePluginPanelMenus: (
+    pluginId: string
+  ) => Record<string, readonly PublishedPanelMenuItem[]>;
   /** User-facing name for a plugin id, for surfaces that name a plugin to a person. */
   pluginDisplayName: (pluginId: string) => string;
   pluginDataDir: (pluginId: string) => string;
@@ -1723,6 +1748,65 @@ export function createHost(
       });
       return Promise.resolve(dispose);
     },
+    onDidChangeFocusedPanel: (callback, options) => {
+      if (revoked) {
+        throw new Error(
+          `Plugin "${pluginId}" host revoked: onDidChangeFocusedPanel called after activate() returned or timed out`
+        );
+      }
+      if (!deps.declaredCapabilities(pluginId).has("panel:focus-read")) {
+        throw new Error(
+          `PERMISSION_REQUIRED: plugin "${pluginId}" onDidChangeFocusedPanel requires "panel:focus-read", which is not declared in manifest.capabilities`
+        );
+      }
+      const tracker = getFocusedPanelTracker();
+      // A project plugin sees focus inside its own project only; focus anywhere
+      // else, the Portal included, reads as no focused panel rather than as a
+      // fact about another project.
+      const project = (state: FocusedPanelState): PluginFocusedPanel =>
+        boundProjectId === null || state.workspaceId === boundProjectId
+          ? state.panel
+          : NO_FOCUSED_PANEL;
+      const failures = createListenerFailureState();
+      let latest: PluginFocusedPanel = project(tracker.getCurrent());
+      let delivered: PluginFocusedPanel | null = null;
+      let active = true;
+      // The issue asks for a 250–500ms trailing window: focus flips in bursts
+      // (click-through, tab cycling) and only where it settles is attention.
+      const debounceMs = resolveSubscriptionDebounceMsOr(
+        options?.debounceMs,
+        PLUGIN_FOCUSED_PANEL_DEFAULT_DEBOUNCE_MS
+      );
+      const deliver = (): void => {
+        if (!active || !isBound()) return;
+        const value = latest;
+        if (delivered !== null && pluginFocusedPanelEquals(delivered, value)) return;
+        delivered = value;
+        invokeTrackedListener(
+          failures,
+          pluginId,
+          "onDidChangeFocusedPanel",
+          () => callback(value),
+          () => dispose()
+        );
+      };
+      const coalescer = createSubscriptionCoalescer(debounceMs, deliver);
+      const unsub = tracker.subscribe((state) => {
+        if (!active || !isBound()) return;
+        latest = project(state);
+        coalescer.push();
+      });
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
+        active = false;
+        coalescer.dispose();
+        unsub();
+      });
+      // The current focus, replayed straight away rather than after a window a
+      // later change would restart. A microtask, so the plugin holds the
+      // disposer first and a throwing replay can quarantine the listener.
+      queueMicrotask(deliver);
+      return Promise.resolve(dispose);
+    },
     onDidChangePanelLifecycle: (callback) => {
       if (revoked) {
         throw new Error(
@@ -2094,6 +2178,54 @@ export function createHost(
       pushToRenderers(CHANNELS.EVENTS_PUSH, {
         name: "plugin:panel-badges-changed",
         payload: { pluginId, badges: deps.serializePluginBadges(pluginId) },
+      });
+      return Promise.resolve();
+    },
+    // NOT revoke-guarded, like setPanelBadge: a plugin republishes its menu
+    // from lifecycle callbacks and its own state changes (#13213). Ownership is
+    // not checked against the panel here — `panel.openPluginPanel` hands back an
+    // id before the renderer has reported it — so the renderer shows a list
+    // only on a panel whose kind this plugin contributed.
+    setPanelMenuItems: (panelId, items) => {
+      if (!deps.plugins.has(pluginId)) return Promise.resolve();
+      if (typeof panelId !== "string" || panelId.length === 0) {
+        // Reject (not sync throw): runtime-surface Promise method (#10617).
+        return Promise.reject(
+          new Error(`Plugin "${pluginId}" setPanelMenuItems: panelId must be a non-empty string`)
+        );
+      }
+      const result = normalizePanelMenuItems(items, manifestId, pluginId);
+      if (!result.ok) {
+        return Promise.reject(
+          new Error(`Plugin "${pluginId}" setPanelMenuItems: invalid items — ${result.error}`)
+        );
+      }
+      let panelMap = deps.pluginPanelMenus.get(pluginId);
+      const previous = panelMap?.get(panelId);
+      if (result.items.length === 0) {
+        if (!panelMap || previous === undefined) return Promise.resolve();
+        panelMap.delete(panelId);
+        if (panelMap.size === 0) deps.pluginPanelMenus.delete(pluginId);
+      } else {
+        if (previous !== undefined && samePanelMenuItems(previous, result.items)) {
+          return Promise.resolve();
+        }
+        if (previous === undefined && (panelMap?.size ?? 0) >= PLUGIN_PANEL_MENUS_MAX_PANELS) {
+          return Promise.reject(
+            new Error(
+              `Plugin "${pluginId}" setPanelMenuItems: menus are already published on ${PLUGIN_PANEL_MENUS_MAX_PANELS} panels — clear a closed panel's with null`
+            )
+          );
+        }
+        if (!panelMap) {
+          panelMap = new Map();
+          deps.pluginPanelMenus.set(pluginId, panelMap);
+        }
+        panelMap.set(panelId, result.items);
+      }
+      pushToRenderers(CHANNELS.EVENTS_PUSH, {
+        name: "plugin:panel-menus-changed",
+        payload: { pluginId, menus: deps.serializePluginPanelMenus(pluginId) },
       });
       return Promise.resolve();
     },

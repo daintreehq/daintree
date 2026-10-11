@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { createElement, type ComponentType } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -367,10 +367,11 @@ describe("@daintreehq/plugin-ui first render", () => {
     await act(async () => {
       openGate();
       await import("@/components/PluginKit/PluginKit");
-      await new Promise((resolve) => setTimeout(resolve, 0));
     });
     vi.doUnmock("@/components/PluginKit/PluginKit");
-    expect(container.querySelector("button")?.textContent).toBe("Later");
+    // React 19 can hold a resolved Suspense boundary's reveal for up to ~300ms,
+    // so a single macrotask after the chunk settles is a race under CI load.
+    await waitFor(() => expect(container.querySelector("button")?.textContent).toBe("Later"));
     expect(container.querySelector("[data-testid='trigger']")).not.toBeNull();
   }, 30_000);
 });

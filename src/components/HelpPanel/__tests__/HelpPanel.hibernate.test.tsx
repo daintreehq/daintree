@@ -965,13 +965,32 @@ describe("HelpPanel — Resume affordance for eviction-captured sessions", () =>
   it("does not offer Resume when the captured agent has no resume support", async () => {
     helpPanelState.autoLaunchEnabled = false;
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
-    // claude is installed/supported here, but buildResumeLatestCommand undefined
+    // claude is installed/supported here, but buildResumeCommand undefined
     // models a non-resumable agent (e.g. the built-in assistant). Resuming would
     // dead-end and silently start fresh, so the CTA must NOT promise a resume.
-    mockBuildResumeLatestCommand.mockReturnValue(undefined);
+    mockBuildResumeCommand.mockReturnValue(undefined);
     mockPeekPendingHibernation.mockResolvedValue({
       agentId: "claude",
       agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+    });
+
+    const { findByTestId, queryByTestId } = await act(async () =>
+      render(<HelpPanel width={380} />)
+    );
+
+    expect(await findByTestId("help-start-assistant")).toBeTruthy();
+    expect(queryByTestId("help-resume-assistant")).toBeNull();
+  });
+
+  it("does not offer Resume for an entry with no conversation id (#13205)", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    // A Codex lane never captured: recovery is by exact id only, so there is
+    // nothing to resume and the CTA must say Start, not promise a resume.
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "",
       cwd: "/tmp/help/proj-1",
     });
 

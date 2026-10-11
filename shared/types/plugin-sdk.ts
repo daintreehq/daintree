@@ -21,6 +21,7 @@
 
 export type {
   PanelContribution,
+  PanelMenuItemContribution,
   ToolbarButtonContribution,
   MenuItemContribution,
   MenuItemLocation,
@@ -54,6 +55,10 @@ export type {
   PluginPanelLifecyclePhase,
   PanelReloadResult,
 } from "./plugin.js";
+
+// ── Focused panel (worker-facing) ───────────────────────────────────
+
+export type { PluginFocusedPanel, PluginFocusedPanelKind } from "./plugin.js";
 
 // ── System wake (worker-facing) ─────────────────────────────────────
 

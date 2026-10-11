@@ -3,6 +3,7 @@ import { z } from "zod";
 import { COPY_TREE_UNMATCHED_SELECTORS } from "@shared/types/ipc/copyTree";
 import { COPY_TREE_HISTORY_NAME_MAX_LENGTH } from "@shared/types/ipc/copyTreeHistory";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
+import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 
 const filesClientMock = vi.hoisted(() => ({
   search: vi.fn(),
@@ -43,6 +44,14 @@ const artifactClientMock = vi.hoisted(() => ({
 const notifyMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+
+// The host's own probe of the project folder, which a project's root copy
+// waits on (#13210). Answers "no repository here" unless a case says otherwise.
+const worktreeClientMock = vi.hoisted(() => ({
+  getAllWithStatus: vi.fn(async () => ({ worktrees: [], gitBacked: false as boolean | null })),
+}));
+
+vi.mock("@/clients/worktreeClient", () => ({ worktreeClient: worktreeClientMock }));
 
 vi.mock("@/clients", () => ({
   filesClient: filesClientMock,
@@ -671,6 +680,97 @@ describe("systemActions adversarial", () => {
       // replaced the clipboard is the failure mode this exists to prevent.
       expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
       expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    describe("worktree-less workspace (#13210)", () => {
+      // The view's worktree list has loaded and come back empty: a non-git
+      // folder. A scratch never consults it.
+      beforeEach(() => {
+        const store = createWorktreeStore();
+        store.setState({ isInitialized: true, isLoading: false });
+        setCurrentViewStore(store);
+      });
+
+      it("makes an agent name a worktree while a project's list is still loading", async () => {
+        // Before the list arrives, no active worktree proves nothing — this is
+        // exactly the window the #11722 guard exists for.
+        setCurrentViewStore(createWorktreeStore());
+        const { run } = setupActions();
+        await expect(
+          run("copyTree.generateAndCopyFile", undefined, {
+            dispatchSource: "agent",
+            projectId: "proj-1",
+          })
+        ).rejects.toThrow(/requires an explicit/);
+        expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
+      });
+
+      it("makes an agent name a worktree while the host has yet to classify the folder", async () => {
+        worktreeClientMock.getAllWithStatus.mockResolvedValueOnce({
+          worktrees: [],
+          gitBacked: null,
+        });
+        const { run } = setupActions();
+        await expect(
+          run("copyTree.generateAndCopyFile", undefined, {
+            dispatchSource: "agent",
+            projectId: "proj-1",
+          })
+        ).rejects.toThrow(/requires an explicit/);
+        expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ["user", "a non-git project", { projectId: "proj-1" }],
+        ["agent", "a non-git project", { projectId: "proj-1" }],
+        ["user", "a scratch", { scratchId: "scratch-1" }],
+      ])(
+        "copies the workspace root for a %s dispatch in %s",
+        async (dispatchSource, _label, workspace) => {
+          // With no worktree there is nothing an agent could inherit by
+          // accident, so the explicit-target guard has nothing to protect.
+          const { run } = setupActions();
+          await run(
+            "copyTree.generateAndCopyFile",
+            { options: { format: "xml" } },
+            { dispatchSource, ...workspace }
+          );
+          expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledTimes(1);
+          const [worktreeId, options] = copyTreeClientMock.generateAndCopyFile.mock.calls[0]!;
+          expect(worktreeId).toBeUndefined();
+          expect(options).toEqual({ format: "xml" });
+        }
+      );
+
+      it("still refuses a named worktreePath that matches nothing, rather than widening to the root", async () => {
+        setWorktreePathIndexAccessor(() => new Map());
+        const { run } = setupActions();
+        await expect(
+          run(
+            "copyTree.generateAndCopyFile",
+            { worktreePath: "/repo/gone" },
+            { dispatchSource: "agent", projectId: "proj-1" }
+          )
+        ).rejects.toThrow(/no open worktree matches that path/i);
+        expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
+      });
+
+      it("refuses with no workspace of any kind", async () => {
+        const { run } = setupActions();
+        await expect(
+          run("copyTree.generateAndCopyFile", undefined, { dispatchSource: "user" })
+        ).rejects.toThrow(/No active worktree/);
+        expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
+      });
+
+      it("is ready in the palette for any workspace, worktree or not", () => {
+        const palette = setupActions().getDef("copyTree.generateAndCopyFile").palette;
+        if (palette?.mode !== "requireContext") throw new Error("expected requireContext");
+        expect(palette.isReady({ projectId: "proj-1" })).toBe(true);
+        expect(palette.isReady({ scratchId: "scratch-1" })).toBe(true);
+        expect(palette.isReady({ activeWorktreeId: "wt-1" })).toBe(true);
+        expect(palette.isReady({})).toBe(false);
+      });
     });
 
     it("toasts once on a successful agent dispatch", async () => {

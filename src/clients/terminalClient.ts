@@ -865,6 +865,15 @@ export const terminalClient = {
   },
 
   /**
+   * Every terminal the host knows of, assistants included — unlike
+   * {@link getForProject}, whose inventory leaves them out. A shard that fails
+   * to answer contributes nothing rather than an error.
+   */
+  getAll: (): Promise<BackendTerminalInfo[]> => {
+    return window.electron.terminal.getAllTerminals();
+  },
+
+  /**
    * Reconnect to an existing terminal process in the backend.
    * Returns the terminal info if it exists, error otherwise.
    */

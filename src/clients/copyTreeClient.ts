@@ -31,7 +31,7 @@ export const copyTreeClient = {
   },
 
   generateAndCopyFile: (
-    worktreeId: string,
+    worktreeId: string | undefined,
     options?: CopyTreeOptions,
     source?: CopyTreeRunSource,
     name?: string

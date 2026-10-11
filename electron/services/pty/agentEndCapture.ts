@@ -1,10 +1,11 @@
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { supportsSessionIdAssignment } from "../../../shared/types/agentSettings.js";
+import type { AgentEndObservation } from "../../../shared/types/ipc/agent.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { createLogger } from "../../utils/logger.js";
 import { events } from "../events.js";
 import { resolveCaptureBranch, trackAgentSessionCapture } from "./agentSessionCaptureDelivery.js";
-import { createSessionIdMatcher } from "./sessionIdCapture.js";
+import { createSessionIdMatcher, tailMatchesPattern } from "./sessionIdCapture.js";
 import type { TerminalInfo } from "./types.js";
 
 const logger = createLogger("pty:AgentEndCapture");
@@ -63,7 +64,8 @@ type AgentEndCaptureOutcome =
   | "no-resume-config"
   | "no-pattern"
   | "no-match"
-  | "needs-boundary";
+  | "needs-boundary"
+  | "launch-id";
 
 interface AgentEndCaptureArgs {
   terminalId: string;
@@ -89,8 +91,25 @@ interface AgentEndCaptureArgs {
  * Best-effort throughout — every failure mode resolves to one log line and no
  * record. Never logs the captured id itself, which is a resume credential.
  */
-export function captureAgentEndSession(args: AgentEndCaptureArgs): void {
+export function captureAgentEndSession(args: AgentEndCaptureArgs): AgentEndObservation {
   const { terminalId, terminal, agentId, boundary, recentOutput } = args;
+
+  const launchedRun =
+    terminal.isAssistantTerminal !== true &&
+    agentId === terminal.launchAgentId &&
+    terminal.agentIncarnation === 0;
+  const selfUpdateSucceeded =
+    launchedRun &&
+    tailMatchesPattern(
+      recentOutput,
+      getEffectiveAgentConfig(agentId)?.capabilities?.selfUpdateSuccessPattern,
+      { tailLines: CAPTURE_SCAN_LINES, tailChars: CAPTURE_SCAN_CHARS }
+    );
+  const observe = (resumeHintSeen: boolean): AgentEndObservation => ({
+    launchedRun,
+    resumeHintSeen,
+    selfUpdateSucceeded,
+  });
 
   const logOutcome = (outcome: AgentEndCaptureOutcome): void => {
     logger.info("Passive agent session capture outcome", {
@@ -99,7 +118,8 @@ export function captureAgentEndSession(args: AgentEndCaptureArgs): void {
       agentId,
       boundary,
       outcome,
-      captured: outcome === "captured" || outcome === "preassigned",
+      captured: outcome === "captured" || outcome === "preassigned" || outcome === "launch-id",
+      selfUpdateSucceeded,
     });
   };
 
@@ -107,13 +127,13 @@ export function captureAgentEndSession(args: AgentEndCaptureArgs): void {
   // never produce a resume record (#12183), exactly as trash expiry skips it.
   if (terminal.isAssistantTerminal === true) {
     logOutcome("assistant");
-    return;
+    return observe(false);
   }
 
   const resume = getEffectiveAgentConfig(agentId)?.resume;
   if (resume?.kind !== "session-id") {
     logOutcome("no-resume-config");
-    return;
+    return observe(false);
   }
 
   // The id was chosen at launch, so there is nothing to scrape and no
@@ -128,13 +148,13 @@ export function captureAgentEndSession(args: AgentEndCaptureArgs): void {
   ) {
     emitCapture(args, terminal.agentSessionId);
     logOutcome("preassigned");
-    return;
+    return observe(true);
   }
 
   const matcher = createSessionIdMatcher(resume.sessionIdPattern);
   if (!matcher) {
     logOutcome("no-pattern");
-    return;
+    return observe(false);
   }
 
   const match = matcher(recentOutput, {
@@ -146,15 +166,31 @@ export function captureAgentEndSession(args: AgentEndCaptureArgs): void {
     tailChars: CAPTURE_SCAN_CHARS,
   });
   if (match.kind !== "match") {
-    logOutcome(match.kind === "needs-boundary" ? "needs-boundary" : "no-match");
-    return;
+    // No farewell, but the launched run was opened on a known conversation —
+    // a restored `codex resume <id>` that exited at its updater, say. Journal
+    // that id so closing the pane can't lose it (#13226). Titleless: the
+    // pane's title describes whatever conversation the user ended in, which
+    // `/resume` or `/new` may have switched without a trace, so it can't be
+    // filed against the id the pane happened to launch with.
+    if (launchedRun && terminal.agentSessionId) {
+      emitCapture(args, terminal.agentSessionId, { titleless: true });
+      logOutcome("launch-id");
+    } else {
+      logOutcome(match.kind === "needs-boundary" ? "needs-boundary" : "no-match");
+    }
+    return observe(false);
   }
 
   emitCapture(args, match.sessionId);
   logOutcome("captured");
+  return observe(true);
 }
 
-function emitCapture(args: AgentEndCaptureArgs, sessionId: string): void {
+function emitCapture(
+  args: AgentEndCaptureArgs,
+  sessionId: string,
+  options: { titleless?: boolean } = {}
+): void {
   const { terminalId, terminal, agentId, boundary } = args;
 
   // Read every field before the caller's own teardown rewrites the title or
@@ -167,10 +203,11 @@ function emitCapture(args: AgentEndCaptureArgs, sessionId: string): void {
     worktreeId: terminal.worktreeId ?? null,
     // The observed task title unless the user locked the title, matching every
     // other close path — a locked record should read like the frozen live tab.
-    title:
-      (terminal.titleMode === "user"
-        ? terminal.title
-        : (terminal.lastObservedTitle ?? terminal.title)) ?? null,
+    title: options.titleless
+      ? null
+      : ((terminal.titleMode === "user"
+          ? terminal.title
+          : (terminal.lastObservedTitle ?? terminal.title)) ?? null),
     projectId: terminal.projectId ?? null,
     // Flags and model describe the agent Daintree launched. A different agent
     // the user started by hand in the same pane must not inherit them.

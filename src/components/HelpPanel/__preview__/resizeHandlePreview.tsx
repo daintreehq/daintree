@@ -88,6 +88,7 @@ function Scene() {
             canEndSession
             onRestartConversation={() => {}}
             onEndSession={() => {}}
+            onResumePastSession={() => {}}
             onOpenDocs={() => {}}
             onClose={() => {}}
           />

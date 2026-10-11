@@ -8,6 +8,7 @@ import { copyTreeClient, systemClient } from "@/clients";
 import { resolveCopyTreeRunSource } from "@/lib/copyTreeRunSource";
 import { actionService } from "@/services/ActionService";
 import { getCurrentViewStore, getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
+import { copiesWorkspaceRoot } from "./workspaceRootCopyTarget";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 // Static, unlike the panel stores below: both are leaf modules (a lease map and
 // a zustand store) that pull in no client graph, and they are the same two
@@ -392,13 +393,15 @@ export function registerWorktreeContextActions(
         const scopePaths = args?.scopePaths;
         const scopeIgnoresIgnoreFiles = args?.scopeIgnoresIgnoreFiles;
         const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
-        if (!targetWorktreeId) return null;
+        // No worktree at all is a non-git project or a scratch: copy its root,
+        // which main resolves from the dispatching view itself (#13210).
+        if (!targetWorktreeId && !(await copiesWorkspaceRoot(ctx))) return null;
 
         const format = explicitFormat ?? DEFAULT_COPYTREE_FORMAT;
 
         // Bracketed for the toolbar spinner, whoever dispatched — an MCP copy
         // spins the Copy context button the same as a clicked one. After the
-        // no-worktree return so a refused dispatch never blips it.
+        // no-workspace return so a refused dispatch never blips it.
         const runStore = useCopyTreeRunStore.getState();
         runStore.beginRun();
         let result: CopyTreeResult;
@@ -459,7 +462,7 @@ export function registerWorktreeContextActions(
         }
 
         return {
-          worktreeId: targetWorktreeId,
+          worktreeId: targetWorktreeId ?? null,
           fileCount: result.fileCount,
           stats: result.stats ?? null,
           format,

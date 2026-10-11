@@ -1,11 +1,14 @@
-import { BrowserWindow, session } from "electron";
+import { BrowserWindow, session, webContents } from "electron";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import {
   clearPortHolderWebContentsIfCurrent,
   getAppWebContents,
+  getProjectForWebContents,
+  isCachedViewWebContents,
   setFallbackEligibleProjectsListener,
 } from "./webContentsRegistry.js";
+import { getFocusedPanelTracker } from "../services/FocusedPanelTracker.js";
 import { distributePortsToView, releaseAllTerminalWorkerPorts } from "./portDistribution.js";
 import { resolveInitialColorSchemeId } from "./skeletonCss.js";
 import { resolveAppTheme } from "../../shared/theme/index.js";
@@ -459,6 +462,32 @@ export async function initPerWindowServices(
     "surface-canvas"
   ];
   ctx.services.portalManager = new PortalManager(win, portalBackgroundColor);
+  // OS foreground for the plugin focus tracker (#13221). The window's own
+  // focus/blur, because a child view's webContents doesn't reliably blur when
+  // the window deactivates.
+  const focusedPanelTracker = getFocusedPanelTracker();
+  focusedPanelTracker.setSenderChecks({
+    isFocused: (id) => {
+      const wc = webContents.fromId(id);
+      return wc !== undefined && !wc.isDestroyed() && wc.isFocused();
+    },
+    isActive: (id) => {
+      const activeView = windowRegistry
+        ?.getByWebContentsId(id)
+        ?.services.projectViewManager?.getActiveView();
+      if (activeView && !activeView.webContents.isDestroyed()) {
+        return activeView.webContents.id === id;
+      }
+      return !isCachedViewWebContents(id);
+    },
+    workspaceOf: (id) => getProjectForWebContents(id),
+  });
+  const windowIdForFocus = win.id;
+  const onWindowFocus = () => focusedPanelTracker.setFocusedWindow(windowIdForFocus);
+  const onWindowBlur = () => focusedPanelTracker.blurWindow(windowIdForFocus);
+  win.on("focus", onWindowFocus);
+  win.on("blur", onWindowBlur);
+  if (win.isFocused()) onWindowFocus();
   ctx.services.projectSwitchService = new ProjectSwitchService({
     mainWindow: win,
     ptyClient: ptyClient ?? undefined,
@@ -474,6 +503,11 @@ export async function initPerWindowServices(
   // Per-window cleanup: ports, portalManager, eventBuffer
   ctx.cleanup.add(
     toDisposable(() => {
+      if (!win.isDestroyed()) {
+        win.removeListener("focus", onWindowFocus);
+        win.removeListener("blur", onWindowBlur);
+      }
+      focusedPanelTracker.removeWindow(windowIdForFocus);
       // Paint-fabric surface views: release their pty-host connections first
       // (the broker disconnects each synthetic connection id), then tear down
       // the sibling WebContentsViews.

@@ -110,8 +110,11 @@ interface CopyTreeMenuContentProps {
   onCopyFullContext: () => void;
   /** Re-run a stored option set against the active worktree. */
   onRunRecent: (record: CopyTreeHistoryRecord) => void;
-  /** Open Project settings on the Context tab, where excludes and budgets live. */
-  onOpenContextSettings: () => void;
+  /**
+   * Open Project settings on the Context tab, where excludes and budgets live.
+   * Absent in a scratch, which has no project settings to open (#13210).
+   */
+  onOpenContextSettings?: () => void;
   /** Forwarded to the content; the toolbar uses it to redirect focus on overflow eviction. */
   onCloseAutoFocus?: (event: Event) => void;
 }
@@ -230,14 +233,18 @@ function CopyTreeMenuItems({
         ))
       )}
 
-      <DropdownMenuSeparator />
       {/* Where the excludes, always-include lists and size budgets that shape
           every copy actually live. Without this the menu is a dead end for
           someone who opened it wanting to change what a copy contains. */}
-      <DropdownMenuItem onSelect={onOpenContextSettings}>
-        <FileCode data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-        Context settings
-      </DropdownMenuItem>
+      {onOpenContextSettings ? (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={onOpenContextSettings}>
+            <FileCode data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            Context settings
+          </DropdownMenuItem>
+        </>
+      ) : null}
     </>
   );
 }

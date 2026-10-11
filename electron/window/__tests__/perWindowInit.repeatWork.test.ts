@@ -102,7 +102,14 @@ import type { WindowContext } from "../WindowRegistry.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 
 function fakeWindow(id: number): BrowserWindow {
-  return { id, isDestroyed: () => false, once: vi.fn() } as unknown as BrowserWindow;
+  return {
+    id,
+    isDestroyed: () => false,
+    isFocused: () => false,
+    once: vi.fn(),
+    on: vi.fn(),
+    removeListener: vi.fn(),
+  } as unknown as BrowserWindow;
 }
 
 function fakeContext(id: number): WindowContext {

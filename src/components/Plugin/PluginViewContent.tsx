@@ -14,6 +14,7 @@ import {
   type ProfilerOnRenderCallback,
 } from "react";
 import type {
+  PanelMenuItemContribution,
   PanelReloadResult,
   PanelViewProps,
   PluginPanelToolbarItemState,
@@ -70,6 +71,9 @@ import { PluginKitOwnerContext } from "@/components/PluginKit/kitScope";
 import { PluginKitViewHostContext } from "@/components/PluginKit/kitViewHost";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import { usePluginPanelToolbarStore } from "@/store/pluginPanelToolbarStore";
+import { usePluginPanelMenuStore } from "@/store/pluginPanelMenuStore";
+import { normalizePanelMenuItems } from "@shared/utils/pluginPanelMenuItems";
+import { logWarn } from "@/utils/logger";
 
 /**
  * The resolved subset of `PanelKindConfig` a plugin view actually needs. Both
@@ -170,8 +174,9 @@ export interface PluginViewContentProps {
    */
   offerRequestReload?: boolean;
   /**
-   * Hand the view `setToolbarItemState`, for a host that draws the panel's
-   * header and with it the kind's manifest `toolbar`. Project surfaces don't.
+   * Hand the view `setToolbarItemState` and `setMenuItems`, for a host that
+   * draws the panel's header and menus, and with them the kind's manifest
+   * `toolbar` and `menu`. Project surfaces don't.
    */
   offerToolbar?: boolean;
   /** Forwarded as `PanelViewProps.settingsContext`, for a settings view's host only. */
@@ -1167,7 +1172,9 @@ export function makePluginViewContent(
      * dock or tab move picks up where it left off.
      */
     const clearToolbarState = useCallback((): void => {
-      if (offerToolbar) usePluginPanelToolbarStore.getState().clearPanel(panelId);
+      if (!offerToolbar) return;
+      usePluginPanelToolbarStore.getState().clearPanel(panelId);
+      usePluginPanelMenuStore.getState().setViewItems(panelId, []);
     }, [offerToolbar, panelId]);
 
     /**
@@ -1561,6 +1568,36 @@ export function makePluginViewContent(
           : undefined,
       [offerToolbar, setToolbarItemStateFor, retryCount]
     );
+    /**
+     * The view's menu list (#13213), held to the same attempt and teardown
+     * guards as the toolbar. Vetted whole: a list the host would refuse is
+     * dropped rather than half drawn.
+     */
+    const setMenuItemsFor = useCallback(
+      (attempt: number, items: unknown): void => {
+        if (toolbarClosedRef.current) return;
+        if (attempt !== attemptRef.current) return;
+        const result = normalizePanelMenuItems(
+          items,
+          pluginManifestIdFromInstanceKey(pluginId),
+          pluginId
+        );
+        if (!result.ok) {
+          logWarn(`[PluginViewContent] Plugin "${pluginId}" setMenuItems: ${result.error}`);
+          return;
+        }
+        usePluginPanelMenuStore.getState().setViewItems(panelId, result.items);
+      },
+      [panelId]
+    );
+    const setMenuItems = useMemo(
+      () =>
+        offerToolbar
+          ? (items: readonly PanelMenuItemContribution[] | null) =>
+              setMenuItemsFor(retryCount, items)
+          : undefined,
+      [offerToolbar, setMenuItemsFor, retryCount]
+    );
     const runningActions = useAuthoredRunningActions(pluginId);
 
     // The user's reload reaches this mount through the lifecycle service, which
@@ -1815,6 +1852,7 @@ export function makePluginViewContent(
                           requestReload={requestReload}
                           setHasUnsavedChanges={setHasUnsavedChanges}
                           setToolbarItemState={setToolbarItemState}
+                          setMenuItems={setMenuItems}
                           runningActions={runningActions}
                           worktreeId={worktreeId}
                           styleRootAttributes={styleRootProps}

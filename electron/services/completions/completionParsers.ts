@@ -171,7 +171,9 @@ async function scanSkillDirectories(rootDir: string): Promise<RawCompletionEntry
   await Promise.all(
     entries.map(async (entry) => {
       if (entry.name.startsWith(".")) return;
-      if (!entry.isDirectory()) return;
+      // Skill managers commonly symlink skill folders in; the SKILL.md stat
+      // below follows the link and drops links to non-directories.
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) return;
 
       const skillFile = path.join(rootDir, entry.name, "SKILL.md");
       try {

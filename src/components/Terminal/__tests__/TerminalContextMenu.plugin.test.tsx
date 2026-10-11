@@ -164,6 +164,7 @@ import {
 } from "@shared/config/panelKindRegistry";
 import { registerTour } from "@/components/Tour/tourRegistry";
 import { publishRegisteredPluginActions } from "@/services/plugin/registeredPluginActions";
+import { usePluginPanelMenuStore } from "@/store/pluginPanelMenuStore";
 import type { PanelLocation } from "@/types";
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import {
@@ -333,6 +334,7 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     unregisterPanelKind(PTY_PLUGIN_KIND);
     unregisterPanelKind(VIEW_PLUGIN_KIND);
     publishRegisteredPluginActions([]);
+    usePluginPanelMenuStore.setState({ workerMenusByPanelId: {}, viewMenusByPanelId: {} });
     __resetPanelCloseGuardsForTests();
   });
 
@@ -783,5 +785,144 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     registerPluginKind(VIEW_PLUGIN_KIND);
     renderMenuFor({ id: "panel-1", title: "Acme", kind: VIEW_PLUGIN_KIND, worktreeId: "wt-1" });
     expect(findRow("Plugin settings…")).toBeUndefined();
+  });
+
+  describe("published menu entries (#13213)", () => {
+    it("adds the view's and the backend's lists after the manifest's", () => {
+      registerPluginKind(VIEW_PLUGIN_KIND, { pluginMenu: [{ actionId: "acme.refresh" }] });
+      act(() =>
+        publishRegisteredPluginActions([
+          ["acme.refresh", "Refresh data"],
+          ["acme.open-row", "Open row"],
+          ["acme.export", "Export"],
+        ])
+      );
+      usePluginPanelMenuStore.setState({
+        viewMenusByPanelId: { "panel-1": [{ actionId: "acme.open-row", label: "Open Acme" }] },
+        workerMenusByPanelId: { "panel-1": { acme: [{ actionId: "acme.export" }] } },
+      });
+      renderMenuFor(pluginPanel);
+
+      expect(menuRows()).toEqual(
+        sharedRows({
+          canMoveToWorktree: false,
+          isDockable: panelKindIsDockable(VIEW_PLUGIN_KIND),
+          pluginMenuItems: [
+            { actionId: "acme.refresh", label: "Refresh data" },
+            { actionId: "acme.open-row", label: "Open Acme" },
+            { actionId: "acme.export", label: "Export" },
+          ],
+        })
+      );
+    });
+
+    it("follows a republish while the menu is live", () => {
+      registerPluginKind(VIEW_PLUGIN_KIND);
+      act(() => publishRegisteredPluginActions([["acme.open-row", "Open row"]]));
+      renderMenuFor(pluginPanel);
+      expect(findRow("Open row")).toBeUndefined();
+
+      act(() =>
+        usePluginPanelMenuStore.getState().setViewItems("panel-1", [{ actionId: "acme.open-row" }])
+      );
+      expect(findRow("Open row")).toBeDefined();
+
+      act(() => usePluginPanelMenuStore.getState().setViewItems("panel-1", []));
+      expect(findRow("Open row")).toBeUndefined();
+    });
+
+    it("never shows another plugin's backend list on the panel", () => {
+      registerPluginKind(VIEW_PLUGIN_KIND);
+      act(() => publishRegisteredPluginActions([["other.run", "Run other"]]));
+      usePluginPanelMenuStore.setState({
+        workerMenusByPanelId: { "panel-1": { other: [{ actionId: "other.run" }] } },
+      });
+      renderMenuFor(pluginPanel);
+      expect(findRow("Run other")).toBeUndefined();
+    });
+
+    it("gives a PTY-backed plugin panel its plugin's entries, dispatched with the panel", async () => {
+      registerPluginKind(PTY_PLUGIN_KIND, {
+        hasPty: true,
+        pluginMenu: [{ actionId: "acme.restart-server" }],
+      });
+      act(() =>
+        publishRegisteredPluginActions([
+          ["acme.restart-server", "Restart server"],
+          ["acme.tail-logs", "Tail logs"],
+        ])
+      );
+      usePluginPanelMenuStore.setState({
+        workerMenusByPanelId: { "panel-1": { acme: [{ actionId: "acme.tail-logs" }] } },
+      });
+      // What addPanel records for a PTY-backed plugin kind: a terminal, with
+      // the kind it was opened as kept beside it.
+      renderMenuFor({
+        id: "panel-1",
+        title: "Acme Shell",
+        kind: "terminal",
+        pluginPanelKindId: PTY_PLUGIN_KIND,
+        worktreeId: "wt-1",
+      });
+
+      const labels = menuRows().map((row) => (row === "---" ? row : row.label));
+      expect(labels).toContain("Rename terminal");
+      const info = labels.indexOf("View terminal info");
+      expect(info).toBeGreaterThan(-1);
+      expect(labels.slice(info + 1, info + 3)).toEqual(["Restart server", "Tail logs"]);
+
+      findRow("Tail logs")!.click();
+      await closeMenu();
+      expect(dispatch).toHaveBeenCalledWith(
+        "acme.tail-logs",
+        { panelId: "panel-1" },
+        expect.anything()
+      );
+    });
+
+    it("keeps a PTY plugin panel a full terminal while its plugin kind is unregistered", () => {
+      act(() => publishRegisteredPluginActions([["acme.tail-logs", "Tail logs"]]));
+      usePluginPanelMenuStore.setState({
+        workerMenusByPanelId: { "panel-1": { acme: [{ actionId: "acme.tail-logs" }] } },
+      });
+      renderMenuFor({
+        id: "panel-1",
+        title: "Acme Shell",
+        kind: "terminal",
+        pluginPanelKindId: PTY_PLUGIN_KIND,
+        worktreeId: "wt-1",
+      });
+
+      expect(screen.getByText("Rename terminal")).toBeTruthy();
+      expect(screen.queryByText("Rename panel")).toBeNull();
+      expect(findRow("Tail logs")).toBeUndefined();
+    });
+
+    it("keeps a live PTY plugin panel a terminal when its kind re-registers without a PTY", () => {
+      registerPluginKind(PTY_PLUGIN_KIND, { hasPty: false });
+      act(() => publishRegisteredPluginActions([["acme.tail-logs", "Tail logs"]]));
+      usePluginPanelMenuStore.setState({
+        workerMenusByPanelId: { "panel-1": { acme: [{ actionId: "acme.tail-logs" }] } },
+      });
+      renderMenuFor({
+        id: "panel-1",
+        title: "Acme Shell",
+        kind: "terminal",
+        pluginPanelKindId: PTY_PLUGIN_KIND,
+        worktreeId: "wt-1",
+      });
+
+      expect(screen.getByText("Rename terminal")).toBeTruthy();
+      expect(findRow("Tail logs")).toBeDefined();
+    });
+
+    it("adds nothing to a plain terminal's menu", () => {
+      act(() => publishRegisteredPluginActions([["acme.tail-logs", "Tail logs"]]));
+      usePluginPanelMenuStore.setState({
+        workerMenusByPanelId: { "panel-1": { acme: [{ actionId: "acme.tail-logs" }] } },
+      });
+      renderMenuFor({ id: "panel-1", title: "Shell", kind: "terminal", worktreeId: "wt-1" });
+      expect(findRow("Tail logs")).toBeUndefined();
+    });
   });
 });

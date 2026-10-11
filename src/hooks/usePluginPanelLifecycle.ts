@@ -37,7 +37,10 @@ export function usePluginPanelLifecycle(): void {
         // registered kind while its panels are perfectly alive.
         livePanelIds.add(panelId);
         if (!panel?.kind) continue;
-        const kind = getPanelKindConfig(panel.kind);
+        // A PTY-backed plugin panel is a "terminal"; the kind it was opened as
+        // is what names its plugin (#13213).
+        const kindId = panel.pluginPanelKindId ?? panel.kind;
+        const kind = getPanelKindConfig(kindId);
         const extensionId = kind?.extensionId;
         if (!extensionId) {
           // Only a registered kind with no plugin is known to be non-plugin; an
@@ -47,7 +50,7 @@ export function usePluginPanelLifecycle(): void {
         }
         entries.push({
           panelId,
-          kindId: panel.kind,
+          kindId,
           pluginId: extensionId,
           location: panel.location,
         });

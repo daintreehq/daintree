@@ -591,6 +591,8 @@ export const CHANNELS = {
   HELP_TAKE_PENDING_HIBERNATION: "help:take-pending-hibernation",
   HELP_RESTORE_PENDING_HIBERNATION: "help:restore-pending-hibernation",
   HELP_LIST_PENDING_HIBERNATION_SLOTS: "help:list-pending-hibernation-slots",
+  HELP_DISCARD_CONVERSATION: "help:discard-conversation",
+  HELP_LIST_PAST_SESSIONS: "help:list-past-sessions",
   HELP_REPORT_PANEL_OPEN: "help:report-panel-open",
   HELP_GET_PINNED_ACTION_CONTEXT: "help:get-pinned-action-context",
 
@@ -1073,6 +1075,8 @@ export const CHANNELS = {
   PLUGIN_REPORT_VIEW_METRICS: "plugin:report-view-metrics",
   /** Renderer → main, fire-and-forget: the plugin push channels this renderer has subscribers for. */
   PLUGIN_REPORT_PUSH_LISTENERS: "plugin:report-push-listeners",
+  /** Renderer → main, fire-and-forget: the kind of panel holding DOM focus in this view (#13221). */
+  PLUGIN_REPORT_FOCUSED_PANEL: "plugin:report-focused-panel",
   /** Every tracked plugin's `PluginPerfSnapshot`. */
   PLUGIN_PERF_SNAPSHOTS_GET: "plugin:perf-snapshots-get",
   /** Renderer → main, fire-and-forget: start receiving `PLUGIN_PERF_SNAPSHOTS_CHANGED`. */

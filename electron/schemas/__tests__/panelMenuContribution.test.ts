@@ -104,10 +104,10 @@ describe("contributes.panels[].menu", () => {
     expect(errorCodes(result)).toContain("panel_menu_duplicate_action");
   });
 
-  it("refuses a menu on a PTY-backed panel, whose terminal menus would never show it", () => {
+  it("accepts a menu on a PTY-backed panel, whose terminal right-click menu draws it (#13213)", () => {
     const result = parse([panel([{ actionId: "acme.board.refresh" }], { hasPty: true })]);
 
-    expect(errorCodes(result)).toContain("pty_panel_menu_unsupported");
+    expect(result.success).toBe(true);
   });
 
   it.each([

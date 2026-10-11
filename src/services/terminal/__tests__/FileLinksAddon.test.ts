@@ -338,7 +338,13 @@ describe("FileLinksAddon", () => {
       });
 
     const readLink = (link: ILink) =>
-      link as unknown as { kind: string; text: string; absolutePath: string };
+      link as unknown as {
+        kind: string;
+        text: string;
+        absolutePath: string;
+        _line?: number;
+        _col?: number;
+      };
 
     it("turns an agent's generated-image URL into a single file link", async () => {
       const links = await linksFor(`Saved image to ${CODEX_URL}`);
@@ -486,6 +492,18 @@ describe("FileLinksAddon", () => {
       ]);
       const [first, second] = links!;
       expect(first!.range.end.x).toBeLessThan(second!.range.start.x);
+    });
+
+    it("links a bare path that opens on a hidden directory", async () => {
+      const links = await linksFor("Saved to .neo-issue/reviews/336/x.jpg");
+      expect(links!.map((link) => readLink(link).absolutePath)).toEqual([
+        "/home/user/project/.neo-issue/reviews/336/x.jpg",
+      ]);
+      const [located] = (await linksFor("see .github/workflows/ci.yml:12:3"))!;
+      const link = readLink(located!);
+      expect(link.text).toBe(".github/workflows/ci.yml:12:3");
+      expect([link._line, link._col]).toEqual([12, 3]);
+      expect(located!.range.start.x).toBe(5);
     });
 
     it("reports hover and leave like any other file link", async () => {

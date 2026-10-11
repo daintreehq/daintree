@@ -66,6 +66,7 @@ function renderHeader(overrides: Partial<ComponentProps<typeof HelpPanelHeader>>
       canEndSession={false}
       onRestartConversation={vi.fn()}
       onEndSession={vi.fn()}
+      onResumePastSession={vi.fn()}
       onOpenDocs={vi.fn()}
       onClose={vi.fn()}
       {...overrides}
@@ -207,5 +208,19 @@ describe("HelpPanelHeader", () => {
     fireEvent.click(getByText("Open docs"));
 
     expect(onOpenDocs).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers resuming a past session from the overflow menu, not the header row", () => {
+    const onResumePastSession = vi.fn();
+    const { container, getByText } = renderHeader({ onResumePastSession });
+
+    const overflow = container.querySelector("[data-testid='overflow-menu']")!;
+    const item = [...overflow.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Resume a past session…")
+    );
+    expect(item).toBeDefined();
+
+    fireEvent.click(getByText("Resume a past session…"));
+    expect(onResumePastSession).toHaveBeenCalledTimes(1);
   });
 });

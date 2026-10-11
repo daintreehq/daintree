@@ -969,6 +969,30 @@ describe("terminal notices", () => {
         ["terminal.sendCommand", { terminalId: "t-b", command: "ballot B" }],
       ]);
       expect(terminalNotify.prepareSend.mock.calls.map((c) => c[1])).toEqual(["t-a", "t-b"]);
+      // Omitted, so a notice may carry a handback summary in place of the screen.
+      expect(terminalNotify.prepareSend.mock.calls.map((c) => c[2]?.replyLines)).toEqual([
+        undefined,
+        undefined,
+      ]);
+    });
+
+    it("passes an explicit replyLines, zero included, to each send's notice", async () => {
+      const { terminalNotify, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-send-many-lines");
+
+      await callTool(server, {
+        name: "terminal.sendCommandMany",
+        arguments: {
+          sends: [
+            { terminalId: "t-a", command: "ballot A" },
+            { terminalId: "t-b", command: "ballot B" },
+          ],
+          notify: true,
+          replyLines: 0,
+        },
+      });
+
+      expect(terminalNotify.prepareSend.mock.calls.map((c) => c[2]?.replyLines)).toEqual([0, 0]);
     });
 
     it("sends through the owned tool from an agent pane, which refuses what it did not create", async () => {

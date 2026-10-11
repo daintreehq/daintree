@@ -461,7 +461,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       name?: string
     ): Promise<CopyTreeResult>;
     generateAndCopyFile(
-      worktreeId: string,
+      worktreeId: string | undefined,
       options?: CopyTreeOptions,
       source?: CopyTreeRunSource,
       name?: string
@@ -2329,6 +2329,20 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     onPanelBadgesCleared(callback: (payload: { pluginId: string }) => void): () => void;
     /**
+     * Subscribe to plugin runtime panel menus (#13213). The callback fires with
+     * one plugin's COMPLETE current map (`panelId → items`); an empty map clears
+     * that plugin's lists, as on unload. Returns a cleanup.
+     */
+    onPanelMenusChanged(
+      callback: (payload: {
+        pluginId: string;
+        menus: Record<
+          string,
+          readonly import("../../utils/pluginPanelMenuItems.js").PublishedPanelMenuItem[]
+        >;
+      }) => void
+    ): () => void;
+    /**
      * Subscribe to a plugin's running actions: the callback fires with its
      * COMPLETE set of action ids whose handlers are in flight, however they were
      * dispatched; an empty list means none. Returns a cleanup.
@@ -2356,6 +2370,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * drops reports for plugins it has not loaded or for a load it has retired.
      */
     reportViewMetrics(reports: import("./pluginMetrics.js").PluginRendererMetricsEnvelope[]): void;
+    /**
+     * Fire-and-forget: the kind of panel holding DOM focus in this project
+     * view, or `kind: null` when none does. Main combines it with window and
+     * Portal focus for `host.onDidChangeFocusedPanel` (#13221).
+     */
+    reportFocusedPanel(report: import("../plugin.js").PluginFocusedPanel): void;
     /**
      * Subscribe to per-plugin perf snapshots, pushed at most once a second and
      * only while at least one listener is attached (worker memory is sampled

@@ -312,6 +312,7 @@ beforeEach(() => {
           revokeSession: vi.fn().mockResolvedValue(undefined),
           takePendingHibernation: vi.fn().mockResolvedValue(null),
           restorePendingHibernation: vi.fn().mockResolvedValue(false),
+          discardConversation: vi.fn().mockResolvedValue(undefined),
         },
         helpAssistant: {
           getSettings: vi.fn().mockResolvedValue({ idleHibernateMinutes: 30 }),
@@ -604,6 +605,16 @@ describe("HelpSessionController — endSession (Stop assistant, #10989)", () => 
     syncWorkspaceInputs(ctrl, workspace);
   }
 
+  it("discards the lane's durable conversation pointer in main (#13205)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl["_patch"]({ phase: "live" });
+    bindLiveSession(ctrl);
+
+    ctrl.endSession();
+
+    expect(window.electron.help.discardConversation).toHaveBeenCalledWith("proj-1", 0);
+  });
+
   it("tears the bound session down without relaunching, then closes the panel", () => {
     const ctrl = new HelpSessionController();
     ctrl["_patch"]({ phase: "live" });
@@ -846,6 +857,16 @@ describe("HelpSessionController — handleAgentExited (agent /exit inside a live
     // Workspace reaches the controller via synced inputs, not the project store.
     syncWorkspaceInputs(ctrl, workspace);
   }
+
+  it("keeps the lane's durable conversation pointer, so the exit stays resumable (#13205)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl["_patch"]({ phase: "live" });
+    bindLiveSession(ctrl);
+
+    ctrl.handleAgentExited("term-1");
+
+    expect(window.electron.help.discardConversation).not.toHaveBeenCalled();
+  });
 
   it("kills the shell PTY, revokes, and slides the sidebar out on a settled agent exit", () => {
     const ctrl = new HelpSessionController();

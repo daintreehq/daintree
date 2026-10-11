@@ -68,6 +68,10 @@ export function reduceAgentDetected(
     terminal.runtimeIdentity,
     nextRuntimeIdentity
   );
+  // A new agent run is the user carrying on, so the offer to reopen the
+  // previous run's conversation has been answered (#13226).
+  const needsResumeOfferClear =
+    nextDetectedAgentId !== undefined && terminal.agentResumeOffer !== undefined;
   const shouldSeedAgentState =
     nextDetectedAgentId !== undefined &&
     (terminal.agentState === undefined || terminal.agentState === "exited");
@@ -93,7 +97,8 @@ export function reduceAgentDetected(
     !needsRuntimeIdentityUpdate &&
     !shouldSeedAgentState &&
     !needsTitleUpdate &&
-    !needsIncarnationUpdate
+    !needsIncarnationUpdate &&
+    !needsResumeOfferClear
   ) {
     return null;
   }
@@ -112,6 +117,7 @@ export function reduceAgentDetected(
       lastStateChange: timestamp,
     }),
     ...(needsTitleUpdate && { title: computedTitle }),
+    ...(needsResumeOfferClear && { agentResumeOffer: undefined }),
   };
 
   // Runtime detection still applies the in-process agent policies

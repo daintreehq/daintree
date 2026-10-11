@@ -6,7 +6,10 @@ import type * as HelpSessionServiceModule from "../../services/HelpSessionServic
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../../shared/types/actions.js";
-import type { PinnedActionContextSnapshot } from "../../../shared/types/ipc/help.js";
+import type {
+  HelpPastSession,
+  PinnedActionContextSnapshot,
+} from "../../../shared/types/ipc/help.js";
 import {
   DEFAULT_ASSISTANT_SLOT,
   isValidAssistantSlot,
@@ -228,6 +231,45 @@ async function handleListPendingHibernationSlots(
   return helpSessionService.listPendingHibernationSlots(projectId);
 }
 
+/**
+ * Past assistant conversations for this project (#13206), read from the agents'
+ * own transcript stores. Same cross-project guard as the hibernation reads:
+ * titles are conversation text, so only the view bound to the project may ask.
+ */
+async function handleListPastSessions(
+  ctx: import("../types.js").IpcContext,
+  projectId: string
+): Promise<HelpPastSession[]> {
+  if (typeof projectId !== "string" || !projectId) return [];
+  if (!ctx.projectId || ctx.projectId !== projectId) {
+    console.warn("[help] listPastSessions: projectId mismatch — refusing cross-project read", {
+      requested: projectId,
+      fromView: ctx.projectId,
+      webContentsId: ctx.webContentsId,
+    });
+    return [];
+  }
+  const [{ helpSessionService }, lister, claudeStore, codex, { projectStore }, { scratchStore }] =
+    await Promise.all([
+      getHelpSessionService(),
+      import("../../services/helpPastSessions.js"),
+      import("../../services/claude/ClaudeSessionStore.js"),
+      import("../../services/codex/CodexSubagentService.js"),
+      import("../../services/ProjectStore.js"),
+      import("../../services/ScratchStore.js"),
+    ]);
+  // The path comes from main's own record of the view's workspace, never the
+  // renderer: a path it supplied could name another project's history.
+  const projectPath =
+    projectStore.getProjectById(projectId)?.path ?? scratchStore.getScratchById(projectId)?.path;
+  if (!projectPath) return [];
+  return lister.listHelpPastSessions(helpSessionService.getSessionPathForProject(projectPath), {
+    claudeProjectsRoot:
+      claudeStore.resolvePaneClaudeProjectsRoot() ?? lister.defaultClaudeProjectsRoot(),
+    listCodexSessions: (cwd) => codex.listCodexSessionsForCwd(cwd),
+  });
+}
+
 async function handleTakePendingHibernation(
   ctx: import("../types.js").IpcContext,
   projectId: string,
@@ -285,6 +327,30 @@ async function handleRestorePendingHibernation(
   if (slot === null) return false;
   const { helpSessionService } = await getHelpSessionService();
   return helpSessionService.restorePendingHibernation(projectId, slot, claimId, ctx.webContentsId);
+}
+
+/**
+ * The user explicitly discarded a lane's conversation — Stop, Restart
+ * conversation, or closing its tab (#13205). The only renderer path that clears
+ * a lane's durable resume pointer; CLI exits and crashes leave it in place.
+ */
+async function handleDiscardConversation(
+  ctx: import("../types.js").IpcContext,
+  projectId: string,
+  rawSlot?: number
+): Promise<void> {
+  if (typeof projectId !== "string" || !projectId) return;
+  if (!ctx.projectId || ctx.projectId !== projectId) {
+    console.warn(
+      "[help] discardConversation: projectId mismatch — refusing cross-project discard",
+      { requested: projectId, fromView: ctx.projectId, webContentsId: ctx.webContentsId }
+    );
+    return;
+  }
+  const slot = resolveSlot(rawSlot);
+  if (slot === null) return;
+  const { helpSessionService } = await getHelpSessionService();
+  await helpSessionService.discardConversation(projectId, slot);
 }
 
 async function handleReportPanelOpen(
@@ -365,6 +431,12 @@ export const helpNamespace = defineIpcNamespace({
       handleRestorePendingHibernation,
       { withContext: true }
     ),
+    discardConversation: op(HELP_METHOD_CHANNELS.discardConversation, handleDiscardConversation, {
+      withContext: true,
+    }),
+    listPastSessions: op(HELP_METHOD_CHANNELS.listPastSessions, handleListPastSessions, {
+      withContext: true,
+    }),
     reportPanelOpen: op(HELP_METHOD_CHANNELS.reportPanelOpen, handleReportPanelOpen, {
       withContext: true,
     }),

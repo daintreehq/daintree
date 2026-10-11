@@ -101,6 +101,10 @@ export const config: AgentConfig = {
         "Codex's ambient animation behind the prompt. Off keeps idle panes from repainting continuously.",
     },
     supportsBracketedPaste: true,
+    // "Update now" on the startup prompt runs the installer and exits without
+    // relaunching, dropping a resumed pane back to its shell (#13226). Verified
+    // against `codex-cli 0.162.1`.
+    selfUpdateSuccessPattern: "Update ran successfully! Please restart Codex\\.",
     // Composer shows `[Image #N]` for a lone bracketed-pasted image path (#12792).
     imageInput: "bracketed-path",
     softNewlineSequence: "\n",
@@ -285,6 +289,15 @@ export const config: AgentConfig = {
             },
             segments: ["skills"],
             locationPrecedence: 0,
+          },
+          {
+            // Codex's documented personal skill location. Not moved by
+            // CODEX_HOME, and outranks `$CODEX_HOME/skills` on a name clash.
+            id: "user:agents-skills",
+            scope: "user",
+            base: { type: "homeRelative", segments: [".agents"] },
+            segments: ["skills"],
+            locationPrecedence: 1,
           },
           {
             id: "project:agents-skills",

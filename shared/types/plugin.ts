@@ -182,6 +182,16 @@ export interface PanelMenuItemContribution {
   label?: string;
 }
 
+/**
+ * Most entries one publisher may put on a panel's menu at runtime, through
+ * `PanelViewProps.setMenuItems` or `host.setPanelMenuItems`. Separate from the
+ * manifest's {@link PANEL_MENU_MAX_ITEMS}.
+ */
+export const PANEL_RUNTIME_MENU_MAX_ITEMS = 5;
+
+/** Most characters a menu entry's label may carry; a longer runtime label is cut. */
+export const PANEL_MENU_LABEL_MAX = 80;
+
 export interface ToolbarButtonContribution {
   id: string;
   label: string;
@@ -261,6 +271,10 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   // Not confirm-triggering — it changes where a dispatch lands, not which
   // actions a plugin can reach.
   "project:dispatch",
+  // Observe which kind of panel has focus (`host.onDidChangeFocusedPanel`,
+  // #13221): the kind, an agent flag and the worktree id, never a panel's id,
+  // title, URL or content. Disclosure-only and not confirm-triggering.
+  "panel:focus-read",
 ] as const;
 
 export type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
@@ -662,6 +676,27 @@ export interface PanelViewProps {
     actionId: string,
     state: PluginPanelToolbarItemState | null
   ) => void;
+  /**
+   * Publishes the contextual actions this panel's ⋯ and right-click menus
+   * offer right now, in order, in the plugin's own group after the manifest's
+   * `menu` entries. Each call replaces the whole list; `null` (or `[]`) clears
+   * it. Every `actionId` must be one of your own actions, written
+   * `"{manifestId}.{id}"` like the manifest's `menu`; an entry shows while its
+   * action is registered and is dispatched with `{ panelId }`, through the
+   * action's own danger tier. At most five entries; labels default to the
+   * action's title and are cut at 80 characters. An invalid list (a foreign or
+   * built-in action, a duplicate, too many entries) is ignored whole.
+   *
+   * The list belongs to the panel, so it survives the view re-rendering,
+   * unmounting and remounting, and is cleared when the panel closes or the view
+   * reloads. A menu that is open when you republish shows the new list.
+   *
+   * The setter belongs to the attempt that received it: a call held past this
+   * attempt's teardown does nothing. `usePanelMenuItems` wraps it.
+   *
+   * Absent where the panel has no host menu (a surface), so call it optionally.
+   */
+  readonly setMenuItems?: (items: readonly PanelMenuItemContribution[] | null) => void;
   /**
    * Your actions whose handlers are running right now, by `actionId` as the
    * manifest writes it — however they were dispatched: the palette, a menu,
@@ -1652,15 +1687,17 @@ export interface PluginHostCallOptions {
  * Options accepted by the bursty host subscriptions —
  * {@link PluginActivationApi.onDidChangeWorktrees},
  * {@link PluginActivationApi.onDidChangeActiveWorktree},
- * {@link PluginActivationApi.onDidChangeAgentState} and
- * {@link PluginActivationApi.onDidChangeAllAgents}. These coalesce by default:
+ * {@link PluginActivationApi.onDidChangeAgentState},
+ * {@link PluginActivationApi.onDidChangeAllAgents} and
+ * {@link PluginActivationApi.onDidChangeFocusedPanel}. These coalesce by default:
  * a burst of events becomes one trailing callback fired `debounceMs` after the
  * last event (the host re-emits the worktree set on every git-status poll, and
  * agents change state many times a second). A burst that never goes quiet
  * still fires at least every `4 × debounceMs`, so a busy project never
  * withholds its latest state indefinitely.
  *
- * - omitted (or not a number) — the default window, 100ms
+ * - omitted (or not a number) — the default window, 100ms (250ms for
+ *   `onDidChangeFocusedPanel`)
  * - `0` (or a negative number) — no coalescing: every event is delivered
  * - any other value — used as the window, clamped to 50–60000ms
  *
@@ -2875,6 +2912,43 @@ export interface PluginAllAgentsSnapshot {
    * updated when the answer changes, so it is not a heartbeat.
    */
   readonly lastSuccessfulAt: number | null;
+}
+
+/**
+ * The kind of surface that has focus, as
+ * {@link PluginActivationApi.onDidChangeFocusedPanel} reports it. A built-in
+ * panel kind passes through as-is; every plugin-contributed panel, this
+ * plugin's own included, is `"plugin"`; `"portal"` is the Portal (web chat)
+ * dock.
+ */
+export type PluginFocusedPanelKind =
+  // `BuiltInPanelKind`, spelled out so the SDK bundle never pulls the panel
+  // registry and its theme imports; pinned to it by a type test.
+  | "terminal"
+  | "browser"
+  | "dev-preview"
+  | "review"
+  | "file"
+  | "file-browser"
+  | "diff"
+  | "plugin"
+  | "portal";
+
+/**
+ * Which kind of panel the user is working in. Carries the kind and the
+ * worktree only — never a panel's id, title, URL, cwd or content.
+ */
+export interface PluginFocusedPanel {
+  /**
+   * The focused kind, or `null` when Daintree has no focused panel: its window
+   * is not the OS foreground window, or focus is on something that is not a
+   * panel (the sidebar, an app dialog, the assistant).
+   */
+  readonly kind: PluginFocusedPanelKind | null;
+  /** The focused panel is a terminal currently running an agent. */
+  readonly agent: boolean;
+  /** The focused panel's worktree, when it belongs to one. Always `null` for `"portal"`. */
+  readonly worktreeId: string | null;
 }
 
 /** `host.agents` — the agent panes in the plugin's project. */
@@ -4338,6 +4412,30 @@ export interface PluginActivationApi {
     options?: PluginHostSubscriptionOptions
   ): Promise<() => void>;
   /**
+   * Subscribe to which kind of panel has focus (#13221): a terminal, a browser
+   * panel, a diff, the Portal, … The callback receives a frozen
+   * {@link PluginFocusedPanel} with `kind: null` while Daintree is not the
+   * foreground window or nothing that is a panel has focus. Gated on
+   * `panel:focus-read`. A project plugin sees focus only inside its own
+   * project, and `kind: null` everywhere else, the Portal included.
+   *
+   * The current focus is delivered once after subscribing, then every change.
+   * Coalesced to the latest value with a 250ms default window, and a value
+   * equal to the last one delivered is never repeated; see
+   * {@link PluginHostSubscriptionOptions}. Resolves to a disposer; calling it
+   * more than once is a no-op. Disposed automatically when the plugin is
+   * unloaded.
+   *
+   * Subscribing is revoke-guarded — call it during `activate()`.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` if the plugin did not declare
+   *   `panel:focus-read`, or the host is revoked.
+   */
+  onDidChangeFocusedPanel(
+    callback: (focus: PluginFocusedPanel) => void,
+    options?: PluginHostSubscriptionOptions
+  ): Promise<() => void>;
+  /**
    * Subscribe to panel lifecycle transitions for this plugin's own contributed
    * panels (#11301). No capability is required — a plugin only ever sees events
    * for panel instances of kinds it contributed itself.
@@ -4749,6 +4847,39 @@ export interface PluginHostApi extends PluginActivationApi {
    * still rejected synchronously worker-side.)
    */
   setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
+  /**
+   * Publish the contextual actions the ⋯ and right-click menus of one of this
+   * plugin's own panels offer right now — the backend-side twin of the view's
+   * `PanelViewProps.setMenuItems`, and the only way a PTY-backed panel (which
+   * has no view) gets entries of its own. They appear in the plugin's group,
+   * after the manifest's `menu` entries and any the view published; the host's
+   * own entries keep their place and order.
+   *
+   * Each call replaces this plugin's list for that panel; `null` (or `[]`)
+   * clears it. Every `actionId` must be one of your own actions, written
+   * `"{manifestId}.{id}"`; an entry shows while its action is registered and is
+   * dispatched with `{ panelId }`, through the action's own danger tier. At most
+   * five entries; labels default to the action's title and are cut at 80
+   * characters.
+   * Panel ids come from {@link onDidChangePanelLifecycle} or the `{ panelId }`
+   * that `panel.openPluginPanel` returns.
+   *
+   * Entries only ever show on a panel of a kind this plugin contributed. The
+   * list is not persisted: clear it when the panel reports `removed`, and
+   * republish after a restart. Every list this plugin published is dropped when
+   * it unloads.
+   *
+   * Like {@link setPanelBadge} this is NOT revoke-guarded and becomes a silent
+   * no-op once the plugin is unloaded. An empty `panelId` or an invalid list (a
+   * foreign or built-in action, a duplicate, too many entries) rejects. (In a
+   * worker the list is vetted before it crosses the port, so those still
+   * reject; only the host's 256-panel cap is logged there rather than
+   * rejected.)
+   */
+  setPanelMenuItems(
+    panelId: string,
+    items: readonly PanelMenuItemContribution[] | null
+  ): Promise<void>;
   /**
    * Ask the host to discard one of this plugin's own panel views and mount a
    * fresh one (#12610) — the backend-side twin of the view's

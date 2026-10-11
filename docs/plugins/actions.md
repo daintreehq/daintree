@@ -212,6 +212,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `help.displayImage` | Display documentation image | safe | `url`, `altText?`, `caption?` |
 | `help.gettingStarted.show` | Getting started | safe | — |
 | `help.openCommandsFolder` | Open assistant commands folder | safe | — |
+| `help.resumePastSession` | Resume past assistant session | safe | `agentId`, `sessionId`, `slot?` |
 | `help.tour.show` | Daintree Tour | safe | `tourId?` |
 
 ## introspection

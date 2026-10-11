@@ -289,6 +289,7 @@ The module has to run in both places: relative imports with their file extension
 | `useNow`, `useAnimationFrame` | A shared clock and a frame loop, both paused while nobody can see the view. |
 | `useActionRunning` | Whether one of your actions is running, however it was dispatched — for an in-view control that shows busy (or refuses a second click) while a menu- or toolbar-started run is in flight, with no start and end pushes of your own. |
 | `usePanelToolbarItem` | Keeps one of the panel's manifest `toolbar` buttons in step with the view: busy, disabled, a status and its "Updated" age. Returns `false` where the surface has no panel header. See [Panel toolbar](./contribution-points.md#panel-toolbar). |
+| `usePanelMenuItems` | Keeps the panel's contextual menu entries in step with the view, for example an "Open row" entry that follows the selection. It republishes only when an entry changes, and returns `false` where the surface has no panel menus. See [Runtime menu entries](./contribution-points.md#runtime-menu-entries). |
 | `lazyWithPreload`, `usePreloadOnIntent` | A split chunk preloaded on hover or focus, so it renders in its first frame. |
 | `createViewScope` | Releases listeners, timers, observers, workers and WebGL contexts with the mount. See [Resources your view owns](#resources-your-view-owns). |
 | `loadDocumentPackage` | Loads a library the host document keeps across reloads. See [Document packages](./document-packages.md). |

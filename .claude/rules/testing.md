@@ -12,7 +12,7 @@ paths:
 
 ## Unit tests (vitest)
 
-Run the **full** suite before calling work done — `npm test`. Scoped runs have repeatedly hidden failures that then cost a CI round trip; ~153s locally is cheaper than one cycle.
+**NEVER run the full suite locally** (`npm test`, `npx vitest run` with no path). It takes 15-20 minutes and GitHub CI runs it on every PR in 4 shards. Run only the test files that cover what you changed: `npm test -- <path>`. This holds at every stage, including before a commit or PR, and overrides any skill or runbook step that says to run the whole suite. A failure CI finds outside your files gets fixed from the CI log.
 
 **No jest-dom in this repo.** Only `@testing-library/react` is installed, so `toBeInTheDocument`, `toHaveAttribute` and friends throw "Invalid Chai property". Use plain DOM reads.
 

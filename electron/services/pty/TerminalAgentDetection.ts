@@ -11,6 +11,7 @@ import type { TerminalInfo } from "./types.js";
 import { computeDefaultTitle } from "./terminalTitle.js";
 import { logIdentityDebug } from "./identityDebug.js";
 import { buildPatternConfig } from "./terminalActivityPatterns.js";
+import type { AgentEndObservation } from "../../../shared/types/ipc/agent.js";
 import { captureAgentEndSession } from "./agentEndCapture.js";
 
 export interface TerminalAgentDetectionHost {
@@ -156,6 +157,7 @@ export function handleAgentDetection(
     }
   } else if (!isDetected && (terminal.detectedAgentId || host.lastDetectedProcessIconId)) {
     const previousAgent = terminal.detectedAgentId;
+    let agentEnd: AgentEndObservation | undefined;
     if (previousAgent) {
       // The "agent-requires-explicit-exit" guard exists to keep durable
       // launch-affinity chrome stable through transient detection gaps —
@@ -183,7 +185,7 @@ export function handleAgentDetection(
       // path ever sees this session — quitting Codex by hand left it invisible to
       // the resume palette (#12179). Runs before the identity and title rewrites
       // below, which the record reads.
-      captureAgentEndSession({
+      agentEnd = captureAgentEndSession({
         terminalId: host.id,
         terminal,
         agentId: previousAgent,
@@ -215,6 +217,7 @@ export function handleAgentDetection(
       defaultTitle: previousAgent ? nextTitle : undefined,
       timestamp: Date.now(),
       ...(previousAgent ? { exitKind: "subcommand" as const } : {}),
+      ...(agentEnd ? { agentEnd } : {}),
     });
   }
 

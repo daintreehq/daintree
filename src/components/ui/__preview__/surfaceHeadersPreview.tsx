@@ -340,6 +340,7 @@ function AssistantColumn({ focused }: { focused: boolean }) {
           canEndSession
           onRestartConversation={noop}
           onEndSession={noop}
+          onResumePastSession={noop}
           onOpenDocs={noop}
           onClose={noop}
           isFocused={focused}

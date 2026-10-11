@@ -43,6 +43,13 @@ export const PLUGIN_PUSH_MAX_BATCH_SIZE = 256;
  */
 export const PLUGIN_SUBSCRIPTION_DEFAULT_DEBOUNCE_MS = 100;
 
+/**
+ * Default window for `host.onDidChangeFocusedPanel` (#13221). Longer than the
+ * general default: focus flips through several panels on one click-through or
+ * tab cycle, and only where it settles says where attention went.
+ */
+export const PLUGIN_FOCUSED_PANEL_DEFAULT_DEBOUNCE_MS = 250;
+
 /** Lines `host.terminals.readScreen` returns when the caller names none. */
 export const PLUGIN_TERMINAL_SCREEN_DEFAULT_LINES = 20;
 

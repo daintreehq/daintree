@@ -76,13 +76,15 @@ describe("ContentGrid panel motion (issue #6162)", () => {
     const content = await readFile(CONTEXT_PATH, "utf-8");
     expect(content).toContain("prevGridColsRef");
     expect(content).toContain("suppressResizesDuringLayoutTransition");
-    // The pass is skipped entirely while switching projects or dragging, and
-    // the resize-lock is armed whenever the survivors' boxes change — a
-    // column-count change or a layout-changing close.
+    // The pass is skipped entirely while switching projects or dragging. The
+    // resize-lock is armed when the boxes change without an add or close (a
+    // window resize crossing a breakpoint); an add or close instead resizes
+    // the survivors at once through a leading-edge pass, with no lock.
     expect(content).toMatch(/if\s*\(isProjectSwitching\s*\|\|\s*isDraggingRef\.current\)\s*return/);
     expect(content).toMatch(
-      /if\s*\(colsChanged\s*\|\|\s*scrollGeoChanged\s*\|\|\s*layoutChangingClose\)\s*\{/
+      /if\s*\(!membershipChanged\s*&&\s*\(colsChanged\s*\|\|\s*scrollGeoChanged\)\)\s*\{/
     );
+    expect(content).toMatch(/runGridBatchFit\(membershipChanged\)/);
     expect(content).toContain("GRID_PLACEHOLDER_ID");
   });
 

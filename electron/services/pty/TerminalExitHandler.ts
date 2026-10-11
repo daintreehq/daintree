@@ -6,7 +6,9 @@ import type { IdentityWatcher } from "./IdentityWatcher.js";
 import type { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
 import type { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
 import type { SessionSnapshotter } from "./SessionSnapshotter.js";
+import type { AgentEndObservation } from "../../../shared/types/ipc/agent.js";
 import { captureAgentEndSession } from "./agentEndCapture.js";
+import { supportsSessionIdAssignment } from "../../../shared/types/agentSettings.js";
 import { computeDefaultTitle } from "./terminalTitle.js";
 import { logTerminalExit } from "./terminalKillAudit.js";
 
@@ -90,10 +92,20 @@ export class TerminalExitHandler {
     // id up front, and that id outlives the agent, so a pane whose user quit the
     // launched agent and started another by hand would otherwise skip the
     // backstop on the strength of the previous conversation's id.
+    //
+    // An id is only the teardown's own when it either scraped it or the agent's
+    // id was assigned at launch, which the teardown hands back verbatim. A
+    // restored Codex pane carries its launch id from the start; a teardown
+    // whose quit was swallowed must still reach the backstop, which journals
+    // that launch id when no farewell turns up (#13226).
     const teardownHoldsThisSession =
-      terminal.wasKilled && !!terminal.agentSessionId && previousAgent === terminal.launchAgentId;
+      terminal.wasKilled &&
+      !!terminal.agentSessionId &&
+      previousAgent === terminal.launchAgentId &&
+      (terminal.sessionIdCapturedAtTeardown === true || supportsSessionIdAssignment(previousAgent));
+    let agentEnd: AgentEndObservation | undefined;
     if (previousAgent && !teardownHoldsThisSession) {
-      captureAgentEndSession({
+      agentEnd = captureAgentEndSession({
         terminalId: this.host.id,
         terminal,
         agentId: previousAgent,
@@ -119,6 +131,7 @@ export class TerminalExitHandler {
         defaultTitle: previousAgent ? nextTitle : undefined,
         timestamp: Date.now(),
         ...(previousAgent ? { exitKind: "terminal" as const } : {}),
+        ...(agentEnd ? { agentEnd } : {}),
       });
     }
 

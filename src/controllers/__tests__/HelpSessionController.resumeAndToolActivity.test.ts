@@ -347,11 +347,11 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
     panelStoreState.addPanel = vi.fn().mockResolvedValue("term-resumed");
   }
 
-  it("does not show the resume banner when the hibernation sessionId is empty (resume-latest path)", async () => {
+  it("starts fresh instead of resuming when the hibernation sessionId is empty (#13205)", async () => {
     const ctrl = new HelpSessionController();
     ctrl.start();
     primeResumeInputs(ctrl);
-    // Empty sessionId is the sentinel from main's LRU-eviction race.
+    // Empty sessionId: a Codex lane never captured, or main's LRU-eviction race.
     helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
       sessionId: "",
       // Captured in the session directory the resume will launch in.
@@ -366,17 +366,12 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
       undefined
     );
 
-    // The phase still reached live (the spawn succeeded via --continue) but
-    // the resume-banner claim is suppressed because we never had a real id.
-    expect(ctrl.getSnapshot().phase).toBe("live");
+    // Recovery is by exact id only: no resume panel is spawned, so nothing can
+    // run `--continue` against the directory every lane shares, and no banner
+    // claims a restore that never happened.
     expect(ctrl.getSnapshot().showResumeBanner).toBe(false);
-    // The hibernate entry is still consumed so a future auto-launch doesn't
-    // loop on the same --continue attempt.
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1", 0);
-    // The spawn still happened — the renderer attempted the agent heuristic.
-    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "terminal" })
-    );
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
     ctrl.stop();
   });
 
@@ -446,35 +441,6 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
     ctrl.stop();
   });
 
-  it("ignores another project's hibernated lanes when deciding whether it is alone", async () => {
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    primeResumeInputs(ctrl);
-    helpPanelState.openSlots = [0];
-    helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
-      sessionId: "",
-      // Captured in the session directory the resume will launch in.
-      cwd: "/help",
-      agentId: "claude",
-    };
-    helpPanelState.hibernateSessions[slotKey("p2", 1)] = {
-      sessionId: "elsewhere",
-      cwd: "/other",
-      agentId: "claude",
-    };
-
-    await ctrl["_executeLaunch"](
-      7,
-      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
-      { id: "p1", path: "/repo" },
-      undefined
-    );
-
-    expect(panelStoreState.addPanel).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(panelStoreState.addPanel.mock.calls[0]![0])).toContain("--continue");
-    ctrl.stop();
-  });
-
   it("refuses resume-latest when the entry was captured in a different directory", async () => {
     // A lane from before every lane shared one directory has its entry keyed to
     // `<hash>-s1`. Resuming "latest" from the shared directory would pick up
@@ -503,14 +469,15 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
     ctrl.stop();
   });
 
-  it("still allows resume-latest when this is the project's only lane", async () => {
+  it("never falls back to resume-latest, even as the project's only lane (#13205)", async () => {
+    // "Only lane now" can't prove no other conversation ever used the shared
+    // directory — a lane closed before a restart left its transcript there.
     const ctrl = new HelpSessionController();
     ctrl.start();
     primeResumeInputs(ctrl);
     helpPanelState.openSlots = [0];
     helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
       sessionId: "",
-      // Captured in the session directory the resume will launch in.
       cwd: "/help",
       agentId: "claude",
     };
@@ -522,8 +489,8 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
       undefined
     );
 
-    expect(panelStoreState.addPanel).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(panelStoreState.addPanel.mock.calls[0]![0])).toContain("--continue");
+    // No resume panel at all — the fresh launch goes through agent.launch.
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
     ctrl.stop();
   });
 
@@ -547,6 +514,11 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
     expect(ctrl.getSnapshot().phase).toBe("live");
     expect(ctrl.getSnapshot().showResumeBanner).toBe(true);
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1", 0);
+    // The resumed panel carries the id it reopened, so main re-records it at
+    // spawn and the lane stays recoverable after another quit (#13205).
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ agentSessionId: "abc-123" })
+    );
     ctrl.stop();
   });
 });
@@ -818,6 +790,204 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1", 0);
     expect(ctrl.getSnapshot().phase).toBe("live");
     ctrl.stop();
+  });
+});
+
+describe("HelpSessionController — picked past-session resume (#13206)", () => {
+  const provisionMock = () => vi.mocked(window.electron.help.provisionSession);
+  const takeMock = () => vi.mocked(window.electron.help.takePendingHibernation);
+
+  function primeProvision() {
+    provisionMock().mockResolvedValueOnce({
+      sessionId: "sess-pick",
+      sessionPath: "/help",
+      token: "tok",
+      tier: "core",
+      mcpUrl: null,
+      windowId: 1,
+    });
+  }
+
+  it("resumes the picked id exactly, records it on the panel, and ignores the lane's captured entry", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    primeProvision();
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("term-picked");
+    // A captured entry for a different conversation must neither be resumed
+    // nor taken before the spawn.
+    helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
+      sessionId: "captured-other",
+      cwd: "/help",
+      agentId: "claude",
+    };
+    // As `launch()` records it before handing off to `_executeLaunch`.
+    ctrl["_lastResumeTarget"] = { sessionId: "picked-123" };
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", resumeTarget: { sessionId: "picked-123" } },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    const options = panelStoreState.addPanel.mock.calls[0]![0];
+    expect(options.command).toContain("picked-123");
+    expect(options.command).not.toContain("captured-other");
+    expect(options.agentSessionId).toBe("picked-123");
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+      0,
+      "term-picked",
+      "claude",
+      "sess-pick"
+    );
+    expect(ctrl.getSnapshot().phase).toBe("live");
+    // Main records the picked id as the lane's pointer from the spawn's
+    // `agentSessionId` (#13205), so the pick never claims the lane's old entry.
+    expect(takeMock()).not.toHaveBeenCalled();
+    // Live, so the lane no longer belongs to the pick.
+    expect(ctrl["_lastResumeTarget"]).toBeUndefined();
+    ctrl.stop();
+  });
+
+  it("never falls back to resume-latest or a fresh launch when the pick can't be resumed", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    primeProvision();
+    // The spawn fails outright.
+    panelStoreState.addPanel = vi.fn().mockResolvedValue(null);
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", resumeTarget: { sessionId: "picked-123" } },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    const commands = panelStoreState.addPanel.mock.calls.map((call) => String(call[0].command));
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).not.toContain("--continue");
+    expect(actionService.dispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
+    // Surfaced, not swallowed — a toast here, since the panel is closed.
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-pick");
+    expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalled();
+    expect(takeMock()).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("records the exact id on an ordinary captured-entry resume too", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    primeProvision();
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("term-resumed");
+    helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
+      sessionId: "abc-123",
+      cwd: "/help",
+      agentId: "claude",
+    };
+
+    await ctrl["_executeLaunch"](7, { agentId: "claude" }, { id: "p1", path: "/repo" }, undefined);
+
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ agentSessionId: "abc-123" })
+    );
+    ctrl.stop();
+  });
+});
+
+describe("HelpSessionController — launchWhenReady (#13206)", () => {
+  const readyInputs = {
+    isOpen: true,
+    isReadyToLaunch: true,
+    currentProject: { id: "p1", path: "/repo" },
+    terminalId: null,
+    preferredAgentId: "claude",
+    supportedInstalledAgentIds: ["claude"],
+    autoLaunchEnabled: true,
+    visibilityEpoch: 0,
+  };
+
+  it("holds the launch until the lane's first ready sync, and that sync skips auto-launch", () => {
+    const ctrl = new HelpSessionController();
+    const launch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
+
+    ctrl.launchWhenReady({ agentId: "claude", resumeTarget: { sessionId: "picked-1" } });
+    expect(launch).not.toHaveBeenCalled();
+
+    ctrl.syncInputs({ ...readyInputs, isReadyToLaunch: false });
+    expect(launch).not.toHaveBeenCalled();
+
+    ctrl.syncInputs(readyInputs);
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(launch).toHaveBeenCalledWith({
+      agentId: "claude",
+      resumeTarget: { sessionId: "picked-1" },
+    });
+
+    // Consumed: a later sync never replays it. (Any auto-launch that sync
+    // attempts meets the real launch's re-entrancy guard, stubbed out here.)
+    ctrl.syncInputs({ ...readyInputs, visibilityEpoch: 1 });
+    const replays = launch.mock.calls.filter(([options]) => options.resumeTarget !== undefined);
+    expect(replays).toHaveLength(1);
+  });
+
+  it("does not auto-launch a blank session over a failed pick", () => {
+    const ctrl = new HelpSessionController();
+    const launch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
+    // The pick ran and failed: the lane is idle with no terminal, consent is on.
+    ctrl["_lastResumeTarget"] = { sessionId: "picked-4" };
+
+    ctrl.syncInputs(readyInputs);
+    ctrl.handleViewRevealed();
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  it("leaves a stuck picked launch alone on view reveal, even in a lane that auto-launched before", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    ctrl["_hasAutoLaunched"] = true;
+    ctrl["_lastResumeTarget"] = { sessionId: "picked-5" };
+    ctrl["_patch"]({ phase: "provisioning" });
+    const gen = ctrl["_launchGen"];
+
+    ctrl.handleViewRevealed();
+    expect(ctrl["_launchGen"]).toBe(gen);
+    expect(ctrl.getSnapshot().phase).toBe("provisioning");
+  });
+
+  it("retries a failed pick with the same conversation, and a plain launch plainly", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    const launch = vi.spyOn(ctrl, "launch");
+    ctrl["_lastResumeTarget"] = { sessionId: "picked-3" };
+
+    launch.mockImplementation(() => {});
+    ctrl.retryLaunch("claude");
+    expect(launch).toHaveBeenLastCalledWith({
+      agentId: "claude",
+      replaceExisting: true,
+      resumeTarget: { sessionId: "picked-3" },
+    });
+
+    ctrl["_lastResumeTarget"] = undefined;
+    ctrl.retryLaunch("claude");
+    expect(launch).toHaveBeenLastCalledWith({ agentId: "claude" });
+  });
+
+  it("launches immediately when the lane is already ready", () => {
+    const ctrl = new HelpSessionController();
+    const launch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+
+    ctrl.launchWhenReady({ agentId: "claude", resumeTarget: { sessionId: "picked-2" } });
+    expect(launch).toHaveBeenCalledTimes(1);
   });
 });
 

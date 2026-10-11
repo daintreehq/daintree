@@ -330,6 +330,13 @@ interface BasePanelData {
    * when its registration is gone.
    */
   pluginId?: string;
+  /**
+   * The plugin kind a PTY-backed plugin panel was opened as (#13213). Such a
+   * panel is created as a `terminal`, so `kind` no longer names its plugin;
+   * this does, for the lifecycle feed and the menus that find the kind's
+   * plugin. Runtime-only: not persisted, so a restored panel is a terminal.
+   */
+  pluginPanelKindId?: string;
   /** Persisted creation timestamp (milliseconds since epoch). */
   createdAt?: number;
   /**
@@ -367,6 +374,11 @@ interface BasePanelData {
  * `panelsById` so it survives the unmount a worktree switch causes, and it is
  * never serialized, so it does not come back after a quit.
  */
+export interface AgentResumeOffer {
+  agentId: string;
+  sessionId?: string;
+}
+
 export interface PanelWorktreeMoveNotice {
   /** Worktree the panel was filed under by the move that raised this notice. */
   destinationWorktreeId: string;
@@ -691,6 +703,16 @@ export interface PtyPanelData extends BasePanelData {
    * `serializePtyPanel`.
    */
   sessionLostOnRestore?: SessionLostReason;
+  /**
+   * Live-only: the run Daintree launched in this pane ended without leaving a
+   * resume hint, so nothing in the pane offers its conversation back (#13226).
+   * `sessionId` is the conversation the run was launched with — absent for an
+   * anonymous resume-latest launch, which can only be offered a picker. Not a
+   * claim that the run ended in that conversation. Cleared by restart, by
+   * dismissal, and when a new agent starts in the pane. Never serialized, like
+   * `sessionLostOnRestore`.
+   */
+  agentResumeOffer?: AgentResumeOffer;
   /**
    * Directory this pane's conversation began in, recorded only once the pane
    * runs somewhere else (#12434) — a pane moved onto another worktree resumes

@@ -1119,6 +1119,21 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // natural exit left on the pane survives it — once the host confirms the
       // spawn (#12433).
       noteTerminalLaunch(id, { command: safeCommand, agentSessionId: spawnAgentSessionId });
+      // The assistant lane's durable resume pointer, written the moment its
+      // conversation exists so a quit or a main-process crash can't lose it
+      // (#13205). Memory-first, so it is current before any later capture.
+      // The PTY is already up, so a failure here must not fail the spawn.
+      if (isHelpLaunch) {
+        try {
+          helpSessionService
+            .recordLaneLaunchForToken(helpToken, spawnAgentSessionId)
+            .catch((err) => {
+              console.warn("[TerminalSpawn] Failed to record assistant lane pointer:", err);
+            });
+        } catch (err) {
+          console.warn("[TerminalSpawn] Failed to record assistant lane pointer:", err);
+        }
+      }
 
       return id;
     } catch (error) {

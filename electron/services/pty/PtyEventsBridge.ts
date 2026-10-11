@@ -161,6 +161,7 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         agentType: event.agentType,
         timestamp: event.timestamp,
         exitKind: event.exitKind,
+        ...(event.agentEnd ? { agentEnd: event.agentEnd } : {}),
       });
       return true;
 

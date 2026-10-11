@@ -15,6 +15,7 @@ import type { PowerPolicyLevel } from "./powerPolicy.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { AgentConfig } from "../config/agentRegistry.js";
 import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
+import type { AgentEndObservation } from "./ipc/agent.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
 import type { WorkerResourceSnapshot } from "./workerGovernance.js";
 import type { SerializedTerminalSnapshot } from "./terminal.js";
@@ -768,6 +769,7 @@ export type PtyHostEvent =
       defaultTitle?: string;
       timestamp: number;
       exitKind?: "subcommand" | "terminal";
+      agentEnd?: AgentEndObservation;
     }
   | { type: "agent-spawned"; payload: AgentSpawnedPayload }
   | { type: "agent-output"; payload: AgentOutputPayload }

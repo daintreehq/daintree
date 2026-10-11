@@ -57,15 +57,23 @@ export interface MemoryPressureTarget {
  *
  * `< criticalMb` is deliberately strict, preserving the boundary rule the
  * previous single-threshold check used.
+ *
+ * `systemPressure` is confirmed kernel-plus-swap pressure (#13223), which puts
+ * the target in the critical band whatever availability says. On a machine
+ * deep in swap the availability figure can sit comfortably inside, or even
+ * above, the band — it counts file-backed pages the kernel is busy evicting.
+ * It moves only the target: how fast a pass may get there is the caller's.
  */
 export function memoryPressureTarget(
   availableMb: number,
   policy: MemoryPressurePolicy,
-  maxCachedViews: number
+  maxCachedViews: number,
+  options: { systemPressure?: boolean } = {}
 ): MemoryPressureTarget {
   // Normalized rather than trusted: the return value caps a view count, so a
   // fractional or non-finite input must not leak out as a fractional target.
   const cap = Number.isFinite(maxCachedViews) ? Math.max(1, Math.floor(maxCachedViews)) : 1;
+  if (options.systemPressure) return { level: "critical", targetMax: 1 };
   if (!Number.isFinite(availableMb)) return { level: "none", targetMax: cap };
   if (availableMb < policy.criticalMb) return { level: "critical", targetMax: 1 };
   if (availableMb >= policy.warningMb) return { level: "none", targetMax: cap };

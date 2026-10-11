@@ -151,6 +151,8 @@ export type AgentSubagentTranscriptResult = AgentSubagentTranscriptOk | AgentSub
 export interface CodexFolderSession {
   id: string;
   preview: string;
+  /** The thread's user-given name, when it has one. Conversation text too. */
+  name?: string;
   updatedAt: number;
 }
 

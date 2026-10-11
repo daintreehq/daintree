@@ -273,6 +273,14 @@ export const REGISTRY: Record<string, Command> = {
     gate: "RUN_PERF_INTERACTIONS",
     build: "build:e2e",
   }),
+  "panel-close-add": playwrightBench({
+    summary:
+      "Grid add/close transitions with agent TUIs: first frame, settle time, layout jumps, resize storms",
+    kind: "journey",
+    spec: "e2e/perf/panel-close-add-perf.spec.ts",
+    gate: "RUN_PERF_PANEL_CLOSE_ADD",
+    build: "build:e2e",
+  }),
   "project-switch": playwrightBench({
     summary: "Switch round-trip and on-screen reveal latency, cold (LRU-evicted) and warm",
     kind: "journey",

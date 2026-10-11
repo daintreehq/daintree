@@ -575,6 +575,19 @@ export class TerminalResizeController {
       // collapse is a new episode and must log rather than dedupe against the
       // stale signature (#12442).
       managed.implausibleGridSignature = undefined;
+      // The pane's own observer can measure this same box first and park it
+      // behind the large-buffer debounce. An immediate request for the box is
+      // the final word on it, so run that queued job now rather than letting
+      // the dedup swallow the request — a settled-strategy timer included.
+      if (options.immediate) {
+        if (managed.resizeJob !== undefined || managed.resizeDebounceTimer !== undefined) {
+          this.clearResizeJob(managed);
+          this.applyResize(id, managed.latestCols, managed.latestRows, { commitNow: true });
+        } else {
+          const settled = this.takeSettledResize(id);
+          if (settled) this.commitSettledResize(id, settled);
+        }
+      }
       return null;
     }
 
@@ -649,7 +662,7 @@ export class TerminalResizeController {
         managed.latestWasAtBottom = wasAtBottom;
         this.clearResizeJob(managed);
         this.clearSettledTimer(id);
-        this.applyResize(id, cols, rows);
+        this.applyResize(id, cols, rows, { commitNow: options.immediate });
         return { cols, rows };
       }
 
@@ -703,7 +716,7 @@ export class TerminalResizeController {
 
       if (options.immediate || managed.isFocused || bufferLineCount < START_DEBOUNCING_THRESHOLD) {
         this.clearResizeJob(managed);
-        this.applyResize(id, cols, rows);
+        this.applyResize(id, cols, rows, { commitNow: options.immediate });
         return { cols, rows };
       }
 
@@ -1209,7 +1222,14 @@ export class TerminalResizeController {
     return true;
   }
 
-  applyResize(id: string, cols: number, rows: number): void {
+  /**
+   * `commitNow` is for a box known to be final — a pane's first fit, or the
+   * grid's pass after a panel was added or closed. It moves both grids at once
+   * even for a settled-strategy agent, whose stability wait only exists to
+   * coalesce a box that is still changing (a window drag, an animating
+   * sidebar) into one SIGWINCH.
+   */
+  applyResize(id: string, cols: number, rows: number, options: { commitNow?: boolean } = {}): void {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
 
@@ -1224,7 +1244,7 @@ export class TerminalResizeController {
     }
     this.cancelPendingResize(id);
 
-    if (this.getResizeStrategy(managed) === "settled") {
+    if (this.getResizeStrategy(managed) === "settled" && !options.commitNow) {
       const flushedHeldBytes = this.flushHeldBytesBeforeResize(id);
       if (!flushedHeldBytes) {
         // Keep ingest moving at the still-consistent outgoing grid while the

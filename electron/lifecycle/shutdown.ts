@@ -6,6 +6,7 @@ import { projectStore } from "../services/ProjectStore.js";
 import { journalAgentSession } from "../services/pty/agentSessionJournal.js";
 import { sealAndDrainCapturedSessionPersistence } from "../services/pty/agentSessionCapturePersistence.js";
 import { isAssistantTerminalRecord } from "../services/assistantTerminal.js";
+import type { AssistantLaneSnapshot } from "../services/HelpSessionService.js";
 import { getLifecycleLedger } from "../services/pty/lifecycleLedger.js";
 import { getActiveAgentCount, showQuitWarning } from "../utils/quitWarning.js";
 import {
@@ -261,6 +262,21 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         [...terminalInfoById.keys()].map((id) => [id, ledger.currentGeneration(id)])
       );
 
+      // Which assistant lane each PTY serves, frozen before the kills: the
+      // renderer revokes each lane as its PTY exits, taking the live binding
+      // with it before the captures below come back (#13205). Lazy like the
+      // revokeAll import further down — the module only matters if a help
+      // session ever ran.
+      let assistantLanes = new Map<string, AssistantLaneSnapshot>();
+      let helpSessions:
+        typeof import("../services/HelpSessionService.js").helpSessionService | null = null;
+      try {
+        helpSessions = (await import("../services/HelpSessionService.js")).helpSessionService;
+        assistantLanes = helpSessions.snapshotLaneTerminals();
+      } catch (err) {
+        console.warn("[MAIN] Assistant lane snapshot at quit failed:", err);
+      }
+
       const allProjects = projectStore.getAllProjects();
       const projectIds = allProjects.map((p) => p.id);
       // Cap each project's graceful kill independently (in parallel) rather
@@ -311,6 +327,23 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         })
       );
 
+      // The assistant's captures are excluded from the grid writes below, but
+      // they are its lane's resume pointer: a Codex lane has no id until this
+      // kill scrapes one (#13205). Started here, awaited after the grid
+      // writeback so a slow store write can't spend that work's budget.
+      const assistantCaptureWrites: Promise<void>[] = [];
+      if (helpSessions && assistantLanes.size > 0) {
+        for (const result of allResults.flat()) {
+          const lane = assistantLanes.get(result.id);
+          if (!lane || !result.agentSessionId) continue;
+          assistantCaptureWrites.push(
+            helpSessions.noteQuitCapture(lane, result.agentSessionId).catch((err) => {
+              console.warn("[MAIN] Persisting assistant lane capture at quit failed:", err);
+            })
+          );
+        }
+      }
+
       for (let i = 0; i < projectIds.length; i++) {
         const results = allResults[i];
         // Same assistant skip as the journal below, keeping this block a true
@@ -343,6 +376,8 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
           );
         }
       }
+
+      await Promise.all(assistantCaptureWrites);
 
       // Journal a resume record per captured agent session, matching the
       // trash-expiry / kill / gracefulKill close paths. Non-agent terminals

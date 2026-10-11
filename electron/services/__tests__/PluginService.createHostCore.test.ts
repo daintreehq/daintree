@@ -281,6 +281,7 @@ type CreateHostShape = (pluginId: string) => {
     broadcastToRenderer: (channel: string, payload: unknown) => void;
     postToPanel: (channel: string, payload: unknown, panelId?: string | null) => Promise<void>;
     setPanelBadge: (panelId: string, badge: unknown) => Promise<void>;
+    setPanelMenuItems: (panelId: string, items: unknown) => Promise<void>;
     reloadPanel: (panelId: unknown) => Promise<string>;
     invalidateFileDecorations: (scope: string, paths?: string[]) => Promise<void>;
     registerForgeProvider: (descriptor: { id: string }, impl: unknown) => () => void;
@@ -560,6 +561,104 @@ describe("createHost (plugin activation API)", () => {
 
     // Liveness no-op stays a silent resolve even with an otherwise-invalid badge.
     await expect(host.setPanelBadge("", { kind: "bogus" })).resolves.toBeUndefined();
+  });
+
+  it("host.setPanelMenuItems publishes the plugin's whole map, skips an unchanged list and clears on unload (#13213)", async () => {
+    await writePlugin("menu-publish", { name: "acme.menu-publish", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.menu-publish"
+    );
+    const menuEvents = () =>
+      broadcastToRendererMock.mock.calls
+        .filter((call) => call[0] === CHANNELS.EVENTS_PUSH)
+        .map((call) => call[1] as { name: string; payload: unknown })
+        .filter((event) => event.name.startsWith("plugin:panel-menus-"));
+
+    broadcastToRendererMock.mockClear();
+    await host.setPanelMenuItems("panel-a", [
+      { actionId: "acme.menu-publish.open", label: "Open row" },
+    ]);
+    await host.setPanelMenuItems("panel-b", [{ actionId: "acme.menu-publish.export" }]);
+    await host.setPanelMenuItems("panel-b", [{ actionId: "acme.menu-publish.export" }]);
+    await host.setPanelMenuItems("panel-a", null);
+    expect(menuEvents()).toEqual([
+      {
+        name: "plugin:panel-menus-changed",
+        payload: {
+          pluginId: "acme.menu-publish",
+          menus: { "panel-a": [{ actionId: "acme.menu-publish.open", label: "Open row" }] },
+        },
+      },
+      {
+        name: "plugin:panel-menus-changed",
+        payload: {
+          pluginId: "acme.menu-publish",
+          menus: {
+            "panel-a": [{ actionId: "acme.menu-publish.open", label: "Open row" }],
+            "panel-b": [{ actionId: "acme.menu-publish.export" }],
+          },
+        },
+      },
+      {
+        name: "plugin:panel-menus-changed",
+        payload: {
+          pluginId: "acme.menu-publish",
+          menus: { "panel-b": [{ actionId: "acme.menu-publish.export" }] },
+        },
+      },
+    ]);
+
+    broadcastToRendererMock.mockClear();
+    service.unloadPlugin("acme.menu-publish");
+    expect(menuEvents()).toEqual([
+      { name: "plugin:panel-menus-changed", payload: { pluginId: "acme.menu-publish", menus: {} } },
+    ]);
+  });
+
+  it("host.setPanelMenuItems rejects a foreign action, a bad panelId or a long list, and sends nothing (#13213)", async () => {
+    await writePlugin("menu-reject", { name: "acme.menu-reject", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.menu-reject"
+    );
+
+    broadcastToRendererMock.mockClear();
+    await expect(
+      host.setPanelMenuItems("", [{ actionId: "acme.menu-reject.open" }])
+    ).rejects.toThrow(/setPanelMenuItems: panelId/);
+    await expect(
+      host.setPanelMenuItems("panel-a", [{ actionId: "terminal.kill" }])
+    ).rejects.toThrow(/setPanelMenuItems: invalid items/);
+    await expect(
+      host.setPanelMenuItems("panel-a", [{ actionId: "other.plugin.run" }])
+    ).rejects.toThrow(/own actions/);
+    await expect(
+      host.setPanelMenuItems(
+        "panel-a",
+        Array.from({ length: 6 }, (_, i) => ({ actionId: `acme.menu-reject.a${i}` }))
+      )
+    ).rejects.toThrow(/at most 5/);
+    // Clearing a panel that never had a list says nothing.
+    await host.setPanelMenuItems("panel-a", null);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("host.setPanelMenuItems silently no-ops once the plugin is unloaded (#13213)", async () => {
+    await writePlugin("menu-unloaded", { name: "acme.menu-unloaded", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.menu-unloaded"
+    );
+    service.unloadPlugin("acme.menu-unloaded");
+
+    await expect(host.setPanelMenuItems("", [{ actionId: "x" }])).resolves.toBeUndefined();
   });
 
   it("host.reloadPanel rejects a malformed or non-plugin target and answers not-mounted for an unknown one (#12610)", async () => {

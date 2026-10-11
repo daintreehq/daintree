@@ -10,8 +10,8 @@ Electron IDE for orchestrating AI coding agents — many agent terminals running
 
 ```bash
 npm run dev            # Main + Renderer (Vite)
-npm test               # vitest (CI runs this in 4 shards)
-npm test -- <path>     # narrowest useful test while iterating
+npm test -- <path>     # the ONLY way to run unit tests locally: the files you changed
+npm test               # full vitest suite: CI only (4 shards). NEVER run it locally
 npm run check          # typecheck + codegen/guard checks + lint and e2e-wait ratchets + format:check
 npm run fix            # prettier --write + eslint --fix
 npm run build          # production build
@@ -59,7 +59,7 @@ React Compiler is enabled (`babel-plugin-react-compiler`, `target: "19"`). A bai
 
 ## Definition of done
 
-1. **During development on a branch, run only the tests relevant to what you changed** (`npm test -- <path>`) — never the full suite mid-work, however large the task. The **full** `npm test` is for final integration into `develop` (e.g. before merging the PR), where scoped runs have repeatedly missed failures that cost a CI round trip.
+1. **NEVER run the full unit suite locally.** Not mid-work, not before a commit, not before opening a PR, not "at the end", not because a skill or runbook says to. A bare `npm test` / `npx vitest run` takes 15-20 minutes of a locked-up machine, and every task paying that makes the work take forever. GitHub CI runs the full suite on every PR (4 shards); that is the gate. Locally, run only the test files covering what you changed (`npm test -- <path>`), plus typecheck and lint. If CI then finds a failure elsewhere, fix it from the CI log.
 2. Run `npm run check` for anything touching types, IPC, keybindings, plugin manifests, or lint-visible code.
 3. Scale verification to the change. A small edit does not need build + E2E + full check stacked on top.
 4. Report the commands actually run and their real results. `prettier` prints "All files formatted correctly" while exiting 1 — trust the exit code, not the summary.

@@ -10,6 +10,7 @@ import {
 import { AppError } from "../../utils/errorTypes.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { scratchStore } from "../../services/ScratchStore.js";
+import { isFullyQualifiedRoot } from "../../utils/fullyQualifiedRoot.js";
 import { fileTreeService } from "../../services/FileTreeService.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
@@ -101,20 +102,11 @@ type BrowserRoot = { kind: "worktree" | "workspace"; path: string };
 
 /**
  * A root must be an absolute path before anything joins against it.
- * `FileTreeService` runs `path.resolve`, so an empty or relative root — which
- * SQLite's NOT NULL columns still permit from corrupt or legacy state — would
- * silently resolve against the main process's own cwd and list *that*.
+ * `FileTreeService` runs `path.resolve`, so a root that isn't fully qualified
+ * would list the main process's own cwd instead.
  */
 function assertAbsoluteRoot(rootPath: string, kind: BrowserRoot["kind"]): void {
-  // `path.win32.isAbsolute` also accepts rooted-but-not-qualified paths such as
-  // a bare leading separator, which `resolve` then completes with the process's
-  // *current drive* — the same context-dependent root this guard exists to
-  // reject. So on Windows require a drive root or a full UNC share.
-  const isFullyQualified =
-    process.platform === "win32"
-      ? /^(?:[a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/])/.test(rootPath)
-      : path.isAbsolute(rootPath);
-  if (rootPath === "" || !isFullyQualified) {
+  if (!isFullyQualifiedRoot(rootPath)) {
     throw new AppError({
       code: "INVALID_PATH",
       message: "Workspace root is not an absolute path",

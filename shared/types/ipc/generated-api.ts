@@ -279,12 +279,18 @@ export interface GeneratedElectronAPI {
     fetch(...args: IpcInvokeMap["git:fetch"]["args"]): Promise<IpcInvokeMap["git:fetch"]["result"]>;
   };
   help: {
+    discardConversation(
+      ...args: IpcInvokeMap["help:discard-conversation"]["args"]
+    ): Promise<IpcInvokeMap["help:discard-conversation"]["result"]>;
     getFolderPath(
       ...args: IpcInvokeMap["help:get-folder-path"]["args"]
     ): Promise<IpcInvokeMap["help:get-folder-path"]["result"]>;
     getPinnedActionContext(
       ...args: IpcInvokeMap["help:get-pinned-action-context"]["args"]
     ): Promise<IpcInvokeMap["help:get-pinned-action-context"]["result"]>;
+    listPastSessions(
+      ...args: IpcInvokeMap["help:list-past-sessions"]["args"]
+    ): Promise<IpcInvokeMap["help:list-past-sessions"]["result"]>;
     listPendingHibernationSlots(
       ...args: IpcInvokeMap["help:list-pending-hibernation-slots"]["args"]
     ): Promise<IpcInvokeMap["help:list-pending-hibernation-slots"]["result"]>;

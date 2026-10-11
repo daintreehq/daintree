@@ -18,6 +18,7 @@ import { FolderGit2 } from "@/components/icons";
 import type { ActionId } from "@shared/types/actions";
 import { isBuiltInPanelKind, type PanelKind } from "@shared/types/panel";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
+import type { PublishedPanelMenuItem } from "@shared/utils/pluginPanelMenuItems";
 
 export type GenericPanelMenuCommandId =
   | "move-to-worktree"
@@ -42,6 +43,11 @@ const PLUGIN_MENU_COMMAND_PREFIX = "plugin-action:";
 /** Whether a command is a plugin-contributed one rather than the host's. */
 export function isPluginMenuCommandId(commandId: string): commandId is PluginMenuCommandId {
   return commandId.startsWith(PLUGIN_MENU_COMMAND_PREFIX);
+}
+
+/** The command for a plugin-contributed item that dispatches `actionId`. */
+export function pluginMenuCommandId(actionId: string): PluginMenuCommandId {
+  return `${PLUGIN_MENU_COMMAND_PREFIX}${actionId}`;
 }
 
 /** The action a plugin-contributed command dispatches, with `{ panelId }`. */
@@ -99,6 +105,8 @@ export interface PanelKindMenuCapabilities {
   pluginBackupId: string | null;
   /** The kind's `menu` items whose actions are registered right now, in declared order. */
   pluginMenuItems: readonly PluginPanelMenuItem[];
+  /** The plugin instance that contributed the kind, whose published menus it shows; null for built-ins. */
+  pluginOwnerId: string | null;
 }
 
 const EMPTY_TOUR_IDS: ReadonlySet<string> = new Set();
@@ -146,7 +154,42 @@ export function readPanelKindMenuCapabilities(
     pluginBackupId:
       config?.hasPluginDatabases === true && config.extensionId ? config.extensionId : null,
     pluginMenuItems,
+    pluginOwnerId: config?.extensionId ?? null,
   };
+}
+
+/**
+ * The plugin's whole contributed group for one panel (#13213): the kind's
+ * manifest `menu` items, then what the view published, then what the plugin's
+ * backend published, each action once, first place winning. A published entry
+ * is shown only on a panel of a kind its own plugin contributed, only for an
+ * action in that plugin's namespace, and only while the action is registered,
+ * so a list can neither reach another plugin's panel nor offer a built-in.
+ */
+export function resolvePluginMenuItems(
+  capabilities: Pick<PanelKindMenuCapabilities, "pluginMenuItems" | "pluginOwnerId">,
+  viewItems: readonly PublishedPanelMenuItem[],
+  workerMenus: Readonly<Record<string, readonly PublishedPanelMenuItem[]>>,
+  registeredPluginActions: ReadonlyMap<string, string>
+): readonly PluginPanelMenuItem[] {
+  const owner = capabilities.pluginOwnerId;
+  const workerItems = owner !== null ? workerMenus[owner] : undefined;
+  if (owner === null || (viewItems.length === 0 && workerItems === undefined)) {
+    return capabilities.pluginMenuItems;
+  }
+  const ownPrefix = `${owner}.`;
+  const resolved = [...capabilities.pluginMenuItems];
+  const seen = new Set(resolved.map((item) => item.actionId));
+  for (const item of [...viewItems, ...(workerItems ?? [])]) {
+    if (seen.has(item.actionId) || !item.actionId.startsWith(ownPrefix)) continue;
+    const title = registeredPluginActions.get(item.actionId);
+    if (title === undefined) continue;
+    const label = item.label ?? title;
+    if (label.length === 0) continue;
+    seen.add(item.actionId);
+    resolved.push({ actionId: item.actionId, label });
+  }
+  return resolved;
 }
 
 /**
@@ -274,7 +317,7 @@ function getPluginContributedMenuCommands(
   items: readonly PluginPanelMenuItem[]
 ): GenericPanelMenuCommand[] {
   return items.map((item) => ({
-    id: `${PLUGIN_MENU_COMMAND_PREFIX}${item.actionId}` as PluginMenuCommandId,
+    id: pluginMenuCommandId(item.actionId),
     label: item.label,
     icon: Puzzle,
   }));

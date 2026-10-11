@@ -68,6 +68,34 @@ describe("agentSessionHistory", () => {
     expect(p).toBe(path.join("/tmp/test", "agent-session-history.json"));
   });
 
+  it("keeps a session's title when it is re-journaled without one (#13226)", async () => {
+    const base = { agentId: "codex", worktreeId: "wt-1", projectId: null, sessionId: "s1" };
+    await persistAgentSession({ ...base, title: "Fixing the parser" }, userDataDir);
+    // A launch-id fallback knows the id but not which conversation's title is its own.
+    await persistAgentSession({ ...base, title: null }, userDataDir);
+
+    const records = await readSessionHistory(userDataDir);
+    expect(records).toHaveLength(1);
+    expect(records[0].title).toBe("Fixing the parser");
+  });
+
+  it("never lends a title across agents that share a session id", async () => {
+    const base = { worktreeId: "wt-1", projectId: null, sessionId: "s1" };
+    await persistAgentSession({ ...base, agentId: "claude", title: "Claude task" }, userDataDir);
+    await persistAgentSession({ ...base, agentId: "codex", title: null }, userDataDir);
+
+    const records = await readSessionHistory(userDataDir);
+    expect(records[0]).toMatchObject({ agentId: "codex", title: null });
+  });
+
+  it("lets a newer titled record replace an older title", async () => {
+    const base = { agentId: "codex", worktreeId: "wt-1", projectId: null, sessionId: "s1" };
+    await persistAgentSession({ ...base, title: "Old" }, userDataDir);
+    await persistAgentSession({ ...base, title: "New" }, userDataDir);
+
+    expect((await readSessionHistory(userDataDir))[0].title).toBe("New");
+  });
+
   it("returns empty array when no history file exists", async () => {
     const records = await readSessionHistory(userDataDir);
     expect(records).toEqual([]);

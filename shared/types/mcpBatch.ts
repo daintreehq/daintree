@@ -19,7 +19,7 @@ const notifyFields = {
   notify: z
     .boolean()
     .optional()
-    .describe("As on a single call: each notice quotes that agent's reply."),
+    .describe("As on a single call: each notice carries that agent's reply."),
   handback: z.boolean().optional().describe("As on the single call, for each item."),
   replyLines: NotifyReplyLinesSchema,
   waitForReply: z

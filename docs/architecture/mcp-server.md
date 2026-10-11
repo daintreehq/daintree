@@ -117,7 +117,7 @@ Roughly in dependency order rather than by size — per-file line counts are del
 | `rendererBridge.ts` | IPC bridge to the renderer: requests the action manifest and dispatches actions, with per-session pinning (`SessionBindingError` when the pinned view is gone). |
 | `tierAuth.ts` | Auth primitives: bearer extraction, timing-safe API-key compare, tier resolution, `shouldExposeTool`/`isTierPermitted`, tool schema/annotation builders, `requestKey` parsing. Re-exports `deriveBand`/`BAND_OVERRIDES`. |
 | `readinessProbe.ts` | Active `initialize` round-trip probe (`/mcp` and `/sse`) proving the server actually answers, not just that the socket is bound. Used by `HelpSessionService` before launching the assistant. |
-| `terminalNotify.ts` | Terminal notices: `notify: true` (and `replyLines`) on the submit, launch and key paths and `terminal.notifyWhenIdle`, the reply each notice quotes, and the guarded delivery into the caller's own prompt. |
+| `terminalNotify.ts` | Terminal notices: `notify: true` (and `replyLines`) on the submit, launch and key paths and `terminal.notifyWhenIdle`, the handback summary or screen quote each notice carries, and the guarded delivery into the caller's own prompt. |
 | `waitUntilIdle.ts` | The `terminal.waitUntilIdle` / `terminal.waitUntilIdleBatch` handshakes — bounded long-polls until an agent FSM leaves `working` (interactive sessions capped at 60s). Runs in main, not via renderer dispatch. |
 | `projectCheck.ts` | Main-process short-circuit for `project.runCheck` — validates the runner against the project's detected set, spawns it, and projects the capped, secret-scrubbed result. |
 | `skills.ts` | Main-process short-circuit for `skills.search` / `skills.load` against the skill registry. |

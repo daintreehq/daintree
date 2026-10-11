@@ -196,6 +196,28 @@ export interface AgentExitedPayload {
    * #5807
    */
   exitKind?: "subcommand" | "terminal";
+  /**
+   * What the host saw of the agent that just ended (#13226). Absent for a
+   * process-icon clearing and from producers that didn't look.
+   */
+  agentEnd?: AgentEndObservation;
+}
+
+/**
+ * Observations about an agent run at the moment it ended, never a verdict:
+ * nothing here claims the agent crashed, or that the conversation it ended in
+ * is the one it was launched with.
+ */
+export interface AgentEndObservation {
+  /**
+   * The run that ended is the one Daintree launched in this PTY — the launch
+   * agent, before any later agent started in the shell it left behind.
+   */
+  launchedRun: boolean;
+  /** A resume id was in hand at the boundary: preassigned, or scraped from the farewell. */
+  resumeHintSeen: boolean;
+  /** The agent's own updater reported success as the last thing it printed. */
+  selfUpdateSucceeded: boolean;
 }
 
 /**

@@ -311,6 +311,24 @@ describe("PluginDevWorkerHostProxy agent handoff", () => {
     expect(Object.isFrozen(snapshot)).toBe(true);
   });
 
+  it("subscribes focused-panel and rebuilds each focus to the allowlist, frozen", async () => {
+    const { proxy, sent } = makeProxy();
+    const callback = vi.fn();
+    await proxy.host.onDidChangeFocusedPanel(callback, { debounceMs: 300 });
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "focused-panel");
+    expect(sub).toMatchObject({ debounceMs: 300 });
+
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { kind: "terminal", agent: true, worktreeId: "wt-1", extra: "x" },
+    });
+
+    const focus = callback.mock.calls[0][0];
+    expect(focus).toStrictEqual({ kind: "terminal", agent: true, worktreeId: "wt-1" });
+    expect(Object.isFrozen(focus)).toBe(true);
+  });
+
   it("relays terminals.readScreen and resolves with the screen", async () => {
     const { proxy, sent } = makeProxy();
     const promise = proxy.host.terminals.readScreen("t-1", { lines: 5 });
@@ -977,6 +995,37 @@ describe("PluginDevWorkerHostProxy runtime-surface validation rejects, never thr
       /setPanelBadge: panelId/
     );
     expect(sent.some((m) => m.type === "host-notify" && m.method === "setPanelBadge")).toBe(false);
+  });
+
+  it("setPanelMenuItems vets the list locally and notifies main with a plain copy (#13213)", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.setPanelMenuItems("", [])).rejects.toThrow(
+      /setPanelMenuItems: panelId/
+    );
+    await expect(
+      proxy.host.setPanelMenuItems("panel-1", [{ actionId: "terminal.kill" }])
+    ).rejects.toThrow(/setPanelMenuItems: invalid items/);
+    // A field the list does not use never reaches the port, so it cannot fail to clone there.
+    await proxy.host.setPanelMenuItems("panel-1", [
+      { actionId: "acme.demo.open", label: "Open", extra: () => {} } as never,
+    ]);
+    await proxy.host.setPanelMenuItems("panel-1", null);
+    // Only own data fields count: a label behind a getter is never run, so it
+    // cannot throw past the Promise or hand the port something else.
+    const label = vi.fn(() => "Lazy");
+    const accessorItem = { actionId: "acme.demo.lazy" };
+    Object.defineProperty(accessorItem, "label", { get: label, enumerable: true });
+    await proxy.host.setPanelMenuItems("panel-2", [accessorItem]);
+    expect(label).toHaveBeenCalledTimes(0);
+    expect(
+      sent
+        .filter((m) => m.type === "host-notify" && m.method === "setPanelMenuItems")
+        .map((m) => (m as { params: unknown }).params)
+    ).toEqual([
+      { panelId: "panel-1", items: [{ actionId: "acme.demo.open", label: "Open" }] },
+      { panelId: "panel-1", items: [] },
+      { panelId: "panel-2", items: [{ actionId: "acme.demo.lazy" }] },
+    ]);
   });
 
   it("invalidateFileDecorations rejects an empty scope without notifying main", async () => {

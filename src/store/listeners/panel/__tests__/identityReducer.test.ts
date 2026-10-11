@@ -16,6 +16,34 @@ function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
 }
 
 describe("reduceAgentDetected", () => {
+  it("answers a pending resume offer when a new agent run starts (#13226)", () => {
+    const terminal = makeTerminal({
+      launchAgentId: "codex",
+      agentState: "exited",
+      agentResumeOffer: { agentId: "codex", sessionId: "s1" },
+    });
+    const result = reduceAgentDetected(terminal, {
+      nextDetectedAgentId: "codex",
+      nextDetectedProcessId: "codex",
+      nextEverDetectedAgent: true,
+      nextAgentIncarnation: 1,
+      timestamp: 1000,
+    });
+    expect(result?.patch).toHaveProperty("agentResumeOffer", undefined);
+  });
+
+  it("keeps a resume offer through a plain process detection", () => {
+    const terminal = makeTerminal({ agentResumeOffer: { agentId: "codex" } });
+    const result = reduceAgentDetected(terminal, {
+      nextDetectedAgentId: undefined,
+      nextDetectedProcessId: "npm",
+      nextEverDetectedAgent: undefined,
+      nextAgentIncarnation: undefined,
+      timestamp: 1000,
+    });
+    expect(result?.patch ?? {}).not.toHaveProperty("agentResumeOffer");
+  });
+
   it("returns null when nothing changes", () => {
     const terminal = makeTerminal({
       detectedProcessId: "npm",
