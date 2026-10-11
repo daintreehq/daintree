@@ -7,7 +7,10 @@
  * fleet stopped restoring until the next relaunch.
  */
 
-import type { OpenWindowRecord } from "../services/persistence/windowManifest.js";
+import {
+  isRemoteWorkspaceKey,
+  type OpenWindowRecord,
+} from "../services/persistence/windowManifest.js";
 
 /**
  * What `createWindow` reports back. "exit-requested" stops the restore; any
@@ -56,6 +59,12 @@ export interface RestoreWindowFleetDeps {
        * this many ms pass. Set for every window another one is queued behind.
        */
       awaitHydrationMs?: number;
+      /**
+       * The window was showing this host-scoped workspace (`<hostId>:<projectId>`).
+       * It opens on this machine (`projectId` is undefined, a picker) and is
+       * switched to the host once Remote Hosts is up.
+       */
+      remoteWorkspaceKey?: string;
     }
   ) => Promise<CreateWindowResult>;
   suppressSaves: () => void;
@@ -99,9 +108,31 @@ export function resolvePrimaryRestoreProjectId(
   hadManifest: boolean,
   fallbackProjectId: string | undefined
 ): string | undefined {
-  if (records.length > 0) return records[0].projectId ?? undefined;
+  if (records.length > 0) return localSeedOf(records[0]);
   if (hadManifest) return undefined;
   return fallbackProjectId;
+}
+
+/** The host-scoped workspace a record names, when it was on another machine's project. */
+function remoteKeyOf(record: OpenWindowRecord | undefined): string | undefined {
+  const id = record?.projectId;
+  return id && isRemoteWorkspaceKey(id) ? id : undefined;
+}
+
+/**
+ * What the window opens with on this machine: its own workspace, or a picker
+ * for one that was on a host (the switch to the host follows once it's up).
+ */
+function localSeedOf(record: OpenWindowRecord): string | undefined {
+  return remoteKeyOf(record) ? undefined : (record.projectId ?? undefined);
+}
+
+/** The create option carrying a host-scoped workspace, or nothing for a local one. */
+function remoteRestoreOpts(record: OpenWindowRecord | undefined): {
+  remoteWorkspaceKey?: string;
+} {
+  const key = remoteKeyOf(record);
+  return key ? { remoteWorkspaceKey: key } : {};
 }
 
 /**
@@ -188,6 +219,7 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
     const background = deps.primaryAlreadyOpen ? records : records.slice(1);
     if (!deps.primaryAlreadyOpen) {
       const primaryResult = await deps.createWindow(primaryProjectId, {
+        ...remoteRestoreOpts(records[0]),
         backgroundProjectIds: records[0]?.backgroundProjectIds,
         ...(background.length > 0 ? { awaitHydrationMs: RESTORE_HYDRATION_WAIT_MS } : {}),
       });
@@ -213,7 +245,8 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
       if (record.projectId !== null && deps.isProjectOwned?.(record.projectId)) continue;
       // Background windows reveal with showInactive(): a plain show() would
       // pull focus away from the window the user is working in.
-      const created = deps.createWindow(record.projectId ?? undefined, {
+      const created = deps.createWindow(localSeedOf(record), {
+        ...remoteRestoreOpts(record),
         revealMode: "showInactive",
         backgroundProjectIds: record.backgroundProjectIds,
         ...(index < background.length - 1 ? { awaitHydrationMs: RESTORE_HYDRATION_WAIT_MS } : {}),

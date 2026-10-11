@@ -519,6 +519,79 @@ describe("RemoteHostsClient", () => {
     expect(events.some((e) => e.type === "hosts-changed")).toBe(true);
   });
 
+  it("restores a window onto a host project, unless the window stopped waiting for it", async () => {
+    await expect(
+      client.switchWindowToHostProject(1, "studio-01", "proj-1", () => true)
+    ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-1" });
+    expect(windows.openRemoteProject).toHaveBeenCalledWith(1, "studio-01", "proj-1", "/srv/proj-1");
+
+    vi.mocked(windows.openRemoteProject).mockClear();
+    await expect(
+      client.switchWindowToHostProject(2, "studio-01", "proj-1", () => false)
+    ).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+    expect(windows.openRemoteProject).not.toHaveBeenCalled();
+    expect(bindings.get(2)).toBe("local");
+  });
+
+  it("forgetting a host moves its windows' views back to a local project, not just their binding", async () => {
+    manager.last = { projectId: "proj-9", path: "/srv/proj-9", name: "proj-9" };
+    await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false });
+    vi.mocked(windows.lastLocalProjectId).mockReturnValue("local-proj");
+    await client.forget({ hostId: "studio-01" });
+    expect(windows.openLocalProject).toHaveBeenCalledWith(1, "local-proj");
+    // The window leaves before the link goes, so its view never sits on a dead host.
+    expect(vi.mocked(windows.openLocalProject).mock.invocationCallOrder[0]).toBeLessThan(
+      manager.disconnect.mock.invocationCallOrder[0]!
+    );
+    expect(bindings.get(1)).toBe("local");
+  });
+
+  it("doesn't let a local project that never finishes activating hold the host's removal", async () => {
+    const slow = new RemoteHostsClient({
+      registry,
+      manager: manager as unknown as RemoteHostManager,
+      bindings,
+      router,
+      senders: { projectKeyFor: () => null, windowIdFor: (id) => (id === 5 ? 1 : null) },
+      windows: {
+        ...windows,
+        openLocalProject: vi.fn(() => new Promise<void>(() => {})),
+        lastLocalProjectId: vi.fn(() => "local-proj"),
+      },
+      installRouter,
+      emit: () => {},
+      forgetSwitchWaitMs: 5,
+    });
+    manager.last = { projectId: "proj-9", path: "/srv/proj-9", name: "proj-9" };
+    await slow.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false });
+    await slow.forget({ hostId: "studio-01" });
+    expect(manager.disconnect).toHaveBeenCalledWith("studio-01");
+    expect(registry.list()).toEqual([]);
+  });
+
+  it("leaves a window the person moved to another host while the removal ran", async () => {
+    registry.add({ name: "studio-02", connection: { kind: "ssh", target: "s2.example" } });
+    manager.last = { projectId: "proj-9", path: "/srv/proj-9", name: "proj-9" };
+    await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false });
+    vi.mocked(windows.lastLocalProjectId).mockReturnValue("local-proj");
+    // The removal starts, then the person sends the window to studio-02.
+    const removal = client.forget({ hostId: "studio-01" });
+    const elsewhere = client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-02",
+      newWindow: false,
+      projectId: "proj-2",
+    });
+    await removal;
+    await elsewhere;
+    expect(bindings.get(1)).toBe("studio-02");
+    expect(windows.openRemoteProject).toHaveBeenLastCalledWith(
+      1,
+      "studio-02",
+      "proj-2",
+      "/srv/proj-2"
+    );
+  });
+
   it("cleans up what this machine kept for a forgotten host, after it leaves the list", async () => {
     const onForget = vi.fn(async () => {
       expect(registry.get("studio-01")).toBeNull();

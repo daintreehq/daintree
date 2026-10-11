@@ -4,6 +4,7 @@ import "./setup/environment.js";
 
 import nodeV8 from "node:v8";
 import { app, BrowserWindow, crashReporter, protocol, webContents } from "electron";
+import type { WebContentsView } from "electron";
 
 // Ask V8 to auto-dump a heap snapshot when the main process is genuinely close
 // to its heap limit. Complements the existing dev-only 600 MB RSS heuristic in
@@ -72,7 +73,7 @@ import { buildMemoryAttribution } from "./utils/memoryAttribution.js";
 import { helpSessionService } from "./services/HelpSessionService.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
-import { isWindowBound, reserveWindowForOpen } from "./window/windowOpenState.js";
+import { hasPendingOpen, isWindowBound, reserveWindowForOpen } from "./window/windowOpenState.js";
 import { distributePortsToView, getRemoteViewHooks } from "./window/portDistribution.js";
 import { findOtherProjectOwner, type ProjectOwner } from "./window/projectOwnership.js";
 import { openFolderInNewWindow } from "./window/newWindowOpen.js";
@@ -144,6 +145,12 @@ import {
   scheduleOpenWindowsSave,
   suppressOpenWindowsSaves,
 } from "./window/openWindowsTracker.js";
+import {
+  forgetRemoteWindowRestore,
+  noteRemoteWindowRestore,
+  remoteWindowReady,
+  restoreRemoteWindows,
+} from "./window/remoteWindowRestore.js";
 import { emergencyLogMainFatal } from "./utils/emergencyLog.js";
 import { startHostRuntime } from "./boot/hostBootstrap.js";
 import {
@@ -516,6 +523,8 @@ if (!gotTheLock) {
       awaitHydrationMs?: number;
       /** Told the window's id as soon as it is registered, before setup awaits anything. */
       onRegistered?: (windowId: number) => void;
+      /** A restored window that was on this host-scoped workspace; it moves there once Remote Hosts is up. */
+      remoteWorkspaceKey?: string;
     }
   ): Promise<CreateWindowResult> {
     const { win, appView, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =
@@ -530,6 +539,7 @@ if (!gotTheLock) {
     setMainWindow(win);
     const ctx = windowRegistry.register(win, { projectPath: initialProjectPath ?? undefined });
     opts?.onRegistered?.(ctx.windowId);
+    if (opts?.remoteWorkspaceKey) noteRemoteWindowRestore(ctx.windowId, opts.remoteWorkspaceKey);
     // A restored window only binds its workspace once setup reaches
     // `registerInitialView`. Until then it is claimed for that workspace, so a
     // folder opened from outside meanwhile finds this window instead of
@@ -547,7 +557,10 @@ if (!gotTheLock) {
     // from the registry context captured here rather than read in the handler.
     const closedWindowId = ctx.windowId;
     scheduleOpenWindowsSave();
-    win.on("closed", () => saveOpenWindowsNow(closedWindowId));
+    win.on("closed", () => {
+      forgetRemoteWindowRestore(closedWindowId);
+      saveOpenWindowsNow(closedWindowId);
+    });
     const initialWebContentsId = appView.webContents.id;
     windowRegistry.registerAppViewWebContents(ctx.windowId, initialWebContentsId);
     // Paint-fabric surface views load the same preload as project views; the
@@ -911,6 +924,8 @@ if (!gotTheLock) {
       });
     }
 
+    // A window restored for a host's project can be switched there from now on.
+    remoteWindowReady(ctx.windowId);
     return "ok";
   }
 
@@ -1219,6 +1234,29 @@ if (!gotTheLock) {
             remoteHostsStarted = true;
             // A handoff that landed while the start was in flight, or setup's enable.
             if (hostModeHandedOff || hostModeEnableRequested) listenForHandedOffHostMode();
+            // Windows that were on a host's project when the app quit go back there.
+            void restoreRemoteWindows({
+              isWindowWaiting: (windowId) => {
+                const ctx = windowRegistry.getByWindowId(windowId);
+                if (!ctx || ctx.browserWindow.isDestroyed() || getActiveShutdown() !== null) {
+                  return false;
+                }
+                // A folder the person is opening there (or its git-init prompt) wins.
+                if (hasPendingOpen(windowId)) return false;
+                return (ctx.services.projectViewManager?.getActiveProjectId() ?? null) === null;
+              },
+              viewOf: (windowId) => {
+                const ctx = windowRegistry.getByWindowId(windowId);
+                if (!ctx || ctx.browserWindow.isDestroyed()) return null;
+                // A window on the picker has no project view: its UI is the
+                // window's first view, as ProjectViewManager itself falls back to.
+                const view =
+                  ctx.services.projectViewManager?.getActiveView() ??
+                  ctx.browserWindow.contentView.children[0];
+                return view && "webContents" in view ? (view as WebContentsView).webContents : null;
+              },
+              onRestored: () => scheduleOpenWindowsSave(),
+            });
           } catch (error) {
             console.error("[MAIN] Remote Hosts failed to start:", error);
           }

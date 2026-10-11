@@ -72,11 +72,20 @@ export interface RemoteHostsClientOptions {
   onFirstUse?: () => void;
   /** How long opening a host's project waits for its link before giving up. */
   readyTimeoutMs?: number;
+  /** How long forgetting a host waits for each of its windows to come back here. */
+  forgetSwitchWaitMs?: number;
   /** After a host is forgotten: drop what this machine kept for it (SSH master, cached bundles). */
   onForget?: (descriptor: HostDescriptor) => Promise<void>;
 }
 
 const DEFAULT_READY_TIMEOUT_MS = 20_000;
+
+/**
+ * Forgetting a host waits this long for a window's local project to activate:
+ * a workspace host that never reports ready must not hold the host's removal
+ * (the switch carries on, and the window lands when it does).
+ */
+const DEFAULT_FORGET_SWITCH_WAIT_MS = 5_000;
 
 const MAX_PROJECT_ID_LENGTH = 256;
 
@@ -160,6 +169,31 @@ export class RemoteHostsClient {
   async forget(payload: { hostId: string }): Promise<void> {
     const hostId = hostIdOf(payload);
     const descriptor = this.options.registry.require(hostId);
+    // Windows on the host come back to this machine first, binding and view
+    // together, as the removal promises: only rebinding left the host's view
+    // on screen with nothing behind it and no host chip to leave by. A window
+    // the person moved elsewhere meanwhile is left where they put it.
+    const waitMs = this.options.forgetSwitchWaitMs ?? DEFAULT_FORGET_SWITCH_WAIT_MS;
+    await Promise.all(
+      [...this.options.bindings.windowsOn(hostId)].map(async (windowId) => {
+        const projectId = this.options.windows.lastLocalProjectId(windowId);
+        if (projectId === null) return;
+        const moved = this.switchWindow(
+          windowId,
+          { hostId: LOCAL_HOST_ID, newWindow: false, projectId },
+          () => this.options.bindings.get(windowId) === hostId
+        ).catch((error: unknown) => {
+          console.warn("[RemoteHosts] Couldn't bring a window back from a forgotten host:", error);
+        });
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const waited = new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, waitMs);
+          timer.unref?.();
+        });
+        await Promise.race([moved, waited]);
+        clearTimeout(timer);
+      })
+    );
     await this.options.manager.disconnect(hostId);
     this.detached.forget(hostId);
     for (const windowId of this.options.bindings.windowsOn(hostId)) {
@@ -247,6 +281,21 @@ export class RemoteHostsClient {
   }
 
   /**
+   * Put an existing window back on a host's project: how main restores a
+   * window that was showing it when the app last quit. `stillWanted` is asked
+   * before the window moves, so a project the person opened there while the
+   * host was connecting is never replaced.
+   */
+  switchWindowToHostProject(
+    windowId: number,
+    hostId: HostId,
+    projectId: string,
+    stillWanted?: () => boolean
+  ): Promise<SwitchWindowHostResult> {
+    return this.switchWindow(windowId, { hostId, newWindow: false, projectId }, stillWanted);
+  }
+
+  /**
    * Open a host's project in a new window on that host, the project named by
    * its path there: what a remote view's "open in new window" hands main.
    */
@@ -284,7 +333,8 @@ export class RemoteHostsClient {
 
   private async switchWindow(
     askingWindowId: number | null,
-    payload: SwitchWindowHostPayload
+    payload: SwitchWindowHostPayload,
+    stillWanted?: () => boolean
   ): Promise<SwitchWindowHostResult> {
     const hostId = hostIdOf(payload);
     const newWindow = payload.newWindow === true;
@@ -305,7 +355,9 @@ export class RemoteHostsClient {
     // a newer one arrives resolves as superseded and never moves the window.
     const ticket = sourceWindowId === null ? null : this.takeSwitchTicket(sourceWindowId);
     const superseded = (): SwitchWindowHostResult | null =>
-      ticket !== null && !ticket.isCurrent() ? { outcome: "superseded", hostId } : null;
+      (ticket !== null && !ticket.isCurrent()) || (stillWanted !== undefined && !stillWanted())
+        ? { outcome: "superseded", hostId }
+        : null;
     let projectPath: string | null = null;
     let projectName: string | null = null;
     let connection: ReturnType<RemoteHostManager["connect"]> | null = null;

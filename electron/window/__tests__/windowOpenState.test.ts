@@ -6,6 +6,7 @@ const logErrorMock = vi.hoisted(() => vi.fn());
 vi.mock("../../utils/logger.js", () => ({ logError: logErrorMock }));
 
 import {
+  hasPendingOpen,
   holdWindowForOpen,
   isWindowBound,
   isWindowReadyForOpens,
@@ -252,6 +253,18 @@ describe("reserveWindowForOpen", () => {
     expect(snapshotOpenWorld(registryOf([w]), "default").windows[0].unboundOpens).toEqual([]);
     active = null;
     expect(snapshotOpenWorld(registryOf([w]), "default").windows[0].unboundOpens).toEqual([]);
+  });
+
+  it("says a window is busy with an open in flight or a folder still on its prompt", () => {
+    expect(hasPendingOpen(1)).toBe(false);
+    const release = reserveWindowForOpen(1, { projectId: null, projectPath: "/plain" });
+    expect(hasPendingOpen(1)).toBe(true);
+    // Settled unbound: the git-init prompt is still on screen.
+    release(false);
+    expect(hasPendingOpen(1)).toBe(true);
+    // The window bound a workspace since: the folder no longer holds it.
+    getProjectHistory(1).record("picked");
+    expect(hasPendingOpen(1)).toBe(false);
   });
 
   it("clears an unbound open when a later open into the window binds", () => {

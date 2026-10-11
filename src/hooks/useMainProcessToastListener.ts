@@ -32,6 +32,23 @@ function parseTrustedDaintreeUrl(raw: string | undefined): string | null {
   return url.toString();
 }
 
+/** `{ hostId, projectId }` from a toast action's data, or null when it isn't one. */
+function parseHostProjectTarget(
+  raw: string | undefined
+): { hostId: string; projectId: string } | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const { hostId, projectId } = parsed as { hostId?: unknown; projectId?: unknown };
+    if (typeof hostId !== "string" || hostId.length === 0) return null;
+    if (typeof projectId !== "string" || projectId.length === 0) return null;
+    return { hostId, projectId };
+  } catch {
+    return null;
+  }
+}
+
 export function useMainProcessToastListener(): void {
   useEffect(() => {
     if (!window.electron?.notification?.onShowToast) return;
@@ -72,6 +89,19 @@ export function useMainProcessToastListener(): void {
                 safeFireAndForget(window.electron.clipboard.writeText(data), {
                   context: "Writing clipboard text from toast action",
                 });
+              } else if (ipcChannel === "remote-hosts:switch-window-host") {
+                // Retry for a window main couldn't put back on its host at launch.
+                const target = parseHostProjectTarget(data);
+                if (!target) {
+                  console.warn("[MainProcessToast] remote-hosts:switch-window-host bad payload");
+                  return;
+                }
+                safeFireAndForget(
+                  import("@/components/Hosts/hostSwitching").then(({ switchToHost }) =>
+                    switchToHost(target.hostId, false, target.projectId)
+                  ),
+                  { context: "Reopening a window on its host from toast action" }
+                );
               } else {
                 console.warn(`[MainProcessToast] Unknown IPC channel for action: ${ipcChannel}`);
               }

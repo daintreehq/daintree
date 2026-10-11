@@ -92,6 +92,19 @@ export function reserveWindowForOpen(
 }
 
 /**
+ * Whether an open holds the window: one in flight, or a folder whose open
+ * settled without binding a workspace (its git-init prompt or failure is on
+ * screen). Such a window reads as the picker but is not idle.
+ */
+export function hasPendingOpen(windowId: number): boolean {
+  if ((reservations.get(windowId)?.size ?? 0) > 0) return true;
+  if (getPendingActivationProjectIds(windowId).length > 0) return true;
+  // A parked folder counts only until the window binds a workspace, as the snapshot reads it.
+  const parked = unboundOpens.get(windowId);
+  return parked !== undefined && getProjectHistory(windowId).current() === parked.historyHead;
+}
+
+/**
  * Whether the window now has a workspace in front. Unknown reads as unbound —
  * the direction that can cost an extra window but never an occupied one.
  */
