@@ -10,6 +10,7 @@ import type {
 } from "../../../shared/types/ipc/remoteHosts.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { type ArtifactChecksum, NO_CHECKSUM_MESSAGE, isSha512Base64 } from "./clientBuild.js";
 import type { CommandResult, CommandRunner } from "./commandRunner.js";
 import {
   APPIMAGE_BUILD_INFO_SUFFIX,
@@ -45,6 +46,8 @@ export interface InstallerDeps {
   /** Agents the host reports working now; null when that can't be observed. */
   workingAgents(hostId: HostId | null): Promise<number | null>;
   download(url: string, destination: string, signal: AbortSignal): Promise<void>;
+  /** The checksum the release feed publishes for an artifact URL; null when it lists none. */
+  checksum(url: string, signal: AbortSignal): Promise<ArtifactChecksum | null>;
   /** A directory on this machine for this host's downloaded or packed bundles. */
   cacheDir: string;
   /** Dial the host again and say whether it came back on this build; null when not in the list. */
@@ -117,7 +120,8 @@ async function stage(
 ): Promise<{ dir: string; file: string }> {
   const out = await exec(
     deps,
-    `d=$(mktemp -d "\${TMPDIR:-/tmp}/daintree-stage.XXXXXX") && chmod 755 "$d" && echo "${MARK}stage $d"`,
+    // Private until the build checks out: nobody else can see or swap what lands here.
+    `d=$(mktemp -d "\${TMPDIR:-/tmp}/daintree-stage.XXXXXX") && chmod 700 "$d" && echo "${MARK}stage $d"`,
     signal,
     "Couldn't make a staging folder on the host"
   );
@@ -146,13 +150,17 @@ async function deliver(
   if (plan.delivery === "host-fetch") {
     const url = plan.artifactUrl!;
     if (!SAFE_URL.test(url)) throw failed("The release URL isn't usable", url);
+    const expected = await requireChecksum(deps, url, signal);
     report({ stage: "downloading", fraction: 0.2, message: "The host is downloading the build" });
-    const fetched = await deps.shell.exec(
-      `if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 2 -o ${remotePath(file)} ${sq(url)}; else wget -q -O ${remotePath(file)} ${sq(url)}; fi`,
-      { signal, timeoutMs: 30 * 60_000 }
-    );
+    const fetched = await deps.shell.exec(hostFetchScript(url, file), {
+      signal,
+      timeoutMs: 30 * 60_000,
+    });
     if (signal.aborted) throw cancelled();
-    if (fetched.code === 0) return;
+    if (fetched.code === 0) {
+      await checkHostDownload(deps, file, expected, signal);
+      return;
+    }
     // Having curl or wget doesn't mean the host can reach the release feed:
     // this machine fetches the same artifact and copies it over.
     const hostReason = failureDetail(fetched, "download failed");
@@ -192,6 +200,7 @@ async function deliver(
     throw failed("This machine has no build to copy");
   }
 
+  await requireChecksum(deps, plan.artifactUrl!, signal);
   report({ stage: "downloading", fraction: 0.2, message: "Downloading the build" });
   const local = await downloadHere(deps, plan, signal, null);
   await pushFile(deps, local, file, signal, report, true);
@@ -229,6 +238,159 @@ async function sha256Of(file: string): Promise<string> {
 export function remoteSha256Script(file: string): string {
   const f = remotePath(file);
   return `if command -v sha256sum >/dev/null 2>&1; then h=$(sha256sum ${f}); else h=$(shasum -a 256 ${f}); fi && echo "${MARK}sha256 \${h%% *}"`;
+}
+
+/** Prints the file's sha512 (hex), like {@link remoteSha256Script}. */
+export function remoteSha512Script(file: string): string {
+  const f = remotePath(file);
+  return `if command -v sha512sum >/dev/null 2>&1; then h=$(sha512sum ${f}); else h=$(shasum -a 512 ${f}); fi && echo "${MARK}sha512 \${h%% *}"`;
+}
+
+/**
+ * The host fetches the artifact itself: nothing but https, even across
+ * redirects (wget can't hold a redirect to https, so it follows none and a
+ * redirected feed falls back to this machine's download), none of the user's
+ * curl config, and a file only its owner can read until it has checked out.
+ */
+export function hostFetchScript(url: string, file: string): string {
+  const f = remotePath(file);
+  return `umask 077; if command -v curl >/dev/null 2>&1; then curl -q -fsSL --proto =https --proto-redir =https --retry 2 -o ${f} ${sq(url)}; else wget -q --https-only --max-redirect=0 -O ${f} ${sq(url)}; fi`;
+}
+
+const NO_DEB_CHECKSUM_MESSAGE =
+  "The release feed doesn't publish a checksum for the .deb, so Daintree won't download one it can't check. On a host without Daintree, choose the AppImage; on a host that already has the .deb, install the update there yourself.";
+
+/** The feed's checksum for an artifact; a build it lists none for isn't downloaded at all. */
+async function requireChecksum(
+  deps: InstallerDeps,
+  url: string,
+  signal: AbortSignal
+): Promise<ArtifactChecksum> {
+  let expected: ArtifactChecksum | null;
+  try {
+    expected = await deps.checksum(url, signal);
+  } catch (err) {
+    if (signal.aborted) throw cancelled();
+    throw err;
+  }
+  if (signal.aborted) throw cancelled();
+  if (expected) return expected;
+  throw new AppError({
+    code: "UNSUPPORTED",
+    message: `The release feed lists no checksum for ${url}`,
+    userMessage: url.endsWith(".deb") ? NO_DEB_CHECKSUM_MESSAGE : NO_CHECKSUM_MESSAGE,
+  });
+}
+
+/** Check what the host downloaded against the feed's sha512 before anything opens it. */
+async function checkHostDownload(
+  deps: InstallerDeps,
+  file: string,
+  expected: ArtifactChecksum,
+  signal: AbortSignal
+): Promise<void> {
+  const out = await exec(
+    deps,
+    remoteSha512Script(file),
+    signal,
+    "Couldn't check the download on the host",
+    10 * 60_000
+  );
+  const actual = markerValue(out, "sha512");
+  const wanted = isSha512Base64(expected.sha512)
+    ? Buffer.from(expected.sha512, "base64").toString("hex")
+    : null;
+  if (wanted === null || actual === null || !/^[0-9a-f]{128}$/.test(actual) || actual !== wanted) {
+    await deps.shell.exec(`rm -f ${remotePath(file)}`, { timeoutMs: 30_000 }).catch(() => {});
+    throw failed(
+      "The host's download doesn't match the release feed's checksum, so it wasn't used",
+      actual ?? "unreadable"
+    );
+  }
+}
+
+/**
+ * This machine's own signing team, or null when it is unsigned or ad-hoc
+ * signed (or not a Mac build). A look that fails says neither, so it stops the
+ * install rather than lower the bar to "unsigned".
+ */
+async function ownTeamId(deps: InstallerDeps, signal: AbortSignal): Promise<string | null> {
+  const bundle = deps.client.bundle;
+  if (deps.client.platform !== "darwin" || bundle.kind !== "app-bundle") return null;
+  const result = await deps.run("codesign", ["-dv", "--verbose=2", bundle.path], {
+    signal,
+    timeoutMs: 60_000,
+  });
+  if (signal.aborted) throw cancelled();
+  const text = `${result.stdout}\n${result.stderr}`;
+  if (result.code !== 0) {
+    if (/not signed at all/.test(text)) return null;
+    throw failed(
+      "Couldn't read this machine's own signing team",
+      failureDetail(result, "codesign failed")
+    );
+  }
+  const team = /^TeamIdentifier=(.+)$/m.exec(text)?.[1]?.trim();
+  if (!team || team === "not set") return null;
+  if (!/^[A-Z0-9]{10}$/.test(team)) {
+    throw failed("This machine's own signing team isn't one codesign reports normally", team);
+  }
+  return team;
+}
+
+/**
+ * The code requirement a downloaded build must meet when this machine is a
+ * signed build: a Developer ID Application certificate, chained to Apple,
+ * issued to this machine's own team. A TeamIdentifier field alone can be claimed.
+ */
+export function developerIdRequirement(team: string): string {
+  if (!/^[A-Z0-9]{10}$/.test(team)) throw new Error("Not a team identifier");
+  // Apple's Developer ID intermediate and Developer ID Application leaf
+  // extensions, so a development certificate of the same team doesn't pass.
+  return `anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "${team}"`;
+}
+
+/**
+ * A downloaded Mac build must meet this machine's own team's Developer ID
+ * requirement when this machine is a signed build, and otherwise be validly
+ * signed and accepted by Gatekeeper. A copy of this machine's own bundle
+ * needs none of it: it is what runs here.
+ */
+async function checkSignature(
+  deps: InstallerDeps,
+  appPath: string,
+  signal: AbortSignal
+): Promise<void> {
+  const app = remotePath(appPath);
+  const own = await ownTeamId(deps, signal);
+  if (own !== null) {
+    const out = await exec(
+      deps,
+      `if codesign --verify --deep --strict ${sq(`-R=${developerIdRequirement(own)}`)} ${app} >/dev/null 2>&1; then echo "${MARK}signed yes"; else echo "${MARK}signed no"; fi`,
+      signal,
+      "Couldn't check the build's signature on the host",
+      5 * 60_000
+    );
+    if (markerValue(out, "signed") !== "yes") {
+      throw failed(
+        "The downloaded build isn't signed by this machine's own developer, so it wasn't used"
+      );
+    }
+    return;
+  }
+  const out = await exec(
+    deps,
+    `if codesign --verify --deep --strict ${app} >/dev/null 2>&1; then echo "${MARK}signed yes"; else echo "${MARK}signed no"; fi; if spctl --assess --type execute ${app} >/dev/null 2>&1; then echo "${MARK}gatekeeper yes"; else echo "${MARK}gatekeeper no"; fi`,
+    signal,
+    "Couldn't check the build's signature on the host",
+    5 * 60_000
+  );
+  if (markerValue(out, "signed") !== "yes") {
+    throw failed("The downloaded build isn't validly signed, so it wasn't used");
+  }
+  if (markerValue(out, "gatekeeper") !== "yes") {
+    throw failed("macOS Gatekeeper didn't accept the downloaded build, so it wasn't used");
+  }
 }
 
 /**
@@ -296,6 +458,9 @@ async function verifyStaged(
       );
     }
     checkMarker(markerValue(out, "buildinfo"), expected);
+    if (plan.delivery !== "push-bundle") {
+      await checkSignature(deps, `${staged.dir}/x/Daintree.app`, signal);
+    }
     return expected;
   }
   if (plan.packaging === "appimage") {
@@ -313,9 +478,10 @@ async function verifyStaged(
     checkMarker(marker, expected);
     return marker;
   }
+  // Checked out: apt (its `_apt` user) may read it now, and nobody else may change it.
   await exec(
     deps,
-    `test -s ${remotePath(staged.file)} && chmod 644 ${remotePath(staged.file)}`,
+    `test -s ${remotePath(staged.file)} && chmod 644 ${remotePath(staged.file)} && chmod 755 ${remotePath(staged.dir)}`,
     signal,
     "The staged build is missing on the host"
   );
@@ -477,15 +643,37 @@ export async function runHostInstall(
   }
 
   if (plan.packaging === "deb") {
-    const after = await deps.probe(signal);
-    return {
-      status: "needs-user-command",
-      command: {
-        label: "Install the package on the host",
-        command: debInstallCommand(staged.file),
-      },
-      probe: after.result,
-    };
+    try {
+      // The command the user runs checks the file is still the one checked here.
+      const sum = markerValue(
+        await exec(
+          deps,
+          remoteSha256Script(staged.file),
+          signal,
+          "Couldn't check the staged package on the host",
+          10 * 60_000
+        ),
+        "sha256"
+      );
+      if (!sum || !/^[0-9a-f]{64}$/.test(sum)) {
+        throw failed("Couldn't read the staged package's sha256 on the host", sum ?? "unreadable");
+      }
+      const after = await deps.probe(signal);
+      return {
+        status: "needs-user-command",
+        command: {
+          label: "Install the package on the host",
+          command: debInstallCommand(staged.file, sum),
+        },
+        probe: after.result,
+      };
+    } catch (err) {
+      // No command came of it, so nothing is left staged for one.
+      await deps.shell
+        .exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 })
+        .catch(() => {});
+      throw err;
+    }
   }
 
   if (plan.restartsHost) {

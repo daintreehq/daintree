@@ -3,10 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { downloadArtifact, lookupArtifactChecksum, updateManifestNameFor } from "../clientBuild.js";
+import {
+  downloadArtifact,
+  fetchHttpsOnly,
+  lookupArtifactChecksum,
+  updateManifestNameFor,
+} from "../clientBuild.js";
 
 const FEED = "https://updates.daintree.org/releases/";
-const NAME = "Daintree-1.4.0-x86_64.AppImage";
+const NAME = "Daintree-1.4.0.AppImage";
 const BYTES = new Uint8Array(Array.from({ length: 1000 }, (_, i) => i % 251));
 const SHA = crypto.createHash("sha512").update(BYTES).digest("base64");
 
@@ -75,9 +80,9 @@ describe("downloadArtifact", () => {
   });
 
   it("refuses a body shorter than the length the server announced", async () => {
-    await expect(download(feed({ manifest: null, chunks: [BYTES.slice(0, 600)] }))).rejects.toThrow(
-      /Received 600 of 1000/
-    );
+    await expect(
+      download(feed({ manifest: manifest(), chunks: [BYTES.slice(0, 600)] }))
+    ).rejects.toThrow(/Received 600 of 1000/);
     expect(await fs.readdir(dir)).toEqual([]);
   });
 
@@ -99,9 +104,14 @@ describe("downloadArtifact", () => {
     expect(new Uint8Array(await fs.readFile(path.join(dir, NAME)))).toEqual(BYTES);
   });
 
-  it("still checks the length when the feed lists no checksum for this build", async () => {
-    await download(feed({ manifest: null }));
-    expect((await fs.stat(path.join(dir, NAME))).size).toBe(BYTES.byteLength);
+  it("refuses a build the feed lists no checksum for, without downloading it", async () => {
+    const fetchImpl = feed({ manifest: null });
+    await expect(download(fetchImpl)).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    // Only the manifest was asked for.
+    expect(vi.mocked(fetchImpl).mock.calls.map((call) => String(call[0]))).toEqual([
+      `${FEED}latest-linux.yml`,
+    ]);
+    expect(await fs.readdir(dir)).toEqual([]);
   });
 });
 
@@ -120,6 +130,68 @@ describe("lookupArtifactChecksum", () => {
     await expect(
       lookupArtifactChecksum({ url: `${FEED}${NAME}`, fetchImpl: feed({ manifest: other }) })
     ).resolves.toBeNull();
+  });
+
+  it("says the feed can't be read, rather than that the build isn't listed", async () => {
+    const failing = (respond: () => Promise<Response>) =>
+      lookupArtifactChecksum({
+        url: `${FEED}${NAME}`,
+        fetchImpl: vi.fn(respond) as unknown as typeof fetch,
+      });
+    for (const respond of [
+      async () => {
+        throw new TypeError("fetch failed");
+      },
+      async () => new Response("down", { status: 503 }),
+      async () => new Response("files: [unterminated"),
+      async () => new Response(manifest("not-a-sha512")),
+      async () => new Response("version: 1.4.0\n"),
+      async () => new Response("files:\n  - null\n"),
+      async () => new Response(`files:\n  - url: ${NAME}\n    sha512: 42\n`),
+    ]) {
+      await expect(failing(respond)).rejects.toMatchObject({
+        code: "INTERNAL",
+        userMessage: expect.stringContaining("couldn't read the release feed's checksums"),
+      });
+    }
+    // A feed with no manifest for this platform publishes nothing for it.
+    await expect(failing(async () => new Response("", { status: 404 }))).resolves.toBeNull();
+  });
+
+  it("finds no checksum for the deb, which the Linux manifest doesn't list", async () => {
+    await expect(
+      lookupArtifactChecksum({
+        url: `${FEED}daintree_1.4.0_amd64.deb`,
+        fetchImpl: feed({ manifest: manifest() }),
+      })
+    ).resolves.toBeNull();
+  });
+
+  it("follows redirects only while every hop stays on https", async () => {
+    const hops = vi.fn(async (url: string | URL | Request) => {
+      const href = String(url);
+      if (href.endsWith("/start")) {
+        return new Response(null, { status: 302, headers: { location: "/next" } });
+      }
+      if (href.endsWith("/next")) {
+        return new Response(null, {
+          status: 301,
+          headers: { location: "http://updates.daintree.org/plain" },
+        });
+      }
+      return new Response("ok");
+    }) as unknown as typeof fetch;
+    await expect(fetchHttpsOnly(`${FEED}start`, { fetchImpl: hops })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    expect(vi.mocked(hops).mock.calls.map((call) => String(call[0]))).toEqual([
+      `${FEED}start`,
+      "https://updates.daintree.org/next",
+    ]);
+    // Never a plain-http request, and redirects are never left to fetch itself.
+    for (const call of vi.mocked(hops).mock.calls) {
+      expect((call[1] as RequestInit).redirect).toBe("manual");
+    }
   });
 
   it("names the manifest electron-builder publishes per platform", () => {

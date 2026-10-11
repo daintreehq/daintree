@@ -14,6 +14,7 @@ import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { mintOperationId } from "@/clients/operationsClient";
 import { useRemoteHostsStore } from "@/store/remoteHostsStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isClientAppError } from "@/utils/clientAppError";
 import {
   formatHostConnection,
   sshConnection,
@@ -112,7 +113,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   const [name, setName] = useState(existing?.name ?? "");
   const [probe, setProbe] = useState<HostProbeResult | null>(null);
   const [plan, setPlan] = useState<HostInstallPlan | null>(null);
-  const [linuxPackage, setLinuxPackage] = useState<LinuxPackagePreference>("deb");
+  // The AppImage is the Linux build the release feed publishes a checksum for.
+  const [linuxPackage, setLinuxPackage] = useState<LinuxPackagePreference>("appimage");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [opId, setOpId] = useState<OperationId | null>(null);
@@ -160,7 +162,11 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       },
       (err: unknown) => {
         setBusy(false);
-        setError(formatErrorMessage(err, "Something went wrong"));
+        setError(
+          isClientAppError(err) && err.userMessage
+            ? err.userMessage
+            : formatErrorMessage(err, "Something went wrong")
+        );
       }
     );
   };
@@ -172,7 +178,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       () => remoteHostsClient.probe(connection),
       (result) => {
         setProbe(result);
-        if (result.install?.packaging === "appimage") setLinuxPackage("appimage");
+        setLinuxPackage(result.install?.packaging === "deb" ? "deb" : "appimage");
         setStep("check");
       }
     );

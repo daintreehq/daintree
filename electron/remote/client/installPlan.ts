@@ -59,7 +59,8 @@ export function artifactNameFor(
 ): string {
   if (packaging === "app-bundle") return `Daintree-${version}-${arch}-mac.zip`;
   if (packaging === "deb") return `daintree_${version}_${arch === "x64" ? "amd64" : "arm64"}.deb`;
-  return `Daintree-${version}-${arch === "x64" ? "x86_64" : "arm64"}.AppImage`;
+  // electron-builder's AppImage default: x64 carries no arch, any other arch does.
+  return arch === "x64" ? `Daintree-${version}.AppImage` : `Daintree-${version}-${arch}.AppImage`;
 }
 
 function linuxPackaging(
@@ -67,8 +68,9 @@ function linuxPackaging(
   preference: LinuxPackagePreference | undefined
 ): "deb" | "appimage" {
   if (preference) return preference;
-  // An AppImage install is replaced in place without root; otherwise the deb.
-  return probe.install?.packaging === "appimage" ? "appimage" : "deb";
+  // A host already on the deb keeps it; otherwise the AppImage, which installs
+  // without root and is the one the release feed publishes a checksum for.
+  return probe.install?.packaging === "deb" ? "deb" : "appimage";
 }
 
 export function planInstall(params: {
@@ -118,6 +120,13 @@ export function planInstall(params: {
   if (packaging === "appimage" && params.appImageConflict) {
     return unsupported(params.appImageConflict);
   }
+  // The probe and the host's service keep finding the deb, so an AppImage
+  // beside it would install and never run.
+  if (packaging === "appimage" && probe.install?.packaging === "deb") {
+    return unsupported(
+      "This host runs Daintree from the .deb, which can't be switched to the AppImage from here. Update the .deb on the host yourself."
+    );
+  }
   const sameTarget = probe.platform === client.platform && probe.arch === client.arch;
   const canPush =
     sameTarget &&
@@ -144,11 +153,15 @@ export function planInstall(params: {
   };
 }
 
-/** The one command a deb install asks the user to run on the host. */
-export function debInstallCommand(stagedPath: string): string {
+/**
+ * The one command a deb install asks the user to run on the host. It checks
+ * the package is still the one Daintree verified before sudo touches it.
+ */
+export function debInstallCommand(stagedPath: string, sha256: string): string {
+  if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error("Not a sha256");
   // The user pastes this into their shell, and a staging path may hold spaces.
   const quoted = /^[A-Za-z0-9._/+-]+$/.test(stagedPath)
     ? stagedPath
     : `'${stagedPath.replace(/'/g, `'"'"'`)}'`;
-  return `sudo apt install ${quoted}`;
+  return `printf '%s  %s\\n' ${sha256} ${quoted} | sha256sum -c --quiet - && sudo apt install ${quoted}`;
 }

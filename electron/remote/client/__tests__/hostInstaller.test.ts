@@ -11,7 +11,7 @@ import {
   type InstallProgress,
   type InstallerDeps,
 } from "../hostInstaller.js";
-import type { ClientBuild } from "../installPlan.js";
+import { debInstallCommand, type ClientBuild } from "../installPlan.js";
 import type { HostCommandChannel } from "../remoteShell.js";
 
 const CLIENT: ClientBuild = {
@@ -22,6 +22,10 @@ const CLIENT: ClientBuild = {
   channel: "stable",
   bundle: { kind: "app-bundle", path: "/Applications/Daintree.app" },
 };
+/** What every download here carries, and the feed's checksum for it. */
+const ARTIFACT = "artifact";
+const ARTIFACT_SHA512 = crypto.createHash("sha512").update(ARTIFACT).digest("base64");
+const ARTIFACT_SHA256 = crypto.createHash("sha256").update(ARTIFACT).digest("hex");
 const NEW_BUILD = '{"daintreeBuildInfo":1,"version":"1.4.0","commit":"abcdef0123"}';
 const OLD_BUILD = '{"daintreeBuildInfo":1,"version":"1.3.0","commit":"0123456789"}';
 
@@ -55,6 +59,10 @@ interface FakeShell extends HostCommandChannel {
   uploads: Array<[string, string]>;
   /** The sha256 of what each upload carried, by remote path, as the host would read it back. */
   received: Map<string, string>;
+  /** The sha512 (hex) of what each host-side fetch saved, by remote path. */
+  fetched: Map<string, string>;
+  /** What a host-side fetch saves, as its sha512: the feed's bytes unless a test swaps them. */
+  fetchedSha512: string;
 }
 
 function fakeShell(answer: (script: string) => CommandResult = () => ok()): FakeShell {
@@ -62,10 +70,14 @@ function fakeShell(answer: (script: string) => CommandResult = () => ok()): Fake
     scripts: [],
     uploads: [],
     received: new Map(),
+    fetched: new Map(),
+    fetchedSha512: Buffer.from(ARTIFACT_SHA512, "base64").toString("hex"),
     exec: async (script) => {
       shell.scripts.push(script);
       const sha = /@@dt:sha256/.test(script) ? /sha256sum '([^']+)'/.exec(script)?.[1] : null;
       if (sha) return ok(`@@dt:sha256 ${shell.received.get(sha) ?? "missing"}\n`);
+      const sha512 = /@@dt:sha512/.test(script) ? /sha512sum '([^']+)'/.exec(script)?.[1] : null;
+      if (sha512) return ok(`@@dt:sha512 ${shell.fetched.get(sha512) ?? "missing"}\n`);
       if (script.includes("mktemp -d")) return ok("@@dt:stage /tmp/daintree-stage.abc123\n");
       if (script.includes("ditto -x -k"))
         return ok(`@@dt:version 1.4.0\n@@dt:buildinfo ${NEW_BUILD}\n`);
@@ -73,7 +85,14 @@ function fakeShell(answer: (script: string) => CommandResult = () => ok()): Fake
       if (script.includes('echo "@@dt:home')) return ok("@@dt:home /home/greg\n");
       if (script.includes("@@dt:stopped")) return ok("@@dt:stopped yes\n");
       if (script.includes("@@dt:rolledback")) return ok("@@dt:rolledback yes\n");
-      return answer(script);
+      const result = answer(script);
+      // A fetch that worked leaves the feed's bytes where it was told to put them.
+      const fetchedTo = script.includes("curl -q") ? /-o '([^']+)'/.exec(script)?.[1] : null;
+      if (fetchedTo && result.code === 0) {
+        shell.fetched.set(fetchedTo, shell.fetchedSha512);
+        shell.received.set(fetchedTo, ARTIFACT_SHA256);
+      }
+      return result;
     },
     execWithInput: async (script) => shell.exec(script),
     sendFile: async (local, remote) => {
@@ -140,7 +159,8 @@ function makeDeps(params: {
       });
     },
     workingAgents: async () => (working.length > 1 ? working.shift()! : working[0]!),
-    download: async (_url, destination) => fs.writeFile(destination, "artifact"),
+    download: async (_url, destination) => fs.writeFile(destination, ARTIFACT),
+    checksum: async () => ({ sha512: ARTIFACT_SHA512, size: null }),
     cacheDir,
     reconnect: vi.fn(async () => true),
     sleep: async () => {},
@@ -324,10 +344,23 @@ describe("runHostInstall", () => {
     const result = await install(deps);
     expect(result).toMatchObject({
       status: "needs-user-command",
-      command: { command: "sudo apt install /tmp/daintree-stage.abc123/daintree_1.4.0_amd64.deb" },
+      command: {
+        command: debInstallCommand(
+          "/tmp/daintree-stage.abc123/daintree_1.4.0_amd64.deb",
+          ARTIFACT_SHA256
+        ),
+      },
     });
     const fetch = shell.scripts.find((s) => s.includes("curl"))!;
     expect(fetch).toContain("'https://updates.daintree.org/releases/daintree_1.4.0_amd64.deb'");
+    // Only https, even across redirects, with none of the user's curl config, owner-only.
+    expect(fetch).toMatch(/^umask 077; /);
+    expect(fetch).toContain("curl -q -fsSL --proto =https --proto-redir =https");
+    expect(fetch).toContain("wget -q --https-only --max-redirect=0");
+    // Checked against the feed's sha512 before anything opened it.
+    const checked = shell.scripts.findIndex((s) => s.includes("@@dt:sha512"));
+    expect(checked).toBeGreaterThan(shell.scripts.indexOf(fetch));
+    expect(checked).toBeLessThan(shell.scripts.findIndex((s) => s.includes("test -s")));
     // Daintree never runs sudo and restarts nothing for a deb.
     expect(shell.scripts.some((s) => s.includes("sudo"))).toBe(false);
     expect(shell.scripts.some((s) => s.includes("@@dt:stopped"))).toBe(false);
@@ -344,7 +377,7 @@ describe("runHostInstall", () => {
     const DEB = "daintree_1.4.0_amd64.deb";
     const STAGED = `/tmp/daintree-stage.abc123/${DEB}`;
     const offline = (script: string): CommandResult =>
-      script.includes("curl -fsSL")
+      script.includes("curl -q")
         ? {
             code: 6,
             stdout: "",
@@ -371,7 +404,7 @@ describe("runHostInstall", () => {
       deps.download = download;
       await expect(install(deps)).resolves.toMatchObject({
         status: "needs-user-command",
-        command: { command: `sudo apt install ${STAGED}` },
+        command: { command: debInstallCommand(STAGED, ARTIFACT_SHA256) },
       });
       expect(download).toHaveBeenCalledWith(
         `https://updates.daintree.org/releases/${DEB}`,
@@ -380,7 +413,7 @@ describe("runHostInstall", () => {
       );
       expect(shell.uploads).toEqual([[path.join(cacheDir, DEB), STAGED]]);
       const order = shell.scripts.map((s) =>
-        s.includes("curl -fsSL")
+        s.includes("curl -q")
           ? "host-fetch"
           : s === `rm -f '${STAGED}'`
             ? "drop-partial"
@@ -392,7 +425,15 @@ describe("runHostInstall", () => {
                   ? "stage"
                   : "other"
       );
-      expect(order).toEqual(["stage", "host-fetch", "drop-partial", "check-copy", "verify"]);
+      // The last check reads the staged package's sha256 into the command the user runs.
+      expect(order).toEqual([
+        "stage",
+        "host-fetch",
+        "drop-partial",
+        "check-copy",
+        "verify",
+        "check-copy",
+      ]);
       expect(deps.progress.map((p) => p.message)).toContain(
         "The host couldn't download the build, so this machine is fetching it"
       );
@@ -715,6 +756,179 @@ describe("runHostInstall", () => {
     const deps = makeDeps({ shell, probes: [macProbe({ build: NEW_BUILD, hostMode: true })] });
     await expect(install(deps)).resolves.toMatchObject({ status: "up-to-date" });
     expect(shell.scripts).toEqual([]);
+  });
+});
+
+describe("what a downloaded build has to prove", () => {
+  const LINUX_DEB = [
+    "@@dt:uname Linux x86_64",
+    "@@dt:install deb /opt/Daintree",
+    "@@dt:version 1.3.0",
+    "@@dt:download yes",
+    "@@dt:end",
+  ].join("\n");
+  const APPIMAGE_HOST = [
+    "@@dt:uname Linux x86_64",
+    "@@dt:appimage /home/greg/Applications/Daintree-1.3.0-x86_64.AppImage",
+    "@@dt:unit yes",
+    "@@dt:download yes",
+    "@@dt:end",
+  ].join("\n");
+
+  it("refuses a host download that doesn't match the feed's checksum, before anything opens it", async () => {
+    const shell = fakeShell();
+    shell.fetchedSha512 = "0".repeat(128);
+    const deps = makeDeps({ shell, probes: [APPIMAGE_HOST] });
+    await expect(install(deps)).rejects.toThrow(/doesn't match the release feed's checksum/);
+    // The image was never run to read its marker.
+    expect(shell.scripts.some((s) => s.includes("--appimage-extract"))).toBe(false);
+    expect(shell.scripts).toContain("rm -f '/tmp/daintree-stage.abc123/Daintree-1.4.0.AppImage'");
+    expect(shell.scripts.at(-1)).toBe("rm -rf '/tmp/daintree-stage.abc123'");
+  });
+
+  it("says the deb has no published checksum and points at the AppImage", async () => {
+    const shell = fakeShell();
+    const deps = makeDeps({ shell, probes: [LINUX_DEB] });
+    deps.checksum = async (url) =>
+      url.endsWith(".deb") ? null : { sha512: ARTIFACT_SHA512, size: null };
+    await expect(install(deps)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+      userMessage: expect.stringContaining("choose the AppImage"),
+    });
+    expect(shell.scripts.some((s) => s.includes("curl"))).toBe(false);
+  });
+
+  it("refuses a build the feed lists no checksum for, before fetching anything", async () => {
+    const shell = fakeShell();
+    const deps = makeDeps({ shell, probes: [APPIMAGE_HOST] });
+    deps.checksum = async () => null;
+    const download = vi.fn(deps.download);
+    deps.download = download;
+    await expect(install(deps)).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    expect(shell.scripts.some((s) => s.includes("curl"))).toBe(false);
+    expect(download).not.toHaveBeenCalled();
+    expect(shell.scripts.at(-1)).toBe("rm -rf '/tmp/daintree-stage.abc123'");
+  });
+
+  it("stages privately, and opens the folder to apt only once the deb checked out", async () => {
+    const shell = fakeShell();
+    const deps = makeDeps({ shell, probes: [LINUX_DEB] });
+    await expect(install(deps)).resolves.toMatchObject({ status: "needs-user-command" });
+    expect(shell.scripts.find((s) => s.includes("mktemp"))).toContain('chmod 700 "$d"');
+    expect(shell.scripts.find((s) => s.includes("test -s"))).toContain(
+      "chmod 755 '/tmp/daintree-stage.abc123'"
+    );
+  });
+
+  it("removes the staged deb when its last check fails, since no command came of it", async () => {
+    const shell = fakeShell();
+    const exec = shell.exec;
+    let sums = 0;
+    shell.exec = async (script, options) =>
+      script.includes("@@dt:sha256") && ++sums === 1
+        ? { ...ok(), code: 1, stderr: "sha256sum: read error" }
+        : exec(script, options);
+    const deps = makeDeps({ shell, probes: [LINUX_DEB] });
+    await expect(install(deps)).rejects.toThrow(/Couldn't check the staged package/);
+    expect(shell.scripts.at(-1)).toBe("rm -rf '/tmp/daintree-stage.abc123'");
+  });
+
+  describe("a Mac build downloaded rather than copied from this Mac", () => {
+    // An Intel Mac can't copy its own bundle to an Apple silicon host.
+    const INTEL: ClientBuild = { ...CLIENT, arch: "x64" };
+    /** The host's build as codesign there sees it: signed by `team`, or not at all. */
+    const signedBy =
+      (team: string | null, gatekeeper = true) =>
+      (script: string): CommandResult => {
+        if (!script.includes("codesign --verify")) return ok();
+        const requirement = /leaf\[subject\.OU\] = "([A-Z0-9]+)"/.exec(script)?.[1];
+        const meets = team !== null && (requirement === undefined || requirement === team);
+        const lines = [`@@dt:signed ${meets ? "yes" : "no"}`];
+        if (script.includes("spctl")) lines.push(`@@dt:gatekeeper ${gatekeeper ? "yes" : "no"}`);
+        return ok(`${lines.join("\n")}\n`);
+      };
+    const runAs =
+      (answer: Partial<CommandResult>): CommandRunner =>
+      async (command) =>
+        command === "codesign" ? { ...ok(), ...answer } : ok();
+    const signedHere = runAs({ stderr: "Identifier=x\nTeamIdentifier=TEAM123456\n" });
+    const probes = [
+      macProbe({ build: null, hostMode: false }),
+      macProbe({ build: NEW_BUILD, hostMode: false }),
+    ];
+
+    it("installs one that meets this Mac's own Developer ID requirement, Gatekeeper aside", async () => {
+      const shell = fakeShell(signedBy("TEAM123456", false));
+      const deps = makeDeps({ shell, probes, client: INTEL, run: signedHere });
+      await expect(install(deps)).resolves.toMatchObject({ status: "installed" });
+      const check = shell.scripts.find((s) => s.includes("codesign --verify"))!;
+      // A Developer ID Application certificate, chained to Apple, of this Mac's own team.
+      expect(check).toContain(
+        "'-R=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists"
+      );
+      expect(check).toContain("certificate leaf[field.1.2.840.113635.100.6.1.13] exists");
+      expect(check).toContain('certificate leaf[subject.OU] = "TEAM123456"');
+      expect(check).not.toContain("spctl");
+    });
+
+    it.each([
+      ["is signed by another team", signedBy("OTHER12345")],
+      ["isn't signed", signedBy(null)],
+    ])("refuses one that %s, leaving the old build alone", async (_label, answer) => {
+      const shell = fakeShell(answer);
+      const deps = makeDeps({ shell, probes, client: INTEL, run: signedHere });
+      await expect(install(deps)).rejects.toThrow(/isn't signed by this machine's own developer/);
+      expect(shell.scripts.some((s) => s.includes("Daintree.app.old"))).toBe(false);
+    });
+
+    it("leans on Gatekeeper when this Mac's own build is unsigned or ad-hoc", async () => {
+      for (const unsigned of [
+        runAs({ stderr: "Identifier=x\nTeamIdentifier=not set\n" }),
+        runAs({
+          code: 1,
+          stderr: "/Applications/Daintree.app: code object is not signed at all\n",
+        }),
+      ]) {
+        const accepted = makeDeps({
+          shell: fakeShell(signedBy("TEAM123456", true)),
+          probes,
+          client: INTEL,
+          run: unsigned,
+        });
+        await expect(install(accepted)).resolves.toMatchObject({ status: "installed" });
+        const rejected = makeDeps({
+          shell: fakeShell(signedBy("TEAM123456", false)),
+          probes,
+          client: INTEL,
+          run: unsigned,
+        });
+        await expect(install(rejected)).rejects.toThrow(/Gatekeeper/);
+      }
+    });
+
+    it("stops when it can't tell how this Mac is signed, rather than assume unsigned", async () => {
+      const shell = fakeShell(signedBy("TEAM123456", true));
+      const deps = makeDeps({
+        shell,
+        probes,
+        client: INTEL,
+        run: runAs({ code: null, timedOut: true }),
+      });
+      await expect(install(deps)).rejects.toThrow(/Couldn't read this machine's own signing team/);
+      expect(shell.scripts.some((s) => s.includes("Daintree.app.old"))).toBe(false);
+    });
+
+    it("checks no signature on a copy of this Mac's own bundle", async () => {
+      const shell = fakeShell();
+      const run = vi.fn<CommandRunner>(async (command, args) => {
+        if (command === "ditto") await fs.writeFile(args[args.length - 1]!, "zip");
+        return ok();
+      });
+      const deps = makeDeps({ shell, probes, run });
+      await expect(install(deps)).resolves.toMatchObject({ status: "installed" });
+      expect(shell.scripts.some((s) => s.includes("codesign") || s.includes("spctl"))).toBe(false);
+      expect(run.mock.calls.some(([command]) => command === "codesign")).toBe(false);
+    });
   });
 });
 

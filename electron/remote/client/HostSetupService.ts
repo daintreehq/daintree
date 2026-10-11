@@ -29,6 +29,7 @@ import { AppError } from "../../utils/errorTypes.js";
 import type { CommandRunner } from "./commandRunner.js";
 import { connectionKey, requireHostConnection, unsupportedConnection } from "./connection.js";
 import { discoverHosts } from "./discovery.js";
+import { type ArtifactChecksum, lookupArtifactChecksum } from "./clientBuild.js";
 import { runHostInstall } from "./hostInstaller.js";
 import { bootstrapHostMode, LINUX_START_SCRIPT, MAC_START_SCRIPT } from "./hostModeBootstrap.js";
 import { probeHost, type ProbeOutcome } from "./hostProbe.js";
@@ -55,6 +56,8 @@ export interface HostSetupDeps {
   workingAgents(hostId: HostId | null): Promise<number | null>;
   reconnect?(hostId: HostId): Promise<boolean | null>;
   download(url: string, destination: string, signal: AbortSignal): Promise<void>;
+  /** The release feed's checksum for an artifact; defaults to reading the feed's update manifest. */
+  checksum?(url: string, signal: AbortSignal): Promise<ArtifactChecksum | null>;
   emit(event: RemoteHostsEvent): void;
   sleep?(ms: number, signal: AbortSignal): Promise<void>;
   now?: () => number;
@@ -189,6 +192,10 @@ export class HostSetupService {
             probe: (signal) => this.probeOutcome(connection, shell, signal),
             workingAgents: (hostId) => this.deps.workingAgents(hostId),
             download: (url, destination, signal) => this.deps.download(url, destination, signal),
+            checksum: (url, signal) =>
+              this.deps.checksum
+                ? this.deps.checksum(url, signal)
+                : lookupArtifactChecksum({ url, signal }),
             cacheDir: this.cacheDirFor(connection),
             reconnect: this.deps.reconnect,
             sleep: this.deps.sleep ?? abortableSleep,

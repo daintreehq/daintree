@@ -74,13 +74,41 @@ describe("planInstall", () => {
       probe: probe({ platform: "linux", arch: "x64", canDownload: false }),
     });
     expect(plan.delivery).toBe("client-download-push");
-    expect(plan.artifactName).toBe("daintree_1.4.0_amd64.deb");
+    expect(plan.artifactName).toBe("Daintree-1.4.0.AppImage");
   });
 
-  it("prefers the deb on Linux, which ends in a command the user runs", () => {
+  it("gives a fresh Linux host the AppImage, the build the feed publishes a checksum for", () => {
     const plan = planInstall({
       client: macClient,
-      probe: probe({ platform: "linux", arch: "arm64" }),
+      probe: probe({ platform: "linux", arch: "x64" }),
+    });
+    expect(plan.packaging).toBe("appimage");
+    expect(plan.userCommandNeeded).toBe(false);
+    expect(plan.artifactName).toBe("Daintree-1.4.0.AppImage");
+  });
+
+  it("won't switch a deb host to the AppImage, which it would never run", () => {
+    const plan = planInstall({
+      client: macClient,
+      probe: probe({
+        platform: "linux",
+        arch: "x64",
+        install: { path: "/opt/Daintree", version: "1.3.0", commit: null, packaging: "deb" },
+      }),
+      linuxPackage: "appimage",
+    });
+    expect(plan.kind).toBe("unsupported");
+    expect(plan.reason).toMatch(/runs Daintree from the \.deb/);
+  });
+
+  it("keeps a deb host on the deb, which ends in a command the user runs", () => {
+    const plan = planInstall({
+      client: macClient,
+      probe: probe({
+        platform: "linux",
+        arch: "arm64",
+        install: { path: "/opt/Daintree", version: "1.3.0", commit: null, packaging: "deb" },
+      }),
     });
     expect(plan.packaging).toBe("deb");
     expect(plan.userCommandNeeded).toBe(true);
@@ -102,7 +130,7 @@ describe("planInstall", () => {
     });
     const kept = planInstall({ client: macClient, probe: appImageHost });
     expect(kept.packaging).toBe("appimage");
-    expect(kept.artifactName).toBe("Daintree-1.4.0-x86_64.AppImage");
+    expect(kept.artifactName).toBe("Daintree-1.4.0.AppImage");
     expect(kept.userCommandNeeded).toBe(false);
     expect(kept.restartsHost).toBe(true);
     const chosen = planInstall({ client: macClient, probe: appImageHost, linuxPackage: "deb" });
@@ -117,11 +145,11 @@ describe("planInstall", () => {
       bundle: { kind: "appimage", path: "/home/g/Daintree.AppImage" },
     };
     const host = probe({ platform: "linux", arch: "x64" });
-    expect(
-      planInstall({ client: linuxClient, probe: host, linuxPackage: "appimage" }).delivery
-    ).toBe("push-bundle");
+    expect(planInstall({ client: linuxClient, probe: host }).delivery).toBe("push-bundle");
     // The deb isn't something the client has, so it comes from the feed.
-    expect(planInstall({ client: linuxClient, probe: host }).delivery).toBe("host-fetch");
+    expect(planInstall({ client: linuxClient, probe: host, linuxPackage: "deb" }).delivery).toBe(
+      "host-fetch"
+    );
   });
 
   it("fetches from the feed when this machine has no bundle to copy (a dev or deb install)", () => {
@@ -194,13 +222,20 @@ describe("planInstall with conflicting AppImages", () => {
 });
 
 describe("debInstallCommand", () => {
-  it("quotes a staged path the user's shell would otherwise split", () => {
-    expect(debInstallCommand("/tmp/daintree-stage.abc/daintree_1.4.0_amd64.deb")).toBe(
-      "sudo apt install /tmp/daintree-stage.abc/daintree_1.4.0_amd64.deb"
+  const SUM = "a".repeat(64);
+
+  it("checks the package's sha256 before sudo, and quotes a path the shell would split", () => {
+    expect(debInstallCommand("/tmp/daintree-stage.abc/daintree_1.4.0_amd64.deb", SUM)).toBe(
+      `printf '%s  %s\\n' ${SUM} /tmp/daintree-stage.abc/daintree_1.4.0_amd64.deb | sha256sum -c --quiet - && sudo apt install /tmp/daintree-stage.abc/daintree_1.4.0_amd64.deb`
     );
-    expect(debInstallCommand("/tmp/my stage/it's.deb")).toBe(
-      `sudo apt install '/tmp/my stage/it'"'"'s.deb'`
+    const quoted = `'/tmp/my stage/it'"'"'s.deb'`;
+    expect(debInstallCommand("/tmp/my stage/it's.deb", SUM)).toBe(
+      `printf '%s  %s\\n' ${SUM} ${quoted} | sha256sum -c --quiet - && sudo apt install ${quoted}`
     );
+  });
+
+  it("refuses anything but a sha256", () => {
+    expect(() => debInstallCommand("/tmp/a.deb", "$(rm -rf ~)")).toThrow();
   });
 });
 
@@ -209,5 +244,7 @@ describe("artifactNameFor", () => {
     expect(artifactNameFor("arm64", "app-bundle", "2.0.0")).toBe("Daintree-2.0.0-arm64-mac.zip");
     expect(artifactNameFor("x64", "deb", "2.0.0")).toBe("daintree_2.0.0_amd64.deb");
     expect(artifactNameFor("arm64", "appimage", "2.0.0")).toBe("Daintree-2.0.0-arm64.AppImage");
+    // electron-builder's AppImage default puts no arch on x64 (the feed's Daintree-0.43.0.AppImage).
+    expect(artifactNameFor("x64", "appimage", "2.0.0")).toBe("Daintree-2.0.0.AppImage");
   });
 });
