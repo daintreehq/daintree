@@ -234,16 +234,41 @@ export async function takeOverDrive(projectId: string): Promise<void> {
  * view, not per sync mount (the layout remounts once after hydration), and
  * only until it succeeds; a machine that takes the project over later is
  * offered back through the banner, never fought for.
+ *
+ * A finished claim is also kept in sessionStorage, which belongs to the view's
+ * WebContents and outlives a reload or a renderer crash: a reloaded view is
+ * the same opening, so it must not take back a project the host's own screen
+ * took from it meanwhile. A newly opened view starts with none.
  */
 const openClaim = { projectId: null as string | null, done: false, inFlight: false, owed: false };
 
+const OPEN_CLAIM_KEY_PREFIX = "daintree:host-open-claim:";
+
+function readClaimedOnOpen(projectId: string): boolean {
+  try {
+    return window.sessionStorage.getItem(OPEN_CLAIM_KEY_PREFIX + projectId) === "done";
+  } catch {
+    return false;
+  }
+}
+
+function recordClaimedOnOpen(projectId: string): void {
+  try {
+    window.sessionStorage.setItem(OPEN_CLAIM_KEY_PREFIX + projectId, "done");
+  } catch {
+    // Without storage a reload claims again, as before.
+  }
+}
+
 function openClaimOutstanding(projectId: string): boolean {
-  return openClaim.projectId !== projectId || !openClaim.done;
+  if (openClaim.projectId !== projectId) return !readClaimedOnOpen(projectId);
+  return !openClaim.done;
 }
 
 function claimOpenedProject(projectId: string, isLive: () => boolean): void {
   if (openClaim.projectId !== projectId) {
-    Object.assign(openClaim, { projectId, done: false, inFlight: false, owed: false });
+    const done = readClaimedOnOpen(projectId);
+    Object.assign(openClaim, { projectId, done, inFlight: false, owed: false });
   }
   if (openClaim.done || !isLive()) return;
   // A link that came up while an attempt was out gets one more once it settles.
@@ -257,6 +282,7 @@ function claimOpenedProject(projectId: string, isLive: () => boolean): void {
     .then(
       () => {
         openClaim.done = true;
+        recordClaimedOnOpen(projectId);
       },
       async (error: unknown) => {
         logWarn("[HostConnection] Couldn't take the project over on open", { error });
@@ -568,7 +594,8 @@ export function reconnectHost(): void {
   });
 }
 
-export function _resetHostConnectionSyncForTesting(): void {
+/** The module's state as a reloaded view starts it: memory gone, sessionStorage kept. */
+export function _reloadHostConnectionSyncForTesting(): void {
   stopSync?.();
   stopSync = null;
   syncRefs = 0;
@@ -576,4 +603,15 @@ export function _resetHostConnectionSyncForTesting(): void {
   resyncAgain = false;
   resyncProjectStateOwed = false;
   Object.assign(openClaim, { projectId: null, done: false, inFlight: false, owed: false });
+}
+
+export function _resetHostConnectionSyncForTesting(): void {
+  _reloadHostConnectionSyncForTesting();
+  try {
+    for (const key of Object.keys(window.sessionStorage)) {
+      if (key.startsWith(OPEN_CLAIM_KEY_PREFIX)) window.sessionStorage.removeItem(key);
+    }
+  } catch {
+    // No storage, nothing kept.
+  }
 }

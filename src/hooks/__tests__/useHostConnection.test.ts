@@ -39,6 +39,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 vi.mock("@/store/hostProjectRehydrate", () => ({ rehydrateHostProjectState: rehydrate }));
 
 import {
+  _reloadHostConnectionSyncForTesting,
   _resetHostConnectionSyncForTesting,
   drivenElsewhereBy,
   resyncFromHost,
@@ -474,6 +475,22 @@ describe("lease and reconnect races", () => {
     await flush();
     first();
     // The layout mounts again after hydration; another machine may have taken it meanwhile.
+    const second = startHostConnectionSync();
+    await flush();
+    expect(electron.driveLease.takeOver).toHaveBeenCalledTimes(1);
+    second();
+  });
+
+  it("does not claim again when the view reloads, so a takeover from the host's screen stands", async () => {
+    const { electron } = installElectron();
+    bindView("studio-01");
+    const first = startHostConnectionSync();
+    await flush();
+    expect(electron.driveLease.takeOver).toHaveBeenCalledTimes(1);
+    first();
+    // The host's own screen takes the project back, then this view reloads.
+    electron.driveLease.get.mockResolvedValue(leaseView(holder({ isHostLocal: true }), false));
+    _reloadHostConnectionSyncForTesting();
     const second = startHostConnectionSync();
     await flush();
     expect(electron.driveLease.takeOver).toHaveBeenCalledTimes(1);
