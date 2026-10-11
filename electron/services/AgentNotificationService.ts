@@ -970,15 +970,20 @@ class AgentNotificationService {
     for (const ask of asks) this.canopyAnnouncedIds.add(ask.terminalId);
 
     const first = asks[0];
-    this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
+    const ownerWebContentsId = this.resolveOwner(first.terminalId);
+    // A remote view's Shell plays its own sound for the category.
+    if (!isRemoteNotificationOwner(ownerWebContentsId)) {
+      this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
+    }
     const navigation = {
       channel: CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
       context: this.makeContext(first.terminalId, first.agentId, first.worktreeId),
     };
     const options = {
-      ownerWebContentsId: this.resolveOwner(first.terminalId),
+      ownerWebContentsId,
       navigation,
       closeWithPanels: asks.map((ask) => ask.terminalId),
+      category: "waiting" as const,
     };
     if (asks.length === 1) {
       notificationService.showNativeNotification(

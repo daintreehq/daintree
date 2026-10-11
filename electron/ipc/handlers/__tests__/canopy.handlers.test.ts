@@ -18,6 +18,8 @@ const state = vi.hoisted(() => ({
   mode: "on" as string,
   packaged: false,
   generation: 1 as number | null,
+  /** The project the pty-host's record names; null once the terminal has exited. */
+  terminalProject: "project-1" as string | null,
 }));
 
 const ptyClient = vi.hoisted(() => ({
@@ -34,15 +36,16 @@ const ptyClient = vi.hoisted(() => ({
   off: vi.fn(),
   acquireIpcDataMirror: vi.fn(() => state.releaseMirror),
   getSerializedStateAsync: vi.fn(async () => ({ data: "screen", cols: 80, rows: 24 })),
-  getTerminalProjectId: vi.fn((_id: string): string | null => "project-1"),
+  getTerminalProjectId: vi.fn((_id: string): string | null => state.terminalProject),
   resize: vi.fn(),
 }));
 
-/** Another screen drives every project while set; null is no lease service at all. */
-const lease = vi.hoisted(() => ({ drivenElsewhere: false }));
+/** Who drives every project: this screen, another one, or nobody (no lease service at all). */
+const lease = vi.hoisted(() => ({ holder: null as "self" | "other" | null }));
 vi.mock("../../../services/DriveLeaseService.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../services/DriveLeaseService.js")>()),
-  peekDriveLeaseService: () => (lease.drivenElsewhere ? { isDriving: () => false } : null),
+  peekDriveLeaseService: () =>
+    lease.holder === null ? null : { isDriving: () => lease.holder === "self" },
 }));
 
 vi.mock("electron", () => ({
@@ -181,7 +184,8 @@ describe("canopy IPC", () => {
     state.mode = "on";
     state.packaged = false;
     state.generation = 1;
-    lease.drivenElsewhere = false;
+    lease.holder = null;
+    state.terminalProject = "project-1";
     saved.state = null;
     // setMode is rate-limited across the file; each case starts with the window clear.
     _resetRateLimitQueuesForTest();
@@ -1174,7 +1178,7 @@ describe("canopy IPC", () => {
 
     it("refuses typing, keys, submits and answers from a screen that doesn't drive it", async () => {
       const { sender, watchId } = await openStream();
-      lease.drivenElsewhere = true;
+      lease.holder = "other";
 
       const attempts = await Promise.all([
         outcome(invoke(CANOPY_METHOD_CHANNELS.terminalInput, sender, watchId, "y")),
@@ -1191,13 +1195,70 @@ describe("canopy IPC", () => {
 
     it("leaves the PTY at the driver's size rather than the panel's", async () => {
       const { sender, watchId } = await openStream();
-      lease.drivenElsewhere = true;
+      lease.holder = "other";
       await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
       expect(ptyClient.resize).not.toHaveBeenCalled();
 
-      lease.drivenElsewhere = false;
+      lease.holder = "self";
       await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
       expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 100, 30);
+    });
+
+    it("hands no size back once its view has lost control", async () => {
+      lease.holder = "self";
+      const { sender, watchId } = await openStream();
+      await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+      expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 100, 30);
+
+      lease.holder = "other";
+      ptyClient.resize.mockClear();
+      await invoke(CANOPY_METHOD_CHANNELS.unwatchTerminal, sender);
+      expect(ptyClient.resize).not.toHaveBeenCalled();
+    });
+
+    it("stops answering when another screen takes control between keys", async () => {
+      lease.holder = "self";
+      ptyClient.write.mockImplementationOnce((_id: string, data: string) => {
+        lease.holder = "other";
+        return state.writes.push(data);
+      });
+      const answered = await outcome(
+        invoke(
+          CANOPY_METHOD_CHANNELS.answer,
+          fakeSender(5),
+          "run-1",
+          { spawnedAt: 100 },
+          "No, and tell Claude what to do differently"
+        )
+      );
+      expect(answered).toEqual({
+        ok: false,
+        message: expect.stringContaining("Another screen took control"),
+      });
+      expect(state.writes).toEqual(["\x1b[B"]);
+    });
+
+    it("refuses Undo by the trash's own project, even once its terminal has exited", async () => {
+      const receipt = await trashReceipt();
+      state.runs = [];
+      state.terminalProject = null;
+      lease.holder = "other";
+      const undone = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), receipt));
+      expect(undone.ok).toBe(false);
+      expect(ptyClient.restore).not.toHaveBeenCalled();
+    });
+
+    it("refuses Undo when control moves while the host is asked", async () => {
+      lease.holder = "self";
+      const receipt = await trashReceipt();
+      state.runs = [];
+      ptyClient.getTerminalAsync.mockImplementationOnce(async () => {
+        lease.holder = "other";
+        return state.record;
+      });
+      const undone = await outcome(invoke(CANOPY_METHOD_CHANNELS.untrash, fakeSender(1), receipt));
+      expect(undone.ok).toBe(false);
+      expect(ptyClient.restore).not.toHaveBeenCalled();
     });
   });
 });

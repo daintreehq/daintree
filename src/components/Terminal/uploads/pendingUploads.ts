@@ -102,6 +102,9 @@ export function usePendingUploads(surface: string): readonly PendingUpload[] {
 
 /** Surface keys, so a composer and the terminal under it never share chips. */
 export const composerUploadSurface = (terminalId: string) => `composer:${terminalId}`;
+/** Canopy's reply box for a terminal, whose uploads are not its pane composer's to wait on. */
+export const isolatedComposerUploadSurface = (terminalId: string) =>
+  `isolated-composer:${terminalId}`;
 export const terminalUploadSurface = (terminalId: string) => `terminal:${terminalId}`;
 export const fileBrowserUploadSurface = (panelId: string) => `file-browser:${panelId}`;
 

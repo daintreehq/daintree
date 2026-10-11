@@ -2707,6 +2707,24 @@ describe("notifications owned by a view on a remote Shell", () => {
     expect(soundServiceMock.playFile).not.toHaveBeenCalled();
   });
 
+  it("sends a Canopy ask's waiting category to the remote Shell and plays nothing here", () => {
+    mockStore({ soundEnabled: true });
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-1"]);
+    // Past the boot grace, so the ask isn't taken for a restore's first reading.
+    vi.advanceTimersByTime(9_000);
+    agentNotificationService.notifyCanopyAsk(
+      { terminalId: "term-1", worktreeId: "wt-1", agentId: "agent-1", kind: "approval" },
+      () => []
+    );
+    vi.advanceTimersByTime(200);
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+      "Agent waiting",
+      expect.any(String),
+      expect.objectContaining({ ownerWebContentsId: REMOTE_OWNER, category: "waiting" })
+    );
+    expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+  });
+
   it("still plays this machine's sound for its own windows", () => {
     mockStore({ waitingEnabled: true, soundEnabled: true });
     agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);

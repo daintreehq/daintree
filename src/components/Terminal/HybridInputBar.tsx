@@ -63,7 +63,11 @@ import { useAutocompleteItems } from "./hooks/useAutocompleteItems";
 import { useDragDrop } from "./hooks/useDragDrop";
 import { useAttachFiles, useAttachFromHost } from "./hooks/useAttachFiles";
 import { fileAttachmentEntryFromSource, insertFileAttachments } from "./fileAttachments";
-import { composerUploadSurface, hasPendingUploads } from "./uploads/pendingUploads";
+import {
+  composerUploadSurface,
+  hasPendingUploads,
+  isolatedComposerUploadSurface,
+} from "./uploads/pendingUploads";
 import { tryComposerFleetBroadcast } from "./composerFleetBroadcast";
 import { PendingUploadChips } from "./uploads/PendingUploadChips";
 import { LazyUploadConfirmHost } from "./uploads/LazyUploadConfirmHost";
@@ -394,7 +398,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // Assistant, whose input bar owns no selectable pane.
     // In a remote window, what the user drops here is uploaded to the host;
     // the chips for those uploads live on this composer, and sending waits on them.
-    const uploadSurface = composerUploadSurface(terminalId);
+    const uploadSurface = isolated
+      ? isolatedComposerUploadSurface(terminalId)
+      : composerUploadSurface(terminalId);
     const isRemote = isRemoteWindow();
     const hostPlatform = useHostPlatform();
     const cwdRef = useRef(cwd);
@@ -433,9 +439,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const handleAttachFiles = useAttachFiles(editorViewRef, cwd, uploadSurface);
     const handleAttachFromHost = useAttachFromHost(editorViewRef, cwd);
 
-    // A drop on this pane's agent terminal, in a remote window, lands here.
+    // A drop on this pane's agent terminal, in a remote window, lands here —
+    // in the pane's own composer, never Canopy's reply box for the same terminal.
     useEffect(() => {
-      if (!isRemote) return;
+      if (!isRemote || isolated) return;
       return registerComposerDropTarget(terminalId, (sources) => {
         const view = editorViewRef.current;
         if (!view) return;
@@ -448,7 +455,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           cwdProvider: readCwd,
         });
       });
-    }, [isRemote, terminalId, cwd, uploadSurface, readCwd]);
+    }, [isRemote, isolated, terminalId, cwd, uploadSurface, readCwd]);
 
     const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(
       cwd,

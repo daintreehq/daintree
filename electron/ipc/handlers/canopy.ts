@@ -561,7 +561,11 @@ function leftTheTrash(): AppError {
  * their trash. Refused once the trash has let the terminal go, or for a
  * terminal that is no longer the incarnation trashed.
  */
-async function restoreThroughOwningViews(receipt: number): Promise<void> {
+async function restoreThroughOwningViews(
+  receipt: number,
+  /** Checked again right before anything is restored: control can move while the host is asked. */
+  mayRestore: (trashed: TrashedRun) => boolean = () => true
+): Promise<void> {
   pruneTrashReceipts();
   const trashed = recentlyTrashed.get(receipt);
   if (!trashed) throw leftTheTrash();
@@ -596,6 +600,7 @@ async function restoreThroughOwningViews(receipt: number): Promise<void> {
       userMessage: "That terminal's project has opened since. Nothing was restored.",
     });
   }
+  if (!mayRestore(trashed)) throw drivenElsewhere(trashed.workspaceId);
   forgetReceiptsFor(trashed.runId, trashed.spawnedAt);
   // The host's word that this restore landed is ours, not news of someone
   // else's: it must not spend a receipt for a trash made after it.
@@ -730,21 +735,27 @@ function watchView(ctx: IpcContext): void {
  * driver's to do while a drive lease is held, as through `terminal:input`. The
  * run names the project, not the caller's view, so the handler checks it.
  */
-function drivesRun(ctx: IpcContext, runId: string): boolean {
+function drivesProject(ctx: IpcContext, projectId: string | null): boolean {
   const lease = peekDriveLeaseService();
-  if (!lease) return true;
-  const projectId = requirePtyClient().getTerminalProjectId(runId);
-  return projectId === null || lease.isDriving(projectId, ctx.endpoint);
+  return !lease || projectId === null || lease.isDriving(projectId, ctx.endpoint);
+}
+
+function drivesRun(ctx: IpcContext, runId: string): boolean {
+  if (!peekDriveLeaseService()) return true;
+  return drivesProject(ctx, requirePtyClient().getTerminalProjectId(runId));
+}
+
+function drivenElsewhere(projectId: string | null): AppError {
+  return new AppError({
+    code: "DRIVEN_ELSEWHERE",
+    message: `project ${projectId ?? "unknown"} is driven elsewhere; only its driver may change its terminals`,
+    userMessage: "This project is being driven from another screen.",
+    context: { projectId },
+  });
 }
 
 function assertDrivesRun(ctx: IpcContext, runId: string): void {
-  if (drivesRun(ctx, runId)) return;
-  throw new AppError({
-    code: "DRIVEN_ELSEWHERE",
-    message: `terminal ${runId} is driven elsewhere; only its driver may type to it`,
-    userMessage: "This project is being driven from another screen.",
-    context: { terminalId: runId },
-  });
+  if (!drivesRun(ctx, runId)) throw drivenElsewhere(requirePtyClient().getTerminalProjectId(runId));
 }
 
 export const canopyNamespace = defineIpcNamespace({
@@ -820,7 +831,15 @@ export const canopyNamespace = defineIpcNamespace({
         if (generation !== null && !ptyClient.isLiveGeneration(runId, generation)) {
           throw new Error("That agent isn't running any more.");
         }
-        return watchTerminal(ptyClient, viewOf(ctx), runId, target.spawnedAt, ticket, generation);
+        return watchTerminal(
+          ptyClient,
+          viewOf(ctx),
+          runId,
+          target.spawnedAt,
+          ticket,
+          generation,
+          () => drivesRun(ctx, runId)
+        );
       },
       { withContext: true }
     ),
@@ -1058,10 +1077,13 @@ export const canopyNamespace = defineIpcNamespace({
         if (!Number.isSafeInteger(receipt) || receipt <= 0) {
           throw new Error("Invalid trash receipt");
         }
-        // The receipt, not an argument the lease gate can read, names the run.
+        // The receipt, not an argument the lease gate can read, names the
+        // project: an exited terminal's live record no longer does.
         const trashed = recentlyTrashed.get(receipt);
-        if (trashed) assertDrivesRun(ctx, trashed.runId);
-        await restoreThroughOwningViews(receipt);
+        if (trashed && !drivesProject(ctx, trashed.workspaceId)) {
+          throw drivenElsewhere(trashed.workspaceId);
+        }
+        await restoreThroughOwningViews(receipt, (held) => drivesProject(ctx, held.workspaceId));
       },
       { withContext: true }
     ),
@@ -1155,6 +1177,12 @@ export const canopyNamespace = defineIpcNamespace({
               (generation !== null && !pty.isLiveGeneration(runId, generation))
             ) {
               throw answerRefused("That terminal has moved on since the list showed it.");
+            }
+            // Control can move to another screen between keys.
+            if (!drivesRun(ctx, runId)) {
+              throw answerRefused(
+                "Another screen took control of that project. Nothing more was pressed."
+              );
             }
             pty.write(runId, ANSWER_KEY_SEQUENCES[key] ?? key);
           }
