@@ -197,9 +197,11 @@ export function registerFilesHandlers(): () => void {
       });
     }
 
-    // Open the user-supplied filePath (not realFile) with O_NOFOLLOW so a
-    // final-component symlink injected after the realpath check is rejected
-    // with ELOOP. On Windows O_NOFOLLOW is 0 (no-op); realpath containment
+    // Open the contained realFile, not the path as asked, with O_NOFOLLOW: a
+    // link inside the project resolves to a real path that was just checked,
+    // while a link swapped in for that path after the check is rejected with
+    // ELOOP. Opening the asked path refused every symlinked file, in-project
+    // ones included. On Windows O_NOFOLLOW is 0 (no-op); realpath containment
     // still applies.
     // O_NONBLOCK so a FIFO swapped in can't hang the open (and a libuv worker
     // with it); the descriptor is then held to what was checked: a regular
@@ -208,7 +210,7 @@ export function registerFilesHandlers(): () => void {
     let fileHandle: Awaited<ReturnType<typeof fs.open>>;
     try {
       fileHandle = await fs.open(
-        filePath,
+        realFile,
         fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | (fs.constants.O_NONBLOCK ?? 0)
       );
     } catch (error) {

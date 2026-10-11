@@ -498,6 +498,28 @@ describe("files:read handler", () => {
     expect(fsMock.open).not.toHaveBeenCalled();
   });
 
+  it("reads a symlinked file inside the root through its contained real path", async () => {
+    const link = path.join(root, "link.ts");
+    const target = path.join(root, "src", "app.ts");
+    fsMock.realpath.mockImplementation(async (p: string) => (p === link ? target : p));
+    const content = Buffer.from("export {}", "utf-8");
+    fsMock.stat.mockResolvedValue({ size: content.length });
+    fsMock.open.mockImplementation(async (p: string) => {
+      // O_NOFOLLOW on the link itself is what refused every in-project link.
+      if (p === link) throw Object.assign(new Error("symbolic link"), { code: "ELOOP" });
+      return makeFileHandle(content);
+    });
+    registerFilesHandlers();
+
+    const result = await getReadHandler()({}, { path: link, rootPath: root });
+
+    expect(result).toMatchObject({ content: "export {}" });
+    expect(fsMock.open).toHaveBeenCalledWith(
+      target,
+      fsMock.constants.O_RDONLY | fsMock.constants.O_NOFOLLOW | fsMock.constants.O_NONBLOCK
+    );
+  });
+
   it("accepts a file when both root and file canonicalize through symlinked paths", async () => {
     const linkedRoot = path.resolve("/tmp/project-link");
     const linkedFile = path.join(linkedRoot, "a.txt");
