@@ -34,7 +34,9 @@ vi.mock("@/components/ui/AppDialog", () => {
 });
 
 vi.mock("@/components/ui/select", () => ({
-  Select: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Select: ({ children, value }: { children: ReactNode; value?: string }) => (
+    <div data-select-value={value}>{children}</div>
+  ),
   SelectTrigger: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   SelectValue: () => null,
   SelectContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
@@ -309,6 +311,70 @@ describe("HostSwitchDialog", () => {
       candidate: { projectId: "host-p1" },
       branch: { name: "feature/host-chip" },
     });
+  });
+
+  it("never opens by itself when an agent or plugin asked for the dialog", async () => {
+    prepare.mockResolvedValue(
+      preparation({
+        hasUncommittedChanges: false,
+        candidates: [
+          {
+            projectId: "host-p1",
+            path: "/home/greg/code/daintree",
+            name: "daintree",
+            remotes: [{ name: "origin", url: "https://github.com/daintreehq/daintree" }],
+            source: "registered",
+            matchedBy: "remote-url",
+            lastOpenedAt: null,
+          },
+        ],
+      })
+    );
+    render(<HostSwitchDialog request={{ ...request, askFirst: true }} onClose={() => {}} />);
+    expect(await screen.findByText(/already has this project/)).toBeTruthy();
+    expect(execute).not.toHaveBeenCalled();
+    expect(switchToHost).not.toHaveBeenCalled();
+  });
+
+  it("asks before opening when the project comes from another machine", async () => {
+    prepare.mockResolvedValue(
+      preparation({
+        fromHostId: "bigbox",
+        hasUncommittedChanges: false,
+        candidates: [
+          {
+            projectId: "host-p1",
+            path: "/home/greg/code/daintree",
+            name: "daintree",
+            remotes: [{ name: "origin", url: "https://github.com/daintreehq/daintree" }],
+            source: "registered",
+            matchedBy: "remote-url",
+            lastOpenedAt: null,
+          },
+        ],
+      })
+    );
+    render(<HostSwitchDialog request={request} onClose={() => {}} />);
+    expect(await screen.findByText(/already has this project/)).toBeTruthy();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("starts with no setup recipe when the default came from another machine", async () => {
+    const recipes = [{ id: "r1", name: "Install dependencies" }];
+    const chosenRecipe = async () => {
+      await screen.findByText("Setup");
+      return document.querySelector("[data-select-value]")?.getAttribute("data-select-value");
+    };
+    prepare.mockResolvedValue(
+      preparation({ fromHostId: "bigbox", recipes, defaultRecipeId: "r1" })
+    );
+    const { unmount } = render(<HostSwitchDialog request={request} onClose={() => {}} />);
+    expect(await chosenRecipe()).toBe("__none__");
+    unmount();
+    // This machine's own default is still offered.
+    prepare.mockResolvedValue(preparation({ recipes, defaultRecipeId: "r1" }));
+    render(<HostSwitchDialog request={request} onClose={() => {}} />);
+    expect(await chosenRecipe()).toBe("r1");
   });
 
   it("just switches host without touching the project", async () => {

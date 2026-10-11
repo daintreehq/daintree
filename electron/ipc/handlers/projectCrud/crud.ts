@@ -46,7 +46,8 @@ const PROJECT_VISIBLE_MESSAGE =
  */
 export async function addProjectByPath(
   projectPath: string,
-  options?: ProjectAddOptions
+  options?: ProjectAddOptions,
+  internal?: { fresh?: boolean }
 ): Promise<Project> {
   if (typeof projectPath !== "string" || !projectPath) {
     throw new Error("Invalid project path");
@@ -64,6 +65,7 @@ export async function addProjectByPath(
     // doesn't have, and `addProject` alone decides that a repository was found.
     ...(options?.gitBacked === false ? { gitBacked: false } : {}),
     identity: normalizeCreationIdentity(options?.identity),
+    ...(internal?.fresh ? { fresh: true } : {}),
   });
   broadcastToRenderer(CHANNELS.PROJECT_UPDATED, project);
   return project;

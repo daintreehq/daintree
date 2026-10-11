@@ -58,14 +58,32 @@ export class BundleStore {
     }
   }
 
-  /** `git bundle create --all` of the repository at `repoPath`: committed history only. */
+  /**
+   * A bundle of the repository at `repoPath`: HEAD, branches and tags, so the
+   * other machine gets the project's history and not the stash, filter-branch
+   * backups (`refs/original`) or notes, which can hold work never meant to
+   * leave this machine.
+   */
   async create(git: GitFactory, repoPath: string): Promise<BundleEntry & { size: number }> {
     const dir = await this.ready();
     const token = newToken();
     const target = path.join(dir, `${token}.bundle`);
     const repo = await git.local(repoPath);
     try {
-      await repo.raw(["bundle", "create", "--quiet", target, "--all"]);
+      // An unborn HEAD names no commit, so it is left out rather than fail the bundle.
+      const head = await repo
+        .raw(["rev-parse", "--verify", "--quiet", "HEAD"])
+        .then((sha) => sha.trim().length > 0)
+        .catch(() => false);
+      await repo.raw([
+        "bundle",
+        "create",
+        "--quiet",
+        target,
+        ...(head ? ["HEAD"] : []),
+        "--branches",
+        "--tags",
+      ]);
     } catch (error) {
       await fs.rm(target, { force: true });
       throw error;

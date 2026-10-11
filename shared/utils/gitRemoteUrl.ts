@@ -131,7 +131,18 @@ export function repositoryNameFromRemote(url: string): string | null {
 
 /** Remotes a clone accepts: HTTP(S), SCP-style SSH (`git@host:path`) and `ssh://`. */
 export function isSupportedCloneUrl(url: string): boolean {
-  return /^https?:\/\//i.test(url) || /^git@/i.test(url) || /^ssh:\/\//i.test(url);
+  // Nothing git would read as an option, and no space or control character.
+  if (url.startsWith("-") || [...url].some((char) => char <= " " || char === "\x7f")) return false;
+  if (/^https?:\/\//i.test(url) || /^ssh:\/\//i.test(url)) {
+    try {
+      return new URL(url).hostname.length > 0;
+    } catch {
+      return false;
+    }
+  }
+  // scp-like `git@host:path`: a plain host, one colon, a path that isn't a
+  // `::` remote-helper address.
+  return /^git@[A-Za-z0-9.-]+:(?!:)[^:]+$/.test(url);
 }
 
 /**

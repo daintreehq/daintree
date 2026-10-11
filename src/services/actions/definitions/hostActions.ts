@@ -199,6 +199,8 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
         worktreePath,
         newWindow: parsed.newWindow ?? false,
         worktree: parsed.worktree ?? null,
+        // An agent (a host's MCP included) or a plugin opens the dialog; only a person's click moves the window.
+        askFirst: ctx.dispatchSource === "agent" || ctx.dispatchSource === "plugin",
       });
       if (requestId === null) {
         throw new ClientAppError(

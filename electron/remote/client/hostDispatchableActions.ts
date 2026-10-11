@@ -16,8 +16,9 @@
  * - `host.switch` is `danger: "confirm"`, so a host asking to move this window
  *   raises this Shell's own dialog naming that host, and does nothing unless
  *   the person here approves.
- * - `project.openOnHost` only opens the switch dialog here; every push, clone
- *   and switch in it is the person's own click.
+ * - `project.openOnHost` only opens the switch dialog here, marked as asked
+ *   for by an agent so it never opens the project on its own; every push,
+ *   clone and switch in it is the person's own click.
  */
 export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "actions.getContext",

@@ -193,7 +193,12 @@ export function HostSwitchDialog({
         setDestinationCheck(prepared.destination);
         setCheckedInput(prepared.destination?.path ?? null);
         setSubmodules(prepared.hasSubmodules);
-        setRecipeId(prepared.defaultRecipeId ?? NO_RECIPE);
+        // A default from another machine is that machine's say-so: start with none.
+        setRecipeId(
+          prepared.fromHostId === LOCAL_HOST_ID && prepared.defaultRecipeId
+            ? prepared.defaultRecipeId
+            : NO_RECIPE
+        );
       })
       .catch((error: unknown) => {
         if (!cancelled) setLoadError(formatErrorMessage(error, "Couldn't look at the project."));
@@ -479,7 +484,14 @@ export function HostSwitchDialog({
       ? `Open ${projectName} on ${targetName}`
       : `${projectName} isn't on ${targetName} yet`;
   const busy = running !== null;
-  const autoOpen = prep !== null && !autoOpenStarted && opensWithoutQuestion(prep, placed !== null);
+  const autoOpen =
+    prep !== null &&
+    !autoOpenStarted &&
+    request.askFirst !== true &&
+    // Moving from another machine, what's on offer is that machine's say-so:
+    // the person opens it with a click.
+    prep.fromHostId === LOCAL_HOST_ID &&
+    opensWithoutQuestion(prep, placed !== null);
 
   // Nothing to decide: open it there instead of asking.
   const openWithoutAsking = useEffectEvent(() => {

@@ -1,4 +1,5 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import type { TerminalRecipe } from "@shared/types/project";
 import { useProjectStore } from "@/store/projectStore";
 import { HostSwitchDialog } from "./HostSwitchDialog";
 import { HostProjectPicker } from "./HostProjectPicker";
@@ -8,6 +9,7 @@ import {
   registerHostProjectPickerHost,
   subscribeHostProjectPicker,
 } from "./hostProjectPickerRequests";
+import { HostSetupRecipeConfirm } from "./HostSetupRecipeConfirm";
 import { runPendingHostSetup } from "./pendingHostSetup";
 import {
   completeHostSwitchRequest,
@@ -34,6 +36,10 @@ export function HostSwitchDialogHost() {
     () => null
   );
   const projectId = useProjectStore((state) => state.currentProject?.id ?? null);
+  const [setupQuestion, setSetupQuestion] = useState<{
+    recipe: TerminalRecipe;
+    answer: (run: boolean) => void;
+  } | null>(null);
 
   useEffect(() => registerHostSwitchDialogHost(), []);
   useEffect(() => registerHostProjectPickerHost(), []);
@@ -43,12 +49,31 @@ export function HostSwitchDialogHost() {
     const remoteHosts = window.electron?.remoteHosts;
     if (typeof remoteHosts?.isInUse !== "function") return;
     let cancelled = false;
+    // The question this effect opened, settled exactly once: by the person,
+    // or as a no when the view moves to another project or goes away.
+    let settle: ((run: boolean) => void) | null = null;
+    const confirm = (recipe: TerminalRecipe) =>
+      new Promise<boolean>((resolve) => {
+        if (cancelled) {
+          resolve(false);
+          return;
+        }
+        const answer = (run: boolean) => {
+          if (settle !== answer) return;
+          settle = null;
+          setSetupQuestion((open) => (open?.answer === answer ? null : open));
+          resolve(run && !cancelled);
+        };
+        settle = answer;
+        setSetupQuestion({ recipe, answer });
+      });
     void remoteHosts
       .isInUse()
-      .then((inUse) => (inUse && !cancelled ? runPendingHostSetup(projectId) : undefined))
+      .then((inUse) => (inUse && !cancelled ? runPendingHostSetup(projectId, confirm) : undefined))
       .catch(() => {});
     return () => {
       cancelled = true;
+      settle?.(false);
     };
   }, [projectId]);
 
@@ -61,6 +86,9 @@ export function HostSwitchDialogHost() {
           onClose={() => dismissHostSwitchRequest(request.id)}
           onComplete={() => completeHostSwitchRequest(request.id)}
         />
+      )}
+      {setupQuestion && (
+        <HostSetupRecipeConfirm recipe={setupQuestion.recipe} onAnswer={setupQuestion.answer} />
       )}
       {pickerRequest && (
         <HostProjectPicker

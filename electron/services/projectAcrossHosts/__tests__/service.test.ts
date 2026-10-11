@@ -58,6 +58,8 @@ describe("cloneAndOpen", () => {
       worktreePath: path.join(`${destination}-worktrees`, "feature-host-chip"),
       setupRecipeId: "inrepo-setup",
     });
+    // Cloned from another machine's word: a fresh identity, never an old project's.
+    expect(host.registerProject).toHaveBeenCalledWith(destination, { fresh: true });
     expect(host.projects.map((p) => p.path)).toEqual([destination]);
     expect(host.createWorktree).toHaveBeenCalledWith(
       destination,
@@ -191,6 +193,33 @@ describe("cloneAndOpen", () => {
 });
 
 describe("repository bundles", () => {
+  it("won't clone into a folder another project is still registered at", async () => {
+    const host = createTestHost(root, "studio-reg");
+    const destination = path.join(root, "studio-reg-home", "Projects", "gone");
+    host.addProject(destination);
+    expect(() =>
+      host.service.cloneAndOpen({
+        opId: nextOpId(),
+        source: { kind: "remote", url: URL },
+        destination,
+        branch,
+        options: { submodules: false, depth: "full" },
+        setupRecipeId: null,
+      })
+    ).toThrow(/already registered/);
+    expect(host.clone).not.toHaveBeenCalled();
+  });
+
+  it("never suggests home itself as the projects folder", async () => {
+    const host = createTestHost(root, "studio-home");
+    const check = await host.service.suggestDestination({
+      homeRelativePath: null,
+      repoName: "bin",
+      remoteUrls: [URL],
+    });
+    expect(check.path).toBe(path.join(root, "studio-home-home", "Projects", "bin"));
+  });
+
   it("clones from a bundle, keeps its branches, drops origin and deletes the bundle", async () => {
     const source = createTestHost(root, "bundle-src");
     const target = createTestHost(root, "bundle-dst");
@@ -744,7 +773,8 @@ describe("placing a worktree asked for on another host", () => {
     expect(noRecipe).toMatchObject({ ok: true, setupRecipeId: null });
     expect((noRecipe as { branchNote: string | null }).branchNote).toMatch(/won't run/);
 
-    const occupied = path.join(root, "place-b-home", "Projects", "taken");
+    const worktrees = `${path.basename(project.path)}-worktrees`;
+    const occupied = path.join(path.dirname(project.path), worktrees, "taken");
     fs.mkdirSync(occupied, { recursive: true });
     fs.writeFileSync(path.join(occupied, "x"), "x");
     const opId = nextOpId();
@@ -756,7 +786,7 @@ describe("placing a worktree asked for on another host", () => {
           worktree: {
             ...placed,
             newBranch: "feature/b2",
-            relativePath: "../taken",
+            relativePath: `../${worktrees}/taken`,
             recipeId: null,
           },
         },
@@ -765,21 +795,27 @@ describe("placing a worktree asked for on another host", () => {
     ).rejects.toMatchObject({ code: "VALIDATION" });
     expect(host.service.operationStatus(opId)).toMatchObject({ status: "failed" });
 
-    await expect(
-      host.service.placeWorktree(
+    // A path into a hidden folder, or a sibling not named after the project,
+    // is the other machine's say-so: this host's own pattern is used instead.
+    for (const [branch, relativePath] of [
+      ["feature/b3", ".git/hooks"],
+      ["feature/b4", "../bin"],
+    ] as const) {
+      const outcome = await host.service.placeWorktree(
         {
           opId: nextOpId(),
           projectId: project.id,
-          worktree: {
-            ...placed,
-            newBranch: "feature/b3",
-            relativePath: ".git/hooks",
-            recipeId: null,
-          },
+          worktree: { ...placed, newBranch: branch, relativePath, recipeId: null },
         },
         ALLOW_PLACEMENT
-      )
-    ).rejects.toMatchObject({ code: "VALIDATION" });
+      );
+      expect(outcome).toMatchObject({ ok: true });
+      const placedAt = (outcome as { worktreePath: string }).worktreePath;
+      expect(placedAt).not.toContain(`${path.sep}.git${path.sep}`);
+      expect(path.basename(path.dirname(placedAt))).not.toBe(
+        path.basename(path.dirname(project.path))
+      );
+    }
     expect(() =>
       host.service.placeWorktree(
         {

@@ -271,6 +271,24 @@ describe("project.openOnHost", () => {
     releaseHost?.();
   });
 
+  it("has the dialog ask first when an agent or plugin opens it", async () => {
+    withDialogHost();
+    const registry: ActionRegistry = new Map();
+    registerHostActions(registry, callbacks());
+    for (const [dispatchSource, askFirst] of [
+      ["agent", true],
+      ["plugin", true],
+      ["user", false],
+    ] as const) {
+      await registry.get("project.openOnHost")!().run({ hostId: "studio-01", projectId: "p1" }, {
+        projectId: "p1",
+        dispatchSource,
+      } as ActionContext);
+      expect(currentHostSwitchRequest()?.askFirst).toBe(askFirst);
+    }
+    releaseHost?.();
+  });
+
   it("uses the project folder for a project other than the window's", async () => {
     withDialogHost();
     const registry: ActionRegistry = new Map();

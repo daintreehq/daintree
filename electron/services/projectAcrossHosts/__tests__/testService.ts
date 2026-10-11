@@ -17,6 +17,7 @@ export interface TestHost {
   createWorktree: ReturnType<typeof vi.fn>;
   focusWorktree: ReturnType<typeof vi.fn>;
   clone: ReturnType<typeof vi.fn>;
+  registerProject: ReturnType<typeof vi.fn>;
   addProject(projectPath: string, id?: string): Project;
 }
 
@@ -55,13 +56,16 @@ export function createTestHost(root: string, name: string): TestHost {
     return { worktreeId: options.path, branch: options.newBranch };
   });
   const focusWorktree = vi.fn(async () => {});
+  const registerProject = vi.fn(
+    async (projectPath: string, _options?: { fresh?: boolean }) =>
+      projects.find((p) => p.path === projectPath) ?? addProject(projectPath)
+  );
   const clone = vi.fn(plainClone);
   const deps: ProjectAcrossHostsDeps = {
     git: testGit,
     listProjects: () => projects,
     getProject: (id) => projects.find((p) => p.id === id) ?? null,
-    registerProject: async (projectPath) =>
-      projects.find((p) => p.path === projectPath) ?? addProject(projectPath),
+    registerProject,
     readCommittedProjectId: async () => null,
     readInRepoRecipes: async (projectPath) => {
       const dir = path.join(projectPath, ".daintree", "recipes");
@@ -85,7 +89,17 @@ export function createTestHost(root: string, name: string): TestHost {
   const service = new ProjectAcrossHostsService(deps, async (repoPath) =>
     listConfigRemotes(repoPath)
   );
-  return { service, deps, projects, registry, createWorktree, focusWorktree, clone, addProject };
+  return {
+    service,
+    deps,
+    projects,
+    registry,
+    createWorktree,
+    focusWorktree,
+    clone,
+    registerProject,
+    addProject,
+  };
 }
 
 export async function settled(registry: OperationRegistry, opId: string): Promise<void> {

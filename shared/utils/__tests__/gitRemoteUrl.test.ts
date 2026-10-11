@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  isSupportedCloneUrl,
   normalizeGitRemoteUrl,
   normalizeGitRemoteUrls,
   repositoryNameFromRemote,
@@ -129,5 +130,33 @@ describe("stripGitRemoteCredentials", () => {
     "not a url @ all",
   ])("leaves %s as it is", (input) => {
     expect(stripGitRemoteCredentials(input)).toBe(input);
+  });
+});
+
+describe("isSupportedCloneUrl", () => {
+  it("accepts HTTP(S), ssh:// and scp-like git@host:path remotes", () => {
+    for (const url of [
+      "https://github.com/daintreehq/daintree.git",
+      "ssh://git@github.com/daintreehq/daintree.git",
+      "git@github.com:daintreehq/daintree.git",
+    ]) {
+      expect(isSupportedCloneUrl(url)).toBe(true);
+    }
+  });
+
+  it("refuses anything else git would read differently", () => {
+    for (const url of [
+      "git@local/repo",
+      "git@helper::address",
+      "git@host:path:more",
+      "-uhttps://x",
+      "https://github.com/a b",
+      "https://github.com/a\nb",
+      "file:///etc",
+      "ext::sh -c x",
+      "/local/path",
+    ]) {
+      expect(isSupportedCloneUrl(url)).toBe(false);
+    }
   });
 });

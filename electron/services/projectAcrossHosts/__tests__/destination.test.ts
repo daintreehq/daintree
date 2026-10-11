@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { checkDestination, suggestDestination } from "../destination.js";
+import {
+  checkDestination,
+  isMirrorableHomePath,
+  plainFolderName,
+  suggestDestination,
+} from "../destination.js";
 import { makeRepo, tempRoot } from "./gitFixtures.js";
 
 let root: string;
@@ -89,6 +94,62 @@ describe("suggestDestination", () => {
       homeDir: home,
       projectsDir: path.join(home, "Projects"),
       homeRelativePath: "../escape",
+      repoName: "daintree",
+      remoteUrls: [URL],
+    });
+    expect(check.path).toBe(path.join(home, "Projects", "daintree"));
+  });
+});
+
+describe("what the source machine names for the destination", () => {
+  it("never mirrors into hidden or system folders, wherever the project lived", () => {
+    expect(isMirrorableHomePath("Projects/Daintree/daintree")).toBe(true);
+    expect(isMirrorableHomePath("Clients/acme", "Clients")).toBe(true);
+    for (const rel of [
+      "bin",
+      "bin/git",
+      "Library/LaunchAgents",
+      "library/launchagents",
+      ".config/autostart",
+      "Projects/.ssh",
+      "../outside",
+      "/abs/path",
+      "",
+    ]) {
+      expect(isMirrorableHomePath(rel)).toBe(false);
+    }
+  });
+
+  it("keeps a repository name to one plain folder name", () => {
+    expect(plainFolderName("daintree")).toBe("daintree");
+    // A dot folder keeps its name, without the dot.
+    expect(plainFolderName(".dotfiles")).toBe("dotfiles");
+    for (const name of ["../LaunchAgents", "a/b", "..", " ", "x\\y", "a\u0000b"]) {
+      expect(plainFolderName(name)).toBe("project");
+    }
+  });
+
+  it("falls back to the projects folder when the source names a system folder", async () => {
+    const home = path.join(root, "home-sys");
+    const check = await suggestDestination({
+      homeDir: home,
+      projectsDir: path.join(home, "Projects"),
+      homeRelativePath: "Library/LaunchAgents",
+      repoName: "../LaunchAgents",
+      remoteUrls: [URL],
+    });
+    expect(check.path).toBe(path.join(home, "Projects", "project"));
+  });
+
+  it("won't mirror through a link that resolves into a folder it would refuse", async () => {
+    const home = path.join(root, "home-link");
+    fs.mkdirSync(path.join(home, "Projects", "seed"), { recursive: true });
+    fs.mkdirSync(path.join(home, ".config"), { recursive: true });
+    fs.symlinkSync(path.join(home, ".config"), path.join(home, "Projects", "seed", "config"));
+    const check = await suggestDestination({
+      homeDir: home,
+      projectsDir: path.join(home, "Projects"),
+      homeRelativePath: "Projects/seed/config/autostart",
       repoName: "daintree",
       remoteUrls: [URL],
     });

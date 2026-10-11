@@ -14,7 +14,11 @@ export interface ProjectAcrossHostsDeps {
   listProjects(): Project[];
   getProject(projectId: string): Project | null;
   /** The normal registration path: the host mints the id. */
-  registerProject(projectPath: string): Promise<Project>;
+  /**
+   * `fresh`: the folder's contents came from another machine, so a committed
+   * id never adopts an unavailable local project's identity and state.
+   */
+  registerProject(projectPath: string, options?: { fresh?: boolean }): Promise<Project>;
   /** The `id` in a committed `.daintree/project.json`, when there is one. */
   readCommittedProjectId(projectPath: string): Promise<string | null>;
   readInRepoRecipes(projectPath: string): Promise<Array<{ id: string; name: string }>>;

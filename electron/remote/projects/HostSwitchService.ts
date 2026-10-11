@@ -49,6 +49,7 @@ import {
   type SessionResolver,
 } from "./gateways.js";
 import { BUNDLE_SINK_PREFIX, CloneOutcomeSchema, ProjectLinkMethod } from "./linkMethods.js";
+import { plainFolderName } from "../../services/projectAcrossHosts/destination.js";
 
 export interface HostSwitchServiceOptions {
   /** This machine's host-side service (the "local" host). */
@@ -165,6 +166,12 @@ export class HostSwitchService {
       cloneUrl: described.cloneUrl === null ? null : stripGitRemoteCredentials(described.cloneUrl),
     };
     const remoteUrls = source.remotes.map((remote) => remote.url);
+    // What the source names for the target's folder and setup is the source's
+    // say-so: a folder name, never a path, and a default only from its own list.
+    source.repoName = plainFolderName(source.repoName);
+    if (!source.recipes.some((recipe) => recipe.id === source.defaultRecipeId)) {
+      source.defaultRecipeId = null;
+    }
     const [found, environment, destination] = await Promise.all([
       to.match({ remoteUrls, committedProjectId: source.committedProjectId }),
       to.environment(),

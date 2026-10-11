@@ -48,7 +48,12 @@ import { normalizeOperationId } from "../operations/OperationRegistry.js";
 import { readRemoteBranchTip } from "../../utils/remoteBranchTip.js";
 import { checkBranchAgainstRemote } from "./branchCheck.js";
 import { BundleStore, isBundleToken } from "./bundles.js";
-import { checkDestination, suggestDestination } from "./destination.js";
+import {
+  checkDestination,
+  suggestDestination,
+  canonicalPath,
+  isPlacedWorktreePathSafe,
+} from "./destination.js";
 import { refExists, tryRaw } from "./gitOps.js";
 import {
   findRegisteredMatches,
@@ -492,9 +497,15 @@ export class ProjectAcrossHostsService {
   }
 
   async suggestDestination(payload: SuggestDestinationPayload): Promise<DestinationCheck> {
+    const homeDir = this.deps.homeDir();
+    const projectsDir = await hostProjectsDir(this.deps);
     return suggestDestination({
-      homeDir: this.deps.homeDir(),
-      projectsDir: await hostProjectsDir(this.deps),
+      homeDir,
+      // Never home itself: a name like `bin` would land on PATH.
+      projectsDir:
+        path.resolve(projectsDir) === path.resolve(homeDir)
+          ? path.join(homeDir, "Projects")
+          : projectsDir,
       homeRelativePath: payload?.homeRelativePath ?? null,
       repoName: payload.repoName,
       remoteUrls: Array.isArray(payload?.remoteUrls) ? payload.remoteUrls : [],
@@ -524,6 +535,15 @@ export class ProjectAcrossHostsService {
       throw invalid("destination must be an absolute path");
     }
     const destination = path.resolve(payload.destination);
+    // A clone is a new project: never into the folder another one is still registered at.
+    if (this.deps.listProjects().some((project) => path.resolve(project.path) === destination)) {
+      throw new AppError({
+        code: "VALIDATION",
+        message: "A project is already registered at that folder",
+        userMessage:
+          "Daintree already has a project registered at that folder. Choose another folder.",
+      });
+    }
     const source = payload.source;
     let sourceKey: string;
     if (source?.kind === "remote") {
@@ -666,7 +686,8 @@ export class ProjectAcrossHostsService {
 
       // Past this point the project exists on the host; a late cancel no longer undoes it.
       op.progress({ fraction: null, stage: "registering", message: "Adding the project" });
-      const project = await this.deps.registerProject(destination);
+      // Cloned from another machine's word: a fresh identity, never an old project's.
+      const project = await this.deps.registerProject(destination, { fresh: true });
 
       let branchResult: Pick<
         HostProjectOpened,
@@ -736,7 +757,15 @@ export class ProjectAcrossHostsService {
       .map((ref) => ref.trim())
       .filter((ref) => ref.length > 0 && ref !== "HEAD" && ref !== current);
     for (const ref of refs) {
-      await repo.raw(["branch", "--no-track", ref, `refs/remotes/origin/${ref}`]);
+      // Branch names come from the bundle, which another machine made.
+      if (!validateBranchName(ref).valid) continue;
+      await repo.raw([
+        "branch",
+        "--no-track",
+        "--end-of-options",
+        ref,
+        `refs/remotes/origin/${ref}`,
+      ]);
       if (!(await refExists(repo, `refs/heads/${ref}`))) {
         throw new Error(`Couldn't keep branch ${ref} from the repository copy`);
       }
@@ -1041,9 +1070,28 @@ export class ProjectAcrossHostsService {
     if (existing) {
       worktreePath = existing;
     } else {
-      const target = worktree.relativePath
-        ? path.resolve(project.path, worktree.relativePath)
-        : await this.deps.worktreePathFor(project.path, worktree.newBranch);
+      // The path came from the other machine's form: used only where a
+      // worktree belongs, and still there once links are resolved.
+      const folder = path.basename(project.path);
+      const proposed =
+        worktree.relativePath && isPlacedWorktreePathSafe(worktree.relativePath, folder)
+          ? path.resolve(project.path, worktree.relativePath)
+          : null;
+      // The same rule once links are resolved: a link can't make a path look
+      // like it goes beside the project when it goes somewhere else.
+      const resolvedOk =
+        proposed !== null &&
+        isPlacedWorktreePathSafe(
+          path
+            .relative(await canonicalPath(project.path), await canonicalPath(proposed))
+            .split(path.sep)
+            .join("/"),
+          path.basename(await canonicalPath(project.path))
+        );
+      const target =
+        proposed !== null && resolvedOk
+          ? proposed
+          : await this.deps.worktreePathFor(project.path, worktree.newBranch);
       const inside = path.relative(project.path, target);
       if (inside === "" || inside === ".git" || inside.startsWith(`.git${path.sep}`)) {
         throw invalid("The worktree can't go inside the project's git folder");

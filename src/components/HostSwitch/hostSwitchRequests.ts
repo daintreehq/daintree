@@ -15,6 +15,11 @@ export interface HostSwitchRequest {
    * project is there, create it instead of handing over the current branch.
    */
   worktree?: PlacedWorktree | null;
+  /**
+   * Asked for by an agent or a plugin rather than a person: the dialog never
+   * opens the project on its own, even when there is nothing to decide.
+   */
+  askFirst?: boolean;
 }
 
 /** How a request ended: the project opened on the host, or the dialog went away without it. */

@@ -11,6 +11,16 @@ import { defaultGitFactory } from "./gitOps.js";
 import { ProjectAcrossHostsService } from "./service.js";
 import type { ProjectAcrossHostsDeps } from "./types.js";
 
+/** Remove the lifecycle approvals file the workspace host keeps for a project folder. */
+async function forgetLifecycleApprovals(projectPath: string): Promise<void> {
+  const { app } = await import("electron");
+  const { createHash } = await import("node:crypto");
+  const { rm } = await import("node:fs/promises");
+  const dir = path.join(app.getPath("userData"), "lifecycle-command-approvals");
+  const key = createHash("sha256").update(path.resolve(projectPath)).digest("hex").slice(0, 32);
+  await rm(path.join(dir, `${key}.json`), { force: true }).catch(() => {});
+}
+
 const identityFiles = new ProjectIdentityFiles();
 
 export function createDefaultProjectAcrossHostsDeps(): ProjectAcrossHostsDeps {
@@ -18,9 +28,14 @@ export function createDefaultProjectAcrossHostsDeps(): ProjectAcrossHostsDeps {
     git: defaultGitFactory,
     listProjects: () => projectStore.getAllProjects(),
     getProject: (projectId) => projectStore.getProjectById(projectId),
-    registerProject: async (projectPath) => {
+    registerProject: async (projectPath, options) => {
       const { addProjectByPath } = await import("../../ipc/handlers/projectCrud/crud.js");
-      return addProjectByPath(projectPath);
+      if (!options?.fresh) return addProjectByPath(projectPath);
+      const project = await addProjectByPath(projectPath, undefined, { fresh: true });
+      // Lifecycle command approvals are kept by folder: a project that once
+      // lived here doesn't lend its approvals to code from another machine.
+      await forgetLifecycleApprovals(projectPath);
+      return project;
     },
     readCommittedProjectId: async (projectPath) =>
       (await identityFiles.readInRepoProjectIdentity(projectPath)).id ?? null,
