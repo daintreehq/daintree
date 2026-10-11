@@ -333,10 +333,11 @@ export class LinkClient {
       if (quietTimer) clearInterval(quietTimer);
       if (this.current !== session) return;
       this.current = null;
+      // Before the state below: whoever hears it records when the host was last seen.
+      this.lastSeenAt = Math.max(this.lastSeenAt ?? 0, session.lastReceivedAt);
       // Down from now: releasing the old forward can take as long as a stalled
       // transport does, and the link must not read as connected meanwhile.
       this.setState({ status: "connecting", attempt: this.attempt + 1 });
-      this.lastSeenAt = Math.max(this.lastSeenAt ?? 0, session.lastReceivedAt);
       const generation = this.generation;
       // Release the old forward before the next attempt sets up a new one.
       void this.release(connection).then(() => {

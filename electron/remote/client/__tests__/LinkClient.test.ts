@@ -260,9 +260,26 @@ describe("LinkClient session loss", () => {
       });
       client.start();
       await waitFor(() => client!.getState().status === "connected");
+      // Something from the host after the WELCOME, later than anything the client noted.
+      const welcomedAt = client.session!.lastReceivedAt;
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      const event: LinkMessage = {
+        lane: Lane.EVENTS,
+        kind: EventKind.EVENT,
+        body: { endpointId: null, channel: "x:event", args: [] },
+      };
+      peer!.write(Buffer.from(encodeFrame(messageToFrame(event))));
+      await waitFor(() => client!.session!.lastReceivedAt > welcomedAt);
+      const lastFrameAt = client.session!.lastReceivedAt;
+      // Whoever hears the drop reads when the host was last heard from, as of then.
+      let seenAtDrop: number | null = null;
+      client.onStateChange((state) => {
+        if (state.status === "connecting") seenAtDrop = client!.lastSeen;
+      });
       peer!.destroy();
       await waitFor(() => client!.getState().status !== "connected");
       expect(client.getState()).toEqual({ status: "connecting", attempt: 1 });
+      expect(seenAtDrop).toBe(lastFrameAt);
       // Still waiting on the release: no second attempt has started.
       expect(opens).toBe(1);
     } finally {
