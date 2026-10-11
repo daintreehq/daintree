@@ -109,4 +109,22 @@ describe("useWorktreeDevServerStateSync", () => {
     );
     expect(Object.keys(useWorktreeDevServerStore.getState().sessionsByWorktreeId)).toEqual(["w1"]);
   });
+
+  it("drops a session the host no longer has after a resync, keeping one that changed meanwhile", async () => {
+    renderHook(() => useWorktreeDevServerStateSync());
+    emit({ state: makeSession("w1", "running", 1) });
+    emit({ state: makeSession("w2", "running", 1) });
+    let answer!: (value: DevPreviewSessionState[]) => void;
+    (window.electron.devPreview as { getAllSessions: () => Promise<unknown> }).getAllSessions =
+      () => new Promise((resolve) => (answer = resolve));
+    notifyHostResync();
+    // w2 starts again while the snapshot is out, in the same millisecond it was taken.
+    emit({ state: makeSession("w2", "starting", 2) });
+    answer([makeSession("w2", "stopped", 2)]);
+    await vi.waitFor(() =>
+      expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1).toBeUndefined()
+    );
+    // The broadcast that arrived meanwhile is newer than the snapshot.
+    expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId.w2?.status).toBe("starting");
+  });
 });

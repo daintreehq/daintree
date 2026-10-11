@@ -5,6 +5,7 @@ import {
   useAllDevSessionsStore,
   _resetAllDevSessionsForTests,
 } from "../allDevSessionsStore";
+import { notifyHostResync } from "../hostResyncSignal";
 
 function makeSession(overrides: Partial<DevPreviewSessionState> = {}): DevPreviewSessionState {
   return {
@@ -177,5 +178,28 @@ describe("allDevSessionsStore", () => {
     release();
     release();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes a fresh snapshot when a host's link comes back, unless a push overtakes it", async () => {
+    const release = acquireAllDevSessions();
+    resolveGetAll([makeSession({ status: "starting" })]);
+    await vi.waitFor(() => expect(useAllDevSessionsStore.getState().hydrated).toBe(true));
+
+    notifyHostResync();
+    expect(getAllSessions).toHaveBeenCalledTimes(2);
+    resolveGetAll([makeSession({ status: "running" })]);
+    await vi.waitFor(() =>
+      expect(useAllDevSessionsStore.getState().sessions[0]?.status).toBe("running")
+    );
+
+    notifyHostResync();
+    pushCallback!({ sessions: [makeSession({ status: "error" })] });
+    resolveGetAll([makeSession({ status: "running" })]);
+    await Promise.resolve();
+    expect(useAllDevSessionsStore.getState().sessions[0]?.status).toBe("error");
+
+    release();
+    notifyHostResync();
+    expect(getAllSessions).toHaveBeenCalledTimes(3);
   });
 });

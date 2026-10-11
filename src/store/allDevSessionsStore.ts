@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import { logError } from "@/utils/logger";
+import { onHostResync } from "@/store/hostResyncSignal";
 
 interface AllDevSessionsState {
   sessions: DevPreviewSessionState[];
@@ -27,9 +28,8 @@ let unsubscribe: (() => void) | null = null;
 // (or after a restart) can't clobber fresher push state.
 let hydrateToken = 0;
 
-function startSubscription(): void {
+function hydrate(): void {
   const token = ++hydrateToken;
-
   window.electron.devPreview
     .getAllSessions()
     .then((sessions) => {
@@ -41,8 +41,14 @@ function startSubscription(): void {
       logError("Failed to load dev-server sessions", err);
       useAllDevSessionsStore.setState({ hydrated: true, fetchError: true });
     });
+}
 
-  unsubscribe = window.electron.devPreview.onAllSessionsChanged((payload) => {
+function startSubscription(): void {
+  hydrate();
+  // A push sent while the link to a host was down is lost: take a fresh
+  // snapshot once it's back, under the same token, so a newer push still wins.
+  const offResync = onHostResync(hydrate);
+  const offPushes = window.electron.devPreview.onAllSessionsChanged((payload) => {
     // A push reflects a state transition newer than the initial hydrate
     // snapshot. Advance the token so a still-in-flight getAllSessions() that
     // resolves later can't overwrite this fresher state with stale data.
@@ -53,6 +59,10 @@ function startSubscription(): void {
       fetchError: false,
     });
   });
+  unsubscribe = () => {
+    offPushes();
+    offResync();
+  };
 }
 
 function stopSubscription(): void {

@@ -142,6 +142,10 @@ export function useDevServer({
   });
   const isMountedRef = useRef(true);
   const isEnsuringRef = useRef(false);
+  /** State changes heard for this panel, so a host resync's answer can tell it was overtaken. */
+  const stateEventsRef = useRef(0);
+  /** The latest host resync's ask; an older one's answer is dropped. */
+  const resyncAskRef = useRef(0);
   const lastEnsureConfigRef = useRef<string>("");
   const pendingEnsureRef = useRef<{ configKey: string; resume: boolean } | null>(null);
   const userStoppedRef = useRef(false);
@@ -425,14 +429,28 @@ export function useDevServer({
     };
   }, [panelId, currentProjectId, applyState, applyInvokeError]);
 
-  // A state change sent while the link to the host was down is lost: ask again once it's back.
+  // A state change sent while the link to the host was down is lost: ask again
+  // once it's back. Only the latest ask applies, and only if no state change
+  // for this panel arrived while it was out: that one is newer than the answer.
   useEffect(() => {
     if (!currentProjectId) return;
-    return onHostResync(() => {
-      window.electron.devPreview
-        .getState({ panelId, projectId: currentProjectId })
-        .then(applyState, () => {});
+    let live = true;
+    const off = onHostResync(() => {
+      const ask = ++resyncAskRef.current;
+      const eventsBefore = stateEventsRef.current;
+      window.electron.devPreview.getState({ panelId, projectId: currentProjectId }).then(
+        (state) => {
+          if (!live || ask !== resyncAskRef.current) return;
+          if (stateEventsRef.current !== eventsBefore) return;
+          applyState(state);
+        },
+        () => {}
+      );
     });
+    return () => {
+      live = false;
+      off();
+    };
   }, [panelId, currentProjectId, applyState]);
 
   useEffect(() => {
@@ -441,6 +459,7 @@ export function useDevServer({
       const { state } = payload;
       if (state.panelId !== panelId) return;
       if (state.projectId !== currentProjectId) return;
+      stateEventsRef.current += 1;
       if (
         state.status === "error" ||
         state.status === "stopped" ||

@@ -1968,4 +1968,71 @@ describe("useDevServer adversarial races", () => {
     await waitFor(() => expect(result.current.status).toBe("running"));
     expect(result.current.url).toBe("http://127.0.0.1:5638/");
   });
+
+  it("drops a resync answer that a newer state change overtook", async () => {
+    let listener: ((payload: { state: DevPreviewSessionState }) => void) | null = null;
+    onStateChangedMock.mockImplementation((cb: typeof listener) => {
+      listener = cb;
+      return vi.fn();
+    });
+    const { result } = renderHook(() =>
+      useDevServer({ panelId: "panel-1", devCommand: "npm run dev", cwd: "/repo" })
+    );
+    await waitFor(() => expect(result.current.status).toBe("starting"));
+
+    const answer = createDeferred<DevPreviewSessionState>();
+    getStateMock.mockReturnValueOnce(answer.promise);
+    act(() => notifyHostResync());
+    const running = buildState({
+      panelId: "panel-1",
+      projectId: "project-1",
+      status: "running",
+      url: "http://127.0.0.1:5638/",
+      terminalId: "term-project-1",
+    });
+    act(() => listener!({ state: running }));
+    await waitFor(() => expect(result.current.status).toBe("running"));
+    // The resync's snapshot was taken before the server came up.
+    await act(async () => {
+      answer.resolve(
+        buildState({
+          panelId: "panel-1",
+          projectId: "project-1",
+          status: "starting",
+          terminalId: "term-project-1",
+        })
+      );
+    });
+    expect(result.current.status).toBe("running");
+    expect(result.current.url).toBe("http://127.0.0.1:5638/");
+  });
+
+  it("applies only the latest of overlapping resync answers", async () => {
+    const { result } = renderHook(() =>
+      useDevServer({ panelId: "panel-1", devCommand: "npm run dev", cwd: "/repo" })
+    );
+    await waitFor(() => expect(result.current.status).toBe("starting"));
+    const older = createDeferred<DevPreviewSessionState>();
+    const newer = createDeferred<DevPreviewSessionState>();
+    getStateMock.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    act(() => notifyHostResync());
+    act(() => notifyHostResync());
+    await act(async () => {
+      newer.resolve(
+        buildState({
+          panelId: "panel-1",
+          projectId: "project-1",
+          status: "running",
+          url: "http://127.0.0.1:1/",
+          terminalId: "t",
+        })
+      );
+    });
+    await act(async () => {
+      older.resolve(
+        buildState({ panelId: "panel-1", projectId: "project-1", status: "error", terminalId: "t" })
+      );
+    });
+    expect(result.current.status).toBe("running");
+  });
 });
