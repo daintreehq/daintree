@@ -28,6 +28,7 @@ import {
   getGitRecoveryHint,
 } from "../../shared/utils/gitOperationErrors.js";
 import { logError, logWarn } from "../utils/logger.js";
+import { newFileDiff } from "../utils/newFileDiff.js";
 import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
 import type {
   LifecycleCommandReview,
@@ -5525,15 +5526,7 @@ export class WorkspaceService {
             return;
           }
 
-          const content = buffer.toString("utf-8");
-          const lines = content.split("\n");
-
-          const diff = `diff --git a/${gitPath} b/${gitPath}
-new file mode 100644
---- /dev/null
-+++ b/${gitPath}
-@@ -0,0 +1,${lines.length} @@
-${lines.map((l) => "+" + l).join("\n")}`;
+          const diff = newFileDiff(gitPath, buffer.toString("utf-8"));
 
           serve(diff, fileKey, freshness);
           return;
