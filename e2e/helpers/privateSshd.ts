@@ -310,5 +310,5 @@ export async function masterPidAt(sshd: PrivateSshd, controlPath: string): Promi
 export async function controlSocketsUnder(userDataDir: string): Promise<string[]> {
   const dir = path.join(userDataDir, "rh");
   const names = await fs.readdir(dir).catch(() => [] as string[]);
-  return names.filter((name) => name.startsWith("cm-")).map((name) => path.join(dir, name));
+  return names.filter((name) => name.startsWith("cm1-")).map((name) => path.join(dir, name));
 }

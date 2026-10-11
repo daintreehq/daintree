@@ -17,9 +17,10 @@ import {
 
 /**
  * A Host on another build: the same checkout launched from an app folder whose
- * package.json names another version, so `app.getVersion()` differs and the
- * handshake refuses the link. The Shell must say so in terms of both builds,
- * stop dialling, and connect normally once the Host runs its build again.
+ * package.json names another version, so `app.getVersion()` differs. Builds on
+ * the same wire protocol connect anyway, best effort, and the link names both
+ * builds so the Shell can say so; only a different protocol is refused, which
+ * a version alone can't stage. Once the Host runs this build, the note goes.
  */
 
 const ROOT = path.resolve(import.meta.dirname, "../..");
@@ -46,8 +47,7 @@ interface HostRow {
   descriptor: { id: string };
   connection: {
     status: string;
-    mismatch?: { kind: string; local: unknown; remote: unknown };
-    remote?: { version: string };
+    buildMismatch?: { kind: string; local: unknown; remote: unknown };
   };
 }
 
@@ -94,12 +94,6 @@ async function startHost(appRoot?: string): Promise<AppContext> {
     )
     .toBe(true);
   return ctx;
-}
-
-/** Link attempts the Shell made: ssh invocations that aren't master control commands. */
-async function dialAttempts(): Promise<number> {
-  const log = await run.wrapper.invocations();
-  return log.split("\n").filter((line) => line.trim() && !line.includes(" -O ")).length;
 }
 
 test.describe.serial("Remote hosts: a Host on another build", () => {
@@ -161,7 +155,7 @@ test.describe.serial("Remote hosts: a Host on another build", () => {
     }
   });
 
-  test("1. the Shell refuses the link, naming both builds, and stops dialling", async () => {
+  test("1. the Shell connects to another build of the same protocol, naming both builds", async () => {
     const page = run.b.window;
     const added = (await page.evaluate(
       ({ name, target }) =>
@@ -172,24 +166,15 @@ test.describe.serial("Remote hosts: a Host on another build", () => {
     await page.evaluate((hostId) => window.electron.remoteHosts.connect({ hostId }), run.hostId);
     await expect
       .poll(async () => (await hostRow(page))?.connection.status, { timeout: 60_000 })
-      .toBe("version-mismatch");
+      .toBe("connected");
     const row = (await hostRow(page))!;
     const shellVersion = await run.b.app.evaluate(({ app }) => app.getVersion());
-    expect(row.connection.mismatch).toMatchObject({
+    expect(row.connection.buildMismatch).toMatchObject({
       kind: "version",
       local: shellVersion,
       remote: OTHER_VERSION,
     });
-    expect(row.connection.remote?.version).toBe(OTHER_VERSION);
-
-    // A mismatch doesn't back off and try again: nothing will change until
-    // someone updates one side.
-    const attempts = await dialAttempts();
-    await new Promise((resolve) => setTimeout(resolve, 8_000));
-    expect(await dialAttempts()).toBe(attempts);
-    expect((await hostRow(page))?.connection.status).toBe("version-mismatch");
-
-    // The Host is fine: still listening, nobody attached.
+    // The Host is fine: still listening, with this Shell attached.
     expect(
       (await run.a.window.evaluate(() => window.electron.hostMode.getStatus())).listening
     ).toBe(true);
@@ -204,6 +189,7 @@ test.describe.serial("Remote hosts: a Host on another build", () => {
     await expect
       .poll(async () => (await hostRow(page))?.connection.status, { timeout: 60_000 })
       .toBe("connected");
+    await expect.poll(async () => (await hostRow(page))?.connection.buildMismatch).toBeUndefined();
     const projects = (await page.evaluate(
       (hostId) => window.electron.remoteHosts.listHostProjects({ hostId }),
       run.hostId

@@ -350,7 +350,7 @@ test.describe.serial("Remote hosts: host plugins and the host MCP server, from a
     await page.locator(SEL.remoteHosts.settingsTab).click();
     await page.getByRole("button", { name: "Add host", exact: true }).click();
     const dialog = page.locator(SEL.remoteHosts.addHostDialog);
-    await dialog.getByPlaceholder("user@studio-03").fill(SSH_ALIAS);
+    await dialog.getByPlaceholder("user@devbox.local").fill(SSH_ALIAS);
     await dialog.getByPlaceholder(SSH_ALIAS).fill(HOST_NAME);
     await dialog.getByRole("button", { name: "Check host" }).click();
     await expect(dialog).toContainText(/Host mode\s*Listening/, { timeout: 60_000 });
@@ -358,7 +358,7 @@ test.describe.serial("Remote hosts: host plugins and the host MCP server, from a
     await dialog.getByRole("button", { name: "Skip" }).click();
     await dialog.getByRole("button", { name: "Add host", exact: true }).click();
     await expect(dialog).toBeHidden({ timeout: 60_000 });
-    await expect(page.locator('[id="hosts-list"]')).toContainText(/\bConnected\b/, {
+    await expect(page.locator('[id="hosts-list"]')).toContainText("Connected", {
       timeout: 60_000,
     });
     const hosts = (await page.evaluate(() =>
@@ -374,12 +374,11 @@ test.describe.serial("Remote hosts: host plugins and the host MCP server, from a
     const page = run.b.window;
     await page.locator(SEL.remoteHosts.hostChip).click();
     await page.locator(SEL.remoteHosts.hostMenuRow(run.hostId)).click();
-    await page.locator(SEL.remoteHosts.switchDialogJustSwitch).click();
     await page.locator(SEL.remoteHosts.projectPickerOption(run.hostProject.name)).click();
     run.remotePage = await waitForView(run.b.app, run.hostId, run.hostProject.name);
+    // Opening it takes control from the host's own screen.
     const driven = run.remotePage.locator(SEL.remoteHosts.drivenElsewhereBanner);
-    await driven.getByRole("button", { name: "Take over" }).click();
-    await expect(driven).toHaveCount(0);
+    await expect(driven).toHaveCount(0, { timeout: 15_000 });
     await openTerminal(run.remotePage);
     await waitForTerminalReady(run.remotePage, getFirstGridPanel(run.remotePage), 60_000);
   });

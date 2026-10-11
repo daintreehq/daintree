@@ -386,7 +386,7 @@ test.describe.serial("Remote hosts: a Host reached over --attach-stdio", () => {
     const top = run.remotePage;
     const driven = top.locator(SEL.remoteHosts.drivenElsewhereBanner);
     if ((await driven.count()) > 0) {
-      await driven.getByRole("button", { name: "Take over" }).click();
+      await driven.getByRole("button", { name: "Take control" }).click();
       await expect(driven).toHaveCount(0, { timeout: 15_000 });
     }
     await openTerminal(top);

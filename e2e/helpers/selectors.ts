@@ -376,10 +376,9 @@ export const SEL = {
     connectionBanner:
       '[role="status"]:has-text("Reconnecting…"), [role="status"]:has-text("Connecting to"), [role="alert"]:has-text("is unreachable"), [role="status"]:has-text("runs a different build")',
     /** Another frontend drives the host project this view shows. */
-    drivenElsewhereBanner: '[role="status"]:has-text("is being driven from")',
+    drivenElsewhereBanner: '[role="status"]:has-text("has control of this project")',
     /** On the host's own screen, once a Shell has taken its project over. */
-    takenFromHostBanner: '[role="status"]:has-text("Being driven from")',
-    switchDialogJustSwitch: '[role="dialog"] button:has-text("Just switch host")',
+    takenFromHostBanner: '[role="status"]:has-text("has control of this project")',
     projectPickerOption: (projectName: string) =>
       `[role="option"][id^="host-project-picker-"]:has-text("${projectName}")`,
   },

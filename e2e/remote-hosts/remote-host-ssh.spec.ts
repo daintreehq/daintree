@@ -392,7 +392,7 @@ test.describe.serial("Remote hosts: a Shell drives a Host over real ssh", () => 
     const dialog = page.locator(SEL.remoteHosts.addHostDialog);
     await expect(dialog).toBeVisible();
 
-    await dialog.getByPlaceholder("user@studio-03").fill(SSH_ALIAS);
+    await dialog.getByPlaceholder("user@devbox.local").fill(SSH_ALIAS);
     await dialog.getByPlaceholder(SSH_ALIAS).fill(HOST_NAME);
     await dialog.getByRole("button", { name: "Check host" }).click();
 
@@ -414,7 +414,7 @@ test.describe.serial("Remote hosts: a Shell drives a Host over real ssh", () => 
 
     const row = page.locator('[id="hosts-list"]');
     await expect(row).toContainText(HOST_NAME);
-    await expect(row).toContainText(/\bConnected\b/, { timeout: 60_000 });
+    await expect(row).toContainText("Connected", { timeout: 60_000 });
     timings.addHostMs = Date.now() - started;
 
     const hosts = (await page.evaluate(() =>
@@ -437,11 +437,10 @@ test.describe.serial("Remote hosts: a Shell drives a Host over real ssh", () => 
     const page = run.b.window;
     const chip = page.locator(SEL.remoteHosts.hostChip);
     await expect(chip).toBeVisible();
-    await expect(chip).toHaveAttribute("aria-label", /^Host: This Mac/);
+    await expect(chip).toHaveAttribute("aria-label", /^Working on This Mac/);
     await chip.click();
+    // Picking a host only goes there; nothing of this machine's is brought along.
     await page.locator(SEL.remoteHosts.hostMenuRow(run.hostId)).click();
-    // With a project open, the chip offers to bring it along; just switch.
-    await page.locator(SEL.remoteHosts.switchDialogJustSwitch).click();
     // Nothing of this machine's to return to there: the host's project list.
     const option = page.locator(SEL.remoteHosts.projectPickerOption(run.hostProject.name));
     await expect(option).toBeVisible({ timeout: 30_000 });
@@ -453,23 +452,21 @@ test.describe.serial("Remote hosts: a Shell drives a Host over real ssh", () => 
     const remoteChip = run.remotePage.locator(SEL.remoteHosts.hostChip);
     await expect(remoteChip).toBeVisible();
     const label = (await remoteChip.getAttribute("aria-label")) ?? "";
-    expect(label).toMatch(/^Host: /);
+    expect(label).toMatch(/^Working on SSH · /);
     expect(label).not.toContain("This Mac");
     await expect(remoteChip).toContainText(/\S/);
     expect(await chipAccentOffenders(remoteChip)).toEqual([]);
     await expect(run.remotePage.locator(SEL.remoteHosts.connectionBanner)).toHaveCount(0);
 
-    // The project is open on the host's own screen, which drives it: this
-    // window says so and takes over explicitly, and the host's screen says who
-    // drives now.
+    // The project is open on the host's own screen. Opening it here takes
+    // control from that screen (never from another machine), and the host's
+    // screen says who has it now, offering it back.
     const driven = run.remotePage.locator(SEL.remoteHosts.drivenElsewhereBanner);
-    await expect(driven).toContainText("its own screen");
-    await driven.getByRole("button", { name: "Take over" }).click();
-    await expect(driven).toHaveCount(0);
+    await expect(driven).toHaveCount(0, { timeout: 15_000 });
     const hostScreen = await waitForView(run.a.app, null, run.hostProject.name);
     const taken = hostScreen.locator(SEL.remoteHosts.takenFromHostBanner);
     await expect(taken).toBeVisible();
-    await expect(taken.getByRole("button", { name: "Take back" })).toBeVisible();
+    await expect(taken.getByRole("button", { name: "Take control" })).toBeVisible();
     timings.switchAndTakeOverMs = Date.now() - started;
   });
 
@@ -552,11 +549,10 @@ test.describe.serial("Remote hosts: a Shell drives a Host over real ssh", () => 
     const page = run.remotePage!;
     await page.locator(SEL.remoteHosts.hostChip).click();
     await page.locator(SEL.remoteHosts.hostMenuRow("local")).click();
-    await page.locator(SEL.remoteHosts.switchDialogJustSwitch).click();
     const local = await waitForView(run.b.app, null, run.localProject.name);
     await expect(local.locator(SEL.remoteHosts.hostChip)).toHaveAttribute(
       "aria-label",
-      /^Host: This Mac/
+      /^Working on This Mac/
     );
     await expect(local.locator(SEL.remoteHosts.connectionBanner)).toHaveCount(0);
     timings.switchBackMs = Date.now() - started;
