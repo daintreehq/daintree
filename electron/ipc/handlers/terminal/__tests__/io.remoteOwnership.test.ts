@@ -168,7 +168,7 @@ describe("terminal input from a remote view", () => {
     remoteSend(CHANNELS.TERMINAL_BATCH_DOUBLE_ESCAPE, ["term-b", "term-a", "term-unknown"]);
     await vi.waitFor(() => expect(ptyClient.batchDoubleEscape).toHaveBeenCalled());
 
-    expect(ptyClient.broadcastWrite).toHaveBeenCalledWith(["term-a"], "y");
+    expect(ptyClient.broadcastWrite).toHaveBeenCalledWith(["term-a"], "y", false);
     expect(ptyClient.batchDoubleEscape).toHaveBeenCalledWith(["term-a"]);
   });
 
@@ -215,7 +215,7 @@ describe("terminal input from a local view", () => {
 
     expect(ptyClient.write).toHaveBeenCalledWith("term-b", "ls\r");
     expect(ptyClient.write).toHaveBeenCalledWith("term-unknown", "ls\r");
-    expect(ptyClient.broadcastWrite).toHaveBeenCalledWith(["term-a", "term-b"], "y");
+    expect(ptyClient.broadcastWrite).toHaveBeenCalledWith(["term-a", "term-b"], "y", false);
     expect(ptyClient.getTerminalProjectId).not.toHaveBeenCalled();
   });
 });

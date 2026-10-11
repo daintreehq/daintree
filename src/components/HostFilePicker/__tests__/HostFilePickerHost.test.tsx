@@ -1,7 +1,16 @@
 /**
  * @vitest-environment jsdom
  */
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FileTransferEvent } from "@shared/types/ipc/fileTransfer";
 import type { HostDirectoryListing } from "@shared/types/ipc/hostFiles";
@@ -44,6 +53,9 @@ vi.mock("@/store/paletteStore", () => {
 
 import { HostFilePickerHost } from "../HostFilePickerHost";
 import { dismissAllHostPicks, pickHostPaths } from "../hostFilePickerQueue";
+
+// The app mounts one TooltipProvider at its root; truncated text discloses through it.
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
 
 const listings: Record<string, HostDirectoryListing> = {
   "/home/greg": {

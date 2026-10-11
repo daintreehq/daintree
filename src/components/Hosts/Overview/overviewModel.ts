@@ -1,5 +1,6 @@
 import type { HostId, HostMetricsSummary } from "@shared/types/remoteHosts";
 import type { HostMenuRow } from "../hostModel";
+import { formatBytes } from "@/lib/formatBytes";
 
 /** A pressure band drawn on the same 0–100 axis as CPU, so both sparklines read alike. */
 const PRESSURE_LEVEL: Record<NonNullable<HostMetricsSummary["memoryPressure"]>, number> = {
@@ -17,18 +18,6 @@ export function pressureSeries(history: readonly HostMetricsSummary[]): Array<nu
   return [...history]
     .reverse()
     .map((entry) => (entry.memoryPressure === null ? null : PRESSURE_LEVEL[entry.memoryPressure]));
-}
-
-const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB"];
-
-export function formatBytes(bytes: number): string {
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < BYTE_UNITS.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${BYTE_UNITS[unit]}`;
 }
 
 /** "3.1 GB of 8 GB swap", or null when the host doesn't report swap. */

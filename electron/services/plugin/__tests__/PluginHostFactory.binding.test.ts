@@ -756,7 +756,8 @@ describe("createHost dispatch with an explicit project (#13119)", () => {
     expect(h.sendDispatchToRenderer).toHaveBeenCalledWith(
       "agent.launch",
       { agentId: "claude" },
-      PROJECT_A
+      PROJECT_A,
+      PLUGIN_ID
     );
     expect(projectTargeting.hasGrant).toHaveBeenCalledWith({
       pluginId: PLUGIN_ID,
@@ -814,8 +815,20 @@ describe("createHost dispatch with an explicit project (#13119)", () => {
     await host.dispatch("terminal.focus", undefined, {});
     await host.dispatch("terminal.focus", undefined, undefined);
 
-    expect(h.sendDispatchToRenderer).toHaveBeenNthCalledWith(1, "terminal.focus", undefined, null);
-    expect(h.sendDispatchToRenderer).toHaveBeenNthCalledWith(2, "terminal.focus", undefined, null);
+    expect(h.sendDispatchToRenderer).toHaveBeenNthCalledWith(
+      1,
+      "terminal.focus",
+      undefined,
+      null,
+      PLUGIN_ID
+    );
+    expect(h.sendDispatchToRenderer).toHaveBeenNthCalledWith(
+      2,
+      "terminal.focus",
+      undefined,
+      null,
+      PLUGIN_ID
+    );
     expect(projectTargeting.hasGrant).not.toHaveBeenCalled();
   });
 
@@ -842,7 +855,12 @@ describe("createHost dispatch with an explicit project (#13119)", () => {
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
 
     await host.dispatch("terminal.focus", undefined, { projectId: PROJECT_A });
-    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith("terminal.focus", undefined, PROJECT_A);
+    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith(
+      "terminal.focus",
+      undefined,
+      PROJECT_A,
+      PLUGIN_ID
+    );
 
     await expect(
       host.dispatch("terminal.focus", undefined, { projectId: "project-other" })

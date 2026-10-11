@@ -38,6 +38,7 @@ import {
   installLabel,
   platformLabel,
 } from "./hostLabels";
+import { pluralize } from "@/lib/pluralize";
 
 type Step = "discover" | "check" | "install" | "enable" | "advise";
 
@@ -482,7 +483,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
             <p className="text-sm text-text-primary">
               {installResult.working === null
                 ? "Daintree is running on the host and its agent activity can't be seen from here."
-                : `The host reports ${installResult.working} working agent${installResult.working === 1 ? "" : "s"}.`}{" "}
+                : `The host reports ${pluralize(installResult.working, "working agent")}.`}{" "}
               Nothing was changed.
             </p>
             <div className="flex gap-2">

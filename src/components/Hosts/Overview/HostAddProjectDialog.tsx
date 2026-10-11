@@ -16,6 +16,7 @@ import { mintOperationId } from "@/clients/operationsClient";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { pickHostPaths } from "@/components/HostFilePicker/hostFilePickerQueue";
 import { describeCloneFailure, destinationInFolder } from "@/components/HostSwitch/hostSwitchModel";
+import { GitFailureCallout } from "@/components/HostSwitch/GitFailureCallout";
 
 const STATUS_POLL_MS = 300;
 const CHECK_DELAY_MS = 300;
@@ -347,18 +348,7 @@ export function HostAddProjectDialog({
         <p className="text-xs text-text-secondary">
           {hostName} clones with its own git credentials; nothing from this machine is sent.
         </p>
-        {failure && (
-          <div
-            role="alert"
-            className="space-y-2 rounded-[var(--radius-md)] border border-status-error/40 bg-status-error/10 px-3 py-2.5"
-          >
-            <p className="text-sm font-medium text-text-primary">{failure.title}</p>
-            <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-text-secondary select-text">
-              {failure.gitText}
-            </pre>
-            {failure.fix && <p className="text-sm text-text-primary">{failure.fix}</p>}
-          </div>
-        )}
+        {failure && <GitFailureCallout failure={failure} />}
       </div>
       <AppDialog.Footer hint={hint}>
         <div className="flex shrink-0 items-center gap-3">

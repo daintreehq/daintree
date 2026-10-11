@@ -9,10 +9,7 @@ import {
   crossHostSafeRetryDeadline,
   getCrossHostTarget,
 } from "./crossHostFleet";
-
-function plural(count: number, singular: string, pluralForm: string): string {
-  return `${count} ${count === 1 ? singular : pluralForm}`;
-}
+import { pluralize } from "@/lib/pluralize";
 
 function retryFailures(): void {
   void actionService.dispatch("fleet.retryFailures", undefined, { source: "user" });
@@ -69,22 +66,21 @@ export function FleetFailureBanner(): ReactElement | null {
   const hostNames = [
     ...new Set(unconfirmed.map((id) => getCrossHostTarget(id)?.hostName ?? "another host")),
   ];
-  const where = hostNames.length === 1 ? hostNames[0]! : plural(hostNames.length, "host", "hosts");
-  const agents = plural(unconfirmed.length, "agent", "agents");
+  const where = hostNames.length === 1 ? hostNames[0]! : pluralize(hostNames.length, "host");
+  const agents = pluralize(unconfirmed.length, "agent");
 
   const disarmedSuffix =
     disarmedCount > 0
       ? ` ${disarmedCount} unreachable ${disarmedCount === 1 ? "terminal was" : "terminals were"} disarmed.`
       : "";
-  const rejected =
-    retryable > 0 ? `${plural(retryable, "terminal", "terminals")} rejected the write.` : "";
+  const rejected = retryable > 0 ? `${pluralize(retryable, "terminal")} rejected the write.` : "";
   const unknown =
     unconfirmed.length > 0
       ? `Couldn't confirm whether ${agents} on ${where} received the prompt. Sending it again may deliver it twice.`
       : "";
   const description =
     payload === null
-      ? `${plural(failedIds.size, "terminal", "terminals")} rejected a keystroke. Single keystrokes can't be replayed.${disarmedSuffix}`
+      ? `${pluralize(failedIds.size, "terminal")} rejected a keystroke. Single keystrokes can't be replayed.${disarmedSuffix}`
       : [rejected, unknown].filter(Boolean).join(" ") + disarmedSuffix;
 
   let action: BannerAction | undefined;

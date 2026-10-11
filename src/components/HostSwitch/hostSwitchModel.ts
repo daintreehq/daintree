@@ -2,6 +2,7 @@ import type { BranchCheck, HostSwitchPreparation } from "@shared/types/ipc/hostS
 import type { PlacedWorktree, ProjectMatchCandidate } from "@shared/types/ipc/projectMatch";
 import { extractHostname } from "@shared/utils/forgeHostnames";
 import { normalizeGitRemoteUrl } from "@shared/utils/gitRemoteUrl";
+import { pluralize } from "@/lib/pluralize";
 
 /** What happens to the branch once the project is on the target host. */
 export type BranchPlan =
@@ -25,10 +26,6 @@ export interface BranchHandoff {
   /** Empty when there is nothing to choose; `defaultPlan` then applies. */
   choices: BranchChoice[];
   defaultPlan: BranchPlan;
-}
-
-function plural(count: number, word: string): string {
-  return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 
 /**
@@ -71,7 +68,7 @@ export function describeBranchHandoff(
       };
     case "behind":
       return {
-        summary: `On ${check.remote}, which has ${plural(check.behind, "newer commit")}`,
+        summary: `On ${check.remote}, which has ${pluralize(check.behind, "newer commit")}`,
         detail: `A worktree for ${branch} is created from ${check.remote}'s version.`,
         tone: "ok",
         choices: [],
@@ -79,7 +76,7 @@ export function describeBranchHandoff(
       };
     case "ahead":
       return {
-        summary: `${branch} has ${plural(check.ahead, "unpushed commit")} on ${sourceName}`,
+        summary: `${branch} has ${pluralize(check.ahead, "unpushed commit")} on ${sourceName}`,
         detail: null,
         tone: "attention",
         choices: [

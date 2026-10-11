@@ -169,7 +169,7 @@ describe("terminal input and the drive lease", () => {
     await settle();
     expect(envelope.ok).toBe(true);
     expect(ptyClient.write).toHaveBeenCalledWith("term-a", "ls\r");
-    expect(ptyClient.broadcastWrite).toHaveBeenCalledWith(["term-a"], "x");
+    expect(ptyClient.broadcastWrite).toHaveBeenCalledWith(["term-a"], "x", false);
     expect(ptyClient.submit).toHaveBeenCalledWith("term-a", "make test", undefined, undefined);
   });
 });

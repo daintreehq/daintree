@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { describe, expect, it } from "vitest";
 import { HostCard } from "../HostCard";
 import { makeRow, makeSummary } from "./fixtures";
 
+// The app mounts one TooltipProvider at its root; truncated text discloses through it.
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
+
 describe("HostCard forge connections", () => {
-  it("shows what the host reports for each forge, naming the host in full", () => {
+  it("shows what the host reports for each forge, naming the host in full", async () => {
     const summary = makeSummary({
       forges: [
         {
@@ -29,7 +34,8 @@ describe("HostCard forge connections", () => {
     const value = [...card.querySelectorAll("dd")].find((dd) =>
       dd.textContent?.startsWith("GitHub")
     );
-    expect(value?.getAttribute("title")).toBe(
+    fireEvent.focus(value!);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
       "GitHub: Signed in as greg on studio-01. GitLab: GitLab isn't connected on studio-01"
     );
     expect(value?.className).not.toMatch(/accent/);

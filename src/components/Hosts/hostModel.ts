@@ -10,6 +10,7 @@ import {
 import { getAgentConfig } from "@shared/config/agentRegistry";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { isMac, isWindows } from "@/lib/platform";
+import { pluralize } from "@/lib/pluralize";
 
 /** Action the host menu's "Hosts overview…" entry dispatches, once something registers it. */
 export const HOSTS_OVERVIEW_ACTION_ID = "host.overview.open";
@@ -93,10 +94,6 @@ function liveSummary(row: HostMenuRow): HostMetricsSummary | null {
   return row.connection?.status === "connected" ? row.summary : null;
 }
 
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 function lastSeenSuffix(lastSeenAt: number | null, now: number): string {
   return lastSeenAt === null ? "" : ` · last seen ${formatRelativeTime(lastSeenAt, now)}`;
 }
@@ -129,7 +126,7 @@ export function describeHostRowStatus(row: HostMenuRow, now: number = Date.now()
   if (observed && observed.waiting > 0) agents.push(`${observed.waiting} waiting`);
   // A failed read is unknown, not zero.
   const projects =
-    summary.projectCount === null ? "Projects unknown" : plural(summary.projectCount, "project");
+    summary.projectCount === null ? "Projects unknown" : pluralize(summary.projectCount, "project");
   // Agent states are what the host's output heuristics saw, and say so.
   return agents.length > 0 ? `${projects} · ${agents.join(" · ")} (observed)` : projects;
 }

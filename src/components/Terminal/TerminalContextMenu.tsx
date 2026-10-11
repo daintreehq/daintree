@@ -153,8 +153,8 @@ import {
   getRegisteredPluginActionsSnapshot,
   subscribeToRegisteredPluginActions,
 } from "@/services/plugin/registeredPluginActions";
-import { copyWithToast } from "@/lib/copyWithToast";
 import { usePanelViewMenuItems, usePanelWorkerMenus } from "@/store/pluginPanelMenuStore";
+import { copyWithToast } from "@/lib/copyWithToast";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
@@ -719,9 +719,7 @@ function TerminalContextMenuBody({
         // The path is the host's; a remote host's file manager is on a screen
         // nobody is looking at, so hand the path over instead.
         if (isRemoteWindow()) {
-          void navigator.clipboard.writeText(path).catch((error: unknown) => {
-            reportFileLinkFailure("Failed to copy host path", error, path);
-          });
+          copyWithToast("Host path", path);
           return;
         }
         // Unlike copy-link, guard rejections (OUTSIDE_ROOT) and a since-deleted

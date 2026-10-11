@@ -148,6 +148,7 @@ describe("files:read handler", () => {
 
       await expect(getReadHandler()(remote, { path: file, rootPath: root })).resolves.toEqual({
         content: "hello\n",
+        pathIsCanonical: true,
       });
       expect(holdsRoot).toHaveBeenCalledWith("proj-1", root);
     });
@@ -184,7 +185,7 @@ describe("files:read handler", () => {
       registerFilesHandlers();
       await expect(
         getReadHandler()({ endpoint: { kind: "local-view" } }, { path: file, rootPath: root })
-      ).resolves.toEqual({ content: "hello\n" });
+      ).resolves.toEqual({ content: "hello\n", pathIsCanonical: true });
       expect(holdsRoot).not.toHaveBeenCalled();
     });
   });

@@ -19,6 +19,7 @@ import {
   isLive,
   pressureSeries,
 } from "./overviewModel";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 interface HostCardProps {
   row: HostMenuRow;
@@ -99,9 +100,9 @@ function Fact({
   return (
     <div className="flex min-w-0 gap-2 text-xs">
       <dt className="shrink-0 text-text-secondary">{label}</dt>
-      <dd className="min-w-0 truncate text-text-primary" title={detail}>
-        {value}
-      </dd>
+      <TruncatedTooltip content={detail ?? value} isTruncated={detail ? true : undefined}>
+        <dd className="min-w-0 truncate text-text-primary">{value}</dd>
+      </TruncatedTooltip>
     </div>
   );
 }

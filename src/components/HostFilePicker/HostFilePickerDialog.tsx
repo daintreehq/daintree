@@ -25,6 +25,7 @@ import {
   joinHostPath,
   resolveChoice,
 } from "./hostFilePickerModel";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 /**
  * Where the picker reads folders from: the window's own host, or — when the
@@ -241,9 +242,15 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
       Showing the first {entries.length.toLocaleString()} items. Type a path to go deeper.
     </span>
   ) : choice ? (
-    <span className="truncate" title={choice.join("\n")}>
-      {choice.length > 1 ? `${choice.length} files selected` : choice[0]}
-    </span>
+    // A multi-select names its count, so the list is always worth disclosing.
+    <TruncatedTooltip
+      content={<span className="whitespace-pre-line">{choice.join("\n")}</span>}
+      isTruncated={choice.length > 1 ? true : undefined}
+    >
+      <span className="truncate">
+        {choice.length > 1 ? `${choice.length} files selected` : choice[0]}
+      </span>
+    </TruncatedTooltip>
   ) : (
     <span className="truncate">
       {request.mode === "file" ? "Select a file to continue" : "Open a folder to choose it"}

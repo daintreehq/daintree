@@ -46,6 +46,7 @@ import {
   initialView,
   type BranchPlan,
 } from "./hostSwitchModel";
+import { GitFailureCallout, type HostGitFailure } from "./GitFailureCallout";
 import type { HostSwitchRequest } from "./hostSwitchRequests";
 
 const STATUS_POLL_MS = 300;
@@ -54,11 +55,7 @@ const NO_RECIPE = "__none__";
 
 type View = "existing" | "clone" | "local-only";
 
-interface Failure {
-  title: string;
-  gitText: string;
-  fix: string | null;
-}
+type Failure = HostGitFailure;
 
 interface CheckoutOffer {
   result: Extract<HostSwitchExecuteResult, { kind: "opened" }>;
@@ -119,21 +116,6 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-baseline gap-3">
       <span className="text-xs text-text-secondary">{label}</span>
       <div className="min-w-0 text-sm text-text-primary">{children}</div>
-    </div>
-  );
-}
-
-function FailureBlock({ failure }: { failure: Failure }) {
-  return (
-    <div
-      role="alert"
-      className="space-y-2 rounded-[var(--radius-md)] border border-status-error/40 bg-status-error/10 px-3 py-2.5"
-    >
-      <p className="text-sm font-medium text-text-primary">{failure.title}</p>
-      <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-text-secondary select-text">
-        {failure.gitText}
-      </pre>
-      {failure.fix && <p className="text-sm text-text-primary">{failure.fix}</p>}
     </div>
   );
 }
@@ -872,7 +854,7 @@ export function HostSwitchDialog({
       </AppDialog.Header>
       <div className="flex flex-col gap-4 px-6 py-4">
         {body}
-        {failure && <FailureBlock failure={failure} />}
+        {failure && <GitFailureCallout failure={failure} />}
       </div>
       <AppDialog.Footer hint={hint}>
         <div className="flex shrink-0 items-center gap-3">

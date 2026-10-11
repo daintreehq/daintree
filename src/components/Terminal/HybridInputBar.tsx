@@ -1272,10 +1272,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 confirm itself. */}
             <div className="flex items-center justify-end pr-1.5 group-[[data-composer-narrow]:has([data-composer-multiline])]/shell:basis-full">
               <div ref={trailingGroupRef} className="flex shrink-0 items-center">
-                {isRemote ? (
-                  <DropdownMenu>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
+                {/* One control in both modes. In a remote window it opens a
+                    menu, since a file can come from this machine or the host;
+                    the root renders nothing, so a local window keeps a plain
+                    button. */}
+                <DropdownMenu>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      {isRemote ? (
                         <DropdownMenuTrigger asChild>
                           <button
                             type="button"
@@ -1291,39 +1295,36 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                             <Paperclip className="h-3.5 w-3.5" />
                           </button>
                         </DropdownMenuTrigger>
-                      </TooltipTrigger>
-                      <TooltipContent side="top">Attach files</TooltipContent>
-                    </Tooltip>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void handleAttachFiles()}
+                          disabled={disabled}
+                          className={cn(
+                            "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
+                            COMPOSER_CONTROL_TEXT_CLASS,
+                            COMPOSER_CONTROL_HOVER_BG_CLASS,
+                            COMPOSER_CONTROL_FOCUS_CLASS
+                          )}
+                          aria-label="Attach files"
+                        >
+                          <Paperclip className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </TooltipTrigger>
+                    <TooltipContent side="top">Attach files</TooltipContent>
+                  </Tooltip>
+                  {isRemote && (
                     <DropdownMenuContent align="end" side="top">
                       <DropdownMenuItem onSelect={() => void handleAttachFiles()}>
-                        {isMac() ? "From This Mac…" : "From this computer…"}
+                        {isMac() ? "From this Mac…" : "From this computer…"}
                       </DropdownMenuItem>
                       <DropdownMenuItem onSelect={() => void handleAttachFromHost()}>
                         {`From ${hostPlatform.hostName ?? "the host"}…`}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
-                  </DropdownMenu>
-                ) : (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={() => void handleAttachFiles()}
-                        disabled={disabled}
-                        className={cn(
-                          "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
-                          COMPOSER_CONTROL_TEXT_CLASS,
-                          COMPOSER_CONTROL_HOVER_BG_CLASS,
-                          COMPOSER_CONTROL_FOCUS_CLASS
-                        )}
-                        aria-label="Attach files"
-                      >
-                        <Paperclip className="h-3.5 w-3.5" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="top">Attach files</TooltipContent>
-                  </Tooltip>
-                )}
+                  )}
+                </DropdownMenu>
                 {hasStash && (
                   <Tooltip>
                     <TooltipTrigger asChild>

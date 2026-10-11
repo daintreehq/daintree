@@ -1,8 +1,13 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { describe, expect, it, vi } from "vitest";
 import { HostCard } from "../HostCard";
 import { makeRow, makeSummary } from "./fixtures";
+
+// The app mounts one TooltipProvider at its root; truncated text discloses through it.
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
 
 describe("HostCard", () => {
   it("shows a connected host's load, observed agents, version, link and driver", () => {
