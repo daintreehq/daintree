@@ -2216,7 +2216,12 @@ async function runPluginInvoke(
   try {
     // Before any dispatch work, so an oversize payload is never forwarded
     // to a plugin worker (a second full structured clone).
-    assertPayloadWithinLimit(pluginId, `arguments to "${channel}"`, args, PLUGIN_INVOKE_MAX_ARGS_BYTES);
+    assertPayloadWithinLimit(
+      pluginId,
+      `arguments to "${channel}"`,
+      args,
+      PLUGIN_INVOKE_MAX_ARGS_BYTES
+    );
     argsWithinLimit = true;
     const service = await getPluginService();
     const worktreeId = await source.resolveWorktreeId(service);

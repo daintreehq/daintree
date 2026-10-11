@@ -150,14 +150,16 @@ async function waitForView(
         found = page;
         return true;
       },
-      {
-        timeout,
-        intervals: [250, 500, 1000],
-        message: () =>
-          `window never showed ${projectName} on ${hostId ?? "this machine"} (last: ${last})`,
-      }
+      { timeout, intervals: [250, 500, 1000] }
     )
-    .toBe(true);
+    .toBe(true)
+    .catch((err: unknown) => {
+      // The poll's own message is fixed when it starts; the last thing seen is what explains a miss.
+      throw new Error(
+        `window never showed ${projectName} on ${hostId ?? "this machine"} (last: ${last})`,
+        { cause: err }
+      );
+    });
   return found!;
 }
 

@@ -161,14 +161,16 @@ async function waitForView(
         found = page;
         return true;
       },
-      {
-        timeout,
-        intervals: [250, 500, 1000],
-        message: () =>
-          `window never showed ${projectName} on ${hostId ?? "this machine"} (last: ${last})`,
-      }
+      { timeout, intervals: [250, 500, 1000] }
     )
-    .toBe(true);
+    .toBe(true)
+    .catch((err: unknown) => {
+      // The poll's own message is fixed when it starts; the last thing seen is what explains a miss.
+      throw new Error(
+        `window never showed ${projectName} on ${hostId ?? "this machine"} (last: ${last})`,
+        { cause: err }
+      );
+    });
   return found!;
 }
 
@@ -492,7 +494,6 @@ test.describe.serial("Remote hosts: a windowless Host started with --host-mode",
     await lost.hover();
     await overflowBtn.click();
     await top.locator(SEL.panel.restart).first().click();
-    await top.locator(SEL.panel.restartConfirm).first().click();
 
     await expect(lost.getByText("[exited]", { exact: true })).toHaveCount(0, { timeout: 30_000 });
     await waitForTerminalReady(top, lost, 60_000);

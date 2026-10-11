@@ -278,7 +278,10 @@ export class PluginRendererDispatcher {
         },
       });
     }
-    return this.sendDispatchToWebContents(webContents, actionId, args);
+    const sent = this.sendDispatchToWebContents(webContents, actionId, args);
+    // A project-bound plugin gets the uniform miss for a terminal in another
+    // project, as a bound MCP session does (#13120).
+    return projectId != null ? sent.then(maskTerminalInOtherProject) : sent;
   }
 
   /**
@@ -402,12 +405,7 @@ export class PluginRendererDispatcher {
       };
 
       this.pendingPluginDispatches.set(requestId, {
-        // A project-bound plugin gets the uniform miss for a terminal in
-        // another project, as a bound MCP session does (#13120).
-        resolve:
-          projectId != null
-            ? (result: ActionDispatchResult) => resolve(maskTerminalInOtherProject(result))
-            : resolve,
+        resolve,
         timer,
         webContentsId,
         destroyedCleanup,

@@ -304,20 +304,20 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
           args,
           () =>
             split({
-            hostId,
-            webContentsId,
-            args,
-            local: async (replacement) => listener(event, ...(replacement ?? args)),
-            remote: (remoteChannel, replacement) =>
-              unwrapForwarded(
-                router.forwardInvoke(
-                  hostId,
-                  webContentsId,
-                  remoteChannel ?? channel,
-                  replacement ?? args
-                )
-              ),
-          }),
+              hostId,
+              webContentsId,
+              args,
+              local: async (replacement) => listener(event, ...(replacement ?? args)),
+              remote: (remoteChannel, replacement) =>
+                unwrapForwarded(
+                  router.forwardInvoke(
+                    hostId,
+                    webContentsId,
+                    remoteChannel ?? channel,
+                    replacement ?? args
+                  )
+                ),
+            }),
           { onEnvelopeRejected }
         );
       }

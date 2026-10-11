@@ -1214,12 +1214,12 @@ function copyPathForSet(
     Object.setPrototypeOf(Object.fromEntries(Object.entries(node)), Object.getPrototypeOf(node));
   const root = copy(base);
   let parent = root;
-  for (let i = 0; i < segments.length - 1; i++) {
-    const existing = parent[segments[i]];
+  for (const segment of segments.slice(0, -1)) {
+    const existing = parent[segment];
     if (Array.isArray(existing)) return null;
-    if (existing !== undefined && !Object.hasOwn(parent, segments[i])) return null;
+    if (existing !== undefined && !Object.hasOwn(parent, segment)) return null;
     const child = existing !== null && typeof existing === "object" ? copy(existing) : {};
-    parent[segments[i]] = child;
+    parent[segment] = child;
     parent = child;
   }
   return { root, parent };
@@ -1453,7 +1453,7 @@ export const store = new Proxy({} as Store<StoreSchema>, {
         // Serialize under the leaf key so a toJSON(key) sees what conf's
         // whole-store serialize passes it; a toJSON() returning undefined
         // leaves the key out on disk, so it is left out of the snapshot too.
-        const leaf = segments[segments.length - 1];
+        const leaf = segments[segments.length - 1]!;
         const wrapped = JSON.parse(JSON.stringify({ [leaf]: args[1] })) as Record<string, unknown>;
         if (Object.hasOwn(wrapped, leaf)) target.parent[leaf] = wrapped[leaf];
         else delete target.parent[leaf];

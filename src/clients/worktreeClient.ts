@@ -26,11 +26,22 @@ export function worktreeCreateResultFromOutcome(result: unknown): WorktreeCreate
   return {
     worktreeId: record.worktreeId,
     branch: record.branch,
-    setupState:
-      typeof record.setupState === "string"
-        ? (record.setupState as WorktreeCreateResult["setupState"])
-        : "unknown",
+    setupState: isSetupState(record.setupState) ? record.setupState : "unknown",
   };
+}
+
+const SETUP_STATES: ReadonlySet<unknown> = new Set<WorktreeCreateResult["setupState"]>([
+  "pending",
+  "running",
+  "ready",
+  "failed",
+  "timed-out",
+  "needs-approval",
+  "unknown",
+]);
+
+function isSetupState(value: unknown): value is WorktreeCreateResult["setupState"] {
+  return SETUP_STATES.has(value);
 }
 
 /**

@@ -2065,7 +2065,9 @@ function ContextSectionHeader({
                 · unavailable
               </span>
             ) : null}
-            {!host && !project && !worktree ? <span className="truncate">{APP_SOURCE_LABEL}</span> : null}
+            {!host && !project && !worktree ? (
+              <span className="truncate">{APP_SOURCE_LABEL}</span>
+            ) : null}
           </span>
           {/* Beside the name it counts, not beside the button — at the far end
             it read as part of "Mark read". */}

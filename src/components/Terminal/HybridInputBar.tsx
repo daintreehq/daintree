@@ -311,6 +311,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const worktree = panelWorktreeId ? s.worktrees.get(panelWorktreeId) : undefined;
       return worktree?.isMainWorktree ? worktree.name : worktree?.branch || worktree?.name;
     });
+    const panelWorktreePath = useWorktreeStore((s) =>
+      panelWorktreeId ? s.worktrees.get(panelWorktreeId)?.path : undefined
+    );
     const isVoiceRecording = activeVoicePanelId === terminalId && voiceStatus === "recording";
     const isVoiceConnecting = activeVoicePanelId === terminalId && voiceStatus === "connecting";
     const isVoiceReconnecting = activeVoicePanelId === terminalId && voiceStatus === "reconnecting";
@@ -372,8 +375,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [cwd]);
     const readCwd = useCallback(() => cwdRef.current, []);
     const addToProjectDirectory = useCallback(
-      () => panelWorktree?.path ?? (cwd || null),
-      [panelWorktree?.path, cwd]
+      () => panelWorktreePath ?? (cwd || null),
+      [panelWorktreePath, cwd]
     );
     const {
       handleDragEnter,

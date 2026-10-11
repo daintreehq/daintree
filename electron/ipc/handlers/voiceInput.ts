@@ -404,7 +404,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const svc = await getService();
     const serviceReadyAt = performance.now();
     // The renderer went away during the import — nothing is left to record for.
-    if (ctx.event.sender.isDestroyed()) {
+    if (!ctx.event || ctx.event.sender.isDestroyed()) {
       return { ok: false, error: "Voice session superseded" };
     }
     // Snapshot transcription settings at session start (model, language, API key).

@@ -168,14 +168,16 @@ async function waitForView(
         found = page;
         return true;
       },
-      {
-        timeout,
-        intervals: [250, 500, 1000],
-        message: () =>
-          `window never showed ${projectName} on ${hostId ?? "this machine"} (last: ${last})`,
-      }
+      { timeout, intervals: [250, 500, 1000] }
     )
-    .toBe(true);
+    .toBe(true)
+    .catch((err: unknown) => {
+      // The poll's own message is fixed when it starts; the last thing seen is what explains a miss.
+      throw new Error(
+        `window never showed ${projectName} on ${hostId ?? "this machine"} (last: ${last})`,
+        { cause: err }
+      );
+    });
   return found!;
 }
 
@@ -423,8 +425,14 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
   test("5. Ctrl-C interrupts a host process and the shell keeps working", async () => {
     const page = run.remotePage!;
     const panel = getFirstGridPanel(page);
-    await runTerminalCommand(page, panel, 'sleep 600; echo "slept=$((1+1))through"');
-    await page.waitForTimeout(500);
+    // The marker lands just before the sleep, so Ctrl-C reaches a running job.
+    const started = path.join(run.root, `sleeping-${NONCE}`);
+    await runTerminalCommand(
+      page,
+      panel,
+      `touch '${started}'; sleep 600; echo "slept=$((1+1))through"`
+    );
+    await expect.poll(() => existsSync(started), { timeout: 15_000 }).toBe(true);
     await panel.locator(".xterm").first().click();
     await page.keyboard.press("Control+C");
     await runTerminalCommand(page, panel, 'echo "after-int=$((5*5))"');
@@ -719,8 +727,8 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
     // An observer's keystrokes do not reach the host.
     const cPanel = getFirstGridPanel(cPage);
     const observerFile = path.join(run.root, `observer-${NONCE}`);
+    // The refusal is the host's answer to this submit, so nothing was queued to land later.
     expect(await submitRefusal(cPage, cPanel, `touch '${observerFile}'`)).toBe("DRIVEN_ELSEWHERE");
-    await bPage.waitForTimeout(1_000);
     expect(existsSync(observerFile), "an observer's input reached the host").toBe(false);
 
     await cDriven.getByRole("button", { name: "Take over" }).click();
@@ -737,7 +745,6 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
     expect(await submitRefusal(bPage, getFirstGridPanel(bPage), `touch '${staleFile}'`)).toBe(
       "DRIVEN_ELSEWHERE"
     );
-    await bPage.waitForTimeout(1_000);
     expect(existsSync(staleFile), "a displaced driver's input reached the host").toBe(false);
 
     // B takes it back.
@@ -781,8 +788,21 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
       await expect(page.locator(SEL.remoteHosts.connectionBanner)).toHaveCount(0, {
         timeout: 60_000,
       });
-      await page.waitForTimeout(1_000);
-      counts.push(await fdCount());
+      // Counted once two reads a poll apart agree, so a reconnect still closing
+      // its old sockets isn't caught mid-way.
+      let previous = -1;
+      await expect
+        .poll(
+          async () => {
+            const now = await fdCount();
+            const steady = now === previous;
+            previous = now;
+            return steady;
+          },
+          { timeout: 15_000, intervals: [500] }
+        )
+        .toBe(true);
+      counts.push(previous);
     }
     console.log(`[remote-hosts deep] Shell fd counts across reconnects ${JSON.stringify(counts)}`);
     timings.fdGrowthOver6Reconnects = counts[counts.length - 1]! - counts[0]!;
@@ -805,7 +825,7 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
     await runTerminalCommand(
       page,
       panel,
-      `while [ ! -e '${go}' ]; do sleep 0.2; done; echo "outage=$((8*8))"`
+      `while [ ! -e '${go}' ]; do sleep 0.2; done; echo "outage=$((8*8))"; touch '${go}.done'`
     );
     const oldPort = run.sshd.port;
     await run.sshd.stop();
@@ -816,7 +836,8 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
     });
     timings.bannerAfterSshdStopMs = Date.now() - downAt;
     await fs.writeFile(go, "");
-    await page.waitForTimeout(3_000);
+    // The output is produced while the link is down; replaying it is the point.
+    await expect.poll(() => existsSync(`${go}.done`), { timeout: 15_000 }).toBe(true);
     run.sshd = await restartSshd(run.sshd, oldPort);
     const upAt = Date.now();
     await expect(page.locator(SEL.remoteHosts.connectionBanner)).toHaveCount(0, {

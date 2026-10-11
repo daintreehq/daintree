@@ -342,7 +342,10 @@ export function FleetCountChip({
                   // only names it and lets it leave the fleet.
                   <li
                     key={target.key}
-                    className="flex items-center gap-2 rounded-[var(--radius-md)] hover:bg-tint/[0.08]"
+                    className={cn(
+                      "flex items-center gap-2 rounded-[var(--radius-md)]",
+                      POPOVER_ROW_HOVER_CLASS
+                    )}
                     data-testid={`fleet-row-host-${target.key}`}
                   >
                     <span
@@ -354,18 +357,20 @@ export function FleetCountChip({
                     </span>
                     {sendFailed && (
                       <span className="inline-flex shrink-0 items-center gap-1 text-3xs font-medium text-text-primary">
-                        <AlertCircle className="h-3 w-3 text-status-error" aria-hidden="true" />
+                        <XCircle className="h-3 w-3 text-status-error" aria-hidden="true" />
                         Send failed
                       </span>
                     )}
-                    <button
-                      type="button"
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
                       onClick={() => disarmId(target.key)}
-                      aria-label={`Remove ${target.title} on ${target.hostName} from the fleet`}
-                      className={cn(FLEET_RIBBON_ICON_BUTTON_CLASS, "mr-0.5")}
+                      aria-label={`Disarm ${target.title} on ${target.hostName}`}
+                      // Ringed inside: the list scrolls and clips anything outside it.
+                      className="mr-0.5 shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2"
                     >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
+                      <X aria-hidden="true" />
+                    </Button>
                   </li>
                 );
               })}

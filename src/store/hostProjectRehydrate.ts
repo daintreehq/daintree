@@ -65,12 +65,15 @@ export async function rehydrateHostProjectState(
 
   type Saved = Parameters<typeof inferKind>[0];
   type PanelState = ReturnType<typeof usePanelStore.getState>;
-  const saved = ((hydrate.appState?.terminals ?? []) as unknown as Saved[]).filter(
+  const terminals: readonly unknown[] = hydrate.appState?.terminals ?? [];
+  const saved = terminals.filter(
     (entry): entry is Saved =>
-      !!entry &&
+      entry !== null &&
+      typeof entry === "object" &&
+      "id" in entry &&
       typeof entry.id === "string" &&
       entry.id.trim() !== "" &&
-      entry.location !== "trash"
+      (!("location" in entry) || entry.location !== "trash")
   );
   const projectRoot = hydrate.project?.path ?? "";
   const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;

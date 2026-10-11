@@ -134,9 +134,11 @@ export function WorktreePlacementRow({
       { hostId: target.hostId, projectId, worktree: toPlacedWorktree(draft, rootPath) },
       { source: "user" }
     );
-    const requestId = result.ok
-      ? (result.result as { requestId?: unknown } | undefined)?.requestId
-      : undefined;
+    const payload: unknown = result.ok ? result.result : undefined;
+    const requestId =
+      payload !== null && typeof payload === "object" && "requestId" in payload
+        ? payload.requestId
+        : undefined;
     if (result.ok && typeof requestId === "number") {
       onHostSwitchSettled(requestId, (settlement) => {
         setHandoff({ status: "idle" });

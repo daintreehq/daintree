@@ -519,6 +519,7 @@ async function activateForRemoteShell(
     incomingProjectId: project.id,
     outgoingProjectId: ctx.projectId,
     senderWindow: null,
+    senderWebContentsId: ctx.webContentsId,
     windowId: undefined,
     projectViewManager: undefined,
   });
