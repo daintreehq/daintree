@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 describe("PluginViewBlockedPlaceholder", () => {
-  it("says the view shows where the project is driven, offers control, and loads once this window has it", () => {
+  it("says the view shows where the project is driven, offers control, and loads once this window has it", async () => {
     seedDriveLeaseView(lease(false));
     const onRetry = vi.fn();
     render(<PluginViewBlockedPlaceholder pluginDisplayName="Docker Console" onRetry={onRetry} />);
@@ -50,7 +50,7 @@ describe("PluginViewBlockedPlaceholder", () => {
     ).toBeTruthy();
     expect(screen.queryByText(/is blocked on this computer/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Take control" }));
-    expect(takeControl).toHaveBeenCalledWith("proj-1");
+    await vi.waitFor(() => expect(takeControl).toHaveBeenCalledWith("proj-1"));
     expect(onRetry).not.toHaveBeenCalled();
 
     act(() => seedDriveLeaseView(lease(true)));

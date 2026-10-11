@@ -73,6 +73,8 @@ vi.mock("../../window/windowRef.js", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
+  // No remote-bound views here: every local push reaches its view.
+  isWithheldFromView: () => false,
   // A project plugin's settings writes are announced to its own project only.
   broadcastToProjectRenderers: vi.fn(),
   // No project views: a project plugin's replay has nowhere to go.

@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { drivenElsewhereBy, useHostConnection } from "@/hooks/useHostConnection";
 import { useDriveLeaseView } from "@/components/Recovery/driveLeaseState";
-import { takeControl, useTakeControlPending } from "@/components/Recovery/takeControl";
 
 /** Thrown when this computer won't run a host plugin's view: the person said no, or it couldn't be checked. */
 export class PluginViewBlockedError extends Error {
@@ -48,7 +47,6 @@ export function PluginViewBlockedPlaceholder({
     }
   }, [driver, lease?.drivingHere, onRetry]);
 
-  const taking = useTakeControlPending(lease?.projectId ?? null);
   if (driver !== null && lease) {
     const projectId = lease.projectId;
     return (
@@ -64,8 +62,13 @@ export function PluginViewBlockedPlaceholder({
             <Button
               variant="outline"
               size="sm"
-              loading={taking}
-              onClick={() => void takeControl(projectId)}
+              // Loaded on use: the shared action reaches the panel store, which
+              // a plugin pane's placeholder has no other reason to pull in.
+              onClick={() =>
+                void import("@/components/Recovery/takeControl").then(({ takeControl }) =>
+                  takeControl(projectId)
+                )
+              }
             >
               Take control
             </Button>
