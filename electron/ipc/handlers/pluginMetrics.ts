@@ -179,15 +179,22 @@ export function registerPluginMetricsHandlers(options?: {
   // teardown are visible, ended on the host when the view navigates or goes,
   // and re-sent whenever the view gets an endpoint again.
   const relayedSubscribers = new Map<number, { sender: Electron.WebContents; off: () => void }>();
+  // Unsubscribes relayed for views that are still alive. A send while the link
+  // is down is dropped, and a resume keeps the host's endpoint and its
+  // subscription, so each is re-sent on the view's next endpoint.
+  const pendingUnsubscribes = new Map<number, Electron.WebContents>();
   const endRelayed = (id: number, tellHost: boolean): void => {
     const entry = relayedSubscribers.get(id);
     if (!entry) return;
     relayedSubscribers.delete(id);
     entry.off();
-    if (tellHost) relaySendToHost(id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE, []);
+    if (!tellHost) return;
+    relaySendToHost(id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE, []);
+    if (!entry.sender.isDestroyed()) pendingUnsubscribes.set(id, entry.sender);
   };
   const relaySubscribe = (sender: Electron.WebContents): boolean => {
     if (!relaySendToHost(sender.id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, [])) return false;
+    pendingUnsubscribes.delete(sender.id);
     if (relayedSubscribers.has(sender.id)) return true;
     const id = sender.id;
     const onGone = (): void => endRelayed(id, false);
@@ -205,6 +212,13 @@ export function registerPluginMetricsHandlers(options?: {
   };
   cleanups.push(
     onRemoteViewEndpointOpened((webContentsId) => {
+      const unsubscribed = pendingUnsubscribes.get(webContentsId);
+      if (unsubscribed) {
+        pendingUnsubscribes.delete(webContentsId);
+        if (!unsubscribed.isDestroyed()) {
+          relaySendToHost(webContentsId, CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE, []);
+        }
+      }
       const entry = relayedSubscribers.get(webContentsId);
       if (!entry) return;
       if (entry.sender.isDestroyed() || !relaySubscribe(entry.sender)) {
@@ -214,6 +228,7 @@ export function registerPluginMetricsHandlers(options?: {
   );
   cleanups.push(() => {
     for (const id of [...relayedSubscribers.keys()]) endRelayed(id, false);
+    pendingUnsubscribes.clear();
   });
 
   const handleSubscribe = (event: Electron.IpcMainEvent): void => {

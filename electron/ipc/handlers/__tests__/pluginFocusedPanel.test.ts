@@ -208,6 +208,16 @@ describe("plugin:report-focused-panel", () => {
       expect(relayed).toHaveLength(count + 1);
     });
 
+    it("clears its host's report when the renderer crashes, and replays nothing after", () => {
+      const s = sender(7);
+      send(s, { kind: "terminal" });
+      s.fire("render-process-gone");
+      expect(relayed.at(-1)).toEqual({ sender: 7, args: [null, false] });
+      const count = relayed.length;
+      notifyRemoteViewEndpointOpened(7);
+      expect(relayed).toHaveLength(count);
+    });
+
     it("falls back to the local tracker once the view is no longer bound", () => {
       send(sender(8), { kind: "file" });
       registryMock.windows.set(8, win);

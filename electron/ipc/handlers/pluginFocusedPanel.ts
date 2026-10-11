@@ -73,7 +73,15 @@ export function registerPluginFocusedPanelHandlers(
       });
       // A crashed renderer keeps its WebContents, so `destroyed` alone would
       // leave its last report standing until the reload reports again.
-      sender.on("render-process-gone", () => tracker.removeSender(senderId));
+      sender.on("render-process-gone", () => {
+        tracker.removeSender(senderId);
+        // Nothing runs in a crashed renderer, and a recovery page loaded into
+        // it reports nothing: tell its host it has no panel, and stop replaying
+        // the last report into new endpoints.
+        if (relayed.delete(senderId)) {
+          relaySendToHost(senderId, CHANNELS.PLUGIN_REPORT_FOCUSED_PANEL, [null, false]);
+        }
+      });
       // Which view holds native focus decides whose report counts, and that
       // can change with no new report (a warm switch back to a view whose
       // answer is unchanged), so re-derive on the view's own focus edges.

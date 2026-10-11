@@ -491,12 +491,40 @@ describe("a local view bound to a remote host (Shell side)", () => {
 
       view.emit("did-navigate");
       expect(relayed.at(-1)).toEqual([view.id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE]);
-      const count = relayed.length;
+      // The next endpoint repeats the unsubscribe, never the subscription.
       notifyRemoteViewEndpointOpened(view.id);
-      expect(relayed).toHaveLength(count);
+      expect(relayed.at(-1)).toEqual([view.id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE]);
+      expect(
+        relayed.filter(([, channel]) => channel === CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE)
+      ).toHaveLength(2);
     } finally {
       off();
       vi.useRealTimers();
+    }
+  });
+
+  it("re-sends an unsubscribe the link may have dropped when the view's endpoint reopens", () => {
+    const view = makeSender();
+    const channels: string[] = [];
+    const off = setHostSendRelay((id, channel) => {
+      if (id !== view.id) return false;
+      channels.push(channel);
+      return true;
+    });
+    try {
+      emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, view);
+      view.emit("did-navigate");
+      notifyRemoteViewEndpointOpened(view.id);
+      expect(channels).toEqual([
+        CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE,
+        CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE,
+        CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE,
+      ]);
+      // Once re-sent, a later reopen has nothing left to say.
+      notifyRemoteViewEndpointOpened(view.id);
+      expect(channels).toHaveLength(3);
+    } finally {
+      off();
     }
   });
 
