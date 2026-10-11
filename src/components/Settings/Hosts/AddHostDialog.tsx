@@ -13,8 +13,7 @@ import { isMac } from "@/lib/platform";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { mintOperationId } from "@/clients/operationsClient";
 import { useRemoteHostsStore } from "@/store/remoteHostsStore";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { isClientAppError } from "@/utils/clientAppError";
+import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import {
   formatHostConnection,
   sshConnection,
@@ -51,6 +50,15 @@ const STEPS: Array<{ id: Step; label: string }> = [
   { id: "enable", label: "Enable" },
   { id: "advise", label: "Advise" },
 ];
+
+/** Machines not yet added first, then by name as people number them (studio-2 before studio-10). */
+function sortDiscovered(found: DiscoveredHost[]): DiscoveredHost[] {
+  return [...found].sort(
+    (a, b) =>
+      Number(a.alreadyAdded) - Number(b.alreadyAdded) ||
+      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })
+  );
+}
 
 const SOURCE_LABEL: Record<DiscoveredHost["source"], string> = {
   tailscale: "Tailnet",
@@ -133,10 +141,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     let live = true;
     remoteHostsClient.discover().then(
       (found) => {
-        if (live) setDiscovered(found);
+        if (live) setDiscovered(sortDiscovered(found));
       },
       (err: unknown) => {
-        if (live) setDiscoverError(formatErrorMessage(err, "Discovery failed"));
+        if (live) setDiscoverError(clientErrorText(err, "Discovery failed"));
       }
     );
     return () => {
@@ -165,7 +173,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         setError(
           isClientAppError(err) && err.userMessage
             ? err.userMessage
-            : formatErrorMessage(err, "Something went wrong")
+            : clientErrorText(err, "Something went wrong")
         );
       }
     );
@@ -299,11 +307,16 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
               </Button>
             </div>
           ) : discovered === null ? (
-            showDiscovering ? (
-              <p className="flex items-center gap-2 text-sm text-text-secondary">
-                <Spinner size="sm" /> Looking for Macs and Linux machines
-              </p>
-            ) : null
+            // Holds its line from the start, so the heading never stands alone and nothing jumps when it shows.
+            <p
+              className={cn(
+                "flex items-center gap-2 text-sm text-text-secondary",
+                !showDiscovering && "invisible"
+              )}
+              aria-hidden={!showDiscovering}
+            >
+              <Spinner size="sm" /> Looking for Macs and Linux machines
+            </p>
           ) : discovered.length === 0 ? (
             <p className="text-sm text-text-secondary">
               No machines answered on your tailnet or local network. Enter an SSH target below.

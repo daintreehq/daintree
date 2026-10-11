@@ -168,11 +168,38 @@ describe("AddHostDialog", () => {
     expect(remoteHosts.discover).toHaveBeenCalledTimes(2);
   });
 
-  it("holds the discovery spinner back until the loading gate passes", async () => {
+  it("holds the discovery spinner back until the loading gate passes, keeping its line", async () => {
     remoteHosts.discover!.mockReturnValue(new Promise(() => {}));
     render(<AddHostDialog isOpen onClose={() => {}} />);
-    expect(screen.queryByText("Looking for Macs and Linux machines")).toBeNull();
-    expect(await screen.findByText("Looking for Macs and Linux machines")).toBeTruthy();
+    // The line is laid out from the start, so the heading never stands alone and nothing jumps.
+    const line = screen.getByText("Looking for Macs and Linux machines").closest("p")!;
+    expect(line.getAttribute("aria-hidden")).toBe("true");
+    expect(line.className).toContain("invisible");
+    await waitFor(() => expect(line.getAttribute("aria-hidden")).toBe("false"));
+    expect(line.className).not.toContain("invisible");
+  });
+
+  it("lists machines not yet added first, numbered names in order", async () => {
+    const found = (name: string, alreadyAdded = false) => ({
+      name,
+      connection: { kind: "ssh" as const, target: `${name}.local` },
+      source: "mdns" as const,
+      platform: "darwin" as const,
+      online: true,
+      alreadyAdded,
+    });
+    remoteHosts.discover!.mockResolvedValueOnce([
+      found("studio-10"),
+      found("studio-01", true),
+      found("studio-2"),
+      found("Studio-03"),
+    ]);
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    const list = (await screen.findByText("studio-10")).closest("ul")!;
+    const names = [...list.querySelectorAll("li")].map(
+      (item) => item.querySelector(".font-medium")!.textContent
+    );
+    expect(names).toEqual(["studio-2", "Studio-03", "studio-10", "studio-01"]);
   });
 
   it("keeps a host that was added but couldn't connect, and retries only the connection", async () => {
