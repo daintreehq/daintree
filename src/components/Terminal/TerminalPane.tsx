@@ -116,7 +116,8 @@ import { isPtyPanel } from "@shared/types/panel";
 import { useSessionLostBanner } from "./useSessionLostBanner";
 import { useWorktreeMoveBanner, resolveWorktreeMoveRoute } from "./useWorktreeMoveBanner";
 import { useTerminalInputBlock } from "@/hooks/useHostConnection";
-import { TerminalInputBlockBanner } from "./TerminalInputBlockBanner";
+import { ControlConfirmedBanner, TerminalInputBlockBanner } from "./TerminalInputBlockBanner";
+import { useControlConfirmed } from "@/components/Recovery/takeControl";
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
@@ -688,6 +689,7 @@ function TerminalPaneComponent({
   // Typing is held back while the host link is down or another machine
   // drives the project; the pane says why rather than swallowing keys.
   const inputBlock = useTerminalInputBlock();
+  const controlConfirmed = useControlConfirmed(id);
 
   // Cancel auto-restart if terminal is intentionally trashed/removed
   useEffect(() => {
@@ -1439,8 +1441,12 @@ function TerminalPaneComponent({
       {/* A PTY-backed plugin kind's "needs setup" strip, in flow above the
           terminal rather than over it. Nothing for a plain terminal. */}
       {storedKind !== undefined && <PluginKindSetupStrip kind={storedKind} />}
-      <BannerSlot visible={inputBlock !== null}>
-        {inputBlock && <TerminalInputBlockBanner block={inputBlock} />}
+      <BannerSlot visible={inputBlock !== null || controlConfirmed}>
+        {inputBlock ? (
+          <TerminalInputBlockBanner block={inputBlock} panelId={id} />
+        ) : (
+          controlConfirmed && <ControlConfirmedBanner />
+        )}
       </BannerSlot>
 
       <BannerSlot visible={showRestartError}>

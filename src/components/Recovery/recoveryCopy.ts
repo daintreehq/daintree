@@ -136,8 +136,8 @@ export function getHostConnectionBannerCopy(
 }
 
 /**
- * Copy for a project another machine drives. Only one frontend drives at a
- * time, so this states who does and offers to take it; it never mirrors.
+ * Copy for a project another device controls. One device controls a project
+ * at a time; this names it and offers control here. It never mirrors.
  */
 export function getDriveLeaseBannerCopy(
   state:
@@ -145,18 +145,13 @@ export function getDriveLeaseBannerCopy(
     | { kind: "driven-elsewhere"; driverName: string; driverIsHostScreen: boolean },
   hostName: string
 ): RecoveryBannerCopy & { actionLabel: string } {
-  if (state.kind === "taken-from-host") {
-    return {
-      title: `Being driven from ${state.driverName}`,
-      description: "Read-only here",
-      actionLabel: "Take back",
-    };
-  }
+  const controller =
+    state.kind === "driven-elsewhere" && state.driverIsHostScreen
+      ? `${hostName}'s own screen`
+      : state.driverName;
   return {
-    title: state.driverIsHostScreen
-      ? `${hostName} is being driven from its own screen`
-      : `${hostName} is being driven from ${state.driverName}`,
-    description: "Read-only here",
-    actionLabel: "Take over",
+    title: `${controller} has control of this project`,
+    description: "Viewing here",
+    actionLabel: "Take control",
   };
 }

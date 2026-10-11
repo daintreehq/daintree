@@ -127,7 +127,7 @@ export function describeHostRowStatus(row: HostMenuRow, now: number = Date.now()
       case "version-mismatch":
         return `Runs a different build (${connection.remote.version})`;
       case "driven-elsewhere":
-        return `Driven from ${connection.driver.clientName}`;
+        return `${connection.driver.clientName} has control`;
     }
   }
   // Connected anyway to a different build: said on every line the row shows.
@@ -180,7 +180,7 @@ export function describeHostMenuState(
     case "version-mismatch":
       return { state: "Can't connect", note: "Needs a compatible build" };
     case "driven-elsewhere":
-      return { state: "Connected", note: `Driven from ${connection.driver.clientName}` };
+      return { state: "Connected", note: `${connection.driver.clientName} has control` };
   }
 }
 
@@ -250,7 +250,7 @@ export function hostChipStatusText(status: HostChipStatus): string | null {
     case "disconnected":
       return "not connected";
     case "driven-elsewhere":
-      return "driven elsewhere";
+      return "viewing";
     default:
       return null;
   }

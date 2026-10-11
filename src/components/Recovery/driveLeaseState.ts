@@ -2,6 +2,8 @@ import { useEffect, useSyncExternalStore } from "react";
 import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
 import { isEitherRemoteRoleSupported } from "@/lib/remoteHosts";
 import { getViewHostId } from "@/hooks/useHostConnection";
+import { useHostConnectionStore } from "@/store/hostConnectionStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { getDriveLeaseSnapshot, subscribeDriveLeaseSnapshot } from "@/services/terminal/inputGate";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 
@@ -46,8 +48,46 @@ export function selectDriveLeaseBanner(
 let lease: DriveLeaseView | null = null;
 const listeners = new Set<() => void>();
 
+/** Who controls the project, as the banner names them; null when this view has control. */
+function controllerOf(view: DriveLeaseView | null): { key: string; name: string } | null {
+  const state = selectDriveLeaseBanner(view, getViewHostId() !== null);
+  const holder = view?.holder;
+  if (state === null || !holder) return null;
+  // Compared by device, not by name: two machines can share a name, and a
+  // rename isn't a change of control.
+  const key = holder.isHostLocal ? "host-screen" : holder.clientId;
+  if (state.kind === "driven-elsewhere" && state.driverIsHostScreen) {
+    const host = useHostConnectionStore.getState();
+    return { key, name: `${host.hostName ?? host.hostId ?? "The host"}'s own screen` };
+  }
+  return { key, name: state.driverName };
+}
+
+/**
+ * Say a change of control once per window, whichever banner holds the slot
+ * and whoever caused it: the banner and the panes' strips stay quiet, since a
+ * higher-priority banner can hide this one and every pane would repeat it.
+ */
+function announceControlChange(prev: DriveLeaseView | null, next: DriveLeaseView | null): void {
+  if (next === null) return;
+  const sameProject = prev !== null && prev.projectId === next.projectId;
+  const before = sameProject ? controllerOf(prev) : null;
+  const after = controllerOf(next);
+  if (after?.key === before?.key) return;
+  const announce = useAnnouncerStore.getState().announce;
+  if (after !== null) {
+    announce(
+      sameProject ? `Control moved to ${after.name}` : `${after.name} has control of this project`,
+      "polite"
+    );
+  } else if (before !== null && next.drivingHere) {
+    announce("You have control of this project", "polite");
+  }
+}
+
 function setLease(next: DriveLeaseView | null): void {
   if (lease === next) return;
+  announceControlChange(lease, next);
   lease = next;
   for (const listener of [...listeners]) listener();
 }

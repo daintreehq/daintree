@@ -130,12 +130,12 @@ export function getTerminalInputBlockMessage(block: TerminalInputBlock): string 
     case "disconnected":
       return `Read-only until ${block.hostName} reconnects`;
     case "driven-elsewhere":
-      // Worded as the banner words it, so the pane and the banner name one driver.
+      // Names the controller the way the window banner does.
       return block.driverIsHostScreen
-        ? `Read-only while ${block.driverName} is driven from its own screen`
-        : `Read-only while ${block.driverName} is driving this project`;
+        ? `Read-only · ${block.driverName}'s own screen has control`
+        : `Read-only · ${block.driverName} has control`;
     case "lease-unknown":
-      return `Read-only until ${block.hostName} confirms who is driving this project`;
+      return `Read-only until ${block.hostName} confirms who has control of this project`;
   }
 }
 
