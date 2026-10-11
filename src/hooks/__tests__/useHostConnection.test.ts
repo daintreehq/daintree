@@ -350,10 +350,10 @@ describe("host connection sync", () => {
 describe("lease and reconnect races", () => {
   it("keeps a remote view read-only until the host answers, then claims the project once the link is up", async () => {
     const { electron, emitHost } = installElectron({ status: "connecting", attempt: 1 });
-    electron.driveLease.takeOver.mockRejectedValueOnce(
-      new Error("[AppError|HOST_DISCONNECTED] down")
-    );
-    electron.driveLease.get.mockRejectedValueOnce(new Error("[AppError|HOST_DISCONNECTED] down"));
+    // The link is down at open: the claim's lease read and the fallback lookup both go unanswered.
+    electron.driveLease.get
+      .mockRejectedValueOnce(new Error("[AppError|HOST_DISCONNECTED] down"))
+      .mockRejectedValueOnce(new Error("[AppError|HOST_DISCONNECTED] down"));
     bindView("studio-01");
     const stop = startHostConnectionSync();
     await flush();
@@ -365,15 +365,60 @@ describe("lease and reconnect races", () => {
     // The link is up but the first claim never answered, so ownership is unknown.
     expect(getTerminalInputBlock()).toEqual({ kind: "lease-unknown", hostName: "studio-01" });
     await flush();
+    await flush();
     // Opening the project here is taking it over: the claim is retried, not just a lookup.
-    expect(electron.driveLease.takeOver).toHaveBeenCalledTimes(2);
+    expect(electron.driveLease.takeOver).toHaveBeenCalledTimes(1);
     expect(electron.driveLease.takeOver).toHaveBeenLastCalledWith({ projectId: "proj-1" });
     expect(getTerminalInputBlock()).toBeNull();
     stop();
   });
 
+  it("moves the project between this machine's own windows without asking", async () => {
+    const { electron } = installElectron();
+    electron.driveLease.get.mockResolvedValue({
+      ...leaseView(holder({ isHostLocal: false }), false),
+      heldByThisClient: true,
+    });
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    expect(electron.driveLease.takeOver).toHaveBeenCalledWith({ projectId: "proj-1" });
+    stop();
+  });
+
+  it("reads the lease again when an event lands while it was being read, and takes nothing on the stale read", async () => {
+    const { electron, emitLease } = installElectron();
+    let answer: (value: unknown) => void = () => {};
+    electron.driveLease.get
+      .mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)))
+      .mockResolvedValue(leaseView(holder({ isHostLocal: false }), false));
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    // Another laptop takes it while the first read is out; that read said nobody held it.
+    emitLease({ type: "changed", state: leaseView(holder({ isHostLocal: false }), false) });
+    answer(leaseView(null, true));
+    await flush();
+    expect(electron.driveLease.get).toHaveBeenCalledTimes(2);
+    expect(electron.driveLease.takeOver).not.toHaveBeenCalled();
+    expect(getTerminalInputBlock()?.kind).toBe("driven-elsewhere");
+    stop();
+  });
+
+  it("leaves a project another machine drives alone on open, offering Take over instead", async () => {
+    const { electron } = installElectron();
+    electron.driveLease.get.mockResolvedValue(leaseView(holder({ isHostLocal: false }), false));
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    expect(electron.driveLease.takeOver).not.toHaveBeenCalled();
+    expect(getTerminalInputBlock()?.kind).toBe("driven-elsewhere");
+    stop();
+  });
+
   it("takes the project over from the host's own screen when a remote view opens it", async () => {
     const { electron } = installElectron();
+    electron.driveLease.get.mockResolvedValue(leaseView(holder({ isHostLocal: true }), false));
     electron.driveLease.takeOver.mockResolvedValueOnce(leaseView(holder(), true));
     bindView("studio-01");
     const stop = startHostConnectionSync();
@@ -452,6 +497,7 @@ describe("lease and reconnect races", () => {
     await flush();
     expect(electron.driveLease.takeOver).toHaveBeenCalledTimes(1);
     refuse(new Error("[AppError|HOST_DISCONNECTED] down"));
+    await flush();
     await flush();
     expect(electron.driveLease.takeOver).toHaveBeenCalledTimes(2);
     expect(getTerminalInputBlock()).toBeNull();
@@ -580,8 +626,8 @@ describe("host-owned saves held through a reconnect", () => {
   it("taking the project over drops what was held, so the authoritative rehydrate isn't overwritten", async () => {
     const { electron } = installElectron();
     bindView("studio-01");
+    // The lease read never answers, so this view's claim on open stays out.
     electron.driveLease.get.mockImplementation(() => new Promise(() => {}));
-    electron.driveLease.takeOver.mockImplementationOnce(() => new Promise(() => {}));
     const stop = startHostConnectionSync();
     await flush();
     expect(getTerminalInputBlock()?.kind).toBe("lease-unknown");

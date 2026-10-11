@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   composeWindowTitle,
+  rememberRemoteWorkspaceTitle,
   resolveWindowProjectName,
   type ProjectTitleLookup,
   type ProjectTitleRow,
@@ -120,6 +121,13 @@ describe("composeWindowTitle", () => {
 });
 
 describe("resolveWindowProjectName", () => {
+  it("names a host's project with its host, which this machine's store has no row for", () => {
+    rememberRemoteWorkspaceTitle("studio-01:proj-9", "daintree — studio-01");
+    expect(resolveWindowProjectName(pvm("studio-01:proj-9"), () => null)).toBe(
+      "daintree — studio-01"
+    );
+  });
+
   const rows = lookupOf({
     "proj-open": { name: "checkout-api", status: "active" },
     "proj-background": { name: "billing", status: "background" },

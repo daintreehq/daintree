@@ -144,6 +144,7 @@ import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { ToolbarProjectPill, ToolbarProjectPillTooltipBody } from "./ToolbarProjectPill";
 import { HostChip } from "@/components/Hosts/HostChip";
 import { AttachedMachinesIndicator } from "@/components/Hosts/AttachedMachinesIndicator";
+import { getViewHostId } from "@/hooks/useHostConnection";
 import { shortSha } from "@/utils/textParsing";
 import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
@@ -2409,6 +2410,9 @@ export function Toolbar({
     </ContextMenuTrigger>
   );
 
+  // Static per view: a project view is bound to one host for its life.
+  const remoteWindow = getViewHostId() !== null;
+
   return (
     <header>
       {/* Brand marks in the toolbar are painted on the toolbar surface, not on
@@ -2430,6 +2434,15 @@ export function Toolbar({
             )}
           >
             {!isLinux() && <div className="window-resize-strip" />}
+            {remoteWindow && (
+              // A window working on another machine carries the host's colour
+              // along its top edge: a different place, never a warning.
+              <div
+                aria-hidden="true"
+                data-testid="remote-window-strip"
+                className="pointer-events-none absolute inset-x-0 top-0 h-[3px] bg-status-info"
+              />
+            )}
 
             {/* LEFT GROUP */}
             <div

@@ -495,6 +495,7 @@ export class DriveLeaseService {
       drivingHere: drives(holder, { endpointId: endpoint?.endpointId ?? "", clientId }),
       isHolderEndpoint: holder !== null && endpoint?.endpointId === holder.endpointId,
       viewerIsHostLocal: endpoint ? endpoint.kind === "local-view" : true,
+      heldByThisClient: holder !== null && holder.clientId === clientId,
     };
   }
 

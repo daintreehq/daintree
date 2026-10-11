@@ -329,6 +329,22 @@ describe("RemoteHostsClient", () => {
       expect(windows.openRemoteProject).not.toHaveBeenCalled();
     });
 
+    it("returns to this window's own last project on the host before the host's memory of this machine", async () => {
+      manager.last = { projectId: "proj-2", path: "/srv/proj-2", name: "proj-2" };
+      windows.lastProjectOnHost = vi.fn(() => "proj-9");
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+      ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-9" });
+      expect(windows.lastProjectOnHost).toHaveBeenCalledWith(1, "studio-01");
+
+      // Gone from the host since: the host's memory answers instead.
+      manager.connect("studio-01").describeProject.mockResolvedValueOnce(null);
+      await client.switchWindowHost(ctxFor(5, 1), { hostId: "local", newWindow: false });
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+      ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-2" });
+    });
+
     it("returns to this machine's last project, or asks for its list", async () => {
       manager.last = { projectId: "proj-2", path: "/srv/proj-2", name: "proj-2" };
       await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false });

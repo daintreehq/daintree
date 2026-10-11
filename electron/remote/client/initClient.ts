@@ -195,6 +195,24 @@ function lastLocalProjectId(windowId: number | null): string | null {
   return latest?.id ?? null;
 }
 
+/** Best effort: a title that fails to update must not fail the switch that committed. */
+function refreshWindowTitles(): void {
+  void import("../../services/NotificationService.js").then(
+    ({ notificationService }) => notificationService.refreshTitles(),
+    () => {}
+  );
+}
+
+/** This window's most recent project on `hostId`, from its own history; null when it has none there. */
+function lastProjectOnHost(windowId: number | null, hostId: HostId): string | null {
+  if (windowId === null) return null;
+  for (const key of getProjectHistory(windowId).snapshot().entries) {
+    const parsed = parseHostScopedKey(key);
+    if (parsed.hostId === hostId) return parsed.projectId;
+  }
+  return null;
+}
+
 function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
   // This client's switches run one at a time per window, so each reads the
   // workspace it is leaving only once the one before it has landed: two
@@ -229,6 +247,8 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         const from = pvm.getActiveProjectId();
         const { view, isNew } = await pvm.switchToHostProject(hostId, projectId, projectPath);
         recordWindowSwitch(windowId, from, toHostScopedKey(hostId, projectId));
+        // The title names the place: "<project> — <host>".
+        refreshWindowTitles();
         const wc = view.webContents;
         if (wc && !wc.isDestroyed()) hooks.onRemoteViewActivated?.(windowId, wc, isNew);
       });
@@ -246,9 +266,11 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         const from = pvm.getActiveProjectId();
         await pvm.switchTo(project.id, project.path);
         recordWindowSwitch(windowId, from, project.id);
+        refreshWindowTitles();
       });
     },
     lastLocalProjectId,
+    lastProjectOnHost,
     watchWindow(windowId, onClosed) {
       const ctx = getWindowRegistry()?.getByWindowId(windowId);
       if (!ctx || ctx.browserWindow.isDestroyed()) {

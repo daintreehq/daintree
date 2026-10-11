@@ -191,7 +191,8 @@ describe("DriveLeaseBanner", () => {
     useHostConnectionStore.setState({ hostId: "studio-01", hostName: "studio-01" });
     // The view's claim on open is refused both times, so it falls back to who drives.
     takeOver.mockRejectedValue(new Error("refused"));
-    get.mockRejectedValueOnce(new Error("link down"));
+    // Down at open: the claim's read and its fallback lookup both fail.
+    get.mockRejectedValueOnce(new Error("link down")).mockRejectedValueOnce(new Error("link down"));
     get.mockResolvedValue(view({ viewerIsHostLocal: false }));
     const { container } = render(<Harness />);
     await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
@@ -215,7 +216,10 @@ describe("DriveLeaseBanner", () => {
       "studio-01"
     );
     expect(await screen.findByText(copy.title)).toBeTruthy();
-    expect(get).toHaveBeenCalledTimes(2);
+    // Claim and fallback at open (both down), then the claim on reconnect, which
+    // finds another machine driving and leaves it to the banner's Take over.
+    expect(get).toHaveBeenCalledTimes(3);
+    expect(takeOver).not.toHaveBeenCalled();
   });
 
   it("does nothing at all where Remote Hosts isn't supported", () => {

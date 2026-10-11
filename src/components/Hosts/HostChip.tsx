@@ -8,6 +8,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Server } from "@/components/icons";
@@ -123,10 +126,11 @@ function hostUpdateOffers(
 }
 
 /**
- * The window's host, right of the project switcher. Hidden until a host other
- * than this machine exists, and never in a build without Remote Hosts. Neutral
- * on purpose: which machine the window is on is context, not a call to act.
- * A window on this machine shows only an icon; a window on a host names it.
+ * Where this window works, right of the project switcher: "This Mac", or
+ * "SSH · studio-01" on a host's tinted surface so a remote window reads as a
+ * different place at a glance. Hidden until a host other than this machine
+ * exists, and never in a build without Remote Hosts. Picking a host only goes
+ * there, as it is; bringing the current branch along is its own item.
  */
 export function HostChip() {
   const supported = isRemoteShellSupported();
@@ -157,9 +161,10 @@ export function HostChip() {
   const name = isLocalWindow
     ? localHostLabel(localPlatform)
     : (storeHostName ?? currentRow.name ?? windowHostId);
+  // "SSH · studio-01": the place and how it is reached, so a remote window never reads as local.
+  const locationLabel = isLocalWindow ? name : `SSH · ${name}`;
   const status = hostChipStatus(isLocalWindow, connection, drivenElsewhereBy(lease));
   const statusText = hostChipStatusText(status);
-  const compact = isLocalWindow && statusText === null;
   const mismatch =
     connection?.status === "version-mismatch"
       ? connection.mismatch
@@ -178,16 +183,13 @@ export function HostChip() {
   );
   const overviewAvailable = actionService.has(HOSTS_OVERVIEW_ACTION_ID);
 
+  // Navigation only: the host opens as it is (this window's last project
+  // there, or its picker). Nothing is fetched, pushed or created.
   const pick = (row: HostMenuRow, newWindow: boolean) => {
     if (row.isCurrent && !newWindow) return;
-    // With a project open, switching this window means bringing the project
-    // along; a new window just opens the host.
-    if (projectId && !newWindow) {
-      void openProjectOnHost(row.hostId, projectId);
-      return;
-    }
     void switchToHost(row.hostId, newWindow);
   };
+  const otherHosts = rows.filter((row) => !row.isCurrent);
 
   const trigger = (
     <DropdownMenuTrigger asChild>
@@ -196,43 +198,79 @@ export function HostChip() {
         data-toolbar-item=""
         data-testid="host-chip"
         data-host-status={status}
-        aria-label={statusText ? `Host: ${name}, ${statusText}` : `Host: ${name}`}
+        data-host-location={isLocalWindow ? "local" : "remote"}
+        aria-label={
+          statusText ? `Working on ${locationLabel}, ${statusText}` : `Working on ${locationLabel}`
+        }
         className={cn(
-          "app-no-drag pointer-events-auto ml-1.5 flex h-7 min-w-0 shrink items-center rounded-[var(--radius-md)] text-xs",
-          compact ? "w-7 shrink-0 justify-center" : "max-w-48 gap-1.5 px-2",
-          "text-text-secondary transition-colors hover:bg-overlay-subtle hover:text-text-primary aria-expanded:bg-overlay-subtle aria-expanded:text-text-primary",
-          "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-2"
+          "app-no-drag pointer-events-auto ml-1.5 flex h-7 min-w-0 max-w-56 shrink items-center gap-1.5 rounded-[var(--radius-md)] px-2 text-xs",
+          "transition-colors focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-2",
+          isLocalWindow
+            ? "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary aria-expanded:bg-overlay-subtle aria-expanded:text-text-primary"
+            : // A different place, not a problem: a solid informational block (the
+              // remote indicator other editors use), never a warning colour. Its
+              // text takes whichever of black or white reads on the fill, so it
+              // holds in every theme and colour-vision override; forced colours
+              // drop the fill, so a system border keeps the block visible.
+              "bg-status-info [color:contrast-color(var(--color-status-info))] forced-colors:border forced-colors:border-[CanvasText]"
         )}
       >
-        {compact ? (
-          <Server className="h-3.5 w-3.5" aria-hidden="true" />
+        {isLocalWindow ? (
+          <PlatformGlyph platform={currentRow.platform} className="shrink-0" />
         ) : (
-          <>
-            <PlatformGlyph platform={currentRow.platform} className="shrink-0" />
-            <span className="min-w-0 truncate font-medium">{name}</span>
-            {statusText && <span className="shrink-0 text-2xs">{statusText}</span>}
-            <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
-          </>
+          <Server className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         )}
+        <span className="min-w-0 truncate font-medium">{locationLabel}</span>
+        {statusText && (
+          <span className={cn("shrink-0 text-2xs", isLocalWindow && "text-text-secondary")}>
+            {statusText}
+          </span>
+        )}
+        <ChevronDown
+          className={cn("h-3 w-3 shrink-0", isLocalWindow && "text-text-secondary")}
+          aria-hidden="true"
+        />
       </button>
     </DropdownMenuTrigger>
   );
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
-      {compact ? (
-        <Tooltip>
-          <TooltipTrigger asChild>{trigger}</TooltipTrigger>
-          <TooltipContent side="bottom">Hosts</TooltipContent>
-        </Tooltip>
-      ) : (
-        trigger
-      )}
+      <Tooltip>
+        <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+        <TooltipContent side="bottom">
+          {isLocalWindow
+            ? "Working on this machine"
+            : `Working on ${name} over SSH. Project files, terminals and agents run there`}
+        </TooltipContent>
+      </Tooltip>
       <DropdownMenuContent align="end" className="w-80">
-        <DropdownMenuLabel>Hosts</DropdownMenuLabel>
+        <DropdownMenuLabel>Working on</DropdownMenuLabel>
         {rows.map((row) => (
           <HostMenuItem key={row.hostId} row={row} onPick={pick} />
         ))}
+        {projectId && otherHosts.length > 0 && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>Continue this branch on…</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="min-w-44">
+                {otherHosts.map((row) => (
+                  <DropdownMenuItem
+                    key={row.hostId}
+                    data-continue-host-id={row.hostId}
+                    onSelect={() => void openProjectOnHost(row.hostId, projectId)}
+                  >
+                    <span className="mr-2 flex w-3.5 shrink-0 justify-center text-text-secondary">
+                      <PlatformGlyph platform={row.platform} />
+                    </span>
+                    <span className="truncate">{row.name}</span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          </>
+        )}
         {updates.map((offer) => (
           <DropdownMenuItem
             key={offer.target === "local" ? "local" : offer.hostId}

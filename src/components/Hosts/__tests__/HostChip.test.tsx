@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { HostListEntry } from "@shared/types/remoteHosts";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 
@@ -165,11 +165,13 @@ describe("HostChip", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
-  it("is an icon in a local window, naming this machine only to assistive tech, with no accent", async () => {
+  it("names this machine in words in a local window, with no accent and no remote tint", async () => {
     const { container } = await renderWithHosts([host("h1", "studio-01")]);
     const chip = container.querySelector<HTMLElement>("[data-testid='host-chip']")!;
-    expect(chip.textContent).toBe("");
-    expect(chip.getAttribute("aria-label")).toBe("Host: This Mac");
+    expect(chip.textContent).toBe("This Mac");
+    expect(chip.getAttribute("aria-label")).toBe("Working on This Mac");
+    expect(chip.getAttribute("data-host-location")).toBe("local");
+    expect(chip.className).not.toMatch(/status-info/);
     expect(chip.getAttribute("data-host-status")).toBe("local");
     expect(chip.className).not.toMatch(/accent/);
     for (const el of chip.querySelectorAll("*")) {
@@ -189,7 +191,10 @@ describe("HostChip", () => {
       const chip = container.querySelector<HTMLElement>("[data-testid='host-chip']")!;
       expect(chip.textContent).toContain("studio-01");
       expect(chip.textContent).toContain("unreachable");
-      expect(chip.getAttribute("aria-label")).toBe("Host: studio-01, unreachable");
+      expect(chip.getAttribute("aria-label")).toBe("Working on SSH · studio-01, unreachable");
+      // A different place reads as one: the host's tinted surface, in every remote state.
+      expect(chip.getAttribute("data-host-location")).toBe("remote");
+      expect(chip.className).toMatch(/bg-status-info\b/);
     } finally {
       delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
     }
@@ -228,7 +233,7 @@ describe("HostChip", () => {
     );
   });
 
-  it("takes the open project along on a plain click, and opens just the host on Cmd-click", async () => {
+  it("only goes to a host on a plain click, even with a project open; Cmd-click opens a new window", async () => {
     const previous = useProjectStore.getState().currentProject;
     useProjectStore.setState({ currentProject: { id: "proj-1" } as Project });
     try {
@@ -236,18 +241,41 @@ describe("HostChip", () => {
       let menu = await openMenu();
       fireEvent.click(menu.querySelector("[data-host-id='h1']")!);
       await waitFor(() =>
-        expect(dispatch).toHaveBeenCalledWith(
-          "project.openOnHost",
-          { hostId: "h1", projectId: "proj-1" },
-          { source: "user" }
-        )
+        expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h1", newWindow: false })
       );
-      expect(switchWindowHost).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalledWith(
+        "project.openOnHost",
+        expect.anything(),
+        expect.anything()
+      );
 
       menu = await openMenu();
       fireEvent.click(menu.querySelector("[data-host-id='h1']")!, { metaKey: true });
       await waitFor(() =>
         expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h1", newWindow: true })
+      );
+    } finally {
+      useProjectStore.setState({ currentProject: previous });
+    }
+  });
+
+  it('brings the branch along only from "Continue this branch on…"', async () => {
+    const previous = useProjectStore.getState().currentProject;
+    useProjectStore.setState({ currentProject: { id: "proj-1" } as Project });
+    try {
+      await renderWithHosts([host("h1", "studio-01")]);
+      const menu = await openMenu();
+      const continueOn = within(menu).getByText("Continue this branch on…");
+      fireEvent.keyDown(continueOn, { key: "ArrowRight" });
+      fireEvent.click(
+        await screen.findByText("studio-01", { selector: "[data-continue-host-id] *" })
+      );
+      await waitFor(() =>
+        expect(dispatch).toHaveBeenCalledWith(
+          "project.openOnHost",
+          { hostId: "h1", projectId: "proj-1" },
+          { source: "user" }
+        )
       );
     } finally {
       useProjectStore.setState({ currentProject: previous });

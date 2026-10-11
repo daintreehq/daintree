@@ -4,6 +4,7 @@ import {
   isLocalHostId,
   parseHostScopedKey,
   sameHostConnection,
+  toHostScopedKey,
   type HostConnectionState,
   type HostDescriptor,
   type HostId,
@@ -21,6 +22,7 @@ import type {
 import type { IpcContext } from "../../ipc/types.js";
 import type { RemoteRouter } from "../../ipc/endpoint.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { rememberRemoteWorkspaceTitle } from "../../window/windowTitle.js";
 import { getRemoteService } from "../runtime.js";
 import type { HostRegistry } from "./HostRegistry.js";
 import type { HostReadiness, RemoteHostManager } from "./RemoteHostManager.js";
@@ -46,6 +48,8 @@ export interface WindowControl {
    * most recently opened here. Null when there is none.
    */
   lastLocalProjectId(windowId: number | null): string | null;
+  /** This window's own most recent project on a host, which a plain switch there returns to. */
+  lastProjectOnHost?(windowId: number | null, hostId: HostId): string | null;
   /** Call `onClosed` once when the window closes. */
   watchWindow(windowId: number, onClosed: () => void): void;
 }
@@ -262,6 +266,7 @@ export class RemoteHostsClient {
     const superseded = (): SwitchWindowHostResult | null =>
       ticket !== null && !ticket.isCurrent() ? { outcome: "superseded", hostId } : null;
     let projectPath: string | null = null;
+    let projectName: string | null = null;
     let connection: ReturnType<RemoteHostManager["connect"]> | null = null;
     if (remote) {
       this.ensureRouter();
@@ -287,10 +292,21 @@ export class RemoteHostsClient {
           });
         }
       } else if (projectId === undefined) {
-        const last = await connection.lastActiveProject().catch(() => null);
+        // Where this window last was on the host first; the host's memory of
+        // this machine is the fallback, then its project picker.
+        const windowLast = this.options.windows.lastProjectOnHost?.(sourceWindowId, hostId) ?? null;
+        const remembered = windowLast
+          ? await connection.describeProject(windowLast).catch(() => null)
+          : null;
+        const last = remembered?.path
+          ? { projectId: windowLast!, path: remembered.path, name: remembered.name }
+          : await connection.lastActiveProject().catch(() => null);
+        const staleLast = superseded();
+        if (staleLast) return staleLast;
         if (last?.path) {
           projectId = last.projectId;
           projectPath = last.path;
+          projectName = last.name;
         }
       } else {
         const description = await connection.describeProject(projectId).catch(() => null);
@@ -304,6 +320,7 @@ export class RemoteHostsClient {
           });
         }
         projectPath = description.path;
+        projectName = description.name;
       }
     } else if (projectId === undefined) {
       projectId = this.options.windows.lastLocalProjectId(sourceWindowId) ?? undefined;
@@ -350,6 +367,12 @@ export class RemoteHostsClient {
         if (targetPath === null) {
           throw new AppError({ code: "INTERNAL", message: "No host path" });
         }
+        // The window's title names the place too: "<project> — <host>".
+        const hostName = this.options.registry.get(hostId)?.name ?? hostId;
+        rememberRemoteWorkspaceTitle(
+          toHostScopedKey(hostId, targetProjectId),
+          `${projectName || targetProjectId} — ${hostName}`
+        );
         await this.options.windows.openRemoteProject(windowId, hostId, targetProjectId, targetPath);
       } catch (error) {
         // The view didn't move, so neither does the binding: they never name

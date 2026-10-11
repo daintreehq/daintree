@@ -163,6 +163,7 @@ describe("DriveLeaseService", () => {
       drivingHere: false,
       isHolderEndpoint: false,
       viewerIsHostLocal: false,
+      heldByThisClient: false,
     });
     expect(service.isDriving("p", laptop)).toBe(false);
 
@@ -325,7 +326,11 @@ describe("DriveLeaseService", () => {
     expect(holder.endpointId).toBe("s1:e1");
     expect(service.isDriving("p", first)).toBe(true);
     expect(service.isDriving("p", second)).toBe(false);
-    expect(service.viewFor("p", second)).toMatchObject({ drivingHere: false });
+    // Another window of the same client: not driving, but its own machine holds it.
+    expect(service.viewFor("p", second)).toMatchObject({
+      drivingHere: false,
+      heldByThisClient: true,
+    });
     expect(service.drivingLeaseId("p", first)).toBe(holder.leaseId);
     expect(service.drivingLeaseId("p", second)).toBe(false);
     expect(service.drivingLeaseId("nobody", second)).toBeNull();

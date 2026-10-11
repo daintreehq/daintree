@@ -15,6 +15,12 @@ export interface DriveLeaseView extends DriveLeaseState {
   isHolderEndpoint: boolean;
   /** This renderer is a window on the Host machine's own screen (offers "Take back"). */
   viewerIsHostLocal: boolean;
+  /**
+   * The holder is a window of this renderer's own machine (any of its windows),
+   * so opening the project here moves it between this machine's windows rather
+   * than from another machine. Absent from hosts before this field.
+   */
+  heldByThisClient?: boolean;
 }
 
 export type DriveLeaseEvent = { type: "changed"; state: DriveLeaseView };

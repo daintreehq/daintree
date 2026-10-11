@@ -253,7 +253,7 @@ function claimOpenedProject(projectId: string, isLive: () => boolean): void {
   }
   openClaim.inFlight = true;
   openClaim.owed = false;
-  void takeOverDrive(projectId)
+  void claimUnlessAnotherMachineDrives(projectId)
     .then(
       () => {
         openClaim.done = true;
@@ -267,6 +267,37 @@ function claimOpenedProject(projectId: string, isLive: () => boolean): void {
       openClaim.inFlight = false;
       if (!openClaim.done && openClaim.owed && isLive()) claimOpenedProject(projectId, isLive);
     });
+}
+
+/**
+ * Takes the project unless another machine drives it: nobody holding it, the
+ * host's own screen holding it, or another window of this machine holding it
+ * is taken; a second laptop driving it is not silently taken from, and this
+ * view opens viewing with "Take over" offered instead. A lease event landing
+ * while the lease is read means the read is stale, so it is read again before
+ * anything is taken. Settles either way, so the claim isn't retried.
+ */
+async function claimUnlessAnotherMachineDrives(projectId: string): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const generation = leaseGeneration;
+    const lease = await window.electron.driveLease.get({ projectId });
+    if (generation !== leaseGeneration) continue;
+    const holder = lease.holder;
+    const anotherMachine =
+      holder !== null &&
+      !lease.drivingHere &&
+      !holder.isHostLocal &&
+      lease.heldByThisClient !== true;
+    if (anotherMachine) {
+      leaseGeneration += 1;
+      applyLease(lease);
+      return;
+    }
+    await takeOverDrive(projectId);
+    return;
+  }
+  // The lease kept moving while it was read: leave it to the events, which
+  // already describe it, rather than take it on a stale read.
 }
 
 let syncRefs = 0;
