@@ -193,8 +193,13 @@ async function resolveDestination(
  */
 const pendingLookups = new WeakMap<object, Map<string, Promise<Destination | "unresolved">>>();
 
-/** Distinct names one session may have in flight; a request past it is refused. */
+/** Distinct names one session may have in flight; more wait for one to finish. */
 export const GUEST_MAX_PENDING_LOOKUPS = 64;
+/** Names one session may have waiting for a slot; a request past them is refused. */
+export const GUEST_MAX_QUEUED_LOOKUPS = 256;
+
+/** Per session, the lookups waiting for a slot, each started when one frees. */
+const queuedLookups = new WeakMap<object, Array<() => void>>();
 
 function lookUp(
   session: object,
@@ -208,9 +213,26 @@ function lookUp(
   }
   const inFlight = pending.get(hostname);
   if (inFlight) return inFlight;
-  if (pending.size >= GUEST_MAX_PENDING_LOOKUPS) return Promise.resolve("unresolved");
-  const lookup = resolveDestination(resolve, hostname).finally(() => pending.delete(hostname));
-  pending.set(hostname, lookup);
+  if (pending.size >= GUEST_MAX_PENDING_LOOKUPS) {
+    // A page with many hosts waits its turn rather than losing resources at
+    // random; each lookup has its deadline, so the queue drains.
+    let queue = queuedLookups.get(session);
+    if (!queue) {
+      queue = [];
+      queuedLookups.set(session, queue);
+    }
+    if (queue.length >= GUEST_MAX_QUEUED_LOOKUPS) return Promise.resolve("unresolved");
+    const waiting = queue;
+    return new Promise<void>((start) => waiting.push(start)).then(() =>
+      lookUp(session, resolve, hostname)
+    );
+  }
+  const slots = pending;
+  const lookup = resolveDestination(resolve, hostname).finally(() => {
+    slots.delete(hostname);
+    queuedLookups.get(session)?.shift()?.();
+  });
+  slots.set(hostname, lookup);
   return lookup;
 }
 

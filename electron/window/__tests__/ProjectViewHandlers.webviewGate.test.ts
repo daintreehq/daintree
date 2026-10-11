@@ -13,6 +13,7 @@ vi.mock("electron", () => ({
 import { isWebviewSrcAllowed, setRemoteWebviewSrcGate } from "../ProjectViewHandlers.js";
 import {
   GUEST_MAX_PENDING_LOOKUPS,
+  GUEST_MAX_QUEUED_LOOKUPS,
   GUEST_RESOLVE_DEADLINE_MS,
   guardRemoteGuestRequests,
   guestDocument,
@@ -386,22 +387,40 @@ describe("remote guest requests", () => {
     warn.mockRestore();
   });
 
-  it("refuses a request once a session has too many names in flight", async () => {
+  it("queues a request past the names in flight, and loads it once one of them gives up", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const answers: Record<string, Answer> = {};
-      for (let i = 0; i <= GUEST_MAX_PENDING_LOOKUPS; i++) answers[`n${i}.example`] = "hang";
+      for (let i = 0; i < GUEST_MAX_PENDING_LOOKUPS; i++) answers[`n${i}.example`] = "hang";
       answers["fine.example"] = ["93.184.216.34"];
       const fake = resolvingSession(answers);
       guardRemoteGuestRequests(REMOTE, { session: fake.session });
       for (let i = 0; i < GUEST_MAX_PENDING_LOOKUPS; i++) fake.send(`http://n${i}.example/`);
-      await expect(fake.send("http://fine.example/").settled).resolves.toBe(false);
+      const queued = fake.send("http://fine.example/");
+      await vi.advanceTimersByTimeAsync(0);
+      // Waiting its turn, not refused and not yet asked about.
       expect(fake.resolveHost).toHaveBeenCalledTimes(GUEST_MAX_PENDING_LOOKUPS);
-      // Once the stalled lookups give up, names are looked up again.
       await vi.advanceTimersByTimeAsync(GUEST_RESOLVE_DEADLINE_MS + 1);
-      const later = fake.send("http://fine.example/");
-      await expect(later.settled).resolves.toBe(true);
+      await expect(queued.settled).resolves.toBe(true);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses a request only once the queue behind the names in flight is full too", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const total = GUEST_MAX_PENDING_LOOKUPS + GUEST_MAX_QUEUED_LOOKUPS;
+      const answers: Record<string, Answer> = {};
+      for (let i = 0; i < total; i++) answers[`n${i}.example`] = "hang";
+      answers["fine.example"] = ["93.184.216.34"];
+      const fake = resolvingSession(answers);
+      guardRemoteGuestRequests(REMOTE, { session: fake.session });
+      for (let i = 0; i < total; i++) fake.send(`http://n${i}.example/`);
+      await expect(fake.send("http://fine.example/").settled).resolves.toBe(false);
     } finally {
       warn.mockRestore();
       vi.useRealTimers();
