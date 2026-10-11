@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const ipcUtilsMock = vi.hoisted(() => ({
   broadcastToRenderer: vi.fn(),
   broadcastToProjectRenderers: vi.fn(),
+  /** Views bound to a remote host, which hear that host's contributions instead. */
+  remoteBound: new Set<number>(),
 }));
 const registryMock = vi.hoisted(() => ({
   getAllAppWebContents: vi.fn((): unknown[] => []),
@@ -23,6 +25,7 @@ const contributionsMock = vi.hoisted(() => ({
 vi.mock("../../../ipc/utils.js", () => ({
   broadcastToRenderer: ipcUtilsMock.broadcastToRenderer,
   broadcastToProjectRenderers: ipcUtilsMock.broadcastToProjectRenderers,
+  isWithheldFromView: (webContentsId: number) => ipcUtilsMock.remoteBound.has(webContentsId),
 }));
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getAllAppWebContents: registryMock.getAllAppWebContents,
@@ -504,6 +507,24 @@ describe("project-scoped mutation broadcasts", () => {
     expect(viewA.send).not.toHaveBeenCalled();
   });
 
+  it("never sends this machine's slice to a view bound to another host", async () => {
+    const viewA = fakeWebContents(11);
+    const remoteView = fakeWebContents(33);
+    ipcUtilsMock.remoteBound.add(33);
+    registryMock.getRegisteredProjectViews.mockReturnValue([
+      { webContents: viewA, projectId: PROJECT_A },
+    ]);
+    registryMock.getAllAppWebContents.mockReturnValue([viewA, remoteView]);
+    try {
+      const b = makeBroadcaster();
+      b.schedulePanelKindsBroadcast();
+      await flush();
+      expect(remoteView.send).not.toHaveBeenCalled();
+    } finally {
+      ipcUtilsMock.remoteBound.clear();
+    }
+  });
+
   it("falls back to an app-wide broadcast of the global slice when no project view is registered", async () => {
     registryMock.getRegisteredProjectViews.mockReturnValue([]);
     const b = makeBroadcaster();
@@ -548,6 +569,17 @@ describe("pushSnapshotTo", () => {
       { tours: contributionsMock.tours },
       { icons: contributionsMock.icons },
     ]);
+  });
+
+  it("replays nothing of this machine's to a view bound to another host", async () => {
+    const wc = fakeWebContents(44);
+    ipcUtilsMock.remoteBound.add(44);
+    try {
+      await makeBroadcaster().pushSnapshotTo(wc as unknown as Electron.WebContents);
+      expect(wc.send).not.toHaveBeenCalled();
+    } finally {
+      ipcUtilsMock.remoteBound.clear();
+    }
   });
 
   it("resolves the target's own project rather than the active one", async () => {

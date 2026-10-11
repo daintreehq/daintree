@@ -430,7 +430,16 @@ export function setRemoteBoundViewFilter(filter: RemoteBoundViewFilter | null): 
   };
 }
 
-function isWithheldFromView(webContentsId: number, channel: string, args: unknown[]): boolean {
+/**
+ * Whether a push from this machine is kept from a view: a view bound to a
+ * remote host hears that host's state, not this machine's. Every direct
+ * `send` of a local push to an arbitrary view goes through this.
+ */
+export function isWithheldFromView(
+  webContentsId: number,
+  channel: string,
+  args: unknown[]
+): boolean {
   const filter = remoteBoundViewFilter;
   return filter !== null && !filter(webContentsId, channel, args);
 }
