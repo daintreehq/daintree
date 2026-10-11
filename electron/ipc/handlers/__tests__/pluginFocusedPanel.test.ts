@@ -208,14 +208,18 @@ describe("plugin:report-focused-panel", () => {
       expect(relayed).toHaveLength(count + 1);
     });
 
-    it("clears its host's report when the renderer crashes, and replays nothing after", () => {
+    it("clears its host's report when the renderer crashes, until it reports again", () => {
       const s = sender(7);
       send(s, { kind: "terminal" });
       s.fire("render-process-gone");
       expect(relayed.at(-1)).toEqual({ sender: 7, args: [null, false] });
-      const count = relayed.length;
+      // Re-sent on the next endpoint, in case the link was down for the first.
       notifyRemoteViewEndpointOpened(7);
-      expect(relayed).toHaveLength(count);
+      expect(relayed.at(-1)).toEqual({ sender: 7, args: [null, false] });
+      // A reloaded page that reports again is relayed as usual from then on.
+      send(s, { kind: "diff" });
+      notifyRemoteViewEndpointOpened(7);
+      expect(relayed.at(-1)).toEqual({ sender: 7, args: [{ kind: "diff" }, true] });
     });
 
     it("falls back to the local tracker once the view is no longer bound", () => {

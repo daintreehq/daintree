@@ -528,6 +528,27 @@ describe("a local view bound to a remote host (Shell side)", () => {
     }
   });
 
+  it("forgets a pending unsubscribe once its view is closed", () => {
+    const view = makeSender();
+    const channels: string[] = [];
+    const off = setHostSendRelay((id, channel) => {
+      if (id !== view.id) return false;
+      channels.push(channel);
+      return true;
+    });
+    try {
+      emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, view);
+      emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE, view);
+      view.destroyed = true;
+      view.emit("destroyed");
+      expect(view.listenerCount("destroyed")).toBe(0);
+      notifyRemoteViewEndpointOpened(view.id);
+      expect(channels).toHaveLength(2);
+    } finally {
+      off();
+    }
+  });
+
   it("relays an explicit unsubscribe to its host", () => {
     const view = makeSender();
     const channels: string[] = [];

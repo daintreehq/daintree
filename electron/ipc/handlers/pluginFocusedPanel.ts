@@ -30,6 +30,13 @@ export function registerPluginFocusedPanelHandlers(
 ): () => void {
   const watched = new WeakSet<WebContents>();
   const relayed = new Map<number, { sender: WebContents; payload: unknown; focused: boolean }>();
+  // Remote-bound renderers that crashed: their host is told "no panel" until
+  // they report again, on every endpoint, since one sent while the link was
+  // down is dropped and a resume keeps the host's old report.
+  const crashed = new Set<number>();
+  const clearOnHost = (id: number): void => {
+    relaySendToHost(id, CHANNELS.PLUGIN_REPORT_FOCUSED_PANEL, [null, false]);
+  };
   const watchedWindows = new Set<BrowserWindow>();
 
   const isNativelyFocused = (sender: WebContents): boolean => {
@@ -69,6 +76,7 @@ export function registerPluginFocusedPanelHandlers(
       watched.add(sender);
       sender.once("destroyed", () => {
         relayed.delete(senderId);
+        crashed.delete(senderId);
         tracker.removeSender(senderId);
       });
       // A crashed renderer keeps its WebContents, so `destroyed` alone would
@@ -79,7 +87,8 @@ export function registerPluginFocusedPanelHandlers(
         // it reports nothing: tell its host it has no panel, and stop replaying
         // the last report into new endpoints.
         if (relayed.delete(senderId)) {
-          relaySendToHost(senderId, CHANNELS.PLUGIN_REPORT_FOCUSED_PANEL, [null, false]);
+          crashed.add(senderId);
+          clearOnHost(senderId);
         }
       });
       // Which view holds native focus decides whose report counts, and that
@@ -99,6 +108,7 @@ export function registerPluginFocusedPanelHandlers(
       window.on("blur", refreshRelays);
       window.once("closed", () => watchedWindows.delete(window));
     }
+    crashed.delete(senderId);
     if (relay(sender, payload, true)) {
       tracker.removeSender(senderId);
       return;
@@ -131,6 +141,10 @@ export function registerPluginFocusedPanelHandlers(
   // A relay sent while the link was down was dropped, and a fresh endpoint
   // starts with nothing: re-send the view's last report when it reattaches.
   const offReopen = onRemoteViewEndpointOpened((webContentsId) => {
+    if (crashed.has(webContentsId)) {
+      clearOnHost(webContentsId);
+      return;
+    }
     const entry = relayed.get(webContentsId);
     if (entry) relay(entry.sender, entry.payload, true);
   });
@@ -150,5 +164,6 @@ export function registerPluginFocusedPanelHandlers(
     }
     watchedWindows.clear();
     relayed.clear();
+    crashed.clear();
   };
 }

@@ -182,7 +182,13 @@ export function registerPluginMetricsHandlers(options?: {
   // Unsubscribes relayed for views that are still alive. A send while the link
   // is down is dropped, and a resume keeps the host's endpoint and its
   // subscription, so each is re-sent on the view's next endpoint.
-  const pendingUnsubscribes = new Map<number, Electron.WebContents>();
+  const pendingUnsubscribes = new Map<number, { sender: Electron.WebContents; off: () => void }>();
+  const dropPendingUnsubscribe = (id: number): void => {
+    const pending = pendingUnsubscribes.get(id);
+    if (!pending) return;
+    pendingUnsubscribes.delete(id);
+    pending.off();
+  };
   const endRelayed = (id: number, tellHost: boolean): void => {
     const entry = relayedSubscribers.get(id);
     if (!entry) return;
@@ -190,11 +196,17 @@ export function registerPluginMetricsHandlers(options?: {
     entry.off();
     if (!tellHost) return;
     relaySendToHost(id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE, []);
-    if (!entry.sender.isDestroyed()) pendingUnsubscribes.set(id, entry.sender);
+    const sender = entry.sender;
+    if (sender.isDestroyed()) return;
+    dropPendingUnsubscribe(id);
+    // A closed view's endpoint closes on the host with its subscription.
+    const onGone = (): void => dropPendingUnsubscribe(id);
+    sender.once("destroyed", onGone);
+    pendingUnsubscribes.set(id, { sender, off: () => sender.removeListener("destroyed", onGone) });
   };
   const relaySubscribe = (sender: Electron.WebContents): boolean => {
     if (!relaySendToHost(sender.id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, [])) return false;
-    pendingUnsubscribes.delete(sender.id);
+    dropPendingUnsubscribe(sender.id);
     if (relayedSubscribers.has(sender.id)) return true;
     const id = sender.id;
     const onGone = (): void => endRelayed(id, false);
@@ -214,8 +226,8 @@ export function registerPluginMetricsHandlers(options?: {
     onRemoteViewEndpointOpened((webContentsId) => {
       const unsubscribed = pendingUnsubscribes.get(webContentsId);
       if (unsubscribed) {
-        pendingUnsubscribes.delete(webContentsId);
-        if (!unsubscribed.isDestroyed()) {
+        dropPendingUnsubscribe(webContentsId);
+        if (!unsubscribed.sender.isDestroyed()) {
           relaySendToHost(webContentsId, CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE, []);
         }
       }
@@ -228,7 +240,7 @@ export function registerPluginMetricsHandlers(options?: {
   );
   cleanups.push(() => {
     for (const id of [...relayedSubscribers.keys()]) endRelayed(id, false);
-    pendingUnsubscribes.clear();
+    for (const id of [...pendingUnsubscribes.keys()]) dropPendingUnsubscribe(id);
   });
 
   const handleSubscribe = (event: Electron.IpcMainEvent): void => {
