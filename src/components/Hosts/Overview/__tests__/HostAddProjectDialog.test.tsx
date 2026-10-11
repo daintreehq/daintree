@@ -170,6 +170,22 @@ describe("HostAddProjectDialog", () => {
     expect(suggestCloneDestination).not.toHaveBeenCalled();
   });
 
+  it("keeps a typed name through a later Change…, even one that matches the URL's", async () => {
+    pickHostPaths.mockResolvedValue(["/data"]);
+    renderDialog();
+    const urlField = screen.getByRole("textbox", { name: "Repository URL to clone on studio-01" });
+    fireEvent.change(urlField, { target: { value: URL } });
+    const folder = screen.getByRole("textbox", { name: "Folder on studio-01" }) as HTMLInputElement;
+    await waitFor(() => expect(folder.value).toBe("/home/greg/Projects/api"));
+    // Typed by hand, ending on the URL's own name.
+    fireEvent.change(folder, { target: { value: "/home/greg/Projects/ap" } });
+    fireEvent.change(folder, { target: { value: "/home/greg/Projects/api" } });
+    fireEvent.click(screen.getByRole("button", { name: "Choose a folder on studio-01" }));
+    await waitFor(() => expect(folder.value).toBe("/data/api"));
+    fireEvent.change(urlField, { target: { value: "git@github.com:daintreehq/web.git" } });
+    expect(folder.value).toBe("/data/api");
+  });
+
   it("keeps a folder name the person typed when the URL changes", async () => {
     pickHostPaths.mockResolvedValue(["/data"]);
     renderDialog();

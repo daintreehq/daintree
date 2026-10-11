@@ -70,6 +70,8 @@ export function HostAddProjectDialog({
   const [destinationTouched, setDestinationTouched] = useState(false);
   // A folder chosen with Change…: the clone's own folder in it follows the URL until one is typed.
   const [pickedFolder, setPickedFolder] = useState<string | null>(null);
+  // Whether the person typed the folder's name, rather than it coming from the URL or the host.
+  const [nameTyped, setNameTyped] = useState(false);
   const [check, setCheck] = useState<DestinationCheck | null>(null);
   const [checkedInput, setCheckedInput] = useState<string | null>(null);
   // The URL the check was made for: a folder vetted for one repository never clones another.
@@ -173,12 +175,14 @@ export function HostAddProjectDialog({
     });
     const folder = picked?.[0];
     if (!folder) return;
-    const name = repoName(trimmedUrl);
-    const next = destinationInFolder(folder, destination, name);
     setDestinationTouched(true);
-    // Only a name taken from the URL follows it; one the person typed stays.
-    setPickedFolder(next.slice(next.lastIndexOf("/") + 1) === name ? folder : null);
-    setDestination(next);
+    // A name the person typed stays; any other is the URL's, and follows it.
+    setPickedFolder(nameTyped ? null : folder);
+    setDestination(
+      nameTyped
+        ? destinationInFolder(folder, destination, repoName(trimmedUrl))
+        : destinationInFolder(folder, "", repoName(trimmedUrl))
+    );
     setCheck(null);
     setCheckedInput(null);
     setFailure(null);
@@ -289,6 +293,7 @@ export function HostAddProjectDialog({
               onChange={(event) => {
                 setDestinationTouched(true);
                 setPickedFolder(null);
+                setNameTyped(true);
                 setDestination(event.target.value);
                 setCheck(null);
                 setCheckedInput(null);
@@ -322,6 +327,7 @@ export function HostAddProjectDialog({
                     onClick={() => {
                       setDestinationTouched(true);
                       setPickedFolder(null);
+                      setNameTyped(false);
                       setDestination(check.suggestion!);
                       setCheck(null);
                       setCheckedInput(null);
