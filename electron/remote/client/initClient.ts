@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import os from "node:os";
 import path from "node:path";
 import { app, type WebContents } from "electron";
 import type { RemoteHostsEvent } from "../../../shared/types/ipc/remoteHosts.js";
@@ -56,6 +55,7 @@ import { TransportError, type LinkTransport } from "./transport.js";
 import { WindowHostBinding } from "./WindowHostBinding.js";
 import { defaultCommandRunner } from "./commandRunner.js";
 import { readOrCreateDeviceId } from "./deviceId.js";
+import { machineDisplayName } from "./machineName.js";
 import { detectClientBundle, downloadArtifact } from "./clientBuild.js";
 import { HostSetupService, RELEASE_FEED_PREFIXES } from "./HostSetupService.js";
 
@@ -394,7 +394,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     client: {
       // Per launch: a session only resumes within one run of this app.
       clientId: crypto.randomUUID(),
-      clientName: os.hostname(),
+      clientName: machineDisplayName(),
       deviceId: readOrCreateDeviceId(clientDir),
       platform:
         process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux",
