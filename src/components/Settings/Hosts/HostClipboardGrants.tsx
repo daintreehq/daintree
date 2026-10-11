@@ -28,7 +28,8 @@ function pluginLabel(pluginId: string): string {
  * clipboard. Resetting forgets the answer, so the plugin asks again.
  */
 export function HostClipboardGrants({ hostId, hostName }: HostClipboardGrantsProps) {
-  const [grants, setGrants] = useState<HostPluginClipboardGrant[]>([]);
+  // Null until read: "no plugin has asked" is said only once the answer is known.
+  const [grants, setGrants] = useState<HostPluginClipboardGrant[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -70,7 +71,9 @@ export function HostClipboardGrants({ hostId, hostName }: HostClipboardGrantsPro
             }
           />
         )}
-        {grants.length === 0 ? (
+        {grants === null ? (
+          error === null && <SettingsEmptyRow>Reading clipboard answers</SettingsEmptyRow>
+        ) : grants.length === 0 ? (
           <SettingsEmptyRow>
             No plugin on {hostName} has asked for this computer&apos;s clipboard
           </SettingsEmptyRow>

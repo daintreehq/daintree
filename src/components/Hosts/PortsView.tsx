@@ -1,9 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import type { HostListeningPort, PortForward } from "@shared/types/ipc/portForwards";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useHostList } from "./hostList";
 
 const ORIGIN_LABELS: Record<PortForward["origin"], string> = {
@@ -41,7 +48,7 @@ function parsePort(text: string): number | null {
 }
 
 interface PortsViewProps {
-  /** Show and forward this host's ports; without it, every host's forwards are listed. */
+  /** The host to forward from at first (the window's own); otherwise the first connected host. */
   hostId?: string;
 }
 
@@ -49,40 +56,73 @@ interface PortsViewProps {
  * Active port forwards, a way to forward any port from a host, and the ports
  * found listening on it. Built to sit inside the hosts overview.
  */
-export function PortsView({ hostId }: PortsViewProps) {
+export function PortsView({ hostId: preferredHostId }: PortsViewProps) {
   const forwards = useForwards();
   const { hosts } = useHostList();
+  // Forwarding works from any connected host, whichever machine this window is on.
+  const connectedHosts = hosts.filter((h) => h.connection.status === "connected");
+  const [picked, setPicked] = useState<string | null>(null);
+  const isConnected = (id: string | null | undefined) =>
+    !!id && connectedHosts.some((h) => h.descriptor.id === id);
+  // A host picked here stays picked if it drops, rather than the view quietly
+  // moving to another machine; forwarding waits for it instead.
+  const hostId =
+    picked ??
+    (isConnected(preferredHostId) ? preferredHostId : connectedHosts[0]?.descriptor.id) ??
+    undefined;
+  const hostAvailable = isConnected(hostId);
+  // Once a target is shown it stays the target until someone picks another,
+  // so a host that drops mid-typing never hands the port to a different machine.
+  useEffect(() => {
+    if (picked === null && hostId) setPicked(hostId);
+  }, [picked, hostId]);
+  const pickable = hosts.filter(
+    (h) => h.connection.status === "connected" || h.descriptor.id === hostId
+  );
+  const pickerId = useId();
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [detected, setDetected] = useState<HostListeningPort[] | null>(null);
-  const [scanError, setScanError] = useState<string | null>(null);
+  // A scan belongs to the host it was run on, and shows only while that host is the target.
+  const [scan, setScan] = useState<{
+    hostId: string;
+    ports: HostListeningPort[] | null;
+    error: string | null;
+  } | null>(null);
   const [scanRun, setScanRun] = useState(0);
+  const detected = scan && scan.hostId === hostId ? scan.ports : null;
+  const scanError = scan && scan.hostId === hostId ? scan.error : null;
 
   useEffect(() => {
-    if (!hostId) return;
+    if (!hostId || !hostAvailable) return;
     let live = true;
     window.electron.portForwards.listHostPorts({ hostId }).then(
       (ports) => {
-        if (!live) return;
-        setDetected(ports);
-        setScanError(null);
+        if (live) setScan({ hostId, ports, error: null });
       },
       (err: unknown) => {
-        if (live) setScanError(formatErrorMessage(err, "Couldn't list the host's ports"));
+        if (live) {
+          setScan({
+            hostId,
+            ports: null,
+            error: formatErrorMessage(err, "Couldn't list the host's ports"),
+          });
+        }
       }
     );
     return () => {
       live = false;
     };
-  }, [hostId, scanRun]);
+  }, [hostId, hostAvailable, scanRun]);
 
   const hostName = (id: string) => hosts.find((h) => h.descriptor.id === id)?.descriptor.name ?? id;
-  const shown = hostId ? forwards.filter((f) => f.hostId === hostId) : forwards;
-  const forwardedPorts = new Set(shown.map((f) => f.remotePort));
+  const shown = forwards;
+  const forwardedPorts = new Set(
+    forwards.filter((f) => f.hostId === hostId).map((f) => f.remotePort)
+  );
   const offered = (detected ?? []).filter((p) => !forwardedPorts.has(p.port));
 
   const forward = (port: number, origin: PortForward["origin"]) => {
-    if (!hostId) return;
+    if (!hostId || !hostAvailable) return;
     window.electron.portForwards.forward({ hostId, remotePort: port, origin }).then(
       () => {
         setError(null);
@@ -115,17 +155,44 @@ export function PortsView({ hostId }: PortsViewProps) {
 
       {hostId && (
         <form
-          className="flex items-center gap-2"
+          className="flex flex-wrap items-center gap-2"
           onSubmit={(e) => {
             e.preventDefault();
             submit();
           }}
         >
+          {pickable.length > 1 ? (
+            <>
+              <label htmlFor={pickerId} className="text-xs text-text-secondary">
+                From
+              </label>
+              <Select
+                value={hostId}
+                onValueChange={(value) => {
+                  setPicked(value);
+                  setError(null);
+                }}
+              >
+                <SelectTrigger id={pickerId} className="w-44">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {pickable.map((h) => (
+                    <SelectItem key={h.descriptor.id} value={h.descriptor.id}>
+                      {h.descriptor.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </>
+          ) : (
+            <span className="text-xs text-text-secondary">From {hostName(hostId)}</span>
+          )}
           <Input
             density="compact"
             className="w-32"
             inputMode="numeric"
-            aria-label="Port on the host"
+            aria-label={`Port on ${hostName(hostId)}`}
             placeholder="Port"
             value={draft}
             invalid={error !== null}
@@ -134,9 +201,14 @@ export function PortsView({ hostId }: PortsViewProps) {
               setError(null);
             }}
           />
-          <Button type="submit" variant="outline" size="sm">
+          <Button type="submit" variant="outline" size="sm" disabled={!hostAvailable}>
             Forward port
           </Button>
+          {!hostAvailable && (
+            <span className="text-xs text-text-secondary">
+              {hostName(hostId)} isn&apos;t connected
+            </span>
+          )}
         </form>
       )}
       {error && (
@@ -148,8 +220,8 @@ export function PortsView({ hostId }: PortsViewProps) {
       {shown.length === 0 ? (
         <p className="text-xs text-text-secondary">
           {hostId
-            ? "Forward a port to open the host's server in this machine's browser"
-            : "Forward a port from a host to open its server here"}
+            ? `Forward a port to open a server on ${hostName(hostId)} in this machine's browser`
+            : "Connect to a host to forward its ports here"}
         </p>
       ) : (
         <ul className="divide-y divide-border-divider" aria-label="Forwarded ports">
@@ -176,11 +248,14 @@ export function PortsView({ hostId }: PortsViewProps) {
       {hostId && (
         <div className="space-y-2">
           <div className="flex items-center gap-2">
-            <h4 className="text-xs font-medium text-text-secondary">Detected on the host</h4>
+            <h4 className="text-xs font-medium text-text-secondary">
+              Listening on {hostName(hostId)}
+            </h4>
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label="Scan the host's ports again"
+              aria-label={`Scan ${hostName(hostId)}'s ports again`}
+              disabled={!hostAvailable}
               onClick={() => setScanRun((n) => n + 1)}
             >
               <RefreshCw aria-hidden="true" />
@@ -190,7 +265,7 @@ export function PortsView({ hostId }: PortsViewProps) {
             <p className="text-xs text-text-secondary">{scanError}</p>
           ) : detected === null ? null : offered.length === 0 ? (
             <p className="text-xs text-text-secondary">
-              Nothing else is listening on the host's localhost
+              Nothing else is listening on {hostName(hostId)}&apos;s localhost
             </p>
           ) : (
             <ul className="divide-y divide-border-divider" aria-label="Detected ports">
@@ -200,7 +275,12 @@ export function PortsView({ hostId }: PortsViewProps) {
                   <span className="min-w-0 flex-1 truncate text-text-secondary">
                     {p.processName ?? "Unknown process"}
                   </span>
-                  <Button variant="ghost" size="xs" onClick={() => forward(p.port, "detected")}>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    disabled={!hostAvailable}
+                    onClick={() => forward(p.port, "detected")}
+                  >
                     Forward
                   </Button>
                 </li>

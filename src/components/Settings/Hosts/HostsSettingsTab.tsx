@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -12,7 +12,12 @@ import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { AddHostDialog } from "./AddHostDialog";
 import { HostDetail } from "./HostDetail";
-import { buildLabel, connectionLabel, platformLabel } from "./hostLabels";
+import { connectionLabel, platformLabel } from "./hostLabels";
+import {
+  onHostSettingsRequest,
+  takePendingHostSettings,
+  type HostSettingsRequest,
+} from "./hostSettingsRequests";
 import { onHostUpdateRequest, takePendingHostUpdate } from "./hostUpdateRequests";
 import { onHostPluginsRequest, takePendingHostPlugins } from "./hostPluginRequests";
 
@@ -26,6 +31,13 @@ export default function HostsSettingsTab() {
   const [detailHostId, setDetailHostId] = useState<HostId | null>(null);
   const [forgetTarget, setForgetTarget] = useState<{ id: HostId; name: string } | null>(null);
   const [forgetError, setForgetError] = useState<string | null>(null);
+  // Leaving a host's details puts focus back on the Details button it came
+  // from (or, once removed, the list's Add host); entering from the keyboard
+  // puts it on the header's way back.
+  const returnFocusTo = useRef<{ hostId: HostId; visible: boolean } | null>(null);
+  // Set when the details were opened from the keyboard; the detail page moves
+  // focus to the header's way back once it has mounted, however late its host loads.
+  const [focusBackFor, setFocusBackFor] = useState<HostId | null>(null);
   const [forgetting, setForgetting] = useState(false);
   const confirmForget = () => {
     const target = forgetTarget;
@@ -40,7 +52,7 @@ export default function HostsSettingsTab() {
       },
       (err: unknown) => {
         setForgetting(false);
-        setForgetError(formatErrorMessage(err, "Couldn't forget the host"));
+        setForgetError(formatErrorMessage(err, "Couldn't remove the host"));
       }
     );
   };
@@ -59,6 +71,33 @@ export default function HostsSettingsTab() {
     if (pending) open(pending);
     return onHostUpdateRequest(open);
   }, []);
+
+  useEffect(() => {
+    const answer = (request: HostSettingsRequest) => {
+      if (request.kind === "add") {
+        setDetailHostId(null);
+        setAddOpen(true);
+      } else {
+        setFocusBackFor(request.viaKeyboard === true ? request.hostId : null);
+        setDetailHostId(request.hostId);
+      }
+    };
+    const pending = takePendingHostSettings();
+    if (pending) answer(pending);
+    return onHostSettingsRequest(answer);
+  }, []);
+
+  useEffect(() => {
+    if (detailHostId !== null) return undefined;
+    const target = returnFocusTo.current;
+    if (target === null) return undefined;
+    returnFocusTo.current = null;
+    const button =
+      document.querySelector<HTMLElement>(`[data-host-details="${CSS.escape(target.hostId)}"]`) ??
+      document.querySelector<HTMLElement>('[data-testid="hosts-add-host"]');
+    button?.focus({ focusVisible: target.visible } as FocusOptions);
+    return undefined;
+  }, [detailHostId]);
 
   useEffect(() => {
     const open = (hostId: HostId) => {
@@ -80,15 +119,18 @@ export default function HostsSettingsTab() {
       <HostDetail
         key={
           openUpdate
-            ? `update-${updateRequest.seq}`
+            ? `update-${detail.descriptor.id}-${updateRequest.seq}`
             : focusPlugins
-              ? `plugins-${pluginsRequest.seq}`
-              : "detail"
+              ? `plugins-${detail.descriptor.id}-${pluginsRequest.seq}`
+              : `detail-${detail.descriptor.id}`
         }
         entry={detail}
+        focusBackOnMount={focusBackFor === detail.descriptor.id}
         openUpdate={openUpdate}
         focusPlugins={focusPlugins}
-        onBack={() => {
+        onBack={(viaKeyboard) => {
+          returnFocusTo.current = { hostId: detail.descriptor.id, visible: viaKeyboard === true };
+          setFocusBackFor(null);
           setDetailHostId(null);
           setUpdateRequest(null);
           setPluginsRequest(null);
@@ -98,7 +140,12 @@ export default function HostsSettingsTab() {
   }
 
   const addButton = (
-    <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>
+    <Button
+      variant="outline"
+      size="sm"
+      data-testid="hosts-add-host"
+      onClick={() => setAddOpen(true)}
+    >
       Add host
     </Button>
   );
@@ -136,7 +183,9 @@ export default function HostsSettingsTab() {
                 description={
                   <>
                     {formatHostConnection(descriptor.connection)} ·{" "}
-                    {platformLabel(descriptor.platform, descriptor.arch)} · {buildLabel(descriptor)}
+                    {descriptor.platform
+                      ? platformLabel(descriptor.platform, null)
+                      : "Not seen yet"}
                     <br />
                     {connectionLabel(connection)}
                   </>
@@ -146,8 +195,12 @@ export default function HostsSettingsTab() {
                     <Button
                       variant="outline"
                       size="sm"
-                      aria-label={`Open ${descriptor.name}`}
-                      onClick={() => setDetailHostId(descriptor.id)}
+                      aria-label={`Details for ${descriptor.name}`}
+                      data-host-details={descriptor.id}
+                      onClick={(event) => {
+                        setFocusBackFor(event.detail === 0 ? descriptor.id : null);
+                        setDetailHostId(descriptor.id);
+                      }}
                     >
                       Details
                     </Button>
@@ -156,7 +209,7 @@ export default function HostsSettingsTab() {
                         <Button
                           variant="ghost-danger"
                           size="icon-sm"
-                          aria-label={`Forget ${descriptor.name}`}
+                          aria-label={`Remove ${descriptor.name} from this device`}
                           onClick={() => {
                             setForgetError(null);
                             setForgetTarget({ id: descriptor.id, name: descriptor.name });
@@ -165,7 +218,7 @@ export default function HostsSettingsTab() {
                           <Trash2 aria-hidden="true" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent side="bottom">Forget host</TooltipContent>
+                      <TooltipContent side="bottom">Remove host</TooltipContent>
                     </Tooltip>
                   </div>
                 }
@@ -182,9 +235,9 @@ export default function HostsSettingsTab() {
         isOpen={forgetTarget !== null}
         onClose={() => setForgetTarget(null)}
         variant="destructive"
-        title={`Forget '${forgetTarget?.name ?? "host"}'?`}
-        description="It leaves your host list, its connection closes, and windows attached to it return to this machine. Daintree on the host keeps running."
-        confirmLabel="Forget host"
+        title={`Remove '${forgetTarget?.name ?? "host"}' from this device?`}
+        description={`Its connection here closes and windows attached to it return to this machine. Projects and Daintree on ${forgetTarget?.name ?? "the host"} keep running.`}
+        confirmLabel="Remove host"
         onConfirm={confirmForget}
         isConfirmLoading={forgetting}
       >

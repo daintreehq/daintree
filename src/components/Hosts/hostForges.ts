@@ -29,8 +29,10 @@ export function describeHostForges(
   summary: Pick<HostMetricsSummary, "forges"> | null,
   hostName: string
 ): { short: string; full: string } | null {
-  const forges = summary?.forges;
-  if (!forges) return null;
+  const reported = summary?.forges;
+  if (!reported) return null;
+  // Alphabetical, as the host's details list them, so two cards read alike.
+  const forges = [...reported].sort((a, b) => a.name.localeCompare(b.name));
   if (forges.length === 0) {
     const none = `No forge providers on ${hostName}`;
     return { short: "None", full: none };

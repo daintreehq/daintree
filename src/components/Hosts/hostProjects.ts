@@ -29,9 +29,10 @@ export function setHostProjectsLoader(next: HostProjectsLoader | null): void {
 }
 
 const CACHE_TTL_MS = 10_000;
-const cache = new Map<HostId, { at: number; projects: Promise<HostProjectRef[]> }>();
+const cache = new Map<HostId, { at: number; projects: Promise<HostProjectRef[] | null> }>();
 
-function loadHostProjects(hostId: HostId, now: number): Promise<HostProjectRef[]> {
+/** A host's projects; null when they couldn't be listed, which is not the same as none. */
+function loadHostProjects(hostId: HostId, now: number): Promise<HostProjectRef[] | null> {
   const cached = cache.get(hostId);
   if (cached && now - cached.at < CACHE_TTL_MS) return cached.projects;
   const load = loader;
@@ -39,7 +40,7 @@ function loadHostProjects(hostId: HostId, now: number): Promise<HostProjectRef[]
     ? load(hostId).catch((error: unknown) => {
         cache.delete(hostId);
         logWarn("[Hosts] Couldn't list another host's projects", { error });
-        return [];
+        return null;
       })
     : Promise.resolve([]);
   cache.set(hostId, { at: now, projects });
@@ -114,14 +115,14 @@ export function useOtherHostTargets(localPlatform: ClientPlatform): OtherHostTar
 
 /**
  * The projects each host lists, for the hosts named (the overview's cards).
- * A host missing from the map hasn't answered yet; nothing is asked of a
- * host whose id isn't passed.
+ * A host missing from the map hasn't answered yet, and null means its list
+ * couldn't be read; nothing is asked of a host whose id isn't passed.
  */
 export function useHostProjectLists(
   hostIds: readonly HostId[]
-): ReadonlyMap<HostId, HostProjectRef[]> {
+): ReadonlyMap<HostId, HostProjectRef[] | null> {
   const key = hostIds.join("\n");
-  const [lists, setLists] = useState<ReadonlyMap<HostId, HostProjectRef[]>>(() => new Map());
+  const [lists, setLists] = useState<ReadonlyMap<HostId, HostProjectRef[] | null>>(() => new Map());
   useEffect(() => {
     const ids = key === "" ? [] : key.split("\n");
     if (ids.length === 0) {
@@ -131,7 +132,7 @@ export function useHostProjectLists(
     let cancelled = false;
     const now = Date.now();
     void Promise.all(ids.map((id) => loadHostProjects(id, now))).then((loaded) => {
-      if (!cancelled) setLists(new Map(ids.map((id, index) => [id, loaded[index] ?? []])));
+      if (!cancelled) setLists(new Map(ids.map((id, index) => [id, loaded[index] ?? null])));
     });
     return () => {
       cancelled = true;

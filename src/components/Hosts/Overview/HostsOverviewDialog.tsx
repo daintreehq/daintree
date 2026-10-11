@@ -12,6 +12,10 @@ import { buildHostMenuRows, clientPlatform } from "../hostModel";
 import { switchToHost } from "../hostSwitching";
 import { useHostProjectLists } from "../hostProjects";
 import { HostAddProjectDialog } from "./HostAddProjectDialog";
+import {
+  openHostsSettingsTab,
+  requestHostSettings,
+} from "@/components/Settings/Hosts/hostSettingsRequests";
 import { HostCard } from "./HostCard";
 import { HostFleetTargets } from "./HostFleetTargets";
 import { isLive } from "./overviewModel";
@@ -44,6 +48,13 @@ export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
     if (isCurrent && !newWindow) return;
     onClose();
     void switchToHost(hostId, newWindow);
+  };
+
+  // A host's settings, names and inventory live in Settings → Hosts.
+  const openDetails = (hostId: HostId, viaKeyboard: boolean) => {
+    onClose();
+    requestHostSettings({ kind: "detail", hostId, viaKeyboard });
+    openHostsSettingsTab();
   };
 
   const openProject = (hostId: HostId, projectId: string, newWindow: boolean) => {
@@ -83,18 +94,28 @@ export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
                 {!row.isCurrent && isLive(row) && (
                   <HostFleetTargets hostId={row.hostId} hostName={row.name} />
                 )}
-                {isLive(row) && (
-                  <div>
+                <div className="mt-auto flex flex-wrap gap-2 pt-1">
+                  {isLive(row) && (
                     <Button
                       variant="outline"
                       size="sm"
-                      aria-label={`Add a project on ${row.name}`}
+                      aria-label={`Add project on ${row.name}`}
                       onClick={() => setAddingTo({ hostId: row.hostId, name: row.name })}
                     >
                       Add project…
                     </Button>
-                  </div>
-                )}
+                  )}
+                  {!row.isLocal && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={`Details for ${row.name}`}
+                      onClick={(event) => openDetails(row.hostId, event.detail === 0)}
+                    >
+                      Details
+                    </Button>
+                  )}
+                </div>
               </HostCard>
             ))}
           </div>

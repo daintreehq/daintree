@@ -35,6 +35,18 @@ export function describeBuildMismatch(mismatch: HandshakeMismatch): string {
   }
 }
 
+/** How a host's build compares with this machine's, for its Build row: "Differs from this machine (0.43.0)". */
+export function describeBuildDifference(mismatch: HandshakeMismatch): string {
+  switch (mismatch.kind) {
+    case "protocol":
+      return `Uses link protocol ${mismatch.remote}; this machine uses ${mismatch.local}`;
+    case "version":
+      return `Differs from this machine (${mismatch.local})`;
+    case "commit":
+      return `Differs from this machine (${shortCommit(mismatch.local)})`;
+  }
+}
+
 export function buildLabel(descriptor: HostDescriptor): string {
   const seen = descriptor.lastHandshake;
   if (!seen) return "Build not seen yet";
@@ -63,13 +75,14 @@ export function connectionLabel(state: HostConnectionState): string {
     case "connecting":
       return state.attempt > 1 ? `Connecting (attempt ${state.attempt})` : "Connecting";
     case "connected": {
-      const base = state.rttMs === null ? "Connected" : `Connected · ${Math.round(state.rttMs)} ms`;
-      return state.buildMismatch ? `${base} · ${describeBuildMismatch(state.buildMismatch)}` : base;
+      // A build that differs but connected is the Build row's to say, not the link's.
+      return state.rttMs === null ? "Connected" : `Connected · ${Math.round(state.rttMs)} ms`;
     }
     case "unreachable":
       return `Unreachable · ${formatSeen(state.lastSeenAt)}`;
     case "version-mismatch":
-      return `Runs Daintree ${state.remote.version} (${shortCommit(state.remote.commit)})`;
+      // Exact builds are the Build row's; here, what it means for connecting.
+      return "Can't connect · needs a compatible build";
     case "driven-elsewhere":
       return `Driven from ${state.driver.clientName}`;
   }

@@ -10,6 +10,7 @@ import { requestHostsOverview } from "@/components/Hosts/Overview/hostsOverviewR
 import { ClientAppError } from "@/utils/clientAppError";
 import { getHostListSnapshot, hasRemoteHosts } from "@/components/Hosts/hostList";
 import { followSwitchResult } from "@/components/Hosts/hostSwitching";
+import { requestHostSettings } from "@/components/Settings/Hosts/hostSettingsRequests";
 
 const hostIdSchema = z
   .string()
@@ -135,6 +136,8 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
     keywords: ["host", "machine", "remote", "ssh", "server", "add"],
     nonRepeatable: true,
     run: async () => {
+      // Opens the add flow itself, not just the list it lives on.
+      requestHostSettings({ kind: "add" });
       openHostsSettings(callbacks);
     },
   }));

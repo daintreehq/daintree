@@ -5,6 +5,8 @@ interface HostSparklineProps {
   values: ReadonlyArray<number | null>;
   label: string;
   className?: string;
+  /** Samples the width spans; defaults to the full ~15 minute history. */
+  windowSize?: number;
 }
 
 const WIDTH = 120;
@@ -14,10 +16,13 @@ const INSET = 2;
 type Point = { x: number; y: number };
 
 /** Unbroken stretches of measured samples, right-aligned at a fixed spacing. */
-export function sparklineRuns(values: ReadonlyArray<number | null>): Point[][] {
-  const samples = values.slice(-HOST_METRICS_HISTORY_SIZE);
+export function sparklineRuns(
+  values: ReadonlyArray<number | null>,
+  windowSize: number = HOST_METRICS_HISTORY_SIZE
+): Point[][] {
+  const samples = values.slice(-windowSize);
   const right = WIDTH - INSET;
-  const step = (WIDTH - INSET * 2) / Math.max(1, HOST_METRICS_HISTORY_SIZE - 1);
+  const step = (WIDTH - INSET * 2) / Math.max(1, windowSize - 1);
   const runs: Point[][] = [];
   let current: Point[] | null = null;
   for (let i = 0; i < samples.length; i += 1) {
@@ -39,12 +44,11 @@ export function sparklineRuns(values: ReadonlyArray<number | null>): Point[][] {
 }
 
 /**
- * The last ~15 minutes of one metric on a fixed 0–100 scale, so a host that
- * just connected draws a short line at the right edge rather than stretching
- * a few samples across the box.
+ * One metric on a fixed 0–100 scale across a fixed time window, so a gap or a
+ * short history is drawn as what it is; the caller names the window.
  */
-export function HostSparkline({ values, label, className }: HostSparklineProps) {
-  const runs = sparklineRuns(values);
+export function HostSparkline({ values, label, className, windowSize }: HostSparklineProps) {
+  const runs = sparklineRuns(values, windowSize);
   return (
     <svg
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}

@@ -1,6 +1,7 @@
 import type { HostId, HostMetricsSummary } from "@shared/types/remoteHosts";
 import type { HostMenuRow } from "../hostModel";
 import { formatBytes } from "@/lib/formatBytes";
+import { pluralize } from "@/lib/pluralize";
 
 /** A pressure band drawn on the same 0–100 axis as CPU, so both sparklines read alike. */
 const PRESSURE_LEVEL: Record<NonNullable<HostMetricsSummary["memoryPressure"]>, number> = {
@@ -20,23 +21,24 @@ export function pressureSeries(history: readonly HostMetricsSummary[]): Array<nu
     .map((entry) => (entry.memoryPressure === null ? null : PRESSURE_LEVEL[entry.memoryPressure]));
 }
 
-/** "3.1 GB of 8 GB swap", or null when the host doesn't report swap. */
+/** "3.1 GB of 8 GB" under a Swap label, or null when the host doesn't report swap. */
 export function describeSwap(summary: HostMetricsSummary): string | null {
   if (summary.swapTotalBytes === null) return null;
   if (summary.swapTotalBytes === 0) return "No swap";
   const used = summary.swapUsedBytes;
   return used === null
-    ? `${formatBytes(summary.swapTotalBytes)} swap`
-    : `${formatBytes(used)} of ${formatBytes(summary.swapTotalBytes)} swap`;
+    ? formatBytes(summary.swapTotalBytes)
+    : `${formatBytes(used)} of ${formatBytes(summary.swapTotalBytes)}`;
 }
 
 export function describeMemory(summary: HostMetricsSummary): string | null {
   if (summary.memoryUsedBytes === null || summary.memoryTotalBytes === null) return null;
-  return `${formatBytes(summary.memoryUsedBytes)} of ${formatBytes(summary.memoryTotalBytes)} memory`;
+  return `${formatBytes(summary.memoryUsedBytes)} of ${formatBytes(summary.memoryTotalBytes)}`;
 }
 
 export function describeThermal(summary: HostMetricsSummary): string | null {
-  return summary.thermal === null ? null : `Thermal ${summary.thermal}`;
+  const thermal = summary.thermal;
+  return thermal === null ? null : thermal.charAt(0).toUpperCase() + thermal.slice(1);
 }
 
 /** Observed agent counts, always labelled as observations; a failed read says so, never 0. */
@@ -51,7 +53,8 @@ export function describeProjects(summary: HostMetricsSummary): string {
   const { projectCount, worktreeCount } = summary;
   if (projectCount === null && worktreeCount === null) return "Unknown";
   const open = projectCount === null ? "? open" : `${projectCount} open`;
-  const worktrees = worktreeCount === null ? "worktrees unknown" : `${worktreeCount} worktrees`;
+  const worktrees =
+    worktreeCount === null ? "worktrees unknown" : pluralize(worktreeCount, "worktree");
   return `${open} · ${worktrees}`;
 }
 
@@ -64,7 +67,7 @@ export function describeDriver(summary: HostMetricsSummary): string | null {
 export function describeRtt(row: HostMenuRow): string | null {
   const connection = row.connection;
   if (connection?.status !== "connected" || connection.rttMs === null) return null;
-  return `${Math.round(connection.rttMs)} ms link`;
+  return `${Math.round(connection.rttMs)} ms`;
 }
 
 /** Whether the card's numbers are current: this machine, or a host whose link is up. */

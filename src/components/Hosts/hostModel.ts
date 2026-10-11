@@ -32,6 +32,17 @@ export function localHostLabel(platform: ClientPlatform): string {
   return platform === "darwin" ? "This Mac" : "This machine";
 }
 
+/**
+ * A host name short enough for the chip, keeping its end: "build-east-01" and
+ * "build-east-02" differ only there. The full name stays in the tooltip and
+ * accessible name.
+ */
+export function shortHostName(name: string, max = 24): string {
+  if (name.length <= max) return name;
+  const tail = 8;
+  return `${name.slice(0, max - tail - 1)}…${name.slice(-tail)}`;
+}
+
 export interface HostMenuRow {
   hostId: HostId;
   name: string;
@@ -139,6 +150,40 @@ export function describeHostRowStatus(row: HostMenuRow, now: number = Date.now()
     : `${projects}${differs}`;
 }
 
+/**
+ * A host menu row's short state, right of its name, and the one note under it
+ * when something about the link changes what picking it does. The menu is a
+ * place switcher: load, activity and versions live in the overview and the
+ * host's details, never here.
+ */
+export function describeHostMenuState(
+  row: HostMenuRow,
+  now: number = Date.now()
+): { state: string | null; note: string | null } {
+  if (row.isLocal) return { state: "Local", note: null };
+  const connection = row.connection;
+  if (!connection) return { state: null, note: null };
+  switch (connection.status) {
+    case "connected":
+    case "local":
+      return { state: "Connected", note: null };
+    case "connecting":
+      return { state: "Connecting…", note: null };
+    case "disconnected":
+      return { state: "Not connected", note: null };
+    case "unreachable":
+      return {
+        state: "Unreachable",
+        note:
+          row.lastSeenAt === null ? null : `Last seen ${formatRelativeTime(row.lastSeenAt, now)}`,
+      };
+    case "version-mismatch":
+      return { state: "Can't connect", note: "Needs a compatible build" };
+    case "driven-elsewhere":
+      return { state: "Connected", note: `Driven from ${connection.driver.clientName}` };
+  }
+}
+
 /** CPU and memory pressure as last reported; null when the host measured neither. */
 export function describeHostRowMetrics(row: HostMenuRow): string | null {
   const summary = liveSummary(row);
@@ -201,8 +246,7 @@ export function hostChipStatusText(status: HostChipStatus): string | null {
     case "unreachable":
       return "unreachable";
     case "version-mismatch":
-    case "build-differs":
-      return "different build";
+      return "can't connect";
     case "disconnected":
       return "not connected";
     case "driven-elsewhere":
