@@ -128,7 +128,7 @@ const MAX_WAITING_DIALOGS = 3;
  * drawn in the renderer could be answered by host code already running there.
  * One at a time, and only a few waiting.
  */
-function askToRunPluginView(question: PluginViewQuestion): Promise<boolean | null> {
+export function askToRunPluginView(question: PluginViewQuestion): Promise<boolean | null> {
   // Not a no: the view isn't run now, and its next load asks again.
   if (waitingDialogs >= MAX_WAITING_DIALOGS) return Promise.resolve(null);
   waitingDialogs++;
@@ -137,7 +137,7 @@ function askToRunPluginView(question: PluginViewQuestion): Promise<boolean | nul
   return answer.finally(() => waitingDialogs--);
 }
 
-async function showPluginViewDialog(question: PluginViewQuestion): Promise<boolean> {
+async function showPluginViewDialog(question: PluginViewQuestion): Promise<boolean | null> {
   const host = defaultHostName(question.hostId);
   const plugin = pluginLabel(question.pluginId);
   const wc =
@@ -160,6 +160,9 @@ async function showPluginViewDialog(question: PluginViewQuestion): Promise<boole
   const result = parent
     ? await dialog.showMessageBox(parent, options)
     : await dialog.showMessageBox(options);
+  // A sheet whose window closed under it was dismissed, not answered: the
+  // next load asks again rather than holding a no for the rest of the run.
+  if (parent?.isDestroyed()) return null;
   return result.response === 0;
 }
 
