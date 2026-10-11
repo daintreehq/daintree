@@ -1,4 +1,10 @@
-import { controlPathOption, isValidSshTarget, type SshSpawner } from "../client/sshTransport.js";
+import {
+  buildResolveControlPathArgs,
+  isValidSshTarget,
+  muxControlArgs,
+  parseResolvedControlPath,
+  type SshSpawner,
+} from "../client/sshTransport.js";
 
 /**
  * Port forwards added to (and removed from) the ControlMaster the link's own
@@ -29,15 +35,15 @@ export function buildPortForwardArgs(
   mux: SshMuxTarget,
   localPort: number,
   remotePort: number,
-  operation: "forward" | "cancel"
+  operation: "forward" | "cancel",
+  resolvedControlPath: string | null = null
 ): string[] {
   if (!isValidSshTarget(mux.target)) throw new Error(`Invalid SSH target: ${mux.target}`);
   if (!isPort(localPort) || !isPort(remotePort)) {
     throw new Error(`Invalid port pair ${localPort}:${remotePort}`);
   }
   return [
-    "-o",
-    controlPathOption(mux.controlPath),
+    ...muxControlArgs(mux.controlPath, resolvedControlPath),
     "-O",
     operation,
     "-L",
@@ -45,6 +51,60 @@ export function buildPortForwardArgs(
     "--",
     mux.target,
   ];
+}
+
+/**
+ * The master's expanded control path (`ssh -G`), so a forward can be asked
+ * for without the user's config adding its own; null to name it as usual.
+ */
+export function resolveMuxControlPath(
+  spawn: SshSpawner,
+  mux: SshMuxTarget,
+  timeoutMs = DEFAULT_TIMEOUT_MS
+): Promise<string | null> {
+  if (!isValidSshTarget(mux.target)) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let settled = false;
+    const chunks: Buffer[] = [];
+    const finish = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    let child: ReturnType<SshSpawner>;
+    try {
+      child = spawn(buildResolveControlPathArgs(mux.target, mux.controlPath));
+    } catch {
+      resolve(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      finish(null);
+    }, timeoutMs);
+    // `exit` can come before the last of stdout, so read it once both are in.
+    let exitCode: number | null | undefined;
+    let stdoutEnded = !child.stdout;
+    const settle = () => {
+      if (exitCode === undefined || !stdoutEnded) return;
+      const out = Buffer.concat(chunks).toString("utf8");
+      finish(exitCode === 0 ? parseResolvedControlPath(out) : null);
+    };
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    });
+    child.stdout?.on("end", () => {
+      stdoutEnded = true;
+      settle();
+    });
+    child.stderr?.resume();
+    child.on("error", () => finish(null));
+    child.on("exit", (code) => {
+      exitCode = code;
+      settle();
+    });
+  });
 }
 
 /** Run one mux control command; true when ssh reports success. Never rejects. */

@@ -5,7 +5,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostServer } from "../../host/HostServer.js";
-import { hostSocketLocation } from "../../host/hostSocketPath.js";
+import { hostSocketLocation, remoteHostSocketLocation } from "../../host/hostSocketPath.js";
 import { LinkClient, type LinkClientState } from "../LinkClient.js";
 import { bridgeChild, type BridgeChild } from "../../__tests__/harness/bridgeChild.js";
 import {
@@ -13,6 +13,7 @@ import {
   SshTransport,
   attachCommandFor,
   buildAttachArgs,
+  buildCancelArgs,
   buildCatArgs,
   closeSshMaster,
   closeSshMasters,
@@ -23,6 +24,7 @@ import {
   buildStreamLocalCheckArgs,
   controlPathFor,
   controlPathOption,
+  isForwardablePath,
   isValidSshTarget,
   parseProbeOutput,
   type SshChild,
@@ -40,6 +42,12 @@ import {
 const COMMON = [
   "-o",
   "BatchMode=yes",
+  "-o",
+  "ForwardAgent=no",
+  "-o",
+  "ForwardX11=no",
+  "-o",
+  "ClearAllForwardings=yes",
   "-o",
   "ControlMaster=auto",
   "-o",
@@ -91,6 +99,10 @@ describe("ssh argument construction", () => {
       "-o",
       "BatchMode=yes",
       "-o",
+      "ForwardAgent=no",
+      "-o",
+      "ForwardX11=no",
+      "-o",
       "ControlPath=none",
       "-o",
       "StreamLocalBindUnlink=yes",
@@ -113,6 +125,30 @@ describe("ssh argument construction", () => {
     expect(() => buildCatArgs("s", "/cp", "/a\nb")).toThrow(TransportError);
   });
 
+  it("refuses remote socket paths ssh would expand against this machine's environment", () => {
+    expect(isForwardablePath("/run/user/1/daintree/host.sock")).toBe(true);
+    expect(isForwardablePath("/Users/g/Library/Application Support/Daintree/host.sock")).toBe(true);
+    const unsafe = [
+      "/x/${OPENAI_API_KEY}/host.sock",
+      "/x/%u/host.sock",
+      "/x:y",
+      "relative/host.sock",
+      "/x\\y",
+      "/x\ny",
+      "/x\ry",
+      "/x\ty",
+      "/x\u0000y",
+      "/x\u007fy",
+    ];
+    for (const bad of unsafe) {
+      expect(isForwardablePath(bad)).toBe(false);
+      expect(() => buildStreamLocalCheckArgs("s", "/cp", bad)).toThrow(TransportError);
+      expect(() => buildMuxForwardArgs("s", "/cp", "/l.sock", bad)).toThrow(TransportError);
+      expect(() => buildForwardArgs("s", "/l.sock", bad)).toThrow(TransportError);
+      expect(() => buildCancelArgs("s", "/cp", "/l.sock", bad)).toThrow(TransportError);
+    }
+  });
+
   it("only accepts targets that cannot be read as options", () => {
     expect(isValidSshTarget("greg@studio-01.tailnet.ts.net")).toBe(true);
     expect(isValidSshTarget("studio")).toBe(true);
@@ -121,13 +157,13 @@ describe("ssh argument construction", () => {
     expect(() => new SshTransport({ target: "-x", clientDir: "/tmp/x" })).toThrow(TransportError);
   });
 
-  it("uses cm-%C when it fits and a short hash when it would not", () => {
+  it("uses cm1-%C when it fits and a short hash when it would not", () => {
     expect(controlPathFor("/Users/g/.config/Daintree/ssh", "studio", "darwin")).toBe(
-      "/Users/g/.config/Daintree/ssh/cm-%C"
+      "/Users/g/.config/Daintree/ssh/cm1-%C"
     );
     const long = "/Users/somebody/Library/Application Support/Daintree/ssh";
     const hashed = controlPathFor(long, "studio", "darwin");
-    expect(hashed).toMatch(/\/cm-[0-9a-f]{16}$/);
+    expect(hashed).toMatch(/\/cm1-[0-9a-f]{16}$/);
     expect(controlPathFor(long, "studio", "darwin")).toBe(hashed);
     expect(controlPathFor(long, "other", "darwin")).not.toBe(hashed);
   });
@@ -156,12 +192,34 @@ describe("probe parsing", () => {
   });
 });
 
-/** Stand in for an ssh `-L` forward: a local socket piped to the host socket. */
-function fakeForward(args: string[]): net.Server {
+/**
+ * Where the client expects each fake host's socket, from what its probe
+ * answers. The test servers listen in a temp dir; the fake forward maps the
+ * expected path onto it.
+ */
+const LINUX_SOCKET = remoteHostSocketLocation({
+  platform: "linux",
+  uid: 4242,
+  home: "/home/greg",
+}).socketPath;
+const DARWIN_SOCKET = remoteHostSocketLocation({
+  platform: "darwin",
+  uid: 501,
+  home: "/Users/g",
+}).socketPath;
+
+/**
+ * Stand in for an ssh `-L` forward: a local socket piped to the test host's
+ * real socket, once the forward is checked to name the expected remote path.
+ */
+function fakeForward(args: string[], expectedRemote: string, realSocket: string): net.Server {
   const spec = args[args.indexOf("-L") + 1]!;
-  const [local, remote] = spec.split(":") as [string, string];
+  const parts = spec.split(":");
+  expect(parts).toHaveLength(2);
+  const [local, remote] = parts as [string, string];
+  expect(remote).toBe(expectedRemote);
   const proxy = net.createServer((conn) => {
-    const upstream = net.connect(remote);
+    const upstream = net.connect(realSocket);
     conn.pipe(upstream).pipe(conn);
     conn.on("error", () => upstream.destroy());
     upstream.on("error", () => conn.destroy());
@@ -222,13 +280,15 @@ describe("SshTransport with an injected ssh", () => {
           0,
           JSON.stringify({
             version: 1,
-            socketPath: hostLoc.socketPath,
+            socketPath: LINUX_SOCKET,
             token: server!.token,
             pid: 1,
           })
         );
+      } else if (args[0] === "-G") {
+        child.finish(0, "controlpath /cp/cm1-resolved\n");
       } else if (args.includes("forward")) {
-        proxies.push(fakeForward(args));
+        proxies.push(fakeForward(args, LINUX_SOCKET, hostLoc.socketPath));
         child.finish(0);
       } else {
         child.finish(0);
@@ -252,22 +312,45 @@ describe("SshTransport with an injected ssh", () => {
       buildStreamLocalCheckArgs(
         "greg@studio",
         controlPathFor(clientDir, "greg@studio"),
-        hostLoc.socketPath
+        LINUX_SOCKET
       )
     );
-    expect(calls[3]!.slice(0, 5)).toEqual([
+    expect(calls[3]).toEqual([
+      "-G",
       "-o",
       controlPathOption(controlPathFor(clientDir, "greg@studio")),
+      "--",
+      "greg@studio",
+    ]);
+    // The forward names the master by its expanded path and reads no config,
+    // so the user's own forwards for this host aren't sent with it.
+    expect(calls[4]!.slice(0, 7)).toEqual([
+      "-F",
+      "/dev/null",
+      "-o",
+      'ControlPath="/cp/cm1-resolved"',
       "-O",
       "forward",
       "-L",
     ]);
-    expect(calls[3]![5]).toMatch(new RegExp(`^${clientDir}/l-[0-9a-f]{8}-[0-9a-f]{8}\\.sock:`));
+    const spec = calls[4]![7]!;
+    expect(spec).toMatch(new RegExp(`^${clientDir}/l-[0-9a-f]{8}-[0-9a-f]{8}\\.sock:`));
+    expect(spec.endsWith(`:${LINUX_SOCKET}`)).toBe(true);
 
     await client.stop();
     client = null;
-    // Dispose cancels the forward through the control master.
-    expect(calls.some((a) => a.includes("-O") && a.includes("cancel"))).toBe(true);
+    // Dispose cancels exactly that forward through the control master.
+    const cancel = calls.find((a) => a.includes("-O") && a.includes("cancel"));
+    expect(cancel?.slice(0, 7)).toEqual([
+      "-F",
+      "/dev/null",
+      "-o",
+      'ControlPath="/cp/cm1-resolved"',
+      "-O",
+      "cancel",
+      "-L",
+    ]);
+    expect(cancel?.[7]).toBe(spec);
     for (const p of proxies) p.close();
   });
 
@@ -287,13 +370,14 @@ describe("SshTransport with an injected ssh", () => {
           0,
           JSON.stringify({
             version: 1,
-            socketPath: hostLoc.socketPath,
+            socketPath: DARWIN_SOCKET,
             token: server!.token,
             pid: 1,
           })
         );
       else if (args.includes("forward")) child.finish(255, "", "no master\n");
-      else if (args.includes("-N")) proxies.push(fakeForward(args));
+      else if (args.includes("-N"))
+        proxies.push(fakeForward(args, DARWIN_SOCKET, hostLoc.socketPath));
       else child.finish(0);
       return child;
     };
@@ -343,7 +427,7 @@ describe("SshTransport with an injected ssh", () => {
       else if (command.startsWith("cat -- "))
         child.finish(
           0,
-          JSON.stringify({ version: 1, socketPath: "/x/host.sock", token: "a".repeat(64), pid: 1 })
+          JSON.stringify({ version: 1, socketPath: DARWIN_SOCKET, token: "a".repeat(64), pid: 1 })
         );
       else if (args.includes("forward"))
         child.finish(255, "", "Control socket connect(/c/cm): No such file or directory\n");
@@ -360,6 +444,80 @@ describe("SshTransport with an injected ssh", () => {
     await expect(transport.open(new AbortController().signal)).rejects.toMatchObject({
       detail: "Error: remote port forwarding failed for listen path",
     });
+  });
+
+  it("refuses a discovery file whose socket isn't beside it, or that ssh would expand", async () => {
+    const open = (home: string, socketPath: string) => {
+      const after: string[][] = [];
+      const streams: string[][] = [];
+      const ensureRunning = vi.fn(async () => true);
+      const spawner: SshSpawner = (args) => {
+        const child = new FakeChild();
+        const command = args.at(-1)!;
+        if (command === PROBE_COMMAND) child.finish(0, `Darwin\n501\n${home}\n`);
+        else if (command.startsWith("cat -- "))
+          child.finish(
+            0,
+            JSON.stringify({
+              version: 1,
+              socketPath,
+              token: "a".repeat(64),
+              pid: 1,
+              command: ["/Applications/Daintree.app/Contents/MacOS/Daintree"],
+            })
+          );
+        else {
+          after.push(args);
+          child.finish(0);
+        }
+        return child;
+      };
+      const transport = new SshTransport({
+        target: "studio",
+        clientDir: path.join(root, "c"),
+        spawn: spawner,
+        spawnStream: (args) => {
+          streams.push(args);
+          return bridgeChild("/nonexistent/host.json");
+        },
+        ensureRunning,
+      });
+      return {
+        opened: transport.open(new AbortController().signal),
+        after,
+        streams,
+        ensureRunning,
+      };
+    };
+    const expectRefused = async (attempt: ReturnType<typeof open>, detail: string) => {
+      await expect(attempt.opened).rejects.toMatchObject({
+        message: "Host discovery file is not valid",
+        detail: expect.stringContaining(detail),
+      });
+      // Nothing else reached ssh, and the host wasn't restarted over it.
+      expect(attempt.after).toEqual([]);
+      expect(attempt.streams).toEqual([]);
+      expect(attempt.ensureRunning).not.toHaveBeenCalled();
+    };
+
+    // A socket somewhere other than beside the discovery file, plain or expanding.
+    await expectRefused(open("/Users/g", "/tmp/other.sock"), "not beside it");
+    await expectRefused(open("/Users/g", "/x/${OPENAI_API_KEY}/host.sock"), "not beside it");
+
+    // A host can't get an expansion in through its $HOME either.
+    for (const home of ["/Users/${OPENAI_API_KEY}", "/Users/%u"]) {
+      const socket = remoteHostSocketLocation({ platform: "darwin", uid: 501, home }).socketPath;
+      await expectRefused(open(home, socket), "can't forward as written");
+    }
+  });
+
+  it("accepts a home with a bare $, which ssh leaves alone", () => {
+    const socket = remoteHostSocketLocation({
+      platform: "darwin",
+      uid: 501,
+      home: "/Users/g$literal",
+    }).socketPath;
+    expect(isForwardablePath(socket)).toBe(true);
   });
 
   it("reports a missing discovery file with ssh's stderr", async () => {
@@ -517,7 +675,7 @@ describe("when the ssh server refuses socket forwarding", () => {
           0,
           JSON.stringify({
             version: 1,
-            socketPath: hostLoc.socketPath,
+            socketPath: DARWIN_SOCKET,
             token: server!.token,
             pid: 1,
             ...(options.publishCommand !== false && {
@@ -587,7 +745,7 @@ describe("when the ssh server refuses socket forwarding", () => {
     const proxies: net.Server[] = [];
     const spawner: SshSpawner = (args) => {
       if (args.includes("forward")) {
-        proxies.push(fakeForward(args));
+        proxies.push(fakeForward(args, DARWIN_SOCKET, host.hostLoc.socketPath));
         const child = new FakeChild();
         child.finish(0);
         return child;

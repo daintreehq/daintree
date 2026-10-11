@@ -23,7 +23,12 @@ import {
   probeFreeLoopbackPort,
   type LoopbackListener,
 } from "./localListener.js";
-import { buildPortForwardArgs, runSshMuxCommand, type SshMuxTarget } from "./sshForward.js";
+import {
+  buildPortForwardArgs,
+  resolveMuxControlPath,
+  runSshMuxCommand,
+  type SshMuxTarget,
+} from "./sshForward.js";
 import { PortStreamMux } from "./streamForwarder.js";
 
 /**
@@ -72,7 +77,14 @@ interface ActiveForward {
      * `session` is the one open when ssh added it: the forward dies with its
      * master. ssh holds 127.0.0.1; `relay` holds [::1] beside it, when there is one.
      */
-    | { kind: "ssh"; mux: SshMuxTarget; session: LinkSession; relay: LoopbackListener | null };
+    | {
+        kind: "ssh";
+        mux: SshMuxTarget;
+        /** The master's expanded control path the forward was asked with; its cancel uses it too. */
+        resolved: string | null;
+        session: LinkSession;
+        relay: LoopbackListener | null;
+      };
   /** The loopback addresses the local port is held on. */
   addresses: string[];
   idleTimer: ReturnType<typeof setTimeout> | null;
@@ -460,14 +472,15 @@ export class PortForwardManager {
       // Something took the IPv6 side since the probe: use a link stream instead.
       return null;
     }
-    const args = buildPortForwardArgs(mux, localPort, info.remotePort, "forward");
+    const resolved = await resolveMuxControlPath(this.spawn, mux);
+    const args = buildPortForwardArgs(mux, localPort, info.remotePort, "forward", resolved);
     if (!(await runSshMuxCommand(this.spawn, args))) {
       await relay?.close();
       return null;
     }
     return {
       info: { ...info, localPort },
-      driver: { kind: "ssh", mux, session, relay },
+      driver: { kind: "ssh", mux, resolved, session, relay },
       addresses: relay ? ["127.0.0.1", "::1"] : ["127.0.0.1"],
       idleTimer: null,
     };
@@ -559,7 +572,8 @@ export class PortForwardManager {
       forward.driver.mux,
       forward.info.localPort,
       forward.info.remotePort,
-      "cancel"
+      "cancel",
+      forward.driver.resolved
     );
     const cancelled = await runSshMuxCommand(this.spawn, args);
     // Keep the IPv6 side while ssh still holds the IPv4 one, so both stay ours.

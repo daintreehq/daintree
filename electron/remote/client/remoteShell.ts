@@ -50,14 +50,18 @@ export function remoteShellArgs(target: string, controlPath: string, script: str
   ];
 }
 
+/** `-S` so a copy runs the same ssh as everything else (`DAINTREE_SSH`), not scp's built-in one. */
 export function scpArgs(
   target: string,
   controlPath: string,
   localPath: string,
-  remotePath: string
+  remotePath: string,
+  sshPath: string
 ): string[] {
   return [
     "-q",
+    "-S",
+    sshPath,
     "-o",
     "BatchMode=yes",
     "-o",
@@ -107,7 +111,7 @@ export function createSshCommandChannel(params: {
     async sendFile(localPath, remotePath, options) {
       const copied = await run(
         params.scpPath ?? "scp",
-        scpArgs(target, controlPath, localPath, remotePath),
+        scpArgs(target, controlPath, localPath, remotePath, ssh),
         options
       );
       // A host without an sftp subsystem refuses modern scp; the same ssh

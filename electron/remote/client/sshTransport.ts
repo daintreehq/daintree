@@ -111,8 +111,33 @@ function isSafeRemotePath(value: string): boolean {
   return true;
 }
 
-/** `-L local:remote` splits on the colon, so forwarded paths can't contain one. */
-const isForwardablePath = (p: string) => isSafeRemotePath(p) && !p.includes(":");
+/**
+ * `-L local:remote` splits on the colon, so forwarded paths can't contain one.
+ * ssh also expands `${VAR}` (and, in `-L`, `%u`/`%d`/`%l`) in these paths
+ * against this machine's environment before sending them to the host, so a
+ * host that chose its socket path could read our environment back out of it.
+ * A bare `$` is left alone by ssh and is fine.
+ */
+export const isForwardablePath = (p: string) =>
+  isSafeRemotePath(p) && !p.includes(":") && !p.includes("${") && !p.includes("%");
+
+function requireForwardable(remoteSocket: string): string {
+  if (!isForwardablePath(remoteSocket)) {
+    throw new TransportError(`Refusing to forward an unusual remote path: ${remoteSocket}`, null);
+  }
+  return remoteSocket;
+}
+
+/**
+ * The host's discovery file named a socket this client won't hand to ssh.
+ * Starting the host again can't change that, so no restart is attempted.
+ */
+export class DiscoveryRejectedError extends TransportError {
+  constructor(detail: string) {
+    super("Host discovery file is not valid", detail);
+    this.name = "DiscoveryRejectedError";
+  }
+}
 
 /** Single-quote for a POSIX, fish or csh remote shell. */
 export function shellQuote(value: string): string {
@@ -150,16 +175,23 @@ function targetHash(target: string): string {
 }
 
 /**
- * `cm-%C` when it fits the platform's socket path limit; otherwise a short
+ * Changes whenever the options a master starts with change, so a master an
+ * older build left running (one that may still forward the agent, say) is
+ * never picked up as this build's. 1: no agent, X11 or config forwards.
+ */
+const CONTROL_PATH_PREFIX = "cm1-";
+
+/**
+ * `cm1-%C` when it fits the platform's socket path limit; otherwise a short
  * per-target hash (%C alone is 40 characters, and ssh adds a temporary
  * suffix while binding).
  */
 export function controlPathFor(clientDir: string, target: string, platform = process.platform) {
   const limit = maxSocketPathBytes(platform);
-  const withC = path.join(clientDir, "cm-%C");
+  const withC = path.join(clientDir, `${CONTROL_PATH_PREFIX}%C`);
   const expanded = Buffer.byteLength(withC) - 2 + PERCENT_C_LENGTH + CONTROL_PATH_TEMP_SUFFIX;
   if (expanded <= limit) return withC;
-  const hashed = path.join(clientDir, `cm-${targetHash(target)}`);
+  const hashed = path.join(clientDir, `${CONTROL_PATH_PREFIX}${targetHash(target)}`);
   if (Buffer.byteLength(hashed) + CONTROL_PATH_TEMP_SUFFIX > limit) {
     throw new TransportError(`SSH control directory path is too long: ${clientDir}`, null);
   }
@@ -172,10 +204,28 @@ export function localForwardPathFor(clientDir: string, target: string): string {
   return path.join(clientDir, `l-${targetHash(target).slice(0, 8)}-${nonce}.sock`);
 }
 
+/**
+ * Daintree opens sessions on its own (probes, reconnects, the attach bridge),
+ * so nothing the user's config forwards for their interactive logins rides
+ * along: no agent or X11 for each session, and none of the config's port
+ * forwards on a master this call creates. `-W` is not a port forward and
+ * survives ClearAllForwardings; `-O forward` requests go through the master
+ * later and are unaffected.
+ */
+const NO_FORWARDING = [
+  "-o",
+  "ForwardAgent=no",
+  "-o",
+  "ForwardX11=no",
+  "-o",
+  "ClearAllForwardings=yes",
+];
+
 export function sshCommonArgs(controlPath: string, controlPersist = "10m"): string[] {
   return [
     "-o",
     "BatchMode=yes",
+    ...NO_FORWARDING,
     "-o",
     "ControlMaster=auto",
     "-o",
@@ -203,6 +253,34 @@ export function buildCatArgs(
   return [...sshCommonArgs(controlPath, persist), "--", target, `cat -- ${shellQuote(filePath)}`];
 }
 
+/** `ssh -G` prints the control path with its `%` tokens expanded. */
+export function buildResolveControlPathArgs(target: string, controlPath: string): string[] {
+  return ["-G", "-o", controlPathOption(controlPath), "--", target];
+}
+
+/** The expanded control path from `ssh -G`, or null when it can't be passed on as is. */
+export function parseResolvedControlPath(stdout: string): string | null {
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("controlpath ")) continue;
+    const value = line.slice("controlpath ".length).replace(/\r$/, "");
+    // A `%` left in it would be expanded a second time.
+    return path.isAbsolute(value) && !value.includes("%") ? value : null;
+  }
+  return null;
+}
+
+/**
+ * How a mux control command names the master. A `-O forward` or `-O cancel`
+ * also sends every forward the user's config declares for the host along
+ * with ours (ClearAllForwardings would drop ours too), so when the master's
+ * expanded path is known the command reads no config at all.
+ */
+export function muxControlArgs(controlPath: string, resolvedControlPath: string | null): string[] {
+  return resolvedControlPath === null
+    ? ["-o", controlPathOption(controlPath)]
+    : ["-F", "/dev/null", "-o", controlPathOption(resolvedControlPath)];
+}
+
 /**
  * Add the forward to the ControlMaster the probe left running. A mux client
  * given `-N -L` would also ask the master for a session, so the forward is
@@ -212,15 +290,15 @@ export function buildMuxForwardArgs(
   target: string,
   controlPath: string,
   localSocket: string,
-  remoteSocket: string
+  remoteSocket: string,
+  resolvedControlPath: string | null = null
 ): string[] {
   return [
-    "-o",
-    controlPathOption(controlPath),
+    ...muxControlArgs(controlPath, resolvedControlPath),
     "-O",
     "forward",
     "-L",
-    `${localSocket}:${remoteSocket}`,
+    `${localSocket}:${requireForwardable(remoteSocket)}`,
     "--",
     target,
   ];
@@ -240,6 +318,10 @@ export function buildForwardArgs(
     "-o",
     "BatchMode=yes",
     "-o",
+    "ForwardAgent=no",
+    "-o",
+    "ForwardX11=no",
+    "-o",
     "ControlPath=none",
     "-o",
     "StreamLocalBindUnlink=yes",
@@ -247,7 +329,7 @@ export function buildForwardArgs(
     "ExitOnForwardFailure=yes",
     "-N",
     "-L",
-    `${localSocket}:${remoteSocket}`,
+    `${localSocket}:${requireForwardable(remoteSocket)}`,
     "--",
     target,
   ];
@@ -257,15 +339,15 @@ export function buildCancelArgs(
   target: string,
   controlPath: string,
   localSocket: string,
-  remoteSocket: string
+  remoteSocket: string,
+  resolvedControlPath: string | null = null
 ): string[] {
   return [
-    "-o",
-    controlPathOption(controlPath),
+    ...muxControlArgs(controlPath, resolvedControlPath),
     "-O",
     "cancel",
     "-L",
-    `${localSocket}:${remoteSocket}`,
+    `${localSocket}:${requireForwardable(remoteSocket)}`,
     "--",
     target,
   ];
@@ -282,7 +364,13 @@ export function buildStreamLocalCheckArgs(
   remoteSocket: string,
   persist?: string
 ): string[] {
-  return [...sshCommonArgs(controlPath, persist), "-W", remoteSocket, "--", target];
+  return [
+    ...sshCommonArgs(controlPath, persist),
+    "-W",
+    requireForwardable(remoteSocket),
+    "--",
+    target,
+  ];
 }
 
 /**
@@ -462,6 +550,7 @@ export class SshTransport implements LinkTransport {
       // ssh itself failing (unreachable, refused key) is not Daintree being down.
       const ensureRunning = this.options.ensureRunning;
       if (!reached || !ensureRunning || signal.aborted) throw error;
+      if (error instanceof DiscoveryRejectedError) throw error;
       if (!(await ensureRunning(signal))) throw error;
       return this.openOnce(signal, () => {});
     }
@@ -496,8 +585,18 @@ export class SshTransport implements LinkTransport {
       signal
     );
     const info = parseDiscoveryInfo(cat.stdout);
-    if (!info || !isForwardablePath(info.socketPath)) {
-      throw new TransportError("Host discovery file is not valid", null);
+    if (!info) throw new TransportError("Host discovery file is not valid", null);
+    // The host writes its socket beside the discovery file, so anything else
+    // is a path the host chose for us to hand to ssh: refuse it.
+    if (info.socketPath !== location.socketPath) {
+      throw new DiscoveryRejectedError(
+        `The host's discovery file names a socket at ${info.socketPath}, not beside it at ${location.socketPath}`
+      );
+    }
+    if (!isForwardablePath(info.socketPath)) {
+      throw new DiscoveryRejectedError(
+        `The host's socket path has characters ssh can't forward as written (":", "\${" or "%"): ${info.socketPath}`
+      );
     }
     const remoteSocket = info.socketPath;
 
@@ -559,6 +658,20 @@ export class SshTransport implements LinkTransport {
     return transport.open(signal);
   }
 
+  /** The master's expanded control path, or null to name it the usual way. */
+  private async resolveControlPath(controlPath: string, signal: AbortSignal) {
+    try {
+      const out = await this.run(
+        buildResolveControlPathArgs(this.options.target, controlPath),
+        signal
+      );
+      return parseResolvedControlPath(out.stdout);
+    } catch (err) {
+      if (signal.aborted) throw err;
+      return null;
+    }
+  }
+
   private async openForward(
     controlPath: string,
     remoteSocket: string,
@@ -573,8 +686,9 @@ export class SshTransport implements LinkTransport {
     await fs.rm(localSocket, { force: true });
 
     let dispose: () => Promise<void>;
+    const resolved = await this.resolveControlPath(controlPath, signal);
     const viaMaster = await this.run(
-      buildMuxForwardArgs(target, controlPath, localSocket, remoteSocket),
+      buildMuxForwardArgs(target, controlPath, localSocket, remoteSocket, resolved),
       signal
     ).then(
       () => true,
@@ -583,7 +697,7 @@ export class SshTransport implements LinkTransport {
     if (viaMaster) {
       dispose = async () => {
         await this.run(
-          buildCancelArgs(target, controlPath, localSocket, remoteSocket),
+          buildCancelArgs(target, controlPath, localSocket, remoteSocket, resolved),
           new AbortController().signal
         ).catch(() => {});
         await fs.rm(localSocket, { force: true }).catch(() => {});

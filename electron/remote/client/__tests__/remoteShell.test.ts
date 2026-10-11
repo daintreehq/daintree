@@ -67,6 +67,28 @@ describe("the ssh command channel", () => {
     expect(calls[0]!.args.at(-1)).toBe("bigbox:/tmp/s/a.deb");
   });
 
+  it("has scp run the same ssh as every other call", async () => {
+    const { run, calls } = recording({ scp: result(0) });
+    const channel = createSshCommandChannel({
+      target: "bigbox",
+      controlPath: "/cm",
+      run,
+      sshPath: "/opt/wrapped/ssh",
+    });
+    await channel.sendFile("/l/a.deb", "/tmp/s/a.deb");
+    const args = calls[0]!.args;
+    expect(args[args.indexOf("-S") + 1]).toBe("/opt/wrapped/ssh");
+  });
+
+  it("keeps the user's agent and X11 forwarding off its own sessions", async () => {
+    const { run, calls } = recording({});
+    const channel = createSshCommandChannel({ target: "bigbox", controlPath: "/cm", run });
+    await channel.exec("true");
+    expect(calls[0]!.args).toEqual(
+      expect.arrayContaining(["ForwardAgent=no", "ForwardX11=no", "ClearAllForwardings=yes"])
+    );
+  });
+
   it("streams the file over the same ssh login when scp is refused (no sftp subsystem)", async () => {
     const { run, calls } = recording({ scp: result(255, "subsystem request failed on channel 0") });
     const channel = createSshCommandChannel({ target: "bigbox", controlPath: "/cm", run });

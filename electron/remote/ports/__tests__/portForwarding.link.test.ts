@@ -418,6 +418,14 @@ describe("dev preview through a forward", () => {
 class FakeSshChild extends EventEmitter {
   stdout = new PassThrough();
   stderr = new PassThrough();
+  /** Like a real child, stdout ends once the process has gone, unless a test holds it open. */
+  endStdoutOnExit = true;
+  constructor() {
+    super();
+    this.once("exit", () => {
+      if (this.endStdoutOnExit && !this.stdout.writableEnded) this.stdout.end();
+    });
+  }
   kill(): boolean {
     return true;
   }
@@ -429,6 +437,8 @@ describe("ssh -O forward on the ControlMaster", () => {
     const spawn = (args: string[]): SshChild => {
       calls.push(args);
       const child = new FakeSshChild();
+      if (args[0] === "-G") child.stdout.end("hostname studio-01\ncontrolpath /tmp/rh/cm1-7f3a\n");
+      else child.stdout.end();
       setImmediate(() => child.emit("exit", 0, null));
       return child as unknown as SshChild;
     };
@@ -442,9 +452,14 @@ describe("ssh -O forward on the ControlMaster", () => {
 
     const forward = await m.forward({ hostId: HOST, remotePort });
     expect(forward.localPort).toBe(remotePort);
-    expect(calls[0]).toEqual([
+    expect(calls[0]).toEqual(["-G", "-o", 'ControlPath="/tmp/rh/cm-abc"', "--", "greg@studio-01"]);
+    // Named by its expanded path and read with no config, so the user's own
+    // forwards for this host don't ride along.
+    expect(calls[1]).toEqual([
+      "-F",
+      "/dev/null",
       "-o",
-      'ControlPath="/tmp/rh/cm-abc"',
+      'ControlPath="/tmp/rh/cm1-7f3a"',
       "-O",
       "forward",
       "-L",
@@ -454,15 +469,64 @@ describe("ssh -O forward on the ControlMaster", () => {
     ]);
 
     await m.stop(forward.forwardId);
-    expect(calls[1]).toEqual([
+    expect(calls[2]).toEqual([
+      "-F",
+      "/dev/null",
       "-o",
-      'ControlPath="/tmp/rh/cm-abc"',
+      'ControlPath="/tmp/rh/cm1-7f3a"',
       "-O",
       "cancel",
       "-L",
       `127.0.0.1:${remotePort}:localhost:${remotePort}`,
       "--",
       "greg@studio-01",
+    ]);
+  });
+
+  it("names the master the usual way when ssh can't print its expanded path", async () => {
+    const calls: string[][] = [];
+    const spawn = (args: string[]): SshChild => {
+      calls.push(args);
+      const child = new FakeSshChild();
+      child.stdout.end(args[0] === "-G" ? "controlpath /tmp/rh/cm1-%C\n" : "");
+      setImmediate(() => child.emit("exit", 0, null));
+      return child as unknown as SshChild;
+    };
+    const m = manager({
+      sshMuxFor: () => ({ target: "studio-01", controlPath: "/tmp/rh/cm-abc" }),
+      spawn,
+    });
+    await m.forward({ hostId: HOST, remotePort: 40124 });
+    expect(calls[1]!.slice(0, 4)).toEqual(["-o", 'ControlPath="/tmp/rh/cm-abc"', "-O", "forward"]);
+  });
+
+  it("waits for all of ssh -G's output, even when it trails the exit", async () => {
+    const calls: string[][] = [];
+    const spawn = (args: string[]): SshChild => {
+      calls.push(args);
+      const child = new FakeSshChild();
+      setImmediate(() => {
+        if (args[0] === "-G") {
+          child.endStdoutOnExit = false;
+          child.stdout.write("controlpath /tmp/rh/cm1-");
+          child.emit("exit", 0, null);
+          setTimeout(() => child.stdout.end("late\n"), 20);
+        } else {
+          child.emit("exit", 0, null);
+        }
+      });
+      return child as unknown as SshChild;
+    };
+    const m = manager({
+      sshMuxFor: () => ({ target: "studio-01", controlPath: "/tmp/rh/cm-abc" }),
+      spawn,
+    });
+    await m.forward({ hostId: HOST, remotePort: 40125 });
+    expect(calls[1]!.slice(0, 4)).toEqual([
+      "-F",
+      "/dev/null",
+      "-o",
+      'ControlPath="/tmp/rh/cm1-late"',
     ]);
   });
 
@@ -540,7 +604,11 @@ describe("ssh -O forward on the ControlMaster", () => {
     expect(m.localPortsFor(HOST)).toEqual(new Set([again!.localPort]));
     expect(calls.at(-1)).toContain(`127.0.0.1:${again!.localPort}:localhost:${remotePort}`);
     // The old forward is cancelled before the new one is added, so a late cancel can't undo it.
-    expect(calls.map((args) => args[3])).toEqual(["forward", "cancel", "forward"]);
+    expect(calls.filter((args) => args.includes("-O")).map((args) => args[3])).toEqual([
+      "forward",
+      "cancel",
+      "forward",
+    ]);
   });
 
   it("holds the IPv6 side of an ssh forward itself and relays it to the IPv4 side ssh holds", async () => {

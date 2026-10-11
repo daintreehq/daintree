@@ -648,7 +648,7 @@ describe.skipIf(!ENABLED)(
         expect(leftovers).toEqual([]);
         expect(await masterPid()).toBeNull();
         const controlEntries = (await fs.readdir(clientDir)).filter((name) =>
-          name.startsWith("cm-")
+          name.startsWith("cm")
         );
         expect(controlEntries).toEqual([]);
 
