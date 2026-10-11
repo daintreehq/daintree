@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.43.0] - 2026-10-11
+
+Assistant conversations now survive quit and crash and can be picked back up from a past-session picker, and Codex carries on in the same conversation after it updates itself. Panel add and close settle the grid in about 60ms, plugins can publish contextual panel menu actions and read panel focus, and scratch and non-git folder rows get the actions worktree rows already had.
+
+### Features
+
+**Daintree Assistant**
+
+- A past-session picker lists the project's Claude and Codex assistant conversations and resumes the one you pick, from the header overflow, the empty state or the palette (#13206)
+
+**Plugins**
+
+- Plugins can publish and update contextual actions for their panel's more-menu and right-click menu at runtime, including PTY-backed panels, through `setMenuItems`, `usePanelMenuItems` or `host.setPanelMenuItems` (#13213)
+- `host.onDidChangeFocusedPanel` reports the kind of panel that has focus, behind a new `panel:focus-read` capability; project plugins only see focus inside their own project (#13221)
+
+**Workspaces**
+
+- Scratch and non-git folder rows get a more-actions menu and a matching right-click menu with launch, open, copy and recipe actions (#13225)
+- Copy context copies the workspace root in a scratch or non-git project instead of refusing with "Open a worktree first" (#13210)
+
+**MCP**
+
+- Notices carry the agent's handback summary and a `terminal.getOutput` pointer instead of a screen quote when the summary is complete; `replyLines` still asks for the quote (#13202)
+
+### Performance
+
+- Surviving panes resize straight away when a panel is added or closed: grid settle drops from 257ms to 67ms on close and from 875ms to 65ms for Codex-style agents (#13214)
+
+### Bug Fixes
+
+**Terminals and agents**
+
+- When Codex updates itself and exits, the same conversation is relaunched once instead of leaving the pane at a shell, and a Codex run that exits without a resume hint stays reachable from history (#13226)
+- Relative paths that start with a hidden directory, like `.github/workflows/ci.yml`, are linked in terminal output (#13216)
+- Codex `$` skill autocomplete includes personal skills in `~/.agents/skills` and follows symlinked skill folders (#13209)
+
+**Daintree Assistant**
+
+- Assistant conversations survive quit, crash and a CLI self-exit, and are offered for resume after a restart instead of vanishing (#13205)
+- Assistant guidance points to the correct Tool set settings path (#13217)
+
+**Memory**
+
+- On macOS, a kernel warning combined with heavy swap now counts as real memory pressure for reclaiming cached project views, and the memory notice offers "Sleep idle projects" (#13223)
+
+**Markdown**
+
+- The Markdown editor's Edit mode no longer fails with `z is not defined` in production builds, a regression in 0.42.0 (#13204)
+
 ## [0.42.0] - 2026-10-06
 
 A process-hygiene release: terminals, dev servers and plugin processes are now reaped reliably on kill, quit and host crash, and a new Running processes view shows everything alive across projects, including work that outlived its terminal. The file browser viewer gains a Diff mode and a Close control, and the assistant drops its deny list and read-only posture.
