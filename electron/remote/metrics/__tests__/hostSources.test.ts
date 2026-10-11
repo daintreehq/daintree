@@ -4,6 +4,13 @@ const workspace = vi.hoisted(() => ({
   client: null as null | { getAllStatesForProjectResultAsync: ReturnType<typeof vi.fn> },
 }));
 
+const cli = vi.hoisted(() => ({
+  service: null as null | {
+    getAvailability: ReturnType<typeof vi.fn>;
+    checkAvailability: ReturnType<typeof vi.fn>;
+  },
+}));
+
 const pty = vi.hoisted(() => ({
   client: null as null | {
     getAllTerminalsWithCompletenessAsync: ReturnType<typeof vi.fn>;
@@ -14,7 +21,7 @@ const pty = vi.hoisted(() => ({
 vi.mock("../../../window/serviceRefs.js", () => ({
   getPtyClient: () => pty.client,
   getAgentVersionService: () => null,
-  getCliAvailabilityServiceRef: () => null,
+  getCliAvailabilityServiceRef: () => cli.service,
   getResourceProfileService: () => null,
   getWorkspaceClientRef: () => workspace.client,
 }));
@@ -93,6 +100,17 @@ describe("observeAgents", () => {
 });
 
 describe("createHostSampleSources", () => {
+  it("asks for agent CLIs itself when nothing has, so a windowless host lists them next sample", async () => {
+    cli.service = {
+      getAvailability: vi.fn(() => null),
+      checkAvailability: vi.fn(async () => ({})),
+    };
+    const sources = createHostSampleSources();
+    await expect(sources.agentClis()).resolves.toEqual([]);
+    expect(cli.service.checkAvailability).toHaveBeenCalledTimes(1);
+    cli.service = null;
+  });
+
   it("reports worktrees as unknown when no workspace client can count them", async () => {
     await expect(createHostSampleSources().projects()).resolves.toEqual({
       projectCount: 2,

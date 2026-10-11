@@ -170,9 +170,15 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
     driver: currentDriver,
     async agentClis() {
       if (clis && now() - clis.at < AGENT_CLIS_TTL_MS) return clis.list;
-      const availability = getCliAvailabilityServiceRef()?.getAvailability();
+      const service = getCliAvailabilityServiceRef();
+      const availability = service?.getAvailability();
       const versions = getAgentVersionService();
-      if (!availability) return clis?.list ?? [];
+      if (!availability) {
+        // Nothing has checked yet: a windowless host has no view to ask, so
+        // this asks, and the next sample lists what it found.
+        void service?.checkAvailability().catch(() => {});
+        return clis?.list ?? [];
+      }
       const installed = (Object.entries(availability) as Array<[AgentId, string]>)
         .filter(([, state]) => state !== "missing")
         .map(([agentId]) => agentId);
