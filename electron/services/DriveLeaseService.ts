@@ -322,8 +322,20 @@ export class DriveLeaseService {
   /**
    * Hand the lease to `endpoint`. Explicit and always granted: the previous
    * driver's screen shows it has been taken, with the option to take it back.
+   * With `ifLeaseId`, granted only while the lease is still that one (null:
+   * nobody holds it); otherwise the current holder is returned unchanged.
    */
-  takeOver(projectId: string, endpoint: ClientEndpoint): DriveLeaseHolder {
+  takeOver(projectId: string, endpoint: ClientEndpoint): DriveLeaseHolder;
+  takeOver(
+    projectId: string,
+    endpoint: ClientEndpoint,
+    options: { ifLeaseId?: number | null }
+  ): DriveLeaseHolder | null;
+  takeOver(
+    projectId: string,
+    endpoint: ClientEndpoint,
+    options: { ifLeaseId?: number | null } = {}
+  ): DriveLeaseHolder | null {
     if (this.disposed) {
       throw new AppError({ code: "UNSUPPORTED", message: "The drive lease service has stopped" });
     }
@@ -336,6 +348,10 @@ export class DriveLeaseService {
     }
     const current = this.leases.get(projectId);
     if (current && current.holder.endpointId === endpoint.endpointId) return current.holder;
+    if (options.ifLeaseId !== undefined) {
+      const holder = this.getHolder(projectId);
+      if ((holder?.leaseId ?? null) !== options.ifLeaseId) return holder;
+    }
     return this.grant(projectId, endpoint);
   }
 

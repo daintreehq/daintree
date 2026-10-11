@@ -500,7 +500,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./driveLease.js").DriveLeaseView;
   };
   "drive-lease:take-over": {
-    args: [payload: import("./driveLease.js").DriveLeaseProjectPayload];
+    args: [payload: import("./driveLease.js").DriveLeaseTakeOverPayload];
     result: import("./driveLease.js").DriveLeaseView;
   };
   "editor:discover": {

@@ -4,6 +4,17 @@ export interface DriveLeaseProjectPayload {
   projectId: string;
 }
 
+export interface DriveLeaseTakeOverPayload extends DriveLeaseProjectPayload {
+  /**
+   * Take it only if the lease is still the one this view read: that holder's
+   * `leaseId`, or null for nobody holding it. Absent, the take-over is
+   * unconditional, as the Take over button's is. A claim made on opening a
+   * project passes it, so two Shells opening at once can't take it from each
+   * other on the same stale read.
+   */
+  ifLeaseId?: number | null;
+}
+
 /** A project's drive lease as one renderer sees it. */
 export interface DriveLeaseView extends DriveLeaseState {
   /**

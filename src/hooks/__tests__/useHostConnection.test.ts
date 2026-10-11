@@ -375,7 +375,10 @@ describe("lease and reconnect races", () => {
     await flush();
     // Opening the project here is taking it over: the claim is retried, not just a lookup.
     expect(electron.driveLease.takeOver).toHaveBeenCalledTimes(1);
-    expect(electron.driveLease.takeOver).toHaveBeenLastCalledWith({ projectId: "proj-1" });
+    expect(electron.driveLease.takeOver).toHaveBeenLastCalledWith({
+      projectId: "proj-1",
+      ifLeaseId: null,
+    });
     expect(getTerminalInputBlock()).toBeNull();
     stop();
   });
@@ -389,7 +392,10 @@ describe("lease and reconnect races", () => {
     bindView("studio-01");
     const stop = startHostConnectionSync();
     await flush();
-    expect(electron.driveLease.takeOver).toHaveBeenCalledWith({ projectId: "proj-1" });
+    expect(electron.driveLease.takeOver).toHaveBeenCalledWith({
+      projectId: "proj-1",
+      ifLeaseId: 2,
+    });
     stop();
   });
 
@@ -430,8 +436,30 @@ describe("lease and reconnect races", () => {
     bindView("studio-01");
     const stop = startHostConnectionSync();
     await flush();
-    expect(electron.driveLease.takeOver).toHaveBeenCalledWith({ projectId: "proj-1" });
+    // Only from the holder it read: a Shell that got there first isn't taken from.
+    expect(electron.driveLease.takeOver).toHaveBeenCalledWith({
+      projectId: "proj-1",
+      ifLeaseId: 2,
+    });
     expect(getTerminalInputBlock()).toBeNull();
+    stop();
+  });
+
+  it("watches when another Shell claimed the project first, keeping what this view holds", async () => {
+    const { electron } = installElectron();
+    electron.driveLease.get.mockResolvedValue(leaseView(holder({ isHostLocal: true }), false));
+    // The host turned the conditional claim down: shell-a took it between the read and the claim.
+    electron.driveLease.takeOver.mockResolvedValueOnce(
+      leaseView(holder({ leaseId: 3, clientId: "shell-a", clientName: "shell-a" }), false)
+    );
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    expect(electron.driveLease.takeOver).toHaveBeenCalledTimes(1);
+    expect(getTerminalInputBlock()).toMatchObject({
+      kind: "driven-elsewhere",
+      driverName: "shell-a",
+    });
     stop();
   });
 

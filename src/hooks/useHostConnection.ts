@@ -210,12 +210,23 @@ async function remoteDrivingPossible(): Promise<boolean> {
  * Ask the host to hand this view's project to this view. The answer is
  * applied at once; the previous driver learns of it from its own lease event.
  */
-export async function takeOverDrive(projectId: string): Promise<void> {
-  const view = await window.electron.driveLease.takeOver({ projectId });
+export async function takeOverDrive(
+  projectId: string,
+  options: { ifLeaseId?: number | null } = {}
+): Promise<void> {
+  const view = await window.electron.driveLease.takeOver(
+    options.ifLeaseId === undefined ? { projectId } : { projectId, ifLeaseId: options.ifLeaseId }
+  );
+  leaseGeneration += 1;
+  if (!view.drivingHere) {
+    // A conditional claim the host turned down: someone took it first. This
+    // view watches, with Take over offered, and keeps what it holds.
+    applyLease(view);
+    return;
+  }
   // The host's state is read back as authoritative below; a save held from
   // before the takeover must not land on top of it.
   dropDeferredHostOwnedWrites("this view took the project over");
-  leaseGeneration += 1;
   applyLease(view);
   // The previous driver's saved layout is the project's now; this view's was
   // stale while it was displaced.
@@ -322,7 +333,9 @@ async function claimUnlessAnotherMachineDrives(projectId: string): Promise<void>
       applyLease(lease);
       return;
     }
-    await takeOverDrive(projectId);
+    // Only from the holder just read: another Shell opening the project at
+    // the same moment may have taken it since, and isn't taken from in turn.
+    await takeOverDrive(projectId, { ifLeaseId: holder?.leaseId ?? null });
     return;
   }
   // The lease kept moving while it was read: leave it to the events, which

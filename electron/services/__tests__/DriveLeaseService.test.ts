@@ -143,6 +143,29 @@ describe("DriveLeaseService", () => {
     expect(service.isDriving("empty", local(9, "empty"))).toBe(true);
   });
 
+  it("grants a claim made on open only from the lease it read, so two Shells can't take it from each other", async () => {
+    const hostWindow = local(1);
+    const a = remote("s1:e1", "shell-a");
+    const b = remote("s2:e1", "shell-b");
+    registry.add(hostWindow);
+    await settle();
+    const seen = service.getHolder("p")!;
+    registry.add(a);
+    registry.add(b);
+    await settle();
+
+    // Both read the host's own window holding it, then claim at once.
+    const first = service.takeOver("p", a, { ifLeaseId: seen.leaseId });
+    expect(first?.endpointId).toBe("s1:e1");
+    const second = service.takeOver("p", b, { ifLeaseId: seen.leaseId });
+    expect(second?.endpointId).toBe("s1:e1");
+    expect(service.isDriving("p", a)).toBe(true);
+    expect(service.isDriving("p", b)).toBe(false);
+
+    // The Take over button's unconditional take still works.
+    expect(service.takeOver("p", b).endpointId).toBe("s2:e1");
+  });
+
   it("a second client sees it driven elsewhere and can take over, with a fresh lease id", async () => {
     const hostWindow = local(1);
     const laptop = remote("s1:e1", "greg-mbp-id");

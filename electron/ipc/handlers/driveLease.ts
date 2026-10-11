@@ -6,6 +6,7 @@ import { getDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type {
   DriveLeaseProjectPayload,
+  DriveLeaseTakeOverPayload,
   DriveLeaseView,
 } from "../../../shared/types/ipc/driveLease.js";
 
@@ -19,6 +20,15 @@ function readProjectId(payload: DriveLeaseProjectPayload | undefined): string {
     throw new AppError({ code: "VALIDATION", message: "A project id is required" });
   }
   return projectId;
+}
+
+function readIfLeaseId(payload: DriveLeaseTakeOverPayload | undefined): number | null | undefined {
+  const value = payload?.ifLeaseId;
+  if (value === undefined || value === null) return value;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new AppError({ code: "VALIDATION", message: "ifLeaseId must be a lease id or null" });
+  }
+  return value;
 }
 
 /**
@@ -49,14 +59,15 @@ export const driveLeaseNamespace = defineIpcNamespace({
     ),
     takeOver: op(
       DRIVE_LEASE_METHOD_CHANNELS.takeOver,
-      async (ctx: IpcContext, payload: DriveLeaseProjectPayload): Promise<DriveLeaseView> => {
+      async (ctx: IpcContext, payload: DriveLeaseTakeOverPayload): Promise<DriveLeaseView> => {
         const projectId = readProjectId(payload);
+        const ifLeaseId = readIfLeaseId(payload);
         const endpoint = endpointOf(ctx);
         if (!endpoint) {
           throw new AppError({ code: "VALIDATION", message: "No view to hand the lease to" });
         }
         const service = getDriveLeaseService();
-        service.takeOver(projectId, endpoint);
+        service.takeOver(projectId, endpoint, ifLeaseId === undefined ? {} : { ifLeaseId });
         return service.viewFor(projectId, endpoint);
       },
       { withContext: true }
