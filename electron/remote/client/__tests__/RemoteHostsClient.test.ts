@@ -312,6 +312,39 @@ describe("RemoteHostsClient", () => {
       ).resolves.toEqual({ outcome: "choose-project", hostId: "studio-01" });
     });
 
+    it("keeps waiting for a host whose Daintree is being started, past the usual wait", async () => {
+      let starting = true;
+      const startingClient = new RemoteHostsClient({
+        registry,
+        manager: manager as unknown as RemoteHostManager,
+        bindings,
+        router,
+        senders: { projectKeyFor: () => null, windowIdFor: (id) => (id === 5 ? 1 : null) },
+        windows,
+        installRouter,
+        emit: () => {},
+        isStarting: () => starting,
+      });
+      const whenReady = manager.connect("studio-01").whenReady;
+      whenReady.mockResolvedValueOnce("timeout").mockImplementationOnce(async () => {
+        starting = false;
+        return "ready";
+      });
+      await expect(
+        startingClient.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+      ).resolves.toEqual({ outcome: "choose-project", hostId: "studio-01" });
+      expect(whenReady).toHaveBeenCalledTimes(2);
+
+      // Not being started: the usual wait is the whole wait.
+      whenReady.mockClear();
+      whenReady.mockResolvedValueOnce("timeout");
+      await expect(
+        startingClient.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+      ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
+      expect(whenReady).toHaveBeenCalledTimes(1);
+      startingClient.dispose();
+    });
+
     it("refuses when the host never answers, rather than moving the window blind", async () => {
       manager.readiness = "unreachable";
       await expect(

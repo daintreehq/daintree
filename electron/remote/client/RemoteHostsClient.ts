@@ -78,6 +78,12 @@ export interface RemoteHostsClientOptions {
   onFirstUse?: () => void;
   /** How long opening a host's project waits for its link before giving up. */
   readyTimeoutMs?: number;
+  /**
+   * Whether this machine is checking on or starting Daintree on the host
+   * right now (a reboot or power cut left it stopped). A wait for the link
+   * goes on while it is, up to {@link STARTING_TIMEOUT_MS}.
+   */
+  isStarting?: (hostId: HostId) => boolean;
   /** How long forgetting a host waits for each of its windows to come back here. */
   forgetSwitchWaitMs?: number;
   /** After a host is forgotten: drop what this machine kept for it (SSH master, cached bundles). */
@@ -85,6 +91,11 @@ export interface RemoteHostsClientOptions {
 }
 
 const DEFAULT_READY_TIMEOUT_MS = 20_000;
+/**
+ * The longest a wait for the link goes on while the host's Daintree is being
+ * started: its launch is given 30 s and its listener a minute.
+ */
+const STARTING_TIMEOUT_MS = 120_000;
 
 /**
  * Forgetting a host waits this long for a window's local project to activate:
@@ -126,10 +137,7 @@ export class RemoteHostsClient {
       whenReady: async (hostId) => {
         const connection = this.options.manager.get(hostId);
         if (!connection) return false;
-        const readiness = await connection.whenReady(
-          this.options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS
-        );
-        return readiness === "ready";
+        return (await this.whenReady(connection, hostId)) === "ready";
       },
       // Every view of the host hears it; the renderer ignores other hosts' resyncs.
       resync: (hostId) =>
@@ -389,9 +397,7 @@ export class RemoteHostsClient {
       // A cold switch dials the host now. The view is created only once the
       // link is up and the host has named the project's path: a view made
       // before that would open with no path and its first calls would fail.
-      const readiness = await connection.whenReady(
-        this.options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS
-      );
+      const readiness = await this.whenReady(connection, hostId);
       const stale = superseded();
       if (stale) return stale;
       if (readiness === "version-mismatch") throw versionMismatch(hostId);
@@ -567,6 +573,26 @@ export class RemoteHostsClient {
     const window = ctx.senderWindow;
     if (window && !window.isDestroyed()) return window.id;
     return this.options.senders.windowIdFor(ctx.webContentsId);
+  }
+
+  /**
+   * Wait for calls to reach the host, and keep waiting past the usual bound
+   * while its Daintree is being started: giving up there reported a host
+   * that was coming up as unreachable, and the switch needed another click.
+   */
+  private async whenReady(
+    connection: { whenReady(timeoutMs: number): Promise<HostReadiness> },
+    hostId: HostId
+  ): Promise<HostReadiness> {
+    const timeoutMs = this.options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
+    const deadline = Date.now() + STARTING_TIMEOUT_MS;
+    let readiness = await connection.whenReady(timeoutMs);
+    while (readiness === "timeout" && this.options.isStarting?.(hostId)) {
+      const left = deadline - Date.now();
+      if (left <= 0) break;
+      readiness = await connection.whenReady(Math.min(timeoutMs, left));
+    }
+    return readiness;
   }
 
   /** A project view's host is in its key; a view with no project follows its window. */

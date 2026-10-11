@@ -375,6 +375,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   dispose(): Promise<void>;
 } {
   const registry = new HostRegistry(store as unknown as RemoteHostsStore);
+  /** Hosts whose Daintree this machine is checking on or starting over ssh, by attempts in flight. */
+  const startingHosts = new Map<HostId, number>();
   const clientDir = path.join(app.getPath("userData"), "rh");
   // Bound below: the sink needs the router's answer, the router needs the manager.
   let router: RemoteRouterImpl | null = null;
@@ -385,7 +387,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       hooks.createTransport ??
       ((descriptor) =>
         transportFor(descriptor.connection, clientDir, (signal) =>
-          ensureHostRunning(descriptor.connection, signal)
+          ensureHostRunning(descriptor.id, descriptor.connection, signal)
         )),
     handshake: getLocalHandshakeInfo,
     client: {
@@ -412,6 +414,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     emit: broadcastLocal,
     onFirstUse: hooks.onFirstUse,
     onForget: (descriptor): Promise<void> => setup.forgetArtifacts(descriptor),
+    isStarting: (hostId) => (startingHosts.get(hostId) ?? 0) > 0,
   });
   /**
    * A host reachable over ssh whose Daintree isn't serving (a reboot, a power
@@ -419,9 +422,11 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
    * starting is what the user sees.
    */
   const ensureHostRunning = async (
+    hostId: HostId,
     connection: HostConnection,
     signal: AbortSignal
   ): Promise<boolean> => {
+    startingHosts.set(hostId, (startingHosts.get(hostId) ?? 0) + 1);
     try {
       return (await setup.ensureHostRunning(connection, signal)) !== "not-startable";
     } catch (error) {
@@ -429,6 +434,10 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
         ? (error.userMessage ?? error.message)
         : formatErrorMessage(error, "Daintree couldn't be started on the host");
       throw new TransportError(reason, reason);
+    } finally {
+      const left = (startingHosts.get(hostId) ?? 1) - 1;
+      if (left > 0) startingHosts.set(hostId, left);
+      else startingHosts.delete(hostId);
     }
   };
   const setup: HostSetupService = new HostSetupService({
