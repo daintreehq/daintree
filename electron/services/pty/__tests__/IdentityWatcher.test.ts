@@ -687,6 +687,66 @@ describe("IdentityWatcher", () => {
       expect(state.detectionCalls).toHaveLength(0);
     });
 
+    it.each([
+      ["a bare cmd.exe prompt", "C:\\dev\\project>"],
+      ["a cmd.exe prompt holding a stray ^C echo", "C:\\dev\\project>^C"],
+    ])(
+      "clears agent evidence when %s returns with the Windows descendant count unavailable",
+      async (_label, prompt) => {
+        const clear = vi.fn();
+        const fakeDetector = {
+          injectShellCommandEvidence: vi.fn(),
+          clearShellCommandEvidence: clear,
+        } as unknown as ProcessDetector;
+        const { delegate, state } = createFakeDelegate({
+          processDetector: fakeDetector,
+          visibleLines: ["C:\\dev\\project>codex", "Welcome to Claude Code"],
+          cursorLine: "Welcome to Claude Code",
+          ptyDescendantCount: undefined,
+          foreground: null,
+        });
+        const watcher = new IdentityWatcher(delegate);
+
+        watcher.onShellSubmit("codex");
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(watcher.isFallbackCommitted).toBe(true);
+
+        state.visibleLines = ["C:\\dev\\project>codex", prompt];
+        state.cursorLine = prompt;
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+        watcher.dispose();
+      }
+    );
+
+    it("does not read an echoed cmd.exe command line as a returned prompt", async () => {
+      const clear = vi.fn();
+      const fakeDetector = {
+        injectShellCommandEvidence: vi.fn(),
+        clearShellCommandEvidence: clear,
+      } as unknown as ProcessDetector;
+      const { delegate, state } = createFakeDelegate({
+        processDetector: fakeDetector,
+        visibleLines: ["C:\\dev\\project>codex", "OpenAI Codex"],
+        cursorLine: "OpenAI Codex",
+        ptyDescendantCount: 2,
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("codex");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+
+      state.visibleLines = ["OpenAI Codex", "C:\\dev\\project>npm test"];
+      state.cursorLine = "C:\\dev\\project>npm test";
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(clear).not.toHaveBeenCalled();
+      expect(watcher.isFallbackCommitted).toBe(true);
+      watcher.dispose();
+    });
+
     it("clears shell evidence when a real shell prompt returns after stale agent UI text", async () => {
       const inject = vi.fn();
       const clear = vi.fn();
