@@ -89,6 +89,7 @@ describe("generate-update-metadata", () => {
     await writeFile(image, randomBytes(256 * 1024));
     const { buildBlockMap } = await import("app-builder-lib/out/targets/blockmap/blockmap.js");
     const built = await buildBlockMap(image, "deflate");
+    await writeArtifact(releaseDir, "daintree_2.0.0_amd64.deb", "deb");
 
     const metadata = await generateUpdateMetadata({
       platform: "linux",
@@ -119,6 +120,7 @@ describe("generate-update-metadata", () => {
       path.join(releaseDir, "Daintree-2.0.0.AppImage"),
       Buffer.concat([randomBytes(64), tail])
     );
+    await writeArtifact(releaseDir, "daintree_2.0.0_amd64.deb", "deb");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const metadata = await generateUpdateMetadata({
