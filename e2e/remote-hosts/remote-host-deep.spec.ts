@@ -956,6 +956,49 @@ test.describe.serial("Remote hosts deep: a Shell drives a Host over real ssh", (
     run.remotePage = top;
   });
 
+  // ── A host's projects, one view each ──
+
+  test("14b. Add project… opens a repository already on the host, picked on the host", async () => {
+    const page = run.remotePage!;
+    const repo = createFixtureRepo({ name: `rh-onhost-${NONCE}` });
+    run.hostProject.cleanup = ((prev) => () => {
+      repo.cleanup();
+      prev();
+    })(run.hostProject.cleanup);
+    await page.locator(SEL.remoteHosts.hostChip).click();
+    await page.getByRole("menuitem", { name: "Hosts overview…" }).click();
+    await page.getByRole("button", { name: `Add project on ${HOST_NAME}` }).click();
+    await page.getByRole("button", { name: `Open a folder on ${HOST_NAME}` }).click();
+    const field = page.getByRole("textbox", { name: "Folder path" });
+    await field.fill(repo.dir);
+    await field.press("Enter");
+    await page.getByRole("button", { name: "Open", exact: true }).click();
+    run.remotePage = await waitForView(run.b.app, run.hostId, path.basename(repo.dir));
+  });
+
+  test("14c. asking for a project another window shows brings that window forward, not a second view", async () => {
+    const page = run.remotePage!;
+    const name = await page
+      .locator('[data-testid="project-switcher-trigger"]')
+      .textContent({ timeout: 5_000 });
+    const projects = (await page.evaluate(
+      (hostId) => window.electron.remoteHosts.listHostProjects({ hostId }),
+      run.hostId
+    )) as Array<{ id: string; name: string }>;
+    const shown = projects.find((p) => name?.includes(p.name));
+    expect(shown, "the window's project is in the host's list").toBeTruthy();
+    const windowCount = () =>
+      run.b.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
+    const before = await windowCount();
+    const result = await page.evaluate(
+      ({ hostId, projectId }) =>
+        window.electron.remoteHosts.switchWindowHost({ hostId, newWindow: true, projectId }),
+      { hostId: run.hostId, projectId: shown!.id }
+    );
+    expect(result).toMatchObject({ outcome: "focused-elsewhere", projectId: shown!.id });
+    expect(await windowCount()).toBe(before);
+  });
+
   test("15. neither app logged an uncaught error along the way", async () => {
     const bad = (lines: string[]) =>
       lines.filter((l) =>
