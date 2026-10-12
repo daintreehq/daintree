@@ -561,6 +561,13 @@ describe("WorktreeFilterPopover 'Has an agent' facet", () => {
     expect(agentChip).toBeDefined();
     expect(agentChip!.closest("[inert]")).toBeNull();
     expect(agentChip!.closest('[aria-hidden="true"]')).toBeNull();
+    // Not inside the scroll area either, where the open sections could push it
+    // out of view.
+    const scroller = document.querySelector(
+      '[data-testid="worktree-filter-popover"] .overflow-y-auto'
+    );
+    expect(scroller).not.toBeNull();
+    expect(scroller!.contains(agentChip!)).toBe(false);
     expect(agentChip!.textContent).toContain("(2)");
   });
 
@@ -575,6 +582,14 @@ describe("WorktreeFilterPopover 'Has an agent' facet", () => {
     expect(screen.getByLabelText(/^Filter and sort worktrees/).textContent).toContain("1");
     expect(screen.queryByText("Clear all filters")).not.toBeNull();
 
+    fireEvent.click(chip(/^Has an agent/)!);
+    expect(useWorktreeFilterStore.getState().hasAgentFilter).toBe(false);
+    expect(screen.queryByText("Clear all filters")).toBeNull();
+  });
+
+  it("is reset by Clear all filters", () => {
+    useWorktreeFilterStore.getState().setHasAgentFilter(true);
+    renderWithCounts();
     fireEvent.click(screen.getByText("Clear all filters"));
     expect(useWorktreeFilterStore.getState().hasAgentFilter).toBe(false);
   });

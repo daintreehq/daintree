@@ -634,6 +634,38 @@ describe("worktreeFilterStore persistence scoping", () => {
     }
   });
 
+  it("writes the 'Has an agent' filter through to the scoped key when set and unset", async () => {
+    vi.useFakeTimers();
+    try {
+      const writes = new Map<string, string>();
+      installLocalStorage({
+        getItem: (key) => writes.get(key) ?? null,
+        setItem: (key, value) => {
+          writes.set(key, value);
+        },
+        removeItem: (key) => {
+          writes.delete(key);
+        },
+      });
+
+      const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+      const persisted = () =>
+        (JSON.parse(writes.get(PROJECT_KEY)!) as { state: { hasAgentFilter: boolean } }).state
+          .hasAgentFilter;
+
+      store.getState().setHasAgentFilter(true);
+      vi.advanceTimersByTime(400);
+      expect(persisted()).toBe(true);
+
+      store.getState().setHasAgentFilter(false);
+      expect(store.getState().hasAgentFilter).toBe(false);
+      vi.advanceTimersByTime(400);
+      expect(persisted()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("restores the 'Has an agent' filter, and defaults it off when absent", async () => {
     const blob = (extra: Record<string, unknown>) =>
       JSON.stringify({
