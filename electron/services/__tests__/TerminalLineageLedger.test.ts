@@ -512,6 +512,18 @@ describe("TerminalLineageLedger", () => {
       expect(listener).not.toHaveBeenCalled();
     });
 
+    it("takes the creation time from a later sighting when the first carried none", () => {
+      const { ledger, listener } = registeredLedger();
+      const start = "2026-10-12T10:00:00.5000000+02:00";
+
+      ledger.reconcile(new FakeCensus([{ pid: 100, ppid: 10 }]));
+      expect(ledger.getRootStartTime(100)).toBeUndefined();
+      ledger.reconcile(new FakeCensus([{ pid: 100, ppid: 10, startTime: start }]));
+
+      expect(ledger.getRootStartTime(100)).toBe(start);
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
     it("records none off Windows", () => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       const { ledger, listener } = registeredLedger();

@@ -558,6 +558,12 @@ describe("PtyClient fabric", () => {
         const shardA = projectShard("project-a");
         shardA.child.emit("message", { type: "ready" });
         shardA.child.emit("message", { type: "terminal-pid", id: "t1", pid: 11111 });
+        shardA.child.emit("message", {
+          type: "terminal-identity",
+          id: "t1",
+          pid: 11111,
+          startTime: 1_760_256_000_123_456,
+        });
         defaultShard().child.emit("message", { type: "terminal-pid", id: "t2", pid: 22222 });
         const forkCountBefore = forks.length;
 
@@ -566,7 +572,10 @@ describe("PtyClient fabric", () => {
         await vi.advanceTimersByTimeAsync(15_000);
 
         expect(windowsTreeKill).toHaveBeenCalledTimes(1);
-        expect(windowsTreeKill).toHaveBeenCalledWith([{ pid: 11111 }], { timeoutMs: 3000 });
+        expect(windowsTreeKill).toHaveBeenCalledWith(
+          [{ pid: 11111, startTime: 1_760_256_000_123_456 }],
+          { timeoutMs: 3000 }
+        );
         // The dead host no longer pins these PIDs: no bare-PID kill, ever.
         expect(killSpy).not.toHaveBeenCalled();
         // The replacement host waits for the old trees, as it does for the lineage reap.
@@ -611,9 +620,10 @@ describe("PtyClient fabric", () => {
         await vi.advanceTimersByTimeAsync(0);
 
         // A shell whose PID was taken over since the crash is refused by the
-        // helper; one with no identity still goes by PID, as before.
+        // helper; one with no identity is never walked by bare PID — its
+        // pseudoconsole died with the host and the Job Object holds the rest.
         expect(windowsTreeKill).toHaveBeenCalledWith(
-          [{ pid: 11111, startTime: 1_760_256_000_123_456 }, { pid: 11112 }],
+          [{ pid: 11111, startTime: 1_760_256_000_123_456 }],
           { timeoutMs: 3000 }
         );
         client.dispose();

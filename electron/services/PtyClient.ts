@@ -1579,16 +1579,26 @@ export class PtyClient extends EventEmitter {
           identityOf.set(identity.pid, identity.startTime);
         }
       }
-      const targets: WindowsTreeKillTarget[] = killable.map((pid) => {
-        const startTime = identityOf.get(pid);
-        return startTime === undefined ? { pid } : { pid, startTime };
-      });
+      // A shell the host never identified (a crash within a second or so of
+      // its spawn) is not walked by bare PID: nothing proves the PID is still
+      // ours. Its pseudoconsole died with the host, which ends it, and the
+      // terminal Job Object holds whatever it started.
+      const identified = killable.filter((pid) => identityOf.has(pid));
+      if (identified.length < killable.length) {
+        console.warn(
+          `[PtyClient] Left ${killable.length - identified.length} unidentified orphaned PTY root(s) to the pseudoconsole close and Job Object`
+        );
+      }
+      const targets: WindowsTreeKillTarget[] = identified.map((pid) => ({
+        pid,
+        startTime: identityOf.get(pid) as number,
+      }));
       const kill = killWindowsProcessTrees(targets, { timeoutMs: 3000 }).then(
         (results) => {
           results.forEach((result, index) => {
             const problem = describeWindowsTreeKillProblem(result);
             if (problem) {
-              console.warn(`[PtyClient] Orphaned PTY pid=${killable[index]}: ${problem}`);
+              console.warn(`[PtyClient] Orphaned PTY pid=${identified[index]}: ${problem}`);
             }
           });
         },

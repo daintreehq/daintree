@@ -767,6 +767,10 @@ export class TerminalLineageLedger {
             this.noteRootIdentity(rootPid, entry, rootProc.startTime);
           } else if (entry.rootPpid !== rootProc.ppid) {
             this.close(entry);
+          } else if (entry.rootStartTime === null) {
+            // A first sighting without a usable CreationDate must not leave the
+            // shell unidentified for good.
+            this.noteRootIdentity(rootPid, entry, rootProc.startTime);
           }
         } else if (entry.rootPpid !== null) {
           // Seen before, gone now — the terminal ended without a teardown we
