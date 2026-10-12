@@ -66,6 +66,14 @@ export function parseOsRelease(content: string): Record<string, string> {
   return fields;
 }
 
+/** Own keys only: an `ID=constructor` must not resolve to Object.prototype's. */
+function ownFamily(
+  table: Record<string, LinuxDistroFamily>,
+  key: string
+): LinuxDistroFamily | null {
+  return Object.hasOwn(table, key) ? table[key] : null;
+}
+
 /**
  * The family whose install commands fit this system, or null when nothing in
  * `ID` or `ID_LIKE` is recognised. `ID` wins; then `ID_LIKE` in its own order,
@@ -74,13 +82,13 @@ export function parseOsRelease(content: string): Record<string, string> {
 export function classifyLinuxDistro(fields: Record<string, string>): LinuxDistroFamily | null {
   const id = fields.ID?.trim().toLowerCase() ?? "";
   if (id) {
-    const exact = FAMILY_BY_ID[id];
+    const exact = ownFamily(FAMILY_BY_ID, id);
     if (exact) return exact;
     if (id.startsWith("opensuse")) return "suse";
   }
   for (const token of (fields.ID_LIKE ?? "").toLowerCase().split(/\s+/)) {
     if (!token) continue;
-    const like = FAMILY_BY_LIKE[token];
+    const like = ownFamily(FAMILY_BY_LIKE, token);
     if (like) return like;
     if (token.startsWith("opensuse")) return "suse";
   }

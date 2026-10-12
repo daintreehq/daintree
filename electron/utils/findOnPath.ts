@@ -34,18 +34,42 @@ const MAX_CONCURRENT_PATH_PROBES = 2;
 let activeProbes = 0;
 const probeQueue: Array<() => void> = [];
 
-export function withPathProbeSlot<T>(task: () => Promise<T>): Promise<T> {
+/**
+ * Runs `task` once a slot is free. Aborting `signal` while the task is still
+ * queued drops it from the queue and rejects with the abort reason, so a lookup
+ * that gave up behind two hung probes leaves nothing behind to run later.
+ */
+export function withPathProbeSlot<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = () => {
+      const index = probeQueue.indexOf(run);
+      if (index !== -1) probeQueue.splice(index, 1);
+      reject(signal?.reason);
+    };
     const run = () => {
+      signal?.removeEventListener("abort", onAbort);
       activeProbes++;
       new Promise<T>((settle) => settle(task())).then(resolve, reject).finally(() => {
         activeProbes--;
         probeQueue.shift()?.();
       });
     };
-    if (activeProbes < MAX_CONCURRENT_PATH_PROBES) run();
-    else probeQueue.push(run);
+    if (activeProbes < MAX_CONCURRENT_PATH_PROBES) {
+      run();
+      return;
+    }
+    probeQueue.push(run);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/** Test seam — lookups waiting for a probe slot. */
+export function __pathProbeQueueDepthForTests(): number {
+  return probeQueue.length;
 }
 
 const DEFAULT_TIMEOUT_MS = 5_000;
@@ -54,17 +78,20 @@ export interface FindOnPathOptions {
   /** Environment whose `PATH` is searched. Defaults to `process.env`. */
   env?: NodeJS.ProcessEnv;
   /**
-   * Give up after this long and report nothing found — the outcome a timed-out
-   * `which` had. Probes already queued are abandoned rather than run late.
+   * Give up after this long. A lookup that confirmed nothing by then reports
+   * nothing found — the outcome a timed-out `which` had — while
+   * {@link findAllOnPath} keeps the matches it had already confirmed. Probes
+   * still queued are dropped rather than run late.
    */
   timeoutMs?: number;
 }
 
-async function isExecutableFile(candidate: string): Promise<boolean> {
+async function isExecutableFile(candidate: string, signal: AbortSignal): Promise<boolean> {
   try {
     // access first: it is the cheap miss for the common case (ENOENT), and the
     // stat only runs on a hit to rule out a directory, which passes X_OK.
     await fsp.access(candidate, fsConstants.X_OK);
+    if (signal.aborted) return false;
     return (await fsp.stat(candidate)).isFile();
   } catch {
     return false;
@@ -78,7 +105,9 @@ function searchCandidates(command: string, env: NodeJS.ProcessEnv): string[] {
   const candidates: string[] = [];
   for (const dir of (env.PATH ?? "").split(":")) {
     if (!dir || !path.posix.isAbsolute(dir)) continue;
-    const candidate = path.posix.join(dir, command);
+    // Appended, not path.join()ed: joining would collapse `link/..` lexically,
+    // while the kernel resolves `..` against wherever the link points.
+    const candidate = dir.endsWith("/") ? dir + command : `${dir}/${command}`;
     if (seen.has(candidate)) continue;
     seen.add(candidate);
     candidates.push(candidate);
@@ -98,20 +127,28 @@ async function fileIdentity(match: string): Promise<string> {
   }
 }
 
+/** Appends each distinct match to `matches` as it is confirmed. */
 async function walk(
   command: string,
   env: NodeJS.ProcessEnv,
   all: boolean,
-  isAbandoned: () => boolean
+  signal: AbortSignal,
+  matches: string[]
 ): Promise<string[]> {
-  const matches: string[] = [];
   const identities = new Set<string>();
   for (const candidate of searchCandidates(command, env)) {
-    if (isAbandoned()) break;
-    const identity = await withPathProbeSlot(async () => {
-      if (isAbandoned() || !(await isExecutableFile(candidate))) return null;
-      return all ? fileIdentity(candidate) : candidate;
-    });
+    if (signal.aborted) break;
+    let identity: string | null;
+    try {
+      identity = await withPathProbeSlot(async () => {
+        if (signal.aborted || !(await isExecutableFile(candidate, signal))) return null;
+        if (!all) return candidate;
+        return signal.aborted ? null : fileIdentity(candidate);
+      }, signal);
+    } catch (err) {
+      if (signal.aborted) break;
+      throw err;
+    }
     if (identity === null) continue;
     if (identities.has(identity)) continue;
     identities.add(identity);
@@ -128,16 +165,17 @@ async function bounded(
 ): Promise<string[]> {
   const env = options?.env ?? process.env;
   const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  let abandoned = false;
+  const controller = new AbortController();
+  const matches: string[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<string[]>((resolve) => {
     timer = setTimeout(() => {
-      abandoned = true;
-      resolve([]);
+      controller.abort();
+      resolve([...matches]);
     }, timeoutMs);
   });
   try {
-    return await Promise.race([walk(command, env, all, () => abandoned), timeout]);
+    return await Promise.race([walk(command, env, all, controller.signal, matches), timeout]);
   } finally {
     if (timer) clearTimeout(timer);
   }

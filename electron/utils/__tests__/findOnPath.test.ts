@@ -43,6 +43,16 @@ describe.skipIf(process.platform === "win32")("findOnPath", () => {
     expect(await findOnPath("tool", { env: env(a, b) })).toBe(first);
   });
 
+  it("resolves `..` in a PATH entry through a symlink, as the kernel does", async () => {
+    const app = dir("real/app");
+    const bin = dir("real/bin");
+    file(bin, "tool", 0o755);
+    fs.symlinkSync(app, path.join(root, "link"));
+    const entry = `${root}/link/../bin`;
+
+    expect(await findOnPath("tool", { env: env(entry) })).toBe(`${entry}/tool`);
+  });
+
   it("skips a file without an execute bit for a later executable one", async () => {
     const a = dir("a");
     const b = dir("b");
@@ -180,6 +190,55 @@ describe.skipIf(process.platform === "win32")("findOnPath", () => {
       expect(await fresh.findOnPath("tool", { env: env(a), timeoutMs: 30 })).toBeNull();
       expect(await fresh.findAllOnPath("tool", { env: env(a), timeoutMs: 30 })).toEqual([]);
       expect(Date.now() - started).toBeLessThan(2_000);
+    });
+
+    it("drops a lookup that timed out in the queue, and runs fresh work once the slots free", async () => {
+      vi.resetModules();
+      const fresh = await import("../findOnPath.js");
+      const hung = dir("hung");
+      const a = dir("a");
+      const tool = file(a, "tool", 0o755);
+      const realAccess = fs.promises.access;
+      const releases: Array<() => void> = [];
+      const probed: string[] = [];
+      vi.spyOn(fs.promises, "access").mockImplementation((target, mode) => {
+        probed.push(String(target));
+        if (String(target).startsWith(hung)) {
+          return new Promise<void>((_, reject) =>
+            releases.push(() => reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" })))
+          );
+        }
+        return realAccess(target, mode);
+      });
+
+      const holding = [
+        fresh.findOnPath("one", { env: env(hung), timeoutMs: 20 }),
+        fresh.findOnPath("two", { env: env(hung), timeoutMs: 20 }),
+      ];
+      expect(await fresh.findOnPath("tool", { env: env(a), timeoutMs: 20 })).toBeNull();
+      expect(await Promise.all(holding)).toEqual([null, null]);
+      expect(fresh.__pathProbeQueueDepthForTests()).toBe(0);
+
+      for (const release of releases) release();
+      expect(await fresh.findOnPath("tool", { env: env(a) })).toBe(tool);
+      expect(probed.filter((target) => target.startsWith(a))).toEqual([tool]);
+    });
+
+    it("keeps the matches it confirmed before the deadline", async () => {
+      vi.resetModules();
+      const fresh = await import("../findOnPath.js");
+      const a = dir("a");
+      const hung = dir("hung");
+      const tool = file(a, "tool", 0o755);
+      const realAccess = fs.promises.access;
+      vi.spyOn(fs.promises, "access").mockImplementation((target, mode) =>
+        String(target).startsWith(hung) ? new Promise<void>(() => {}) : realAccess(target, mode)
+      );
+
+      // Generous: the confirmed match is real filesystem work on a loaded CI runner.
+      expect(await fresh.findAllOnPath("tool", { env: env(a, hung), timeoutMs: 500 })).toEqual([
+        tool,
+      ]);
     });
 
     it("never has more than two probes in flight across concurrent lookups", async () => {

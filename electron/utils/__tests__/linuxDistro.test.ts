@@ -87,6 +87,11 @@ describe("classifyLinuxDistro", () => {
     expect(classifyLinuxDistro(parseOsRelease(OS_RELEASE[fixture]))).toBe(family);
   });
 
+  it("never resolves an ID or ID_LIKE to an inherited object property", () => {
+    expect(classifyLinuxDistro({ ID: "constructor" })).toBeNull();
+    expect(classifyLinuxDistro({ ID: "toString", ID_LIKE: "__proto__ hasOwnProperty" })).toBeNull();
+  });
+
   it("lets ID win over ID_LIKE", () => {
     // An enterprise rebuild that only claims `fedora` must not get Fedora's DNF5 commands.
     expect(classifyLinuxDistro({ ID: "ol", ID_LIKE: "fedora" })).toBe("rhel");
