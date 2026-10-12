@@ -611,12 +611,23 @@ describe("agentInstall", () => {
       expect(classifyNpmPermissionFailure(CLAUDE, report, "linux")?.kind).toBe("global-folder");
     });
 
-    it("tells a cache failure from a prefix one and keeps npm's own chown", async () => {
+    it("tells a cache failure from a prefix one and takes the folder from npm's chown", async () => {
       const { classifyNpmPermissionFailure } = await import("../agentInstall");
       expect(classifyNpmPermissionFailure(CLAUDE, CACHE_REPORT, "macos")).toEqual({
         kind: "cache",
         folder: "/Users/me/.npm",
-        fixCommand: 'sudo chown -R 501:20 "/Users/me/.npm"',
+        fixCommand: "sudo chown -R $(id -u):$(id -g) '/Users/me/.npm'",
+      });
+    });
+
+    // npm double-quotes the folder in its own chown, so pasting it would expand
+    // a `$NAME` or run a `$(…)` in the folder's name.
+    it("never hands on npm's printed chown for a folder that would expand", async () => {
+      const { classifyNpmPermissionFailure } = await import("../agentInstall");
+      const report = CACHE_REPORT.replaceAll("/Users/me/.npm", "/Users/me/$HOME`x`/.npm");
+      expect(classifyNpmPermissionFailure(CLAUDE, report, "macos")).toMatchObject({
+        kind: "cache",
+        fixCommand: "sudo chown -R $(id -u):$(id -g) '/Users/me/$HOME`x`/.npm'",
       });
     });
 
@@ -626,16 +637,16 @@ describe("agentInstall", () => {
       expect(classifyNpmPermissionFailure(CLAUDE, report, "linux")).toEqual({
         kind: "cache",
         folder: "/home/me/.npm",
-        fixCommand: 'sudo chown -R $(id -u):$(id -g) "/home/me/.npm"',
+        fixCommand: "sudo chown -R $(id -u):$(id -g) '/home/me/.npm'",
       });
     });
 
-    it("offers no command for a cache path that can't be quoted safely", async () => {
+    it("single-quotes a cache path holding shell syntax", async () => {
       const { classifyNpmPermissionFailure } = await import("../agentInstall");
-      const report = 'npm error code EACCES\nnpm error path /home/me/$(x)".npm/_cacache';
+      const report = "npm error code EACCES\nnpm error path /home/me/$(x)'.npm/_cacache";
       expect(classifyNpmPermissionFailure(CLAUDE, report, "linux")).toMatchObject({
         kind: "cache",
-        fixCommand: null,
+        fixCommand: "sudo chown -R $(id -u):$(id -g) '/home/me/$(x)'\\''.npm'",
       });
     });
 

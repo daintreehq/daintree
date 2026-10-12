@@ -129,8 +129,14 @@ function parentFolder(filePath: string | null): string | null {
   return index > 0 ? filePath.slice(0, index) : null;
 }
 
-// Characters that would change a double-quoted shell word's meaning.
-const UNSAFE_IN_DOUBLE_QUOTES = /["$`\\\n]/;
+/**
+ * The folder as one single-quoted shell word, safe to paste whatever it holds;
+ * null for a newline, which would split a pasted command.
+ */
+function shellQuote(folder: string): string | null {
+  if (folder.includes("\n")) return null;
+  return `'${folder.replace(/'/g, "'\\''")}'`;
+}
 
 const HOME_FOLDER = /^\/(?:home\/[^/]+|Users\/[^/]+|root)(?:\/|$)/;
 
@@ -163,9 +169,10 @@ export function classifyNpmPermissionFailure(
     const quoted = npmFix ? /"([^"]+)"/.exec(npmFix)?.[1] : null;
     const folder = quoted ?? cacheMatch?.[1] ?? null;
     if (!folder) return null;
-    const fixCommand =
-      npmFix ??
-      (UNSAFE_IN_DOUBLE_QUOTES.test(folder) ? null : `sudo chown -R $(id -u):$(id -g) "${folder}"`);
+    // Built here rather than copied from npm's text: npm double-quotes the
+    // folder, so a `$`, backtick or `$(…)` in it would expand when pasted.
+    const quotedFolder = shellQuote(folder);
+    const fixCommand = quotedFolder ? `sudo chown -R $(id -u):$(id -g) ${quotedFolder}` : null;
     return { kind: "cache", folder, fixCommand };
   }
 

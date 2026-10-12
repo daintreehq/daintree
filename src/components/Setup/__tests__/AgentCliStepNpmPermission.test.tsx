@@ -46,7 +46,9 @@ const PREFIX_REPORT = [
   "npm error errno -13",
   "npm error Error: EACCES: permission denied, mkdir '/usr/lib/node_modules/agent'",
 ].join("\n");
-const CACHE_FIX = 'sudo chown -R 501:20 "/Users/me/.npm"';
+const NPM_PRINTED_FIX = 'sudo chown -R 501:20 "/Users/me/.npm"';
+// Built from the folder npm names, single-quoted so nothing in it expands.
+const CACHE_FIX = "sudo chown -R $(id -u):$(id -g) '/Users/me/.npm'";
 const CACHE_REPORT = [
   "npm error code EACCES",
   "npm error syscall mkdir",
@@ -57,7 +59,7 @@ const CACHE_REPORT = [
   "npm error previous versions of npm which has since been addressed.",
   "npm error",
   "npm error To permanently fix this problem, please run:",
-  `npm error   ${CACHE_FIX}`,
+  `npm error   ${NPM_PRINTED_FIX}`,
 ].join("\n");
 
 function render(ui: ReactElement) {
@@ -123,7 +125,7 @@ describe("npm refusing a global install", () => {
     expect(callout.textContent).toContain(NPM_USER_PREFIX_COMMAND);
   });
 
-  it("gives a cache failure npm's chown, not a new prefix", async () => {
+  it("gives a cache failure a chown for npm's cache, not a new prefix", async () => {
     installOS.current = "macos";
     failInstallWith(CACHE_REPORT);
     await installAndFail();
