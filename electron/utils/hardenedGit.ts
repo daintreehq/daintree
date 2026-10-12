@@ -574,7 +574,6 @@ export async function createWslHardenedGit(
   });
 }
 
-const execFileAsync = promisify(execFile);
 const USER_SSH_COMMAND_TTL_MS = 60_000;
 let userSshCommand: { readAt: number; value: Promise<string | null> } | null = null;
 
@@ -603,7 +602,7 @@ export function withNonInteractiveSshOptions(command: string): string | null {
 async function readUserSshCommand(): Promise<string | null> {
   for (const scope of ["--global", "--system"]) {
     try {
-      const { stdout } = await execFileAsync(
+      const { stdout } = await promisify(execFile)(
         "git",
         ["config", scope, "--no-includes", "--get", "core.sshCommand"],
         {
