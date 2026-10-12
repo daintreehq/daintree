@@ -12,9 +12,14 @@ const shared = vi.hoisted(() => {
     forkMock: vi.fn(),
     appMock,
     trackEventMock: vi.fn(),
+    getActiveShutdownMock: vi.fn((): { initiator: string; phase: string } | null => null),
     loggerCalls: [] as Array<{ level: string; message: string; context?: unknown }>,
   };
 });
+
+vi.mock("../../lifecycle/shutdownCoordinator.js", () => ({
+  getActiveShutdown: shared.getActiveShutdownMock,
+}));
 
 vi.mock("electron", () => ({
   utilityProcess: {
@@ -70,6 +75,7 @@ describe("MainProcessWatchdogClient", () => {
     // so a previous test's unconsumed queue can hijack the next constructor's
     // fork() and attach the exit handler to a stale child.
     shared.forkMock.mockReset();
+    shared.getActiveShutdownMock.mockReturnValue(null);
     mockChild = createMockChild();
     shared.forkMock.mockReturnValue(mockChild);
     ({ MainProcessWatchdogClient: WatchdogClient } =
@@ -223,6 +229,29 @@ describe("MainProcessWatchdogClient", () => {
     expect(exit?.level).toBe("warn");
     expect(exit?.context).toMatchObject({ pid: 31337, exitCode: 1 });
     expect(shared.loggerCalls.some((c) => c.message.includes("Restarting watchdog in"))).toBe(true);
+  });
+
+  it("does not restart a watchdog that exits while the app is shutting down", () => {
+    shared.loggerCalls.length = 0;
+    new WatchdogClient({ mainPid: 4242 });
+    // A signal sent to the whole process group kills the watchdog mid-quit.
+    shared.getActiveShutdownMock.mockReturnValue({ initiator: "app-quit", phase: "cleaning" });
+    mockChild.emit("exit", 15);
+
+    vi.advanceTimersByTime(6_000);
+
+    expect(shared.forkMock).toHaveBeenCalledTimes(1);
+    expect(shared.loggerCalls.some((c) => c.level === "warn")).toBe(false);
+  });
+
+  it("drops a pending restart when a shutdown begins before it fires", () => {
+    new WatchdogClient({ mainPid: 4242 });
+    mockChild.emit("exit", 15);
+    shared.getActiveShutdownMock.mockReturnValue({ initiator: "app-quit", phase: "cleaning" });
+
+    vi.advanceTimersByTime(6_000);
+
+    expect(shared.forkMock).toHaveBeenCalledTimes(1);
   });
 
   it("logs nothing for the exit of a disposed watchdog", () => {

@@ -35,6 +35,11 @@ vi.mock("../signalShutdownState.js", () => ({
   setSafetyBeltTimer: setSafetyBeltTimerMock,
 }));
 
+const finishIfGroupStopMock = vi.hoisted(() => vi.fn(() => false));
+vi.mock("../groupStop.js", () => ({
+  finishIfGroupStop: finishIfGroupStopMock,
+}));
+
 const isWindowRecreatingMock = vi.fn(() => false);
 vi.mock("../windowRecreationState.js", () => ({
   isWindowRecreating: isWindowRecreatingMock,
@@ -153,6 +158,23 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     // runs Electron's native teardown. Never process.exit(0).
     expect(appMock.exit).toHaveBeenCalledWith(1);
     expect(processExitSpy).not.toHaveBeenCalledWith(0);
+  });
+
+  it("checks for a group stop only once the quit has claimed the shutdown", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
+    const handler = sigTermCall![1] as () => void;
+
+    handler();
+
+    // The quit runs the chain's synchronous persistence; a group stop that
+    // finished first would exit without it.
+    expect(finishIfGroupStopMock).toHaveBeenCalledOnce();
+    expect(appMock.quit.mock.invocationCallOrder[0]).toBeLessThan(
+      finishIfGroupStopMock.mock.invocationCallOrder[0]
+    );
   });
 
   it("safety-belt nulls the stored handle when it fires", async () => {

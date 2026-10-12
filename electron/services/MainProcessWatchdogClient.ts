@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { trackEvent } from "./TelemetryService.js";
 import { createLogger } from "../utils/logger.js";
 import { noteTerminationIntent } from "./processTerminationIntent.js";
+import { getActiveShutdown } from "../lifecycle/shutdownCoordinator.js";
 
 const logger = createLogger("main:Watchdog");
 
@@ -181,6 +182,17 @@ export class MainProcessWatchdogClient {
 
       if (wasDisposed) return;
 
+      // The shutdown chain disposes the watchdog itself, and a signal sent to
+      // the whole process group kills it alongside Main. A replacement forked
+      // now would only race that teardown.
+      if (getActiveShutdown() !== null) {
+        logger.info(`Watchdog process exited during shutdown (code=${code}); not restarting`, {
+          pid: watchdogPid ?? null,
+          exitCode: code ?? null,
+        });
+        return;
+      }
+
       this.lastExitCode = code ?? null;
       // The `exit` code cannot tell a crash from a signal kill; the
       // ProcessDeathLogger line for "daintree-watchdog" carries the reason.
@@ -255,7 +267,8 @@ export class MainProcessWatchdogClient {
     }
     this.restartTimer = setTimeout(() => {
       this.restartTimer = null;
-      if (this.isDisposed || this.child !== null) return;
+      // A shutdown that began while the restart was pending.
+      if (this.isDisposed || this.child !== null || getActiveShutdown() !== null) return;
       this.startHost();
     }, delay);
     this.restartTimer.unref?.();

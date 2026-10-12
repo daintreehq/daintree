@@ -8,6 +8,7 @@ import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { refreshProjectMenuState } from "../projectMenuState.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { setSignalShutdown, setSafetyBeltTimer } from "./signalShutdownState.js";
+import { finishIfGroupStop } from "./groupStop.js";
 import { isWindowRecreating } from "./windowRecreationState.js";
 import { SAFETY_BELT_TIMEOUT_MS } from "./shutdownConfig.js";
 import { extractDaintreeUrl, handleDaintreeUrl } from "../setup/deepLinkInstall.js";
@@ -316,6 +317,10 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     handle.unref();
     setSafetyBeltTimer(handle);
     app.quit();
+    // The quit has claimed the shutdown and run its synchronous prefix. If the
+    // same signal reached Chromium's own processes, this is a group stop and
+    // the rest of the chain cannot outrun Chromium (see groupStop.ts).
+    finishIfGroupStop();
   };
   process.on("SIGTERM", signalHandler);
   process.on("SIGINT", signalHandler);

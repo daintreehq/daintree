@@ -133,6 +133,23 @@ const signalShutdownMock = vi.hoisted(() => ({
 
 vi.mock("../signalShutdownState.js", () => signalShutdownMock);
 
+// Detection is groupStop.ts's own concern (groupStop.test.ts); here the
+// registered finisher is driven directly.
+const groupStopMock = vi.hoisted(() => {
+  const state = { finisher: null as (() => boolean) | null };
+  return {
+    state,
+    setGroupStopFinisher: vi.fn((fn: (() => boolean) | null) => {
+      state.finisher = fn;
+    }),
+    rememberChromiumZygotes: vi.fn(),
+    noteChildProcessGone: vi.fn(),
+    noteRendererGone: vi.fn(),
+  };
+});
+
+vi.mock("../groupStop.js", () => groupStopMock);
+
 const dbMaintenanceMock = vi.hoisted(() => ({
   dispose: vi.fn(() => Promise.resolve()),
 }));
@@ -2187,6 +2204,177 @@ describe("registerShutdownHandler", () => {
       expect(onReadyToInstall).not.toHaveBeenCalled();
       expect(closeSharedDbMock.closeSharedDb).not.toHaveBeenCalled();
       expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+    });
+  });
+
+  // L12: a termination signal sent to the whole process group (logout,
+  // `pkill daintree`). Chromium aborts the browser within milliseconds of its
+  // GPU process dying there, so the chain is cut short after its synchronous
+  // prefix.
+  describe("group stop", () => {
+    beforeEach(() => {
+      groupStopMock.state.finisher = null;
+      mcpServerMock.stop.mockReturnValue(Promise.resolve());
+      performanceTraceMock.stopPerformanceTraceIfActive.mockReturnValue(Promise.resolve());
+    });
+
+    async function setupGroupStop(overrides?: Partial<ShutdownDeps>) {
+      const ctx = await setup(overrides);
+      const coordinator = await import("../shutdownCoordinator.js");
+      const finishGroupStop = groupStopMock.state.finisher;
+      if (!finishGroupStop) throw new Error("shutdown.ts registered no group-stop finisher");
+      return { ...ctx, coordinator, finishGroupStop };
+    }
+
+    it("remembers the zygotes and forwards every child and renderer death to the detector", async () => {
+      await setup();
+      expect(groupStopMock.rememberChromiumZygotes).toHaveBeenCalledOnce();
+      const listener = (name: string) =>
+        appMock.on.mock.calls.find((args: string[]) => args[0] === name)![1] as (
+          ...args: unknown[]
+        ) => void;
+      const details = { type: "GPU", reason: "killed", exitCode: 15 };
+
+      listener("child-process-gone")({}, details);
+      listener("render-process-gone")({}, {}, { reason: "clean-exit", exitCode: 0 });
+
+      expect(groupStopMock.noteChildProcessGone).toHaveBeenCalledWith(details);
+      expect(groupStopMock.noteRendererGone).toHaveBeenCalledOnce();
+    });
+
+    it("exits clean straight after the chain's synchronous prefix, without waiting on the chain", async () => {
+      signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+      const { beforeQuitCb, coordinator, finishGroupStop } = await setupGroupStop();
+
+      void beforeQuitCb(makeEvent());
+      // What the quit persisted before its first await.
+      expect(openWindowsTrackerMock.freezeAndSnapshotOpenWindows).toHaveBeenCalled();
+      expect(crashRecoveryMock.takeBackup).toHaveBeenCalled();
+
+      expect(finishGroupStop()).toBe(true);
+
+      expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+      expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalled();
+      expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalled();
+      expect(projectCheckServiceMock.dispose).toHaveBeenCalled();
+      expect(signalShutdownMock.clearSafetyBeltTimer).toHaveBeenCalled();
+      // None of the chain's awaited work had been reached.
+      expect(closeSharedDbMock.closeSharedDb).not.toHaveBeenCalled();
+      expect(closeTelemetryMock).not.toHaveBeenCalled();
+
+      // The abandoned chain settling afterwards must not change the exit code.
+      await vi.waitFor(() => expect(coordinator.getActiveShutdown()?.phase).toBe("handoff"), {
+        timeout: 5_000,
+      });
+      expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+    });
+
+    it("claims the shutdown itself when a quit confirmation was still open", async () => {
+      quitWarningMock.getActiveAgentCount.mockReturnValue(2);
+      let answerDialog: (confirmed: boolean) => void = () => {};
+      quitWarningMock.showQuitWarning.mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => (answerDialog = resolve))
+      );
+      const mainWindow = {} as Electron.BrowserWindow;
+      const { beforeQuitCb, coordinator, finishGroupStop } = await setupGroupStop({
+        windowRegistry: {
+          getPrimary: () => ({ browserWindow: mainWindow }),
+        } as unknown as ShutdownDeps["windowRegistry"],
+      });
+
+      const userQuit = beforeQuitCb(makeEvent());
+      expect(quitWarningMock.showQuitWarning).toHaveBeenCalled();
+      expect(coordinator.getActiveShutdown()).toBeNull();
+
+      expect(finishGroupStop()).toBe(true);
+
+      expect(coordinator.getActiveShutdown()?.initiator).toBe("app-quit");
+      expect(openWindowsTrackerMock.freezeAndSnapshotOpenWindows).toHaveBeenCalled();
+      expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalled();
+      expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+
+      answerDialog(true);
+      await userQuit;
+      await vi.waitFor(() => expect(coordinator.getActiveShutdown()?.phase).toBe("handoff"), {
+        timeout: 5_000,
+      });
+      expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+    });
+
+    it("exits dirty, without clean markers, when the chain had already timed out", async () => {
+      vi.useFakeTimers();
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+      mcpServerMock.stop.mockReturnValue(new Promise(() => {}));
+      // Keeps the run in its tail, still cleaning, after the outcome is dirty.
+      closeTelemetryMock.mockReturnValueOnce(new Promise(() => {}));
+
+      try {
+        const { beforeQuitCb, finishGroupStop } = await setupGroupStop();
+        await beforeQuitCb(makeEvent());
+        await vi.advanceTimersByTimeAsync(CLEANUP_TIMEOUT_MS);
+        expect(closeTelemetryMock).toHaveBeenCalled();
+
+        expect(finishGroupStop()).toBe(true);
+
+        expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(1);
+        expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+        expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+
+        await vi.runAllTimersAsync();
+        expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(1);
+      } finally {
+        consoleSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
+    it("exits dirty when the quit's synchronous persistence threw", async () => {
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+      openWindowsTrackerMock.freezeAndSnapshotOpenWindows.mockImplementationOnce(() => {
+        throw new Error("database is locked");
+      });
+
+      try {
+        const { beforeQuitCb, coordinator, finishGroupStop } = await setupGroupStop();
+        void beforeQuitCb(makeEvent());
+
+        expect(finishGroupStop()).toBe(true);
+
+        expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(1);
+        expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(coordinator.getActiveShutdown()?.phase).toBe("handoff"));
+        expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(1);
+      } finally {
+        consoleSpy.mockRestore();
+      }
+    });
+
+    it("leaves an update install's terminal action alone", async () => {
+      const { coordinator, finishGroupStop } = await setupGroupStop();
+      const onReadyToInstall = vi.fn();
+      expect(coordinator.requestGracefulShutdownForUpdate(onReadyToInstall)).toBe("started");
+
+      expect(finishGroupStop()).toBe(false);
+
+      expect(appMock.exit).not.toHaveBeenCalled();
+      expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(onReadyToInstall).toHaveBeenCalledWith("clean"), {
+        timeout: 5_000,
+      });
+      expect(appMock.exit).not.toHaveBeenCalled();
+    });
+
+    it("does nothing in smoke-test mode, where quitting skips cleanup", async () => {
+      isSmokeTestMock.value = true;
+      const { coordinator, finishGroupStop } = await setupGroupStop();
+
+      expect(finishGroupStop()).toBe(false);
+
+      expect(coordinator.getActiveShutdown()).toBeNull();
+      expect(appMock.exit).not.toHaveBeenCalled();
+      expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
     });
   });
 });
