@@ -15,6 +15,8 @@ import { extractDaintreeUrl, handleDaintreeUrl } from "../setup/deepLinkInstall.
 import { dispatchOpenDirPath, hasOpenDirConsumer } from "../setup/environment.js";
 import { isHostModeRequested } from "../boot/hostModeLaunch.js";
 
+const DISABLE_GPU_CRASH_LIMIT_SWITCH = "disable-gpu-process-crash-limit";
+
 const CLI_PATH_FLAG = "--cli-path";
 const CLI_PATH_PREFIX = `${CLI_PATH_FLAG}=`;
 
@@ -310,6 +312,14 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     }
     firstSignalTime = Date.now();
     setSignalShutdown();
+    // Chromium aborts the browser ("GPU process isn't usable. Goodbye.") once
+    // relaunches of a lost GPU process have used up every fallback mode, and a
+    // signal sent to the whole group leaves no zygote to launch one from.
+    // Chromium reads this switch, on this thread, at each GPU crash it records,
+    // so from here on a lost GPU process is relaunched without falling back
+    // (gpu_process_host.cc RecordProcessCrash). Nothing is rendered past this
+    // point that a fallback would help.
+    app.commandLine.appendSwitch(DISABLE_GPU_CRASH_LIMIT_SWITCH);
     const handle = setTimeout(() => {
       setSafetyBeltTimer(null);
       app.exit(1);

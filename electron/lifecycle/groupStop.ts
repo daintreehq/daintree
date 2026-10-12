@@ -9,7 +9,9 @@
 // within milliseconds — far sooner than the graceful chain lets the message
 // loop exit, and Chromium launches nothing once it has. Everything that chain
 // would wait on is being terminated by the same signal anyway, so a group stop
-// is finished at once instead (L12).
+// is finished at once instead (L12). The signal handler also switches off the
+// GPU fallback count (appLifecycle.ts), so a group stop recognised a little
+// late costs failed relaunches rather than that abort.
 //
 // Main cannot tell who a signal was sent to, so on Linux it looks at Chromium's
 // zygotes: they live as long as the browser, so one that is dying is both the
@@ -27,6 +29,9 @@
 
 import fs from "node:fs";
 import type { Details } from "electron";
+import { createLogger } from "../utils/logger.js";
+
+const logger = createLogger("main:GroupStop");
 
 // A group signal is delivered to every process within microseconds. The window
 // covers Main handling its signal and a child's death in either order, and
@@ -49,6 +54,28 @@ export interface ProcIdentity {
   startTime: string;
 }
 
+/**
+ * What /proc shows of a process. `gone`: reaped. `replaced`: its pid now names
+ * another process. `exited`: a zombie. `exiting`: tearing down. `signalled`: a
+ * terminating signal is pending. `unreadable` counts as alive.
+ */
+export type ProcState =
+  "running" | "unreadable" | "gone" | "replaced" | "exited" | "exiting" | "signalled";
+
+const TERMINATING_STATES: ReadonlySet<ProcState> = new Set<ProcState>([
+  "gone",
+  "replaced",
+  "exited",
+  "exiting",
+  "signalled",
+]);
+
+export interface ChildProbe {
+  terminating: boolean;
+  /** `pid=state` per zygote, for the log. */
+  summary: string;
+}
+
 const readProcFile: ReadProcFile = (procPath) => fs.readFileSync(procPath, "utf8");
 const listMainThreads = (): string[] => fs.readdirSync("/proc/self/task");
 
@@ -57,13 +84,19 @@ let signalAt: number | null = null;
 let lastChildSignalKillAt: number | null = null;
 let finisher: (() => boolean) | null = null;
 let finished = false;
+let recognised = false;
+let lastProbe: ChildProbe = { terminating: false, summary: "none" };
 let watchTimer: ReturnType<typeof setTimeout> | null = null;
 
-function probeZygotes(): boolean {
-  return zygotes.some((zygote) => isProcessTerminating(zygote));
+function probeZygotes(): ChildProbe {
+  const states = zygotes.map((zygote) => [zygote.pid, readProcessState(zygote)] as const);
+  return {
+    terminating: states.some(([, state]) => TERMINATING_STATES.has(state)),
+    summary: states.map(([pid, state]) => `${pid}=${state}`).join(" ") || "none",
+  };
 }
 
-let probeChildren: () => boolean = probeZygotes;
+let probeChildren: () => ChildProbe = probeZygotes;
 
 export function isChromiumChildSignalKill(details: ChildProcessGone): boolean {
   if (details.reason !== "killed") return false;
@@ -89,36 +122,45 @@ function pendingSignals(status: string, field: "SigPnd" | "ShdPnd"): bigint {
   return match ? BigInt(`0x${match[1]}`) : 0n;
 }
 
-/**
- * Linux: the process is gone (or its pid now names another process), a zombie,
- * already exiting, or has a terminating signal pending. An unreadable entry
- * (anything but "gone") counts as alive.
- */
-export function isProcessTerminating(
+export function readProcessState(
   identity: ProcIdentity,
   read: ReadProcFile = readProcFile
-): boolean {
+): ProcState {
   let stat: string;
   try {
     stat = read(`/proc/${identity.pid}/stat`);
   } catch (err) {
-    return isGone(err);
+    return isGone(err) ? "gone" : "unreadable";
   }
   const fields = statFields(stat);
-  if (fields[19] !== identity.startTime) return true;
-  const state = fields[0];
+  if (fields[19] !== identity.startTime) return "replaced";
+  if (fields[0] === "Z" || fields[0] === "X") return "exited";
   const flags = Number(fields[6]);
-  if (state === "Z" || state === "X") return true;
-  if (Number.isFinite(flags) && (flags & PF_EXITING) !== 0) return true;
+  if (Number.isFinite(flags) && (flags & PF_EXITING) !== 0) return "exiting";
 
   let status: string;
   try {
     status = read(`/proc/${identity.pid}/status`);
   } catch (err) {
-    return isGone(err);
+    return isGone(err) ? "gone" : "unreadable";
   }
   const pending = pendingSignals(status, "SigPnd") | pendingSignals(status, "ShdPnd");
-  return TERMINATING_SIGNALS.some((sig) => ((pending >> BigInt(sig - 1)) & 1n) === 1n);
+  const signalled = TERMINATING_SIGNALS.some((sig) => ((pending >> BigInt(sig - 1)) & 1n) === 1n);
+  return signalled ? "signalled" : "running";
+}
+
+export function isProcessTerminating(
+  identity: ProcIdentity,
+  read: ReadProcFile = readProcFile
+): boolean {
+  return TERMINATING_STATES.has(readProcessState(identity, read));
+}
+
+// Chromium rewrites each child's command line into one space-separated title
+// (setproctitle), so the arguments are not NUL-separated by the time Main reads
+// them.
+function isZygoteCommandLine(cmdline: string): boolean {
+  return cmdline.split(/[\s\0]+/).includes("--type=zygote");
 }
 
 /**
@@ -148,7 +190,7 @@ export function findZygotes(
       const pid = Number(token);
       if (!Number.isInteger(pid) || pid <= 0 || found.has(pid)) continue;
       try {
-        if (!read(`/proc/${pid}/cmdline`).split("\0").includes("--type=zygote")) continue;
+        if (!isZygoteCommandLine(read(`/proc/${pid}/cmdline`))) continue;
         const startTime = statFields(read(`/proc/${pid}/stat`))[19];
         if (startTime) found.set(pid, { pid, startTime });
       } catch {
@@ -166,6 +208,9 @@ export function findZygotes(
 export function rememberChromiumZygotes(): void {
   if (process.platform !== "linux") return;
   zygotes = findZygotes();
+  logger.info(`Watching ${zygotes.length} Chromium zygote(s) for a group stop`, {
+    pids: zygotes.map((zygote) => zygote.pid),
+  });
 }
 
 /**
@@ -192,16 +237,27 @@ export function noteRendererGone(): void {
 // finishing destroys every window.
 function recheckAfterDeath(): void {
   if (signalAt === null || finished) return;
-  setImmediate(evaluate);
+  setImmediate(() => {
+    evaluate("after a child process died");
+  });
 }
 
-function evaluate(): boolean {
+function evaluate(when: string): boolean {
   if (finished) return true;
   const killNearSignal =
     lastChildSignalKillAt !== null &&
     signalAt !== null &&
     Math.abs(lastChildSignalKillAt - signalAt) <= GROUP_STOP_WINDOW_MS;
-  if (!killNearSignal && !probeChildren()) return false;
+  lastProbe = probeChildren();
+  if (!killNearSignal && !lastProbe.terminating) return false;
+  if (!recognised) {
+    recognised = true;
+    const elapsed = signalAt === null ? 0 : Date.now() - signalAt;
+    logger.info(`Group stop recognised ${when}, ${elapsed}ms after the termination signal`, {
+      zygotes: lastProbe.summary,
+      chromiumChildKilled: killNearSignal,
+    });
+  }
   if (finisher?.()) {
     finished = true;
     stopWatch();
@@ -212,10 +268,16 @@ function evaluate(): boolean {
 // The sender may reach the zygotes a moment after Main, and their deaths raise
 // no event of their own, so Main keeps looking for the rest of the window.
 function watch(until: number): void {
-  if (probeChildren === probeZygotes && zygotes.length === 0) return;
   watchTimer = setTimeout(() => {
     watchTimer = null;
-    if (evaluate() || Date.now() >= until) return;
+    if (evaluate("while watching")) return;
+    if (Date.now() >= until) {
+      logger.info(
+        `No group stop within ${GROUP_STOP_WINDOW_MS}ms of the termination signal; the graceful shutdown continues`,
+        { zygotes: lastProbe.summary }
+      );
+      return;
+    }
     watch(until);
   }, WATCH_INTERVAL_MS);
   watchTimer.unref?.();
@@ -238,12 +300,25 @@ export function finishIfGroupStop(now = Date.now()): boolean {
     // in case they are still alive.
     if (zygotes.length === 0) rememberChromiumZygotes();
   }
-  if (evaluate()) return true;
-  if (!watchTimer) watch(now + GROUP_STOP_WINDOW_MS);
+  if (evaluate("on the signal")) return true;
+  if (watchTimer) return false;
+  if (probeChildren === probeZygotes && zygotes.length === 0) {
+    logger.info(
+      "Termination signal: no Chromium zygotes to watch; only a Chromium child killed next to it shows a group stop"
+    );
+    return false;
+  }
+  logger.info(
+    "Termination signal: Chromium's zygotes are still running; watching for a group stop",
+    {
+      zygotes: lastProbe.summary,
+    }
+  );
+  watch(now + GROUP_STOP_WINDOW_MS);
   return false;
 }
 
-export function setChromiumChildProbeForTests(probe: (() => boolean) | null): void {
+export function setChromiumChildProbeForTests(probe: (() => ChildProbe) | null): void {
   probeChildren = probe ?? probeZygotes;
 }
 
@@ -254,5 +329,7 @@ export function resetGroupStopForTests(): void {
   lastChildSignalKillAt = null;
   finisher = null;
   finished = false;
+  recognised = false;
+  lastProbe = { terminating: false, summary: "none" };
   probeChildren = probeZygotes;
 }

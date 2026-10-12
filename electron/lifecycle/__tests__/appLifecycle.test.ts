@@ -6,6 +6,7 @@ const appMock = vi.hoisted(() => ({
   on: vi.fn(),
   quit: vi.fn(),
   exit: vi.fn(),
+  commandLine: { appendSwitch: vi.fn() },
 }));
 
 const browserWindowMock = vi.hoisted(() => ({
@@ -174,6 +175,27 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     expect(finishIfGroupStopMock).toHaveBeenCalledOnce();
     expect(appMock.quit.mock.invocationCallOrder[0]).toBeLessThan(
       finishIfGroupStopMock.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("stops Chromium's GPU fallback count before the quit starts, once", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
+    const handler = sigTermCall![1] as () => void;
+
+    handler();
+    vi.setSystemTime(Date.now() + 5_000);
+    handler();
+
+    // Relaunching a GPU process lost to the same signal must not exhaust the
+    // fallback modes and abort the browser mid-quit.
+    expect(appMock.commandLine.appendSwitch).toHaveBeenCalledExactlyOnceWith(
+      "disable-gpu-process-crash-limit"
+    );
+    expect(appMock.commandLine.appendSwitch.mock.invocationCallOrder[0]).toBeLessThan(
+      appMock.quit.mock.invocationCallOrder[0]
     );
   });
 

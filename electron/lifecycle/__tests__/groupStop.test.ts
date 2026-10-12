@@ -1,13 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const logged = vi.hoisted(() => [] as Array<{ message: string; context?: unknown }>);
+vi.mock("../../utils/logger.js", () => ({
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: (message: string, context?: unknown) => logged.push({ message, context }),
+    warn: (message: string, context?: unknown) => logged.push({ message, context }),
+    error: vi.fn(),
+  }),
+}));
+
 import {
   GROUP_STOP_WINDOW_MS,
   findZygotes,
   finishIfGroupStop,
   isChromiumChildSignalKill,
-  isProcessTerminating,
   noteChildProcessGone,
   noteRendererGone,
+  readProcessState,
   resetGroupStopForTests,
   setChromiumChildProbeForTests,
   setGroupStopFinisher,
@@ -51,19 +61,19 @@ const status = ({ sigPnd = "0", shdPnd = "0" } = {}) =>
 
 const zygote = { pid: 4242, startTime: "9001" };
 
-describe("isProcessTerminating", () => {
+describe("readProcessState", () => {
   it.each([
-    ["a sleeping process with nothing pending", stat("S"), status(), false],
+    ["a sleeping process with nothing pending", stat("S"), status(), "running"],
     // A default-action SIGTERM is queued as SIGKILL on every thread.
-    ["a process with SIGKILL pending", stat("S"), status({ sigPnd: "100" }), true],
-    ["a process with SIGTERM pending process-wide", stat("S"), status({ shdPnd: "4000" }), true],
-    ["a process with SIGINT pending", stat("R"), status({ shdPnd: "2" }), true],
-    ["a process with only SIGUSR1 pending", stat("S"), status({ shdPnd: "200" }), false],
-    ["a zombie", stat("Z"), status(), true],
-    ["a process already exiting", stat("R", { flags: 4194564 }), status(), true],
+    ["a process with SIGKILL pending", stat("S"), status({ sigPnd: "100" }), "signalled"],
+    ["a process with SIGTERM pending", stat("S"), status({ shdPnd: "4000" }), "signalled"],
+    ["a process with SIGINT pending", stat("R"), status({ shdPnd: "2" }), "signalled"],
+    ["a process with only SIGUSR1 pending", stat("S"), status({ shdPnd: "200" }), "running"],
+    ["a zombie", stat("Z"), status(), "exited"],
+    ["a process already exiting", stat("R", { flags: 4194564 }), status(), "exiting"],
   ])("%s → %s", (_label, statText, statusText, expected) => {
     const read = procReader({ "/proc/4242/stat": statText, "/proc/4242/status": statusText });
-    expect(isProcessTerminating(zygote, read)).toBe(expected);
+    expect(readProcessState(zygote, read)).toBe(expected);
   });
 
   it("reads the fields after the last parenthesis of a hostile process name", () => {
@@ -71,38 +81,40 @@ describe("isProcessTerminating", () => {
       "/proc/4242/stat": stat("S").replace("(daintree)", "(x) Z (y)"),
       "/proc/4242/status": status(),
     });
-    expect(isProcessTerminating(zygote, read)).toBe(false);
+    expect(readProcessState(zygote, read)).toBe("running");
   });
 
-  it("treats a pid that now names another process as the old one gone", () => {
+  it("tells a pid that now names another process from the one remembered", () => {
     const read = procReader({
       "/proc/4242/stat": stat("S", { startTime: "123456" }),
       "/proc/4242/status": status(),
     });
-    expect(isProcessTerminating(zygote, read)).toBe(true);
+    expect(readProcessState(zygote, read)).toBe("replaced");
   });
 
-  it("treats a process that is already gone as terminated", () => {
-    expect(isProcessTerminating(zygote, procReader({}))).toBe(true);
-    expect(isProcessTerminating(zygote, procReader({ "/proc/4242/stat": stat("S") }))).toBe(true);
+  it("reports a process that has been reaped as gone", () => {
+    expect(readProcessState(zygote, procReader({}))).toBe("gone");
+    expect(readProcessState(zygote, procReader({ "/proc/4242/stat": stat("S") }))).toBe("gone");
   });
 
-  it("treats an unreadable process as alive", () => {
+  it("reports an entry it may not read as unreadable", () => {
     const read = procReader({ "/proc/4242/stat": errno("EACCES") });
-    expect(isProcessTerminating(zygote, read)).toBe(false);
+    expect(readProcessState(zygote, read)).toBe("unreadable");
   });
 });
 
 describe("findZygotes", () => {
-  it("returns Main's children whose command line marks them as a zygote", () => {
+  it("finds Main's zygote children by the title Chromium gives them", () => {
     const read = procReader({
       "/proc/self/task/100/children": "200 201 ",
       "/proc/self/task/101/children": "202\n",
       "/proc/self/task/102/children": "",
-      "/proc/200/cmdline": "/opt/Daintree/daintree\0--type=zygote\0--no-zygote-sandbox\0",
+      // setproctitle: the arguments become one space-separated string.
+      "/proc/200/cmdline": "/opt/Daintree/daintree --type=zygote --no-zygote-sandbox\0",
       "/proc/200/stat": stat("S", { pid: 200, startTime: "500" }),
-      "/proc/201/cmdline": "/opt/Daintree/daintree\0--type=utility\0--utility-sub-type=node\0",
+      "/proc/201/cmdline": "/opt/Daintree/daintree --type=utility --utility-sub-type=node\0",
       "/proc/201/stat": stat("S", { pid: 201, startTime: "501" }),
+      // An untouched argv is NUL-separated.
       "/proc/202/cmdline": "/opt/Daintree/daintree\0--type=zygote\0",
       "/proc/202/stat": stat("S", { pid: 202, startTime: "502" }),
     });
@@ -112,10 +124,19 @@ describe("findZygotes", () => {
     ]);
   });
 
+  it("does not take a switch that merely starts with the zygote type", () => {
+    const read = procReader({
+      "/proc/self/task/100/children": "200",
+      "/proc/200/cmdline": "/opt/Daintree/daintree --type=zygote-helper\0",
+      "/proc/200/stat": stat("S", { pid: 200, startTime: "500" }),
+    });
+    expect(findZygotes(read, () => ["100"])).toEqual([]);
+  });
+
   it("skips threads and children it cannot read", () => {
     const read = procReader({
       "/proc/self/task/101/children": "200 203",
-      "/proc/200/cmdline": "/opt/Daintree/daintree\0--type=zygote\0",
+      "/proc/200/cmdline": "/opt/Daintree/daintree --type=zygote\0",
       "/proc/200/stat": stat("S", { pid: 200, startTime: "500" }),
     });
     expect(findZygotes(read, () => ["100", "101"])).toEqual([{ pid: 200, startTime: "500" }]);
@@ -150,13 +171,18 @@ describe("group stop detection", () => {
   let finisher: ReturnType<typeof vi.fn<() => boolean>>;
   let zygotesTerminating: boolean;
   const runDeferred = () => vi.advanceTimersByTimeAsync(0);
+  const messages = () => logged.map((entry) => entry.message);
 
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(100_000);
+    logged.length = 0;
     resetGroupStopForTests();
     zygotesTerminating = false;
-    setChromiumChildProbeForTests(() => zygotesTerminating);
+    setChromiumChildProbeForTests(() => ({
+      terminating: zygotesTerminating,
+      summary: zygotesTerminating ? "76904=signalled" : "76904=running",
+    }));
     finisher = vi.fn<() => boolean>(() => true);
     setGroupStopFinisher(finisher);
   });
@@ -166,11 +192,15 @@ describe("group stop detection", () => {
     vi.useRealTimers();
   });
 
-  it("finishes at once when the signal has reached the zygotes too", () => {
+  it("finishes at once when the signal has reached the zygotes too, and says what it saw", () => {
     zygotesTerminating = true;
 
     expect(finishIfGroupStop()).toBe(true);
     expect(finisher).toHaveBeenCalledOnce();
+    expect(logged).toContainEqual({
+      message: "Group stop recognised on the signal, 0ms after the termination signal",
+      context: { zygotes: "76904=signalled", chromiumChildKilled: false },
+    });
   });
 
   it("leaves a signal sent to Main alone to the graceful chain", async () => {
@@ -178,6 +208,14 @@ describe("group stop detection", () => {
 
     await vi.advanceTimersByTimeAsync(GROUP_STOP_WINDOW_MS * 2);
     expect(finisher).not.toHaveBeenCalled();
+    expect(logged).toContainEqual({
+      message:
+        "Termination signal: Chromium's zygotes are still running; watching for a group stop",
+      context: { zygotes: "76904=running" },
+    });
+    expect(messages()).toContain(
+      `No group stop within ${GROUP_STOP_WINDOW_MS}ms of the termination signal; the graceful shutdown continues`
+    );
   });
 
   it("keeps looking when the zygotes are signalled a moment after Main", async () => {
@@ -188,6 +226,7 @@ describe("group stop detection", () => {
     await vi.advanceTimersByTimeAsync(50);
 
     expect(finisher).toHaveBeenCalledOnce();
+    expect(messages().some((m) => m.startsWith("Group stop recognised while watching"))).toBe(true);
   });
 
   it("stops looking once the window after Main's signal has passed", async () => {
@@ -200,7 +239,7 @@ describe("group stop detection", () => {
     expect(finisher).not.toHaveBeenCalled();
   });
 
-  it("does not poll when there is nothing to look at", () => {
+  it("does not poll when there are no zygotes to look at", () => {
     setChromiumChildProbeForTests(null);
 
     expect(finishIfGroupStop()).toBe(false);
@@ -284,7 +323,7 @@ describe("group stop detection", () => {
     expect(finisher).toHaveBeenCalledOnce();
   });
 
-  it("tries again after a finisher that declined", async () => {
+  it("tries again after a finisher that declined, logging the recognition once", async () => {
     finisher.mockReturnValueOnce(false);
     zygotesTerminating = true;
     expect(finishIfGroupStop()).toBe(true);
@@ -293,5 +332,6 @@ describe("group stop detection", () => {
     await runDeferred();
 
     expect(finisher).toHaveBeenCalledTimes(2);
+    expect(messages().filter((m) => m.startsWith("Group stop recognised"))).toHaveLength(1);
   });
 });
