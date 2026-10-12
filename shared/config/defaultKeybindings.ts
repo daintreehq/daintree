@@ -1215,6 +1215,11 @@ const NON_MAC_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
 // Replacements, not additions: each entry displaces the core row with the same
 // actionId and scope. Ctrl+. is the IBus emoji picker on GNOME, and Ctrl+Alt+.
 // is taken by agent.focusNextWorking once Cmd folds to Ctrl.
+//
+// The desktop grabs these Ctrl+Alt defaults before Daintree sees them: Ctrl+Alt+T
+// opens the system terminal (GNOME, XFCE, KDE), Ctrl+Alt+L locks the screen (XFCE,
+// KDE, Cinnamon, MATE) and Ctrl+Alt+F opens Thunar (XFCE). Adding Shift keeps the
+// letter and the Ctrl a focused terminal needs to hand a key to a binding.
 const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
   {
     actionId: "voiceInput.toggle",
@@ -1223,6 +1228,30 @@ const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
     priority: 0,
     description: "Toggle voice dictation",
     category: "Voice",
+  },
+  {
+    actionId: "terminal.new",
+    combo: "Ctrl+Shift+Alt+T",
+    scope: "global",
+    priority: 0,
+    description: "New terminal",
+    category: "Terminal",
+  },
+  {
+    actionId: "terminal.scrollToLastActivity",
+    combo: "Ctrl+Shift+Alt+L",
+    scope: "global",
+    priority: 0,
+    description: "Scroll to last activity",
+    category: "Terminal",
+  },
+  {
+    actionId: "worktree.openFileBrowserPanel",
+    combo: "Ctrl+Shift+Alt+F",
+    scope: "global",
+    priority: 0,
+    description: "Open file browser panel for focused worktree",
+    category: "Worktrees",
   },
 ];
 

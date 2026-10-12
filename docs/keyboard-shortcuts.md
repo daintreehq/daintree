@@ -31,7 +31,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | --- | --- | --- |
 | Close focused terminal | `⌘+W` | `Ctrl+W` |
 | Duplicate focused panel | `⌘+T` | `Ctrl+T` |
-| New terminal | `⌘+⌥+T` | `Ctrl+Alt+T` |
+| New terminal | `⌘+⌥+T` | `Ctrl+Alt+T` (Windows), `Ctrl+Shift+Alt+T` (Linux) |
 | Reopen last closed terminal | `⌘+⇧+T` | `Ctrl+Shift+T` |
 | Resume a closed session | `⌘+K ⌘+R` | `Ctrl+K Ctrl+R` |
 | Close all terminals | `⌘+K ⌘+W` | `Ctrl+K Ctrl+W` |
@@ -42,7 +42,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Redraw focused terminal | `⌘+K ⌘+D` | `Ctrl+K Ctrl+D` |
 | Rename focused terminal | `⌘+K ⌘+L` | `Ctrl+K Ctrl+L` |
 | Toggle watch on focused terminal | `⌘+⇧+W` | `Ctrl+Shift+W` |
-| Scroll to last activity | `⌘+⌥+L` | `Ctrl+Alt+L` |
+| Scroll to last activity | `⌘+⌥+L` | `Ctrl+Alt+L` (Windows), `Ctrl+Shift+Alt+L` (Linux) |
 | Stash current input | `⌘+⇧+S` | `Ctrl+Shift+S` |
 | Restore stashed input | `⌘+⇧+X` | `Ctrl+Shift+X` |
 | Toggle focused terminal dock state | `⌘+⌥+M` | `Ctrl+Alt+M` |
@@ -125,7 +125,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Toggle worktrees overview | `⌘+⌥+R` | `Ctrl+Alt+R` |
 | Copy tree context for active worktree | `⌘+⇧+C` | `Ctrl+Shift+C` |
 | Open changes for focused worktree | `⌘+⇧+D` | `Ctrl+Shift+D` |
-| Open file browser panel for focused worktree | `⌘+⌥+F` | `Ctrl+Alt+F` |
+| Open file browser panel for focused worktree | `⌘+⌥+F` | `Ctrl+Alt+F` (Windows), `Ctrl+Shift+Alt+F` (Linux) |
 
 ## Worktree sessions
 

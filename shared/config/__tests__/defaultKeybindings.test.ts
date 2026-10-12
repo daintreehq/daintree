@@ -50,7 +50,13 @@ describe("buildDefaultKeybindings", () => {
 
   it("leaves non-replaced Linux rows identical to the core table", () => {
     const changed = linux.filter((b, i) => b !== mac[i]).map((b) => b.actionId);
-    expect(changed.sort()).toEqual(["canopy.toggle", "voiceInput.toggle"]);
+    expect(changed.sort()).toEqual([
+      "canopy.toggle",
+      "terminal.new",
+      "terminal.scrollToLastActivity",
+      "voiceInput.toggle",
+      "worktree.openFileBrowserPanel",
+    ]);
   });
 
   it("gives Canopy the one-modifier E on macOS and keeps All agents on Cmd+Alt+O", () => {
@@ -86,6 +92,45 @@ describe("buildDefaultKeybindings", () => {
           foldCmd(b.combo) === foldCmd(replacement!.combo)
       );
       expect(collisions).toEqual([]);
+    }
+  });
+
+  // Grabbed by GNOME, XFCE or KDE before the window sees them; on XFCE and KDE
+  // Ctrl+Alt+L locks the screen.
+  it("ships none of the Ctrl+Alt letter combos Linux desktops grab", () => {
+    const grabbed = ["T", "L", "F"].map((key) => `Ctrl+Alt+${key}`);
+    expect(linux.filter((b) => grabbed.includes(foldCmd(b.combo)))).toEqual([]);
+  });
+
+  // A focused terminal offers a key to the bindings only with Ctrl or Meta held
+  // (XtermAdapter), so a Linux replacement without one would type into the shell.
+  it("keeps Ctrl in every Linux replacement", () => {
+    for (const replacement of linux.filter((b, i) => b !== mac[i])) {
+      expect(foldCmd(replacement.combo), replacement.actionId).toMatch(/^Ctrl\+/);
+    }
+  });
+
+  // Normalized so modifier order, Cmd-vs-Ctrl spelling and letter case can't
+  // hide a collision, and compared across scopes (global and a panel scope are
+  // live at once) and against chord first steps.
+  it("keeps every Linux replacement clear of every other default", () => {
+    const step = (combo: string) => {
+      const parts = foldCmd(combo).split("+");
+      const key = parts.pop()!.toLowerCase();
+      return [...parts.sort(), key].join("+");
+    };
+    const replaced = linux.filter((b, i) => b !== mac[i]);
+    for (const replacement of replaced) {
+      const mine = step(replacement.combo);
+      const collisions = linux.filter((b) => {
+        if (b === replacement || !b.combo) return false;
+        const [first] = b.combo.split(" ");
+        return step(first!) === mine;
+      });
+      expect(
+        collisions.map((b) => `${b.actionId}:${b.scope}`),
+        replacement.actionId
+      ).toEqual([]);
     }
   });
 });
