@@ -188,6 +188,8 @@ function createMockWindow() {
     destroy: vi.fn(),
     getContentBounds: vi.fn(() => ({ x: 0, y: 0, width: 800, height: 600 })),
     contentView: {
+      on: vi.fn(),
+      removeListener: vi.fn(),
       children,
       addChildView: vi.fn((view: unknown, index?: number) => {
         if (typeof index === "number") {

@@ -376,6 +376,7 @@ export class ProjectViewManager {
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
   private resizeHandler: (() => void) | null = null;
+  private contentAreaGrowthHandler: (() => void) | null = null;
   evictionTimestamps = new Map<string, number>();
   /**
    * In-flight background restores, keyed by project id (#12320). Registered
@@ -529,6 +530,22 @@ export class ProjectViewManager {
     // the geometry it had before the minimize until the next real resize or its
     // own reveal (#11900).
     win.on("restore", this.resizeHandler);
+
+    // Alt shows the auto-hidden menu bar on Linux inside the window, shrinking the
+    // content area with no `resize`. Views stay full size while it is open (the
+    // bottom strip is clipped) since tracking it would resize every PTY twice per
+    // menu visit. But a view sized while it was open (a resize or switch with the
+    // menu up) must grow back once it hides, or a blank strip stays at the bottom.
+    this.contentAreaGrowthHandler = () => {
+      if (win.isDestroyed() || !this.resizeHandler) return;
+      const view = (this.getActiveView() ?? win.contentView.children[0]) as
+        WebContentsView | undefined;
+      if (!view || view.webContents.isDestroyed()) return;
+      const area = win.getContentBounds();
+      const bounds = view.getBounds();
+      if (bounds.width < area.width || bounds.height < area.height) this.resizeHandler();
+    };
+    win.contentView.on("bounds-changed", this.contentAreaGrowthHandler);
 
     // Per-instance random phase offset: every window has its own sampler, and
     // app.getAppMetrics() costs 5–50ms of synchronous main-thread work. A
@@ -1548,6 +1565,12 @@ export class ProjectViewManager {
       this.win.removeListener("leave-full-screen", this.resizeHandler);
       this.win.removeListener("restore", this.resizeHandler);
       this.resizeHandler = null;
+    }
+    if (this.contentAreaGrowthHandler) {
+      if (!this.win.isDestroyed()) {
+        this.win.contentView.removeListener("bounds-changed", this.contentAreaGrowthHandler);
+      }
+      this.contentAreaGrowthHandler = null;
     }
 
     if (this.efficiencyFreezeTimer) {
