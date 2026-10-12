@@ -612,6 +612,10 @@ export class LinkSession {
 
   private onData(chunk: Buffer): void {
     if (this.state === "closed") return;
+    // Any bytes are the peer being there: a frame larger than the idle window
+    // takes that long to arrive on a slow link, and it must not be cut off
+    // (nor the link called quiet) halfway through.
+    this._lastReceivedAt = this.now();
     let frames: LinkFrame[];
     try {
       frames = this.decoder.push(chunk);

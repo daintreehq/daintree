@@ -228,6 +228,31 @@ describe("LinkSession liveness", () => {
     b.destroy();
   });
 
+  it("keeps hearing a peer whose frame arrives slower than the idle window, then gives up once it stops", async () => {
+    const { a, b } = await socketPair(dir);
+    const session = new LinkSession(a, { role: "host", pingIntervalMs: 0, idleTimeoutMs: 60 });
+    sessions.push(session);
+    session.open();
+    // One frame, a byte every 15 ms: about 0.3 s for something the idle window would cut at 60 ms.
+    const bytes = encodeFrame(
+      messageToFrame({ lane: Lane.CONTROL, kind: ControlKind.PING, body: { sentAt: 1 } }),
+      1024
+    );
+    let closedEarly = false;
+    void closedPromise(session).then(() => (closedEarly = true));
+    for (const byte of bytes) {
+      b.write(Buffer.from([byte]));
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    }
+    expect(bytes.length * 15).toBeGreaterThan(120);
+    expect(closedEarly).toBe(false);
+    expect(session.isOpen).toBe(true);
+    // Nothing more: the window runs out as before.
+    const closed = await closedPromise(session);
+    expect(closed.reason).toBe("idle timeout");
+    b.destroy();
+  });
+
   it("ends with a GOODBYE the peer sees as a remote close", async () => {
     const { host, client } = await pair();
     const closed = closedPromise(client);
