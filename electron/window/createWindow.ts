@@ -12,7 +12,7 @@ import { routeNewWindowRequest } from "./windowHost.js";
 import { toggleWindowFullscreen } from "./fullscreen.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import path from "path";
-import { createWindowWithState } from "../windowState.js";
+import { createWindowWithState, disposeWindowStateTracking } from "../windowState.js";
 import { store } from "../store.js";
 import { resolveAppTheme } from "../../shared/theme/index.js";
 import type { AppColorScheme } from "../../shared/theme/index.js";
@@ -44,7 +44,7 @@ import {
   INSTANCE_ROLE_ARG,
 } from "./skeletonCss.js";
 import { getPlatformWindowOptions } from "./platformWindowOptions.js";
-import { getLinuxWindowIcon } from "./linuxWindowIcon.js";
+import { getLinuxWindowIconOption } from "./linuxWindowIcon.js";
 import { showWindowInactive } from "./showWindowInactive.js";
 import { seedTitleBarOverlay } from "./titleBarOverlay.js";
 import { readLastActiveProjectIdentitySync } from "../services/persistence/readLastProjectId.js";
@@ -234,7 +234,7 @@ export function setupBrowserWindow(
       minWidth: 800,
       minHeight: 600,
       ...getPlatformWindowOptions(windowBg),
-      icon: getLinuxWindowIcon(),
+      ...getLinuxWindowIconOption(),
       backgroundColor: windowBg,
     },
     resolveBoundsProjectPath(projectPath, initialProjectId),
@@ -642,6 +642,7 @@ export function setupBrowserWindow(
 
   win.once("closed", () => {
     activeViewFocus.dispose();
+    disposeWindowStateTracking(win);
     if (reclaimTimer) {
       clearTimeout(reclaimTimer);
       reclaimTimer = null;

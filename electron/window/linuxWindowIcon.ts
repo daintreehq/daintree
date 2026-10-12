@@ -38,3 +38,13 @@ export function getLinuxWindowIcon(): NativeImage | undefined {
   }
   return cached ?? undefined;
 }
+
+/**
+ * The window constructor's `icon` option, present only when there is an icon.
+ * An `icon: undefined` key still reaches Electron's NativeImage converter, which
+ * logs "Argument must be a file path or a NativeImage" for every window.
+ */
+export function getLinuxWindowIconOption(): { icon?: NativeImage } {
+  const icon = getLinuxWindowIcon();
+  return icon ? { icon } : {};
+}

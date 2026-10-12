@@ -71,6 +71,9 @@ const fakes = vi.hoisted(() => {
     emit(event: string) {
       for (const handler of [...(this.handlers.get(event) ?? [])]) handler();
     }
+    listenerCount(event: string) {
+      return (this.handlers.get(event) ?? []).length;
+    }
   }
 
   return { store, workArea, display, FakeWindow };
@@ -96,6 +99,7 @@ vi.mock("../services/ProjectStore.js", () => ({
 type FakeWindow = InstanceType<typeof fakes.FakeWindow>;
 
 let createWindowWithState: typeof import("../windowState.js").createWindowWithState;
+let disposeWindowStateTracking: typeof import("../windowState.js").disposeWindowStateTracking;
 
 const originalPlatform = process.platform;
 function setPlatform(value: NodeJS.Platform) {
@@ -120,7 +124,7 @@ function occupiedBy(...windows: FakeWindow[]): WindowStateTracking {
 
 beforeEach(async () => {
   vi.resetModules();
-  ({ createWindowWithState } = await import("../windowState.js"));
+  ({ createWindowWithState, disposeWindowStateTracking } = await import("../windowState.js"));
   fakes.FakeWindow.created.length = 0;
   fakes.store.state = {};
   Object.assign(fakes.workArea, { x: 0, y: 0, width: 1920, height: 1200 });
@@ -329,14 +333,31 @@ describe("saving under the project the window shows", () => {
     expect(Object.keys(fakes.store.state)).toEqual([HELLO_WEB]);
   });
 
-  it("stops listening for switches once the window is closed", () => {
+  // The window's own "closed" handler disposes the tracking: a listener of its
+  // own was the eleventh on every app window, and an unpackaged build exits on
+  // Node's MaxListenersExceededWarning.
+  it("stops listening for switches once disposed, without a closed listener of its own", () => {
     const listeners: Array<() => void> = [];
     const win = open(DAINTREE, tracking({ path: DAINTREE }, listeners));
     expect(listeners).toHaveLength(1);
+    expect(win.listenerCount("closed")).toBe(0);
 
-    win.emit("closed");
+    disposeWindowStateTracking(win as never);
+    disposeWindowStateTracking(win as never);
 
     expect(listeners).toHaveLength(0);
+  });
+
+  it("leaves other windows' tracking alone when one is disposed", () => {
+    const daintreeListeners: Array<() => void> = [];
+    const helloWebListeners: Array<() => void> = [];
+    const daintree = open(DAINTREE, tracking({ path: DAINTREE }, daintreeListeners));
+    open(HELLO_WEB, tracking({ path: HELLO_WEB }, helloWebListeners));
+
+    disposeWindowStateTracking(daintree as never);
+
+    expect(daintreeListeners).toHaveLength(0);
+    expect(helloWebListeners).toHaveLength(1);
   });
 });
 

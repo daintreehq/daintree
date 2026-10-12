@@ -332,6 +332,18 @@ export interface WindowStateTracking {
   getOccupiedBounds?: () => Electron.Rectangle[];
 }
 
+const stopTrackingOnClose = new WeakMap<BrowserWindow, () => void>();
+
+/**
+ * Stop following the window's project switches. Called from the window's own
+ * "closed" handler: a listener of its own was the eleventh on every app window,
+ * and an unpackaged build exits on Node's MaxListenersExceededWarning.
+ */
+export function disposeWindowStateTracking(win: BrowserWindow): void {
+  stopTrackingOnClose.get(win)?.();
+  stopTrackingOnClose.delete(win);
+}
+
 /**
  * Create a window at the bounds saved for `projectPath` — or, without them, at
  * the most recent window's bounds — and keep its bounds saved as it moves.
@@ -498,7 +510,7 @@ export function createWindowWithState(
       boundsKey = shown;
       if (shown) debouncedSaveState();
     });
-    win.once("closed", unsubscribe);
+    stopTrackingOnClose.set(win, unsubscribe);
   }
 
   return win;

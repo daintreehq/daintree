@@ -79,6 +79,40 @@ describe("getLinuxWindowIcon", () => {
   });
 });
 
+describe("getLinuxWindowIconOption", () => {
+  async function loadOption() {
+    vi.resetModules();
+    return (await import("../linuxWindowIcon.js")).getLinuxWindowIconOption;
+  }
+
+  // An `icon: undefined` key still reaches Electron's NativeImage converter,
+  // which logs a warning for every window on macOS and Windows.
+  it("adds no icon key on macOS and Windows", async () => {
+    for (const platform of ["darwin", "win32"] as const) {
+      setPlatform(platform);
+      expect(Object.keys((await loadOption())())).toEqual([]);
+    }
+  });
+
+  it("adds no icon key when the Linux icon can't be loaded", async () => {
+    setPlatform("linux");
+    electron.nativeImage.createFromPath.mockReturnValue({ isEmpty: () => true });
+
+    expect(Object.keys((await loadOption())())).toEqual([]);
+  });
+
+  it("carries the loaded icon on Linux", async () => {
+    setPlatform("linux");
+    const resized = { isEmpty: () => false };
+    electron.nativeImage.createFromPath.mockReturnValue({
+      isEmpty: () => false,
+      resize: () => resized,
+    });
+
+    expect((await loadOption())()).toEqual({ icon: resized });
+  });
+});
+
 describe("getLinuxAppIconPath", () => {
   afterEach(() => {
     electron.app.isPackaged = true;
