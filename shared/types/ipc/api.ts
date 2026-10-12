@@ -2060,8 +2060,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * getUserMedia is the real gate on those platforms.
      */
     requestMicPermission(): Promise<boolean>;
-    /** Best-effort: opens the OS microphone settings. Failures are logged, never surfaced. */
-    openMicSettings(): Promise<void>;
+    /**
+     * Opens the OS microphone settings (on Linux, the desktop's sound settings).
+     * Resolves false when no settings app could be opened.
+     */
+    openMicSettings(): Promise<boolean>;
     validateApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }>;
     /** Run a whole-passage AI cleanup pass over the dictated text after recording stops. */
     correct(request: {
