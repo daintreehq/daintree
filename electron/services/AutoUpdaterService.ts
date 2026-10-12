@@ -142,6 +142,17 @@ function linuxPackageInstallNeedsPassword(): boolean {
   }
 }
 
+// Those packages never install on a plain quit. electron-updater's quit
+// handler would run pkexec synchronously, so quitting — or logging out, or
+// shutting down — would stop on an administrator password prompt with the main
+// thread blocked, and a process killed while the prompt is up leaves pkexec
+// holding Daintree's descriptors, which keeps its GPU and network processes
+// alive. They install from "Restart to update" alone, where the user asked
+// for it; a staged update is offered again on the next launch.
+function installsOnQuit(): boolean {
+  return !linuxPackageInstallNeedsPassword() && !isLinuxPackageUpdater(autoUpdater);
+}
+
 export type UpdateMenuState = "idle" | "checking" | "ready";
 
 // Renderer-facing snapshot of the update the user should currently be told
@@ -909,7 +920,7 @@ class AutoUpdaterService {
 
     try {
       autoUpdater.autoDownload = true;
-      autoUpdater.autoInstallOnAppQuit = true;
+      autoUpdater.autoInstallOnAppQuit = installsOnQuit();
       autoUpdater.disableWebInstaller = true;
 
       const initialChannel = store.get("updateChannel") ?? "stable";
@@ -1063,7 +1074,7 @@ class AutoUpdaterService {
         // hand a late-mounting renderer an actionable "Restart to update" for a
         // payload this service will not install.
         this.latestUpdate = { version: info.version, downloaded: true };
-        autoUpdater.autoInstallOnAppQuit = true;
+        autoUpdater.autoInstallOnAppQuit = installsOnQuit();
         // Persist the staged version so the next boot can detect a silent
         // install failure (issue #9261). Write before broadcasting so a crash
         // between event delivery and the IPC frame still leaves the marker on

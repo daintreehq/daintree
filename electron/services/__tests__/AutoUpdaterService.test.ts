@@ -597,6 +597,67 @@ describe("AutoUpdaterService", () => {
       expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
     });
 
+    it.each(["deb", "rpm", "pacman"])(
+      "never installs a %s update on a plain quit, before or after it downloads",
+      (packageType) => {
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+        fsMock.existsSync.mockReturnValue(true);
+        fsMock.readFileSync.mockReturnValue(packageType);
+
+        autoUpdaterService.initialize();
+        expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(false);
+
+        const downloaded = (autoUpdaterMock.on as Mock).mock.calls.find(
+          (args) => args[0] === "update-downloaded"
+        )![1];
+        downloaded({ version: "2.0.0" });
+        expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(false);
+        // The explicit restart still installs it.
+        expect(autoUpdaterService.quitAndInstallIfReady()).toBe(true);
+        shutdownCoordinatorMock.settleShutdown("clean");
+        expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+        expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(false);
+      }
+    );
+
+    it("never installs on quit once a package updater was selected, even if package-type can't be read", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      fsMock.existsSync.mockReturnValue(true);
+      fsMock.readFileSync.mockReturnValueOnce("deb").mockImplementation(() => {
+        throw new Error("EACCES");
+      });
+      const updater = autoUpdaterMock as typeof autoUpdaterMock & {
+        runCommandWithSudoIfNeeded?: () => string;
+        doInstall?: () => boolean;
+      };
+      updater.runCommandWithSudoIfNeeded = vi.fn(() => "");
+      updater.doInstall = vi.fn(() => true);
+      try {
+        autoUpdaterService.initialize();
+        const downloaded = (autoUpdaterMock.on as Mock).mock.calls.find(
+          (args) => args[0] === "update-downloaded"
+        )![1];
+        downloaded({ version: "2.0.0" });
+        expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(false);
+      } finally {
+        delete updater.runCommandWithSudoIfNeeded;
+        delete updater.doInstall;
+      }
+    });
+
+    it("still installs an AppImage update on a plain quit", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.APPIMAGE = "/home/u/Applications/Daintree.AppImage";
+
+      autoUpdaterService.initialize();
+      expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(true);
+      const downloaded = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-downloaded"
+      )![1];
+      downloaded({ version: "2.0.0" });
+      expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(true);
+    });
+
     it("skips initialization on Linux when package-type file is empty", () => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       fsMock.existsSync.mockReturnValue(true);
