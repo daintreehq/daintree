@@ -14,6 +14,7 @@ import { getFocusThrottlePollMultiplier, isFocusThrottled } from "../window/focu
 import { getPowerPolicy } from "../window/powerPolicy.js";
 import { getRendererTerminalDiagnosticsSamples } from "./RendererTerminalDiagnosticsCache.js";
 import type { HandlerDependencies } from "../ipc/types.js";
+import { cliSpawnTarget, pickWindowsLaunchable } from "../utils/windowsCliSpawn.js";
 import type {
   WhySlowFocusThrottleSnapshot,
   WhySlowMemorySnapshot,
@@ -157,10 +158,13 @@ async function runCommand(
   timeoutMs = SECTION_TIMEOUT_MS
 ): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync(cmd, args, {
+    const target = cliSpawnTarget(cmd, args);
+    const { stdout } = await execFileAsync(target.command, target.args, {
       encoding: "utf8",
       timeout: timeoutMs,
       env: process.env,
+      windowsHide: true,
+      windowsVerbatimArguments: target.windowsVerbatimArguments,
     });
     return stdout.trim();
   } catch {
@@ -330,7 +334,11 @@ async function collectProcess() {
 
 /** POSIX resolves in-process: the external `which` is absent from minimal Linux installs. */
 async function resolveToolPath(tool: string): Promise<string | null> {
-  if (process.platform === "win32") return runCommand("where", [tool], 3000);
+  if (process.platform === "win32") {
+    const located = await runCommand("where", [tool], 3000);
+    // `where` lists every match, extensionless npm shim first.
+    return located ? (pickWindowsLaunchable(located.split(/\r?\n/)) ?? located) : null;
+  }
   return findOnPath(tool, { env: process.env, timeoutMs: 3000 });
 }
 

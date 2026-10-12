@@ -1,3 +1,6 @@
+vi.mock("../../../utils/windowsCliSpawn.js", () => ({
+  cliSpawnTarget: (command: string, args: string[]) => ({ command, args, shell: false }),
+}));
 import { EventEmitter } from "events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

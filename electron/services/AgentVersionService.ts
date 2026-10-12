@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from "child_process";
 import * as semver from "semver";
+import { cliSpawnTarget } from "../utils/windowsCliSpawn.js";
 import {
   getEffectiveAgentConfig,
   getEffectiveAgentIds,
@@ -242,15 +243,18 @@ export class AgentVersionService {
     return new Promise<string>((resolve, reject) => {
       // `detached` puts the child in its own process group (POSIX) so the
       // deadline can SIGKILL the entire tree, including a grandchild that
-      // inherited the stdout pipe. Windows has no process groups here, so fall
-      // back to killing just the child.
+      // inherited the stdout pipe. Windows uses taskkill /T while the root lives.
       const useGroup = process.platform !== "win32";
+      // An npm-installed agent is a `.cmd` shim on Windows (see windowsCliSpawn).
       let child: ChildProcess;
       try {
-        child = spawn(command, args, {
-          shell: false,
+        const env = buildProbeEnv();
+        const target = cliSpawnTarget(command, args, process.platform, { env });
+        child = spawn(target.command, target.args, {
+          shell: target.shell,
+          windowsVerbatimArguments: target.windowsVerbatimArguments,
           windowsHide: true,
-          env: buildProbeEnv(),
+          env,
           detached: useGroup,
           stdio: ["ignore", "pipe", "pipe"],
         });
@@ -267,6 +271,9 @@ export class AgentVersionService {
       let stdout = "";
       let stderr = "";
       let settled = false;
+      let probeExitCode: number | null | undefined;
+      const capturedVersion = (): string =>
+        probeExitCode === undefined || probeExitCode === 0 ? stdout || stderr : "";
       // Set when `exit` fires before `close`. `exit` does NOT guarantee all
       // stdout has been delivered (Node only guarantees that by `close`), so we
       // don't finish on `exit` directly — we give the pipes a short grace to
@@ -332,7 +339,7 @@ export class AgentVersionService {
         // A genuinely hung foreground (or a grandchild keeping us alive) — reap
         // the tree and resolve with whatever the CLI managed to print first.
         killTree();
-        finish(stdout || stderr);
+        finish(capturedVersion());
       }, this.TIMEOUT_MS);
       // Don't let the deadline timer pin event-loop teardown (the optional call
       // guards Vitest fake-timer objects that lack `unref`).
@@ -373,7 +380,7 @@ export class AgentVersionService {
           // Enough to parse a version line — stop reading and reap so a chatty
           // CLI can't stream past the cap and keep us alive.
           killTree();
-          finish(stdout || stderr);
+          finish(capturedVersion());
         }
       });
       child.stderr?.on("data", (chunk: Buffer) => {
@@ -383,15 +390,17 @@ export class AgentVersionService {
 
       // `close` fires after the process exited AND all stdio reached EOF, so it
       // carries the complete output — the preferred settle in the common case.
-      child.on("close", () => {
-        finish(stdout || stderr);
+      child.on("close", (code) => {
+        probeExitCode = code;
+        finish(capturedVersion());
       });
 
       // `exit` fires when the process terminates but BEFORE stdio is guaranteed
       // flushed/closed. The crux of the hang fix is that we never wait on `close`
       // alone: arm a short grace timer so a daemon grandchild holding the pipe
       // can't keep us pending. `close` (if it comes) clears this via `cleanup`.
-      child.on("exit", () => {
+      child.on("exit", (code) => {
+        probeExitCode = code;
         if (settled || exitGraceTimer) return;
         exitGraceTimer = setTimeout(() => {
           // `close` never came within the grace window, so a grandchild is still
@@ -399,7 +408,7 @@ export class AgentVersionService {
           // the detached process the probe exists to kill leaks. (The `close`
           // path stays kill-free: it fires only once every fd-holder has exited.)
           killTree();
-          finish(stdout || stderr);
+          finish(capturedVersion());
         }, this.EXIT_DRAIN_MS);
         exitGraceTimer.unref?.();
       });

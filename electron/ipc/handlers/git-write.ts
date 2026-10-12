@@ -1927,7 +1927,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       const { stdout } = await execFileAsync(
         "git",
         ["config", "--global", "--get-all", "safe.directory"],
-        { env: { ...process.env, LC_ALL: "C" } }
+        { env: { ...process.env, LC_ALL: "C" }, windowsHide: true }
       );
       const entries = stdout
         .split("\n")
@@ -1950,6 +1950,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     if (!alreadyConfigured) {
       await execFileAsync("git", ["config", "--global", "--add", "safe.directory", normalized], {
         env: { ...process.env, LC_ALL: "C" },
+        windowsHide: true,
       });
     }
   };

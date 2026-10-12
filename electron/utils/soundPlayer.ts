@@ -6,7 +6,7 @@ export interface SoundHandle {
 }
 
 function spawnSilent(cmd: string, args: string[]): ChildProcess {
-  return spawn(cmd, args, { stdio: "ignore", detached: false });
+  return spawn(cmd, args, { stdio: "ignore", detached: false, windowsHide: true });
 }
 
 export function playSound(filePath: string, volume = 1.0): SoundHandle {

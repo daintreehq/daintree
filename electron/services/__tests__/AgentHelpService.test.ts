@@ -1,3 +1,6 @@
+vi.mock("../../utils/windowsCliSpawn.js", () => ({
+  cliSpawnTarget: (command: string, args: string[]) => ({ command, args, shell: false }),
+}));
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { AgentHelpService } from "../AgentHelpService.js";
 import { execFile } from "child_process";
@@ -44,6 +47,7 @@ describe("AgentHelpService", () => {
         expect.objectContaining({
           timeout: 5000,
           maxBuffer: 256 * 1024,
+          // Executable resolution is covered by windowsCliSpawn tests.
           shell: false,
           windowsHide: true,
         }),

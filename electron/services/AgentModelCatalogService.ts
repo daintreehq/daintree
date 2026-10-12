@@ -1,5 +1,4 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execFileWithTreeKill } from "../utils/execFileWithTreeKill.js";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { z } from "zod";
@@ -11,8 +10,9 @@ import {
 } from "../../shared/config/agentRegistry.js";
 import type { ResolvedModelCatalog } from "../../shared/types/ipc/agentCapabilities.js";
 import { buildProbeEnv } from "../utils/spawnEnv.js";
+import { cliSpawnTarget } from "../utils/windowsCliSpawn.js";
 
-const execFileAsync = promisify(execFile);
+const execFileAsync = execFileWithTreeKill;
 
 const ModelEntrySchema = z
   .object({
@@ -452,12 +452,18 @@ export class AgentModelCatalogService {
     const command = this.deps.codexCommand ?? "codex";
     let stdout = "";
     try {
-      const result = await exec(command, ["debug", "models", "--bundled"], {
+      // An npm-installed Codex is a `.cmd` shim on Windows (see windowsCliSpawn).
+      const env = buildProbeEnv();
+      const target = cliSpawnTarget(command, ["debug", "models", "--bundled"], process.platform, {
+        env,
+      });
+      const result = await exec(target.command, target.args, {
         timeout: CODEX_TIMEOUT_MS,
         maxBuffer: MAX_CODEX_BUFFER,
-        shell: false,
+        shell: target.shell,
+        windowsVerbatimArguments: target.windowsVerbatimArguments,
         windowsHide: true,
-        env: buildProbeEnv(),
+        env,
       });
       stdout = result.stdout || result.stderr || "";
     } catch (err: unknown) {

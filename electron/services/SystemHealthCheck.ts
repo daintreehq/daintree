@@ -1,4 +1,9 @@
 import { execFile } from "child_process";
+import {
+  isShellInertInvocation,
+  isWindowsShellShim,
+  pickWindowsLaunchable,
+} from "../utils/windowsCliSpawn.js";
 import { promisify } from "util";
 import * as path from "path";
 import * as semver from "semver";
@@ -16,6 +21,9 @@ import type {
 } from "../../shared/types/ipc.js";
 
 const execFileAsync = promisify(execFile);
+
+// The IPC handler gates `system:check-tool` on this; it lives with the spawn helper.
+export { isShellInertInvocation };
 
 const CHECK_TIMEOUT_MS = 5_000;
 
@@ -126,29 +134,6 @@ async function hasXcodeCommandLineTools(): Promise<boolean> {
 }
 
 /** Whether the PATH lookup landed on a Windows shell shim. */
-function isWindowsShellShim(resolvedPath: string): boolean {
-  return /\.(cmd|bat)$/i.test(resolvedPath.split("\n")[0]?.trim() ?? "");
-}
-
-/** A bare binary name or version flag — nothing cmd.exe treats as syntax. */
-const SHELL_INERT_TOKEN = /^[A-Za-z0-9._\-/=]+$/;
-
-/**
- * Whether a version invocation can survive being flattened into a shell line.
- * Node joins command and args with spaces and hands the result to
- * `cmd.exe /d /s /c` without escaping anything (the reason passing args
- * alongside `shell` is deprecated as DEP0190), so a `&&` or a quote in an
- * argument is cmd.exe syntax rather than an argument. `checkPrerequisite` is
- * reachable from the `system:check-tool` IPC channel with a caller-supplied
- * spec, so the tokens are treated as untrusted wherever a shell is involved.
- */
-export function isShellInertInvocation(command: unknown, versionArgs: unknown): boolean {
-  if (typeof command !== "string" || !Array.isArray(versionArgs)) return false;
-  return [command, ...versionArgs].every(
-    (token) => typeof token === "string" && SHELL_INERT_TOKEN.test(token)
-  );
-}
-
 /**
  * Runs a tool's version command. On Windows the entry point for a lot of tools
  * is a `.cmd`/`.bat` shim (`npm.cmd`, and anything installed as an npm global
@@ -198,7 +183,9 @@ async function resolveOnPath(command: string): Promise<string | null> {
       encoding: "utf8",
       timeout: CHECK_TIMEOUT_MS,
     });
-    return stdout;
+    // `where` lists npm's extensionless sh script before the `.cmd` beside it
+    // (Node's own installer ships npm that way), and only the `.cmd` runs.
+    return pickWindowsLaunchable(stdout.split(/\r?\n/)) ?? stdout;
   } catch {
     return null;
   }

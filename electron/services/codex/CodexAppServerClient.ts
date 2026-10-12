@@ -23,6 +23,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from "child_process";
+import { cliSpawnTarget } from "../../utils/windowsCliSpawn.js";
 import { buildProbeEnv } from "../../utils/spawnEnv.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import type { AgentSubagentUnavailableReason } from "../../../shared/types/ipc/agentSubagents.js";
@@ -199,12 +200,23 @@ async function spawnCodexAppServerSession<T>(
   // stdout pipe. Windows has none here, so it falls back to `taskkill /T`.
   const useGroup = process.platform !== "win32";
 
+  // On Windows an npm-installed Codex is a `.cmd` shim, which a shell-less
+  // spawn of the bare name never reaches (ENOENT): quota and subagent reads
+  // silently failed there while the terminal launch worked.
   let child: ChildProcess;
   try {
-    child = spawn(command, ["app-server", "--listen", "stdio://"], {
-      shell: false,
+    const env = buildAppServerEnv(options.codexHome);
+    const target = cliSpawnTarget(
+      command,
+      ["app-server", "--listen", "stdio://"],
+      process.platform,
+      { env }
+    );
+    child = spawn(target.command, target.args, {
+      shell: target.shell,
+      windowsVerbatimArguments: target.windowsVerbatimArguments,
       windowsHide: true,
-      env: buildAppServerEnv(options.codexHome),
+      env,
       detached: useGroup,
       stdio: ["pipe", "pipe", "pipe"],
     });

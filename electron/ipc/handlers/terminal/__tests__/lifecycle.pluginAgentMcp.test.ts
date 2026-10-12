@@ -1,3 +1,12 @@
+// Unit IPC fixtures don't install CLIs; real Windows argv coverage lives in utils.
+vi.mock("../../../../utils/windowsCliSpawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../utils/windowsCliSpawn.js")>()),
+  cliSpawnTarget: (_command: string, args: string[]) => ({
+    command: "C:\\test\\agent.exe",
+    args,
+    shell: false,
+  }),
+}));
 import fs from "node:fs/promises";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -48,7 +57,8 @@ vi.mock("../../../../services/ProjectStore.js", () => ({
   },
 }));
 
-vi.mock("../../../../services/pty/terminalShell.js", () => ({
+vi.mock("../../../../services/pty/terminalShell.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../services/pty/terminalShell.js")>()),
   getDefaultShell: vi.fn(() => "/bin/zsh"),
 }));
 

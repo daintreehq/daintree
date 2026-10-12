@@ -26,7 +26,6 @@ import {
   agentClipboardDirectory,
 } from "../agentSettings.js";
 import { setUserRegistry } from "../../config/agentRegistry.js";
-import { escapeShellArg } from "../../utils/shellEscape.js";
 import type { AgentConfig } from "../../config/agentRegistry.js";
 
 // Force POSIX shell-escape semantics so the hardcoded single-quote assertions
@@ -55,7 +54,7 @@ describe("buildResumeCommand", () => {
     const cmd = buildResumeCommand("codex", "abc-123");
     // Pinned to the launch directory (#12434), and still readable by the
     // `codex resume <id>` scrape when the shell echoes it.
-    expect(cmd).toBe(`codex resume abc-123 -C ${escapeShellArg(".")}`);
+    expect(cmd).toBe(`codex resume abc-123 -C '.'`);
     expect(cmd).toContain("codex resume abc-123");
     expect(cmd).not.toContain("--resume");
   });
@@ -105,7 +104,7 @@ describe("buildResumeCommand", () => {
       "--dangerously-bypass-approvals-and-sandbox",
     ]);
     expect(cmd).toBe(
-      `codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox resume sess-456 -C ${escapeShellArg(".")}`
+      `codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox resume sess-456 -C '.'`
     );
   });
 
@@ -1731,12 +1730,49 @@ describe("DEFAULT_AGENT_SETTINGS inline seeding (#10876)", () => {
   });
 });
 
+describe("Windows launch command quoting", () => {
+  const originalPlatform = process.platform;
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("hands PowerShell a prompt it cannot expand or execute", () => {
+    // The command runs as a PowerShell script (`-EncodedCommand`). In cmd-style
+    // "..." this prompt's `$(...)` ran before the agent started — a recipe or an
+    // issue body could execute code — and `$HOME`, `$5` and the backticks were
+    // rewritten on their way to the agent.
+    const prompt = "Fix the `greet` function in $HOME. Price is $5. Probe: $(Set-Content x pwned)";
+    const command = generateAgentCommand("codex", {}, "codex", { initialPrompt: prompt });
+    expect(command.endsWith(` '${prompt}'`)).toBe(true);
+    expect(command).not.toContain(`"${prompt}"`);
+  });
+
+  it("quotes leading-dash payloads on fresh, resumed and rebuilt launches", () => {
+    const flag = "--value=$(Get-Date)";
+    expect(generateAgentCommand("claude", { customFlags: flag }, "claude")).toContain(`'${flag}'`);
+    expect(buildResumeCommand("claude", "session", [flag])).toContain(`'${flag}'`);
+    expect(buildResumeLatestCommand("claude", [flag])).toContain(`'${flag}'`);
+    expect(buildLaunchCommandFromFlags("claude", "claude", [flag])).toContain(`'${flag}'`);
+  });
+
+  it("doubles apostrophes and preserves double quotes as source literals", () => {
+    const command = generateAgentCommand("claude", {}, "claude", {
+      initialPrompt: `don't print "hi"`,
+    });
+    expect(command.endsWith(` 'don''t print "hi"'`)).toBe(true);
+  });
+});
+
 describe("decorative effects (registry capabilities.decorations)", () => {
   const OFF = ["-c", "tui.whimsy=false"];
 
   describe.each([
     ["linux", "'tui.whimsy=false'", "'.'"],
-    ["win32", '"tui.whimsy=false"', '"."'],
+    // Windows launches run through PowerShell, so they take its literal quotes too.
+    ["win32", "'tui.whimsy=false'", "'.'"],
   ])("launch commands on %s", (platform, quotedOverride, quotedDir) => {
     const originalPlatform = process.platform;
 
@@ -1817,6 +1853,6 @@ describe("agentClipboardDirectory", () => {
     expect(dir).toBe("/tmp/daintree-inbox");
     expect(
       buildLaunchCommandFromFlags("gemini", "gemini", [], { clipboardDirectory: dir })
-    ).toContain(`--include-directories ${escapeShellArg("/tmp/daintree-inbox")}`);
+    ).toContain(`--include-directories '/tmp/daintree-inbox'`);
   });
 });

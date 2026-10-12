@@ -214,10 +214,15 @@ import {
 import { getLifecycleLedger } from "../../../services/pty/lifecycleLedger.js";
 import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
 import { getDefaultShell } from "../../../services/pty/terminalShell.js";
-import { hasEnvVar } from "../../../services/pty/EnvironmentFilter.js";
+import {
+  filterEnvironment,
+  hasEnvVar,
+  mergeEnvVars,
+} from "../../../services/pty/EnvironmentFilter.js";
 import { refreshWindowsPathForSpawn } from "../../../setup/windowsPath.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
-import { quoteCommandArg } from "../../../../shared/utils/shellEscape.js";
+import { quoteCommandArg, isPowerShellShell } from "../../../../shared/utils/shellEscape.js";
+import { buildWindowsAgentLaunchScript } from "../../../utils/windowsAgentLaunch.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../../../shared/utils/recipeSanitizer.js";
 import { buildCommandLaunchShell } from "./commandLaunch.js";
 
@@ -550,7 +555,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // undefined (see `acquirePtyProcess` in `terminalSpawn.ts`); promoting
     // `getDefaultShell()` into the spawn options would silently disable the
     // pool for every spawn. The spawn-side fallback stays absent below.
-    const quotingShell = validatedOptions.shell || projectShell || getDefaultShell();
+    const requestedShell = validatedOptions.shell || projectShell || getDefaultShell();
+    // Generated Windows agent commands use PowerShell literals even when the
+    // user's plain-terminal shell is cmd.exe or Git Bash.
+    const quotingShell =
+      process.platform === "win32" && launchAgentId && !isPowerShellShell(requestedShell)
+        ? `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+        : requestedShell;
 
     // Help-assistant launches arrive with a pre-provisioned session dir that
     // every lane of the project shares. Claude's MCP wiring, with its literal
@@ -1049,25 +1060,36 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       }
     }
 
-    const commandLaunchShell = buildCommandLaunchShell(safeCommand, quotingShell);
-    const resolvedArgs = commandLaunchShell ? commandLaunchShell.args : projectArgs;
-    const spawnShell = commandLaunchShell
-      ? commandLaunchShell.shell
-      : validatedOptions.shell || projectShell;
-
-    // Shells that can't host a startup wrapper (fish, nushell, unrecognized
-    // Windows shells) launch bare and get the command typed in after spawn.
-    // Cache it on the spawn options so it rides every pendingSpawns replay — a
-    // pty-host crash respawn would otherwise bring these terminals back as an
-    // empty prompt, losing the (possibly resume) launch entirely (#11339). The
-    // pty-host spawn handler injects it, and only after a successful spawn, so a
-    // rejected spawn can't type it into a pre-existing live PTY (#11341).
-    // Wrapper shells already carry the command in `args`, so they replay
-    // faithfully with no postSpawnInput.
-    const postSpawnInput =
-      safeCommand.length > 0 && !commandLaunchShell ? `${safeCommand}\r` : undefined;
-
     try {
+      // Inside the try: resolving the agent executable can throw, and the
+      // catch below is what releases the pane config and help binding made above.
+      // The env is built the way the PTY's is (`buildTerminalEnv`), so a pane's
+      // `Path` replaces main's `PATH` here exactly as it will there.
+      const startupCommand =
+        process.platform === "win32" && launchAgentId && safeCommand
+          ? buildWindowsAgentLaunchScript(safeCommand, {
+              env: mergeEnvVars(filterEnvironment(process.env), spawnEnv ?? {}),
+              cwd,
+            })
+          : safeCommand;
+      const commandLaunchShell = buildCommandLaunchShell(startupCommand, quotingShell);
+      const resolvedArgs = commandLaunchShell ? commandLaunchShell.args : projectArgs;
+      const spawnShell = commandLaunchShell
+        ? commandLaunchShell.shell
+        : validatedOptions.shell || projectShell;
+
+      // Shells that can't host a startup wrapper (fish, nushell, unrecognized
+      // Windows shells) launch bare and get the command typed in after spawn.
+      // Cache it on the spawn options so it rides every pendingSpawns replay — a
+      // pty-host crash respawn would otherwise bring these terminals back as an
+      // empty prompt, losing the (possibly resume) launch entirely (#11339). The
+      // pty-host spawn handler injects it, and only after a successful spawn, so a
+      // rejected spawn can't type it into a pre-existing live PTY (#11341).
+      // Wrapper shells already carry the command in `args`, so they replay
+      // faithfully with no postSpawnInput.
+      const postSpawnInput =
+        safeCommand.length > 0 && !commandLaunchShell ? `${safeCommand}\r` : undefined;
+
       armSpawnConfirmation(id);
       // Every terminal is an interactive shell. Agent launches inject their
       // command after the shell's first prompt renders — never `exec`'d over

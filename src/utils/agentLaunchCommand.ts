@@ -1,5 +1,5 @@
 import type { AgentCliDetail } from "@shared/types/ipc";
-import { escapeShellArgOptional, isWindows } from "@shared/utils/shellEscape";
+import { escapeShellArgOptional, isWindows, quotePowerShellArg } from "@shared/utils/shellEscape";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { getHostPlatformInfo, hostShellDialect, isRemoteWindow } from "@/hooks/useHostPlatform";
 
@@ -66,7 +66,7 @@ export function resolveAgentLaunchBaseCommand(
   const dialect = platform ?? hostShellDialect();
   const useWindows = dialect ? dialect === "windows" : isWindows();
   if (useWindows) {
-    return `& '${effective.replace(/'/g, "''")}'`;
+    return `& ${quotePowerShellArg(effective)}`;
   }
 
   const home =

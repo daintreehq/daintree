@@ -76,6 +76,13 @@ vi.mock("../../utils/findOnPath.js", () => ({
   findOnPath: (command: string, options?: unknown) => shared.findOnPathHandler(command, options),
 }));
 
+const cliSpawn = vi.hoisted(() => ({ target: vi.fn() }));
+
+vi.mock("../../utils/windowsCliSpawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsCliSpawn.js")>()),
+  cliSpawnTarget: (command: string, args: string[]) => cliSpawn.target(command, args),
+}));
+
 vi.mock("child_process", () => ({
   execFile: (
     file: string,
@@ -194,6 +201,11 @@ describe("DiagnosticsCollector adversarial", () => {
       lagPressureActive: false,
     };
     mcp.service = null;
+    cliSpawn.target.mockImplementation((command: string, args: string[]) => ({
+      command,
+      args: [...args],
+      shell: false,
+    }));
     setDefaultExecFile();
     diagnostics = await import("../DiagnosticsCollector.js");
   });
@@ -230,6 +242,62 @@ describe("DiagnosticsCollector adversarial", () => {
       terminals: unknown[];
     };
     expect(payload.terminals).toEqual([]);
+  });
+
+  it("TOOL_PROBES_HIDE_CONSOLE_WINDOWS", async () => {
+    await diagnostics.collectDiagnostics(createDeps());
+    const calls = shared.execFileHandler.mock.calls as [string, string[], unknown, unknown][];
+    expect(calls.length).toBeGreaterThan(0);
+    for (const [, , options] of calls) {
+      expect(options).toMatchObject({ windowsHide: true });
+    }
+  });
+
+  it("TOOL_PROBES_LAUNCH_WINDOWS_SHIMS_AND_REPORT_THE_LAUNCHABLE_PATH", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      const npmCli = "C:\\nodejs\\node_modules\\npm\\bin\\npm-cli.js";
+      cliSpawn.target.mockImplementation((command: string, args: string[]) =>
+        command === "npm"
+          ? { command: "C:\\nodejs\\node.exe", args: [npmCli, ...args], shell: false }
+          : { command, args: [...args], shell: false }
+      );
+      shared.execFileHandler.mockImplementation(
+        (
+          file: string,
+          args: string[],
+          _options: Record<string, unknown>,
+          callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void
+        ) => {
+          if (file === "where" && args[0] === "npm") {
+            callback(null, { stdout: "C:\\nodejs\\npm\r\nC:\\nodejs\\npm.cmd\r\n", stderr: "" });
+          } else if (file === "C:\\nodejs\\node.exe" && args[0] === npmCli) {
+            callback(null, { stdout: "11.6.0\r\n", stderr: "" });
+          } else {
+            callback(new Error("not found"));
+          }
+        }
+      );
+
+      const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+        tools: Array<{
+          tool: string;
+          available: boolean;
+          path: string | null;
+          version: string | null;
+        }>;
+      };
+
+      expect(payload.tools.find((t) => t.tool === "npm")).toEqual({
+        tool: "npm",
+        available: true,
+        path: "C:\\nodejs\\npm.cmd",
+        version: "11.6.0",
+      });
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
   });
 
   it("LOG_HISTORY_BOUNDED_TO_100", async () => {

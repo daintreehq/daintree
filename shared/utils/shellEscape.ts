@@ -87,7 +87,14 @@ export function escapeWindowsArg(arg: string): string {
  *   // "'C:\\Users\\O''Brien\\config.json'"
  */
 export function quotePowerShellArg(arg: string): string {
-  return `'${arg.replace(/'/g, "''")}'`;
+  return `'${arg.replace(/['\u2018-\u201b]/g, (quote) => quote + quote)}'`;
+}
+
+/** Source quoting for commands assembled for the project's host. */
+export function quoteLaunchArgOptional(arg: string, platform?: "windows" | "posix"): string {
+  if (isSafeUnescaped(arg) || isSafeShellOption(arg)) return arg;
+  const windows = platform === "windows" || (platform === undefined && isWindows());
+  return windows ? quotePowerShellArg(arg) : escapeShellArg(arg, "posix");
 }
 
 /**
@@ -142,10 +149,7 @@ export function isCmdShell(shellPath: string): boolean {
 export function quoteCommandArg(value: string, shellPath: string): string {
   if (typeof process !== "undefined" && process.platform === "win32") {
     if (isPowerShellShell(shellPath)) {
-      // Windows PowerShell 5.1 and pwsh .cmd shims use legacy native argument
-      // passing. Preserve embedded quotes across that second boundary
-      // (notably Codex's TOML config overrides).
-      return quotePowerShellArg(value.replace(/"/g, '\\"'));
+      return quotePowerShellArg(value);
     }
     if (isCmdShell(shellPath)) {
       return escapeWindowsArg(value);
@@ -176,6 +180,11 @@ function escapePosixArg(arg: string): string {
  * Returns true if the string contains only alphanumeric characters,
  * hyphens, underscores, and forward slashes.
  */
+/** A leading dash is safe only when the entire option is shell-inert. */
+export function isSafeShellOption(arg: string): boolean {
+  return /^-[A-Za-z0-9_\-/.=:+]+$/.test(arg);
+}
+
 export function isSafeUnescaped(arg: string): boolean {
   return /^[a-zA-Z0-9_\-/]+$/.test(arg);
 }

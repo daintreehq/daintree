@@ -275,6 +275,14 @@ describe("shellEscape", () => {
   });
 
   describe("quotePowerShellArg", () => {
+    it.each(["\u2018", "\u2019", "\u201a", "\u201b"])(
+      "doubles the PowerShell quote delimiter %s",
+      (quote) => {
+        expect(quotePowerShellArg(`x${quote}$(Get-Date)${quote}y`)).toBe(
+          `'x${quote}${quote}$(Get-Date)${quote}${quote}y'`
+        );
+      }
+    );
     it("wraps simple strings in single quotes", () => {
       expect(quotePowerShellArg("hello")).toBe("'hello'");
       expect(quotePowerShellArg("hello world")).toBe("'hello world'");
@@ -390,7 +398,7 @@ describe("shellEscape", () => {
         "'C:\\Users\\O''Brien\\config.json'"
       );
       expect(quoteCommandArg('mcp_servers.daintree.url="http://127.0.0.1/mcp"', "pwsh.exe")).toBe(
-        "'mcp_servers.daintree.url=\\\"http://127.0.0.1/mcp\\\"'"
+        "'mcp_servers.daintree.url=\"http://127.0.0.1/mcp\"'"
       );
     });
 
@@ -404,7 +412,7 @@ describe("shellEscape", () => {
       ).toBe("'hello world'");
       expect(
         quoteCommandArg('mcp_servers.daintree.url="http://127.0.0.1/mcp"', "powershell.exe")
-      ).toBe("'mcp_servers.daintree.url=\\\"http://127.0.0.1/mcp\\\"'");
+      ).toBe("'mcp_servers.daintree.url=\"http://127.0.0.1/mcp\"'");
     });
 
     it("uses cmd double-quote escaping on Windows + cmd.exe", () => {

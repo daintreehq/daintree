@@ -102,6 +102,17 @@ describe("git:mark-safe-directory handler", () => {
     );
   });
 
+  it("hides the console window for both git config calls", async () => {
+    registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
+    const handler = getHandler("git:mark-safe-directory");
+    await handler(null, "/Users/foo/my repo");
+    const calls = execFileMock.mock.calls as [string, string[], unknown, unknown][];
+    expect(calls).toHaveLength(2);
+    for (const [, , opts] of calls) {
+      expect(opts).toMatchObject({ windowsHide: true });
+    }
+  });
+
   it("canonicalizes symlinked repo paths before writing", async () => {
     realpathMock.mockResolvedValueOnce("/Users/foo/real-repo");
     registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);

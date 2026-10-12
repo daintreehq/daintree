@@ -56,7 +56,8 @@ import { useDragDrop } from "../hooks/useDragDrop";
 import { formatAtFileToken } from "../hybridInputParsing";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { escapeShellArgOptional } from "@shared/utils/shellEscape.js";
+import { quoteLaunchArgOptional } from "@shared/utils/shellEscape.js";
+import * as hostPlatform from "@/hooks/useHostPlatform";
 import {
   BRACKETED_PASTE_START,
   BRACKETED_PASTE_END,
@@ -283,13 +284,28 @@ describe("useTerminalFileTransfer hook", () => {
 
   // --- Image paste tests ---
 
+  it("inserts Windows clipboard paths as PowerShell literals", async () => {
+    const dialect = vi.spyOn(hostPlatform, "hostShellDialect").mockReturnValue("windows");
+    try {
+      vi.mocked(window.electron.clipboard.saveImage).mockResolvedValue({
+        filePath: String.raw`C:\temp\x’$(Get-Date)&y.png`,
+        thumbnailDataUrl: "data:image/png;base64,abc",
+      });
+      renderFileTransferHook();
+      await pasteImage();
+      expect(lastWrittenPayload()).toBe(String.raw`'C:\temp\x’’$(Get-Date)&y.png' `);
+    } finally {
+      dialect.mockRestore();
+    }
+  });
+
   it("image paste calls saveImage and writes escaped path to terminal", async () => {
     renderFileTransferHook();
     const event = await pasteImage();
 
     expect(terminalClient.write).toHaveBeenCalledWith(
       "term-1",
-      `${escapeShellArgOptional("/tmp/daintree-clipboard/clipboard-123-abc.png")} `
+      `${quoteLaunchArgOptional("/tmp/daintree-clipboard/clipboard-123-abc.png")} `
     );
     expect(terminalInstanceService.notifyUserInput).toHaveBeenCalledWith("term-1");
     expect(event.defaultPrevented).toBe(true);
@@ -301,7 +317,7 @@ describe("useTerminalFileTransfer hook", () => {
     await pasteImage();
 
     expect(onInput).toHaveBeenCalledWith(
-      `${escapeShellArgOptional("/tmp/daintree-clipboard/clipboard-123-abc.png")} `
+      `${quoteLaunchArgOptional("/tmp/daintree-clipboard/clipboard-123-abc.png")} `
     );
   });
 
@@ -354,7 +370,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     expect(terminalClient.write).toHaveBeenCalledWith(
       "term-1",
-      `${escapeShellArgOptional("/tmp/daintree clipboard/my screenshot.png")} `
+      `${quoteLaunchArgOptional("/tmp/daintree clipboard/my screenshot.png")} `
     );
   });
 
@@ -457,7 +473,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     expect(terminalClient.write).toHaveBeenCalledWith(
       "term-1",
-      `${escapeShellArgOptional("/Users/test/document.pdf")} ${escapeShellArgOptional("/Users/test/script.sh")} `
+      `${quoteLaunchArgOptional("/Users/test/document.pdf")} ${quoteLaunchArgOptional("/Users/test/script.sh")} `
     );
     expect(terminalInstanceService.notifyUserInput).toHaveBeenCalledWith("term-1");
     expect(event.defaultPrevented).toBe(true);
@@ -469,7 +485,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     expect(terminalClient.write).toHaveBeenCalledWith(
       "term-1",
-      `${escapeShellArgOptional("/Users/test/my file.pdf")} `
+      `${quoteLaunchArgOptional("/Users/test/my file.pdf")} `
     );
   });
 
@@ -479,7 +495,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     expect(terminalClient.write).toHaveBeenCalledWith(
       "term-1",
-      `${escapeShellArgOptional("/Users/test/resolved.pdf")} `
+      `${quoteLaunchArgOptional("/Users/test/resolved.pdf")} `
     );
   });
 
@@ -502,7 +518,7 @@ describe("useTerminalFileTransfer hook", () => {
     renderFileTransferHook({ onInput });
     await dropFiles([fileAt("file.ts", "/Users/test/file.ts")]);
 
-    expect(onInput).toHaveBeenCalledWith(`${escapeShellArgOptional("/Users/test/file.ts")} `);
+    expect(onInput).toHaveBeenCalledWith(`${quoteLaunchArgOptional("/Users/test/file.ts")} `);
   });
 
   // --- Runtime identity decides the content format (#11574) ---
@@ -540,7 +556,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     expect(terminalClient.write).toHaveBeenCalledWith(
       "term-1",
-      `${escapeShellArgOptional("/Users/test/src/App.tsx")} `
+      `${quoteLaunchArgOptional("/Users/test/src/App.tsx")} `
     );
   });
 
@@ -656,7 +672,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     // A shell resolves a relative path against its own cwd, which the pane only
     // observes — it has no way to know the two still agree.
-    expect(lastWrittenPayload()).toBe(`${escapeShellArgOptional(absolute)} `);
+    expect(lastWrittenPayload()).toBe(`${quoteLaunchArgOptional(absolute)} `);
   });
 
   it("relativizes a pasted image saved inside the worktree", async () => {
@@ -677,7 +693,7 @@ describe("useTerminalFileTransfer hook", () => {
     const registrationsAfterMount = addSpy.mock.calls.length;
 
     await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
-    expect(lastWrittenPayload()).toBe(`${escapeShellArgOptional("/Users/test/a.ts")} `);
+    expect(lastWrittenPayload()).toBe(`${quoteLaunchArgOptional("/Users/test/a.ts")} `);
 
     rerender({ detectedAgentId: "claude" });
 
@@ -737,7 +753,7 @@ describe("useTerminalFileTransfer hook", () => {
     await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
 
     const payload = lastWrittenPayload();
-    expect(payload).toBe(`${escapeShellArgOptional("/Users/test/a.ts")} `);
+    expect(payload).toBe(`${quoteLaunchArgOptional("/Users/test/a.ts")} `);
     // A shell that never enabled DECSET 2004 would echo these as literal input.
     expect(payload).not.toContain(BRACKETED_PASTE_START);
   });
@@ -1162,7 +1178,7 @@ describe("useTerminalFileTransfer hook", () => {
       renderFileTransferHook({ cwdProvider: () => CWD });
       await dropInternalPaths([`${CWD}/src/my notes.md`]);
 
-      expect(lastWrittenPayload().trimEnd()).toBe(escapeShellArgOptional(`${CWD}/src/my notes.md`));
+      expect(lastWrittenPayload().trimEnd()).toBe(quoteLaunchArgOptional(`${CWD}/src/my notes.md`));
     });
 
     it("relativizes against the cwd read at drop time", async () => {
@@ -1216,7 +1232,7 @@ describe("useTerminalFileTransfer hook", () => {
       await dropInternalPaths([`${CWD}/src/App.tsx`]);
 
       expect(lastWrittenPayload()).toBe(
-        formatWithBracketedPaste(`${escapeShellArgOptional(`${CWD}/src/App.tsx`)} `)
+        formatWithBracketedPaste(`${quoteLaunchArgOptional(`${CWD}/src/App.tsx`)} `)
       );
     });
 
@@ -1239,7 +1255,7 @@ describe("useTerminalFileTransfer hook", () => {
       rerender({ cwdProvider: () => CWD });
       await dropInternalPaths([`${CWD}/src/App.tsx`]);
       expect(vi.mocked(terminalClient.write)).toHaveBeenCalledTimes(1);
-      expect(lastWrittenPayload()).toBe(`${escapeShellArgOptional(`${CWD}/src/App.tsx`)} `);
+      expect(lastWrittenPayload()).toBe(`${quoteLaunchArgOptional(`${CWD}/src/App.tsx`)} `);
     });
 
     it("references a dragged folder", async () => {
@@ -1423,7 +1439,7 @@ describe("useTerminalFileTransfer hook", () => {
       await dropFiles([fileAt("App.tsx", "/Users/me/App.tsx")]);
       await release();
 
-      expect(lastWrittenPayload()).toBe(`${escapeShellArgOptional("/host/inbox/files/App.tsx")} `);
+      expect(lastWrittenPayload()).toBe(`${quoteLaunchArgOptional("/host/inbox/files/App.tsx")} `);
     });
 
     it("pastes an image through materialize rather than saving it directly", async () => {
@@ -1435,7 +1451,7 @@ describe("useTerminalFileTransfer hook", () => {
       expect(seen).toEqual([{ kind: "clipboard-image" }]);
       expect(window.electron.clipboard.saveImage).not.toHaveBeenCalled();
       expect(lastWrittenPayload()).toBe(
-        `${escapeShellArgOptional("/tmp/daintree-clipboard/clip.png")} `
+        `${quoteLaunchArgOptional("/tmp/daintree-clipboard/clip.png")} `
       );
     });
 
@@ -1447,7 +1463,7 @@ describe("useTerminalFileTransfer hook", () => {
       renderFileTransferHook({});
       await dropFiles([fileAt("bad.ts", "/Users/me/bad.ts"), fileAt("ok.ts", "/Users/me/ok.ts")]);
 
-      expect(lastWrittenPayload()).toBe(`${escapeShellArgOptional("/Users/me/ok.ts")} `);
+      expect(lastWrittenPayload()).toBe(`${quoteLaunchArgOptional("/Users/me/ok.ts")} `);
     });
 
     it("writes nothing when the input locks while the drop resolves", async () => {
@@ -1517,8 +1533,8 @@ describe("useTerminalFileTransfer hook", () => {
 
       await resolvePath("/Users/test/big.bin");
       expect(vi.mocked(terminalClient.write).mock.calls.map(([, data]) => data)).toEqual([
-        `${escapeShellArgOptional("/Users/test/big.bin")} `,
-        `${escapeShellArgOptional("/Users/test/small.txt")} `,
+        `${quoteLaunchArgOptional("/Users/test/big.bin")} `,
+        `${quoteLaunchArgOptional("/Users/test/small.txt")} `,
       ]);
     });
 
@@ -1534,7 +1550,7 @@ describe("useTerminalFileTransfer hook", () => {
       await resolvePath("/Users/test/b.ts");
 
       expect(vi.mocked(terminalClient.write).mock.calls.map(([, data]) => data)).toEqual([
-        `${escapeShellArgOptional("/Users/test/b.ts")} `,
+        `${quoteLaunchArgOptional("/Users/test/b.ts")} `,
       ]);
     });
 
@@ -1564,7 +1580,7 @@ describe("useTerminalFileTransfer hook", () => {
         await release();
 
         // The paths still land where they were dropped; only the keyboard stays.
-        expect(lastWrittenPayload()).toBe(`${escapeShellArgOptional("/Users/test/a.ts")} `);
+        expect(lastWrittenPayload()).toBe(`${quoteLaunchArgOptional("/Users/test/a.ts")} `);
         expect(onDropSelect).not.toHaveBeenCalled();
         expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
         expect(terminalInstanceService.focus).not.toHaveBeenCalled();
@@ -1647,7 +1663,7 @@ describe("useTerminalFileTransfer hook", () => {
 
       expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
       expect(lastWrittenPayload()).toBe(
-        `${escapeShellArgOptional("/tmp/daintree-inbox/files/x/a.txt")} `
+        `${quoteLaunchArgOptional("/tmp/daintree-inbox/files/x/a.txt")} `
       );
     });
 

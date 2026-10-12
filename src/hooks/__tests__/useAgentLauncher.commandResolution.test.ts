@@ -21,6 +21,15 @@ function detail(overrides: Partial<AgentCliDetail>): AgentCliDetail {
 }
 
 describe("resolveAgentLaunchBaseCommand", () => {
+  it("escapes typographic PowerShell quote delimiters in executable paths", () => {
+    expect(
+      resolveAgentLaunchBaseCommand(
+        "claude",
+        detail({ resolvedPath: String.raw`C:\O’Brien\claude.exe` }),
+        "windows"
+      )
+    ).toBe(String.raw`& 'C:\O’’Brien\claude.exe'`);
+  });
   it("uses the availability-resolved executable path when the CLI is ready", () => {
     expect(
       resolveAgentLaunchBaseCommand("claude", detail({ resolvedPath: "/tmp/bin/claude" }), "posix")

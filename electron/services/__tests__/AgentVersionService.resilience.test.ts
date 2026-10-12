@@ -1,3 +1,6 @@
+vi.mock("../../utils/windowsCliSpawn.js", () => ({
+  cliSpawnTarget: (command: string, args: string[]) => ({ command, args, shell: false }),
+}));
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { EventEmitter } from "events";
 import type { AgentId } from "../../../shared/types/agent.js";
@@ -142,6 +145,26 @@ describe("AgentVersionService resilience", () => {
   // kept the promise pending and the 10s `timeout` was ineffective (it signals
   // the already-exited foreground PID, never the grandchild). The probe now
   // resolves on `exit` and hard-reaps the tree on a deadline.
+  it("does not parse diagnostic numbers as a version after a failed exit", async () => {
+    registryMock.getEffectiveAgentConfig.mockReturnValue({
+      id: "claude",
+      name: "Claude",
+      command: "claude",
+      version: { args: ["--version"] },
+    });
+    spawnMock.mockImplementation(() => {
+      const child = makeFakeChild();
+      queueMicrotask(() => {
+        child.stderr.emit("data", Buffer.from("launch error 1.2.3"));
+        child.emit("exit", 1, null);
+        child.emit("close", 1, null);
+      });
+      return child;
+    });
+    const { service } = createService(async () => ({ claude: "ready" }));
+    expect((await service.getVersion("claude" as AgentId)).installedVersion).toBeNull();
+  });
+
   describe("installed-version probe hang resistance", () => {
     beforeEach(() => {
       spawnMock.mockReset();

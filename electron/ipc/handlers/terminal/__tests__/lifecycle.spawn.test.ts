@@ -1,3 +1,15 @@
+// Unit IPC fixtures don't install CLIs; real Windows argv coverage lives in utils.
+const cliSpawnTargetMock = vi.hoisted(() =>
+  vi.fn((_command: string, args: string[], _platform?: string, _options?: unknown) => ({
+    command: "C:\\test\\agent.exe",
+    args,
+    shell: false as const,
+  }))
+);
+vi.mock("../../../../utils/windowsCliSpawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../utils/windowsCliSpawn.js")>()),
+  cliSpawnTarget: cliSpawnTargetMock,
+}));
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const ipcMainMock = vi.hoisted(() => ({
@@ -35,7 +47,8 @@ vi.mock("../../../../services/ProjectStore.js", () => ({
   },
 }));
 
-vi.mock("../../../../services/pty/terminalShell.js", () => ({
+vi.mock("../../../../services/pty/terminalShell.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../services/pty/terminalShell.js")>()),
   getDefaultShell: vi.fn(() => "/bin/zsh"),
 }));
 
@@ -3485,6 +3498,57 @@ describe("terminal spawn handler - Windows PATH refresh", () => {
     registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
     return getSpawnHandler();
   }
+
+  it("releases the pane config when the agent executable cannot be resolved", async () => {
+    setPlatform("win32");
+    cliSpawnTargetMock.mockImplementationOnce(() => {
+      throw Object.assign(new Error("Cannot launch CLI: daintree-assistant"), { code: "ENOENT" });
+    });
+    const handler = spawnHandlerForTest();
+
+    await expect(
+      handler(
+        { senderWindow: { id: 7 } } as unknown as Electron.IpcMainInvokeEvent,
+        {
+          id: "assistant-pane",
+          cols: 80,
+          rows: 24,
+          command: "daintree-assistant",
+          launchAgentId: "daintree-assistant",
+        } as unknown as Parameters<typeof handler>[1]
+      )
+    ).rejects.toThrow(/Failed to spawn terminal: Cannot launch CLI/);
+
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+    expect(mockRevokePaneConfig).toHaveBeenCalledWith("assistant-pane");
+  });
+
+  it("resolves the agent against the pane's PATH whatever its casing", async () => {
+    setPlatform("win32");
+    const savedPath = process.env.PATH;
+    process.env.PATH = "C:\\global";
+    try {
+      const handler = spawnHandlerForTest();
+      await handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cols: 80,
+          rows: 24,
+          command: "daintree-assistant",
+          launchAgentId: "daintree-assistant",
+          env: { Path: "C:\\project-tools" },
+        } as unknown as Parameters<typeof handler>[1]
+      );
+
+      const options = cliSpawnTargetMock.mock.calls.at(-1)?.[3] as {
+        env: Record<string, string>;
+      };
+      const pathEntries = Object.entries(options.env).filter(([key]) => /^path$/i.test(key));
+      expect(pathEntries.map(([, value]) => value)).toEqual(["C:\\project-tools"]);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
 
   it("refreshes the registry PATH before spawning on Windows", async () => {
     setPlatform("win32");
