@@ -24,6 +24,7 @@ import {
   credentialImportCapability,
   readGhToken,
 } from "../GitHubCliCredential.js";
+import { executableForSpawn } from "../../../../../electron/utils/windowsExecutable.js";
 
 const TOKEN = "gho_16C7e42F292c6912E7710c838347Ae178B4a";
 
@@ -135,7 +136,8 @@ describe("readGhToken", () => {
 
     expect(order).toEqual(["refreshPath", "execFile"]);
     const { cmd, args, opts } = lastExec();
-    expect(cmd).toBe("gh");
+    // On Windows gh is spawned by its absolute PATH location.
+    expect(cmd).toBe(executableForSpawn("gh", opts.env));
     expect(args).toEqual(["auth", "token", "--hostname", "github.com"]);
     expect(opts.windowsHide).toBe(true);
     expect(opts.maxBuffer).toBeGreaterThan(0);

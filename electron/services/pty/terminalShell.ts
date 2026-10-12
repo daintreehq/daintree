@@ -2,6 +2,7 @@
 import { existsSync } from "fs";
 import { execFileSync } from "child_process";
 import { isPowerShellShell } from "../../../shared/utils/shellEscape.js";
+import { resolveWindowsExecutable, windowsSystemTool } from "../../utils/windowsExecutable.js";
 
 export interface ShellArgsOptions {
   nonInteractive?: boolean;
@@ -37,8 +38,14 @@ function probeWindowsShell(): string {
     try {
       // windowsHide: libuv only sets CREATE_NO_WINDOW when the flag is passed,
       // so without it this probe flashes a console window.
-      execFileSync("where", [shell], { stdio: "ignore", timeout: 3000, windowsHide: true });
-      return shell;
+      execFileSync(windowsSystemTool("where.exe"), [shell], {
+        stdio: "ignore",
+        timeout: 3000,
+        windowsHide: true,
+      });
+      // Absolute when a PATH directory holds it, so launching the shell never
+      // depends on which directory the launching process happens to be in.
+      return resolveWindowsExecutable(shell);
     } catch {
       // not on PATH or timed out, try next
     }

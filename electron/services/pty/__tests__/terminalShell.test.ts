@@ -6,10 +6,19 @@ import {
   getDefaultShellArgs,
   resetWindowsShellCache,
 } from "../terminalShell.js";
+import { resolveWindowsExecutable } from "../../../utils/windowsExecutable.js";
 
 vi.mock("child_process", () => ({ execFileSync: vi.fn() }));
 
+// The PATH lookup reads the host's real filesystem; each case decides what it finds.
+vi.mock("../../../utils/windowsExecutable.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/windowsExecutable.js")>()),
+  resolveWindowsExecutable: vi.fn((name: string) => name),
+}));
+
 const execFileSyncMock = vi.mocked(execFileSync);
+const resolveWindowsExecutableMock = vi.mocked(resolveWindowsExecutable);
+const WHERE = expect.stringMatching(/^[A-Za-z]:\\.*\\System32\\where\.exe$/i);
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -120,6 +129,7 @@ describe("findWindowsShell (Windows shell discovery)", () => {
 
   beforeEach(() => {
     execFileSyncMock.mockReset();
+    resolveWindowsExecutableMock.mockImplementation((name: string) => name);
     resetWindowsShellCache();
   });
 
@@ -137,11 +147,22 @@ describe("findWindowsShell (Windows shell discovery)", () => {
 
     expect(findWindowsShell()).toBe("pwsh.exe");
     expect(execFileSyncMock).toHaveBeenCalledTimes(1);
-    expect(execFileSyncMock).toHaveBeenCalledWith("where", ["pwsh.exe"], {
+    expect(execFileSyncMock).toHaveBeenCalledWith(WHERE, ["pwsh.exe"], {
       stdio: "ignore",
       timeout: 3000,
       windowsHide: true,
     });
+  });
+
+  it("returns the absolute path a PATH directory holds for the shell where found", () => {
+    const pwsh = "C:\\Program Files\\PowerShell\\7\\pwsh.exe";
+    execFileSyncMock.mockReturnValue(Buffer.from("") as never);
+    resolveWindowsExecutableMock.mockImplementation((name: string) =>
+      name === "pwsh.exe" ? pwsh : name
+    );
+
+    expect(findWindowsShell()).toBe(pwsh);
+    expect(resolveWindowsExecutableMock).toHaveBeenCalledWith("pwsh.exe");
   });
 
   it("probes the shell once, however many terminals launch", () => {
@@ -210,6 +231,7 @@ describe("getDefaultShell", () => {
 
   beforeEach(() => {
     execFileSyncMock.mockReset();
+    resolveWindowsExecutableMock.mockImplementation((name: string) => name);
     resetWindowsShellCache();
   });
 
@@ -232,7 +254,7 @@ describe("getDefaultShell", () => {
 
     expect(getDefaultShell()).toBe("pwsh.exe");
     // Proves the win32 short-circuit: the POSIX $SHELL branch never runs.
-    expect(execFileSyncMock).toHaveBeenCalledWith("where", ["pwsh.exe"], expect.anything());
+    expect(execFileSyncMock).toHaveBeenCalledWith(WHERE, ["pwsh.exe"], expect.anything());
   });
 
   it("returns process.env.SHELL when set on POSIX", () => {

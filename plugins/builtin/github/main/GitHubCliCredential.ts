@@ -8,6 +8,7 @@ import type {
   CredentialImportUnavailable,
 } from "../../../../shared/types/forge.js";
 import { raceAbort } from "../../../../electron/utils/raceAbort.js";
+import { executableForSpawn } from "../../../../electron/utils/windowsExecutable.js";
 import { findMissingGitHubScopes } from "../shared/credentialScopes.js";
 import { validateGitHubToken } from "./GitHubToken.js";
 
@@ -129,11 +130,12 @@ export async function readGhToken(signal?: AbortSignal): Promise<GhTokenRead> {
     };
 
     try {
+      const env = buildGhCredentialEnv();
       execFile(
-        "gh",
+        executableForSpawn("gh", env),
         ["auth", "token", "--hostname", GH_HOSTNAME],
         {
-          env: buildGhCredentialEnv(),
+          env,
           encoding: "utf8",
           maxBuffer: GH_TOKEN_MAX_BUFFER_BYTES,
           signal: controller.signal,

@@ -57,7 +57,8 @@ const { defaultExecFileImpl, pathFixtureLookup } = vi.hoisted(() => ({
       (a): a is (err: unknown, stdout?: string) => void => typeof a === "function"
     );
     const [file, fileArgs, options] = args;
-    if (file === "where") {
+    // Windows runs the absolute System32 where.exe.
+    if (typeof file === "string" && /^[A-Za-z]:\\.*\\System32\\where\.exe$/i.test(file)) {
       queueMicrotask(() => {
         try {
           const out = execFileSync(file, fileArgs as readonly string[], options as never) as
@@ -415,7 +416,7 @@ describe("CliAvailabilityService", () => {
         expect(result.claude).toBe("unauthenticated");
         expect(service.getDetails()?.claude?.resolvedPath).toBe(expectedClaudePath);
         expect(mockedExecFileSync).not.toHaveBeenCalledWith(
-          "where",
+          expect.stringMatching(/where\.exe$/i),
           ["claude"],
           expect.any(Object)
         );
@@ -471,7 +472,7 @@ describe("CliAvailabilityService", () => {
         await service.checkAvailability();
 
         expect(mockedExecFile).toHaveBeenCalledWith(
-          "where",
+          expect.stringMatching(/^[A-Za-z]:\\.*\\System32\\where\.exe$/i),
           expect.any(Array),
           expect.objectContaining({ timeout: expect.any(Number), windowsHide: true }),
           expect.any(Function)
@@ -1938,7 +1939,7 @@ describe("CliAvailabilityService", () => {
       // (via `npm config get prefix`) fails under the default mock, so WSL
       // *is* reached for Codex. Verify via the file arg that no NON-Codex
       // agent triggered wsl.exe.
-      const wslCalls = mockedExecFile.mock.calls.filter((c) => c[0] === "wsl.exe");
+      const wslCalls = mockedExecFile.mock.calls.filter((c) => /wsl\.exe$/i.test(String(c[0])));
       // Two expected calls: --list (to enumerate distros) + one -d probe.
       // Those fire because Codex has supportsWsl. No agent besides Codex
       // should produce wsl.exe invocations.

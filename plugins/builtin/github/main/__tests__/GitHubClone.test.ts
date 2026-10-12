@@ -22,6 +22,11 @@ vi.mock("../GitHubRepoContext.js", () => ({
 }));
 
 import { cloneCapability } from "../GitHubClone.js";
+import { executableForSpawn } from "../../../../../electron/utils/windowsExecutable.js";
+
+// On Windows gh is spawned by its absolute PATH location; deriving the expected
+// command the same way keeps these assertions correct on every host.
+const GH = executableForSpawn("gh");
 
 class FakeChildProcess extends EventEmitter {
   pid = 12345;
@@ -65,7 +70,7 @@ describe("GitHubClone — probeAuth", () => {
     setAuthResult(null);
     await expect(cloneCapability.probeAuth()).resolves.toEqual({ authenticated: true });
     expect(childProcessMock.execFile).toHaveBeenCalledWith(
-      "gh",
+      GH,
       ["auth", "status"],
       expect.objectContaining({ windowsHide: true }),
       expect.any(Function)
@@ -104,7 +109,7 @@ describe("GitHubClone — cloneRepository", () => {
     await cloneCapability.cloneRepository!("https://github.com/owner/repo", TARGET_DIR, {});
 
     expect(childProcessMock.spawn).toHaveBeenCalledWith(
-      "gh",
+      GH,
       expect.arrayContaining(["repo", "clone", "owner/repo"]),
       expect.objectContaining({ cwd: path.dirname(TARGET_DIR), windowsHide: true })
     );

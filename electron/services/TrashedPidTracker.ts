@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { resilientAtomicWriteFileSync } from "../utils/fs.js";
 import { killWindowsProcessTree } from "../utils/windowsTreeKill.js";
+import { windowsSystemTool } from "../utils/windowsExecutable.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -23,7 +24,7 @@ async function getProcessStartTime(pid: number): Promise<string | null> {
   try {
     if (process.platform === "win32") {
       const { stdout } = await execFileAsync(
-        "powershell.exe",
+        windowsSystemTool("powershell.exe"),
         [
           "-NoProfile",
           "-NonInteractive",

@@ -3,6 +3,7 @@ import { promises as fsPromises } from "fs";
 import { isAbsolute, join as pathJoin } from "path";
 import { logWarn } from "./logger.js";
 import { Cache } from "./cache.js";
+import { executableForSpawn } from "./windowsExecutable.js";
 
 // worktreePath → gitDir/commonDir is immutable for a live worktree and all
 // removal/switch paths invalidate explicitly via clearGitDirCache /
@@ -143,7 +144,7 @@ function execGit(args: string[], cwd: string, timeout: number): Promise<string> 
     // "let Windows decide" terminal host escalates an unhidden spawn into a
     // full Windows Terminal window (#12042).
     execFile(
-      "git",
+      executableForSpawn("git"),
       args,
       {
         cwd,

@@ -6,6 +6,7 @@ import * as nodeFs from "fs";
 import { CHANNELS } from "../channels.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
 import { findOnPath } from "../../utils/findOnPath.js";
+import { windowsSystemTool } from "../../utils/windowsExecutable.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -382,7 +383,10 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
     try {
       const { execFile } = await import("child_process");
       const { promisify } = await import("util");
-      await promisify(execFile)("where", [command], { timeout: 5_000, windowsHide: true });
+      await promisify(execFile)(windowsSystemTool("where.exe"), [command], {
+        timeout: 5_000,
+        windowsHide: true,
+      });
       return true;
     } catch {
       return false;

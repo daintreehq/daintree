@@ -16,6 +16,7 @@ import {
   getResourceProfileService,
   getWorkspaceClientRef,
 } from "../../window/serviceRefs.js";
+import { executableForSpawn } from "../../utils/windowsExecutable.js";
 import { createForgeObserver } from "./hostForges.js";
 import type { HostSampleSources, ObservedAgents } from "./sampler.js";
 
@@ -106,7 +107,8 @@ export async function observeAgents(): Promise<ObservedAgents | null> {
  */
 /** Working trees git lists for the repository at `path`, its main one included; null when git can't say. */
 async function gitWorktreeCount(path: string): Promise<number | null> {
-  const out = await runCommand("git", ["-C", path, "worktree", "list", "--porcelain"]);
+  const git = executableForSpawn("git");
+  const out = await runCommand(git, ["-C", path, "worktree", "list", "--porcelain"]);
   if (out === null) return null;
   const entries = out.split("\n\n").filter((entry) => entry.startsWith("worktree "));
   // A bare main repository has no working tree of its own.

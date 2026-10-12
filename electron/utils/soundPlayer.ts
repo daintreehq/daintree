@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from "child_process";
 import { existsSync } from "fs";
+import { windowsSystemTool } from "./windowsExecutable.js";
 
 export interface SoundHandle {
   cancel(): void;
@@ -23,7 +24,7 @@ export function playSound(filePath: string, volume = 1.0): SoundHandle {
     } else if (process.platform === "win32") {
       // PowerShell SoundPlayer has no volume API — volume param ignored
       const escapedPath = filePath.replace(/'/g, "''");
-      proc = spawnSilent("powershell", [
+      proc = spawnSilent(windowsSystemTool("powershell.exe"), [
         "-NoProfile",
         "-NonInteractive",
         "-Command",

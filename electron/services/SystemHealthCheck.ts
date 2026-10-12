@@ -4,6 +4,7 @@ import {
   isWindowsShellShim,
   pickWindowsLaunchable,
 } from "../utils/windowsCliSpawn.js";
+import { executableForSpawn, windowsSystemTool } from "../utils/windowsExecutable.js";
 import { promisify } from "util";
 import * as path from "path";
 import * as semver from "semver";
@@ -160,7 +161,8 @@ async function runVersionCommand(
   if (useShell && !isShellInertInvocation(command, versionArgs)) {
     throw new Error(`Refusing to run "${command}" through a shell: unsafe version arguments`);
   }
-  const { stdout } = await execFileAsync(command, versionArgs, {
+  const file = useShell ? command : executableForSpawn(command);
+  const { stdout } = await execFileAsync(file, versionArgs, {
     encoding: "utf8",
     timeout: CHECK_TIMEOUT_MS,
     ...(useShell ? { shell: true, windowsHide: true } : {}),
@@ -179,7 +181,7 @@ async function resolveOnPath(command: string): Promise<string | null> {
     return findOnPath(command, { timeoutMs: CHECK_TIMEOUT_MS });
   }
   try {
-    const { stdout } = await execFileAsync("where", [command], {
+    const { stdout } = await execFileAsync(windowsSystemTool("where.exe"), [command], {
       encoding: "utf8",
       timeout: CHECK_TIMEOUT_MS,
     });

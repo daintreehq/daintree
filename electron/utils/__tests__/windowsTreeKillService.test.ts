@@ -14,6 +14,9 @@ import {
   type FakeTreeKillHelper,
 } from "./helpers/fakeTreeKillHelper.js";
 
+// Started by absolute path under %SystemRoot%, never resolved from a working directory.
+const POWERSHELL = /^[A-Za-z]:\\.*\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/i;
+
 const BUDGET: TreeKillBudget = { timeoutMs: 5000, waitMs: 1500 };
 
 function target(pid: number): NormalizedTreeKillTarget {
@@ -101,7 +104,7 @@ describe("WindowsTreeKillService", () => {
       await settleIo();
 
       expect(spawnMock).toHaveBeenCalledTimes(1);
-      expect(spawnMock.mock.calls[0][0]).toBe("powershell.exe");
+      expect(spawnMock.mock.calls[0][0]).toMatch(POWERSHELL);
       expect(spawnMock.mock.calls[0][1]).toEqual(engine.serverArgs);
       expect(helpers[0].requests).toHaveLength(1);
       expect(helpers[0].rootsOf(0)).toEqual([101, 102, 103]);

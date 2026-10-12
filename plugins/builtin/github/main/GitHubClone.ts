@@ -9,6 +9,7 @@ import {
   killWindowsProcessTreeInBackground,
   liveChildTreeTarget,
 } from "../../../../electron/utils/windowsTreeKill.js";
+import { executableForSpawn } from "../../../../electron/utils/windowsExecutable.js";
 import type {
   CloneAuthProbe,
   CloneCapability,
@@ -105,11 +106,12 @@ async function probeGhAuth(externalSignal?: AbortSignal): Promise<CloneAuthProbe
     }
     const timer = setTimeout(() => controller.abort(), GH_AUTH_PROBE_TIMEOUT_MS);
 
+    const env = { ...process.env, ...GH_NON_INTERACTIVE_ENV };
     execFile(
-      "gh",
+      executableForSpawn("gh", env),
       ["auth", "status"],
       {
-        env: { ...process.env, ...GH_NON_INTERACTIVE_ENV },
+        env,
         signal: controller.signal,
         windowsHide: true,
       },
@@ -146,9 +148,10 @@ async function cloneWithGh(
   ];
 
   const isWin = process.platform === "win32";
-  const child: ChildProcessWithoutNullStreams = spawn("gh", args, {
+  const env = { ...process.env, ...GH_NON_INTERACTIVE_ENV };
+  const child: ChildProcessWithoutNullStreams = spawn(executableForSpawn("gh", env), args, {
     cwd: path.dirname(targetDir),
-    env: { ...process.env, ...GH_NON_INTERACTIVE_ENV },
+    env,
     detached: !isWin,
     windowsHide: true,
   });

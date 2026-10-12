@@ -1,11 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import path from "node:path";
+import { executableForSpawn } from "../../../utils/windowsExecutable.js";
 
 // On Windows, `path.resolve("/Users/foo/my repo")` prepends the current
 // drive letter ("C:\Users\foo\my repo") and the handler normalizes
 // backslashes to forward slashes. Deriving the expected value the same way
 // keeps assertions correct on both POSIX and Windows runners.
 const resolvedSlashed = (p: string): string => path.resolve(p).replace(/\\/g, "/");
+
+// On Windows the git spawn is by absolute PATH location; deriving the expected
+// command the same way keeps these assertions correct on every host.
+const GIT = executableForSpawn("git");
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -95,7 +100,7 @@ describe("git:mark-safe-directory handler", () => {
     const handler = getHandler("git:mark-safe-directory");
     await handler(null, "/Users/foo/my repo");
     expect(execFileMock).toHaveBeenCalledWith(
-      "git",
+      GIT,
       ["config", "--global", "--add", "safe.directory", resolvedSlashed("/Users/foo/my repo")],
       expect.objectContaining({ env: expect.objectContaining({ LC_ALL: "C" }) }),
       expect.any(Function)
@@ -119,7 +124,7 @@ describe("git:mark-safe-directory handler", () => {
     const handler = getHandler("git:mark-safe-directory");
     await handler(null, "/Users/foo/link-to-repo");
     expect(execFileMock).toHaveBeenCalledWith(
-      "git",
+      GIT,
       ["config", "--global", "--add", "safe.directory", "/Users/foo/real-repo"],
       expect.any(Object),
       expect.any(Function)
@@ -132,7 +137,7 @@ describe("git:mark-safe-directory handler", () => {
     const handler = getHandler("git:mark-safe-directory");
     await handler(null, "/Users/foo/missing-repo");
     expect(execFileMock).toHaveBeenCalledWith(
-      "git",
+      GIT,
       ["config", "--global", "--add", "safe.directory", resolvedSlashed("/Users/foo/missing-repo")],
       expect.any(Object),
       expect.any(Function)
@@ -149,7 +154,7 @@ describe("git:mark-safe-directory handler", () => {
     // the backslash → forward-slash normalization runs.
     await handler(null, "/tmp/win-style");
     expect(execFileMock).toHaveBeenCalledWith(
-      "git",
+      GIT,
       ["config", "--global", "--add", "safe.directory", "C:/Users/foo/repo"],
       expect.any(Object),
       expect.any(Function)

@@ -1,5 +1,6 @@
 import { execFile, spawnSync } from "child_process";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { windowsSystemTool } from "./windowsExecutable.js";
 import {
   identityMicros,
   isKillableWindowsPid,
@@ -775,7 +776,7 @@ function runHelperSync(
   let failure: string | null = null;
   let timedOut = false;
   try {
-    const result = spawnSync("powershell.exe", HELPER_ARGS, {
+    const result = spawnSync(windowsSystemTool("powershell.exe"), HELPER_ARGS, {
       ...helperOptions(encodeTreeKillInput(targets, waitMs), timeoutMs),
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -803,7 +804,7 @@ function runHelper(
   return new Promise((resolve) => {
     try {
       const child = execFile(
-        "powershell.exe",
+        windowsSystemTool("powershell.exe"),
         HELPER_ARGS,
         helperOptions(encodeTreeKillInput(targets, waitMs), timeoutMs),
         (error, stdout, stderr) => {

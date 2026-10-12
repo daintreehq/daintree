@@ -223,6 +223,7 @@ import { refreshWindowsPathForSpawn } from "../../../setup/windowsPath.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { quoteCommandArg, isPowerShellShell } from "../../../../shared/utils/shellEscape.js";
 import { buildWindowsAgentLaunchScript } from "../../../utils/windowsAgentLaunch.js";
+import { windowsSystemTool } from "../../../utils/windowsExecutable.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../../../shared/utils/recipeSanitizer.js";
 import { buildCommandLaunchShell } from "./commandLaunch.js";
 
@@ -560,7 +561,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // user's plain-terminal shell is cmd.exe or Git Bash.
     const quotingShell =
       process.platform === "win32" && launchAgentId && !isPowerShellShell(requestedShell)
-        ? `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+        ? windowsSystemTool("powershell.exe")
         : requestedShell;
 
     // Help-assistant launches arrive with a pre-provisioned session dir that

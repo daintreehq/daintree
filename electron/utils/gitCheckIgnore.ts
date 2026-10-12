@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { getHardenedGitConfig, buildHardenedGitEnv, GIT_BLOCK_TIMEOUT_MS } from "./hardenedGit.js";
+import { executableForSpawn } from "./windowsExecutable.js";
 
 /**
  * Direct-spawn wrapper around `git check-ignore --stdin -z`.
@@ -69,7 +70,7 @@ function runGitTokens(cwd: string, gitArgs: string[], options: RunOptions): Prom
   const args = [...configArgs, ...gitArgs];
 
   return new Promise<Set<string>>((resolve, reject) => {
-    const child = spawn("git", args, {
+    const child = spawn(executableForSpawn("git", env, platform), args, {
       cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],

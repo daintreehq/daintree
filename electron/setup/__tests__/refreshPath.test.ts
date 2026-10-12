@@ -168,10 +168,10 @@ describe("refreshPath", () => {
     const { refreshPath } = await import("../environment.js");
     await refreshPath();
 
-    // Verify reg query was called for both HKLM and HKCU
+    // Verify reg query was called for both HKLM and HKCU, by absolute path
     expect(execFileMock).toHaveBeenCalledTimes(2);
     expect(execFileMock).toHaveBeenCalledWith(
-      "reg",
+      expect.stringMatching(/^[A-Za-z]:\\.*\\System32\\reg\.exe$/),
       expect.arrayContaining(["query"]),
       expect.any(Object),
       expect.any(Function)

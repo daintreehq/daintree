@@ -35,6 +35,17 @@ function mockPathLookup(resolve: (command: string) => string | null) {
 type ExecCallback = (err: Error | null, result?: { stdout: string; stderr: string }) => void;
 
 /**
+ * The tool a spawn ran, whatever path it was given: on Windows `where` and the
+ * probed tools are started by absolute path (`C:\Windows\System32\where.exe`).
+ */
+function toolName(cmd: unknown): string {
+  return String(cmd)
+    .split(/[\\/]/)
+    .pop()!
+    .replace(/\.exe$/i, "");
+}
+
+/**
  * Drives the promisified `execFile` from a plain (command, args) -> stdout
  * function. Throwing from the handler stands in for a nonzero exit, which is
  * the distinction the availability logic now turns on.
@@ -47,7 +58,7 @@ function mockExec(handler: (cmd: string, args: string[]) => string) {
     callback: ExecCallback
   ) => {
     try {
-      callback(null, { stdout: handler(cmd, args ?? []), stderr: "" });
+      callback(null, { stdout: handler(toolName(cmd), args ?? []), stderr: "" });
     } catch (err) {
       callback(err as Error);
     }
@@ -365,9 +376,9 @@ describe("runSystemHealthCheck", () => {
           .map((s) => s.command ?? s.tool)
           .sort()
       );
-      expect(mockedExecFile.mock.calls.some((c) => c[0] === "which" || c[0] === "where")).toBe(
-        false
-      );
+      expect(
+        mockedExecFile.mock.calls.some((c) => ["which", "where"].includes(toolName(c[0])))
+      ).toBe(false);
     } finally {
       Object.defineProperty(process, "platform", originalPlatform);
     }
@@ -381,7 +392,8 @@ describe("runSystemHealthCheck", () => {
 
       await runSystemHealthCheck();
 
-      expect(mockedExecFile.mock.calls.some((c) => c[0] === "where")).toBe(true);
+      const where = /^[A-Za-z]:\\.*\\System32\\where\.exe$/i;
+      expect(mockedExecFile.mock.calls.some((c) => where.test(String(c[0])))).toBe(true);
       expect(mockedFindOnPath).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(process, "platform", originalPlatform);
@@ -523,7 +535,7 @@ describe("runSystemHealthCheck", () => {
 
     /** Options the version command was invoked with, per binary. */
     function versionCallOptions(bin: string): Record<string, unknown> | undefined {
-      const call = mockedExecFile.mock.calls.find((c) => c[0] === bin);
+      const call = mockedExecFile.mock.calls.find((c) => toolName(c[0]) === bin);
       return call?.[2] as Record<string, unknown> | undefined;
     }
 
@@ -565,7 +577,7 @@ describe("runSystemHealthCheck", () => {
       const result = await runSystemHealthCheck();
 
       expect(result.prerequisites.find((p) => p.tool === "git")?.available).toBe(false);
-      expect(mockedExecFile.mock.calls.filter((c) => c[0] === "git")).toHaveLength(1);
+      expect(mockedExecFile.mock.calls.filter((c) => toolName(c[0]) === "git")).toHaveLength(1);
     });
 
     it("only shells out for a shim when every argument is inert", async () => {
@@ -630,7 +642,7 @@ describe("runSystemHealthCheck", () => {
         const git = result.prerequisites.find((p) => p.tool === "git");
         expect(git?.available).toBe(false);
         expect(git?.unavailableReason).toBe("macos-command-line-tools-missing");
-        expect(mockedExecFile.mock.calls.some((c) => c[0] === "git")).toBe(false);
+        expect(mockedExecFile.mock.calls.some((c) => toolName(c[0]) === "git")).toBe(false);
       }
     );
 

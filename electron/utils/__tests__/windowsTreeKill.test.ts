@@ -39,6 +39,9 @@ import {
 import { creationTimeMicros, IDENTITY_TOLERANCE_MICROS } from "../windowsProcessTree.js";
 import { createFakeTreeKillHelper, settleIo } from "./helpers/fakeTreeKillHelper.js";
 
+// Started by absolute path under %SystemRoot%, never resolved from a working directory.
+const POWERSHELL = /^[A-Za-z]:\\.*\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/i;
+
 // Far above any real PID on the test host, so nothing here can name a live process.
 const ROOT = 7_200_000;
 const CHILD = 7_200_001;
@@ -514,7 +517,7 @@ describe("Windows tree kill", () => {
 
       expect(spawnSyncMock).toHaveBeenCalledTimes(2);
       const [first, second] = spawnSyncMock.mock.calls;
-      expect(first[0]).toBe("powershell.exe");
+      expect(first[0]).toMatch(POWERSHELL);
       // Same script for different targets: the PIDs travel only as input.
       expect(second[1]).toEqual(first[1]);
       expect(String(first[1])).not.toContain(String(ROOT));
@@ -708,7 +711,7 @@ describe("Windows tree kill", () => {
 
       expect(spawnMock).toHaveBeenCalledTimes(1);
       const [file, args, options] = spawnMock.mock.calls[0];
-      expect(file).toBe("powershell.exe");
+      expect(file).toMatch(POWERSHELL);
       const encoded = (args as string[])[(args as string[]).indexOf("-EncodedCommand") + 1];
       expect(Buffer.from(encoded, "base64").toString("utf16le")).toBe(TREE_KILL_SERVER_SCRIPT);
       expect(String(args)).not.toContain(String(ROOT));
@@ -775,7 +778,7 @@ describe("Windows tree kill", () => {
         const result = await killWindowsProcessTree(ROOT, { timeoutMs: 3000 });
 
         expect(execFileMock).toHaveBeenCalledWith(
-          "powershell.exe",
+          expect.stringMatching(POWERSHELL),
           expect.any(Array),
           expect.objectContaining({ windowsHide: true, timeout: 3000 }),
           expect.any(Function)

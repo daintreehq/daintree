@@ -25,4 +25,16 @@ describe("playSound", () => {
       expect.objectContaining({ windowsHide: true }),
     ]);
   });
+
+  it("starts Windows PowerShell by its absolute System32 path", () => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    playSound("/sounds/chime.wav");
+    expect(spawnMock.mock.calls[0]).toEqual([
+      expect.stringMatching(
+        /^[A-Za-z]:\\.*\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/i
+      ),
+      expect.any(Array),
+      expect.any(Object),
+    ]);
+  });
 });

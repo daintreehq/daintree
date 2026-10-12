@@ -21,6 +21,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { getDefaultWslDistro } from "../utils/wsl.js";
 import { findAllOnPath } from "../utils/findOnPath.js";
+import { windowsSystemTool } from "../utils/windowsExecutable.js";
 import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("main:CliAvailabilityService");
@@ -644,7 +645,7 @@ export class CliAvailabilityService {
   private probeViaWhere(command: string): Promise<ProbeResult> {
     return new Promise((resolve) => {
       execFile(
-        "where",
+        windowsSystemTool("where.exe"),
         [command],
         {
           timeout: CliAvailabilityService.WHICH_TIMEOUT_MS,
@@ -815,7 +816,7 @@ export class CliAvailabilityService {
 
     return new Promise((resolve) => {
       execFile(
-        "wsl.exe",
+        windowsSystemTool("wsl.exe"),
         ["-d", distro, "-e", command, "--version"],
         {
           timeout: CliAvailabilityService.WSL_PROBE_TIMEOUT_MS,

@@ -44,6 +44,7 @@ import {
   _setUserSshCommandForTesting,
 } from "../hardenedGit.js";
 import { simpleGit } from "simple-git";
+import { resetWindowsExecutableCache } from "../windowsExecutable.js";
 
 // The authenticated profile honours the user's own core.sshCommand; keep the
 // developer's git config out of these tests (hardenedGit.userSsh.test.ts covers it).
@@ -857,7 +858,7 @@ describe("createWslHardenedGit", () => {
     );
   });
 
-  it("sets binary to wsl.exe + git two-tuple", async () => {
+  it("sets binary to the System32 wsl.exe + git two-tuple", async () => {
     await createWslHardenedGit({
       distro: "Ubuntu",
       uncPath: "\\\\wsl$\\Ubuntu\\home\\user\\proj",
@@ -865,7 +866,12 @@ describe("createWslHardenedGit", () => {
     });
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(options.binary).toEqual(["wsl.exe", "git"]);
+    expect(options.binary).toEqual([
+      expect.stringMatching(/^[A-Za-z]:\\.*\\System32\\wsl\.exe$/i),
+      "git",
+    ]);
+    // A path simple-git accepts as-is needs no relaxed binary check.
+    expect(options.unsafe.allowUnsafeCustomBinary).toBeUndefined();
   });
 
   it("carries the same non-path hardening as the native hardened profile", async () => {
@@ -1411,5 +1417,95 @@ describe("buildContinueEnv", () => {
     expect(env.GIT_ASKPASS).toBeUndefined();
     expect(env.GIT_EDITOR).toBe("true");
     expect(env.GIT_MERGE_AUTOEDIT).toBe("no");
+  });
+});
+
+describe("native git binary on Windows", () => {
+  const originalPath = process.env.PATH;
+  let root: string;
+
+  function installGit(dirName: string): string {
+    const dir = path.join(root, dirName);
+    fs.mkdirSync(dir, { recursive: true });
+    const git = path.join(dir, "git.exe");
+    fs.writeFileSync(git, "");
+    process.env.PATH = dir;
+    return git;
+  }
+
+  function lastOptions() {
+    const calls = (simpleGit as ReturnType<typeof vi.fn>).mock.calls;
+    return calls[calls.length - 1][0];
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetWindowsExecutableCache();
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daintree-git-bin-")));
+  });
+
+  afterEach(() => {
+    process.env.PATH = originalPath;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("hands simple-git the absolute git from PATH, within its own character rule", async () => {
+    const git = installGit("tools");
+
+    await createHardenedGit("/test/repo", undefined, "win32");
+
+    expect(lastOptions().binary).toBe(git);
+    expect(lastOptions().unsafe.allowUnsafeCustomBinary).toBeUndefined();
+  });
+
+  it("relaxes only the binary check for a resolved path with a space, without its warning", async () => {
+    const git = installGit("Program Files/Git/cmd");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    (simpleGit as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+      console.warn(
+        "Invalid value supplied for custom binary, restricted characters must be removed"
+      );
+      console.warn("unrelated warning");
+      return mockGitInstance;
+    });
+
+    try {
+      await createHardenedGit("/test/repo", undefined, "win32");
+
+      expect(lastOptions().binary).toBe(git);
+      expect(lastOptions().unsafe).toEqual(
+        expect.objectContaining({ allowUnsafeCustomBinary: true, allowUnsafeHooksPath: true })
+      );
+      expect(warn.mock.calls).toEqual([["unrelated warning"]]);
+      // The filter is gone once the instance is built.
+      console.warn("Invalid value supplied for custom binary");
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("uses the resolved git for the authenticated and background-fetch profiles", async () => {
+    const git = installGit("tools");
+
+    await createAuthenticatedGit("/test/repo", { platform: "win32" });
+    expect(lastOptions().binary).toBe(git);
+
+    await createBackgroundFetchGit("/test/repo", {
+      signal: new AbortController().signal,
+      platform: "win32",
+    });
+    expect(lastOptions().binary).toBe(git);
+  });
+
+  it("keeps simple-git's bare git when PATH has none, and off Windows", async () => {
+    process.env.PATH = path.join(root, "empty");
+    await createHardenedGit("/test/repo", undefined, "win32");
+    expect("binary" in lastOptions()).toBe(false);
+
+    installGit("tools");
+    await createHardenedGit("/test/repo", undefined, "darwin");
+    expect("binary" in lastOptions()).toBe(false);
+    expect(lastOptions().unsafe.allowUnsafeCustomBinary).toBeUndefined();
   });
 });

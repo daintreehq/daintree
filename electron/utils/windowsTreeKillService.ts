@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "child_process";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { NormalizedTreeKillTarget, WindowsTreeKillResult } from "./windowsTreeKill.js";
+import { windowsSystemTool } from "./windowsExecutable.js";
 
 /**
  * Line that ends one run's report, suffixed with the id of the request it
@@ -361,11 +362,15 @@ export class WindowsTreeKillService {
   }
 
   private launch(): ChildProcess {
-    const child = this.spawnHelper("powershell.exe", [...this.engine.serverArgs], {
-      windowsHide: true,
-      shell: false,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const child = this.spawnHelper(
+      windowsSystemTool("powershell.exe"),
+      [...this.engine.serverArgs],
+      {
+        windowsHide: true,
+        shell: false,
+        stdio: ["pipe", "pipe", "pipe"],
+      }
+    );
     this.child = child;
 
     child.stdout?.setEncoding("utf8");

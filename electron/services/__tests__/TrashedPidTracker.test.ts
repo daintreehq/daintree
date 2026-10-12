@@ -240,6 +240,14 @@ describe("TrashedPidTracker", () => {
         );
         // The PID is not pinned by any handle here; only the helper may end it.
         expect(killSpy).not.toHaveBeenCalled();
+        // The start-time probe runs PowerShell by absolute path.
+        expect(mockExecFileAsync).toHaveBeenCalledWith(
+          expect.stringMatching(
+            /^[A-Za-z]:\\.*\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/i
+          ),
+          expect.any(Array),
+          expect.any(Object)
+        );
       } finally {
         Object.defineProperty(process, "platform", original);
       }

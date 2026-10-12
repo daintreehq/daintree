@@ -11,6 +11,7 @@ import {
 } from "path";
 import { getGitDir } from "../utils/gitUtils.js";
 import { getGitLocaleEnv } from "../utils/hardenedGit.js";
+import { executableForSpawn } from "../utils/windowsExecutable.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { NOTE_PATH } from "./types.js";
 
@@ -38,7 +39,7 @@ export function probeGitLfsAvailable(): Promise<boolean> {
     };
 
     const child = execFile(
-      "git",
+      executableForSpawn("git"),
       ["lfs", "version"],
       {
         timeout: LFS_PROBE_TIMEOUT_MS,

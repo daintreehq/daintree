@@ -2,10 +2,16 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "path";
-import type { SimpleGit, SimpleGitProgressEvent } from "simple-git";
+import type {
+  SimpleGit,
+  SimpleGitFactory,
+  SimpleGitOptions,
+  SimpleGitProgressEvent,
+} from "simple-git";
 import { promisify } from "node:util";
 import { tightenDirPermissionsSync } from "./fs.js";
 import { detectWslPath } from "./wsl.js";
+import { executableForSpawn, windowsSystemTool } from "./windowsExecutable.js";
 
 // Deferred import keeps simple-git out of the eager pre-paint main bundle —
 // esbuild's `splitting: true` emits it as a lazy chunk (issue #10395). Kicked
@@ -337,6 +343,56 @@ export function validateCwd(cwd: unknown): asserts cwd is string {
 
 export const GIT_BLOCK_TIMEOUT_MS = 30_000;
 
+// simple-git's own rule for a `binary` value (custom-binary.plugin.ts, 3.36.0):
+// an optional drive letter, then letters, digits and `/ . \ _ ~ -` only.
+const SIMPLE_GIT_BINARY_CHARACTERS = /^([a-z]:)?([a-z0-9/.\\_~-]+)$/i;
+const SIMPLE_GIT_BINARY_WARNING = "Invalid value supplied for custom binary";
+
+type SimpleGitConfig = Omit<Partial<SimpleGitOptions>, "binary" | "unsafe">;
+
+/** On Windows, git's absolute path from PATH; elsewhere, or when PATH has none, simple-git's bare `git`. */
+function nativeGitBinary(platform: NodeJS.Platform): string | undefined {
+  const git = executableForSpawn("git", process.env, platform);
+  return git === "git" ? undefined : git;
+}
+
+/**
+ * Builds the instance with an explicit `binary`, so on Windows git is never
+ * looked up in the repository it runs in. simple-git refuses a binary outside
+ * the characters above unless `allowUnsafeCustomBinary` is set, and the default
+ * install (`C:\Program Files\Git\cmd\git.exe`) has a space, so the flag
+ * is set for exactly those values: absolute paths resolved here from PATH or
+ * `%SystemRoot%`, never taken from input, and spawned without a shell.
+ * simple-git still prints a warning for each instance it accepts that way,
+ * which the workspace host would forward to the log on every git call, so that
+ * one line is dropped while the instance is built.
+ */
+function buildSimpleGit(
+  simpleGit: SimpleGitFactory,
+  options: SimpleGitConfig,
+  binary?: string | [string, string]
+): SimpleGit {
+  if (binary === undefined) return simpleGit({ ...options, unsafe: UNSAFE_FLAGS });
+  const parts = typeof binary === "string" ? [binary] : binary;
+  if (parts.every((part) => SIMPLE_GIT_BINARY_CHARACTERS.test(part))) {
+    return simpleGit({ ...options, binary, unsafe: UNSAFE_FLAGS });
+  }
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    if (typeof args[0] === "string" && args[0].startsWith(SIMPLE_GIT_BINARY_WARNING)) return;
+    warn.apply(console, args);
+  };
+  try {
+    return simpleGit({
+      ...options,
+      binary,
+      unsafe: { ...UNSAFE_FLAGS, allowUnsafeCustomBinary: true },
+    });
+  } finally {
+    console.warn = warn;
+  }
+}
+
 /**
  * Locale env vars passed to every git invocation so non-ASCII paths survive
  * iconv on Windows (where the default ANSI codepage rejects multi-byte
@@ -434,13 +490,16 @@ export async function createHardenedGit(
   platform: NodeJS.Platform = process.platform
 ): Promise<SimpleGit> {
   const { simpleGit } = await simpleGitModule;
-  return simpleGit({
-    baseDir: cwd,
-    config: [...getHardenedGitConfig(platform)],
-    timeout: { block: GIT_BLOCK_TIMEOUT_MS },
-    ...(signal ? { abort: signal } : {}),
-    unsafe: UNSAFE_FLAGS,
-  }).env(buildHardenedGitEnv(platform));
+  return buildSimpleGit(
+    simpleGit,
+    {
+      baseDir: cwd,
+      config: [...getHardenedGitConfig(platform)],
+      timeout: { block: GIT_BLOCK_TIMEOUT_MS },
+      ...(signal ? { abort: signal } : {}),
+    },
+    nativeGitBinary(platform)
+  ).env(buildHardenedGitEnv(platform));
 }
 
 export interface WslGitInvocation {
@@ -469,7 +528,7 @@ export interface WslGitInvocation {
  *
  * Implementation note: simple-git's `binary` option accepts a 1-2 element
  * tuple. The 2-element form prepends `binary[1]` as a single positional arg
- * to every spawn, so `["wsl.exe", "git"]` produces `wsl.exe git <args>` and
+ * to every spawn, so `[<System32>\wsl.exe, "git"]` produces `wsl.exe git <args>` and
  * routes through the WSL default distro. Spaces are forbidden in the second
  * element, so a `-d <distro>` selector cannot be passed via this path —
  * non-default distros are filtered out before reaching this factory by the
@@ -513,18 +572,20 @@ export async function createWslHardenedGit(
   }
 
   const { simpleGit } = await simpleGitModule;
-  return simpleGit({
-    baseDir: uncPath,
-    binary: ["wsl.exe", "git"],
-    // The Windows-side hooks directory is not addressable from inside the
-    // distro, so this route carries its own POSIX path (see
-    // WSL_GIT_HOOKS_PATH). Non-path hardening is shared with the native
-    // profile.
-    config: [...HARDENED_GIT_CONFIG_BASE, `core.hooksPath=${WSL_GIT_HOOKS_PATH}`],
-    timeout: { block: GIT_BLOCK_TIMEOUT_MS },
-    ...(signal ? { abort: signal } : {}),
-    unsafe: UNSAFE_FLAGS,
-  }).env({
+  return buildSimpleGit(
+    simpleGit,
+    {
+      baseDir: uncPath,
+      // The Windows-side hooks directory is not addressable from inside the
+      // distro, so this route carries its own POSIX path (see
+      // WSL_GIT_HOOKS_PATH). Non-path hardening is shared with the native
+      // profile.
+      config: [...HARDENED_GIT_CONFIG_BASE, `core.hooksPath=${WSL_GIT_HOOKS_PATH}`],
+      timeout: { block: GIT_BLOCK_TIMEOUT_MS },
+      ...(signal ? { abort: signal } : {}),
+    },
+    [windowsSystemTool("wsl.exe"), "git"]
+  ).env({
     ...getSanitizedProcessEnv(),
     LC_CTYPE: "C.UTF-8",
     LC_ALL: "",
@@ -602,12 +663,13 @@ export function withNonInteractiveSshOptions(command: string): string | null {
 async function readUserSshCommand(): Promise<string | null> {
   for (const scope of ["--global", "--system"]) {
     try {
+      const env = getSanitizedProcessEnv();
       const { stdout } = await promisify(execFile)(
-        "git",
+        executableForSpawn("git", env),
         ["config", scope, "--no-includes", "--get", "core.sshCommand"],
         {
           cwd: os.tmpdir(),
-          env: getSanitizedProcessEnv(),
+          env,
           timeout: 3_000,
           maxBuffer: 64 * 1024,
           windowsHide: true,
@@ -648,23 +710,28 @@ export interface AuthenticatedGitOptions {
   signal?: AbortSignal;
   progress?: (data: SimpleGitProgressEvent) => void;
   extraConfig?: string[];
+  /** Override platform detection for the git binary — test-only. */
+  platform?: NodeJS.Platform;
 }
 
 export async function createAuthenticatedGit(
   cwd: string,
   opts: AuthenticatedGitOptions = {}
 ): Promise<SimpleGit> {
-  const { signal, progress, extraConfig } = opts;
+  const { signal, progress, extraConfig, platform = process.platform } = opts;
   const { simpleGit } = await simpleGitModule;
   const sshCommand = await resolveAuthenticatedSshCommand();
-  return simpleGit({
-    baseDir: cwd,
-    config: getAuthenticatedGitConfig(extraConfig),
-    timeout: { block: 0 },
-    ...(signal ? { abort: signal } : {}),
-    ...(progress ? { progress } : {}),
-    unsafe: UNSAFE_FLAGS,
-  }).env({
+  return buildSimpleGit(
+    simpleGit,
+    {
+      baseDir: cwd,
+      config: getAuthenticatedGitConfig(extraConfig),
+      timeout: { block: 0 },
+      ...(signal ? { abort: signal } : {}),
+      ...(progress ? { progress } : {}),
+    },
+    nativeGitBinary(platform)
+  ).env({
     ...getSanitizedProcessEnv(),
     ...getGitLocaleEnv(),
     LC_ALL: "",
@@ -733,6 +800,7 @@ export async function createBackgroundFetchGit(
     signal,
     progress,
     extraConfig: [...BACKGROUND_FETCH_CONFIG, ...(extraConfig ?? [])],
+    platform,
   });
   if (platform !== "win32") {
     return git.env({

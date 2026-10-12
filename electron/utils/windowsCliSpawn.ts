@@ -1,5 +1,11 @@
 import path from "node:path";
-import { readFileSync, statSync, lstatSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import {
+  isWindowsLaunchFile as isLaunchFile,
+  windowsEnvKey as envKey,
+  windowsEnvValue as envValue,
+  windowsSystemTool,
+} from "./windowsExecutable.js";
 
 const SHELL_INERT_TOKEN = /^[A-Za-z0-9._\-/=:]+$/;
 const LAUNCHABLE_EXTENSIONS = new Set([".exe", ".com", ".cmd", ".bat"]);
@@ -27,32 +33,6 @@ export interface WindowsCliResolveOptions {
   cwd?: string;
   isFile?: (file: string) => boolean;
   readFile?: (file: string) => string;
-}
-
-function isLaunchFile(file: string): boolean {
-  try {
-    return statSync(file).isFile();
-  } catch {
-    // Windows Store execution aliases are reparse points: stat reports EACCES,
-    // while CreateProcess can still launch the alias by its resolved file name.
-    try {
-      return lstatSync(file).isSymbolicLink();
-    } catch {
-      return false;
-    }
-  }
-}
-
-function envKey(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  // Node sorts duplicate Windows env keys and forwards the first case variant.
-  return Object.keys(env)
-    .sort()
-    .find((candidate) => candidate.toUpperCase() === name);
-}
-
-function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  const key = envKey(env, name);
-  return key === undefined ? undefined : env[key];
 }
 
 function launchError(command: string, code: string): NodeJS.ErrnoException {
@@ -424,10 +404,8 @@ export function cliSpawnTarget(
   if (/["%^!&|<>\r\n]/.test(file) || !args.every((arg) => SHELL_INERT_TOKEN.test(arg))) {
     throw launchError(file, "EINVAL");
   }
-  const env = options.env ?? process.env;
-  const systemRoot = envValue(env, "SYSTEMROOT") ?? "C:\\Windows";
   return {
-    command: path.win32.join(systemRoot, "System32", "cmd.exe"),
+    command: windowsSystemTool("cmd.exe", options.env ?? process.env),
     args: ["/d", "/s", "/v:off", "/c", `""${file}" ${args.join(" ")}"`],
     shell: false,
     windowsVerbatimArguments: true,

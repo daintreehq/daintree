@@ -4,7 +4,8 @@
 // `setPath`, `app.commandLine`, fs, and SQLite work at module load) so
 // importers that only need a PATH refresh — the terminal spawn handler — don't
 // pull that startup machinery into their graph. Same rationale as
-// `runtimeFlags.ts` and `deepLinkUrlQueue.ts`. Node builtins only.
+// `runtimeFlags.ts` and `deepLinkUrlQueue.ts`. Node builtins only, plus the
+// builtins-only `windowsExecutable` helper.
 //
 // `deduplicatePath` lives here rather than in `environment.ts` because this is
 // the dependency-free leaf: `environment.ts` imports it back for its POSIX
@@ -14,6 +15,7 @@ import { execFile } from "child_process";
 import { existsSync } from "fs";
 import os from "os";
 import path from "path";
+import { windowsSystemTool } from "../utils/windowsExecutable.js";
 
 // A terminal spawn re-reads the registry at most this often. `reg.exe` is two
 // process spawns (30-100ms+ each on Windows once Defender inspects them), which
@@ -124,7 +126,8 @@ function readWindowsRegistryPath(): Promise<string> {
           // to inherit, so without it Windows opens a real window. Tolerable
           // once at startup; this now runs per terminal-open.
           const options = { timeout: 3_000, windowsHide: true };
-          execFile("reg", ["query", key, "/v", "Path"], options, (err, stdout) => {
+          const reg = windowsSystemTool("reg.exe");
+          execFile(reg, ["query", key, "/v", "Path"], options, (err, stdout) => {
             if (err || !stdout) return resolve("");
             const match = stdout.match(/Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/i);
             resolve(expandWindowsEnvVars(match?.[1]?.trim() ?? ""));
