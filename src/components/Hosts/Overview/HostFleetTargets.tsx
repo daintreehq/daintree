@@ -59,6 +59,8 @@ export function HostFleetTargets({ hostId, hostName }: HostFleetTargetsProps) {
           onClick={load}
           disabled={state.kind === "loading"}
           aria-busy={state.kind === "loading" || undefined}
+          // Every host card has one: the name says whose agents.
+          aria-label={`Add agents on ${hostName} to the fleet`}
         >
           Add agents to fleet…
         </Button>
