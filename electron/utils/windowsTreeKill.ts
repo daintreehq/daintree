@@ -42,9 +42,11 @@ import {
  * is ever parsed as PowerShell.
  *
  * If the census fails, a root is ended alone: through a handle checked against
- * the caller's expected identity when there is one, by PID only when the
- * caller says the PID is its own live child (it holds the process handle, so
- * the PID cannot have been reused), and otherwise not at all.
+ * the caller's expected identity when there is one, by PID only while the root
+ * is the caller's own child and Node has not seen it exit (Node holds its
+ * process handle until then, so the PID cannot have been reused), and
+ * otherwise not at all. Liveness is read when the run starts and again right
+ * before any by-PID kill, never remembered from when the kill was requested.
  *
  * Two ways to run it. Asynchronous kills, in every process that makes them
  * (Main, the pty-host, the workspace host), go through one persistent helper
@@ -52,6 +54,11 @@ import {
  * and falls back to the one-shot helper when it cannot finish a run. The
  * blocking variant is always a one-shot `spawnSync`, for exit paths where
  * nothing asynchronous can complete.
+ *
+ * Neither helper outlives the process that started it: Node spawns them
+ * without `detached`, so libuv puts them in that process's kill-on-close job.
+ * A kill still queued or running when its process exits is abandoned, and a
+ * caller that needs it finished must hand it on before exiting.
  */
 
 const INPUT_ENV = "DAINTREE_TREE_KILL_INPUT";
@@ -244,10 +251,11 @@ export const TREE_KILL_SCRIPT = [
  * lines if it got that far, which is exactly what recovery needs to read.
  * Every other output stream is silenced: stdout is the protocol.
  *
- * Writes never abort a run. If the host has gone — it quit or crashed with a
- * kill in flight — a write to the broken pipe fails, and the run carries on
- * to the end of its terminations instead of leaving the tree half killed;
- * the next read then sees EOF and the helper exits.
+ * Writes never abort a run: a write to a pipe nobody reads any more fails, and
+ * the run carries on to the end of its terminations instead of leaving the
+ * tree half killed; the next read then sees EOF and the helper exits. That
+ * does not make the helper outlive its host — it sits in the host's
+ * kill-on-close job and dies with it.
  */
 export const TREE_KILL_SERVER_SCRIPT = [
   ...SCRIPT_PRELUDE,
@@ -296,6 +304,20 @@ const DEFAULT_WAIT_MS = 1500;
 /** What a run needs besides the exit wait: a PowerShell start and one CIM query. */
 const HELPER_OVERHEAD_MS = 1500;
 
+/**
+ * Node's record of a child this process spawned — a `ChildProcess` qualifies.
+ * Until Node has seen the child exit it holds the child's process handle, and
+ * Windows does not reuse a PID while a handle to it is open.
+ */
+export interface OwnedChildProcess {
+  readonly exitCode?: number | null;
+  readonly signalCode?: NodeJS.Signals | null;
+}
+
+function childStillRunning(child: OwnedChildProcess): boolean {
+  return typeof child.exitCode !== "number" && typeof child.signalCode !== "string";
+}
+
 /** One tree to end. A bare number is `{ pid }`. */
 export interface WindowsTreeKillTarget {
   pid: number;
@@ -309,11 +331,22 @@ export interface WindowsTreeKillTarget {
   /** False ends the root alone, by handle. Default true. */
   tree?: boolean;
   /**
-   * The caller holds this process's handle (a live `ChildProcess` it spawned),
-   * so the PID cannot have been reused. Only then may a failed census end the
-   * root by PID without an identity.
+   * The root is this child of the caller's. While it is still running its PID
+   * cannot have been reused, so a failed census may end it by PID without an
+   * identity. Read when the run starts and again just before any by-PID kill:
+   * a kill can wait in the queue past the child's exit, and once Node has seen
+   * the exit the PID may name anything. A child that has exited by the time
+   * its run starts is not sent at all.
    */
-  ownChild?: boolean;
+  ownChild?: OwnedChildProcess;
+  /**
+   * Withdraws this root while it is still waiting in this process's queue:
+   * once aborted, it is never handed to a helper and resolves as `withdrawn`.
+   * For a root whose PID the caller can no longer vouch for — a shell with no
+   * identity whose pseudoconsole was released, or that has exited. No effect
+   * once its run has started.
+   */
+  withdrawOn?: AbortSignal;
 }
 
 export interface WindowsTreeKillOptions {
@@ -323,8 +356,8 @@ export interface WindowsTreeKillOptions {
   waitMs?: number;
   /**
    * Asynchronous kills only: called once the run carrying this request has
-   * been handed to a helper process, which finishes it even if this process
-   * exits first. Until then it waits in this process's queue.
+   * been handed to a helper process. Until then it waits in this process's
+   * queue. Either way it is this process's: the helper dies with it.
    */
   onStart?: () => void;
 }
@@ -340,6 +373,8 @@ export type WindowsTreeKillMode =
   | "root-only"
   /** The census failed and the root could not be identified: nothing was touched. */
   | "untouched"
+  /** The caller withdrew the root before its run started ({@link WindowsTreeKillTarget.withdrawOn}): nothing was touched. */
+  | "withdrawn"
   /** Not Windows, or a PID never killed (system, this process, its parent). */
   | "skipped";
 
@@ -377,26 +412,52 @@ export interface NormalizedTreeKillTarget {
   pid: number;
   start?: number;
   tree: boolean;
+  /** The caller owns the root; see {@link ownsLiveChild} for whether that still counts. */
   own: boolean;
+  /** Whether the owned child is still running, read at the moment it matters. */
+  alive?: () => boolean;
+  withdrawOn?: AbortSignal;
 }
 
 export function normalizeTreeKillTarget(
   target: number | WindowsTreeKillTarget
 ): NormalizedTreeKillTarget {
-  const spec = typeof target === "number" ? { pid: target } : target;
+  const spec: WindowsTreeKillTarget = typeof target === "number" ? { pid: target } : target;
   const start = identityMicros(spec.startTime);
+  const child = spec.ownChild;
   return {
     pid: spec.pid,
     ...(start !== undefined ? { start } : {}),
     tree: spec.tree !== false,
-    own: spec.ownChild === true,
+    own: child !== undefined,
+    ...(child !== undefined ? { alive: () => childStillRunning(child) } : {}),
+    ...(spec.withdrawOn ? { withdrawOn: spec.withdrawOn } : {}),
   };
+}
+
+/** The root is the caller's child and is still running, so its PID is still its own. */
+function ownsLiveChild(target: NormalizedTreeKillTarget): boolean {
+  return target.own && target.alive?.() !== false;
+}
+
+/**
+ * The result for a target that must not be sent after all, or null to send it:
+ * one its caller withdrew, or an owned child that has exited since the kill was
+ * requested — its PID is free for reuse, and a dead root's tree cannot be
+ * walked anyway. Checked when a run starts.
+ */
+export function screenTreeKillTarget(
+  target: NormalizedTreeKillTarget
+): WindowsTreeKillResult | null {
+  if (target.own && target.alive?.() === false) return { ...emptyResult("gone"), rootEnded: true };
+  if (target.withdrawOn?.aborted) return emptyResult("withdrawn");
+  return null;
 }
 
 /**
  * The helper's input, as JSON for {@link INPUT_ENV}. Identities travel as
  * decimal strings: Windows PowerShell's JSON reader turns large numbers into
- * doubles.
+ * doubles. Ownership is read now, as the run starts.
  */
 export function encodeTreeKillInput(
   targets: readonly NormalizedTreeKillTarget[],
@@ -410,7 +471,7 @@ export function encodeTreeKillInput(
       pid: t.pid,
       start: t.start === undefined ? null : String(t.start),
       tree: t.tree,
-      own: t.own,
+      own: ownsLiveChild(t),
     })),
   });
 }
@@ -566,8 +627,10 @@ export function classifyTreeKillOutput(
 
 /**
  * Results for a run whose helper never reported: PowerShell missing, blocked,
- * timed out, or killed. A root the caller owns is ended by PID — its handle
- * pins the PID — and every other root is left alone.
+ * timed out, or killed. A root that is the caller's still-running child is
+ * ended by PID — Node's handle pins the PID — and every other root is left
+ * alone. Liveness is read right here, not when the kill was requested: a child
+ * that exited meanwhile no longer pins anything.
  */
 function fallbackResults(
   targets: readonly NormalizedTreeKillTarget[],
@@ -575,6 +638,7 @@ function fallbackResults(
 ): WindowsTreeKillResult[] {
   return targets.map((target) => {
     if (!target.own) return { ...emptyResult("untouched"), error };
+    if (!ownsLiveChild(target)) return { ...emptyResult("gone"), rootEnded: true, error };
     const result: WindowsTreeKillResult = {
       ...emptyResult("root-only"),
       targeted: [target.pid],
@@ -645,15 +709,59 @@ function firstLine(text: unknown): string {
   return typeof text === "string" ? (text.trim().split(/\r?\n/)[0] ?? "") : "";
 }
 
+type UnavailableListener = (reason: string) => void;
+const unavailableListeners = new Set<UnavailableListener>();
+let unavailableReported = false;
+
+/**
+ * Be told, once per process, that PowerShell could not run a tree kill at all:
+ * missing, blocked by AppLocker or WDAC, or held in Constrained Language Mode.
+ * Fired the first time the one-shot helper — the last resort, reached after
+ * the persistent helper has failed — ends without a report for any reason but
+ * its own timeout. Returns an unsubscribe.
+ */
+export function onWindowsTreeKillUnavailable(listener: UnavailableListener): () => void {
+  unavailableListeners.add(listener);
+  return () => unavailableListeners.delete(listener);
+}
+
+/** Test-only: forget that the unavailable notice was given. */
+export function resetWindowsTreeKillUnavailableForTest(): void {
+  unavailableReported = false;
+}
+
+function noteHelperUnavailable(reason: string): void {
+  if (unavailableReported) return;
+  unavailableReported = true;
+  console.warn(
+    `[WindowsTreeKill] PowerShell could not run the process-tree kill (${reason}). Terminals still close, but programs started in them may keep running until Daintree quits.`
+  );
+  for (const listener of unavailableListeners) {
+    try {
+      listener(reason);
+    } catch {
+      // A listener's failure must not reach the kill path.
+    }
+  }
+}
+
 function settle(
   targets: readonly NormalizedTreeKillTarget[],
   stdout: unknown,
-  failure: string | null
+  failure: string | null,
+  timedOut = false
 ): WindowsTreeKillResult[] {
-  const parsed = parseTreeKillOutput(typeof stdout === "string" ? stdout : "");
+  const text = typeof stdout === "string" ? stdout : "";
+  const parsed = parseTreeKillOutput(text);
+  const reason = failure ?? "tree-kill helper gave an incomplete report";
+  // Not one line of the script's output: PowerShell never got as far as
+  // running it. A report cut short mid-run is a failed run, not a blocked one.
+  if (!parsed && !timedOut && text.replace(/^\uFEFF/, "").trim() === "") {
+    noteHelperUnavailable(reason);
+  }
   const results = parsed
     ? classifyTreeKillOutput(targets, parsed)
-    : fallbackResults(targets, failure ?? "tree-kill helper gave an incomplete report");
+    : fallbackResults(targets, reason);
   warnStale(targets, results);
   return results;
 }
@@ -665,6 +773,7 @@ function runHelperSync(
 ): WindowsTreeKillResult[] {
   let stdout: unknown = "";
   let failure: string | null = null;
+  let timedOut = false;
   try {
     const result = spawnSync("powershell.exe", HELPER_ARGS, {
       ...helperOptions(encodeTreeKillInput(targets, waitMs), timeoutMs),
@@ -674,14 +783,16 @@ function runHelperSync(
       failure = "no result";
     } else {
       stdout = result.stdout;
-      if (result.error) failure = result.error.message;
-      else if (result.status !== 0)
+      if (result.error) {
+        failure = result.error.message;
+        timedOut = (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT";
+      } else if (result.status !== 0)
         failure = `exited ${result.status}: ${firstLine(result.stderr)}`.trim();
     }
   } catch (err) {
     failure = formatErrorMessage(err, "PowerShell did not start");
   }
-  return settle(targets, stdout, failure);
+  return settle(targets, stdout, failure, timedOut);
 }
 
 function runHelper(
@@ -699,7 +810,9 @@ function runHelper(
           const failure = error
             ? `${error.message.split(/\r?\n/)[0]} ${firstLine(stderr)}`.trim()
             : null;
-          resolve(settle(targets, stdout, failure));
+          // execFile sets `killed` when its own timeout ended the helper.
+          const timedOut = (error as { killed?: boolean } | null)?.killed === true;
+          resolve(settle(targets, stdout, failure, timedOut));
         }
       );
       // The input is in the environment; an open stdin pipe is only something
@@ -827,6 +940,7 @@ const TREE_KILL_ENGINE: TreeKillEngine = {
     return results;
   },
   recover: recoverTreeKillRun,
+  screen: screenTreeKillTarget,
 };
 
 /** This process's persistent helper, created by the first asynchronous kill. */
@@ -881,6 +995,15 @@ function plan(targets: readonly (number | WindowsTreeKillTarget)[]): Plan {
   return { normalized, results, live };
 }
 
+/** A blocking run starts now: drop what {@link screenTreeKillTarget} says must not be sent. */
+function screenNow(planned: Plan): void {
+  planned.live = planned.live.filter((index) => {
+    const screened = screenTreeKillTarget(planned.normalized[index]);
+    if (screened) planned.results[index] = screened;
+    return screened === null;
+  });
+}
+
 /**
  * Every target goes to one helper run, so one census and one set of pinned
  * handles cover them all: a second run could census a PID the first had
@@ -903,6 +1026,7 @@ export function killWindowsProcessTreesSync(
   options: WindowsTreeKillOptions = {}
 ): WindowsTreeKillResult[] {
   const planned = plan(targets);
+  screenNow(planned);
   if (planned.live.length === 0) return planned.results;
   const { timeoutMs, waitMs } = budgets(options);
   const helperTargets = planned.live.map((i) => planned.normalized[i]);
@@ -952,16 +1076,15 @@ export function killWindowsProcessTreeSync(
  * exited. Until then Node holds the child's process handle, so its PID cannot
  * be reused and the helper may fall back to it; afterwards the PID may already
  * name an unrelated process, and the walk could not reach a dead root's
- * descendants anyway.
+ * descendants anyway. The target carries the child itself, so a kill that
+ * waits in the queue re-reads that when its run starts.
  */
-export function liveChildTreeTarget(child: {
-  pid?: number | undefined;
-  exitCode?: number | null;
-  signalCode?: NodeJS.Signals | null;
-}): WindowsTreeKillTarget | null {
+export function liveChildTreeTarget(
+  child: OwnedChildProcess & { pid?: number | undefined }
+): WindowsTreeKillTarget | null {
   if (typeof child.pid !== "number") return null;
-  if (typeof child.exitCode === "number" || typeof child.signalCode === "string") return null;
-  return { pid: child.pid, ownChild: true };
+  if (!childStillRunning(child)) return null;
+  return { pid: child.pid, ownChild: child };
 }
 
 /**

@@ -379,6 +379,7 @@ export class PluginPtyProcessManager {
         if (entry.exited) return;
         entry.pty.kill("SIGTERM");
       },
+      onExit: (listener) => entry.pty.onExit(() => listener()),
     };
     try {
       return this.createTreeKiller(target, { kind: "plugin", id: entry.id });

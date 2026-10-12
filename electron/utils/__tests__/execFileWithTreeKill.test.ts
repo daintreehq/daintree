@@ -82,7 +82,7 @@ describe("execFile process tree cleanup", () => {
       await rejection;
 
       expect(order).toEqual(["tree", "root"]);
-      expect(treeKillMock).toHaveBeenCalledWith({ pid: 1234, ownChild: true }, "[CLI probe]", {
+      expect(treeKillMock).toHaveBeenCalledWith({ pid: 1234, ownChild: child }, "[CLI probe]", {
         timeoutMs: 3000,
       });
     }

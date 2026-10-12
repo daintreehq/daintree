@@ -1,4 +1,4 @@
-import { isKillableWindowsPid } from "../../utils/windowsProcessTree.js";
+import { identityMicros, isKillableWindowsPid } from "../../utils/windowsProcessTree.js";
 import {
   describeWindowsTreeKillProblem,
   isWindowsTreeKillHelperRunning,
@@ -36,8 +36,12 @@ const SHELL_GONE = Symbol("shell-gone");
 /** A Windows tree kill in flight, and when it has settled. */
 interface WindowsJob {
   coversShell: boolean;
-  /** Handed to a helper process, which finishes it even if this host exits. */
+  /**
+   * Handed to a helper process. Not a promise that it finishes: the helper is
+   * this host's child, in its kill-on-close job, and dies with it.
+   */
   started: boolean;
+  settled: boolean;
   done: Promise<void>;
 }
 
@@ -56,6 +60,12 @@ interface EscalationState {
 export interface ProcessTreeKillTarget {
   readonly pid: number;
   kill(signal?: string): void;
+  /**
+   * The root's exit, as node-pty reports it. Windows uses it to withdraw a
+   * queued kill of a shell it has no identity for: node-pty lets go of the
+   * shell's handle on exit, and nothing then pins its PID.
+   */
+  onExit?(listener: () => void): unknown;
 }
 
 /**
@@ -88,7 +98,34 @@ export interface LineageKillSource {
    * then against each process handle, so no probe runs on the host's thread.
    */
   getTrackedPids?(rootPid: number): Array<{ pid: number; startTime: string }>;
+  /**
+   * Windows: the root shell's own creation time from the first census that
+   * listed it, or undefined before one has. Passed with the shell so a kill
+   * that waits in the queue can never walk a process that took over its PID.
+   */
+  getRootStartTime?(rootPid: number): string | undefined;
 }
+
+/** A root the exit batch could not confirm ended, by the identity Main needs to finish it. */
+export interface UnfinishedTreeKillRoot {
+  pid: number;
+  /** Creation time, UTC microseconds. */
+  startTime: number;
+}
+
+/** What the exit batch did, as far as it could confirm before its deadline. */
+export interface WindowsExitBatchOutcome {
+  /**
+   * Roots with an identity that no report confirmed ended. Their PIDs stop
+   * being pinned when this host exits, but their identities still name them,
+   * so another process can finish them safely.
+   */
+  unfinished: UnfinishedTreeKillRoot[];
+  /** Roots with no identity left unconfirmed: nothing outside this host can end them safely. */
+  abandoned: number;
+}
+
+const NOTHING_LEFT: WindowsExitBatchOutcome = { unfinished: [], abandoned: 0 };
 
 /**
  * Windows tree kills collected during the pty-host's exit teardown, run as one
@@ -100,7 +137,7 @@ let windowsExitBatch: {
    * Shells the batch could only name by bare PID while their first kill is
    * still pending: see {@link ProcessTreeKiller}'s `killWindows`.
    */
-  joined: Array<{ shellPid: number; job: WindowsJob }>;
+  joined: Array<{ shellPid: number; job: WindowsJob; withdrawOn: AbortSignal | undefined }>;
   after: Array<() => void>;
 } | null = null;
 
@@ -120,18 +157,30 @@ export function beginWindowsExitBatch(): void {
  * because closing it first ends the shell the walk starts from.
  *
  * For `process.on("exit")`, where nothing asynchronous completes. A pending
- * first kill already handed to a helper process is not repeated: that process
- * finishes it after this host has gone, and only it knows whether the shell's
- * PID is still the shell's. One still waiting in this process's queue would
- * never run, and nothing has touched its shell, so the batch kills it here. A
- * teardown that can wait uses {@link flushWindowsExitBatchAsync}.
+ * first kill still waiting in this process's queue would never run, and
+ * nothing has touched its shell, so the batch kills it here. One already
+ * handed to the helper is abandoned: the helper dies with this host, and the
+ * kill may already have ended the shell and freed its PID, so walking that PID
+ * again could reach anything. A teardown that can wait uses
+ * {@link flushWindowsExitBatchAsync}, which hands what it cannot confirm on.
  */
 export function flushWindowsExitBatch(): void {
   const batch = windowsExitBatch;
   windowsExitBatch = null;
   if (!batch) return;
-  const targets = [
-    ...batch.joined.filter(({ job }) => !job.started).map(({ shellPid }) => ({ pid: shellPid })),
+  const inFlight = batch.joined.filter(({ job }) => job.started && !job.settled);
+  if (inFlight.length > 0) {
+    console.warn(
+      `[ProcessTreeKiller] abandoning ${inFlight.length} tree kill(s) still running at exit: pid=${inFlight.map(({ shellPid }) => shellPid).join(", ")}`
+    );
+  }
+  const targets: WindowsTreeKillTarget[] = [
+    ...batch.joined
+      .filter(({ job }) => !job.started && !job.settled)
+      .map(({ shellPid, withdrawOn }) => ({
+        pid: shellPid,
+        ...(withdrawOn ? { withdrawOn } : {}),
+      })),
     ...batch.targets,
   ];
   if (targets.length > 0) killExitBatchSync(targets);
@@ -146,19 +195,27 @@ export function flushWindowsExitBatch(): void {
  * two seconds, which is why the blocking run missed Main's deadline at quit.
  * Without a running helper the batch is the blocking one-shot, as before.
  * Pseudoconsoles are released once the kills settle or the budget runs out,
- * whichever is first.
+ * whichever is first. Releasing one withdraws its shell from any request still
+ * queued, since nothing pins that PID afterwards.
+ *
+ * Resolves with what no report confirmed. A request queued behind a slow run
+ * may never have reached the helper, and the helper dies with this host, so
+ * the caller must hand those roots on before it exits.
  */
-export async function flushWindowsExitBatchAsync(): Promise<void> {
+export async function flushWindowsExitBatchAsync(): Promise<WindowsExitBatchOutcome> {
   const batch = windowsExitBatch;
   windowsExitBatch = null;
-  if (!batch) return;
+  if (!batch) return NOTHING_LEFT;
   const deadlineAt = Date.now() + WINDOWS_EXIT_BATCH_TIMEOUT_MS;
+  const results: Array<WindowsTreeKillResult | undefined> = [];
+  const keep = (settled: readonly WindowsTreeKillResult[]) =>
+    settled.forEach((result, index) => (results[index] = result));
   const work: Array<Promise<unknown>> = batch.joined.map(({ job }) => job.done);
   if (batch.targets.length > 0) {
     if (isWindowsTreeKillHelperRunning()) {
-      work.push(killExitBatchOnHelper(batch.targets));
+      work.push(killExitBatchOnHelper(batch.targets).then(keep));
     } else {
-      killExitBatchSync(batch.targets);
+      keep(killExitBatchSync(batch.targets));
     }
   }
   if (work.length > 0 && !(await settlesBy(Promise.all(work), deadlineAt))) {
@@ -166,7 +223,34 @@ export async function flushWindowsExitBatchAsync(): Promise<void> {
       `[ProcessTreeKiller] exit tree kills did not finish within ${WINDOWS_EXIT_BATCH_TIMEOUT_MS}ms; releasing ${batch.after.length} pseudoconsole(s) anyway`
     );
   }
+  const outcome = exitBatchOutcome(batch.targets, results, batch.joined);
   releaseExitBatch(batch.after);
+  return outcome;
+}
+
+/**
+ * The batch's roots no report confirmed ended. One the helper refused is
+ * nobody's to retry, and one withdrawn because its shell exited first is
+ * gone; one with an identity can be finished elsewhere; one without, or a
+ * joined first kill that never settled, cannot.
+ */
+function exitBatchOutcome(
+  targets: readonly WindowsTreeKillTarget[],
+  results: ReadonlyArray<WindowsTreeKillResult | undefined>,
+  joined: ReadonlyArray<{ job: WindowsJob }>
+): WindowsExitBatchOutcome {
+  const unfinished = new Map<number, UnfinishedTreeKillRoot>();
+  let abandoned = joined.filter(({ job }) => !job.settled).length;
+  targets.forEach((target, index) => {
+    const result = results[index];
+    if (result && (result.rootEnded || result.mode === "skipped" || result.mode === "withdrawn")) {
+      return;
+    }
+    const startTime = identityMicros(target.startTime);
+    if (startTime === undefined) abandoned++;
+    else unfinished.set(target.pid, { pid: target.pid, startTime });
+  });
+  return { unfinished: [...unfinished.values()], abandoned };
 }
 
 const EXIT_BATCH_OPTIONS = {
@@ -174,19 +258,28 @@ const EXIT_BATCH_OPTIONS = {
   waitMs: WINDOWS_EXIT_BATCH_WAIT_MS,
 };
 
-function killExitBatchSync(targets: readonly WindowsTreeKillTarget[]): void {
+function killExitBatchSync(targets: readonly WindowsTreeKillTarget[]): WindowsTreeKillResult[] {
   try {
-    logWindowsKillProblems(targets, killWindowsProcessTreesSync(targets, EXIT_BATCH_OPTIONS));
+    const results = killWindowsProcessTreesSync(targets, EXIT_BATCH_OPTIONS);
+    logWindowsKillProblems(targets, results);
+    return results;
   } catch (error) {
     console.warn(`[ProcessTreeKiller] exit tree kill failed: ${(error as Error).message}`);
+    return [];
   }
 }
 
-function killExitBatchOnHelper(targets: readonly WindowsTreeKillTarget[]): Promise<void> {
+function killExitBatchOnHelper(
+  targets: readonly WindowsTreeKillTarget[]
+): Promise<WindowsTreeKillResult[]> {
   return killWindowsProcessTrees(targets, EXIT_BATCH_OPTIONS).then(
-    (results) => logWindowsKillProblems(targets, results),
+    (results) => {
+      logWindowsKillProblems(targets, results);
+      return results;
+    },
     (error: unknown) => {
       console.warn(`[ProcessTreeKiller] exit tree kill failed: ${(error as Error)?.message}`);
+      return [];
     }
   );
 }
@@ -271,11 +364,18 @@ export class ProcessTreeKiller {
   private releaseQueuedInBatch = false;
   private ptyReleased = false;
   /**
-   * Windows: the shell's creation time (UTC µs) from the first tree kill whose
-   * census listed it, passed back to every later kill so a recycled PID is
-   * never walked as ours. `SHELL_GONE` once a census showed it gone.
+   * Windows: the shell's creation time (UTC µs), from the ledger's first
+   * census sighting or the first tree kill whose census listed it, passed with
+   * every kill so a recycled PID is never walked as ours. `SHELL_GONE` once a
+   * census showed it gone or the shell exited.
    */
   private windowsShellIdentity: number | typeof SHELL_GONE | null = null;
+  /**
+   * Windows: aborted once nothing pins the shell's PID any more — node-pty
+   * reported its exit, or its pseudoconsole was released — which withdraws a
+   * queued kill that could only name it by that PID.
+   */
+  private readonly shellUnpinned: AbortController | null = null;
 
   constructor(
     private readonly ptyProcess: ProcessTreeKillTarget,
@@ -285,6 +385,24 @@ export class ProcessTreeKiller {
     private readonly origin: LineageOrigin | null = null
   ) {
     this.registerRoot(this.ptyProcess.pid);
+    if (process.platform === "win32") {
+      this.shellUnpinned = new AbortController();
+      try {
+        this.ptyProcess.onExit?.(() => this.noteShellExited());
+      } catch {
+        // A root that cannot report its exit is withdrawn at release instead.
+      }
+    }
+  }
+
+  /**
+   * Windows: the shell has exited. node-pty no longer holds its handle, so its
+   * PID may already name another process: no later kill names it, and a queued
+   * one that could only name it by PID is withdrawn.
+   */
+  private noteShellExited(): void {
+    this.windowsShellIdentity = SHELL_GONE;
+    this.shellUnpinned?.abort();
   }
 
   /**
@@ -654,6 +772,7 @@ export class ProcessTreeKiller {
     // and each handle, so nothing is probed here and the shell — gone, its PID
     // free for reuse — is never a root.
     if (process.platform === "win32") {
+      this.noteShellExited();
       const targets = this.windowsOrphanTargets(shellPid);
       if (targets.length === 0) return [];
       this.killWindows(null, targets, false);
@@ -745,31 +864,43 @@ export class ProcessTreeKiller {
    * (scripts/patchNodePtyConpty.cjs) makes that release safe after the shell
    * has already exited, and this killer releases it at most once.
    *
+   * Identity. The shell goes with its creation time whenever one is known —
+   * the ledger's first census sighting, or an earlier kill's census — so a kill
+   * that waits in the queue behind a slow run can only ever end the shell it
+   * was meant for. Without one it goes by bare PID, which is sound only while
+   * node-pty holds the shell's handle: the kill is withdrawn if it is still
+   * queued when the shell exits or its pseudoconsole is released (the
+   * backstop), and the shell is never named again after either. It is not
+   * named at all once a census showed it gone.
+   *
    * Pending jobs. A kill that arrives while one covering the shell is still
    * running joins it — no second walk of the same tree — and only takes over
    * the pending release. Inside the host's exit teardown the kill goes to the
    * exit batch instead, and is repeated there when the shell has an identity
    * to pass: the batch's walk is then as identity-checked as the first. A
-   * shell whose first kill has not reported yet has none, and that kill may
-   * already have ended it and freed its PID, so the batch waits for the
-   * pending kill rather than walk the bare PID again.
-   *
-   * The shell is passed with the identity a previous kill's census recorded,
-   * and not at all once a census showed it gone. A first kill has none to
-   * pass: node-pty holds the shell's process handle until it observes the
-   * exit, which keeps the PID from being reused while the shell lives.
+   * shell without one whose first kill is pending may already have been ended
+   * by it, its PID freed, so the batch waits for that kill rather than walk the
+   * bare PID again.
    */
   private killWindows(
     shellPid: number | null,
     orphans: WindowsTreeKillTarget[],
     releasePty: boolean
   ): void {
+    if (shellPid !== null && this.windowsShellIdentity === null) {
+      const recorded = identityMicros(this.lineage?.getRootStartTime?.(shellPid));
+      if (recorded !== undefined) this.windowsShellIdentity = recorded;
+    }
     const identity = this.windowsShellIdentity;
-    const includeShell = shellPid !== null && identity !== SHELL_GONE;
+    const unpinned = this.shellUnpinned?.signal;
+    const includeShell =
+      shellPid !== null && identity !== SHELL_GONE && (identity !== null || !unpinned?.aborted);
     const targets: WindowsTreeKillTarget[] = [];
     if (includeShell) {
       targets.push(
-        typeof identity === "number" ? { pid: shellPid, startTime: identity } : { pid: shellPid }
+        typeof identity === "number"
+          ? { pid: shellPid, startTime: identity }
+          : { pid: shellPid, ...(unpinned ? { withdrawOn: unpinned } : {}) }
       );
     }
     targets.push(...orphans);
@@ -783,7 +914,7 @@ export class ProcessTreeKiller {
           ? [...this.windowsJobs].find((job) => job.coversShell)
           : undefined;
       if (pendingShellKill && shellPid !== null) {
-        windowsExitBatch.joined.push({ shellPid, job: pendingShellKill });
+        windowsExitBatch.joined.push({ shellPid, job: pendingShellKill, withdrawOn: unpinned });
         windowsExitBatch.targets.push(...orphans);
       } else {
         windowsExitBatch.targets.push(...targets);
@@ -814,7 +945,12 @@ export class ProcessTreeKiller {
     if (releasePty) this.releasePtyWhenSettled = true;
     const backstop = setTimeout(() => this.settleRelease(), WINDOWS_PTY_RELEASE_BACKSTOP_MS);
     backstop.unref?.();
-    const job: WindowsJob = { coversShell: includeShell, started: false, done: Promise.resolve() };
+    const job: WindowsJob = {
+      coversShell: includeShell,
+      started: false,
+      settled: false,
+      done: Promise.resolve(),
+    };
     this.windowsJobs.add(job);
     job.done = killWindowsProcessTrees(targets, {
       timeoutMs: WINDOWS_TREE_KILL_TIMEOUT_MS,
@@ -824,7 +960,7 @@ export class ProcessTreeKiller {
     })
       .then(
         (results) => {
-          if (includeShell) this.learnShellIdentity(results[0]);
+          if (includeShell) this.learnShellIdentity(shellPid, identity, results[0]);
           logWindowsKillProblems(targets, results);
         },
         (error: unknown) => {
@@ -839,6 +975,7 @@ export class ProcessTreeKiller {
         if (includeShell && this.windowsShellIdentity === null) {
           this.windowsShellIdentity = SHELL_GONE;
         }
+        job.settled = true;
         clearTimeout(backstop);
         this.windowsJobs.delete(job);
         if (this.windowsJobs.size === 0) this.settleRelease();
@@ -851,9 +988,15 @@ export class ProcessTreeKiller {
     this.releasePty();
   }
 
+  /**
+   * Close the pseudoconsole, which ends the shell. Nothing pins its PID after
+   * that, so a kill still queued that could only name it by PID is withdrawn
+   * first.
+   */
   private releasePty(): void {
     if (this.ptyReleased) return;
     this.ptyReleased = true;
+    this.shellUnpinned?.abort();
     try {
       this.ptyProcess.kill();
     } catch {
@@ -861,8 +1004,21 @@ export class ProcessTreeKiller {
     }
   }
 
-  private learnShellIdentity(result: WindowsTreeKillResult | undefined): void {
+  private learnShellIdentity(
+    shellPid: number | null,
+    passed: number | null,
+    result: WindowsTreeKillResult | undefined
+  ): void {
     if (!result) return;
+    if (result.mode === "withdrawn") {
+      console.warn(
+        `[ProcessTreeKiller] pid=${shellPid}: the shell exited or its pseudoconsole was released before its tree kill started, so its PID was no longer pinned; the kill was withdrawn`
+      );
+    } else if (result.mode === "identity-mismatch" && passed !== null) {
+      console.warn(
+        `[ProcessTreeKiller] pid=${shellPid}: that PID no longer belongs to the shell first recorded under it; nothing was ended`
+      );
+    }
     if (result.mode === "gone" || result.mode === "identity-mismatch") {
       this.windowsShellIdentity = SHELL_GONE;
     } else if (result.rootStartTime !== undefined && this.windowsShellIdentity === null) {

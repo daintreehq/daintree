@@ -62,7 +62,12 @@ import { createLogger, ingestHostLogEvent, isValidLogOverrideLevel } from "../ut
 import {
   describeWindowsTreeKillProblem,
   killWindowsProcessTrees,
+  type WindowsTreeKillTarget,
 } from "../utils/windowsTreeKill.js";
+import {
+  installWindowsTreeKillNotice,
+  reportWindowsTreeKillUnavailable,
+} from "./windowsTreeKillNotice.js";
 import { store } from "../store.js";
 import { stripAssignedSessionIdArgs } from "../../shared/types/agentSettings.js";
 import { buildCommandLaunchShell } from "../ipc/handlers/terminal/commandLaunch.js";
@@ -272,6 +277,14 @@ const MAX_MISSED_HEARTBEATS = 3;
  * before SIGKILL, after it), each bounded at 3s, plus the escalation grace.
  */
 const CLOSED_PROCESS_KILL_TIMEOUT_MS = 15_000;
+/** One run of Main's tree-kill helper for roots a disposing host handed over. */
+const HANDOFF_TREE_KILL_TIMEOUT_MS = 3000;
+/**
+ * How long quit waits, once the hosts have exited, for those kills: Main's
+ * helper is usually cold, and it dies with Main. Only a host that could not
+ * confirm its own kills costs this; the quit chain caps the total anyway.
+ */
+const HANDOFF_QUIT_WAIT_MS = 3500;
 
 /**
  * Centralized per-operation timeout policy for PTY host RPC calls.
@@ -451,6 +464,14 @@ export class PtyClient extends EventEmitter {
   private deferInitialPoolWarm = false;
   private hostStartRequested = false;
   private terminalPids: Map<string, number> = new Map();
+  /**
+   * Windows: each terminal shell's creation time (UTC µs), as its host
+   * reported once a census saw it. Used only while the PID still matches
+   * {@link terminalPids}: it lets crash cleanup refuse a reused PID.
+   */
+  private terminalIdentities = new Map<string, { pid: number; startTime: number }>();
+  /** Tree kills a disposing host handed over; quit waits for them, briefly. */
+  private readonly handoffKills = new Set<Promise<void>>();
   private resourceMonitoringEnabled = false;
   private sessionPersistSuppressed = false;
   // Cached for replay in respawnPendingForShard(): both sends are fire-and-forget,
@@ -523,6 +544,7 @@ export class PtyClient extends EventEmitter {
     this.shardMemoryLimitMb = this.fabricEnabled
       ? shardHeapBudgetMb(os.totalmem())
       : this.config.memoryLimitMb;
+    installWindowsTreeKillNotice();
 
     // SharedArrayBuffer cannot be sent to Electron UtilityProcess via postMessage
     // ("An object could not be cloned"). This is a Chromium structured clone limitation
@@ -592,7 +614,10 @@ export class PtyClient extends EventEmitter {
   private shardCallbacks(): ConstructorParameters<typeof PtyShard>[1] {
     if (this.shardCallbacksCache) return this.shardCallbacksCache;
     this.shardCallbacksCache = {
-      onMessage: (shard, event) => this.handleShardEvent(shard, event),
+      onMessage: (shard, event) => {
+        if (this.handleTreeKillEvent(shard, event)) return;
+        this.handleShardEvent(shard, event);
+      },
       // The host already wrote this entry to the shared log file — mirror it
       // into Main's buffer and the renderer, never to disk again (#12544).
       // Shard-agnostic: the entry carries its own source and timestamp.
@@ -655,6 +680,93 @@ export class PtyClient extends EventEmitter {
       logWarn: (message) => logWarn(message),
     };
     return this.shardCallbacksCache;
+  }
+
+  /**
+   * Windows tree-kill traffic, taken before the router because a handoff comes
+   * from a host that is already disposing — its shard retired, and every other
+   * event from it dropped. Returns whether the event was one of these.
+   */
+  private handleTreeKillEvent(shard: PtyShard, event: PtyHostEvent): boolean {
+    switch (event.type) {
+      case "terminal-identity":
+        if (!shard.retired) this.recordTerminalIdentity(event.id, event.pid, event.startTime);
+        return true;
+      case "tree-kill-handoff":
+        this.finishHandedOffTreeKills(shard, event.roots);
+        return true;
+      case "tree-kill-unavailable":
+        reportWindowsTreeKillUnavailable(event.reason, shard.serviceName);
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private recordTerminalIdentity(id: string, pid: number, startTime: number): void {
+    if (this.terminalPids.get(id) !== pid) return;
+    if (!Number.isSafeInteger(startTime) || startTime <= 0) return;
+    for (const known of this.terminalIdentities.keys()) {
+      if (!this.terminalPids.has(known)) this.terminalIdentities.delete(known);
+    }
+    this.terminalIdentities.set(id, { pid, startTime });
+  }
+
+  /**
+   * End trees a disposing host's exit batch could not confirm. Its helper died
+   * with it, and with it whatever pinned those PIDs, so each goes with the
+   * identity the host recorded: the helper here ends nothing that has taken a
+   * PID over since. Kept on {@link handoffKills} so a quit waits for it.
+   */
+  private finishHandedOffTreeKills(
+    shard: PtyShard,
+    roots: ReadonlyArray<{ pid: number; startTime: number }>
+  ): void {
+    if (process.platform !== "win32" || !Array.isArray(roots)) return;
+    const targets: WindowsTreeKillTarget[] = roots.flatMap((root) =>
+      Number.isSafeInteger(root?.pid) &&
+      root.pid > 0 &&
+      root.pid !== process.pid &&
+      Number.isSafeInteger(root?.startTime) &&
+      root.startTime > 0
+        ? [{ pid: root.pid, startTime: root.startTime }]
+        : []
+    );
+    if (targets.length === 0) return;
+    console.warn(
+      `[PtyClient] ${shard.serviceName} handed over ${targets.length} tree kill(s) its teardown could not confirm; finishing them here`
+    );
+    const kill: Promise<void> = killWindowsProcessTrees(targets, {
+      timeoutMs: HANDOFF_TREE_KILL_TIMEOUT_MS,
+    })
+      .then(
+        (results) => {
+          results.forEach((result, index) => {
+            const problem = describeWindowsTreeKillProblem(result);
+            if (problem)
+              console.warn(`[PtyClient] Handed-over pid=${targets[index].pid}: ${problem}`);
+          });
+        },
+        (err: unknown) => {
+          console.warn("[PtyClient] Handed-over tree kill failed:", err);
+        }
+      )
+      .finally(() => this.handoffKills.delete(kill));
+    this.handoffKills.add(kill);
+  }
+
+  /** Every handed-over kill, or {@link HANDOFF_QUIT_WAIT_MS}, whichever is first. */
+  private async settleHandoffKills(): Promise<void> {
+    if (this.handoffKills.size === 0) return;
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      Promise.all([...this.handoffKills]),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, HANDOFF_QUIT_WAIT_MS);
+        timer.unref?.();
+      }),
+    ]);
+    clearTimeout(timer);
   }
 
   private handleShardEvent(shard: PtyShard, event: PtyHostEvent): void {
@@ -1455,10 +1567,23 @@ export class PtyClient extends EventEmitter {
     if (process.platform === "win32") {
       // One helper run for every tree, never `taskkill /T`, which can follow a
       // reused parent PID into an unrelated program — and no bare-PID fallback
-      // either: the crashed host's handles no longer pin these PIDs. Not
-      // blocking: this is Main mid-session. The shard's restart waits for it
-      // through the same barrier as the lineage reap above.
-      const kill = killWindowsProcessTrees(killable, { timeoutMs: 3000 }).then(
+      // either: the crashed host's handles no longer pin these PIDs. A shell
+      // whose identity the host reported goes with it, so a PID taken over
+      // since the crash is left alone. Not blocking: this is Main mid-session.
+      // The shard's restart waits for it through the same barrier as the
+      // lineage reap above.
+      const identityOf = new Map<number, number>();
+      for (const id of ownedIds) {
+        const identity = this.terminalIdentities.get(id);
+        if (identity && identity.pid === this.terminalPids.get(id)) {
+          identityOf.set(identity.pid, identity.startTime);
+        }
+      }
+      const targets: WindowsTreeKillTarget[] = killable.map((pid) => {
+        const startTime = identityOf.get(pid);
+        return startTime === undefined ? { pid } : { pid, startTime };
+      });
+      const kill = killWindowsProcessTrees(targets, { timeoutMs: 3000 }).then(
         (results) => {
           results.forEach((result, index) => {
             const problem = describeWindowsTreeKillProblem(result);
@@ -1501,6 +1626,7 @@ export class PtyClient extends EventEmitter {
 
     for (const id of ownedIds) {
       this.terminalPids.delete(id);
+      this.terminalIdentities.delete(id);
       // Their exit events died with the host; release them here so the
       // supervisor never holds a PID that is free to be recycled.
       terminalCrashReapService.detachTerminal(id);
@@ -3300,10 +3426,16 @@ export class PtyClient extends EventEmitter {
     // if it has not exited in time), pending ports, and the broker (rejects
     // pending promises with "Broker disposed"; callers convert to sentinel
     // values via .catch()).
+    // A host whose exit batch could not confirm its kills hands them over just
+    // before it exits; those finish here, on Main's helper, which dies with
+    // Main — so quit waits for them too, briefly.
     this.hostsExited = Promise.all([
       ...Array.from(this.shards.values(), (shard) => shard.dispose()),
       ...this.retiringHostExits,
-    ]).then((exits) => exits.every(Boolean));
+    ]).then(async (exits) => {
+      await this.settleHandoffKills();
+      return exits.every(Boolean);
+    });
     this.shards.clear();
 
     this.pendingSpawns.clear();
@@ -3316,6 +3448,7 @@ export class PtyClient extends EventEmitter {
     this.ipcDataMirrorExplicit.clear();
     this.ipcDataMirrorLeases.clear();
     this.terminalPids.clear();
+    this.terminalIdentities.clear();
     this.terminalOwners.clear();
     this.projectShardOverrides.clear();
     this.windowPortShard.clear();

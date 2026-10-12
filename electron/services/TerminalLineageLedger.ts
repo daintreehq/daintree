@@ -139,7 +139,23 @@ interface RootEntry {
   origin: LineageOrigin | null;
   /** When the root left `active`, or null while it is still active. */
   closedAtMs: number | null;
+  /** When the root was registered. Its shell was created moments before. */
+  registeredAtMs: number;
+  /**
+   * Windows: the root's `CreationDate` from the first census that listed it,
+   * kept only if that process could be our shell — see
+   * {@link couldBeRegisteredRoot}. Null until then, and on other platforms,
+   * whose census carries no start time.
+   */
+  rootStartTime: string | null;
 }
+
+/** Root identity listener: see {@link TerminalLineageLedger.setRootIdentityListener}. */
+export type RootIdentityListener = (
+  rootPid: number,
+  startTime: string,
+  origin: LineageOrigin | null
+) => void;
 
 export interface PersistedLineageEntry {
   pid: number;
@@ -485,6 +501,28 @@ function couldPredateObservation(startTime: string, observedAtMs: number): boole
 }
 
 /**
+ * Seconds of slack either side of a root's registration within which a census
+ * row may be taken as that root's own identity. The shell is created just
+ * before it is registered — moments before, or a few event-loop turns when
+ * ConPTY reports its PID late — so a process created after registration plus
+ * the clock's slack holds a PID our shell already gave up, and one created
+ * long before is the PID's previous holder, caught by a census that began
+ * before the shell existed.
+ */
+const ROOT_IDENTITY_AFTER_MS = 1000;
+const ROOT_IDENTITY_BEFORE_MS = 10_000;
+
+/** Whether a process created at `startTime` could be the root registered at `registeredAtMs`. */
+function couldBeRegisteredRoot(startTime: string, registeredAtMs: number): boolean {
+  const createdAtMs = Date.parse(startTime);
+  if (!Number.isFinite(createdAtMs)) return false;
+  return (
+    createdAtMs <= registeredAtMs + ROOT_IDENTITY_AFTER_MS &&
+    createdAtMs >= registeredAtMs - ROOT_IDENTITY_BEFORE_MS
+  );
+}
+
+/**
  * Records every descendant ever observed under a PTY shell, so teardown can
  * still reach the ones that have since reparented to PID 1.
  *
@@ -529,6 +567,7 @@ export class TerminalLineageLedger {
   private lastCensus: LineageCensus | null = null;
   /** When {@link lastCensus} was folded in, the observation time for adoptions. */
   private lastCensusAtMs = 0;
+  private rootIdentityListener: RootIdentityListener | null = null;
 
   constructor(
     private readonly filePath: string | null,
@@ -550,7 +589,39 @@ export class TerminalLineageLedger {
       unseenSweeps: 0,
       origin: origin ?? null,
       closedAtMs: null,
+      registeredAtMs: Date.now(),
+      rootStartTime: null,
     });
+  }
+
+  /**
+   * Windows: the root's own creation time, as the first census that listed it
+   * saw it — the identity a kill of the root passes so the helper refuses
+   * whatever holds the PID if it is no longer this shell. Undefined until a
+   * census has listed it, and always off Windows.
+   */
+  getRootStartTime(rootPid: number): string | undefined {
+    return this.roots.get(rootPid)?.rootStartTime ?? undefined;
+  }
+
+  /**
+   * Be told when a root's identity is first established (Windows only). The
+   * pty-host forwards a terminal's to Main, which has only the bare PID and
+   * needs the identity to clean up safely after a host crash.
+   */
+  setRootIdentityListener(listener: RootIdentityListener | null): void {
+    this.rootIdentityListener = listener;
+  }
+
+  private noteRootIdentity(rootPid: number, entry: RootEntry, startTime: string | undefined): void {
+    if (process.platform !== "win32" || !startTime || entry.rootStartTime !== null) return;
+    if (!couldBeRegisteredRoot(startTime, entry.registeredAtMs)) return;
+    entry.rootStartTime = startTime;
+    try {
+      this.rootIdentityListener?.(rootPid, startTime, entry.origin);
+    } catch (err) {
+      console.warn("[TerminalLineageLedger] Root identity listener failed:", err);
+    }
   }
 
   /**
@@ -693,6 +764,7 @@ export class TerminalLineageLedger {
           entry.unseenSweeps = 0;
           if (entry.rootPpid === null) {
             entry.rootPpid = rootProc.ppid;
+            this.noteRootIdentity(rootPid, entry, rootProc.startTime);
           } else if (entry.rootPpid !== rootProc.ppid) {
             this.close(entry);
           }

@@ -822,6 +822,14 @@ export type PtyHostEvent =
   // `launchGeneration` binds the PID to the incarnation that owns it, so Main
   // never attributes a predecessor's PID to a same-id respawn.
   | { type: "terminal-pid"; id: string; pid: number; launchGeneration?: number }
+  // Windows: a terminal shell's creation time (UTC µs), once a census has seen
+  // it, so Main's cleanup after a host crash can refuse a reused PID.
+  | { type: "terminal-identity"; id: string; pid: number; startTime: number }
+  // Windows: tree kills the host's exit teardown could not confirm, handed to
+  // Main to finish by identity. The host's own helper dies when it exits.
+  | { type: "tree-kill-handoff"; roots: Array<{ pid: number; startTime: number }> }
+  // Windows: PowerShell could not run a tree kill at all (missing or blocked).
+  | { type: "tree-kill-unavailable"; reason: string }
   // Input from a renderer's MessagePort, which bypasses Main, that answered
   // the terminal's screen: Return, or a key that answers an approval menu.
   | { type: "terminal-input"; id: string; answer: "submit" | "key" }

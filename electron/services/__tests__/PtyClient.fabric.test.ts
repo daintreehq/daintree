@@ -566,7 +566,7 @@ describe("PtyClient fabric", () => {
         await vi.advanceTimersByTimeAsync(15_000);
 
         expect(windowsTreeKill).toHaveBeenCalledTimes(1);
-        expect(windowsTreeKill).toHaveBeenCalledWith([11111], { timeoutMs: 3000 });
+        expect(windowsTreeKill).toHaveBeenCalledWith([{ pid: 11111 }], { timeoutMs: 3000 });
         // The dead host no longer pins these PIDs: no bare-PID kill, ever.
         expect(killSpy).not.toHaveBeenCalled();
         // The replacement host waits for the old trees, as it does for the lineage reap.
@@ -579,6 +579,78 @@ describe("PtyClient fabric", () => {
       } finally {
         Object.defineProperty(process, "platform", original);
         killSpy.mockRestore();
+      }
+    });
+
+    it("on Windows, passes each shell's reported identity to the crash cleanup", async () => {
+      const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+      try {
+        const client = createFabricClient();
+        client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        const shardA = projectShard("project-a");
+        shardA.child.emit("message", { type: "ready" });
+        shardA.child.emit("message", { type: "terminal-pid", id: "t1", pid: 11111 });
+        shardA.child.emit("message", { type: "terminal-pid", id: "t2", pid: 11112 });
+        shardA.child.emit("message", {
+          type: "terminal-identity",
+          id: "t1",
+          pid: 11111,
+          startTime: 1_760_256_000_123_456,
+        });
+        // An identity for a PID the terminal no longer has is stale.
+        shardA.child.emit("message", {
+          type: "terminal-identity",
+          id: "t2",
+          pid: 99999,
+          startTime: 1_760_256_000_999_999,
+        });
+
+        Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+        shardA.child.emit("exit", 1);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // A shell whose PID was taken over since the crash is refused by the
+        // helper; one with no identity still goes by PID, as before.
+        expect(windowsTreeKill).toHaveBeenCalledWith(
+          [{ pid: 11111, startTime: 1_760_256_000_123_456 }, { pid: 11112 }],
+          { timeoutMs: 3000 }
+        );
+        client.dispose();
+      } finally {
+        Object.defineProperty(process, "platform", original);
+      }
+    });
+
+    it("on Windows, finishes the tree kills a disposing host handed over, and quit waits for them", async () => {
+      const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+      let treesGone: (value: unknown[]) => void = () => {};
+      windowsTreeKill.mockImplementationOnce(
+        () => new Promise<unknown[]>((resolve) => (treesGone = resolve))
+      );
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const client = createFabricClient();
+        Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+        client.dispose();
+        let exited: boolean | null = null;
+        void client.waitForHostsExited().then((value) => (exited = value));
+
+        // The handoff comes from a host already disposing: its shard is retired.
+        const roots = [{ pid: 33333, startTime: 1_760_256_000_123_456 }];
+        defaultShard().child.emit("message", { type: "tree-kill-handoff", roots });
+        defaultShard().child.emit("exit", 1);
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(windowsTreeKill).toHaveBeenCalledWith(roots, { timeoutMs: 3000 });
+        expect(exited).toBeNull();
+
+        treesGone([]);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(exited).toBe(false);
+      } finally {
+        Object.defineProperty(process, "platform", original);
+        warnSpy.mockRestore();
       }
     });
 

@@ -472,9 +472,10 @@ describe("AgentVersionService resilience", () => {
         const result = await pending;
 
         expect(result.installedVersion).toBe("4.5.6");
-        // The root is alive and ours, so the helper may fall back to its PID.
+        // The root is alive and ours, so the helper may fall back to its PID —
+        // the child itself goes along, so that is re-checked when the kill runs.
         expect(treeKillMock).toHaveBeenCalledWith(
-          { pid: 4242, ownChild: true },
+          { pid: 4242, ownChild: expect.objectContaining({ pid: 4242 }) },
           "[AgentVersionService]",
           { timeoutMs: 3000 }
         );

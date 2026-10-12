@@ -28,8 +28,9 @@ const { ProcessTreeKiller, beginWindowsExitBatch, flushWindowsExitBatchAsync } =
   await import("../ProcessTreeKiller.js");
 const { PluginPtyProcessManager } =
   await import("../../../pty-host/services/PluginPtyProcessManager.js");
-const { disposeWindowsTreeKillService, keepWindowsTreeKillHelperWarm } =
+const { disposeWindowsTreeKillService, keepWindowsTreeKillHelperWarm, killWindowsProcessTree } =
   await import("../../../utils/windowsTreeKill.js");
+const { identityMicros } = await import("../../../utils/windowsProcessTree.js");
 
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
 
@@ -167,6 +168,58 @@ describe("ProcessTreeKiller on the persistent Windows helper", () => {
     // Nothing else was sent: the shell's PID is free once that kill ended it.
     expect(helpers[0].requests).toHaveLength(1);
     expect(spawnSyncMock).not.toHaveBeenCalled();
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("never sends a shell the backstop released while its kill waited behind a slow run", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const slow = killWindowsProcessTree(7_250_000, { timeoutMs: 20_000 });
+      await settleIo();
+      const pty = makePty(7_250_001);
+      new ProcessTreeKiller(pty, null).execute(false);
+      await settleIo();
+      expect(helpers[0].requests).toHaveLength(1);
+
+      vi.advanceTimersByTime(5_500);
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+
+      helpers[0].answer(killedEverything(helpers[0], 0));
+      await slow;
+      await settleIo();
+      // The shell has gone with its pseudoconsole and nothing pins its PID:
+      // a census now could find anything under it.
+      expect(helpers[0].requests).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends a queued shell with its recorded identity and ends nothing the helper finds changed", async () => {
+    const start = "2026-10-12T10:00:00.1234560+02:00";
+    const lineage = {
+      registerRoot: () => {},
+      markRootClosing: () => {},
+      getVerifiedOrphanPids: () => [],
+      getTrackedPids: () => [],
+      getRootStartTime: () => start,
+    };
+    const pty = makePty(7_260_001);
+
+    new ProcessTreeKiller(pty, null, lineage).execute(false);
+    await settleIo();
+    const line = helpers[0].requests[0];
+    const input = JSON.parse(line.slice(line.indexOf(" ") + 1)) as {
+      roots: Array<{ pid: number; start: string | null }>;
+    };
+    expect(input.roots).toEqual([
+      expect.objectContaining({ pid: 7_260_001, start: String(identityMicros(start)) }),
+    ]);
+
+    // Another process holds the PID now; the helper reports it and kills nothing.
+    helpers[0].answer(["R 0 mismatch 42", "K"]);
+    await settleIo();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("no longer belongs to the shell"));
     expect(pty.kill).toHaveBeenCalledTimes(1);
   });
 

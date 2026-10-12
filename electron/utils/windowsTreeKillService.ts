@@ -65,6 +65,12 @@ export interface TreeKillEngine {
     budget: TreeKillBudget,
     reason: string
   ): Promise<WindowsTreeKillResult[]>;
+  /**
+   * The result for a target that must not be sent after all — withdrawn by its
+   * caller, or no longer the process it named — or null to send it. Asked when
+   * a run starts, and when a target's `withdrawOn` aborts while it is queued.
+   */
+  screen?(target: NormalizedTreeKillTarget): WindowsTreeKillResult | null;
 }
 
 export interface WindowsTreeKillServiceOptions {
@@ -79,12 +85,19 @@ interface PendingKill {
   budget: TreeKillBudget;
   resolve: (results: WindowsTreeKillResult[]) => void;
   onStart?: () => void;
+  /** Drops the `withdrawOn` listeners; called once the request leaves the queue. */
+  detach?: () => void;
+  /**
+   * Per target, the result it was settled with instead of being sent, or null
+   * when it went to the helper. Filled when the run starts.
+   */
+  screened?: Array<WindowsTreeKillResult | null>;
 }
 
 interface Run {
   id: number;
   kills: PendingKill[];
-  /** Every request's targets, concatenated in submission order. */
+  /** Every request's targets that were sent, concatenated in submission order. */
   targets: NormalizedTreeKillTarget[];
   budget: TreeKillBudget;
   /** The persistent helper serving this run; null when the one-shot does. */
@@ -121,6 +134,9 @@ interface Run {
  * difference: a kill is never dropped, so a run the persistent helper cannot
  * finish (it would not start, died, timed out, or answered out of protocol)
  * is finished by the one-shot helper instead, and every request resolves.
+ * Only its caller can take a root back, and only before its run starts
+ * (`withdrawOn`): a queued root whose PID nothing pins any more must never
+ * reach a census that would walk whatever holds that PID by then.
  * The helper announces its kill plan before it terminates anything, so that
  * recovery knows which roots may already have been ended and pins each to the
  * identity the helper's census saw, rather than walking a PID that may have
@@ -169,8 +185,12 @@ export class WindowsTreeKillService {
   /**
    * Kill these trees in the next run. Resolves in target order once the run
    * has finished, by the persistent helper or the one-shot. Never rejects.
-   * `onStart` is called once a helper process has the request — from then on
-   * the kill completes even if this process exits.
+   * `onStart` is called once a helper process has the request. The helper is
+   * this process's child and dies with it, so a run still in flight when this
+   * process exits is abandoned, not finished.
+   *
+   * A target whose `withdrawOn` aborts while the request is still queued is
+   * not sent; a request left with nothing to send resolves at once.
    */
   kill(
     targets: readonly NormalizedTreeKillTarget[],
@@ -179,9 +199,39 @@ export class WindowsTreeKillService {
   ): Promise<WindowsTreeKillResult[]> {
     if (targets.length === 0) return Promise.resolve([]);
     return new Promise((resolve) => {
-      this.queue.push({ targets, budget, resolve, ...(onStart ? { onStart } : {}) });
+      const pending: PendingKill = { targets, budget, resolve, ...(onStart ? { onStart } : {}) };
+      const signals = [...new Set(targets.flatMap((t) => (t.withdrawOn ? [t.withdrawOn] : [])))];
+      if (signals.length > 0) {
+        const onAbort = () => this.withdrawIfQueued(pending);
+        for (const signal of signals) signal.addEventListener("abort", onAbort);
+        pending.detach = () => {
+          for (const signal of signals) signal.removeEventListener("abort", onAbort);
+        };
+      }
+      this.queue.push(pending);
       this.scheduleDispatch();
+      // A target withdrawn before it was ever queued needs no abort to notice.
+      if (signals.some((signal) => signal.aborted)) this.withdrawIfQueued(pending);
     });
+  }
+
+  /**
+   * A queued request whose every target must no longer be sent leaves the
+   * queue now, settled with the screened results. One that still has a target
+   * to send stays; the rest are dropped when its run starts.
+   */
+  private withdrawIfQueued(kill: PendingKill): void {
+    const index = this.queue.indexOf(kill);
+    if (index === -1) return;
+    const screened = kill.targets.map((target) => this.engine.screen?.(target) ?? null);
+    if (screened.some((result) => result === null)) return;
+    this.queue.splice(index, 1);
+    kill.detach?.();
+    kill.resolve(screened as WindowsTreeKillResult[]);
+    if (!this.isBusy) {
+      if (this.keepWarm) this.prewarm();
+      else this.armIdleTimer();
+    }
   }
 
   /**
@@ -236,10 +286,14 @@ export class WindowsTreeKillService {
     if (this.run || this.queue.length === 0) return;
     this.clearIdleTimer();
     const kills = this.queue.splice(0);
+    for (const kill of kills) {
+      kill.detach?.();
+      kill.screened = kill.targets.map((target) => this.engine.screen?.(target) ?? null);
+    }
     const run: Run = {
       id: this.nextRunId++,
       kills,
-      targets: kills.flatMap((kill) => kill.targets),
+      targets: kills.flatMap((kill) => kill.targets.filter((_t, i) => kill.screened?.[i] === null)),
       budget: {
         timeoutMs: Math.max(...kills.map((kill) => kill.budget.timeoutMs)),
         waitMs: Math.max(...kills.map((kill) => kill.budget.waitMs)),
@@ -252,6 +306,12 @@ export class WindowsTreeKillService {
       started: false,
     };
     this.run = run;
+
+    if (run.targets.length === 0) {
+      // Everything in it was withdrawn or is gone: nothing to start.
+      this.settle(run, []);
+      return;
+    }
 
     if (this.disposed || this.cooldownTimer) {
       this.recover(
@@ -456,12 +516,16 @@ export class WindowsTreeKillService {
     this.run = null;
     let offset = 0;
     for (const kill of run.kills) {
-      const slice = results.slice(offset, offset + kill.targets.length);
-      offset += kill.targets.length;
+      const screened = kill.screened ?? kill.targets.map(() => null);
+      const sent = screened.filter((result) => result === null).length;
+      const slice = results.slice(offset, offset + sent);
+      offset += sent;
+      let next = 0;
       kill.resolve(
-        slice.length === kill.targets.length
-          ? slice
-          : kill.targets.map(() => untouchedResult("no report for this root"))
+        screened.map((result) => {
+          if (result) return result;
+          return slice.length === sent ? slice[next++] : untouchedResult("no report for this root");
+        })
       );
     }
 

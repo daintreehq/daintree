@@ -81,7 +81,10 @@ import {
   flushWindowsExitBatch,
   flushWindowsExitBatchAsync,
   ProcessTreeKiller,
+  type WindowsExitBatchOutcome,
 } from "./services/pty/ProcessTreeKiller.js";
+import { onWindowsTreeKillUnavailable } from "./utils/windowsTreeKill.js";
+import { identityMicros } from "./utils/windowsProcessTree.js";
 import { GracefulCaptureTracker } from "./pty-host/GracefulCaptureTracker.js";
 import {
   PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS,
@@ -201,6 +204,18 @@ const lineageLedger = new TerminalLineageLedger(
   process.env.DAINTREE_PTY_SHARD_SERVICE ?? "daintree-pty-host"
 );
 processTreeCache.attachLineageLedger(lineageLedger);
+if (process.platform === "win32") {
+  // Main knows a terminal's shell only by PID, and once this host is gone
+  // nothing pins that PID: its crash cleanup needs the shell's identity to
+  // refuse a process that has taken the number over.
+  lineageLedger.setRootIdentityListener((pid, startTime, origin) => {
+    const micros = identityMicros(startTime);
+    if (origin?.kind !== "terminal" || micros === undefined) return;
+    sendEvent({ type: "terminal-identity", id: origin.id, pid, startTime: micros });
+  });
+  // Main tells the user, once per session; this host only reports it.
+  onWindowsTreeKillUnavailable((reason) => sendEvent({ type: "tree-kill-unavailable", reason }));
+}
 // Image-path identity signal — defeats `process.title`/`setproctitle` rewrites
 // where comm/argv have been clobbered but the on-disk binary path still
 // identifies the agent. Shared across all terminals so the per-PID cache is
@@ -1932,8 +1947,9 @@ function finishCleanup(): void {
 }
 
 /**
- * The teardown for `process.on("exit")`, where nothing asynchronous completes:
- * the exit batch runs on a blocking one-shot helper.
+ * The teardown for `process.on("exit")`, and on macOS and Linux for every
+ * shutdown: synchronous, so the exit follows in the same tick. On Windows the
+ * exit batch runs on a blocking one-shot helper here.
  */
 function cleanup(): void {
   if (cleanedUp) return;
@@ -1945,39 +1961,97 @@ function cleanup(): void {
 }
 
 /**
- * The teardown Main asks for. On Windows the exit batch goes to the warm
+ * How long a host that handed unfinished tree kills to Main waits before
+ * exiting, so the message is on its way before the process goes.
+ */
+const TREE_KILL_HANDOFF_DELIVERY_MS = 50;
+let treeKillsHandedOff = false;
+
+/**
+ * The teardown Main asks for, on Windows. The exit batch goes to the warm
  * tree-kill helper when one is running and is awaited within the batch's
  * budget: a cold PowerShell start alone took most of it, and at quit the
  * blocking run kept missing it, leaving every tree to the census-failure path.
+ *
+ * Resolves with whether every tree was confirmed ended. The helper dies with
+ * this host, so whatever the batch could not confirm — a request stuck behind
+ * a slow run, or a run cut off at the deadline — is handed to Main by identity
+ * before the host exits, and the exit is not a clean one.
  */
-async function cleanupAsync(): Promise<void> {
-  if (cleanedUp) return;
+async function cleanupAsync(): Promise<boolean> {
+  if (cleanedUp) return true;
   cleanedUp = true;
   const failed = beginCleanup();
-  await flushWindowsExitBatchAsync();
+  const outcome = await flushWindowsExitBatchAsync();
+  const confirmed = handOffUnfinishedTreeKills(outcome);
   if (failed) throw failed.error;
   finishCleanup();
+  return confirmed;
 }
 
-let shutdown: Promise<void> | null = null;
+/** Hand Main the roots the exit batch left unconfirmed. Returns whether there were none. */
+function handOffUnfinishedTreeKills(outcome: WindowsExitBatchOutcome): boolean {
+  if (outcome.unfinished.length > 0) {
+    console.warn(
+      `[PtyHost] handing ${outcome.unfinished.length} unconfirmed tree kill(s) to Main: pid=${outcome.unfinished.map((root) => root.pid).join(", ")}`
+    );
+    try {
+      sendEvent({ type: "tree-kill-handoff", roots: outcome.unfinished });
+      treeKillsHandedOff = true;
+    } catch (error) {
+      console.warn("[PtyHost] tree-kill handoff failed:", error);
+    }
+  }
+  if (outcome.abandoned > 0) {
+    console.warn(
+      `[PtyHost] ${outcome.abandoned} terminal tree(s) with no recorded identity were not confirmed ended and cannot be handed on`
+    );
+  }
+  return outcome.unfinished.length === 0 && outcome.abandoned === 0;
+}
+
+let shutdown: Promise<boolean> | null = null;
 
 /**
  * Finish the teardown, then exit. The explicit exit is load-bearing: the
  * message port keeps the event loop alive, so a host that only cleans up never
  * exits and Main is left waiting on its force-kill deadline. Main treats a
- * clean exit as proof every terminal was reached (#13167). A second request
- * while the first is still tearing down waits for it rather than exiting
- * under it.
+ * clean exit as proof every terminal was reached (#13167), so a teardown that
+ * threw, or left a tree it could not confirm, exits non-zero.
+ *
+ * macOS and Linux tear down synchronously and exit in the same tick. Windows
+ * awaits its exit batch, and a second request while the first is still
+ * tearing down waits for it rather than exiting under it.
  */
 function shutdownHost(exitCode = 0): void {
+  if (process.platform !== "win32") {
+    try {
+      cleanup();
+    } catch (error) {
+      // Main reads a clean exit as "every terminal was reached"; a teardown that
+      // threw part way must not claim that.
+      console.error("[PtyHost] Teardown failed:", error);
+      exitCode = exitCode || 1;
+    }
+    process.exit(exitCode);
+    return;
+  }
   shutdown ??= cleanupAsync();
   shutdown.then(
-    () => process.exit(exitCode),
+    (confirmed) => {
+      if (confirmed) {
+        process.exit(exitCode);
+        return;
+      }
+      setTimeout(() => process.exit(exitCode || 1), TREE_KILL_HANDOFF_DELIVERY_MS);
+    },
     (error: unknown) => {
-      // Main reads a clean exit as "every terminal was reached"; a teardown
-      // that threw part way must not claim that.
       console.error("[PtyHost] Teardown failed:", error);
-      process.exit(exitCode || 1);
+      if (!treeKillsHandedOff) {
+        process.exit(exitCode || 1);
+        return;
+      }
+      setTimeout(() => process.exit(exitCode || 1), TREE_KILL_HANDOFF_DELIVERY_MS);
     }
   );
 }

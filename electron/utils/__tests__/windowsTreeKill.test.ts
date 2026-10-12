@@ -26,9 +26,11 @@ import {
   killWindowsProcessTreesSync,
   liveChildTreeTarget,
   normalizeTreeKillTarget,
+  onWindowsTreeKillUnavailable,
   parseTreeKillOutput,
   parseTreeKillPlan,
   planTreeKillRecovery,
+  resetWindowsTreeKillUnavailableForTest,
   TREE_KILL_SCRIPT,
   TREE_KILL_SERVER_SCRIPT,
   treeKillInputEnv,
@@ -46,6 +48,9 @@ const EDITOR = 7_200_100;
 
 const ROOT_START = "2026-10-12T10:00:00.1234560+02:00";
 const ROOT_MICROS = creationTimeMicros(ROOT_START)!;
+
+/** A child Node has not seen exit. */
+const RUNNING = { exitCode: null, signalCode: null };
 
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
 
@@ -166,7 +171,7 @@ describe("the persistent helper script", () => {
     expect(TREE_KILL_SERVER_SCRIPT).toContain("if ($rid -notmatch '^[0-9]+$') { continue }");
   });
 
-  it("finishes a run whose host has gone instead of failing on the broken pipe", () => {
+  it("keeps a run going when nobody reads its output any more", () => {
     // Every write goes through Send, which swallows the failure.
     expect(TREE_KILL_SERVER_SCRIPT).toContain(
       "function Send([string]$text) { try { [Console]::Out.Write($text); [Console]::Out.Flush() } catch { } }"
@@ -187,7 +192,7 @@ describe("encodeTreeKillInput", () => {
       encodeTreeKillInput(
         [
           normalizeTreeKillTarget({ pid: ROOT, startTime: ROOT_START }),
-          normalizeTreeKillTarget({ pid: CHILD, tree: false, ownChild: true }),
+          normalizeTreeKillTarget({ pid: CHILD, tree: false, ownChild: RUNNING }),
           normalizeTreeKillTarget(OTHER_ROOT),
         ],
         1234.7
@@ -237,11 +242,9 @@ describe("treeKillInputEnv", () => {
 });
 
 describe("liveChildTreeTarget", () => {
-  it("lets a running child fall back to its handle-pinned PID", () => {
-    expect(liveChildTreeTarget({ pid: ROOT, exitCode: null, signalCode: null })).toEqual({
-      pid: ROOT,
-      ownChild: true,
-    });
+  it("lets a running child fall back to its handle-pinned PID, re-read when it is used", () => {
+    const child = { pid: ROOT, exitCode: null, signalCode: null };
+    expect(liveChildTreeTarget(child)).toEqual({ pid: ROOT, ownChild: child });
   });
 
   it.each([
@@ -470,6 +473,7 @@ describe("Windows tree kill", () => {
     spawnSyncMock.mockReset();
     execFileMock.mockReset();
     spawnMock.mockReset();
+    resetWindowsTreeKillUnavailableForTest();
     killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   });
@@ -542,7 +546,7 @@ describe("Windows tree kill", () => {
     ])("after %s, ends only a root the caller owns, by PID", (_label, spawned) => {
       spawnSyncMock.mockReturnValue(spawned);
 
-      const owned = killWindowsProcessTreeSync({ pid: ROOT, ownChild: true });
+      const owned = killWindowsProcessTreeSync({ pid: ROOT, ownChild: RUNNING });
       const foreign = killWindowsProcessTreeSync(OTHER_ROOT);
 
       expect(killSpy.mock.calls).toEqual([[ROOT, "SIGKILL"]]);
@@ -569,6 +573,35 @@ describe("Windows tree kill", () => {
       expect(killSpy).not.toHaveBeenCalled();
     });
 
+    it("never ends an owned child by PID once Node has seen it exit", () => {
+      // Alive when the run starts, gone by the time the helper has failed:
+      // Node no longer holds its handle, so its PID may name anything.
+      const child: { exitCode: number | null; signalCode: null } = {
+        exitCode: null,
+        signalCode: null,
+      };
+      spawnSyncMock.mockImplementation(() => {
+        child.exitCode = 0;
+        return { stdout: "", stderr: "boom", status: 1 };
+      });
+
+      const result = killWindowsProcessTreeSync({ pid: ROOT, ownChild: child });
+
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ mode: "gone", rootEnded: true, unconfirmed: [] });
+    });
+
+    it("does not start a run for an owned child that has already exited", () => {
+      const result = killWindowsProcessTreeSync({
+        pid: ROOT,
+        ownChild: { exitCode: 1, signalCode: null },
+      });
+
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ mode: "gone", targeted: [] });
+    });
+
     it.each([0, -1, 4, 1.5, Number.NaN])("refuses PID %s without starting PowerShell", (pid) => {
       expect(killWindowsProcessTreeSync(pid).mode).toBe("skipped");
       expect(spawnSyncMock).not.toHaveBeenCalled();
@@ -577,7 +610,7 @@ describe("Windows tree kill", () => {
 
     it("refuses this process and its parent", () => {
       expect(killWindowsProcessTreeSync(process.pid).mode).toBe("skipped");
-      expect(killWindowsProcessTreeSync({ pid: process.ppid, ownChild: true }).mode).toBe(
+      expect(killWindowsProcessTreeSync({ pid: process.ppid, ownChild: RUNNING }).mode).toBe(
         "skipped"
       );
       expect(spawnSyncMock).not.toHaveBeenCalled();
@@ -762,11 +795,150 @@ describe("Windows tree kill", () => {
       it("falls back to the owned root alone when the one-shot fails too", async () => {
         execFileYields(new Error("Command failed"), "");
 
-        const result = await killWindowsProcessTree({ pid: ROOT, ownChild: true });
+        const result = await killWindowsProcessTree({ pid: ROOT, ownChild: RUNNING });
 
         expect(result.mode).toBe("root-only");
         expect(killSpy.mock.calls).toEqual([[ROOT, "SIGKILL"]]);
         expect(describeWindowsTreeKillProblem(result)).toContain("census failed");
+      });
+
+      it("skips the by-PID fallback for an owned child that exited while its kill ran", async () => {
+        const child: { exitCode: number | null; signalCode: null } = {
+          exitCode: null,
+          signalCode: null,
+        };
+        execFileMock.mockImplementation(
+          (
+            _file: string,
+            _args: string[],
+            _options: unknown,
+            callback: (error: Error | null, stdout: string, stderr: string) => void
+          ) => {
+            child.exitCode = 0;
+            queueMicrotask(() => callback(new Error("Command failed"), "", ""));
+            return { stdin: { end: vi.fn() } };
+          }
+        );
+
+        const result = await killWindowsProcessTree({ pid: ROOT, ownChild: child });
+
+        expect(killSpy).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ mode: "gone", rootEnded: true, unconfirmed: [] });
+      });
+
+      it("tells listeners once, and only once, that PowerShell cannot run", async () => {
+        execFileYields(new Error("Command failed: blocked by group policy"), "");
+        const listener = vi.fn();
+        const unsubscribe = onWindowsTreeKillUnavailable(listener);
+        try {
+          await killWindowsProcessTree(ROOT);
+          await killWindowsProcessTree(OTHER_ROOT);
+        } finally {
+          unsubscribe();
+        }
+
+        expect(listener).toHaveBeenCalledTimes(1);
+        expect(listener).toHaveBeenCalledWith(expect.stringContaining("blocked by group policy"));
+      });
+
+      it("does not read a timed-out or cut-short run as PowerShell being blocked", async () => {
+        const listener = vi.fn();
+        const unsubscribe = onWindowsTreeKillUnavailable(listener);
+        try {
+          execFileYields(Object.assign(new Error("Command failed"), { killed: true }), "");
+          await killWindowsProcessTree(ROOT);
+          execFileYields(new Error("Command failed"), `R 0 tree ${ROOT_MICROS}\r\nK\r\n`);
+          await killWindowsProcessTree(ROOT);
+        } finally {
+          unsubscribe();
+        }
+
+        expect(listener).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("withdrawal before a run starts", () => {
+      async function runInFlight() {
+        const helper = helperRuns();
+        const first = killWindowsProcessTree(OTHER_ROOT);
+        await settleIo();
+        expect(helper.requests).toHaveLength(1);
+        return { helper, first };
+      }
+
+      it("never sends a root withdrawn while queued, and settles it at once", async () => {
+        const { helper, first } = await runInFlight();
+        const unpinned = new AbortController();
+        let settled = false;
+        const queued = killWindowsProcessTree({ pid: ROOT, withdrawOn: unpinned.signal }).then(
+          (result) => {
+            settled = true;
+            return result;
+          }
+        );
+        await settleIo();
+
+        unpinned.abort();
+        await settleIo();
+        expect(settled).toBe(true);
+        expect((await queued).mode).toBe("withdrawn");
+
+        helper.answer(["R 0 gone -"]);
+        await first;
+        await settleIo();
+        expect(helper.requests).toHaveLength(1);
+      });
+
+      it("sends the rest of a request when only some of its roots are withdrawn", async () => {
+        const { helper, first } = await runInFlight();
+        const unpinned = new AbortController();
+        const queued = killWindowsProcessTrees([
+          { pid: ROOT, withdrawOn: unpinned.signal },
+          { pid: CHILD, startTime: ROOT_START },
+        ]);
+        await settleIo();
+        unpinned.abort();
+
+        helper.answer(["R 0 gone -"]);
+        await first;
+        await settleIo();
+        expect(helper.rootsOf(1)).toEqual([CHILD]);
+        helper.answer([`R 0 mismatch 1`]);
+
+        expect((await queued).map((result) => result.mode)).toEqual([
+          "withdrawn",
+          "identity-mismatch",
+        ]);
+      });
+
+      it("never sends a queued owned child that exited before its run started", async () => {
+        const { helper, first } = await runInFlight();
+        const child: { exitCode: number | null; signalCode: null } = {
+          exitCode: null,
+          signalCode: null,
+        };
+        const queued = killWindowsProcessTree({ pid: ROOT, ownChild: child });
+        await settleIo();
+        child.exitCode = 0;
+
+        helper.answer(["R 0 gone -"]);
+        await first;
+        await settleIo();
+
+        expect(helper.requests).toHaveLength(1);
+        expect(await queued).toMatchObject({ mode: "gone", rootEnded: true });
+        expect(killSpy).not.toHaveBeenCalled();
+      });
+
+      it("has no effect once the run has started", async () => {
+        const helper = helperRuns();
+        const unpinned = new AbortController();
+        const pending = killWindowsProcessTree({ pid: ROOT, withdrawOn: unpinned.signal });
+        await settleIo();
+        unpinned.abort();
+
+        helper.answer([`R 0 tree ${ROOT_MICROS}`, "K", `P 0 ${ROOT} killed`]);
+        expect((await pending).mode).toBe("tree");
       });
     });
   });

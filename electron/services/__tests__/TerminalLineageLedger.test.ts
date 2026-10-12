@@ -462,6 +462,69 @@ describe("TerminalLineageLedger", () => {
     });
   });
 
+  describe("root identity", () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    // Registered at 08:00:01Z; the shell was created just before.
+    const REGISTERED_AT = new Date("2026-10-12T08:00:01.000Z");
+    const ORIGIN = { kind: "terminal" as const, id: "t1" };
+
+    function registeredLedger() {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(REGISTERED_AT);
+      const ledger = new TerminalLineageLedger(null);
+      const listener = vi.fn();
+      ledger.setRootIdentityListener(listener);
+      ledger.registerRoot(100, ORIGIN);
+      return { ledger, listener };
+    }
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", originalPlatform);
+      vi.useRealTimers();
+    });
+
+    it("keeps the root's creation time from the first census that lists it, and reports it once", () => {
+      const { ledger, listener } = registeredLedger();
+      const start = "2026-10-12T10:00:00.5000000+02:00";
+      const census = new FakeCensus([{ pid: 100, ppid: 10, startTime: start }]);
+
+      ledger.reconcile(census);
+      ledger.reconcile(census);
+
+      expect(ledger.getRootStartTime(100)).toBe(start);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith(100, start, ORIGIN);
+    });
+
+    it.each([
+      ["created after the root registered: the PID changed hands", "2026-10-12T08:00:05.0000000Z"],
+      ["created long before: the PID's previous holder", "2026-10-12T07:59:00.0000000Z"],
+    ])("refuses a process %s", (_label, start) => {
+      const { ledger, listener } = registeredLedger();
+
+      ledger.reconcile(new FakeCensus([{ pid: 100, ppid: 10, startTime: start }]));
+
+      expect(ledger.getRootStartTime(100)).toBeUndefined();
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("records none off Windows", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      const { ledger, listener } = registeredLedger();
+
+      ledger.reconcile(
+        new FakeCensus([{ pid: 100, ppid: 10, startTime: "2026-10-12T08:00:00.5000000Z" }])
+      );
+
+      expect(ledger.getRootStartTime(100)).toBeUndefined();
+      expect(listener).not.toHaveBeenCalled();
+    });
+  });
+
   describe("root lifecycle", () => {
     it("closes an active root whose PID was handed to another process", async () => {
       // A root is only keyed by PID. If that number is recycled, an unrelated
