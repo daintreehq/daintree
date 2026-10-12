@@ -169,18 +169,20 @@ const fakePvm = vi.hoisted(() => {
 
 vi.mock("../../window/windowRef.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../window/windowRef.js")>()),
-  getWindowRegistry: () => ({
-    getByWindowId: (id: number) =>
-      id === shellWindow.id
-        ? {
-            windowId: shellWindow.id,
-            browserWindow: shellWindow,
-            services: { projectViewManager: fakePvm },
-            // The window's own cleanup, as WindowContext has; this window is never closed here.
-            cleanup: { add: () => undefined },
-          }
-        : undefined,
-  }),
+  getWindowRegistry: () => {
+    const context = {
+      windowId: shellWindow.id,
+      browserWindow: shellWindow,
+      services: { projectViewManager: fakePvm },
+      // The window's own cleanup, as WindowContext has; this window is never closed here.
+      cleanup: { add: () => undefined },
+    };
+    return {
+      getByWindowId: (id: number) => (id === shellWindow.id ? context : undefined),
+      // The one window, so a project's owner lookup has every window to walk.
+      all: () => [context],
+    };
+  },
 }));
 
 vi.mock("../../window/webContentsRegistry.js", async () => {
