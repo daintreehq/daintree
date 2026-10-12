@@ -1,4 +1,5 @@
 import { GitFileWatcher } from "../utils/gitFileWatcher.js";
+import type { InotifyLimit } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
 
@@ -72,7 +73,7 @@ export interface WatcherControllerHost {
    * or pending-flag drained after an in-flight update completes).
    */
   onTriggerUpdate(): void;
-  onInotifyLimitReached(worktreeId: string): void;
+  onInotifyLimitReached(worktreeId: string, limit: InotifyLimit): void;
   onEmfileLimitReached(worktreeId: string): void;
   /**
    * Fired when a recursive watcher successfully re-arms after a prior
@@ -249,7 +250,9 @@ export class WatcherController {
       ...this.debouncePolicy(),
       worktreeQuietWindowMs: WATCHER_WORKTREE_QUIET_WINDOW_MS,
       onWatcherFailed: () => this.handleWatcherFailed(),
-      onInotifyLimitReached: () => this.host.onInotifyLimitReached(this.host.worktreeId),
+      onInotifyLimitReached: (limit) =>
+        this.host.onInotifyLimitReached(this.host.worktreeId, limit),
+      onWorktreeWatcherReady: () => this.handleRecursiveWatcherReady(watcher),
       onEmfileLimitReached: () => this.host.onEmfileLimitReached(this.host.worktreeId),
     });
 
@@ -277,13 +280,8 @@ export class WatcherController {
           if (this.armedWatcher === watcher) this.armedWatcher = null;
           watcher.dispose();
         });
-        if (mode === "recursive" && this.wasDegraded) {
-          // Recursive coverage restored after a degradation. Signal recovery
-          // exactly once per degradation episode so the host can reset its
-          // one-shot guards and clear the persistent degraded indicator.
-          this.wasDegraded = false;
-          this.host.onWatcherRecovered?.();
-        }
+        // Recovery from a degradation is signalled by handleRecursiveWatcherReady
+        // once the subscription is live: `started` only means it was scheduled.
         // Retry budget is managed by stop(true) (reset) and scheduleRetry()
         // (increment). Resetting it here would defeat exhaustion — a failing
         // git-only fallback path would keep getting fresh budget every cycle.
@@ -337,6 +335,21 @@ export class WatcherController {
       this.pendingArm.watcher.dispose();
       this.pendingArm = null;
     }
+  }
+
+  /**
+   * The recursive subscription is live. Recovery from a degradation is
+   * signalled here, once per episode, so the host can reset its one-time
+   * notices and clear the degraded indicator. Not when the arm resolves:
+   * `start()` returns before the subscription exists, and a re-arm that then
+   * fails (an inotify limit still hit) must not read as recovered.
+   */
+  private handleRecursiveWatcherReady(watcher: GitFileWatcher): void {
+    if (this.disposed || !this.wasDegraded) return;
+    if (this.armedWatcher !== watcher && this.pendingArm?.watcher !== watcher) return;
+    if (this.gitWatcherMode !== "recursive") return;
+    this.wasDegraded = false;
+    this.host.onWatcherRecovered?.();
   }
 
   /**

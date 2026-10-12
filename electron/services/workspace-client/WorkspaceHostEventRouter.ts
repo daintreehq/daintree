@@ -45,7 +45,7 @@ export class WorkspaceHostEventRouter {
   private copyTreeProgressCallbacks: Map<string, CopyTreeProgressCallback>;
 
   private forgeCredentialChangeAt = new Map<string, number>();
-  private inotifyLimitToastSent = false;
+  private readonly inotifyLimitToastsSent = new Set<"watches" | "instances">();
   private emfileLimitToastSent = false;
   private cloudTeardownFailureToastKeys = new Set<string>();
   private pruneRetainedToastKeys = new Set<string>();
@@ -431,17 +431,22 @@ export class WorkspaceHostEventRouter {
       }
 
       case "inotify-limit-reached": {
-        if (this.inotifyLimitToastSent) break;
-        this.inotifyLimitToastSent = true;
+        // Hosts from before the limit was named only ever reported watches.
+        const limit = event.limit ?? "watches";
+        if (this.inotifyLimitToastsSent.has(limit)) break;
+        this.inotifyLimitToastsSent.add(limit);
+        const setting =
+          limit === "instances"
+            ? { noun: "instance", command: "sudo sysctl fs.inotify.max_user_instances=1024" }
+            : { noun: "watch", command: "sudo sysctl fs.inotify.max_user_watches=524288" };
         broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
           type: "warning",
           title: "File watching degraded",
-          message:
-            "Linux inotify watch limit reached. Some files may not auto-refresh until you raise it.",
+          message: `Linux inotify ${setting.noun} limit reached. Some files may not auto-refresh until you raise it.`,
           action: {
             label: "Copy fix command",
             ipcChannel: CHANNELS.CLIPBOARD_WRITE_TEXT,
-            data: "sudo sysctl fs.inotify.max_user_watches=524288",
+            data: setting.command,
           },
         });
         break;
@@ -506,7 +511,7 @@ export class WorkspaceHostEventRouter {
         // Recursive coverage restored. Reset the one-shot toast guards so a
         // subsequent relapse re-notifies. No toast — recovery is conveyed by
         // the persistent indicator disappearing (Tier-1 ambient signal).
-        this.inotifyLimitToastSent = false;
+        this.inotifyLimitToastsSent.clear();
         this.emfileLimitToastSent = false;
         break;
       }

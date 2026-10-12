@@ -1208,6 +1208,112 @@ describe("GitFileWatcher", () => {
       }
     });
 
+    it.each([
+      ["inotify_add_watch on '/repo/d65/s41' failed: No space left on device", 1],
+      ["ENOSPC: no space left on device, write", 0],
+    ])(
+      "reads the codeless rejection %j as the inotify watch limit %i time(s)",
+      async (message, limitCalls) => {
+        const onWatcherFailed = vi.fn();
+        const onInotifyLimitReached = vi.fn();
+        const mock = setupSubscribeMock();
+        const origPlatform = process.platform;
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+        try {
+          const gitWatcher = new GitFileWatcher({
+            worktreePath: "/repo",
+            branch: "main",
+            debounceMs: 300,
+            onChange: vi.fn(),
+            watchWorktree: true,
+            onWatcherFailed,
+            onInotifyLimitReached,
+          });
+          await gitWatcher.start();
+
+          // The real rejection: a bare Error with no errno code.
+          mock.reject(new Error(message));
+          await Promise.resolve();
+          await flushParcelWatcherCallbacks();
+
+          expect(onInotifyLimitReached).toHaveBeenCalledTimes(limitCalls);
+          expect(onWatcherFailed).toHaveBeenCalledTimes(1);
+        } finally {
+          Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+        }
+      }
+    );
+
+    it.each([
+      [
+        "Unable to initialize inotify: no inotify instance is available (fs.inotify.max_user_instances is used up)",
+      ],
+      ["Unable to initialize inotify: Too many open files"],
+    ])("names the instance limit for %j", async (message) => {
+      const onWatcherFailed = vi.fn();
+      const onInotifyLimitReached = vi.fn();
+      const mock = setupSubscribeMock();
+      const origPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+      try {
+        const gitWatcher = new GitFileWatcher({
+          worktreePath: "/repo",
+          branch: "main",
+          debounceMs: 300,
+          onChange: vi.fn(),
+          watchWorktree: true,
+          onWatcherFailed,
+          onInotifyLimitReached,
+        });
+        await gitWatcher.start();
+
+        mock.reject(Object.assign(new Error(message), { code: "EMFILE" }));
+        await Promise.resolve();
+        await flushParcelWatcherCallbacks();
+
+        expect(onInotifyLimitReached).toHaveBeenCalledWith("instances");
+        expect(onWatcherFailed).toHaveBeenCalledTimes(1);
+      } finally {
+        Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+      }
+    });
+
+    it.each([
+      ["Unable to initialize inotify: the system's open file table is full", "ENFILE"],
+      ["Unable to initialize inotify: Too many open files in system", undefined],
+      ["Unable to initialize inotify: Cannot allocate memory", undefined],
+    ])("doesn't blame the instance limit for %j", async (message, code) => {
+      const onWatcherFailed = vi.fn();
+      const onInotifyLimitReached = vi.fn();
+      const mock = setupSubscribeMock();
+      const origPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+      try {
+        const gitWatcher = new GitFileWatcher({
+          worktreePath: "/repo",
+          branch: "main",
+          debounceMs: 300,
+          onChange: vi.fn(),
+          watchWorktree: true,
+          onWatcherFailed,
+          onInotifyLimitReached,
+        });
+        await gitWatcher.start();
+
+        mock.reject(Object.assign(new Error(message), code ? { code } : {}));
+        await Promise.resolve();
+        await flushParcelWatcherCallbacks();
+
+        expect(onInotifyLimitReached).not.toHaveBeenCalled();
+        expect(onWatcherFailed).toHaveBeenCalledTimes(1);
+      } finally {
+        Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+      }
+    });
+
     it("does not call onInotifyLimitReached for unknown rejection on Linux", async () => {
       const onChange = vi.fn();
       const onWatcherFailed = vi.fn();

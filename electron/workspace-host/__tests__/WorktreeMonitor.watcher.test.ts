@@ -86,7 +86,7 @@ let mockGitOnlyStartResult: boolean | undefined;
  *  failure callback. */
 let mockWatcherStartFiresFailure = false;
 let capturedOnWatcherFailed: (() => void) | undefined;
-let capturedOnInotifyLimitReached: (() => void) | undefined;
+let capturedOnInotifyLimitReached: ((limit: "watches" | "instances") => void) | undefined;
 let capturedOnEmfileLimitReached: (() => void) | undefined;
 let capturedWatcherOptions: Record<string, unknown> | undefined;
 const capturedWatcherOptionsHistory: Record<string, unknown>[] = [];
@@ -107,7 +107,7 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
       constructor(
         opts: {
           onWatcherFailed?: () => void;
-          onInotifyLimitReached?: () => void;
+          onInotifyLimitReached?: (limit: "watches" | "instances") => void;
           onEmfileLimitReached?: () => void;
           watchWorktree?: boolean;
         } & Record<string, unknown>
@@ -642,8 +642,8 @@ describe("WorktreeMonitor", () => {
       await monitor.start();
 
       expect(capturedOnInotifyLimitReached).toBeDefined();
-      capturedOnInotifyLimitReached?.();
-      expect(onInotifyLimitReached).toHaveBeenCalledWith(ACTIVE_WORKTREE.id);
+      capturedOnInotifyLimitReached?.("instances");
+      expect(onInotifyLimitReached).toHaveBeenCalledWith(ACTIVE_WORKTREE.id, "instances");
       expect(onInotifyLimitReached).toHaveBeenCalledTimes(1);
 
       monitor.stop();

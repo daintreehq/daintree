@@ -1,6 +1,7 @@
 import { existsSync, watch as fsWatch, type FSWatcher } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { matchesGlob, normalize, relative, resolve } from "node:path";
+import { probeInotifyInstance, type InotifyInstanceFailure } from "./inotifyCapacity.js";
 import parcelWatcher, {
   type AsyncSubscription,
   type BackendType,
@@ -272,6 +273,12 @@ async function subscribeWindowsWatcher(
   return subscription;
 }
 
+const INOTIFY_INSTANCE_FAILURE_REASONS: Record<InotifyInstanceFailure, string> = {
+  EMFILE: "no inotify instance is available (fs.inotify.max_user_instances is used up)",
+  ENFILE: "the system's open file table is full",
+  ENOMEM: "the kernel is out of memory for inotify",
+};
+
 /**
  * Subscribe through the process-wide lifecycle queue.
  *
@@ -288,12 +295,26 @@ export function subscribeParcelWatcher(
     return subscribeWindowsWatcher(dir, callback, options);
   }
 
-  return enqueueLifecycle(() =>
-    parcelWatcher.subscribe(dir, callback, {
+  return enqueueLifecycle(async () => {
+    // A subscribe may start Parcel's shared inotify backend (the first one in
+    // the process, or after Parcel dropped it on an error), and 2.6.0 signals
+    // that start only once inotify_init1 has succeeded: with the user's
+    // fs.inotify.max_user_instances used up, subscribe() blocks the JavaScript
+    // thread forever. Whether a backend is live can't be read from here, so
+    // every Linux subscribe checks first and is refused instead; callers fall
+    // back as they do for any watcher failure.
+    const failure = process.platform === "linux" ? await probeInotifyInstance(dir) : null;
+    if (failure) {
+      throw Object.assign(
+        new Error(`Unable to initialize inotify: ${INOTIFY_INSTANCE_FAILURE_REASONS[failure]}`),
+        { code: failure }
+      );
+    }
+    return parcelWatcher.subscribe(dir, callback, {
       ...options,
       ...parcelWatcherBackendOption(),
-    })
-  ).then((nativeSubscription) => {
+    });
+  }).then((nativeSubscription) => {
     let unsubscribePromise: Promise<void> | null = null;
     const subscription: AsyncSubscription = {
       unsubscribe(): Promise<void> {

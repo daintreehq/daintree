@@ -1,4 +1,5 @@
 import { watch as fsWatch, FSWatcher } from "fs";
+import type { InotifyLimit } from "../../shared/types/workspace-host.js";
 import { readFile, realpath } from "fs/promises";
 import {
   join as pathJoin,
@@ -20,6 +21,8 @@ const LINUX_INOTIFY_LIMIT_HELP =
   "inotify watch limit reached — file watching may be incomplete. " +
   "Temporary fix: sudo sysctl -w fs.inotify.max_user_watches=524288 fs.inotify.max_user_instances=512. " +
   "Permanent fix: echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-inotify.conf && sudo sysctl --system";
+const LINUX_INOTIFY_INSTANCE_LIMIT_HELP =
+  "Linux inotify instance limit reached (fs.inotify.max_user_instances); watching this worktree's files falls back to polling. Raise it with: sudo sysctl fs.inotify.max_user_instances=1024";
 
 const MACOS_EMFILE_LIMIT_HELP =
   "FSEvents file descriptor ceiling reached — recursive file watching may be incomplete. " +
@@ -178,8 +181,12 @@ export interface GitFileWatcherOptions {
    *  inotify watch limit (ENOSPC) or macOS FSEvents fd ceiling (EMFILE). */
   onWatcherFailed?: () => void;
   /** Called when the recursive worktree watcher fails specifically because of
-   *  the Linux inotify watch limit (ENOSPC). Fires in addition to `onWatcherFailed`. */
-  onInotifyLimitReached?: () => void;
+   *  a Linux inotify limit: the per-user watches (ENOSPC) or instances
+   *  (EMFILE). Fires in addition to `onWatcherFailed`. */
+  onInotifyLimitReached?: (limit: InotifyLimit) => void;
+  /** Called once the recursive worktree subscription is live. `start()`
+   *  resolves before it is, and a startup failure arrives afterwards. */
+  onWorktreeWatcherReady?: () => void;
   /** Called when the recursive worktree watcher fails specifically because of
    *  the macOS FSEvents file descriptor ceiling (EMFILE). Fires in addition to
    *  `onWatcherFailed`. */
@@ -241,7 +248,8 @@ export class GitFileWatcher {
   /** Directory holding `.git/config` — always the common dir. */
   private gitConfigDir: string | null = null;
   private readonly onWatcherFailed: (() => void) | undefined;
-  private readonly onInotifyLimitReached: (() => void) | undefined;
+  private readonly onInotifyLimitReached: ((limit: InotifyLimit) => void) | undefined;
+  private readonly onWorktreeWatcherReady: (() => void) | undefined;
   private readonly onEmfileLimitReached: (() => void) | undefined;
   private readonly watchWorktree: boolean;
   private currentBranch?: string;
@@ -259,6 +267,7 @@ export class GitFileWatcher {
     this.onWorktreeFilesChanged = options.onWorktreeFilesChanged;
     this.onWatcherFailed = options.onWatcherFailed;
     this.onInotifyLimitReached = options.onInotifyLimitReached;
+    this.onWorktreeWatcherReady = options.onWorktreeWatcherReady;
     this.onEmfileLimitReached = options.onEmfileLimitReached;
     this.currentBranch = options.branch;
     this.watchWorktree = options.watchWorktree ?? false;
@@ -491,6 +500,7 @@ export class GitFileWatcher {
           sub.unsubscribe();
         } else {
           this.worktreeSubscription = sub;
+          this.onWorktreeWatcherReady?.();
         }
       })
       .catch((error: unknown) => {
@@ -504,9 +514,31 @@ export class GitFileWatcher {
     const code = err?.code;
     const message = err?.message ?? "";
 
-    if (process.platform === "linux" && code === "ENOSPC") {
+    // @parcel/watcher rejects with a bare Error naming the failed call —
+    // "inotify_add_watch on '<dir>' failed: No space left on device" — and no
+    // errno code, so the code alone never matched the real limit.
+    const isInotifyLimit =
+      code === "ENOSPC" || /inotify\w*.*No space left on device/i.test(message);
+    if (process.platform === "linux" && isInotifyLimit) {
       logWarn(LINUX_INOTIFY_LIMIT_HELP, { path: this.worktreePath });
-      this.onInotifyLimitReached?.();
+      this.onInotifyLimitReached?.("watches");
+      this.onWatcherFailed?.();
+      return;
+    }
+
+    // No inotify instance could be opened: Parcel's own "Unable to initialize
+    // inotify" or subscribeParcelWatcher refusing to let Parcel block on it.
+    // EMFILE is the per-user instance limit — parcel's strerror says "Too many
+    // open files"; ENFILE ("... in system") and ENOMEM are not, so raising
+    // max_user_instances wouldn't help them.
+    const isInstanceLimit =
+      /Unable to initialize inotify/i.test(message) &&
+      (code === "EMFILE" ||
+        /max_user_instances/.test(message) ||
+        /Too many open files$/i.test(message.trim()));
+    if (process.platform === "linux" && isInstanceLimit) {
+      logWarn(LINUX_INOTIFY_INSTANCE_LIMIT_HELP, { path: this.worktreePath, error: message });
+      this.onInotifyLimitReached?.("instances");
       this.onWatcherFailed?.();
       return;
     }
