@@ -1,4 +1,12 @@
 import type { SerializedError, IpcSuccessEnvelope, IpcErrorEnvelope } from "../types/ipc/errors.js";
+import type { AppErrorDetails } from "../types/appError.js";
+import type { HostPlatform, PluginIncompatibleReason } from "../types/remoteHosts.js";
+
+/**
+ * A serialized error that may carry `AppError.details`: allowlisted structured
+ * data that, unlike `context`, survives the packaged-build strip.
+ */
+export type SerializedAppError = SerializedError & { details?: AppErrorDetails };
 
 const KNOWN_ERROR_KEYS = new Set([
   "name",
@@ -14,6 +22,7 @@ const KNOWN_ERROR_KEYS = new Set([
   "syscall",
   "path",
   "context",
+  "details",
   "cause",
   "errors",
 ]);
@@ -103,7 +112,82 @@ function sanitizeCloneValue(value: unknown, seen: WeakSet<object>): unknown {
   return result;
 }
 
-export function serializeError(error: unknown, seen = new WeakSet<object>()): SerializedError {
+const HOST_PLATFORMS: ReadonlySet<string> = new Set<HostPlatform>(["darwin", "linux"]);
+const MAX_DETAIL_STRING_LENGTH = 256;
+const MAX_DETAIL_LIST_LENGTH = 32;
+
+function pickDetailString(value: unknown): string | undefined {
+  return typeof value === "string" ? value.slice(0, MAX_DETAIL_STRING_LENGTH) : undefined;
+}
+
+function pickHostPlatform(value: unknown): HostPlatform | undefined {
+  return typeof value === "string" && HOST_PLATFORMS.has(value)
+    ? (value as HostPlatform)
+    : undefined;
+}
+
+function pickIncompatibleReason(value: unknown): PluginIncompatibleReason | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  switch (raw.kind) {
+    case "engine": {
+      const required = pickDetailString(raw.required);
+      const hostVersion = pickDetailString(raw.hostVersion);
+      if (required === undefined || hostVersion === undefined) return undefined;
+      return { kind: "engine", required, hostVersion };
+    }
+    case "platform": {
+      const hostPlatform = pickHostPlatform(raw.hostPlatform);
+      if (hostPlatform === undefined || !Array.isArray(raw.supported)) return undefined;
+      const supported: HostPlatform[] = [];
+      for (const entry of raw.supported.slice(0, MAX_DETAIL_LIST_LENGTH)) {
+        const platform = pickHostPlatform(entry);
+        if (platform === undefined) return undefined;
+        supported.push(platform);
+      }
+      return { kind: "platform", hostPlatform, supported };
+    }
+    case "remote-unsupported":
+      return { kind: "remote-unsupported" };
+    case "untrusted":
+      return { kind: "untrusted" };
+    case "unconfigured": {
+      if (!Array.isArray(raw.missing)) return undefined;
+      const missing: string[] = [];
+      for (const entry of raw.missing.slice(0, MAX_DETAIL_LIST_LENGTH)) {
+        const name = pickDetailString(entry);
+        if (name === undefined) return undefined;
+        missing.push(name);
+      }
+      return { kind: "unconfigured", missing };
+    }
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * `details` survives the packaged-build strip and crosses the link and the
+ * contextBridge, so it is rebuilt field by field from the `PluginHostError`
+ * union rather than copied: anything that is not exactly a recognised variant
+ * is dropped, and unknown fields never ride along.
+ */
+export function pickAppErrorDetails(value: unknown): AppErrorDetails | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const pluginId = pickDetailString(raw.pluginId);
+  const hostId = pickDetailString(raw.hostId);
+  if (pluginId === undefined || hostId === undefined) return undefined;
+  if (raw.code === "PLUGIN_NOT_ON_HOST") {
+    return { code: "PLUGIN_NOT_ON_HOST", pluginId, hostId };
+  }
+  if (raw.code !== "PLUGIN_INCOMPATIBLE") return undefined;
+  const reason = pickIncompatibleReason(raw.reason);
+  if (reason === undefined) return undefined;
+  return { code: "PLUGIN_INCOMPATIBLE", pluginId, hostId, reason };
+}
+
+export function serializeError(error: unknown, seen = new WeakSet<object>()): SerializedAppError {
   if (error === null || error === undefined) {
     return { name: "Error", message: String(error) };
   }
@@ -118,7 +202,7 @@ export function serializeError(error: unknown, seen = new WeakSet<object>()): Se
   seen.add(error);
 
   const err = error as Record<string, unknown>;
-  const serialized: SerializedError = {
+  const serialized: SerializedAppError = {
     name: typeof err.name === "string" ? err.name : "Error",
     message: typeof err.message === "string" ? err.message : String(error),
   };
@@ -145,6 +229,9 @@ export function serializeError(error: unknown, seen = new WeakSet<object>()): Se
       serialized.context = context as Record<string, unknown>;
     }
   }
+
+  const details = pickAppErrorDetails(err.details);
+  if (details !== undefined) serialized.details = details;
 
   if (err.cause !== undefined && err.cause !== null && typeof err.cause === "object") {
     serialized.cause = serializeError(err.cause, seen);
@@ -186,7 +273,7 @@ export function serializeError(error: unknown, seen = new WeakSet<object>()): Se
   return serialized;
 }
 
-export function deserializeError(serialized: SerializedError): Error {
+export function deserializeError(serialized: SerializedAppError): Error {
   const error = new Error(serialized.message);
   error.name = serialized.name;
 
@@ -214,6 +301,11 @@ export function deserializeError(serialized: SerializedError): Error {
 
   if (serialized.context !== undefined) {
     (error as unknown as Record<string, unknown>).context = serialized.context;
+  }
+
+  const details = pickAppErrorDetails(serialized.details);
+  if (details !== undefined) {
+    (error as unknown as Record<string, unknown>).details = details;
   }
 
   if (serialized.cause !== undefined) {

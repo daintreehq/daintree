@@ -1136,3 +1136,63 @@ describe("DevPreviewProxyService", () => {
     });
   });
 });
+
+describe("DevPreviewProxyService remote upstream fallback", () => {
+  let proxy: DevPreviewProxyService | null = null;
+  let upstream: http.Server | null = null;
+
+  afterEach(() => {
+    proxy?.dispose();
+    proxy = null;
+    upstream?.close();
+    upstream = null;
+  });
+
+  it("asks the remote resolver only for a subdomain this machine doesn't know", async () => {
+    upstream = http.createServer((req, res) => res.end(`served ${req.url}`));
+    const upstreamPort = await listen(upstream);
+    const remote = vi.fn((subdomain: string) =>
+      subdomain === "dp-remote"
+        ? Promise.resolve({ kind: "ok" as const, port: upstreamPort, isHttps: false })
+        : null
+    );
+    proxy = new DevPreviewProxyService(
+      (sub) => (sub === "dp-local" ? { port: upstreamPort, isHttps: false } : null),
+      undefined,
+      remote
+    );
+    const proxyPort = await proxy.start();
+
+    const local = await request(proxyPort, `dp-local.localhost:${proxyPort}`, "/a");
+    expect(local.body).toBe("served /a");
+    expect(remote).not.toHaveBeenCalled();
+
+    const viaRemote = await request(proxyPort, `dp-remote.localhost:${proxyPort}`, "/b");
+    expect(viaRemote.body).toBe("served /b");
+    expect(remote).toHaveBeenCalledWith("dp-remote");
+
+    const unknown = await request(proxyPort, `dp-unknown.localhost:${proxyPort}`);
+    expect(unknown.status).toBe(502);
+    expect(unknown.body).toContain("No dev server is registered");
+  });
+
+  it("reports a remote preview that isn't running, and survives a failed lookup", async () => {
+    proxy = new DevPreviewProxyService(
+      () => null,
+      undefined,
+      (subdomain) =>
+        subdomain === "dp-stopped"
+          ? Promise.resolve({ kind: "not-running" as const, status: "stopped" as const })
+          : Promise.reject(new Error("link down"))
+    );
+    const proxyPort = await proxy.start();
+
+    const stopped = await request(proxyPort, `dp-stopped.localhost:${proxyPort}`);
+    expect(stopped.status).toBe(502);
+    expect(stopped.body).toContain("isn't running");
+
+    const failed = await request(proxyPort, `dp-broken.localhost:${proxyPort}`);
+    expect(failed.status).toBe(502);
+    expect(failed.body).toContain("No dev server is registered");
+  });
+});

@@ -35,6 +35,7 @@ From there, follow the architecture doc nearest the surface you're changing. Eac
 | [state-management.md](./architecture/state-management.md) | The renderer store layer — the two store flavors, the panel-listener subsystem, and the two persistence paths. |
 | [store-init-order.md](./architecture/store-init-order.md) | Cross-store accessor module and the ESM init ordering that avoids TDZ cycles. |
 | [ipc-services.md](./architecture/ipc-services.md) | The backend/bridge surface — services, IPC handlers, `window.electron` namespaces, clients. |
+| [remote-hosts.md](./architecture/remote-hosts.md) | Driving another machine's Daintree over system `ssh` — Shell and Host roles, the link protocol, dispatcher routing and channel locality, terminal replay, the drive lease, Host mode, files, ports, plugins, security, and the Windows build exclusion. |
 | [action-system.md](./architecture/action-system.md) | Central typed dispatch for menus, keybindings, context menus, and agent automation — and the manifest that is the MCP tool surface. |
 | [mcp-server.md](./architecture/mcp-server.md) | The local MCP HTTP server that lets agents drive the IDE via built-in actions — including how to connect an external client. |
 | [mcp-context-condensation.md](./architecture/mcp-context-condensation.md) | Authoring standard and CI budgets for the prose and schemas the MCP surface sends a model every turn. |

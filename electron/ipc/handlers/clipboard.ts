@@ -6,11 +6,13 @@ import * as crypto from "node:crypto";
 import * as os from "node:os";
 import { defineIpcNamespace, op } from "../define.js";
 import type { IpcContext } from "../types.js";
+import type { ClipboardSaveImageOptions } from "../../../shared/types/ipc/fileTransfer.js";
 import { CLIPBOARD_METHOD_CHANNELS } from "./clipboard.preload.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { resolveContainedPath } from "./pathGuard.js";
 import { decodeClipboardPng, MAX_CLIPBOARD_IMAGE_BYTES } from "../../utils/clipboardImage.js";
+import { ensureOwnerOnlyDir, OWNER_RW_FILE_MODE } from "../../utils/fs.js";
 
 const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -31,6 +33,18 @@ function getClipboardDir(): string {
   return path.join(os.tmpdir(), CLIPBOARD_DIR_NAME);
 }
 
+// Set only while this machine accepts uploads from remote windows, whose
+// pasted and dropped images live in the host inbox rather than the clipboard dir.
+let hostInboxRoot: string | null = null;
+
+/** The host inbox joins the thumbnail roots while uploads are accepted; null removes it. */
+export function setThumbnailInboxRoot(root: string | null): () => void {
+  hostInboxRoot = root;
+  return () => {
+    if (hostInboxRoot === root) hostInboxRoot = null;
+  };
+}
+
 function logCleanupRejections(results: PromiseSettledResult<unknown>[]): void {
   for (const result of results) {
     if (result.status === "rejected") {
@@ -44,6 +58,20 @@ function logCleanupRejections(results: PromiseSettledResult<unknown>[]): void {
 
 export async function cleanupOldClipboardImages(now: number = Date.now()): Promise<void> {
   const dir = getClipboardDir();
+  // Never sweep through a symlink, or a directory, someone else planted on the
+  // shared temp name: the unlinks below would land in files that aren't ours.
+  // Once the dir is verified as ours, the sticky temp root stops anyone else
+  // swapping it out mid-sweep.
+  try {
+    const dirStat = await fs.lstat(dir);
+    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return;
+    const uid = typeof process.getuid === "function" ? process.getuid() : null;
+    if (process.platform !== "win32" && uid !== null && dirStat.uid !== uid) return;
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    console.warn("[clipboard] Failed to inspect clipboard dir for cleanup:", err);
+    return;
+  }
   let entries: Dirent[];
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
@@ -101,7 +129,29 @@ export async function cleanupOldClipboardImages(now: number = Date.now()): Promi
   }
 }
 
-async function handleSaveImage(): Promise<{ filePath: string; thumbnailDataUrl: string }> {
+// Exclusive create: a name that already exists (planted or colliding) fails
+// rather than being overwritten or followed. O_NOFOLLOW is absent on Windows.
+async function writeOwnerOnlyNewFile(filePath: string, data: Buffer): Promise<void> {
+  const flags =
+    fs.constants.O_WRONLY |
+    fs.constants.O_CREAT |
+    fs.constants.O_EXCL |
+    (fs.constants.O_NOFOLLOW ?? 0);
+  const handle = await fs.open(filePath, flags, OWNER_RW_FILE_MODE);
+  try {
+    await handle.writeFile(data);
+  } catch (error) {
+    await handle.close().catch(() => {});
+    await fs.unlink(filePath).catch(() => {});
+    throw error;
+  }
+  await handle.close();
+}
+
+// The options only steer a remote window's upload (see the clipboard split); a local save has none.
+async function handleSaveImage(
+  _options?: ClipboardSaveImageOptions
+): Promise<{ filePath: string; thumbnailDataUrl: string }> {
   const image = clipboard.readImage();
   if (image.isEmpty()) {
     throw new AppError({
@@ -113,12 +163,15 @@ async function handleSaveImage(): Promise<{ filePath: string; thumbnailDataUrl: 
 
   const pngBuffer = image.toPNG();
   const dir = getClipboardDir();
-  await fs.mkdir(dir, { recursive: true });
+  // The dir sits under the shared temp root, so it is verified as ours and
+  // owner-only on every save, not just at startup: it can be removed and
+  // re-planted while the app runs.
+  await ensureOwnerOnlyDir(dir);
 
   const id = crypto.randomBytes(3).toString("hex");
   const filename = `clipboard-${Date.now()}-${id}.png`;
   const filePath = path.join(dir, filename);
-  await fs.writeFile(filePath, pngBuffer);
+  await writeOwnerOnlyNewFile(filePath, pngBuffer);
 
   // Fire-and-forget — bound temp-file accumulation after every save without
   // blocking the save's return path. Mirrors the startup cleanup call.
@@ -145,7 +198,11 @@ async function handleThumbnailFromPath(
   // rather than the path-taking nativeImage.createFromPath — that API follows
   // symlinks in C++, leaving a TOCTOU window an fs.realpath check alone can't
   // close. Mirrors the safe read pattern in electron/ipc/handlers/files.ts.
-  const roots = [getClipboardDir(), ...projectStore.getAllProjects().map((p) => p.path)];
+  const roots = [
+    getClipboardDir(),
+    ...(hostInboxRoot ? [hostInboxRoot] : []),
+    ...projectStore.getAllProjects().map((p) => p.path),
+  ];
   await resolveContainedPath(filePath, roots);
 
   // Open the user-supplied filePath (not the realpath) with O_NOFOLLOW so a
@@ -314,12 +371,15 @@ export const clipboardNamespace = defineIpcNamespace({
 export function registerClipboardHandlers(): () => void {
   // Ensure the clipboard directory exists at startup so agents like Gemini
   // can reference it via --include-directories without errors (#4048)
-  fs.mkdir(getClipboardDir(), { recursive: true }).catch((err) => {
-    console.warn("[clipboard] Failed to create clipboard directory:", err);
-  });
-  cleanupOldClipboardImages().catch((err) => {
-    console.warn("[clipboard] Cleanup failed unexpectedly:", err);
-  });
+  ensureOwnerOnlyDir(getClipboardDir()).then(
+    () =>
+      cleanupOldClipboardImages().catch((err) => {
+        console.warn("[clipboard] Cleanup failed unexpectedly:", err);
+      }),
+    (err) => {
+      console.warn("[clipboard] Failed to create clipboard directory:", err);
+    }
+  );
 
   return clipboardNamespace.register();
 }

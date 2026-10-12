@@ -1,6 +1,8 @@
 import { defineIpcNamespace, op } from "../define.js";
 import { PROCESSES_METHOD_CHANNELS } from "./processes.preload.js";
-import type { HandlerDependencies } from "../types.js";
+import type { HandlerDependencies, IpcContext } from "../types.js";
+import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
+import { AppError } from "../../utils/errorTypes.js";
 import type {
   ClosedProcessKillResult,
   ClosedProcessKillTarget,
@@ -24,6 +26,53 @@ async function getPluginService(): Promise<PluginServiceSingleton> {
     cachedPluginService = mod.pluginService;
   }
   return cachedPluginService;
+}
+
+/**
+ * A closed terminal's leftovers still belong to the project the ledger
+ * recorded them under, so while drive leases are in force (Host mode) only
+ * that project's driver may end them. One recorded with no project has no
+ * lease to consult.
+ */
+async function assertDrivesRecordedProjects(
+  ctx: IpcContext,
+  ptyClient: NonNullable<HandlerDependencies["ptyClient"]>,
+  targets: readonly ClosedProcessKillTarget[]
+): Promise<void> {
+  const lease = peekDriveLeaseService();
+  if (!lease || targets.length === 0) return;
+  const owners = new Map<string, string | null>();
+  const { inventories, shardsFailed } = await ptyClient.getProcessInventory();
+  for (const inventory of inventories) {
+    for (const recorded of inventory.closedTerminalProcesses ?? []) {
+      owners.set(`${recorded.pid}@${recorded.startTime}`, recorded.origin?.projectId ?? null);
+    }
+  }
+  for (const { pid, startTime } of targets) {
+    const key = `${pid}@${startTime}`;
+    // Fail closed: a target the census can't place right now (a shard that
+    // didn't answer, the listing's cap, a survivor too new to list) might be
+    // any project's, so it is refused rather than assumed free.
+    if (!owners.has(key)) {
+      throw new AppError({
+        code: "DRIVEN_ELSEWHERE",
+        message: `processes:kill-closed-terminal-processes can't place ${key}${shardsFailed > 0 ? " (a terminal host didn't answer)" : ""} while drive leases are in force`,
+        userMessage:
+          "Couldn't confirm which project these processes belong to. Refresh the list and try again.",
+        context: { pid },
+      });
+    }
+    const projectId = owners.get(key);
+    if (projectId && !lease.isDriving(projectId, ctx.endpoint)) {
+      throw new AppError({
+        code: "DRIVEN_ELSEWHERE",
+        message: `processes:kill-closed-terminal-processes ends processes of ${projectId}, which another window drives`,
+        userMessage:
+          "These processes belong to a project another screen has control of. Take control first.",
+        context: { projectId },
+      });
+    }
+  }
 }
 
 /**
@@ -60,7 +109,10 @@ export function createProcessesNamespace(deps: Pick<HandlerDependencies, "ptyCli
       ),
       killClosedTerminalProcesses: op(
         PROCESSES_METHOD_CHANNELS.killClosedTerminalProcesses,
-        async (targets: ClosedProcessKillTarget[]): Promise<ClosedProcessKillResult> => {
+        async (
+          ctx: IpcContext,
+          targets: ClosedProcessKillTarget[]
+        ): Promise<ClosedProcessKillResult> => {
           if (!Array.isArray(targets)) throw new Error("Expected a list of processes to kill");
           const valid = targets.filter(
             (target): target is ClosedProcessKillTarget =>
@@ -74,8 +126,10 @@ export function createProcessesNamespace(deps: Pick<HandlerDependencies, "ptyCli
           if (!deps.ptyClient) {
             return { ended: 0, stillRunning: 0, unchecked: valid.length, notTracked: 0 };
           }
+          await assertDrivesRecordedProjects(ctx, deps.ptyClient, valid);
           return deps.ptyClient.killClosedTerminalProcesses(valid);
-        }
+        },
+        { withContext: true }
       ),
     },
   });

@@ -14,6 +14,35 @@ import type {
 import type { PRServiceStatus } from "@shared/types/workspace-host";
 import type { WorktreeChanges } from "@shared/types/git";
 import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
+import { mintRemoteOperationId } from "@/clients/operationsClient";
+import { runHostOperation } from "@/hooks/useHostConnection";
+
+/** The create's own answer, rebuilt from what the host recorded when that answer was lost. */
+export function worktreeCreateResultFromOutcome(result: unknown): WorktreeCreateResult {
+  const record = (result ?? {}) as Partial<Record<keyof WorktreeCreateResult, unknown>>;
+  if (typeof record.worktreeId !== "string" || typeof record.branch !== "string") {
+    throw new Error("The host recorded the worktree without its id");
+  }
+  return {
+    worktreeId: record.worktreeId,
+    branch: record.branch,
+    setupState: isSetupState(record.setupState) ? record.setupState : "unknown",
+  };
+}
+
+const SETUP_STATES: ReadonlySet<unknown> = new Set<WorktreeCreateResult["setupState"]>([
+  "pending",
+  "running",
+  "ready",
+  "failed",
+  "timed-out",
+  "needs-approval",
+  "unknown",
+]);
+
+function isSetupState(value: unknown): value is WorktreeCreateResult["setupState"] {
+  return SETUP_STATES.has(value);
+}
 
 /**
  * @example
@@ -83,7 +112,14 @@ export const worktreeClient = {
    * port than this response, so there is no ordering between them.
    */
   create: (options: CreateWorktreeOptions, rootPath: string): Promise<WorktreeCreateResult> => {
-    return window.electron.worktree.create(options, rootPath);
+    // Named only in a remote-bound view, where a dropped link can lose the
+    // answer: the host is then asked what became of the create before any
+    // retry is offered. A local create runs untracked, as it always has.
+    const opId = mintRemoteOperationId();
+    if (opId === undefined) return window.electron.worktree.create(options, rootPath);
+    return runHostOperation(opId, () => window.electron.worktree.create(options, rootPath, opId), {
+      fromResult: worktreeCreateResultFromOutcome,
+    });
   },
 
   listBranches: (rootPath: string): Promise<BranchInfo[]> => {

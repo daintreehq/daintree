@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { EditorView } from "@codemirror/view";
+import type { MaterializeSource } from "@shared/types/remoteHosts";
 
 // The hook reaches `useTerminalFileTransfer` for one regex, but that module
 // constructs the `terminalInstanceService` singleton at import time — real
@@ -22,6 +23,7 @@ vi.mock("@/store/panelStore", () => ({
 const { useDragDrop } = await import("../useDragDrop");
 const { FILE_DRAG_MIME, encodeFileDragPaths } = await import("@/lib/fileDragPayload");
 const { getAllAtFileTokens } = await import("../../hybridInputParsing");
+const { setRemoteMaterializer } = await import("@/services/materialize");
 
 const CWD = "/Users/greg/Projects/daintree";
 
@@ -118,20 +120,25 @@ function chipSpellings(dispatch: ReturnType<typeof vi.fn>, head: number): string
   );
 }
 
-let pathForFile: ReturnType<typeof vi.fn>;
+let pathForFile: Mock<(file: File) => string>;
 let thumbnailFromPath: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   setPreferredTerminalFocusTarget.mockClear();
-  pathForFile = vi.fn((file: File) => `${CWD}/${file.name}`);
+  pathForFile = vi.fn<(file: File) => string>((file) => `${CWD}/${file.name}`);
   thumbnailFromPath = vi.fn(async () => ({ thumbnailDataUrl: "data:image/png;base64,x" }));
   (window as unknown as { electron: unknown }).electron = {
-    webUtils: { getPathForFile: pathForFile },
+    // The bridge resolves a batch; each file still maps through `pathForFile`
+    // so a test can steer one path at a time.
+    files: {
+      getDroppedFilePaths: (files: readonly File[]) => files.map((file) => pathForFile(file)),
+    },
     clipboard: { thumbnailFromPath },
   };
 });
 
 afterEach(() => {
+  setRemoteMaterializer(null);
   vi.restoreAllMocks();
   delete (window as unknown as { electron?: unknown }).electron;
 });
@@ -750,6 +757,8 @@ describe("useDragDrop", () => {
       expect(focus).toHaveBeenCalledTimes(1);
 
       await act(async () => {
+        // The path is materialized before the thumbnail is asked for.
+        await vi.waitFor(() => expect(thumbnailFromPath).toHaveBeenCalledTimes(1));
         releaseThumbnail();
         await pending;
       });
@@ -852,6 +861,8 @@ describe("useDragDrop", () => {
       const replacement = fakeView();
       ref.current = replacement.view;
       await act(async () => {
+        // The path is materialized before the thumbnail is asked for.
+        await vi.waitFor(() => expect(thumbnailFromPath).toHaveBeenCalledTimes(1));
         releaseThumbnail();
         await pending;
       });
@@ -879,5 +890,111 @@ describe("useDragDrop", () => {
       expect(dispatch).toHaveBeenCalledTimes(1);
       expect(focus).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("useDragDrop — materialize seam", () => {
+  function recordMaterialize(
+    result: (source: MaterializeSource) => { hostPath: string; thumbnail?: string }
+  ) {
+    const seen: MaterializeSource[] = [];
+    setRemoteMaterializer(async (source) => {
+      seen.push(source);
+      return { displayName: "x", bytes: null, ...result(source) };
+    });
+    return seen;
+  }
+
+  const pathOf = (source: MaterializeSource) => ("path" in source ? source.path : "");
+
+  it("hands an OS drop over as local files and a file-browser drag as host files", async () => {
+    const seen = recordMaterialize((source) => ({ hostPath: pathOf(source) }));
+    pathForFile.mockReturnValue(`${CWD}/src/a.ts`);
+    const { ref } = fakeView();
+    const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+    await act(async () => {
+      await result.current.handleDrop(dropEvent([fakeFile("a.ts")]));
+      await result.current.handleDrop(internalDrop([`${CWD}/src/b.ts`]));
+    });
+
+    expect(seen).toEqual([
+      { kind: "local-file", path: `${CWD}/src/a.ts` },
+      { kind: "host-file", path: `${CWD}/src/b.ts`, hostId: "local" },
+    ]);
+  });
+
+  it("inserts the materialized path, keeping the OS name on the chip", async () => {
+    recordMaterialize(() => ({ hostPath: "/host/inbox/files/report.pdf" }));
+    pathForFile.mockReturnValue("/Users/me/Desktop/report.pdf");
+    const { dispatch, ref } = fakeView();
+    const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+    await act(async () => {
+      await result.current.handleDrop(dropEvent([fakeFile("report.pdf", 7)]));
+    });
+
+    expect(insertedToken(dispatch)).toBe("@/host/inbox/files/report.pdf");
+    expect(effectValues(dispatch)[0]).toMatchObject({
+      filePath: "/host/inbox/files/report.pdf",
+      fileName: "report.pdf",
+      fileSize: 7,
+    });
+  });
+
+  it("uses a thumbnail materialize built instead of asking for one by path", async () => {
+    recordMaterialize(() => ({ hostPath: "/host/inbox/shot.png", thumbnail: "data:image/png;t" }));
+    pathForFile.mockReturnValue("/Users/me/shot.png");
+    const { dispatch, ref } = fakeView();
+    const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+    await act(async () => {
+      await result.current.handleDrop(dropEvent([fakeFile("shot.png")]));
+    });
+
+    expect(thumbnailFromPath).not.toHaveBeenCalled();
+    expect(insertedToken(dispatch)).toBe("/host/inbox/shot.png");
+    expect(effectValues(dispatch)[0]).toMatchObject({ thumbnailUrl: "data:image/png;t" });
+  });
+
+  it("skips a file that fails to materialize and inserts the rest", async () => {
+    setRemoteMaterializer(async (source) => {
+      if ("path" in source && source.path.endsWith("bad.ts")) throw new Error("refused");
+      return { hostPath: pathOf(source), displayName: "x", bytes: null };
+    });
+    const { dispatch, ref } = fakeView();
+    const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+    await act(async () => {
+      await result.current.handleDrop(internalDrop([`${CWD}/bad.ts`, `${CWD}/ok.ts`]));
+    });
+
+    expect(insertedToken(dispatch)).toBe("@ok.ts");
+  });
+
+  it("inserts into neither editor when the pane remounts while paths materialize", async () => {
+    let release!: () => void;
+    setRemoteMaterializer(
+      (source) =>
+        new Promise((resolve) => {
+          release = () => resolve({ hostPath: pathOf(source), displayName: "x", bytes: null });
+        })
+    );
+    const { ref, dispatch } = fakeView();
+    const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.handleDrop(internalDrop([`${CWD}/src/a.ts`]));
+    });
+    const replacement = fakeView();
+    ref.current = replacement.view;
+    await act(async () => {
+      release();
+      await pending;
+    });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(replacement.dispatch).not.toHaveBeenCalled();
   });
 });

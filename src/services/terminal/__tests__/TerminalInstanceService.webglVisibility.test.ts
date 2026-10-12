@@ -7,6 +7,7 @@ const mockTerminalClient = {
   onData: vi.fn(() => vi.fn()),
   onExit: vi.fn(() => vi.fn()),
   onTierChanged: vi.fn(() => vi.fn()),
+  onReset: vi.fn(() => vi.fn()),
   setActivityTier: vi.fn(),
   wake: vi.fn().mockResolvedValue({ state: null }),
   write: vi.fn(),
@@ -14,6 +15,7 @@ const mockTerminalClient = {
   getSharedBuffer: vi.fn(() => null),
   acknowledgeData: vi.fn(),
   acknowledgePortData: vi.fn(),
+  getPortAckGeneration: vi.fn(() => 0),
   discardPortAcks: vi.fn(),
 };
 

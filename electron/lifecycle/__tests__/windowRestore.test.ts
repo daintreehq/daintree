@@ -90,6 +90,12 @@ describe("resolvePrimaryRestoreProjectId", () => {
   it("resolves to nothing on a first run with no manifest and no last-active project", () => {
     expect(resolvePrimaryRestoreProjectId([], false, undefined)).toBeUndefined();
   });
+
+  it("opens a picker, not a local lookup of the key, for a window that was on a host", () => {
+    expect(
+      resolvePrimaryRestoreProjectId([record(`studio-01:${"a".repeat(64)}`)], true, "other")
+    ).toBeUndefined();
+  });
 });
 
 describe("normalizeWindowRecords (#12596)", () => {
@@ -391,6 +397,22 @@ describe("restoreWindowFleet", () => {
     await restoreWindowFleet(h.deps);
     expect(h.openedProjects()).toEqual(["a", "b", "c"]);
     expect(h.persisted()).toBe(false);
+  });
+
+  it("opens windows that were on a host as pickers here, each carrying its host's project", async () => {
+    const remoteA = `studio-01:${"a".repeat(64)}`;
+    const remoteB = `studio-02:${"b".repeat(64)}`;
+    h = harness({
+      records: [record(remoteA), record("local"), record(remoteB)],
+      hadManifest: true,
+    });
+    await restoreWindowFleet(h.deps);
+    expect(h.openedProjects()).toEqual([undefined, "local", undefined]);
+    const remoteKeys = h.createWindow.mock.calls.map(
+      (c) => (c[1] as { remoteWorkspaceKey?: string } | undefined)?.remoteWorkspaceKey
+    );
+    expect(remoteKeys).toEqual([remoteA, undefined, remoteB]);
+    expect(h.persisted()).toBe(true);
   });
 
   it("opens one picker window when every saved project was deleted", async () => {

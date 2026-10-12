@@ -428,6 +428,36 @@ describe("FleetSnapshotService", () => {
     service.stop();
   });
 
+  it("replays to a view attached over a link on the live channel", async () => {
+    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
+    const service = new FleetSnapshotService(client as never);
+    const endpoint = {
+      kind: "remote-view" as const,
+      isClosed: vi.fn(() => false),
+      send: vi.fn(),
+    };
+
+    service.pushSnapshotToEndpoint(endpoint as never);
+    expect(endpoint.send).not.toHaveBeenCalled();
+
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    const [liveChannel, livePayload] = broadcastMock.mock.calls[0] as [string, FleetSnapshot];
+    service.pushSnapshotToEndpoint(endpoint as never);
+
+    expect(endpoint.send).toHaveBeenCalledWith({
+      type: "event",
+      channel: liveChannel,
+      args: [livePayload],
+    });
+
+    endpoint.send.mockClear();
+    endpoint.isClosed.mockReturnValue(true);
+    service.pushSnapshotToEndpoint(endpoint as never);
+    expect(endpoint.send).not.toHaveBeenCalled();
+    service.stop();
+  });
+
   it("sends nothing to a destroyed view", async () => {
     const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
     const service = new FleetSnapshotService(client as never);

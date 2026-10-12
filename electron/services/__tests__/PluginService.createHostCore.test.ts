@@ -69,7 +69,7 @@ const fakePushRenderer = vi.hoisted(() => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
-  getProjectRendererTargets: () => [fakePushRenderer],
+  getProjectPushTargets: () => [fakePushRenderer],
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,

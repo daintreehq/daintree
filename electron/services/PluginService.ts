@@ -206,6 +206,7 @@ import {
   onPanelKindRegistered,
   onPanelKindUnregistered,
   getPanelKindConfig,
+  toPersistedPanelKindRef,
 } from "../../shared/config/panelKindRegistry.js";
 import {
   registerToolbarButton,
@@ -275,8 +276,12 @@ import { PluginRecipeMetadataStore } from "./plugin/PluginRecipeMetadataStore.js
 import {
   broadcastToRenderer,
   broadcastToProjectRenderers,
+  endpointPushTarget,
   getProjectRendererTargets,
+  type ProjectPushTarget,
 } from "../ipc/utils.js";
+import type { ClientEndpoint } from "../ipc/endpoint.js";
+import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import { PLUGIN_INVOKE_MAX_RESULT_BYTES } from "../../shared/config/pluginBudgets.js";
 import { assertPayloadWithinLimit, estimatePayloadBytes } from "./plugin/pluginPayloadLimits.js";
 import { getPluginPushBatcher, routePluginPush } from "./plugin/pluginPushBatcher.js";
@@ -296,7 +301,19 @@ import { stableArgsSha256 } from "../utils/pluginMcpHash.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { canDisposeIdlePluginWorker } from "../../shared/utils/workerGovernancePolicy.js";
 import type { WorkerResourceSnapshot } from "../../shared/types/workerGovernance.js";
-import { markAuditedHandlerFailure } from "../utils/pluginAuditMarker.js";
+import { isAuditedHandlerFailure, markAuditedHandlerFailure } from "../utils/pluginAuditMarker.js";
+import {
+  PluginNotOnHostInvokeError,
+  pluginIncompatibleError,
+  pluginNotOnHostError,
+} from "./plugin/parity/errors.js";
+import { buildPluginInventory, type PluginInventory } from "./plugin/parity/inventory.js";
+import {
+  platformDisplayName,
+  pluginInstallRefusal,
+  replacementRefusal,
+} from "./plugin/parity/preflight.js";
+import { readArchiveManifest } from "./PluginArchive.js";
 import { withTimeout, TimeoutError } from "../utils/withTimeout.js";
 import type {
   PluginDiagnosticsAuditRecord,
@@ -1225,6 +1242,7 @@ export class PluginService {
       reservedNames: this.reservedNames,
       disabledPlugins: this.disabledPlugins,
       blockedPlugins: this.blockedPlugins,
+      getInstalledVersion: (pluginId) => this.installedPluginVersion(pluginId),
     });
 
     const offRegister = onPanelKindRegistered(() => this.broadcaster.schedulePanelKindsBroadcast());
@@ -3444,9 +3462,19 @@ export class PluginService {
    * and shared by every view the plugin contributes, so a plugin occupies two
    * namespaces at worst no matter how many times the user retries.
    */
+  /**
+   * Whether a loaded plugin declares `"remote": "unsupported"`: it only works
+   * for a person sitting at this machine, so a window attached from another
+   * machine must not start or call it.
+   */
+  isRemoteUnsupported(pluginId: string): boolean {
+    return this.plugins.get(pluginId)?.manifest.remote === "unsupported";
+  }
+
   async activatePluginForView(
     panelKindId: string,
-    requestRecoveryPath = false
+    requestRecoveryPath = false,
+    options: { remoteFrontend?: boolean } = {}
   ): Promise<PluginActivationResult> {
     if (typeof panelKindId !== "string" || panelKindId.length === 0) return { ok: true };
     const settingsPluginId = pluginIdFromSettingsViewKindId(panelKindId);
@@ -3467,6 +3495,16 @@ export class PluginService {
                 projectId
               );
         if (runtimeId === panelKindId) {
+          if (options.remoteFrontend && plugin.manifest.remote === "unsupported") {
+            console.warn(
+              `[PluginService] Refused to activate "${pluginId}" for a window on another machine: the plugin declares "remote": "unsupported"`
+            );
+            return {
+              ok: false,
+              error: `Plugin "${pluginId}" only works on the machine it runs on`,
+              remoteUnsupported: { pluginId },
+            };
+          }
           await this.activatePlugin(pluginId);
           const loadError = this.getPluginLoadError(pluginId);
           if (loadError) {
@@ -3500,6 +3538,12 @@ export class PluginService {
           };
         }
       }
+    }
+    // A window on another machine restored or kept a panel whose plugin this
+    // host doesn't have (any more): say so, rather than letting its import 404.
+    const ref = options.remoteFrontend ? toPersistedPanelKindRef(panelKindId) : null;
+    if (ref && ![...this.plugins.values()].some((p) => p.manifest.name === ref.pluginId)) {
+      throw pluginNotOnHostError(ref.pluginId);
     }
     return { ok: true };
   }
@@ -4607,7 +4651,7 @@ export class PluginService {
     const sameGeneration = (): boolean =>
       generation !== undefined && this.plugins.get(pluginId) === generation;
     try {
-      const result = await this.dispatchHandlerUnmetered(pluginId, channel, ctx, args, timing);
+      const result = await this.dispatchHandlerOnHost(pluginId, channel, ctx, args, timing);
       if (sameGeneration()) {
         this.metrics.recordInvoke(
           pluginId,
@@ -4627,6 +4671,32 @@ export class PluginService {
         );
       }
       throw err;
+    }
+  }
+
+  private async dispatchHandlerOnHost(
+    pluginId: string,
+    channel: string,
+    ctx: PluginIpcContext,
+    args: unknown[],
+    timing: { handlerStart: number; promptMark?: InvokePromptMark }
+  ): Promise<unknown> {
+    if (ctx.origin?.kind !== "remote")
+      return this.dispatchHandlerUnmetered(pluginId, channel, ctx, args, timing);
+    // A window on another machine may still show a plugin this host has since
+    // removed. It is told so in a form it can build its placeholder from, both
+    // up front and for a call the removal cut short.
+    if (!this.plugins.has(pluginId)) throw new PluginNotOnHostInvokeError(pluginId, channel);
+    try {
+      return await this.dispatchHandlerUnmetered(pluginId, channel, ctx, args, timing);
+    } catch (err) {
+      if (this.plugins.has(pluginId)) throw err;
+      // A handler that was running when its plugin went is audited already;
+      // a call cut off before reaching one is an ownership refusal, as ever.
+      if (!isAuditedHandlerFailure(err)) throw new PluginNotOnHostInvokeError(pluginId, channel);
+      const typed = pluginNotOnHostError(pluginId);
+      markAuditedHandlerFailure(typed);
+      throw typed;
     }
   }
 
@@ -4910,6 +4980,101 @@ export class PluginService {
     opts?: PluginInstallOptions
   ): Promise<PluginInstallResult> {
     return this.installer.installPlugin(archivePath, opts);
+  }
+
+  /**
+   * This machine's installed plugins, for another machine to compare with its
+   * own. Only reads; nothing about either machine changes.
+   */
+  async getPluginInventory(options: { includeSecrets?: boolean } = {}): Promise<PluginInventory> {
+    await this.waitForInit();
+    return buildPluginInventory(this, {
+      appVersion: this.appVersion,
+      platform: process.platform,
+      includeSecrets: options.includeSecrets === true,
+    });
+  }
+
+  /**
+   * Install a package another machine sent, through the normal install path.
+   * Before anything reaches the plugins folder, its manifest is read from the
+   * archive and refused if it has no build for this OS or the plugin
+   * blocklist names this version; a package the load-time blocklist would
+   * refuse is never copied into place. `pluginId` pins the package to the
+   * plugin the person asked for, and `update` requires it to be installed
+   * here already. Whether it may replace what is installed is decided inside
+   * the installer's lock, against what is installed at that moment. `jobId`
+   * is a job already registered for progress and cancellation.
+   */
+  async installPluginFromAnotherMachine(
+    archivePath: string,
+    expect: { pluginId?: string; update?: boolean; jobId?: string } = {}
+  ): Promise<PluginInstallResult> {
+    await this.waitForInit();
+    let manifest: PluginManifest;
+    try {
+      manifest = await readArchiveManifest(archivePath);
+    } catch (err) {
+      return {
+        status: "failed",
+        errors: [{ code: "manifest_invalid", message: formatErrorMessage(err, "Invalid plugin") }],
+      };
+    }
+    if (expect.pluginId !== undefined && manifest.name !== expect.pluginId) {
+      return {
+        status: "failed",
+        errors: [
+          {
+            code: "archive_mismatch",
+            message: `The package is for "${manifest.name}", not "${expect.pluginId}"`,
+          },
+        ],
+      };
+    }
+    const blocklist = (await this.blocklistService.getBlocklist()) ?? this.startupBlocklist;
+    const refusal = pluginInstallRefusal(manifest, { platform: process.platform, blocklist });
+    const displayName = manifest.displayName?.trim() || manifest.name;
+    if (refusal?.kind === "platform") {
+      const hostPlatform = process.platform === "darwin" ? "darwin" : "linux";
+      throw pluginIncompatibleError(
+        manifest.name,
+        {
+          kind: "platform",
+          hostPlatform,
+          supported: refusal.supported.filter(
+            (entry): entry is "darwin" | "linux" => entry === "darwin" || entry === "linux"
+          ),
+        },
+        `${displayName} has no build for ${platformDisplayName(process.platform)}.`
+      );
+    }
+    if (refusal?.kind === "blocklisted") {
+      throw pluginIncompatibleError(
+        manifest.name,
+        { kind: "untrusted" },
+        `${displayName} ${manifest.version} is blocked: ${refusal.message}`
+      );
+    }
+    const target = { pluginId: expect.pluginId, update: expect.update };
+    return this.installer.installPlugin(
+      archivePath,
+      { source: "sideload", ...(expect.jobId !== undefined ? { jobId: expect.jobId } : {}) },
+      (installedVersion) => replacementRefusal(manifest, installedVersion, target)
+    );
+  }
+
+  /**
+   * The version installed under `pluginId`, whether it loaded, was skipped as
+   * disabled, or was refused by the blocklist; null when none is.
+   */
+  private installedPluginVersion(pluginId: string): string | null {
+    return (
+      (
+        this.plugins.get(pluginId) ??
+        this.disabledPlugins.get(pluginId) ??
+        this.blockedPlugins.get(pluginId)
+      )?.manifest.version ?? null
+    );
   }
 
   /**
@@ -5975,6 +6140,13 @@ export class PluginService {
     }
     for (const wc of targets) {
       await this.broadcaster.pushSnapshotTo(wc, projectId);
+    }
+    // Remote views attached to the project (Host mode).
+    const registry = getEndpointRegistry();
+    if (!registry.hasRemote()) return;
+    for (const endpoint of registry.getForProject(projectId)) {
+      if (endpoint.kind !== "remote-view" || endpoint.isClosed()) continue;
+      await this.broadcaster.pushSnapshotTo(endpointPushTarget(endpoint), projectId);
     }
   }
 
@@ -7351,8 +7523,28 @@ export class PluginService {
    * each plugin to next re-emit from a subscription callback.
    */
   async pushSnapshotTo(webContents: Electron.WebContents): Promise<void> {
-    await this.broadcaster.pushSnapshotTo(webContents);
+    await this.pushSnapshot(webContents);
+  }
+
+  /**
+   * {@link pushSnapshotTo} for a view attached from another machine (Host
+   * mode). A remote view has no `did-finish-load` here, so the host replays
+   * when it attaches, scoped to the project its endpoint is bound to.
+   */
+  async pushSnapshotToEndpoint(endpoint: ClientEndpoint): Promise<void> {
+    if (endpoint.kind !== "remote-view") return;
+    await this.pushSnapshot(endpointPushTarget(endpoint), endpoint.projectId);
+  }
+
+  private async pushSnapshot(webContents: ProjectPushTarget, projectId?: string | null) {
+    await this.broadcaster.pushSnapshotTo(webContents, projectId);
     if (webContents.isDestroyed()) return;
+    // A local view's project is read from its registration, which a cached
+    // view keeps; a remote view's is the one its endpoint is bound to.
+    const inView = (owningProjectId: string): boolean =>
+      projectId === undefined
+        ? getProjectRendererTargets(owningProjectId).some((wc) => wc.id === webContents.id)
+        : owningProjectId === projectId;
     // Each send is independently guarded against a TOCTOU destroy, matching the
     // broadcaster's defensive pattern above.
     for (const pluginId of this.pluginBadges.keys()) {
@@ -7369,12 +7561,7 @@ export class PluginService {
     // belong to its own project's views.
     for (const pluginId of this.pluginPanelMenus.keys()) {
       const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
-      if (
-        owningProjectId !== null &&
-        !getProjectRendererTargets(owningProjectId).some((wc) => wc.id === webContents.id)
-      ) {
-        continue;
-      }
+      if (owningProjectId !== null && !inView(owningProjectId)) continue;
       try {
         webContents.send(CHANNELS.EVENTS_PUSH, {
           name: "plugin:panel-menus-changed",
@@ -7386,12 +7573,7 @@ export class PluginService {
     }
     for (const [pluginId, byAction] of this.runningActions) {
       const owningProjectId = projectIdFromPluginInstanceKey(pluginId);
-      if (
-        owningProjectId !== null &&
-        !getProjectRendererTargets(owningProjectId).some((wc) => wc.id === webContents.id)
-      ) {
-        continue;
-      }
+      if (owningProjectId !== null && !inView(owningProjectId)) continue;
       try {
         webContents.send(CHANNELS.EVENTS_PUSH, {
           name: "plugin:actions-running-changed",

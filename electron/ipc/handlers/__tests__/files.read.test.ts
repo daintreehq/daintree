@@ -13,15 +13,16 @@ vi.mock("electron", () => ({
 type FileHandleLike = {
   readFile: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  stat?: ReturnType<typeof vi.fn>;
 };
 
 const fsMock = vi.hoisted(() => {
   return {
-    stat: vi.fn<(p: string) => Promise<{ size: number }>>(),
+    stat: vi.fn<(p: string) => Promise<{ size: number; ino?: number; dev?: number }>>(),
     realpath: vi.fn<(p: string) => Promise<string>>(),
     open: vi.fn<(p: string, flags: number) => Promise<FileHandleLike>>(),
     readFile: vi.fn<(p: string) => Promise<Buffer>>(),
-    constants: { O_RDONLY: 0, O_NOFOLLOW: 0x100 },
+    constants: { O_RDONLY: 0, O_NOFOLLOW: 0x100, O_NONBLOCK: 0x4 },
   };
 });
 
@@ -44,13 +45,14 @@ vi.mock("../../utils.js", () => ({
     );
     return () => ipcMainMock.removeHandler(channel);
   },
-  typedHandleValidated: (channel: string, schema: SafeParseable, handler: unknown) => {
-    ipcMainMock.handle(channel, async (_e: unknown, ...args: unknown[]) => {
+  typedHandleWithContextValidated: (channel: string, schema: SafeParseable, handler: unknown) => {
+    ipcMainMock.handle(channel, async (event: unknown, ...args: unknown[]) => {
       const parsed = schema.safeParse(args[0]);
       if (!parsed.success) {
         throw new Error(`IPC validation failed: ${channel}`);
       }
-      return (handler as (payload: unknown) => unknown)(parsed.data);
+      const ctx = { endpoint: (event as { endpoint?: unknown } | null)?.endpoint };
+      return (handler as (ctx: unknown, payload: unknown) => unknown)(ctx, parsed.data);
     });
     return () => ipcMainMock.removeHandler(channel);
   },
@@ -61,6 +63,7 @@ vi.mock("../../../services/FileSearchService.js", () => ({
 }));
 
 import { ipcMain } from "electron";
+import { _resetRemoteServicesForTest, registerRemoteService } from "../../../remote/runtime.js";
 import { CHANNELS } from "../../channels.js";
 import { registerFilesHandlers, isLfsPointer } from "../files.js";
 import { _resetHtmlPreviewTokensForTests } from "../../../setup/htmlPreviewTokens.js";
@@ -84,6 +87,12 @@ function makeFileHandle(buffer: Buffer): FileHandleLike {
   return {
     readFile: vi.fn().mockResolvedValue(buffer),
     close: vi.fn().mockResolvedValue(undefined),
+    // The same file the real path's stat named (the stat mocks carry no inode).
+    stat: vi.fn().mockResolvedValue({
+      isFile: () => true,
+      isDirectory: () => false,
+      size: buffer.length,
+    }),
   };
 }
 
@@ -126,7 +135,66 @@ describe("files:read handler", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetRemoteServicesForTest();
     fsMock.realpath.mockImplementation(async (p: string) => p);
+  });
+
+  describe("for a remote Shell's view", () => {
+    const remote = { endpoint: { kind: "remote-view", projectId: "proj-1" } };
+    const content = Buffer.from("hello\n", "utf-8");
+
+    beforeEach(() => {
+      fsMock.stat.mockResolvedValue({ size: content.length });
+      fsMock.open.mockResolvedValue(makeFileHandle(content));
+    });
+
+    it("reads under its own project folder or worktree", async () => {
+      const holdsRoot = vi.fn(async (_projectId: string, candidate: string) => candidate === root);
+      registerRemoteService("hostFileService", { holdsRoot } as never);
+      registerFilesHandlers();
+
+      await expect(getReadHandler()(remote, { path: file, rootPath: root })).resolves.toEqual({
+        content: "hello\n",
+        pathIsCanonical: true,
+      });
+      expect(holdsRoot).toHaveBeenCalledWith("proj-1", root);
+    });
+
+    it("refuses a root outside its project before touching the disk", async () => {
+      registerRemoteService("hostFileService", { holdsRoot: vi.fn(async () => false) } as never);
+      registerFilesHandlers();
+
+      await expect(
+        getReadHandler()(remote, { path: "/etc/passwd", rootPath: "/" })
+      ).rejects.toMatchObject({ name: "AppError", code: "OUTSIDE_ROOT" });
+      expect(fsMock.realpath).not.toHaveBeenCalled();
+      expect(fsMock.open).not.toHaveBeenCalled();
+    });
+
+    it("refuses when the view has no project or the host's file service isn't running", async () => {
+      registerFilesHandlers();
+      await expect(getReadHandler()(remote, { path: file, rootPath: root })).rejects.toMatchObject({
+        code: "OUTSIDE_ROOT",
+      });
+      registerRemoteService("hostFileService", { holdsRoot: vi.fn(async () => true) } as never);
+      await expect(
+        getReadHandler()(
+          { endpoint: { kind: "remote-view", projectId: null } },
+          { path: file, rootPath: root }
+        )
+      ).rejects.toMatchObject({ code: "OUTSIDE_ROOT" });
+      expect(fsMock.open).not.toHaveBeenCalled();
+    });
+
+    it("leaves a local view free to name any root", async () => {
+      const holdsRoot = vi.fn(async () => false);
+      registerRemoteService("hostFileService", { holdsRoot } as never);
+      registerFilesHandlers();
+      await expect(
+        getReadHandler()({ endpoint: { kind: "local-view" } }, { path: file, rootPath: root })
+      ).resolves.toEqual({ content: "hello\n", pathIsCanonical: true });
+      expect(holdsRoot).not.toHaveBeenCalled();
+    });
   });
 
   it("throws AppError(LFS_POINTER) when the file is a git-lfs v1 pointer", async () => {
@@ -282,13 +350,48 @@ describe("files:read handler", () => {
 
     expect(fsMock.open).toHaveBeenCalledWith(
       file,
-      fsMock.constants.O_RDONLY | fsMock.constants.O_NOFOLLOW
+      fsMock.constants.O_RDONLY | fsMock.constants.O_NOFOLLOW | fsMock.constants.O_NONBLOCK
     );
+  });
+
+  it("never reads a FIFO or a file swapped in after the checks, and opens without blocking", async () => {
+    fsMock.stat.mockResolvedValue({ size: 10, ino: 1, dev: 1 });
+    registerFilesHandlers();
+    for (const opened of [
+      { isFile: () => false, isDirectory: () => false, size: 0, ino: 1, dev: 1 },
+      { isFile: () => true, isDirectory: () => false, size: 10, ino: 2, dev: 1 },
+    ]) {
+      const handle = {
+        stat: vi.fn().mockResolvedValue(opened),
+        readFile: vi.fn().mockResolvedValue(Buffer.from("secret")),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      fsMock.open.mockResolvedValue(handle);
+      await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toBeDefined();
+      expect(handle.readFile).not.toHaveBeenCalled();
+      expect(handle.close).toHaveBeenCalled();
+    }
+    const flags = fsMock.open.mock.calls.at(-1)![1];
+    expect(flags & fsMock.constants.O_NONBLOCK).toBe(fsMock.constants.O_NONBLOCK);
+  });
+
+  it("reports a folder (a submodule's checkout) as not a file, as before", async () => {
+    fsMock.stat.mockResolvedValue({ size: 0 });
+    registerFilesHandlers();
+    fsMock.open.mockResolvedValue({
+      stat: vi.fn().mockResolvedValue({ isFile: () => false, isDirectory: () => true, size: 0 }),
+      readFile: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    });
+    await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
+      code: "NOT_A_FILE",
+    });
   });
 
   it("closes the file handle even when readFile rejects", async () => {
     fsMock.stat.mockResolvedValue({ size: 100 });
     const handle = {
+      stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 100 }),
       readFile: vi
         .fn()
         .mockRejectedValue(Object.assign(new Error("file disappeared"), { code: "ENOENT" })),
@@ -318,6 +421,7 @@ describe("files:read handler", () => {
   it("throws AppError(NOT_FOUND) when stat succeeds but readFile raises ENOENT (TOCTOU)", async () => {
     fsMock.stat.mockResolvedValue({ size: 100 });
     const handle = {
+      stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 100 }),
       readFile: vi
         .fn()
         .mockRejectedValue(Object.assign(new Error("file disappeared"), { code: "ENOENT" })),
@@ -338,6 +442,7 @@ describe("files:read handler", () => {
     // succeed (#12309).
     fsMock.stat.mockResolvedValue({ size: 128 });
     const handle = {
+      stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 100 }),
       readFile: vi
         .fn()
         .mockRejectedValue(Object.assign(new Error("illegal operation"), { code: "EISDIR" })),
@@ -355,6 +460,7 @@ describe("files:read handler", () => {
   it("throws AppError(PERMISSION) when readFile raises EACCES", async () => {
     fsMock.stat.mockResolvedValue({ size: 100 });
     const handle = {
+      stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 100 }),
       readFile: vi
         .fn()
         .mockRejectedValue(Object.assign(new Error("permission denied"), { code: "EACCES" })),
@@ -392,6 +498,28 @@ describe("files:read handler", () => {
     expect(fsMock.open).not.toHaveBeenCalled();
   });
 
+  it("reads a symlinked file inside the root through its contained real path", async () => {
+    const link = path.join(root, "link.ts");
+    const target = path.join(root, "src", "app.ts");
+    fsMock.realpath.mockImplementation(async (p: string) => (p === link ? target : p));
+    const content = Buffer.from("export {}", "utf-8");
+    fsMock.stat.mockResolvedValue({ size: content.length });
+    fsMock.open.mockImplementation(async (p: string) => {
+      // O_NOFOLLOW on the link itself is what refused every in-project link.
+      if (p === link) throw Object.assign(new Error("symbolic link"), { code: "ELOOP" });
+      return makeFileHandle(content);
+    });
+    registerFilesHandlers();
+
+    const result = await getReadHandler()({}, { path: link, rootPath: root });
+
+    expect(result).toMatchObject({ content: "export {}" });
+    expect(fsMock.open).toHaveBeenCalledWith(
+      target,
+      fsMock.constants.O_RDONLY | fsMock.constants.O_NOFOLLOW | fsMock.constants.O_NONBLOCK
+    );
+  });
+
   it("accepts a file when both root and file canonicalize through symlinked paths", async () => {
     const linkedRoot = path.resolve("/tmp/project-link");
     const linkedFile = path.join(linkedRoot, "a.txt");
@@ -417,6 +545,7 @@ describe("files:read handler", () => {
   it("returns the readFile error (not the close error) when both reject", async () => {
     fsMock.stat.mockResolvedValue({ size: 100 });
     const handle = {
+      stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 100 }),
       readFile: vi
         .fn()
         .mockRejectedValue(Object.assign(new Error("file disappeared"), { code: "ENOENT" })),

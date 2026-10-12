@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+import { isRemoteContributionActionAllowed } from "@shared/utils/remotePluginContributions";
+import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import type { PluginToolbarButtonId } from "@shared/types/toolbar";
 import { useToolbarPreferencesStore } from "@/store";
@@ -39,7 +41,9 @@ export function usePluginToolbarButtons(): PluginToolbarButtonState {
     const sync = (buttons: ToolbarButtonConfig[], complete: boolean): void => {
       if (disposed) return;
       const map = new Map<string, ToolbarButtonConfig>();
+      const remote = pluginViewHostId() !== null;
       for (const btn of buttons) {
+        if (remote && !isRemoteContributionActionAllowed(btn.pluginId, btn.actionId)) continue;
         map.set(btn.id, btn);
       }
       setConfigs(map);

@@ -37,6 +37,13 @@ export interface NotificationNavigation {
   context: WatchNotificationContext;
 }
 
+/**
+ * What a notification is about. The machine that presents it picks the sound
+ * for it from its own settings: for a view on a remote Shell that is the
+ * Shell, never the host that decided to notify.
+ */
+export type NotificationCategory = "completed" | "waiting" | "escalation" | "info";
+
 export interface WatchNotificationOptions {
   silent?: boolean;
   /** Renderer that owns the panel — decides which window a click focuses. */
@@ -47,6 +54,8 @@ export interface WatchNotificationOptions {
    * first member to be handled. Omit it and the banner is never closed early.
    */
   closeWithPanels?: readonly string[];
+  /** Defaults to "info" (no sound of its own) where a remote Shell presents it. */
+  category?: NotificationCategory;
 }
 
 export interface NativeNotificationOptions extends WatchNotificationOptions {
@@ -55,6 +64,33 @@ export interface NativeNotificationOptions extends WatchNotificationOptions {
 }
 
 const DEBOUNCE_MS = 300;
+
+/** A decided notification whose owner is a view on a remote Shell. */
+export interface RemoteNotification {
+  /** The owning remote endpoint's handle (negative). */
+  ownerHandle: number;
+  title: string;
+  body: string;
+  category: NotificationCategory;
+  navigation?: NotificationNavigation;
+}
+
+/**
+ * Delivers a notification to the Shell that owns it. Installed by the Remote
+ * Hosts host side; with none installed a remote owner's notification is
+ * dropped, since this machine's screen is not the one being watched.
+ */
+export type RemoteNotificationSink = (notification: RemoteNotification) => void;
+
+/**
+ * Whether the owner is a view on a remote Shell. Remote endpoint handles are
+ * negative; `WebContents` ids never are.
+ */
+export function isRemoteNotificationOwner(
+  ownerId: NotificationOwnerId | undefined
+): ownerId is number {
+  return typeof ownerId === "number" && ownerId < 0;
+}
 
 interface TrackedWindow {
   browserWindow: import("electron").BrowserWindow;
@@ -72,6 +108,16 @@ class NotificationService {
   private activeNotifications = new Set<Notification>();
   /** Panels still outstanding for each banner that asked to close with them. */
   private pendingPanelsByNotification = new Map<Notification, Set<string>>();
+
+  private remoteSink: RemoteNotificationSink | null = null;
+
+  /** The host decides; the Shell that owns the view displays. */
+  setRemoteNotificationSink(sink: RemoteNotificationSink | null): () => void {
+    this.remoteSink = sink;
+    return () => {
+      if (this.remoteSink === sink) this.remoteSink = null;
+    };
+  }
 
   detachWindowListeners(windowId: number): void {
     const tracked = this.trackedWindows.get(windowId);
@@ -365,9 +411,24 @@ class NotificationService {
   }
 
   private showNotification(title: string, body: string, options: NativeNotificationOptions): void {
+    const {
+      silent = true,
+      ownerWebContentsId,
+      navigation,
+      closeWithPanels,
+      category = "info",
+    } = options;
+    if (isRemoteNotificationOwner(ownerWebContentsId)) {
+      try {
+        this.remoteSink?.({ ownerHandle: ownerWebContentsId, title, body, category, navigation });
+      } catch (error) {
+        console.warn("[NotificationService] remote notification delivery failed:", error);
+      }
+      return;
+    }
+
     if (!Notification.isSupported()) return;
 
-    const { silent = true, ownerWebContentsId, navigation, closeWithPanels } = options;
     const notification = new Notification({ title, body, silent });
     this.activeNotifications.add(notification);
     if (closeWithPanels && closeWithPanels.length > 0) {
@@ -484,6 +545,7 @@ class NotificationService {
 
     this.registry = null;
     this.projectLookup = null;
+    this.remoteSink = null;
   }
 }
 

@@ -52,13 +52,13 @@ import {
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
 import { resolveAgentLaunchKind, sanitizeTerminalName } from "@/utils/agentLaunchValidation";
+import { hostShellDialect, isRemoteWindow, resolveHostTmpDir } from "@/hooks/useHostPlatform";
+import { agentClipboardDirectory } from "@shared/types/agentSettings";
 
 export { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 // Re-exported so the hook stays the canonical import site for launch-path
 // callers; the action layer imports the pure module directly (#11547).
 export { resolveAgentLaunchKind } from "@/utils/agentLaunchValidation";
-
-const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 
 /**
  * Resolve the worktree a launch should target. When a `targetWorktreeId` is
@@ -596,8 +596,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           let clipboardDirectory: string | undefined;
           if (agentId === "gemini" && effectiveEntry.shareClipboardDirectory !== false) {
             try {
-              const tmpDir = await systemClient.getTmpDir();
-              clipboardDirectory = `${tmpDir}/${CLIPBOARD_DIR_NAME}`;
+              const tmpDir = await resolveHostTmpDir(() => systemClient.getTmpDir());
+              clipboardDirectory = agentClipboardDirectory(tmpDir, isRemoteWindow());
             } catch {
               // Non-critical: Gemini will work without clipboard access
             }
@@ -643,7 +643,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           // reconcile the settings-derived flags re-append exactly these.
           const extraFlags = launchOptions?.agentLaunchFlags?.filter(Boolean);
           if (extraFlags?.length) {
-            command = appendCallerLaunchFlagsToCommand(command, extraFlags);
+            command = appendCallerLaunchFlagsToCommand(command, extraFlags, hostShellDialect());
             if (isAgent) {
               launchFlags = [...(launchFlags ?? []), ...extraFlags];
               callerLaunchFlags = extraFlags;

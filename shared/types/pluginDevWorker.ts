@@ -311,6 +311,12 @@ export type PluginWorkerToHostMessage =
       requestId: string;
       method: PluginHostCallMethod;
       params: unknown;
+      /**
+       * The `invoke` requestId whose handler made this call, when it made it
+       * while handling one. Main uses it to answer the prompt or clipboard
+       * call for that invocation's caller.
+       */
+      invocationId?: string;
     }
   /**
    * Cancel an in-flight `host-call`. The proxy posts this when the caller's
@@ -566,16 +572,19 @@ export interface SendToAgentParams {
 export interface ShowQuickPickParams {
   items: PluginQuickPickItem[];
   options?: PluginQuickPickOptions;
+  whenNoFrontend?: "fail" | "queue";
 }
 
 /** Params for `showInputBox` (`host-call`). */
 export interface ShowInputBoxParams {
   options?: PluginInputBoxOptions;
+  whenNoFrontend?: "fail" | "queue";
 }
 
 /** Params for `showConfirm` (`host-call`). */
 export interface ShowConfirmParams {
   options: PluginConfirmOptions;
+  whenNoFrontend?: "fail" | "queue";
 }
 
 /**

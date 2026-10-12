@@ -250,3 +250,66 @@ describe("switchToLastWorkspace", () => {
     expect(scratchState.switchScratch).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("switchToLastWorkspace across hosts", () => {
+  const switchWindowHost = vi.fn();
+
+  function onHost(hostId: string | null): void {
+    (window as unknown as { electron: unknown }).electron = {
+      projectHistory: { peek: peekMock },
+      remoteHosts: { switchWindowHost },
+    };
+    (window as unknown as { __DAINTREE_HOST_ID__?: { id: string } }).__DAINTREE_HOST_ID__ =
+      hostId === null ? undefined : { id: hostId };
+  }
+
+  beforeEach(() => switchWindowHost.mockReset().mockResolvedValue({ outcome: "switched" }));
+
+  it("moves a local window to the remote workspace it came from, host and project together", async () => {
+    onHost(null);
+    peekMock.mockResolvedValue({ workspaceId: `studio-01:${TARGET_PROJECT}` });
+
+    await switchToLastWorkspace();
+
+    expect(switchWindowHost).toHaveBeenCalledWith({
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: TARGET_PROJECT,
+    });
+    expect(projectState.switchProject).not.toHaveBeenCalled();
+  });
+
+  it("returns a remote view to this machine's project through the host switch", async () => {
+    onHost("studio-01");
+    peekMock.mockResolvedValue({ workspaceId: TARGET_PROJECT });
+
+    await switchToLastWorkspace();
+
+    expect(switchWindowHost).toHaveBeenCalledWith({
+      hostId: "local",
+      newWindow: false,
+      projectId: TARGET_PROJECT,
+    });
+  });
+
+  it("switches by bare id within the view's own host", async () => {
+    onHost("studio-01");
+    projectState.currentProject = { id: CURRENT_PROJECT };
+    peekMock.mockResolvedValue({ workspaceId: `studio-01:${SCRATCH_ONE}` });
+
+    await switchToLastWorkspace();
+
+    expect(switchWindowHost).not.toHaveBeenCalled();
+    expect(scratchState.switchScratch).toHaveBeenCalledWith(SCRATCH_ONE);
+  });
+
+  it("does nothing when the remote target is where this view already is", async () => {
+    onHost("studio-01");
+    peekMock.mockResolvedValue({ workspaceId: `studio-01:${CURRENT_PROJECT}` });
+
+    await switchToLastWorkspace();
+
+    expect(switchWindowHost).not.toHaveBeenCalled();
+    expect(projectState.switchProject).not.toHaveBeenCalled();
+  });
+});

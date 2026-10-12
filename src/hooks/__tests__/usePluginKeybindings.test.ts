@@ -32,6 +32,27 @@ afterEach(() => {
 });
 
 describe("usePluginKeybindings", () => {
+  it("in a window attached to a host, skips bindings to actions it won't run for a plugin", async () => {
+    Object.assign(window, { __DAINTREE_HOST_ID__: { id: "studio-01" } });
+    try {
+      keybindingsMock.mockResolvedValue([
+        makeEntry("acme.graph", "terminal.paste", "Cmd+Shift+V"),
+        makeEntry("acme.graph", "other.plugin.run", "Cmd+Shift+O"),
+        makeEntry("acme.graph", "acme.graph.open", "Cmd+Shift+G"),
+      ]);
+      const { keybindingService } = await import("@/services/KeybindingService");
+      const registerSpy = vi.spyOn(keybindingService, "registerBinding");
+      const { usePluginKeybindings } = await import("../usePluginKeybindings");
+      renderHook(() => usePluginKeybindings());
+      await waitFor(() => expect(registerSpy).toHaveBeenCalledTimes(1));
+      expect(registerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ actionId: "acme.graph.open" })
+      );
+    } finally {
+      Reflect.deleteProperty(window, "__DAINTREE_HOST_ID__");
+    }
+  });
+
   it("registers plugin keybindings pulled on mount", async () => {
     keybindingsMock.mockResolvedValue([makeEntry("p1", "p1.act", "Cmd+Shift+8")]);
 

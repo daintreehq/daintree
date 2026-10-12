@@ -24,8 +24,21 @@ vi.mock("../../utils.js", () => ({
   typedHandleWithContextValidated: vi.fn(() => () => {}),
 }));
 
+const dispatcherMock = vi.hoisted(() => ({
+  sendListeners: new Map<string, (ctx: unknown, ...args: unknown[]) => void>(),
+}));
+vi.mock("../../dispatcher.js", () => ({
+  getIpcDispatcher: () => ({
+    registerSend: (channel: string, listener: (ctx: unknown, ...args: unknown[]) => void) => {
+      dispatcherMock.sendListeners.set(channel, listener);
+      return () => dispatcherMock.sendListeners.delete(channel);
+    },
+  }),
+}));
+
 import { CHANNELS } from "../../channels.js";
 import { MAX_REPORTS_PER_SECOND, registerPluginMetricsHandlers } from "../pluginMetrics.js";
+import { notifyRemoteViewEndpointOpened, setHostSendRelay } from "../../hostSendRelay.js";
 import {
   MAX_REPORTED_COMMITS,
   MAX_REPORTS_PER_MESSAGE,
@@ -369,5 +382,190 @@ describe("perf snapshot subscription", () => {
     emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, sender);
     await flush();
     expect(acquire).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("a view on another machine", () => {
+  function endpoint(handle: number, projectId: string | null) {
+    const closers: Array<() => void> = [];
+    let closed = false;
+    return {
+      kind: "remote-view" as const,
+      handle,
+      projectId,
+      send: vi.fn(),
+      isClosed: () => closed,
+      onClose: (cb: () => void) => {
+        closers.push(cb);
+        return { dispose: () => closers.splice(closers.indexOf(cb), 1) };
+      },
+      close: () => {
+        closed = true;
+        closers.splice(0).forEach((cb) => cb());
+      },
+    };
+  }
+  const link = (channel: string, ep: ReturnType<typeof endpoint>, payload?: unknown) =>
+    dispatcherMock.sendListeners.get(channel)!({ endpoint: ep }, payload);
+
+  it("reports through the link, scoped to its endpoint's project", async () => {
+    link(
+      CHANNELS.PLUGIN_REPORT_VIEW_METRICS,
+      endpoint(-1, "proj-b"),
+      envelopes(validReport(PROJECT_A_PLUGIN))
+    );
+    link(
+      CHANNELS.PLUGIN_REPORT_VIEW_METRICS,
+      endpoint(-2, "proj-a"),
+      envelopes(validReport(PROJECT_A_PLUGIN))
+    );
+    await flush();
+    expect(metrics.getSnapshot(PROJECT_A_PLUGIN)!.viewLoads).toHaveLength(1);
+  });
+
+  it("subscribes over the link, gets its project's snapshots, and is dropped when it closes", async () => {
+    vi.useFakeTimers();
+    try {
+      const ep = endpoint(-1, "proj-b");
+      link(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, ep);
+      await vi.advanceTimersByTimeAsync(0);
+      metrics.recordInvoke("acme.demo", 1, "ok");
+      metrics.recordInvoke(PROJECT_A_PLUGIN, 1, "ok");
+      await vi.advanceTimersByTimeAsync(1_000);
+      const frame = ep.send.mock.calls.at(-1)![0] as {
+        type: string;
+        channel: string;
+        args: [Array<{ pluginId: string }>];
+      };
+      expect(frame.type).toBe("event");
+      expect(frame.channel).toBe(CHANNELS.PLUGIN_PERF_SNAPSHOTS_CHANGED);
+      expect(frame.args[0].map((snapshot) => snapshot.pluginId)).toEqual(["acme.demo"]);
+
+      ep.close();
+      ep.send.mockClear();
+      metrics.recordInvoke("acme.demo", 1, "ok");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(ep.send).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("unsubscribes over the link", async () => {
+    vi.useFakeTimers();
+    try {
+      const ep = endpoint(-1, null);
+      link(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, ep);
+      await vi.advanceTimersByTimeAsync(0);
+      link(CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE, ep);
+      metrics.recordInvoke("acme.demo", 1, "ok");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(ep.send).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("a local view bound to a remote host (Shell side)", () => {
+  it("subscribes on its host, ends it when the view navigates, and re-sends on a new endpoint", async () => {
+    vi.useFakeTimers();
+    const view = makeSender();
+    const relayed: Array<[number, string]> = [];
+    const off = setHostSendRelay((id, channel) => {
+      if (id !== view.id) return false;
+      relayed.push([id, channel]);
+      return true;
+    });
+    try {
+      emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, view);
+      expect(relayed).toEqual([[view.id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE]]);
+      // This machine's feed never reaches it.
+      await vi.advanceTimersByTimeAsync(0);
+      metrics.recordInvoke("acme.demo", 1, "ok");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(view.send).not.toHaveBeenCalled();
+
+      notifyRemoteViewEndpointOpened(view.id);
+      expect(relayed.at(-1)).toEqual([view.id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE]);
+
+      view.emit("did-navigate");
+      expect(relayed.at(-1)).toEqual([view.id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE]);
+      // The next endpoint repeats the unsubscribe, never the subscription.
+      notifyRemoteViewEndpointOpened(view.id);
+      expect(relayed.at(-1)).toEqual([view.id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE]);
+      expect(
+        relayed.filter(([, channel]) => channel === CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE)
+      ).toHaveLength(2);
+    } finally {
+      off();
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-sends an unsubscribe the link may have dropped when the view's endpoint reopens", () => {
+    const view = makeSender();
+    const channels: string[] = [];
+    const off = setHostSendRelay((id, channel) => {
+      if (id !== view.id) return false;
+      channels.push(channel);
+      return true;
+    });
+    try {
+      emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, view);
+      view.emit("did-navigate");
+      notifyRemoteViewEndpointOpened(view.id);
+      expect(channels).toEqual([
+        CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE,
+        CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE,
+        CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE,
+      ]);
+      // Once re-sent, a later reopen has nothing left to say.
+      notifyRemoteViewEndpointOpened(view.id);
+      expect(channels).toHaveLength(3);
+    } finally {
+      off();
+    }
+  });
+
+  it("forgets a pending unsubscribe once its view is closed", () => {
+    const view = makeSender();
+    const channels: string[] = [];
+    const off = setHostSendRelay((id, channel) => {
+      if (id !== view.id) return false;
+      channels.push(channel);
+      return true;
+    });
+    try {
+      emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, view);
+      emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE, view);
+      view.destroyed = true;
+      view.emit("destroyed");
+      expect(view.listenerCount("destroyed")).toBe(0);
+      notifyRemoteViewEndpointOpened(view.id);
+      expect(channels).toHaveLength(2);
+    } finally {
+      off();
+    }
+  });
+
+  it("relays an explicit unsubscribe to its host", () => {
+    const view = makeSender();
+    const channels: string[] = [];
+    const off = setHostSendRelay((id, channel) => {
+      if (id !== view.id) return false;
+      channels.push(channel);
+      return true;
+    });
+    try {
+      emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, view);
+      emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE, view);
+      expect(channels).toEqual([
+        CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE,
+        CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE,
+      ]);
+    } finally {
+      off();
+    }
   });
 });

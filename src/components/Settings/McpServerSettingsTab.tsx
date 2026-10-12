@@ -50,6 +50,7 @@ interface McpServerStatus {
   port: number | null;
   configuredPort: number | null;
   apiKey: string;
+  apiKeyRedacted?: boolean;
 }
 
 const EXPORT_FEEDBACK_MS = 2000;
@@ -795,42 +796,48 @@ export function McpServerSettingsTab() {
                     label="Client config"
                     error={configCopyError}
                     description={
-                      <>
-                        {viewWorkspaceId
-                          ? "A project-scoped config pins the client to this project, so its calls keep landing here whichever window you're looking at. The plain config follows whichever Daintree window you focused last."
-                          : null}
-                        {viewWorkspaceId && status.apiKey ? " " : null}
-                        {status.apiKey
-                          ? "The config carries your API key, so treat it like a password — rotating the key cuts off any client still holding an older copy."
-                          : null}
-                      </>
+                      status.apiKeyRedacted ? (
+                        "Copy the config on the host itself: it carries the host's API key, which a window on another machine never sees."
+                      ) : (
+                        <>
+                          {viewWorkspaceId
+                            ? "A project-scoped config pins the client to this project, so its calls keep landing here whichever window you're looking at. The plain config follows whichever Daintree window you focused last."
+                            : null}
+                          {viewWorkspaceId && status.apiKey ? " " : null}
+                          {status.apiKey
+                            ? "The config carries your API key, so treat it like a password — rotating the key cuts off any client still holding an older copy."
+                            : null}
+                        </>
+                      )
                     }
                     layout="stacked"
                     control={
-                      <SettingsRowActions>
-                        <CopyButton
-                          key={`plain:${configCopyEpoch}`}
-                          label="Copy MCP config"
-                          variant="outline"
-                          size="sm"
-                          text={() => readClientConfig(null)}
-                          announcement="Config copied"
-                          onClick={() => setConfigCopyError(null)}
-                          onCopyError={handleConfigCopyError}
-                        />
-                        {viewWorkspaceId ? (
+                      status.apiKeyRedacted ? undefined : (
+                        <SettingsRowActions>
                           <CopyButton
-                            key={`scoped:${configCopyEpoch}`}
-                            label="Copy config for this project"
+                            key={`plain:${configCopyEpoch}`}
+                            label="Copy MCP config"
                             variant="outline"
                             size="sm"
-                            text={() => readClientConfig(viewWorkspaceId)}
+                            text={() => readClientConfig(null)}
                             announcement="Config copied"
                             onClick={() => setConfigCopyError(null)}
                             onCopyError={handleConfigCopyError}
                           />
-                        ) : null}
-                      </SettingsRowActions>
+                          {viewWorkspaceId ? (
+                            <CopyButton
+                              key={`scoped:${configCopyEpoch}`}
+                              label="Copy config for this project"
+                              variant="outline"
+                              size="sm"
+                              text={() => readClientConfig(viewWorkspaceId)}
+                              announcement="Config copied"
+                              onClick={() => setConfigCopyError(null)}
+                              onCopyError={handleConfigCopyError}
+                            />
+                          ) : null}
+                        </SettingsRowActions>
+                      )
                     }
                   />
                 </>
@@ -904,7 +911,9 @@ export function McpServerSettingsTab() {
                 description={
                   status.apiKey
                     ? "Every connection must present this bearer token. It persists across restarts."
-                    : "Generated when the server starts"
+                    : status.apiKeyRedacted
+                      ? "Set on the host. A window on another machine never sees it."
+                      : "Generated when the server starts"
                 }
                 control={
                   status.apiKey ? (

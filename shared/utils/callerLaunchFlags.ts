@@ -50,14 +50,17 @@ export function readCallerLaunchFlags(
 
 /**
  * Appends caller flags to a shell command string the way the launcher does:
- * options pass through as typed, values are quoted only when they need it.
+ * options pass through as typed, values are quoted only when they need it, in
+ * the dialect of the shell that will run the command (a remote host's, when
+ * the window is attached to one).
  */
 export function appendCallerLaunchFlagsToCommand(
   command: string,
-  callerFlags: readonly string[] | undefined
+  callerFlags: readonly string[] | undefined,
+  dialect?: "windows" | "posix"
 ): string {
   const tokens = (callerFlags ?? [])
     .filter(Boolean)
-    .map((flag) => (flag.startsWith("-") ? flag : escapeShellArgOptional(flag)));
+    .map((flag) => (flag.startsWith("-") ? flag : escapeShellArgOptional(flag, dialect)));
   return tokens.length > 0 ? `${command} ${tokens.join(" ")}` : command;
 }

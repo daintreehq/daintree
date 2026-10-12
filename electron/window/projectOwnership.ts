@@ -1,4 +1,4 @@
-import type { BrowserWindow, WebContents } from "electron";
+import { dialog, type BrowserWindow, type WebContents } from "electron";
 import { CHANNELS } from "../ipc/channels.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
@@ -9,6 +9,7 @@ import type {
 } from "../../shared/types/ipc/project.js";
 import type { Project } from "../../shared/types/project.js";
 import { hasPendingActivation } from "./projectActivationClaims.js";
+import { isWindowOnRemoteHost, switchWindowToLocal } from "./windowHost.js";
 
 export { claimProjectActivation } from "./projectActivationClaims.js";
 
@@ -155,9 +156,47 @@ export function redirectToProjectOwner(
     return { outcome: "focused-elsewhere", project, targetWindowId };
   }
 
+  // A window that has since moved to a remote host can still hold this
+  // machine's view in its cache, but its renderer's switch would ask the host
+  // for a project it doesn't have. The window comes back to this machine
+  // instead, its binding and view together.
+  if (isWindowOnRemoteHost(targetWindowId)) {
+    bringOwnerToThisMachine(browserWindow, targetWindowId, project);
+    revealWindow(browserWindow);
+    return { outcome: "activated-elsewhere", project, targetWindowId };
+  }
+
   requestOwnerSwitch(ownerSwitchRenderer(projectViewManager, browserWindow), project.id);
   revealWindow(browserWindow);
   return { outcome: "activated-elsewhere", project, targetWindowId };
+}
+
+/**
+ * Switch an owner window that is on a host back to this machine. The request
+ * has already been answered, so a switch that fails says so in a dialog on
+ * that window, which stayed on its host.
+ */
+function bringOwnerToThisMachine(
+  browserWindow: BrowserWindow,
+  windowId: number,
+  project: Project
+): void {
+  void switchWindowToLocal(windowId, project.id).catch(async (error: unknown) => {
+    console.error("[projectOwnership] Couldn't bring the window back to this machine:", error);
+    if (browserWindow.isDestroyed()) return;
+    const { response } = await dialog.showMessageBox(browserWindow, {
+      type: "error",
+      title: "Couldn't open project",
+      message: "Couldn't open project",
+      detail: `"${project.name}" didn't open here, so this window stayed on its host.`,
+      buttons: ["Try again", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    if (response === 0 && !browserWindow.isDestroyed()) {
+      bringOwnerToThisMachine(browserWindow, windowId, project);
+    }
+  });
 }
 
 /**

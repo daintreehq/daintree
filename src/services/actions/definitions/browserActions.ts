@@ -266,7 +266,11 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       if (!targetId) {
         throw new Error("No browser panel: pass terminalId or focus a browser panel first");
       }
-      const shot = await window.electron.webview.captureScreenshot(targetId);
+      // An agent's capture may be the host's (a remote window's MCP): main
+      // then refuses a page on this computer's own network.
+      const shot = await window.electron.webview.captureScreenshot(targetId, {
+        forHost: ctx?.dispatchSource === "agent",
+      });
       // Preserve the user-facing "copy to clipboard" affordance for keybinding /
       // toolbar dispatch; agent (MCP) calls receive the bytes in the result and
       // must not clobber the user's clipboard.

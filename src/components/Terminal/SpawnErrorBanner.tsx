@@ -38,7 +38,10 @@ export function SpawnErrorBanner({
 }: SpawnErrorBannerProps) {
   const isCwdError = error.code === "ENOTDIR";
   const isResourceLimit = RESOURCE_LIMIT_CODES.has(error.code);
-  const copy: SpawnErrorBannerCopy = SPAWN_ERROR_BANNER_COPY[error.code];
+  // A persisted or IPC-borne error can carry a code this table doesn't know;
+  // it reads as the generic failure rather than taking the pane down.
+  const copy: SpawnErrorBannerCopy =
+    SPAWN_ERROR_BANNER_COPY[error.code] ?? SPAWN_ERROR_BANNER_COPY.UNKNOWN;
 
   const retryAction: BannerAction = {
     id: "retry",

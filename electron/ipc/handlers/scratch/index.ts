@@ -7,7 +7,6 @@
  * and never invoke `WorktreeService` (non-git directories) or
  * `ProjectSwitchService` (which validates against `projects`).
  */
-import { randomUUID } from "crypto";
 import { dialog, type WebContentsView } from "electron";
 import fs from "fs/promises";
 import path from "path";
@@ -15,14 +14,10 @@ import { CHANNELS } from "../../channels.js";
 import { broadcastToRenderer } from "../../utils.js";
 import { defineIpcNamespace, op } from "../../define.js";
 import { SCRATCH_METHOD_CHANNELS } from "./preload.js";
+import { activateScratchInWindow } from "./activation.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
-import { distributePortsToView } from "../../../window/portDistribution.js";
-import { scheduleOpenWindowsSave } from "../../../window/openWindowsTracker.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
-import { projectStore } from "../../../services/ProjectStore.js";
 import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
-import { refreshProjectMenuState } from "../../../projectMenuState.js";
-import { notificationService } from "../../../services/NotificationService.js";
 import { addProjectByPath } from "../projectCrud/crud.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
 import { createHardenedGit } from "../../../utils/hardenedGit.js";
@@ -39,8 +34,17 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
       getAll: op(SCRATCH_METHOD_CHANNELS.getAll, async (): Promise<Scratch[]> =>
         scratchStore.getAllScratches()
       ),
-      getCurrent: op(SCRATCH_METHOD_CHANNELS.getCurrent, async (): Promise<Scratch | null> =>
-        scratchStore.getCurrentScratch()
+      getCurrent: op(
+        SCRATCH_METHOD_CHANNELS.getCurrent,
+        async (ctx): Promise<Scratch | null> => {
+          // A view on a remote Shell shows whatever its own binding names; the
+          // current-scratch pointer describes this machine's windows.
+          if (ctx.endpoint?.kind === "remote-view") {
+            return ctx.projectId ? scratchStore.getScratchById(ctx.projectId) : null;
+          }
+          return scratchStore.getCurrentScratch();
+        },
+        { withContext: true }
       ),
       create: op(SCRATCH_METHOD_CHANNELS.create, async (name?: string): Promise<Scratch> => {
         const scratch = await scratchStore.createScratch(name);
@@ -105,10 +109,20 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
             throw new Error(`Scratch not found: ${scratchId}`);
           }
 
+          // A view on a remote Shell: the Shell swaps its own view and tells it
+          // it switched. This machine's windows, pointers and history are not
+          // that view's, so only the scratch's own recency moves here.
+          if (ctx.endpoint?.kind === "remote-view") {
+            const opened = scratchStore.updateScratch(scratchId, { lastOpened: Date.now() });
+            // Other views' scratch lists reorder on it; on-switch is the Shell's to send.
+            broadcastToRenderer(CHANNELS.SCRATCH_UPDATED, opened);
+            return opened;
+          }
+
           // Resolve the per-window ProjectViewManager (the same view manager handles
           // scratches; PVM is keyed on opaque string IDs and has no entity-type
           // assumptions, so a UUID scratch ID coexists with SHA256 project IDs).
-          const senderWindow = getWindowForWebContents(ctx.event.sender);
+          const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
           const pvmCtx = senderWindow
             ? deps.windowRegistry?.getByWindowId(senderWindow.id)
             : undefined;
@@ -152,54 +166,15 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
             history.record(scratchId);
           }
 
-          // Now commit canonical pointers — scratch active, project cleared.
-          // Mutually exclusive with project: clear the project pointer so the
-          // renderer's `getCurrentProject` does not race-restore the previous project.
-          const updated = scratchStore.setCurrentScratch(scratchId);
-          projectStore.clearCurrentProject();
-
-          // Re-persist which workspace each window is showing (#11492), the
-          // same call `project:switch` makes after its own commit. Placed after
-          // the PVM swap because the manifest is built from
-          // `getActiveProjectId()` across every window — it has to read the
-          // committed state, not the switch that is still landing.
-          //
-          // Best-effort for an abrupt exit, not a guarantee: the write is
-          // trailing-debounced, so a crash inside that window still relaunches
-          // into the workspace the user had left. A graceful quit is covered
-          // regardless — `freezeAndSnapshotOpenWindows()` captures whatever the
-          // pending debounce still owed (#11958).
-          scheduleOpenWindowsSave();
-
-          // A scratch is not a project: the window's PVM now holds a scratch id
-          // with no project row, so the File-menu project gates must drop.
-          refreshProjectMenuState();
-          notificationService.refreshTitles();
-
-          // Tell the PTY host the active workspace changed. PtyClient treats the ID
-          // as an opaque string and the path as a working directory, so passing a
-          // scratch UUID + scratch dir is supported by the existing protocol.
-          const windowId = senderWindow?.id ?? deps.mainWindow?.id;
-          if (windowId !== undefined && deps.ptyClient) {
-            deps.ptyClient.onProjectSwitch(windowId, scratchId, scratch.path);
-          }
-
-          // Distribute a fresh PTY MessagePort to the active view. Without this,
-          // terminals spawned in the scratch can't reach the PTY host.
-          if (windowId !== undefined && senderWindow && deps.windowRegistry) {
-            const wctx = deps.windowRegistry.getByWindowId(senderWindow.id);
-            if (wctx) {
-              const targetWc = activeView?.webContents ?? ctx.event.sender;
-              if (!targetWc.isDestroyed()) {
-                distributePortsToView(senderWindow, wctx, targetWc, deps.ptyClient ?? null);
-              }
-            }
-          }
-
-          const switchId = randomUUID();
-          broadcastToRenderer(CHANNELS.SCRATCH_ON_SWITCH, { scratch: updated, switchId });
-
-          return updated;
+          // Now commit canonical pointers, the manifest, menu, PTY workspace and port.
+          return activateScratchInWindow({
+            scratch,
+            windowId: senderWindow?.id ?? deps.mainWindow?.id,
+            window: senderWindow,
+            view: activeView?.webContents ?? ctx.event?.sender,
+            windowRegistry: deps.windowRegistry,
+            ptyClient: deps.ptyClient,
+          });
         },
         { withContext: true }
       ),
@@ -212,7 +187,11 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
        */
       saveAsProject: op(
         SCRATCH_METHOD_CHANNELS.saveAsProject,
-        async (ctx, scratchId: string): Promise<ScratchSaveAsProjectResult> => {
+        async (
+          ctx,
+          scratchId: string,
+          remoteDestinationPath?: string
+        ): Promise<ScratchSaveAsProjectResult> => {
           if (typeof scratchId !== "string" || !scratchId) {
             throw new Error("Invalid scratch ID");
           }
@@ -222,21 +201,31 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
             throw new Error(`Scratch not found: ${scratchId}`);
           }
 
-          const senderWindow = getWindowForWebContents(ctx.event.sender);
-          const dialogOpts: Electron.OpenDialogOptions = {
-            title: "Save scratch as project",
-            buttonLabel: "Save here",
-            properties: ["openDirectory", "createDirectory"],
-          };
-          const result = senderWindow
-            ? await dialog.showOpenDialog(senderWindow, dialogOpts)
-            : await dialog.showOpenDialog(dialogOpts);
+          let destinationPath: string;
+          if (ctx.endpoint?.kind === "remote-view") {
+            // A remote Shell chose the folder in its host picker; a dialog here
+            // would open on this machine's screen, in front of nobody.
+            if (typeof remoteDestinationPath !== "string" || !remoteDestinationPath) {
+              throw new Error("A destination folder is required");
+            }
+            destinationPath = remoteDestinationPath;
+          } else {
+            const senderWindow = ctx.event && getWindowForWebContents(ctx.event.sender);
+            const dialogOpts: Electron.OpenDialogOptions = {
+              title: "Save scratch as project",
+              buttonLabel: "Save here",
+              properties: ["openDirectory", "createDirectory"],
+            };
+            const result = senderWindow
+              ? await dialog.showOpenDialog(senderWindow, dialogOpts)
+              : await dialog.showOpenDialog(dialogOpts);
 
-          if (result.canceled || result.filePaths.length === 0) {
-            return { status: "cancelled" };
+            if (result.canceled || result.filePaths.length === 0) {
+              return { status: "cancelled" };
+            }
+
+            destinationPath = result.filePaths[0]!;
           }
-
-          const destinationPath = result.filePaths[0]!;
           if (!path.isAbsolute(destinationPath)) {
             throw new Error("Destination path must be absolute");
           }

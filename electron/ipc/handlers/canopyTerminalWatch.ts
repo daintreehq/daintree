@@ -1,8 +1,8 @@
-import type { WebContents } from "electron";
 import type { CanopyTerminalData, CanopyTerminalView } from "../../../shared/types/ipc/canopy.js";
 import type { TerminalResizeResult } from "../../../shared/types/pty-host.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import { CHANNELS } from "../channels.js";
+import type { ProjectPushTarget } from "../utils.js";
 
 interface GridSize {
   cols: number;
@@ -35,6 +35,11 @@ interface Watch {
   stop: (restore: boolean) => void;
   /** The terminal under the id is still the incarnation the stream was opened for. */
   isCurrent: () => boolean;
+  /**
+   * The view may still size the PTY: it drives the run's project, or nobody
+   * holds it. A view that lost control hands nothing back and holds nothing.
+   */
+  mayResize: () => boolean;
   /** End the stream, telling the view, with no size to hand back. */
   end: () => void;
 }
@@ -71,7 +76,9 @@ export function isCurrentWatchRequest(webContentsId: number, ticket: number): bo
 }
 
 /**
- * Stream one terminal's output to one view, starting from a snapshot.
+ * Stream one terminal's output to one view, starting from a snapshot. The view
+ * is a local one's WebContents or a remote one's endpoint, keyed by the id its
+ * calls report.
  *
  * The bytes ride the host's Main-process mirror, which reaches any project's
  * terminal, rather than the view's own port, which only carries its project.
@@ -89,7 +96,7 @@ export function isCurrentWatchRequest(webContentsId: number, ticket: number): bo
  */
 export async function watchTerminal(
   ptyClient: PtyClient,
-  sender: WebContents,
+  sender: ProjectPushTarget,
   runId: string,
   spawnedAt: number,
   ticket: number,
@@ -97,7 +104,8 @@ export async function watchTerminal(
    * The incarnation the caller validated `spawnedAt` against, taken before it
    * awaited anything; by default, the one running now.
    */
-  launchGeneration: number | null = ptyClient.getLiveGeneration(runId)
+  launchGeneration: number | null = ptyClient.getLiveGeneration(runId),
+  mayResize: () => boolean = () => true
 ): Promise<CanopyTerminalView> {
   stopWatch(sender.id);
   const watchId = ++nextWatchId;
@@ -177,6 +185,7 @@ export async function watchTerminal(
     launchGeneration,
     isCurrent: () =>
       watch.launchGeneration === null || ptyClient.isLiveGeneration(runId, watch.launchGeneration),
+    mayResize,
     end: () => end(),
     stop: (restore) => {
       const held = holders.get(runId) === sender.id;
@@ -187,7 +196,8 @@ export async function watchTerminal(
         held &&
         watch.heldSize !== null &&
         watch.ownerSize !== null &&
-        watch.isCurrent()
+        watch.isCurrent() &&
+        watch.mayResize()
       ) {
         const current = watch.appliedSize ?? watch.heldSize;
         if (!sameSize(current, watch.ownerSize)) {
@@ -304,7 +314,14 @@ export function resizeWatchedTerminal(
   }
   if (watch.ownerSize === null) return;
   const holder = holders.get(watch.runId);
-  if (holder !== undefined && holder !== webContentsId) return;
+  // Another view's hold stands unless that view has lost control of the run.
+  if (
+    holder !== undefined &&
+    holder !== webContentsId &&
+    watches.get(holder)?.mayResize() !== false
+  ) {
+    return;
+  }
   const size = { cols, rows };
   // Already the hold, and either on its way or what the PTY reports: nothing
   // to send. A hold the pane has since overridden, or that failed, goes again.

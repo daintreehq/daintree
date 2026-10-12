@@ -1,0 +1,387 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { HEADLESS_OZONE_SWITCH, HOST_MODE_FLAG } from "../../boot/hostModeLaunch.js";
+import type { CommandRunner } from "./hostCommands.js";
+import { HOST_MODE_STATUS_NAME } from "./hostModeStatusFile.js";
+import { LINUX_RUNTIME_DIR_NAME } from "./hostSocketPath.js";
+
+/**
+ * Start at login for Host mode: a Daintree-owned LaunchAgent on macOS and a
+ * Daintree-owned `systemd --user` unit on Linux. Both launch this same binary
+ * with `--host-mode`, which starts the backend windowless. They are written
+ * only after the user switches start at login on, and removed when it or Host
+ * mode goes off. Nothing here touches any other configuration.
+ *
+ * macOS uses a LaunchAgent rather than `app.setLoginItemSettings`: login item
+ * arguments are Windows-only in Electron and `openAsHidden` is ignored from
+ * macOS 13, so a login item can't ask for a windowless Host launch. The agent
+ * is limited to the Aqua session so the backend only ever runs inside the
+ * logged-in GUI session, never from an SSH login.
+ *
+ * Removal never unloads a running job (`launchctl bootout`,
+ * `systemctl --user stop`): the job may be this very process, and switching
+ * Host mode off must not quit the app. Deleting the file and disabling the
+ * unit is enough for the next login not to start it.
+ */
+
+export type StartAtLoginKind = "launch-agent" | "systemd-user";
+
+export interface StartAtLoginObservation {
+  kind: StartAtLoginKind;
+  /** Where the Daintree-owned file lives. */
+  path: string;
+  /** The file exists. */
+  installed: boolean;
+  /** The file on disk is exactly what this launch would write (same binary, same flags). */
+  current: boolean;
+  /**
+   * The file launches this install (its binary, and app folder when
+   * unpackaged), whatever else in it differs: an older build of this install
+   * wrote it, not another install sharing the name.
+   */
+  ownLaunch?: boolean;
+  /** `systemctl --user is-enabled` output, or null where it doesn't apply or couldn't be read. */
+  unitState: string | null;
+  /** `loginctl show-user` Linger value; null where it doesn't apply or couldn't be read. */
+  linger: "yes" | "no" | null;
+  /** The login name linger applies to. */
+  userName: string | null;
+}
+
+export interface StartAtLoginController {
+  readonly kind: StartAtLoginKind;
+  readonly path: string;
+  install(): Promise<void>;
+  remove(): Promise<void>;
+  /** The Daintree-owned file exists; reads nothing but the file. */
+  isInstalled(): Promise<boolean>;
+  observe(): Promise<StartAtLoginObservation>;
+}
+
+export interface HostLaunchTarget {
+  /** The binary to run: the AppImage when running from one, else the executable. */
+  executable: string;
+  /** Dev builds run the Electron binary against an app directory. */
+  appPath: string | null;
+  /**
+   * An AppImage on a machine without FUSE: its runtime unpacks and runs it
+   * instead of mounting it (`APPIMAGE_EXTRACT_AND_RUN=1`). The running host
+   * inherits the variable, so a unit it rewrites keeps it.
+   */
+  appImageExtractAndRun?: boolean;
+}
+
+export const APPIMAGE_EXTRACT_AND_RUN_ENV = "APPIMAGE_EXTRACT_AND_RUN";
+
+/** What starts this install: its binary, and its app folder when unpackaged. */
+function launchArguments(target: HostLaunchTarget): string[] {
+  return [target.executable, ...(target.appPath ? [target.appPath] : [])];
+}
+
+export function hostModeLaunchArguments(target: HostLaunchTarget): string[] {
+  return [...launchArguments(target), HOST_MODE_FLAG];
+}
+
+export interface StartAtLoginFs {
+  readFile(file: string): Promise<string | null>;
+  writeFile(file: string, content: string): Promise<void>;
+  remove(file: string): Promise<void>;
+}
+
+export const nodeStartAtLoginFs: StartAtLoginFs = {
+  async readFile(file) {
+    try {
+      return await fs.readFile(file, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  },
+  async writeFile(file, content) {
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o755 });
+    // Write-then-rename, so a crash never leaves a half-written unit behind.
+    const tmp = `${file}.${process.pid}.tmp`;
+    await fs.writeFile(tmp, content, { mode: 0o644 });
+    await fs.rename(tmp, file);
+  },
+  async remove(file) {
+    await fs.rm(file, { force: true });
+  },
+};
+
+// ---- macOS LaunchAgent ----
+
+export function launchAgentLabel(packaged: boolean): string {
+  return packaged ? "org.daintree.app.host" : "org.daintree.app.dev.host";
+}
+
+function xmlEscape(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+export function buildLaunchAgentPlist(input: {
+  label: string;
+  programArguments: readonly string[];
+  bundleId: string;
+}): string {
+  const args = input.programArguments
+    .map((arg) => `\t\t<string>${xmlEscape(arg)}</string>`)
+    .join("\n");
+  return [
+    `<?xml version="1.0" encoding="UTF-8"?>`,
+    `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
+    `<plist version="1.0">`,
+    `<dict>`,
+    `\t<key>Label</key>`,
+    `\t<string>${xmlEscape(input.label)}</string>`,
+    `\t<key>ProgramArguments</key>`,
+    `\t<array>`,
+    args,
+    `\t</array>`,
+    `\t<key>RunAtLoad</key>`,
+    `\t<true/>`,
+    `\t<key>LimitLoadToSessionType</key>`,
+    `\t<string>Aqua</string>`,
+    `\t<key>ProcessType</key>`,
+    `\t<string>Interactive</string>`,
+    `\t<key>AssociatedBundleIdentifiers</key>`,
+    `\t<array>`,
+    `\t\t<string>${xmlEscape(input.bundleId)}</string>`,
+    `\t</array>`,
+    `</dict>`,
+    `</plist>`,
+    ``,
+  ].join("\n");
+}
+
+export function createLaunchAgentController(deps: {
+  homeDir: string;
+  packaged: boolean;
+  bundleId: string;
+  target: HostLaunchTarget;
+  fs?: StartAtLoginFs;
+}): StartAtLoginController {
+  const files = deps.fs ?? nodeStartAtLoginFs;
+  const label = launchAgentLabel(deps.packaged);
+  const file = path.posix.join(deps.homeDir, "Library", "LaunchAgents", `${label}.plist`);
+  const content = (): string =>
+    buildLaunchAgentPlist({
+      label,
+      programArguments: hostModeLaunchArguments(deps.target),
+      bundleId: deps.bundleId,
+    });
+  return {
+    kind: "launch-agent",
+    path: file,
+    async install() {
+      await files.writeFile(file, content());
+    },
+    async remove() {
+      await files.remove(file);
+    },
+    async isInstalled() {
+      return (await files.readFile(file).catch(() => null)) !== null;
+    },
+    async observe() {
+      const onDisk = await files.readFile(file).catch(() => null);
+      const launch = launchArguments(deps.target)
+        .map((arg) => `\t\t<string>${xmlEscape(arg)}</string>\n`)
+        .join("");
+      return {
+        kind: "launch-agent",
+        path: file,
+        installed: onDisk !== null,
+        current: onDisk === content(),
+        ownLaunch: onDisk !== null && onDisk.includes(`\t<array>\n${launch}`),
+        unitState: null,
+        linger: null,
+        userName: null,
+      };
+    },
+  };
+}
+
+// ---- Linux systemd --user ----
+
+export function systemdUnitName(packaged: boolean): string {
+  return packaged ? "daintree-host.service" : "daintree-dev-host.service";
+}
+
+/**
+ * Quote one ExecStart word. systemd expands `%` specifiers and `$` variables
+ * inside quotes too, so both are doubled; backslashes and quotes are escaped.
+ */
+/**
+ * The AppImage this process was started from, when it was: its runtime sets
+ * APPIMAGE and APPDIR and runs the binary from inside APPDIR. An APPIMAGE
+ * with no such mount around this binary is only an inherited variable.
+ */
+export function runningAppImage(
+  env: NodeJS.ProcessEnv = process.env,
+  execPath: string = process.execPath
+): string | null {
+  const image = env.APPIMAGE;
+  const dir = env.APPDIR;
+  if (!image || !dir || !path.isAbsolute(image) || !path.isAbsolute(dir)) return null;
+  const rel = path.relative(dir, execPath);
+  return rel.length > 0 && !rel.startsWith("..") && !path.isAbsolute(rel) ? image : null;
+}
+
+export function systemdQuote(arg: string): string {
+  // A line break ends the directive and starts another; no quoting survives it.
+  if (/[\r\n\0]/.test(arg)) {
+    throw new Error("A start-at-login argument can't contain a line break or NUL");
+  }
+  const escaped = arg
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/%/g, "%%")
+    .replace(/\$/g, "$$$$");
+  return `"${escaped}"`;
+}
+
+/**
+ * An AppImage run without FUSE stays systemd's main process, with Daintree as
+ * its child, so a stop would signal the image's runtime and then kill
+ * Daintree outright. This asks Daintree itself to quit first and waits for it
+ * (within the stop timeout). Its pid comes from the status file it writes, and
+ * counts only while its parent is this service's main process: the file may
+ * name a Daintree opened on the desktop, or a pid since reused. (Membership of
+ * the unit's cgroup can't tell: Chromium moves its main process into a scope
+ * of its own as it starts.)
+ */
+export const APPIMAGE_STOP_SCRIPT = `p=$(grep -o '"pid":[0-9]*' "$XDG_RUNTIME_DIR/${LINUX_RUNTIME_DIR_NAME}/${HOST_MODE_STATUS_NAME}" 2>/dev/null | cut -d: -f2); [ -n "$p" ] && [ -n "$MAINPID" ] || exit 0; set -- $(cut -d')' -f2- "/proc/$p/stat" 2>/dev/null); [ "$2" = "$MAINPID" ] || exit 0; kill -TERM "$p" 2>/dev/null || exit 0; i=0; while kill -0 "$p" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.25; i=$((i + 1)); done; exit 0`;
+
+export function buildSystemdUnit(input: {
+  programArguments: readonly string[];
+  appImageExtractAndRun?: boolean;
+}): string {
+  return [
+    `[Unit]`,
+    `Description=Daintree host (serves Daintree windows on other machines over SSH)`,
+    ``,
+    `[Service]`,
+    `Type=simple`,
+    `ExecStart=${input.programArguments.map(systemdQuote).join(" ")}`,
+    // Linger starts the unit before any login, when neither is in the environment.
+    `Environment=XDG_RUNTIME_DIR=/run/user/%U`,
+    `Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus`,
+    ...(input.appImageExtractAndRun
+      ? [
+          `Environment=${APPIMAGE_EXTRACT_AND_RUN_ENV}=1`,
+          `ExecStop=${["/bin/sh", "-c", APPIMAGE_STOP_SCRIPT].map(systemdQuote).join(" ")}`,
+        ]
+      : []),
+    `Restart=on-failure`,
+    `RestartSec=10`,
+    // A stop signals Daintree alone and lets it close its own helpers: one
+    // sent to all of them at once crashes Chromium on the way down. Its own
+    // shutdown gives up after 20 s, so the stop waits a little longer.
+    `KillMode=mixed`,
+    `TimeoutStopSec=30`,
+    ``,
+    `[Install]`,
+    `WantedBy=default.target`,
+    ``,
+  ].join("\n");
+}
+
+/**
+ * The unit for a launch target. The host writes it when start at login goes
+ * on, and a Shell bootstrapping a headless host writes the very same text over
+ * SSH, so the host finds its own unit already current.
+ */
+export function systemdUnitFor(target: HostLaunchTarget): string {
+  return buildSystemdUnit({
+    // Headless whether or not the user manager has a display: the service
+    // runs on after logout, and a host tied to an X server dies with it.
+    programArguments: [...hostModeLaunchArguments(target), HEADLESS_OZONE_SWITCH],
+    appImageExtractAndRun: target.appImageExtractAndRun === true,
+  });
+}
+
+export class StartAtLoginError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StartAtLoginError";
+  }
+}
+
+function describeFailure(
+  step: string,
+  result: Awaited<ReturnType<CommandRunner>>
+): StartAtLoginError {
+  if (result.failure === "not-found") {
+    return new StartAtLoginError(`systemctl isn't installed, so ${step} couldn't run`);
+  }
+  if (result.failure === "timeout") return new StartAtLoginError(`${step} timed out`);
+  const detail = result.stderr.trim().split("\n")[0] ?? "";
+  return new StartAtLoginError(
+    `${step} failed${result.code !== null ? ` (exit ${result.code})` : ""}${detail ? `: ${detail}` : ""}`
+  );
+}
+
+export function parseLinger(stdout: string): "yes" | "no" | null {
+  const match = /^Linger=(yes|no)\s*$/m.exec(stdout);
+  return match ? (match[1] as "yes" | "no") : null;
+}
+
+export function createSystemdUserController(deps: {
+  homeDir: string;
+  packaged: boolean;
+  userName: string;
+  target: HostLaunchTarget;
+  run: CommandRunner;
+  fs?: StartAtLoginFs;
+}): StartAtLoginController {
+  const files = deps.fs ?? nodeStartAtLoginFs;
+  const unit = systemdUnitName(deps.packaged);
+  const file = path.posix.join(deps.homeDir, ".config", "systemd", "user", unit);
+  const content = (): string => systemdUnitFor(deps.target);
+  const systemctl = (...args: string[]) => deps.run("systemctl", ["--user", ...args]);
+
+  return {
+    kind: "systemd-user",
+    path: file,
+    async install() {
+      await files.writeFile(file, content());
+      const reload = await systemctl("daemon-reload");
+      if (reload.code !== 0) throw describeFailure("systemctl --user daemon-reload", reload);
+      // Enabled, not started: this process already is the host, and a second
+      // launch would only hand over to it and exit.
+      const enable = await systemctl("enable", unit);
+      if (enable.code !== 0) throw describeFailure(`systemctl --user enable ${unit}`, enable);
+    },
+    async remove() {
+      await systemctl("disable", unit);
+      await files.remove(file);
+      await systemctl("daemon-reload");
+    },
+    async isInstalled() {
+      return (await files.readFile(file).catch(() => null)) !== null;
+    },
+    async observe() {
+      const [onDisk, enabled, linger] = await Promise.all([
+        files.readFile(file).catch(() => null),
+        systemctl("is-enabled", unit),
+        deps.run("loginctl", ["show-user", deps.userName, "-p", "Linger"]),
+      ]);
+      const unitState = enabled.failure ? null : enabled.stdout.trim().split("\n")[0] || null;
+      const launch = `ExecStart=${launchArguments(deps.target).map(systemdQuote).join(" ")} `;
+      return {
+        kind: "systemd-user",
+        path: file,
+        installed: onDisk !== null,
+        current: onDisk === content(),
+        ownLaunch: onDisk !== null && onDisk.split("\n").some((line) => line.startsWith(launch)),
+        unitState,
+        linger: linger.code === 0 ? parseLinger(linger.stdout) : null,
+        userName: deps.userName,
+      };
+    },
+  };
+}

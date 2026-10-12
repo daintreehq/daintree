@@ -81,7 +81,13 @@ vi.mock("../AppHydrationService.js", () => ({
 }));
 
 import { CHANNELS } from "../../ipc/channels.js";
-import { ProjectSwitchService } from "../ProjectSwitchService.js";
+import {
+  ProjectSwitchService,
+  _resetHostResidencyForTesting,
+  activateProjectOnHost,
+  getHostResidentProject,
+  releaseProjectOnHost,
+} from "../ProjectSwitchService.js";
 
 describe("ProjectSwitchService", () => {
   beforeEach(() => {
@@ -527,5 +533,75 @@ describe("ProjectSwitchService", () => {
       expect.anything()
     );
     expect(ptyClient.setActiveProject).not.toHaveBeenCalled();
+  });
+});
+
+describe("Host activation for a remote view", () => {
+  const project = { id: "project-new", path: "/tmp/new" };
+
+  function workspace(load: () => Promise<unknown> = async () => "cold") {
+    const order: string[] = [];
+    return {
+      order,
+      resumeProject: vi.fn(() => void order.push("resume")),
+      loadProject: vi.fn(async () => {
+        order.push("load");
+        return load();
+      }),
+      unregisterWindow: vi.fn(),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetHostResidencyForTesting();
+    projectStoreMock.getProjectById.mockReturnValue({ ...project, name: "New", status: "active" });
+  });
+
+  it("starts the workspace host through loadProject, held for the view's handle", async () => {
+    const ws = workspace();
+    await activateProjectOnHost(ws, project, -4);
+
+    expect(ws.order).toEqual(["resume", "load"]);
+    expect(ws.loadProject).toHaveBeenCalledWith("/tmp/new", -4);
+    expect(getHostResidentProject(-4)).toBe("project-new");
+    expect(projectStoreMock.updateProject).toHaveBeenCalledWith(
+      "project-new",
+      expect.objectContaining({ status: "active", lastOpened: expect.any(Number) })
+    );
+    expect(sendToRendererMock).toHaveBeenCalledWith(
+      CHANNELS.PROJECT_UPDATED,
+      expect.objectContaining({ id: "project-new" })
+    );
+    expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+  });
+
+  it("shares one load between attachment and switch for the same project", async () => {
+    const ws = workspace();
+    const first = activateProjectOnHost(ws, project, -4);
+    const second = activateProjectOnHost(ws, project, -4);
+    await Promise.all([first, second]);
+    expect(ws.loadProject).toHaveBeenCalledTimes(1);
+    expect(projectStoreMock.updateProject).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops residency when the load fails so a retry starts over", async () => {
+    const ws = workspace(async () => {
+      throw new Error("spawn failed");
+    });
+    await expect(activateProjectOnHost(ws, project, -4)).rejects.toThrow("spawn failed");
+    expect(getHostResidentProject(-4)).toBeNull();
+    await expect(activateProjectOnHost(ws, project, -4)).rejects.toThrow();
+    expect(ws.loadProject).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases the view's hold once, when it leaves", async () => {
+    const ws = workspace();
+    await activateProjectOnHost(ws, project, -4);
+    releaseProjectOnHost(ws, -4);
+    releaseProjectOnHost(ws, -4);
+    expect(ws.unregisterWindow).toHaveBeenCalledTimes(1);
+    expect(ws.unregisterWindow).toHaveBeenCalledWith(-4);
+    expect(getHostResidentProject(-4)).toBeNull();
   });
 });

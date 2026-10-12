@@ -6,6 +6,7 @@ const logErrorMock = vi.hoisted(() => vi.fn());
 vi.mock("../../utils/logger.js", () => ({ logError: logErrorMock }));
 
 import {
+  hasPendingOpen,
   holdWindowForOpen,
   isWindowBound,
   isWindowReadyForOpens,
@@ -17,6 +18,7 @@ import {
 import { getProjectHistory, resetProjectHistory } from "../../services/ProjectHistoryService.js";
 import { claimProjectActivation } from "../projectActivationClaims.js";
 import { decideProjectOpenTarget } from "../windowOpenPolicy.js";
+import { registerRemoteService } from "../../remote/runtime.js";
 
 interface FakePvm {
   getActiveProjectId: () => string | null;
@@ -75,6 +77,7 @@ describe("snapshotOpenWorld", () => {
           ready: true,
           reservations: [],
           unboundOpens: [],
+          onRemoteHost: false,
         },
         {
           windowId: 1,
@@ -84,9 +87,46 @@ describe("snapshotOpenWorld", () => {
           ready: false,
           reservations: [],
           unboundOpens: [],
+          onRemoteHost: false,
         },
       ],
     });
+  });
+
+  it("marks a window on a remote host, so a folder from this machine never reuses it", () => {
+    const unregister = registerRemoteService("windowHosts", {
+      windowHost: (windowId: number) => (windowId === 2 ? "studio-01" : "local"),
+      viewHost: () => "local",
+      switchWindowToLocal: vi.fn(),
+      openHostProjectInNewWindow: vi.fn(),
+    });
+    try {
+      const onHost = ctx(2, pvm(null));
+      const local = ctx(1, pvm(null));
+      markWindowReadyForOpens(onHost.browserWindow);
+      markWindowReadyForOpens(local.browserWindow);
+
+      const world = snapshotOpenWorld(registryOf([onHost, local]), "default");
+      expect(world.windows.map((w) => [w.windowId, w.onRemoteHost])).toEqual([
+        [2, true],
+        [1, false],
+      ]);
+      expect(
+        decideProjectOpenTarget(
+          {
+            projectId: null,
+            projectPath: "/work/dropped",
+            source: "external",
+            intent: "open",
+            disposition: "default",
+            initiatingWindowId: null,
+          },
+          world
+        )
+      ).toEqual({ kind: "activate", windowId: 1, reason: "empty" });
+    } finally {
+      unregister();
+    }
   });
 
   it("skips destroyed windows and tolerates a missing registry", () => {
@@ -213,6 +253,18 @@ describe("reserveWindowForOpen", () => {
     expect(snapshotOpenWorld(registryOf([w]), "default").windows[0].unboundOpens).toEqual([]);
     active = null;
     expect(snapshotOpenWorld(registryOf([w]), "default").windows[0].unboundOpens).toEqual([]);
+  });
+
+  it("says a window is busy with an open in flight or a folder still on its prompt", () => {
+    expect(hasPendingOpen(1)).toBe(false);
+    const release = reserveWindowForOpen(1, { projectId: null, projectPath: "/plain" });
+    expect(hasPendingOpen(1)).toBe(true);
+    // Settled unbound: the git-init prompt is still on screen.
+    release(false);
+    expect(hasPendingOpen(1)).toBe(true);
+    // The window bound a workspace since: the folder no longer holds it.
+    getProjectHistory(1).record("picked");
+    expect(hasPendingOpen(1)).toBe(false);
   });
 
   it("clears an unbound open when a later open into the window binds", () => {

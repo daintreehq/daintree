@@ -45,6 +45,8 @@ export interface AppContext {
 export interface LaunchOptions {
   env?: Record<string, string>;
   userDataDir?: string;
+  /** The app folder to launch instead of this checkout, e.g. one whose package.json differs. */
+  appRoot?: string;
   waitForSelector?: string;
   extraArgs?: string[];
   /**
@@ -72,6 +74,14 @@ export interface LaunchOptions {
    * `process.env.CI` runners where GPU is unavailable.
    */
   enableWebgl?: boolean;
+  /**
+   * Another app this worker launched keeps running beside this one (two
+   * instances talking to each other, as the Remote Hosts spec runs a Host and
+   * a Shell). The pre-launch reap then targets only this launch's own
+   * user-data dir, instead of every dir this worker has launched with, which
+   * would kill the other app.
+   */
+  alongside?: boolean;
   /**
    * Show the app on screen. Local macOS runs default to background windows —
    * invisible, click-through, never taking OS focus — so a suite can run while
@@ -287,9 +297,9 @@ function cleanupWindowsElectronProcesses(): void {
  */
 const launchedUserDataDirs = new Set<string>();
 
-function cleanupMacElectronE2eProcesses(): void {
+function cleanupMacElectronE2eProcesses(dirs: Iterable<string> = launchedUserDataDirs): void {
   if (process.platform !== "darwin") return;
-  for (const dir of launchedUserDataDirs) {
+  for (const dir of dirs) {
     try {
       // The -f full-command-line match catches every helper type (GPU,
       // Renderer, network-service utility, crashpad_handler) since they all
@@ -483,7 +493,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     const userDataDir = options.userDataDir ?? mkdtempSync(path.join(tmpdir(), E2E_TEMP_PREFIX));
     if (!options.userDataDir) recordTempDir(userDataDir);
     launchedUserDataDirs.add(userDataDir);
-    const args = [`--user-data-dir=${userDataDir}`, ROOT];
+    const args = [`--user-data-dir=${userDataDir}`, options.appRoot ?? ROOT];
     args.unshift(E2E_MODE_ARG);
     if (options.env?.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS !== "0") {
       args.unshift(E2E_SKIP_FIRST_RUN_DIALOGS_ARG);
@@ -534,7 +544,9 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     // macOS local: reap any leftover e2e Electron processes from prior specs
     // before each fresh launch. Zombie crashpad helpers from a closed app can
     // hold Mach ports and contribute to first-launch flakes.
-    if (isMacOSLocal) cleanupMacElectronE2eProcesses();
+    if (isMacOSLocal) {
+      cleanupMacElectronE2eProcesses(options.alongside ? [userDataDir] : launchedUserDataDirs);
+    }
     if (isMacOSLocal && !options.enableWebgl) {
       // Local macOS Electron E2E can hit Crashpad/GPU-process FATALs during
       // restart-heavy specs. Mirror the screenshot harness mitigation for
@@ -738,7 +750,9 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         writeSummary();
         console.warn(`[e2e] Launch attempt ${attempt}/${maxAttempts} failed, retrying...`);
         if (isWindowsCI) cleanupWindowsElectronProcesses();
-        if (isMacOSLocal) cleanupMacElectronE2eProcesses();
+        if (isMacOSLocal) {
+          cleanupMacElectronE2eProcesses(options.alongside ? [userDataDir] : launchedUserDataDirs);
+        }
         // macOS local retry needs to fit inside the 120s test timeout.
         // Keep the retry-prep wait short so the retry attempt has its full budget.
         await wait(isMacOSLocal ? 1000 : 2000 * attempt);

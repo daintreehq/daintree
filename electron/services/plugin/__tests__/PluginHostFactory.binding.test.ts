@@ -4,7 +4,7 @@ import path from "path";
 const ipcUtilsMock = vi.hoisted(() => ({
   broadcastToRenderer: vi.fn(),
   broadcastToProjectRenderers: vi.fn(),
-  getProjectRendererTargets: vi.fn((_projectId: string | null): unknown[] => []),
+  getProjectPushTargets: vi.fn((_projectId: string | null): unknown[] => []),
 }));
 const serviceRefsMock = vi.hoisted(() => ({
   getPtyClient: vi.fn((): unknown => null),
@@ -19,7 +19,7 @@ vi.mock("electron", () => ({
 vi.mock("../../../ipc/utils.js", () => ({
   broadcastToRenderer: ipcUtilsMock.broadcastToRenderer,
   broadcastToProjectRenderers: ipcUtilsMock.broadcastToProjectRenderers,
-  getProjectRendererTargets: ipcUtilsMock.getProjectRendererTargets,
+  getProjectPushTargets: ipcUtilsMock.getProjectPushTargets,
 }));
 vi.mock("../../../window/serviceRefs.js", () => ({
   getPtyClient: serviceRefsMock.getPtyClient,
@@ -579,7 +579,7 @@ describe("createHost renderer pushes", () => {
     );
     // Plugin pushes resolve their renderers through the batcher at flush time,
     // same scope, once per flush.
-    const pushScopes = ipcUtilsMock.getProjectRendererTargets.mock.calls.map((c) => c[0]);
+    const pushScopes = ipcUtilsMock.getProjectPushTargets.mock.calls.map((c) => c[0]);
     expect(pushScopes).toEqual([PROJECT_A]);
   });
 
@@ -593,7 +593,7 @@ describe("createHost renderer pushes", () => {
 
     expect(ipcUtilsMock.broadcastToProjectRenderers).not.toHaveBeenCalled();
     expect(ipcUtilsMock.broadcastToRenderer).toHaveBeenCalledTimes(1);
-    expect(ipcUtilsMock.getProjectRendererTargets.mock.calls.map((c) => c[0])).toEqual([null]);
+    expect(ipcUtilsMock.getProjectPushTargets.mock.calls.map((c) => c[0])).toEqual([null]);
   });
 });
 
@@ -608,9 +608,16 @@ describe("createHost dispatch, catalog and prompts", () => {
     await host.showInputBox({ title: "name" });
     await host.showConfirm({ title: "sure?" });
 
-    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith("terminal.focus", undefined, PROJECT_A);
-    expect(h.sendActionsListToRenderer).toHaveBeenCalledWith(PROJECT_A);
-    expect(h.sendActionsGetToRenderer).toHaveBeenCalledWith("terminal.focus", PROJECT_A);
+    // The plugin's identity travels too: in Host mode it decides which
+    // frontend (possibly on another machine) the round-trip reaches.
+    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith(
+      "terminal.focus",
+      undefined,
+      PROJECT_A,
+      PLUGIN_ID
+    );
+    expect(h.sendActionsListToRenderer).toHaveBeenCalledWith(PROJECT_A, PLUGIN_ID);
+    expect(h.sendActionsGetToRenderer).toHaveBeenCalledWith("terminal.focus", PROJECT_A, PLUGIN_ID);
     for (const call of h.requestPrompt.mock.calls) expect(call[2]).toBe(PROJECT_A);
   });
 
@@ -680,8 +687,13 @@ describe("createHost dispatch, catalog and prompts", () => {
     await host.actions.list();
     await host.showInputBox({ title: "name" });
 
-    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith("terminal.focus", undefined, null);
-    expect(h.sendActionsListToRenderer).toHaveBeenCalledWith(null);
+    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith(
+      "terminal.focus",
+      undefined,
+      null,
+      PLUGIN_ID
+    );
+    expect(h.sendActionsListToRenderer).toHaveBeenCalledWith(null, PLUGIN_ID);
     expect(h.requestPrompt.mock.calls[0][2]).toBeNull();
   });
 
@@ -744,7 +756,8 @@ describe("createHost dispatch with an explicit project (#13119)", () => {
     expect(h.sendDispatchToRenderer).toHaveBeenCalledWith(
       "agent.launch",
       { agentId: "claude" },
-      PROJECT_A
+      PROJECT_A,
+      PLUGIN_ID
     );
     expect(projectTargeting.hasGrant).toHaveBeenCalledWith({
       pluginId: PLUGIN_ID,
@@ -802,8 +815,20 @@ describe("createHost dispatch with an explicit project (#13119)", () => {
     await host.dispatch("terminal.focus", undefined, {});
     await host.dispatch("terminal.focus", undefined, undefined);
 
-    expect(h.sendDispatchToRenderer).toHaveBeenNthCalledWith(1, "terminal.focus", undefined, null);
-    expect(h.sendDispatchToRenderer).toHaveBeenNthCalledWith(2, "terminal.focus", undefined, null);
+    expect(h.sendDispatchToRenderer).toHaveBeenNthCalledWith(
+      1,
+      "terminal.focus",
+      undefined,
+      null,
+      PLUGIN_ID
+    );
+    expect(h.sendDispatchToRenderer).toHaveBeenNthCalledWith(
+      2,
+      "terminal.focus",
+      undefined,
+      null,
+      PLUGIN_ID
+    );
     expect(projectTargeting.hasGrant).not.toHaveBeenCalled();
   });
 
@@ -830,7 +855,12 @@ describe("createHost dispatch with an explicit project (#13119)", () => {
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
 
     await host.dispatch("terminal.focus", undefined, { projectId: PROJECT_A });
-    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith("terminal.focus", undefined, PROJECT_A);
+    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith(
+      "terminal.focus",
+      undefined,
+      PROJECT_A,
+      PLUGIN_ID
+    );
 
     await expect(
       host.dispatch("terminal.focus", undefined, { projectId: "project-other" })

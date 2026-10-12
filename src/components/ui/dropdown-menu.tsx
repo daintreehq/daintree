@@ -364,7 +364,17 @@ DropdownMenuSubContent.displayName = "DropdownMenuSubContent";
 
 type DropdownMenuContentProps = React.ComponentPropsWithoutRef<
   typeof DropdownMenuPrimitiveType.Content
->;
+> & {
+  /**
+   * A small pointer on the edge facing the trigger, for a short menu that reads
+   * as a select hanging off its control. Its rows still scroll when the
+   * viewport is short, without the edge shadows.
+   */
+  pointer?: boolean;
+};
+
+/** Pointer size in CSS px; the content sits this much further from its trigger. */
+const MENU_POINTER = { width: 14, height: 7 };
 
 const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitiveType.Content>,
@@ -385,6 +395,7 @@ const DropdownMenuContent = React.forwardRef<
       onKeyDown,
       onClick,
       onCloseAutoFocus,
+      pointer = false,
       ...props
     },
     ref
@@ -442,6 +453,7 @@ const DropdownMenuContent = React.forwardRef<
     if (!radix) return null;
     const Portal = radix.DropdownMenuPrimitive.Portal;
     const Content = radix.DropdownMenuPrimitive.Content;
+    const Arrow = radix.DropdownMenuPrimitive.Arrow;
     return (
       <Portal>
         {/* Context reaches through a portal even though the DOM does not, so a
@@ -450,7 +462,7 @@ const DropdownMenuContent = React.forwardRef<
         <BrandSurfaceReset>
           <Content
             ref={shadowRef}
-            sideOffset={sideOffset}
+            sideOffset={pointer ? sideOffset + MENU_POINTER.height : sideOffset}
             collisionPadding={collisionPadding}
             style={{
               transformOrigin: "var(--radix-dropdown-menu-content-transform-origin)",
@@ -461,6 +473,8 @@ const DropdownMenuContent = React.forwardRef<
               "app-no-drag",
               "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
               OVERLAY_MOTION_CLASS,
+              // The pointer sits outside the box, which a scroll container would clip.
+              pointer && "overflow-visible",
               className
             )}
             {...props}
@@ -474,9 +488,33 @@ const DropdownMenuContent = React.forwardRef<
             onCloseAutoFocus={handleCloseAutoFocus}
             data-dock-popover-child={isDockPopoverChild ? "" : undefined}
           >
-            {topShadow}
-            {children}
-            {bottomShadow}
+            {pointer && (
+              <Arrow asChild width={MENU_POINTER.width} height={MENU_POINTER.height}>
+                {/* Drawn pointing away from the menu; Radix turns it to face the
+                    trigger. The lower half of a rotated square, filled with the
+                    surface and edged like it, so it reads as part of the menu. */}
+                <span
+                  className="relative block overflow-hidden"
+                  style={{ width: MENU_POINTER.width, height: MENU_POINTER.height }}
+                  aria-hidden="true"
+                >
+                  <span className="absolute left-1/2 top-0 block size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 border-r border-b border-[var(--border-overlay)] bg-[var(--overlay-surface-solid)]" />
+                </span>
+              </Arrow>
+            )}
+            {pointer ? (
+              // The box can't clip (the pointer sits outside it), so its rows
+              // scroll in here instead, within the height the viewport leaves.
+              <div className="-m-1 max-h-[calc(var(--radix-dropdown-menu-content-available-height)-2px)] overflow-y-auto p-1">
+                {children}
+              </div>
+            ) : (
+              <>
+                {topShadow}
+                {children}
+                {bottomShadow}
+              </>
+            )}
           </Content>
         </BrandSurfaceReset>
       </Portal>

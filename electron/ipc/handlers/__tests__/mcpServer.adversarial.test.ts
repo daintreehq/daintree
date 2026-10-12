@@ -67,7 +67,7 @@ vi.mock("../../../services/McpPaneConfigService.js", () => ({
   mcpPaneConfigService: paneConfigMock,
 }));
 
-import { registerMcpServerHandlers } from "../mcpServer.js";
+import { mcpServerNamespace, registerMcpServerHandlers } from "../mcpServer.js";
 import { CHANNELS } from "../../channels.js";
 
 type Handler = (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>;
@@ -456,5 +456,50 @@ describe("mcpServer IPC adversarial", () => {
     expect(ipcHandlers.size).toBe(32);
     cleanup();
     expect(ipcHandlers.size).toBe(0);
+  });
+});
+
+describe("the host's MCP key and a window on another machine", () => {
+  const remote = { endpoint: { kind: "remote-view" }, webContentsId: -3 } as never;
+  const local = { endpoint: { kind: "local-view" }, webContentsId: 7 } as never;
+  const status = {
+    enabled: true,
+    port: 45454,
+    configuredPort: 45454,
+    apiKey: "daintree_secret_key",
+  };
+  type Op = { handler: (ctx: never, ...args: unknown[]) => Promise<unknown> };
+  const op = (name: string) =>
+    (mcpServerNamespace.ops as unknown as Record<string, Op>)[name]!.handler;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    serviceMock.getStatus.mockReturnValue(status as never);
+    serviceMock.getConfigSnippet.mockReturnValue(`{"Authorization":"Bearer ${status.apiKey}"}`);
+    serviceMock.rotateApiKey.mockResolvedValue("daintree_new_key");
+  });
+
+  it("never hands a remote view the key, only that one is set", async () => {
+    for (const [name, args] of [
+      ["getStatus", []],
+      ["setEnabled", [true]],
+      ["setPort", [45455]],
+    ] as const) {
+      const answer = (await op(name)(remote, ...args)) as {
+        apiKey: string;
+        apiKeyRedacted?: boolean;
+      };
+      expect(answer.apiKey).toBe("");
+      expect(answer.apiKeyRedacted).toBe(true);
+    }
+    expect(await op("rotateApiKey")(remote)).toBe("");
+    const snippet = (await op("getConfigSnippet")(remote)) as string;
+    expect(snippet).not.toContain(status.apiKey);
+  });
+
+  it("shows this machine's own windows the key as before", async () => {
+    expect(((await op("getStatus")(local)) as { apiKey: string }).apiKey).toBe(status.apiKey);
+    expect(await op("rotateApiKey")(local)).toBe("daintree_new_key");
+    expect(await op("getConfigSnippet")(local)).toContain(status.apiKey);
   });
 });

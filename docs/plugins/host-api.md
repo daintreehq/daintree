@@ -971,7 +971,7 @@ Invoke an action by id through Daintree's `ActionService` with a `"plugin"` sour
 ```ts
 const result = await host.dispatch("acme.linear-planner.sync-now", { team: "engineering" });
 if (!result.ok) {
-  // result.error.code: "RESTRICTED" | "CONFIRMATION_REQUIRED" | "PLUGIN_UNLOADED" | ...
+  // result.error.code: "RESTRICTED" | "CONFIRMATION_REQUIRED" | "PLUGIN_UNLOADED" | "NO_FRONTEND_ATTACHED" | ...
 }
 ```
 
@@ -1315,6 +1315,8 @@ The host prefixes `message` with your plugin's display name (`{displayName}: {me
 
 Toasts route through Daintree's standard `notify()` path, so quiet-hours and inbox-history semantics apply. The rate-limit bucket is scoped per plugin id and type (two plugins sharing a display name still get separate buckets), so a noisy plugin can't suppress another plugin's toasts (or system toasts). Audit your toasts against the four-question checklist (timely, helpful, not already visible, ignorable) — the host delivers what you ask for, it doesn't second-guess. There's no "sticky" or "action required" toast type — for persistent UI, register a panel view instead. A toast with an action button, or an Undo toast, comes from the view instead: [`useToast`](./ui-kit.md#hooks) in `@daintreehq/plugin-ui` routes through the same `notify()` path under the same limits, and its button calls straight back into the view.
 
+When the project is driven from a window on another machine (see [Remote hosts](#remote-hosts--when-nobody-is-sitting-at-this-machine)), the toast is shown in that window.
+
 ## User prompts — `showQuickPick`, `showInputBox`, `showConfirm`
 
 Three imperative dialogs, rendered through the app's own surfaces so they look and behave like the rest of Daintree. All three resolve rather than throw when the user backs out, and all three are post-activation-safe — call them from a command handler, a timer, or a subscription callback.
@@ -1359,6 +1361,17 @@ if (
 **Where the dialog appears.** A project-bound plugin's prompt is delivered into that project's view, so the user finds it when they switch to that project — never wherever focus happens to be. If the bound project has no live renderer the call rejects with `PROJECT_VIEW_UNAVAILABLE` rather than landing somewhere else. See [Project-local plugins → Binding](./project-local.md#binding--which-project-a-host-call-reaches).
 
 **One dialog at a time.** A plugin has at most one dialog open — the three prompts and a `sendToAgent` picker share the slot. A second request while one is open is never shown: it resolves its cancel value (`undefined` / `false`) at once, so a loop of prompts does not stack dialogs.
+
+**When nobody is attached.** On a machine running as a host, the project may be driven from a window on another machine, or by nobody at all — agents run overnight with no window open. The prompt goes to the window that drives the project, wherever it is. With nobody attached, the call rejects with a `NO_FRONTEND_ATTACHED:` error: deliberately not the dismiss value, so "nobody was there" never reads as "the person said no". To wait instead, pass `{ whenNoFrontend: "queue" }` as the call options:
+
+```ts
+const ok = await host.showConfirm(
+  { title: "Deploy the nightly build?", confirmLabel: "Deploy build" },
+  { whenNoFrontend: "queue" }
+);
+```
+
+A queued prompt is shown on the next window that attaches to drive the project, marked with the host and the time it was asked. It still counts against the one-open-prompt-per-plugin limit, and aborting `signal` settles it with the dismiss value. If the window that was showing a prompt goes away before answering, a queued prompt waits again and any other prompt rejects with `NO_FRONTEND_ATTACHED:`.
 
 ## `process` — managed child processes
 
@@ -1626,6 +1639,8 @@ const text = await host.clipboard.readText(); // clipboard:read
 
 **Reads stay text-only.** There is no `clipboard.readImage`, `readHtml` or `readFiles` (a copied file list; not to be confused with [`fs.readFiles`](#readfiles-and-walk--bulk-reads)): the read side is where richer payload types would let a plugin pull out more than it declared. Writes carry no such risk, since you already have the bytes.
 
+**Whose clipboard.** When the project is driven from a window on another machine, the clipboard is that machine's: writes land there and reads come from there (a read is refused unless that window is focused). That machine also asks the person once per host, plugin and access (read or write) before your plugin touches its clipboard, even when `clipboard:read`/`clipboard:write` was already granted on the host; the answer, allow or deny, is remembered there and can be reset in Settings → Hosts → _host_. While that first question is open your call waits; a call that outlives the host's wait is refused and the next one goes through. An image for another machine's clipboard is capped at 8 MiB. With nobody attached, or a window on this machine driving, it's this machine's clipboard as always.
+
 ## `system` — open and reveal files in your own scope
 
 Hand a file to the OS default application, or reveal it in Finder/Explorer — scoped to your plugin's own filesystem roots.
@@ -1649,6 +1664,8 @@ Errors carry prefixes: `PATH_NOT_ALLOWED:` for a path that is relative, unresolv
 | Windows | `.exe` `.bat` `.cmd` `.com` `.scr` `.pif` `.vbs` `.ps1` `.msi` `.lnk` `.jar` `.reg` `.cpl` `.wsf` `.hta` |
 
 Matching is case-insensitive. When the OS cannot open the file (no default application, say), `openPath` rejects with `plugin "…" system.openPath failed: <reason>`, which carries no code. Successful calls are audited (rejected ones are not — nothing reached the OS). `host.system` is NOT revoke-guarded.
+
+When the project is driven from a window on another machine, both methods reject with a `REMOTE_FRONTEND:` error (code `UNSUPPORTED`): opening a file on this host's screen does nothing for the person on the other machine and puts windows in front of whoever is sitting here.
 
 ## `documents` — render HTML to PDF
 
@@ -1694,13 +1711,26 @@ import { useHostChannel, usePluginEvent, usePluginPanelEvent } from "@daintreehq
 ### `useHostChannel` — request/response (the pull half)
 
 ```ts
-const { invoke, loading, error } = useHostChannel<SyncArgs, SyncResult>(pluginId, "sync-now");
+const { invoke, loading, error, disconnected } = useHostChannel<SyncArgs, SyncResult>(
+  pluginId,
+  "sync-now"
+);
 
 // later, e.g. in a click handler:
 const result = await invoke({ team: "engineering" });
 ```
 
 `useHostChannel(pluginId, channel)` binds a single-flight `invoke(args)` to your plugin's `registerHandler(channel, …)`. It resolves with the validated channel result on success, or `undefined` when the host rejected the call (the rejection surfaces on `error`, never throws out of `invoke`). `invoke` forwards exactly one argument to the handler, so a handler expecting `(ctx, a, b)` never sees `b`. `loading` reflects the latest call only; if you fire a second `invoke` before the first resolves, the earlier call is superseded and resolves `undefined`, so concurrent invocations stay coherent — and a fan-out of loads through one hook loses all but the last, so queue them or use one hook per load. When the typed `registerHandler` overload rejects with a `SCHEMA_ERROR:` / `PERMISSION_REQUIRED:` prefix, that surfaces on `error` for the renderer to discriminate.
+
+In a window attached to another machine your handler runs on that host, and the link to it can drop. A call that never reached the host fails with `HostDisconnectedError`; one whose answer was lost after it was sent fails with `OutcomeUnknownError` — it may or may not have run, so check its effect before repeating anything that changes state. Either sets `disconnected` until a later call gets through, so a view can show a quiet offline state rather than an error. Both classes are exported from `@daintreehq/plugin-sdk/react` and carry `code` (`"HOST_DISCONNECTED"` / `"OUTCOME_UNKNOWN"`) with the original error as `cause`.
+
+```tsx
+import { HostDisconnectedError, useHostChannel } from "@daintreehq/plugin-sdk/react";
+
+const { invoke, disconnected, error } = useHostChannel(pluginId, "graph");
+if (disconnected) return <p>Waiting for the host…</p>;
+if (error && !(error instanceof HostDisconnectedError)) return <p>{error.message}</p>;
+```
 
 ### `usePluginEvent` — subscription (the push half)
 
@@ -1956,6 +1986,18 @@ It has no manifest model and no processes behind it, so a test that passes again
 - **`fs.walk` and `fs.readFiles`** run the host's validation, ordering, pruning, truncation and budgets over the in-memory files. There is no git and there are no symlinks, so `respectGitignore` is accepted with nothing to act on.
 - **`logger`** calls are no-ops: nothing is printed and nothing is recorded.
 - **Lifecycle.** Registrations made before a throwing `activate()` are not rolled back, and no revoke ever runs, so a handle keeps working after the point at which the real host would have cut it off.
+
+## Remote hosts — when nobody is sitting at this machine
+
+A Daintree can serve its projects to windows on other machines. Your plugin's main code always runs on the machine the project lives on (the host), next to the project; its views render in the window of whoever is attached, which may be another machine. Nothing in your main code changes for that, with these differences:
+
+- **Invoke context.** A call from a window on another machine carries `ctx.origin: { kind: "remote", clientId, endpointId }`, and `ctx.webContentsId` is a negative handle that names no local renderer. `ctx.projectId` and `ctx.worktreeId` are the host's own. A call from a window on the host itself has no `origin`, exactly as before.
+- **Person-facing calls** — prompts, toasts, capability consent and the clipboard — go to the window that drives the project. See [User prompts](#user-prompts--showquickpick-showinputbox-showconfirm) for what happens when nobody is attached; first-use capability consent nobody can answer is a denial (`PERMISSION_REQUIRED:`), never a wait.
+- **`dispatch` and the `actions` catalog** reach the window that drives the project, wherever it is. With nobody attached, `dispatch` returns `{ ok: false, error: { code: "NO_FRONTEND_ATTACHED" } }` without running anything, and `actions.list()` / `actions.get()` answer `[]` / `null`.
+- **`system.openPath` / `showItemInFolder`** reject for a driver on another machine.
+- **`"remote": "unsupported"`** in the manifest keeps a plugin that assumes the renderer's `localhost` is the project's machine, or that relies on local OS behaviour, from starting for a window on another machine. See [Manifest → `remote`](./manifest.md#remote).
+
+Views loaded into a window on another machine run in that machine's renderer with the same `window.electron` any view has, which is why trusting a plugin from such a window names both machines. A narrower bridge for those views is planned, not shipped.
 
 ## What's not exposed
 

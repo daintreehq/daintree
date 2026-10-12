@@ -28,6 +28,7 @@ import {
   saveOpenWindowsNow,
   scheduleOpenWindowsSave,
   setPendingBackgroundRestores,
+  setPendingRemoteRestore,
   suppressOpenWindowsSaves,
 } from "../openWindowsTracker.js";
 import {
@@ -120,6 +121,20 @@ describe("buildOpenWindowRecords", () => {
 
   it("records a window with no project as a picker window", () => {
     const registry = makeRegistry([{ windowId: 1, projectId: null }]);
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: null }]);
+  });
+
+  it("keeps naming a restored window's host project while it waits on the picker", () => {
+    const remote = `studio-01:${"a".repeat(64)}`;
+    const win: FakeWindow = { windowId: 1, projectId: null };
+    const registry = makeRegistry([win]);
+    setPendingRemoteRestore(1, remote);
+    // The host was unreachable this launch: quitting now must not forget it.
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: remote }]);
+    // The person opened a project here instead: the intent is spent for good.
+    win.projectId = "local";
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "local" }]);
+    win.projectId = null;
     expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: null }]);
   });
 

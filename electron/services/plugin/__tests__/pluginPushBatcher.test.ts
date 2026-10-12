@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 const utilsMock = vi.hoisted(() => ({
-  getProjectRendererTargets: vi.fn((_projectId: string | null): unknown[] => []),
+  getProjectPushTargets: vi.fn((_projectId: string | null): unknown[] => []),
 }));
 vi.mock("../../../ipc/utils.js", () => utilsMock);
 
@@ -297,7 +297,7 @@ describe("PluginPushBatcher", () => {
 describe("routePluginPush", () => {
   beforeEach(() => {
     resetPluginPushBatcherForTests();
-    utilsMock.getProjectRendererTargets.mockReset();
+    utilsMock.getProjectPushTargets.mockReset();
   });
 
   function route(overrides: Partial<Parameters<typeof routePluginPush>[0]> = {}): void {
@@ -316,11 +316,14 @@ describe("routePluginPush", () => {
   it("scopes to the binding's renderers and wraps the panel envelope", () => {
     const a = fakeTarget(1);
     const b = fakeTarget(2);
-    utilsMock.getProjectRendererTargets.mockReturnValue([a, b]);
+    utilsMock.getProjectPushTargets.mockReturnValue([a, b]);
 
     route();
 
-    expect(utilsMock.getProjectRendererTargets).toHaveBeenCalledWith("proj-a");
+    expect(utilsMock.getProjectPushTargets).toHaveBeenCalledWith(
+      "proj-a",
+      PLUGIN_PUSH_BATCH_CHANNEL
+    );
     for (const target of [a, b]) {
       expect(batchesSentTo(target)).toEqual([
         [["plugin:acme.demo:tick", { panelId: null, payload: { n: 1 } }]],
@@ -331,7 +334,7 @@ describe("routePluginPush", () => {
   it("delivers a targeted push only to the renderer holding the panel", () => {
     const a = fakeTarget(1);
     const b = fakeTarget(2);
-    utilsMock.getProjectRendererTargets.mockReturnValue([a, b]);
+    utilsMock.getProjectPushTargets.mockReturnValue([a, b]);
     const locatePanel = vi.fn(() => [2]);
 
     route({ panelId: "panel-1", locatePanel });
@@ -346,11 +349,14 @@ describe("routePluginPush", () => {
   it("falls back to the full scope while the panel is not located yet", () => {
     const a = fakeTarget(1);
     const b = fakeTarget(2);
-    utilsMock.getProjectRendererTargets.mockReturnValue([a, b]);
+    utilsMock.getProjectPushTargets.mockReturnValue([a, b]);
 
     route({ panelId: "panel-1", locatePanel: () => [] });
 
-    expect(utilsMock.getProjectRendererTargets).toHaveBeenCalledWith("proj-a");
+    expect(utilsMock.getProjectPushTargets).toHaveBeenCalledWith(
+      "proj-a",
+      PLUGIN_PUSH_BATCH_CHANNEL
+    );
     expect(a.send).toHaveBeenCalledTimes(1);
     expect(b.send).toHaveBeenCalledTimes(1);
   });
@@ -358,7 +364,7 @@ describe("routePluginPush", () => {
   it("drops a push to a panel the broker knows is closed", () => {
     const a = fakeTarget(1);
     const b = fakeTarget(2);
-    utilsMock.getProjectRendererTargets.mockReturnValue([a, b]);
+    utilsMock.getProjectPushTargets.mockReturnValue([a, b]);
 
     route({ panelId: "panel-1", locatePanel: () => "closed" });
 
@@ -369,7 +375,7 @@ describe("routePluginPush", () => {
   it("never narrows outside the binding's scope", () => {
     const a = fakeTarget(1);
     const b = fakeTarget(2);
-    utilsMock.getProjectRendererTargets.mockReturnValue([a, b]);
+    utilsMock.getProjectPushTargets.mockReturnValue([a, b]);
 
     // The only holder is a renderer of another project: keep today's scope
     // rather than reaching it.
@@ -380,7 +386,7 @@ describe("routePluginPush", () => {
   });
 
   it("does nothing when no renderer is in scope", () => {
-    utilsMock.getProjectRendererTargets.mockReturnValue([]);
+    utilsMock.getProjectPushTargets.mockReturnValue([]);
     const locatePanel = vi.fn(() => [1]);
     route({ panelId: "panel-1", locatePanel });
     expect(getPluginPushBatcher().pendingCount()).toBe(0);
@@ -391,14 +397,14 @@ describe("routePluginPush", () => {
 describe("withPushFlushBarrier", () => {
   beforeEach(() => {
     resetPluginPushBatcherForTests();
-    utilsMock.getProjectRendererTargets.mockReset();
+    utilsMock.getProjectPushTargets.mockReset();
   });
 
   it("delivers queued pushes before any direct delivery through the wrapped collaborator", () => {
     const order: string[] = [];
     const a = fakeTarget(1);
     a.send.mockImplementation(() => order.push("push"));
-    utilsMock.getProjectRendererTargets.mockReturnValue([a]);
+    utilsMock.getProjectPushTargets.mockReturnValue([a]);
     class Dispatcher {
       #sent = 0;
       reload(panelId: string): number {

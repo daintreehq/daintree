@@ -352,7 +352,12 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
       if (!newTabId) return;
 
       try {
-        await window.electron.portal.create({ tabId: newTabId, url: tab.url });
+        // A duplicate of a promoted preview keeps its session, as the original does.
+        await window.electron.portal.create({
+          tabId: newTabId,
+          url: tab.url,
+          ...(tab.partition ? { partition: tab.partition } : {}),
+        });
         state.markTabCreated(newTabId);
         await showPortalTabIfNoOverlay(newTabId, bounds);
       } catch (error) {

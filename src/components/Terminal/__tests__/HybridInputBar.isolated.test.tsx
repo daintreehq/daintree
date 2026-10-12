@@ -24,6 +24,7 @@ vi.mock("@/store/terminalInputStore", async (importOriginal) => {
 });
 
 import { HybridInputBar } from "../HybridInputBar";
+import { routeDropToComposer } from "../uploads/composerRouting";
 
 const WT_ID = "/repo/wt";
 
@@ -56,7 +57,10 @@ beforeEach(() => {
   });
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+});
 
 function mount(isolated: boolean) {
   return render(
@@ -81,6 +85,18 @@ describe("HybridInputBar isolated", () => {
     expect(registry.register).toHaveBeenCalledWith("term-1", expect.anything());
     view.unmount();
     expect(registry.unregister).toHaveBeenCalledWith("term-1");
+  });
+
+  it("leaves a remote pane's drops with its own composer while the canopy panel opens and closes", async () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    const pane = mount(false);
+    await act(async () => {});
+    const canopy = mount(true);
+    await act(async () => {});
+    canopy.unmount();
+    expect(routeDropToComposer("term-1", [])).toBe(true);
+    pane.unmount();
+    expect(routeDropToComposer("term-1", [])).toBe(false);
   });
 
   it("leaves the pane's controller alone from the canopy panel", async () => {

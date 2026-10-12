@@ -19,7 +19,7 @@ import nodeV8 from "node:v8";
 import vm from "node:vm";
 import { spawn } from "child_process";
 import { randomBytes } from "crypto";
-import { app } from "electron";
+import { app, dialog } from "electron";
 import path from "path";
 import fs from "fs";
 import { existsSync } from "fs";
@@ -41,6 +41,12 @@ import {
   shouldRetryGpuAfterUpdate,
 } from "../services/gpuDisabledFlag.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import {
+  HEADLESS_OZONE_SWITCH,
+  isAttachStdioRequested,
+  shouldUseHeadlessOzone,
+} from "../boot/hostModeLaunch.js";
+import { installHeadlessDialogGuards } from "./headlessDialogs.js";
 import {
   e2eCrashDumpsDir,
   isDemoMode,
@@ -156,9 +162,32 @@ export const gpuAngleFallbackActive = fs.existsSync(gpuAngleFallbackFlagPath);
 // Chromium feature flags: memory reclamation + platform-specific features
 const enabledFeatures = ["PartitionAllocMemoryReclaimer"];
 
+// A windowless Host on a box with no display server runs Chromium headless,
+// with the GPU off since nothing is ever composited. Ozone is chosen before
+// this module runs, so only the switch on the command line selects it (the
+// systemd unit passes it); a launch without it aborts looking for X11. Only
+// when Host mode is requested — a normal launch without a display should
+// still fail loudly.
+export const headlessOzone = shouldUseHeadlessOzone({
+  platform: process.platform,
+  argv: process.argv,
+  env: process.env,
+});
+
 // Enable native Wayland support on Linux (Electron < 38)
 // Electron 38+ auto-detects via XDG_SESSION_TYPE; this flag is ignored.
-if (process.platform === "linux") {
+if (headlessOzone) {
+  installHeadlessDialogGuards(dialog);
+  app.commandLine.appendSwitch("ozone-platform", "headless");
+  app.commandLine.appendSwitch("disable-gpu");
+  if (!gpuHardwareAccelerationDisabled) app.disableHardwareAcceleration();
+  // `--attach-stdio`'s stdout is the link: its diagnostics go to stderr.
+  (isAttachStdioRequested(process.argv) ? console.error : console.log)(
+    process.argv.includes(HEADLESS_OZONE_SWITCH)
+      ? "[GPU] Headless Host mode: ozone-platform=headless, GPU disabled"
+      : `[GPU] No display server: start Host mode with ${HEADLESS_OZONE_SWITCH}, or Chromium aborts looking for X11`
+  );
+} else if (process.platform === "linux") {
   app.commandLine.appendSwitch("ozone-platform-hint", "auto");
   if (process.env.XDG_SESSION_TYPE === "wayland") {
     enabledFeatures.push("WaylandWindowDecorations");
@@ -747,6 +776,11 @@ export function clearPendingOpenDirPaths(): void {
  */
 export function setOpenDirConsumer(consumer: ((dirPath: string) => void) | null): void {
   _openDirConsumer = consumer;
+}
+
+/** False until a window has set up and can route external folder opens itself. */
+export function hasOpenDirConsumer(): boolean {
+  return _openDirConsumer !== null;
 }
 
 /** Queue a directory for the first window's drain; dedupes bursts. */

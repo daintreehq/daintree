@@ -652,6 +652,10 @@ export function removeChipRange(view: EditorView, from: number, to: number): voi
 }
 
 export function formatChipLabel(filePath: string): string {
+  // A host's inbox names a pasted image by its own clock (`clipboard-YYYYMMDD-HHMMSS-…`);
+  // this machine's paste uses epoch milliseconds.
+  const stamped = filePath.match(/clipboard-\d{8}-(\d{2})(\d{2})\d{2}-/);
+  if (stamped) return `Screenshot ${stamped[1]}:${stamped[2]}`;
   const match = filePath.match(/clipboard-(\d+)-/);
   if (match) {
     const date = new Date(Number(match[1]));

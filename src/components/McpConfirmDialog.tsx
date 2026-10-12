@@ -439,7 +439,8 @@ function RequesterRow({ current }: { current: PendingMcpConfirm }) {
   } else if (callerInfo) {
     Icon = Plug;
     name = truncateUserAgent(callerInfo.userAgent);
-    detail = `…${callerInfo.token4LastChars}`;
+    // A host's agent has no bearer of this machine's, so nothing to show.
+    detail = callerInfo.token4LastChars ? `…${callerInfo.token4LastChars}` : null;
   } else if (isAssistant) {
     Icon = Sparkles;
     name = "Daintree Assistant";

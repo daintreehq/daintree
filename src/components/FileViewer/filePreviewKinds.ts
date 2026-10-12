@@ -1,3 +1,5 @@
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
+
 /**
  * Shared classification + URL helpers for previewable (non-text) files.
  *
@@ -124,12 +126,85 @@ export function isFileContentsCopyCandidate(filePath: string): boolean {
 }
 
 /**
+ * The remote host this view's files live on, or null for a view of this
+ * machine. A remote view's preview URLs name the host so this machine's
+ * protocol handler fetches the host's file instead of reading its own copy of
+ * the same path.
+ */
+function viewRemoteHostId(): string | null {
+  const id = typeof window === "undefined" ? undefined : window.__DAINTREE_HOST_ID__?.id;
+  return id && id !== LOCAL_HOST_ID ? id : null;
+}
+
+let previewCapability: string | null = null;
+let previewCapabilityRequest: Promise<string | null> | null = null;
+
+/**
+ * Fetch this view's preview capability once and keep it for the view's life.
+ * A protocol request carries no sender, so the host serves a remote view's
+ * preview only when its URL carries the token main minted for that view.
+ * Resolves null without any IPC for a view of this machine.
+ */
+export function primeHostPreviewCapability(): Promise<string | null> {
+  if (previewCapability !== null) return Promise.resolve(previewCapability);
+  if (viewRemoteHostId() === null) return Promise.resolve(null);
+  if (previewCapabilityRequest) return previewCapabilityRequest;
+  const fileTransfer = window.electron?.fileTransfer;
+  if (!fileTransfer?.getPreviewCapability) return Promise.resolve(null);
+  const request = fileTransfer
+    .getPreviewCapability()
+    .then((capability) => {
+      previewCapability = capability;
+      return capability;
+    })
+    .catch(() => null)
+    .finally(() => {
+      // A failed fetch leaves nothing cached, so the next preview asks again.
+      if (previewCapabilityRequest === request) previewCapabilityRequest = null;
+    });
+  previewCapabilityRequest = request;
+  return request;
+}
+
+/** Test seam: forget the cached capability. */
+export function resetHostPreviewCapabilityForTests(): void {
+  previewCapability = null;
+  previewCapabilityRequest = null;
+}
+
+/**
+ * `load` for this machine, `host/<hostId>/<capability>/load` for the remote
+ * host this view is bound to. Local URLs keep exactly the shape they always
+ * had. The capability is only valid for the view's own host, so a URL naming
+ * any other host (or built before the capability arrived) goes without it and
+ * the host refuses it rather than serving it under the wrong view.
+ */
+function previewAuthority(hostId: string | null): string {
+  if (hostId === null) return "load";
+  const host = `host/${encodeURIComponent(hostId)}`;
+  if (hostId !== viewRemoteHostId()) return `${host}/load`;
+  if (previewCapability === null) {
+    void primeHostPreviewCapability();
+    return `${host}/load`;
+  }
+  return `${host}/${previewCapability}/load`;
+}
+
+function previewQuery(filePath: string, rootPath: string): string {
+  return `?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
+}
+
+/**
  * URL for the custom `daintree-file://` protocol, which serves a file from
  * inside a known root. Used as an `<img>` src so raster images never round-trip
  * through a base64 IPC read.
  */
-export function buildDaintreeFileUrl(filePath: string, rootPath: string): string {
-  return `daintree-file://load?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
+export function buildDaintreeFileUrl(
+  filePath: string,
+  rootPath: string,
+  hostId: string | null = viewRemoteHostId()
+): string {
+  return `daintree-file://${previewAuthority(hostId)}${previewQuery(filePath, rootPath)}`;
 }
 
 /**
@@ -139,11 +214,15 @@ export function buildDaintreeFileUrl(filePath: string, rootPath: string): string
  * (#12242). It is registered `standard: true`, the privilege the upstream report
  * behind the old blob detour identified as the missing one.
  */
-export function buildDaintreeMediaUrl(filePath: string, rootPath: string): string {
+export function buildDaintreeMediaUrl(
+  filePath: string,
+  rootPath: string,
+  hostId: string | null = viewRemoteHostId()
+): string {
   // Trailing `/` on the authority is written out rather than left to Chromium:
   // a `standard: true` scheme canonicalizes to it anyway, and matching that
   // shape here keeps the URL we set identical to the one the handler receives.
-  return `daintree-media://load/?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
+  return `daintree-media://${previewAuthority(hostId)}/${previewQuery(filePath, rootPath)}`;
 }
 
 /**
@@ -152,6 +231,10 @@ export function buildDaintreeMediaUrl(filePath: string, rootPath: string): strin
  * `frame-src`. Used as an iframe `src` so Chromium's built-in PDFium viewer
  * renders the document.
  */
-export function buildDaintreePdfUrl(filePath: string, rootPath: string): string {
-  return `daintree-pdf://load?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
+export function buildDaintreePdfUrl(
+  filePath: string,
+  rootPath: string,
+  hostId: string | null = viewRemoteHostId()
+): string {
+  return `daintree-pdf://${previewAuthority(hostId)}${previewQuery(filePath, rootPath)}`;
 }

@@ -7,6 +7,9 @@ import {
   useFleetRunStore,
   subscribeFleetRunWatcher,
   summarizeFleetRun,
+  FLEET_HOST_OBSERVE_INTERVAL_MS,
+  FLEET_HOST_OBSERVE_LIMIT_MS,
+  FLEET_HOST_SETTLE_GRACE_MS,
 } from "@/store/fleetRunStore";
 import { RUN_HISTORY_DRAFT_PREVIEW_MAX_LENGTH } from "@shared/types/ipc/runHistory";
 import type { FleetExecutionResult } from "@/components/Fleet/fleetExecution";
@@ -89,6 +92,7 @@ beforeEach(() => {
     armOrder: [],
     armOrderById: {},
     lastArmedId: null,
+    crossHostTargets: [],
   });
   useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
   Object.assign(window, {
@@ -488,5 +492,233 @@ describe("history resilience", () => {
         .applySubmissionResult(runId, makeResult([{ terminalId: "a", status: "fulfilled" }]))
     ).not.toThrow();
     expect(useFleetRunStore.getState().run!.status).toBe("completed");
+  });
+});
+
+describe("agents on other hosts", () => {
+  const REMOTE = "host-fleet:studio-01:t1";
+
+  function armRemote(): void {
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key: REMOTE,
+      hostId: "studio-01",
+      hostName: "studio-01",
+      terminalId: "t1",
+      title: "Claude",
+    });
+  }
+
+  function startMixedRun(): string {
+    seedPanels([makeAgent("a", { agentState: "working" })]);
+    useFleetArmingStore.getState().armId("a");
+    armRemote();
+    const runId = useFleetRunStore.getState().beginRun(["a", REMOTE], { draft: "go" });
+    useFleetRunStore.getState().applySubmissionResult(
+      runId,
+      makeResult([
+        { terminalId: "a", status: "fulfilled" },
+        { terminalId: REMOTE, status: "fulfilled" },
+      ])
+    );
+    return runId;
+  }
+
+  it("is sent but unobserved after submission, never done because it has no panel here", () => {
+    armRemote();
+    const runId = useFleetRunStore.getState().beginRun([REMOTE], { draft: "go" });
+    useFleetRunStore
+      .getState()
+      .applySubmissionResult(runId, makeResult([{ terminalId: REMOTE, status: "fulfilled" }]));
+    const run = useFleetRunStore.getState().run!;
+    expect(run.status).toBe("watching");
+    expect(run.targets[0]).toMatchObject({
+      settled: false,
+      gone: false,
+      title: "Claude · studio-01",
+    });
+    const counts = summarizeFleetRun(run);
+    expect(counts).toMatchObject({ sent: 1, unobserved: 1, done: 0, working: 0 });
+    useFleetRunStore.getState().reconcile();
+    expect(useFleetRunStore.getState().run!.status).toBe("watching");
+  });
+
+  it("does not let a mixed run finish when only this view's panes have settled", () => {
+    startMixedRun();
+    setAgentState("a", "completed");
+    useFleetRunStore.getState().reconcile();
+    const run = useFleetRunStore.getState().run!;
+    expect(run.status).toBe("watching");
+    expect(summarizeFleetRun(run)).toMatchObject({ done: 1, unobserved: 1 });
+  });
+
+  it("follows what the host reports, and finishes once it reports the agent at rest", () => {
+    const runId = startMixedRun();
+    setAgentState("a", "completed");
+    useFleetRunStore.getState().reconcile();
+    const startedAt = useFleetRunStore.getState().run!.startedAt;
+    // Seen at rest before the grace: it may not have picked the prompt up yet.
+    useFleetRunStore
+      .getState()
+      .observeHost("studio-01", [{ terminalId: "t1", agentState: "idle" }], startedAt + 1);
+    expect(useFleetRunStore.getState().run!.status).toBe("watching");
+    // At rest before it could have started reads as sent, not working.
+    expect(summarizeFleetRun(useFleetRunStore.getState().run!)).toMatchObject({
+      working: 0,
+      unobserved: 1,
+    });
+    useFleetRunStore
+      .getState()
+      .observeHost("studio-01", [{ terminalId: "t1", agentState: "working" }], startedAt + 2);
+    expect(summarizeFleetRun(useFleetRunStore.getState().run!)).toMatchObject({
+      working: 1,
+      unobserved: 0,
+    });
+    useFleetRunStore
+      .getState()
+      .observeHost("studio-01", [{ terminalId: "t1", agentState: "waiting" }], startedAt + 3);
+    const run = useFleetRunStore.getState().run!;
+    expect(run.runId).toBe(runId);
+    expect(run.status).toBe("completed");
+    expect(summarizeFleetRun(run)).toMatchObject({ waiting: 1, done: 1 });
+  });
+
+  it("measures the settle grace from when the host took the submit, not from the run's start", () => {
+    vi.useFakeTimers();
+    try {
+      seedPanels([makeAgent("a", { agentState: "completed" })]);
+      armRemote();
+      const runId = useFleetRunStore.getState().beginRun(["a", REMOTE], { draft: "go" });
+      const startedAt = useFleetRunStore.getState().run!.startedAt;
+      // The submit spent a reconnect's worth of time in flight.
+      vi.setSystemTime(startedAt + FLEET_HOST_SETTLE_GRACE_MS * 2);
+      useFleetRunStore.getState().applySubmissionResult(
+        runId,
+        makeResult([
+          { terminalId: "a", status: "fulfilled" },
+          { terminalId: REMOTE, status: "fulfilled" },
+        ])
+      );
+      useFleetRunStore
+        .getState()
+        .observeHost(
+          "studio-01",
+          [{ terminalId: "t1", agentState: "idle" }],
+          startedAt + FLEET_HOST_SETTLE_GRACE_MS * 2 + 1
+        );
+      expect(useFleetRunStore.getState().run!.status).toBe("watching");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles an agent the host no longer lists as gone, but not on a list cut short", () => {
+    startMixedRun();
+    setAgentState("a", "completed");
+    useFleetRunStore.getState().reconcile();
+    const at = useFleetRunStore.getState().run!.startedAt + FLEET_HOST_SETTLE_GRACE_MS;
+    useFleetRunStore.getState().observeHost("studio-01", [], at, false);
+    expect(useFleetRunStore.getState().run!.status).toBe("watching");
+    useFleetRunStore.getState().observeHost("studio-01", [], at);
+    const run = useFleetRunStore.getState().run!;
+    expect(run.status).toBe("completed");
+    expect(run.targets.find((t) => t.terminalId === REMOTE)).toMatchObject({ gone: true });
+  });
+
+  it("asks the host while it waits on it, and stops asking after the limit", async () => {
+    vi.useFakeTimers();
+    try {
+      const listFleetTargets = vi.fn(async () => ({
+        targets: [
+          {
+            hostId: "studio-01",
+            terminalId: "t1",
+            title: "Claude",
+            projectId: null,
+            projectName: null,
+            agentId: "claude",
+            agentState: "working" as const,
+          },
+        ],
+        complete: true,
+      }));
+      Object.assign(window, {
+        electron: {
+          runHistory: { append: (input: unknown) => appendMock(input) },
+          hostMetrics: { listFleetTargets },
+        },
+      });
+      const unsubscribe = subscribeFleetRunWatcher();
+      startMixedRun();
+      await vi.advanceTimersByTimeAsync(FLEET_HOST_OBSERVE_INTERVAL_MS);
+      expect(listFleetTargets).toHaveBeenCalledWith({ hostId: "studio-01" });
+      expect(summarizeFleetRun(useFleetRunStore.getState().run!).unobserved).toBe(0);
+      setAgentState("a", "completed");
+      await vi.advanceTimersByTimeAsync(FLEET_HOST_OBSERVE_LIMIT_MS);
+      const run = useFleetRunStore.getState().run!;
+      expect(run.status).toBe("completed");
+      // Last seen working is not how it ended: it reads as sent, not done.
+      expect(summarizeFleetRun(run)).toMatchObject({ unobserved: 1, done: 1 });
+      const calls = listFleetTargets.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(FLEET_HOST_OBSERVE_INTERVAL_MS * 3);
+      expect(listFleetTargets.mock.calls.length).toBe(calls);
+      unsubscribe();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves a target the host's degraded read omitted unobserved, not gone", async () => {
+    vi.useFakeTimers();
+    try {
+      let complete = false;
+      const listFleetTargets = vi.fn(async () => ({ targets: [], complete }));
+      Object.assign(window, {
+        electron: {
+          runHistory: { append: (input: unknown) => appendMock(input) },
+          hostMetrics: { listFleetTargets },
+        },
+      });
+      const unsubscribe = subscribeFleetRunWatcher();
+      startMixedRun();
+      setAgentState("a", "completed");
+      useFleetRunStore.getState().reconcile();
+      await vi.advanceTimersByTimeAsync(FLEET_HOST_OBSERVE_INTERVAL_MS * 3);
+      expect(listFleetTargets).toHaveBeenCalled();
+      let run = useFleetRunStore.getState().run!;
+      expect(run.status).toBe("watching");
+      expect(run.targets.find((t) => t.terminalId === REMOTE)?.gone).not.toBe(true);
+      complete = true;
+      await vi.advanceTimersByTimeAsync(FLEET_HOST_OBSERVE_INTERVAL_MS);
+      run = useFleetRunStore.getState().run!;
+      expect(run.targets.find((t) => t.terminalId === REMOTE)).toMatchObject({ gone: true });
+      unsubscribe();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never asks any host when the run has only this view's panes", async () => {
+    vi.useFakeTimers();
+    try {
+      const listFleetTargets = vi.fn(async () => ({ targets: [], complete: true }));
+      Object.assign(window, {
+        electron: {
+          runHistory: { append: (input: unknown) => appendMock(input) },
+          hostMetrics: { listFleetTargets },
+        },
+      });
+      const unsubscribe = subscribeFleetRunWatcher();
+      seedPanels([makeAgent("a", { agentState: "working" })]);
+      useFleetArmingStore.getState().armId("a");
+      const runId = useFleetRunStore.getState().beginRun(["a"], { draft: "go" });
+      useFleetRunStore
+        .getState()
+        .applySubmissionResult(runId, makeResult([{ terminalId: "a", status: "fulfilled" }]));
+      await vi.advanceTimersByTimeAsync(FLEET_HOST_OBSERVE_INTERVAL_MS * 3);
+      expect(listFleetTargets).not.toHaveBeenCalled();
+      unsubscribe();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

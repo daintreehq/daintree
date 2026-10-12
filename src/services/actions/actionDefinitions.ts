@@ -40,6 +40,9 @@ import { registerWorkflowActions } from "./definitions/workflowActions";
 import { registerProjectCheckActions } from "./definitions/projectCheckActions";
 import { registerPluginActions } from "./definitions/pluginActions";
 import { registerSkillActions } from "./definitions/skillActions";
+import { registerHostActions } from "./definitions/hostActions";
+import { registerPortActions } from "./definitions/portActions";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 
 export type { ActionCallbacks, ActionRegistry } from "./actionTypes";
 
@@ -90,6 +93,10 @@ export function createActionDefinitions(
   registerFileActions(actions, callbacks);
   registerVoiceActions(actions);
   registerActionActions(actions);
+  if (isRemoteShellSupported()) {
+    registerHostActions(actions, callbacks);
+    registerPortActions(actions, callbacks);
+  }
 
   return actions;
 }

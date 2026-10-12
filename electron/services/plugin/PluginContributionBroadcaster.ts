@@ -1,4 +1,8 @@
-import { broadcastToRenderer, broadcastToProjectRenderers } from "../../ipc/utils.js";
+import {
+  broadcastToRenderer,
+  broadcastToProjectRenderers,
+  isWithheldFromView,
+} from "../../ipc/utils.js";
 import {
   getAllAppWebContents,
   getProjectForWebContents,
@@ -361,11 +365,14 @@ export class PluginContributionBroadcaster {
       });
     }
     const globalPayload = buildPayload(null);
+    const event = { name, payload: globalPayload };
     for (const wc of getAllAppWebContents()) {
       if (projectViewIds.has(wc.id)) continue;
       if (wc.isDestroyed()) continue;
+      // A view on another host hears that host's contributions, not this machine's.
+      if (isWithheldFromView(wc.id, CHANNELS.EVENTS_PUSH, [event])) continue;
       try {
-        wc.send(CHANNELS.EVENTS_PUSH, { name, payload: globalPayload });
+        wc.send(CHANNELS.EVENTS_PUSH, event);
       } catch {
         // Silently ignore send failures during window initialization/disposal.
       }
@@ -686,7 +693,7 @@ export class PluginContributionBroadcaster {
    * unload sweep.
    */
   async pushSnapshotTo(
-    webContents: Electron.WebContents,
+    webContents: Pick<Electron.WebContents, "id" | "isDestroyed" | "send">,
     projectId?: string | null
   ): Promise<void> {
     await this.deps.initPromise;
@@ -771,6 +778,8 @@ export class PluginContributionBroadcaster {
         })),
     ];
     for (const event of events) {
+      // A view on another host is replayed that host's contributions, by the host.
+      if (isWithheldFromView(webContents.id, CHANNELS.EVENTS_PUSH, [event])) continue;
       try {
         webContents.send(CHANNELS.EVENTS_PUSH, event);
       } catch {

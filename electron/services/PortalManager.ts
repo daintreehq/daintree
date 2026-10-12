@@ -142,7 +142,12 @@ export class PortalManager {
     this.restoringTabIds.add(tabId);
   }
 
-  createTab(tabId: string, url: string, partition: string = "persist:portal"): void {
+  createTab(
+    tabId: string,
+    url: string,
+    partition: string = "persist:portal",
+    options: { isPopupAllowed?: (url: string) => boolean } = {}
+  ): void {
     console.log(`[PortalManager] Creating tab ${tabId} for ${url} on ${partition}`);
     if (this.viewMap.has(tabId)) return;
 
@@ -174,7 +179,7 @@ export class PortalManager {
       view.setBackgroundColor(this.backgroundColor);
 
       view.webContents.setWindowOpenHandler(({ url }) => {
-        if (typeof url === "string" && url.trim()) {
+        if (typeof url === "string" && url.trim() && (options.isPopupAllowed?.(url) ?? true)) {
           void openExternalUrl(url).catch((error) => {
             console.error("[PortalManager] Failed to open window URL:", error);
           });

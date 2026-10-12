@@ -6,6 +6,7 @@ import {
   registerAppView,
 } from "./webContentsRegistry.js";
 import { getWindowRegistry } from "./windowRef.js";
+import { routeNewWindowRequest } from "./windowHost.js";
 import { toggleWindowFullscreen } from "./fullscreen.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import path from "path";
@@ -21,7 +22,7 @@ import {
 
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
-import { isLocalhostUrl, isDevPreviewProxyUrl } from "../../shared/utils/urlUtils.js";
+import { isWebviewSrcAllowed } from "./ProjectViewHandlers.js";
 import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -80,7 +81,12 @@ function registerWindowIpcHandlers(onCreateWindow?: CreateWindowHandler): void {
     // back in it (#12594).
     ipcMain.handle(CHANNELS.WINDOW_NEW, (event, projectPath?: string) => {
       const bw = getWindowForWebContents(event.sender);
-      return onCreateWindow(projectPath ?? undefined, bw && !bw.isDestroyed() ? bw.id : null);
+      return routeNewWindowRequest(
+        event.sender.id,
+        bw && !bw.isDestroyed() ? bw.id : null,
+        projectPath ?? undefined,
+        onCreateWindow
+      );
     });
   }
 
@@ -504,9 +510,7 @@ export function setupBrowserWindow(
 
   // Harden webview security — on the app view's webContents
   appWebContents.on("will-attach-webview", (event, webPreferences, params) => {
-    // Dev-preview webviews now load the stable proxy origin (dp-*.localhost), which
-    // isLocalhostUrl rejects — accept it explicitly (#9100).
-    const isAllowedLocalhostUrl = isLocalhostUrl(params.src) || isDevPreviewProxyUrl(params.src);
+    const isAllowedLocalhostUrl = isWebviewSrcAllowed(appWebContents.id, params.src);
     const partition = params.partition ?? "";
     const isValidPartition =
       isBrowserPartition(partition) ||

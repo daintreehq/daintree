@@ -59,6 +59,12 @@ export interface OpenWorldWindow {
    * it binds something: never picked as empty, and the same folder reopens here.
    */
   unboundOpens: readonly WindowOpenReservation[];
+  /**
+   * Attached to a remote host. Every folder routed here is on this machine, so
+   * such a window is never reused as empty or current; one still holding the
+   * folder's view in its cache remains its owner.
+   */
+  onRemoteHost?: boolean;
 }
 
 export interface OpenWorld {
@@ -110,8 +116,11 @@ function findOwner(request: ProjectOpenRequest, world: OpenWorld): ProjectOpenDe
   }
 
   // Opened again rather than focused: the prompt it was waiting on may have
-  // been dismissed, and reopening puts it back in front of the user.
-  const unbound = windows.find((w) => w.unboundOpens.some((r) => reservationMatches(r, request)));
+  // been dismissed, and reopening puts it back in front of the user. Never a
+  // window on a host: its renderer's prompt would act on the host.
+  const unbound = windows.find(
+    (w) => !w.onRemoteHost && w.unboundOpens.some((r) => reservationMatches(r, request))
+  );
   if (unbound) return { kind: "activate", windowId: unbound.windowId, reason: "owner" };
 
   return null;
@@ -120,6 +129,7 @@ function findOwner(request: ProjectOpenRequest, world: OpenWorld): ProjectOpenDe
 function isEmptyWindow(w: OpenWorldWindow): boolean {
   return (
     w.ready &&
+    !w.onRemoteHost &&
     w.activeProjectId === null &&
     w.bridgeProjectId === null &&
     w.reservations.length === 0 &&
@@ -144,11 +154,12 @@ function newWindowTarget(request: ProjectOpenRequest, world: OpenWorld): Project
 /**
  * "This window": the asking window, or for a request with none (an external
  * open under `off`) the most recently focused window that has finished booting.
+ * Either must be on this machine, where the folder is.
  */
 function currentWindowTarget(request: ProjectOpenRequest, world: OpenWorld): ProjectOpenDecision {
   const target =
-    world.windows.find((w) => w.windowId === request.initiatingWindowId) ??
-    world.windows.find((w) => w.ready);
+    world.windows.find((w) => w.windowId === request.initiatingWindowId && !w.onRemoteHost) ??
+    world.windows.find((w) => w.ready && !w.onRemoteHost);
   if (target) return { kind: "activate", windowId: target.windowId, reason: "current" };
   return newWindowTarget(request, world);
 }

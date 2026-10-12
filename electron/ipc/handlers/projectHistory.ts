@@ -2,6 +2,8 @@ import { projectStore } from "../../services/ProjectStore.js";
 import { scratchStore } from "../../services/ScratchStore.js";
 import { getProjectHistory } from "../../services/ProjectHistoryService.js";
 import { isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
+import { isLocalHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
+import { getRemoteService } from "../../remote/runtime.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type { ProjectHistoryTarget } from "../../../shared/types/ipc/project.js";
 import { defineIpcNamespace, op } from "../define.js";
@@ -19,10 +21,24 @@ import { PROJECT_HISTORY_METHOD_CHANNELS } from "./projectHistory.preload.js";
  * project store simply comes back missing and is pruned, which is what should
  * happen to an id no store can account for.
  */
-const workspaceExists = (workspaceId: string): boolean =>
-  isScratchWorkspaceId(workspaceId)
+const workspaceExists = (workspaceId: string): boolean => {
+  const { hostId } = parseHostScopedKey(workspaceId);
+  if (!isLocalHostId(hostId)) return remoteHostIsKnown(hostId);
+  return isScratchWorkspaceId(workspaceId)
     ? Boolean(scratchStore.getScratchById(workspaceId))
     : Boolean(projectStore.getProjectById(workspaceId));
+};
+
+/**
+ * A workspace on another host is kept while that host is in this machine's
+ * list. Whether the host still has it can't be asked synchronously; the switch
+ * back asks, and says so if it's gone.
+ */
+function remoteHostIsKnown(hostId: string): boolean {
+  const client = getRemoteService("remoteHostsClient");
+  if (!client) return false;
+  return client.list().some((entry) => entry.descriptor.id === hostId);
+}
 
 /**
  * `workspaceExists` memoised for the length of one request.
@@ -86,7 +102,10 @@ export function createProjectHistoryNamespace(deps: HandlerDependencies) {
    * handler dependencies rather than the one that pressed the key.
    */
   const resolveLastWorkspace = (ctx: IpcContext): ProjectHistoryTarget | null => {
-    const windowId = ctx.senderWindow?.id ?? deps.mainWindow?.id;
+    // The primary-window fallback is for a local sender whose window can't be
+    // resolved. A view attached over a link has no window here, and borrowing
+    // this machine's would hand it another screen's history.
+    const windowId = ctx.senderWindow?.id ?? (ctx.event !== null ? deps.mainWindow?.id : undefined);
     if (windowId === undefined) return null;
 
     const history = getProjectHistory(windowId);

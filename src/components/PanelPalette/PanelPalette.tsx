@@ -14,6 +14,7 @@ import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { countPanelsTowardLimit } from "@/store/slices/panelRegistry/panelCount";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { keyBelongsToField } from "@/hooks/useListboxCursor";
+import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 
 interface PanelPaletteProps {
   isOpen: boolean;
@@ -140,6 +141,8 @@ export function PanelPalette({
   );
   const hardLimit = usePanelLimitStore((state) => state.hardLimit);
   const panelPaletteShortcut = useEffectiveCombo("panel.palette");
+  // Installed means installed where the panel would run: the host, in a remote window.
+  const remoteHostName = useRemoteHostName();
   const showCounter = hardLimit > 0 && panelCount / hardLimit >= 0.75;
 
   const isSearching = query.trim().length > 0;
@@ -152,7 +155,9 @@ export function PanelPalette({
     const badgeLabel = isStale
       ? "Worktree removed"
       : kind.installed === false
-        ? "Not installed"
+        ? remoteHostName === null
+          ? "Not installed"
+          : `Not installed on ${remoteHostName}`
         : null;
     // The palette already has a second line, so provenance goes there rather
     // than into the trailing badge, which is reserved for state ("Not

@@ -28,13 +28,13 @@ import {
 } from "../utils/webviewCsp.js";
 import { resolveHtmlPreviewRoot } from "./htmlPreviewTokens.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
-import {
-  isLocalhostUrl,
-  isDevPreviewProxyUrl,
-  isSafeNavigationUrl,
-  formatDialogOrigin,
-} from "../../shared/utils/urlUtils.js";
+import { formatDialogOrigin } from "../../shared/utils/urlUtils.js";
 import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
+import {
+  guardRemoteGuestRequests,
+  isGuestNavigationAllowed,
+  isGuestPopupAllowed,
+} from "../window/webviewSrcGate.js";
 import {
   parsePluginTourAudioPath,
   stripPluginViewGeneration,
@@ -45,6 +45,9 @@ import { looksLikeOAuthUrl } from "../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { logWarn } from "../utils/logger.js";
 import { isPluginDirResolverLive, markPluginDirResolverLive } from "./pluginProtocolReadiness.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { isValidRemoteHostId } from "../../shared/types/remoteHosts.js";
+import { parseRemotePluginAssetPath } from "../../shared/types/pluginRemoteView.js";
 
 /**
  * Resolve a `plugin://` authority to the plugin root that serves it.
@@ -280,7 +283,7 @@ function buildDaintreeFileHeaders(mimeType: string, contentLength: number): Reco
   };
 }
 
-function buildDaintreeFileErrorHeaders(): Record<string, string> {
+export function buildDaintreeFileErrorHeaders(): Record<string, string> {
   return {
     "Content-Type": "text/plain",
     "Content-Security-Policy": "sandbox; default-src 'none'",
@@ -303,8 +306,22 @@ function buildDaintreeFileErrorHeaders(): Record<string, string> {
 // Audio rides the same path as video: a 4 MB podcast episode would 413 against
 // the 512 KB buffered cap, and the renderer plays both through the same
 // fetch-to-blob flow (#11425).
-function isMediaMimeType(mimeType: string): boolean {
+export function isMediaMimeType(mimeType: string): boolean {
   return mimeType.startsWith("video/") || mimeType.startsWith("audio/");
+}
+
+/**
+ * The most bytes a whole-response preview of `filePath` under `scheme` may
+ * carry, as this machine's own handler holds it; null for audio and video,
+ * which stream (a host-served preview is held to the same).
+ */
+export function previewByteCeiling(
+  scheme: "daintree-file" | "daintree-media" | "daintree-pdf",
+  filePath: string
+): number | null {
+  if (scheme === "daintree-pdf") return DAINTREE_PDF_MAX_BYTES;
+  if (isMediaMimeType(getMimeType(filePath))) return null;
+  return maxBytesForFile(filePath, "file");
 }
 
 type ParsedByteRange = { start: number; end: number } | "unsatisfiable" | null;
@@ -383,6 +400,18 @@ async function streamContainedMediaFile(
     throw err;
   }
 
+  return streamOpenedMediaFile(fileHandle, mimeType, request);
+}
+
+/**
+ * The post-open half of {@link streamContainedMediaFile}: everything is
+ * decided from the descriptor, which this takes ownership of.
+ */
+async function streamOpenedMediaFile(
+  fileHandle: Awaited<ReturnType<typeof fs.open>>,
+  mimeType: string,
+  request: GlobalRequest
+): Promise<Response> {
   let size: number;
   try {
     const fdStat = await fileHandle.stat();
@@ -479,7 +508,7 @@ async function streamContainedMediaFile(
  * pointing outside root is rejected (CVE-2025-53109 / CVE-2025-54794 class).
  * Returns the canonical file path, or the 404 Response to relay.
  */
-async function resolveContainedRealPath(
+export async function resolveContainedRealPath(
   normalizedRoot: string,
   normalizedFile: string
 ): Promise<{ realFile: string } | Response> {
@@ -746,46 +775,51 @@ function parseContainedFileRequest(
  * streamContainedMediaFile's, unchanged and shared with daintree-file://.
  */
 function createDaintreeMediaProtocolHandler() {
-  return async (request: GlobalRequest) => {
-    try {
-      const parsed = parseContainedFileRequest(request);
-      if (parsed instanceof Response) return parsed;
-      const { normalizedRoot, normalizedFile } = parsed;
+  return async (request: GlobalRequest) =>
+    (await answerHostScopedRequest("daintree-media", request)) ??
+    respondToDaintreeMediaRequest(request);
+}
 
-      const contained = await resolveContainedRealPath(normalizedRoot, normalizedFile);
-      if (contained instanceof Response) return contained;
+async function respondToDaintreeMediaRequest(request: GlobalRequest): Promise<Response> {
+  try {
+    const parsed = parseContainedFileRequest(request);
+    if (parsed instanceof Response) return parsed;
+    const { normalizedRoot, normalizedFile } = parsed;
 
-      // Classified from the canonical path, not the request path: on Windows
-      // O_NOFOLLOW is a no-op, so a final-component symlink (`clip.mp4` →
-      // `secrets.env`) opens fine and request-path routing would stream it
-      // under a media MIME. On POSIX ELOOP rejects that symlink at open, so the
-      // two spellings agree either way.
-      const realMimeType = getMimeType(contained.realFile);
-      if (!isMediaMimeType(realMimeType)) {
-        return new Response("Not Found", {
-          status: 404,
-          headers: buildDaintreeFileErrorHeaders(),
-        });
-      }
+    const contained = await resolveContainedRealPath(normalizedRoot, normalizedFile);
+    if (contained instanceof Response) return contained;
 
-      return await streamContainedMediaFile(normalizedFile, realMimeType, request);
-    } catch (err) {
-      console.error("[MAIN] daintree-media protocol error:", err);
-      return new Response("Internal Server Error", {
-        status: 500,
+    // Classified from the canonical path, not the request path: on Windows
+    // O_NOFOLLOW is a no-op, so a final-component symlink (`clip.mp4` →
+    // `secrets.env`) opens fine and request-path routing would stream it
+    // under a media MIME. On POSIX ELOOP rejects that symlink at open, so the
+    // two spellings agree either way.
+    const realMimeType = getMimeType(contained.realFile);
+    if (!isMediaMimeType(realMimeType)) {
+      return new Response("Not Found", {
+        status: 404,
         headers: buildDaintreeFileErrorHeaders(),
       });
     }
-  };
+
+    return await streamContainedMediaFile(normalizedFile, realMimeType, request);
+  } catch (err) {
+    console.error("[MAIN] daintree-media protocol error:", err);
+    return new Response("Internal Server Error", {
+      status: 500,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
 }
 
 /**
  * Create the daintree-file:// protocol handler function.
  */
 function createDaintreeFileProtocolHandler() {
-  const handleRequest = createDaintreeFileRequestCore();
   return async (request: GlobalRequest) => {
-    const response = await handleRequest(request);
+    const response =
+      (await answerHostScopedRequest("daintree-file", request)) ??
+      (await daintreeFileRequestCore(request));
     // Constructed Responses have mutable headers, so the CORS grant rides on
     // every path (success and error alike) — a blocked error response would
     // otherwise surface as an opaque TypeError instead of a readable status.
@@ -837,6 +871,222 @@ function createDaintreeFileRequestCore() {
       });
     }
   };
+}
+
+const daintreeFileRequestCore = createDaintreeFileRequestCore();
+
+/** The three query-string schemes that serve a file from inside a root. */
+export type ContainedFileScheme = "daintree-file" | "daintree-media" | "daintree-pdf";
+
+/**
+ * Serves a host-scoped request for a window attached to a remote host: the
+ * file lives on that host, so it has to be fetched from there rather than read
+ * from this machine at the same path.
+ */
+export type HostFileRequestProxy = (
+  scheme: ContainedFileScheme,
+  target: HostScopedFileTarget,
+  request: GlobalRequest
+) => Promise<Response>;
+
+/**
+ * The host a preview URL names, and the capability of the view that built it.
+ * A protocol request carries no sender, so the capability (minted by main for
+ * one view) is the only thing that says whose authority the request runs
+ * under; null when the URL has none, which the proxy refuses.
+ */
+export interface HostScopedFileTarget {
+  hostId: string;
+  viewCapability: string | null;
+}
+
+let hostFileRequestProxy: HostFileRequestProxy | null = null;
+
+/** Installed by the remote-hosts client; the returned function removes it. */
+export function setHostFileRequestProxy(proxy: HostFileRequestProxy | null): () => void {
+  hostFileRequestProxy = proxy;
+  return () => {
+    if (hostFileRequestProxy === proxy) hostFileRequestProxy = null;
+  };
+}
+
+/**
+ * A remote view's preview URLs carry the host and the view's capability in
+ * the authority and path —
+ * `daintree-file://host/<hostId>/<capability>/load?path=…&root=…` (the media
+ * scheme keeps its trailing `load/`). Local URLs use the `load` authority and
+ * never match, so they keep their exact shape and handling. A URL with the
+ * `host` authority is never served from this machine, even when malformed.
+ */
+export function parseHostScopedFileUrl(url: string): HostScopedFileTarget | "malformed" | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.host !== "host") return null;
+  const match = /^\/([^/]+)(?:\/([0-9a-f]{32}))?\/load\/?$/.exec(parsed.pathname);
+  if (!match) return "malformed";
+  let hostId: string;
+  try {
+    hostId = decodeURIComponent(match[1]!);
+  } catch {
+    return "malformed";
+  }
+  return isValidRemoteHostId(hostId) ? { hostId, viewCapability: match[2] ?? null } : "malformed";
+}
+
+async function answerHostScopedRequest(
+  scheme: ContainedFileScheme,
+  request: GlobalRequest
+): Promise<Response | null> {
+  const target = parseHostScopedFileUrl(request.url);
+  if (target === null) return null;
+  if (target === "malformed") {
+    return new Response("Invalid host URL", {
+      status: 400,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+  const proxy = hostFileRequestProxy;
+  if (!proxy) {
+    return new Response("Host not connected", {
+      status: 503,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+  try {
+    return await proxy(scheme, target, request);
+  } catch (err) {
+    console.error(`[MAIN] ${scheme} host proxy error:`, err);
+    return new Response("Bad Gateway", {
+      status: 502,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
+}
+
+/** The local-form URL of a contained-file request, as the renderer builds it. */
+export function buildContainedFileUrl(
+  scheme: ContainedFileScheme,
+  filePath: string,
+  rootPath: string
+): string {
+  const query = `?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
+  return scheme === "daintree-media" ? `${scheme}://load/${query}` : `${scheme}://load${query}`;
+}
+
+/**
+ * Answer a contained-file request exactly as this machine's own handler would
+ * for its own views: same validation, containment, caps and range handling,
+ * minus the CORS grant (the caller decides who may read it). A host uses this
+ * to serve an attached Shell's previews.
+ */
+export function serveContainedFileRequest(
+  scheme: ContainedFileScheme,
+  request: GlobalRequest
+): Promise<Response> {
+  switch (scheme) {
+    case "daintree-file":
+      return daintreeFileRequestCore(request);
+    case "daintree-pdf":
+      return respondToDaintreePdfRequest(request);
+    case "daintree-media":
+      return respondToDaintreeMediaRequest(request);
+  }
+}
+
+/** A descriptor a host opened for {@link serveOpenedContainedFile}. */
+export type OpenedContainedFile = Awaited<ReturnType<typeof fs.open>>;
+
+// Return type inferred for the same reason as readContainedDaintreeFile's.
+async function readUpTo(fileHandle: OpenedContainedFile, limit: number) {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  while (total < limit) {
+    const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, limit - total));
+    const { bytesRead } = await fileHandle.read(chunk, 0, chunk.byteLength, total);
+    if (bytesRead === 0) break;
+    chunks.push(chunk.subarray(0, bytesRead));
+    total += bytesRead;
+  }
+  return Buffer.concat(chunks, total);
+}
+
+/**
+ * A host's answer to an attached Shell's preview, served from a descriptor the
+ * host opened itself beneath the admitted root, so nothing is resolved by path
+ * again after admission. The scheme's gates, caps, headers and Range handling
+ * are the local handlers' (minus CORS, as {@link serveContainedFileRequest}).
+ *
+ * Takes ownership of `fileHandle`. `admitBuffered` is asked for the file's size
+ * before a buffered read and may refuse it (503), so the host can bound the
+ * bytes it holds across previews before reading any of them.
+ */
+export async function serveOpenedContainedFile(
+  scheme: ContainedFileScheme,
+  fileHandle: OpenedContainedFile,
+  canonicalPath: string,
+  request: GlobalRequest,
+  admitBuffered: (bytes: number) => boolean = () => true
+): Promise<Response> {
+  const refuse = async (status: number, text: string): Promise<Response> => {
+    await fileHandle.close().catch(() => {});
+    return new Response(text, { status, headers: buildDaintreeFileErrorHeaders() });
+  };
+  try {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return await refuse(405, "Method Not Allowed");
+    }
+    const mimeType = getMimeType(canonicalPath);
+    if (scheme === "daintree-media" && !isMediaMimeType(mimeType)) {
+      return await refuse(404, "Not Found");
+    }
+    if (scheme !== "daintree-pdf" && isMediaMimeType(mimeType)) {
+      return await streamOpenedMediaFile(fileHandle, mimeType, request);
+    }
+
+    const kind: DaintreeReadKind = scheme === "daintree-pdf" ? "pdf" : "file";
+    if (kind === "pdf" && !isPdfPath(canonicalPath)) {
+      return await refuse(415, "Unsupported Media Type");
+    }
+    const stats = await fileHandle.stat();
+    if (!stats.isFile()) return await refuse(404, "Not Found");
+    const maxBytes = maxBytesForFile(canonicalPath, kind);
+    if (stats.size > maxBytes) return await refuse(413, "Payload Too Large");
+    const headersFor = (length: number) =>
+      kind === "pdf"
+        ? buildDaintreePdfHeaders(canonicalPath, length)
+        : buildDaintreeFileHeaders(mimeType, length);
+
+    if (request.method === "HEAD") {
+      await fileHandle.close().catch(() => {});
+      return new Response(null, { status: 200, headers: headersFor(stats.size) });
+    }
+    if (!admitBuffered(stats.size)) return await refuse(503, "Too many open previews");
+    let buffer: Awaited<ReturnType<typeof readUpTo>>;
+    try {
+      buffer = await readUpTo(fileHandle, maxBytes + 1);
+    } finally {
+      await fileHandle.close().catch(() => {});
+    }
+    // Growth after the stat is caught on the bytes actually read, as locally.
+    if (buffer.length > maxBytes) {
+      return new Response("Payload Too Large", {
+        status: 413,
+        headers: buildDaintreeFileErrorHeaders(),
+      });
+    }
+    return new Response(buffer, { status: 200, headers: headersFor(buffer.length) });
+  } catch (err) {
+    await fileHandle.close().catch(() => {});
+    console.error(`[MAIN] ${scheme} host serve error:`, err);
+    return new Response("Internal Server Error", {
+      status: 500,
+      headers: buildDaintreeFileErrorHeaders(),
+    });
+  }
 }
 
 /** True for any `daintree-html://…` request URL (the sandboxed preview scheme). */
@@ -1065,7 +1315,7 @@ function shouldPreservePreviewResponseHeaders(url: string | undefined): boolean 
  * would both use that. Ships a quoted ASCII fallback plus an RFC 5987
  * `filename*` so non-ASCII names survive.
  */
-function buildPdfContentDisposition(realFile: string): string {
+export function buildPdfContentDisposition(realFile: string): string {
   const base = path.basename(realFile);
   // Drop everything outside printable ASCII (control chars, CR/LF) before
   // neutralizing the quote and backslash that would otherwise escape the
@@ -1121,7 +1371,9 @@ function buildDaintreePdfHeaders(realFile: string, contentLength: number): Recor
  */
 function createDaintreePdfProtocolHandler() {
   return async (request: GlobalRequest) => {
-    const response = await respondToDaintreePdfRequest(request);
+    const response =
+      (await answerHostScopedRequest("daintree-pdf", request)) ??
+      (await respondToDaintreePdfRequest(request));
     const corsOrigin = trustedAppCorsOrigin(request);
     if (corsOrigin) response.headers.set("Access-Control-Allow-Origin", corsOrigin);
     return response;
@@ -1337,6 +1589,89 @@ function pluginNotFound(
 }
 
 /**
+ * One `plugin://` asset a host served for a window attached to it. Only the
+ * status and bytes cross from the host: every response header is decided
+ * here, for this machine's requester, exactly as for a local asset.
+ */
+export interface RemotePluginAsset {
+  status: number;
+  body: Uint8Array | null;
+  /** Epoch ms the file last changed on the host, for the V8 code cache validator. */
+  lastModified?: number;
+}
+
+export type RemotePluginAssetProxy = (request: {
+  hostId: string;
+  authority: string;
+  /** Path on the host, still URL-encoded, without a leading slash. */
+  path: string;
+  method: "GET" | "HEAD";
+}) => Promise<RemotePluginAsset>;
+
+let remotePluginAssetProxy: RemotePluginAssetProxy | null = null;
+
+/** Installed by the remote-hosts client; the returned function removes it. */
+export function setRemotePluginAssetProxy(proxy: RemotePluginAssetProxy | null): () => void {
+  remotePluginAssetProxy = proxy;
+  return () => {
+    if (remotePluginAssetProxy === proxy) remotePluginAssetProxy = null;
+  };
+}
+
+async function serveRemotePluginAsset(
+  request: GlobalRequest,
+  target: { hostId: string; authority: string; path: string }
+): Promise<Response> {
+  const proxy = remotePluginAssetProxy;
+  if (!proxy) {
+    return new Response("Not Found", { status: 404, headers: buildPluginErrorHeaders() });
+  }
+  const method = request.method === "HEAD" ? "HEAD" : "GET";
+  let asset: RemotePluginAsset;
+  try {
+    asset = await proxy({ ...target, method });
+  } catch (err) {
+    logWarn("plugin.protocol.remote-failed", {
+      hostId: target.hostId,
+      reason: formatErrorMessage(err, "remote plugin asset fetch failed"),
+    });
+    return new Response("Bad Gateway", { status: 502, headers: buildPluginErrorHeaders() });
+  }
+  if (asset.status !== 200) {
+    const status = asset.status >= 400 && asset.status <= 599 ? asset.status : 502;
+    return new Response(status === 404 ? "Not Found" : "Unavailable", {
+      status,
+      headers: buildPluginErrorHeaders(),
+    });
+  }
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(target.path);
+  } catch {
+    decoded = target.path;
+  }
+  const assetPath = stripPluginViewGeneration(decoded)?.path ?? decoded;
+  const stats =
+    asset.lastModified !== undefined && Number.isFinite(asset.lastModified)
+      ? { mtime: new Date(asset.lastModified) }
+      : undefined;
+  const body =
+    method === "HEAD" || asset.body === null
+      ? null
+      : // A copy onto a plain ArrayBuffer: the link hands back views of a shared one.
+        new Uint8Array(asset.body).buffer;
+  return new Response(body, {
+    status: 200,
+    headers: buildPluginHeaders(
+      getMimeType(assetPath),
+      assetPath,
+      stats,
+      trustedAppCorsOrigin(request)
+    ),
+  });
+}
+
+/**
  * Create the plugin:// protocol handler.
  *
  * URL shape: `plugin://{authority}/{relative/path}`. The host segment is an
@@ -1372,6 +1707,18 @@ export function createPluginProtocolHandler(
     const authority = url.hostname;
     if (!authority) {
       return pluginNotFound("no-authority", authority, url.pathname);
+    }
+
+    // A view of a window attached to another machine: its assets live on that
+    // host and are fetched from it, never resolved against this machine's disk
+    // (the authority was minted there, and an id alias could name a different
+    // local copy of the plugin).
+    const remote = parseRemotePluginAssetPath(url.pathname);
+    if (remote === "malformed") {
+      return new Response("Not Found", { status: 404, headers: buildPluginErrorHeaders() });
+    }
+    if (remote) {
+      return serveRemotePluginAsset(request, { ...remote, authority });
     }
 
     const pluginRoot = getPluginRoot(authority);
@@ -1468,7 +1815,10 @@ export function createPluginProtocolHandler(
     // (no-op); realpath containment still applies. Mirrors daintree-file://.
     let fileHandle: Awaited<ReturnType<typeof fs.open>>;
     try {
-      fileHandle = await fs.open(candidatePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      fileHandle = await fs.open(
+        candidatePath,
+        fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | (fs.constants.O_NONBLOCK ?? 0)
+      );
     } catch (err) {
       const errCode = (err as NodeJS.ErrnoException).code;
       if (errCode === "ELOOP" || errCode === "ENOENT" || errCode === "EISDIR") {
@@ -1481,6 +1831,7 @@ export function createPluginProtocolHandler(
       });
     }
 
+    let handedOff = false;
     try {
       // Stat via the open handle (no realpath/stat TOCTOU window) so the 304
       // shortcut and the Last-Modified validator share one source of truth.
@@ -1491,14 +1842,21 @@ export function createPluginProtocolHandler(
       if (!fileStats.isFile()) {
         return pluginNotFound("not-a-file", authority, url.pathname);
       }
+      // The descriptor must be the file the contained real path names: an
+      // ancestor swapped between the realpath and the open can't send it elsewhere.
+      const realStats = await fs.stat(realFile).catch(() => null);
+      if (!realStats || realStats.ino !== fileStats.ino || realStats.dev !== fileStats.dev) {
+        return pluginNotFound("outside-root", authority, url.pathname);
+      }
 
       const mimeType = getMimeType(realFile);
       // Tour narration (#12773) plays by `<audio>` tag, which seeks with byte
-      // ranges; hand it to the range-aware streamer, which reopens the same
-      // contained path with the same O_NOFOLLOW discipline.
+      // ranges; hand it to the range-aware streamer, on the descriptor just
+      // checked, so what plays is the file that passed (the streamer owns and
+      // closes it from here).
       if (isMediaMimeType(mimeType)) {
-        const streamed = await streamContainedMediaFile(candidatePath, mimeType, request);
-        // The streamer reopens the file, so it can still miss after the checks above.
+        handedOff = true;
+        const streamed = await streamOpenedMediaFile(fileHandle, mimeType, request);
         if (streamed.status === 404) logPluginNotFound("media", authority, url.pathname);
         // Keep the trusted-document read a view's own fetch() of its bundled
         // media had before narration was streamed (WebAudio, blob playback).
@@ -1537,7 +1895,7 @@ export function createPluginProtocolHandler(
       });
     } finally {
       // Swallow close errors so they don't mask a preceding readFile failure.
-      await fileHandle.close().catch(() => {});
+      if (!handedOff) await fileHandle.close().catch(() => {});
     }
   };
 }
@@ -1638,6 +1996,15 @@ function resolvePluginTourAudio(
 /** Point tour remote-audio routes at the live registry; installed beside the root resolver. */
 export function setPluginTourAudioResolver(resolver: GetPluginTourAudio): void {
   cachedPluginTourAudioResolver = resolver;
+}
+
+/**
+ * Serve one of this machine's `plugin://` assets to a window attached from
+ * another machine, through the very handler local views use — same
+ * containment, same symlink and traversal defences.
+ */
+export function fetchLocalPluginAsset(request: GlobalRequest): Promise<Response> {
+  return createPluginProtocolHandler(resolvePluginRoot)(request);
 }
 
 export function registerPluginProtocol(getPluginRoot: GetPluginRootByAuthority): void {
@@ -1871,8 +2238,17 @@ export function setupWebviewCSP(): void {
       }
     });
 
+    // A guest in a remote-bound view reaches this machine's localhost only
+    // through its host's forwards, for every request and not just navigations.
+    contents.on("did-attach-webview", (_event, guest) => {
+      guardRemoteGuestRequests(contents.id, guest);
+    });
+
     // Route target="_blank" links and window.open() from webview guests to the system browser
     if (contents.getType() === "webview") {
+      const embedder = contents.hostWebContents;
+      if (embedder) guardRemoteGuestRequests(embedder.id, contents);
+
       contents.setWindowOpenHandler(({ url }) => {
         // If this is an OAuth URL from a dev-preview webview, route it through
         // the blocked-nav banner so the user can use "Sign in via Browser" (loopback flow).
@@ -1881,6 +2257,11 @@ export function setupWebviewCSP(): void {
         const isDevPreview = !isBrowserPanelContents(contents);
         if (url && isDevPreview && looksLikeOAuthUrl(url)) {
           notifyBlockedNavigation(url);
+          return { action: "deny" };
+        }
+
+        if (url && !isGuestPopupAllowed((contents.hostWebContents ?? contents).id, url)) {
+          console.warn(`[MAIN] Blocked a remote view's popup to this machine's localhost: ${url}`);
           return { action: "deny" };
         }
 
@@ -1899,12 +2280,16 @@ export function setupWebviewCSP(): void {
       // navigate away afterwards).
       // Browser partition allows cross-origin http/https for OAuth/OIDC flows.
       // Dev-preview and other partitions remain restricted to localhost only.
+      // Both use the attach gate's host-aware rule, so a guest in a remote-bound
+      // view can't reach this machine's localhost except through a forward.
       contents.on("will-navigate", (event, navigationUrl) => {
         const isBrowserPanel = isBrowserPanelContents(contents);
 
-        const blocked = isBrowserPanel
-          ? !isSafeNavigationUrl(navigationUrl)
-          : !isLocalhostUrl(navigationUrl) && !isDevPreviewProxyUrl(navigationUrl);
+        const blocked = !isGuestNavigationAllowed(
+          (contents.hostWebContents ?? contents).id,
+          navigationUrl,
+          isBrowserPanel
+        );
 
         if (blocked) {
           const label = isBrowserPanel ? "unsafe" : "non-localhost";
@@ -1917,9 +2302,11 @@ export function setupWebviewCSP(): void {
       contents.on("will-redirect", (event, redirectUrl) => {
         const isBrowserPanel = isBrowserPanelContents(contents);
 
-        const blocked = isBrowserPanel
-          ? !isSafeNavigationUrl(redirectUrl)
-          : !isLocalhostUrl(redirectUrl) && !isDevPreviewProxyUrl(redirectUrl);
+        const blocked = !isGuestNavigationAllowed(
+          (contents.hostWebContents ?? contents).id,
+          redirectUrl,
+          isBrowserPanel
+        );
 
         if (blocked) {
           const label = isBrowserPanel ? "unsafe" : "non-localhost";

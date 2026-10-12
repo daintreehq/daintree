@@ -3,6 +3,7 @@ import type { IpcMainInvokeEvent } from "electron";
 import { types as utilTypes } from "node:util";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { classifyPartition } from "../utils/webviewCsp.js";
+import { isRemotePortalPartition } from "../../shared/utils/partitionUtils.js";
 import {
   wrapSuccess,
   wrapError,
@@ -10,10 +11,11 @@ import {
 } from "../../shared/utils/ipcErrorSerialization.js";
 import { FAULT_MODE_ENABLED, applyInvokeFault, initFaultRegistry } from "../ipc/faultRegistry.js";
 import { markIpcSecurityReady } from "../ipc/ipcGuard.js";
-import { notifyIpcEnvelopeRejected } from "../ipc/envelopeRejections.js";
+import { getIpcDispatcher, type InvokeEnveloper } from "../ipc/dispatcher.js";
+import { isIpcEnvelope, type IpcEnvelope } from "../../shared/types/ipc/errors.js";
 import { channelToCategory, type IpcChannelCategory } from "../ipc/utils.js";
 import { AppError } from "../utils/errorTypes.js";
-import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
+import { sanitizeErrorMessage, toTransportSafeError } from "../ipc/transportSafeError.js";
 import { getCurrentCorrelationId } from "../services/TelemetryService.js";
 import { PLUGIN_INVOKE_MAX_ARGS_BYTES } from "../../shared/config/pluginBudgets.js";
 import {
@@ -292,41 +294,91 @@ function validatePluginInvokeEnvelope(args: unknown[], budget: number): void {
   );
 }
 
-function sanitizePaths(msg: string): string {
-  return msg
-    .replace(/\/(?:Users|home|tmp|private|var)\/[^\s:]+/gi, "<path>")
-    .replace(/[A-Z]:[/\\](?:Users|Program Files|Windows|ProgramData)[^\s:]*/gi, "<path>")
-    .replace(/\\\\(?:[^\s\\]+)\\(?:[^\s:]+)/g, "<path>");
-}
-
 /**
  * @internal Exported for testing. Strip filesystem paths and pattern-known
  * secret sigils from an IPC error message before it leaves the main process.
- * Path normalization runs first so a token embedded inside a path is still
- * caught after the path is collapsed to `<path>`.
  */
 export function sanitizeErrorForRenderer(msg: string): string {
-  return scrubSecrets(sanitizePaths(msg));
+  return sanitizeErrorMessage(msg);
+}
+
+function sanitizedErrorEnvelope(channel: string, error: unknown): IpcEnvelope {
+  if (!app.isPackaged) return wrapError(error);
+  const correlationId = getCurrentCorrelationId();
+  console.error(`[IPC] Error on channel ${channel} [${correlationId}]:`, error);
+  const serialized = serializeError(error);
+  if (correlationId !== undefined) {
+    serialized.correlationId = correlationId;
+  }
+  return {
+    __daintreeIpcEnvelope: true as const,
+    ok: false as const,
+    error: toTransportSafeError(serialized),
+  };
+}
+
+function isWellFormedEnvelope(value: unknown): value is IpcEnvelope {
+  if (!isIpcEnvelope(value)) return false;
+  if (value.ok) return true;
+  const error: unknown = value.error;
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    typeof (error as Record<string, unknown>).name === "string" &&
+    typeof (error as Record<string, unknown>).message === "string"
+  );
+}
+
+/**
+ * The single envelope path for every invocation, whether it arrived through
+ * `ipcMain` or over a link: arg-count and payload budget, fault injection,
+ * success wrapping, and the packaged-build error sanitiser.
+ *
+ * @internal Exported for testing.
+ */
+export const runEnvelopedInvoke: InvokeEnveloper = async (channel, args, call, options) => {
+  try {
+    try {
+      validateIpcInvokeEnvelope(channel, args);
+    } catch (error) {
+      options?.onEnvelopeRejected?.(error);
+      throw error;
+    }
+    if (FAULT_MODE_ENABLED) {
+      const stub = await applyInvokeFault(channel);
+      if (stub) return wrapSuccess(stub.value);
+    }
+    const result = await call();
+    if (options?.verbatim) {
+      if (!isWellFormedEnvelope(result)) {
+        throw new AppError({
+          code: "INTERNAL",
+          message: `Forwarded call on ${channel} returned a malformed envelope`,
+        });
+      }
+      return result;
+    }
+    return wrapSuccess(result);
+  } catch (error) {
+    return sanitizedErrorEnvelope(channel, error);
+  }
+};
+
+function untrustedSenderEnvelope(channel: string, senderUrl: string | undefined): IpcEnvelope {
+  return wrapError(
+    new Error(
+      `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || "unknown"}`
+    )
+  );
 }
 
 // Wrap ipcMain.handle globally to enforce sender validation on ALL IPC handlers
 // This must run before any handlers are registered
-/** {@link validateIpcInvokeEnvelope}, telling the channel's rejection observer when it refuses. */
-function validateEnvelopeObserved(
-  channel: string,
-  event: IpcMainInvokeEvent,
-  args: unknown[]
-): void {
-  try {
-    validateIpcInvokeEnvelope(channel, args);
-  } catch (error) {
-    notifyIpcEnvelopeRejected(channel, event, args, error);
-    throw error;
-  }
-}
-
 export function enforceIpcSenderValidation(): void {
   if (FAULT_MODE_ENABLED) initFaultRegistry();
+
+  const dispatcher = getIpcDispatcher();
+  dispatcher.setInvokeEnveloper(runEnvelopedInvoke);
 
   const originalHandle = ipcMain.handle.bind(ipcMain);
   const originalHandleOnce = ipcMain.handleOnce?.bind(ipcMain);
@@ -338,41 +390,9 @@ export function enforceIpcSenderValidation(): void {
     return originalHandle(channel, async (event, ...args) => {
       const senderUrl = event.senderFrame?.url;
       if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
-        return wrapError(
-          new Error(
-            `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || "unknown"}`
-          )
-        );
+        return untrustedSenderEnvelope(channel, senderUrl);
       }
-      try {
-        validateEnvelopeObserved(channel, event, args);
-        if (FAULT_MODE_ENABLED) {
-          const stub = await applyInvokeFault(channel);
-          if (stub) return wrapSuccess(stub.value);
-        }
-        const result = await listener(event, ...args);
-        return wrapSuccess(result);
-      } catch (error) {
-        if (app.isPackaged) {
-          const correlationId = getCurrentCorrelationId();
-          console.error(`[IPC] Error on channel ${channel} [${correlationId}]:`, error);
-          const serialized = serializeError(error);
-          if (correlationId !== undefined) {
-            serialized.correlationId = correlationId;
-          }
-          serialized.message = sanitizeErrorForRenderer(serialized.message);
-          if (typeof serialized.userMessage === "string") {
-            serialized.userMessage = sanitizeErrorForRenderer(serialized.userMessage);
-          }
-          serialized.stack = undefined;
-          serialized.path = undefined;
-          serialized.context = undefined;
-          serialized.cause = undefined;
-          serialized.properties = undefined;
-          return { __daintreeIpcEnvelope: true as const, ok: false as const, error: serialized };
-        }
-        return wrapError(error);
-      }
+      return dispatcher.dispatchLocalInvoke(channel, event, args, listener);
     });
   } as typeof ipcMain.handle;
 
@@ -384,41 +404,9 @@ export function enforceIpcSenderValidation(): void {
       return originalHandleOnce(channel, async (event, ...args) => {
         const senderUrl = event.senderFrame?.url;
         if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
-          return wrapError(
-            new Error(
-              `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || "unknown"}`
-            )
-          );
+          return untrustedSenderEnvelope(channel, senderUrl);
         }
-        try {
-          validateEnvelopeObserved(channel, event, args);
-          if (FAULT_MODE_ENABLED) {
-            const stub = await applyInvokeFault(channel);
-            if (stub) return wrapSuccess(stub.value);
-          }
-          const result = await listener(event, ...args);
-          return wrapSuccess(result);
-        } catch (error) {
-          if (app.isPackaged) {
-            const correlationId = getCurrentCorrelationId();
-            console.error(`[IPC] Error on channel ${channel} [${correlationId}]:`, error);
-            const serialized = serializeError(error);
-            if (correlationId !== undefined) {
-              serialized.correlationId = correlationId;
-            }
-            serialized.message = sanitizeErrorForRenderer(serialized.message);
-            if (typeof serialized.userMessage === "string") {
-              serialized.userMessage = sanitizeErrorForRenderer(serialized.userMessage);
-            }
-            serialized.stack = undefined;
-            serialized.path = undefined;
-            serialized.context = undefined;
-            serialized.cause = undefined;
-            serialized.properties = undefined;
-            return { __daintreeIpcEnvelope: true as const, ok: false as const, error: serialized };
-          }
-          return wrapError(error);
-        }
+        return dispatcher.dispatchLocalInvoke(channel, event, args, listener);
       });
     } as typeof ipcMain.handleOnce;
   }
@@ -440,7 +428,7 @@ export function enforceIpcSenderValidation(): void {
         );
         return;
       }
-      return listener(event, ...args);
+      return dispatcher.dispatchLocalSend(channel, event, args, listener);
     };
 
     if (!onListenerMap.has(channel)) onListenerMap.set(channel, new Map());
@@ -579,6 +567,12 @@ export function setupPermissionLockdown(): void {
       const type = classifyPartition(partition);
       if (type === "project" || type === "portal") {
         return; // already statically locked down above
+      }
+      // A window attached to a host gets its own portal session, allowed what
+      // this machine's portal is (clipboard writes for copy buttons) and no more.
+      if (isRemotePortalPartition(partition)) {
+        lockdownTrustedPermissions(ses, "portal", PORTAL_SESSION_PERMISSIONS);
+        return;
       }
       lockdownUntrustedPermissions(ses, partition);
       console.log(`[SECURITY] Default-locked new session partition: ${partition || "(none)"}`);

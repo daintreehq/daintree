@@ -111,13 +111,32 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
   };
 });
 
-vi.mock("fs/promises", () => ({
-  stat: vi.fn().mockRejectedValue(new Error("ENOENT")),
-  mkdir: vi.fn().mockResolvedValue(undefined),
-  writeFile: vi.fn().mockResolvedValue(undefined),
-  access: vi.fn().mockResolvedValue(undefined),
-  readFile: vi.fn().mockResolvedValue(Buffer.from("content")),
-}));
+vi.mock("fs/promises", () => {
+  const readFile = vi.fn().mockResolvedValue(Buffer.from("content"));
+  const entry = {
+    isSymbolicLink: () => false,
+    isDirectory: () => false,
+    isFile: () => true,
+    ino: 1,
+    dev: 1,
+  };
+  return {
+    stat: vi.fn().mockRejectedValue(new Error("ENOENT")),
+    mkdir: vi.fn().mockResolvedValue(undefined),
+    writeFile: vi.fn().mockResolvedValue(undefined),
+    access: vi.fn().mockResolvedValue(undefined),
+    readFile,
+    lstat: vi.fn().mockResolvedValue(entry),
+    readlink: vi.fn().mockResolvedValue(""),
+    realpath: vi.fn(async (p: string) => p),
+    // The descriptor reads what the path holds, as the mocked readFile says.
+    open: vi.fn(async (p: string) => ({
+      stat: async () => entry,
+      readFile: () => readFile(p),
+      close: async () => {},
+    })),
+  };
+});
 
 describe("WorkspaceService.getFileDiff", () => {
   let service: WorkspaceService;
@@ -220,6 +239,55 @@ describe("WorkspaceService.getFileDiff", () => {
     await service.getFileDiff("req-sub-1", "/test/repo", "vendor/sub", "modified");
 
     expect(mockSimpleGit.diff).toHaveBeenCalledWith(expect.arrayContaining(["--submodule=short"]));
+  });
+
+  it("shows an untracked symlink as its target, never what it points at", async () => {
+    const { lstat, readlink, readFile } = await import("fs/promises");
+    vi.mocked(lstat).mockResolvedValueOnce({
+      isSymbolicLink: () => true,
+      isDirectory: () => false,
+    } as never);
+    vi.mocked(readlink).mockResolvedValueOnce("/home/me/.config/Daintree/config.json" as never);
+
+    await service.getFileDiff("req-link", "/test/repo", "notes/secret", "untracked");
+
+    const event = mockSendEvent.mock.calls
+      .map((call) => call[0])
+      .find((e) => e.requestId === "req-link");
+    expect(event.diff).toContain("+/home/me/.config/Daintree/config.json");
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses a file the caller names through a linked folder", async () => {
+    const { realpath, readFile } = await import("fs/promises");
+    vi.mocked(realpath).mockImplementation(async (p) =>
+      String(p) === "/test/repo/linked" ? "/home/me/.ssh" : String(p)
+    );
+    try {
+      await service.getFileDiff("req-dir", "/test/repo", "linked/id_ed25519", "untracked");
+      const event = mockSendEvent.mock.calls
+        .map((call) => call[0])
+        .find((e) => e.requestId === "req-dir");
+      expect(event.error).toBeDefined();
+      expect(readFile).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(realpath).mockImplementation(async (p) => String(p));
+    }
+  });
+
+  it("refuses a file swapped for another between the check and the open", async () => {
+    const { open, readFile } = await import("fs/promises");
+    vi.mocked(open).mockResolvedValueOnce({
+      stat: async () => ({ isFile: () => true, ino: 99, dev: 1 }),
+      readFile: () => readFile("/elsewhere"),
+      close: async () => {},
+    } as never);
+    await service.getFileDiff("req-swap", "/test/repo", "notes.txt", "untracked");
+    const event = mockSendEvent.mock.calls
+      .map((call) => call[0])
+      .find((e) => e.requestId === "req-swap");
+    expect(event.error).toBeDefined();
+    expect(readFile).not.toHaveBeenCalled();
   });
 
   it("asks git for an added gitlink instead of reading its checkout directory", async () => {

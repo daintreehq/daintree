@@ -53,8 +53,20 @@ export function resolveWindowProjectName(
   return bridged ?? openProjectName(pvm.getActiveProjectId(), lookup);
 }
 
+/**
+ * Titles for host-qualified views ("<project> — <host>"), which have no row in
+ * this machine's project store. Set when a window opens a host's project.
+ */
+const remoteWorkspaceTitles = new Map<string, string>();
+
+export function rememberRemoteWorkspaceTitle(key: string, title: string): void {
+  remoteWorkspaceTitles.set(key, title);
+}
+
 function openProjectName(projectId: string | null, lookup: ProjectTitleLookup): string | null {
   if (!projectId) return null;
+  const remote = remoteWorkspaceTitles.get(projectId);
+  if (remote) return remote;
   const project = lookup(projectId);
   if (!project || project.status === "closed") return null;
   return project.name ?? null;

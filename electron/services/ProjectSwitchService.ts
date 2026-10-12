@@ -292,3 +292,87 @@ export class ProjectSwitchService {
     return this.switchProject(projectId);
   }
 }
+
+/** The workspace-client calls host activation makes. */
+export type HostActivationWorkspace = {
+  loadProject(rootPath: string, residentId: number): Promise<unknown>;
+  resumeProject(rootPath: string): void;
+  unregisterWindow(residentId: number): void;
+};
+
+interface HostResidency {
+  projectId: string;
+  load: Promise<void>;
+}
+
+/**
+ * Which project each remote view holds resident on this host, keyed by the
+ * view's endpoint handle. Handles are negative and WebContents ids never are,
+ * so the workspace pool can count a remote view as a holder exactly as it
+ * counts a local window, without either shadowing the other.
+ */
+const hostResidency = new Map<number, HostResidency>();
+
+/**
+ * The Host half of activating a project for a view on a remote Shell, shared
+ * by that view's first attachment, a switch and a reopen: start the
+ * project's workspace host if none is running (the same `loadProject` a local
+ * activation uses, so a cold project comes up rather than only a warm one
+ * being foregrounded), hold it resident for the view, and record the
+ * activity. Repeat calls for the project the view already holds share the
+ * first load. Rejects when the workspace host cannot load; the view's
+ * residency is then dropped so a retry starts over.
+ */
+export function activateProjectOnHost(
+  workspace: HostActivationWorkspace,
+  project: Pick<Project, "id" | "path">,
+  residentId: number
+): Promise<void> {
+  const current = hostResidency.get(residentId);
+  if (current?.projectId === project.id) return current.load;
+
+  // Foreground first: a warm host demoted by an earlier switch-away must be
+  // accepting worktree calls by the time the view's first ones arrive.
+  workspace.resumeProject(project.path);
+  const load = workspace.loadProject(project.path, residentId).then(() => undefined);
+  const entry: HostResidency = { projectId: project.id, load };
+  hostResidency.set(residentId, entry);
+  load.catch(() => {
+    if (hostResidency.get(residentId) === entry) hostResidency.delete(residentId);
+  });
+  markProjectActiveOnHost(project.id);
+  return load;
+}
+
+/**
+ * The view left this host (its endpoint closed). The workspace pool demotes
+ * and eventually reclaims the project's host once no view, local or remote,
+ * holds it.
+ */
+export function releaseProjectOnHost(workspace: HostActivationWorkspace, residentId: number): void {
+  if (!hostResidency.delete(residentId)) return;
+  workspace.unregisterWindow(residentId);
+}
+
+/** The project a remote view holds resident here, if any. */
+export function getHostResidentProject(residentId: number): string | null {
+  return hostResidency.get(residentId)?.projectId ?? null;
+}
+
+/**
+ * Status and MRU only. The global current-project pointer names this
+ * machine's own last-focused window, so a remote view never moves it.
+ */
+function markProjectActiveOnHost(projectId: string): void {
+  try {
+    projectStore.updateProject(projectId, { status: "active", lastOpened: Date.now() });
+    broadcastProjectSwitchUpdates(null, projectId);
+  } catch (error) {
+    console.warn("[ProjectSwitch] Failed to record remote activation:", error);
+  }
+}
+
+/** @internal Tests only. */
+export function _resetHostResidencyForTesting(): void {
+  hostResidency.clear();
+}

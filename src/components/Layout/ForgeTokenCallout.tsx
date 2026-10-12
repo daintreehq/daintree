@@ -18,6 +18,7 @@ import {
   useForgeProviderHealthStore,
 } from "@/store/forgeProviderHealthStore";
 import { useForgeTokenCalloutStore } from "@/store/forgeTokenCalloutStore";
+import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 
 const CALLOUT_WIDTH = 320;
 const VIEWPORT_GUTTER = 8;
@@ -201,6 +202,9 @@ export function ForgeTokenCallout({
   onOpenChange,
 }: ForgeTokenCalloutProps) {
   const reconnectKind = errorKind !== null && errorKind !== "not-configured" ? errorKind : null;
+  // A remote window's forge counts come from the host's own sign-in, so the
+  // failing token is named as the host's; Reconnect opens the host's connect flow.
+  const remoteHostName = useRemoteHostName();
   const health = useForgeProviderHealthStore(selectForgeProviderHealth(providerId));
   const reauthUrl = health.tokenHealth?.reauthUrl;
   const fingerprint = useFailureFingerprint(providerId, reconnectKind !== null, validating);
@@ -251,6 +255,10 @@ export function ForgeTokenCallout({
   });
 
   if (!shouldRender || !position || !reconnectKind) return null;
+  const title =
+    remoteHostName === null
+      ? COPY[reconnectKind](providerName)
+      : `${COPY[reconnectKind](providerName)} on ${remoteHostName}`;
 
   const actions: BannerAction[] = [
     {
@@ -279,7 +287,7 @@ export function ForgeTokenCallout({
       id={id}
       data-testid="forge-token-callout"
       role="region"
-      aria-label={COPY[reconnectKind](providerName)}
+      aria-label={title}
       // Escapes the toolbar's drag region via the portal — see `.app-no-drag` (#12347).
       // Drops from its anchor like a toolbar dropdown: 4px and 97% on the
       // entry/exit tier, from `@starting-style`, and reverses on dismissal.
@@ -310,7 +318,7 @@ export function ForgeTokenCallout({
         style={{ border: `1px solid ${warningBorder}` }}
       >
         <InlineStatusBanner
-          title={COPY[reconnectKind](providerName)}
+          title={title}
           description={DESCRIPTION[reconnectKind]}
           severity="warning"
           role="status"

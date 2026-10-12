@@ -17,6 +17,7 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
+import { useSettingsRowOwnerNote } from "@/hooks/useSettingsOwner";
 import {
   SETTINGS_CONTROL_WIDTH,
   SettingsDependents,
@@ -377,6 +378,8 @@ function getBypassCopy(
 }
 
 export function DaintreeAssistantSettingsTab() {
+  // The chosen agent is kept on this screen, unlike the rest of the page.
+  const rowOwnerNote = useSettingsRowOwnerNote();
   const [settings, setSettings] = useState<HelpAssistantSettings>(DEFAULT_SETTINGS);
   const [mcpStatus, setMcpStatus] = useState<McpStatusSnapshot | null>(null);
   // useMcpReadiness drives the 4-state Connection display reactively; the
@@ -1101,11 +1104,12 @@ export function DaintreeAssistantSettingsTab() {
         <SettingsGroup>
           <SettingsSelect
             label="Agent"
-            description={
+            description={rowOwnerNote(
               preferredAgentId
                 ? "The CLI that runs the help assistant in the dock"
-                : "The help assistant can't start until you choose one"
-            }
+                : "The help assistant can't start until you choose one",
+              "device"
+            )}
             value={agentSelectValue}
             onValueChange={handleAgentChange}
             options={agentOptions}

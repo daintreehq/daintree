@@ -7,6 +7,13 @@ import type { NotifyPayload } from "@/lib/notify";
 
 const notifyMock = vi.fn<(payload: NotifyPayload) => string>().mockReturnValue("toast-id");
 
+const switchToHostMock = vi.hoisted(() =>
+  vi.fn<(hostId: string, newWindow: boolean, projectId?: string) => Promise<void>>(() =>
+    Promise.resolve()
+  )
+);
+vi.mock("@/components/Hosts/hostSwitching", () => ({ switchToHost: switchToHostMock }));
+
 vi.mock("@/lib/notify", () => ({
   notify: (...args: [NotifyPayload]) => notifyMock(...args),
 }));
@@ -55,6 +62,29 @@ describe("useMainProcessToastListener", () => {
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, "platform", originalPlatformDescriptor);
     }
+  });
+
+  it("retries a window's host restore from its toast, and ignores a malformed target", async () => {
+    renderHook(() => useMainProcessToastListener());
+    const fire = (data?: string) =>
+      act(() => {
+        capturedCallback!({
+          type: "error",
+          title: "Couldn't reopen this window on Studio",
+          message: "Couldn't reach this host.",
+          action: { label: "Retry", ipcChannel: "remote-hosts:switch-window-host", data },
+        });
+      });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fire(JSON.stringify({ hostId: "studio-01", projectId: "p1" }));
+    await act(async () => notifyMock.mock.calls.at(-1)![0].action!.onClick!());
+    await vi.waitFor(() => expect(switchToHostMock).toHaveBeenCalledWith("studio-01", false, "p1"));
+    for (const bad of [undefined, "not json", JSON.stringify({ hostId: "studio-01" })]) {
+      fire(bad);
+      await act(async () => notifyMock.mock.calls.at(-1)![0].action!.onClick!());
+    }
+    expect(switchToHostMock).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 
   it("subscribes to onShowToast on mount and cleans up on unmount", () => {

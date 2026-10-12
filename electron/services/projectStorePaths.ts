@@ -47,6 +47,15 @@ export function mintProjectId(normalizedPath: string, isTaken: (id: string) => b
   throw new Error("Failed to mint a unique project id");
 }
 
+/** A random project id, never one derived from the path (a fresh project's own). */
+export function mintFreshProjectId(isTaken: (id: string) => boolean): string {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const candidate = randomBytes(32).toString("hex");
+    if (!isTaken(candidate)) return candidate;
+  }
+  throw new Error("Failed to mint a unique project id");
+}
+
 export function isValidProjectId(projectId: string): boolean {
   return isProjectWorkspaceId(projectId);
 }

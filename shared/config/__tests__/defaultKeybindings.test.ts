@@ -66,12 +66,14 @@ describe("buildDefaultKeybindings", () => {
   });
 
   it("keeps Windows in core order with replacements in place and additions after", () => {
+    // Remote Hosts appends Switch host to the core list everywhere but Windows.
+    const core = mac.filter((b) => b.actionId !== "host.switch");
     const changed = windows
-      .slice(0, mac.length)
-      .filter((b, i) => b !== mac[i])
+      .slice(0, core.length)
+      .filter((b, i) => b !== core[i])
       .map((b) => b.actionId);
     expect(changed).toEqual(["canopy.toggle"]);
-    expect(windows.length).toBeGreaterThan(mac.length);
+    expect(windows.length).toBeGreaterThan(core.length);
   });
 
   it("keeps the Canopy replacement clear of every other global default", () => {

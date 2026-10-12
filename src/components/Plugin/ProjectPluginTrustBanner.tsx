@@ -3,6 +3,7 @@ import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/Inl
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import type { ProjectPluginTrustDecision } from "@shared/types/plugin";
+import { useRemoteTrustSentence } from "./remotePluginTrust";
 
 /**
  * A neutral consent strip at the top of the panel grid. Only main's trust
@@ -52,12 +53,17 @@ function TrustBannerBody() {
   const deciding = useProjectPluginStore((s) => s.deciding);
   const decide = useProjectPluginStore((s) => s.decide);
   const dismissPrompt = useProjectPluginStore((s) => s.dismissPrompt);
+  // Defensive rather than trusting the payload's declared type: it crosses IPC
+  // from a `plugin.json` the host parsed but this renderer never validated.
+  const plugins = prompt !== null && Array.isArray(prompt.plugins) ? prompt.plugins : [];
+  const single = plugins.length === 1 ? plugins[0] : undefined;
+  const remoteTrust = useRemoteTrustSentence(
+    single ? `'${single.displayName.trim() || single.id}'` : "them",
+    !single
+  );
 
   if (prompt === null) return null;
 
-  // Defensive rather than trusting the payload's declared type: it crosses IPC
-  // from a `plugin.json` the host parsed but this renderer never validated.
-  const plugins = Array.isArray(prompt.plugins) ? prompt.plugins : [];
   const answer = (decision: ProjectPluginTrustDecision) => () => {
     void decide(decision);
   };
@@ -102,6 +108,7 @@ function TrustBannerBody() {
           <>
             Plugin code runs with your account and isn&apos;t sandboxed. Only enable it if you trust
             this project&apos;s contributors, including its agents.
+            {remoteTrust && <> {remoteTrust}</>}
             {error && (
               <span className="mt-0.5 flex items-center gap-1.5 text-text-primary">
                 <XCircle className="h-3.5 w-3.5 shrink-0 text-status-error" aria-hidden="true" />

@@ -9,7 +9,7 @@ vi.mock("electron", () => ({
 vi.mock("../../../ipc/utils.js", () => ({
   broadcastToRenderer: vi.fn(),
   broadcastToProjectRenderers: vi.fn(),
-  getProjectRendererTargets: vi.fn(() => []),
+  getProjectPushTargets: vi.fn(() => []),
 }));
 vi.mock("../../../window/serviceRefs.js", () => ({
   getPtyClient: vi.fn(() => null),

@@ -6,7 +6,11 @@ vi.mock("../../utils/logger.js", () => ({
   logInfo: vi.fn(),
 }));
 
-import { collectActiveProjectIds, projectViewManagersFrom } from "../activeProjectIds.js";
+import {
+  collectActiveProjectIds,
+  projectViewManagersFrom,
+  setRemoteVisibleProjectIdsProvider,
+} from "../activeProjectIds.js";
 import type { ProjectViewManager } from "../ProjectViewManager.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
 
@@ -106,6 +110,47 @@ describe("collectActiveProjectIds (#11102)", () => {
 
     expect(ids.has("proj-still-visible")).toBe(true);
     expect(healthy.getActiveProjectId).toHaveBeenCalled();
+  });
+});
+
+describe("collectActiveProjectIds with Host mode visibility", () => {
+  let off: (() => void) | null = null;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    off?.();
+    off = null;
+  });
+
+  function registerVisibility(visibleProjectIds: () => Set<string>): void {
+    off = setRemoteVisibleProjectIdsProvider(visibleProjectIds);
+  }
+
+  it("unions in projects a remote Shell is displaying", () => {
+    registerVisibility(() => new Set(["remote-proj"]));
+    const ids = collectActiveProjectIds(providerOf([makePvm("proj-a")]), null, "test");
+    expect([...ids].sort()).toEqual(["proj-a", "remote-proj"]);
+  });
+
+  it("reads the remote set live on every call", () => {
+    let visible = new Set<string>();
+    registerVisibility(() => visible);
+    expect(collectActiveProjectIds(null, null, "test").has("late")).toBe(false);
+    visible = new Set(["late"]);
+    expect(collectActiveProjectIds(null, null, "test").has("late")).toBe(true);
+  });
+
+  it("keeps the local set when the remote lookup throws", () => {
+    registerVisibility(() => {
+      throw new Error("tearing down");
+    });
+    const ids = collectActiveProjectIds(providerOf([makePvm("proj-a")]), "ptr", "test");
+    expect([...ids].sort()).toEqual(["proj-a", "ptr"]);
+  });
+
+  it("is a no-op when no Host mode service is registered", () => {
+    const ids = collectActiveProjectIds(providerOf([makePvm("proj-a")]), null, "test");
+    expect([...ids]).toEqual(["proj-a"]);
   });
 });
 

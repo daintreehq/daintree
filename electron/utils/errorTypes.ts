@@ -1,6 +1,6 @@
 import { classifyGitError, extractGitErrorMessage } from "../../shared/utils/gitOperationErrors.js";
 import type { ErrorRetryability, GitOperationReason } from "../../shared/types/ipc/errors.js";
-import type { AppErrorCode } from "../../shared/types/appError.js";
+import type { AppErrorCode, AppErrorDetails } from "../../shared/types/appError.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 export class DaintreeError extends Error {
@@ -122,11 +122,14 @@ export class WatcherError extends DaintreeError {
 export class AppError extends DaintreeError {
   readonly code: AppErrorCode;
   readonly userMessage?: string;
+  /** Allowlisted structured detail; unlike `context`, it survives the packaged-build strip. */
+  readonly details?: AppErrorDetails;
 
   constructor(opts: {
     code: AppErrorCode;
     message: string;
     userMessage?: string;
+    details?: AppErrorDetails;
     context?: Record<string, unknown>;
     cause?: Error;
   }) {
@@ -134,6 +137,7 @@ export class AppError extends DaintreeError {
     this.name = "AppError";
     this.code = opts.code;
     this.userMessage = opts.userMessage;
+    if (opts.details !== undefined) this.details = opts.details;
   }
 }
 

@@ -1,0 +1,80 @@
+import { describe, expect, it } from "vitest";
+import { isClientAppError, clientErrorCode, clientErrorText } from "../clientAppError";
+
+// Mirrors the preload's `_reconstructAppError` encoding.
+function encode(code: string, message: string, userMessage?: string, details?: unknown): Error {
+  const userPart = userMessage !== undefined ? `|${encodeURIComponent(userMessage)}` : "";
+  const detailsPart =
+    details !== undefined ? `|#${encodeURIComponent(JSON.stringify(details))}` : "";
+  return new Error(`[AppError|${code}${userPart}${detailsPart}] ${message}`);
+}
+
+function decoded(e: Error) {
+  if (!isClientAppError(e)) throw new Error("not decoded as an AppError");
+  return e;
+}
+
+describe("isClientAppError", () => {
+  it("decodes code and userMessage as before", () => {
+    const e = decoded(encode("NOT_FOUND", "gone", "It's gone | really"));
+    expect(e.code).toBe("NOT_FOUND");
+    expect(e.userMessage).toBe("It's gone | really");
+    expect(e.message).toBe("gone");
+    expect(e.details).toBeUndefined();
+  });
+
+  it("decodes details with and without a userMessage", () => {
+    const details = { code: "PLUGIN_NOT_ON_HOST", pluginId: "acme.x", hostId: "box] |#" };
+    const withUser = decoded(encode("PLUGIN_NOT_ON_HOST", "missing", "Not on this host", details));
+    const withoutUser = decoded(encode("PLUGIN_NOT_ON_HOST", "missing", undefined, details));
+
+    expect(withUser.userMessage).toBe("Not on this host");
+    expect(withUser.details).toEqual(details);
+    expect(withUser.message).toBe("missing");
+
+    expect(withoutUser.userMessage).toBeUndefined();
+    expect(withoutUser.details).toEqual(details);
+    expect(withoutUser.message).toBe("missing");
+  });
+
+  it("strips fields outside the PluginHostError allowlist when decoding", () => {
+    const e = decoded(
+      encode("PLUGIN_NOT_ON_HOST", "missing", undefined, {
+        code: "PLUGIN_NOT_ON_HOST",
+        pluginId: "acme.x",
+        hostId: "box",
+        token: "secret",
+      })
+    );
+    expect(e.details).toEqual({ code: "PLUGIN_NOT_ON_HOST", pluginId: "acme.x", hostId: "box" });
+    const bogus = decoded(encode("INTERNAL", "boom", undefined, { code: "ANYTHING", x: 1 }));
+    expect(bogus.details).toBeUndefined();
+  });
+
+  it("ignores undecodable details without failing the guard", () => {
+    const e = decoded(new Error("[AppError|INTERNAL|#%7Bnot-json] boom"));
+    expect(e.details).toBeUndefined();
+    expect(e.message).toBe("boom");
+  });
+});
+
+describe("clientErrorText / clientErrorCode", () => {
+  it("shows the AppError's own words and code, never the wire prefix", () => {
+    const wire = new Error(
+      "[AppError|VALIDATION|Only%20HTTP(S)%20and%20SSH%20remotes%20can%20be%20cloned] Only HTTP(S) and SSH remotes can be cloned"
+    );
+    expect(clientErrorCode(wire)).toBe("VALIDATION");
+    expect(clientErrorText(wire, "fallback")).toBe("Only HTTP(S) and SSH remotes can be cloned");
+    expect(clientErrorText(wire, "fallback")).not.toContain("[AppError");
+  });
+
+  it("decodes a CANCELLED that crossed the bridge, so a cancel isn't shown as a failure", () => {
+    expect(clientErrorCode(new Error("[AppError|CANCELLED] stopped"))).toBe("CANCELLED");
+  });
+
+  it("falls back to the message, then the fallback, for anything else", () => {
+    expect(clientErrorCode(new Error("plain"))).toBeUndefined();
+    expect(clientErrorText(new Error("plain"), "fallback")).toBe("plain");
+    expect(clientErrorText({ odd: true }, "fallback")).toBe("fallback");
+  });
+});

@@ -1,9 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const getAppWebContentsMock = vi.hoisted(() => vi.fn());
 vi.mock("../webContentsRegistry.js", () => ({
   getAppWebContents: getAppWebContentsMock,
 }));
+
+const showMessageBoxMock = vi.hoisted(() =>
+  vi.fn(async () => ({ response: 1, checkboxChecked: false }))
+);
+vi.mock("electron", () => ({ dialog: { showMessageBox: showMessageBoxMock } }));
 
 import { CHANNELS } from "../../ipc/channels.js";
 import {
@@ -16,6 +21,7 @@ import {
 import type { ProjectViewManager } from "../ProjectViewManager.js";
 import type { WindowContext, WindowRegistry } from "../WindowRegistry.js";
 import type { Project } from "../../../shared/types/project.js";
+import { _resetRemoteServicesForTest, registerRemoteService } from "../../remote/runtime.js";
 
 function makeWebContents(destroyed = false, loading = false) {
   return {
@@ -344,5 +350,76 @@ describe("redirectToProjectOwner", () => {
     expect(leavingView.send).not.toHaveBeenCalled();
     expect(pvm.setPendingFocusIntent).toHaveBeenCalledWith("p", focusIntent);
     expect(getAppWebContentsMock).not.toHaveBeenCalled();
+  });
+
+  describe("an owner that has since moved to a remote host", () => {
+    afterEach(() => {
+      _resetRemoteServicesForTest();
+    });
+
+    it("brings the window back to this machine instead of asking its host-bound renderer", async () => {
+      const switchWindowToLocal = vi.fn(async () => ({
+        outcome: "switched" as const,
+        hostId: "local",
+        projectId: "p",
+      }));
+      registerRemoteService("windowHosts", {
+        windowHost: (windowId: number) => (windowId === 2 ? "studio-01" : "local"),
+        viewHost: () => "local",
+        switchWindowToLocal,
+        openHostProjectInNewWindow: vi.fn(),
+      });
+      const pvm = makePvm("studio-01:q", ["studio-01:q", "p"]);
+      const win = makeBrowserWindow();
+      const appWebContents = makeWebContents();
+      getAppWebContentsMock.mockReturnValue(appWebContents);
+      const owner = { context: makeContext(2, pvm, win), projectViewManager: pvm, state: "cached" };
+      const focusIntent = { intent: "focus-panel", panelId: "x" } as const;
+
+      const result = redirectToProjectOwner(owner as never, PROJECT, focusIntent);
+
+      expect(result).toEqual({
+        outcome: "activated-elsewhere",
+        project: PROJECT,
+        targetWindowId: 2,
+      });
+      expect(switchWindowToLocal).toHaveBeenCalledWith(2, "p");
+      expect(pvm.setPendingFocusIntent).toHaveBeenCalledWith("p", focusIntent);
+      expect(appWebContents.send).not.toHaveBeenCalled();
+      expect(win.focus).toHaveBeenCalled();
+    });
+
+    it("says so on that window when it can't come back, and tries again when asked", async () => {
+      const switchWindowToLocal = vi
+        .fn<() => Promise<{ outcome: "switched"; hostId: string; projectId: string }>>()
+        .mockRejectedValueOnce(new Error("view failed"))
+        .mockResolvedValueOnce({ outcome: "switched", hostId: "local", projectId: "p" });
+      registerRemoteService("windowHosts", {
+        windowHost: (windowId: number) => (windowId === 2 ? "studio-01" : "local"),
+        viewHost: () => "local",
+        switchWindowToLocal,
+        openHostProjectInNewWindow: vi.fn(),
+      });
+      showMessageBoxMock.mockResolvedValueOnce({ response: 0, checkboxChecked: false });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const pvm = makePvm("studio-01:q", ["studio-01:q", "p"]);
+      const win = makeBrowserWindow();
+      const owner = { context: makeContext(2, pvm, win), projectViewManager: pvm, state: "cached" };
+
+      redirectToProjectOwner(owner as never, PROJECT);
+
+      await vi.waitFor(() => expect(switchWindowToLocal).toHaveBeenCalledTimes(2));
+      expect(showMessageBoxMock).toHaveBeenCalledExactlyOnceWith(
+        win,
+        expect.objectContaining({
+          type: "error",
+          title: "Couldn't open project",
+          buttons: ["Try again", "Cancel"],
+          cancelId: 1,
+        })
+      );
+      expect(switchWindowToLocal).toHaveBeenLastCalledWith(2, "p");
+      errSpy.mockRestore();
+    });
   });
 });

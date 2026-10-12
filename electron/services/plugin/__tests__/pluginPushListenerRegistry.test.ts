@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, type Mock } from "vitest";
 
-vi.mock("../../../ipc/utils.js", () => ({ getProjectRendererTargets: vi.fn(() => []) }));
+vi.mock("../../../ipc/utils.js", () => ({ getProjectPushTargets: vi.fn(() => []) }));
 
 import {
   PluginPushListenerRegistry,

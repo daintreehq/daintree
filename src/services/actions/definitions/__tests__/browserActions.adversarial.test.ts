@@ -486,7 +486,7 @@ describe("browserActions adversarial", () => {
     const run = setupActions();
     const result = await run("browser.captureScreenshot");
 
-    expect(captureScreenshotSpy).toHaveBeenCalledWith("b1");
+    expect(captureScreenshotSpy).toHaveBeenCalledWith("b1", { forHost: false });
     expect(result).toEqual({ pngBase64: btoa("png-bytes"), width: 1024, height: 768 });
   });
 
@@ -495,7 +495,7 @@ describe("browserActions adversarial", () => {
     const run = setupActions();
     await run("browser.captureScreenshot", { terminalId: "b2" });
 
-    expect(captureScreenshotSpy).toHaveBeenCalledWith("b2");
+    expect(captureScreenshotSpy).toHaveBeenCalledWith("b2", { forHost: false });
   });
 
   it("browser.captureScreenshot copies to clipboard for non-agent dispatch", async () => {
@@ -518,7 +518,8 @@ describe("browserActions adversarial", () => {
 
     const result = await def.run(undefined, { dispatchSource: "agent" } as never);
 
-    expect(captureScreenshotSpy).toHaveBeenCalledWith("b1");
+    // An agent's capture may be the window's host asking: main checks the page for it.
+    expect(captureScreenshotSpy).toHaveBeenCalledWith("b1", { forHost: true });
     expect(writeImageSpy).not.toHaveBeenCalled();
     expect(result).toEqual({ pngBase64: btoa("png-bytes"), width: 1024, height: 768 });
   });

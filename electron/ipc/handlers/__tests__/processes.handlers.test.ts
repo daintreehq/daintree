@@ -28,7 +28,12 @@ vi.mock("../../../services/PluginService.js", () => ({
 }));
 
 import { ipcMain } from "electron";
-import { registerProcessesHandlers } from "../processes.js";
+import { createProcessesNamespace, registerProcessesHandlers } from "../processes.js";
+import {
+  DriveLeaseService,
+  _resetDriveLeaseServiceForTesting,
+} from "../../../services/DriveLeaseService.js";
+import type { IpcContext } from "../../types.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { ProcessInventorySnapshot } from "../../../../shared/types/processes.js";
 
@@ -121,5 +126,94 @@ describe("processes IPC (#13175)", () => {
     dispose = null;
 
     expect(ipcMain.removeHandler).toHaveBeenCalledWith("processes:get-snapshot");
+  });
+});
+
+describe("ending a closed terminal's processes under drive leases", () => {
+  const closed = (pid: number, projectId?: string) => ({
+    pid,
+    startTime: `t${pid}`,
+    comm: "node",
+    memoryKb: null,
+    cpuPercent: null,
+    origin: { kind: "terminal" as const, id: `term-${pid}`, ...(projectId ? { projectId } : {}) },
+    closedAt: 1,
+  });
+
+  function setup() {
+    const killClosedTerminalProcesses = vi.fn(async () => ({
+      ended: 1,
+      stillRunning: 0,
+      unchecked: 0,
+      notTracked: 0,
+    }));
+    const ptyClient = {
+      killClosedTerminalProcesses,
+      getProcessInventory: vi.fn(async () => ({
+        inventories: [
+          {
+            terminals: [],
+            closedTerminalProcesses: [closed(101, "proj-a"), closed(202)],
+            pidSamples: {},
+            available: true,
+            sampledAt: 1,
+          },
+        ],
+        shardsTotal: 1,
+        shardsFailed: 0,
+      })),
+    };
+    const ns = createProcessesNamespace({ ptyClient } as never);
+    const kill = ns.ops.killClosedTerminalProcesses.handler as (
+      ctx: IpcContext,
+      targets: unknown
+    ) => Promise<unknown>;
+    return { kill, killClosedTerminalProcesses };
+  }
+
+  const ctxFor = (endpointId: string, clientId: string) =>
+    ({ endpoint: { endpointId, clientId } }) as unknown as IpcContext;
+
+  afterEach(() => _resetDriveLeaseServiceForTesting(null));
+
+  it("checks nothing when no lease service runs", async () => {
+    const { kill, killClosedTerminalProcesses } = setup();
+    await kill(ctxFor("e1", "client-b"), [{ pid: 101, startTime: "t101" }]);
+    expect(killClosedTerminalProcesses).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a caller who doesn't drive the project a target was recorded under", async () => {
+    const lease = new DriveLeaseService();
+    _resetDriveLeaseServiceForTesting(lease);
+    const isDriving = vi
+      .spyOn(lease, "isDriving")
+      .mockImplementation((_projectId, endpoint) => endpoint.endpointId === "driver");
+    const { kill, killClosedTerminalProcesses } = setup();
+
+    await expect(
+      kill(ctxFor("observer", "client-c"), [{ pid: 101, startTime: "t101" }])
+    ).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+    expect(killClosedTerminalProcesses).not.toHaveBeenCalled();
+    expect(isDriving).toHaveBeenCalledWith(
+      "proj-a",
+      expect.objectContaining({ endpointId: "observer" })
+    );
+
+    await kill(ctxFor("driver", "client-b"), [{ pid: 101, startTime: "t101" }]);
+    // A process recorded with no project has no lease to consult.
+    await kill(ctxFor("observer", "client-c"), [{ pid: 202, startTime: "t202" }]);
+    expect(killClosedTerminalProcesses).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses a target the census can't place, rather than assuming it is free", async () => {
+    _resetDriveLeaseServiceForTesting(new DriveLeaseService());
+    const { kill, killClosedTerminalProcesses } = setup();
+    await expect(
+      kill(ctxFor("driver", "client-b"), [
+        { pid: 101, startTime: "t101" },
+        { pid: 101, startTime: "a-reused-pid" },
+      ])
+    ).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+    expect(killClosedTerminalProcesses).not.toHaveBeenCalled();
   });
 });

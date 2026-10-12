@@ -1,4 +1,5 @@
 import { useId, useRef, useSyncExternalStore } from "react";
+import { isOwnPluginAction } from "@shared/utils/remotePluginContributions";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
@@ -50,8 +51,11 @@ export function resolvePluginToolbarButtons(
   registeredActions: ReadonlyMap<string, string>
 ): readonly PluginPanelToolbarButton[] {
   const declared = config?.pluginToolbar;
-  if (!declared || declared.length === 0) return NO_BUTTONS;
+  const owner = config?.extensionId;
+  if (!declared || declared.length === 0 || !owner) return NO_BUTTONS;
   return declared.flatMap((item) => {
+    // Only the panel's own plugin's actions: a kind can't wire another plugin's.
+    if (!isOwnPluginAction(owner, item.actionId)) return [];
     const title = registeredActions.get(item.actionId);
     if (title === undefined) return [];
     const label = item.label ?? title;

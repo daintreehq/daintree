@@ -27,7 +27,7 @@ import type {
   PluginToastOptions,
   PluginQuickPickItem,
   PluginQuickPickOptions,
-  PluginHostCallOptions,
+  PluginPromptCallOptions,
   PluginTypedIpcHandler,
   PluginHandlerOptions,
   PluginWorktreeSnapshot,
@@ -56,6 +56,7 @@ import type {
   PluginProcessDataChunk,
   PluginProcessMode,
 } from "../../../shared/types/plugin.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { pathToFileURL } from "node:url";
 import { toRuntimePanelKindId } from "../../../shared/config/panelKindRegistry.js";
 import type {
@@ -144,6 +145,11 @@ interface RegisteredMcpTool {
  */
 const COMMAND_IMPORT_TIMEOUT_MS = 5000;
 
+/** Only an explicit opt-in to waiting crosses the port; anything else is the default. */
+function promptQueueParam(callOptions?: PluginPromptCallOptions): { whenNoFrontend?: "queue" } {
+  return callOptions?.whenNoFrontend === "queue" ? { whenNoFrontend: "queue" } : {};
+}
+
 /** Push channels one worker may watch for listeners; past it `hasListeners` answers `true`. */
 const MAX_WATCHED_PUSH_CHANNELS = 256;
 
@@ -205,6 +211,12 @@ export class PluginDevWorkerHostProxy {
    * the worker's life, so `hasListeners` stays a synchronous local read.
    */
   private readonly listenerStates = new Map<string, ListenerState>();
+  /**
+   * The main-side invocation the plugin's current work is answering. Stamped
+   * on each host call so main can put a prompt or clipboard call in front of
+   * the person who made that invocation, not whoever called the plugin last.
+   */
+  private readonly invocation = new AsyncLocalStorage<string>();
 
   constructor(pluginId: string, post: Post, identity: PluginIdentity) {
     this.pluginId = pluginId;
@@ -266,7 +278,7 @@ export class PluginDevWorkerHostProxy {
       }
       case "invoke":
         if (msg.kind === "mcp-tool") void this.handleMcpToolInvoke(msg);
-        else void this.handleInvoke(msg);
+        else void this.invocation.run(msg.requestId, () => this.handleInvoke(msg));
         return true;
       case "invoke-cancel": {
         // Released here rather than when `execute` settles: a tool that ignores
@@ -637,7 +649,14 @@ export class PluginDevWorkerHostProxy {
         signal.addEventListener("abort", onAbort, { once: true });
       }
       try {
-        this.post({ type: "host-call", requestId, method, params });
+        const invocationId = this.invocation.getStore();
+        this.post({
+          type: "host-call",
+          requestId,
+          method,
+          params,
+          ...(invocationId !== undefined ? { invocationId } : {}),
+        });
       } catch (err) {
         // A non-structured-clone-safe `params` makes `postMessage` throw
         // (DataCloneError). Drop the pending entry so it doesn't leak until
@@ -1289,23 +1308,28 @@ export class PluginDevWorkerHostProxy {
       showQuickPick: ((
         items: PluginQuickPickItem[],
         options?: PluginQuickPickOptions,
-        callOptions?: PluginHostCallOptions
+        callOptions?: PluginPromptCallOptions
       ) =>
         this.callWithGrace<PluginQuickPickItem | PluginQuickPickItem[] | undefined>(
           "showQuickPick",
-          { items, options },
+          { items, options, ...promptQueueParam(callOptions) },
           undefined,
           callOptions?.signal
         )) as PluginHostApi["showQuickPick"],
       showInputBox: (options, callOptions) =>
         this.callWithGrace<string | undefined>(
           "showInputBox",
-          { options },
+          { options, ...promptQueueParam(callOptions) },
           undefined,
           callOptions?.signal
         ),
       showConfirm: (options, callOptions) =>
-        this.callWithGrace<boolean>("showConfirm", { options }, false, callOptions?.signal),
+        this.callWithGrace<boolean>(
+          "showConfirm",
+          { options, ...promptQueueParam(callOptions) },
+          false,
+          callOptions?.signal
+        ),
       logger: {
         info: (message, fields) => this.notify("logger.info", { message, fields }),
         warn: (message, fields) => this.notify("logger.warn", { message, fields }),

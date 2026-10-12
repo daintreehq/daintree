@@ -7,6 +7,10 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
 
   return {
+    define: {
+      __DAINTREE_REMOTE_HOSTS__: "true",
+      __DAINTREE_BUILD_COMMIT__: JSON.stringify("test"),
+    },
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./src"),

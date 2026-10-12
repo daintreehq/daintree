@@ -33,6 +33,7 @@ import { countResumableAgentPanels } from "./projectStateRestore.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../shared/utils/workspaceIds.js";
 import {
   generateProjectId,
+  mintFreshProjectId,
   mintProjectId,
   isValidProjectId,
   getProjectStateDir,
@@ -65,6 +66,15 @@ import { repairMovedSubmodulePaths } from "./git/submodulePathRepair.js";
 
 export { DEFAULT_PROJECT_EMOJI } from "../../shared/utils/projectEmoji.js";
 import { DEFAULT_PROJECT_EMOJI } from "../../shared/utils/projectEmoji.js";
+
+/** A fresh project (one cloned from another machine) asked for a folder a project is registered at. */
+function freshFolderTaken(): AppError {
+  return new AppError({
+    code: "VALIDATION",
+    message: "A project is already registered at that folder",
+    userMessage: "Daintree already has a project registered at that folder. Choose another folder.",
+  });
+}
 
 /**
  * The single spelling of a project path used for identity comparisons. Separator
@@ -682,7 +692,19 @@ export class ProjectStore {
    * are read independently — a lightweight open carries no identity, and an
    * identity never implies a mode.
    */
-  async addProject(projectPath: string, options?: ProjectAddOptions): Promise<Project> {
+  async addProject(
+    projectPath: string,
+    options?: ProjectAddOptions & {
+      /**
+       * A folder whose contents came from another machine: it gets a new,
+       * random identity. Its committed id never adopts an unavailable
+       * project's, and a folder another project is still registered at is
+       * refused, so no earlier project's settings, sessions or plugin trust
+       * (kept by id) come with it.
+       */
+      fresh?: boolean;
+    }
+  ): Promise<Project> {
     const classification = await this.classifyGitBacking(projectPath);
     const creationIdentity = options?.identity;
 
@@ -741,6 +763,9 @@ export class ProjectStore {
         : undefined;
 
     const existing = await this.getProjectByPath(normalizedPath);
+    // A folder from another machine never takes over a project row: that
+    // row's id is where its settings and plugin trust live.
+    if (existing && options?.fresh) throw freshFolderTaken();
     if (existing) {
       // A git root resolved, so promote a row that was adopted without one —
       // this is what `git init` on a lightweight workspace lands on (#11405).
@@ -754,7 +779,9 @@ export class ProjectStore {
     // whose registered path is gone, this is that project at its new home and
     // its identity — and therefore every id-keyed piece of state — is preserved
     // in place (#11282).
-    const relocated = await this.tryAdoptMovedProject(inRepo.id, normalizedPath);
+    const relocated = options?.fresh
+      ? null
+      : await this.tryAdoptMovedProject(inRepo.id, normalizedPath);
     if (relocated) return relocated;
 
     // Re-check under the same tick as the insert. Several awaits have happened
@@ -763,11 +790,16 @@ export class ProjectStore {
     // mint a *random* one and insert a second row for one directory — the path
     // column has no unique index to catch it.
     const raced = await this.getProjectByPath(normalizedPath);
-    if (raced) return raced;
+    if (raced) {
+      if (options?.fresh) throw freshFolderTaken();
+      return raced;
+    }
 
     const now = Date.now();
     const project: Project = {
-      id: mintProjectId(normalizedPath, (candidate) => this.isProjectIdTaken(candidate)),
+      id: options?.fresh
+        ? mintFreshProjectId((candidate) => this.isProjectIdTaken(candidate))
+        : mintProjectId(normalizedPath, (candidate) => this.isProjectIdTaken(candidate)),
       path: normalizedPath,
       name: inRepo.name ?? mintIdentity?.name ?? path.basename(normalizedPath),
       emoji: inRepo.emoji ?? mintIdentity?.emoji ?? DEFAULT_PROJECT_EMOJI,

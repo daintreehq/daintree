@@ -73,10 +73,22 @@ vi.mock("../../window/windowRef.js", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
+  // No remote-bound views here: every local push reaches its view.
+  isWithheldFromView: () => false,
   // A project plugin's settings writes are announced to its own project only.
   broadcastToProjectRenderers: vi.fn(),
   // No project views: a project plugin's replay has nowhere to go.
   getProjectRendererTargets: () => [],
+  getProjectPushTargets: () => [],
+  endpointPushTarget: (endpoint: {
+    handle: number;
+    isClosed: () => boolean;
+    send: (frame: unknown) => void;
+  }) => ({
+    id: endpoint.handle,
+    isDestroyed: () => endpoint.isClosed(),
+    send: (channel: string, ...args: unknown[]) => endpoint.send({ type: "event", channel, args }),
+  }),
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,
@@ -784,6 +796,46 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
         },
       },
     ]);
+  });
+
+  it("pushSnapshotToEndpoint() replays to a remote view scoped to its endpoint's project", async () => {
+    const service = new PluginService(tmpDir);
+    await service.activateStartupFinishedPlugins();
+    const menus = (
+      service as unknown as {
+        pluginPanelMenus: Map<string, Map<string, readonly { actionId: string }[]>>;
+      }
+    ).pluginPanelMenus;
+    menus.set("acme.global", new Map([["panel-a", [{ actionId: "acme.global.open" }]]]));
+    menus.set(
+      "project__other-project__acme.local",
+      new Map([["panel-b", [{ actionId: "project__other-project__acme.local.open" }]]])
+    );
+    const remote = (projectId: string | null) => ({
+      kind: "remote-view" as const,
+      handle: -7,
+      projectId,
+      endpointId: "e",
+      clientId: "c",
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => {} }),
+      isClosed: () => false,
+    });
+    const menuPluginsFor = async (projectId: string | null) => {
+      const endpoint = remote(projectId);
+      await service.pushSnapshotToEndpoint(endpoint);
+      return endpoint.send.mock.calls
+        .map((c) => c[0] as { channel: string; args: [{ name?: string; payload?: unknown }] })
+        .filter((frame) => frame.args[0].name === "plugin:panel-menus-changed")
+        .map((frame) => (frame.args[0].payload as { pluginId: string }).pluginId);
+    };
+
+    expect(await menuPluginsFor("other-project")).toEqual([
+      "acme.global",
+      "project__other-project__acme.local",
+    ]);
+    expect(await menuPluginsFor(null)).toEqual(["acme.global"]);
   });
 
   it("pushSnapshotTo() keeps sending remaining channels when one send() throws (TOCTOU)", async () => {

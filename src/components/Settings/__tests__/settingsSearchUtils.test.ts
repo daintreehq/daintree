@@ -473,6 +473,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       toolbar: "Toolbar",
       notifications: "Notifications",
       integrations: "Integrations",
+      hosts: "Hosts",
       voice: "Voice input",
       canopy: "Canopy",
       assistant: "Daintree Assistant",

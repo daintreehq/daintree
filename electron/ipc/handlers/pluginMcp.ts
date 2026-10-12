@@ -10,6 +10,7 @@ import { PLUGIN_MCP_METHOD_CHANNELS } from "./pluginMcp.preload.js";
 import type * as PluginMcpSupervisorModule from "../../services/PluginMcpSupervisor.js";
 import type * as PluginServiceModule from "../../services/PluginService.js";
 import { store } from "../../store.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { deriveDangerTier } from "../../services/plugin-mcp/PluginMcpTierAuth.js";
 import type {
   PluginMcpAuthorizeInput,
@@ -220,14 +221,7 @@ function pushConsentRequest(
   }
   return new Promise<PluginMcpConsentDecision>((resolve) => {
     const requestId = randomUUID();
-    const onDestroyed = () => settleConsent(requestId, "rejected");
-    const cleanup = () => {
-      try {
-        wc.removeListener("destroyed", onDestroyed);
-      } catch {
-        // best-effort — the WebContents may already be torn down
-      }
-    };
+    const cleanup = onWebContentsDestroyed(wc, () => settleConsent(requestId, "rejected"));
     // Safety net: an abandoned prompt settles itself as "timeout" so the gating
     // promise never hangs and the pending entry is freed (#10841).
     const timer = setTimeout(
@@ -235,7 +229,6 @@ function pushConsentRequest(
       PLUGIN_MCP_CONSENT_TIMEOUT_MS
     );
     pendingConsents.set(requestId, { resolve, webContentsId, cleanup, timer });
-    wc.once("destroyed", onDestroyed);
     try {
       wc.send(CHANNELS.EVENTS_PUSH, {
         name: "plugin-mcp:consent-request",
