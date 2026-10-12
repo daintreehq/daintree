@@ -11,16 +11,30 @@ const mocks = vi.hoisted(() => {
 vi.mock("node:child_process", () => ({ spawn: mocks.spawn }));
 vi.mock("electron", () => ({ app: { relaunch: mocks.relaunch } }));
 
-import { armAppImageRelaunch, armRelaunch, WAIT_THEN_RUN_IMAGE } from "../armRelaunch.js";
+import {
+  armAppImageRelaunch,
+  armRelaunch,
+  resetArmedRelaunchForTests,
+  retargetRelaunch,
+  WAIT_THEN_RUN_IMAGE,
+} from "../armRelaunch.js";
 
 const originalPlatform = process.platform;
 const savedEnvNames = ["APPIMAGE", "APPDIR", "PATH", "LD_LIBRARY_PATH", "APPIMAGE_EXTRACT_AND_RUN"];
 const originalEnv = Object.fromEntries(savedEnvNames.map((name) => [name, process.env[name]]));
 const originalArgv = process.argv;
-const image = "/home/u/Applications/Daintree.AppImage";
+const image = "/home/u/Applications/Daintree-1.2.0.AppImage";
+const updated = "/home/u/Applications/Daintree-1.3.0.AppImage";
 
 type SpawnCall = [string, string[], { detached: boolean; stdio: string; env: NodeJS.ProcessEnv }];
 const spawnCall = (i = 0) => mocks.spawn.mock.calls[i] as unknown as SpawnCall;
+const commandFile = (i = 0) => spawnCall(i)[1][3]!;
+const waitedPids = (i = 0) => spawnCall(i)[1].slice(4);
+
+/** What the waiter will run, read the way it reads it: NUL-terminated parts. */
+function armedCommand(i = 0): string[] {
+  return fs.readFileSync(commandFile(i), "utf8").split("\0").slice(0, -1);
+}
 
 function setPlatform(value: NodeJS.Platform) {
   Object.defineProperty(process, "platform", { value, configurable: true });
@@ -32,6 +46,13 @@ function runFromImage(appDir = path.dirname(process.execPath)) {
   process.env.APPDIR = appDir;
 }
 
+function waiterError(): (error: Error) => void {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  return mocks.waiter.on.mock.calls.find(([event]) => event === "error")?.[1] as (
+    error: Error
+  ) => void;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   setPlatform("linux");
@@ -39,6 +60,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const [, argv] of mocks.spawn.mock.calls as unknown as SpawnCall[]) {
+    fs.rmSync(path.dirname(argv[3]!), { recursive: true, force: true });
+  }
+  resetArmedRelaunchForTests();
   vi.restoreAllMocks();
   setPlatform(originalPlatform);
   for (const name of savedEnvNames) {
@@ -59,21 +84,25 @@ describe("armRelaunch", () => {
     expect(mocks.spawn).toHaveBeenCalledTimes(1);
     const [command, argv, options] = spawnCall();
     expect(command).toBe("/bin/bash");
-    expect(argv.slice(2)).toEqual([
-      "daintree-relaunch",
-      image,
-      String(process.pid),
-      "--",
-      "--reset-data",
-    ]);
+    expect(argv.slice(0, 3)).toEqual(["-c", WAIT_THEN_RUN_IMAGE, "daintree-relaunch"]);
+    expect(waitedPids()).toEqual([String(process.pid)]);
+    expect(armedCommand()).toEqual([image, "--reset-data"]);
     expect(options).toMatchObject({ detached: true, stdio: "ignore" });
     expect(mocks.waiter.unref).toHaveBeenCalled();
+  });
+
+  it("keeps the command where only this user can read or replace it", () => {
+    runFromImage();
+    armRelaunch();
+
+    expect(fs.statSync(commandFile()).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(path.dirname(commandFile())).mode & 0o777).toBe(0o700);
   });
 
   it("keeps the current args when the caller passes none", () => {
     runFromImage();
     armRelaunch();
-    expect(spawnCall()[1].slice(-3)).toEqual(["--", "--no-sandbox", "--host-mode"]);
+    expect(armedCommand()).toEqual([image, "--no-sandbox", "--host-mode"]);
   });
 
   it("drops the old mount's entries from the path lists AppRun will prefix again", () => {
@@ -106,9 +135,9 @@ describe("armRelaunch", () => {
     runExtracted(image);
     armRelaunch({ args: ["x"] });
 
-    const [, argv, { env }] = spawnCall();
-    expect(argv.slice(3)).toEqual([image, String(process.pid), String(process.ppid), "--", "x"]);
-    expect(env.APPIMAGE_EXTRACT_AND_RUN).toBe("1");
+    expect(waitedPids()).toEqual([String(process.pid), String(process.ppid)]);
+    expect(armedCommand()).toEqual([image, "x"]);
+    expect(spawnCall()[2].env.APPIMAGE_EXTRACT_AND_RUN).toBe("1");
   });
 
   // An update deletes or replaces the image before it relaunches.
@@ -116,24 +145,20 @@ describe("armRelaunch", () => {
     runExtracted(`${image} (deleted)`);
     armRelaunch({ args: [] });
 
-    expect(spawnCall()[1].slice(4, 6)).toEqual([String(process.pid), String(process.ppid)]);
+    expect(waitedPids()).toEqual([String(process.pid), String(process.ppid)]);
   });
 
   it("doesn't wait for a parent that isn't the image's runtime", () => {
     runExtracted("/usr/bin/bash");
     armRelaunch({ args: [] });
 
-    expect(spawnCall()[1].slice(4)).toEqual([String(process.pid), "--"]);
+    expect(waitedPids()).toEqual([String(process.pid)]);
   });
 
   it("falls back to Electron's relaunch when the waiter can't start", () => {
     runFromImage();
     armRelaunch({ args: ["x"] });
-    const onError = mocks.waiter.on.mock.calls.find(([event]) => event === "error")?.[1] as (
-      error: Error
-    ) => void;
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    onError(new Error("ENOENT"));
+    waiterError()(new Error("ENOENT"));
     expect(mocks.relaunch).toHaveBeenCalledWith({ args: ["x"] });
   });
 
@@ -153,8 +178,6 @@ describe("armRelaunch", () => {
 });
 
 describe("armAppImageRelaunch", () => {
-  const updated = "/home/u/Applications/Daintree-2.0.0.AppImage";
-
   it("runs the image an update put in place through the same waiter", () => {
     const appDir = path.dirname(process.execPath);
     runFromImage(appDir);
@@ -163,18 +186,12 @@ describe("armAppImageRelaunch", () => {
 
     expect(armAppImageRelaunch(updated, [], fallback)).toBe(true);
 
-    const [command, argv, options] = spawnCall();
+    const [command, , options] = spawnCall();
     expect(command).toBe("/bin/bash");
-    expect(argv.slice(1)).toEqual([
-      WAIT_THEN_RUN_IMAGE,
-      "daintree-relaunch",
-      updated,
-      String(process.pid),
-      "--",
-    ]);
+    expect(armedCommand()).toEqual([updated]);
+    expect(waitedPids()).toEqual([String(process.pid)]);
     expect(options).toMatchObject({ detached: true, stdio: "ignore" });
     expect(options.env).not.toHaveProperty("LD_LIBRARY_PATH");
-    expect(mocks.waiter.unref).toHaveBeenCalled();
     expect(mocks.relaunch).not.toHaveBeenCalled();
     expect(fallback).not.toHaveBeenCalled();
   });
@@ -183,11 +200,7 @@ describe("armAppImageRelaunch", () => {
     runFromImage();
     const fallback = vi.fn();
     armAppImageRelaunch(updated, [], fallback);
-    const onError = mocks.waiter.on.mock.calls.find(([event]) => event === "error")?.[1] as (
-      error: Error
-    ) => void;
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    onError(new Error("ENOENT"));
+    waiterError()(new Error("ENOENT"));
 
     expect(fallback).toHaveBeenCalledTimes(1);
     expect(mocks.relaunch).not.toHaveBeenCalled();
@@ -202,6 +215,56 @@ describe("armAppImageRelaunch", () => {
 
     expect(mocks.spawn).not.toHaveBeenCalled();
     expect(mocks.relaunch).not.toHaveBeenCalled();
+  });
+});
+
+// One waiter per process, so one new instance, whatever asks for it.
+describe("a relaunch already armed", () => {
+  it("is replaced by a later request rather than joined by a second waiter", () => {
+    runFromImage();
+    armRelaunch({ args: ["--reset-data"] });
+    const fallback = vi.fn();
+    armAppImageRelaunch(updated, [], fallback);
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(1);
+    expect(armedCommand()).toEqual([updated]);
+    // The latest request's fallback is the one that runs.
+    waiterError()(new Error("ENOENT"));
+    expect(fallback).toHaveBeenCalledTimes(1);
+    expect(mocks.relaunch).not.toHaveBeenCalled();
+  });
+
+  it("starts afresh once the waiter it had couldn't start", () => {
+    runFromImage();
+    armRelaunch({ args: ["a"] });
+    waiterError()(new Error("ENOENT"));
+    armRelaunch({ args: ["b"] });
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(2);
+    expect(armedCommand(1)).toEqual([image, "b"]);
+  });
+
+  // A restart with an update staged: Electron's `quit` (which app.exit() emits
+  // too) runs electron-updater's install-on-quit after the restart was armed,
+  // and that deletes the image the restart was going to run.
+  it("follows the image to the name an update installed it under, keeping its args", () => {
+    runFromImage();
+    armRelaunch({ args: ["--disable-gpu"] });
+
+    retargetRelaunch(image, updated);
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(1);
+    expect(armedCommand()).toEqual([updated, "--disable-gpu"]);
+  });
+
+  it("ignores a move of some other image, or with nothing armed", () => {
+    retargetRelaunch(image, updated);
+    expect(mocks.spawn).not.toHaveBeenCalled();
+
+    runFromImage();
+    armAppImageRelaunch(updated, [], vi.fn());
+    retargetRelaunch(image, "/home/u/Applications/Daintree-9.9.9.AppImage");
+    expect(armedCommand()).toEqual([updated]);
   });
 });
 
@@ -234,19 +297,32 @@ describe.runIf(originalPlatform === "linux")("WAIT_THEN_RUN_IMAGE", () => {
     throw new Error(`${file} never appeared`);
   }
 
-  it("closes inherited descriptors, waits for every pid, then runs the image with the args intact", async () => {
-    const out = path.join(dir, "out");
-    const fakeImage = path.join(dir, "Fake.AppImage");
+  function fakeImage(name: string, out: string): string {
+    const file = path.join(dir, name);
     fs.writeFileSync(
-      fakeImage,
+      file,
       [
         "#!/bin/bash",
         `ls /proc/$$/fd > "${out}.fds"`,
         `if kill -0 "$WAITED_A" 2>/dev/null || kill -0 "$WAITED_B" 2>/dev/null; then echo alive > "${out}.waited"; else echo gone > "${out}.waited"; fi`,
-        `printf '%s\\n' "$@" > "${out}.tmp" && mv "${out}.tmp" "${out}"`,
+        `printf '%s\\n' "$0" "$@" > "${out}.tmp" && mv "${out}.tmp" "${out}"`,
       ].join("\n"),
       { mode: 0o755 }
     );
+    return file;
+  }
+
+  function writeCommand(file: string, parts: string[]) {
+    fs.writeFileSync(file, parts.map((part) => `${part}\0`).join(""));
+  }
+
+  it("closes inherited descriptors, waits for every pid, then runs the command it reads last", async () => {
+    const out = path.join(dir, "out");
+    const before = fakeImage("Daintree-1.2.0.AppImage", out);
+    const after = fakeImage("Daintree-1.3.0.AppImage", out);
+    const target = path.join(dir, "relaunch", "command");
+    fs.mkdirSync(path.dirname(target));
+    writeCommand(target, [before, "a b", "", "$(touch pwned)"]);
     const sleeper = (seconds: string) => {
       const child = realSpawn("sleep", [seconds], { stdio: "ignore" });
       children.push(child);
@@ -257,18 +333,7 @@ describe.runIf(originalPlatform === "linux")("WAIT_THEN_RUN_IMAGE", () => {
     const held = fs.openSync(path.join(dir, "held"), "w");
     const waiter = realSpawn(
       "/bin/bash",
-      [
-        "-c",
-        WAIT_THEN_RUN_IMAGE,
-        "daintree-relaunch",
-        fakeImage,
-        a,
-        b,
-        "--",
-        "a b",
-        "",
-        "$(touch pwned)",
-      ],
+      ["-c", WAIT_THEN_RUN_IMAGE, "daintree-relaunch", target, a, b],
       {
         cwd: dir,
         env: { ...process.env, WAITED_A: a, WAITED_B: b },
@@ -277,12 +342,15 @@ describe.runIf(originalPlatform === "linux")("WAIT_THEN_RUN_IMAGE", () => {
     );
     children.push(waiter);
     fs.closeSync(held);
+    // The update moves the image while the waiter is waiting.
+    writeCommand(target, [after, "a b", "", "$(touch pwned)"]);
 
-    expect(await waitForFile(out)).toBe("a b\n\n$(touch pwned)\n");
+    expect(await waitForFile(out)).toBe(`${after}\na b\n\n$(touch pwned)\n`);
     expect(fs.readFileSync(`${out}.waited`, "utf8").trim()).toBe("gone");
     // bash keeps the script it runs open on 255; nothing of Daintree's survives.
     const fds = fs.readFileSync(`${out}.fds`, "utf8").split("\n").filter(Boolean);
     expect(fds.filter((fd) => !["0", "1", "2", "255"].includes(fd))).toEqual([]);
     expect(fs.existsSync(path.join(dir, "pwned"))).toBe(false);
+    expect(fs.existsSync(path.dirname(target))).toBe(false);
   });
 });

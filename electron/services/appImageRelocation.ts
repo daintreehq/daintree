@@ -1,11 +1,14 @@
+import { retargetRelaunch } from "../lifecycle/armRelaunch.js";
 import { runningAppImage } from "../utils/appImage.js";
 import { repointAppImageWrapper } from "./CliInstallService.js";
 
 /**
  * Daintree's own files that name the AppImage it runs from, kept pointing at
- * it when the image moves. electron-updater installs a versioned AppImage
- * (Daintree-1.2.0.AppImage) under the new version's name and deletes the old
- * file, so anything holding the old path launches nothing afterwards.
+ * it when the image moves: the armed relaunch's command, the daintree CLI
+ * wrapper, and whatever registers a handler. electron-updater installs a
+ * versioned AppImage (Daintree-1.2.0.AppImage) under the new version's name and
+ * deletes the old file, so anything holding the old path launches nothing
+ * afterwards.
  */
 
 export interface AppImageRelocation {
@@ -33,6 +36,11 @@ export function onAppImageRelocated(handler: RelocationHandler): void {
  * stops the rest.
  */
 export function notifyAppImageRelocated(relocation: AppImageRelocation): void {
+  try {
+    retargetRelaunch(relocation.previous, relocation.next);
+  } catch (error) {
+    console.warn("[AppImage] Couldn't move the armed relaunch to the new image:", error);
+  }
   try {
     repointAppImageWrapper(relocation.next);
   } catch (error) {

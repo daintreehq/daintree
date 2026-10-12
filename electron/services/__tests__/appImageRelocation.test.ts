@@ -4,6 +4,10 @@ const cliMock = vi.hoisted(() => ({ repointAppImageWrapper: vi.fn(() => true) })
 
 vi.mock("../CliInstallService.js", () => cliMock);
 
+const relaunchMock = vi.hoisted(() => ({ retargetRelaunch: vi.fn() }));
+
+vi.mock("../../lifecycle/armRelaunch.js", () => relaunchMock);
+
 import {
   notifyAppImageRelocated,
   onAppImageRelocated,
@@ -19,6 +23,7 @@ const relocation = {
 describe("appImageRelocation", () => {
   beforeEach(() => {
     cliMock.repointAppImageWrapper.mockReset().mockReturnValue(true);
+    relaunchMock.retargetRelaunch.mockReset();
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
@@ -37,8 +42,25 @@ describe("appImageRelocation", () => {
     expect(handler).toHaveBeenCalledWith(relocation);
   });
 
+  // A restart armed before electron-updater's install-on-quit would otherwise
+  // run the path the install just deleted.
+  it("moves an armed relaunch to the new image before anything else", () => {
+    notifyAppImageRelocated(relocation);
+
+    expect(relaunchMock.retargetRelaunch).toHaveBeenCalledWith(
+      relocation.previous,
+      relocation.next
+    );
+    expect(relaunchMock.retargetRelaunch.mock.invocationCallOrder[0]).toBeLessThan(
+      cliMock.repointAppImageWrapper.mock.invocationCallOrder[0]!
+    );
+  });
+
   // The process is about to quit: a step that throws must not cost the others.
   it("keeps going past a step that fails", () => {
+    relaunchMock.retargetRelaunch.mockImplementation(() => {
+      throw new Error("ENOSPC");
+    });
     cliMock.repointAppImageWrapper.mockImplementation(() => {
       throw new Error("EACCES");
     });
@@ -50,6 +72,7 @@ describe("appImageRelocation", () => {
     onAppImageRelocated(after);
 
     expect(() => notifyAppImageRelocated(relocation)).not.toThrow();
+    expect(cliMock.repointAppImageWrapper).toHaveBeenCalled();
     expect(after).toHaveBeenCalledWith(relocation);
   });
 
