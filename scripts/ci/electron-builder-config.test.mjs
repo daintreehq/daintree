@@ -275,6 +275,20 @@ describe("NSIS installer — folder context-menu verbs (#11406)", () => {
     expect(path.win32.normalize(cliPathOperand(command, "C:\\src\\app"))).toBe("C:\\src\\app");
   });
 
+  it("drops the runtime-registered daintree:// scheme on uninstall, only when it is ours", async () => {
+    const nsh = await repoFile("build/installer.nsh");
+    const uninstall = nsh.slice(nsh.indexOf("!macro customUnInstall"));
+    const guard = uninstall.indexOf("${ifNot} ${isUpdated}");
+    const check = uninstall.indexOf(`StrCmp $0 '"$INSTDIR\\\${APP_EXECUTABLE_FILENAME}" "%1"'`);
+    const remove = uninstall.indexOf(`DeleteRegKey HKCU "Software\\Classes\\daintree"`);
+    // An update runs the old uninstaller too; the new build re-registers on launch.
+    expect(guard).toBeGreaterThan(-1);
+    // Only while the command still launches this install, so another build or
+    // app that claimed the scheme keeps it.
+    expect(check).toBeGreaterThan(guard);
+    expect(remove).toBeGreaterThan(check);
+  });
+
   it("removes exactly its own verbs on uninstall", async () => {
     const nsh = await repoFile("build/installer.nsh");
     const uninstall = nsh.slice(nsh.indexOf("!macro customUnInstall"));
