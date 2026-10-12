@@ -5,6 +5,8 @@ import type { BrowserPaneProps } from "../BrowserPane";
 import { BrowserPane } from "../BrowserPane";
 import { SKELETON_HINT_FIRST_THRESHOLD_MS } from "@/components/ui/Skeleton";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import type { ProjectSettings } from "@shared/types";
 import type { ReactNode } from "react";
 
 // The app root supplies the TooltipProvider. Triggers render inline; the
@@ -2443,6 +2445,264 @@ describe("BrowserPane webview lifecycle regression", () => {
       });
       // Reserved TLD likewise passes without error.
       expect(validateUrl!("printer.local").error).toBeUndefined();
+    });
+  });
+
+  describe("host approval", () => {
+    type Deferred<T> = {
+      promise: Promise<T>;
+      resolve: (value: T) => void;
+      reject: (error: unknown) => void;
+    };
+    function deferred<T>(): Deferred<T> {
+      let resolve!: (value: T) => void;
+      let reject!: (error: unknown) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    const savedOnDisk: ProjectSettings = {
+      runCommands: [{ id: "dev", name: "dev", command: "npm run dev" }],
+      devServerCommand: "npm run dev",
+      environmentVariables: { API_URL: "http://localhost:4000" },
+      browserAllowedHosts: ["internal.corp.test"],
+    };
+
+    let getSettingsMock: ReturnType<typeof vi.fn>;
+    let saveSettingsMock: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      useProjectStoreMock.mockImplementation((selector) =>
+        selector({ currentProject: { id: "test-project" } })
+      );
+      getSettingsMock = vi.fn(() => Promise.resolve(savedOnDisk));
+      saveSettingsMock = vi.fn(() => Promise.resolve());
+      Object.defineProperty(window.electron, "project", {
+        configurable: true,
+        writable: true,
+        value: {
+          getSettings: getSettingsMock,
+          saveSettings: saveSettingsMock,
+          detectRunners: vi.fn(() => Promise.resolve([])),
+          onSwitch: vi.fn(() => vi.fn()),
+        },
+      });
+      // The cache holds this project but lags what is saved on disk.
+      useProjectSettingsStore.setState({
+        projectId: "test-project",
+        settings: { runCommands: [] },
+        isLoading: false,
+        error: null,
+      });
+    });
+
+    afterEach(() => {
+      useProjectSettingsStore.getState().reset();
+    });
+
+    function settle(webview: MockWebviewElement) {
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+        webview.setMockLoading(false);
+        emitWebviewEvent(webview, "did-stop-loading");
+      });
+    }
+
+    function navigate(url: string) {
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:browser-navigate", {
+            detail: { id: "browser-panel-1", url },
+          })
+        );
+      });
+    }
+
+    function findButton(container: HTMLElement, label: string): HTMLButtonElement {
+      const button = Array.from(container.querySelectorAll("button")).find(
+        (candidate) => candidate.textContent?.trim() === label
+      );
+      if (!button) throw new Error(`Expected a "${label}" button`);
+      return button;
+    }
+
+    /** The nearest absolutely positioned ancestor carrying a z-index, and that index. */
+    function stackingLayer(element: HTMLElement): { layer: HTMLElement; z: number } {
+      for (let node: HTMLElement | null = element; node; node = node.parentElement) {
+        const classes = node.className.split(/\s+/);
+        const zClass = classes.find((name) => /^z-\d+$/.test(name));
+        if (zClass && classes.includes("absolute")) {
+          return { layer: node, z: Number(zClass.slice(2)) };
+        }
+      }
+      throw new Error("Expected a positioned layer");
+    }
+
+    it("stacks the prompt above a load-error overlay so Allow can be clicked", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settle(webview);
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -102,
+          errorDescription: "ERR_CONNECTION_REFUSED",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/",
+        });
+      });
+      navigate("https://example.com");
+
+      expect(container.textContent).toContain("Allow browser panel to load");
+      const prompt = stackingLayer(findButton(container, "Allow"));
+      const errorOverlay = stackingLayer(findButton(container, "Retry"));
+      // Siblings in one positioned container: z-index alone decides which one
+      // takes the click.
+      expect(prompt.layer.parentElement).toBe(errorOverlay.layer.parentElement);
+      expect(prompt.z).toBeGreaterThan(errorOverlay.z);
+    });
+
+    it("navigates as soon as Allow is clicked, before the host is saved", async () => {
+      const pendingRead = deferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(pendingRead.promise);
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settle(webview);
+      navigate("https://example.com");
+      expect(webview.loadURL).not.toHaveBeenCalled();
+
+      act(() => {
+        findButton(container, "Allow").click();
+      });
+
+      expect(webview.loadURL).toHaveBeenLastCalledWith("https://example.com/");
+      expect(container.textContent).not.toContain("Allow browser panel to load");
+      expect(saveSettingsMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        pendingRead.resolve(savedOnDisk);
+        await vi.waitFor(() => expect(saveSettingsMock).toHaveBeenCalled());
+      });
+      // The page already loaded; the save landing doesn't load it twice.
+      expect(webview.loadURL).toHaveBeenCalledTimes(1);
+    });
+
+    it("saves the host onto the settings on disk and updates the cache", async () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      settle(getWebviewElement(container));
+      navigate("https://example.com");
+
+      await act(async () => {
+        findButton(container, "Allow").click();
+        await vi.waitFor(() => expect(saveSettingsMock).toHaveBeenCalled());
+      });
+
+      // Built on main's copy, so a lagging or unloaded cache can't wipe the
+      // rest of the project's settings or a host approved elsewhere.
+      expect(saveSettingsMock).toHaveBeenCalledWith("test-project", {
+        ...savedOnDisk,
+        browserAllowedHosts: ["internal.corp.test", "example.com"],
+      });
+      expect(useProjectSettingsStore.getState().settings?.browserAllowedHosts).toEqual([
+        "internal.corp.test",
+        "example.com",
+      ]);
+    });
+
+    it("does not ask again in this pane when the save fails", async () => {
+      saveSettingsMock.mockRejectedValueOnce(new Error("disk full"));
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settle(webview);
+      navigate("https://example.com");
+
+      await act(async () => {
+        findButton(container, "Allow").click();
+        await vi.waitFor(() => expect(saveSettingsMock).toHaveBeenCalled());
+      });
+      navigate("https://example.com/docs");
+
+      expect(container.textContent).not.toContain("Allow browser panel to load");
+      expect(webview.loadURL).toHaveBeenLastCalledWith("https://example.com/docs");
+    });
+
+    it("does not rewrite settings that already hold the host", async () => {
+      getSettingsMock.mockResolvedValue({ ...savedOnDisk, browserAllowedHosts: ["example.com"] });
+      const { container } = render(<BrowserPane {...baseProps} />);
+      settle(getWebviewElement(container));
+      navigate("https://example.com");
+
+      await act(async () => {
+        findButton(container, "Allow").click();
+        await vi.waitFor(() =>
+          expect(useProjectSettingsStore.getState().settings?.browserAllowedHosts).toEqual([
+            "example.com",
+          ])
+        );
+      });
+
+      expect(saveSettingsMock).not.toHaveBeenCalled();
+    });
+
+    it("still navigates when no project is known to save the host to", () => {
+      useProjectStoreMock.mockImplementation((selector) => selector({ currentProject: null }));
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      settle(webview);
+      navigate("https://example.com");
+
+      act(() => {
+        findButton(container, "Allow").click();
+      });
+
+      expect(webview.loadURL).toHaveBeenLastCalledWith("https://example.com/");
+      expect(container.textContent).not.toContain("Allow browser panel to load");
+      expect(getSettingsMock).not.toHaveBeenCalled();
+      expect(saveSettingsMock).not.toHaveBeenCalled();
+    });
+
+    it("goes to an approved history entry without waiting for the save", async () => {
+      const pendingRead = deferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(pendingRead.promise);
+      vi.mocked(window.electron.webview.getNavigationHistory).mockImplementation(() =>
+        Promise.resolve({
+          entries: [
+            { index: 0, url: "http://localhost:5173/a", title: "A" },
+            { index: 1, url: "https://example.com/page", title: "Example" },
+          ],
+          activeIndex: 0,
+          canGoBack: false,
+          canGoForward: true,
+        })
+      );
+      let container!: HTMLElement;
+      await act(async () => {
+        ({ container } = render(<BrowserPane {...baseProps} />));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const { onGoToHistoryIndex } = browserToolbarPropsSpy.mock.lastCall![0];
+      await act(async () => {
+        await onGoToHistoryIndex(1);
+      });
+      expect(container.textContent).toContain("Allow browser panel to load");
+
+      await act(async () => {
+        findButton(container, "Allow").click();
+        await Promise.resolve();
+      });
+
+      expect(window.electron.webview.goToHistoryIndex).toHaveBeenCalledWith(42, 1);
+      expect(container.textContent).not.toContain("Allow browser panel to load");
+      expect(saveSettingsMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        pendingRead.resolve(savedOnDisk);
+        await vi.waitFor(() => expect(saveSettingsMock).toHaveBeenCalled());
+      });
     });
   });
 });
