@@ -251,18 +251,18 @@ export function HostChip() {
           "transition-colors focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-2",
           isLocalWindow
             ? "h-7 max-w-56 gap-1.5 px-2 text-xs text-text-secondary hover:bg-overlay-subtle hover:text-text-primary aria-expanded:bg-overlay-subtle aria-expanded:text-text-primary"
-            : // A different place, not a problem: a solid informational block (the
-              // remote indicator other editors use), never a warning colour. Its
-              // text takes whichever of black or white reads on the fill, so it
-              // holds in every theme and colour-vision override; forced colours
-              // drop the fill, so a system border keeps the block visible.
-              "h-8 max-w-64 gap-2 px-2.5 text-sm bg-status-info [color:contrast-color(var(--color-status-info))] forced-colors:border forced-colors:border-[CanvasText]"
+            : // A different place, not a problem, and not a second accent: the same
+              // neutral bordered surface as the toolbar's other pills, one step up in
+              // size and weight. The server glyph and "SSH ·" say where the window
+              // is; a status fill read as a warning stripe beside the project pill.
+              // The border also carries the shape under forced colours.
+              "h-8 max-w-64 gap-2 border border-border-default bg-overlay-subtle px-2.5 text-sm text-text-primary hover:bg-overlay-hover aria-expanded:bg-overlay-hover"
         )}
       >
         {isLocalWindow ? (
           <PlatformGlyph platform={currentRow.platform} className="shrink-0" />
         ) : (
-          <Server className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <Server className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
         )}
         {/* The place is what this control exists to say: a state note truncates first. */}
         <span className="flex min-w-0 max-w-48 shrink-0 font-medium">
@@ -278,14 +278,9 @@ export function HostChip() {
           )}
         </span>
         {statusText && (
-          <span className={cn("min-w-0 truncate text-2xs", isLocalWindow && "text-text-secondary")}>
-            {statusText}
-          </span>
+          <span className="min-w-0 truncate text-2xs text-text-secondary">{statusText}</span>
         )}
-        <ChevronDown
-          className={cn("h-3 w-3 shrink-0", isLocalWindow && "text-text-secondary")}
-          aria-hidden="true"
-        />
+        <ChevronDown className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />
       </button>
     </DropdownMenuTrigger>
   );
