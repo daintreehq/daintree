@@ -183,6 +183,8 @@ describe("HostSetupService", () => {
       expect.stringContaining("daintree-setup-backup"),
       expect.stringMatching(/^sh -c '.*systemctl --user enable daintree-host\.service'$/),
       "sh -c 'systemctl --user start daintree-host.service'",
+      // The service's restart count when it started, to tell a crash loop from a slow start.
+      expect.stringContaining("NRestarts"),
       expect.stringContaining("--host-mode --enable-host-mode --host-mode-handoff"),
     ]);
   });

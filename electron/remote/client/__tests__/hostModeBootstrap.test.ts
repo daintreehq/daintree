@@ -6,9 +6,12 @@ import {
   ENABLE_LINGER_SCRIPT,
   hostModeConfirmed,
   DROP_UNIT_BACKUP_SCRIPT,
+  lastRunError,
   REMOVE_UNIT_SCRIPT,
   restoreUnitScript,
   SAVE_UNIT_SCRIPT,
+  SERVICE_JOURNAL_SCRIPT,
+  SERVICE_STATE_SCRIPT,
   linuxHandoffScript,
   MAC_ENABLE_SCRIPT,
   START_UNIT_SCRIPT,
@@ -272,6 +275,9 @@ describe("bootstrapHostMode on a headless Linux host", () => {
       SAVE_UNIT_SCRIPT,
       writeUnitScript(),
       START_UNIT_SCRIPT,
+      // The restart count when it started, and again while it hadn't listened yet.
+      SERVICE_STATE_SCRIPT,
+      SERVICE_STATE_SCRIPT,
       linuxHandoffScript({ ...target, appImageExtractAndRun: false }),
     ]);
     // The very text the host writes for itself, so it finds its unit current.
@@ -279,7 +285,7 @@ describe("bootstrapHostMode on a headless Linux host", () => {
     expect(writeUnitScript()).toBe(
       'mkdir -p "$HOME/.config/systemd/user" && cat > "$HOME/.config/systemd/user/daintree-host.service.tmp" && chmod 644 "$HOME/.config/systemd/user/daintree-host.service.tmp" && mv -f "$HOME/.config/systemd/user/daintree-host.service.tmp" "$HOME/.config/systemd/user/daintree-host.service" && systemctl --user daemon-reload && systemctl --user enable daintree-host.service'
     );
-    expect(calls[4]!.script).toBe(
+    expect(calls.at(-1)!.script).toBe(
       "'/opt/Daintree/daintree' --host-mode --enable-host-mode --host-mode-handoff </dev/null >/dev/null 2>&1; echo \"@@dt:handoff $?\""
     );
     expect(result).toMatchObject({ lingerRefused: null, probe: { hostModeListening: true } });
@@ -408,6 +414,40 @@ describe("bootstrapHostMode on a headless Linux host", () => {
         }
       )
     ).rejects.toThrow(/Host mode service \(systemctl --user\): Failed to connect to bus/);
+  });
+
+  it("stops waiting on a service that keeps exiting, and says what its last run printed", async () => {
+    let restarts = 3;
+    const journal = [
+      "Started daintree-host.service - Daintree host (serves Daintree windows on other machines over SSH).",
+      "[GPU] Headless Host mode: ozone-platform=headless, GPU disabled",
+      "[8093:1012/053606.113380:ERROR:ui/ozone/platform/x11/ozone_platform_x11.cc:257] Missing X server or $DISPLAY",
+      "[8093:1012/053606.113490:ERROR:ui/aura/env.cc:246] The platform failed to initialize.  Exiting.",
+      "Main process exited, code=dumped, status=5/TRAP",
+      "Failed with result 'core-dump'.",
+      "Scheduled restart job, restart counter is at 4.",
+    ].join("\n");
+    const { channel, calls } = scripted((script) =>
+      script === SERVICE_STATE_SCRIPT
+        ? ok(`@@dt:restarts ${restarts++}\n`)
+        : script === SERVICE_JOURNAL_SCRIPT
+          ? ok(journal)
+          : handedOver(script)
+    );
+    const seen = probes([linux({ unit: "enabled", linger: "yes" })]);
+    await expect(
+      bootstrapHostMode(
+        { kind: "ssh", target: "bigbox" },
+        await outcomeOf(linux({ linger: "yes" })),
+        { channel, probe: seen.probe, sleep: async () => {}, now: clock() }
+      )
+    ).rejects.toThrow(
+      "Daintree's Host mode service on bigbox keeps exiting as it starts: Missing X server or $DISPLAY (more in journalctl --user -u daintree-host.service there)"
+    );
+    // Restarts left from before (3) don't count: it gave up at the second
+    // probe, once two more of its own had happened, not at the 60 s limit.
+    expect(seen.count()).toBe(2);
+    expect(calls.at(-1)!.script).toBe(REMOVE_UNIT_SCRIPT);
   });
 
   it("removes the unit it wrote when Host mode never reads back, so nothing starts at the next login", async () => {
@@ -580,5 +620,27 @@ describe("bootstrapHostMode on a headless Linux host", () => {
       linux({ unit: "enabled", listening: true, state: state() }).replace("@@dt:hostpid 4242\n", "")
     );
     expect(hostModeConfirmed(stale)).toBe(false);
+  });
+});
+
+describe("lastRunError", () => {
+  it("takes the first error of the last run, not one from an earlier run", () => {
+    const journal = [
+      "Started daintree-host.service - Daintree host.",
+      "[1:1:ERROR:a.cc:1] An old failure",
+      "Main process exited, code=exited, status=1/FAILURE",
+      "Started daintree-host.service - Daintree host.",
+      "[INFO] [main:default] resource-profile-service-started",
+      "/opt/Daintree/daintree: error while loading shared libraries: libnss3.so: cannot open shared object file: No such file or directory",
+      "Main process exited, code=exited, status=127/n/a",
+    ].join("\n");
+    expect(lastRunError(journal)).toBe(
+      "/opt/Daintree/daintree: error while loading shared libraries: libnss3.so: cannot open shared object file: No such file or directory"
+    );
+  });
+
+  it("finds nothing in a run that printed no error", () => {
+    expect(lastRunError("Started daintree-host.service.\n[INFO] starting\n")).toBeNull();
+    expect(lastRunError("")).toBeNull();
   });
 });

@@ -39,6 +39,8 @@ const LISTEN_TIMEOUT_MS = 60_000;
 const CONFIRM_TIMEOUT_MS = 60_000;
 const KEYCHAIN_SETTLE_MS = 12_000;
 const POLL_MS = 2_000;
+/** Restarts after which a service that never listened is crash-looping, not starting slowly. */
+const CRASH_LOOP_RESTARTS = 2;
 
 export interface HostModeBootstrapDeps {
   channel: HostCommandChannel;
@@ -158,6 +160,40 @@ export const ENABLE_LINGER_SCRIPT = "loginctl enable-linger";
 /** Undo a unit this setup wrote where there was none: nothing is left to start at the next login after a failure. */
 export const REMOVE_UNIT_SCRIPT = `systemctl --user disable --now ${LINUX_UNIT_NAME} >/dev/null 2>&1; rm -f "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}"; systemctl --user daemon-reload >/dev/null 2>&1; true`;
 
+/** The service's restart count, and the journal of its runs. */
+export const SERVICE_STATE_SCRIPT = `systemctl --user show -p NRestarts --value ${LINUX_UNIT_NAME} 2>/dev/null | sed 's/^/${MARK}restarts /'`;
+export const SERVICE_JOURNAL_SCRIPT = `journalctl --user -u ${LINUX_UNIT_NAME} -n 200 --no-pager -o cat 2>/dev/null | tail -n 200`;
+
+export function parseServiceRestarts(stdout: string): number | null {
+  const value = markerValue(stdout, "restarts");
+  return value !== null && /^\d+$/.test(value) ? Number(value) : null;
+}
+
+/**
+ * The first error the service's last run printed, without Chromium's
+ * `[pid:time:ERROR:file]` prefix: what a person would look for in the journal.
+ */
+export function lastRunError(journal: string): string | null {
+  const lines = journal.split("\n").map((line) => line.trim());
+  let start = 0;
+  lines.forEach((line, index) => {
+    if (/^Started .*daintree/i.test(line)) start = index + 1;
+  });
+  for (const line of lines.slice(start)) {
+    if (
+      /^(Main process exited|Failed with result|Consumed |Scheduled restart|Stopped )/.test(line)
+    ) {
+      continue;
+    }
+    const chromium = /^\[[^\]]*:(?:ERROR|FATAL):[^\]]*\]\s*(.+)$/.exec(line);
+    if (chromium) return chromium[1]!.slice(0, 300);
+    if (/error while loading shared libraries|\b(?:Error|FATAL|Fatal)\b/.test(line)) {
+      return line.slice(0, 300);
+    }
+  }
+  return null;
+}
+
 /** Hand `--enable-host-mode` to the Daintree running on a Linux host; prints its exit status. */
 export function linuxHandoffScript(target: ReturnType<typeof linuxLaunchTarget>): string {
   const env = target.appImageExtractAndRun ? `${APPIMAGE_EXTRACT_AND_RUN_ENV}=1 ` : "";
@@ -248,11 +284,13 @@ export async function bootstrapHostMode(
 
   const pollUntil = async (
     done: (outcome: ProbeOutcome) => boolean,
-    timeoutMs: number
+    timeoutMs: number,
+    giveUp?: () => Promise<boolean>
   ): Promise<ProbeOutcome> => {
     const deadline = now() + timeoutMs;
     let outcome = await deps.probe();
     while (!done(outcome) && now() < deadline) {
+      if (giveUp && (await giveUp())) break;
       await deps.sleep(POLL_MS, signal);
       outcome = await deps.probe();
     }
@@ -302,11 +340,37 @@ export async function bootstrapHostMode(
           systemdUnitFor(target)
         );
         await run(deps.channel, START_UNIT_SCRIPT, "Couldn't start the Host mode service");
-        const up = await pollUntil((o) => o.result.hostModeListening, LISTEN_TIMEOUT_MS);
+        // Counted from here: an earlier failed setup may have left restarts on the unit.
+        const restartsAt = async () =>
+          parseServiceRestarts(
+            (await deps.channel.exec(SERVICE_STATE_SCRIPT, { timeoutMs: 15_000, signal })).stdout
+          );
+        const baseline = (await restartsAt()) ?? 0;
+        let crashLooping = false;
+        const up = await pollUntil(
+          (o) => o.result.hostModeListening,
+          LISTEN_TIMEOUT_MS,
+          async () => {
+            const restarts = await restartsAt();
+            crashLooping = restarts !== null && restarts - baseline >= CRASH_LOOP_RESTARTS;
+            return crashLooping;
+          }
+        );
         if (!up.result.hostModeListening) {
+          const journal = await deps.channel
+            .exec(SERVICE_JOURNAL_SCRIPT, { timeoutMs: 15_000, signal })
+            .catch(() => null);
+          const error = journal ? lastRunError(journal.stdout) : null;
+          const where = `journalctl --user -u ${LINUX_UNIT_NAME} there`;
+          if (crashLooping) {
+            throw failed(
+              `Daintree's Host mode service on ${hostLabel} keeps exiting as it starts`,
+              error ? `${error} (more in ${where})` : `see ${where}`
+            );
+          }
           throw failed(
             `The Host mode service started on ${hostLabel}, but Daintree didn't start listening`,
-            `see journalctl --user -u ${LINUX_UNIT_NAME} there`
+            error ? `${error} (more in ${where})` : `see ${where}`
           );
         }
       }
