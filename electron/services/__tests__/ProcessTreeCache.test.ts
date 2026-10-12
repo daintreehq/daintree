@@ -1121,6 +1121,31 @@ describe("ProcessTreeCache command/env construction", () => {
       expect(cache.getProcess(200)?.command).toContain("git status");
     });
 
+    it("does not adopt an older process whose dead parent's PID was reused", async () => {
+      const row = (pid: number, ppid: number, name: string, created: string) => ({
+        ProcessId: pid,
+        ParentProcessId: ppid,
+        Name: name,
+        CommandLine: name,
+        KernelModeTime: "0",
+        UserModeTime: "0",
+        WorkingSetSize: "1048576",
+        CreationDate: created,
+      });
+      const cache = await runWindowsRefresh(
+        JSON.stringify([
+          // A runner whose launcher (PID 300) exited long ago...
+          row(400, 300, "powershell.exe", "2026-10-12T15:56:22.0000000+02:00"),
+          // ...and a shell that was later handed PID 300.
+          row(300, 1, "pwsh.exe", "2026-10-12T16:04:20.0000000+02:00"),
+          row(500, 300, "claude.exe", "2026-10-12T16:04:21.0000000+02:00"),
+        ])
+      );
+
+      expect(cache.getChildPids(300)).toEqual([500]);
+      expect(cache.getDescendantPids(300)).toEqual([500]);
+    });
+
     it("carries ExecutablePath through to ProcessInfo", async () => {
       // `ImagePathProbe` no longer starts a PowerShell per PID on Windows; this
       // field is where the image basename comes from instead (#12243).
