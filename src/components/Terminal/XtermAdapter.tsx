@@ -390,9 +390,34 @@ export function XtermAdapter({
           return false;
         };
 
-        // One clipboard-image paste at a time: a second Ctrl+V while the first
-        // is uploading would send the same image twice.
-        let ctrlVPasteInFlight = false;
+        // One clipboard-image paste at a time: a second Ctrl+V (or paste key)
+        // while the first is uploading would send the same image twice.
+        let imagePasteInFlight = false;
+
+        // The Windows/Linux paste keys. Text pastes as before; a clipboard
+        // with no text gets the image route the DOM paste event takes on
+        // macOS, so a screenshot arrives as a path. Text goes first because a
+        // copy that carries both (spreadsheet cells, rich text) means the text.
+        const pasteFromClipboard = () => {
+          void navigator.clipboard
+            .readText()
+            .then((text) => {
+              if (managed.isInputLocked) return;
+              if (text) {
+                managed.terminal.paste(text);
+                return;
+              }
+              const pasteImage = getClipboardImagePaster(terminalId);
+              if (!pasteImage || imagePasteInFlight) return;
+              imagePasteInFlight = true;
+              void pasteImage().finally(() => {
+                imagePasteInFlight = false;
+              });
+            })
+            .catch((error) => {
+              logError("[XtermClipboard] Paste failed", error);
+            });
+        };
 
         const customKeyEventHandler = (event: KeyboardEvent): boolean => {
           // Only process keydown events to avoid double-firing
@@ -514,10 +539,10 @@ export function XtermAdapter({
             if (pasteImage) {
               event.preventDefault();
               event.stopPropagation();
-              if (!managed.isInputLocked && !ctrlVPasteInFlight) {
-                ctrlVPasteInFlight = true;
+              if (!managed.isInputLocked && !imagePasteInFlight) {
+                imagePasteInFlight = true;
                 void pasteImage().then((outcome) => {
-                  ctrlVPasteInFlight = false;
+                  imagePasteInFlight = false;
                   if (outcome !== "empty" || managed.isInputLocked) return;
                   const literalNext = "\x16";
                   writeTerminalInputOrFleet(terminalId, literalNext);
@@ -554,18 +579,9 @@ export function XtermAdapter({
           if (isTerminalClipboardPasteKey(event)) {
             event.preventDefault();
             event.stopPropagation();
-            if (!managed.isInputLocked) {
-              // terminal.paste() follows the normal typed-input path (onData →
-              // PTY + input accounting) and applies bracketed-paste wrapping.
-              navigator.clipboard
-                .readText()
-                .then((text) => {
-                  if (text && !managed.isInputLocked) managed.terminal.paste(text);
-                })
-                .catch((error) => {
-                  logError("[XtermClipboard] Paste failed", error);
-                });
-            }
+            // terminal.paste() follows the normal typed-input path (onData →
+            // PTY + input accounting) and applies bracketed-paste wrapping.
+            if (!managed.isInputLocked) pasteFromClipboard();
             return false;
           }
 

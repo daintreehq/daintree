@@ -359,10 +359,12 @@ export function useTerminalFileTransfer(
         });
     };
 
-    // Ctrl+V in an agent terminal of a remote window: this machine's clipboard
-    // image, uploaded to the host and typed as its path. "empty" lets the
-    // caller hand the key to the agent untouched.
-    const pasteClipboardImageForCtrlV = async (): Promise<"inserted" | "empty" | "failed"> => {
+    // This machine's clipboard image, saved (or, in a remote window, uploaded
+    // to the host) and typed as its path — the DOM paste below without the
+    // event. Ctrl+V in a remote agent terminal and the Windows/Linux paste keys
+    // use it; "empty" lets the caller fall back to what the key does without
+    // an image.
+    const pasteClipboardImage = async (): Promise<"inserted" | "empty" | "failed"> => {
       const lockEpoch = lockEpochRef.current;
       try {
         const { hostPath: filePath } = await materialize({ kind: "clipboard-image" });
@@ -381,9 +383,7 @@ export function useTerminalFileTransfer(
         return empty ? "empty" : "failed";
       }
     };
-    const unregisterImagePaster = isRemoteWindow()
-      ? registerClipboardImagePaster(terminalId, pasteClipboardImageForCtrlV)
-      : noop;
+    const unregisterImagePaster = registerClipboardImagePaster(terminalId, pasteClipboardImage);
 
     const handlePaste = async (event: ClipboardEvent) => {
       if (isInputLockedRef.current) return;

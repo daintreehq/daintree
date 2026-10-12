@@ -10,6 +10,11 @@ import { deriveTerminalChrome, type TerminalChromeInput } from "@/utils/terminal
  * image, Daintree uploads it and types the host path, which the agent then
  * attaches just as if it had read the clipboard itself. With no image the key
  * goes through untouched. Input-layer only: no agent configuration changes.
+ *
+ * Every terminal registers its paster, local windows included: the Windows and
+ * Linux paste keys (Ctrl+Shift+V, Shift+Insert) fall back to it when the
+ * clipboard holds no text, which is how a screenshot reaches a terminal there.
+ * Only the Ctrl+V takeover is limited to remote windows.
  */
 
 /** Pastes this machine's clipboard image into a terminal; "empty" when there is none. */

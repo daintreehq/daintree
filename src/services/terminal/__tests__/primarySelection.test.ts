@@ -88,6 +88,30 @@ describe("installLinuxPrimarySelectionListeners", () => {
     });
   });
 
+  describe("middle-button release", () => {
+    function release(button: number, target: HTMLElement = hostElement): MouseEvent {
+      const event = new MouseEvent("mouseup", { button, bubbles: true, cancelable: true });
+      target.dispatchEvent(event);
+      return event;
+    }
+
+    it("cancels it, so Chromium's own PRIMARY paste can't double the auxclick one", () => {
+      expect(release(1).defaultPrevented).toBe(true);
+    });
+
+    it("cancels it from a descendant that stops propagation (capture phase)", () => {
+      const child = document.createElement("div");
+      hostElement.appendChild(child);
+      child.addEventListener("mouseup", (event) => event.stopPropagation());
+      expect(release(1, child).defaultPrevented).toBe(true);
+    });
+
+    it("leaves primary and right-button releases alone", () => {
+      expect(release(0).defaultPrevented).toBe(false);
+      expect(release(2).defaultPrevented).toBe(false);
+    });
+  });
+
   describe("auxclick (middle-click paste)", () => {
     it("ignores auxclick when button is not the middle button", async () => {
       hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 2, bubbles: true }));
@@ -236,13 +260,20 @@ describe("installLinuxPrimarySelectionListeners", () => {
   });
 
   describe("cleanup", () => {
-    it("removes both listeners so later events are ignored", () => {
+    it("removes every listener so later events are ignored", () => {
       cleanup();
       cachedSelection = "after cleanup";
       hostElement.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      const middleRelease = new MouseEvent("mouseup", {
+        button: 1,
+        bubbles: true,
+        cancelable: true,
+      });
+      hostElement.dispatchEvent(middleRelease);
       hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
       expect(writeSelection).not.toHaveBeenCalled();
       expect(readSelection).not.toHaveBeenCalled();
+      expect(middleRelease.defaultPrevented).toBe(false);
     });
   });
 });
