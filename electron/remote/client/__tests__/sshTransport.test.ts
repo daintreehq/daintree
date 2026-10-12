@@ -31,7 +31,7 @@ import {
   type SshSpawner,
   type SshStreamSpawner,
 } from "../sshTransport.js";
-import { TransportError } from "../transport.js";
+import { HostModeOffError, TransportError } from "../transport.js";
 import {
   TEST_HANDSHAKE,
   makeTempDir,
@@ -538,7 +538,7 @@ describe("SshTransport with an injected ssh", () => {
     expect(isForwardablePath(socket)).toBe(true);
   });
 
-  it("reports a missing discovery file with ssh's stderr", async () => {
+  it("reports a missing discovery file as Daintree not hosting there, not as cat's error", async () => {
     const spawner: SshSpawner = (args) => {
       const child = new FakeChild();
       if (args.at(-1) === PROBE_COMMAND) child.finish(0, "Linux\n1000\n/home/g\n");
@@ -551,8 +551,10 @@ describe("SshTransport with an injected ssh", () => {
       clientDir: path.join(root, "c"),
       spawn: spawner,
     });
-    await expect(transport.open(new AbortController().signal)).rejects.toMatchObject({
-      detail: "cat: /run/user/1000/daintree/host.json: No such file or directory",
+    const error = await transport.open(new AbortController().signal).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HostModeOffError);
+    expect(error).toMatchObject({
+      detail: "Daintree isn't running in Host mode there (no host.json).",
     });
   });
 
@@ -578,9 +580,9 @@ describe("SshTransport with an injected ssh", () => {
         spawn: missingDiscovery(reads),
         ensureRunning,
       });
-      await expect(transport.open(new AbortController().signal)).rejects.toMatchObject({
-        detail: "cat: host.json: No such file or directory",
-      });
+      await expect(transport.open(new AbortController().signal)).rejects.toBeInstanceOf(
+        HostModeOffError
+      );
       expect(ensureRunning).toHaveBeenCalledTimes(1);
       expect(reads.count).toBe(2);
     });
@@ -624,8 +626,10 @@ describe("SshTransport with an injected ssh", () => {
         ensureRunning: async () => false,
       });
       reads.count = 0;
-      await expect(notStartable.open(new AbortController().signal)).rejects.toMatchObject({
-        detail: "cat: host.json: No such file or directory",
+      const error = await notStartable.open(new AbortController().signal).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(HostModeOffError);
+      expect(error).toMatchObject({
+        detail: "Daintree isn't running in Host mode there (no host.json).",
       });
       expect(reads.count).toBe(1);
     });

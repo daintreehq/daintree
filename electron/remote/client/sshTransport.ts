@@ -15,6 +15,7 @@ import type { CommandRunner } from "./commandRunner.js";
 import { createCommandStreamTransport, type StreamCommandChild } from "./commandStreamTransport.js";
 import { sshExecutable } from "./sshExecutable.js";
 import {
+  HostModeOffError,
   TransportError,
   connectUnixSocket,
   type LinkTransport,
@@ -584,7 +585,15 @@ export class SshTransport implements LinkTransport {
     const cat = await this.run(
       buildCatArgs(target, controlPath, location.discoveryPath, persist),
       signal
-    );
+    ).catch((error: unknown) => {
+      // The host answered, and Daintree writes this file while it listens: none there is no Host mode.
+      if (error instanceof TransportError && /No such file or directory/.test(error.detail ?? "")) {
+        throw new HostModeOffError(
+          `Daintree isn't running in Host mode there (no ${path.posix.basename(location.discoveryPath)}).`
+        );
+      }
+      throw error;
+    });
     const info = parseDiscoveryInfo(cat.stdout);
     if (!info) throw new TransportError("Host discovery file is not valid", null);
     // The host writes its socket beside the discovery file, so anything else

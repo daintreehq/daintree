@@ -80,6 +80,7 @@ export function HostDetail({
     remoteHostsClient.update({ hostId: descriptor.id, connection: sshConnection(value) })
   );
   const connected = connection.status === "connected";
+  const hostModeOff = connection.status === "unreachable" && connection.hostModeOff === true;
   const buildMismatch = connected ? (connection.buildMismatch ?? null) : null;
   const agentClis = [...(summary?.agentClis ?? [])]
     .map((cli) => ({ ...cli, name: getAgentConfig(cli.agentId)?.name ?? cli.agentId }))
@@ -203,7 +204,12 @@ export function HostDetail({
               ) : undefined
             }
             control={
-              connected ? undefined : (
+              connected ? undefined : hostModeOff ? (
+                // Connecting again finds the same; setting up turns Host mode on there.
+                <Button variant="outline" size="sm" onClick={() => setUpdateOpen(true)}>
+                  Set up…
+                </Button>
+              ) : (
                 <Button
                   variant="outline"
                   size="sm"

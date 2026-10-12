@@ -340,6 +340,7 @@ export class HostConnection {
           status: "unreachable",
           lastSeenAt: state.lastSeenAt ?? this.descriptor()?.lastSeenAt ?? null,
           detail: state.detail,
+          ...(state.hostModeOff ? { hostModeOff: true as const } : {}),
         };
       case "version-mismatch":
         return { status: "version-mismatch", mismatch: state.mismatch, remote: state.remote };

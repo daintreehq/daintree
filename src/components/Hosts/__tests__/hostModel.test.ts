@@ -144,6 +144,19 @@ describe("describeHostRowStatus", () => {
     expect(text).not.toMatch(/asleep|timeout/i);
   });
 
+  it("says Host mode is off on a host that answered, rather than unreachable", () => {
+    const [, row] = rowsFor([
+      entry("h1", "studio-03", {
+        status: "unreachable",
+        lastSeenAt: null,
+        detail: "Daintree isn't running in Host mode there (no host.json).",
+        hostModeOff: true,
+      }),
+    ]);
+    expect(describeHostRowStatus(row!, now)).toBe("Host mode off");
+    expect(describeHostMenuState(row!, now)).toEqual({ state: "Host mode off", note: null });
+  });
+
   it("says a host connected best effort runs a different build, with or without numbers", () => {
     const [, bare] = rowsFor([entry("h1", "studio-01", CONNECTED_OTHER_BUILD)]);
     expect(describeHostRowStatus(bare!, now)).toBe("Connected · different build (1.1.0)");

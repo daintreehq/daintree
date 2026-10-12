@@ -205,7 +205,13 @@ export type HostConnectionState =
       quietSince?: number;
     }
   /** Never a guessed cause: we say what we saw. */
-  | { status: "unreachable"; lastSeenAt: number | null; detail: string | null }
+  | {
+      status: "unreachable";
+      lastSeenAt: number | null;
+      detail: string | null;
+      /** ssh reached the host and found no Daintree listening there in Host mode (no discovery file). */
+      hostModeOff?: true;
+    }
   | { status: "version-mismatch"; mismatch: HandshakeMismatch; remote: HostHandshakeInfo }
   | { status: "driven-elsewhere"; driver: DriveLeaseHolder };
 

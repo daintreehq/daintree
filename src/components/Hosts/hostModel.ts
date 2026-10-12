@@ -123,7 +123,9 @@ export function describeHostRowStatus(row: HostMenuRow, now: number = Date.now()
       case "disconnected":
         return `Not connected${lastSeenSuffix(row.lastSeenAt, now)}`;
       case "unreachable":
-        return `Unreachable${lastSeenSuffix(row.lastSeenAt, now)}`;
+        return connection.hostModeOff
+          ? "Host mode off"
+          : `Unreachable${lastSeenSuffix(row.lastSeenAt, now)}`;
       case "version-mismatch":
         return `Runs a different build (${connection.remote.version})`;
       case "driven-elsewhere":
@@ -179,6 +181,8 @@ export function describeHostMenuState(
     case "disconnected":
       return { state: "Not connected", note: null };
     case "unreachable":
+      // The machine answered; Daintree there isn't hosting, which setting up fixes.
+      if (connection.hostModeOff) return { state: "Host mode off", note: null };
       return {
         state: "Unreachable",
         note:

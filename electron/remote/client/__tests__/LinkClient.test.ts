@@ -2,7 +2,12 @@ import net from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LinkClient, type LinkClientState } from "../LinkClient.js";
-import { TransportError, createDirectTransport, type LinkTransport } from "../transport.js";
+import {
+  HostModeOffError,
+  TransportError,
+  createDirectTransport,
+  type LinkTransport,
+} from "../transport.js";
 import { FrameDecoder, Lane, encodeFrame, type LinkFrame } from "../../link/frames.js";
 import {
   ControlKind,
@@ -61,6 +66,30 @@ describe("LinkClient backoff", () => {
     expect(delays.slice(0, 4)).toEqual([5, 10, 20, 20]);
     expect(states[0]).toEqual({ status: "connecting", attempt: 1 });
     expect(states[1]).toMatchObject({ status: "unreachable", detail: "Connection timed out" });
+  });
+
+  it("says when the host answered but Daintree there isn't in Host mode", async () => {
+    const transport = {
+      opens: 0,
+      async open(): Promise<never> {
+        transport.opens++;
+        throw new HostModeOffError("Daintree isn't running in Host mode there (no host.json).");
+      },
+    };
+    client = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "linux" },
+      backoff: { initialMs: 1000, maxMs: 1000, jitter: 0 },
+      random: () => 0,
+    });
+    client.start();
+    await waitFor(() => client!.getState().status === "unreachable");
+    expect(client.getState()).toMatchObject({
+      status: "unreachable",
+      hostModeOff: true,
+      detail: "Daintree isn't running in Host mode there (no host.json).",
+    });
   });
 
   it("applies jitter below the base delay", async () => {

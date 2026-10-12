@@ -82,7 +82,11 @@ export function connectionLabel(state: HostConnectionState): string {
       return state.rttMs === null ? "Connected" : `Connected · ${Math.round(state.rttMs)} ms`;
     }
     case "unreachable":
-      return `Unreachable · ${formatSeen(state.lastSeenAt)}`;
+      if (state.hostModeOff) return "Daintree isn't running in Host mode there";
+      // What was seen, when there is something: ssh's own words for why it couldn't reach it.
+      return state.detail
+        ? `Unreachable · ${formatSeen(state.lastSeenAt)} · ${state.detail}`
+        : `Unreachable · ${formatSeen(state.lastSeenAt)}`;
     case "version-mismatch":
       // Exact builds are the Build row's; here, what it means for connecting.
       return "Can't connect · needs a compatible build";

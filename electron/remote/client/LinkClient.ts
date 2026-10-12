@@ -14,7 +14,12 @@ import {
   type WelcomeMessage,
 } from "../link/messages.js";
 import { LinkSession, type LinkSessionOptions } from "../link/session.js";
-import { TransportError, type LinkTransport, type LinkTransportConnection } from "./transport.js";
+import {
+  HostModeOffError,
+  TransportError,
+  type LinkTransport,
+  type LinkTransportConnection,
+} from "./transport.js";
 
 /**
  * Keeps one host's link up: opens the transport, authenticates with HELLO,
@@ -47,6 +52,8 @@ export type LinkClientState =
       status: "unreachable";
       lastSeenAt: number | null;
       detail: string | null;
+      /** ssh reached the host and found no Daintree listening there in Host mode. */
+      hostModeOff?: true;
       /** Epoch ms of the next attempt. */
       retryAt: number;
     }
@@ -184,7 +191,10 @@ export class LinkClient {
     } catch (err) {
       if (this.attemptAbort === abort) this.attemptAbort = null;
       if (stale()) return;
-      this.fail(err instanceof TransportError ? err.detail : formatErrorMessage(err, "failed"));
+      this.fail(
+        err instanceof TransportError ? err.detail : formatErrorMessage(err, "failed"),
+        err instanceof HostModeOffError
+      );
       return;
     }
     if (stale()) {
@@ -388,7 +398,7 @@ export class LinkClient {
     });
   }
 
-  private fail(detail: string | null): void {
+  private fail(detail: string | null, hostModeOff = false): void {
     this.failures++;
     const { initialMs = 500, maxMs = 30_000, jitter = 0.3 } = this.options.backoff ?? {};
     const base = Math.min(maxMs, initialMs * 2 ** Math.min(this.failures - 1, 30));
@@ -397,6 +407,7 @@ export class LinkClient {
       status: "unreachable",
       lastSeenAt: this.lastSeenAt,
       detail,
+      ...(hostModeOff ? { hostModeOff: true as const } : {}),
       retryAt: this.now() + delay,
     });
     this.clearRetry();

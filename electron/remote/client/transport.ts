@@ -34,6 +34,14 @@ export class TransportError extends Error {
   }
 }
 
+/** ssh reached the host and found no Daintree listening there in Host mode. */
+export class HostModeOffError extends TransportError {
+  constructor(detail: string) {
+    super("Daintree isn't running in Host mode on the host", detail);
+    this.name = "HostModeOffError";
+  }
+}
+
 export function connectUnixSocket(
   socketPath: string,
   signal: AbortSignal,

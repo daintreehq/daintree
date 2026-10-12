@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { localNameSuggestion } from "../hostLabels";
+import { connectionLabel, localNameSuggestion } from "../hostLabels";
 
 const unresolved = (name: string) =>
   `ssh: Could not resolve hostname ${name}: nodename nor servname provided, or not known`;
@@ -22,5 +22,28 @@ describe("localNameSuggestion", () => {
       localNameSuggestion("greg@studio", "ssh: connect to host studio port 22: Connection refused")
     ).toBeNull();
     expect(localNameSuggestion("greg@studio", null)).toBeNull();
+  });
+});
+
+describe("connectionLabel", () => {
+  it("gives an unreachable host ssh's own words for why, and says Host mode is off when ssh got in", () => {
+    expect(
+      connectionLabel({
+        status: "unreachable",
+        lastSeenAt: null,
+        detail: "ssh: connect to host studio port 22: Operation timed out",
+      })
+    ).toBe("Unreachable · never seen · ssh: connect to host studio port 22: Operation timed out");
+    expect(connectionLabel({ status: "unreachable", lastSeenAt: null, detail: null })).toBe(
+      "Unreachable · never seen"
+    );
+    expect(
+      connectionLabel({
+        status: "unreachable",
+        lastSeenAt: null,
+        detail: "Daintree isn't running in Host mode there (no host.json).",
+        hostModeOff: true,
+      })
+    ).toBe("Daintree isn't running in Host mode there");
   });
 });
