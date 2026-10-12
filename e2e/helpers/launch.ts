@@ -688,23 +688,32 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       // Skip for restart tests to preserve persisted window state.
       if (!options.userDataDir || options.windowSize) {
         const explicitSize = options.windowSize;
-        await app.evaluate(({ BrowserWindow, screen }, payload) => {
-          const win = BrowserWindow.getAllWindows()[0];
-          if (!win) return;
-          if (payload) {
-            win.setSize(payload.width, payload.height);
+        // On Windows, Playwright intermittently loses this call's result
+        // ("Resulting promise was garbage collected"), which failed whole
+        // serial describes at launch. Sizing is best-effort, so only that
+        // lost acknowledgement is tolerated.
+        await app
+          .evaluate(({ BrowserWindow, screen }, payload) => {
+            const win = BrowserWindow.getAllWindows()[0];
+            if (!win) return;
+            if (payload) {
+              win.setSize(payload.width, payload.height);
+              win.center();
+              return;
+            }
+            const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+            const targetW = Math.max(width, 1920);
+            const targetH = Math.max(height, 1080);
+            win.setSize(targetW, targetH);
             win.center();
-            return;
-          }
-          const { width, height } = screen.getPrimaryDisplay().workAreaSize;
-          const targetW = Math.max(width, 1920);
-          const targetH = Math.max(height, 1080);
-          win.setSize(targetW, targetH);
-          win.center();
-          if (width >= targetW && height >= targetH) {
-            win.maximize();
-          }
-        }, explicitSize ?? null);
+            if (width >= targetW && height >= targetH) {
+              win.maximize();
+            }
+          }, explicitSize ?? null)
+          .catch((error: unknown) => {
+            if (!String(error).includes("Resulting promise was garbage collected")) throw error;
+            console.warn("[e2e] Window sizing result was lost; continuing with the launch");
+          });
       }
 
       await window.waitForLoadState("domcontentloaded");
