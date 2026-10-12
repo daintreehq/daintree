@@ -137,4 +137,31 @@ describe("LaneScheduler", () => {
     capped.enqueue(f(Lane.INTERACTIVE, 0), "b");
     expect(capped.enqueue(f(Lane.INTERACTIVE, 0), "c")).toBe("refused");
   });
+
+  it("keeps turns fair and in order across thousands of flows", () => {
+    const s = new LaneScheduler({
+      ...tight,
+      3: { highWaterBytes: 1e9, hardCapBytes: 1e9, maxFrames: 1e6 },
+    });
+    const flows = 5000;
+    for (let round = 0; round < 3; round++) {
+      for (let i = 0; i < flows; i++) {
+        s.enqueue(
+          {
+            lane: Lane.INTERACTIVE,
+            kind: 1,
+            streamId: round * flows + i,
+            payload: new Uint8Array(),
+          },
+          `t${i}`
+        );
+      }
+    }
+    const seen: number[] = [];
+    for (let fr = s.next(); fr; fr = s.next()) seen.push(fr.streamId);
+    expect(seen).toHaveLength(3 * flows);
+    // Every flow's first frame leaves before any flow's second.
+    expect(Math.max(...seen.slice(0, flows))).toBeLessThan(flows);
+    expect(s.isEmpty).toBe(true);
+  });
 });

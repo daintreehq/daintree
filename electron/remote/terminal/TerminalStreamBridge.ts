@@ -623,15 +623,22 @@ export class TerminalStreamBridge {
     this.behind.delete(stream);
   }
 
+  /**
+   * On every write pass, each waiting terminal is asked again on its own
+   * terms: one whose frames have left the lane goes on even while others keep
+   * it busy. A terminal that got to send goes to the back, so the earliest
+   * waiters don't always take the room a refusal leaves.
+   */
   private pumpBehind(): void {
-    if (this.behind.size === 0 || !this.canSend || this.linkBusy) return;
+    if (this.behind.size === 0 || !this.canSend) return;
     for (const stream of [...this.behind]) {
       if (this.streams.get(stream.id) !== stream) {
         this.behind.delete(stream);
         continue;
       }
+      const sentBefore = stream.sentSeq;
       this.pump(stream);
-      if (this.linkBusy) return;
+      if (stream.sentSeq !== sentBefore && this.behind.delete(stream)) this.behind.add(stream);
     }
   }
 

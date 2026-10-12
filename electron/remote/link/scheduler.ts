@@ -58,8 +58,9 @@ interface FlowQueue {
 
 interface LaneQueue {
   flows: Map<string, FlowQueue>;
-  /** Keys of the flows with frames, in turn order. */
+  /** Keys of the flows with frames, in turn order, from `turnsHead`. */
   turns: string[];
+  turnsHead: number;
   frameCount: number;
   bytes: number;
   wasOverHighWater: boolean;
@@ -69,7 +70,14 @@ interface LaneQueue {
 const SHARED_FLOW = "";
 
 function emptyLane(): LaneQueue {
-  return { flows: new Map(), turns: [], frameCount: 0, bytes: 0, wasOverHighWater: false };
+  return {
+    flows: new Map(),
+    turns: [],
+    turnsHead: 0,
+    frameCount: 0,
+    bytes: 0,
+    wasOverHighWater: false,
+  };
 }
 
 function frameCost(frame: LinkFrame): number {
@@ -139,7 +147,12 @@ export class LaneScheduler {
 
   private shift(lane: Lane): LinkFrame {
     const q = this.lanes[lane]!;
-    const flow = q.turns.shift()!;
+    const flow = q.turns[q.turnsHead]!;
+    q.turnsHead++;
+    if (q.turnsHead > 1024 && q.turnsHead * 2 > q.turns.length) {
+      q.turns = q.turns.slice(q.turnsHead);
+      q.turnsHead = 0;
+    }
     const fq = q.flows.get(flow)!;
     const frame = fq.frames[fq.head]!;
     fq.frames[fq.head] = undefined as unknown as LinkFrame;

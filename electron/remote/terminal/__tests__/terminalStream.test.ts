@@ -686,6 +686,41 @@ describe("terminal stream over the link", () => {
         .filter((m) => m.id === "flood")
     ).toEqual([]);
 
+    // Held while its own frame waits; once that frame has left, the next write
+    // pass sends the rest though the lane is still busy.
+    let quietQueued = 64 * 1024;
+    h.host.queuedBytes = (_lane, flow) =>
+      flow === undefined
+        ? Number.MAX_SAFE_INTEGER
+        : flow.endsWith("\0flood")
+          ? 64 * 1024
+          : flow.endsWith("\0quiet")
+            ? quietQueued
+            : 0;
+    h.pty().emit("quiet", "R");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(
+      h
+        .renderer()
+        .ofType("data")
+        .filter((m) => m.id === "quiet")
+    ).toHaveLength(1);
+    quietQueued = 0;
+    h.pty().emit("other", "o");
+    await waitFor(
+      () =>
+        h
+          .renderer()
+          .ofType("data")
+          .filter((m) => m.id === "quiet").length === 2
+    );
+    expect(
+      h
+        .renderer()
+        .ofType("data")
+        .filter((m) => m.id === "flood")
+    ).toEqual([]);
+
     // Once the lane has room the held terminal follows, in order.
     h.host.queuedBytes = real;
     h.pty().emit("flood", "line 2");
