@@ -86,6 +86,8 @@ import {
 import { onWindowsTreeKillUnavailable } from "./utils/windowsTreeKill.js";
 import { identityMicros } from "./utils/windowsProcessTree.js";
 import { prewarmWindowsShell } from "./services/pty/terminalShell.js";
+
+const WINDOWS_SHELL_READY_WAIT_MS = 2_000;
 import { GracefulCaptureTracker } from "./pty-host/GracefulCaptureTracker.js";
 import {
   PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS,
@@ -2074,7 +2076,8 @@ async function initialize(): Promise<void> {
   try {
     // The default shell is searched for asynchronously (a PATH entry on a dead
     // share must not stall this loop); start now so the first terminal gets it.
-    if (process.platform === "win32") void prewarmWindowsShell();
+    const windowsShellReady =
+      process.platform === "win32" ? prewarmWindowsShell().catch(() => undefined) : undefined;
 
     // Start the resource governor for proactive memory monitoring
     resourceGovernor.start();
@@ -2085,6 +2088,16 @@ async function initialize(): Promise<void> {
     ptyManager.setLineageLedger(lineageLedger);
     ptyManager.setImagePathProbe(imagePathProbe);
     console.log("[PtyHost] ProcessTreeCache started");
+
+    // Session restore spawns terminals the moment Main hears "ready". Wait
+    // (briefly — the search takes milliseconds on a healthy PATH) so they open
+    // in PowerShell 7 rather than the in-box fallback used while it is pending.
+    if (windowsShellReady) {
+      await Promise.race([
+        windowsShellReady,
+        new Promise<void>((resolve) => setTimeout(resolve, WINDOWS_SHELL_READY_WAIT_MS).unref()),
+      ]);
+    }
 
     // Notify Main that we're ready (after cache is initialized, before pool is warmed)
     markHostPerformance(PERF_MARKS.PTY_HOST_READY_POSTED);

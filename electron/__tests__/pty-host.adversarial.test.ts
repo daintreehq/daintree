@@ -337,6 +337,14 @@ vi.mock("../services/TerminalLineageLedger.js", () => ({
   beginTeardownProbeWindow: vi.fn(),
 }));
 
+const prewarmWindowsShell = vi.hoisted(() =>
+  vi.fn(async (): Promise<string> => "C:\\Program Files\\PowerShell\\7\\pwsh.exe")
+);
+vi.mock("../services/pty/terminalShell.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/pty/terminalShell.js")>()),
+  prewarmWindowsShell,
+}));
+
 vi.mock("../services/pty/TerminalResourceMonitor.js", () => ({
   TerminalResourceMonitor: class {
     dispose = vi.fn();
@@ -882,6 +890,23 @@ describe("pty-host adversarial", () => {
         ([payload]: unknown[]) => (payload as { type?: string })?.type === "tree-kill-handoff"
       )
     ).toBe(false);
+  });
+
+  it("WINDOWS_READY_WAITS_FOR_THE_DEFAULT_SHELL", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    let shellFound: (shell: string) => void = () => {};
+    prewarmWindowsShell.mockImplementationOnce(
+      () => new Promise<string>((resolve) => (shellFound = resolve))
+    );
+
+    const parentPort = await loadHost();
+    // Restored terminals spawn on "ready": not before the shell they open in is known.
+    expect(parentPort.postMessage).not.toHaveBeenCalledWith({ type: "ready" });
+
+    shellFound("C:\\Program Files\\PowerShell\\7\\pwsh.exe");
+    await flushMicrotasks();
+    await flushMicrotasks();
+    expect(parentPort.postMessage).toHaveBeenCalledWith({ type: "ready" });
   });
 
   it("WINDOWS_STARTUP_SKIPS_PTY_POOL", async () => {
