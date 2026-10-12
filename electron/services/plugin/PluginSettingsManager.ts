@@ -75,7 +75,8 @@ export class PluginSettingsManager {
    * Not keyed on scope: a `project`-scoped secret lives in the same file as the
    * plugin's `local` settings, and two stores over one file would each rewrite
    * it from their own cache, erasing the other's keys. Entries for a plugin are
-   * dropped on unload.
+   * dropped on unload; a dropped store's writes still in flight stay queued
+   * ahead of its replacement's, since stores share one write queue per file.
    */
   private settingsStores = new Map<string, PluginSettingsStore>();
   /**

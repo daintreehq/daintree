@@ -184,6 +184,46 @@ describe("PluginSettingsManager secret tier routing (#9167)", () => {
     expect(ui.secretsPlaintext).toEqual([]);
   });
 
+  // A save waiting on the keychain outlives an unload, which drops its store; the
+  // reloaded plugin's store saves after it and must keep the last word.
+  it("keeps a reloaded plugin's secret when the unloaded one's save lands late", async () => {
+    const cipher = fakeCipher();
+    const encrypt = cipher.encrypt;
+    let release!: () => void;
+    const keychainAnswers = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reachedKeychain!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      reachedKeychain = resolve;
+    });
+    cipher.encrypt = async (plaintext) => {
+      if (plaintext === "sk-old") {
+        reachedKeychain();
+        await keychainAnswers;
+      }
+      return encrypt(plaintext);
+    };
+    const mgr = managerFor([{ id: "token", type: "secret", scope: "user" }], cipher);
+
+    const older = mgr.setSettingValueFromUi("acme.scope-test", "token", "sk-old", "user", null);
+    await waiting;
+    mgr.clearPluginSettingsState("acme.scope-test");
+    const newer = mgr.setSettingValueFromUi("acme.scope-test", "token", "sk-new", "user", null);
+    const raced = await Promise.race([
+      newer.then(() => "saved"),
+      new Promise((resolve) => setTimeout(() => resolve("queued"), 100)),
+    ]);
+    expect(raced).toBe("queued");
+
+    release();
+    expect(await older).toBe(true);
+    expect(await newer).toBe(true);
+    expect(await mgr.revealSecretSettingForUi("acme.scope-test", "token", "user", null)).toBe(
+      "sk-new"
+    );
+  });
+
   it("discloses an unavailable keychain and refuses the write", async () => {
     const mgr = managerFor([{ id: "token", type: "secret", scope: "user" }], fakeCipher(false));
     await expect(

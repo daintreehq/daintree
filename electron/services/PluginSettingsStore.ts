@@ -52,6 +52,30 @@ function isSecretEnvelope(value: unknown): value is SecretEnvelope {
   );
 }
 
+/**
+ * Writes queued per settings file and shared by every store over it, so no two
+ * read-modify-writes of one file interleave. Stores belong to a plugin instance
+ * and are dropped when it unloads, but a dropped store can still be partway
+ * through a write, waiting on a keychain prompt, and it reloads the file only
+ * once the keychain answers: without one queue its older value would commit over
+ * whatever the replacement store saved meanwhile.
+ */
+const writeQueues = new Map<string, Promise<void>>();
+
+function queueWrite<T>(file: string, write: () => Promise<T>): Promise<T> {
+  const result = (writeQueues.get(file) ?? Promise.resolve()).then(write);
+  // A failed write must not stall the ones queued behind it.
+  const tail = result.then(
+    () => undefined,
+    () => undefined
+  );
+  writeQueues.set(file, tail);
+  void tail.then(() => {
+    if (writeQueues.get(file) === tail) writeQueues.delete(file);
+  });
+  return result;
+}
+
 /** Per-call hint: when a key is declared `type: "secret"`, route it through the cipher. */
 interface SecretOptions {
   secret?: boolean;
@@ -90,15 +114,16 @@ export class PluginSettingsStore {
    * would swap in the pre-write contents under the write.
    */
   private persisting = false;
-  /** Serializes writes so concurrent `set` calls can't interleave read-modify-write. */
-  private writeChain: Promise<void> = Promise.resolve();
   private readonly cipher: SecretCipher;
+  /** This file's entry in {@link writeQueues}. */
+  private readonly queueKey: string;
 
   constructor(
     private readonly filePath: string,
     cipher: SecretCipher = safeStorageCipher
   ) {
     this.cipher = cipher;
+    this.queueKey = path.resolve(filePath);
   }
 
   /**
@@ -147,13 +172,7 @@ export class PluginSettingsStore {
    * the error rethrown.
    */
   async set<T = unknown>(key: string, value: T, options?: SecretOptions): Promise<boolean> {
-    const result = this.writeChain.then(() => this.doSet(key, value, options));
-    // Keep the chain alive even when this write rejects, so queued writes run.
-    this.writeChain = result.then(
-      () => undefined,
-      () => undefined
-    );
-    return result;
+    return queueWrite(this.queueKey, () => this.doSet(key, value, options));
   }
 
   private async doSet<T>(key: string, value: T, options?: SecretOptions): Promise<boolean> {
@@ -247,7 +266,7 @@ export class PluginSettingsStore {
    * now, the old ciphertext stays and still reads.
    */
   private reencryptInBackground(key: string, read: SecretEnvelope, plaintext: string): void {
-    const run = this.writeChain.then(async () => {
+    void queueWrite(this.queueKey, async () => {
       if (!storesEnvelope(await this.load(), key, read)) return;
       const ciphertext = await this.cipher.encrypt(plaintext);
       if (ciphertext === null) return;
@@ -257,24 +276,18 @@ export class PluginSettingsStore {
       if (storesEnvelope(cache, key, read)) {
         await this.commit(cache, key, asyncEnvelope(ciphertext));
       }
-    });
-    this.writeChain = run.catch(() => undefined);
+    }).catch(() => undefined);
   }
 
   /**
    * Remove `key`. Resolves to `true` when a stored value was actually deleted
    * (so the caller can fire change subscribers with `undefined`), `false` when
    * the key was already absent. On write failure the optimistic in-memory delete
-   * is rolled back and the error rethrown. Serialized through the same write
-   * chain as {@link set} so a concurrent set/delete can't interleave.
+   * is rolled back and the error rethrown. Queued with {@link set} so a
+   * concurrent set/delete can't interleave.
    */
   async delete(key: string): Promise<boolean> {
-    const result = this.writeChain.then(() => this.doDelete(key));
-    this.writeChain = result.then(
-      () => undefined,
-      () => undefined
-    );
-    return result;
+    return queueWrite(this.queueKey, () => this.doDelete(key));
   }
 
   private async doDelete(key: string): Promise<boolean> {

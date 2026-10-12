@@ -324,6 +324,36 @@ describe("PluginSettingsStore secrets the sync safeStorage API wrote", () => {
     expect(cipher.encryptCalls).toEqual(["sk-new"]);
   });
 
+  it("queues a second store's write behind one over the same file still waiting on the keychain", async () => {
+    const filePath = path.join(tmpDir, "acme.plugin.json");
+    const slow = fakeCipher(true);
+    const encrypt = slow.encrypt.bind(slow);
+    const reached = deferred();
+    const release = deferred();
+    slow.encrypt = async (plaintext) => {
+      reached.resolve();
+      await release.promise;
+      return encrypt(plaintext);
+    };
+    const replaced = new PluginSettingsStore(filePath, slow);
+    const replacement = new PluginSettingsStore(filePath, fakeCipher(true));
+
+    const older = replaced.set("token", "sk-old", { secret: true });
+    await reached.promise;
+    const newer = replacement.set("token", "sk-new", { secret: true });
+    const raced = await Promise.race([
+      newer.then(() => "saved"),
+      new Promise((resolve) => setTimeout(() => resolve("queued"), 100)),
+    ]);
+    expect(raced).toBe("queued");
+    release.resolve();
+
+    expect(await older).toBe(true);
+    expect(await newer).toBe(true);
+    expect(await replacement.get<string>("token", { secret: true })).toBe("sk-new");
+    expect((await readRaw(filePath)).token).toMatchObject({ cipher: seal("sk-new") });
+  });
+
   it("drops a background re-encrypt when the file changes while the keychain encrypts", async () => {
     const filePath = path.join(tmpDir, "acme.plugin.json");
     await seed(filePath, { token: legacyEnvelope("sk-old") });
