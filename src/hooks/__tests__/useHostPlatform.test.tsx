@@ -10,6 +10,14 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
   isLinux: () => platform.linux,
   isWindows: () => platform.windows,
 }));
+// The same client for the launch-command fallback, which reads the platform
+// through this one instead: left real, an unseeded launch command took the
+// test machine's quoting, PowerShell's on Windows, while the rest of this file
+// describes a Mac.
+vi.mock("@shared/utils/shellEscape", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@shared/utils/shellEscape")>()),
+  isWindows: () => platform.windows,
+}));
 
 import {
   _resetHostPlatformForTests,

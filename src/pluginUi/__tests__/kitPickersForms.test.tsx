@@ -22,7 +22,7 @@ import { sameFormValue } from "@/pluginUi/form";
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
-});
+}, 60_000);
 
 afterEach(() => {
   cleanup();

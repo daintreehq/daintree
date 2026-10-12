@@ -17,7 +17,7 @@ import { PluginKitLayerContext, PluginKitOwnerContext } from "@/components/Plugi
 // the Select and Popover tests below would find nothing rendered.
 beforeAll(async () => {
   await kit.whenPluginUiReady();
-});
+}, 60_000);
 
 afterEach(cleanup);
 

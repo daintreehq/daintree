@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
+import path from "node:path";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
 import {
@@ -260,8 +261,10 @@ describe("WorkspaceService.getFileDiff", () => {
 
   it("refuses a file the caller names through a linked folder", async () => {
     const { realpath, readFile } = await import("fs/promises");
+    // Compared resolved: on Windows the service asks about `C:\test\repo\linked`.
+    const linked = path.resolve("/test/repo/linked");
     vi.mocked(realpath).mockImplementation(async (p) =>
-      String(p) === "/test/repo/linked" ? "/home/me/.ssh" : String(p)
+      path.resolve(String(p)) === linked ? path.resolve("/home/me/.ssh") : String(p)
     );
     try {
       await service.getFileDiff("req-dir", "/test/repo", "linked/id_ed25519", "untracked");

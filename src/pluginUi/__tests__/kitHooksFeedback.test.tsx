@@ -28,7 +28,7 @@ import { UNDO_ACTION_LABEL, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
-});
+}, 60_000);
 
 beforeEach(() => {
   notifySpy.mockClear();

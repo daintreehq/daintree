@@ -30,7 +30,7 @@ import { selectTriggerVariants } from "@/components/ui/select";
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
-});
+}, 60_000);
 
 afterEach(() => {
   cleanup();

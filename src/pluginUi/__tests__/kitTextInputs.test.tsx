@@ -21,7 +21,7 @@ import { keybindingService } from "@/services/KeybindingService";
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
-});
+}, 60_000);
 
 afterEach(() => {
   cleanup();

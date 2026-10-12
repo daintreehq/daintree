@@ -22,14 +22,12 @@ type Platform = "win32" | "linux";
  */
 async function poolFor(platform: Platform) {
   vi.resetModules();
-  if (platform === "win32") {
-    vi.doMock("path", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("path")>();
-      return { ...actual.win32, default: actual.win32 };
-    });
-  } else {
-    vi.doUnmock("path");
-  }
+  // Both ways, so a Linux pool resolves POSIX paths on a Windows test machine too.
+  vi.doMock("path", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("path")>();
+    const flavour = platform === "win32" ? actual.win32 : actual.posix;
+    return { ...flavour, default: flavour };
+  });
   Object.defineProperty(process, "platform", { value: platform, configurable: true });
   const { WorkspaceHostPool } = await import("../WorkspaceHostPool.js");
   return new WorkspaceHostPool({ config: {}, emit: vi.fn() });

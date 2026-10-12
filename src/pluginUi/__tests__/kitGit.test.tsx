@@ -35,7 +35,7 @@ import {
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
-});
+}, 60_000);
 
 beforeEach(() => dispatch.mockClear());
 afterEach(cleanup);

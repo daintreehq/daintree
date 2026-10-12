@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createActionRegistry } from "./helpers/wireSurface";
+import { createActionRegistry, createActionRegistryWithRemoteHosts } from "./helpers/wireSurface";
 import { renderPluginActionsDoc } from "../../../../scripts/codegen/pluginActionsDoc";
 import { DENY_PLUGIN_DISPATCH_ACTION_IDS } from "@shared/config/actionIds";
 
@@ -20,7 +20,9 @@ const DOC_PATH = path.resolve(
  */
 describe("docs/plugins/actions.md", () => {
   it("matches what the current action manifest generates", async () => {
-    const registry = await createActionRegistry();
+    // The page lists the Remote Hosts actions, which a Windows registry leaves
+    // out, so the freshness check reads the registry the page was generated from.
+    const registry = await createActionRegistryWithRemoteHosts();
     const expected = renderPluginActionsDoc(registry);
     const actual = readFileSync(DOC_PATH, "utf-8");
 

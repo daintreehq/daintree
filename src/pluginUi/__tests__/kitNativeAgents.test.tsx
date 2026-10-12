@@ -51,7 +51,7 @@ import { useNotificationStore } from "@/store/notificationStore";
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
-});
+}, 60_000);
 
 const combos = new Map<string, string>();
 

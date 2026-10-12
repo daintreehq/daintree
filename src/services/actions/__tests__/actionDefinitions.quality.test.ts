@@ -15,6 +15,10 @@ import {
   toNonRendererOwnedTools,
 } from "@shared/config/helpAssistantTierAllowlists";
 import { MCP_EXTERNAL_TIER_TOOLS } from "@shared/config/mcpExternalTierAllowlist";
+import {
+  actionIdsAbsentOnThisPlatform,
+  createActionRegistryWithRemoteHosts,
+} from "./helpers/wireSurface";
 
 /**
  * Action IDs that exist in BuiltInKeyAction but are intentionally NOT in the
@@ -506,8 +510,10 @@ describe("LLM-facing tool descriptions (#11542)", () => {
     // silently stop applying to the surface that needs them most.
     expect(MCP_EXTERNAL_TIER_TOOLS.filter((id) => !LLM_EXPOSED_TOOL_IDS.has(id))).toEqual([]);
 
+    // Bar the Remote Hosts tools on a platform that registers none of them.
+    const absentHere = await actionIdsAbsentOnThisPlatform();
     const rows = await cohortDefinitions();
-    expect(rows.length).toBe(LLM_EXPOSED_TOOL_IDS.size);
+    expect(rows.length).toBe([...LLM_EXPOSED_TOOL_IDS].filter((id) => !absentHere.has(id)).length);
   });
 
   it("keeps every description above the readable floor", async () => {
@@ -850,12 +856,14 @@ describe("registry-vs-union drift", () => {
 
   it("every BUILT_IN_ACTION_IDS entry has a runtime registry entry", async () => {
     const { registry } = await createRegistryWithAudit();
+    // Bar the Remote Hosts actions on a platform that registers none of them.
+    const absentHere = await actionIdsAbsentOnThisPlatform();
 
     const missingFromRegistry = (BUILT_IN_ACTION_IDS as readonly string[])
       .filter((id) => !registry.has(id as ActionId) && !KEY_ONLY_ACTIONS.has(id))
       .slice()
       .sort();
-    expect(missingFromRegistry).toEqual([]);
+    expect(missingFromRegistry).toEqual([...absentHere].sort());
   });
 
   it("BUILT_IN_ACTION_IDS has no duplicate entries", () => {
@@ -873,6 +881,8 @@ describe("registry-vs-union drift", () => {
 
   it("every BuiltInKeyAction in KEY_ACTION_VALUES has a registry entry (or is allowlisted)", async () => {
     const { registry } = await createRegistryWithAudit();
+    // Bar the Remote Hosts actions on a platform that registers none of them.
+    const absentHere = await actionIdsAbsentOnThisPlatform();
 
     const missing: string[] = [];
     for (const id of KEY_ACTION_VALUES) {
@@ -880,7 +890,9 @@ describe("registry-vs-union drift", () => {
         missing.push(id);
       }
     }
-    expect(missing.sort()).toEqual([]);
+    expect(missing.sort()).toEqual(
+      [...KEY_ACTION_VALUES].filter((id) => absentHere.has(id)).sort()
+    );
   });
 
   it("every DEFAULT_KEYBINDINGS actionId has a registry entry (or is a key-only action)", async () => {
@@ -1472,7 +1484,9 @@ describe("dangerRationale backfill", () => {
 describe("ActionService.list() snapshot", () => {
   it("produces a stable, sorted manifest snapshot", async () => {
     const { ActionService } = await import("../../ActionService");
-    const { registry } = await createRegistryWithAudit();
+    // One snapshot on every platform: the manifest as it is built with Remote
+    // Hosts, whose actions a Windows registry leaves out.
+    const registry = await createActionRegistryWithRemoteHosts();
     const service = new ActionService();
     for (const [_key, factory] of registry) {
       service.register(factory());

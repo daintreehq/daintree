@@ -6,6 +6,17 @@ import path from "path";
 // against empty strings: Vitest stubs every `.css` specifier — `?raw` included
 // — so the bytes have to arrive as a virtual JS module instead.
 import { pluginStyleContract } from "./scripts/lib/plugin-style-contract.mjs";
+import { isEitherRemoteRoleSupportedOn } from "./shared/config/remoteHostsSupport";
+
+// Code that only ever runs as part of Remote Hosts, which a platform with
+// neither role (Windows today, see shared/config/remoteHostsSupport.ts) never
+// starts: the boot, both roles' links over Unix sockets, and the project
+// service behind host-to-host clone and placement. Their suites assume POSIX
+// paths and sockets by design. The gate itself and the core code that checks
+// it are tested outside these folders, so they still run there.
+const REMOTE_HOSTS_ONLY_TESTS = isEitherRemoteRoleSupportedOn(process.platform, true)
+  ? []
+  : ["electron/remote/**", "electron/services/projectAcrossHosts/**"];
 
 // The suite asserts en-US number formatting — the plugin kit formats with the
 // default locale — so a developer on another locale (en_ZA groups digits with
@@ -70,6 +81,7 @@ export default defineConfig({
       "build",
       "release",
       "**/*.integration.test.{js,ts}",
+      ...REMOTE_HOSTS_ONLY_TESTS,
     ],
     testTimeout: 15000,
     // Paired with testTimeout the way vitest.integration.config.ts pairs its

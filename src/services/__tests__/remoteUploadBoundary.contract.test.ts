@@ -40,7 +40,8 @@ function resolveSpecifier(from: string, specifier: string): string | null {
   base = base.replace(/\.js$/, "");
   if (/\.(ts|tsx)$/.test(base) && existsSync(base)) return base;
   for (const extension of EXTENSIONS) {
-    if (existsSync(base + extension)) return base + extension;
+    // Normalized so an `/index.ts` target is one spelling on Windows too.
+    if (existsSync(base + extension)) return path.normalize(base + extension);
   }
   return null;
 }
@@ -124,7 +125,8 @@ function scanGraph(): Scan {
 
 describe("remote-only renderer modules stay out of builds without Remote Hosts", () => {
   const scan = scanGraph();
-  const rel = (file: string) => path.relative(ROOT, file);
+  // Forward slashes on every platform, so the expectations read the same on Windows.
+  const rel = (file: string) => path.relative(ROOT, file).split(path.sep).join("/");
 
   it("walks the real renderer graph", () => {
     expect(scan.statics.size).toBeGreaterThan(200);

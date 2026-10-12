@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { BUILT_IN_ACTION_IDS } from "@shared/config/actionIds";
+import { actionIdsAbsentOnThisPlatform } from "./helpers/wireSurface";
 
 async function createRegistry() {
   (globalThis as any).self = globalThis;
@@ -85,12 +86,14 @@ describe("createActionDefinitions", () => {
 
   it("registers all BUILT_IN_ACTION_IDS entries", async () => {
     const actions = await createRegistry();
+    // Every one, bar the Remote Hosts actions on a platform without them.
+    const absentHere = await actionIdsAbsentOnThisPlatform();
 
     const missing = (BUILT_IN_ACTION_IDS as readonly string[])
       .filter((id) => !actions.has(id as any))
       .slice()
       .sort();
-    expect(missing).toEqual([]);
+    expect(missing).toEqual([...absentHere].sort());
   });
 
   it("does not register removed github.* action ids", async () => {
