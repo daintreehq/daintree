@@ -303,15 +303,22 @@ export function shouldInjectForceColor(env: Record<string, string>): boolean {
 const UTF8_PATTERN = /utf-?8/i;
 
 /**
- * Ensure the environment has a UTF-8 locale set in LANG.
+ * Ensure the environment has a UTF-8 locale set in LANG. The fallback is
+ * per platform, as in `getGitLocaleEnv`: macOS has no `C.UTF-8`, and a Linux
+ * system without locale packages (Debian, Fedora, Ubuntu and Arch containers,
+ * a fresh Arch install, minimal servers) has only `C.UTF-8`, so `en_US.UTF-8`
+ * failed every `setlocale` there and left the shell and its tools ASCII-only.
  */
-export function ensureUtf8Locale(env: Record<string, string>): Record<string, string> {
+export function ensureUtf8Locale(
+  env: Record<string, string>,
+  platform: NodeJS.Platform = process.platform
+): Record<string, string> {
   const result = { ...env };
   const lang = getEnvVar(result, "LANG");
   if (lang && UTF8_PATTERN.test(lang)) {
     return result;
   }
-  setEnvVar(result, "LANG", "en_US.UTF-8");
+  setEnvVar(result, "LANG", platform === "linux" ? "C.UTF-8" : "en_US.UTF-8");
   return result;
 }
 

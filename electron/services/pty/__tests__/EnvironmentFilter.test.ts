@@ -319,23 +319,38 @@ describe("ensureUtf8Locale", () => {
   });
 
   it("falls back to en_US.UTF-8 when LANG is missing", () => {
-    expect(ensureUtf8Locale({}).LANG).toBe("en_US.UTF-8");
+    expect(ensureUtf8Locale({}, "darwin").LANG).toBe("en_US.UTF-8");
   });
 
   it("falls back to en_US.UTF-8 when LANG is empty", () => {
-    expect(ensureUtf8Locale({ LANG: "" }).LANG).toBe("en_US.UTF-8");
+    expect(ensureUtf8Locale({ LANG: "" }, "darwin").LANG).toBe("en_US.UTF-8");
   });
 
   it("falls back to en_US.UTF-8 when LANG is C", () => {
-    expect(ensureUtf8Locale({ LANG: "C" }).LANG).toBe("en_US.UTF-8");
+    expect(ensureUtf8Locale({ LANG: "C" }, "darwin").LANG).toBe("en_US.UTF-8");
   });
 
   it("falls back to en_US.UTF-8 when LANG is POSIX", () => {
-    expect(ensureUtf8Locale({ LANG: "POSIX" }).LANG).toBe("en_US.UTF-8");
+    expect(ensureUtf8Locale({ LANG: "POSIX" }, "darwin").LANG).toBe("en_US.UTF-8");
+  });
+
+  it.each(["", "C", "POSIX", "en_US.ISO-8859-1"])(
+    "falls back to C.UTF-8 on Linux, the one UTF-8 locale every tested distribution ships, for LANG=%j",
+    (lang) => {
+      expect(ensureUtf8Locale({ LANG: lang }, "linux").LANG).toBe("C.UTF-8");
+    }
+  );
+
+  it("keeps a UTF-8 LANG the user set on Linux", () => {
+    expect(ensureUtf8Locale({ LANG: "de_DE.UTF-8" }, "linux").LANG).toBe("de_DE.UTF-8");
+  });
+
+  it("falls back to en_US.UTF-8 on Windows", () => {
+    expect(ensureUtf8Locale({}, "win32").LANG).toBe("en_US.UTF-8");
   });
 
   it("falls back when LANG has non-UTF-8 encoding", () => {
-    expect(ensureUtf8Locale({ LANG: "en_US.ISO-8859-1" }).LANG).toBe("en_US.UTF-8");
+    expect(ensureUtf8Locale({ LANG: "en_US.ISO-8859-1" }, "darwin").LANG).toBe("en_US.UTF-8");
   });
 
   it("preserves C.UTF-8 (common Linux locale)", () => {
@@ -357,7 +372,7 @@ describe("ensureUtf8Locale", () => {
   });
 
   it("preserves other env vars", () => {
-    const result = ensureUtf8Locale({ PATH: "/usr/bin", HOME: "/home/test" });
+    const result = ensureUtf8Locale({ PATH: "/usr/bin", HOME: "/home/test" }, "darwin");
     expect(result.PATH).toBe("/usr/bin");
     expect(result.HOME).toBe("/home/test");
     expect(result.LANG).toBe("en_US.UTF-8");
