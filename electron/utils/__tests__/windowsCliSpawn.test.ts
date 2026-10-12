@@ -84,6 +84,49 @@ describe("Windows CLI resolution", () => {
     });
   });
 
+  it("unwraps npm's full current template and refuses one with extra lines", () => {
+    const head = [
+      "@ECHO off",
+      "GOTO start",
+      ":find_dp0",
+      "SET dp0=%~dp0",
+      "EXIT /b",
+      ":start",
+      "SETLOCAL",
+      "CALL :find_dp0",
+      "",
+      'IF EXIST "%dp0%\\node.exe" (',
+      '  SET "_prog=%dp0%\\node.exe"',
+      ") ELSE (",
+      '  SET "_prog=node"',
+      ")",
+      "",
+    ];
+    const call =
+      'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & set PATHEXT=%PATHEXT:;.JS;=;% & "%_prog%"  "%dp0%\\node_modules\\codex\\cli.js" %*';
+    const script = "C:\\tools\\node_modules\\codex\\cli.js";
+    const files = (source: string) =>
+      filesystem({
+        "C:\\tools\\codex.CMD": source,
+        [script]: "",
+        "C:\\Program Files\\node\\node.exe": "",
+      });
+
+    expect(
+      cliSpawnTarget("codex", ["--version"], "win32", files([...head, call].join("\r\n")))
+    ).toEqual({
+      command: "C:\\Program Files\\node\\node.exe",
+      args: [script, "--version"],
+      shell: false,
+    });
+
+    // cmd.exe would run C:\\other\\node_modules\\codex\\cli.js here.
+    const redirected = [...head.slice(0, 8), 'SET "dp0=C:\\other\\"', ...head.slice(8), call];
+    const target = cliSpawnTarget("codex", ["--version"], "win32", files(redirected.join("\r\n")));
+    expect(target.command).not.toBe("C:\\Program Files\\node\\node.exe");
+    expect(target.windowsVerbatimArguments).toBe(true);
+  });
+
   it("bypasses npm shims that invoke a bundled native executable", () => {
     const options = filesystem({
       "C:\\tools\\claude.CMD":
@@ -178,7 +221,7 @@ describe("Windows CLI resolution", () => {
     it("keeps flags and script arguments in place and applies the PATH prepend", () => {
       const source = crlf(
         "@SETLOCAL",
-        '@SET "PATH=C:\\runtime\\a;C:\\runtime\\b:%PATH%"',
+        '@SET "PATH=C:\\runtime\\a;C:\\runtime\\b;%PATH%"',
         ...localNodeBlock('--no-warnings "%~dp0\\..\\lib\\agent\\cli.js" --stdio %*')
       );
       const options = filesystem({
@@ -200,6 +243,28 @@ describe("Windows CLI resolution", () => {
         "C:\\tools\\node.exe": "",
       });
       expect(cliSpawnTarget("agent", [], "win32", withLocal).command).toBe("C:\\tools\\node.exe");
+    });
+
+    it("applies a colon-joined PATH prepend literally, as cmd.exe does", () => {
+      // `C:\runtime\b:C:\tools` is one directory name to Windows, so the Node
+      // behind it is as unreachable for us as for the shim.
+      const source = crlf(
+        "@SETLOCAL",
+        '@SET "PATH=C:\\runtime\\b:%PATH%"',
+        'node "%~dp0\\..\\lib\\agent\\cli.js" %*'
+      );
+      const options = filesystem({
+        "C:\\tools\\agent.CMD": source,
+        [script]: "",
+        "C:\\runtime\\b\\node.exe": "",
+        "C:\\Program Files\\node\\node.exe": "",
+      });
+      expect(cliSpawnTarget("agent", [], "win32", options)).toEqual({
+        command: "C:\\Program Files\\node\\node.exe",
+        args: [script],
+        shell: false,
+        env: { Path: "C:\\runtime\\b:C:\\tools;C:\\Program Files\\node" },
+      });
     });
 
     it("runs a baked Node path and a native target directly", () => {

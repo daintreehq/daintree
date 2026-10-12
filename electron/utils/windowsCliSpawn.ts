@@ -120,6 +120,42 @@ function unwrapNpmShim(
   );
 }
 
+// Every line npm's cmd-shim (and its older layouts) writes besides the call
+// itself. A shim with any other line, such as one that resets `dp0` or `_prog`
+// or changes directory, is not one we can stand in for.
+const MODERN_SHIM_LINES = [
+  /^@?ECHO\s+off$/i,
+  /^GOTO\s+start$/i,
+  /^:find_dp0$/i,
+  /^SET\s+dp0=%~dp0$/i,
+  /^EXIT\s+\/b$/i,
+  /^:start$/i,
+  /^SETLOCAL$/i,
+  /^CALL\s+:find_dp0$/i,
+  /^IF\s+EXIST\s+"%dp0%\\node\.exe"\s+\($/i,
+  /^SET\s+"_prog=%dp0%\\node\.exe"$/i,
+  /^\)\s+ELSE\s+\($/i,
+  /^SET\s+"_prog=node"$/i,
+  /^SET\s+PATHEXT=%PATHEXT:;\.JS;=;%$/i,
+  /^\)$/,
+];
+const MODERN_SHIM_CALL_PREFIX =
+  /^(?:endLocal\s+&\s+goto\s+#_undefined_#\s+2>NUL\s+\|\|\s+title\s+%COMSPEC%\s+&\s+)?(?:set\s+PATHEXT=%PATHEXT:;\.JS;=;%\s+&\s+)?/i;
+
+function isModernNpmShimSource(source: string, callLine: string): boolean {
+  let calls = 0;
+  for (const raw of source.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line === callLine) {
+      calls++;
+      continue;
+    }
+    if (!MODERN_SHIM_LINES.some((re) => re.test(line))) return false;
+  }
+  return calls === 1;
+}
+
 function unwrapModernNpmShim(
   source: string,
   directory: string,
@@ -130,6 +166,7 @@ function unwrapModernNpmShim(
     /^"%dp0%[\\/]([^"\r\n]+\.(?:exe|com))"\s*((?:--?[A-Za-z0-9_-]+\s+)*)%\*\s*$/im
   );
   if (native) {
+    if (!isModernNpmShimSource(source, native[0].trim())) return undefined;
     const executable = path.win32.resolve(directory, native[1]);
     if (!isFile(executable)) throw launchError(executable, "ENOENT");
     return {
@@ -143,6 +180,14 @@ function unwrapModernNpmShim(
     /"%_prog%"\s*((?:--?[A-Za-z0-9_-]+\s+)*)"%dp0%[\\/]([^"\r\n]+)"\s+%\*\s*$/im
   );
   if (!call) return undefined;
+  const callLine = source
+    .split(/\r?\n/)
+    .find((line) => line.includes(call[0].trim()))
+    ?.trim();
+  if (!callLine || !MODERN_SHIM_CALL_PREFIX.test(callLine)) return undefined;
+  const prefix = MODERN_SHIM_CALL_PREFIX.exec(callLine)?.[0] ?? "";
+  if (`${prefix}${call[0].trim()}` !== callLine) return undefined;
+  if (!isModernNpmShimSource(source, callLine)) return undefined;
   const script = path.win32.resolve(directory, call[2]);
   if (!isFile(script)) throw launchError(script, "ENOENT");
   const localNode = path.win32.join(directory, "node.exe");
@@ -159,9 +204,9 @@ const SHIM_FLAG = /^--?[A-Za-z0-9_-]+$/;
 // way); any other `%` is an expansion we will not evaluate.
 const SHIM_TEXT = String.raw`(?:[^"%\r\n]|%%)+`;
 const SHIM_PATH_TEXT = new RegExp(`^${SHIM_TEXT}$`);
-// pnpm writes `:` here, which Windows reads as part of a directory name; the
-// prepend is applied with `;`, the separator the shim means.
-const SHIM_PATH_PREPEND = new RegExp(String.raw`^@SET\s+"PATH=(${SHIM_TEXT})[:;]%PATH%"$`, "i");
+// Applied exactly as cmd.exe would, separator included: pnpm can write `:`,
+// which Windows reads as part of one (unusable) directory name.
+const SHIM_PATH_PREPEND = new RegExp(String.raw`^@SET\s+"PATH=(${SHIM_TEXT})([:;])%PATH%"$`, "i");
 const SHIM_NODE_PATH_BLOCK = [
   /^@IF\s+NOT\s+DEFINED\s+NODE_PATH\s+\($/i,
   new RegExp(String.raw`^@SET\s+"NODE_PATH=(${SHIM_TEXT})"$`, "i"),
@@ -284,7 +329,10 @@ function unwrapClassicShim(
     if (PNPM_CODEPAGE_SWITCH.has(line) || SHIM_PREAMBLE.some((re) => re.test(line))) continue;
     const pathPrepend = SHIM_PATH_PREPEND.exec(line);
     if (pathPrepend) {
-      prepend("PATH", (pathPrepend[1] ?? "").replace(/%%/g, "%"));
+      // `%PATH%` expands to nothing in a batch file when PATH is unset.
+      const key = envKey(callerEnv, "PATH") ?? "PATH";
+      const existing = Object.hasOwn(env, key) ? env[key] : callerEnv[key];
+      env[key] = `${(pathPrepend[1] ?? "").replace(/%%/g, "%")}${pathPrepend[2]}${existing ?? ""}`;
       continue;
     }
     if (SHIM_NODE_PATH_BLOCK[0].test(line)) {
