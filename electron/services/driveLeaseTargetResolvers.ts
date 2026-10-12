@@ -50,6 +50,62 @@ async function realpathOrNull(p: string): Promise<string | null> {
   );
 }
 
+/** How long a project root's real spelling is used before it is read again behind the lookup. */
+const ROOT_SPELLING_TTL_MS = 30_000;
+
+interface RootSpelling {
+  real: string | null;
+  /** When `real` was read; 0 while it never has been. */
+  readAt: number;
+  reading: Promise<string | null> | null;
+}
+
+const rootSpellings = new Map<string, RootSpelling>();
+
+function readRootSpelling(root: string, entry: RootSpelling): Promise<string | null> {
+  const reading = realpathOrNull(root).then((real) => {
+    entry.real = real;
+    entry.readAt = Date.now();
+    entry.reading = null;
+    return real;
+  });
+  entry.reading = reading;
+  return reading;
+}
+
+/**
+ * A registered root's real spelling. Re-reading every root on every lookup let
+ * one root on a mount that stopped answering hold every lookup to the timeout
+ * and refuse it. A spelling read before now answers at once, and a stale one
+ * is read again behind it. A root never read is still waited for: any root
+ * might hold the path, and a lookup must never miss an owner.
+ */
+function realRoot(root: string): Promise<string | null> {
+  const known = rootSpellings.get(root);
+  if (known && known.readAt > 0) {
+    if (!known.reading && Date.now() - known.readAt > ROOT_SPELLING_TTL_MS) {
+      void readRootSpelling(root, known);
+    }
+    return Promise.resolve(known.real);
+  }
+  if (known?.reading) return known.reading;
+  const entry: RootSpelling = { real: null, readAt: 0, reading: null };
+  rootSpellings.set(root, entry);
+  return readRootSpelling(root, entry);
+}
+
+/** Forget roots no longer registered, once there are clearly more than the registry holds. */
+function pruneRootSpellings(roots: readonly string[]): void {
+  if (rootSpellings.size <= roots.length * 2 + 16) return;
+  const live = new Set(roots);
+  for (const root of rootSpellings.keys()) if (!live.has(root)) rootSpellings.delete(root);
+}
+
+/** Test-only. */
+export function resetRootSpellingsForTests(): void {
+  rootSpellings.clear();
+}
+
 function isMissing(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | null)?.code;
   return code === "ENOENT" || code === "ENOTDIR";
@@ -110,11 +166,12 @@ async function projectsForPathOwnership(
   if (probe.path === null && probe.failure === "transient") {
     throw new Error("git could not say which repository owns the path");
   }
+  pruneRootSpellings(projects.map((project) => project.root));
   const realProjects = (
     await Promise.all(
       projects.map(async (project) => {
-        const realRoot = await realpathOrNull(project.root);
-        return realRoot ? { id: project.id, root: realRoot } : null;
+        const real = await realRoot(project.root);
+        return real ? { id: project.id, root: real } : null;
       })
     )
   ).filter((project): project is ProjectRoot => project !== null);

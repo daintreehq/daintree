@@ -1,5 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  promises as fsp,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -35,7 +42,10 @@ vi.mock("../../window/serviceRefs.js", () => ({
 }));
 
 import { resolveLeaseTarget, type LeaseTargetResolvers } from "../driveLeaseTargets.js";
-import { createLeaseTargetResolvers } from "../driveLeaseTargetResolvers.js";
+import {
+  createLeaseTargetResolvers,
+  resetRootSpellingsForTests,
+} from "../driveLeaseTargetResolvers.js";
 import { getChannelLeaseTarget } from "../../ipc/channelLeasePolicy.js";
 import { getOperationRegistry } from "../operations/index.js";
 
@@ -331,6 +341,50 @@ describe("createLeaseTargetResolvers", () => {
     // ".." after a link climbs from where the link leads, as git's cwd does,
     // never back into the folder that holds the link.
     await expect(lookup(r, `${repoA}/into-b-sub/..`)).resolves.toEqual(["b"]);
+  });
+
+  it("answers from a root's earlier spelling when its mount stops answering, but never skips a root it hasn't read", async () => {
+    resetRootSpellingsForTests();
+    const r = createLeaseTargetResolvers();
+    const mount = path.join(root, "mount");
+    const fresh = path.join(root, "fresh-mount");
+    mkdirSync(mount);
+    mkdirSync(fresh);
+    projects.push({ id: "m", path: mount, name: "m" });
+    const realpath = fsp.realpath.bind(fsp);
+    const stalled = new Set<string>();
+    const spy = vi
+      .spyOn(fsp, "realpath")
+      .mockImplementation(((p: string) =>
+        stalled.has(p) ? new Promise(() => {}) : realpath(p)) as typeof fsp.realpath);
+    try {
+      await expect(lookup(r, path.join(repoB, "x"))).resolves.toEqual(["b"]);
+      // The mount stops answering; well past the spelling's freshness the lookup still answers at once.
+      stalled.add(mount);
+      const later = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60 * 60_000);
+      const started = performance.now();
+      await expect(lookup(r, path.join(repoB, "x"))).resolves.toEqual(["b"]);
+      expect(performance.now() - started).toBeLessThan(1_000);
+      later.mockRestore();
+
+      // A root registered after the stall has no spelling yet: the lookup waits on it.
+      stalled.add(fresh);
+      projects.push({ id: "f", path: fresh, name: "f" });
+      let settled = false;
+      void Promise.resolve(r.projectsForPath(path.join(repoB, "x"))).then(
+        () => (settled = true),
+        () => (settled = true)
+      );
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(settled).toBe(false);
+    } finally {
+      spy.mockRestore();
+      projects.splice(
+        projects.findIndex((p) => p.id === "m"),
+        2
+      );
+      resetRootSpellingsForTests();
+    }
   });
 
   it("traces a worktree of a repository whose git directory is kept elsewhere to its project", async () => {
