@@ -55,6 +55,7 @@ const noop = () => {};
 
 const EMPTY_META: DerivedWorktreeMeta = {
   terminalCount: 0,
+  hasAgent: false,
   hasWorkingAgent: false,
   hasWaitingAgent: false,
   hasCompletedAgent: false,
@@ -67,6 +68,7 @@ const WORKING_AGENT = 1;
 const WAITING_AGENT = 2;
 const COMPLETED_AGENT = 4;
 const EXITED_AGENT = 8;
+const ANY_AGENT = 16;
 
 export interface WorktreeOverviewModalProps {
   isOpen: boolean;
@@ -104,6 +106,7 @@ export function WorktreeOverviewModal({
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
     alwaysShowActive,
@@ -123,6 +126,7 @@ export function WorktreeOverviewModal({
       typeFilters: state.typeFilters,
       prIssueFilters: state.prIssueFilters,
       sessionFilters: state.sessionFilters,
+      hasAgentFilter: state.hasAgentFilter,
       activityFilters: state.activityFilters,
       devServerFilters: state.devServerFilters,
       alwaysShowActive: state.alwaysShowActive,
@@ -157,6 +161,7 @@ export function WorktreeOverviewModal({
           terminalCount++;
           if (!isAgentTerminal(t)) continue;
           if (!isPtyPanel(t)) continue;
+          flags |= ANY_AGENT;
           if (t.agentState === "working") flags |= WORKING_AGENT;
           if (t.agentState === "waiting") {
             flags |= WAITING_AGENT;
@@ -177,6 +182,7 @@ export function WorktreeOverviewModal({
       const terminalCount = agentTallies[index * 3] ?? 0;
       const waitingTerminalCount = agentTallies[index * 3 + 1] ?? 0;
       const flags = agentTallies[index * 3 + 2] ?? 0;
+      const hasAgent = (flags & ANY_AGENT) !== 0;
       const hasWorkingAgent = (flags & WORKING_AGENT) !== 0;
       const hasWaitingAgent = (flags & WAITING_AGENT) !== 0;
       const hasCompletedAgent = (flags & COMPLETED_AGENT) !== 0;
@@ -205,6 +211,7 @@ export function WorktreeOverviewModal({
       });
       map.set(worktree.id, {
         terminalCount,
+        hasAgent,
         hasWorkingAgent,
         hasWaitingAgent,
         hasCompletedAgent,
@@ -224,6 +231,7 @@ export function WorktreeOverviewModal({
       typeFilters,
       prIssueFilters,
       sessionFilters,
+      hasAgentFilter,
       activityFilters,
       devServerFilters,
     }),
@@ -233,6 +241,7 @@ export function WorktreeOverviewModal({
       typeFilters,
       prIssueFilters,
       sessionFilters,
+      hasAgentFilter,
       activityFilters,
       devServerFilters,
     ]
@@ -654,6 +663,7 @@ export function WorktreeOverviewModal({
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
   });

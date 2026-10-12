@@ -150,6 +150,7 @@ describe("sidebar derivation predicates", () => {
               filters,
               metaMap.get(worktree.id) ?? {
                 terminalCount: 0,
+                hasAgent: false,
                 hasWorkingAgent: false,
                 hasWaitingAgent: false,
                 hasCompletedAgent: false,

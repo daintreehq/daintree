@@ -12,6 +12,7 @@ function resetWorktreeFilterStore() {
     typeFilters: new Set(),
     prIssueFilters: new Set(),
     sessionFilters: new Set(),
+    hasAgentFilter: false,
     activityFilters: new Set(),
     devServerFilters: new Set(),
     alwaysShowActive: true,
@@ -45,6 +46,24 @@ describe("worktreeFilterStore", () => {
 
     expect(useWorktreeFilterStore.getState().getActiveFilterCount()).toBe(3);
     expect(useWorktreeFilterStore.getState().hasActiveFilters()).toBe(true);
+  });
+
+  it("treats 'Has an agent' as one facet filter that clearAll resets", () => {
+    useWorktreeFilterStore.getState().setHasAgentFilter(true);
+
+    const state = useWorktreeFilterStore.getState();
+    expect(state.hasAgentFilter).toBe(true);
+    expect(state.getActiveFilterCount()).toBe(1);
+    expect(state.hasActiveFilters()).toBe(true);
+    expect(state.hasFacetFilters()).toBe(true);
+
+    // Clearing Sessions leaves it alone: it is not a Sessions value.
+    state.clearSessionFilters();
+    expect(useWorktreeFilterStore.getState().hasAgentFilter).toBe(true);
+
+    useWorktreeFilterStore.getState().clearAll();
+    expect(useWorktreeFilterStore.getState().hasAgentFilter).toBe(false);
+    expect(useWorktreeFilterStore.getState().hasFacetFilters()).toBe(false);
   });
 
   it("hasActiveFilters returns true when only a facet filter is active (no query)", () => {
@@ -613,6 +632,73 @@ describe("worktreeFilterStore persistence scoping", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("writes the 'Has an agent' filter through to the scoped key when set and unset", async () => {
+    vi.useFakeTimers();
+    try {
+      const writes = new Map<string, string>();
+      installLocalStorage({
+        getItem: (key) => writes.get(key) ?? null,
+        setItem: (key, value) => {
+          writes.set(key, value);
+        },
+        removeItem: (key) => {
+          writes.delete(key);
+        },
+      });
+
+      const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+      const persisted = () =>
+        (JSON.parse(writes.get(PROJECT_KEY)!) as { state: { hasAgentFilter: boolean } }).state
+          .hasAgentFilter;
+
+      store.getState().setHasAgentFilter(true);
+      vi.advanceTimersByTime(400);
+      expect(persisted()).toBe(true);
+
+      store.getState().setHasAgentFilter(false);
+      expect(store.getState().hasAgentFilter).toBe(false);
+      vi.advanceTimersByTime(400);
+      expect(persisted()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("restores the 'Has an agent' filter, and defaults it off when absent", async () => {
+    const blob = (extra: Record<string, unknown>) =>
+      JSON.stringify({
+        state: {
+          query: "",
+          statusFilters: [],
+          typeFilters: [],
+          prIssueFilters: [],
+          sessionFilters: [],
+          activityFilters: [],
+          pinnedWorktrees: [],
+          collapsedWorktrees: [],
+          manualOrder: [],
+          ...extra,
+        },
+        version: 2,
+      });
+    installLocalStorage({
+      getItem: (key) => (key === PROJECT_KEY ? blob({ hasAgentFilter: true }) : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+    const first = await import("../worktreeFilterStore");
+    expect(first.useWorktreeFilterStore.getState().hasAgentFilter).toBe(true);
+
+    vi.resetModules();
+    installLocalStorage({
+      getItem: (key) => (key === PROJECT_KEY ? blob({}) : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+    const second = await import("../worktreeFilterStore");
+    expect(second.useWorktreeFilterStore.getState().hasAgentFilter).toBe(false);
   });
 
   it("seeds liveQuery from the persisted query on hydration", async () => {

@@ -16,6 +16,8 @@ import { isValidPastTimestamp } from "@/utils/timestamps";
 
 export interface DerivedWorktreeMeta {
   terminalCount: number;
+  /** One or more agent panes, in any state — including none reported yet. */
+  hasAgent: boolean;
   hasWorkingAgent: boolean;
   hasWaitingAgent: boolean;
   hasCompletedAgent: boolean;
@@ -187,6 +189,7 @@ export interface FilterState {
   typeFilters: Set<TypeFilter>;
   prIssueFilters: Set<PrIssueFilter>;
   sessionFilters: Set<SessionFilter>;
+  hasAgentFilter: boolean;
   activityFilters: Set<ActivityFilter>;
   devServerFilters: Set<DevServerFilter>;
 }
@@ -244,6 +247,8 @@ export function matchesFilters(
 
     if (!hasMatch) return false;
   }
+
+  if (filters.hasAgentFilter && !derived.hasAgent) return false;
 
   // Activity filters (OR within category)
   if (filters.activityFilters.size > 0) {
@@ -549,6 +554,7 @@ export function hasAnyFilters(filters: FilterState): boolean {
     filters.typeFilters.size > 0 ||
     filters.prIssueFilters.size > 0 ||
     filters.sessionFilters.size > 0 ||
+    filters.hasAgentFilter ||
     filters.activityFilters.size > 0 ||
     filters.devServerFilters.size > 0
   );
@@ -559,6 +565,7 @@ export interface ChipCounts {
   branchType: Record<TypeFilter, number>;
   prIssue: Record<PrIssueFilter, number>;
   sessions: Record<SessionFilter, number>;
+  hasAgent: number;
   activity: Record<ActivityFilter, number>;
   devServer: Record<DevServerFilter, number>;
 }
@@ -605,6 +612,7 @@ export function emptyChipCounts(): ChipCounts {
     branchType: emptyRecord(TYPE_KEYS),
     prIssue: emptyRecord(PR_ISSUE_KEYS),
     sessions: emptyRecord(SESSION_KEYS),
+    hasAgent: 0,
     activity: emptyRecord(ACTIVITY_KEYS),
     devServer: emptyRecord(DEV_SERVER_KEYS),
   };
@@ -612,6 +620,7 @@ export function emptyChipCounts(): ChipCounts {
 
 const DEFAULT_DERIVED_META: DerivedWorktreeMeta = {
   terminalCount: 0,
+  hasAgent: false,
   hasWorkingAgent: false,
   hasWaitingAgent: false,
   hasCompletedAgent: false,
@@ -626,6 +635,7 @@ const PR_ISSUE_FACET = 1 << 2;
 const SESSION_FACET = 1 << 3;
 const ACTIVITY_FACET = 1 << 4;
 const DEV_SERVER_FACET = 1 << 5;
+const HAS_AGENT_FACET = 1 << 6;
 
 export function computeChipCounts(
   worktrees: readonly (Worktree | WorktreeState)[],
@@ -659,7 +669,7 @@ export function computeChipCounts(
 
     // A row contributes to a facet when every other active facet passed. One
     // failure therefore admits it only to that facet; multiple failures admit
-    // it to none. This preserves the six disjunctive bases without six sweeps.
+    // it to none. This preserves the per-facet bases without a sweep per facet.
     if (filters.statusFilters.size > 0) {
       statuses = computeStatus(worktree, isActive);
       if (!statuses.some((status) => filters.statusFilters.has(status))) {
@@ -693,6 +703,8 @@ export function computeChipCounts(
         (filters.sessionFilters.has("exited") && derived.hasExitedAgent);
       if (!matchesSession) failedFacets |= SESSION_FACET;
     }
+
+    if (filters.hasAgentFilter && !derived.hasAgent) failedFacets |= HAS_AGENT_FACET;
 
     if (filters.activityFilters.size > 0) {
       let matchesActivity = false;
@@ -744,6 +756,10 @@ export function computeChipCounts(
       if (derived.hasWaitingAgent) counts.sessions.waiting++;
       if (derived.hasCompletedAgent) counts.sessions.completed++;
       if (derived.hasExitedAgent) counts.sessions.exited++;
+    }
+
+    if ((failedFacets === 0 || failedFacets === HAS_AGENT_FACET) && derived.hasAgent) {
+      counts.hasAgent++;
     }
 
     if (failedFacets === 0 || failedFacets === ACTIVITY_FACET) {

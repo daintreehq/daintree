@@ -63,6 +63,9 @@ export const SESSION_OPTIONS: readonly FilterOption<SessionFilter>[] = [
   { value: "exited", label: "Exited" },
 ];
 
+/** A facet of one value, so it has a label rather than an option list. */
+export const HAS_AGENT_LABEL = "Has an agent";
+
 export const ACTIVITY_OPTIONS: readonly FilterOption<ActivityFilter>[] = [
   { value: "last15m", label: "15m" },
   { value: "last1h", label: "1h" },
@@ -90,6 +93,7 @@ export interface ActiveFacets {
   typeFilters: ReadonlySet<TypeFilter>;
   prIssueFilters: ReadonlySet<PrIssueFilter>;
   sessionFilters: ReadonlySet<SessionFilter>;
+  hasAgentFilter: boolean;
   activityFilters: ReadonlySet<ActivityFilter>;
   devServerFilters: ReadonlySet<DevServerFilter>;
 }
@@ -116,6 +120,7 @@ function facetPhrase<T extends string>(
  */
 export function describeActiveFacets(facets: ActiveFacets): string {
   return [
+    facets.hasAgentFilter ? HAS_AGENT_LABEL : null,
     facetPhrase("Status", STATUS_OPTIONS, facets.statusFilters),
     facetPhrase("Branch type", TYPE_OPTIONS, facets.typeFilters),
     facetPhrase("Issues & PRs", PR_ISSUE_OPTIONS, facets.prIssueFilters),

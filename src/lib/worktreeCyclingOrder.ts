@@ -44,6 +44,7 @@ function buildDerivedMeta(
 ): DerivedWorktreeMeta {
   let terminalCount = 0;
   let waitingTerminalCount = 0;
+  let hasAgent = false;
   let hasWorkingAgent = false;
   let hasWaitingAgent = false;
   let hasCompletedAgent = false;
@@ -55,6 +56,7 @@ function buildDerivedMeta(
     terminalCount++;
     if (!isAgentTerminal(t)) continue;
     if (!isPtyPanel(t)) continue;
+    hasAgent = true;
     if (t.agentState === "working") hasWorkingAgent = true;
     if (t.agentState === "waiting") {
       hasWaitingAgent = true;
@@ -91,6 +93,7 @@ function buildDerivedMeta(
 
   return {
     terminalCount,
+    hasAgent,
     hasWorkingAgent,
     hasWaitingAgent,
     hasCompletedAgent,
@@ -133,6 +136,7 @@ export function getVisibleWorktreesForCycling(
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
     alwaysShowActive,
@@ -193,6 +197,7 @@ export function getVisibleWorktreesForCycling(
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
   };
@@ -250,6 +255,7 @@ export function getVisibleWorktreesForCycling(
   if (mainWorktree && worktreeMatchesQuery(mainWorktree, query)) {
     const mainDerived = derivedMetaMap.get(mainWorktree.id) ?? {
       terminalCount: 0,
+      hasAgent: false,
       hasWorkingAgent: false,
       hasWaitingAgent: false,
       hasCompletedAgent: false,

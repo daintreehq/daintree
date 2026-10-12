@@ -74,6 +74,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import {
   selectSidebarVisiblePanelIds,
   selectSidebarAgentStateByPanelId,
+  selectSidebarAgentPanelIds,
   selectSidebarFleetEligibleWorktreeById,
   computePanelStateByWorktree,
 } from "./sidebarPanelDerivation";
@@ -672,6 +673,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
     alwaysShowActive,
@@ -688,6 +690,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       typeFilters: state.typeFilters,
       prIssueFilters: state.prIssueFilters,
       sessionFilters: state.sessionFilters,
+      hasAgentFilter: state.hasAgentFilter,
       activityFilters: state.activityFilters,
       devServerFilters: state.devServerFilters,
       alwaysShowActive: state.alwaysShowActive,
@@ -755,6 +758,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // structural, agent-state, or fleet-eligibility changes.
   const visiblePanelIds = usePanelStore(useShallow(selectSidebarVisiblePanelIds));
   const agentStateByPanelId = usePanelStore(useShallow(selectSidebarAgentStateByPanelId));
+  const agentPanelIds = usePanelStore(useShallow(selectSidebarAgentPanelIds));
   const fleetEligibleWorktreeById = usePanelStore(
     useShallow(selectSidebarFleetEligibleWorktreeById)
   );
@@ -765,9 +769,17 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         panelIdsByWorktreeId,
         visiblePanelIds,
         agentStateByPanelId,
+        agentPanelIds,
         worktreeIds
       ),
-    [worktreeIdList, panelIdsByWorktreeId, visiblePanelIds, agentStateByPanelId, worktreeIds]
+    [
+      worktreeIdList,
+      panelIdsByWorktreeId,
+      visiblePanelIds,
+      agentStateByPanelId,
+      agentPanelIds,
+      worktreeIds,
+    ]
   );
 
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -847,6 +859,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       const panelState = panelStateByWorktree[worktree.id] ?? {
         terminalCount: 0,
         waitingTerminalCount: 0,
+        hasAgent: false,
         hasWorkingAgent: false,
         hasWaitingAgent: false,
         hasCompletedAgent: false,
@@ -881,6 +894,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
       map.set(worktree.id, {
         terminalCount: panelState.terminalCount,
+        hasAgent: panelState.hasAgent,
         hasWorkingAgent: panelState.hasWorkingAgent,
         hasWaitingAgent: panelState.hasWaitingAgent,
         hasCompletedAgent: panelState.hasCompletedAgent,
@@ -962,6 +976,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         typeFilters,
         prIssueFilters,
         sessionFilters,
+        hasAgentFilter,
         activityFilters,
         devServerFilters,
       },
@@ -976,6 +991,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
     devServerSessions,
@@ -1007,6 +1023,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         typeFilters,
         prIssueFilters,
         sessionFilters,
+        hasAgentFilter,
         activityFilters,
         devServerFilters,
       };
@@ -1015,6 +1032,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       const filtered = nonMainWorktrees.filter((worktree) => {
         const derived = derivedMetaMap.get(worktree.id) ?? {
           terminalCount: 0,
+          hasAgent: false,
           hasWorkingAgent: false,
           hasWaitingAgent: false,
           hasCompletedAgent: false,
@@ -1120,6 +1138,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       typeFilters,
       prIssueFilters,
       sessionFilters,
+      hasAgentFilter,
       activityFilters,
       devServerFilters,
       devServerSessions,
@@ -1207,6 +1226,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
   };
@@ -1220,6 +1240,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         pinnedFiltersPre,
         derivedMetaMap.get(mainWorktree.id) ?? {
           terminalCount: 0,
+          hasAgent: false,
           hasWorkingAgent: false,
           hasWaitingAgent: false,
           hasCompletedAgent: false,
@@ -1283,6 +1304,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     typeFilters,
     prIssueFilters,
     sessionFilters,
+    hasAgentFilter,
     activityFilters,
     devServerFilters,
   });

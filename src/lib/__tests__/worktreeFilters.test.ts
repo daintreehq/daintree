@@ -91,12 +91,14 @@ const createEmptyFilters = (): FilterState => ({
   typeFilters: new Set(),
   prIssueFilters: new Set(),
   sessionFilters: new Set(),
+  hasAgentFilter: false,
   activityFilters: new Set(),
   devServerFilters: new Set(),
 });
 
 const createEmptyMeta = (): DerivedWorktreeMeta => ({
   terminalCount: 0,
+  hasAgent: false,
   hasWorkingAgent: false,
   hasWaitingAgent: false,
   hasCompletedAgent: false,
@@ -1275,6 +1277,58 @@ describe("hasAnyFilters", () => {
   });
 });
 
+describe("'Has an agent' facet", () => {
+  const worktree = createMockWorktree({ id: "1" });
+
+  it("keeps agent worktrees in any state, including none reported, and drops the rest", () => {
+    const filters = { ...createEmptyFilters(), hasAgentFilter: true };
+    const idleAgent = { ...createEmptyMeta(), terminalCount: 1, hasAgent: true };
+    const shellOnly = { ...createEmptyMeta(), terminalCount: 2 };
+    expect(matchesFilters(worktree, filters, idleAgent, false)).toBe(true);
+    expect(matchesFilters(worktree, filters, shellOnly, false)).toBe(false);
+  });
+
+  it("narrows with the Sessions facet rather than widening it", () => {
+    const filters = { ...createEmptyFilters(), hasAgentFilter: true };
+    filters.sessionFilters.add("waiting");
+    const idleAgent = { ...createEmptyMeta(), terminalCount: 1, hasAgent: true };
+    const waitingAgent = { ...idleAgent, hasWaitingAgent: true };
+    expect(matchesFilters(worktree, filters, idleAgent, false)).toBe(false);
+    expect(matchesFilters(worktree, filters, waitingAgent, false)).toBe(true);
+  });
+
+  it("counts as an active filter", () => {
+    expect(hasAnyFilters({ ...createEmptyFilters(), hasAgentFilter: true })).toBe(true);
+  });
+
+  it("counts agent worktrees against every other facet, lifting only its own", () => {
+    const worktrees = [
+      createMockWorktree({ id: "a", branch: "feature/a" }),
+      createMockWorktree({ id: "b", branch: "feature/b" }),
+      createMockWorktree({ id: "c", branch: "bugfix/c" }),
+      createMockWorktree({ id: "d", branch: "feature/d" }),
+    ];
+    const agent = { ...createEmptyMeta(), terminalCount: 1, hasAgent: true };
+    const map = new Map<string, DerivedWorktreeMeta>([
+      ["a", agent],
+      ["b", { ...agent, hasWorkingAgent: true }],
+      ["c", agent],
+      ["d", { ...createEmptyMeta(), terminalCount: 1 }],
+    ]);
+    const filters = { ...createEmptyFilters(), hasAgentFilter: true };
+    filters.typeFilters.add("feature");
+
+    const counts = computeChipCounts(worktrees, map, null, filters);
+    // Its own selection is lifted; the feature filter still applies.
+    expect(counts.hasAgent).toBe(2);
+    // Other facets are counted within "Has an agent".
+    expect(counts.branchType.feature).toBe(2);
+    expect(counts.branchType.bugfix).toBe(1);
+    expect(counts.sessions.hasTerminals).toBe(2);
+    expect(counts.sessions.working).toBe(1);
+  });
+});
+
 describe("matchesQuickStateFilter", () => {
   it('"all" matches everything', () => {
     expect(matchesQuickStateFilter("all", createEmptyMeta())).toBe(true);
@@ -1497,6 +1551,7 @@ describe("computeChipCounts", () => {
       typeFilters: new Set(),
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
+      hasAgentFilter: false,
       activityFilters: new Set(),
       devServerFilters: new Set(),
     };
@@ -1522,6 +1577,7 @@ describe("computeChipCounts", () => {
       typeFilters: new Set<TypeFilter>(["feature"]),
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
+      hasAgentFilter: false,
       activityFilters: new Set(),
       devServerFilters: new Set(),
     };
@@ -1559,6 +1615,7 @@ describe("computeChipCounts", () => {
       typeFilters: new Set<TypeFilter>(["feature"]),
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
+      hasAgentFilter: false,
       activityFilters: new Set<ActivityFilter>(["last15m"]),
       devServerFilters: new Set(),
     };
@@ -1584,6 +1641,7 @@ describe("computeChipCounts", () => {
       typeFilters: new Set(),
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
+      hasAgentFilter: false,
       activityFilters: new Set(),
       devServerFilters: new Set(),
     };
@@ -1611,6 +1669,7 @@ describe("computeChipCounts", () => {
       typeFilters: new Set<TypeFilter>(["bugfix"]),
       prIssueFilters: new Set(),
       sessionFilters: new Set<SessionFilter>(["working"]),
+      hasAgentFilter: false,
       activityFilters: new Set(),
       devServerFilters: new Set(),
     };
@@ -1636,6 +1695,7 @@ describe("computeChipCounts", () => {
       typeFilters: new Set<TypeFilter>(["feature"]),
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
+      hasAgentFilter: false,
       activityFilters: new Set(),
       devServerFilters: new Set(),
     };
@@ -1657,6 +1717,7 @@ describe("computeChipCounts", () => {
       typeFilters: new Set(),
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
+      hasAgentFilter: false,
       activityFilters: new Set(),
       devServerFilters: new Set(),
     };

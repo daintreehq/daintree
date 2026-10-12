@@ -176,4 +176,38 @@ describe("worktreeFilterStore cross-view write merge (#11351)", () => {
     expect(projectBlob.state.pinnedWorktrees).toEqual(["wt-1"]); // sibling's pin survived
     expect(projectBlob.state.query).toBe("needle"); // this window's change applied
   });
+
+  it("a stale same-project window's write preserves a sibling's 'Has an agent' filter", async () => {
+    const backing = installLocalStorage({});
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+    vi.advanceTimersByTime(400);
+
+    backing.set(
+      PROJECT_KEY,
+      JSON.stringify({
+        version: 2,
+        state: {
+          query: "",
+          statusFilters: [],
+          typeFilters: [],
+          prIssueFilters: [],
+          sessionFilters: [],
+          hasAgentFilter: true,
+          activityFilters: [],
+          pinnedWorktrees: [],
+          collapsedWorktrees: [],
+          manualOrder: [],
+        },
+      })
+    );
+
+    store.getState().setQuery("needle");
+    vi.advanceTimersByTime(400);
+
+    const projectBlob: { state: { hasAgentFilter: boolean; query: string } } = JSON.parse(
+      backing.get(PROJECT_KEY)!
+    );
+    expect(projectBlob.state.hasAgentFilter).toBe(true);
+    expect(projectBlob.state.query).toBe("needle");
+  });
 });

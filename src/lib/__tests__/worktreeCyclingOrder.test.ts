@@ -102,6 +102,7 @@ function resetFilterStore(): void {
     typeFilters: new Set(),
     prIssueFilters: new Set(),
     sessionFilters: new Set(),
+    hasAgentFilter: false,
     activityFilters: new Set(),
     devServerFilters: new Set(),
     alwaysShowActive: true,

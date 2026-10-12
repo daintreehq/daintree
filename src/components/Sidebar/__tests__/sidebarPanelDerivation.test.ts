@@ -3,6 +3,7 @@ import type { PanelInstance } from "@shared/types/panel";
 import {
   selectSidebarVisiblePanelIds,
   selectSidebarAgentStateByPanelId,
+  selectSidebarAgentPanelIds,
   selectSidebarFleetEligibleWorktreeById,
   computePanelStateByWorktree,
   type SidebarPanelDerivationState,
@@ -89,6 +90,7 @@ describe("sidebarPanelDerivation selectors", () => {
       { "wt-1": ["batched"] },
       selectSidebarVisiblePanelIds(state),
       selectSidebarAgentStateByPanelId(state),
+      selectSidebarAgentPanelIds(state),
       new Set(["wt-1"])
     );
     expect(rollup["wt-1"]?.terminalCount).toBe(1);
@@ -177,12 +179,14 @@ describe("computePanelStateByWorktree", () => {
       { "wt-1": ["a", "b", "c"] },
       visible,
       agentState,
+      { a: 1, b: 1, c: 1 },
       new Set(["wt-1"])
     );
 
     expect(result["wt-1"]).toEqual({
       terminalCount: 3,
       waitingTerminalCount: 2,
+      hasAgent: true,
       hasWorkingAgent: true,
       hasWaitingAgent: true,
       hasCompletedAgent: false,
@@ -196,6 +200,7 @@ describe("computePanelStateByWorktree", () => {
       { "wt-1": ["a", "b"] },
       { a: 1, b: 1 },
       { a: "completed", b: "exited" },
+      { a: 1, b: 1 },
       new Set(["wt-1"])
     );
 
@@ -211,6 +216,7 @@ describe("computePanelStateByWorktree", () => {
       { "wt-1": ["a", "hidden"] },
       { a: 1 },
       { a: "working" },
+      { a: 1 },
       new Set(["wt-1"])
     );
 
@@ -224,16 +230,93 @@ describe("computePanelStateByWorktree", () => {
       { "wt-orphan": ["a"] },
       { a: 1 },
       { a: "working" },
+      { a: 1 },
       new Set(["wt-1"])
     );
 
     expect(result["wt-orphan"]).toEqual({
       terminalCount: 0,
       waitingTerminalCount: 0,
+      hasAgent: false,
       hasWorkingAgent: false,
       hasWaitingAgent: false,
       hasCompletedAgent: false,
       hasExitedAgent: false,
     });
+  });
+
+  it("flags an agent with no reported state, but not a worktree of plain shells", () => {
+    const result = computePanelStateByWorktree(
+      ["wt-1", "wt-2"],
+      { "wt-1": ["fresh"], "wt-2": ["shell"] },
+      { fresh: 1, shell: 1 },
+      {},
+      { fresh: 1 },
+      new Set(["wt-1", "wt-2"])
+    );
+
+    expect(result["wt-1"]?.hasAgent).toBe(true);
+    expect(result["wt-1"]?.hasWorkingAgent).toBe(false);
+    expect(result["wt-2"]?.hasAgent).toBe(false);
+    expect(result["wt-2"]?.terminalCount).toBe(1);
+  });
+
+  it("ignores an agent panel that is not visible", () => {
+    const result = computePanelStateByWorktree(
+      ["wt-1"],
+      { "wt-1": ["hidden"] },
+      {},
+      {},
+      { hidden: 1 },
+      new Set(["wt-1"])
+    );
+
+    expect(result["wt-1"]?.hasAgent).toBe(false);
+  });
+});
+
+describe("selectSidebarAgentPanelIds", () => {
+  it("includes agents in every state, and ones that have not reported a state", () => {
+    const state = makeState({
+      idle: agentPanel({ id: "idle", agentState: "idle" }),
+      directing: agentPanel({ id: "directing", agentState: "directing" }),
+      fresh: agentPanel({ id: "fresh", agentState: undefined }),
+      plugin: agentPanel({
+        id: "plugin",
+        launchAgentId: "acme-plugin-agent",
+        agentState: undefined,
+      }),
+    });
+
+    expect(selectSidebarAgentPanelIds(state)).toEqual({
+      idle: 1,
+      directing: 1,
+      fresh: 1,
+      plugin: 1,
+    });
+  });
+
+  it("excludes plain shells and non-terminal panels", () => {
+    const state = makeState({
+      shell: agentPanel({
+        id: "shell",
+        launchAgentId: undefined,
+        detectedAgentId: undefined,
+        runtimeIdentity: undefined,
+        agentState: undefined,
+      }),
+      browser: agentPanel({ id: "browser", kind: "browser" } as Partial<PanelInstance>),
+    });
+
+    expect(selectSidebarAgentPanelIds(state)).toEqual({});
+  });
+
+  it("is unchanged when only a buffer-written field changes", () => {
+    const before = makeState({ a: agentPanel({ id: "a", agentState: undefined }) });
+    const after = makeState({
+      a: agentPanel({ id: "a", agentState: undefined, activityHeadline: "streaming…" }),
+    });
+
+    expect(selectSidebarAgentPanelIds(after)).toEqual(selectSidebarAgentPanelIds(before));
   });
 });
