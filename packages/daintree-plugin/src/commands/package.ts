@@ -9,6 +9,7 @@ import {
 import { resolveVitePlan, runVitePlanBuild } from "../lib/viteBuild.js";
 import { runValidate } from "./validate.js";
 import { isPluginCustomIconRef } from "../../../../shared/config/pluginCustomIcon.js";
+import { parseJsonText } from "../lib/parseJsonText.js";
 
 /**
  * Per-plugin shipping-policy ignore file, `.gitignore` syntax. Only the archive
@@ -157,7 +158,7 @@ export async function runPackage(opts: PackageOptions = {}): Promise<PackageResu
     throw new Error(`Manifest validation failed:\n  ${validation.errors.join("\n  ")}`);
   }
 
-  const manifest = JSON.parse(
+  const manifest = parseJsonText(
     await fs.readFile(path.join(dir, "plugin.json"), "utf8")
   ) as MinimalManifest;
 

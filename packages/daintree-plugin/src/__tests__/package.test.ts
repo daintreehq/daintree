@@ -108,6 +108,18 @@ describe("runPackage", () => {
     }
   });
 
+  it("packages a plugin.json saved with a UTF-8 byte-order mark", async () => {
+    await fixture();
+    const manifest = await fs.readFile(path.join(tmpDir, "plugin.json"), "utf8");
+    await writeFile("plugin.json", "\uFEFF" + manifest);
+    const result = await runPackage({ dir: tmpDir, skipBuild: true });
+    const verify = await verifyPluginArchive(result.outputPath!);
+    expect(verify.valid).toBe(true);
+    if (verify.valid) {
+      expect(verify.manifest.name).toBe("acme.packtest");
+    }
+  });
+
   it("fails on an invalid manifest", async () => {
     await writeFile("plugin.json", JSON.stringify({ name: "no-dot", version: "1.0.0" }));
     await writeFile("dist/index.js", "export const x = 1;");

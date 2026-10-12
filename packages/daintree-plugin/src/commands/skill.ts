@@ -7,6 +7,7 @@ import {
   skillInstallDir,
   type BundledSkill,
 } from "../skills.js";
+import { parseJsonText } from "../lib/parseJsonText.js";
 
 export interface SkillAddOptions {
   /** Plugin directory (default: the cwd). */
@@ -83,7 +84,7 @@ export async function runSkillAdd(
   }
   let manifest: unknown;
   try {
-    manifest = JSON.parse(raw);
+    manifest = parseJsonText(raw);
   } catch {
     throw new Error("plugin.json is not valid JSON");
   }
