@@ -394,6 +394,11 @@ export function createWindowWithState(
     cascadeOffOccupied(win, tracking.getOccupiedBounds());
   }
 
+  // Electron's maximize() on a hidden window shows it, maximized, and on Linux
+  // that show activates it: the window maps before its reveal gate, and a
+  // restored background window takes focus and the top of the stack from the
+  // window the user is in. On Linux the maximize waits for the reveal instead.
+  let maximizeOnShow = false;
   if (windowState.isFullScreen) {
     win.once("show", () => {
       if (!win.isDestroyed()) {
@@ -401,7 +406,17 @@ export function createWindowWithState(
       }
     });
   } else if (windowState.isMaximized) {
-    win.maximize();
+    if (process.platform === "linux" && options.show === false) {
+      maximizeOnShow = true;
+      win.once("show", () => {
+        maximizeOnShow = false;
+        if (!win.isDestroyed()) {
+          win.maximize();
+        }
+      });
+    } else {
+      win.maximize();
+    }
   }
 
   // The project this window's bounds belong to: the one it opened on until it
@@ -424,7 +439,7 @@ export function createWindowWithState(
   const saveState = (saveKey: string | null = resolveSaveKey()) => {
     if (win.isDestroyed()) return;
 
-    const isMaximized = win.isMaximized();
+    const isMaximized = win.isMaximized() || maximizeOnShow;
     const isFullScreen = win.isFullScreen();
 
     const normalBounds = win.getNormalBounds();

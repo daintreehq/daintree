@@ -26,7 +26,7 @@ export interface ActiveViewFocusHandle {
   dispose: () => void;
 }
 
-function viewWebContents(view: View): WebContents | null {
+export function viewWebContents(view: View): WebContents | null {
   const wc = (view as Partial<WebContentsView>).webContents;
   return wc && !wc.isDestroyed() ? wc : null;
 }

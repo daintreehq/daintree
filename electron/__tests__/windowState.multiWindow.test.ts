@@ -309,3 +309,37 @@ describe("saving under the project the window shows", () => {
     expect(listeners).toHaveLength(0);
   });
 });
+
+describe("restoring a maximized window", () => {
+  const maximizedState = { [DAINTREE]: { ...DAINTREE_BOUNDS, isMaximized: true } };
+
+  it("on Linux maximizes a hidden window only once it is revealed", () => {
+    setPlatform("linux");
+    fakes.store.state = { ...maximizedState };
+
+    const win = open(DAINTREE);
+    expect(win.maximize).not.toHaveBeenCalled();
+
+    win.emit("show");
+    expect(win.maximize).toHaveBeenCalledTimes(1);
+  });
+
+  it("on Linux keeps the saved maximized state while the reveal is pending", () => {
+    setPlatform("linux");
+    fakes.store.state = { ...maximizedState };
+
+    const win = open(DAINTREE);
+    win.emit("close");
+
+    expect(fakes.store.state[DAINTREE]).toMatchObject({ isMaximized: true });
+  });
+
+  it("maximizes at once on macOS and Windows", () => {
+    for (const platform of ["darwin", "win32"] as const) {
+      setPlatform(platform);
+      fakes.store.state = { ...maximizedState };
+
+      expect(open(DAINTREE).maximize).toHaveBeenCalledTimes(1);
+    }
+  });
+});
