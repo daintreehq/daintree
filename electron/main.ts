@@ -324,8 +324,9 @@ const __dirname = path.dirname(__filename);
 // NSIS installer stamps its shortcuts with the build appId, but Electron only
 // adopts one itself for Squirrel installs, so without this the process runs as
 // `electron.app.Daintree` and matches no shortcut. Set before any window or
-// notification exists. Unpackaged builds have no such shortcut to match.
-if (process.platform === "win32" && app.isPackaged) {
+// notification exists. Unpackaged builds have no such shortcut to match, and an
+// AppX/MSIX install has its own package identity, which this would contradict.
+if (process.platform === "win32" && app.isPackaged && !process.windowsStore) {
   app.setAppUserModelId("org.daintree.app");
 }
 
