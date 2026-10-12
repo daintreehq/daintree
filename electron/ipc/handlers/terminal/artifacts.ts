@@ -10,6 +10,7 @@ import type { HandlerDependencies, IpcContext } from "../../types.js";
 import { defineIpcNamespace, op } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
+import { applyPatchToleratingTransportCrlf, parsePatchModifiedFiles } from "./patchText.js";
 import type {
   SaveArtifactOptions,
   SaveArtifactResult,
@@ -168,7 +169,10 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
     try {
       const { execa } = await import("execa");
       try {
-        await execa("git", ["apply", tmpPatchPath], { cwd: resolvedCwd });
+        await applyPatchToleratingTransportCrlf(patchContent, async (content) => {
+          if (content !== patchContent) await fs.writeFile(tmpPatchPath, content, "utf-8");
+          await execa("git", ["apply", tmpPatchPath], { cwd: resolvedCwd });
+        });
       } catch (error) {
         const errorMessage = formatErrorMessage(error, "Failed to apply patch");
         console.error("[Artifact] Failed to apply patch:", errorMessage);
@@ -180,18 +184,7 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
         });
       }
 
-      const modifiedFiles: string[] = [];
-      const lines = patchContent.split("\n");
-      for (const line of lines) {
-        if (line.startsWith("+++")) {
-          const match = line.match(/\+\+\+ b\/(.+)/);
-          if (match) {
-            modifiedFiles.push(match[1]);
-          }
-        }
-      }
-
-      return { modifiedFiles };
+      return { modifiedFiles: parsePatchModifiedFiles(patchContent) };
     } finally {
       await fs.unlink(tmpPatchPath).catch(() => {});
     }

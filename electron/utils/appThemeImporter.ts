@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { stripUtf8Bom } from "./stripUtf8Bom.js";
 import { z } from "zod";
 import {
   APP_THEME_TOKEN_KEYS,
@@ -69,7 +70,7 @@ export function parseAppThemeContent(content: string, filename: string): AppThem
   let rawData: unknown;
 
   try {
-    rawData = JSON.parse(content);
+    rawData = JSON.parse(stripUtf8Bom(content));
   } catch (error) {
     return {
       ok: false,

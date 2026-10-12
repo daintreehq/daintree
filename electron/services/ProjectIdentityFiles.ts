@@ -12,6 +12,7 @@ import { z } from "zod";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { UTF8_BOM, isValidProjectId } from "./projectStorePaths.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
+import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 import { TerminalRecipeSchema } from "../schemas/ipc.js";
 import {
   sanitizeRecipeTerminals,
@@ -365,7 +366,7 @@ export class ProjectIdentityFiles {
       throw error;
     }
     try {
-      return detectRecipeForwardIncompat(JSON.parse(content));
+      return detectRecipeForwardIncompat(JSON.parse(stripUtf8Bom(content)));
     } catch {
       return null;
     }
@@ -423,7 +424,7 @@ export class ProjectIdentityFiles {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
       try {
         const content = await fs.readFile(path.join(recipesDir, entry.name), "utf-8");
-        const parsed = JSON.parse(content);
+        const parsed = JSON.parse(stripUtf8Bom(content));
         if (typeof parsed !== "object" || parsed === null) {
           continue;
         }
@@ -569,7 +570,7 @@ export class ProjectIdentityFiles {
         if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
         try {
           const content = await fs.readFile(path.join(agentDir, entry.name), "utf-8");
-          const parsed = JSON.parse(content);
+          const parsed = JSON.parse(stripUtf8Bom(content));
           if (
             typeof parsed !== "object" ||
             parsed === null ||

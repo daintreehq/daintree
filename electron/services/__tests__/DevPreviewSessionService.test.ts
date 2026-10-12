@@ -453,6 +453,48 @@ describe("DevPreviewSessionService", () => {
     expect(state.error?.message).toContain("7");
   });
 
+  // Only the exit is simulated as Windows: the spawn ran under the host
+  // platform, so the launch-shell path stays the one this machine can build.
+  describe("Windows Ctrl+C exit (STATUS_CONTROL_C_EXIT)", () => {
+    const realPlatform = process.platform;
+    const emitExitAsWindows = (id: string, exitCode: number) => {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        ptyClient.emitExit(id, exitCode, 0);
+      } finally {
+        Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+      }
+    };
+
+    it.each([
+      ["unsigned DWORD from node-pty", 3221225786],
+      ["signed value PowerShell passes on", -1073741510],
+    ])("treats the %s as a clean stop", async (_label, exitCode) => {
+      const started = await service.ensure(baseRequest);
+      emitExitAsWindows(started.terminalId!, exitCode);
+
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
+      expect(state.status).toBe("stopped");
+      expect(state.error).toBeNull();
+    });
+
+    it("still reports other Windows exit codes as errors", async () => {
+      const started = await service.ensure(baseRequest);
+      // 130 is POSIX's encoded SIGINT; Windows has no such encoding.
+      emitExitAsWindows(started.terminalId!, 130);
+
+      const state = service.getState({
+        panelId: baseRequest.panelId,
+        projectId: baseRequest.projectId,
+      });
+      expect(state.status).toBe("error");
+      expect(state.error?.message).toContain("130");
+    });
+  });
+
   it("classifies compile-error exit from buffered output", async () => {
     const started = await service.ensure(baseRequest);
     expect(started.status).toBe("starting");

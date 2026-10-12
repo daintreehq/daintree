@@ -152,6 +152,20 @@ describe("WorktreeLifecycleService", () => {
       expect(result).toEqual(validConfig);
     });
 
+    it("reads a config saved with a UTF-8 BOM instead of skipping it", async () => {
+      const projectConfig = { setup: ["npm install"] };
+
+      mockAccess.mockImplementation(async (p: string) => {
+        if (!n(p).endsWith("/project/.daintree/config.json")) throw new Error("ENOENT");
+        return undefined;
+      });
+      // What Windows PowerShell 5.1's `Set-Content -Encoding utf8` writes.
+      mockReadFile.mockResolvedValue("﻿" + JSON.stringify(projectConfig));
+
+      const result = await service.loadConfig("/path/to/worktree", "/path/to/project");
+      expect(result).toEqual(projectConfig);
+    });
+
     it("returns config with only setup or only teardown", async () => {
       const config = { teardown: ["docker compose down"] };
 
@@ -517,7 +531,7 @@ describe("WorktreeLifecycleService", () => {
       const expectedDetached = process.platform !== "win32";
       expect(mockSpawn).toHaveBeenCalledWith(
         "echo test",
-        expect.objectContaining({ detached: expectedDetached, shell: true })
+        expect.objectContaining({ detached: expectedDetached, shell: true, windowsHide: true })
       );
     });
 

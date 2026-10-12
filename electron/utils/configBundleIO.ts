@@ -1,4 +1,5 @@
 import { findSecretInValue } from "../../shared/utils/secretScrubber.js";
+import { stripUtf8Bom } from "./stripUtf8Bom.js";
 import {
   CONFIG_BUNDLE_APP_ID,
   CONFIG_BUNDLE_MAX_BYTES,
@@ -168,7 +169,7 @@ export function parseConfigBundle(json: string): ParseConfigBundleResult {
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(json);
+    parsed = JSON.parse(stripUtf8Bom(json));
   } catch {
     return failure("Invalid JSON");
   }

@@ -3,6 +3,7 @@ import path from "path";
 
 import { describeManifestIssues, getPluginManifestSchema } from "../../schemas/plugin.js";
 import type { PluginManifest } from "../../../shared/types/plugin.js";
+import { stripUtf8Bom } from "../../utils/stripUtf8Bom.js";
 
 /** Where a project keeps its own plugins, relative to the project root. */
 export const PROJECT_PLUGINS_DIR_SEGMENTS = [".daintree", "plugins"] as const;
@@ -182,7 +183,7 @@ async function inspectCandidate(
 
   let json: unknown;
   try {
-    json = JSON.parse(raw);
+    json = JSON.parse(stripUtf8Bom(raw));
   } catch {
     return { dirName, dir: realDir, error: `"${dirName}/plugin.json" is not valid JSON` };
   }

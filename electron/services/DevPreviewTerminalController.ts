@@ -797,14 +797,9 @@ export async function runInstall<TSession extends TerminalControllerSession>(
   if (!launch) submitFallbackCommand(terminalId, installCommand, deps);
 }
 
-/**
- * Handle a dev-preview terminal exit: clear pending timers/aborts, detach the
- * terminal, classify the failure (if any), and decide whether to auto-respawn
- * (install completion, crash-loop-guarded reinstall) or land in a terminal
- * stopped/error state. Mirrors the orchestrator's former `handleExit` body —
- * callers are expected to have already checked disposal/session-lookup/
- * terminal-id-match.
- */
+const STATUS_CONTROL_C_EXIT = 0xc000013a;
+const SIGINT = 2;
+
 /**
  * What killed the dev command, as a signal number. The wrapper shell exits
  * normally with `128 + n` when its child took signal n, so by the time the PTY
@@ -812,11 +807,19 @@ export async function runInstall<TSession extends TerminalControllerSession>(
  * without decoding it, a Ctrl-C reads as "exited with code 130" and a segfault
  * loses its crash classification. node-pty reports signal 0 for an ordinary
  * exit and that zero survives the whole exit path, so "no signal" has to mean
- * falsy rather than undefined. Windows has no such encoding.
+ * falsy rather than undefined.
+ *
+ * Windows has no 128+n encoding, but a console process ended by Ctrl+C (or
+ * Ctrl+Break) exits with STATUS_CONTROL_C_EXIT, which is the Windows spelling of
+ * SIGINT. node-pty reports it as the unsigned DWORD (3221225786) while
+ * PowerShell's `exit $LASTEXITCODE` hands on the signed twin (-1073741510), so
+ * the comparison is made on the unsigned value.
  */
 function decodeExitSignal(exitCode: number, signal: number | undefined): number | undefined {
   if (signal) return signal;
-  if (process.platform === "win32") return undefined;
+  if (process.platform === "win32") {
+    return exitCode >>> 0 === STATUS_CONTROL_C_EXIT ? SIGINT : undefined;
+  }
   return exitCode > 128 && exitCode < 192 ? exitCode - 128 : undefined;
 }
 
@@ -825,6 +828,14 @@ function isExpectedTermination(exitCode: number, signal: number | undefined): bo
   return decoded !== undefined && EXPECTED_TERMINATION_SIGNALS.has(decoded);
 }
 
+/**
+ * Handle a dev-preview terminal exit: clear pending timers/aborts, detach the
+ * terminal, classify the failure (if any), and decide whether to auto-respawn
+ * (install completion, crash-loop-guarded reinstall) or land in a terminal
+ * stopped/error state. Mirrors the orchestrator's former `handleExit` body —
+ * callers are expected to have already checked disposal/session-lookup/
+ * terminal-id-match.
+ */
 export function handleDevPreviewTerminalExit<TSession extends TerminalControllerSession>(
   session: TSession,
   exitCode: number,

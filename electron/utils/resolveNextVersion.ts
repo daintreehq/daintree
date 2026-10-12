@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { stripUtf8Bom } from "./stripUtf8Bom.js";
 
 export async function resolveNextMajorVersion(cwd: string): Promise<number | null> {
   try {
     const raw = await fs.readFile(path.join(cwd, "node_modules/next/package.json"), "utf-8");
-    const pkg = JSON.parse(raw);
+    const pkg = JSON.parse(stripUtf8Bom(raw));
     const version = pkg?.version;
     if (typeof version === "string") {
       const major = parseInt(version.split(".")[0], 10);
@@ -16,7 +17,7 @@ export async function resolveNextMajorVersion(cwd: string): Promise<number | nul
 
   try {
     const raw = await fs.readFile(path.join(cwd, "package.json"), "utf-8");
-    const pkg = JSON.parse(raw);
+    const pkg = JSON.parse(stripUtf8Bom(raw));
     const versionSpec: unknown = pkg?.dependencies?.next ?? pkg?.devDependencies?.next;
     if (typeof versionSpec === "string") {
       const stripped = versionSpec.replace(/^[\^~>=<v\s]+/, "");

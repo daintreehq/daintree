@@ -31,6 +31,7 @@ import { collectPluginIconIssues } from "../../services/plugin/pluginIconAssets.
 import { PLUGIN_METHOD_CHANNELS } from "./plugin.preload.js";
 import type * as PluginServiceModule from "../../services/PluginService.js";
 import { MAX_DNTR_BYTES } from "../../utils/pluginArchiveConstants.js";
+import { stripUtf8Bom } from "../../utils/stripUtf8Bom.js";
 import {
   PLUGIN_DOWNLOAD_TIMEOUT_MS,
   acceptedMime,
@@ -1576,7 +1577,7 @@ async function handleValidateManifest(
 
   let json: unknown;
   try {
-    json = JSON.parse(raw);
+    json = JSON.parse(stripUtf8Bom(raw));
   } catch (err) {
     return {
       manifestPath,

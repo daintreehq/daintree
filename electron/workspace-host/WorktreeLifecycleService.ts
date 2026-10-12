@@ -7,6 +7,7 @@ import { z } from "zod/mini";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { buildProbeEnv } from "../utils/spawnEnv.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
+import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 import type { WorktreeMonitor } from "./WorktreeMonitor.js";
 import type {
   LifecycleCommandReview,
@@ -178,7 +179,7 @@ async function fileExists(p: string): Promise<boolean> {
 async function readJsonFile(p: string): Promise<unknown | null> {
   try {
     const raw = await readFile(p, "utf-8");
-    return JSON.parse(raw);
+    return JSON.parse(stripUtf8Bom(raw));
   } catch {
     return null;
   }
@@ -521,6 +522,7 @@ export class WorktreeLifecycleService {
         cwd,
         shell: true,
         detached: !isWin,
+        windowsHide: true,
         env: buildSpawnEnv(env),
       });
 

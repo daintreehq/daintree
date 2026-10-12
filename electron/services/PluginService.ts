@@ -7,6 +7,7 @@ import { pathToFileURL } from "url";
 import { app } from "electron";
 import { createLogger } from "../utils/logger.js";
 import { PRODUCT_WEBSITE } from "../utils/productBranding.js";
+import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 // Aliased to avoid colliding with Vite's auto-injected ESM shim
 // (`import { createRequire } from 'module'; const require = createRequire(import.meta.url);`),
 // which it adds to every bundled chunk for CJS interop.
@@ -382,7 +383,9 @@ const DEV_MARKER_FILENAME = ".dev-marker";
 async function readDevManifestError(pluginDir: string, pluginId: string): Promise<string | null> {
   let json: unknown;
   try {
-    json = JSON.parse(await fs.readFile(path.join(pluginDir, "plugin.json"), "utf-8"));
+    json = JSON.parse(
+      stripUtf8Bom(await fs.readFile(path.join(pluginDir, "plugin.json"), "utf-8"))
+    );
   } catch (err) {
     return formatErrorMessage(err, "plugin.json could not be read");
   }
@@ -1887,7 +1890,7 @@ export class PluginService {
 
     let json: unknown;
     try {
-      json = JSON.parse(content);
+      json = JSON.parse(stripUtf8Bom(content));
     } catch {
       console.error(`[PluginService] Invalid JSON in ${manifestPath}`);
       return null;

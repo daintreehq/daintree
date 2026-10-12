@@ -38,6 +38,19 @@ describe("RunCommandDetector", () => {
     expect(npmCommands.some((cmd) => cmd.command.includes(";"))).toBe(false);
   });
 
+  it("reads scripts from a package.json saved with a UTF-8 BOM", async () => {
+    await fs.writeFile(
+      path.join(tempDir, "package.json"),
+      "﻿" + JSON.stringify({ name: "test", scripts: { dev: "vite" } }),
+      "utf-8"
+    );
+
+    const commands = await detector.detect(tempDir);
+    expect(commands.filter((cmd) => cmd.id.startsWith("npm-")).map((cmd) => cmd.name)).toEqual([
+      "dev",
+    ]);
+  });
+
   it("uses bun runner when bun.lock (text format) is present", async () => {
     await fs.writeFile(
       path.join(tempDir, "package.json"),
