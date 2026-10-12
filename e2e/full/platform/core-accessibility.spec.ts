@@ -554,6 +554,12 @@ test.describe("Core: Accessibility and focus", () => {
       test("keyboard focus on toolbar buttons draws a visible focus indicator", async () => {
         const { window } = ctx;
         await ensureWindowFocused(ctx.app);
+        // launchApp widens only the window it started with. The project's window
+        // keeps the default size, and on a 1280px runner screen the fixture's long
+        // project name pushes Settings into the toolbar's overflow menu.
+        await ctx.app.evaluate(({ BrowserWindow }) => {
+          for (const win of BrowserWindow.getAllWindows()) win.setSize(1920, 1080);
+        });
 
         // Reached by arrow keys (roving tabindex), so :focus-visible applies the
         // way it does for a keyboard user; programmatic .focus() alone would not.
