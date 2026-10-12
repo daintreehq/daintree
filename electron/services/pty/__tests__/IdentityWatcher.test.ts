@@ -4,6 +4,7 @@ import {
   FOREGROUND_PROBE_KEEPWARM_MS,
   FOREGROUND_PROBE_REFUTATION_MS,
   SHELL_IDENTITY_FALLBACK_POLL_MS,
+  AGENT_INPUT_GRACE_MS,
   IdentityWatcher,
   type IdentityWatcherDelegate,
 } from "../IdentityWatcher.js";
@@ -625,6 +626,37 @@ describe("IdentityWatcher", () => {
 
       expect(inject).toHaveBeenCalledTimes(1);
       expect(inject.mock.calls[0]?.[0]).toMatchObject({ processIconId: "node" });
+      watcher.dispose();
+    });
+
+    it("presumes an unconfirmed agent owns the input only for the grace period", async () => {
+      const { delegate } = createFakeDelegate({
+        processDetector: null,
+        visibleLines: ["codex", "loading"],
+        cursorLine: "loading",
+        ptyDescendantCount: 0,
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("codex");
+      expect(watcher.agentOwnsInput).toBe(true);
+      await vi.advanceTimersByTimeAsync(AGENT_INPUT_GRACE_MS + 1);
+      expect(watcher.agentOwnsInput).toBe(false);
+      watcher.dispose();
+    });
+
+    it("keeps owning the input past the grace period while the agent has a live child", async () => {
+      const { delegate } = createFakeDelegate({
+        processDetector: null,
+        visibleLines: ["codex", "loading"],
+        cursorLine: "loading",
+        ptyDescendantCount: 2,
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("codex");
+      await vi.advanceTimersByTimeAsync(AGENT_INPUT_GRACE_MS + 1);
+      expect(watcher.agentOwnsInput).toBe(true);
       watcher.dispose();
     });
 

@@ -27,6 +27,9 @@ export const FOREGROUND_PROBE_REFUTATION_MS = 5_000;
 export const SHELL_IDENTITY_FALLBACK_PROMPT_POLLS = 2;
 export const SHELL_IDENTITY_FALLBACK_SCAN_LINES = 4;
 export const SHELL_INPUT_BUFFER_MAX = 4096;
+// How long an agent command is presumed to own the terminal's input before
+// detection or a live child confirms it is running.
+export const AGENT_INPUT_GRACE_MS = 10_000;
 
 const SINGLE_CHAR_SHELL_PROMPT_PATTERN = /^\s*[>›❯⟩$#%]\s*$/;
 const SHELL_ONLY_SINGLE_CHAR_PROMPT_PATTERN = /^\s*[$#%]\s*$/;
@@ -392,6 +395,9 @@ export class IdentityWatcher {
   }
 
   onShellSubmit(commandText?: string, options: { allowWhenAgentDetected?: boolean } = {}): void {
+    // A submission consumes the line typed so far, including a body written by
+    // performSubmit whose Enter is suppressed rather than captured.
+    this.discardCapturedInput();
     if (this.stopped || this.delegate.isExited || this.delegate.wasKilled) {
       return;
     }
@@ -514,7 +520,23 @@ export class IdentityWatcher {
    * needs, and the badge outlived the agent.
    */
   get agentOwnsInput(): boolean {
-    return !this.stopped && this.submittedAt !== null && this.identity?.agentType !== undefined;
+    if (this.stopped || this.submittedAt === null || this.identity?.agentType === undefined) {
+      return false;
+    }
+    // Unconfirmed, it is only presumed for a while: a command that failed or
+    // exited at once under a prompt we don't recognise would otherwise keep
+    // the shell's next commands from ever being read.
+    return (
+      this.delegate.detectedAgentId !== undefined ||
+      (this.delegate.getPtyDescendantCount() ?? 0) > 0 ||
+      Date.now() - this.submittedAt < AGENT_INPUT_GRACE_MS
+    );
+  }
+
+  /** Forget a partly captured line: what was typed went to the agent, not the shell. */
+  discardCapturedInput(): void {
+    this.inputBuffer = "";
+    this.escState = 0;
   }
 
   get seededCommandText(): string | undefined {

@@ -268,6 +268,7 @@ export class TerminalInputController {
       !bracketedPaste &&
       !agentOwnsInput &&
       (terminal.detectedAgentId === undefined || isSeededLaunchCommandSubmit);
+    if (agentOwnsInput) identityWatcher.discardCapturedInput();
     const submittedCommandText = canCaptureShellInput
       ? identityWatcher.captureInput(data)
       : undefined;
@@ -530,7 +531,10 @@ export class TerminalInputController {
     }
 
     identityWatcher.armSuppressSignal();
-    identityWatcher.onShellSubmit(body);
+    // Sent into a running agent, the body is the agent's input, not a new
+    // shell command that would replace the agent's identity.
+    if (identityWatcher.agentOwnsInput) identityWatcher.discardCapturedInput();
+    else identityWatcher.onShellSubmit(body);
     if (this.writeStrict(enterSuffix)) ctx?.markPtyWritten();
   }
 
