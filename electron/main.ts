@@ -325,7 +325,10 @@ const gotTheLock = isSmokeTest || app.requestSingleInstanceLock();
 
 if (!gotTheLock) {
   console.log("[MAIN] Another instance is already running. Quitting...");
-  app.quit();
+  // The running instance has this launch's arguments already. A quit would
+  // carry on into Chromium's display setup, which aborts on a Linux box with
+  // no display, as host setup's handoff over SSH is.
+  app.exit(0);
 } else if (isRemoteHostSupported() && isHostModeHandoffOnly(process.argv)) {
   // Host setup runs this from an SSH session only to reach a running
   // Daintree; with none to hand over to, it must not become the backend there.
