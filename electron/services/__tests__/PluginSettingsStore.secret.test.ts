@@ -123,6 +123,20 @@ describe("PluginSettingsStore secret tier", () => {
     expect(await readRaw(filePath)).toEqual({ endpoint: "https://x" });
   });
 
+  // Electron asks for the keychain once per run, so a retry can't get past a
+  // dismissed prompt; the refusal says what will.
+  it("refuses a write the session's locked keychain can't take, saying a restart asks again", async () => {
+    const filePath = path.join(tmpDir, "acme.plugin.json");
+    const cipher = fakeCipher(false);
+    cipher.tier = () => "locked";
+    const store = new PluginSettingsStore(filePath, cipher);
+
+    await expect(store.set("token", "sk-1", { secret: true })).rejects.toThrow(
+      /this session, so the secret "token" wasn't saved — restart Daintree to be asked again$/
+    );
+    await expect(fs.access(filePath)).rejects.toThrow();
+  });
+
   it("keeps an existing encrypted secret when a rewrite is refused", async () => {
     const filePath = path.join(tmpDir, "acme.plugin.json");
     await new PluginSettingsStore(filePath, fakeCipher(true)).set("token", "sk-old", {

@@ -480,6 +480,65 @@ describe("PluginSettingsForm", () => {
 
     expect(await screen.findByText(/wasn't saved/)).toBeTruthy();
     expect(input.value).toBe("sk-typed");
+    // With no keychain at all, another try is refused the same way.
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  // Electron asks for the keychain once per run: after a dismissed unlock prompt
+  // every save this session is refused, and only a restart asks again.
+  it("says the keychain is locked for the session instead of offering a Retry that can't work", async () => {
+    pluginApi.getSettingValues
+      .mockResolvedValueOnce(uiValues({ secretTier: "keychain" }))
+      .mockResolvedValue(uiValues({ secretTier: "locked" }));
+    pluginApi.setSettingValue.mockRejectedValue(
+      new Error(
+        `The keyring wasn't unlocked this session, so the secret "token" wasn't saved — restart Daintree to be asked again`
+      )
+    );
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([
+          { id: "token", type: "secret", label: "Token" },
+          { id: "other", type: "secret", label: "Other" },
+        ])}
+      />
+    );
+
+    const input = (await screen.findByLabelText("Token")) as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    expect(screen.getAllByText("New secrets are stored in the OS keychain")).toHaveLength(2);
+    fireEvent.change(input, { target: { value: "sk-typed" } });
+    fireEvent.blur(input);
+
+    expect(await screen.findByText(/wasn't saved — restart Daintree/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    // Every secret row now says so, not just the one that tried.
+    await waitFor(() =>
+      expect(
+        screen.getAllByText(/this session — restart Daintree to be asked again$/)
+      ).toHaveLength(2)
+    );
+    expect(screen.queryByText("New secrets are stored in the OS keychain")).toBeNull();
+    expect(input.value).toBe("sk-typed");
+  });
+
+  it("still offers Retry when the keychain is there and only this save failed", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ secretTier: "keychain" }));
+    pluginApi.setSettingValue.mockRejectedValueOnce(
+      new Error("Secure storage didn't answer within 60 s. It may be waiting on a password prompt.")
+    );
+    render(
+      <PluginSettingsForm plugin={makePlugin([{ id: "token", type: "secret", label: "Token" }])} />
+    );
+
+    const input = (await screen.findByLabelText("Token")) as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "sk-typed" } });
+    fireEvent.blur(input);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(pluginApi.setSettingValue).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("Stored in OS keychain")).toBeTruthy();
   });
 
   it("nudges re-saving a secret still in plaintext while a keychain is now available", async () => {

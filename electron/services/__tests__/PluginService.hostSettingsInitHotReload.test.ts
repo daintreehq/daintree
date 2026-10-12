@@ -250,6 +250,7 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 
 import { PluginService } from "../PluginService.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { _resetSecretStorageSessionForTests } from "../plugin/secretCipher.js";
 
 let tmpDir: string;
 
@@ -258,6 +259,9 @@ beforeEach(async () => {
   vi.clearAllMocks();
   storeMock._state.clear();
   safeStorageMock.state.available = false;
+  // The real cipher remembers a keychain that gave no key for the process;
+  // each test here is a fresh run.
+  _resetSecretStorageSessionForTests();
 });
 
 afterEach(async () => {

@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import {
   safeStorageCipher,
+  secretWriteRefusal,
   SecretStorageTimeoutError,
   type SecretCipher,
   type SecretStorageTier,
@@ -233,11 +234,9 @@ export class PluginSettingsStore {
       return false;
     }
     const ciphertext = await this.cipher.encrypt(plaintext);
-    if (ciphertext === null) {
-      throw new Error(
-        `Secure storage is unavailable on this device, so the secret "${key}" wasn't saved`
-      );
-    }
+    // The refused encrypt is what tells the tier whether the keychain is absent
+    // or just gave no key this session, so it is read after, not before.
+    if (ciphertext === null) throw new Error(secretWriteRefusal(key, this.cipher.tier()));
     // The keychain can take a while to answer, so write into the snapshot as it
     // is now rather than the one read before it.
     return this.commit(await this.load(), key, asyncEnvelope(ciphertext));

@@ -15,9 +15,11 @@ const safeStorageMock = vi.hoisted(() => ({
 vi.mock("electron", () => ({ safeStorage: safeStorageMock }));
 
 import {
+  _resetSecretStorageSessionForTests,
   SECRET_STORAGE_TIMEOUT_MS,
   SecretStorageTimeoutError,
   safeStorageCipher,
+  secretWriteRefusal,
 } from "../secretCipher.js";
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -49,8 +51,87 @@ const b64 = (buffer: Buffer) => buffer.toString("base64");
 
 beforeEach(() => {
   vi.resetAllMocks();
+  _resetSecretStorageSessionForTests();
   safeStorageMock.isEncryptionAvailable.mockReturnValue(true);
   safeStorageMock.decryptString.mockImplementation(opened);
+});
+
+// Electron builds its async encryptor once per process: a keychain that gave it
+// no key gives none until Daintree restarts, which is what asks again.
+describe("a keychain that gave no key this session", () => {
+  describe("on Linux", () => {
+    beforeEach(() => {
+      setPlatform("linux");
+      safeStorageMock.getSelectedStorageBackend.mockReturnValue("gnome_libsecret");
+    });
+
+    it("reads as locked once the keyring prompt was dismissed", async () => {
+      asyncKey("v10");
+
+      expect(safeStorageCipher.tier()).toBe("keychain");
+      expect(await safeStorageCipher.encrypt("hunter2")).toBeNull();
+      expect(safeStorageCipher.tier()).toBe("locked");
+      expect(secretWriteRefusal("apiKey", safeStorageCipher.tier())).toBe(
+        `The keyring wasn't unlocked this session, so the secret "apiKey" wasn't saved — restart Daintree to be asked again`
+      );
+    });
+
+    it("stays unavailable, not locked, with no keyring backend to ask", async () => {
+      safeStorageMock.getSelectedStorageBackend.mockReturnValue("basic_text");
+
+      expect(await safeStorageCipher.encrypt("hunter2")).toBeNull();
+      expect(safeStorageCipher.tier()).toBe("unavailable");
+      expect(secretWriteRefusal("apiKey", safeStorageCipher.tier())).toBe(
+        `Secure storage is unavailable on this device, so the secret "apiKey" wasn't saved`
+      );
+    });
+
+    it("isn't locked while a prompt is only waiting on an answer", async () => {
+      vi.useFakeTimers();
+      safeStorageMock.encryptStringAsync.mockReturnValue(new Promise<Buffer>(() => {}));
+
+      const settled = expect(safeStorageCipher.encrypt("hunter2")).rejects.toBeInstanceOf(
+        SecretStorageTimeoutError
+      );
+      await vi.advanceTimersByTimeAsync(SECRET_STORAGE_TIMEOUT_MS);
+      await settled;
+      expect(safeStorageCipher.tier()).toBe("keychain");
+    });
+
+    it("explains a failed read by the locked keyring rather than Electron's error", async () => {
+      asyncKey("v10");
+      safeStorageMock.decryptStringAsync.mockRejectedValue(
+        new Error(
+          "Error while decrypting the ciphertext provided to safeStorage.decryptStringAsync."
+        )
+      );
+
+      await expect(safeStorageCipher.decrypt(b64(sealed("v11", "hunter2")))).rejects.toThrow(
+        "The keyring wasn't unlocked this session, so the secret couldn't be read — restart Daintree to be asked again"
+      );
+      expect(safeStorageCipher.tier()).toBe("locked");
+    });
+  });
+
+  it("reads as locked on macOS once Keychain access was denied", async () => {
+    setPlatform("darwin");
+    safeStorageMock.encryptStringAsync.mockRejectedValue(new Error("Error while encrypting"));
+
+    expect(await safeStorageCipher.encrypt("hunter2")).toBeNull();
+    expect(safeStorageCipher.tier()).toBe("locked");
+    expect(secretWriteRefusal("apiKey", "locked")).toBe(
+      `Keychain access was denied this session, so the secret "apiKey" wasn't saved — restart Daintree to be asked again`
+    );
+  });
+
+  // DPAPI has no prompt to dismiss, so a restart wouldn't change anything.
+  it("reads as unavailable on Windows when DPAPI gives no key", async () => {
+    setPlatform("win32");
+    safeStorageMock.encryptStringAsync.mockRejectedValue(new Error("Error while encrypting"));
+
+    expect(await safeStorageCipher.encrypt("hunter2")).toBeNull();
+    expect(safeStorageCipher.tier()).toBe("unavailable");
+  });
 });
 
 afterEach(() => {
@@ -283,14 +364,16 @@ describe("safeStorageCipher decrypt", () => {
       expect(safeStorageMock.decryptString).toHaveBeenCalledTimes(1);
     });
 
-    it("refuses a legacy keyring value while the wallet doesn't answer", async () => {
+    it("refuses a legacy keyring value while the wallet gave no key this session", async () => {
       safeStorageMock.encryptStringAsync.mockImplementation(async (plaintext) =>
         sealed("v10", plaintext)
       );
 
       await expect(
         safeStorageCipher.decrypt(b64(sealed("v11", "hunter2")), { legacy: true })
-      ).rejects.toThrow(/Secure storage is unavailable/);
+      ).rejects.toThrow(
+        "The keyring wasn't unlocked this session, so the secret couldn't be read — restart Daintree to be asked again"
+      );
       expect(safeStorageMock.decryptString).not.toHaveBeenCalled();
     });
 
@@ -317,7 +400,6 @@ describe("safeStorageCipher decrypt", () => {
         await expect(
           safeStorageCipher.decrypt(b64(sealed("v11", "hunter2")), { legacy: true })
         ).rejects.toThrow(/Secure storage is unavailable/);
-        expect(safeStorageMock.encryptStringAsync).not.toHaveBeenCalled();
       } finally {
         safeStorageMock.decryptString = decryptString;
       }
@@ -348,14 +430,17 @@ describe("safeStorageCipher decrypt", () => {
 
     // The sync API would block the main thread on the Keychain prompt the
     // async one couldn't get past.
-    it("keeps a denied Keychain from reaching the sync API", async () => {
-      const failure = new Error("safeStorage.decryptStringAsync is temporarily unavailable");
-      safeStorageMock.decryptStringAsync.mockRejectedValue(failure);
+    it("keeps a denied Keychain from reaching the sync API, and says so", async () => {
+      safeStorageMock.decryptStringAsync.mockRejectedValue(
+        new Error("safeStorage.decryptStringAsync is temporarily unavailable")
+      );
       safeStorageMock.encryptStringAsync.mockRejectedValue(new Error("Error while encrypting"));
 
       await expect(
         safeStorageCipher.decrypt(b64(sealed("v10", "hunter2")), { legacy: true })
-      ).rejects.toBe(failure);
+      ).rejects.toThrow(
+        "Keychain access was denied this session, so the secret couldn't be read — restart Daintree to be asked again"
+      );
       expect(safeStorageMock.decryptString).not.toHaveBeenCalled();
     });
 

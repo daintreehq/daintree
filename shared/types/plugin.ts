@@ -1651,8 +1651,9 @@ export interface PluginSettingsUiValues {
   /**
    * At-rest tier new secret writes will use right now (#9167). `"keychain"` when
    * the OS keychain (Electron `safeStorage`) is available, `"unavailable"` when
-   * it is not (e.g. a headless Linux box) and secret writes are refused. The
-   * settings UI discloses this honestly per secret field.
+   * it is not (e.g. a headless Linux box) and secret writes are refused,
+   * `"locked"` when it gave no key this session. The settings UI discloses this
+   * honestly per secret field.
    */
   secretTier: PluginSecretStorageTier;
   /**
@@ -1667,9 +1668,11 @@ export interface PluginSettingsUiValues {
 /**
  * At-rest storage tier for new secret setting values. Secrets are never written
  * in plaintext: with no OS keychain the tier is `"unavailable"` and a write is
- * refused (#12613).
+ * refused (#12613). `"locked"` is a keychain that is there but gave no key this
+ * session (its unlock prompt was dismissed or failed): Electron asks once per
+ * run, so writes are refused until Daintree restarts and asks again.
  */
-export type PluginSecretStorageTier = "keychain" | "unavailable";
+export type PluginSecretStorageTier = "keychain" | "locked" | "unavailable";
 
 /**
  * A plugin's declared `required` settings, split by what their stored state
