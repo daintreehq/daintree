@@ -547,6 +547,13 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     if (isMacOSLocal) {
       cleanupMacElectronE2eProcesses(options.alongside ? [userDataDir] : launchedUserDataDirs);
     }
+    if (process.platform === "win32" && !process.env.CI && !options.enableWebgl) {
+      // `DAINTREE_DISABLE_WEBGL` is read at build time (Vite envPrefix), so the
+      // launch env above cannot turn WebGL off. Without a GPU flag a local
+      // Windows run renders terminals with WebGL and specs that read
+      // `.xterm-rows` find no DOM rows; CI and local macOS already disable it.
+      args.unshift("--disable-gpu", "--disable-software-rasterizer");
+    }
     if (isMacOSLocal && !options.enableWebgl) {
       // Local macOS Electron E2E can hit Crashpad/GPU-process FATALs during
       // restart-heavy specs. Mirror the screenshot harness mitigation for
