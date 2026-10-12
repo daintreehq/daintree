@@ -79,17 +79,108 @@ export function isNpmGlobalInstall(command: string): boolean {
 }
 
 /**
- * A global npm install refused because npm's prefix belongs to root: a system
- * Node (apt, NodeSource, the nodejs.org macOS installer) installs global
- * packages under /usr. npm reports EACCES, or EPERM where the OS itself says
- * no; the output is npm's own error report.
+ * Why a global npm install was refused, read from npm's own error report:
+ *
+ * - `global-folder` — the account can't write where npm installs global
+ *   packages (`<prefix>/lib/node_modules`, or the `<prefix>/bin` link), and
+ *   that folder is outside any home folder. A system Node (apt, NodeSource,
+ *   the nodejs.org macOS installer) puts its prefix there.
+ * - `cache` — the account can't write to npm's cache; changing the prefix
+ *   doesn't help there. `fixCommand` is the chown npm printed, else one built
+ *   for the folder, and null when the folder can't be quoted safely.
+ *
+ * `folder` is the folder the report names, so the copy can show it rather
+ * than guess at who owns it.
  */
-export function isNpmGlobalPermissionFailure(command: string, output: string): boolean {
-  return isNpmGlobalInstall(command) && /\b(?:EACCES|EPERM)\b/.test(output);
+export type NpmPermissionFailure =
+  | { kind: "global-folder"; folder: string }
+  | { kind: "cache"; folder: string; fixCommand: string | null };
+
+/** npm's documented fix for a global folder the account can't write: a prefix in its own home. */
+export const NPM_USER_PREFIX_COMMAND = "npm config set prefix ~/.npm-global";
+
+// npm 7+ prefixes report lines "npm error", npm 6 "npm ERR!".
+const NPM_REPORT_FIELD = {
+  path: /^npm (?:error|ERR!) path (.+?)\s*$/m,
+  dest: /^npm (?:error|ERR!) dest (.+?)\s*$/m,
+};
+// The fix npm prints for a cache it can't write, with this account's ids.
+const NPM_CACHE_FIX = /^npm (?:error|ERR!)\s+(sudo chown -R \d+:\d+ "[^"\n]+")\s*$/m;
+
+function npmReportField(output: string, field: "path" | "dest"): string | null {
+  return NPM_REPORT_FIELD[field].exec(output)?.[1] ?? null;
 }
 
-/** npm's documented fix for that refusal: a global prefix in the user's own home. */
-export const NPM_USER_PREFIX_COMMAND = "npm config set prefix ~/.npm-global";
+/** Node's own wording, for a report without npm's `path`/`dest` lines. */
+function nodeErrorPaths(output: string): { path: string | null; dest: string | null } {
+  const match = /\bE(?:ACCES|PERM): [^,\n]*, \w+ '([^'\n]+)'(?: -> '([^'\n]+)')?/.exec(output);
+  return { path: match?.[1] ?? null, dest: match?.[2] ?? null };
+}
+
+function globalNodeModulesFolder(filePath: string | null): string | null {
+  if (!filePath?.startsWith("/")) return null;
+  const match = /^(.*?\/lib\/node_modules)(?:\/|$)/.exec(filePath);
+  return match?.[1] ?? null;
+}
+
+function parentFolder(filePath: string | null): string | null {
+  if (!filePath?.startsWith("/")) return null;
+  const index = filePath.lastIndexOf("/");
+  return index > 0 ? filePath.slice(0, index) : null;
+}
+
+// Characters that would change a double-quoted shell word's meaning.
+const UNSAFE_IN_DOUBLE_QUOTES = /["$`\\\n]/;
+
+const HOME_FOLDER = /^\/(?:home\/[^/]+|Users\/[^/]+|root)(?:\/|$)/;
+
+/**
+ * Classifies a failed global npm install on macOS or Linux. Windows reports
+ * EPERM for files held open (an editor, antivirus) as readily as for
+ * permissions, and keeps global commands in the prefix itself rather than
+ * `<prefix>/bin`, so it gets no Unix advice: null there, and for any failure
+ * the report doesn't place, leaves the plain error in charge.
+ */
+export function classifyNpmPermissionFailure(
+  command: string,
+  output: string,
+  os: AgentInstallOS
+): NpmPermissionFailure | null {
+  if (os !== "linux" && os !== "macos") return null;
+  if (!isNpmGlobalInstall(command) || !/\b(?:EACCES|EPERM)\b/.test(output)) return null;
+
+  const fromNode = nodeErrorPaths(output);
+  const path = npmReportField(output, "path") ?? fromNode.path;
+  const dest = npmReportField(output, "dest") ?? fromNode.dest;
+
+  // npm checks the path against its configured cache itself, and only then
+  // prints this, with the chown that fixes it.
+  const npmSaysCache = /Your cache folder contains root-owned files/.test(output);
+  // The cache folder holds `_cacache`; npm's own chown names that folder.
+  const cacheMatch = path ? /^(\/.*?)\/_cacache(?:\/|$)/.exec(path) : null;
+  if (npmSaysCache || cacheMatch) {
+    const npmFix = NPM_CACHE_FIX.exec(output)?.[1];
+    const quoted = npmFix ? /"([^"]+)"/.exec(npmFix)?.[1] : null;
+    const folder = quoted ?? cacheMatch?.[1] ?? null;
+    if (!folder) return null;
+    const fixCommand =
+      npmFix ??
+      (UNSAFE_IN_DOUBLE_QUOTES.test(folder) ? null : `sudo chown -R $(id -u):$(id -g) "${folder}"`);
+    return { kind: "cache", folder, fixCommand };
+  }
+
+  // A command link fails with its relative target into the global packages as
+  // `path` and the link in `<prefix>/bin` as `dest`.
+  const isBinLink = !!path && !path.startsWith("/") && /(?:^|\/)lib\/node_modules\//.test(path);
+  const folder =
+    globalNodeModulesFolder(path) ??
+    globalNodeModulesFolder(dest) ??
+    (isBinLink ? parentFolder(dest) : null);
+  // A prefix already inside a home folder is the user's own, so moving it to
+  // ~/.npm-global is no fix; that, and anything else, keeps the plain error.
+  if (!folder || HOME_FOLDER.test(folder)) return null;
+  return { kind: "global-folder", folder };
+}
 
 /**
  * The first install method for this OS that doesn't go through npm's global

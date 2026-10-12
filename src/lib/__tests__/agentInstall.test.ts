@@ -529,14 +529,37 @@ describe("agentInstall", () => {
   });
 
   describe("npm global permission failures", () => {
-    // What npm 10 prints at --loglevel=error when /usr/lib/node_modules is root's.
-    const EACCES_REPORT = [
+    // npm 10.9 at --loglevel=error, captured against unwritable folders; only
+    // the paths are changed.
+    const PREFIX_REPORT = [
       "npm error code EACCES",
       "npm error syscall mkdir",
       "npm error path /usr/lib/node_modules/@anthropic-ai",
       "npm error errno -13",
       "npm error Error: EACCES: permission denied, mkdir '/usr/lib/node_modules/@anthropic-ai'",
+      "npm error     at async mkdir (node:internal/fs/promises:858:10)",
     ].join("\n");
+    const BIN_LINK_REPORT = [
+      "npm error code EACCES",
+      "npm error syscall symlink",
+      "npm error path ../lib/node_modules/@anthropic-ai/claude-code/cli.js",
+      "npm error dest /usr/local/bin/claude",
+      "npm error errno -13",
+      "npm error Error: EACCES: permission denied, symlink '../lib/node_modules/@anthropic-ai/claude-code/cli.js' -> '/usr/local/bin/claude'",
+    ].join("\n");
+    const CACHE_REPORT = [
+      "npm error code EACCES",
+      "npm error syscall mkdir",
+      "npm error path /Users/me/.npm/_cacache",
+      "npm error errno EACCES",
+      "npm error",
+      "npm error Your cache folder contains root-owned files, due to a bug in",
+      "npm error previous versions of npm which has since been addressed.",
+      "npm error",
+      "npm error To permanently fix this problem, please run:",
+      'npm error   sudo chown -R 501:20 "/Users/me/.npm"',
+    ].join("\n");
+    const CLAUDE = "npm install -g @anthropic-ai/claude-code";
 
     it("recognises the global install spellings", async () => {
       const { isNpmGlobalInstall } = await import("../agentInstall");
@@ -554,19 +577,102 @@ describe("agentInstall", () => {
       expect(isNpmGlobalInstall("curl -fsSL https://claude.ai/install.sh | bash")).toBe(false);
     });
 
-    it("flags EACCES and EPERM from a global npm install", async () => {
-      const { isNpmGlobalPermissionFailure } = await import("../agentInstall");
-      expect(isNpmGlobalPermissionFailure("npm install -g x", EACCES_REPORT)).toBe(true);
-      expect(isNpmGlobalPermissionFailure("npm install -g x", "npm error code EPERM")).toBe(true);
+    it("places a refused write into the global packages folder", async () => {
+      const { classifyNpmPermissionFailure } = await import("../agentInstall");
+      for (const os of ["linux", "macos"] as const) {
+        expect(classifyNpmPermissionFailure(CLAUDE, PREFIX_REPORT, os)).toEqual({
+          kind: "global-folder",
+          folder: "/usr/lib/node_modules",
+        });
+      }
+    });
+
+    it("places a refused command link in the prefix's bin folder", async () => {
+      const { classifyNpmPermissionFailure } = await import("../agentInstall");
+      expect(classifyNpmPermissionFailure(CLAUDE, BIN_LINK_REPORT, "linux")).toEqual({
+        kind: "global-folder",
+        folder: "/usr/local/bin",
+      });
+    });
+
+    it("reads Node's own error line when npm's path lines are missing", async () => {
+      const { classifyNpmPermissionFailure } = await import("../agentInstall");
+      const report =
+        "npm ERR! Error: EPERM: operation not permitted, mkdir '/usr/local/lib/node_modules/x'";
+      expect(classifyNpmPermissionFailure(CLAUDE, report, "macos")).toEqual({
+        kind: "global-folder",
+        folder: "/usr/local/lib/node_modules",
+      });
+    });
+
+    it("reads npm 6's ERR! report lines", async () => {
+      const { classifyNpmPermissionFailure } = await import("../agentInstall");
+      const report = PREFIX_REPORT.replace(/^npm error/gm, "npm ERR!");
+      expect(classifyNpmPermissionFailure(CLAUDE, report, "linux")?.kind).toBe("global-folder");
+    });
+
+    it("tells a cache failure from a prefix one and keeps npm's own chown", async () => {
+      const { classifyNpmPermissionFailure } = await import("../agentInstall");
+      expect(classifyNpmPermissionFailure(CLAUDE, CACHE_REPORT, "macos")).toEqual({
+        kind: "cache",
+        folder: "/Users/me/.npm",
+        fixCommand: 'sudo chown -R 501:20 "/Users/me/.npm"',
+      });
+    });
+
+    it("builds the chown for a cache path npm didn't explain", async () => {
+      const { classifyNpmPermissionFailure } = await import("../agentInstall");
+      const report = "npm error code EACCES\nnpm error path /home/me/.npm/_cacache/index-v5/ab";
+      expect(classifyNpmPermissionFailure(CLAUDE, report, "linux")).toEqual({
+        kind: "cache",
+        folder: "/home/me/.npm",
+        fixCommand: 'sudo chown -R $(id -u):$(id -g) "/home/me/.npm"',
+      });
+    });
+
+    it("offers no command for a cache path that can't be quoted safely", async () => {
+      const { classifyNpmPermissionFailure } = await import("../agentInstall");
+      const report = 'npm error code EACCES\nnpm error path /home/me/$(x)".npm/_cacache';
+      expect(classifyNpmPermissionFailure(CLAUDE, report, "linux")).toMatchObject({
+        kind: "cache",
+        fixCommand: null,
+      });
+    });
+
+    it("gives Windows no Unix advice", async () => {
+      const { classifyNpmPermissionFailure } = await import("../agentInstall");
+      const windowsReport = [
+        "npm error code EPERM",
+        "npm error syscall rename",
+        "npm error path C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code",
+      ].join("\n");
+      expect(classifyNpmPermissionFailure(CLAUDE, windowsReport, "windows")).toBeNull();
+      expect(classifyNpmPermissionFailure(CLAUDE, PREFIX_REPORT, "windows")).toBeNull();
+      expect(classifyNpmPermissionFailure(CLAUDE, CACHE_REPORT, "generic")).toBeNull();
+    });
+
+    it("keeps the plain error for a prefix already inside a home folder", async () => {
+      const { classifyNpmPermissionFailure } = await import("../agentInstall");
+      const report = PREFIX_REPORT.replaceAll("/usr/lib/", "/home/me/.npm-global/lib/");
+      expect(classifyNpmPermissionFailure(CLAUDE, report, "linux")).toBeNull();
+    });
+
+    it("keeps the plain error for a refusal it can't place", async () => {
+      const { classifyNpmPermissionFailure } = await import("../agentInstall");
+      const elsewhere = "npm error code EACCES\nnpm error path /etc/npmrc";
+      expect(classifyNpmPermissionFailure(CLAUDE, elsewhere, "linux")).toBeNull();
+      expect(classifyNpmPermissionFailure(CLAUDE, "npm error code EACCES", "linux")).toBeNull();
     });
 
     it("leaves other failures, and other installers' permission errors, alone", async () => {
-      const { isNpmGlobalPermissionFailure } = await import("../agentInstall");
-      expect(isNpmGlobalPermissionFailure("npm install -g x", "npm error code E404")).toBe(false);
+      const { classifyNpmPermissionFailure } = await import("../agentInstall");
+      expect(classifyNpmPermissionFailure(CLAUDE, "npm error code E404", "linux")).toBeNull();
       expect(
-        isNpmGlobalPermissionFailure("Command failed with exit code 1: npm install -g x", "")
-      ).toBe(false);
-      expect(isNpmGlobalPermissionFailure("pipx install aider-chat", EACCES_REPORT)).toBe(false);
+        classifyNpmPermissionFailure("pipx install aider-chat", PREFIX_REPORT, "linux")
+      ).toBeNull();
+      expect(
+        classifyNpmPermissionFailure("npm install @anthropic-ai/sdk", PREFIX_REPORT, "linux")
+      ).toBeNull();
     });
 
     it("finds the first method that avoids npm's global prefix", async () => {
