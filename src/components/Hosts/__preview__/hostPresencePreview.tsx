@@ -276,7 +276,7 @@ function Toolbar() {
           <div
             data-harness-decoration
             aria-hidden="true"
-            className="ml-1.5 flex h-8 items-center gap-2 rounded-[var(--radius-md)] bg-status-info px-2.5 text-sm [color:contrast-color(var(--color-status-info))]"
+            className="ml-1.5 flex h-8 items-center gap-2 rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle px-2.5 text-sm text-text-primary"
           >
             <span className="font-medium">SSH · studio-01</span>
             <span className="text-2xs">viewing</span>
