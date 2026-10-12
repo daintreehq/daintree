@@ -27,6 +27,7 @@ import os from "os";
 import {
   applyWindowsExtraPaths,
   deduplicatePath,
+  rememberWindowsLaunchPath,
   resolveWindowsRegistryPath,
 } from "./windowsPath.js";
 import { isLinuxWaylandHybridGpu } from "../utils/gpuDetection.js";
@@ -243,6 +244,9 @@ app.commandLine.appendSwitch("force-gpu-mem-available-mb", getGpuTileMemoryCapMb
 app.commandLine.appendSwitch("max-active-webgl-contexts", String(getMaxWebGLContextCeiling()));
 
 if (process.platform === "win32") {
+  // Before anything below rewrites it: every later registry refresh keeps the
+  // entries only the launching shell had (a venv, a developer prompt).
+  rememberWindowsLaunchPath(process.env.PATH);
   const current = process.env.PATH || "";
   const augmented = applyWindowsExtraPaths(current);
   if (augmented !== current) {
@@ -580,7 +584,7 @@ async function runRefreshPath(): Promise<void> {
     const result = await Promise.race([
       (async () => {
         if (process.platform === "win32") {
-          // Registry read + shim-dir merge live in the dependency-free
+          // Registry read, shim-dir and launch-PATH merge live in the dependency-free
           // `windowsPath.ts` leaf so the terminal spawn path can re-run them
           // per pane without importing this module's startup machinery
           // (#11773). Its single-flight is shared, so a spawn refresh landing

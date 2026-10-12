@@ -124,7 +124,11 @@ function isAbsence(error: unknown): boolean {
  * `CLAUDE_CONFIG_DIR` or the variables that choose a shell's startup files. Its
  * profile then does to the pane whatever it did to the probe. Anything else — a
  * different shell, a pane-level override, no probe yet — is unknown, and so is
- * Windows, whose PowerShell and cmd profiles are never probed.
+ * Windows, whose PowerShell and cmd profiles are never probed. Panes start
+ * PowerShell without `-NoProfile` and cmd without `/D`, so `$PROFILE` or the
+ * AutoRun key can set `CLAUDE_CONFIG_DIR` where main never sees it; a Git Bash
+ * pane reads its own rc files, and a WSL pane runs a Linux `claude` against a
+ * store inside WSL.
  *
  * `pane.shell` defaults to the shell a terminal gets when nothing names one.
  */

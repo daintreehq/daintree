@@ -268,6 +268,30 @@ describe("refreshPath", () => {
     delete process.env.SystemRoot;
   });
 
+  it("keeps the PATH Daintree was launched with behind the registry's on Windows", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", writable: true });
+    // Colon-free entries so the assertion holds whatever `path.delimiter` the host has.
+    const venv = "\\\\host\\share\\venv\\Scripts";
+    const registry = "\\\\host\\share\\nodejs";
+    process.env.PATH = [venv, registry].join(path.delimiter);
+
+    execFileMock.mockImplementation(
+      (
+        _cmd: string,
+        _args: string[],
+        _opts: unknown,
+        cb: (err: Error | null, stdout: string) => void
+      ) => {
+        cb(null, `    Path    REG_SZ    ${registry}`);
+      }
+    );
+
+    const { refreshPath } = await import("../environment.js");
+    await refreshPath();
+
+    expect(process.env.PATH).toBe([registry, venv].join(path.delimiter));
+  });
+
   it("falls back on Windows when reg query fails", async () => {
     Object.defineProperty(process, "platform", { value: "win32", writable: true });
     process.env.PATH = "C:\\Windows\\System32";

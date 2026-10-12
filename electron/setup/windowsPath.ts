@@ -47,6 +47,10 @@ let registryReadPromise: Promise<string | null> | null = null;
 // caught up — a stale PATH for as long as the jump.
 let lastRegistryReadAt: number | null = null;
 
+// The PATH this process was started with, before anything here rewrote it.
+// `null` means it was never recorded, and the registry PATH is then used alone.
+let launchPath: string | null = null;
+
 export function deduplicatePath(pathStr: string, caseInsensitive: boolean): string {
   const entries = pathStr.split(path.delimiter).filter(Boolean);
   const seen = new Set<string>();
@@ -140,11 +144,63 @@ export function applyWindowsExtraPaths(currentPath: string): string {
   return missing.length ? [...missing, currentPath].join(path.delimiter) : currentPath;
 }
 
+/**
+ * Record the PATH Daintree was launched with, once, before anything rewrites it.
+ * Later calls are ignored: by then `process.env.PATH` holds a merged value, and
+ * taking that as the launch PATH would keep every entry the registry ever had
+ * for the rest of the session.
+ */
+export function rememberWindowsLaunchPath(value: string | undefined): void {
+  if (launchPath === null) launchPath = value ?? "";
+}
+
+// Windows compares directories case-insensitively, accepts `/` for `\`, and
+// reads a PATH entry wrapped in quotes as the bare path, so `"c:\tools"`,
+// `C:/Tools/` and `C:\Tools` all name one directory. A drive root keeps its
+// slash: `C:` alone means the current directory on that drive, not its root.
+function windowsPathEntryKey(entry: string): string {
+  const unquoted =
+    entry.length >= 2 && entry.startsWith('"') && entry.endsWith('"') ? entry.slice(1, -1) : entry;
+  const lowered = unquoted.replace(/\//g, "\\").toLowerCase();
+  const trimmed = lowered.replace(/\\+$/, "");
+  if (trimmed === "") return "\\";
+  if (trimmed.endsWith(":")) return trimmed === lowered ? trimmed : `${trimmed}\\`;
+  return trimmed;
+}
+
+/**
+ * The registry PATH followed by the launch PATH's entries it does not already
+ * hold, in launch order.
+ *
+ * A shell that started Daintree can carry entries the registry never sees: an
+ * activated venv or conda env, a Visual Studio developer prompt, Git Bash's
+ * Unix tools. Adopting the registry PATH alone dropped them from Daintree and
+ * every terminal it opens. They go after the registry's entries, not before,
+ * so they only supply commands nothing else on PATH does: a tool installed
+ * since launch still resolves to the registry's copy, which is the point of
+ * re-reading it, and Git Bash's `usr\bin` never shadows `System32` inside
+ * PowerShell. A venv's `python` therefore loses to a Python on the user's
+ * PATH; activate the venv in the pane when that matters.
+ */
+function appendLaunchOnlyPathEntries(registryPath: string, launch: string): string {
+  const entries = registryPath.split(path.delimiter).filter(Boolean);
+  const seen = new Set(entries.map(windowsPathEntryKey));
+  for (const entry of launch.split(path.delimiter)) {
+    if (!entry) continue;
+    const key = windowsPathEntryKey(entry);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    entries.push(entry);
+  }
+  return entries.join(path.delimiter);
+}
+
 async function runResolveWindowsRegistryPath(): Promise<string | null> {
   try {
     const registryPath = await readWindowsRegistryPath();
     if (!registryPath) return null;
-    return deduplicatePath(applyWindowsExtraPaths(registryPath), true);
+    const withExtras = applyWindowsExtraPaths(registryPath);
+    return deduplicatePath(appendLaunchOnlyPathEntries(withExtras, launchPath ?? ""), true);
   } finally {
     // Inside the run, not on a `.then` chain hung off it: a derived promise's
     // handler lands a microtask AFTER the awaiting caller resumes, which would
@@ -157,7 +213,8 @@ async function runResolveWindowsRegistryPath(): Promise<string | null> {
 
 /**
  * Read the machine + user PATH out of the registry and merge it with the
- * version-manager shim dirs that never appear there.
+ * version-manager shim dirs that never appear there, then with whatever the
+ * launch PATH held beyond both (see `appendLaunchOnlyPathEntries`).
  *
  * Returns the merged value; does NOT write `process.env`. Callers decide
  * whether to adopt it — `refreshPath()` has a timeout race to honour first.
@@ -246,4 +303,5 @@ export async function refreshWindowsPathForSpawn(): Promise<void> {
 export function __resetWindowsPathStateForTests(): void {
   registryReadPromise = null;
   lastRegistryReadAt = null;
+  launchPath = null;
 }
