@@ -20,7 +20,14 @@ export interface HostSwitchClientDeps {
   sessionFor(hostId: HostId): LinkSession | null;
 }
 
-function unreachable(hostId: HostId, readiness: string): AppError {
+function unreachable(hostId: HostId, readiness: string, hostName: string): AppError {
+  if (readiness === "host-mode-off") {
+    return new AppError({
+      code: "HOST_MODE_OFF",
+      message: `Daintree isn't running in Host mode on ${hostName}`,
+      userMessage: `Daintree isn't running in Host mode on ${hostName}. Set it up to work there.`,
+    });
+  }
   if (readiness === "version-mismatch") {
     return new AppError({
       code: "HOST_VERSION_MISMATCH",
@@ -42,7 +49,11 @@ export function createHostSwitchService(deps: HostSwitchClientDeps): HostSwitchS
     if (current?.isOpen) return current;
     const readiness = await deps.client.connectAndWait(hostId, CONNECT_TIMEOUT_MS);
     const session = readiness === "ready" ? deps.sessionFor(hostId) : null;
-    if (!session?.isOpen) throw unreachable(hostId, readiness);
+    if (!session?.isOpen) {
+      const name = deps.client.list().find((entry) => entry.descriptor.id === hostId)
+        ?.descriptor.name;
+      throw unreachable(hostId, readiness, name ?? hostId);
+    }
     return session;
   };
   return new HostSwitchService({
