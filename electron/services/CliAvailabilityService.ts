@@ -20,6 +20,7 @@ import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { getDefaultWslDistro } from "../utils/wsl.js";
+import { findAllOnPath } from "../utils/findOnPath.js";
 import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("main:CliAvailabilityService");
@@ -30,9 +31,10 @@ interface ProbeSuccess {
   via: AgentCliProbeSource;
   wslDistro?: string;
   /**
-   * All resolved paths from a shell probe (`which -a` on Unix, `where.exe`
-   * on Windows), deduplicated by directory. Populated only when the probe
-   * succeeded via `which`; first entry equals {@link ProbeSuccess.path}.
+   * All resolved paths from the PATH probe (an in-process walk on POSIX,
+   * deduplicated by the file each resolves to; `where.exe` on Windows,
+   * deduplicated by directory). Populated only when the probe succeeded via
+   * the PATH layer; first entry equals {@link ProbeSuccess.path}.
    */
   allPaths?: string[];
 }
@@ -617,89 +619,73 @@ export class CliAvailabilityService {
     return { status: "missing" };
   }
 
+  /**
+   * The PATH layer of the probe ladder. Every match is collected, not just the
+   * first, to drive duplicate-install detection (#6054).
+   *
+   * POSIX walks PATH in-process: the external `which` is absent from minimal
+   * Fedora and Arch installs, where spawning it reported every agent missing.
+   * A file without an execute bit is skipped, as `which` skipped it, so a PATH
+   * miss is always `missing` here — `blocked` comes from the layers that probe
+   * a specific path (prepended, native, npm-global).
+   */
   private async probeViaShell(command: string): Promise<ProbeResult> {
-    const isWindows = process.platform === "win32";
-    const checkCmd = isWindows ? "where" : "which";
-    // `where.exe` already prints every PATH match. On Unix, request all
-    // matches via `which -a` to drive duplicate detection (#6054). When
-    // `-a` is rejected by a minimal `which` (e.g. older BusyBox), retry
-    // without the flag so duplicate detection degrades to a single-path
-    // lookup rather than reporting the agent as missing.
-    const runWhich = (
-      extraArgs: string[]
-    ): Promise<{ ok: true; lines: string[] } | { ok: false; err: unknown }> =>
-      new Promise((resolve) => {
-        execFile(
-          checkCmd,
-          [...extraArgs, command],
-          {
-            timeout: CliAvailabilityService.WHICH_TIMEOUT_MS,
-            windowsHide: true,
-          },
-          (err, stdout) => {
-            if (err) {
-              resolve({ ok: false, err });
-              return;
-            }
-            const lines = String(stdout ?? "")
-              .trim()
-              .split(/\r?\n/)
-              .map((line) => line.trim())
-              .filter(Boolean);
-            resolve({ ok: true, lines });
-          }
-        );
+    if (process.platform !== "win32") {
+      const allPaths = await findAllOnPath(command, {
+        timeoutMs: CliAvailabilityService.WHICH_TIMEOUT_MS,
       });
-
-    const classifyError = (err: unknown): ProbeResult | null => {
-      const code = (err as NodeJS.ErrnoException | undefined)?.code;
-      // EACCES / EPERM from which/where itself is rare — most endpoint
-      // security blocks surface on the spawn attempt. Still, when they
-      // do, the binary clearly exists on disk (otherwise we'd have
-      // ENOENT) so "blocked" is the correct classification.
-      if (typeof code === "string" && SECURITY_ERROR_CODES.has(code)) {
-        return {
-          status: "blocked",
-          reason: "security",
-          via: "which",
-          message: `${checkCmd} "${command}" failed with ${code} — likely blocked by security software or missing execute permission`,
-        };
-      }
-      return null;
-    };
-
-    const primary = await runWhich(isWindows ? [] : ["-a"]);
-    if (primary.ok) {
-      if (primary.lines.length === 0) {
-        // Some shells exit 0 with empty stdout. Preserve the historical
-        // contract: fall back to the bare command so the binary is still
-        // launchable via PATH lookup at spawn time.
-        return { status: "found", path: command, via: "which" };
-      }
-      const allPaths = dedupePathsByDirectory(primary.lines, isWindows);
+      if (allPaths.length === 0) return { status: "missing" };
       return { status: "found", path: allPaths[0], via: "which", allPaths };
     }
+    return this.probeViaWhere(command);
+  }
 
-    // Non-zero exit. On Unix this can be BusyBox/minimal `which`
-    // rejecting `-a`; retry without the flag so a real install isn't
-    // misreported as missing. Skip for security errors so the blocked
-    // verdict surfaces directly.
-    const primaryBlocked = classifyError(primary.err);
-    if (primaryBlocked) {
-      return primaryBlocked;
-    }
-    if (!isWindows) {
-      const fallback = await runWhich([]);
-      if (fallback.ok) {
-        const path = fallback.lines[0] ?? command;
-        return { status: "found", path, via: "which" };
-      }
-      const fallbackBlocked = classifyError(fallback.err);
-      if (fallbackBlocked) {
-        return fallbackBlocked;
-      }
-    }
-    return { status: "missing" };
+  /** `where.exe` prints every PATH match, PATHEXT-resolved. */
+  private probeViaWhere(command: string): Promise<ProbeResult> {
+    return new Promise((resolve) => {
+      execFile(
+        "where",
+        [command],
+        {
+          timeout: CliAvailabilityService.WHICH_TIMEOUT_MS,
+          windowsHide: true,
+        },
+        (err, stdout) => {
+          if (err) {
+            const code = (err as NodeJS.ErrnoException | undefined)?.code;
+            // EACCES / EPERM from `where` itself is rare — most endpoint
+            // security blocks surface on the spawn attempt. Still, when they
+            // do, the binary clearly exists on disk (otherwise we'd have
+            // ENOENT) so "blocked" is the correct classification.
+            if (typeof code === "string" && SECURITY_ERROR_CODES.has(code)) {
+              resolve({
+                status: "blocked",
+                reason: "security",
+                via: "which",
+                message: `where "${command}" failed with ${code} — likely blocked by security software or missing execute permission`,
+              });
+              return;
+            }
+            resolve({ status: "missing" });
+            return;
+          }
+          const lines = String(stdout ?? "")
+            .trim()
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+          if (lines.length === 0) {
+            // Exit 0 with empty stdout. Preserve the historical contract: fall
+            // back to the bare command so the binary is still launchable via
+            // PATH lookup at spawn time.
+            resolve({ status: "found", path: command, via: "which" });
+            return;
+          }
+          const allPaths = dedupePathsByDirectory(lines, true);
+          resolve({ status: "found", path: allPaths[0], via: "which", allPaths });
+        }
+      );
+    });
   }
 
   private async probeNativePaths(paths: string[]): Promise<ProbeResult> {

@@ -9,6 +9,7 @@ import type { ProjectViewManager } from "../window/ProjectViewManager.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { store, windowStatesStore } from "../store.js";
 import { isRunningUnderRosetta } from "../utils/rosettaDetection.js";
+import { findOnPath } from "../utils/findOnPath.js";
 import { getFocusThrottlePollMultiplier, isFocusThrottled } from "../window/focusThrottleState.js";
 import { getPowerPolicy } from "../window/powerPolicy.js";
 import { getRendererTerminalDiagnosticsSamples } from "./RendererTerminalDiagnosticsCache.js";
@@ -327,13 +328,18 @@ async function collectProcess() {
   return result;
 }
 
+/** POSIX resolves in-process: the external `which` is absent from minimal Linux installs. */
+async function resolveToolPath(tool: string): Promise<string | null> {
+  if (process.platform === "win32") return runCommand("where", [tool], 3000);
+  return findOnPath(tool, { env: process.env, timeoutMs: 3000 });
+}
+
 async function collectTools() {
   const tools = ["git", "node", "npm", "npx", "gh"];
-  const checkCmd = process.platform === "win32" ? "where" : "which";
 
   const results = await Promise.allSettled(
     tools.map(async (tool) => {
-      const path = await runCommand(checkCmd, [tool], 3000);
+      const path = await resolveToolPath(tool);
       if (!path) return { tool, available: false, path: null, version: null };
 
       const version = await runCommand(tool, ["--version"], 3000);

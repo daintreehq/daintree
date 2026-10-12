@@ -4,6 +4,7 @@ import * as nodePath from "path";
 import * as nodeFs from "fs";
 import { CHANNELS } from "../channels.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
+import { findOnPath } from "../../utils/findOnPath.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -371,11 +372,16 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
       return false;
     }
 
+    if (process.platform !== "win32") {
+      // In-process: the external `which` is missing from minimal Fedora and
+      // Arch installs, where it made every command read as absent.
+      return (await findOnPath(command, { timeoutMs: 5_000 })) !== null;
+    }
+
     try {
       const { execFile } = await import("child_process");
       const { promisify } = await import("util");
-      const checkCmd = process.platform === "win32" ? "where" : "which";
-      await promisify(execFile)(checkCmd, [command], { timeout: 5_000, windowsHide: true });
+      await promisify(execFile)("where", [command], { timeout: 5_000, windowsHide: true });
       return true;
     } catch {
       return false;

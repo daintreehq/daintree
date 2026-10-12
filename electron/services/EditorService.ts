@@ -3,6 +3,7 @@ import path from "path";
 import os from "os";
 import { shell } from "electron";
 import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "../../shared/types/editor.js";
+import { withPathProbeSlot } from "../utils/findOnPath.js";
 
 interface EditorDefinition {
   id: KnownEditorId;
@@ -303,37 +304,19 @@ function resolveEditorDef(id: KnownEditorId): EditorDefinition | undefined {
   return KNOWN_EDITORS.find((e) => e.id === id);
 }
 
-// Probes share libuv's four-thread fs pool with the rest of the main process,
-// so a PATH entry on a hung mount must not be able to occupy all of it.
-const MAX_CONCURRENT_PROBES = 2;
-let activeProbes = 0;
-const probeQueue: Array<() => void> = [];
-
-function withProbeSlot<T>(task: () => Promise<T>): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const run = () => {
-      activeProbes++;
-      new Promise<T>((settle) => settle(task())).then(resolve, reject).finally(() => {
-        activeProbes--;
-        probeQueue.shift()?.();
-      });
-    };
-    if (activeProbes < MAX_CONCURRENT_PROBES) run();
-    else probeQueue.push(run);
-  });
-}
-
 /**
  * The same walk as a synchronous PATH lookup — binaries first, then extra
  * dirs, then PATH, one candidate at a time — so it touches exactly the paths
  * and picks exactly the file a sequential search would. Only the waiting moves
- * off the main thread; separate editors walk concurrently under the slot cap.
+ * off the main thread; separate editors walk concurrently under the slot cap,
+ * which is shared with every other PATH lookup so that together they can never
+ * hold more of libuv's fs pool than the cap allows.
  */
 async function findExecutable(def: EditorDefinition): Promise<string | null> {
   const extraDirs = def.extraDirs ? def.extraDirs() : [];
   for (const binary of def.binaries) {
     for (const candidate of binaryCandidates(binary, extraDirs)) {
-      if (await withProbeSlot(() => isExecutableFile(candidate))) return candidate;
+      if (await withPathProbeSlot(() => isExecutableFile(candidate))) return candidate;
     }
   }
   return null;

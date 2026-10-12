@@ -4,7 +4,8 @@ import * as path from "path";
 import * as semver from "semver";
 import { getEffectiveAgentConfig } from "../../shared/config/agentRegistry.js";
 import { refreshPath } from "../setup/environment.js";
-import { BASELINE_PREREQUISITES } from "./baselinePrerequisites.js";
+import { findOnPath } from "../utils/findOnPath.js";
+import { getBaselinePrerequisites } from "./baselinePrerequisites.js";
 import type {
   PrerequisiteSpec,
   PrerequisiteSeverity,
@@ -24,12 +25,12 @@ const SEVERITY_RANK: Record<PrerequisiteSeverity, number> = {
   silent: 0,
 };
 
-export { BASELINE_PREREQUISITES };
+export { getBaselinePrerequisites };
 
 export function resolvePrerequisites(agentIds?: string[]): PrerequisiteSpec[] {
   const specMap = new Map<string, PrerequisiteSpec>();
 
-  for (const spec of BASELINE_PREREQUISITES) {
+  for (const spec of getBaselinePrerequisites()) {
     specMap.set(spec.tool, spec);
   }
 
@@ -182,20 +183,32 @@ async function runVersionCommand(
   return stdout;
 }
 
-export async function checkPrerequisite(spec: PrerequisiteSpec): Promise<PrerequisiteCheckResult> {
-  const checkCmd = process.platform === "win32" ? "where" : "which";
-  const command = spec.command ?? spec.tool;
-
-  let resolvedPath: string;
+/**
+ * Where `command` resolves on PATH, or null. POSIX looks it up in-process —
+ * the external `which` is absent from minimal Fedora and Arch installs, and
+ * relying on it read every tool there as missing. Windows keeps `where`, whose
+ * output (first line) also feeds the shell-shim detection below.
+ */
+async function resolveOnPath(command: string): Promise<string | null> {
+  if (process.platform !== "win32") {
+    return findOnPath(command, { timeoutMs: CHECK_TIMEOUT_MS });
+  }
   try {
-    const { stdout } = await execFileAsync(checkCmd, [command], {
+    const { stdout } = await execFileAsync("where", [command], {
       encoding: "utf8",
       timeout: CHECK_TIMEOUT_MS,
     });
-    resolvedPath = stdout;
+    return stdout;
   } catch {
-    return unavailable(spec, "not-found");
+    return null;
   }
+}
+
+export async function checkPrerequisite(spec: PrerequisiteSpec): Promise<PrerequisiteCheckResult> {
+  const command = spec.command ?? spec.tool;
+
+  const resolvedPath = await resolveOnPath(command);
+  if (resolvedPath === null) return unavailable(spec, "not-found");
 
   // Never execute the CLT shim blind: without the tools installed it pops the
   // system installer dialog and hangs until the timeout kills the child, which

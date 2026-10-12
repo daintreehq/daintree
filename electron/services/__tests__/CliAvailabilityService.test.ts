@@ -13,29 +13,51 @@ import { broadcastToRenderer } from "../../ipc/utils.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { logBuffer } from "../LogBuffer.js";
 import { getLogLevelOverrides, setLogLevelOverrides } from "../../utils/logger.js";
+import { findAllOnPath } from "../../utils/findOnPath.js";
 
-// Mock child_process. The service's probes (shell which/where, npm-global,
-// WSL) all run through async `execFile` — mock it or the probes will call
-// `undefined(...)` and throw TypeErrors at runtime. `execFileSync` is mocked
-// too: the tests in this file drive shell-probe behavior through
-// `mockedExecFileSync` implementations, and the default `execFile` impl
-// DELEGATES `which`/`where` spawns to it — calling the sync mock and
-// translating its return/throw into the async callback contract (string
-// stdout on success, error on throw). All other files (npm, wsl.exe, npx)
-// get an ENOENT callback so unmocked tests see the probe as "binary not
-// found" rather than hanging on an un-invoked callback.
+// Mock child_process. The service's subprocess probes (`where.exe`,
+// npm-global, WSL) run through async `execFile` — mock it or the probes will
+// call `undefined(...)` and throw TypeErrors at runtime.
+//
+// `execFileSync` is the suite's PATH fixture: tests state what is on PATH
+// through `mockedExecFileSync` implementations, keyed on the command at the
+// tail of the args (`cmdOf`). Two adapters read it:
+//   - On Windows the default `execFile` impl DELEGATES `where` spawns to it,
+//     translating its return/throw into the async callback contract (string
+//     stdout on success, error on throw).
+//   - On POSIX the service walks PATH in-process through `findAllOnPath`
+//     (no `which` subprocess), and `pathFixtureLookup` answers that from the
+//     same fixture: a throw is "not on PATH", stdout lines are the matches,
+//     and empty stdout is a match at a synthetic location.
+// All other files (npm, wsl.exe, npx) get an ENOENT callback so unmocked
+// tests see the probe as "binary not found" rather than hanging on an
+// un-invoked callback.
 //
 // `execFile` has an overloaded signature: (file, args, callback) or
 // (file, args, options, callback). `vi.hoisted` guarantees this runs before
 // `vi.mock` factories despite the auto-hoisting that normally blocks
 // reference to local bindings.
-const { defaultExecFileImpl } = vi.hoisted(() => ({
+const { defaultExecFileImpl, pathFixtureLookup } = vi.hoisted(() => ({
+  pathFixtureLookup: async (command: string): Promise<string[]> => {
+    let out: string | Buffer;
+    try {
+      out = execFileSync("which", ["-a", command], {}) as string | Buffer;
+    } catch {
+      return [];
+    }
+    const lines = (typeof out === "string" ? out : out.toString("utf8"))
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    return lines.length > 0 ? lines : [`/usr/local/bin/${command}`];
+  },
   defaultExecFileImpl: (...args: unknown[]) => {
     const callback = args.find(
       (a): a is (err: unknown, stdout?: string) => void => typeof a === "function"
     );
     const [file, fileArgs, options] = args;
-    if (file === "which" || file === "where") {
+    if (file === "where") {
       queueMicrotask(() => {
         try {
           const out = execFileSync(file, fileArgs as readonly string[], options as never) as
@@ -56,6 +78,10 @@ const { defaultExecFileImpl } = vi.hoisted(() => ({
 vi.mock("child_process", () => ({
   execFileSync: vi.fn(),
   execFile: vi.fn(defaultExecFileImpl),
+}));
+
+vi.mock("../../utils/findOnPath.js", () => ({
+  findAllOnPath: vi.fn(pathFixtureLookup),
 }));
 
 // Mock os.homedir() to return a stable Unix-style path. On Windows runners
@@ -108,10 +134,9 @@ vi.mock("../../ipc/utils.js", () => ({
 }));
 
 /**
- * Extract the command name from a `which`/`where` args array. On Unix the
- * service now invokes `which -a <cmd>` (#6054), so the command is the last
- * element; on Windows it remains `where <cmd>`. The command always sits at
- * the tail of the args array, so this works on both platforms.
+ * Extract the command name from a PATH-fixture args array: `["-a", cmd]` from
+ * the POSIX adapter, `[cmd]` from `where`. The command always sits at the
+ * tail, so this works on both platforms.
  */
 const cmdOf = (args: unknown): string | undefined => {
   if (!Array.isArray(args) || args.length === 0) return undefined;
@@ -122,6 +147,7 @@ describe("CliAvailabilityService", () => {
   let service: CliAvailabilityService;
   const mockedExecFileSync = vi.mocked(execFileSync);
   const mockedExecFile = vi.mocked(execFile);
+  const mockedFindAllOnPath = vi.mocked(findAllOnPath);
   const savedEnv: Record<string, string | undefined> = {};
   // Default platform to darwin so Unix-style path/probe expectations don't
   // diverge on Windows CI. Individual tests that exercise Windows-specific
@@ -170,6 +196,7 @@ describe("CliAvailabilityService", () => {
     // Default async execFile (npm-global / WSL probes) to "not found" —
     // clearAllMocks wipes mock impls, so we reapply the factory default after each clear.
     mockedExecFile.mockImplementation(defaultExecFileImpl as never);
+    mockedFindAllOnPath.mockImplementation(pathFixtureLookup);
   });
 
   afterEach(() => {
@@ -213,21 +240,18 @@ describe("CliAvailabilityService", () => {
         expect(detail?.authConfirmed).toBe(false);
       }
 
-      // Should have called execFileSync 18 times (once for each CLI).
-      // Fallback probes (native paths, npm-global, WSL) run via async execFile and
-      // only fire when the which/where probe returns missing — in this test
-      // every agent succeeds on the first probe, so execFileSync count
-      // matches the registry size exactly.
+      // One PATH lookup per CLI. Fallback probes (native paths, npm-global,
+      // WSL) only fire when the PATH probe returns missing — in this test every
+      // agent succeeds on the first probe, so the count matches the registry
+      // size exactly.
       expect(mockedExecFileSync).toHaveBeenCalledTimes(18);
 
-      // The shell probe runs through async execFile — assert the option
-      // shape (timeout + windowsHide) on the mock that observes it directly.
-      expect(mockedExecFile).toHaveBeenCalledWith(
-        "which",
-        expect.any(Array),
-        expect.objectContaining({ timeout: expect.any(Number), windowsHide: true }),
-        expect.any(Function)
+      // The PATH probe is bounded, and on POSIX it never spawns a subprocess.
+      expect(mockedFindAllOnPath).toHaveBeenCalledWith(
+        "claude",
+        expect.objectContaining({ timeoutMs: expect.any(Number) })
       );
+      expect(mockedExecFile).not.toHaveBeenCalled();
     });
 
     it("returns 'ready' with authConfirmed=true when binary found and auth file exists", async () => {
@@ -403,24 +427,28 @@ describe("CliAvailabilityService", () => {
       }
     });
 
-    it("uses which on Unix-like systems", async () => {
+    it("walks PATH in-process on Linux, never spawning which", async () => {
+      // Fedora containers and Arch's base set have no `which`; spawning it
+      // reported every installed agent missing.
       const originalPlatform = process.platform;
 
       try {
         Object.defineProperty(process, "platform", {
-          value: "darwin",
+          value: "linux",
           writable: true,
         });
 
         mockedExecFileSync.mockImplementation(() => Buffer.from(""));
 
-        await service.checkAvailability();
+        const result = await service.checkAvailability();
 
-        expect(mockedExecFileSync).toHaveBeenCalledWith(
-          "which",
-          expect.any(Array),
-          expect.any(Object)
+        expect(Object.values(result).every((state) => state !== "missing")).toBe(true);
+        expect(mockedFindAllOnPath.mock.calls.map((call) => call[0]).sort()).toEqual(
+          getAgentIds()
+            .map((id) => getAgentConfig(id)?.command)
+            .sort()
         );
+        expect(mockedExecFile).not.toHaveBeenCalled();
       } finally {
         Object.defineProperty(process, "platform", {
           value: originalPlatform,
@@ -442,11 +470,13 @@ describe("CliAvailabilityService", () => {
 
         await service.checkAvailability();
 
-        expect(mockedExecFileSync).toHaveBeenCalledWith(
+        expect(mockedExecFile).toHaveBeenCalledWith(
           "where",
           expect.any(Array),
-          expect.any(Object)
+          expect.objectContaining({ timeout: expect.any(Number), windowsHide: true }),
+          expect.any(Function)
         );
+        expect(mockedFindAllOnPath).not.toHaveBeenCalled();
       } finally {
         Object.defineProperty(process, "platform", {
           value: originalPlatform,
@@ -707,11 +737,9 @@ describe("CliAvailabilityService", () => {
       expect(refreshed.codex).toBe("missing");
 
       expect(service.getAvailability()).toEqual(refreshed);
-      // 18 primary calls (one per registry entry) + 17 BusyBox-style bare-`which`
-      // retries (the 17 agents whose mock throws a generic `Error` with no errno
-      // code — which `probeViaShell` retries without `-a` to recover
-      // BusyBox/minimal `which` builds that reject the flag).
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(35);
+      // One PATH lookup per registry entry, hit or miss: the in-process walk
+      // has no flag a minimal `which` could reject, so a miss is never retried.
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(18);
     });
 
     it("works on cold start before initial check", async () => {
@@ -1104,7 +1132,10 @@ describe("CliAvailabilityService", () => {
   });
 
   describe("blocked state (security software / permissions)", () => {
-    it("reports 'blocked' when which throws EPERM (Santa / CrowdStrike / Defender)", async () => {
+    // POSIX walks PATH in-process, so only Windows still has a probe
+    // subprocess (`where.exe`) that security software can block.
+    it("reports 'blocked' when where throws EPERM (Santa / CrowdStrike / Defender)", async () => {
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
       mockedExecFileSync.mockImplementation(() => {
         throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
       });
@@ -1124,7 +1155,8 @@ describe("CliAvailabilityService", () => {
       expect(details!.claude?.message).toMatch(/EPERM/);
     });
 
-    it("reports 'blocked' when which throws EACCES", async () => {
+    it("reports 'blocked' when where throws EACCES", async () => {
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
       mockedExecFileSync.mockImplementation(() => {
         throw Object.assign(new Error("access denied"), { code: "EACCES" });
       });
@@ -1924,20 +1956,15 @@ describe("CliAvailabilityService", () => {
   describe("duplicate CLI detection (#6054)", () => {
     const mockedBroadcast = vi.mocked(broadcastToRenderer);
 
-    it("requests all PATH matches via `which -a` on Unix", async () => {
+    it("requests every PATH match, not just the first, on Unix", async () => {
       mockedExecFileSync.mockImplementation(() => Buffer.from(""));
 
       await service.checkAvailability();
 
-      const claudeCall = mockedExecFileSync.mock.calls.find(
-        (call) => Array.isArray(call[1]) && (call[1] as string[])[1] === "claude"
-      );
-      expect(claudeCall).toBeDefined();
-      expect(claudeCall![0]).toBe("which");
-      expect(claudeCall![1]).toEqual(["-a", "claude"]);
+      expect(mockedFindAllOnPath).toHaveBeenCalledWith("claude", expect.any(Object));
     });
 
-    it("captures every line of `which -a` stdout into allResolvedPaths", async () => {
+    it("captures every PATH match into allResolvedPaths", async () => {
       mockedExecFileSync.mockImplementation((_file, args) => {
         const argv = args as string[] | undefined;
         if (argv?.[1] === "claude") {
@@ -2200,46 +2227,6 @@ describe("CliAvailabilityService", () => {
       expect(message).toContain("and 2 more");
     });
 
-    it("falls back to bare `which` when BusyBox-style `which -a` exits non-zero", async () => {
-      // BusyBox/minimal `which` builds reject `-a` with a non-zero exit
-      // (no errno code). Without a fallback, every agent on Alpine would
-      // silently surface as "missing".
-      const { access } = await import("fs/promises");
-      // Resolve kiro's AWS SSO token probe so the agent reaches "ready" —
-      // this test is about path resolution, not auth discovery.
-      vi.mocked(access).mockImplementation(async (path) => {
-        if (typeof path === "string" && path.endsWith("kiro-auth-token.json")) {
-          return undefined;
-        }
-        throw new Error("ENOENT");
-      });
-      mockedExecFileSync.mockImplementation((_file, args) => {
-        const argv = args as string[] | undefined;
-        if (argv?.[0] === "-a") {
-          const e = new Error("which: invalid option -- a");
-          throw Object.assign(e, { status: 1 });
-        }
-        // Plain `which kiro-cli` succeeds.
-        if (cmdOf(args) === "kiro-cli") {
-          return Buffer.from("/usr/local/bin/kiro-cli\n");
-        }
-        const enoent = new Error("not found");
-        throw Object.assign(enoent, { status: 1 });
-      });
-
-      const result = await service.checkAvailability();
-      expect(result.kiro).toBe("ready");
-      const detail = service.getDetails()!.kiro!;
-      expect(detail.resolvedPath).toBe("/usr/local/bin/kiro-cli");
-      // Single-result fallback never surfaces duplicates.
-      expect(detail.allResolvedPaths).toBeUndefined();
-
-      const toastCalls = mockedBroadcast.mock.calls.filter(
-        (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
-      );
-      expect(toastCalls).toHaveLength(0);
-    });
-
     it("survives a milestone load with falsy/undefined value (legacy stores)", async () => {
       // Simulate a store that has never persisted orchestrationMilestones.
       storeBackingMap.delete("orchestrationMilestones");
@@ -2474,11 +2461,15 @@ describe("CliAvailabilityService", () => {
       logBuffer.clear();
     });
 
-    // The hung agent's `which` never calls back, so its check outlives the
-    // batch budget while every other agent settles through microtasks.
-    const hangWhichFor = (hungCommand: string) => {
+    // The hung agent's PATH lookup never settles (the in-process walk on POSIX,
+    // `where` on Windows), so its check outlives the batch budget while every
+    // other agent settles through microtasks.
+    const hangPathLookupFor = (hungCommand: string) => {
+      mockedFindAllOnPath.mockImplementation((command) =>
+        command === hungCommand ? new Promise<string[]>(() => {}) : pathFixtureLookup(command)
+      );
       mockedExecFile.mockImplementation(((...args: unknown[]) =>
-        args[0] === "which" && cmdOf(args[1]) === hungCommand
+        args[0] === "where" && cmdOf(args[1]) === hungCommand
           ? ({} as never)
           : defaultExecFileImpl(...args)) as never);
     };
@@ -2497,7 +2488,7 @@ describe("CliAvailabilityService", () => {
         if (cmdOf(args) === "claude") return Buffer.from("/usr/local/bin/claude\n");
         throw Object.assign(new Error("not found"), { code: "ENOENT" });
       });
-      hangWhichFor("goose");
+      hangPathLookupFor("goose");
 
       vi.useFakeTimers();
       const checkPromise = service.checkAvailability();
@@ -2532,7 +2523,7 @@ describe("CliAvailabilityService", () => {
         if (cmdOf(args) === "claude") return Buffer.from("/opt/homebrew/bin/claude\n");
         throw Object.assign(new Error("not found"), { code: "ENOENT" });
       });
-      hangWhichFor("goose");
+      hangPathLookupFor("goose");
 
       vi.useFakeTimers();
       const refreshPromise = service.refresh();
@@ -2550,6 +2541,9 @@ describe("CliAvailabilityService", () => {
     });
 
     it("keeps a carried agent's own diagnostic instead of the timeout note", async () => {
+      // `where` is the PATH probe that can itself be blocked by security
+      // software, which is what gives goose a diagnostic of its own here.
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
       mockedExecFileSync.mockImplementation((_file, args) => {
         if (cmdOf(args) === "goose") {
           throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
@@ -2561,7 +2555,7 @@ describe("CliAvailabilityService", () => {
       expect(blockedGoose?.state).toBe("blocked");
       expect(blockedGoose?.message).toBeDefined();
 
-      hangWhichFor("goose");
+      hangPathLookupFor("goose");
       vi.useFakeTimers();
       const refreshPromise = service.refresh();
       await vi.advanceTimersByTimeAsync(60_000);
@@ -2574,7 +2568,7 @@ describe("CliAvailabilityService", () => {
     });
 
     it("never offers a timed-out check for reuse", async () => {
-      hangWhichFor("goose");
+      hangPathLookupFor("goose");
       vi.useFakeTimers();
       const checkPromise = service.checkAvailability();
       await vi.advanceTimersByTimeAsync(60_000);
@@ -2589,10 +2583,10 @@ describe("CliAvailabilityService", () => {
         if (cmdOf(args) === "claude") return Buffer.from("/usr/local/bin/claude\n");
         throw Object.assign(new Error("not found"), { code: "ENOENT" });
       });
-      mockedExecFile.mockImplementation(((...args: unknown[]) => {
-        if (args[0] === "which" && cmdOf(args[1]) === "goose") throw new Error("spawn EBADF");
-        return defaultExecFileImpl(...args);
-      }) as never);
+      // Any throw inside one agent's probe ladder stands in here.
+      mockedFindAllOnPath.mockImplementation((command) =>
+        command === "goose" ? Promise.reject(new Error("EBADF")) : pathFixtureLookup(command)
+      );
 
       const result = await service.checkAvailability();
 
