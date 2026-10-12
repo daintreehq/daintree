@@ -145,6 +145,7 @@ const relocationMock = vi.hoisted(() => ({ notifyAppImageRelocated: vi.fn() }));
 vi.mock("../appImageRelocation.js", () => relocationMock);
 
 const armRelaunchMock = vi.hoisted(() => ({
+  armRelaunch: vi.fn(),
   armAppImageRelaunch: vi.fn(
     (_image: string, _args: readonly string[], _fallback: () => void) => true
   ),
@@ -2515,6 +2516,72 @@ describe("AutoUpdaterService", () => {
 
       vi.advanceTimersByTime(5_000);
       expect(appMock.exit).toHaveBeenCalledWith(0);
+    });
+
+    describe("Linux package install", () => {
+      const updater = autoUpdaterMock as typeof autoUpdaterMock & {
+        runCommandWithSudoIfNeeded?: (commandWithArgs: string[]) => string;
+        doInstall?: (options: unknown) => boolean;
+      };
+
+      beforeEach(() => {
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+        updater.runCommandWithSudoIfNeeded = vi.fn(() => "");
+      });
+
+      afterEach(() => {
+        delete updater.runCommandWithSudoIfNeeded;
+        delete updater.doInstall;
+      });
+
+      it("relaunches this version at once when the package did not go in", () => {
+        const originalArgv = process.argv;
+        process.argv = [process.execPath, "--cli-path", "/projects/a", "--enable-logging"];
+        updater.doInstall = vi.fn(() => false);
+        autoUpdaterMock.quitAndInstall.mockImplementationOnce(() => {
+          updater.doInstall!({});
+        });
+        downloadedHandler({ version: "2.0.0" });
+        quitAndInstallHandler(TRUSTED_SENDER);
+        shutdownCoordinatorMock.settleShutdown("clean");
+
+        process.argv = originalArgv;
+
+        // Restores every window rather than reopening the launch target alone.
+        expect(armRelaunchMock.armRelaunch).toHaveBeenCalledTimes(1);
+        expect(armRelaunchMock.armRelaunch).toHaveBeenCalledWith({ args: ["--enable-logging"] });
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+        vi.advanceTimersByTime(5_000);
+        expect(appMock.exit).toHaveBeenCalledTimes(1);
+      });
+
+      it("relaunches when the install threw", () => {
+        autoUpdaterMock.quitAndInstall.mockImplementationOnce(() => {
+          throw new Error("Command pkexec exited with code 126");
+        });
+        updater.doInstall = vi.fn(() => true);
+        downloadedHandler({ version: "2.0.0" });
+        quitAndInstallHandler(TRUSTED_SENDER);
+        shutdownCoordinatorMock.settleShutdown("clean");
+
+        expect(armRelaunchMock.armRelaunch).toHaveBeenCalledTimes(1);
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      it("leaves a package that went in to the updater's own quit, behind the watchdog", () => {
+        updater.doInstall = vi.fn(() => true);
+        autoUpdaterMock.quitAndInstall.mockImplementationOnce(() => {
+          updater.doInstall!({});
+        });
+        downloadedHandler({ version: "2.0.0" });
+        quitAndInstallHandler(TRUSTED_SENDER);
+        shutdownCoordinatorMock.settleShutdown("clean");
+
+        expect(armRelaunchMock.armRelaunch).not.toHaveBeenCalled();
+        expect(appMock.exit).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(5_000);
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
     });
 
     it("does not arm the watchdog while the cleanup chain is still running", () => {

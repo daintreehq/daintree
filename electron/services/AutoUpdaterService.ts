@@ -17,7 +17,14 @@ import { PRODUCT_NAME, PRODUCT_WEBSITE } from "../utils/productBranding.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { isWindowsStoreBuild } from "../../shared/config/distribution.js";
 import { notifyAppImageRelocated } from "./appImageRelocation.js";
+import { armRelaunch } from "../lifecycle/armRelaunch.js";
+import { stripLaunchTargets } from "../lifecycle/launchIntent.js";
 import { routeAppImageRelaunchThroughWaiter } from "./appImageUpdateRelaunch.js";
+import {
+  isLinuxPackageUpdater,
+  runLinuxPackageInstall,
+  type LinuxPackageInstallOutcome,
+} from "./linuxPackageUpdateInstall.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 const DISMISS_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -311,11 +318,29 @@ class AutoUpdaterService {
   // From an AppImage, the new image is started by the relaunch waiter once this
   // process has exited, not by the updater from inside it.
   private executeQuitAndInstall(): void {
+    let packageInstall: LinuxPackageInstallOutcome | null = null;
     try {
-      routeAppImageRelaunchThroughWaiter(autoUpdater, () => autoUpdater.quitAndInstall());
+      packageInstall = runLinuxPackageInstall(autoUpdater, () =>
+        routeAppImageRelaunchThroughWaiter(autoUpdater, () => autoUpdater.quitAndInstall())
+      );
     } catch (err) {
       console.error("[MAIN] autoUpdater.quitAndInstall() threw:", err);
       this.recordInstallStage("handoff-threw");
+      if (isLinuxPackageUpdater(autoUpdater)) packageInstall = "failed";
+    }
+    // A Linux package that didn't go in (most often a cancelled password
+    // prompt) leaves this process torn down. Start this version again rather
+    // than leave the user with no Daintree; the next boot says what happened.
+    // Without the launch targets, so it restores every window, not the one
+    // project this session was opened on.
+    if (packageInstall === "failed") {
+      try {
+        armRelaunch({ args: stripLaunchTargets(process.argv.slice(1)) });
+        app.exit(0);
+      } catch (err) {
+        console.error("[MAIN] Relaunch after a failed package install failed:", err);
+      }
+      return;
     }
     this.watchdogTimeout = setTimeout(() => {
       this.watchdogTimeout = null;
