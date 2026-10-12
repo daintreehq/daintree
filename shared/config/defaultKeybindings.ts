@@ -1176,6 +1176,9 @@ const REMOTE_HOSTS_KEYBINDINGS: KeybindingConfig[] = [
   },
 ];
 
+// Ctrl+F4 is Windows-only on purpose: XFCE binds Ctrl+F1–F12 to workspaces and
+// KDE binds Ctrl+F1–F4 to desktops, so on Linux the window manager takes it
+// before a focused terminal could.
 const WINDOWS_ONLY_KEYBINDINGS: KeybindingConfig[] = [
   {
     actionId: "terminal.close",
