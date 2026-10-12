@@ -44,7 +44,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useProjectStore } from "@/store";
 import { patchCachedProjectSettings, useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
-import { invalidateProjectSettingsCache, projectClient } from "@/clients";
+import { projectClient } from "@/clients";
 import { useFindInPage } from "@/hooks/useFindInPage";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { logError } from "@/utils/logger";
@@ -114,29 +114,14 @@ function loadWebviewUrl(webview: Electron.WebviewTag, url: string): void {
   }
 }
 
-// One approval write at a time: each reads the saved settings and writes them
-// back whole, so two in flight would each drop the other's host.
-let approvedHostWrites: Promise<void> = Promise.resolve();
-
 /**
- * Adds a host the user allowed to the project's saved settings. Builds on
- * main's copy, not the cached one: saving replaces the whole settings file,
- * and the cache may still be loading (null) or hold another project.
+ * Adds a host the user allowed to the project's saved settings. Main merges
+ * it into the file as it stands, so nothing else written since this view last
+ * read the settings is reverted; the cache then takes the list as saved.
  */
-function rememberApprovedHost(projectId: string, hostname: string): Promise<void> {
-  const write = approvedHostWrites.then(async () => {
-    invalidateProjectSettingsCache(projectId);
-    const saved = await projectClient.getSettings(projectId);
-    const hosts = saved.browserAllowedHosts ?? [];
-    const known = hosts.some((host) => host.toLowerCase() === hostname);
-    const next = known ? hosts : [...hosts, hostname];
-    if (!known) {
-      await projectClient.saveSettings(projectId, { ...saved, browserAllowedHosts: next });
-    }
-    patchCachedProjectSettings(projectId, { browserAllowedHosts: next });
-  });
-  approvedHostWrites = write.catch(() => {});
-  return write;
+async function rememberApprovedHost(projectId: string, hostname: string): Promise<void> {
+  const hosts = await projectClient.addBrowserAllowedHost(projectId, hostname);
+  patchCachedProjectSettings(projectId, { browserAllowedHosts: hosts });
 }
 
 export function BrowserPane({

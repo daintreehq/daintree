@@ -233,6 +233,16 @@ export const projectClient = {
     return window.electron.project.saveSettings(projectId, settings);
   },
 
+  addBrowserAllowedHost: async (projectId: string, hostname: string): Promise<string[]> => {
+    invalidateProjectSettingsCache(projectId);
+    try {
+      return await window.electron.project.addBrowserAllowedHost(projectId, hostname);
+    } finally {
+      // A read that landed while Main was writing may hold the file from before.
+      invalidateProjectSettingsCache(projectId);
+    }
+  },
+
   detectRunners: (projectId: string): Promise<RunCommand[]> => {
     return window.electron.project.detectRunners(projectId);
   },

@@ -20,6 +20,13 @@ export class ProjectSettingsManager {
     maxSize: 20,
     defaultTTL: 30_000,
   });
+  // Writes to one project's settings run one at a time, so an update to a
+  // single field reads a file no other write is halfway through replacing.
+  private readonly writeQueues = new Map<string, Promise<void>>();
+  private readonly projectsBeingWritten = new Set<string>();
+  // Bumped as each write starts and ends: a read that overlapped a write may
+  // hold the file from before it, so it is returned but never cached.
+  private readonly writeGenerations = new Map<string, number>();
 
   constructor(
     private projectsConfigDir: string,
@@ -59,6 +66,7 @@ export class ProjectSettingsManager {
   async getProjectSettings(projectId: string): Promise<ProjectSettings> {
     const cached = this.settingsCache.get(projectId);
     if (cached) return cached;
+    const generation = this.writeGenerations.get(projectId) ?? 0;
 
     const filePath = settingsFilePath(this.projectsConfigDir, projectId);
     if (!filePath || !existsSync(filePath)) {
@@ -158,10 +166,58 @@ export class ProjectSettingsManager {
       unresolvedSecureEnvironmentVariables: unresolvedKeys.length > 0 ? unresolvedKeys : undefined,
     };
 
-    this.notificationOverridesCache.set(projectId, settings.notificationOverrides);
-    this.settingsCache.set(projectId, settings);
+    const overlappedWrite =
+      this.projectsBeingWritten.has(projectId) ||
+      (this.writeGenerations.get(projectId) ?? 0) !== generation;
+    if (!overlappedWrite) {
+      this.notificationOverridesCache.set(projectId, settings.notificationOverrides);
+      this.settingsCache.set(projectId, settings);
+    }
 
     return settings;
+  }
+
+  private serializeWrite<T>(projectId: string, write: () => Promise<T>): Promise<T> {
+    const bumpGeneration = () => {
+      this.writeGenerations.set(projectId, (this.writeGenerations.get(projectId) ?? 0) + 1);
+      this.settingsCache.invalidate(projectId);
+    };
+    const previous = this.writeQueues.get(projectId) ?? Promise.resolve();
+    const result = previous.then(async () => {
+      this.projectsBeingWritten.add(projectId);
+      bumpGeneration();
+      try {
+        return await write();
+      } finally {
+        this.projectsBeingWritten.delete(projectId);
+        bumpGeneration();
+      }
+    });
+    const settled = result.then(
+      () => undefined,
+      () => undefined
+    );
+    this.writeQueues.set(projectId, settled);
+    void settled.then(() => {
+      if (this.writeQueues.get(projectId) === settled) this.writeQueues.delete(projectId);
+    });
+    return result;
+  }
+
+  /**
+   * Adds a host to the browser panel's allow-list, merged into the settings
+   * as they are on disk at the time of the write rather than replacing them
+   * with a copy read earlier. Returns the list as saved.
+   */
+  async addBrowserAllowedHost(projectId: string, hostname: string): Promise<string[]> {
+    return this.serializeWrite(projectId, async () => {
+      const settings = await this.getProjectSettings(projectId);
+      const hosts = settings.browserAllowedHosts ?? [];
+      if (hosts.some((host) => host.toLowerCase() === hostname)) return hosts;
+      const next = [...hosts, hostname];
+      await this.writeProjectSettings(projectId, { ...settings, browserAllowedHosts: next });
+      return next;
+    });
   }
 
   /**
@@ -214,8 +270,10 @@ export class ProjectSettingsManager {
   }
 
   async saveProjectSettings(projectId: string, settings: ProjectSettings): Promise<void> {
-    this.settingsCache.invalidate(projectId);
+    return this.serializeWrite(projectId, () => this.writeProjectSettings(projectId, settings));
+  }
 
+  private async writeProjectSettings(projectId: string, settings: ProjectSettings): Promise<void> {
     const stateDir = getProjectStateDir(this.projectsConfigDir, projectId);
     if (!stateDir) {
       throw new Error(`Invalid project ID: ${projectId}`);

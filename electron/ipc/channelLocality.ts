@@ -709,6 +709,7 @@ export const CHANNEL_LOCALITY = {
   "project-relocation:apply": "host",
   "project-relocation:preview": "host",
   "project:add": "host",
+  "project:add-browser-allowed-host": "host",
   "project:add-recipe": "host",
   "project:background-resize": "shell",
   "project:check-missing": "host",

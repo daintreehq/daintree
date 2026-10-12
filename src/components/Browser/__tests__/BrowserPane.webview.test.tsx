@@ -2470,9 +2470,11 @@ describe("BrowserPane webview lifecycle regression", () => {
       environmentVariables: { API_URL: "http://localhost:4000" },
       browserAllowedHosts: ["internal.corp.test"],
     };
+    const savedHosts = ["internal.corp.test", "example.com"];
 
     let getSettingsMock: ReturnType<typeof vi.fn>;
     let saveSettingsMock: ReturnType<typeof vi.fn>;
+    let addHostMock: ReturnType<typeof vi.fn>;
 
     beforeEach(() => {
       useProjectStoreMock.mockImplementation((selector) =>
@@ -2480,17 +2482,18 @@ describe("BrowserPane webview lifecycle regression", () => {
       );
       getSettingsMock = vi.fn(() => Promise.resolve(savedOnDisk));
       saveSettingsMock = vi.fn(() => Promise.resolve());
+      addHostMock = vi.fn(() => Promise.resolve(savedHosts));
       Object.defineProperty(window.electron, "project", {
         configurable: true,
         writable: true,
         value: {
           getSettings: getSettingsMock,
           saveSettings: saveSettingsMock,
+          addBrowserAllowedHost: addHostMock,
           detectRunners: vi.fn(() => Promise.resolve([])),
           onSwitch: vi.fn(() => vi.fn()),
         },
       });
-      // The cache holds this project but lags what is saved on disk.
       useProjectSettingsStore.setState({
         projectId: "test-project",
         settings: { runCommands: [] },
@@ -2565,8 +2568,8 @@ describe("BrowserPane webview lifecycle regression", () => {
     });
 
     it("navigates as soon as Allow is clicked, before the host is saved", async () => {
-      const pendingRead = deferred<ProjectSettings>();
-      getSettingsMock.mockReturnValueOnce(pendingRead.promise);
+      const pendingAdd = deferred<string[]>();
+      addHostMock.mockReturnValueOnce(pendingAdd.promise);
       const { container } = render(<BrowserPane {...baseProps} />);
       const webview = getWebviewElement(container);
       settle(webview);
@@ -2579,40 +2582,72 @@ describe("BrowserPane webview lifecycle regression", () => {
 
       expect(webview.loadURL).toHaveBeenLastCalledWith("https://example.com/");
       expect(container.textContent).not.toContain("Allow browser panel to load");
-      expect(saveSettingsMock).not.toHaveBeenCalled();
 
       await act(async () => {
-        pendingRead.resolve(savedOnDisk);
-        await vi.waitFor(() => expect(saveSettingsMock).toHaveBeenCalled());
+        pendingAdd.resolve(savedHosts);
+        await vi.waitFor(() =>
+          expect(useProjectSettingsStore.getState().settings?.browserAllowedHosts).toEqual(
+            savedHosts
+          )
+        );
       });
       // The page already loaded; the save landing doesn't load it twice.
       expect(webview.loadURL).toHaveBeenCalledTimes(1);
     });
 
-    it("saves the host onto the settings on disk and updates the cache", async () => {
+    it("has Main merge the host in and takes the saved list into the cache", async () => {
+      useProjectSettingsStore.setState({
+        settings: { runCommands: [], devServerCommand: "pnpm dev" },
+      });
       const { container } = render(<BrowserPane {...baseProps} />);
       settle(getWebviewElement(container));
       navigate("https://example.com");
 
       await act(async () => {
         findButton(container, "Allow").click();
-        await vi.waitFor(() => expect(saveSettingsMock).toHaveBeenCalled());
+        await vi.waitFor(() => expect(addHostMock).toHaveBeenCalled());
       });
 
-      // Built on main's copy, so a lagging or unloaded cache can't wipe the
-      // rest of the project's settings or a host approved elsewhere.
-      expect(saveSettingsMock).toHaveBeenCalledWith("test-project", {
-        ...savedOnDisk,
-        browserAllowedHosts: ["internal.corp.test", "example.com"],
+      expect(addHostMock).toHaveBeenCalledWith("test-project", "example.com");
+      // Never a whole-settings save: that would put back whatever this view
+      // last read over anything written since.
+      expect(saveSettingsMock).not.toHaveBeenCalled();
+      expect(useProjectSettingsStore.getState().settings).toEqual({
+        runCommands: [],
+        devServerCommand: "pnpm dev",
+        browserAllowedHosts: savedHosts,
       });
-      expect(useProjectSettingsStore.getState().settings?.browserAllowedHosts).toEqual([
-        "internal.corp.test",
-        "example.com",
-      ]);
+    });
+
+    it("keeps the approval when this view's settings are still loading", async () => {
+      // The initial load read the settings before the host was added.
+      const preWriteRead = deferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(preWriteRead.promise);
+      useProjectSettingsStore.getState().reset();
+      const initialLoad = useProjectSettingsStore.getState().loadSettings("test-project");
+      expect(useProjectSettingsStore.getState().settings).toBeNull();
+
+      const { container } = render(<BrowserPane {...baseProps} />);
+      settle(getWebviewElement(container));
+      navigate("https://example.com");
+      await act(async () => {
+        findButton(container, "Allow").click();
+        await vi.waitFor(() => expect(addHostMock).toHaveBeenCalled());
+      });
+
+      await act(async () => {
+        preWriteRead.resolve(savedOnDisk);
+        await initialLoad;
+      });
+
+      expect(useProjectSettingsStore.getState().settings).toEqual({
+        ...savedOnDisk,
+        browserAllowedHosts: savedHosts,
+      });
     });
 
     it("does not ask again in this pane when the save fails", async () => {
-      saveSettingsMock.mockRejectedValueOnce(new Error("disk full"));
+      addHostMock.mockRejectedValueOnce(new Error("disk full"));
       const { container } = render(<BrowserPane {...baseProps} />);
       const webview = getWebviewElement(container);
       settle(webview);
@@ -2620,30 +2655,12 @@ describe("BrowserPane webview lifecycle regression", () => {
 
       await act(async () => {
         findButton(container, "Allow").click();
-        await vi.waitFor(() => expect(saveSettingsMock).toHaveBeenCalled());
+        await vi.waitFor(() => expect(addHostMock).toHaveBeenCalled());
       });
       navigate("https://example.com/docs");
 
       expect(container.textContent).not.toContain("Allow browser panel to load");
       expect(webview.loadURL).toHaveBeenLastCalledWith("https://example.com/docs");
-    });
-
-    it("does not rewrite settings that already hold the host", async () => {
-      getSettingsMock.mockResolvedValue({ ...savedOnDisk, browserAllowedHosts: ["example.com"] });
-      const { container } = render(<BrowserPane {...baseProps} />);
-      settle(getWebviewElement(container));
-      navigate("https://example.com");
-
-      await act(async () => {
-        findButton(container, "Allow").click();
-        await vi.waitFor(() =>
-          expect(useProjectSettingsStore.getState().settings?.browserAllowedHosts).toEqual([
-            "example.com",
-          ])
-        );
-      });
-
-      expect(saveSettingsMock).not.toHaveBeenCalled();
     });
 
     it("still navigates when no project is known to save the host to", () => {
@@ -2659,13 +2676,12 @@ describe("BrowserPane webview lifecycle regression", () => {
 
       expect(webview.loadURL).toHaveBeenLastCalledWith("https://example.com/");
       expect(container.textContent).not.toContain("Allow browser panel to load");
-      expect(getSettingsMock).not.toHaveBeenCalled();
-      expect(saveSettingsMock).not.toHaveBeenCalled();
+      expect(addHostMock).not.toHaveBeenCalled();
     });
 
     it("goes to an approved history entry without waiting for the save", async () => {
-      const pendingRead = deferred<ProjectSettings>();
-      getSettingsMock.mockReturnValueOnce(pendingRead.promise);
+      const pendingAdd = deferred<string[]>();
+      addHostMock.mockReturnValueOnce(pendingAdd.promise);
       vi.mocked(window.electron.webview.getNavigationHistory).mockImplementation(() =>
         Promise.resolve({
           entries: [
@@ -2697,11 +2713,10 @@ describe("BrowserPane webview lifecycle regression", () => {
 
       expect(window.electron.webview.goToHistoryIndex).toHaveBeenCalledWith(42, 1);
       expect(container.textContent).not.toContain("Allow browser panel to load");
-      expect(saveSettingsMock).not.toHaveBeenCalled();
 
       await act(async () => {
-        pendingRead.resolve(savedOnDisk);
-        await vi.waitFor(() => expect(saveSettingsMock).toHaveBeenCalled());
+        pendingAdd.resolve(savedHosts);
+        await pendingAdd.promise;
       });
     });
   });

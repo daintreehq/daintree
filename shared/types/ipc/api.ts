@@ -722,6 +722,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onRemoved(callback: (projectId: string) => void): () => void;
     getSettings(projectId: string): Promise<ProjectSettings>;
     saveSettings(projectId: string, settings: ProjectSettings): Promise<void>;
+    /**
+     * Add a host to the browser panel's allow-list, merged into the settings on
+     * disk in Main rather than saved over them. Resolves to the list as saved.
+     */
+    addBrowserAllowedHost(projectId: string, hostname: string): Promise<string[]>;
     detectRunners(projectId: string): Promise<RunCommand[]>;
     /**
      * List all git remotes for a working directory, with an optional parsed
