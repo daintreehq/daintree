@@ -212,13 +212,15 @@ export function canopyPanelsListing(runId: string): number[] {
 /**
  * Carries a read change made in the inbox to the run's hand-back, so the two
  * read states agree. Only a run the inbox now holds wholly read is read there:
- * a read through an older turn leaves newer work unread in both.
+ * a read through an older turn leaves newer work unread in both. An undo
+ * (`restored`) puts back unread turns as well as marks.
  */
-function syncHandBack(mark: CanopyReadMark): void {
+function syncHandBack(mark: CanopyReadMark, restored = false): void {
   const handBacks = getRunHandBackService();
   if (!handBacks) return;
-  if (mark.markedUnreadAt !== null) handBacks.markUnread(mark.runId);
-  else if (mark.readTurn >= mark.turn) handBacks.markRead(mark.runId);
+  const whollyRead = mark.markedUnreadAt === null && mark.readTurn >= mark.turn;
+  if (mark.markedUnreadAt !== null || (restored && !whollyRead)) handBacks.markUnread(mark.runId);
+  else if (whollyRead) handBacks.markRead(mark.runId);
 }
 
 /**
@@ -1324,7 +1326,7 @@ export const canopyNamespace = defineIpcNamespace({
           throw new Error("Invalid runs");
         }
         for (const restore of restores) assertReadRestore(restore);
-        for (const mark of getService().restoreReads(restores)) syncHandBack(mark);
+        for (const mark of getService().restoreReads(restores)) syncHandBack(mark, true);
       }
     ),
 

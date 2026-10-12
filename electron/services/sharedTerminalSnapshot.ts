@@ -7,7 +7,7 @@ type TerminalSnapshot = Awaited<ReturnType<PtyClient["getAllTerminalsWithComplet
  * tick, short enough that an unsignalled change (spawn, exit) is no staler than
  * one poll either way.
  */
-const SNAPSHOT_TTL_MS = 1_000;
+export const SNAPSHOT_TTL_MS = 1_000;
 
 interface CacheEntry {
   snapshot: TerminalSnapshot | null;

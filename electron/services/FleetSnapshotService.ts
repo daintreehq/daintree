@@ -7,6 +7,7 @@ import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 import {
   getSharedTerminalSnapshot,
   invalidateSharedTerminalSnapshot,
+  SNAPSHOT_TTL_MS,
 } from "./sharedTerminalSnapshot.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { RunAttentionService } from "./RunAttentionService.js";
@@ -297,7 +298,9 @@ export class FleetSnapshotService {
     }
 
     try {
-      const readStartedAt = Date.now();
+      // A shared read may have left up to its TTL before this call, so the
+      // inventory is dated from the oldest it can be.
+      const readStartedAt = Date.now() - SNAPSHOT_TTL_MS;
       const { terminals: allTerminals, degraded } = await getSharedTerminalSnapshot(this.ptyClient);
       if (this.generation !== gen) return;
 

@@ -693,6 +693,29 @@ describe("canopy IPC", () => {
       expect(handBacks.markRead).toHaveBeenCalledWith("run-1");
     });
 
+    it("carries an undo that leaves the run unread to its hand-back", async () => {
+      const sender = fakeSender(1);
+      const before = (await invoke(
+        CANOPY_METHOD_CHANNELS.setRead,
+        sender,
+        "run-1",
+        { spawnedAt: 100 },
+        false
+      )) as { data?: unknown } & Record<string, unknown>;
+      const mark = (before.data ?? before) as { version: number };
+      const after = (await invoke(
+        CANOPY_METHOD_CHANNELS.setRead,
+        sender,
+        "run-1",
+        { spawnedAt: 100 },
+        true
+      )) as { data?: unknown } & Record<string, unknown>;
+      const left = ((after.data ?? after) as { version: number }).version;
+      handBacks.markUnread.mockClear();
+      await invoke(CANOPY_METHOD_CHANNELS.restoreReads, sender, [{ mark, expectVersion: left }]);
+      expect(handBacks.markUnread).toHaveBeenCalledWith("run-1");
+    });
+
     it("follows a hand-back the user marked from its own surfaces, and only those", async () => {
       const sender = fakeSender(1);
       await invoke(CANOPY_METHOD_CHANNELS.setRead, sender, "run-1", { spawnedAt: 100 }, true);
