@@ -185,7 +185,7 @@ WantedBy=default.target
     await controller.install();
     const file = path.join(home, ".config", "systemd", "user", "daintree-host.service");
     expect(await fs.readFile(file, "utf8")).toContain(
-      'ExecStart="/home/greg/Daintree.AppImage" "--host-mode"'
+      'ExecStart="/home/greg/Daintree.AppImage" "--host-mode" "--ozone-platform=headless"'
     );
     expect(calls).toEqual([
       "systemctl --user daemon-reload",
@@ -239,7 +239,9 @@ describe("AppImage without FUSE", () => {
       appPath: null,
       appImageExtractAndRun: true,
     });
-    expect(unit).toContain('ExecStart="/home/greg/Applications/Daintree.AppImage" "--host-mode"\n');
+    expect(unit).toContain(
+      'ExecStart="/home/greg/Applications/Daintree.AppImage" "--host-mode" "--ozone-platform=headless"\n'
+    );
     expect(unit).toContain("\nEnvironment=APPIMAGE_EXTRACT_AND_RUN=1\n");
     expect(systemdUnitFor({ executable: "/opt/Daintree/daintree", appPath: null })).not.toContain(
       "APPIMAGE_EXTRACT_AND_RUN"

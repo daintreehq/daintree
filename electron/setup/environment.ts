@@ -41,7 +41,11 @@ import {
   shouldRetryGpuAfterUpdate,
 } from "../services/gpuDisabledFlag.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { isAttachStdioRequested, shouldUseHeadlessOzone } from "../boot/hostModeLaunch.js";
+import {
+  HEADLESS_OZONE_SWITCH,
+  isAttachStdioRequested,
+  shouldUseHeadlessOzone,
+} from "../boot/hostModeLaunch.js";
 import {
   e2eCrashDumpsDir,
   isDemoMode,
@@ -157,10 +161,12 @@ export const gpuAngleFallbackActive = fs.existsSync(gpuAngleFallbackFlagPath);
 // Chromium feature flags: memory reclamation + platform-specific features
 const enabledFeatures = ["PartitionAllocMemoryReclaimer"];
 
-// A windowless Host on a box with no display server: Ozone's auto-detection
-// aborts without X11 or Wayland, so the headless backend is chosen explicitly,
-// with the GPU off since nothing is ever composited. Only when Host mode is
-// requested — a normal launch without a display should still fail loudly.
+// A windowless Host on a box with no display server runs Chromium headless,
+// with the GPU off since nothing is ever composited. Ozone is chosen before
+// this module runs, so only the switch on the command line selects it (the
+// systemd unit passes it); a launch without it aborts looking for X11. Only
+// when Host mode is requested — a normal launch without a display should
+// still fail loudly.
 export const headlessOzone = shouldUseHeadlessOzone({
   platform: process.platform,
   argv: process.argv,
@@ -175,7 +181,9 @@ if (headlessOzone) {
   if (!gpuHardwareAccelerationDisabled) app.disableHardwareAcceleration();
   // `--attach-stdio`'s stdout is the link: its diagnostics go to stderr.
   (isAttachStdioRequested(process.argv) ? console.error : console.log)(
-    "[GPU] Headless Host mode: ozone-platform=headless, GPU disabled"
+    process.argv.includes(HEADLESS_OZONE_SWITCH)
+      ? "[GPU] Headless Host mode: ozone-platform=headless, GPU disabled"
+      : `[GPU] No display server: start Host mode with ${HEADLESS_OZONE_SWITCH}, or Chromium aborts looking for X11`
   );
 } else if (process.platform === "linux") {
   app.commandLine.appendSwitch("ozone-platform-hint", "auto");

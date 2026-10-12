@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { HOST_MODE_FLAG } from "../../boot/hostModeLaunch.js";
+import { HEADLESS_OZONE_SWITCH, HOST_MODE_FLAG } from "../../boot/hostModeLaunch.js";
 import type { CommandRunner } from "./hostCommands.js";
 
 /**
@@ -258,7 +258,9 @@ export function buildSystemdUnit(input: {
  */
 export function systemdUnitFor(target: HostLaunchTarget): string {
   return buildSystemdUnit({
-    programArguments: hostModeLaunchArguments(target),
+    // Headless whether or not the user manager has a display: the service
+    // runs on after logout, and a host tied to an X server dies with it.
+    programArguments: [...hostModeLaunchArguments(target), HEADLESS_OZONE_SWITCH],
     appImageExtractAndRun: target.appImageExtractAndRun === true,
   });
 }

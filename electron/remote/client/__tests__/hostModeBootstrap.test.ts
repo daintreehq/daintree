@@ -338,7 +338,7 @@ describe("bootstrapHostMode on a headless Linux host", () => {
     });
     const unit = calls.find((c) => c.input)!.input as { text: string };
     expect(unit.text).toContain(
-      'ExecStart="/home/greg/Applications/Daintree.AppImage" "--host-mode"'
+      'ExecStart="/home/greg/Applications/Daintree.AppImage" "--host-mode" "--ozone-platform=headless"'
     );
     expect(unit.text).toContain("Environment=APPIMAGE_EXTRACT_AND_RUN=1");
     expect(calls.at(-1)!.script).toMatch(

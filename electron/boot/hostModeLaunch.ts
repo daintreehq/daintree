@@ -21,6 +21,12 @@ export const HOST_MODE_HANDOFF_FLAG = "--host-mode-handoff";
  * window, never a backend.
  */
 export const ATTACH_STDIO_FLAG = "--attach-stdio";
+/**
+ * Chromium picks its Ozone backend before any of our code runs, so a headless
+ * Host has to be started with this switch on its command line; appending it
+ * from the main process is too late, and Ozone aborts looking for X11.
+ */
+export const HEADLESS_OZONE_SWITCH = "--ozone-platform=headless";
 /** A handoff launch that found no Daintree running to hand over to. */
 export const HOST_MODE_HANDOFF_NOBODY_EXIT_CODE = 3;
 
@@ -41,9 +47,10 @@ export function isHostModeHandoffOnly(argv: readonly string[]): boolean {
 }
 
 /**
- * A Host-mode (or `--attach-stdio`) launch on Linux with no display server has to run Chromium on
- * the headless Ozone backend, or Ozone init aborts before `ready`. Everything
- * else keeps today's platform auto-detection.
+ * A Host-mode (or `--attach-stdio`) launch on Linux that runs Chromium on the
+ * headless Ozone backend: one started with {@link HEADLESS_OZONE_SWITCH} (the
+ * systemd unit always is), or one with no display server. Everything else
+ * keeps today's platform auto-detection.
  */
 export function shouldUseHeadlessOzone(input: {
   platform: NodeJS.Platform;
@@ -52,6 +59,7 @@ export function shouldUseHeadlessOzone(input: {
 }): boolean {
   if (input.platform !== "linux") return false;
   if (!isHostModeRequested(input.argv) && !isAttachStdioRequested(input.argv)) return false;
+  if (input.argv.includes(HEADLESS_OZONE_SWITCH)) return true;
   return !input.env.DISPLAY && !input.env.WAYLAND_DISPLAY;
 }
 

@@ -352,7 +352,9 @@ describe("HostModeService start at login consent", () => {
 
     const on = await service.setEnabled({ enabled: true, startAtLogin: true });
     expect(fs.files.get(unitPath)).toBe(
-      buildSystemdUnit({ programArguments: ["/opt/Daintree/daintree", "--host-mode"] })
+      buildSystemdUnit({
+        programArguments: ["/opt/Daintree/daintree", "--host-mode", "--ozone-platform=headless"],
+      })
     );
     expect(runner.calls).toEqual(
       expect.arrayContaining([
@@ -544,7 +546,9 @@ describe("HostModeService enabling from host setup", () => {
     await service.enableFromSetup();
     expect(settings()).toEqual({ enabled: true, startAtLogin: true, advertise: true });
     expect(fs.files.get("/home/greg/.config/systemd/user/daintree-host.service")).toBe(
-      buildSystemdUnit({ programArguments: ["/opt/Daintree/daintree", "--host-mode"] })
+      buildSystemdUnit({
+        programArguments: ["/opt/Daintree/daintree", "--host-mode", "--ozone-platform=headless"],
+      })
     );
     expect(calls).toContain("systemctl --user enable daintree-host.service");
     await waitFor(() =>

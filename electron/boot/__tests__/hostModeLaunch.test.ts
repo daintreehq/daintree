@@ -72,6 +72,14 @@ describe("hostModeLaunch", () => {
       expect(shouldUseHeadlessOzone({ platform: "darwin", argv, env: {} })).toBe(false);
     });
 
+    it("follows the switch on the command line even with a display in the environment", () => {
+      const argv = ["daintree", "--host-mode", "--ozone-platform=headless"];
+      expect(shouldUseHeadlessOzone({ platform: "linux", argv, env: { DISPLAY: ":0" } })).toBe(
+        true
+      );
+      expect(shouldUseHeadlessOzone({ platform: "darwin", argv, env: {} })).toBe(false);
+    });
+
     it("keeps auto-detection when X11 or Wayland is reachable", () => {
       expect(
         shouldUseHeadlessOzone({ platform: "linux", argv: hostArgv, env: { DISPLAY: ":0" } })
