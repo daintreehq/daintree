@@ -323,10 +323,7 @@ export class FleetSnapshotService {
       const stallCutoff = Date.now() - STALL_QUIET_MS;
       const runs: FleetRunRow[] = [];
       // A complete inventory, so a terminal missing from it is gone.
-      this.handBacks?.retain(
-        new Set(allTerminals.map((terminal) => terminal.id)),
-        readStartedAt
-      );
+      this.handBacks?.retain(new Set(allTerminals.map((terminal) => terminal.id)), readStartedAt);
 
       for (const terminal of allTerminals) {
         // Unowned terminals have no workspace to attribute a demand to, so they

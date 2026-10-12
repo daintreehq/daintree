@@ -574,7 +574,9 @@ function TerminalContextMenuBody({
       markRead
         ? window.electron.fleet.markRunRead(terminalId)
         : window.electron.fleet.markRunUnread(terminalId),
-      { context: markRead ? "TerminalContextMenu markRunRead" : "TerminalContextMenu markRunUnread" }
+      {
+        context: markRead ? "TerminalContextMenu markRunRead" : "TerminalContextMenu markRunUnread",
+      }
     );
   }, [handBackState, terminalId]);
 

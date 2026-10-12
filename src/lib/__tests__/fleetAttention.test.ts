@@ -370,9 +370,9 @@ describe("watched hand-backs", () => {
         "needs-you"
       );
     }
-    expect(
-      bandForRun(run({ agentState: "waiting", waitingReason: "error", handBack: seen }))
-    ).toBe("blocked");
+    expect(bandForRun(run({ agentState: "waiting", waitingReason: "error", handBack: seen }))).toBe(
+      "blocked"
+    );
     expect(bandForRun(run({ agentState: "working", handBack: seen }))).toBe("running");
   });
 
