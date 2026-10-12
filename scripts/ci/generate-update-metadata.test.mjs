@@ -28,7 +28,7 @@ describe("generate-update-metadata", () => {
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
-  it("writes Linux metadata for the AppImage artifact", async () => {
+  it("writes Linux metadata for the AppImage and the .deb", async () => {
     const dir = await tempDir();
     const releaseDir = path.join(dir, "release");
     await mkdir(releaseDir);
@@ -49,11 +49,29 @@ describe("generate-update-metadata", () => {
     expect(fromFile).toEqual(metadata);
     expect(metadata.version).toBe("2.0.0");
     expect(metadata.path).toBe("Daintree-2.0.0.AppImage");
-    expect(metadata.files).toHaveLength(1);
-    expect(metadata.files[0]).toMatchObject({
-      url: "Daintree-2.0.0.AppImage",
-      size: 8,
-    });
+    expect(metadata.files.map((file) => file.url)).toEqual([
+      "Daintree-2.0.0.AppImage",
+      "daintree_2.0.0_amd64.deb",
+    ]);
+    expect(metadata.files[0]).toMatchObject({ url: "Daintree-2.0.0.AppImage", size: 8 });
+    expect(metadata.files[1]).toMatchObject({ url: "daintree_2.0.0_amd64.deb", size: 3 });
+  });
+
+  it("fails when Linux packaging did not produce exactly one .deb", async () => {
+    const dir = await tempDir();
+    const releaseDir = path.join(dir, "release");
+    await mkdir(releaseDir);
+    const packagePath = await writePackageJson(dir);
+    await writeArtifact(releaseDir, "Daintree-1.2.3.AppImage", "appimage");
+
+    await expect(
+      generateUpdateMetadata({
+        platform: "linux",
+        releaseDir,
+        metadataPath: path.join(releaseDir, "latest-linux.yml"),
+        packagePath,
+      })
+    ).rejects.toThrow("Expected exactly 1 Linux .deb artifact");
   });
 
   // electron-updater's MacUpdater.ts picks the first entry whose URL passes the

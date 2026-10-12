@@ -190,6 +190,7 @@ module.exports = async function () {
     ],
     electronFuses: {
       runAsNode: false,
+      // Off for Linux: afterPack.cjs (applyPlatformFuses) explains why.
       enableCookieEncryption: true,
       enableNodeOptionsEnvironmentVariable: false,
       enableNodeCliInspectArguments: false,
@@ -373,7 +374,10 @@ module.exports = async function () {
       include: "build/installer.nsh",
     },
     linux: {
-      icon: "build/icon.png",
+      // A directory holding only icon.png, so electron-builder renders the hicolor
+      // size set from it. Given the PNG itself it installs that one file, and
+      // 1024x1024 is not a size hicolor indexes: menus showed a broken icon.
+      icon: "build",
       // Foreign-platform better-sqlite3 prebuilds — see the mac.files note.
       // Electron only runs on glibc, so the linuxmusl variants go too.
       // The other glibc arch is pruned in afterPack.cjs (#11829).
@@ -404,6 +408,8 @@ module.exports = async function () {
       extraResources: [
         { from: "scripts/daintree-cli.sh", to: "daintree-cli.sh" },
         { from: "build/linux/daintree.apparmor", to: "daintree.apparmor" },
+        // The window icon (electron/window/linuxWindowIcon.ts)
+        { from: "build/icon.png", to: "icon.png" },
       ],
     },
     deb: {

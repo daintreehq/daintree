@@ -107,4 +107,84 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
     expect(cliArg).toBeDefined();
     expect(cliArg).toContain("my project");
   });
+
+  // The deb's /usr/bin/daintree is a symlink to resources/daintree-cli.sh, beside
+  // the binary's directory: build/linux/postinst.sh.
+  function packagedLinuxLayout() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-cli-pkg-"));
+    roots.push(root);
+    const resources = path.join(root, "opt", "Daintree", "resources");
+    fs.mkdirSync(resources, { recursive: true });
+    const script = path.join(resources, "daintree-cli.sh");
+    fs.copyFileSync(SCRIPT_SOURCE, script);
+    fs.chmodSync(script, 0o755);
+    const argvFile = path.join(root, "argv");
+    fs.writeFileSync(
+      path.join(root, "opt", "Daintree", "daintree"),
+      `#!/usr/bin/env bash\nprintf '%s\\0' "$@" > ${JSON.stringify(argvFile)}\n`,
+      { mode: 0o755 }
+    );
+    const link = path.join(root, "usr-bin", "daintree");
+    fs.mkdirSync(path.dirname(link));
+    fs.symlinkSync(script, link);
+    return { resources, link, argvFile };
+  }
+
+  it("reads the version from a packaged app.asar's build stamp", () => {
+    const { resources, link } = packagedLinuxLayout();
+    fs.writeFileSync(
+      path.join(resources, "app.asar"),
+      Buffer.concat([
+        Buffer.from([0, 1, 2, 255]),
+        Buffer.from('{"daintreeBuildInfo":1,"version":"1.2.3-nightly.4","commit":"abc123"}'),
+      ])
+    );
+    expect(execFileSync("bash", [link, "--version"], { encoding: "utf-8" }).trim()).toBe(
+      "daintree 1.2.3-nightly.4"
+    );
+  });
+
+  // Run as /usr/bin/daintree, the script's own command line matches the
+  // process pattern; it must not count itself as a running app. pgrep is
+  // stubbed so a Daintree running on the test machine can't decide it.
+  it.skipIf(process.platform !== "linux")("doesn't count its own process as a running app", () => {
+    const { link } = packagedLinuxLayout();
+    const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-cli-pgrep-"));
+    roots.push(shimDir);
+    const status = (pgrepOutput: string) => {
+      fs.writeFileSync(path.join(shimDir, "pgrep"), `#!/usr/bin/env bash\n${pgrepOutput}\n`, {
+        mode: 0o755,
+      });
+      try {
+        const stdout = execFileSync("bash", [link, "--status"], {
+          encoding: "utf-8",
+          env: { ...process.env, PATH: `${shimDir}${path.delimiter}${process.env.PATH ?? ""}` },
+        });
+        return { code: 0, stdout: stdout.trim() };
+      } catch (error) {
+        const failed = error as { status: number; stdout: string };
+        return { code: failed.status, stdout: failed.stdout.trim() };
+      }
+    };
+    // pgrep runs as the script's child, so its parent pid is the script's own.
+    expect(status('echo "$PPID"')).toEqual({ code: 1, stdout: "Daintree is not running" });
+    expect(status('echo "$PPID"; echo 999999')).toEqual({ code: 0, stdout: "Daintree is running" });
+  });
+
+  it.skipIf(process.platform !== "linux")(
+    "launches the packaged binary through the /usr/bin symlink",
+    async () => {
+      const { link, argvFile } = packagedLinuxLayout();
+      execFileSync("bash", [link, projectDir], { encoding: "utf-8" });
+      const deadline = Date.now() + 5000;
+      let raw = "";
+      while (Date.now() < deadline && !raw.endsWith("\0")) {
+        raw = fs.existsSync(argvFile) ? fs.readFileSync(argvFile, "utf-8") : "";
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(raw.split("\0").filter(Boolean)).toEqual([
+        `--cli-path=${fs.realpathSync(projectDir)}`,
+      ]);
+    }
+  );
 });

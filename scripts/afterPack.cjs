@@ -501,9 +501,30 @@ function getUnpackedResourcesPath(appOutDir, electronPlatformName, appName) {
 }
 
 /**
+ * Per-platform fuse values on top of `electronFuses` in electron-builder.config.cjs.
+ *
+ * Cookie encryption fetches its key from the OS secret store synchronously on the
+ * main thread whenever the network service starts. On Linux that is libsecret:
+ * with no default keyring yet, or a locked one (autologin), it opens a password
+ * dialog and Daintree shows no window until it's answered, and Cancel reopens it.
+ * Nothing relies on cookie encryption (secrets live in electron-store), so Linux
+ * ships with it off.
+ *
+ * electron-builder flips `config.electronFuses` right after this hook for the same
+ * pack (platformPackager `doPack`: afterPack, then doAddElectronFuses), so setting
+ * the value here holds per platform even when one run packs several.
+ */
+function applyPlatformFuses(packager, electronPlatformName) {
+  const fuses = packager?.config?.electronFuses;
+  if (!fuses) return;
+  fuses.enableCookieEncryption = electronPlatformName !== "linux";
+}
+exports.applyPlatformFuses = applyPlatformFuses;
+
+/**
  * electron-builder afterPack hook.
- * Validates that the node-pty native module is properly unpacked.
- * Fuses are configured via the native electronFuses config in package.json.
+ * Validates that the node-pty native module is properly unpacked, and sets the
+ * per-platform fuse values (see applyPlatformFuses).
  */
 exports.default = async function afterPack(context) {
   const { appOutDir, electronPlatformName, packager } = context;
@@ -511,6 +532,8 @@ exports.default = async function afterPack(context) {
 
   console.log(`[afterPack] Platform: ${electronPlatformName}`);
   console.log(`[afterPack] Output directory: ${appOutDir}`);
+
+  applyPlatformFuses(packager, electronPlatformName);
 
   // First: every check below reads app.asar.unpacked and stays green on a
   // bloated archive, so a packaging regression would otherwise surface as a

@@ -70,7 +70,14 @@ function selectArtifacts(platform, fileNames) {
     if (appImages.length !== 1) {
       throw new Error(`Expected exactly 1 Linux AppImage artifact, found ${appImages.length}`);
     }
-    return appImages;
+    // A .deb install updates through electron-updater's DebUpdater, which only
+    // takes a `.deb` entry from files[]; without one it never finds an update to
+    // download. The AppImage stays first so the legacy top-level `path` names it.
+    const debs = fileNames.filter((fileName) => fileName.endsWith(".deb")).sort();
+    if (debs.length !== 1) {
+      throw new Error(`Expected exactly 1 Linux .deb artifact, found ${debs.length}`);
+    }
+    return [...appImages, ...debs];
   }
 
   if (platform === "mac") {
