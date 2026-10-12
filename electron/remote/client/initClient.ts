@@ -28,6 +28,7 @@ import {
 import { getWindowRegistry } from "../../window/windowRef.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { completeLocalProjectActivation } from "../../window/localProjectActivation.js";
+import { findOtherProjectOwner, revealWindow } from "../../window/projectOwnership.js";
 import { activateScratchInWindow } from "../../ipc/handlers/scratch/activation.js";
 import {
   getPtyClient,
@@ -190,15 +191,42 @@ function isLocalProjectKey(key: string): boolean {
   return isLocalHostId(parseHostScopedKey(key).hostId) && !isScratchWorkspaceId(key);
 }
 
+/** The window other than `windowId` with a live view of a workspace (a view key), if any. */
+function otherOwnerOf(key: string, windowId: number | null) {
+  const registry = getWindowRegistry() ?? undefined;
+  return findOtherProjectOwner(
+    registry,
+    key,
+    windowId === null
+      ? {}
+      : {
+          windowId,
+          projectViewManager:
+            registry?.getByWindowId(windowId)?.services.projectViewManager ?? null,
+        }
+  );
+}
+
+/**
+ * Where a window coming back to this machine lands: its own most recent local
+ * workspace, else the most recently opened project. One another window already
+ * has is passed over, since a project has one view in the app.
+ */
 function lastLocalProjectId(windowId: number | null): string | null {
   if (windowId !== null) {
     for (const key of getProjectHistory(windowId).snapshot().entries) {
-      if (isLocalHostId(parseHostScopedKey(key).hostId) && isOpenLocalWorkspace(key)) return key;
+      if (
+        isLocalHostId(parseHostScopedKey(key).hostId) &&
+        isOpenLocalWorkspace(key) &&
+        !otherOwnerOf(key, windowId)
+      ) {
+        return key;
+      }
     }
   }
   let latest: { id: string; lastOpened: number } | null = null;
   for (const project of projectStore.getAllProjects()) {
-    if (project.status === "closed") continue;
+    if (project.status === "closed" || otherOwnerOf(project.id, windowId)) continue;
     const lastOpened = typeof project.lastOpened === "number" ? project.lastOpened : 0;
     if (!latest || lastOpened > latest.lastOpened) latest = { id: project.id, lastOpened };
   }
@@ -312,6 +340,19 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
     },
     lastLocalProjectId,
     lastProjectOnHost,
+    projectOwner(hostId, projectId, exceptWindowId) {
+      const key = isLocalHostId(hostId) ? projectId : toHostScopedKey(hostId, projectId);
+      const owner = otherOwnerOf(key, exceptWindowId);
+      return owner ? { windowId: owner.context.windowId, showing: owner.state !== "cached" } : null;
+    },
+    revealWindow(windowId) {
+      const ctx = getWindowRegistry()?.getByWindowId(windowId);
+      if (!ctx || ctx.browserWindow.isDestroyed()) return;
+      revealWindow(ctx.browserWindow);
+      // Focusing the window doesn't hand keyboard focus to its project view.
+      const wc = ctx.services.projectViewManager?.getActiveView()?.webContents;
+      if (wc && !wc.isDestroyed()) wc.focus();
+    },
     async replaceWithLocalWindow(windowId) {
       const old = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
       if (!old || old.isDestroyed()) return;

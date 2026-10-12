@@ -57,7 +57,9 @@ export type SwitchWindowHostResult =
   | { outcome: "switched"; hostId: HostId; projectId: string }
   | { outcome: "window-opened"; hostId: HostId }
   | { outcome: "choose-project"; hostId: HostId }
-  | { outcome: "superseded"; hostId: HostId };
+  | { outcome: "superseded"; hostId: HostId }
+  /** Another window already had the project: it came forward, and the asking window stayed as it was. */
+  | { outcome: "focused-elsewhere"; hostId: HostId; projectId: string; targetWindowId: number };
 
 /** A project as the host that has it lists it. Its id means something only on that host. */
 export interface HostProjectSummary {

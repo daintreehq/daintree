@@ -50,6 +50,18 @@ export interface WindowControl {
   lastLocalProjectId(windowId: number | null): string | null;
   /** This window's own most recent project on a host, which a plain switch there returns to. */
   lastProjectOnHost?(windowId: number | null, hostId: HostId): string | null;
+  /**
+   * A window other than `exceptWindowId` with a view of a project, a host's or
+   * this machine's: `showing` when it is on screen there or being switched to,
+   * otherwise held in that window's cache.
+   */
+  projectOwner?(
+    hostId: HostId,
+    projectId: string,
+    exceptWindowId: number | null
+  ): { windowId: number; showing: boolean } | null;
+  /** Bring a window forward with its project view focused. */
+  revealWindow?(windowId: number): void;
   /** Call `onClosed` once when the window closes. */
   watchWindow(windowId: number, onClosed: () => void): void;
   /**
@@ -199,24 +211,34 @@ export class RemoteHostsClient {
     await Promise.all(
       [...this.options.bindings.windowsOn(hostId)].map(async (windowId) => {
         const projectId = this.options.windows.lastLocalProjectId(windowId);
+        // Nothing here to show: a fresh window on this machine's picker takes its place.
+        const replace = () =>
+          (this.options.windows.replaceWithLocalWindow?.(windowId) ?? Promise.resolve()).catch(
+            (error: unknown) => {
+              console.warn("[RemoteHosts] Couldn't replace a forgotten host's window:", error);
+            }
+          );
         const moved =
           projectId === null
-            ? // Nothing here to show: a fresh window on this machine's picker takes its place.
-              (this.options.windows.replaceWithLocalWindow?.(windowId) ?? Promise.resolve()).catch(
-                (error: unknown) => {
-                  console.warn("[RemoteHosts] Couldn't replace a forgotten host's window:", error);
-                }
-              )
+            ? replace()
             : this.switchWindow(
                 windowId,
                 { hostId: LOCAL_HOST_ID, newWindow: false, projectId },
                 () => this.options.bindings.get(windowId) === hostId
-              ).catch((error: unknown) => {
-                console.warn(
-                  "[RemoteHosts] Couldn't bring a window back from a forgotten host:",
-                  error
-                );
-              });
+              ).then(
+                // That project went to another window meanwhile: still nothing here to show.
+                (result) =>
+                  result.outcome === "focused-elsewhere" &&
+                  this.options.bindings.get(windowId) === hostId
+                    ? replace()
+                    : undefined,
+                (error: unknown) => {
+                  console.warn(
+                    "[RemoteHosts] Couldn't bring a window back from a forgotten host:",
+                    error
+                  );
+                }
+              );
         let timer: ReturnType<typeof setTimeout> | undefined;
         const waited = new Promise<void>((resolve) => {
           timer = setTimeout(resolve, waitMs);
@@ -467,6 +489,22 @@ export class RemoteHostsClient {
     // Nothing to return to, and no new window to show the host's project list
     // in: leave this window as it is and let the caller offer the list.
     if (projectId === undefined && !newWindow) return { outcome: "choose-project", hostId };
+
+    // A project has one view in this app, a host's as much as this machine's:
+    // a second would be a second view on the same terminals (for a host's, a
+    // second endpoint, the two claiming the lease from each other). The window
+    // that has it comes forward instead.
+    if (projectId !== undefined) {
+      const owner = this.options.windows.projectOwner?.(hostId, projectId, sourceWindowId);
+      if (owner) {
+        // Held in that window's cache: that window shows it again, binding and view together.
+        if (!owner.showing) {
+          await this.switchWindow(owner.windowId, { hostId, newWindow: false, projectId });
+        }
+        this.options.windows.revealWindow?.(owner.windowId);
+        return { outcome: "focused-elsewhere", hostId, projectId, targetWindowId: owner.windowId };
+      }
+    }
 
     const windowId = newWindow ? await this.options.windows.openWindow() : sourceWindowId;
     if (windowId === null) {
