@@ -1109,14 +1109,18 @@ export class CanopyService {
    * Undo: what the user had read before, for each run left as the change
    * being undone left it — a new turn, or a change from another view, stands.
    */
-  restoreReads(restores: readonly CanopyReadRestore[]): void {
-    if (this.disposed) return;
+  restoreReads(restores: readonly CanopyReadRestore[]): CanopyReadMark[] {
+    if (this.disposed) return [];
+    const restored: CanopyReadMark[] = [];
     for (const { mark, expectVersion } of restores) {
       const entry = this.entries.get(mark.runId);
       if (!entry || entry.spawnedAt !== mark.spawnedAt) continue;
-      restoreRead(entry.reads, mark, expectVersion);
+      if (restoreRead(entry.reads, mark, expectVersion)) {
+        restored.push(readMarkOf(mark.runId, mark.spawnedAt, entry.reads));
+      }
     }
     this.scheduleBroadcast();
+    return restored;
   }
 
   /**

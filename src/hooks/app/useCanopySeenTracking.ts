@@ -1,17 +1,22 @@
 import { useEffect } from "react";
 import { isPtyPanel } from "@shared/types/panel";
 import { subscribeProjectViewObservability } from "@/lib/viewCacheState";
-import { CANOPY_SEEN_HEARTBEAT_MS, canopyViewIsWatched, reportCanopySeen } from "@/lib/canopySeen";
+import {
+  CANOPY_SEEN_HEARTBEAT_MS,
+  canopyViewIsWatched,
+  reportCanopySeen,
+  reportRunLook,
+} from "@/lib/canopySeen";
 import { usePanelStore } from "@/store/panelStore";
 import { useCanopyStore } from "@/store/canopyStore";
 
 /**
- * Tells main when the user has a terminal in front of them, so Canopy can rank
- * a working agent up the longer it goes unlooked-at, and count what an agent
- * did as read once the user has had it on screen a moment. Most looking
- * happens in the terminal's own pane, not in the panel, so the focused pane is
- * what counts: in front of the user while its view can be seen, its window has
- * focus, and Canopy is not open over it. Only while Canopy is on.
+ * Tells main when the user has a terminal in front of them: always, so main
+ * can tell whether a run's hand-back has been seen, and to Canopy as well while
+ * it is on, so it can rank a working agent up the longer it goes unlooked-at
+ * and count what an agent did as read. Most looking happens in the terminal's
+ * own pane, so the focused pane is what counts: in front of the user while its
+ * view can be seen, its window has focus, and Canopy is not open over it.
  *
  * One look at a time, reconciled on every change that could move it — focus,
  * the view being cached or shown, the window, the panel — so a look always
@@ -20,13 +25,11 @@ import { useCanopyStore } from "@/store/canopyStore";
  */
 export function useCanopySeenTracking(): void {
   useEffect(() => {
-    if (!window.electron?.canopy?.markSeen) return;
+    if (!window.electron?.fleet?.noteRunLook && !window.electron?.canopy?.markSeen) return;
 
     /** The pane in front of the user now, or null. */
     const inFront = (): string | null => {
-      const { isOpen, mode } = useCanopyStore.getState();
-      // Not on, Canopy reads nothing, so nothing here is told.
-      if (mode !== "on" || !canopyViewIsWatched() || isOpen) return null;
+      if (!canopyViewIsWatched() || useCanopyStore.getState().isOpen) return null;
       const id = usePanelStore.getState().focusedId;
       if (id === null) return null;
       const panel = usePanelStore.getState().panelsById[id];
@@ -35,12 +38,21 @@ export function useCanopySeenTracking(): void {
     };
 
     let current: string | null = null;
+    // The same look, as told to Canopy: not on, Canopy reads nothing.
+    let canopyCurrent: string | null = null;
     const sync = () => {
       const next = inFront();
-      if (next === current) return;
-      if (current !== null) reportCanopySeen(current, false);
-      current = next;
-      if (current !== null) reportCanopySeen(current, true);
+      if (next !== current) {
+        if (current !== null) reportRunLook(current, false);
+        current = next;
+        if (current !== null) reportRunLook(current, true);
+      }
+      const canopyNext = useCanopyStore.getState().mode === "on" ? next : null;
+      if (canopyNext !== canopyCurrent) {
+        if (canopyCurrent !== null) reportCanopySeen(canopyCurrent, false);
+        canopyCurrent = canopyNext;
+        if (canopyCurrent !== null) reportCanopySeen(canopyCurrent, true);
+      }
     };
     sync();
 
@@ -56,7 +68,8 @@ export function useCanopySeenTracking(): void {
 
     const heartbeat = window.setInterval(() => {
       sync();
-      if (current !== null) reportCanopySeen(current, true);
+      if (current !== null) reportRunLook(current, true);
+      if (canopyCurrent !== null) reportCanopySeen(canopyCurrent, true);
     }, CANOPY_SEEN_HEARTBEAT_MS);
 
     return () => {
@@ -66,8 +79,10 @@ export function useCanopySeenTracking(): void {
       window.clearInterval(heartbeat);
       window.removeEventListener("focus", sync);
       window.removeEventListener("blur", sync);
-      if (current !== null) reportCanopySeen(current, false);
+      if (current !== null) reportRunLook(current, false);
+      if (canopyCurrent !== null) reportCanopySeen(canopyCurrent, false);
       current = null;
+      canopyCurrent = null;
     };
   }, []);
 }

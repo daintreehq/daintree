@@ -1,4 +1,5 @@
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import { isHandBackStop, isHandBackUnseen } from "@shared/utils/runHandBack";
 
 /**
  * Attention bands, worst-first.
@@ -82,7 +83,8 @@ export function isAttentionBand(band: FleetBand): boolean {
  * have to agree about what is still outstanding.
  *
  * A completion with no `since` cannot be compared to the watermark and stays in
- * `review`: unknown is not evidence of having been seen.
+ * `review`: unknown is not evidence of having been seen. A run main watched
+ * hand back work carries its own seen state, which outranks the watermark.
  *
  * A park beats every state, including `blocked`. Parking is the user saying
  * "this one does not need me until further notice", and an attention model
@@ -98,6 +100,17 @@ export function bandForRun(run: FleetRunRow, acknowledgedAt?: number): FleetBand
   // built, so this needs no clock. A run carrying both records reads as parked
   // — the stronger, indefinite decision wins, matching FLEET_BANDS' order.
   if (run.snooze !== undefined) return "snoozed";
+  // A stop main watched the run make after work it saw is a hand-back, and
+  // whether the user has had it in front of them since is main's to say — so
+  // it holds through the slide from `completed` into a generic `waiting`, which
+  // otherwise reads as the agent asking for something.
+  if (
+    run.handBack !== undefined &&
+    run.agentState !== undefined &&
+    isHandBackStop(run.agentState, run.waitingReason)
+  ) {
+    return isHandBackUnseen(run.handBack) ? "review" : "done";
+  }
   switch (run.agentState) {
     case "waiting":
       return run.waitingReason === "error" ? "blocked" : "needs-you";
@@ -183,6 +196,10 @@ export function bandTimestamp(run: FleetRunRow, band: FleetBand): number | undef
       return run.snooze?.snoozedAt ?? run.since;
     case "quiet":
       return run.quietSince ?? run.since;
+    case "review":
+    case "done":
+      // Dated from the stop itself, not the slide into `waiting` after it.
+      return run.handBack?.stoppedAt ?? run.since;
     default:
       return run.since;
   }

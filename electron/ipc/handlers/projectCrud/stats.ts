@@ -6,6 +6,7 @@ import type { MemoryRollup, MemoryRollupProject } from "../../../../shared/types
 import { ProjectStatsService } from "../../../services/ProjectStatsService.js";
 import { FleetSnapshotService } from "../../../services/FleetSnapshotService.js";
 import { RunAttentionService } from "../../../services/RunAttentionService.js";
+import { RunHandBackService } from "../../../services/RunHandBackService.js";
 import { isCleaningUp } from "../../../lifecycle/shutdownCoordinator.js";
 import { store } from "../../../store.js";
 import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
@@ -24,6 +25,7 @@ import {
 
 let projectStatsServiceInstance: ProjectStatsService | null = null;
 let runAttentionServiceInstance: RunAttentionService | null = null;
+let runHandBackServiceInstance: RunHandBackService | null = null;
 
 export function getProjectStatsService(): ProjectStatsService | null {
   return projectStatsServiceInstance;
@@ -35,6 +37,10 @@ export function getFleetSnapshotService(): FleetSnapshotService | null {
 
 export function getRunAttentionService(): RunAttentionService | null {
   return runAttentionServiceInstance;
+}
+
+export function getRunHandBackService(): RunHandBackService | null {
+  return runHandBackServiceInstance;
 }
 
 export function registerProjectStatsHandlers(deps: HandlerDependencies): () => void {
@@ -67,6 +73,17 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
     }
   });
 
+  // Hand-backs ride the fleet rows like park and snooze, so the service is built
+  // before the snapshot that decorates with it.
+  const runHandBackService = new RunHandBackService({ isQuitting: isCleaningUp });
+  runHandBackServiceInstance = runHandBackService;
+  handlers.push(() => {
+    runHandBackService.dispose();
+    if (runHandBackServiceInstance === runHandBackService) {
+      runHandBackServiceInstance = null;
+    }
+  });
+
   const projectStatsService = new ProjectStatsService(deps.ptyClient, runAttentionService);
   projectStatsServiceInstance = projectStatsService;
   projectStatsService.start();
@@ -94,7 +111,11 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
   // same cadence. Registered here so the two can never be started apart, and so
   // one lifecycle owns both. They sample independently, so a surface reading
   // runs and one reading counts can differ across a single transition.
-  const fleetSnapshotService = new FleetSnapshotService(deps.ptyClient, runAttentionService);
+  const fleetSnapshotService = new FleetSnapshotService(
+    deps.ptyClient,
+    runAttentionService,
+    runHandBackService
+  );
   setFleetSnapshotServiceRef(fleetSnapshotService);
   fleetSnapshotService.start();
   registerDeferredTask({

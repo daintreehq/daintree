@@ -23,6 +23,7 @@ export {
   getProjectStatsService,
   getFleetSnapshotService,
   getRunAttentionService,
+  getRunHandBackService,
 } from "./stats.js";
 
 export function registerProjectCrudHandlers(deps: HandlerDependencies): () => void {

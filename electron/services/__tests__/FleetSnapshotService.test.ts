@@ -704,6 +704,47 @@ describe("FleetSnapshotService", () => {
     service.stop();
   });
 
+  it("decorates a run with its hand-back, for the incarnation it spawned in", async () => {
+    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
+    let record: { stoppedAt: number; seenAt?: number } | undefined = { stoppedAt: NOW - 1_000 };
+    const getRecord = vi.fn((_id: string, _spawnedAt?: number) => record);
+    const retain = vi.fn();
+    const handBacks = { getRecord, retain };
+    const service = new FleetSnapshotService(client as never, null, handBacks as never);
+    service.start();
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(lastSnapshot().runs[0].handBack).toEqual({ stoppedAt: NOW - 1_000 });
+    expect(getRecord).toHaveBeenCalledWith("t1", NOW - 60_000);
+    expect(retain).toHaveBeenCalledWith(new Set(["t1"]), expect.any(Number));
+
+    // Seen is a fleet change on its own, with no agent state moving.
+    record = { stoppedAt: NOW - 1_000, seenAt: NOW };
+    eventEmitter.emit("terminal:hand-back-changed", { id: "t1", unseen: false, timestamp: NOW });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(broadcastMock).toHaveBeenCalledTimes(2);
+    expect(lastSnapshot().runs[0].handBack).toEqual(record);
+    service.stop();
+  });
+
+  it("never prunes hand-backs from a degraded read", async () => {
+    const client = makePtyClient([terminal()]);
+    const retain = vi.fn();
+    const service = new FleetSnapshotService(client as never, null, {
+      getRecord: () => undefined,
+      retain,
+    } as never);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    client.setFleet([], true);
+    retain.mockClear();
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(retain).not.toHaveBeenCalled();
+    service.stop();
+  });
+
   it("treats a park change as a fleet change even though no agent state moved", async () => {
     const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
     let parks = new Map();

@@ -340,3 +340,44 @@ describe("bandForRun — snooze", () => {
     for (const band of FLEET_BANDS) expect(counts[band]).toBe(0);
   });
 });
+
+describe("watched hand-backs", () => {
+  const unseen = { stoppedAt: NOW - 60_000 };
+  const seen = { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 };
+
+  it("bands a generic wait after a watched hand-back by whether it was seen", () => {
+    expect(bandForRun(run({ agentState: "waiting", handBack: unseen }))).toBe("review");
+    expect(
+      bandForRun(run({ agentState: "waiting", waitingReason: "prompt", handBack: seen }))
+    ).toBe("done");
+  });
+
+  it("lets the hand-back outrank the workspace watermark on a completion", () => {
+    expect(bandForRun(run({ agentState: "completed", since: NOW, handBack: unseen }), NOW)).toBe(
+      "review"
+    );
+    expect(bandForRun(run({ agentState: "completed", since: NOW, handBack: seen }))).toBe("done");
+  });
+
+  it("reads an unseen hand-back marked unread again as review", () => {
+    const remarked = { ...seen, markedUnreadAt: NOW };
+    expect(bandForRun(run({ agentState: "waiting", handBack: remarked }))).toBe("review");
+  });
+
+  it("never lets a hand-back quiet a specific ask or a run back at work", () => {
+    for (const waitingReason of ["approval", "question"] as const) {
+      expect(bandForRun(run({ agentState: "waiting", waitingReason, handBack: seen }))).toBe(
+        "needs-you"
+      );
+    }
+    expect(bandForRun(run({ agentState: "waiting", waitingReason: "error", handBack: seen }))).toBe(
+      "blocked"
+    );
+    expect(bandForRun(run({ agentState: "working", handBack: seen }))).toBe("running");
+  });
+
+  it("dates a hand-back's band from the stop, not the slide after it", () => {
+    const row = run({ agentState: "waiting", since: NOW, handBack: unseen });
+    expect(bandTimestamp(row, bandForRun(row))).toBe(unseen.stoppedAt);
+  });
+});

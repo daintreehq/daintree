@@ -79,6 +79,7 @@ vi.mock("../projectCrud/index.js", () => ({
     getLastBroadcast: () => ({ runs: state.runs, degraded: false, changedAt: 0 }),
     subscribe: () => () => {},
   }),
+  getRunHandBackService: () => handBacks,
 }));
 vi.mock("../../../services/plugin/pluginTerminalScreenRead.js", () => ({
   readPluginTerminalScreen: vi.fn(async () => ({
@@ -109,6 +110,7 @@ const canopyBackend = vi.hoisted(() => ({
 }));
 vi.mock("../../../services/canopy/canopyBackend.js", () => canopyBackend);
 const broadcasts = vi.hoisted(() => vi.fn());
+const handBacks = vi.hoisted(() => ({ markRead: vi.fn(), markUnread: vi.fn() }));
 vi.mock("../../utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../utils.js")>()),
   getProjectPushTargets: vi.fn(() => state.views),
@@ -677,6 +679,61 @@ describe("canopy IPC", () => {
       ).toBe(true);
       expect((await readMark(sender)).markedUnreadAt).not.toBeNull();
       await invoke(CANOPY_METHOD_CHANNELS.setRead, sender, "run-1", { spawnedAt: 100 }, true);
+      expect((await readMark(sender)).markedUnreadAt).toBeNull();
+    });
+
+    it("carries a read or unread mark to the run's hand-back", async () => {
+      const sender = fakeSender(1);
+      handBacks.markRead.mockClear();
+      handBacks.markUnread.mockClear();
+      await invoke(CANOPY_METHOD_CHANNELS.setRead, sender, "run-1", { spawnedAt: 100 }, false);
+      expect(handBacks.markUnread).toHaveBeenCalledWith("run-1");
+      expect(handBacks.markRead).not.toHaveBeenCalled();
+      await invoke(CANOPY_METHOD_CHANNELS.setRead, sender, "run-1", { spawnedAt: 100 }, true);
+      expect(handBacks.markRead).toHaveBeenCalledWith("run-1");
+    });
+
+    it("carries an undo that leaves the run unread to its hand-back", async () => {
+      const sender = fakeSender(1);
+      const before = (await invoke(
+        CANOPY_METHOD_CHANNELS.setRead,
+        sender,
+        "run-1",
+        { spawnedAt: 100 },
+        false
+      )) as { data?: unknown } & Record<string, unknown>;
+      const mark = (before.data ?? before) as { version: number };
+      const after = (await invoke(
+        CANOPY_METHOD_CHANNELS.setRead,
+        sender,
+        "run-1",
+        { spawnedAt: 100 },
+        true
+      )) as { data?: unknown } & Record<string, unknown>;
+      const left = ((after.data ?? after) as { version: number }).version;
+      handBacks.markUnread.mockClear();
+      await invoke(CANOPY_METHOD_CHANNELS.restoreReads, sender, [{ mark, expectVersion: left }]);
+      expect(handBacks.markUnread).toHaveBeenCalledWith("run-1");
+    });
+
+    it("follows a hand-back the user marked from its own surfaces, and only those", async () => {
+      const sender = fakeSender(1);
+      await invoke(CANOPY_METHOD_CHANNELS.setRead, sender, "run-1", { spawnedAt: 100 }, true);
+      events.emit("terminal:hand-back-changed", { id: "run-1", unseen: true, timestamp: 1 });
+      expect((await readMark(sender)).markedUnreadAt).toBeNull();
+      events.emit("terminal:hand-back-changed", {
+        id: "run-1",
+        unseen: true,
+        fromUser: true,
+        timestamp: 2,
+      });
+      expect((await readMark(sender)).markedUnreadAt).not.toBeNull();
+      events.emit("terminal:hand-back-changed", {
+        id: "run-1",
+        unseen: false,
+        fromUser: true,
+        timestamp: 3,
+      });
       expect((await readMark(sender)).markedUnreadAt).toBeNull();
     });
 

@@ -17,7 +17,7 @@ import type {
 import { getAgentNotificationServiceRef, getPtyClient } from "../../window/serviceRefs.js";
 import type { TerminalInputNotice } from "../../services/PtyClient.js";
 import type { TerminalResizeResult } from "../../../shared/types/pty-host.js";
-import { getFleetSnapshotService } from "./projectCrud/index.js";
+import { getFleetSnapshotService, getRunHandBackService } from "./projectCrud/index.js";
 import { readPluginTerminalScreen } from "../../services/plugin/pluginTerminalScreenRead.js";
 import { CanopyService } from "../../services/canopy/CanopyService.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
@@ -207,6 +207,34 @@ function subscribeInput(): void {
  */
 export function canopyPanelsListing(runId: string): number[] {
   return [...activeViews].filter((view) => viewShown.get(view)?.has(runId) ?? false);
+}
+
+/**
+ * Carries a read change made in the inbox to the run's hand-back, so the two
+ * read states agree. Only a run the inbox now holds wholly read is read there:
+ * a read through an older turn leaves newer work unread in both. An undo
+ * (`restored`) puts back unread turns as well as marks.
+ */
+function syncHandBack(mark: CanopyReadMark, restored = false): void {
+  const handBacks = getRunHandBackService();
+  if (!handBacks) return;
+  const whollyRead = mark.markedUnreadAt === null && mark.readTurn >= mark.turn;
+  if (mark.markedUnreadAt !== null || (restored && !whollyRead)) handBacks.markUnread(mark.runId);
+  else if (whollyRead) handBacks.markRead(mark.runId);
+}
+
+/**
+ * The other direction: a hand-back the user read or marked unread from its own
+ * surfaces — the terminal's menu — is read or unread in the inbox too, for the
+ * incarnation the fleet shows. Only while Canopy is on and its service is up.
+ */
+function onHandBackChanged(change: { id: string; unseen: boolean; fromUser?: boolean }): void {
+  if (!change.fromUser || service === null || !currentPlan().activated) return;
+  const run = getFleetSnapshotService()
+    ?.getLastBroadcast()
+    ?.runs.find((entry) => entry.runId === change.id);
+  if (!run) return;
+  service.setRead(change.id, run.spawnedAt, !change.unseen);
 }
 
 function getService(): CanopyService {
@@ -1125,7 +1153,9 @@ export const canopyNamespace = defineIpcNamespace({
         assertTarget(target);
         if (expectTurn !== undefined && !isTurn(expectTurn)) throw new Error("Invalid turn");
         // What archiving left read, for an undo to put back; null when refused.
-        return getService().archive(runId, target.spawnedAt, expectTurn);
+        const mark = getService().archive(runId, target.spawnedAt, expectTurn);
+        if (mark !== null) syncHandBack(mark);
+        return mark;
       }
     ),
 
@@ -1264,7 +1294,9 @@ export const canopyNamespace = defineIpcNamespace({
         assertTarget(target);
         if (typeof read !== "boolean") throw new Error("Invalid read");
         if (turn !== undefined && !isTurn(turn)) throw new Error("Invalid turn");
-        return getService().setRead(runId, target.spawnedAt, read, turn);
+        const mark = getService().setRead(runId, target.spawnedAt, read, turn);
+        if (mark !== null) syncHandBack(mark);
+        return mark;
       }
     ),
 
@@ -1278,7 +1310,9 @@ export const canopyNamespace = defineIpcNamespace({
           throw new Error("Invalid runs");
         }
         for (const target of targets) assertReadTarget(target);
-        return getService().markAllRead(targets);
+        const marks = getService().markAllRead(targets);
+        for (const mark of marks) syncHandBack(mark);
+        return marks;
       }
     ),
 
@@ -1292,7 +1326,7 @@ export const canopyNamespace = defineIpcNamespace({
           throw new Error("Invalid runs");
         }
         for (const restore of restores) assertReadRestore(restore);
-        getService().restoreReads(restores);
+        for (const mark of getService().restoreReads(restores)) syncHandBack(mark, true);
       }
     ),
 
@@ -1361,9 +1395,11 @@ export function registerCanopyHandlers(): () => void {
   // Restored anywhere — the grid's Undo, the trash, another toast — a trash
   // Canopy made is over, and its receipt must not restore a later one.
   const offRestored = events.on("terminal:restored", ({ id }) => onHostRestored(id));
+  const offHandBack = events.on("terminal:hand-back-changed", onHandBackChanged);
   return () => {
     unregister();
     offRestored();
+    offHandBack();
     unsubscribeFleet?.();
     unsubscribeFleet = null;
     unsubscribeInput?.();

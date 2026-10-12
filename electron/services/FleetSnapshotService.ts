@@ -7,9 +7,11 @@ import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 import {
   getSharedTerminalSnapshot,
   invalidateSharedTerminalSnapshot,
+  SNAPSHOT_TTL_MS,
 } from "./sharedTerminalSnapshot.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { RunAttentionService } from "./RunAttentionService.js";
+import type { RunHandBackService } from "./RunHandBackService.js";
 import type { FleetRunRow, FleetSnapshot } from "../../shared/types/ipc/fleet.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
@@ -69,7 +71,8 @@ export class FleetSnapshotService {
 
   constructor(
     private ptyClient: PtyClient | undefined | null,
-    private runAttention?: RunAttentionService | null
+    private runAttention?: RunAttentionService | null,
+    private handBacks?: RunHandBackService | null
   ) {}
 
   get isStarted(): boolean {
@@ -101,6 +104,7 @@ export class FleetSnapshotService {
     // even though no agent state moved.
     subscribe("terminal:park-changed");
     subscribe("terminal:snooze-changed");
+    subscribe("terminal:hand-back-changed");
     // A rename moves no agent state, so without this the row would carry the
     // old title until the next aligned poll (#11830).
     subscribe("terminal:title-changed");
@@ -273,6 +277,9 @@ export class FleetSnapshotService {
         // expiry reach the renderer without an expiry event existing.
         x.snooze?.snoozedAt !== y.snooze?.snoozedAt ||
         x.snooze?.snoozedUntil !== y.snooze?.snoozedUntil ||
+        x.handBack?.stoppedAt !== y.handBack?.stoppedAt ||
+        x.handBack?.seenAt !== y.handBack?.seenAt ||
+        x.handBack?.markedUnreadAt !== y.handBack?.markedUnreadAt ||
         x.quietSince !== y.quietSince
       ) {
         return false;
@@ -291,6 +298,9 @@ export class FleetSnapshotService {
     }
 
     try {
+      // A shared read may have left up to its TTL before this call, so the
+      // inventory is dated from the oldest it can be.
+      const readStartedAt = Date.now() - SNAPSHOT_TTL_MS;
       const { terminals: allTerminals, degraded } = await getSharedTerminalSnapshot(this.ptyClient);
       if (this.generation !== gen) return;
 
@@ -312,6 +322,8 @@ export class FleetSnapshotService {
       const snoozeRecords = this.runAttention?.getActiveSnoozes();
       const stallCutoff = Date.now() - STALL_QUIET_MS;
       const runs: FleetRunRow[] = [];
+      // A complete inventory, so a terminal missing from it is gone.
+      this.handBacks?.retain(new Set(allTerminals.map((terminal) => terminal.id)), readStartedAt);
 
       for (const terminal of allTerminals) {
         // Unowned terminals have no workspace to attribute a demand to, so they
@@ -321,6 +333,7 @@ export class FleetSnapshotService {
 
         const park = parkRecords?.get(terminal.id);
         const snooze = snoozeRecords?.get(terminal.id);
+        const handBack = this.handBacks?.getRecord(terminal.id, terminal.spawnedAt);
         runs.push({
           runId: terminal.id,
           workspaceId: terminal.projectId,
@@ -357,6 +370,7 @@ export class FleetSnapshotService {
           // state and agent state in one payload, never joining two feeds.
           ...(park !== undefined ? { park } : {}),
           ...(snooze !== undefined ? { snooze } : {}),
+          ...(handBack !== undefined ? { handBack } : {}),
           // Stall cue: only for a working run, and only once the CURRENT
           // working stint has been silent past the threshold. Anchored on the
           // later of last output, the transition into this state and the

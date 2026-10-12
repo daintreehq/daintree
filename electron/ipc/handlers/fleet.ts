@@ -7,11 +7,17 @@ import {
   isAgentSnoozeDurationOption,
   type AgentSnoozeDurationOption,
 } from "../../../shared/utils/agentSnoozeDurations.js";
-import { getFleetSnapshotService, getRunAttentionService } from "./projectCrud/index.js";
+import {
+  getFleetSnapshotService,
+  getRunAttentionService,
+  getRunHandBackService,
+} from "./projectCrud/index.js";
 import { MAX_PARK_NOTE_LENGTH } from "../../services/RunAttentionService.js";
 import { checkRateLimit } from "../utils.js";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
+import type { IpcContext } from "../types.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { FLEET_METHOD_CHANNELS } from "./fleet.preload.js";
 
 /**
@@ -46,6 +52,54 @@ function assertKnownRuns(runId: string, gateRunId: string | undefined): void {
   if (gateRunId !== undefined && !known.has(gateRunId)) {
     throw new Error("Gate terminal not found in the current fleet");
   }
+}
+
+/** Views whose looks are dropped when they go away, by `webContentsId`. */
+const watchedViewers = new Map<number, () => void>();
+
+function forgetViewer(id: number): void {
+  getRunHandBackService()?.forgetViewer(String(id));
+}
+
+/**
+ * A look lasts until its view says it ended, or goes away without saying so:
+ * a local view by navigating, crashing or being destroyed, a remote one when
+ * its endpoint closes. Evicting a project view destroys its WebContents, which
+ * drops its looks and nothing that was seen through them.
+ */
+function watchViewer(ctx: IpcContext): void {
+  const id = ctx.webContentsId;
+  if (watchedViewers.has(id)) return;
+  const sender = ctx.event?.sender;
+  if (!sender) {
+    const closed = ctx.endpoint.onClose(() => {
+      watchedViewers.delete(id);
+      forgetViewer(id);
+    });
+    watchedViewers.set(id, () => closed.dispose());
+    return;
+  }
+  const onNavigate = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+    if (details.isMainFrame && !details.isSameDocument) forgetViewer(id);
+  };
+  const onGone = () => forgetViewer(id);
+  sender.on("did-start-navigation", onNavigate);
+  sender.on("render-process-gone", onGone);
+  const unwatchDestroyed = onWebContentsDestroyed(sender, () => {
+    watchedViewers.delete(id);
+    forgetViewer(id);
+  });
+  watchedViewers.set(id, () => {
+    sender.removeListener("did-start-navigation", onNavigate);
+    sender.removeListener("render-process-gone", onGone);
+    unwatchDestroyed();
+  });
+}
+
+function requireHandBackService() {
+  const service = getRunHandBackService();
+  if (!service) throw new Error("Run hand-back service unavailable");
+  return service;
 }
 
 export const fleetNamespace = defineIpcNamespace({
@@ -174,9 +228,53 @@ export const fleetNamespace = defineIpcNamespace({
       if (!service) throw new Error("Run attention service unavailable");
       return service.unsnooze(runId);
     }),
+
+    /**
+     * The user started or stopped having this run's terminal in front of them,
+     * or still does. Always on and free: whether a hand-back was seen needs no
+     * Canopy. A look ending is never refused, since one dropped would keep the
+     * run read as watched for the whole lease.
+     */
+    noteRunLook: op(
+      FLEET_METHOD_CHANNELS.noteRunLook,
+      async (ctx, runId: string, looking: boolean): Promise<void> => {
+        if (looking !== false) checkRateLimit(CHANNELS.FLEET_NOTE_RUN_LOOK, 120, 10_000);
+        assertRunId(runId, "run id");
+        if (typeof looking !== "boolean") throw new Error("Invalid look");
+        const service = requireHandBackService();
+        watchViewer(ctx);
+        service.noteLook(runId, String(ctx.webContentsId), looking);
+      },
+      { withContext: true }
+    ),
+
+    /** Read a run's hand-back by hand. Resolves false when it has none unseen. */
+    markRunRead: op(FLEET_METHOD_CHANNELS.markRunRead, async (runId: string): Promise<boolean> => {
+      checkRateLimit(CHANNELS.FLEET_MARK_RUN_READ, 30, 10_000);
+      assertRunId(runId, "run id");
+      return requireHandBackService().markRead(runId, true);
+    }),
+
+    /** Mark a run's hand-back unread again. Resolves false when it has none. */
+    markRunUnread: op(
+      FLEET_METHOD_CHANNELS.markRunUnread,
+      async (runId: string): Promise<boolean> => {
+        checkRateLimit(CHANNELS.FLEET_MARK_RUN_UNREAD, 30, 10_000);
+        assertRunId(runId, "run id");
+        return requireHandBackService().markUnread(runId, true);
+      }
+    ),
   },
 });
 
 export function registerFleetHandlers(): () => void {
-  return fleetNamespace.register();
+  const unregister = fleetNamespace.register();
+  return () => {
+    unregister();
+    for (const [id, unwatch] of watchedViewers) {
+      unwatch();
+      forgetViewer(id);
+    }
+    watchedViewers.clear();
+  };
 }

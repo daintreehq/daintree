@@ -325,6 +325,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "A run was snoozed or unsnoozed (user intent, not agent state)",
   },
+  "terminal:hand-back-changed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A run's watched hand-back was taken, seen, read or marked unread",
+  },
   "agent-session:captured": {
     category: "agent",
     requiresContext: false,
@@ -920,6 +926,18 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * The run's hand-back changed: a new one was watched, or it was seen, read or
+   * marked unread. `unseen` is the record as it now stands.
+   */
+  "terminal:hand-back-changed": {
+    id: string;
+    unseen: boolean;
+    /** The user marked it read or unread from a surface of the hand-back's own, not through a mirror of it. */
+    fromUser?: boolean;
+    timestamp: number;
+  };
+
+  /**
    * Emitted when a park is lifted automatically rather than by hand: the gate
    * terminal finished its stint (busy → ready) or was closed. Carries the note
    * so the "this run is ready for you again" surface can say why the run was
@@ -1116,6 +1134,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "terminal:title-changed",
   "terminal:worktree-changed",
   "terminal:snooze-changed",
+  "terminal:hand-back-changed",
   "agent-session:captured",
   "agent-session:recorded",
   "terminal:activity",

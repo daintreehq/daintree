@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useCanopyStore } from "@/store/canopyStore";
-import { __resetCanopySeenForTests, reportCanopySeen, reportCanopySent } from "../canopySeen";
+import {
+  __resetCanopySeenForTests,
+  reportCanopySeen,
+  reportCanopySent,
+  reportRunLook,
+} from "../canopySeen";
 
 let markSeen: ReturnType<typeof vi.fn>;
 let noteSent: ReturnType<typeof vi.fn>;
@@ -59,6 +64,41 @@ describe("reportCanopySeen", () => {
       ["a", true, "pane"],
       ["a", true, "panel"],
       ["a", false, "pane"],
+    ]);
+  });
+});
+
+describe("reportRunLook", () => {
+  let noteRunLook: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    noteRunLook = vi.fn(async () => {});
+    Object.defineProperty(window, "electron", {
+      value: { fleet: { noteRunLook } },
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it("reports whatever Canopy's mode, folding repeats of a look within a moment", () => {
+    useCanopyStore.setState({ mode: "unset" });
+    reportRunLook("a", true);
+    reportRunLook("a", true);
+    expect(noteRunLook).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(2_000);
+    reportRunLook("a", true);
+    expect(noteRunLook).toHaveBeenCalledTimes(2);
+  });
+
+  it("always tells a look ending, and a look starting straight after one", () => {
+    reportRunLook("a", true);
+    reportRunLook("a", false);
+    reportRunLook("a", false);
+    reportRunLook("a", true);
+    expect(noteRunLook.mock.calls.map(([, looking]) => looking)).toEqual([
+      true,
+      false,
+      false,
+      true,
     ]);
   });
 });
