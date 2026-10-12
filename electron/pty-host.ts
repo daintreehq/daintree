@@ -85,6 +85,7 @@ import {
 } from "./services/pty/ProcessTreeKiller.js";
 import { onWindowsTreeKillUnavailable } from "./utils/windowsTreeKill.js";
 import { identityMicros } from "./utils/windowsProcessTree.js";
+import { prewarmWindowsShell } from "./services/pty/terminalShell.js";
 import { GracefulCaptureTracker } from "./pty-host/GracefulCaptureTracker.js";
 import {
   PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS,
@@ -2071,6 +2072,10 @@ process.on("SIGTERM", () => {
 // Initialize pool asynchronously
 async function initialize(): Promise<void> {
   try {
+    // The default shell is searched for asynchronously (a PATH entry on a dead
+    // share must not stall this loop); start now so the first terminal gets it.
+    if (process.platform === "win32") void prewarmWindowsShell();
+
     // Start the resource governor for proactive memory monitoring
     resourceGovernor.start();
 

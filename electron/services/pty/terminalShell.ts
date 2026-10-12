@@ -3,9 +3,10 @@ import { existsSync } from "fs";
 import { isPowerShellShell } from "../../../shared/utils/shellEscape.js";
 import {
   isWindowsAbsolutePath,
-  isWindowsLaunchFile,
+  isWindowsLaunchFileAsync,
   resolveWindowsExecutable,
   windowsEnvValue,
+  windowsExecutableCacheGeneration,
   windowsSystemTool,
 } from "../../utils/windowsExecutable.js";
 
@@ -22,18 +23,51 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-// Which PowerShell is on PATH is a process-lifetime constant, but
 // `getDefaultShell()` is on the hot path for every terminal spawn and every
-// shell-quoting decision, so the answer is memoized (an uncached `where.exe`
-// probe is where the reporter's 53 `where.exe` spawns came from, #12042). A
-// PATH change needs an app restart to take effect, which is the right trade
-// for a value read this often.
-let cachedWindowsShell: string | null = null;
+// shell-quoting decision, and is synchronous, while finding PowerShell 7 means
+// searching PATH, whose entries can include a network share that takes the SMB
+// timeout to fail. So the search runs asynchronously, at startup and again
+// whenever PATH changes or is re-read, and its answer is memoized (an uncached
+// `where.exe` probe is where the reporter's 53 `where.exe` spawns came from,
+// #12042). Until the first answer lands the in-box Windows PowerShell is used,
+// by absolute path and without looking at the disk.
+let windowsShell: { shell: string; stamp: string } | null = null;
+let windowsShellProbe: { stamp: string; promise: Promise<string> } | null = null;
 
+/** What a resolved shell was resolved against: the PATH, and the resolver cache's generation. */
+function windowsShellStamp(env: NodeJS.ProcessEnv): string {
+  return `${windowsExecutableCacheGeneration()}\0${windowsEnvValue(env, "PATH") ?? ""}`;
+}
+
+/**
+ * The Windows default shell, never blocking: the last resolved answer, or the
+ * in-box Windows PowerShell before the first one. A stale answer (PATH changed
+ * or was re-read since) is still returned, and starts a fresh resolution.
+ */
 export function findWindowsShell(): string {
-  if (cachedWindowsShell !== null) return cachedWindowsShell;
-  cachedWindowsShell = probeWindowsShell();
-  return cachedWindowsShell;
+  if (windowsShell?.stamp === windowsShellStamp(process.env)) return windowsShell.shell;
+  void prewarmWindowsShell();
+  return windowsShell?.shell ?? windowsSystemTool("powershell.exe");
+}
+
+/**
+ * Resolve the Windows default shell for the current PATH, once per PATH: what
+ * `findWindowsShell` returns from then on. Startup calls it so the first
+ * terminal already gets PowerShell 7 when PATH has it.
+ */
+export function prewarmWindowsShell(env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  const stamp = windowsShellStamp(env);
+  if (windowsShell?.stamp === stamp) return Promise.resolve(windowsShell.shell);
+  if (windowsShellProbe?.stamp === stamp) return windowsShellProbe.promise;
+  const promise = probeWindowsShell(env)
+    .catch(() => windowsSystemTool("powershell.exe", env))
+    .then((shell) => {
+      if (windowsShellProbe?.promise === promise) windowsShellProbe = null;
+      windowsShell = { shell, stamp };
+      return shell;
+    });
+  windowsShellProbe = { stamp, promise };
+  return promise;
 }
 
 /**
@@ -41,20 +75,22 @@ export function findWindowsShell(): string {
  * the in-box Windows PowerShell, then cmd.exe. Looked up in PATH only, so a
  * same-named file in the directory Daintree was started from is never chosen.
  */
-function probeWindowsShell(): string {
-  for (const shell of ["pwsh.exe", "powershell.exe"]) {
-    const resolved = resolveWindowsExecutable(shell);
-    if (resolved) return resolved;
-  }
-  const inbox = windowsSystemTool("powershell.exe");
-  if (isWindowsLaunchFile(inbox)) return inbox;
-  const comspec = windowsEnvValue(process.env, "COMSPEC");
-  return comspec && isWindowsAbsolutePath(comspec) ? comspec : windowsSystemTool("cmd.exe");
+async function probeWindowsShell(env: NodeJS.ProcessEnv): Promise<string> {
+  const onPath = await Promise.all(
+    ["pwsh.exe", "powershell.exe"].map((shell) => resolveWindowsExecutable(shell, env))
+  );
+  const resolved = onPath.find((shell): shell is string => shell !== null);
+  if (resolved) return resolved;
+  const inbox = windowsSystemTool("powershell.exe", env);
+  if (await isWindowsLaunchFileAsync(inbox)) return inbox;
+  const comspec = windowsEnvValue(env, "COMSPEC");
+  return comspec && isWindowsAbsolutePath(comspec) ? comspec : windowsSystemTool("cmd.exe", env);
 }
 
 /** Test-only: drop the memoized Windows shell so a case can re-probe. */
 export function resetWindowsShellCache(): void {
-  cachedWindowsShell = null;
+  windowsShell = null;
+  windowsShellProbe = null;
 }
 
 export function getDefaultShell(): string {

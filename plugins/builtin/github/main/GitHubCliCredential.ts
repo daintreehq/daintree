@@ -8,7 +8,7 @@ import type {
   CredentialImportUnavailable,
 } from "../../../../shared/types/forge.js";
 import { raceAbort } from "../../../../electron/utils/raceAbort.js";
-import { executableForSpawn } from "../../../../electron/utils/windowsExecutable.js";
+import { resolveExecutableForSpawn } from "../../../../electron/utils/windowsExecutable.js";
 import { findMissingGitHubScopes } from "../shared/credentialScopes.js";
 import { validateGitHubToken } from "./GitHubToken.js";
 
@@ -113,6 +113,16 @@ export async function readGhToken(signal?: AbortSignal): Promise<GhTokenRead> {
   await raceAbort(refreshShellPath(), signal, undefined);
   if (signal?.aborted) return unavailable("cancelled");
 
+  const env = buildGhCredentialEnv();
+  let gh: string;
+  try {
+    gh = await resolveExecutableForSpawn("gh", env);
+  } catch (error) {
+    // A Windows PATH without gh: spawn's ENOENT, before anything runs.
+    return unavailable(classifyExecError(error, "", false));
+  }
+  if (signal?.aborted) return unavailable("cancelled");
+
   return new Promise<GhTokenRead>((resolve) => {
     const controller = new AbortController();
     let timedOut = false;
@@ -130,9 +140,8 @@ export async function readGhToken(signal?: AbortSignal): Promise<GhTokenRead> {
     };
 
     try {
-      const env = buildGhCredentialEnv();
       execFile(
-        executableForSpawn("gh", env),
+        gh,
         ["auth", "token", "--hostname", GH_HOSTNAME],
         {
           env,
@@ -151,7 +160,6 @@ export async function readGhToken(signal?: AbortSignal): Promise<GhTokenRead> {
         }
       );
     } catch (error) {
-      // A Windows PATH without gh throws spawn's ENOENT before anything runs.
       settle(unavailable(classifyExecError(error, "", false)));
     }
   });

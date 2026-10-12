@@ -77,6 +77,13 @@ vi.mock("../../utils/findOnPath.js", () => ({
 }));
 
 const cliSpawn = vi.hoisted(() => ({ target: vi.fn() }));
+const windowsPath = vi.hoisted(() => ({
+  find: vi.fn(async (_tool: string) => null as string | null),
+}));
+vi.mock("../../utils/windowsExecutable.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsExecutable.js")>()),
+  findWindowsCommand: (tool: string) => windowsPath.find(tool),
+}));
 
 vi.mock("../../utils/windowsCliSpawn.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../utils/windowsCliSpawn.js")>()),
@@ -258,8 +265,13 @@ describe("DiagnosticsCollector adversarial", () => {
     Object.defineProperty(process, "platform", { value: "win32" });
     try {
       const npmCli = "C:\\nodejs\\node_modules\\npm\\bin\\npm-cli.js";
+      // PATH holds npm's extensionless sh script and the `.cmd` beside it; only
+      // the `.cmd` is launchable, and its version runs from that very file.
+      windowsPath.find.mockImplementation(async (tool: string) =>
+        tool === "npm" ? "C:\\nodejs\\npm.cmd" : null
+      );
       cliSpawn.target.mockImplementation((command: string, args: string[]) =>
-        command === "npm"
+        command === "C:\\nodejs\\npm.cmd"
           ? { command: "C:\\nodejs\\node.exe", args: [npmCli, ...args], shell: false }
           : { command, args: [...args], shell: false }
       );
@@ -270,9 +282,7 @@ describe("DiagnosticsCollector adversarial", () => {
           _options: Record<string, unknown>,
           callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void
         ) => {
-          if (file === "where" && args[0] === "npm") {
-            callback(null, { stdout: "C:\\nodejs\\npm\r\nC:\\nodejs\\npm.cmd\r\n", stderr: "" });
-          } else if (file === "C:\\nodejs\\node.exe" && args[0] === npmCli) {
+          if (file === "C:\\nodejs\\node.exe" && args[0] === npmCli) {
             callback(null, { stdout: "11.6.0\r\n", stderr: "" });
           } else {
             callback(new Error("not found"));

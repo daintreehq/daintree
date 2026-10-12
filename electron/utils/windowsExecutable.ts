@@ -1,5 +1,4 @@
-import { execFile } from "child_process";
-import { lstatSync, statSync } from "node:fs";
+import { lstatSync, promises as fsPromises, statSync } from "node:fs";
 import path from "node:path";
 
 // Given a bare program name, Windows process creation (and Node's spawn, which
@@ -7,12 +6,17 @@ import path from "node:path";
 // in a repository root would run in place of the tool. Everything here resolves
 // executables from PATH only, hands spawn an absolute path, and never consults
 // the working directory.
+//
+// PATH is searched asynchronously, never with a synchronous stat: a PATH entry
+// on an unreachable network share holds a filesystem call for the SMB timeout,
+// which would freeze whichever event loop made it (Main, the pty host, the
+// workspace host). Names are compared as Node reads the directory (Unicode), so
+// a profile directory such as `C:\Users\山田` is matched as written.
 
 const SYSTEM_TOOLS = {
   "cmd.exe": ["System32", "cmd.exe"],
   "powershell.exe": ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"],
   "reg.exe": ["System32", "reg.exe"],
-  "where.exe": ["System32", "where.exe"],
   "wsl.exe": ["System32", "wsl.exe"],
 } as const satisfies Record<string, readonly string[]>;
 
@@ -28,8 +32,17 @@ const NATIVE_EXTENSIONS = [".com", ".exe"];
 const LAUNCHABLE_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"]);
 const DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD";
 
+/**
+ * How long one search waits on a PATH directory before treating it as holding
+ * nothing. Local directories answer in milliseconds; this is for a share that
+ * has gone away, whose listing would otherwise wait out the SMB timeout.
+ */
+export const WINDOWS_PATH_ENTRY_TIMEOUT_MS = 1_500;
+// A directory whose listing failed after being written off is left alone this
+// long, so every search does not pay the timeout again for a dead share.
+const STALLED_RETRY_MS = 30_000;
+
 const RESOLVED_CACHE_LIMIT = 64;
-const resolved = new Map<string, string>();
 
 /** The key Node forwards for `name`: matched case-insensitively, first in sort order. */
 export function windowsEnvKey(env: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -85,6 +98,10 @@ export function windowsLaunchExtensions(env: NodeJS.ProcessEnv = process.env): s
   return extensions;
 }
 
+/**
+ * Synchronous check of one known file. Never used to search PATH: only for a
+ * path already in hand, such as the target a shim names beside itself.
+ */
 export function isWindowsLaunchFile(file: string): boolean {
   try {
     return statSync(file).isFile();
@@ -115,63 +132,47 @@ export function windowsSystemTool(
   return path.win32.join(windowsSystemRoot(env), ...SYSTEM_TOOLS[name]);
 }
 
-export interface WindowsExecutableOptions {
-  isFile?: (file: string) => boolean;
+/** One entry of a directory listing, as `readdir(..., { withFileTypes: true })` reports it. */
+export interface WindowsDirectoryEntry {
+  name: string;
+  isFile(): boolean;
+  isDirectory(): boolean;
+  isSymbolicLink(): boolean;
 }
 
-/**
- * Paths are built the host's way, which is `path.win32` wherever this runs for
- * real; the POSIX branch is what lets tests search real temporary directories.
- */
-function searchDirectories(env: NodeJS.ProcessEnv): {
-  directories: string[];
-  join: (directory: string, file: string) => string;
-} {
-  const isWindows = process.platform === "win32";
-  const isAbsolute = isWindows ? isWindowsAbsolutePath : path.posix.isAbsolute;
-  return {
-    directories: splitWindowsPath(windowsEnvValue(env, "PATH") ?? "").filter((entry) =>
-      isAbsolute(entry)
-    ),
-    join: isWindows ? path.win32.join : path.posix.join,
-  };
+/** The filesystem calls a PATH search makes; a test seam. */
+export interface WindowsPathFs {
+  readdir(directory: string): Promise<WindowsDirectoryEntry[]>;
+  stat(file: string): Promise<{ isFile(): boolean }>;
+  lstat(file: string): Promise<{ isSymbolicLink(): boolean }>;
 }
 
-function isPathLike(name: string): boolean {
-  return /[\\/:]/.test(name);
+const nodePathFs: WindowsPathFs = {
+  readdir: (directory) => fsPromises.readdir(directory, { withFileTypes: true }),
+  stat: (file) => fsPromises.stat(file),
+  lstat: (file) => fsPromises.lstat(file),
+};
+
+export interface WindowsPathSearchOptions {
+  fs?: WindowsPathFs;
+  /** How long to wait on one PATH directory; see `WINDOWS_PATH_ENTRY_TIMEOUT_MS`. */
+  timeoutMs?: number;
 }
 
-/**
- * Every file a bare `name` could start as from PATH, in PATH order: each
- * directory's matches in PATHEXT order, limited to `.com`, `.exe`, `.bat` and
- * `.cmd` (npm and Scoop install agents as `.cmd` shims). A name that already
- * carries one of those extensions is looked up as given. Relative PATH entries
- * are skipped, so the working directory is never searched. A path, or a name
- * with characters no file name can hold, finds nothing.
- */
-export function findWindowsExecutables(
-  name: string,
-  env: NodeJS.ProcessEnv = process.env,
-  options: WindowsExecutableOptions & { first?: boolean } = {}
-): string[] {
-  if (!name || isPathLike(name) || /[\0\r\n"*?<>|]/.test(name)) return [];
-  const isFile = options.isFile ?? isWindowsLaunchFile;
-  const { directories, join } = searchDirectories(env);
-  // Lower-case extensions, as npm, Scoop and installers write them: the result
-  // is shown to the user and compared across checks, the way `where` lists it.
-  const files = LAUNCHABLE_EXTENSIONS.has(path.win32.extname(name).toLowerCase())
-    ? [name]
-    : windowsLaunchExtensions(env).map((extension) => `${name}${extension.toLowerCase()}`);
-  const found: string[] = [];
-  for (const directory of directories) {
-    for (const file of files) {
-      const candidate = join(directory, file);
-      if (!isFile(candidate)) continue;
-      found.push(candidate);
-      if (options.first) return found;
+/** The asynchronous form of `isWindowsLaunchFile`. */
+export async function isWindowsLaunchFileAsync(
+  file: string,
+  fs: WindowsPathFs = nodePathFs
+): Promise<boolean> {
+  try {
+    return (await fs.stat(file)).isFile();
+  } catch {
+    try {
+      return (await fs.lstat(file)).isSymbolicLink();
+    } catch {
+      return false;
     }
   }
-  return found;
 }
 
 /** A directory as Windows compares it: any case, either slash, no trailing separator. */
@@ -181,66 +182,302 @@ function windowsDirectoryKey(directory: string): string {
   return /^[a-z]:$/.test(trimmed) ? `${trimmed}\\` : trimmed;
 }
 
-export type WindowsWhereResult = { ok: true; paths: string[] } | { ok: false; error: unknown };
+/**
+ * Paths are built the host's way, which is `path.win32` wherever this runs for
+ * real; the POSIX branch is what lets tests search real temporary directories.
+ * A directory PATH lists twice is searched once, where it first appears.
+ */
+function searchDirectories(env: NodeJS.ProcessEnv): {
+  directories: Array<{ directory: string; key: string }>;
+  join: (directory: string, file: string) => string;
+} {
+  const isWindows = process.platform === "win32";
+  const isAbsolute = isWindows ? isWindowsAbsolutePath : path.posix.isAbsolute;
+  const seen = new Set<string>();
+  const directories: Array<{ directory: string; key: string }> = [];
+  for (const directory of splitWindowsPath(windowsEnvValue(env, "PATH") ?? "")) {
+    if (!isAbsolute(directory)) continue;
+    const key = isWindows ? windowsDirectoryKey(directory) : directory;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    directories.push({ directory, key });
+  }
+  return { directories, join: isWindows ? path.win32.join : path.posix.join };
+}
+
+function isPathLike(name: string): boolean {
+  return /[\\/:]/.test(name);
+}
+
+type Listing = Map<string, WindowsDirectoryEntry> | null;
+
+interface PathFsState {
+  /** Listings in flight, shared by every search that wants the same directory meanwhile. */
+  listings: Map<string, Promise<Listing>>;
+  /**
+   * Directories with a call that outlived its deadline. Skipped until that
+   * call returns (and for `STALLED_RETRY_MS` more when it fails), so a dead
+   * share holds one of libuv's four threadpool threads rather than one per
+   * search queued up behind it.
+   */
+  stalled: Set<string>;
+  resolved: Map<string, string>;
+  resolving: Map<string, Promise<string | null>>;
+}
+
+let pathFsStates = new WeakMap<WindowsPathFs, PathFsState>();
+let reportedStalls = new Set<string>();
+let generation = 0;
+
+function stateFor(fs: WindowsPathFs): PathFsState {
+  let state = pathFsStates.get(fs);
+  if (!state) {
+    state = { listings: new Map(), stalled: new Set(), resolved: new Map(), resolving: new Map() };
+    pathFsStates.set(fs, state);
+  }
+  return state;
+}
+
+/** Each name in the directory, keyed case-insensitively; null when it cannot be read. */
+function listDirectory(
+  state: PathFsState,
+  key: string,
+  directory: string,
+  fs: WindowsPathFs
+): Promise<Listing> {
+  const inFlight = state.listings.get(key);
+  if (inFlight) return inFlight;
+  const listing = (async (): Promise<Listing> => {
+    try {
+      const byName = new Map<string, WindowsDirectoryEntry>();
+      for (const entry of await fs.readdir(directory)) {
+        const name = entry.name.toLowerCase();
+        if (!byName.has(name)) byName.set(name, entry);
+      }
+      return byName;
+    } catch {
+      return null;
+    }
+  })();
+  state.listings.set(key, listing);
+  void listing.then(() => {
+    if (state.listings.get(key) === listing) state.listings.delete(key);
+  });
+  return listing;
+}
 
 /**
- * Every match `where.exe` lists for `name`, kept only when it sits in an
- * absolute PATH entry, and ordered as PATH lists those entries. `where` looks
- * in its own working directory before PATH, so it runs from System32 rather
- * than wherever Daintree was started, and anything it reports outside an
- * absolute PATH entry (that directory, or a relative entry resolved against
- * it) is dropped. Asynchronous and time-boxed, so a PATH entry on a stalled
- * network share cannot block the caller. `ok: false` carries the error from
- * `where` itself, which exits 1 when nothing matches.
+ * Write `directory` off until the call that outlived its deadline settles:
+ * `answered` resolves true if it got an answer (the share was only slow), false
+ * if it failed, which keeps the directory skipped a while longer.
  */
-export function windowsWhere(
-  name: string,
-  env: NodeJS.ProcessEnv = process.env,
-  options: { timeoutMs?: number } = {}
-): Promise<WindowsWhereResult> {
-  const order = new Map<string, number>();
-  splitWindowsPath(windowsEnvValue(env, "PATH") ?? "")
-    .filter(isWindowsAbsolutePath)
-    .forEach((directory, index) => {
-      const key = windowsDirectoryKey(directory);
-      if (!order.has(key)) order.set(key, index);
-    });
-  return new Promise((resolve) => {
-    execFile(
-      windowsSystemTool("where.exe", env),
-      [name],
-      {
-        cwd: path.win32.join(windowsSystemRoot(env), "System32"),
-        env,
-        timeout: options.timeoutMs ?? 5_000,
-        windowsHide: true,
-      },
-      (error, stdout) => {
-        if (error) {
-          resolve({ ok: false, error });
-          return;
-        }
-        const ranked = String(stdout ?? "")
-          .split(/\r?\n/)
-          .map((line) => line.trim())
-          .filter(Boolean)
-          .map((file) => ({ file, rank: order.get(windowsDirectoryKey(path.win32.dirname(file))) }))
-          .filter((entry): entry is { file: string; rank: number } => entry.rank !== undefined);
-        // Stable: `where` lists a directory's matches in PATHEXT order.
-        ranked.sort((a, b) => a.rank - b.rank);
-        resolve({ ok: true, paths: ranked.map((entry) => entry.file) });
-      }
+function markStalled(
+  state: PathFsState,
+  key: string,
+  directory: string,
+  answered: Promise<boolean>,
+  timeoutMs: number
+): void {
+  if (state.stalled.has(key)) return;
+  state.stalled.add(key);
+  if (!reportedStalls.has(key)) {
+    reportedStalls.add(key);
+    console.warn(
+      `[windowsExecutable] PATH entry "${directory}" did not answer within ${timeoutMs} ms; searching without it until it does`
     );
+  }
+  void answered.then((ok) => {
+    if (ok) {
+      state.stalled.delete(key);
+      return;
+    }
+    const retry = setTimeout(() => state.stalled.delete(key), STALLED_RETRY_MS);
+    retry.unref?.();
   });
 }
 
-/** The file a shell would start for a bare `name` from PATH, or null when PATH has none. */
-export function resolveWindowsCommand(
+const TIMED_OUT = Symbol("timed out");
+
+interface Deadline {
+  reached: Promise<typeof TIMED_OUT>;
+  cancel(): void;
+}
+
+function startDeadline(timeoutMs: number): Deadline {
+  let timer: NodeJS.Timeout | undefined;
+  const reached = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs);
+    timer.unref?.();
+  });
+  return { reached, cancel: () => clearTimeout(timer) };
+}
+
+interface DirectoryResult {
+  directory: string;
+  found: string[];
+  /** The directory did not answer in time and was treated as holding nothing. */
+  skipped: boolean;
+}
+
+/** `files` (in priority order) that `directory` holds as launchable files. */
+async function searchDirectory(
+  directory: string,
+  key: string,
+  files: readonly string[],
+  join: (directory: string, file: string) => string,
+  fs: WindowsPathFs,
+  deadline: Deadline,
+  timeoutMs: number
+): Promise<DirectoryResult> {
+  const state = stateFor(fs);
+  if (state.stalled.has(key)) return { directory, found: [], skipped: true };
+  const listing = listDirectory(state, key, directory, fs);
+  const entries = await Promise.race([listing, deadline.reached]);
+  if (entries === TIMED_OUT) {
+    const answered = listing.then((listed) => listed !== null);
+    markStalled(state, key, directory, answered, timeoutMs);
+    return { directory, found: [], skipped: true };
+  }
+  const found: string[] = [];
+  if (!entries) return { directory, found, skipped: false };
+  for (const file of files) {
+    const entry = entries.get(file.toLowerCase());
+    if (!entry || entry.isDirectory()) continue;
+    // The listing's own name, so the result reads the way `where` would list it.
+    const candidate = join(directory, entry.name);
+    if (!entry.isFile()) {
+      // A reparse point: a symlink (WinGet's Links), or a Store execution alias.
+      const check = isWindowsLaunchFileAsync(candidate, fs);
+      const launchable = await Promise.race([check, deadline.reached]);
+      if (launchable === TIMED_OUT) {
+        markStalled(
+          state,
+          key,
+          directory,
+          check.then(() => true),
+          timeoutMs
+        );
+        return { directory, found, skipped: true };
+      }
+      if (!launchable) continue;
+    }
+    found.push(candidate);
+  }
+  return { directory, found, skipped: false };
+}
+
+export interface WindowsPathSearch {
+  /** Matches in PATH order; within a directory, in the order the candidates were given. */
+  paths: string[];
+  /** PATH directories that did not answer in time and were treated as holding nothing. */
+  skipped: string[];
+}
+
+/**
+ * Searches every absolute PATH directory at once, each bounded by `timeoutMs`,
+ * and reads the results back in PATH order. With `first`, it returns as soon as
+ * the earliest directory holding a match is known.
+ */
+async function searchPath(
+  files: readonly string[],
+  env: NodeJS.ProcessEnv,
+  options: WindowsPathSearchOptions,
+  first: boolean
+): Promise<WindowsPathSearch> {
+  const fs = options.fs ?? nodePathFs;
+  const timeoutMs = options.timeoutMs ?? WINDOWS_PATH_ENTRY_TIMEOUT_MS;
+  const { directories, join } = searchDirectories(env);
+  const deadline = startDeadline(timeoutMs);
+  const searches = directories.map(({ directory, key }) =>
+    searchDirectory(directory, key, files, join, fs, deadline, timeoutMs)
+  );
+  void Promise.all(searches).then(deadline.cancel, deadline.cancel);
+  const paths: string[] = [];
+  const skipped: string[] = [];
+  for (const search of searches) {
+    const result = await search;
+    if (result.skipped) skipped.push(result.directory);
+    paths.push(...result.found);
+    if (first && paths.length > 0) return { paths: paths.slice(0, 1), skipped };
+  }
+  return { paths, skipped };
+}
+
+/** The file names a bare `name` can start as from a shell: PATHEXT order, `.com`/`.exe`/`.bat`/`.cmd` only. */
+function launchCandidates(name: string, env: NodeJS.ProcessEnv): string[] | null {
+  if (!name || isPathLike(name) || /[\0\r\n"*?<>|]/.test(name)) return null;
+  // Lower-case extensions, as npm, Scoop and installers write them.
+  return LAUNCHABLE_EXTENSIONS.has(path.win32.extname(name).toLowerCase())
+    ? [name]
+    : windowsLaunchExtensions(env).map((extension) => `${name}${extension.toLowerCase()}`);
+}
+
+/**
+ * Every file a bare `name` could start as from PATH, in PATH order: each
+ * directory's matches in PATHEXT order, limited to `.com`, `.exe`, `.bat` and
+ * `.cmd` (npm and Scoop install agents as `.cmd` shims). A name that already
+ * carries one of those extensions is looked up as given. Relative PATH entries
+ * are skipped, so the working directory is never searched. A path, or a name
+ * with characters no file name can hold, finds nothing. A directory that does
+ * not answer within the timeout counts as holding nothing and is reported in
+ * `skipped`.
+ */
+export async function scanWindowsPath(
   name: string,
   env: NodeJS.ProcessEnv = process.env,
-  options: WindowsExecutableOptions = {}
-): string | null {
-  return findWindowsExecutables(name, env, { ...options, first: true })[0] ?? null;
+  options: WindowsPathSearchOptions = {}
+): Promise<WindowsPathSearch> {
+  const files = launchCandidates(name, env);
+  if (!files) return { paths: [], skipped: [] };
+  return searchPath(files, env, options, false);
+}
+
+/** The file a shell would start for a bare `name` from PATH, or null when PATH has none. */
+export async function findWindowsCommand(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+  options: WindowsPathSearchOptions = {}
+): Promise<string | null> {
+  const files = launchCandidates(name, env);
+  if (!files) return null;
+  return (await searchPath(files, env, options, true)).paths[0] ?? null;
+}
+
+function resolvedKey(name: string, env: NodeJS.ProcessEnv): string {
+  return `${generation}\0${name.toLowerCase()}\0${windowsEnvValue(env, "PATH") ?? ""}`;
+}
+
+/**
+ * Whether a cached hit is still there: one stat, bounded like a PATH search and
+ * skipped (so a fresh search follows) while its directory is written off.
+ */
+async function stillOnPath(
+  file: string,
+  options: WindowsPathSearchOptions,
+  fs: WindowsPathFs
+): Promise<boolean> {
+  const isWindows = process.platform === "win32";
+  const directory = (isWindows ? path.win32 : path.posix).dirname(file);
+  const key = isWindows ? windowsDirectoryKey(directory) : directory;
+  const state = stateFor(fs);
+  if (state.stalled.has(key)) return false;
+  const timeoutMs = options.timeoutMs ?? WINDOWS_PATH_ENTRY_TIMEOUT_MS;
+  const deadline = startDeadline(timeoutMs);
+  try {
+    const check = isWindowsLaunchFileAsync(file, fs);
+    const launchable = await Promise.race([check, deadline.reached]);
+    if (launchable !== TIMED_OUT) return launchable;
+    markStalled(
+      state,
+      key,
+      directory,
+      check.then(() => true),
+      timeoutMs
+    );
+    return false;
+  } finally {
+    deadline.cancel();
+  }
 }
 
 /**
@@ -252,38 +489,66 @@ export function resolveWindowsCommand(
  * returned unchanged.
  *
  * Hits are cached per (name, PATH) and re-checked on every use, so a removed
- * file is searched for again; `invalidateWindowsExecutableCache` drops them all
- * when a PATH refresh may have put a new candidate ahead of a cached one.
+ * file is searched for again; a miss is not cached. Concurrent lookups of one
+ * name share a search. `invalidateWindowsExecutableCache` drops every hit when a
+ * PATH refresh may have put a new candidate ahead of a cached one.
  */
 export function resolveWindowsExecutable(
   name: string,
   env: NodeJS.ProcessEnv = process.env,
-  options: WindowsExecutableOptions = {}
-): string | null {
-  if (!name || isPathLike(name)) return name || null;
-  const isFile = options.isFile ?? isWindowsLaunchFile;
-  const key = `${name.toLowerCase()}\0${windowsEnvValue(env, "PATH") ?? ""}`;
-  const cached = resolved.get(key);
-  if (cached !== undefined) {
-    if (isFile(cached)) return cached;
-    resolved.delete(key);
-  }
-
-  const { directories, join } = searchDirectories(env);
-  const files = [
-    ...(path.win32.extname(name) ? [name] : []),
-    ...NATIVE_EXTENSIONS.map((extension) => `${name}${extension}`),
-  ];
-  for (const directory of directories) {
-    for (const file of files) {
-      const candidate = join(directory, file);
-      if (!isFile(candidate)) continue;
-      if (resolved.size >= RESOLVED_CACHE_LIMIT) resolved.clear();
-      resolved.set(key, candidate);
-      return candidate;
+  options: WindowsPathSearchOptions = {}
+): Promise<string | null> {
+  if (!name || isPathLike(name)) return Promise.resolve(name || null);
+  const fs = options.fs ?? nodePathFs;
+  const state = stateFor(fs);
+  const key = resolvedKey(name, env);
+  const pending = state.resolving.get(key);
+  if (pending) return pending;
+  const resolution = (async (): Promise<string | null> => {
+    const cached = state.resolved.get(key);
+    if (cached !== undefined) {
+      if (await stillOnPath(cached, options, fs)) return cached;
+      if (state.resolved.get(key) === cached) state.resolved.delete(key);
     }
-  }
-  return null;
+    const files = [
+      ...(path.win32.extname(name) ? [name] : []),
+      ...NATIVE_EXTENSIONS.map((extension) => `${name}${extension}`),
+    ];
+    const file = (await searchPath(files, env, options, true)).paths[0] ?? null;
+    if (file !== null && key === resolvedKey(name, env)) {
+      if (state.resolved.size >= RESOLVED_CACHE_LIMIT) state.resolved.clear();
+      state.resolved.set(key, file);
+    }
+    return file;
+  })();
+  state.resolving.set(key, resolution);
+  const settle = (): void => {
+    if (state.resolving.get(key) === resolution) state.resolving.delete(key);
+  };
+  void resolution.then(settle, settle);
+  return resolution;
+}
+
+/**
+ * What an earlier asynchronous lookup found for `name` on the current PATH,
+ * without touching the disk: the absolute path, or undefined when no lookup has
+ * found it since PATH last changed or the cache was last invalidated.
+ */
+export function peekWindowsExecutable(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env
+): string | undefined {
+  if (!name || isPathLike(name)) return name || undefined;
+  return stateFor(nodePathFs).resolved.get(resolvedKey(name, env));
+}
+
+/** On Windows, resolve `names` from PATH ahead of the first spawn that needs them. */
+export async function prewarmWindowsExecutables(
+  names: readonly string[],
+  env: NodeJS.ProcessEnv = process.env
+): Promise<void> {
+  if (process.platform !== "win32") return;
+  await Promise.all(names.map((name) => resolveWindowsExecutable(name, env).catch(() => null)));
 }
 
 /**
@@ -302,8 +567,26 @@ export function windowsExecutableNotFound(name: string): NodeJS.ErrnoException {
 
 /**
  * `name` for spawn: its absolute PATH location on Windows, unchanged elsewhere.
- * On Windows a name PATH does not hold throws spawn's ENOENT instead of being
- * handed to spawn bare, which would search the working directory first.
+ * On Windows a name PATH does not hold rejects with spawn's ENOENT instead of
+ * being handed to spawn bare, which would search the working directory first.
+ */
+export async function resolveExecutableForSpawn(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
+): Promise<string> {
+  if (platform !== "win32") return name;
+  const file = await resolveWindowsExecutable(name, env);
+  if (file === null) throw windowsExecutableNotFound(name);
+  return file;
+}
+
+/**
+ * The synchronous form of `resolveExecutableForSpawn`, for a caller that cannot
+ * wait. It never searches PATH itself: on Windows it returns what an earlier
+ * asynchronous lookup (`prewarmWindowsExecutables`, `resolveExecutableForSpawn`)
+ * found, and otherwise starts one and throws spawn's ENOENT. It never hands
+ * spawn a bare name there.
  */
 export function executableForSpawn(
   name: string,
@@ -311,15 +594,29 @@ export function executableForSpawn(
   platform: NodeJS.Platform = process.platform
 ): string {
   if (platform !== "win32") return name;
-  const file = resolveWindowsExecutable(name, env);
-  if (file === null) throw windowsExecutableNotFound(name);
-  return file;
+  const file = peekWindowsExecutable(name, env);
+  if (file !== undefined) return file;
+  void resolveWindowsExecutable(name, env).catch(() => null);
+  throw windowsExecutableNotFound(name);
 }
 
-/** Forget every resolved path; the runtime PATH refresh calls this. */
+/** Bumped by every invalidation; lets a dependent cache tell its answer is stale. */
+export function windowsExecutableCacheGeneration(): number {
+  return generation;
+}
+
+/**
+ * Forget every resolved path; the runtime PATH refresh calls this. Stalled
+ * directories stay written off until their outstanding call returns.
+ */
 export function invalidateWindowsExecutableCache(): void {
-  resolved.clear();
+  generation++;
+  stateFor(nodePathFs).resolved.clear();
 }
 
-/** Test seam: forget every resolved path. */
-export const resetWindowsExecutableCache = invalidateWindowsExecutableCache;
+/** Test seam: forget every resolved path, stalled directory and logged stall. */
+export function resetWindowsExecutableCache(): void {
+  generation++;
+  pathFsStates = new WeakMap();
+  reportedStalls = new Set();
+}

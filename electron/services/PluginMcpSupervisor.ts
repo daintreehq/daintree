@@ -14,7 +14,7 @@ import {
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { McpServerContributionSchema } from "../schemas/plugin.js";
 import { minimalWorkerEnv } from "../utils/minimalSpawnEnv.js";
-import { resolveWindowsCommand, windowsExecutableNotFound } from "../utils/windowsExecutable.js";
+import { findWindowsCommand, windowsExecutableNotFound } from "../utils/windowsExecutable.js";
 import { killWindowsProcessTree, liveChildTreeTarget } from "../utils/windowsTreeKill.js";
 import {
   drainPendingChildTrees,
@@ -1250,11 +1250,12 @@ function plainError(code: string, message: string): Error & { code: string } {
  * working directory first, which is the plugin's directory. A `.cmd` shim such
  * as `npx.cmd` counts, and execa runs it through cmd.exe with its own escaping.
  * A name PATH does not hold fails as spawn's ENOENT. A path is the manifest's
- * own choice and passes through, as does every name off Windows.
+ * own choice and passes through, as does every name off Windows. The lookup is
+ * asynchronous, so a stalled PATH entry cannot block Main.
  */
-export function mcpServerProgram(command: string, env: NodeJS.ProcessEnv): string {
+export async function mcpServerProgram(command: string, env: NodeJS.ProcessEnv): Promise<string> {
   if (process.platform !== "win32" || /[\\/:]/.test(command)) return command;
-  const file = resolveWindowsCommand(command, env);
+  const file = await findWindowsCommand(command, env);
   if (file === null) throw windowsExecutableNotFound(command);
   return file;
 }
@@ -1266,7 +1267,7 @@ const defaultSpawner: SubprocessSpawner = async (config) => {
   // the rest of the host environment, where API tokens and NODE_OPTIONS live
   // (#12616).
   const env = minimalWorkerEnv(config.env);
-  const subprocess = execa(mcpServerProgram(config.command, env), config.args, {
+  const subprocess = execa(await mcpServerProgram(config.command, env), config.args, {
     cwd: config.cwd,
     // `extendEnv: false` is load-bearing: execa otherwise merges `env` back
     // onto the full `process.env`.

@@ -28,6 +28,28 @@ vi.mock("simple-git", () => ({
   simpleGit: vi.fn(() => mockGitInstance),
 }));
 
+// Pass-through spies, so a case can tell whether git's PATH lookup ever touched
+// a PATH directory synchronously.
+const syncFs = vi.hoisted(() => ({
+  calls: [] as string[],
+}));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const record =
+    <A extends unknown[], R>(name: string, fn: (...args: A) => R) =>
+    (...args: A): R => {
+      syncFs.calls.push(`${name} ${String(args[0])}`);
+      return fn(...args);
+    };
+  const spied = {
+    statSync: record("statSync", actual.statSync),
+    lstatSync: record("lstatSync", actual.lstatSync),
+    readdirSync: record("readdirSync", actual.readdirSync),
+    existsSync: record("existsSync", actual.existsSync),
+  };
+  return { ...actual, ...spied, default: { ...actual, ...spied } };
+});
+
 import {
   validateCwd,
   createHardenedGit,
@@ -1502,6 +1524,23 @@ describe("native git binary on Windows", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("looks git up without touching PATH synchronously, and reuses what it found", async () => {
+    // A PATH entry on a dropped network share holds a synchronous stat for the
+    // SMB timeout, freezing whichever host loop was building the instance.
+    const git = installGit("tools");
+    const empty = path.join(root, "empty");
+    fs.mkdirSync(empty);
+    process.env.PATH = `${empty};${path.dirname(git)}`;
+    syncFs.calls.length = 0;
+
+    await createHardenedGit("/test/repo", undefined, "win32");
+    await createAuthenticatedGit("/test/repo", { platform: "win32" });
+    await createHardenedGit("/test/repo", undefined, "win32");
+
+    expect(lastOptions().binary).toBe(git);
+    expect(syncFs.calls.filter((call) => call.includes(root))).toEqual([]);
   });
 
   it("uses the resolved git for the authenticated and background-fetch profiles", async () => {

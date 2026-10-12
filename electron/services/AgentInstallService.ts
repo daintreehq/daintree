@@ -8,9 +8,10 @@ import type {
 } from "../../shared/types/ipc/system.js";
 import { buildInstallEnv } from "../utils/spawnEnv.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
-import { isWindowsShellShim } from "../utils/windowsCliSpawn.js";
+import { isWindowsShellShim, unwrapWindowsShim } from "../utils/windowsCliSpawn.js";
 import {
-  resolveWindowsCommand,
+  findWindowsCommand,
+  resolveWindowsExecutable,
   windowsExecutableNotFound,
   windowsSystemTool,
 } from "../utils/windowsExecutable.js";
@@ -60,31 +61,62 @@ interface InstallSpawn {
   command: string;
   args: string[];
   windowsVerbatimArguments?: true;
+  /** Added to the install env: what an unwrapped shim would have set, or the batch path. */
+  env?: Record<string, string>;
 }
 
 // What cmd.exe would read as syntax rather than text.
 const CMD_SYNTAX = /["%^!&|<>\r\n]/;
 
+// cmd.exe expands `%VAR%` once and never re-reads the result, so a batch path
+// handed over in a variable reaches the quoted command as plain text, whatever
+// it holds (`C:\Users\Jane & John`, a `%` or `^` in a folder name).
+const BATCH_FILE_VAR = "DAINTREE_INSTALL_BATCH_FILE";
+
 /**
- * What an install command starts. On Windows the program is looked up in PATH
- * only, since a bare name would otherwise be searched for in the working
- * directory first: an `.exe` (winget, choco, uv, pip) starts directly, and a
- * `.cmd`/`.bat` shim (npm, pnpm, yarn, Scoop) runs through the in-box cmd.exe
- * by its absolute path. The command lines come from the registry, never the
- * renderer, but an argument cmd.exe would read as syntax is refused anyway.
+ * What an install command starts on Windows (elsewhere it is the command as
+ * written). The program is looked up in PATH only, since a bare name would
+ * otherwise be searched for in the working directory first, and asynchronously,
+ * so a stalled PATH entry cannot block Main. An `.exe` (winget, choco, uv, pip)
+ * starts directly. A `.cmd` shim npm, pnpm or Yarn wrote is unwrapped to Node
+ * and its script (or the executable it wraps) and started with an argument
+ * vector, so neither its path nor its arguments pass through cmd.exe. Any other
+ * batch file (Node's own `npm.cmd`) runs through the in-box cmd.exe with its
+ * path in a variable; the command lines come from the registry, never the
+ * renderer, but an argument cmd.exe would read as syntax is refused there.
  */
-function installSpawn(bin: string, args: string[], env: NodeJS.ProcessEnv): InstallSpawn {
-  if (process.platform !== "win32") return { command: bin, args };
-  const file = /[\\/:]/.test(bin) ? bin : resolveWindowsCommand(bin, env);
+async function windowsInstallSpawn(
+  bin: string,
+  args: string[],
+  env: NodeJS.ProcessEnv
+): Promise<InstallSpawn> {
+  const file = /[\\/:]/.test(bin) ? bin : await findWindowsCommand(bin, env);
   if (file === null) throw windowsExecutableNotFound(bin);
   if (!isWindowsShellShim(file)) return { command: file, args };
-  if (CMD_SYNTAX.test(file) || args.some((arg) => !arg || /\s/.test(arg) || CMD_SYNTAX.test(arg))) {
+  const node = (await resolveWindowsExecutable("node.exe", env)) ?? undefined;
+  let unwrapped: ReturnType<typeof unwrapWindowsShim>;
+  try {
+    unwrapped = unwrapWindowsShim(file, { env, node });
+  } catch {
+    // Unreadable, or naming a script or Node that is not there: let the batch
+    // file run and report that itself.
+    unwrapped = undefined;
+  }
+  if (unwrapped) {
+    return {
+      command: unwrapped.command,
+      args: [...unwrapped.args, ...args],
+      ...(unwrapped.env ? { env: unwrapped.env } : {}),
+    };
+  }
+  if (/["\r\n]/.test(file) || args.some((arg) => !arg || /\s/.test(arg) || CMD_SYNTAX.test(arg))) {
     throw new Error(`Refusing to run ${bin} through cmd.exe: unsupported characters`);
   }
   return {
     command: windowsSystemTool("cmd.exe", env),
-    args: ["/d", "/s", "/v:off", "/c", `""${file}" ${args.join(" ")}"`],
+    args: ["/d", "/s", "/v:off", "/c", `""%${BATCH_FILE_VAR}%" ${args.join(" ")}"`],
     windowsVerbatimArguments: true,
+    env: { [BATCH_FILE_VAR]: file },
   };
 }
 
@@ -93,29 +125,37 @@ function runSingleCommand(
   jobId: string,
   onProgress: (event: AgentInstallProgressEvent) => void
 ): Promise<{ exitCode: number | null }> {
-  return new Promise((resolve) => {
-    const { bin, args } = parseCommand(command);
-    let finalized = false;
+  const { bin, args } = parseCommand(command);
+  const env = {
+    ...buildInstallEnv(),
+    CI: "1",
+    NO_UPDATE_NOTIFIER: "1",
+  };
 
-    const env = {
-      ...buildInstallEnv(),
-      CI: "1",
-      NO_UPDATE_NOTIFIER: "1",
-    };
-
-    let target: InstallSpawn;
-    try {
-      target = installSpawn(bin, args, env);
-    } catch (err) {
+  if (process.platform !== "win32") {
+    return runInstallTarget({ command: bin, args }, env, jobId, onProgress);
+  }
+  return windowsInstallSpawn(bin, args, env).then(
+    (target) => runInstallTarget(target, env, jobId, onProgress),
+    (err: unknown) => {
       // Reported the way a failed spawn is: the message on stderr, exit 1.
       onProgress({ jobId, chunk: scrubSecrets((err as Error).message) + "\n", stream: "stderr" });
-      resolve({ exitCode: 1 });
-      return;
+      return { exitCode: 1 };
     }
+  );
+}
 
+function runInstallTarget(
+  target: InstallSpawn,
+  env: NodeJS.ProcessEnv,
+  jobId: string,
+  onProgress: (event: AgentInstallProgressEvent) => void
+): Promise<{ exitCode: number | null }> {
+  return new Promise((resolve) => {
+    let finalized = false;
     const child = spawn(target.command, target.args, {
       stdio: ["ignore", "pipe", "pipe"],
-      env,
+      env: target.env ? { ...env, ...target.env } : env,
       shell: false,
       windowsHide: true,
       ...(target.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),

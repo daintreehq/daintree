@@ -27,6 +27,7 @@ import os from "os";
 import {
   applyWindowsExtraPaths,
   deduplicatePath,
+  prewarmWindowsSpawnTargets,
   rememberWindowsLaunchPath,
   resolveWindowsRegistryPath,
 } from "./windowsPath.js";
@@ -591,8 +592,9 @@ async function runRefreshPath(): Promise<void> {
           // (#11773). Its single-flight is shared, so a spawn refresh landing
           // mid-startup joins this read instead of racing a second `reg.exe`.
           const resolved = await resolveWindowsRegistryPath();
-          if (!resolved || timedOut) return;
-          process.env.PATH = resolved;
+          if (resolved && !timedOut) process.env.PATH = resolved;
+          // Startup's first PATH search for the shell and git, off this loop.
+          prewarmWindowsSpawnTargets();
         } else if (process.env.DAINTREE_SHELL_PROBE === "1") {
           // Opt-in markered shell-probe path (#6063). Replaces shell-env
           // with a real `$SHELL -i -l -c` invocation so lazy-loaded version

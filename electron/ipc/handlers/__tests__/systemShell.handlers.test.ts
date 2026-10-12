@@ -118,11 +118,11 @@ vi.mock("../../utils.js", () => ({
   },
 }));
 
-const windowsWhereMock = vi.hoisted(() => vi.fn());
+const scanWindowsPathMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../utils/windowsExecutable.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../utils/windowsExecutable.js")>()),
-  windowsWhere: windowsWhereMock,
+  scanWindowsPath: scanWindowsPathMock,
 }));
 
 import { CHANNELS } from "../../channels.js";
@@ -916,15 +916,12 @@ describe("system:check-command on Windows", () => {
   it("reports a command available only when PATH holds it", async () => {
     const handler = getHandler(CHANNELS.SYSTEM_CHECK_COMMAND);
 
-    windowsWhereMock.mockResolvedValueOnce({ ok: true, paths: ["C:\\tools\\gh.exe"] });
+    scanWindowsPathMock.mockResolvedValueOnce({ paths: ["C:\\tools\\gh.exe"], skipped: [] });
     await expect(handler(fakeEvent, "gh")).resolves.toBe(true);
-    expect(windowsWhereMock).toHaveBeenLastCalledWith("gh");
+    expect(scanWindowsPathMock).toHaveBeenLastCalledWith("gh");
 
-    // `where` matched only outside PATH (its working directory), so nothing is left.
-    windowsWhereMock.mockResolvedValueOnce({ ok: true, paths: [] });
-    await expect(handler(fakeEvent, "gh")).resolves.toBe(false);
-
-    windowsWhereMock.mockResolvedValueOnce({ ok: false, error: new Error("exit 1") });
+    // Nothing on PATH (a slow entry counts as holding nothing): not available.
+    scanWindowsPathMock.mockResolvedValueOnce({ paths: [], skipped: ["\\\\server\\tools"] });
     await expect(handler(fakeEvent, "gh")).resolves.toBe(false);
   });
 
@@ -933,7 +930,7 @@ describe("system:check-command on Windows", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
     await expect(handler(fakeEvent, "..\\gh")).resolves.toBe(false);
-    expect(windowsWhereMock).not.toHaveBeenCalled();
+    expect(scanWindowsPathMock).not.toHaveBeenCalled();
   });
 });
 

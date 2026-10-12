@@ -43,8 +43,8 @@ function mockPathLookup(resolve: (command: string) => string | null) {
 type ExecCallback = (err: Error | null, result?: { stdout: string; stderr: string }) => void;
 
 /**
- * The tool a spawn ran, whatever path it was given: on Windows `where` and the
- * probed tools are started by absolute path (`C:\Windows\System32\where.exe`).
+ * The tool a spawn ran, whatever path it was given: on Windows the probed tools
+ * are started by absolute path (`C:\bin\git.exe`).
  */
 function toolName(cmd: unknown): string {
   return String(cmd)
@@ -68,13 +68,7 @@ function mockExec(handler: (cmd: string, args: string[]) => string) {
     const tool = toolName(cmd);
     try {
       const stdout = handler(tool, args ?? []);
-      // `windowsWhere` reads execFile's own callback; version commands go
-      // through promisify, which hands back `{ stdout, stderr }`.
-      if (tool === "where") {
-        (callback as unknown as (err: Error | null, out: string) => void)(null, stdout);
-      } else {
-        callback(null, { stdout, stderr: "" });
-      }
+      callback(null, { stdout, stderr: "" });
     } catch (err) {
       callback(err as Error);
     }
@@ -400,19 +394,29 @@ describe("runSystemHealthCheck", () => {
     }
   });
 
-  it("uses 'where' on windows", async () => {
+  it("reads PATH directly on windows, spawning neither where nor which", async () => {
+    // `where` prints in the console code page, which mangles a path such as
+    // C:\Users\山田; the directory listing reads names as Unicode.
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const originalPath = process.env.PATH;
     try {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      process.env.PATH = "C:\\Users\\山田\\scoop\\shims";
+      virtualWindowsFiles.set({ "C:\\Users\\山田\\scoop\\shims\\git.exe": "" });
       mockLookup(ALL_TOOLS, ALL_VERSIONS);
 
-      await runSystemHealthCheck();
+      const result = await runSystemHealthCheck();
 
-      const where = /^[A-Za-z]:\\.*\\System32\\where\.exe$/i;
-      expect(mockedExecFile.mock.calls.some((c) => where.test(String(c[0])))).toBe(true);
+      expect(result.prerequisites.find((p) => p.tool === "git")?.available).toBe(true);
+      expect(mockedExecFile.mock.calls.map((c) => String(c[0]))).toEqual([
+        "C:\\Users\\山田\\scoop\\shims\\git.exe",
+      ]);
       expect(mockedFindOnPath).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(process, "platform", originalPlatform);
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      virtualWindowsFiles.clear();
     }
   });
 
@@ -565,13 +569,6 @@ describe("runSystemHealthCheck", () => {
       virtualWindowsFiles.clear();
     });
 
-    /** `where` output for each tool: the file in PATH that holds it. */
-    function whereFor(tool: string): string {
-      if (tool === "npm") return `${NODE_DIR}\\npm\r\n${NODE_DIR}\\npm.cmd\r\n`;
-      if (tool === "node") return `${NODE_DIR}\\node.exe\r\n`;
-      return `C:\\bin\\${tool}.exe\r\n`;
-    }
-
     /** The spawn that ran a version command, by the file it started. */
     function versionCall(file: RegExp) {
       return mockedExecFile.mock.calls.find((c) => file.test(String(c[0])));
@@ -580,8 +577,7 @@ describe("runSystemHealthCheck", () => {
     it("runs a .cmd shim through cmd.exe by absolute path, without a shell", async () => {
       // Node refuses to spawn .cmd directly; without this npm would read as
       // unavailable now that a failed version command means unavailable.
-      mockExec((cmd, args) => {
-        if (cmd === "where") return whereFor(args[0] ?? "");
+      mockExec((cmd) => {
         if (cmd === "cmd") return "10.2.4\n";
         return "1.0.0\n";
       });
@@ -598,10 +594,7 @@ describe("runSystemHealthCheck", () => {
     });
 
     it("runs a real executable directly by the path PATH resolved", async () => {
-      mockExec((cmd, args) => {
-        if (cmd === "where") return whereFor(args[0] ?? "");
-        return "v20.11.0\n";
-      });
+      mockExec(() => "v20.11.0\n");
 
       await runSystemHealthCheck();
 
@@ -611,8 +604,7 @@ describe("runSystemHealthCheck", () => {
     });
 
     it("does not re-run a real executable that exited nonzero", async () => {
-      mockExec((cmd, args) => {
-        if (cmd === "where") return whereFor(args[0] ?? "");
+      mockExec((cmd) => {
         if (cmd === "git") throw new Error("git is broken");
         return "v20.11.0\n";
       });
@@ -629,7 +621,6 @@ describe("runSystemHealthCheck", () => {
       // command. It has to be refused before the spawn, not merely quoted.
       const invocations: string[][] = [];
       mockExec((cmd, args) => {
-        if (cmd === "where") return whereFor(args[0] ?? "");
         invocations.push([cmd, ...args]);
         return "10.2.4\n";
       });
@@ -656,18 +647,12 @@ describe("runSystemHealthCheck", () => {
       ]);
     });
 
-    it("never runs a tool `where` found only outside PATH", async () => {
-      // `where` searches its working directory before PATH; a copy there is
-      // not an installed tool, and neither is one under a relative PATH entry.
+    it("never runs a tool found only outside PATH", async () => {
+      // A copy in the working directory, or under a relative PATH entry, is not
+      // an installed tool.
       process.env.PATH = `.;tools;${NODE_DIR}`;
       virtualWindowsFiles.set({ "C:\\Windows\\System32\\tools\\git.exe": "" });
-      mockExec((cmd, args) => {
-        if (cmd === "where" && args[0] === "git") {
-          return "C:\\Windows\\System32\\git.exe\r\nC:\\Windows\\System32\\tools\\git.exe\r\n";
-        }
-        if (cmd === "where") throw new Error("not found");
-        return "git version 2.43.0\n";
-      });
+      mockExec(() => "git version 2.43.0\n");
 
       const result = await checkPrerequisite({
         tool: "git",
@@ -678,10 +663,7 @@ describe("runSystemHealthCheck", () => {
 
       expect(result.available).toBe(false);
       expect(result.unavailableReason).toBe("not-found");
-      expect(mockedExecFile.mock.calls.every((c) => toolName(c[0]) === "where")).toBe(true);
-      expect(mockedExecFile.mock.calls[0]?.[2]).toEqual(
-        expect.objectContaining({ cwd: expect.stringMatching(/\\System32$/i) })
-      );
+      expect(mockedExecFile).not.toHaveBeenCalled();
     });
   });
 

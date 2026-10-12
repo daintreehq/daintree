@@ -9,7 +9,7 @@ import {
   killWindowsProcessTreeInBackground,
   liveChildTreeTarget,
 } from "../../../../electron/utils/windowsTreeKill.js";
-import { executableForSpawn } from "../../../../electron/utils/windowsExecutable.js";
+import { resolveExecutableForSpawn } from "../../../../electron/utils/windowsExecutable.js";
 import type {
   CloneAuthProbe,
   CloneCapability,
@@ -98,6 +98,15 @@ function parseGhStderrLine(line: string): { stage: string; progress: number } | 
  */
 async function probeGhAuth(externalSignal?: AbortSignal): Promise<CloneAuthProbe> {
   if (externalSignal?.aborted) return { authenticated: false, reason: "Probe aborted" };
+  const env = { ...process.env, ...GH_NON_INTERACTIVE_ENV };
+  let gh: string;
+  try {
+    gh = await resolveExecutableForSpawn("gh", env);
+  } catch {
+    // A Windows PATH without gh: unavailable, exactly as a failed spawn reads.
+    return { authenticated: false, reason: "gh CLI unavailable or not signed in" };
+  }
+  if (externalSignal?.aborted) return { authenticated: false, reason: "Probe aborted" };
   return new Promise((resolve) => {
     const controller = new AbortController();
     const onExternalAbort = () => controller.abort();
@@ -116,15 +125,6 @@ async function probeGhAuth(externalSignal?: AbortSignal): Promise<CloneAuthProbe
       );
     };
 
-    const env = { ...process.env, ...GH_NON_INTERACTIVE_ENV };
-    let gh: string;
-    try {
-      gh = executableForSpawn("gh", env);
-    } catch (error) {
-      // A Windows PATH without gh: unavailable, exactly as a failed spawn reads.
-      finish(error);
-      return;
-    }
     execFile(
       gh,
       ["auth", "status"],
@@ -159,7 +159,8 @@ async function cloneWithGh(
 
   const isWin = process.platform === "win32";
   const env = { ...process.env, ...GH_NON_INTERACTIVE_ENV };
-  const child: ChildProcessWithoutNullStreams = spawn(executableForSpawn("gh", env), args, {
+  const gh = await resolveExecutableForSpawn("gh", env);
+  const child: ChildProcessWithoutNullStreams = spawn(gh, args, {
     cwd: path.dirname(targetDir),
     env,
     detached: !isWin,

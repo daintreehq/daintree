@@ -10,15 +10,21 @@ import type * as fs from "node:fs";
  *       await importOriginal()
  *     )
  *   );
+ *
+ * Covers the synchronous stat/lstat/readFile calls and the `fs.promises`
+ * readdir/stat/lstat a PATH search makes. A directory exists when a file sits
+ * somewhere under it.
  */
-const files = new Map<string, string>();
+const files = new Map<string, { path: string; contents: string }>();
 const WINDOWS_PATH = /^(?:[A-Za-z]:[\\/]|\\\\)/;
 
 export const virtualWindowsFiles = {
   /** Replace the disk with `entries` (path → contents), matched case-insensitively. */
   set(entries: Record<string, string>): void {
     files.clear();
-    for (const [file, contents] of Object.entries(entries)) files.set(file.toLowerCase(), contents);
+    for (const [file, contents] of Object.entries(entries)) {
+      files.set(file.toLowerCase(), { path: file, contents });
+    }
   },
   clear(): void {
     files.clear();
@@ -43,6 +49,46 @@ const fileStats = {
   isSymbolicLink: () => false,
 };
 
+const directoryStats = {
+  isFile: () => false,
+  isDirectory: () => true,
+  isSymbolicLink: () => false,
+};
+
+function directoryPrefix(directory: string): string {
+  return `${directory.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase()}\\`;
+}
+
+/** The names directly under `directory`, or undefined when no file sits beneath it. */
+function listVirtualDirectory(
+  directory: string
+):
+  | Array<{ name: string; isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean }>
+  | undefined {
+  const prefix = directoryPrefix(directory);
+  const entries = new Map<string, { name: string; isFile: boolean }>();
+  for (const [key, { path }] of files) {
+    if (!key.startsWith(prefix)) continue;
+    const rest = path.slice(prefix.length);
+    const separator = rest.search(/[\\/]/);
+    const name = separator < 0 ? rest : rest.slice(0, separator);
+    if (!entries.has(name.toLowerCase())) {
+      entries.set(name.toLowerCase(), { name, isFile: separator < 0 });
+    }
+  }
+  if (entries.size === 0) return undefined;
+  return [...entries.values()].map(({ name, isFile }) => ({
+    name,
+    ...(isFile ? fileStats : directoryStats),
+  }));
+}
+
+function isVirtualDirectory(file: string): boolean {
+  const prefix = directoryPrefix(file);
+  for (const key of files.keys()) if (key.startsWith(prefix)) return true;
+  return false;
+}
+
 export function withVirtualWindowsFiles(actual: typeof fs): typeof fs {
   const stat =
     (syscall: "stat" | "lstat", real: typeof fs.statSync) =>
@@ -56,15 +102,45 @@ export function withVirtualWindowsFiles(actual: typeof fs): typeof fs {
   const readFileSync = (file: fs.PathOrFileDescriptor, options?: unknown) => {
     const win = windowsPath(file);
     if (win === undefined) return actual.readFileSync(file, options as never);
-    const contents = files.get(win.toLowerCase());
+    const contents = files.get(win.toLowerCase())?.contents;
     if (contents === undefined) throw notFound("open", win);
     return contents;
   };
+  const asyncStat =
+    (syscall: "stat" | "lstat", real: (file: fs.PathLike) => Promise<unknown>) =>
+    async (file: fs.PathLike, options?: unknown) => {
+      const win = windowsPath(file);
+      if (win === undefined)
+        return (real as (f: fs.PathLike, o?: unknown) => unknown)(file, options);
+      if (files.has(win.toLowerCase())) return fileStats;
+      if (isVirtualDirectory(win)) return directoryStats;
+      throw notFound(syscall, win);
+    };
+  const readdir = async (directory: fs.PathLike, options?: unknown) => {
+    const win = windowsPath(directory);
+    if (win === undefined) {
+      return (actual.promises.readdir as (d: fs.PathLike, o?: unknown) => unknown)(
+        directory,
+        options
+      );
+    }
+    const entries = listVirtualDirectory(win);
+    if (!entries) throw notFound("scandir", win);
+    const withFileTypes = (options as { withFileTypes?: boolean } | undefined)?.withFileTypes;
+    return withFileTypes ? entries : entries.map((entry) => entry.name);
+  };
+  const promises = {
+    ...actual.promises,
+    readdir,
+    stat: asyncStat("stat", actual.promises.stat),
+    lstat: asyncStat("lstat", actual.promises.lstat),
+  } as unknown as typeof fs.promises;
   const overrides = {
     statSync: stat("stat", actual.statSync),
     lstatSync: stat("lstat", actual.lstatSync),
     readFileSync,
-  } as unknown as Pick<typeof fs, "statSync" | "lstatSync" | "readFileSync">;
+    promises,
+  } as unknown as Pick<typeof fs, "statSync" | "lstatSync" | "readFileSync" | "promises">;
   const base = (actual as typeof fs & { default?: typeof fs }).default ?? actual;
   return { ...actual, ...overrides, default: { ...base, ...overrides } } as typeof fs;
 }

@@ -47,6 +47,7 @@ import {
   resolveExposedGc,
   IDLE_HEAP_COMPACT_CHECK_INTERVAL_MS,
 } from "./services/pty/analysis/idleHeapCompactor.js";
+import { prewarmWindowsExecutables } from "./utils/windowsExecutable.js";
 
 // First user-code statement after all imports settle. ESM hoists native
 // module dlopen (better-sqlite3 via WorkspaceService, @parcel/watcher) ahead
@@ -62,6 +63,10 @@ if (!process.parentPort) {
 if (process.env.DAINTREE_USER_DATA) {
   initializeLogger(process.env.DAINTREE_USER_DATA);
 }
+
+// On Windows git is searched for in PATH asynchronously (a PATH entry on a dead
+// share must not stall this loop); start now so the first git call finds it.
+void prewarmWindowsExecutables(["git"]);
 
 const port = process.parentPort as unknown as MessagePort;
 

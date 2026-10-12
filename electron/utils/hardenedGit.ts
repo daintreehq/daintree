@@ -11,7 +11,7 @@ import type {
 import { promisify } from "node:util";
 import { tightenDirPermissionsSync } from "./fs.js";
 import { detectWslPath } from "./wsl.js";
-import { executableForSpawn, windowsSystemTool } from "./windowsExecutable.js";
+import { resolveExecutableForSpawn, windowsSystemTool } from "./windowsExecutable.js";
 
 // Deferred import keeps simple-git out of the eager pre-paint main bundle —
 // esbuild's `splitting: true` emits it as a lazy chunk (issue #10395). Kicked
@@ -352,12 +352,14 @@ type SimpleGitConfig = Omit<Partial<SimpleGitOptions>, "binary" | "unsafe">;
 
 /**
  * On Windows, git's absolute path from PATH; elsewhere, simple-git's bare `git`.
- * A Windows PATH without git throws spawn's `spawn git ENOENT`, which callers
- * already report as "Git is not installed", rather than leaving simple-git to
- * spawn the bare name from the repository directory.
+ * A Windows PATH without git rejects with spawn's `spawn git ENOENT`, which
+ * callers already report as "Git is not installed", rather than leaving
+ * simple-git to spawn the bare name from the repository directory. The lookup
+ * is asynchronous and cached, so building an instance never stats PATH on this
+ * loop.
  */
-function nativeGitBinary(platform: NodeJS.Platform): string | undefined {
-  return platform === "win32" ? executableForSpawn("git", process.env, platform) : undefined;
+async function nativeGitBinary(platform: NodeJS.Platform): Promise<string | undefined> {
+  return platform === "win32" ? resolveExecutableForSpawn("git", process.env, platform) : undefined;
 }
 
 /**
@@ -494,6 +496,7 @@ export async function createHardenedGit(
   platform: NodeJS.Platform = process.platform
 ): Promise<SimpleGit> {
   const { simpleGit } = await simpleGitModule;
+  const binary = await nativeGitBinary(platform);
   return buildSimpleGit(
     simpleGit,
     {
@@ -502,7 +505,7 @@ export async function createHardenedGit(
       timeout: { block: GIT_BLOCK_TIMEOUT_MS },
       ...(signal ? { abort: signal } : {}),
     },
-    nativeGitBinary(platform)
+    binary
   ).env(buildHardenedGitEnv(platform));
 }
 
@@ -669,7 +672,7 @@ async function readUserSshCommand(): Promise<string | null> {
     try {
       const env = getSanitizedProcessEnv();
       const { stdout } = await promisify(execFile)(
-        executableForSpawn("git", env),
+        await resolveExecutableForSpawn("git", env),
         ["config", scope, "--no-includes", "--get", "core.sshCommand"],
         {
           cwd: os.tmpdir(),
@@ -725,6 +728,7 @@ export async function createAuthenticatedGit(
   const { signal, progress, extraConfig, platform = process.platform } = opts;
   const { simpleGit } = await simpleGitModule;
   const sshCommand = await resolveAuthenticatedSshCommand();
+  const binary = await nativeGitBinary(platform);
   return buildSimpleGit(
     simpleGit,
     {
@@ -734,7 +738,7 @@ export async function createAuthenticatedGit(
       ...(signal ? { abort: signal } : {}),
       ...(progress ? { progress } : {}),
     },
-    nativeGitBinary(platform)
+    binary
   ).env({
     ...getSanitizedProcessEnv(),
     ...getGitLocaleEnv(),

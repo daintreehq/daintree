@@ -3,7 +3,7 @@ import { promises as fsPromises } from "fs";
 import { isAbsolute, join as pathJoin } from "path";
 import { logWarn } from "./logger.js";
 import { Cache } from "./cache.js";
-import { executableForSpawn } from "./windowsExecutable.js";
+import { resolveExecutableForSpawn } from "./windowsExecutable.js";
 
 // worktreePath → gitDir/commonDir is immutable for a live worktree and all
 // removal/switch paths invalidate explicitly via clearGitDirCache /
@@ -137,15 +137,14 @@ class GitExecError extends Error {
   }
 }
 
-function execGit(args: string[], cwd: string, timeout: number): Promise<string> {
+async function execGit(args: string[], cwd: string, timeout: number): Promise<string> {
+  let git: string;
+  try {
+    git = await resolveExecutableForSpawn("git");
+  } catch (error) {
+    throw new GitExecError(error, "");
+  }
   return new Promise((resolve, reject) => {
-    let git: string;
-    try {
-      git = executableForSpawn("git");
-    } catch (error) {
-      reject(new GitExecError(error, ""));
-      return;
-    }
     // windowsHide keeps the probe from flashing a console window: libuv only
     // sets CREATE_NO_WINDOW when the flag is passed, and Windows 11's default
     // "let Windows decide" terminal host escalates an unhidden spawn into a

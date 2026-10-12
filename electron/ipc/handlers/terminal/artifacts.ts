@@ -10,7 +10,7 @@ import type { HandlerDependencies, IpcContext } from "../../types.js";
 import { defineIpcNamespace, op } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
-import { executableForSpawn } from "../../../utils/windowsExecutable.js";
+import { resolveExecutableForSpawn } from "../../../utils/windowsExecutable.js";
 import { applyPatchToleratingTransportCrlf, parsePatchModifiedFiles } from "./patchText.js";
 import type {
   SaveArtifactOptions,
@@ -172,7 +172,9 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
       try {
         await applyPatchToleratingTransportCrlf(patchContent, async (content) => {
           if (content !== patchContent) await fs.writeFile(tmpPatchPath, content, "utf-8");
-          await execa(executableForSpawn("git"), ["apply", tmpPatchPath], { cwd: resolvedCwd });
+          await execa(await resolveExecutableForSpawn("git"), ["apply", tmpPatchPath], {
+            cwd: resolvedCwd,
+          });
         });
       } catch (error) {
         const errorMessage = formatErrorMessage(error, "Failed to apply patch");

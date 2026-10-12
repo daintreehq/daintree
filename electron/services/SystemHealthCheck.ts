@@ -1,10 +1,6 @@
 import { execFile } from "child_process";
-import {
-  cliSpawnTarget,
-  isShellInertInvocation,
-  pickWindowsLaunchable,
-} from "../utils/windowsCliSpawn.js";
-import { windowsWhere } from "../utils/windowsExecutable.js";
+import { cliSpawnTarget, isShellInertInvocation } from "../utils/windowsCliSpawn.js";
+import { findWindowsCommand } from "../utils/windowsExecutable.js";
 import { promisify } from "util";
 import * as path from "path";
 import * as semver from "semver";
@@ -171,16 +167,14 @@ async function runVersionCommand(
  * Where PATH has `command`, or null. POSIX looks it up in-process — the
  * external `which` is absent from minimal Fedora and Arch installs, and relying
  * on it read every tool there as missing. On Windows only absolute PATH entries
- * count (see `windowsWhere`), and `where` lists npm's extensionless sh script
- * before the `.cmd` beside it (Node's own installer ships npm that way), of
- * which only the `.cmd` runs.
+ * count, and only a file a shell could start: npm's extensionless sh script
+ * beside `npm.cmd` (Node's own installer ships npm that way) is not one.
  */
 async function resolveOnPath(command: string): Promise<string | null> {
   if (process.platform !== "win32") {
     return findOnPath(command, { timeoutMs: CHECK_TIMEOUT_MS });
   }
-  const where = await windowsWhere(command, process.env, { timeoutMs: CHECK_TIMEOUT_MS });
-  return where.ok ? (pickWindowsLaunchable(where.paths) ?? null) : null;
+  return findWindowsCommand(command, process.env);
 }
 
 export async function checkPrerequisite(spec: PrerequisiteSpec): Promise<PrerequisiteCheckResult> {

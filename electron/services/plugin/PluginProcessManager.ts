@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { spawn as nodeSpawn } from "node:child_process";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { minimalSpawnEnv } from "../../utils/minimalSpawnEnv.js";
-import { executableForSpawn } from "../../utils/windowsExecutable.js";
+import { resolveExecutableForSpawn } from "../../utils/windowsExecutable.js";
 import {
   PLUGIN_PROCESS_KILL_GRACE_MS,
   PLUGIN_PROCESS_MAX_CONCURRENT,
@@ -233,6 +233,8 @@ interface ManagedProcess {
   earlyDataExpiry: ReturnType<typeof setTimeout> | null;
   /** Latches true on the first `onData` subscription — after that, delivery is live-only. */
   hadDataSubscriber: boolean;
+  /** Windows only: `command` as resolved from PATH, or why it could not be. See `spawnProgram`. */
+  windowsProgram?: WindowsProgram;
 }
 
 /**
@@ -339,6 +341,12 @@ export class PluginProcessManager {
    * {@link PluginProcessConcurrencyError} when the per-plugin cap is reached.
    */
   async spawn(pluginId: string, config: ResolvedProcessSpawn): Promise<ManagedProcessHandle> {
+    // Resolved ahead of the admission checks below, which stay synchronous with
+    // the registration they guard.
+    const windowsProgram =
+      process.platform === "win32"
+        ? await resolveWindowsProgram(config.command, config.env)
+        : undefined;
     // The quit sweep has already signalled everything down; a spawn admitted
     // after it would start a child nothing is left to kill.
     if (this.shuttingDown) {
@@ -387,6 +395,7 @@ export class PluginProcessManager {
       earlyDataBytes: 0,
       earlyDataExpiry: null,
       hadDataSubscriber: false,
+      ...(windowsProgram ? { windowsProgram } : {}),
     };
     // Registered before any await so the concurrency cap counts this process
     // immediately — a burst of interactive spawns must not all sail past the cap
@@ -628,7 +637,7 @@ export class PluginProcessManager {
       backend = await spawner(
         {
           mode: "pty",
-          command: spawnProgram(managed.command, managed.env),
+          command: spawnProgram(managed),
           args: managed.args,
           cwd: managed.cwd,
           env: managed.env,
@@ -772,7 +781,7 @@ export class PluginProcessManager {
     try {
       child = this.spawner({
         mode,
-        command: spawnProgram(managed.command, managed.env),
+        command: spawnProgram(managed),
         args: managed.args,
         cwd: managed.cwd,
         env: managed.env,
@@ -1030,6 +1039,13 @@ export class PluginProcessManager {
     // plugin timer that survived into it, would otherwise respawn a child the
     // sweep has already snapshotted and will never signal.
     if (this.shuttingDown) return;
+    // A program PATH did not hold at spawn may have been installed since. One
+    // that was found keeps its absolute path, so the restart below stays
+    // synchronous with the call.
+    if (managed.windowsProgram && "error" in managed.windowsProgram) {
+      managed.windowsProgram = await resolveWindowsProgram(managed.command, managed.env);
+      if (this.shuttingDown || this.processes.get(id) !== managed) return;
+    }
     if (managed.mode === "pty") {
       await this.restartPty(managed);
       return;
@@ -1304,16 +1320,36 @@ export class PluginProcessManager {
   }
 }
 
+type WindowsProgram = { file: string } | { error: unknown };
+
 /**
- * The program a spawn starts. On Windows a bare name is resolved from PATH
- * only (the PATH the child gets), because given a bare name process creation
- * looks in the working directory first, and here that is a plugin or worktree
- * directory. A name PATH does not hold fails as spawn's ENOENT and is recorded
- * as a start failure. A path, absolute or relative, is the plugin's own choice
- * and passes through, as does every name off Windows.
+ * On Windows a bare name is resolved from PATH only (the PATH the child gets),
+ * because given a bare name process creation looks in the working directory
+ * first, and here that is a plugin or worktree directory. Asynchronous, so a
+ * stalled PATH entry cannot block Main. A path, absolute or relative, is the
+ * plugin's own choice and passes through.
  */
-function spawnProgram(command: string, env: Readonly<Record<string, string>>): string {
-  return process.platform === "win32" ? executableForSpawn(command, minimalSpawnEnv(env)) : command;
+async function resolveWindowsProgram(
+  command: string,
+  env: Readonly<Record<string, string>>
+): Promise<WindowsProgram> {
+  try {
+    return { file: await resolveExecutableForSpawn(command, minimalSpawnEnv(env), "win32") };
+  } catch (error) {
+    return { error };
+  }
+}
+
+/**
+ * The program a spawn starts: the Windows PATH lookup's result, or `command`
+ * unchanged off Windows. A name PATH does not hold throws spawn's ENOENT here,
+ * which the spawn paths record as a start failure.
+ */
+function spawnProgram(managed: ManagedProcess): string {
+  const program = managed.windowsProgram;
+  if (!program) return managed.command;
+  if ("error" in program) throw program.error;
+  return program.file;
 }
 
 const defaultSpawner: ProcessSpawner = (config) => {

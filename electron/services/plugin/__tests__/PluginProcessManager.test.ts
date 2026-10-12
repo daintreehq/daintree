@@ -1741,6 +1741,33 @@ describe("PluginProcessManager on Windows: program lookup", () => {
     errorSpy.mockRestore();
   });
 
+  it("looks a program up again on restart only when the last lookup missed", async () => {
+    const h = makeHarness();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const missing = await h.manager.spawn(
+      "acme.tool",
+      pipeConfig({ command: "deno", cwd: "C:\\repo", env: { PATH: "C:\\tools" } })
+    );
+    const found = await h.manager.spawn(
+      "acme.tool",
+      pipeConfig({ command: "node", cwd: "C:\\repo", env: { PATH: "C:\\tools" } })
+    );
+    await flushMicrotasks();
+    expect(h.spawnConfigs.map((config) => config.command)).toEqual(["C:\\tools\\node.exe"]);
+
+    // deno installed since; node moved, but a found program keeps its path.
+    virtualWindowsFiles.set({ "C:\\tools\\deno.exe": "", "C:\\other\\node.exe": "" });
+    await missing.restart();
+    await found.restart();
+
+    expect(h.spawnConfigs.map((config) => config.command)).toEqual([
+      "C:\\tools\\node.exe",
+      "C:\\tools\\deno.exe",
+      "C:\\tools\\node.exe",
+    ]);
+    errorSpy.mockRestore();
+  });
+
   it("passes a path through as the plugin gave it", async () => {
     const h = makeHarness();
     for (const command of ["C:\\plugin\\bin\\tool.exe", ".\\bin\\tool.exe", "bin/tool"]) {

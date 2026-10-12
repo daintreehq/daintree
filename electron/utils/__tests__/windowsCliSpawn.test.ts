@@ -5,6 +5,7 @@ import {
   isWindowsShellShim,
   pickWindowsLaunchable,
   resolveWindowsCli,
+  unwrapWindowsShim,
   type WindowsCliResolveOptions,
 } from "../windowsCliSpawn.js";
 
@@ -262,6 +263,47 @@ describe("Windows CLI resolution", () => {
         "C:\\tools\\node.exe": "",
       });
       expect(cliSpawnTarget("agent", [], "win32", withLocal).command).toBe("C:\\tools\\node.exe");
+    });
+
+    it("unwraps with a node already found on PATH, unless the shim changes PATH first", () => {
+      const files: Record<string, string> = {
+        "C:\\Users\\Jane & John\\npm\\agent.CMD": crlf(
+          "@SETLOCAL",
+          ...localNodeBlock(' "%~dp0\\..\\lib\\agent\\cli.js" %*')
+        ),
+        "C:\\Users\\Jane & John\\lib\\agent\\cli.js": "",
+        "C:\\Users\\Jane & John\\npm\\prepends.CMD": crlf(
+          "@SETLOCAL",
+          '@SET "PATH=C:\\runtime\\b;%PATH%"',
+          'node "%~dp0\\..\\lib\\agent\\cli.js" %*'
+        ),
+        "C:\\runtime\\b\\node.exe": "",
+      };
+      const checked: string[] = [];
+      const options: WindowsCliResolveOptions = {
+        ...filesystem(files),
+        isFile: (file) => {
+          checked.push(file);
+          return Object.keys(files).some((name) => name.toLowerCase() === file.toLowerCase());
+        },
+        node: pathNode,
+      };
+
+      // A path holding `&` reaches no shell: Node and the script, by argv.
+      expect(unwrapWindowsShim("C:\\Users\\Jane & John\\npm\\agent.CMD", options)).toEqual({
+        command: pathNode,
+        args: ["C:\\Users\\Jane & John\\lib\\agent\\cli.js"],
+        shell: false,
+      });
+      // No PATH directory was searched for node.exe.
+      expect(checked.filter((file) => /node\.exe$/i.test(file))).toEqual([
+        "C:\\Users\\Jane & John\\npm\\node.exe",
+      ]);
+
+      expect(unwrapWindowsShim("C:\\Users\\Jane & John\\npm\\prepends.CMD", options)?.command).toBe(
+        "C:\\runtime\\b\\node.exe"
+      );
+      expect(unwrapWindowsShim("C:\\tools\\agent.exe", options)).toBeUndefined();
     });
 
     it("applies a colon-joined PATH prepend literally, as cmd.exe does", () => {

@@ -36,6 +36,12 @@ export interface WindowsCliResolveOptions {
   cwd?: string;
   isFile?: (file: string) => boolean;
   readFile?: (file: string) => string;
+  /**
+   * node.exe as already found on the caller's PATH. Stands in for the PATH
+   * search a shim's bare `node` would otherwise need, unless the shim changes
+   * PATH first.
+   */
+  node?: string;
 }
 
 function launchError(command: string, code: string): NodeJS.ErrnoException {
@@ -172,7 +178,9 @@ function unwrapModernNpmShim(
   const script = path.win32.resolve(directory, call[2]);
   if (!isFile(script)) throw launchError(script, "ENOENT");
   const localNode = path.win32.join(directory, "node.exe");
-  const node = isFile(localNode) ? localNode : resolveWindowsCli("node.exe", options);
+  const node = isFile(localNode)
+    ? localNode
+    : (options.node ?? resolveWindowsCli("node.exe", options));
   return {
     command: node,
     args: [...call[1].trim().split(/\s+/).filter(Boolean), script],
@@ -376,10 +384,13 @@ function unwrapClassicShim(
   } else {
     const local = path.win32.join(directory, "node.exe");
     // A bare `node` runs after the shim's own PATH change, so look it up there.
+    const pathChanged = Object.hasOwn(env, envKey(callerEnv, "PATH") ?? "PATH");
     node =
       localNode && isFile(local)
         ? local
-        : resolveWindowsCli("node.exe", { ...options, env: { ...callerEnv, ...env } });
+        : !pathChanged && options.node
+          ? options.node
+          : resolveWindowsCli("node.exe", { ...options, env: { ...callerEnv, ...env } });
   }
   return {
     command: node,
@@ -387,6 +398,19 @@ function unwrapClassicShim(
     shell: false,
     ...extra,
   };
+}
+
+/**
+ * What an npm-style `.cmd`/`.bat` shim (npm's cmd-shim, pnpm, Yarn) stands
+ * for, spawnable with an argument vector and no cmd.exe: Node and the script
+ * it runs, or the native executable it wraps. Undefined for any other batch
+ * file. Throws ENOENT when the shim names a target that is not there.
+ */
+export function unwrapWindowsShim(
+  file: string,
+  options: WindowsCliResolveOptions = {}
+): CliSpawnTarget | undefined {
+  return isWindowsShellShim(file) ? unwrapNpmShim(file, options) : undefined;
 }
 
 export function cliSpawnTarget(

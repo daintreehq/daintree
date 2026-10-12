@@ -59,7 +59,7 @@ import {
   scanStagedFilesForConflictMarkers,
 } from "../../services/git/conflictMarkerScan.js";
 import { shouldPlayUiFeedbackSound } from "../../utils/uiFeedbackSound.js";
-import { executableForSpawn } from "../../utils/windowsExecutable.js";
+import { resolveExecutableForSpawn } from "../../utils/windowsExecutable.js";
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 
@@ -1924,7 +1924,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     // duplicate entries in ~/.gitconfig. Exit code 1 (no entries set) is
     // expected for first-time users and must not propagate as an error.
     let alreadyConfigured = false;
-    const git = executableForSpawn("git");
+    const git = await resolveExecutableForSpawn("git");
     try {
       const { stdout } = await execFileAsync(
         git,

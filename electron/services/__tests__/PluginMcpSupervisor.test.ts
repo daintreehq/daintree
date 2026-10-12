@@ -1563,20 +1563,20 @@ describe("MCP server program on Windows", () => {
     virtualWindowsFiles.clear();
   });
 
-  it("resolves a bare name from the server's PATH alone, .cmd shims included", () => {
+  it("resolves a bare name from the server's PATH alone, .cmd shims included", async () => {
     // The plugin directory is the working directory; `.` would search it.
     const env = { PATH: ".;bin;C:\\nodejs" };
-    expect(mcpServerProgram("node", env)).toBe("C:\\nodejs\\node.exe");
-    expect(mcpServerProgram("npx", env)).toBe("C:\\nodejs\\npx.cmd");
+    await expect(mcpServerProgram("node", env)).resolves.toBe("C:\\nodejs\\node.exe");
+    await expect(mcpServerProgram("npx", env)).resolves.toBe("C:\\nodejs\\npx.cmd");
   });
 
-  it("passes a path through, and every name off Windows", () => {
+  it("passes a path through, and every name off Windows", async () => {
     const env = { PATH: "C:\\nodejs" };
     for (const command of ["./dist/server.exe", "bin\\server", "C:\\tools\\server.exe"]) {
-      expect(mcpServerProgram(command, env)).toBe(command);
+      await expect(mcpServerProgram(command, env)).resolves.toBe(command);
     }
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-    expect(mcpServerProgram("npx", env)).toBe("npx");
+    await expect(mcpServerProgram("npx", env)).resolves.toBe("npx");
   });
 
   it("reports a name PATH does not hold as a spawn error, without starting anything", async () => {

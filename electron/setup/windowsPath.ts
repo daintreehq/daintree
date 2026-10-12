@@ -15,7 +15,11 @@ import { execFile } from "child_process";
 import { existsSync } from "fs";
 import os from "os";
 import path from "path";
-import { invalidateWindowsExecutableCache, windowsSystemTool } from "../utils/windowsExecutable.js";
+import {
+  invalidateWindowsExecutableCache,
+  prewarmWindowsExecutables,
+  windowsSystemTool,
+} from "../utils/windowsExecutable.js";
 
 // A terminal spawn re-reads the registry at most this often. `reg.exe` is two
 // process spawns (30-100ms+ each on Windows once Defender inspects them), which
@@ -241,6 +245,23 @@ export function resolveWindowsRegistryPath(): Promise<string | null> {
 }
 
 /**
+ * Search the PATH just adopted for what spawns will ask for synchronously (the
+ * default shell) or soon (git), so neither waits on a PATH search when it
+ * comes. Each registry read drops the resolver cache, which is why this runs
+ * after every adoption. Asynchronous; never throws.
+ */
+export function prewarmWindowsSpawnTargets(): void {
+  if (process.platform !== "win32") return;
+  void prewarmWindowsExecutables(["git"]);
+  // Imported on demand: this module stays a builtins-only leaf.
+  void import("../services/pty/terminalShell.js")
+    .then(({ prewarmWindowsShell }) => prewarmWindowsShell())
+    .catch((err: unknown) => {
+      console.warn("[windowsPath] Default shell lookup failed:", err);
+    });
+}
+
+/**
  * Refresh `process.env.PATH` from the registry on behalf of a terminal spawn.
  *
  * The pty-host is forked with a one-time spread of Main's `process.env`
@@ -284,6 +305,7 @@ export async function refreshWindowsPathForSpawn(): Promise<void> {
     const adopted = resolveWindowsRegistryPath().then(
       (resolved) => {
         if (resolved) process.env.PATH = resolved;
+        prewarmWindowsSpawnTargets();
       },
       (err: unknown) => {
         console.warn("[windowsPath] Registry PATH read failed; keeping the current PATH:", err);
