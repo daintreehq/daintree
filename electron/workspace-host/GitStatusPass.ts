@@ -372,7 +372,10 @@ export class GitStatusPass {
       const nextBehindCount = hasUpstream ? (newChanges.behind ?? 0) : undefined;
 
       // Base-branch divergence — runs in parallel with plan file detection.
-      const baseDivergencePromise = this.baseDivergence.compute(hasUpstream);
+      // Caught where it starts: it is awaited only after the plan-file probes,
+      // so a rejection in between (createGit on a worktree deleted outside
+      // Daintree) went unhandled and took the workspace host down.
+      const baseDivergencePromise = this.baseDivergence.compute(hasUpstream).catch(() => null);
 
       const planResults = await Promise.allSettled(
         PLAN_FILE_CANDIDATES.map((candidate) =>
