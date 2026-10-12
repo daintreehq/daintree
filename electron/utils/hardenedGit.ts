@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "path";
 import type { SimpleGit, SimpleGitProgressEvent } from "simple-git";
+import { promisify } from "node:util";
 import { tightenDirPermissionsSync } from "./fs.js";
 import { detectWslPath } from "./wsl.js";
 
@@ -43,8 +45,9 @@ const SAFE_GIT_CONFIG_BASE = [
  * without a terminal can answer — `GIT_TERMINAL_PROMPT=0` only covers git's own
  * terminal prompt, never ssh's.
  */
-const NON_INTERACTIVE_SSH_COMMAND =
-  "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=15";
+const NON_INTERACTIVE_SSH_OPTIONS =
+  "-o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=15";
+const NON_INTERACTIVE_SSH_COMMAND = `ssh ${NON_INTERACTIVE_SSH_OPTIONS}`;
 
 /**
  * Path-independent half of the hardened profile. `core.hooksPath` is appended
@@ -571,6 +574,77 @@ export async function createWslHardenedGit(
   });
 }
 
+const execFileAsync = promisify(execFile);
+const USER_SSH_COMMAND_TTL_MS = 60_000;
+let userSshCommand: { readAt: number; value: Promise<string | null> } | null = null;
+
+/**
+ * The user's own `core.sshCommand` with the non-interactive options placed
+ * straight after the program, so the user's own `-o BatchMode=no` (OpenSSH keeps
+ * the first value it sees) cannot undo them. Only a direct `ssh`/`ssh.exe` is
+ * taken; anything else (plink, a wrapper script) returns null and the pinned
+ * default is used instead.
+ */
+export function withNonInteractiveSshOptions(command: string): string | null {
+  const match = /^("[^"]+"|'[^']+'|\S+)([\s\S]*)$/.exec(command.trim());
+  if (!match) return null;
+  const program = match[1].replace(/^["']|["']$/g, "");
+  const base = program.split(/[\\/]/).pop()?.toLowerCase();
+  if (base !== "ssh" && base !== "ssh.exe") return null;
+  return `${match[1]} ${NON_INTERACTIVE_SSH_OPTIONS}${match[2]}`;
+}
+
+/**
+ * `core.sshCommand` from the user's global, else system, git config. Never the
+ * repository's: a repo must not choose the transport. Includes are not
+ * followed, since a global include can name a file a repository controls. An
+ * explicitly empty global value stops the lookup, as it does for git.
+ */
+async function readUserSshCommand(): Promise<string | null> {
+  for (const scope of ["--global", "--system"]) {
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["config", scope, "--no-includes", "--get", "core.sshCommand"],
+        {
+          cwd: os.tmpdir(),
+          env: getSanitizedProcessEnv(),
+          timeout: 3_000,
+          maxBuffer: 64 * 1024,
+          windowsHide: true,
+        }
+      );
+      return stdout.trim() || null;
+    } catch {
+      // Unset in this scope (git exits 1), or unreadable: try the next one.
+    }
+  }
+  return null;
+}
+
+/**
+ * The ssh program for credentialed git (clone, fetch, pull, push). The user's
+ * own `core.sshCommand` wins when it is a direct ssh: on Windows that is the
+ * only way to reach the Windows OpenSSH or 1Password agent, whose named pipes
+ * Git's bundled ssh cannot see. The hardened profile stays pinned.
+ */
+export async function resolveAuthenticatedSshCommand(): Promise<string> {
+  const now = Date.now();
+  if (!userSshCommand || now - userSshCommand.readAt > USER_SSH_COMMAND_TTL_MS) {
+    userSshCommand = { readAt: now, value: readUserSshCommand().catch(() => null) };
+  }
+  const configured = await userSshCommand.value;
+  return (configured && withNonInteractiveSshOptions(configured)) ?? NON_INTERACTIVE_SSH_COMMAND;
+}
+
+/** Prime the user's ssh command (null: none set); undefined re-reads git config. */
+export function _setUserSshCommandForTesting(value: string | null | undefined): void {
+  userSshCommand =
+    value === undefined
+      ? null
+      : { readAt: Number.POSITIVE_INFINITY, value: Promise.resolve(value) };
+}
+
 export interface AuthenticatedGitOptions {
   signal?: AbortSignal;
   progress?: (data: SimpleGitProgressEvent) => void;
@@ -583,6 +657,7 @@ export async function createAuthenticatedGit(
 ): Promise<SimpleGit> {
   const { signal, progress, extraConfig } = opts;
   const { simpleGit } = await simpleGitModule;
+  const sshCommand = await resolveAuthenticatedSshCommand();
   return simpleGit({
     baseDir: cwd,
     config: getAuthenticatedGitConfig(extraConfig),
@@ -597,7 +672,7 @@ export async function createAuthenticatedGit(
     LC_MESSAGES: "C",
     LANGUAGE: "",
     GIT_TERMINAL_PROMPT: "0",
-    GIT_SSH_COMMAND: NON_INTERACTIVE_SSH_COMMAND,
+    GIT_SSH_COMMAND: sshCommand,
     // Same lock-suppression and Windows-GCM hardening as createHardenedGit.
     // GIT_ASKPASS is intentionally NOT set here — credentialed commands
     // (clone/push) need legitimate ASKPASS resolution.
@@ -668,7 +743,7 @@ export async function createBackgroundFetchGit(
       LC_MESSAGES: "C",
       LANGUAGE: "",
       GIT_TERMINAL_PROMPT: "0",
-      GIT_SSH_COMMAND: NON_INTERACTIVE_SSH_COMMAND,
+      GIT_SSH_COMMAND: await resolveAuthenticatedSshCommand(),
       GIT_ASKPASS: "true",
       // simple-git's .env() replaces the env wholesale, so the hardening
       // flags from createAuthenticatedGit's first .env() call must be

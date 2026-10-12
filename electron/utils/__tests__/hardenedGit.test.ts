@@ -41,8 +41,15 @@ import {
   selectUserDataDir,
   toGitConfigPath,
   GIT_BLOCK_TIMEOUT_MS,
+  _setUserSshCommandForTesting,
 } from "../hardenedGit.js";
 import { simpleGit } from "simple-git";
+
+// The authenticated profile honours the user's own core.sshCommand; keep the
+// developer's git config out of these tests (hardenedGit.userSsh.test.ts covers it).
+beforeEach(() => {
+  _setUserSshCommandForTesting(null);
+});
 
 /**
  * Pull the generated `core.hooksPath` value out of a captured config array.
