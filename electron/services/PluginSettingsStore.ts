@@ -63,9 +63,30 @@ function isSecretEnvelope(value: unknown): value is SecretEnvelope {
  */
 const writeQueues = new Map<string, Promise<void>>();
 
-function queueWrite<T>(file: string, write: () => Promise<T>): Promise<T> {
-  const result = (writeQueues.get(file) ?? Promise.resolve()).then(write);
-  // A failed write must not stall the ones queued behind it.
+/**
+ * How many times each file has been wiped. A write remembers the count it was
+ * queued under and is dropped if a wipe came after: it was meant for settings
+ * that no longer exist, and landing would bring a deleted secret back.
+ */
+const wipeCounts = new Map<string, number>();
+
+/** Which wipe of its file a queued write belongs to. */
+interface WriteTicket {
+  file: string;
+  wipes: number;
+}
+
+function assertNotWiped(ticket: WriteTicket): void {
+  if ((wipeCounts.get(ticket.file) ?? 0) !== ticket.wipes) {
+    throw new Error(
+      "The plugin's settings were deleted before this change landed, so it wasn't saved"
+    );
+  }
+}
+
+function enqueue<T>(file: string, step: () => Promise<T>): Promise<T> {
+  const result = (writeQueues.get(file) ?? Promise.resolve()).then(step);
+  // A failed step must not stall the ones queued behind it.
   const tail = result.then(
     () => undefined,
     () => undefined
@@ -75,6 +96,29 @@ function queueWrite<T>(file: string, write: () => Promise<T>): Promise<T> {
     if (writeQueues.get(file) === tail) writeQueues.delete(file);
   });
   return result;
+}
+
+function queueWrite<T>(file: string, write: (ticket: WriteTicket) => Promise<T>): Promise<T> {
+  const ticket: WriteTicket = { file, wipes: wipeCounts.get(file) ?? 0 };
+  return enqueue(file, () => {
+    // Checked again before the write touches the file; this one spares a
+    // keychain prompt for a write that can no longer land.
+    assertNotWiped(ticket);
+    return write(ticket);
+  });
+}
+
+/**
+ * Delete a plugin's settings file for good, as an uninstall that wipes settings
+ * does. Queued behind the file's writes, and every write queued before it is
+ * dropped rather than written, even one that lands later because it was waiting
+ * on a keychain prompt; a background re-encrypt from a store the unload dropped
+ * is one of those. Writes queued after it are new settings and land as usual.
+ */
+export async function wipeSettingsFile(filePath: string): Promise<void> {
+  const file = path.resolve(filePath);
+  wipeCounts.set(file, (wipeCounts.get(file) ?? 0) + 1);
+  await enqueue(file, () => fs.rm(filePath, { force: true, maxRetries: 5, retryDelay: 100 }));
 }
 
 /** Per-call hint: when a key is declared `type: "secret"`, route it through the cipher. */
@@ -173,11 +217,16 @@ export class PluginSettingsStore {
    * the error rethrown.
    */
   async set<T = unknown>(key: string, value: T, options?: SecretOptions): Promise<boolean> {
-    return queueWrite(this.queueKey, () => this.doSet(key, value, options));
+    return queueWrite(this.queueKey, (ticket) => this.doSet(key, value, ticket, options));
   }
 
-  private async doSet<T>(key: string, value: T, options?: SecretOptions): Promise<boolean> {
-    if (options?.secret) return this.doSetSecret(key, value);
+  private async doSet<T>(
+    key: string,
+    value: T,
+    ticket: WriteTicket,
+    options?: SecretOptions
+  ): Promise<boolean> {
+    if (options?.secret) return this.doSetSecret(key, value, ticket);
 
     const cache = await this.load();
     // Detect a no-op before touching disk: an idempotent set should neither
@@ -187,16 +236,21 @@ export class PluginSettingsStore {
     // object can't diverge the cache from disk, and (b) the cache reflects what
     // actually persists (e.g. NaN/Infinity coerce to null under JSON, in memory
     // and on disk alike).
-    return this.commit(cache, key, cloneValue(value));
+    return this.commit(cache, key, cloneValue(value), ticket);
   }
 
   /** Set `key` in `cache` and persist it, rolling the cache back if the write fails. */
-  private async commit(cache: Map<string, unknown>, key: string, next: unknown): Promise<true> {
+  private async commit(
+    cache: Map<string, unknown>,
+    key: string,
+    next: unknown,
+    ticket: WriteTicket
+  ): Promise<true> {
     const had = cache.has(key);
     const prev = cache.get(key);
     cache.set(key, next);
     try {
-      await this.persist(cache);
+      await this.persist(cache, ticket);
     } catch (err) {
       if (had) cache.set(key, prev);
       else cache.delete(key);
@@ -218,7 +272,7 @@ export class PluginSettingsStore {
    * already-encrypted secret skips the write (ciphertext is non-deterministic, so
    * comparing raw envelopes would always look "changed").
    */
-  private async doSetSecret<T>(key: string, value: T): Promise<boolean> {
+  private async doSetSecret<T>(key: string, value: T, ticket: WriteTicket): Promise<boolean> {
     const stored = cloneValue(value);
     // The plaintext that actually gets encrypted: strings as-is, everything else
     // JSON-encoded (mirrors how the manager stringifies non-string secrets).
@@ -239,7 +293,7 @@ export class PluginSettingsStore {
     if (ciphertext === null) throw new Error(secretWriteRefusal(key, this.cipher.tier()));
     // The keychain can take a while to answer, so write into the snapshot as it
     // is now rather than the one read before it.
-    return this.commit(await this.load(), key, asyncEnvelope(ciphertext));
+    return this.commit(await this.load(), key, asyncEnvelope(ciphertext), ticket);
   }
 
   /**
@@ -265,7 +319,7 @@ export class PluginSettingsStore {
    * now, the old ciphertext stays and still reads.
    */
   private reencryptInBackground(key: string, read: SecretEnvelope, plaintext: string): void {
-    void queueWrite(this.queueKey, async () => {
+    void queueWrite(this.queueKey, async (ticket) => {
       if (!storesEnvelope(await this.load(), key, read)) return;
       const ciphertext = await this.cipher.encrypt(plaintext);
       if (ciphertext === null) return;
@@ -273,7 +327,7 @@ export class PluginSettingsStore {
       // between, so nothing can replace the envelope after the check.
       const cache = await this.load();
       if (storesEnvelope(cache, key, read)) {
-        await this.commit(cache, key, asyncEnvelope(ciphertext));
+        await this.commit(cache, key, asyncEnvelope(ciphertext), ticket);
       }
     }).catch(() => undefined);
   }
@@ -286,16 +340,16 @@ export class PluginSettingsStore {
    * concurrent set/delete can't interleave.
    */
   async delete(key: string): Promise<boolean> {
-    return queueWrite(this.queueKey, () => this.doDelete(key));
+    return queueWrite(this.queueKey, (ticket) => this.doDelete(key, ticket));
   }
 
-  private async doDelete(key: string): Promise<boolean> {
+  private async doDelete(key: string, ticket: WriteTicket): Promise<boolean> {
     const cache = await this.load();
     if (!cache.has(key)) return false;
     const prev = cache.get(key);
     cache.delete(key);
     try {
-      await this.persist(cache);
+      await this.persist(cache, ticket);
     } catch (err) {
       cache.set(key, prev);
       throw err;
@@ -377,7 +431,10 @@ export class PluginSettingsStore {
     return { map: new Map(Object.entries(parsed as Record<string, unknown>)), signature };
   }
 
-  private async persist(cache: Map<string, unknown>): Promise<void> {
+  private async persist(cache: Map<string, unknown>, ticket: WriteTicket): Promise<void> {
+    // Last check before the file is written: the keychain answering a write
+    // queued before a wipe must not put the wiped file back.
+    assertNotWiped(ticket);
     // Null-prototype target so a literal `__proto__` key (a valid storage key,
     // since storage keys are undeclared) becomes an own enumerable property
     // instead of silently mutating Object.prototype — which would drop the value

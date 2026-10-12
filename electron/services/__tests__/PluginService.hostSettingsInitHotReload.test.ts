@@ -398,8 +398,10 @@ describe("createHost — settings", () => {
     const cb = vi.fn();
     await host.settings.onDidChange("token", cb, "project");
 
+    // Linux has no keyring backend here; macOS reads an encrypt with no key as
+    // a Keychain unavailable this session. Either way the secret isn't saved.
     await expect(host.settings.set("token", "sk-host", "project")).rejects.toThrow(
-      /Secure storage is unavailable/
+      /so the secret "token" wasn't saved/
     );
 
     await expect(fs.access(path.join(projectDir, ".daintree"))).rejects.toThrow();

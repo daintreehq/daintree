@@ -100,8 +100,10 @@ function prefixOf(ciphertext: Buffer): string {
  * How the keychain failed this session, once it has. Electron builds its async
  * encryptor once per process, so a keychain that gave it no key (an unlock
  * prompt dismissed or failed) gives none for the rest of the run, and nothing
- * asks again until Daintree restarts. DPAPI has no prompt to dismiss, so on
- * Windows a failure just means there is no keychain to use.
+ * asks again until Daintree restarts. Chromium's Keychain provider reports a
+ * denial and any other Keychain error alike, so on macOS this says only that
+ * the Keychain wasn't available. DPAPI has no prompt to dismiss, so on Windows
+ * a failure just means there is no keychain to use.
  */
 let sessionFailure: "locked" | "unavailable" | null = null;
 
@@ -115,24 +117,29 @@ function noteKeychainKey(keyed: boolean): void {
   else sessionFailure = process.platform === "win32" ? "unavailable" : "locked";
 }
 
-const ASK_AGAIN = "restart Daintree to be asked again";
-
-function lockedReason(): string {
+/** What stopped this session getting a key, and what a restart will do about it. */
+function lockedWords(): { why: string; fix: string } {
   return process.platform === "darwin"
-    ? "Keychain access was denied this session"
-    : "The keyring wasn't unlocked this session";
+    ? { why: "The Keychain wasn't available this session", fix: "restart Daintree to try again" }
+    : {
+        why: "The keyring wasn't unlocked this session",
+        fix: "restart Daintree to be asked again",
+      };
 }
 
 /** Why a secret write was refused at `tier`, in words for the person who tried it. */
 export function secretWriteRefusal(key: string, tier: SecretStorageTier): string {
-  return tier === "locked"
-    ? `${lockedReason()}, so the secret "${key}" wasn't saved — ${ASK_AGAIN}`
-    : `Secure storage is unavailable on this device, so the secret "${key}" wasn't saved`;
+  if (tier !== "locked") {
+    return `Secure storage is unavailable on this device, so the secret "${key}" wasn't saved`;
+  }
+  const { why, fix } = lockedWords();
+  return `${why}, so the secret "${key}" wasn't saved — ${fix}`;
 }
 
 function readRefusal(cause?: unknown): unknown {
   if (sessionFailure === "locked") {
-    return new Error(`${lockedReason()}, so the secret couldn't be read — ${ASK_AGAIN}`);
+    const { why, fix } = lockedWords();
+    return new Error(`${why}, so the secret couldn't be read — ${fix}`);
   }
   return cause ?? new Error("Secure storage is unavailable, so the secret couldn't be read");
 }
@@ -205,6 +212,10 @@ function needsSyncKey(ciphertext: Buffer): boolean {
  */
 export const safeStorageCipher: SecretCipher = {
   tier() {
+    // What this session already learned stands until restart, and answering
+    // from it keeps the sync check below from going back to a Keychain that
+    // just refused, on the main thread.
+    if (sessionFailure !== null) return sessionFailure;
     // On Linux isEncryptionAvailable() fetches the key synchronously and holds
     // the main thread on a keyring prompt (autologin, a locked or missing
     // keyring) until the watchdog kills the app. The settings view only needs
@@ -213,8 +224,7 @@ export const safeStorageCipher: SecretCipher = {
       process.platform === "linux"
         ? isLinuxKeyringBackend(linuxBackend() ?? "")
         : keychainAvailable();
-    if (!present) return "unavailable";
-    return sessionFailure ?? "keychain";
+    return present ? "keychain" : "unavailable";
   },
   async encrypt(plaintext) {
     return (await encryptWithKeychain(plaintext))?.toString("base64") ?? null;

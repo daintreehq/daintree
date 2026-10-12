@@ -113,15 +113,30 @@ describe("a keychain that gave no key this session", () => {
     });
   });
 
-  it("reads as locked on macOS once Keychain access was denied", async () => {
+  // Chromium's Keychain provider reports a denial and any other Keychain error
+  // alike, so the words claim only that the Keychain wasn't available.
+  it("reads as locked on macOS once the Keychain gave no key", async () => {
     setPlatform("darwin");
     safeStorageMock.encryptStringAsync.mockRejectedValue(new Error("Error while encrypting"));
 
     expect(await safeStorageCipher.encrypt("hunter2")).toBeNull();
     expect(safeStorageCipher.tier()).toBe("locked");
     expect(secretWriteRefusal("apiKey", "locked")).toBe(
-      `Keychain access was denied this session, so the secret "apiKey" wasn't saved — restart Daintree to be asked again`
+      `The Keychain wasn't available this session, so the secret "apiKey" wasn't saved — restart Daintree to try again`
     );
+  });
+
+  // The sync check would ask the Keychain again on the main thread, and a
+  // Keychain still refusing would read as no keychain at all, hiding the restart.
+  it("answers the tier from the session on macOS without the sync Keychain check", async () => {
+    setPlatform("darwin");
+    safeStorageMock.encryptStringAsync.mockRejectedValue(new Error("Error while encrypting"));
+    await safeStorageCipher.encrypt("hunter2");
+    safeStorageMock.isEncryptionAvailable.mockReset();
+    safeStorageMock.isEncryptionAvailable.mockReturnValue(false);
+
+    expect(safeStorageCipher.tier()).toBe("locked");
+    expect(safeStorageMock.isEncryptionAvailable).not.toHaveBeenCalled();
   });
 
   // DPAPI has no prompt to dismiss, so a restart wouldn't change anything.
@@ -430,7 +445,7 @@ describe("safeStorageCipher decrypt", () => {
 
     // The sync API would block the main thread on the Keychain prompt the
     // async one couldn't get past.
-    it("keeps a denied Keychain from reaching the sync API, and says so", async () => {
+    it("keeps an unavailable Keychain from reaching the sync API, and says so", async () => {
       safeStorageMock.decryptStringAsync.mockRejectedValue(
         new Error("safeStorage.decryptStringAsync is temporarily unavailable")
       );
@@ -439,7 +454,7 @@ describe("safeStorageCipher decrypt", () => {
       await expect(
         safeStorageCipher.decrypt(b64(sealed("v10", "hunter2")), { legacy: true })
       ).rejects.toThrow(
-        "Keychain access was denied this session, so the secret couldn't be read — restart Daintree to be asked again"
+        "The Keychain wasn't available this session, so the secret couldn't be read — restart Daintree to try again"
       );
       expect(safeStorageMock.decryptString).not.toHaveBeenCalled();
     });

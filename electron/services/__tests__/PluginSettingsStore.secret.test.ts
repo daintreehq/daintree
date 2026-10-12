@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import { PluginSettingsStore } from "../PluginSettingsStore.js";
+import { PluginSettingsStore, wipeSettingsFile } from "../PluginSettingsStore.js";
 import {
   SecretStorageTimeoutError,
   type DecryptedSecret,
@@ -125,14 +125,16 @@ describe("PluginSettingsStore secret tier", () => {
 
   // Electron asks for the keychain once per run, so a retry can't get past a
   // dismissed prompt; the refusal says what will.
-  it("refuses a write the session's locked keychain can't take, saying a restart asks again", async () => {
+  // The exact words are the platform's (keyring or Keychain); secretCipher's
+  // tests pin each.
+  it("refuses a write the session's locked keychain can't take, saying a restart is the way", async () => {
     const filePath = path.join(tmpDir, "acme.plugin.json");
     const cipher = fakeCipher(false);
     cipher.tier = () => "locked";
     const store = new PluginSettingsStore(filePath, cipher);
 
     await expect(store.set("token", "sk-1", { secret: true })).rejects.toThrow(
-      /this session, so the secret "token" wasn't saved — restart Daintree to be asked again$/
+      /this session, so the secret "token" wasn't saved — restart Daintree to /
     );
     await expect(fs.access(filePath)).rejects.toThrow();
   });
@@ -241,6 +243,71 @@ describe("PluginSettingsStore secret tier", () => {
     await store.set("token", "sk-1", { secret: true });
     const rawValue = await store.get<{ __daintreeSecret?: string }>("token");
     expect(rawValue?.__daintreeSecret).toBe("daintree:secret:v1");
+  });
+});
+
+// Uninstalling with "delete settings" drops the plugin's stores, but a write one
+// queued can still be waiting on the keychain when the file is deleted.
+describe("wiping a settings file", () => {
+  /** A cipher whose next encrypt waits until released. */
+  function heldCipher() {
+    const cipher = fakeCipher(true);
+    const encrypt = cipher.encrypt.bind(cipher);
+    const reached = deferred();
+    const release = deferred();
+    cipher.encrypt = async (plaintext) => {
+      reached.resolve();
+      await release.promise;
+      return encrypt(plaintext);
+    };
+    return { cipher, reached, release };
+  }
+
+  it("drops a secret write still waiting on the keychain instead of recreating the file", async () => {
+    const filePath = path.join(tmpDir, "acme.plugin.json");
+    await fs.writeFile(filePath, JSON.stringify({ endpoint: "https://x" }), "utf-8");
+    const { cipher, reached, release } = heldCipher();
+    const store = new PluginSettingsStore(filePath, cipher);
+
+    const write = store.set("token", "sk-1", { secret: true });
+    await reached.promise;
+    const wipe = wipeSettingsFile(filePath);
+    release.resolve();
+
+    await expect(write).rejects.toThrow(/settings were deleted before this change landed/);
+    await wipe;
+    await expect(fs.access(filePath)).rejects.toThrow();
+  });
+
+  it("drops a background re-encrypt a dropped store queued before the wipe", async () => {
+    const filePath = path.join(tmpDir, "acme.plugin.json");
+    await fs.writeFile(filePath, JSON.stringify({ token: legacyEnvelope("sk-old") }), "utf-8");
+    const { cipher, reached, release } = heldCipher();
+    cipher.stale.add(seal("sk-old"));
+    const store = new PluginSettingsStore(filePath, cipher);
+
+    expect(await store.get<string>("token", { secret: true })).toBe("sk-old");
+    await reached.promise;
+    const wipe = wipeSettingsFile(filePath);
+    release.resolve();
+    await wipe;
+
+    await expect(fs.access(filePath)).rejects.toThrow();
+  });
+
+  it("lets settings saved after the wipe land, from the same store or a new one", async () => {
+    const filePath = path.join(tmpDir, "acme.plugin.json");
+    const old = new PluginSettingsStore(filePath, fakeCipher(true));
+    await old.set("token", "sk-old", { secret: true });
+
+    await wipeSettingsFile(filePath);
+    await expect(fs.access(filePath)).rejects.toThrow();
+
+    const reinstalled = new PluginSettingsStore(filePath, fakeCipher(true));
+    expect(await reinstalled.set("token", "sk-new", { secret: true })).toBe(true);
+    expect(await reinstalled.get<string>("token", { secret: true })).toBe("sk-new");
+    expect(await old.set("endpoint", "https://x")).toBe(true);
+    expect(await readRaw(filePath)).toMatchObject({ endpoint: "https://x" });
   });
 });
 

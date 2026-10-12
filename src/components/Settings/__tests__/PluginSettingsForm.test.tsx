@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { dispatchEscape, registerEscape } from "@/lib/escapeStack";
 import { createContext, use } from "react";
 import type { ReactNode } from "react";
-import { PluginSettingsForm } from "../PluginSettingsForm";
+import { PluginSettingsForm, lockedSecretStorageText } from "../PluginSettingsForm";
 import type {
   LoadedPluginInfo,
   PluginSettingsUiValues,
@@ -891,5 +891,26 @@ describe("PluginSettingsForm", () => {
     const input = (await screen.findByLabelText("Storage folder")) as HTMLInputElement;
     await waitFor(() => expect(input.value).toBe("/Users/x/notes"));
     expect(pluginApi.pathExists).not.toHaveBeenCalled();
+  });
+});
+
+describe("a keychain that gave no key this session", () => {
+  it("tells a Linux user the keyring stayed locked and that a restart asks again", () => {
+    expect(lockedSecretStorageText(null, "linux")).toBe(
+      "Keyring not unlocked this session — restart Daintree to be asked again"
+    );
+  });
+
+  // Chromium reports a refusal and any other Keychain error alike.
+  it("claims no more than an unavailable Keychain on macOS", () => {
+    expect(lockedSecretStorageText(null, "darwin")).toBe(
+      "Keychain not available this session — restart Daintree to try again"
+    );
+  });
+
+  it("names the host and restarts Daintree there for a remote window", () => {
+    expect(lockedSecretStorageText({ name: "studio-01" }, "darwin")).toBe(
+      "Keychain on studio-01 not available this session — restart Daintree there to try again"
+    );
   });
 });
