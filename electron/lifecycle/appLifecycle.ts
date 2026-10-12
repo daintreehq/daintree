@@ -16,7 +16,7 @@ import { dispatchOpenDirPath, hasOpenDirConsumer } from "../setup/environment.js
 import { isHostModeRequested } from "../boot/hostModeLaunch.js";
 
 const DISABLE_GPU_CRASH_LIMIT_SWITCH = "disable-gpu-process-crash-limit";
-const SIGNAL_ECHO_WINDOW_MS = 500;
+const SIGNAL_ECHO_WINDOW_MS = 100;
 
 const CLI_PATH_FLAG = "--cli-path";
 const CLI_PATH_PREFIX = `${CLI_PATH_FLAG}=`;
@@ -305,20 +305,24 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   // CrashRecoveryService on next startup.
   let firstSignalTime: number | null = null;
   let firstSignal: NodeJS.Signals | undefined;
+  // When the first signal's dispatch finished; until then, and briefly after,
+  // a repeat of the same signal is an echo. when-exit and signal-exit re-raise
+  // the signal at this process from their own listeners, so the echo is queued
+  // during that dispatch — however long app.quit()'s synchronous prefix takes.
+  let echoUntil: number | null = null;
   const signalHandler = (signal?: NodeJS.Signals) => {
     if (firstSignalTime !== null) {
-      const since = Date.now() - firstSignalTime;
-      // signal-exit re-raises a signal at this process within milliseconds when
-      // its listener count happens to match its hook count; that echo of the
-      // same signal isn't a user asking twice.
-      const echo = signal === firstSignal && since < SIGNAL_ECHO_WINDOW_MS;
-      if (!echo && since < 2000) {
+      const echo = signal === firstSignal && (echoUntil === null || Date.now() < echoUntil);
+      if (!echo && Date.now() - firstSignalTime < 2000) {
         process.exit(1);
       }
       return;
     }
     firstSignalTime = Date.now();
     firstSignal = signal;
+    setImmediate(() => {
+      echoUntil = Date.now() + SIGNAL_ECHO_WINDOW_MS;
+    });
     setSignalShutdown();
     // Chromium aborts the browser ("GPU process isn't usable. Goodbye.") once
     // relaunches of a lost GPU process have used up every fallback mode, and a
@@ -350,7 +354,8 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   // listeners are taken off and put back, ours first: that reinstalls libuv's
   // handler after Electron's. SIGUSR2 is Node's alone.
   const takeSignal = (signal: NodeJS.Signals) => {
-    const existing = process.listeners(signal);
+    // rawListeners keeps `once` wrappers, so one-shot listeners stay one-shot.
+    const existing = process.rawListeners(signal) as ((...args: unknown[]) => void)[];
     process.removeAllListeners(signal);
     process.on(signal, signalHandler);
     for (const listener of existing) process.on(signal, listener);

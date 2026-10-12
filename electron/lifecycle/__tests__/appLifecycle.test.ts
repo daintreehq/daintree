@@ -99,7 +99,7 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     vi.useFakeTimers();
     processOnSpy = vi.spyOn(process, "on").mockImplementation(() => process);
     // The runner's own signal listeners must survive the re-arm.
-    processListenersSpy = vi.spyOn(process, "listeners").mockReturnValue([]);
+    processListenersSpy = vi.spyOn(process, "rawListeners").mockReturnValue([]);
     removeAllListenersSpy = vi
       .spyOn(process, "removeAllListeners")
       .mockImplementation(() => process);
@@ -151,6 +151,8 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
   // its handler when a signal goes from no listeners to one.
   it("re-arms each termination signal with its earlier listeners kept after ours", async () => {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    // rawListeners hands back a `once` listener's wrapper; re-adding that same
+    // wrapper keeps it one-shot.
     const earlier = vi.fn();
     processListenersSpy.mockImplementation((sig: string) => (sig === "SIGTERM" ? [earlier] : []));
     appMock.isPackaged = true;
@@ -266,20 +268,21 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     registerAppLifecycleHandlers(makeOpts());
 
     const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
-    const handler = sigTermCall![1] as () => void;
+    const handler = sigTermCall![1] as (signal: string) => void;
 
-    handler();
-    vi.setSystemTime(new Date(1_000_600));
-    handler();
+    handler("SIGTERM");
+    vi.advanceTimersByTime(1); // the first dispatch has finished
+    vi.setSystemTime(new Date(1_000_200));
+    handler("SIGTERM");
 
     expect(setSignalShutdownMock).toHaveBeenCalledOnce();
     expect(appMock.quit).toHaveBeenCalledOnce();
     expect(processExitSpy).toHaveBeenCalledWith(1);
   });
 
-  // signal-exit re-raises the signal at this process when its listener count
-  // matches its hook count; live, that made every SIGTERM exit with status 1.
-  it("ignores the same signal echoed back within 500ms", async () => {
+  // signal-exit and when-exit re-raise the signal at this process from their
+  // own listeners; live, that made every SIGTERM exit with status 1.
+  it("ignores the same signal echoed back, however long the quit's synchronous part took", async () => {
     vi.setSystemTime(new Date(1_000_000));
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     registerAppLifecycleHandlers(makeOpts());
@@ -288,7 +291,11 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     const handler = sigTermCall![1] as (signal: string) => void;
 
     handler("SIGTERM");
-    vi.setSystemTime(new Date(1_000_005));
+    // Still inside the first dispatch, 800 ms of synchronous persistence later.
+    vi.setSystemTime(new Date(1_000_800));
+    handler("SIGTERM");
+    // And just after it.
+    vi.advanceTimersByTime(1);
     handler("SIGTERM");
 
     expect(appMock.quit).toHaveBeenCalledOnce();
@@ -301,13 +308,14 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     registerAppLifecycleHandlers(makeOpts());
 
     const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
-    const handler = sigTermCall![1] as () => void;
+    const handler = sigTermCall![1] as (signal: string) => void;
 
-    handler();
+    handler("SIGTERM");
+    vi.advanceTimersByTime(1);
     // 1ms inside the 2000ms exclusive boundary — must force-exit. Pins the
     // `<` boundary so an accidental change to `<=` would surface here.
     vi.setSystemTime(new Date(1_001_999));
-    handler();
+    handler("SIGTERM");
 
     expect(processExitSpy).toHaveBeenCalledWith(1);
   });

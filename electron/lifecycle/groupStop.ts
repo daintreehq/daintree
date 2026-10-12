@@ -253,7 +253,14 @@ function recheckAfterDeath(): void {
 
 function evaluate(when: string): boolean {
   if (finished) return true;
+  // Evidence only counts inside the window: a death long after the signal is
+  // the graceful shutdown's own doing, or unrelated, and must not cut it short.
+  if (signalAt !== null && Date.now() - signalAt > GROUP_STOP_WINDOW_MS) return false;
+  // Where the zygotes can be watched they decide: a GPU or service process
+  // killed next to the signal, with the zygotes healthy, isn't a group stop.
+  const zygotesDecide = probeChildren === probeZygotes ? zygotes.length > 0 : testZygotesKnown;
   const killNearSignal =
+    !zygotesDecide &&
     lastChildSignalKillAt !== null &&
     signalAt !== null &&
     Math.abs(lastChildSignalKillAt - signalAt) <= GROUP_STOP_WINDOW_MS;
@@ -327,8 +334,14 @@ export function finishIfGroupStop(now = Date.now()): boolean {
   return false;
 }
 
-export function setChromiumChildProbeForTests(probe: (() => ChildProbe) | null): void {
+let testZygotesKnown = false;
+
+export function setChromiumChildProbeForTests(
+  probe: (() => ChildProbe) | null,
+  zygotesKnown = false
+): void {
   probeChildren = probe ?? probeZygotes;
+  testZygotesKnown = zygotesKnown;
 }
 
 export function resetGroupStopForTests(): void {
@@ -341,4 +354,5 @@ export function resetGroupStopForTests(): void {
   recognised = false;
   lastProbe = { terminating: false, summary: "none" };
   probeChildren = probeZygotes;
+  testZygotesKnown = false;
 }

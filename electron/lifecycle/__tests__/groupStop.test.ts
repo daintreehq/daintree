@@ -242,6 +242,29 @@ describe("group stop detection", () => {
     expect(finisher).not.toHaveBeenCalled();
   });
 
+  // Shutdown's own work kills children long after the signal; only the window counts.
+  it("ignores a death once the window after Main's signal has passed", async () => {
+    finishIfGroupStop();
+    await vi.advanceTimersByTimeAsync(GROUP_STOP_WINDOW_MS + 100);
+
+    zygotesTerminating = true;
+    noteRendererGone();
+    noteChildProcessGone(gpuKilled);
+    await runDeferred();
+
+    expect(finisher).not.toHaveBeenCalled();
+  });
+
+  it("lets healthy zygotes outweigh a GPU process killed next to the signal", async () => {
+    setChromiumChildProbeForTests(() => ({ terminating: false, summary: "76904=running" }), true);
+    finishIfGroupStop();
+
+    noteChildProcessGone(gpuKilled);
+    await runDeferred();
+
+    expect(finisher).not.toHaveBeenCalled();
+  });
+
   it("does not poll when there are no zygotes to look at", () => {
     setChromiumChildProbeForTests(null);
 
