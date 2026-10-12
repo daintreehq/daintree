@@ -825,6 +825,9 @@ describe("pty-host adversarial", () => {
   });
 
   it("SIGTERM_RUNS_TEARDOWN_ONCE_AND_EXITS_SIGNALLED (#13167)", async () => {
+    // The POSIX contract: teardown and exit in the signal's own tick. Windows
+    // awaits its exit batch first (WINDOWS_* cases below).
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     const parentPort = await loadHost();
     const manager = hostState.currentPtyManager as MiniEmitter & { dispose: TestMock };
     const hostSigterm = process
