@@ -22,6 +22,7 @@ import {
   escapeTerminalFocus,
   hasVisibleFocusIndicator,
 } from "../../helpers/keyboard-audit";
+import { NEW_TERMINAL_CHORD } from "../../helpers/shortcuts";
 
 // One launch for security, accessibility and focus management: the welcome
 // screen first (security invariants and its axe audit, while exactly one
@@ -221,7 +222,7 @@ test.describe("Core: Accessibility and focus", () => {
         const { window } = ctx;
         const before = await getGridPanelCount(window);
 
-        await window.keyboard.press(`${mod}+Alt+t`);
+        await window.keyboard.press(NEW_TERMINAL_CHORD);
         await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
         await window
           .locator(SEL.terminal.xtermRows)
@@ -403,7 +404,7 @@ test.describe("Core: Accessibility and focus", () => {
         await ensureWindowFocused(ctx.app);
 
         const before = await getGridPanelCount(window);
-        await window.keyboard.press(`${mod}+Alt+t`);
+        await window.keyboard.press(NEW_TERMINAL_CHORD);
         await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
         const panel = window.locator(SEL.panel.gridPanel).nth(before);
         await panel.locator(SEL.terminal.xtermRows).waitFor({
@@ -583,7 +584,7 @@ test.describe("Core: Accessibility and focus", () => {
 
         await test.step("Open a terminal and focus it", async () => {
           const before = await getGridPanelCount(window);
-          await window.keyboard.press(`${mod}+Alt+t`);
+          await window.keyboard.press(NEW_TERMINAL_CHORD);
           await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
           await window
             .locator(SEL.terminal.xtermRows)
@@ -678,7 +679,7 @@ test.describe("Core: Accessibility and focus", () => {
 
         await test.step("Open a second terminal so two panels are present", async () => {
           before = await getGridPanelCount(window);
-          await window.keyboard.press(`${mod}+Alt+t`);
+          await window.keyboard.press(NEW_TERMINAL_CHORD);
           await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
           await window
             .locator(SEL.panel.gridPanel)
@@ -723,7 +724,7 @@ test.describe("Core: Accessibility and focus", () => {
         await test.step("Focus terminal as the underlying focus target", async () => {
           if (!(await panel.locator(SEL.terminal.xtermRows).isVisible())) {
             const before = await getGridPanelCount(window);
-            await window.keyboard.press(`${mod}+Alt+t`);
+            await window.keyboard.press(NEW_TERMINAL_CHORD);
             await expect
               .poll(() => getGridPanelCount(window), { timeout: T_LONG })
               .toBeGreaterThan(before);

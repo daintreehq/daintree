@@ -87,6 +87,7 @@ const BENCH_PLUGIN_READY = `${BENCH_PLUGIN_ROOT} [data-testid="ilat-plugin-butto
 const BENCH_PLUGIN_VIEW = String.raw`
 import { createElement as h } from "react";
 import { Button, Icon, useDaintreeTheme } from "@daintreehq/plugin-ui";
+import { NEW_TERMINAL_CHORD } from "../helpers/shortcuts";
 export default function View() {
   const theme = useDaintreeTheme();
   return h(
@@ -1223,7 +1224,7 @@ function scenarios(): Scenario[] {
         await spawnCooldown();
         await snapshotPanels();
       },
-      trigger: () => page.keyboard.press(`${MOD}+Alt+t`),
+      trigger: () => page.keyboard.press(NEW_TERMINAL_CHORD),
       cond: () => ({ kind: "newPanel", bufferText: "ilat%" }),
       after: killNewPanels,
     },
