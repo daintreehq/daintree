@@ -1183,7 +1183,8 @@ export class TerminalProcess {
     //
     // Windows is excluded (#9551): there is no ptmx fd to release, and node-pty's
     // WindowsTerminal.kill()/destroy() are *deferred* native kills that race the
-    // taskkill-driven natural exit run by processTreeKiller above. Adding a
+    // tree-kill-driven natural exit run by processTreeKiller, which releases the
+    // pseudoconsole itself once its kill has finished. Adding a
     // pty.kill() here can land on an already-freed pseudoconsole handle and
     // crash the pty-host with STATUS_HEAP_CORRUPTION (0xC0000374). Skipping it
     // restores the proven pre-#9539 Windows teardown, where processTreeKiller +

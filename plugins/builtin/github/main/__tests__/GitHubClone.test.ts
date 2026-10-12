@@ -6,11 +6,12 @@ const childProcessMock = vi.hoisted(() => ({
   spawn: vi.fn(),
   execFile: vi.fn(),
 }));
-const treeKillMock = vi.hoisted(() => vi.fn());
+const treeKillMock = vi.hoisted(() => vi.fn((..._args: unknown[]) => Promise.resolve(null)));
 
 vi.mock("child_process", () => childProcessMock);
-vi.mock("../../../../../electron/utils/windowsTreeKill.js", () => ({
-  killWindowsProcessTreeSync: treeKillMock,
+vi.mock("../../../../../electron/utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../../electron/utils/windowsTreeKill.js")>()),
+  killWindowsProcessTreeInBackground: treeKillMock,
 }));
 
 vi.mock("../GitHubRepoContext.js", () => ({
@@ -195,11 +196,52 @@ describe("GitHubClone — cloneRepository", () => {
 
     await expect(clonePromise).rejects.toThrow(/Clone cancelled/);
     if (process.platform === "win32") {
-      expect(treeKillMock).toHaveBeenCalledWith(12345);
+      expect(treeKillMock).toHaveBeenCalledWith(
+        expect.objectContaining({ pid: 12345 }),
+        "[GitHubClone]"
+      );
     } else {
       expect(killSpy).toHaveBeenCalledWith(-12345, "SIGTERM");
     }
     killSpy.mockRestore();
+  });
+
+  it("on Windows, cancels without blocking and settles only once the tree is gone", async () => {
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      let treeGone: (value: null) => void = () => {};
+      treeKillMock.mockImplementationOnce(() => new Promise((resolve) => (treeGone = resolve)));
+      let capturedChild: FakeChildProcess | undefined;
+      childProcessMock.spawn.mockImplementation(() => {
+        capturedChild = new FakeChildProcess();
+        return capturedChild;
+      });
+      const controller = new AbortController();
+      let settled = false;
+      const clonePromise = cloneCapability.cloneRepository!(
+        "https://github.com/owner/repo",
+        TARGET_DIR,
+        { signal: controller.signal }
+      ).finally(() => {
+        settled = true;
+      });
+
+      await new Promise((r) => setTimeout(r, 5));
+      controller.abort();
+      controller.abort();
+      capturedChild?.emit("close", null);
+      await new Promise((r) => setTimeout(r, 5));
+
+      // The caller removes the partial clone next; the tree's .git handles
+      // would refuse that until every member has exited.
+      expect(settled).toBe(false);
+      expect(treeKillMock).toHaveBeenCalledTimes(1);
+      treeGone(null);
+      await expect(clonePromise).rejects.toThrow(/Clone cancelled/);
+    } finally {
+      Object.defineProperty(process, "platform", original);
+    }
   });
 
   it("rejects immediately when the signal is already aborted", async () => {

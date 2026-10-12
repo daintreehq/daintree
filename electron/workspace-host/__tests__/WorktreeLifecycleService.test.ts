@@ -17,8 +17,9 @@ vi.mock("child_process", () => ({
   spawn: vi.fn(),
 }));
 
-vi.mock("../../utils/windowsTreeKill.js", () => ({
-  killWindowsProcessTreeSync: vi.fn(),
+vi.mock("../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsTreeKill.js")>()),
+  killWindowsProcessTreeInBackground: vi.fn(() => Promise.resolve(null)),
 }));
 
 vi.mock("../../utils/fs.js", () => ({
@@ -54,7 +55,7 @@ describe("WorktreeLifecycleService", () => {
     const childProcessModule = await import("child_process");
     mockSpawn = vi.mocked(childProcessModule.spawn);
     mockTreeKill = vi.mocked(
-      (await import("../../utils/windowsTreeKill.js")).killWindowsProcessTreeSync
+      (await import("../../utils/windowsTreeKill.js")).killWindowsProcessTreeInBackground
     );
 
     const { WorktreeLifecycleService } = await import("../WorktreeLifecycleService.js");
@@ -576,7 +577,10 @@ describe("WorktreeLifecycleService", () => {
         // Advance past the timeout
         vi.advanceTimersByTime(1001);
 
-        expect(mockTreeKill).toHaveBeenCalledWith(12345);
+        expect(mockTreeKill).toHaveBeenCalledWith(
+          expect.objectContaining({ pid: 12345 }),
+          "[WorktreeLifecycle]"
+        );
 
         // Emit close to resolve the promise
         listeners["close"]?.forEach((cb) => cb(1));

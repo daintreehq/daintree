@@ -6,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const treeKillMock = vi.hoisted(() =>
-  vi.fn(() => ({ mode: "tree", targeted: [], failed: [], stale: [], rootEnded: true }))
+  vi.fn<(target: unknown, tag: string, options: unknown) => Promise<null>>(() =>
+    Promise.resolve(null)
+  )
 );
 
 vi.mock("child_process", () => ({
@@ -15,8 +17,15 @@ vi.mock("child_process", () => ({
 
 vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
-  killWindowsProcessTreeSync: treeKillMock,
+  killWindowsProcessTreeInBackground: treeKillMock,
 }));
+
+/** The Windows reap: in the background, tagged, bounded. */
+function expectWindowsReap(pid: number): void {
+  expect(treeKillMock).toHaveBeenCalledWith(expect.objectContaining({ pid }), "[CodexAppServer]", {
+    timeoutMs: 3000,
+  });
+}
 
 vi.mock("../../../utils/spawnEnv.js", () => ({
   buildProbeEnv: () => ({ PATH: "/usr/bin" }),
@@ -241,13 +250,33 @@ describe("runCodexAppServerSession", () => {
     await startSession(async () => "done");
 
     if (process.platform === "win32") {
-      expect(treeKillMock).toHaveBeenCalledWith(child.pid, { timeoutMs: 3000 });
+      expectWindowsReap(child.pid);
     } else {
       // Negative pid = whole group, so a grandchild holding the pipe goes too.
       expect(killSpy).toHaveBeenCalledWith(-child.pid, "SIGKILL");
     }
+    await flush();
     expect(child.stdin.ended).toBe(true);
     expect(child.stdout.destroyed).toBe(true);
+  });
+
+  it("on Windows, reaps in the background and keeps stdin open until the reap settles", async () => {
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    let settle: (value: null) => void = () => {};
+    treeKillMock.mockImplementationOnce(() => new Promise((resolve) => (settle = resolve)));
+    try {
+      await startSession(async () => "done");
+
+      expectWindowsReap(child.pid);
+      // EOF on stdin ends an app-server, and the tree walk starts from it.
+      expect(child.stdin.ended).toBe(false);
+      settle(null);
+      await flush();
+      expect(child.stdin.ended).toBe(true);
+    } finally {
+      Object.defineProperty(process, "platform", original);
+    }
   });
 
   it("keeps stream error sinks alive after teardown so a late EIO is not fatal", async () => {
@@ -405,7 +434,7 @@ describe("runCodexAppServerSession", () => {
     expect(error).toBeInstanceOf(CodexAppServerError);
     expect((error as CodexAppServerError).reason).toBe("timeout");
     if (process.platform === "win32") {
-      expect(treeKillMock).toHaveBeenCalledWith(child.pid, { timeoutMs: 3000 });
+      expectWindowsReap(child.pid);
     } else {
       expect(killSpy).toHaveBeenCalledWith(-child.pid, "SIGKILL");
     }

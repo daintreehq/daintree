@@ -43,7 +43,9 @@ import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { buildInstallEnv } from "../utils/spawnEnv.js";
 import {
   describeWindowsTreeKillProblem,
+  killWindowsProcessTreeInBackground,
   killWindowsProcessTreeSync,
+  liveChildTreeTarget,
 } from "../utils/windowsTreeKill.js";
 
 /**
@@ -428,7 +430,12 @@ export class ProjectCheckService {
       // SIGKILL in cleanup(); a check that exited on its own never gets one.
       let killRequested = false;
 
-      const killTree = (force = false): void => {
+      // Windows: the tree kill in flight, so a later cause joins it instead of
+      // walking the same tree again.
+      let windowsKill: Promise<unknown> | null = null;
+
+      /** `quit` (Windows only) blocks until the tree is gone; see `dispose()`. */
+      const killTree = (force = false, quit = false): void => {
         killRequested = true;
         const pid = child.pid;
         if (typeof pid !== "number") {
@@ -437,19 +444,35 @@ export class ProjectCheckService {
         }
         if (!useGroup) {
           // Windows has no process groups here — `child.kill()` would terminate
-          // only the shell and orphan the runner it launched.
-          // Synchronous: dispose() runs this on the quit path and must not
-          // return before the tree is gone. A root already gone is benign.
-          try {
-            const problem = describeWindowsTreeKillProblem(
-              killWindowsProcessTreeSync(pid, { timeoutMs: 3_000 })
-            );
-            if (problem) console.warn(`[ProjectCheckService] tree kill pid=${pid}: ${problem}`);
-          } catch (err) {
-            console.warn(
-              `[ProjectCheckService] tree kill pid=${pid}: ${formatErrorMessage(err, "unknown error")}`
-            );
+          // only the shell and orphan the runner it launched. Only while the
+          // shell lives: after its exit the PID is free for reuse, and no walk
+          // reaches a dead root's descendants. Anything that may leave the tree
+          // alive is logged.
+          const target = liveChildTreeTarget(child);
+          if (!target) return;
+          if (quit) {
+            // Synchronous only on the quit path: dispose() must not return
+            // before the tree is gone, and Main exits right after. Repeats a
+            // kill still in flight, which may never get to finish.
+            try {
+              const problem = describeWindowsTreeKillProblem(
+                killWindowsProcessTreeSync(target, { timeoutMs: 3_000 })
+              );
+              if (problem) console.warn(`[ProjectCheckService] tree kill pid=${pid}: ${problem}`);
+            } catch (err) {
+              console.warn(
+                `[ProjectCheckService] tree kill pid=${pid}: ${formatErrorMessage(err, "unknown error")}`
+              );
+            }
+            return;
           }
+          // A cancel or deadline runs on Main mid-session: never block it.
+          if (windowsKill) return;
+          windowsKill = killWindowsProcessTreeInBackground(target, "[ProjectCheckService]", {
+            timeoutMs: 3_000,
+          }).finally(() => {
+            windowsKill = null;
+          });
           return;
         }
 
@@ -562,7 +585,7 @@ export class ProjectCheckService {
         // — on Windows that is two serial 3s tree kills per check,
         // blocking the main thread during quit.
         claimAbort();
-        killTree(true);
+        killTree(true, true);
         armForceSettle();
       };
 

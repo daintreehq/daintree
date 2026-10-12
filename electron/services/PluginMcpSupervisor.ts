@@ -14,7 +14,7 @@ import {
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { McpServerContributionSchema } from "../schemas/plugin.js";
 import { minimalWorkerEnv } from "../utils/minimalSpawnEnv.js";
-import { killWindowsProcessTree } from "../utils/windowsTreeKill.js";
+import { killWindowsProcessTree, liveChildTreeTarget } from "../utils/windowsTreeKill.js";
 import {
   drainPendingChildTrees,
   PLUGIN_CHILD_DETACHED,
@@ -49,6 +49,9 @@ interface SupervisedSubprocess {
    * POSIX, so teardown signals the whole tree (#13173). Fakes leave it unset.
    */
   ownsProcessTree?: boolean;
+  /** Set once the child has exited (a real `ChildProcess`); its PID is then free for reuse. */
+  exitCode?: number | null;
+  signalCode?: NodeJS.Signals | null;
   kill(): boolean;
 }
 
@@ -924,7 +927,9 @@ export class PluginMcpSupervisor {
     pid: number | null,
     killGeneration: number
   ): Promise<void> {
-    if (pid !== null && process.platform === "win32") {
+    // Not once the server has exited: its PID is then free for reuse, and no
+    // walk reaches a dead root's descendants.
+    if (pid !== null && process.platform === "win32" && liveChildTreeTarget(subprocess)) {
       try {
         await this.killTree(pid);
       } catch {

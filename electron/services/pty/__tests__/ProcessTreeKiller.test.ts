@@ -1,16 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { EventEmitter } from "node:events";
-import { spawn, spawnSync } from "child_process";
 import type { IPty } from "node-pty";
 import type { ProcessTreeCache } from "../../ProcessTreeCache.js";
-import { ProcessTreeKiller, type LineageKillSource } from "../ProcessTreeKiller.js";
+import {
+  beginWindowsExitBatch,
+  flushWindowsExitBatch,
+  ProcessTreeKiller,
+  type LineageKillSource,
+} from "../ProcessTreeKiller.js";
 import type { KillCensus } from "../../TerminalLineageLedger.js";
-import { walkVerifiedTree, type WindowsProcessRow } from "../../../utils/windowsProcessTree.js";
+import {
+  killWindowsProcessTrees,
+  killWindowsProcessTreesSync,
+  type WindowsTreeKillResult,
+} from "../../../utils/windowsTreeKill.js";
 
-vi.mock("child_process", () => ({ spawnSync: vi.fn(), spawn: vi.fn() }));
+// Every Windows kill goes through the verified helper; nothing here may start
+// a real PowerShell, and nothing may reach taskkill at all.
+vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
+  killWindowsProcessTrees: vi.fn(),
+  killWindowsProcessTreesSync: vi.fn(),
+}));
+vi.mock("child_process", () => ({ spawnSync: vi.fn(), spawn: vi.fn(), execFile: vi.fn() }));
 
-const spawnSyncMock = vi.mocked(spawnSync);
-const spawnMock = vi.mocked(spawn);
+const treeKillMock = vi.mocked(killWindowsProcessTrees);
+const treeKillSyncMock = vi.mocked(killWindowsProcessTreesSync);
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -49,26 +63,7 @@ function makeTreeCache(
   return {
     getDescendantPids: (rootPid: number) => (rootPid in subtrees ? subtrees[rootPid] : descendants),
     getProcess: () => undefined,
-    // No reused parent PID anywhere: the Windows kill keeps taskkill /T.
-    walkTreeByCreationTime: (rootPid: number) => ({ pids: [rootPid], stale: [] }),
   } as unknown as ProcessTreeCache;
-}
-
-/**
- * A cache over Windows census rows, linked by creation time the way the real
- * one is, so the kill decision runs against the real walk.
- */
-function makeWindowsCache(rows: WindowsProcessRow[]): ProcessTreeCache {
-  return {
-    getDescendantPids: (rootPid: number) => walkVerifiedTree(rows, rootPid).pids.slice(1).reverse(),
-    getProcess: () => undefined,
-    walkTreeByCreationTime: (rootPid: number) => walkVerifiedTree(rows, rootPid),
-  } as unknown as ProcessTreeCache;
-}
-
-/** `CreationDate.ToString('o')` for a time of day on a fixed date. */
-function created(time: string): string {
-  return `2026-10-12T${time}.0000000+02:00`;
 }
 
 function makeLineage(
@@ -94,8 +89,8 @@ function makeErrnoError(code: string, message?: string): NodeJS.ErrnoException {
   return err;
 }
 
-// The POSIX SIGTERM/SIGCONT/SIGKILL escalation is Unix-only (Windows uses
-// taskkill). Skip the whole suite on Windows so it reports as skipped rather
+// The POSIX SIGTERM/SIGCONT/SIGKILL escalation is Unix-only (Windows uses the
+// verified tree-kill helper). Skip the whole suite on Windows so it reports as skipped rather
 // than passing vacuously via per-test early-returns.
 describe.skipIf(process.platform === "win32")(
   "ProcessTreeKiller — kill() error discrimination",
@@ -301,356 +296,6 @@ describe.skipIf(process.platform === "win32")(
     });
   }
 );
-
-// Windows uses `taskkill /T /F /PID` to tear down the whole tree atomically
-// rather than the POSIX signal cascade. This branch had ZERO coverage: the
-// suite above early-returned on win32, so on a Windows dev machine the kill
-// path was never asserted. These tests drive the win32 branch under a mocked
-// platform + mocked spawnSync — no real process is killed.
-describe("ProcessTreeKiller — Windows taskkill", () => {
-  let killSpy: ReturnType<typeof vi.spyOn> | undefined;
-
-  beforeEach(() => {
-    spawnSyncMock.mockReset();
-    spawnSyncMock.mockReturnValue({ status: 0 } as never);
-    setPlatform("win32");
-  });
-
-  afterEach(() => {
-    killSpy?.mockRestore();
-    killSpy = undefined;
-    restorePlatform();
-  });
-
-  it("kills the tree with taskkill /T /F /PID and the documented options", () => {
-    const pty = makePty(4321);
-    const killer = new ProcessTreeKiller(pty, makeTreeCache([4322, 4323]));
-
-    killer.execute(true);
-
-    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
-    expect(spawnSyncMock).toHaveBeenCalledWith("taskkill", ["/T", "/F", "/PID", "4321"], {
-      windowsHide: true,
-      stdio: "ignore",
-      timeout: 3000,
-    });
-  });
-
-  it("calls ptyProcess.kill() after taskkill", () => {
-    const pty = makePty(4321);
-    const killer = new ProcessTreeKiller(pty, makeTreeCache([]));
-
-    killer.execute(true);
-
-    expect(pty.kill).toHaveBeenCalledTimes(1);
-    // Ordering matters: taskkill (tree teardown) must run before pty.kill()
-    // closes the session leader, else the descendant tree can be orphaned.
-    const killMock = pty.kill as ReturnType<typeof vi.fn>;
-    expect(spawnSyncMock.mock.invocationCallOrder[0]).toBeLessThan(
-      killMock.mock.invocationCallOrder[0]
-    );
-  });
-
-  it("never sends POSIX signals on Windows", () => {
-    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    const pty = makePty(4321);
-    const killer = new ProcessTreeKiller(pty, makeTreeCache([4322, 4323]));
-
-    killer.execute(true);
-
-    // The Unix SIGTERM/SIGCONT/SIGKILL cascade must not run on Windows.
-    expect(killSpy).not.toHaveBeenCalled();
-  });
-
-  it("swallows a thrown taskkill and still calls ptyProcess.kill()", () => {
-    spawnSyncMock.mockImplementation(() => {
-      throw new Error("taskkill: process already exited");
-    });
-    const pty = makePty(4321);
-    const killer = new ProcessTreeKiller(pty, makeTreeCache([]));
-
-    expect(() => killer.execute(true)).not.toThrow();
-    expect(pty.kill).toHaveBeenCalledTimes(1);
-  });
-
-  it("swallows a thrown ptyProcess.kill() after taskkill", () => {
-    const pty = makePty(4321);
-    (pty.kill as ReturnType<typeof vi.fn>).mockImplementation(() => {
-      throw new Error("pty already exited");
-    });
-    const killer = new ProcessTreeKiller(pty, makeTreeCache([]));
-
-    expect(() => killer.execute(true)).not.toThrow();
-    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([0, -1])(
-    "short-circuits to ptyProcess.kill() without taskkill when shellPid is %i",
-    (pid) => {
-      const pty = makePty(pid);
-      const killer = new ProcessTreeKiller(pty, makeTreeCache([]));
-
-      killer.execute(true);
-
-      // shellPid <= 0 returns before the platform branch — no taskkill.
-      expect(spawnSyncMock).not.toHaveBeenCalled();
-      expect(pty.kill).toHaveBeenCalledTimes(1);
-    }
-  );
-
-  it("short-circuits to ptyProcess.kill() without taskkill when shellPid is undefined", () => {
-    const pty = makePty(undefined as unknown as number);
-    const killer = new ProcessTreeKiller(pty, makeTreeCache([]));
-
-    killer.execute(true);
-
-    // The `shellPid === undefined` guard returns before the platform branch.
-    expect(spawnSyncMock).not.toHaveBeenCalled();
-    expect(pty.kill).toHaveBeenCalledTimes(1);
-  });
-});
-
-// Windows keeps a dead parent's PID in its children's ParentProcessId and hands
-// the PID out again, and taskkill /T follows those links without looking at
-// creation times. PIDs sit far above any real PID on the test host so a
-// mis-routed kill cannot land on a live process.
-describe("ProcessTreeKiller — Windows reused parent PIDs", () => {
-  const SHELL = 7_000_100;
-  const CHILD = 7_000_101;
-  const GRANDCHILD = 7_000_102;
-  const EDITOR = 7_000_200;
-  const EDITOR_CHILD = 7_000_201;
-  let killSpy: MockInstance<typeof process.kill>;
-  let warnSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    spawnSyncMock.mockReset();
-    spawnSyncMock.mockReturnValue({ status: 0 } as never);
-    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    setPlatform("win32");
-  });
-
-  afterEach(() => {
-    killSpy.mockRestore();
-    warnSpy.mockRestore();
-    restorePlatform();
-  });
-
-  function treeKilledWithT(pid: number): boolean {
-    return spawnSyncMock.mock.calls.some(
-      ([file, args]) => file === "taskkill" && args?.join(" ") === `/T /F /PID ${String(pid)}`
-    );
-  }
-
-  it("keeps taskkill /T when every link under the shell is provably its own", () => {
-    const cache = makeWindowsCache([
-      { pid: SHELL, ppid: 1, startTime: created("10:00:00") },
-      { pid: CHILD, ppid: SHELL, startTime: created("10:00:01") },
-      { pid: GRANDCHILD, ppid: CHILD, startTime: created("10:00:02") },
-    ]);
-    const pty = makePty(SHELL);
-
-    new ProcessTreeKiller(pty, cache).execute(true);
-
-    expect(treeKilledWithT(SHELL)).toBe(true);
-    expect(killSpy).not.toHaveBeenCalled();
-    expect(pty.kill).toHaveBeenCalledTimes(1);
-  });
-
-  it("ends the shell's own tree one process at a time when an older program names the shell as parent", () => {
-    const cache = makeWindowsCache([
-      { pid: SHELL, ppid: 1, startTime: created("10:00:05") },
-      { pid: CHILD, ppid: SHELL, startTime: created("10:00:06") },
-      { pid: GRANDCHILD, ppid: CHILD, startTime: created("10:00:07") },
-      // Launched long ago by a process that once held the shell's PID.
-      { pid: EDITOR, ppid: SHELL, startTime: created("09:00:00") },
-      { pid: EDITOR_CHILD, ppid: EDITOR, startTime: created("09:00:01") },
-    ]);
-    const pty = makePty(SHELL);
-
-    new ProcessTreeKiller(pty, cache).execute(true);
-
-    expect(spawnSyncMock).not.toHaveBeenCalled();
-    const killed = killSpy.mock.calls.map(([pid]) => pid);
-    expect(killed).toEqual([SHELL, CHILD, GRANDCHILD]);
-    expect(killed).not.toContain(EDITOR);
-    expect(killed).not.toContain(EDITOR_CHILD);
-    expect(pty.kill).toHaveBeenCalledTimes(1);
-  });
-
-  it("treats a stale link deeper in the tree the same way", () => {
-    const cache = makeWindowsCache([
-      { pid: SHELL, ppid: 1, startTime: created("10:00:05") },
-      { pid: CHILD, ppid: SHELL, startTime: created("10:00:06") },
-      { pid: EDITOR, ppid: CHILD, startTime: created("09:00:00") },
-    ]);
-
-    new ProcessTreeKiller(makePty(SHELL), cache).execute(true);
-
-    expect(spawnSyncMock).not.toHaveBeenCalled();
-    expect(killSpy.mock.calls.map(([pid]) => pid)).toEqual([SHELL, CHILD]);
-  });
-
-  it("ends only the shell when the census predates it but lists a process claiming its PID", () => {
-    // The shell started after the last sweep; anything the sweep saw naming
-    // its PID as parent is older than it.
-    const cache = makeWindowsCache([{ pid: EDITOR, ppid: SHELL, startTime: created("09:00:00") }]);
-
-    new ProcessTreeKiller(makePty(SHELL), cache).execute(true);
-
-    expect(spawnSyncMock).not.toHaveBeenCalled();
-    expect(killSpy.mock.calls.map(([pid]) => pid)).toEqual([SHELL]);
-  });
-
-  it("applies the same check to each ledger orphan", () => {
-    const ORPHAN = 7_000_300;
-    const cache = makeWindowsCache([
-      { pid: SHELL, ppid: 1, startTime: created("10:00:00") },
-      { pid: ORPHAN, ppid: 7_000_299, startTime: created("10:00:10") },
-      { pid: EDITOR, ppid: ORPHAN, startTime: created("09:00:00") },
-    ]);
-    const lineage = makeLineage({ [SHELL]: [ORPHAN] });
-
-    new ProcessTreeKiller(makePty(SHELL), cache, lineage).execute(true);
-
-    expect(treeKilledWithT(SHELL)).toBe(true);
-    expect(treeKilledWithT(ORPHAN)).toBe(false);
-    expect(killSpy.mock.calls.map(([pid]) => pid)).toEqual([ORPHAN]);
-  });
-});
-
-// taskkill takes ~130 ms on Windows. Run synchronously, every terminal kill
-// stalls all terminal I/O and kills of many terminals queue behind each other.
-describe("ProcessTreeKiller — Windows kill does not block the host", () => {
-  const SHELL = 7_000_400;
-  const OTHER_SHELL = 7_000_500;
-  const ORPHAN = 7_000_401;
-
-  beforeEach(() => {
-    spawnSyncMock.mockReset();
-    spawnSyncMock.mockReturnValue({ status: 0 } as never);
-    spawnMock.mockReset();
-    spawnMock.mockImplementation(() => new EventEmitter() as never);
-    setPlatform("win32");
-  });
-
-  afterEach(() => {
-    restorePlatform();
-  });
-
-  const TASKKILL_OPTIONS = { windowsHide: true, stdio: "ignore", timeout: 3000 };
-
-  it("starts taskkill as its own process on the normal path", () => {
-    const pty = makePty(SHELL);
-    const child = new EventEmitter();
-    spawnMock.mockReturnValueOnce(child as never);
-
-    const targets = new ProcessTreeKiller(pty, makeTreeCache([])).execute(false);
-
-    expect(spawnMock).toHaveBeenCalledWith(
-      "taskkill",
-      ["/T", "/F", "/PID", String(SHELL)],
-      TASKKILL_OPTIONS
-    );
-    expect(spawnSyncMock).not.toHaveBeenCalled();
-    expect(targets).toEqual([SHELL]);
-    // The pseudoconsole stays open until the tree kill is done: closing it ends
-    // the shell, and taskkill /T needs the shell alive to walk its tree.
-    expect(pty.kill).not.toHaveBeenCalled();
-    child.emit("exit", 0);
-    child.emit("exit", 0);
-    expect(pty.kill).toHaveBeenCalledTimes(1);
-  });
-
-  it("closes the pseudoconsole even if taskkill never reports back", () => {
-    vi.useFakeTimers();
-    try {
-      const pty = makePty(SHELL);
-      new ProcessTreeKiller(pty, makeTreeCache([])).execute(false);
-      expect(pty.kill).not.toHaveBeenCalled();
-      vi.advanceTimersByTime(3500);
-      expect(pty.kill).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("stays synchronous on the immediate path, where nothing async would run", () => {
-    new ProcessTreeKiller(makePty(SHELL), makeTreeCache([])).execute(true);
-
-    expect(spawnSyncMock).toHaveBeenCalledWith(
-      "taskkill",
-      ["/T", "/F", "/PID", String(SHELL)],
-      TASKKILL_OPTIONS
-    );
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-
-  it("lets kills of different terminals overlap", () => {
-    // Neither taskkill ever exits here: the second kill must not wait on the first.
-    new ProcessTreeKiller(makePty(SHELL), makeTreeCache([])).execute(false);
-    new ProcessTreeKiller(makePty(OTHER_SHELL), makeTreeCache([])).execute(false);
-
-    expect(spawnMock.mock.calls.map(([, args]) => args)).toEqual([
-      ["/T", "/F", "/PID", String(SHELL)],
-      ["/T", "/F", "/PID", String(OTHER_SHELL)],
-    ]);
-    expect(spawnSyncMock).not.toHaveBeenCalled();
-  });
-
-  it("swallows a taskkill that cannot start, however it fails", () => {
-    const child = new EventEmitter();
-    spawnMock.mockReturnValueOnce(child as never);
-    const pty = makePty(SHELL);
-
-    new ProcessTreeKiller(pty, makeTreeCache([])).execute(false);
-    expect(() => child.emit("error", new Error("spawn taskkill ENOENT"))).not.toThrow();
-
-    spawnMock.mockImplementationOnce(() => {
-      throw new Error("EMFILE");
-    });
-    const other = makePty(OTHER_SHELL);
-    expect(() => new ProcessTreeKiller(other, makeTreeCache([])).execute(false)).not.toThrow();
-    expect(pty.kill).toHaveBeenCalledTimes(1);
-    expect(other.kill).toHaveBeenCalledTimes(1);
-  });
-
-  it("runs the orphan pass the same way", () => {
-    const lineage = makeLineage({ [SHELL]: [ORPHAN] });
-
-    const targets = new ProcessTreeKiller(makePty(SHELL), makeTreeCache([]), lineage).execute(
-      false
-    );
-
-    expect(spawnMock.mock.calls.map(([, args]) => args)).toEqual([
-      ["/T", "/F", "/PID", String(SHELL)],
-      ["/T", "/F", "/PID", String(ORPHAN)],
-    ]);
-    expect(targets).toEqual([ORPHAN, SHELL]);
-  });
-
-  it("reaps a natural exit's orphans asynchronously, and synchronously when immediate", () => {
-    const lineage = makeLineage({ [SHELL]: [ORPHAN] });
-
-    new ProcessTreeKiller(makePty(SHELL), makeTreeCache([]), lineage).reapAfterRootExit();
-    expect(spawnMock).toHaveBeenCalledWith(
-      "taskkill",
-      ["/T", "/F", "/PID", String(ORPHAN)],
-      TASKKILL_OPTIONS
-    );
-    expect(spawnSyncMock).not.toHaveBeenCalled();
-
-    spawnMock.mockClear();
-    new ProcessTreeKiller(makePty(SHELL), makeTreeCache([]), lineage).reapAfterRootExit(true);
-    expect(spawnSyncMock).toHaveBeenCalledWith(
-      "taskkill",
-      ["/T", "/F", "/PID", String(ORPHAN)],
-      TASKKILL_OPTIONS
-    );
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-});
 
 // The lineage ledger widens the kill set to descendants that already reparented
 // to PID 1, which no tree walk can find (#12203). The ledger owns start-time
@@ -1422,31 +1067,349 @@ describe.skipIf(process.platform === "win32")("ProcessTreeKiller — kill-time c
   });
 });
 
-describe("ProcessTreeKiller — Windows takes no census", () => {
+// Windows: every tree kill is the verified helper (fresh creation-time walk,
+// handle-checked identities, wait for exit) — never `taskkill /T`, never a
+// bare-PID kill from here. PIDs sit far above any real PID on the test host.
+describe("ProcessTreeKiller — Windows", () => {
+  const SHELL = 7_000_400;
+  const OTHER_SHELL = 7_000_500;
+  const ORPHAN = 7_000_401;
+  const ORPHAN_START = "2026-10-12T10:00:10.0000000+02:00";
+  const SHELL_MICROS = 1_760_256_000_123_456;
+  let killSpy: MockInstance<typeof process.kill>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  function result(overrides: Partial<WindowsTreeKillResult> = {}): WindowsTreeKillResult {
+    return {
+      mode: "tree",
+      targeted: [],
+      killed: [],
+      alreadyGone: [],
+      timedOut: [],
+      unconfirmed: [],
+      failed: [],
+      identityMismatch: [],
+      stale: [],
+      rootEnded: true,
+      ...overrides,
+    };
+  }
+
+  /** Hold every async helper run open until the test settles it. */
+  function heldHelper() {
+    const runs: Array<{
+      resolve: (results: WindowsTreeKillResult[]) => void;
+      reject: (error: Error) => void;
+    }> = [];
+    treeKillMock.mockImplementation(
+      () => new Promise((resolve, reject) => runs.push({ resolve, reject }))
+    );
+    return runs;
+  }
+
+  async function settled(): Promise<void> {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+  }
+
+  /** A ledger tracking `ORPHAN` under `SHELL`, whose sync probe must never run on Windows. */
+  function makeWindowsLineage() {
+    return {
+      registerRoot: vi.fn(),
+      markRootClosing: vi.fn(),
+      getVerifiedOrphanPids: vi.fn(() => {
+        throw new Error("Windows must not probe start times on the host thread");
+      }),
+      getTrackedPids: vi.fn((rootPid: number) =>
+        rootPid === SHELL ? [{ pid: ORPHAN, startTime: ORPHAN_START }] : []
+      ),
+    };
+  }
+
   beforeEach(() => {
     setPlatform("win32");
-    spawnSyncMock.mockReset();
-    spawnMock.mockReset();
-    spawnMock.mockImplementation(() => new EventEmitter() as never);
+    treeKillMock.mockReset();
+    treeKillSyncMock.mockReset();
+    treeKillSyncMock.mockImplementation((targets) => targets.map(() => result()));
+    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
   afterEach(() => {
+    flushWindowsExitBatch();
+    killSpy.mockRestore();
+    warnSpy.mockRestore();
     restorePlatform();
+    vi.useRealTimers();
   });
 
-  it("never reads a kill-time census on win32", () => {
-    const lineage = makeCensusLineage([]);
-    const killer = new ProcessTreeKiller(makePty(P(1000)), makeTreeCache([]), lineage);
+  it("kills the shell and every ledger orphan in one helper run, orphans by identity", () => {
+    heldHelper();
+    const lineage = makeWindowsLineage();
+
+    const targets = new ProcessTreeKiller(makePty(SHELL), makeTreeCache([]), lineage).execute(
+      false
+    );
+
+    expect(treeKillMock).toHaveBeenCalledTimes(1);
+    expect(treeKillMock).toHaveBeenCalledWith(
+      [{ pid: SHELL }, { pid: ORPHAN, startTime: ORPHAN_START }],
+      { timeoutMs: expect.any(Number) }
+    );
+    expect(lineage.getVerifiedOrphanPids).not.toHaveBeenCalled();
+    expect(lineage.markRootClosing).toHaveBeenCalledWith(SHELL);
+    expect(treeKillSyncMock).not.toHaveBeenCalled();
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(targets).toEqual([ORPHAN, SHELL]);
+  });
+
+  it.each([false, true])(
+    "releases the pseudoconsole only once the helper has finished (immediate=%s)",
+    async (immediate) => {
+      const runs = heldHelper();
+      const pty = makePty(SHELL);
+      const killer = new ProcessTreeKiller(pty, makeTreeCache([]));
+
+      killer.execute(immediate);
+      await settled();
+
+      // Closing ConPTY ends the shell, and the helper's walk starts from it.
+      expect(pty.kill).not.toHaveBeenCalled();
+      expect(killer.hasPendingTreeKill()).toBe(true);
+      runs[0].resolve([result()]);
+      await settled();
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+      expect(killer.hasPendingTreeKill()).toBe(false);
+      expect(treeKillSyncMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it("releases the pseudoconsole at the backstop if the helper never reports", () => {
+    vi.useFakeTimers();
+    heldHelper();
+    const pty = makePty(SHELL);
+
+    new ProcessTreeKiller(pty, makeTreeCache([])).execute(false);
+    vi.advanceTimersByTime(1000);
+    expect(pty.kill).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(9000);
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("still releases the pseudoconsole when the helper rejects", async () => {
+    const runs = heldHelper();
+    const pty = makePty(SHELL);
+    (pty.kill as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error("pty already exited");
+    });
+
+    new ProcessTreeKiller(pty, makeTreeCache([])).execute(false);
+    runs[0].reject(new Error("boom"));
+    await settled();
+
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("joins a pending kill instead of walking the same tree twice", async () => {
+    const runs = heldHelper();
+    const pty = makePty(SHELL);
+    const killer = new ProcessTreeKiller(pty, makeTreeCache([]));
+
+    killer.execute(false);
+    killer.execute(true);
+    killer.reapAfterRootExit();
+    expect(treeKillMock).toHaveBeenCalledTimes(1);
+
+    runs[0].resolve([result()]);
+    await settled();
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the shell identity its first kill recorded to every later one", async () => {
+    const runs = heldHelper();
+    const pty = makePty(SHELL);
+    const killer = new ProcessTreeKiller(pty, makeTreeCache([]));
+
+    killer.execute(false);
+    runs[0].resolve([result({ rootStartTime: SHELL_MICROS })]);
+    await settled();
+    killer.execute(true);
+
+    expect(treeKillMock.mock.calls[1][0]).toEqual([{ pid: SHELL, startTime: SHELL_MICROS }]);
+  });
+
+  it.each(["gone", "identity-mismatch"] as const)(
+    "never passes the shell PID again once a census found it %s",
+    async (mode) => {
+      const runs = heldHelper();
+      const lineage = makeWindowsLineage();
+      const killer = new ProcessTreeKiller(makePty(SHELL), makeTreeCache([]), lineage);
+
+      killer.execute(false);
+      runs[0].resolve([result({ mode, rootEnded: true }), result()]);
+      await settled();
+      killer.execute(false);
+
+      expect(treeKillMock.mock.calls[1][0]).toEqual([{ pid: ORPHAN, startTime: ORPHAN_START }]);
+    }
+  );
+
+  it("reaps a natural exit's orphans without the shell and without touching the pty", async () => {
+    const runs = heldHelper();
+    const pty = makePty(SHELL);
+    const lineage = makeWindowsLineage();
+    const killer = new ProcessTreeKiller(pty, makeTreeCache([]), lineage);
+
+    expect(killer.reapAfterRootExit(true)).toEqual([ORPHAN]);
+    expect(treeKillMock).toHaveBeenCalledWith([{ pid: ORPHAN, startTime: ORPHAN_START }], {
+      timeoutMs: expect.any(Number),
+    });
+    // An orphan reap does not own the pty's release, so a teardown may release it.
+    expect(killer.hasPendingTreeKill()).toBe(false);
+    runs[0].resolve([result()]);
+    await settled();
+    expect(pty.kill).not.toHaveBeenCalled();
+    expect(lineage.getVerifiedOrphanPids).not.toHaveBeenCalled();
+  });
+
+  it("starts nothing for a natural exit with no tracked orphans", () => {
+    new ProcessTreeKiller(makePty(SHELL), makeTreeCache([]), makeLineage({})).reapAfterRootExit();
+
+    expect(treeKillMock).not.toHaveBeenCalled();
+  });
+
+  it("lets kills of different terminals overlap", () => {
+    heldHelper();
+
+    new ProcessTreeKiller(makePty(SHELL), makeTreeCache([])).execute(false);
+    new ProcessTreeKiller(makePty(OTHER_SHELL), makeTreeCache([])).execute(false);
+
+    expect(treeKillMock.mock.calls.map(([targets]) => targets)).toEqual([
+      [{ pid: SHELL }],
+      [{ pid: OTHER_SHELL }],
+    ]);
+  });
+
+  it.each([0, -1, undefined])(
+    "releases the pty directly, with no helper, when the shell PID is %s",
+    (pid) => {
+      const pty = makePty(pid as number);
+
+      new ProcessTreeKiller(pty, makeTreeCache([])).execute(false);
+
+      expect(treeKillMock).not.toHaveBeenCalled();
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("never reads a kill-time census", () => {
+    heldHelper();
+    const lineage = { ...makeWindowsLineage(), takeKillCensus: vi.fn(() => null) };
+    const killer = new ProcessTreeKiller(makePty(SHELL), makeTreeCache([]), lineage);
 
     killer.captureTree();
     killer.execute(false);
 
     expect(lineage.takeKillCensus).not.toHaveBeenCalled();
-    expect(spawnMock).toHaveBeenCalledWith(
-      "taskkill",
-      ["/T", "/F", "/PID", String(P(1000))],
-      expect.anything()
-    );
+  });
+
+  describe("exit batch", () => {
+    it("kills every terminal's tree in one blocking run, then releases each pty", () => {
+      const ptys = [makePty(SHELL), makePty(OTHER_SHELL)];
+      const lineage = makeWindowsLineage();
+
+      beginWindowsExitBatch();
+      new ProcessTreeKiller(ptys[0], makeTreeCache([]), lineage).execute(true);
+      new ProcessTreeKiller(ptys[1], makeTreeCache([])).execute(true);
+      expect(treeKillSyncMock).not.toHaveBeenCalled();
+      expect(ptys[0].kill).not.toHaveBeenCalled();
+      flushWindowsExitBatch();
+
+      expect(treeKillMock).not.toHaveBeenCalled();
+      expect(treeKillSyncMock).toHaveBeenCalledTimes(1);
+      expect(treeKillSyncMock.mock.calls[0][0]).toEqual([
+        { pid: SHELL },
+        { pid: ORPHAN, startTime: ORPHAN_START },
+        { pid: OTHER_SHELL },
+      ]);
+      // Fits inside Main's 3 s force-kill deadline for the host.
+      expect(treeKillSyncMock.mock.calls[0][1]?.timeoutMs).toBeLessThan(3000);
+      const helperOrder = treeKillSyncMock.mock.invocationCallOrder[0];
+      for (const pty of ptys) {
+        const kill = pty.kill as ReturnType<typeof vi.fn>;
+        expect(kill).toHaveBeenCalledTimes(1);
+        expect(kill.mock.invocationCallOrder[0]).toBeGreaterThan(helperOrder);
+      }
+    });
+
+    it("owns the pty's release while queued, so a teardown leaves it to the flush", () => {
+      const pty = makePty(SHELL);
+      const killer = new ProcessTreeKiller(pty, makeTreeCache([]));
+
+      beginWindowsExitBatch();
+      killer.execute(true);
+      expect(killer.hasPendingTreeKill()).toBe(true);
+      flushWindowsExitBatch();
+
+      expect(killer.hasPendingTreeKill()).toBe(false);
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-kills a tree whose own kill is still pending, and releases its pty once", async () => {
+      const runs = heldHelper();
+      const pty = makePty(SHELL);
+      const killer = new ProcessTreeKiller(pty, makeTreeCache([]));
+
+      killer.execute(false);
+      beginWindowsExitBatch();
+      killer.execute(true);
+      flushWindowsExitBatch();
+
+      expect(treeKillSyncMock.mock.calls[0][0]).toEqual([{ pid: SHELL }]);
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+      runs[0].resolve([result()]);
+      await settled();
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+    });
+
+    it("queues a natural exit's orphan reap without releasing the pty", () => {
+      const pty = makePty(SHELL);
+
+      beginWindowsExitBatch();
+      new ProcessTreeKiller(pty, makeTreeCache([]), makeWindowsLineage()).reapAfterRootExit(true);
+      flushWindowsExitBatch();
+
+      expect(treeKillSyncMock.mock.calls[0][0]).toEqual([{ pid: ORPHAN, startTime: ORPHAN_START }]);
+      expect(pty.kill).not.toHaveBeenCalled();
+    });
+
+    it("starts nothing when nothing was queued, and nothing at all off Windows", () => {
+      beginWindowsExitBatch();
+      flushWindowsExitBatch();
+      expect(treeKillSyncMock).not.toHaveBeenCalled();
+
+      setPlatform("linux");
+      beginWindowsExitBatch();
+      setPlatform("win32");
+      heldHelper();
+      new ProcessTreeKiller(makePty(SHELL), makeTreeCache([])).execute(true);
+      // No batch was opened off Windows, so the kill ran on its own.
+      expect(treeKillMock).toHaveBeenCalledTimes(1);
+      flushWindowsExitBatch();
+      expect(treeKillSyncMock).not.toHaveBeenCalled();
+    });
+
+    it("releases every pty even when the blocking run throws", () => {
+      treeKillSyncMock.mockImplementation(() => {
+        throw new Error("EMFILE");
+      });
+      const pty = makePty(SHELL);
+
+      beginWindowsExitBatch();
+      new ProcessTreeKiller(pty, makeTreeCache([])).execute(true);
+      expect(() => flushWindowsExitBatch()).not.toThrow();
+
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

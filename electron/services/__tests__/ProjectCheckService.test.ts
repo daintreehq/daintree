@@ -5,7 +5,9 @@ import { Readable } from "stream";
 // Explicitly typed so `.mock.calls` reads without casts that would regress the
 // no-unsafe-type-assertion ratchet, and so the mock factories below type-check.
 const spawnMock = vi.fn<(command: string, options: Record<string, unknown>) => unknown>();
-const treeKillMock = vi.fn<(pid: number, options: { timeoutMs?: number }) => unknown>();
+const treeKillMock = vi.fn<(target: unknown, options: { timeoutMs?: number }) => unknown>();
+const bgTreeKillMock =
+  vi.fn<(target: unknown, tag: string, options: { timeoutMs?: number }) => Promise<null>>();
 const realpathMock = vi.fn<(target: string) => Promise<string>>();
 const detectMock =
   vi.fn<(path: string) => Promise<Array<{ id: string; name: string; command: string }>>>();
@@ -18,8 +20,13 @@ vi.mock("child_process", () => ({
 
 vi.mock("../../utils/windowsTreeKill.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../utils/windowsTreeKill.js")>()),
-  killWindowsProcessTreeSync: (pid: number, options: { timeoutMs?: number }) =>
-    treeKillMock(pid, options),
+  killWindowsProcessTreeSync: (target: unknown, options: { timeoutMs?: number }) =>
+    treeKillMock(target, options),
+  killWindowsProcessTreeInBackground: (
+    target: unknown,
+    tag: string,
+    options: { timeoutMs?: number }
+  ) => bgTreeKillMock(target, tag, options),
 }));
 
 vi.mock("fs/promises", () => ({
@@ -80,10 +87,16 @@ beforeEach(() => {
   treeKillMock.mockReturnValue({
     mode: "tree",
     targeted: [],
+    killed: [],
+    alreadyGone: [],
+    timedOut: [],
+    unconfirmed: [],
     failed: [],
+    identityMismatch: [],
     stale: [],
     rootEnded: true,
   });
+  bgTreeKillMock.mockResolvedValue(null);
   // Identity realpath: every path in these tests is already canonical.
   realpathMock.mockImplementation(async (p: string) => p);
   getProjectByIdMock.mockReturnValue(makeProject());
@@ -442,15 +455,96 @@ describe("ProjectCheckService — output handling", () => {
   });
 });
 
+/**
+ * Windows: a cancel or deadline mid-session runs the tree kill in the
+ * background (this is Main); only quit (`dispose()`) blocks until it is done.
+ */
+function expectWindowsTreeKill(path: "routine" | "quit"): void {
+  const target = expect.objectContaining({ pid: 4242 });
+  if (path === "quit") {
+    expect(treeKillMock).toHaveBeenCalledWith(target, { timeoutMs: 3_000 });
+  } else {
+    expect(bgTreeKillMock).toHaveBeenCalledWith(target, "[ProjectCheckService]", {
+      timeoutMs: 3_000,
+    });
+    expect(treeKillMock).not.toHaveBeenCalled();
+  }
+}
+
+describe("ProjectCheckService — Windows tree kill never blocks Main mid-session", () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", originalPlatform);
+  });
+
+  it("cancels in the background", async () => {
+    const controller = new AbortController();
+    const service = new ProjectCheckService();
+    const promise = service.runCheck(
+      { projectId: "proj-1", runnerId: "npm-test" },
+      { signal: controller.signal }
+    );
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
+
+    controller.abort();
+
+    expectWindowsTreeKill("routine");
+    child.finish(null, null);
+    await expect(promise).resolves.toMatchObject({ aborted: true });
+  });
+
+  it("joins a kill still in flight instead of starting another", async () => {
+    vi.useFakeTimers();
+    try {
+      bgTreeKillMock.mockImplementation(() => new Promise<null>(() => {}));
+      const controller = new AbortController();
+      const service = new ProjectCheckService();
+      const promise = service.runCheck(
+        { projectId: "proj-1", runnerId: "npm-test" },
+        { signal: controller.signal }
+      );
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
+
+      controller.abort();
+      // The force-settle backstop's forced kill lands while the first is pending.
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(bgTreeKillMock).toHaveBeenCalledTimes(1);
+      await expect(promise).resolves.toMatchObject({ aborted: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("blocks only at quit, where nothing would run afterwards", async () => {
+    const service = new ProjectCheckService();
+    const promise = service.runCheck({ projectId: "proj-1", runnerId: "npm-test" });
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
+
+    service.dispose();
+
+    expectWindowsTreeKill("quit");
+    child.finish(null, null);
+    await promise;
+  });
+});
+
 describe("ProjectCheckService — cancellation and teardown", () => {
   /**
    * Group-kill is platform-split: POSIX signals the negative pid, Windows runs
    * the verified tree kill. Asserting only the POSIX call would fail every
    * Windows stabilize run and leave the Windows branch untested everywhere.
    */
-  function expectTreeKilled(killSpy: ReturnType<typeof vi.spyOn>, signal: string): void {
+  function expectTreeKilled(
+    killSpy: ReturnType<typeof vi.spyOn>,
+    signal: string,
+    path: "routine" | "quit" = "routine"
+  ): void {
     if (IS_WIN) {
-      expect(treeKillMock).toHaveBeenCalledWith(4242, { timeoutMs: 3_000 });
+      expectWindowsTreeKill(path);
     } else {
       expect(killSpy).toHaveBeenCalledWith(-4242, signal);
     }
@@ -703,7 +797,7 @@ describe("ProjectCheckService — cancellation and teardown", () => {
       service.dispose();
       // SIGKILL, not SIGTERM-then-wait: the app is exiting, so the escalation
       // timer would never get to fire and the detached child would survive.
-      expectTreeKilled(killSpy, "SIGKILL");
+      expectTreeKilled(killSpy, "SIGKILL", "quit");
 
       child.finish(null, "SIGKILL");
       await expect(promise).resolves.toMatchObject({ aborted: true });

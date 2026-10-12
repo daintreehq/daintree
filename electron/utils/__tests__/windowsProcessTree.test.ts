@@ -1,7 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   creationTimeMicros,
-  terminateWindowsProcesses,
+  identityMicros,
+  sameProcessIdentity,
+  terminationOrder,
   walkVerifiedTree,
   type WindowsProcessRow,
 } from "../windowsProcessTree.js";
@@ -153,50 +155,59 @@ describe("walkVerifiedTree", () => {
   });
 });
 
-describe("terminateWindowsProcesses", () => {
-  let killSpy: MockInstance<typeof process.kill>;
+describe("sameProcessIdentity", () => {
+  // CIM: microseconds. Process.StartTime: 100 ns ticks, floored to µs.
+  const cim = creationTimeMicros(at("10:00:00.1234560"))!;
 
-  beforeEach(() => {
-    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+  it("matches the handle's reading of the process the census listed", () => {
+    const handle = creationTimeMicros(at("10:00:00.1234567"))!;
+    expect(sameProcessIdentity(cim, handle)).toBe(true);
   });
 
-  afterEach(() => {
-    killSpy.mockRestore();
+  it("absorbs a CIM that rounded rather than truncated", () => {
+    expect(sameProcessIdentity(cim + 1, cim)).toBe(true);
+    expect(sameProcessIdentity(cim, cim + 1)).toBe(true);
   });
 
-  function errno(code: string): NodeJS.ErrnoException {
-    return Object.assign(new Error(code), { code });
-  }
-
-  it("terminates each PID in order and treats an exited one as done", () => {
-    killSpy.mockImplementation(((pid: number) => {
-      if (pid === CHILD) throw errno("ESRCH");
-      return true;
-    }) as typeof process.kill);
-
-    expect(terminateWindowsProcesses([ROOT, CHILD, GRANDCHILD])).toEqual([]);
-    expect(killSpy.mock.calls).toEqual([
-      [ROOT, "SIGKILL"],
-      [CHILD, "SIGKILL"],
-      [GRANDCHILD, "SIGKILL"],
-    ]);
+  it("rejects a later process that took the PID", () => {
+    expect(sameProcessIdentity(cim, cim + 2)).toBe(false);
+    expect(sameProcessIdentity(cim, creationTimeMicros(at("10:00:05.0000000")))).toBe(false);
   });
 
-  it("reports a PID it could not end", () => {
-    killSpy.mockImplementation(((pid: number) => {
-      if (pid === CHILD) throw errno("EPERM");
-      return true;
-    }) as typeof process.kill);
+  it("proves nothing without both readings", () => {
+    expect(sameProcessIdentity(undefined, cim)).toBe(false);
+    expect(sameProcessIdentity(cim, undefined)).toBe(false);
+    expect(sameProcessIdentity(Number.NaN, Number.NaN)).toBe(false);
+  });
+});
 
-    expect(terminateWindowsProcesses([ROOT, CHILD])).toEqual([{ pid: CHILD, code: "EPERM" }]);
+describe("identityMicros", () => {
+  it("reads a ledger's CreationDate string and a previous kill's microseconds alike", () => {
+    const micros = creationTimeMicros(at("10:00:00.1234560"))!;
+    expect(identityMicros(at("10:00:00.1234560"))).toBe(micros);
+    expect(identityMicros(micros)).toBe(micros);
   });
 
-  it("never signals a system PID, this process, its parent, or one already ended", () => {
-    const ended = new Set([CHILD]);
+  it("drops what cannot identify a process", () => {
+    expect(identityMicros(undefined)).toBeUndefined();
+    expect(identityMicros("garbage")).toBeUndefined();
+    expect(identityMicros(1.5)).toBeUndefined();
+    expect(identityMicros(0)).toBeUndefined();
+  });
+});
 
-    terminateWindowsProcesses([0, 4, process.pid, process.ppid, CHILD, ROOT], ended);
-
-    expect(killSpy.mock.calls).toEqual([[ROOT, "SIGKILL"]]);
-    expect(ended.has(ROOT)).toBe(true);
+describe("terminationOrder", () => {
+  it("ends every descendant before the root", () => {
+    const tree = walkVerifiedTree(
+      [
+        { pid: ROOT, ppid: 1, startTime: at("10:00:00.0000000") },
+        { pid: CHILD, ppid: ROOT, startTime: at("10:00:01.0000000") },
+        { pid: GRANDCHILD, ppid: CHILD, startTime: at("10:00:02.0000000") },
+      ],
+      ROOT
+    );
+    const order = terminationOrder(tree.pids);
+    expect(order.at(-1)).toBe(ROOT);
+    expect(order.indexOf(GRANDCHILD)).toBeLessThan(order.indexOf(CHILD));
   });
 });

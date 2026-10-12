@@ -39,6 +39,11 @@ const lineage = vi.hoisted(() => ({
   reap: vi.fn((_claimed: string): Promise<void> => Promise.resolve()),
 }));
 
+// The Windows orphan kill after a host crash; only reached with a faked platform.
+const windowsTreeKill = vi.hoisted(() =>
+  vi.fn((_targets: unknown, _options: unknown) => Promise.resolve([] as unknown[]))
+);
+
 interface MockUtilityProcess extends EventEmitter {
   postMessage: Mock;
   kill: Mock;
@@ -138,6 +143,11 @@ describe("PtyClient fabric", () => {
       ...(await importOriginal<typeof import("../TerminalLineageLedger.js")>()),
       claimShardLineageFile: lineage.claim,
       reapClaimedLineageFile: lineage.reap,
+    }));
+    windowsTreeKill.mockReset().mockResolvedValue([]);
+    vi.doMock("../../utils/windowsTreeKill.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../utils/windowsTreeKill.js")>()),
+      killWindowsProcessTrees: windowsTreeKill,
     }));
 
     PtyClientClass = (await import("../PtyClient.js")).PtyClient;
@@ -533,6 +543,44 @@ describe("PtyClient fabric", () => {
         }
       }
     );
+
+    it("on Windows, tree-kills the crashed shard's orphans in the background and restarts after", async () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+      let treesGone: (value: unknown[]) => void = () => {};
+      windowsTreeKill.mockImplementationOnce(
+        () => new Promise<unknown[]>((resolve) => (treesGone = resolve))
+      );
+      try {
+        const client = createFabricClient();
+        client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+        client.spawn("t2", { cwd: "/tmp", cols: 80, rows: 24 });
+        const shardA = projectShard("project-a");
+        shardA.child.emit("message", { type: "ready" });
+        shardA.child.emit("message", { type: "terminal-pid", id: "t1", pid: 11111 });
+        defaultShard().child.emit("message", { type: "terminal-pid", id: "t2", pid: 22222 });
+        const forkCountBefore = forks.length;
+
+        Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+        shardA.child.emit("exit", 1);
+        await vi.advanceTimersByTimeAsync(15_000);
+
+        expect(windowsTreeKill).toHaveBeenCalledTimes(1);
+        expect(windowsTreeKill).toHaveBeenCalledWith([11111], { timeoutMs: 3000 });
+        // The dead host no longer pins these PIDs: no bare-PID kill, ever.
+        expect(killSpy).not.toHaveBeenCalled();
+        // The replacement host waits for the old trees, as it does for the lineage reap.
+        expect(forks.length).toBe(forkCountBefore);
+
+        treesGone([]);
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(forks.length).toBe(forkCountBefore + 1);
+        client.dispose();
+      } finally {
+        Object.defineProperty(process, "platform", original);
+        killSpy.mockRestore();
+      }
+    });
 
     it("registers every terminal with the crash reaper and releases it on exit (#13176)", async () => {
       crashReap.attachTerminal.mockClear();

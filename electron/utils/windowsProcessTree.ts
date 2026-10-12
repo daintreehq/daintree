@@ -9,11 +9,14 @@
  * host this way). A link is real only when the child was created no earlier
  * than the process that now holds its parent's PID.
  *
- * Pure apart from {@link terminateWindowsProcesses}; the census that feeds it
- * lives in `windowsTreeKill.ts`, and the pty-host feeds it its cached census.
+ * Pure. The kill itself runs inside one PowerShell process
+ * (`windowsTreeKill.ts`), which repeats {@link walkVerifiedTree} and
+ * {@link sameProcessIdentity} over its own census so that the census, the walk
+ * and every termination happen in one process. These are the reference
+ * definitions of those decisions; the script must stay in step with them.
  */
 
-/** One `Win32_Process` row. `startTime` is `CreationDate.ToString('o')`, as `ProcessTreeCache` keeps it. */
+/** One `Win32_Process` row. `startTime` is `CreationDate.ToString('o')`, as the census helpers print it. */
 export interface WindowsProcessRow {
   pid: number;
   ppid: number;
@@ -38,6 +41,23 @@ export interface WindowsTreeKillFailure {
 }
 
 /**
+ * The most two readings of one process's creation time may differ by and still
+ * name the same process. CIM reports `CreationDate` to the microsecond while
+ * `Process.StartTime` carries 100 ns ticks; both are floored to whole
+ * microseconds, and one microsecond of slack absorbs a CIM that rounds rather
+ * than truncates. A recycled PID cannot hide inside it: the process that reuses
+ * a PID is created after the previous holder has exited.
+ */
+export const IDENTITY_TOLERANCE_MICROS = 1;
+
+/** Whether two creation times, in UTC microseconds, identify the same process. */
+export function sameProcessIdentity(a: number | undefined, b: number | undefined): boolean {
+  if (a === undefined || b === undefined) return false;
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+  return Math.abs(a - b) <= IDENTITY_TOLERANCE_MICROS;
+}
+
+/**
  * PIDs never terminated, whatever a table says: Idle (0) and System (4), this
  * process, and its parent. `process.kill(0)` on Windows ends the caller.
  */
@@ -58,6 +78,17 @@ export function creationTimeMicros(value: string | undefined): number | undefine
   const fraction = /\.(\d+)/.exec(value)?.[1] ?? "";
   const micros = fraction.length > 3 ? Number(fraction.slice(3, 6).padEnd(3, "0")) : 0;
   return ms * 1000 + micros;
+}
+
+/**
+ * UTC microseconds for an identity a caller holds: a `CreationDate.ToString('o')`
+ * string as the trashed-PID and lineage ledgers persist it, or a number that is
+ * already microseconds (what a previous tree kill reported for its root).
+ */
+export function identityMicros(value: string | number | undefined): number | undefined {
+  if (typeof value === "number")
+    return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  return creationTimeMicros(value);
 }
 
 /**
@@ -104,25 +135,10 @@ export function walkVerifiedTree(rows: Iterable<WindowsProcessRow>, rootPid: num
 }
 
 /**
- * TerminateProcess each PID in order, skipping any already ended in this
- * batch. On Windows `process.kill` is TerminateProcess for every signal but 0;
- * ESRCH means the process is already gone, which is the goal.
+ * The order a verified tree is terminated in: deepest first, the root last, so
+ * a caller waiting on the root's exit (execFile's `close`) never observes it
+ * while a descendant holding its pipes is still alive.
  */
-export function terminateWindowsProcesses(
-  pids: readonly number[],
-  ended: Set<number> = new Set()
-): WindowsTreeKillFailure[] {
-  const failed: WindowsTreeKillFailure[] = [];
-  for (const pid of pids) {
-    if (ended.has(pid) || !isKillableWindowsPid(pid)) continue;
-    try {
-      process.kill(pid, "SIGKILL");
-      ended.add(pid);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
-      if (code === "ESRCH") ended.add(pid);
-      else failed.push({ pid, code });
-    }
-  }
-  return failed;
+export function terminationOrder(pids: readonly number[]): number[] {
+  return [...pids].reverse();
 }

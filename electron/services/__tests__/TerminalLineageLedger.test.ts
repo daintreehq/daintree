@@ -16,7 +16,7 @@ const { mockExecFileAsync, mockSpawnSync, mockTreeKill } = vi.hoisted(() => ({
 // The Windows tree kill reaps a crashed host's verified entries; it runs its
 // own census, so it is stubbed whole rather than through child_process.
 vi.mock("../../utils/windowsTreeKill.js", () => ({
-  killWindowsProcessTree: (...args: unknown[]) => mockTreeKill(...args) as unknown,
+  killWindowsProcessTrees: (...args: unknown[]) => mockTreeKill(...args) as unknown,
 }));
 
 vi.mock("node:child_process", async () => {
@@ -1069,6 +1069,61 @@ describe("TerminalLineageLedger", () => {
     });
   });
 
+  describe("reapLineageEntries on Windows", () => {
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const OTHER_PID = (() => {
+      let pid = ORPHAN_PID + 1;
+      while (pid === process.pid || pid === process.ppid) pid += 1;
+      return pid;
+    })();
+    const created = (pid: number) => `2026-01-01T00:00:0${pid % 10}.0000000+00:00`;
+    let killSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", original);
+    });
+
+    it("ends every confirmed entry in one verified run, identity attached, never by taskkill", async () => {
+      const live = new Set([ORPHAN_PID, OTHER_PID]);
+      mockExecFileAsync.mockImplementation(async (_file: string, args: string[]) => {
+        const script = args[args.length - 1];
+        const listed = [...script.matchAll(/ProcessId=(\d+)/g)]
+          .map((m) => Number(m[1]))
+          .filter((pid) => live.has(pid));
+        return { stdout: listed.map((pid) => `${pid} ${created(pid)}`).join("\r\n"), stderr: "" };
+      });
+      mockTreeKill.mockImplementation(async (targets: Array<{ pid: number }>) => {
+        for (const target of targets) live.delete(target.pid);
+        return [];
+      });
+      const entries = [ORPHAN_PID, OTHER_PID].map((pid) => ({
+        pid,
+        startTime: created(pid),
+        rootPid: 100,
+      }));
+
+      const outcome = await reapLineageEntries(entries, { windowsTree: false });
+
+      expect(mockTreeKill).toHaveBeenCalledTimes(1);
+      expect(mockTreeKill).toHaveBeenCalledWith(
+        entries.map(({ pid, startTime }) => ({ pid, startTime, tree: false })),
+        { timeoutMs: 3000 }
+      );
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith(
+        "taskkill",
+        expect.anything(),
+        expect.anything()
+      );
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(outcome).toMatchObject({ found: 2, ended: 2, stillRunning: 0, survivors: [] });
+    });
+  });
+
   describe("lineage reap report", () => {
     beforeEach(() => {
       resetLineageReapReportForTests();
@@ -1125,8 +1180,9 @@ describe("TerminalLineageLedger", () => {
         if (signal === "SIGKILL") killed.add(pid);
         return true;
       }) as typeof process.kill);
-      mockTreeKill.mockImplementation(async (pid: number) => {
-        killed.add(pid);
+      mockTreeKill.mockImplementation(async (targets: Array<{ pid: number }>) => {
+        for (const target of targets) killed.add(target.pid);
+        return [];
       });
       mockExecFileAsync.mockImplementation(async (file: string, args: string[]) => {
         if (file === "taskkill") {
@@ -1174,7 +1230,10 @@ describe("TerminalLineageLedger", () => {
       await reapPersistedLineages(tmpDir);
 
       if (isWindows) {
-        expect(mockTreeKill).toHaveBeenCalledWith(ORPHAN_PID, { timeoutMs: 3000 });
+        expect(mockTreeKill).toHaveBeenCalledWith(
+          [{ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), tree: true }],
+          { timeoutMs: 3000 }
+        );
       } else {
         expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGTERM");
         expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGKILL");
@@ -1203,7 +1262,10 @@ describe("TerminalLineageLedger", () => {
       await reapClaimedLineageFile(claimed!);
 
       if (isWindows) {
-        expect(mockTreeKill).toHaveBeenCalledWith(ORPHAN_PID, { timeoutMs: 3000 });
+        expect(mockTreeKill).toHaveBeenCalledWith(
+          [{ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), tree: true }],
+          { timeoutMs: 3000 }
+        );
       } else {
         expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGTERM");
         expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGKILL");

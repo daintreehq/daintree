@@ -59,7 +59,10 @@ import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createLogger, ingestHostLogEvent, isValidLogOverrideLevel } from "../utils/logger.js";
-import { killWindowsProcessTreesSync } from "../utils/windowsTreeKill.js";
+import {
+  describeWindowsTreeKillProblem,
+  killWindowsProcessTrees,
+} from "../utils/windowsTreeKill.js";
 import { store } from "../store.js";
 import { stripAssignedSessionIdArgs } from "../../shared/types/agentSettings.js";
 import { buildCommandLaunchShell } from "../ipc/handlers/terminal/commandLaunch.js";
@@ -1448,27 +1451,41 @@ export class PtyClient extends EventEmitter {
     const killable = [...uniquePids].filter(
       (pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid
     );
-    // One census for every tree, never `taskkill /T`, which can follow a reused
-    // parent PID into an unrelated program. Synchronous, as the per-PID taskkill
-    // was, so the trees are gone before this returns and the shard restarts.
-    const windowsKills =
-      process.platform === "win32"
-        ? killWindowsProcessTreesSync(killable, { timeoutMs: 3000 })
-        : null;
 
-    for (const pid of killable) {
-      let killed = false;
-      if (process.platform !== "win32") {
-        try {
-          process.kill(-pid, "SIGKILL");
-          killed = true;
-        } catch {
-          // ignore - fall back to direct kill
+    if (process.platform === "win32") {
+      // One helper run for every tree, never `taskkill /T`, which can follow a
+      // reused parent PID into an unrelated program — and no bare-PID fallback
+      // either: the crashed host's handles no longer pin these PIDs. Not
+      // blocking: this is Main mid-session. The shard's restart waits for it
+      // through the same barrier as the lineage reap above.
+      const kill = killWindowsProcessTrees(killable, { timeoutMs: 3000 }).then(
+        (results) => {
+          results.forEach((result, index) => {
+            const problem = describeWindowsTreeKillProblem(result);
+            if (problem) {
+              console.warn(`[PtyClient] Orphaned PTY pid=${killable[index]}: ${problem}`);
+            }
+          });
+        },
+        (err: unknown) => {
+          console.warn("[PtyClient] Orphaned PTY tree kill after host crash failed:", err);
         }
-      }
+      );
+      const barrier: Promise<void> = Promise.all([shard.lineageReap, kill])
+        .then(() => {})
+        .finally(() => {
+          if (shard.lineageReap === barrier) shard.lineageReap = null;
+        });
+      shard.lineageReap = barrier;
+    }
 
-      if (!killed && windowsKills?.get(pid)?.rootEnded) {
+    for (const pid of process.platform === "win32" ? [] : killable) {
+      let killed = false;
+      try {
+        process.kill(-pid, "SIGKILL");
         killed = true;
+      } catch {
+        // ignore - fall back to direct kill
       }
 
       if (!killed) {

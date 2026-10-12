@@ -8,7 +8,10 @@ import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { buildProbeEnv } from "../utils/spawnEnv.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
-import { killWindowsProcessTreeSync } from "../utils/windowsTreeKill.js";
+import {
+  killWindowsProcessTreeInBackground,
+  liveChildTreeTarget,
+} from "../utils/windowsTreeKill.js";
 import type { WorktreeMonitor } from "./WorktreeMonitor.js";
 import type {
   LifecycleCommandReview,
@@ -531,10 +534,18 @@ export class WorktreeLifecycleService {
       let timedOut = false;
       let aborted = false;
 
+      let windowsTreeKill: Promise<unknown> | null = null;
       const killProcess = () => {
         if (isWin) {
           if (child.pid !== undefined) {
-            killWindowsProcessTreeSync(child.pid);
+            // In the background, so a timed-out setup command never stalls the
+            // workspace host's thread on a PowerShell start; the run settles on
+            // the root's `close`, which the kill brings. One kill per run, and
+            // none once the root has exited and its PID is free for reuse.
+            const target = liveChildTreeTarget(child);
+            if (target) {
+              windowsTreeKill ??= killWindowsProcessTreeInBackground(target, "[WorktreeLifecycle]");
+            }
           } else {
             child.kill();
           }

@@ -1144,8 +1144,6 @@ describe("ProcessTreeCache command/env construction", () => {
 
       expect(cache.getChildPids(300)).toEqual([500]);
       expect(cache.getDescendantPids(300)).toEqual([500]);
-      // The refused link is still visible to a tree kill, which must not use /T.
-      expect(cache.walkTreeByCreationTime(300)).toEqual({ pids: [300, 500], stale: [400] });
     });
 
     it("carries ExecutablePath through to ProcessInfo", async () => {

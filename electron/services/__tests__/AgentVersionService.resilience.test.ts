@@ -26,7 +26,7 @@ vi.mock("child_process", () => ({
 // The Windows tree kill; POSIX CI only reaches it with a faked platform.
 vi.mock("../../utils/windowsTreeKill.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../utils/windowsTreeKill.js")>()),
-  killWindowsProcessTreeSync: treeKillMock,
+  killWindowsProcessTreeInBackground: treeKillMock,
 }));
 
 vi.mock("../../../shared/config/agentRegistry.js", () => registryMock);
@@ -264,7 +264,11 @@ describe("AgentVersionService resilience", () => {
         // (negative pid) so a grandchild holding the pipe dies too; Windows has
         // no group here and runs the verified tree kill on the whole tree.
         if (process.platform === "win32") {
-          expect(treeKillMock).toHaveBeenCalledWith(4242, { timeoutMs: 3000 });
+          expect(treeKillMock).toHaveBeenCalledWith(
+            expect.objectContaining({ pid: 4242 }),
+            "[AgentVersionService]",
+            { timeoutMs: 3000 }
+          );
         } else {
           expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
         }
@@ -308,7 +312,11 @@ describe("AgentVersionService resilience", () => {
 
         expect(result.installedVersion).toBe("1.2.3");
         if (process.platform === "win32") {
-          expect(treeKillMock).toHaveBeenCalledWith(4242, { timeoutMs: 3000 });
+          expect(treeKillMock).toHaveBeenCalledWith(
+            expect.objectContaining({ pid: 4242 }),
+            "[AgentVersionService]",
+            { timeoutMs: 3000 }
+          );
         } else {
           expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
         }
@@ -425,52 +433,79 @@ describe("AgentVersionService resilience", () => {
     });
 
     // The Windows reap branch is dead code on POSIX CI, so force-exercise it by
-    // faking `process.platform`. Asserts the exit-grace path runs the verified
-    // tree kill (whole tree) and never falls back to a group/foreground kill.
-    it("reaps via the tree kill on the exit-grace path when platform is win32", async () => {
-      (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
-        id: "claude",
-        name: "Claude",
-        command: "claude",
-        version: { args: ["--version"] },
-      });
+    // faking `process.platform`.
+    describe("on Windows", () => {
+      let realPlatform: NodeJS.Platform;
+      let killSpy: ReturnType<typeof vi.spyOn>;
 
-      const realPlatform = process.platform;
-      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-      const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
-      treeKillMock.mockReturnValue({
-        mode: "tree",
-        targeted: [4242],
-        failed: [],
-        stale: [],
-        rootEnded: true,
-      });
-      spawnMock.mockImplementation((() => {
-        const child = makeFakeChild();
-        queueMicrotask(() => {
-          child.stdout.emit("data", Buffer.from("1.2.3\n"));
-          child.emit("exit", 0, null);
-          // No `close` — a grandchild holds the pipe.
+      beforeEach(() => {
+        (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
+          id: "claude",
+          name: "Claude",
+          command: "claude",
+          version: { args: ["--version"] },
         });
-        return child;
-      }) as never);
+        realPlatform = process.platform;
+        Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+        killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+        // Never settles: the probe must not wait on the kill, which runs on Main.
+        treeKillMock.mockReturnValue(new Promise(() => {}));
+        vi.useFakeTimers();
+      });
 
-      vi.useFakeTimers();
-      try {
+      afterEach(() => {
+        vi.useRealTimers();
+        killSpy.mockRestore();
+        Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+      });
+
+      it("tree-kills a hung root in the background at the deadline", async () => {
+        spawnMock.mockImplementation((() => {
+          const child = makeFakeChild();
+          queueMicrotask(() => child.stdout.emit("data", Buffer.from("4.5.6\n")));
+          return child;
+        }) as never);
+
+        const { service } = createService(async () => ({ claude: "ready" }));
+        const pending = service.getVersion("claude" as AgentId);
+        await vi.advanceTimersByTimeAsync(10000);
+        const result = await pending;
+
+        expect(result.installedVersion).toBe("4.5.6");
+        // The root is alive and ours, so the helper may fall back to its PID.
+        expect(treeKillMock).toHaveBeenCalledWith(
+          { pid: 4242, ownChild: true },
+          "[AgentVersionService]",
+          { timeoutMs: 3000 }
+        );
+        // Windows has no process group here — no SIGKILL fallback.
+        expect(killSpy).not.toHaveBeenCalled();
+      });
+
+      it("never tree-kills an exited root's PID, which may already be reused", async () => {
+        spawnMock.mockImplementation((() => {
+          const child = makeFakeChild() as ReturnType<typeof makeFakeChild> & {
+            exitCode: number | null;
+          };
+          queueMicrotask(() => {
+            child.stdout.emit("data", Buffer.from("1.2.3\n"));
+            // Node sets exitCode before `exit`, and has released the handle.
+            child.exitCode = 0;
+            child.emit("exit", 0, null);
+            // No `close` — a grandchild holds the pipe.
+          });
+          return child;
+        }) as never);
+
         const { service } = createService(async () => ({ claude: "ready" }));
         const pending = service.getVersion("claude" as AgentId);
         await vi.advanceTimersByTimeAsync(300);
         const result = await pending;
 
         expect(result.installedVersion).toBe("1.2.3");
-        expect(treeKillMock).toHaveBeenCalledWith(4242, { timeoutMs: 3000 });
-        // Windows has no process group here — no SIGKILL fallback.
+        expect(treeKillMock).not.toHaveBeenCalled();
         expect(killSpy).not.toHaveBeenCalled();
-      } finally {
-        vi.useRealTimers();
-        killSpy.mockRestore();
-        Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
-      }
+      });
     });
 
     // Regression guard for the cleanup ordering: cleanup() destroys the pipes,

@@ -76,7 +76,11 @@ import {
   type TerminalWorkerConnection,
 } from "./pty-host/handlers/index.js";
 import { PluginPtyProcessManager } from "./pty-host/services/PluginPtyProcessManager.js";
-import { ProcessTreeKiller } from "./services/pty/ProcessTreeKiller.js";
+import {
+  beginWindowsExitBatch,
+  flushWindowsExitBatch,
+  ProcessTreeKiller,
+} from "./services/pty/ProcessTreeKiller.js";
 import { GracefulCaptureTracker } from "./pty-host/GracefulCaptureTracker.js";
 import {
   PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS,
@@ -1878,16 +1882,26 @@ function cleanup(): void {
   processTreeCache.attachLineageLedger(null);
   imagePathProbe.dispose();
 
-  // Release every plugin PTY's native handle through its teardown chokepoint —
-  // a bare process exit would leak the master fd for any still-running one.
-  pluginPtyManager.disposeAll();
+  // Windows: every tree kill below is queued and run as one helper when the
+  // batch is flushed — `process.exit()` follows, so an asynchronous kill would
+  // never be observed, and a blocking one per terminal would not fit Main's
+  // force-kill deadline. Pseudoconsoles are released after that kill. No-op
+  // elsewhere.
+  beginWindowsExitBatch();
+  try {
+    // Release every plugin PTY's native handle through its teardown chokepoint —
+    // a bare process exit would leak the master fd for any still-running one.
+    pluginPtyManager.disposeAll();
 
-  if (ptyPool) {
-    ptyPool.dispose();
-    ptyPool = null;
+    if (ptyPool) {
+      ptyPool.dispose();
+      ptyPool = null;
+    }
+
+    ptyManager.dispose();
+  } finally {
+    flushWindowsExitBatch();
   }
-
-  ptyManager.dispose();
   lineageLedger.dispose();
 
   // Workers are persistent by design (never terminated — Electron 37+

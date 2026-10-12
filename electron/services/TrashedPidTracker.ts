@@ -160,10 +160,16 @@ export class TrashedPidTracker {
 
         let killed = false;
         if (process.platform === "win32") {
-          const result = await killWindowsProcessTree(entry.pid, { timeoutMs: 3000 });
-          if (result.rootEnded) {
-            killed = true;
-          }
+          // The recorded start time goes with the PID: the helper ends nothing
+          // unless the process holding it now is the one that was trashed, and
+          // kills each member by a handle checked against its census identity,
+          // so the PID cannot be recycled between that check and the kill. No
+          // bare-PID fallback below for the same reason.
+          const result = await killWindowsProcessTree(
+            { pid: entry.pid, startTime: entry.startTime },
+            { timeoutMs: 3000 }
+          );
+          killed = result.rootEnded;
         } else {
           try {
             process.kill(-entry.pid, "SIGKILL");
@@ -173,7 +179,7 @@ export class TrashedPidTracker {
           }
         }
 
-        if (!killed) {
+        if (!killed && process.platform !== "win32") {
           try {
             process.kill(entry.pid, "SIGKILL");
             killed = true;

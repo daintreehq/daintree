@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { resilientAtomicWriteFileSync } from "../utils/fs.js";
-import { killWindowsProcessTree } from "../utils/windowsTreeKill.js";
+import { killWindowsProcessTrees } from "../utils/windowsTreeKill.js";
 import type { ClosedProcessOrigin } from "../../shared/types/processes.js";
 
 const execFileAsync = promisify(execFile);
@@ -1073,7 +1073,7 @@ export interface LineageReapOutcome {
 }
 
 const POST_KILL_CHECK_DELAY_MS = 100;
-const TASKKILL_TIMEOUT_MS = 3000;
+const TREE_KILL_TIMEOUT_MS = 3000;
 
 export interface ReapLineageOptions {
   /** Log context for the reap line. */
@@ -1090,25 +1090,25 @@ export interface ReapLineageOptions {
 /**
  * Async so a slow kill never blocks the host thread its heartbeat runs on.
  *
- * The tree kill is the creation-time-verified one, not `taskkill /T`: the
- * entry's own identity is verified before this runs, but /T would still follow
- * ParentProcessId links below it, and an older process naming a reused PID as
- * its parent is no child of ours.
+ * One helper run for the whole batch, never `taskkill /T` (which follows
+ * ParentProcessId links below a verified entry, and an older process naming a
+ * reused PID as its parent is no child of ours) and never a bare PID. Each
+ * entry travels with the start time it was recorded under; the helper checks
+ * it against its own census and then against the handle it terminates
+ * through, so an entry whose PID was reused since the probe is never touched.
  */
-async function taskkill(pid: number, tree: boolean): Promise<void> {
+async function killEntriesWindows(
+  entries: readonly PersistedLineageEntry[],
+  tree: boolean
+): Promise<void> {
   try {
-    if (tree) {
-      await killWindowsProcessTree(pid, { timeoutMs: TASKKILL_TIMEOUT_MS });
-      return;
-    }
-    await execFileAsync("taskkill", ["/F", "/PID", String(pid)], {
-      windowsHide: true,
-      shell: false,
-      signal: AbortSignal.timeout(TASKKILL_TIMEOUT_MS),
-    });
+    await killWindowsProcessTrees(
+      entries.map((entry) => ({ pid: entry.pid, startTime: entry.startTime, tree })),
+      { timeoutMs: TREE_KILL_TIMEOUT_MS }
+    );
   } catch {
-    // Exit status says what the kill thought; the probe afterwards says what
-    // the OS shows, and only that is reported.
+    // What the kill thought is not reported; the probe afterwards says what
+    // the OS shows, and only that is.
   }
 }
 
@@ -1152,27 +1152,8 @@ export async function reapLineageEntries(
 
   let signalled: PersistedLineageEntry[];
   if (process.platform === "win32") {
-    signalled = [];
-    for (const [index, entry] of confirmed.entries()) {
-      // Each taskkill can take seconds, long enough for a later target to exit
-      // and its PID be reused, so every one after the first is re-verified
-      // right before it is signalled.
-      if (index > 0) {
-        const fresh = await probeStartTimesDetailed([entry.pid]);
-        if (fresh.unresolved.has(entry.pid)) {
-          outcome.survivors.push(entry);
-          outcome.unchecked++;
-          continue;
-        }
-        if (fresh.startTimes.get(entry.pid) !== entry.startTime) {
-          outcome.ended++;
-          continue;
-        }
-      }
-      await taskkill(entry.pid, windowsTree);
-      signalled.push(entry);
-    }
-    if (signalled.length === 0) return outcome;
+    await killEntriesWindows(confirmed, windowsTree);
+    signalled = [...confirmed];
   } else {
     for (const entry of confirmed) {
       killValidated(entry.pid, "SIGTERM");
@@ -1209,7 +1190,7 @@ export async function reapLineageEntries(
     if (signalled.length === 0) return outcome;
   }
 
-  // A delivered SIGKILL or a zero taskkill status is an attempt, not an
+  // A delivered SIGKILL or a completed tree kill is an attempt, not an
   // observation. Look once more so the outcome reports what the OS shows, and
   // keep anything still there or unanswerable for the next attempt.
   await new Promise((resolve) => setTimeout(resolve, POST_KILL_CHECK_DELAY_MS));

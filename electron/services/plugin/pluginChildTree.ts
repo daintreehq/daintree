@@ -1,4 +1,4 @@
-import { killWindowsProcessTree } from "../../utils/windowsTreeKill.js";
+import { killWindowsProcessTree, liveChildTreeTarget } from "../../utils/windowsTreeKill.js";
 
 const TREE_KILL_TIMEOUT_MS = 3000;
 
@@ -31,6 +31,9 @@ let exitHookInstalled = false;
 export interface TreeKillableChild {
   pid?: number | undefined;
   ownsProcessTree?: boolean;
+  /** Set once a real `ChildProcess` has exited; its PID is then free for reuse. */
+  exitCode?: number | null;
+  signalCode?: NodeJS.Signals | null;
   kill(signal?: NodeJS.Signals): boolean;
 }
 
@@ -78,6 +81,11 @@ export function signalChildTree(child: TreeKillableChild, signal: "SIGTERM" | "S
   }
 
   if (process.platform === "win32") {
+    // Not once the child has exited: its PID is free for reuse.
+    if (!liveChildTreeTarget(child)) {
+      directKill(child, signal);
+      return;
+    }
     killWindowsTree(pid, () => directKill(child, signal));
     return;
   }

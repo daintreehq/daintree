@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const treeKillMock = vi.fn();
 
-vi.mock("../../../utils/windowsTreeKill.js", () => ({
+vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
   killWindowsProcessTree: (...args: unknown[]) => treeKillMock(...args) as unknown,
 }));
 
@@ -267,6 +268,13 @@ describe("pluginChildTree (#13173)", () => {
       const child = makeChild({ ownsProcessTree: true });
       signalChildTree(child, "SIGKILL");
       await vi.waitFor(() => expect(child.kill).toHaveBeenCalledTimes(1));
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    });
+
+    it("ends an exited child directly, never tree-killing its reusable PID", () => {
+      const child = { ...makeChild({ ownsProcessTree: true }), exitCode: 0 };
+      signalChildTree(child, "SIGKILL");
+      expect(treeKillMock).not.toHaveBeenCalled();
       expect(child.kill).toHaveBeenCalledWith("SIGKILL");
     });
 

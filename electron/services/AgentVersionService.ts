@@ -2,8 +2,8 @@ import { spawn, type ChildProcess } from "child_process";
 import * as semver from "semver";
 import { cliSpawnTarget } from "../utils/windowsCliSpawn.js";
 import {
-  describeWindowsTreeKillProblem,
-  killWindowsProcessTreeSync,
+  killWindowsProcessTreeInBackground,
+  liveChildTreeTarget,
 } from "../utils/windowsTreeKill.js";
 import {
   getEffectiveAgentConfig,
@@ -293,18 +293,16 @@ export class AgentVersionService {
           // Windows has no process groups here: `child.kill()` TerminateProcess-es
           // only the foreground, orphaning the inherited-pipe grandchild. Reap
           // the whole tree with the creation-time-verified kill, never
-          // `taskkill /T`, which can follow a reused parent PID. A root already
-          // gone is benign (like ESRCH); a census or termination failure may
-          // leave the tree alive, so warn rather than swallow.
-          try {
-            const problem = describeWindowsTreeKillProblem(
-              killWindowsProcessTreeSync(pid, { timeoutMs: 3000 })
-            );
-            if (problem) console.warn(`[AgentVersionService] tree kill pid=${pid}: ${problem}`);
-          } catch (error) {
-            console.warn(
-              `[AgentVersionService] tree kill pid=${pid}: ${this.toErrorString(error)}`
-            );
+          // `taskkill /T`, which can follow a reused parent PID. In the
+          // background: this runs on Main, and the probe settles with what it
+          // captured without waiting on the kill. Only while the root lives:
+          // after its exit the PID is free for reuse, and nothing can walk
+          // from a dead root to the grandchild it left holding the pipe.
+          const target = liveChildTreeTarget(child);
+          if (target) {
+            void killWindowsProcessTreeInBackground(target, "[AgentVersionService]", {
+              timeoutMs: 3000,
+            });
           }
           return;
         }

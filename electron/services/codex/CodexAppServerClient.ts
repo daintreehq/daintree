@@ -25,8 +25,8 @@
 import { spawn, type ChildProcess } from "child_process";
 import { cliSpawnTarget } from "../../utils/windowsCliSpawn.js";
 import {
-  describeWindowsTreeKillProblem,
-  killWindowsProcessTreeSync,
+  killWindowsProcessTreeInBackground,
+  liveChildTreeTarget,
 } from "../../utils/windowsTreeKill.js";
 import { buildProbeEnv } from "../../utils/spawnEnv.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
@@ -240,21 +240,19 @@ async function spawnCodexAppServerSession<T>(
   let disposed = false;
   let failure: Error | null = null;
 
-  const killTree = (): void => {
+  /** Null when the kill is done by the time it returns; the Windows kill settles later. */
+  const killTree = (): Promise<unknown> | null => {
     const pid = child.pid;
-    if (typeof pid !== "number") return;
+    if (typeof pid !== "number") return null;
     if (!useGroup) {
-      try {
-        // A root already gone is benign; a census or termination failure may
-        // have left part of the tree alive.
-        const problem = describeWindowsTreeKillProblem(
-          killWindowsProcessTreeSync(pid, { timeoutMs: 3000 })
-        );
-        if (problem) console.warn(`[CodexAppServer] tree kill pid=${pid}: ${problem}`);
-      } catch (error) {
-        console.warn(`[CodexAppServer] tree kill pid=${pid}: ${String(error)}`);
-      }
-      return;
+      // In the background: every quota and subagent query ends here, on Main,
+      // and nothing after it needs the tree gone first. Only while the root
+      // lives — after its exit the PID is free for reuse. Anything that may
+      // have left part of the tree alive is logged.
+      const target = liveChildTreeTarget(child);
+      return target
+        ? killWindowsProcessTreeInBackground(target, "[CodexAppServer]", { timeoutMs: 3000 })
+        : null;
     }
     try {
       process.kill(-pid, "SIGKILL");
@@ -266,6 +264,7 @@ async function spawnCodexAppServerSession<T>(
         console.warn(`[CodexAppServer] SIGKILL group pid=${pid}: ${String(error)}`);
       }
     }
+    return null;
   };
 
   /** Fail every in-flight request once, and refuse any that arrive after. */
@@ -289,17 +288,23 @@ async function spawnCodexAppServerSession<T>(
     // Anything `run` left in flight settles now rather than idling until its
     // own 10s timer. Harmless on the happy path, where nothing is pending.
     failAll(new CodexAppServerError("protocol-error", "Codex app-server session ended"));
-    if (reap) killTree();
+    const killing = reap ? killTree() : null;
     // Drop only `data`, keeping the no-op `error` sinks below alive: destroy()
     // can surface a pending EIO/EBADF on the next tick, and an unhandled
     // stream error is fatal in the main process.
     child.stdout?.removeAllListeners("data");
     child.stderr?.removeAllListeners("data");
-    try {
-      child.stdin?.end();
-    } catch {
-      // stdin may already be closed; nothing to recover.
-    }
+    const endStdin = (): void => {
+      try {
+        child.stdin?.end();
+      } catch {
+        // stdin may already be closed; nothing to recover.
+      }
+    };
+    // A Windows tree kill walks from the live root, and EOF on stdin is what
+    // ends an app-server — so the pipe stays open until the kill has settled.
+    if (killing) void killing.then(endStdin);
+    else endStdin();
     child.stdout?.destroy();
     child.stderr?.destroy();
   };

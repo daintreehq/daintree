@@ -384,6 +384,35 @@ describe("PluginMcpSupervisor (issue #9233)", () => {
     }
   });
 
+  it("never tree-kills an exited server's PID on Windows, which may already be reused", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+    try {
+      const fake = makeFakeSubprocess({ pid: 9876 });
+      const killTree = vi.fn();
+      const supervisor = new PluginMcpSupervisor({ spawner: () => fake.handle, killTree });
+      const startPromise = supervisor.start({
+        pluginId: "acme.demo",
+        contributions: [{ id: "linear", name: "Linear", command: "node" }],
+        resolveSettings: async () => "",
+      });
+      await fake.waitForStdinCount(1);
+      fake.answerInitialize();
+      await startPromise;
+      // A real ChildProcess records its exit before anything can react to it.
+      Object.assign(fake.handle.subprocess, { exitCode: 1 });
+
+      vi.useFakeTimers();
+      await supervisor.shutdown({ pluginId: "acme.demo" });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(killTree).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+    }
+  });
+
   it("does not invoke the tree-killer on POSIX", async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });

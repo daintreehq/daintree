@@ -5,7 +5,10 @@ import {
   type ChildProcess,
   type ChildProcessWithoutNullStreams,
 } from "child_process";
-import { killWindowsProcessTreeSync } from "../../../../electron/utils/windowsTreeKill.js";
+import {
+  killWindowsProcessTreeInBackground,
+  liveChildTreeTarget,
+} from "../../../../electron/utils/windowsTreeKill.js";
 import type {
   CloneAuthProbe,
   CloneCapability,
@@ -23,21 +26,28 @@ const GH_NON_INTERACTIVE_ENV = {
   GH_TERMINAL_PROMPT: "0",
 } as const;
 
-function killProcessTree(child: ChildProcess): void {
+/**
+ * End the clone's process tree. Windows returns the kill in flight, which
+ * resolves once every member has exited: it runs on Main, so it must not block,
+ * and the caller deletes the partial clone afterwards, which the tree's open
+ * `.git/` handles would refuse.
+ */
+function killProcessTree(child: ChildProcess): Promise<unknown> | null {
   if (child.pid === undefined) {
     try {
       child.kill();
     } catch {
       // Already exited.
     }
-    return;
+    return null;
   }
 
   if (process.platform === "win32") {
     // Never `taskkill /T`: it can follow a reused parent PID into an
-    // unrelated program.
-    killWindowsProcessTreeSync(child.pid);
-    return;
+    // unrelated program. Nothing once the root has exited: its PID is free
+    // for reuse.
+    const target = liveChildTreeTarget(child);
+    return target ? killWindowsProcessTreeInBackground(target, "[GitHubClone]") : null;
   }
 
   try {
@@ -56,6 +66,7 @@ function killProcessTree(child: ChildProcess): void {
   }, 5_000);
   // Don't keep the event loop alive solely for the SIGKILL escalation.
   sigkillTimer.unref();
+  return null;
 }
 
 const GH_STAGE_PATTERNS: Array<{ re: RegExp; stage: string }> = [
@@ -162,13 +173,17 @@ async function cloneWithGh(
     }
   });
 
+  // Windows: the tree kill in flight, awaited before this returns so the
+  // caller's cleanup of the partial clone finds the tree gone.
+  let treeKill: Promise<unknown> | null = null;
+
   const timeoutHandle = setTimeout(() => {
     timedOut = true;
-    killProcessTree(child);
+    treeKill ??= killProcessTree(child);
   }, GH_CLONE_TIMEOUT_MS);
 
   const onAbort = () => {
-    killProcessTree(child);
+    treeKill ??= killProcessTree(child);
   };
   signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -202,6 +217,7 @@ async function cloneWithGh(
   } finally {
     clearTimeout(timeoutHandle);
     signal?.removeEventListener("abort", onAbort);
+    if (treeKill) await treeKill;
   }
 }
 

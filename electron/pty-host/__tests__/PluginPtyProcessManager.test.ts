@@ -445,6 +445,7 @@ describe("PluginPtyProcessManager process-tree teardown (#13173)", () => {
       execute: vi.fn<(immediate: boolean, delayMs?: number) => number[]>(() => []),
       reapAfterRootExit: vi.fn<(immediate?: boolean, delayMs?: number) => number[]>(() => []),
       registerRoot: vi.fn<(pid: number | undefined) => void>(),
+      hasPendingTreeKill: vi.fn<() => boolean>(() => false),
     };
     const manager = new PluginPtyProcessManager(
       (event) => events.push(event),
@@ -561,7 +562,7 @@ describe("PluginPtyProcessManager process-tree teardown (#13173)", () => {
       (fake.pty as unknown as { _agent: object })._agent = {};
       spawnMock.mockReturnValue(fake.pty);
       const { manager, killer, targets } = makeTreeManager();
-      // Model the real killer: taskkill, then the root's native fallback.
+      // Model the real killer once its tree kill has finished: the root's release.
       killer.execute.mockImplementation(() => {
         targets[0].kill();
         return [];
@@ -569,7 +570,7 @@ describe("PluginPtyProcessManager process-tree teardown (#13173)", () => {
       manager.spawn("p1", 0, options());
       manager.kill("p1", 0, "SIGTERM");
       manager.kill("p1", 0, "SIGKILL");
-      // A second taskkill could land on a recycled PID; a second native kill
+      // A finished Windows kill is not repeated; a second native kill
       // double-frees the pseudoconsole (#9551).
       expect(killer.execute).toHaveBeenCalledTimes(1);
       expect(fake.calls.filter((c) => c === "kill")).toHaveLength(1);
@@ -673,8 +674,90 @@ describe("PluginPtyProcessManager process-tree teardown (#13173)", () => {
       manager.kill("p1", 0, "SIGTERM");
       fake.emitExit(0);
       manager.disposeAll();
-      // taskkill /T /F already was the whole kill; the PID may be recycled.
+      // The verified tree kill already was the whole kill.
       expect(killer.execute).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("a Windows tree kill still in flight", () => {
+    /**
+     * Model the real killer: a graceful kill starts the helper and owns the
+     * root's release until it settles; a forced kill while it is pending joins
+     * it. `settle()` is the helper finishing.
+     */
+    function inFlight() {
+      const fake = makeFakePty();
+      (fake.pty as unknown as { _agent: object })._agent = {};
+      spawnMock.mockReturnValue(fake.pty);
+      const tree = makeTreeManager();
+      let pending = false;
+      tree.killer.hasPendingTreeKill.mockImplementation(() => pending);
+      tree.killer.execute.mockImplementation(() => {
+        pending = true;
+        return [];
+      });
+      tree.manager.spawn("p1", 0, options());
+      tree.manager.kill("p1", 0, "SIGTERM");
+      const settle = () => {
+        pending = false;
+        tree.targets[0].kill();
+      };
+      return { ...tree, fake, settle };
+    }
+
+    it.each([
+      [
+        "Main's SIGKILL",
+        (m: InstanceType<typeof PluginPtyProcessManager>) => m.kill("p1", 0, "SIGKILL"),
+      ],
+      [
+        "a superseding generation",
+        (m: InstanceType<typeof PluginPtyProcessManager>) => m.spawn("p1", 1, options()),
+      ],
+      ["host disposal", (m: InstanceType<typeof PluginPtyProcessManager>) => m.disposeAll()],
+      ["the root's own exit", () => {}],
+    ])("keeps ConPTY open through %s until the kill settles", (_label, teardown) => {
+      withPlatform("win32", () => {
+        const { manager, fake, settle, events } = inFlight();
+        if (_label === "the root's own exit") fake.emitExit(0);
+        else {
+          spawnMock.mockReturnValue(makeFakePty({ pid: 5555 }).pty);
+          teardown(manager);
+        }
+
+        // Releasing ConPTY now would end the root the helper walks from.
+        expect(fake.calls).not.toContain("kill");
+        expect(
+          events.filter((e) => e.type === "plugin-pty-exit" && e.generation === 0)
+        ).toHaveLength(1);
+
+        settle();
+        expect(fake.calls.filter((c) => c === "kill")).toHaveLength(1);
+        // Released once, however many routes reach it afterwards.
+        manager.disposeAll();
+        settle();
+        expect(fake.calls.filter((c) => c === "kill")).toHaveLength(1);
+      });
+    });
+
+    it("hands a forced kill to the killer to join, not to start a second walk", () => {
+      withPlatform("win32", () => {
+        const { manager, killer } = inFlight();
+        manager.kill("p1", 0, "SIGKILL");
+        expect(killer.execute.mock.calls).toEqual([[false, expect.any(Number)], [true]]);
+      });
+    });
+
+    it("releases at once when no tree kill owns the release", () => {
+      withPlatform("win32", () => {
+        const fake = makeFakePty();
+        (fake.pty as unknown as { _agent: object })._agent = {};
+        spawnMock.mockReturnValue(fake.pty);
+        const { manager } = makeTreeManager();
+        manager.spawn("p1", 0, options());
+        fake.emitExit(0);
+        expect(fake.calls.filter((c) => c === "kill")).toHaveLength(1);
+      });
     });
   });
 });
