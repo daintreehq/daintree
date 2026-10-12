@@ -48,6 +48,7 @@ import { getLinuxWindowIcon } from "./linuxWindowIcon.js";
 import { showWindowInactive } from "./showWindowInactive.js";
 import { seedTitleBarOverlay } from "./titleBarOverlay.js";
 import { readLastActiveProjectIdentitySync } from "../services/persistence/readLastProjectId.js";
+import { appWindowStateTracking, resolveBoundsProjectPath } from "./windowStateTracking.js";
 import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import { markPerformance } from "../utils/performance.js";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
@@ -168,7 +169,13 @@ export function setupBrowserWindow(
   dirname: string,
   options: SetupBrowserWindowOptions = {}
 ): CreateWindowResult {
-  const { onRecreateWindow, onCreateWindow, projectPath, revealMode = "show" } = options;
+  const {
+    onRecreateWindow,
+    onCreateWindow,
+    projectPath,
+    initialProjectId,
+    revealMode = "show",
+  } = options;
   let smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
   let _smokeRendererUnresponsive = false;
 
@@ -230,7 +237,8 @@ export function setupBrowserWindow(
       icon: getLinuxWindowIcon(),
       backgroundColor: windowBg,
     },
-    projectPath ?? undefined
+    resolveBoundsProjectPath(projectPath, initialProjectId),
+    appWindowStateTracking
   );
   markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);
 
