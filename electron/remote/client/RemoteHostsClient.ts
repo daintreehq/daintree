@@ -455,6 +455,8 @@ export class RemoteHostsClient {
       const stale = superseded();
       if (stale) return stale;
       if (readiness === "version-mismatch") throw versionMismatch(hostId);
+      if (readiness === "host-mode-off")
+        throw hostModeOff(this.options.registry.get(hostId)?.name ?? hostId);
       if (readiness !== "ready") {
         // A new window can show the host's project list while it connects;
         // anything that has to find a project there needs the host's answer.
@@ -728,6 +730,14 @@ export class RemoteHostsClient {
     const windowId = this.windowOf(ctx);
     return windowId === null ? LOCAL_HOST_ID : this.options.bindings.get(windowId);
   }
+}
+
+function hostModeOff(hostName: string): AppError {
+  return new AppError({
+    code: "HOST_MODE_OFF",
+    message: `Daintree isn't running in Host mode on ${hostName}`,
+    userMessage: `Daintree isn't running in Host mode on ${hostName}. Set it up to work there.`,
+  });
 }
 
 function versionMismatch(hostId: HostId): AppError {

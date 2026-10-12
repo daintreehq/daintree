@@ -112,6 +112,28 @@ describe("switchToHost", () => {
     expect(opened.detail).toEqual({ tab: "hosts" });
   });
 
+  it("offers to set the host up when Daintree there isn't in Host mode", async () => {
+    m.hosts = [
+      studio({ status: "unreachable", lastSeenAt: null, detail: null, hostModeOff: true }),
+    ];
+    m.switchWindowHost.mockRejectedValue(
+      new ClientAppError(
+        "HOST_MODE_OFF",
+        "Daintree isn't running in Host mode on studio-01",
+        "Daintree isn't running in Host mode on studio-01. Set it up to work there."
+      )
+    );
+    await switchToHost("h1", false);
+    const toast = m.notify.mock.calls[0]![0] as {
+      message: string;
+      actions: Array<{ label: string; onClick: () => void }>;
+    };
+    expect(toast.message).toContain("isn't running in Host mode");
+    expect(toast.actions.map((action) => action.label)).toEqual(["Set up…"]);
+    toast.actions[0]!.onClick();
+    expect(takePendingHostUpdate()).toBe("h1");
+  });
+
   it("offers a retry for any other failure", async () => {
     m.hosts = [studio({ status: "unreachable", lastSeenAt: null, detail: null })];
     m.switchWindowHost.mockRejectedValue(new ClientAppError("HOST_DISCONNECTED", "gone"));

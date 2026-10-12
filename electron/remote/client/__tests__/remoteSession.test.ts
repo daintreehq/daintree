@@ -86,7 +86,7 @@ import {
   type ViewSink,
 } from "../RemoteHostManager.js";
 import { RemoteRouterImpl } from "../RemoteRouter.js";
-import { createDirectTransport, type LinkTransport } from "../transport.js";
+import { HostModeOffError, createDirectTransport, type LinkTransport } from "../transport.js";
 import { WindowHostBinding } from "../WindowHostBinding.js";
 import { installHostMetricsHostWith } from "../../metrics/hostMetricsHost.js";
 import { MetricsLinkMethod } from "../../metrics/linkMethods.js";
@@ -159,7 +159,7 @@ interface Harness {
   manager: RemoteHostManager;
   sink: ReturnType<typeof recordingSink>;
   sockets: net.Socket[];
-  allowConnect: { value: boolean };
+  allowConnect: { value: boolean; hostModeOff?: boolean };
 }
 
 const cleanups: Array<() => unknown> = [];
@@ -212,10 +212,13 @@ async function startHarness(
   registry.add({ name: HOST_ID, connection: { kind: "ssh", target: "studio.example" } });
   const sink = recordingSink();
   const sockets: net.Socket[] = [];
-  const allowConnect = { value: true };
+  const allowConnect: { value: boolean; hostModeOff?: boolean } = { value: true };
   const direct = createDirectTransport({ socketPath: location.socketPath, token: server.token });
   const transport: LinkTransport = {
     async open(signal) {
+      if (allowConnect.hostModeOff) {
+        throw new HostModeOffError("Daintree isn't running in Host mode there (no host.json).");
+      }
       if (!allowConnect.value) throw new Error("host unreachable");
       const connection = await direct.open(signal);
       sockets.push(connection.socket as net.Socket);
@@ -780,6 +783,16 @@ describe("remote session wiring", () => {
     await expect(
       h.manager.get(HOST_ID)!.callHost(MetricsLinkMethod.LIST_WORKTREES, null)
     ).resolves.toEqual([]);
+  });
+
+  it("settles whenReady at once when the host answers but isn't in Host mode", async () => {
+    await startHarness();
+    h.allowConnect.hostModeOff = true;
+    const connection = h.manager.connect(HOST_ID);
+    const started = Date.now();
+    await expect(connection.whenReady(5_000)).resolves.toBe("host-mode-off");
+    expect(Date.now() - started).toBeLessThan(2_000);
+    h.allowConnect.hostModeOff = false;
   });
 
   it("settles whenReady on connect, stop and timeout", async () => {

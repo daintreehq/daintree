@@ -55,7 +55,12 @@ export async function switchToHost(
       isClientAppError(error) && error.code === "HOST_VERSION_MISMATCH"
         ? getHostListSnapshot().hosts.find((candidate) => candidate.descriptor.id === hostId)
         : undefined;
-    const update = entry ? hostUpdateOffer(entry) : null;
+    // Host mode off there: setting it up is what gets this host working.
+    const update = entry
+      ? hostUpdateOffer(entry)
+      : isClientAppError(error) && error.code === "HOST_MODE_OFF"
+        ? { hostId, target: "host" as const, label: "Set up…" }
+        : null;
     notify({
       type: "error",
       context: { eventKind: "connectivity" },

@@ -67,6 +67,8 @@ export type AppErrorCode =
   | "HOST_DISCONNECTED"
   | "OUTCOME_UNKNOWN"
   | "HOST_VERSION_MISMATCH"
+  // ssh reached the host, but Daintree there isn't running in Host mode.
+  | "HOST_MODE_OFF"
   // An action that is inherently UI (focus a panel, open a dialog) was
   // dispatched with no frontend attached to the host.
   | "NO_FRONTEND_ATTACHED"

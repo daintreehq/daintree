@@ -99,7 +99,13 @@ export interface ViewReverseRequest {
 export type ReverseRequestAnswerer = (request: ViewReverseRequest) => Promise<unknown>;
 
 /** How {@link HostConnection.whenReady} settled. */
-export type HostReadiness = "ready" | "version-mismatch" | "timeout" | "stopped";
+export type HostReadiness =
+  | "ready"
+  | "version-mismatch"
+  /** ssh reached the host and found no Daintree in Host mode there: waiting won't change it. */
+  | "host-mode-off"
+  | "timeout"
+  | "stopped";
 
 function notifyEndpointOpened(
   listeners: Iterable<EndpointOpenedListener>,
@@ -248,7 +254,9 @@ export class HostConnection {
 
   private readiness(): HostReadiness | null {
     if (!this.started) return "stopped";
-    if (this.link.getState().status === "version-mismatch") return "version-mismatch";
+    const link = this.link.getState();
+    if (link.status === "version-mismatch") return "version-mismatch";
+    if (link.status === "unreachable" && link.hostModeOff) return "host-mode-off";
     return this.unavailableEnvelope() === null ? "ready" : null;
   }
 

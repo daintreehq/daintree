@@ -345,6 +345,14 @@ describe("RemoteHostsClient", () => {
       startingClient.dispose();
     });
 
+    it("says at once when the host answered but Daintree there isn't in Host mode", async () => {
+      manager.readiness = "host-mode-off";
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+      ).rejects.toMatchObject({ code: "HOST_MODE_OFF" });
+      expect(bindings.get(1)).toBe("local");
+    });
+
     it("refuses when the host never answers, rather than moving the window blind", async () => {
       manager.readiness = "unreachable";
       await expect(
