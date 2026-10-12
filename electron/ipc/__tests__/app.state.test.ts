@@ -110,6 +110,9 @@ vi.mock("../../services/ProjectStore.js", () => ({
 
 vi.mock("../../utils/gpuDetection.js", () => ({
   getGpuFeatureStatus: vi.fn(() => ({ webgl2: "hardware" })),
+  getWebGLFeatureStatus: vi.fn((status: { webgl?: string; webgl2?: string } | null) =>
+    status ? (status.webgl2 ?? status.webgl) : undefined
+  ),
   isWebGLHardwareAccelerated: vi.fn(() => true),
 }));
 

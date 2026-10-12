@@ -32,7 +32,11 @@ export const CRASH_CRITICAL_FIELDS = new Set([
   "fleetScopeMode",
 ]);
 
-import { getGpuFeatureStatus, isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
+import {
+  getGpuFeatureStatus,
+  getWebGLFeatureStatus,
+  isWebGLHardwareAccelerated,
+} from "../../../utils/gpuDetection.js";
 import { isRunningUnderRosetta } from "../../../utils/rosettaDetection.js";
 import {
   isGpuDisabledByFlag,
@@ -98,11 +102,11 @@ export type ShellHydrateFields = Pick<
  * answered for a remote Shell must not swallow them.
  */
 export function readShellHydrateFields(options: { consumeOneShots: boolean }): ShellHydrateFields {
-  const gpuStatus = getGpuFeatureStatus();
-  const gpuWebGLHardware = isWebGLHardwareAccelerated(gpuStatus.webgl2);
+  const webglStatus = getWebGLFeatureStatus(getGpuFeatureStatus());
+  const gpuWebGLHardware = isWebGLHardwareAccelerated(webglStatus);
   if (!gpuWebGLHardware) {
     console.warn(
-      `[AppHydrate] Software-only WebGL2 detected (status: ${gpuStatus.webgl2}). WebGL terminal renderer will be disabled.`
+      `[AppHydrate] Software-only WebGL detected (status: ${webglStatus}). WebGL terminal renderer will be disabled.`
     );
   }
   const guard = getCrashLoopGuard();

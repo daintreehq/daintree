@@ -117,6 +117,7 @@ import { readGpuDisabledFlagData } from "../gpuDisabledFlag.js";
 describe("GpuCrashMonitorService", () => {
   let tmpDir: string;
   let originalPlatform: NodeJS.Platform;
+  let originalSessionType: string | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -131,6 +132,9 @@ describe("GpuCrashMonitorService", () => {
     // this per-test.
     originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    // The soft fallback only applies on a Wayland session.
+    originalSessionType = process.env.XDG_SESSION_TYPE;
+    process.env.XDG_SESSION_TYPE = "wayland";
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -138,6 +142,8 @@ describe("GpuCrashMonitorService", () => {
 
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    if (originalSessionType === undefined) delete process.env.XDG_SESSION_TYPE;
+    else process.env.XDG_SESSION_TYPE = originalSessionType;
     fs.rmSync(tmpDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
@@ -609,6 +615,32 @@ describe("GpuCrashMonitorService", () => {
           }
         });
       });
+
+      it.each(["x11", undefined])(
+        "linux session %s: first crash does not write ANGLE flag, does not relaunch",
+        async (sessionType) => {
+          // environment.ts applies the ANGLE/Vulkan switches on Wayland only, so an
+          // X11 (or unknown) session's relaunch would cost the session and change nothing.
+          if (sessionType === undefined) delete process.env.XDG_SESSION_TYPE;
+          else process.env.XDG_SESSION_TYPE = sessionType;
+          const writeSpy = await trackAtomicWriter();
+          try {
+            await loadAndInit();
+            emitGpuCrash();
+            await new Promise((r) => setImmediate(r));
+            expect(appMock.relaunch).not.toHaveBeenCalled();
+            expect(appMock.exit).not.toHaveBeenCalled();
+            expect(isGpuAngleFallbackByFlag(tmpDir)).toBe(false);
+            expect(writeSpy).not.toHaveBeenCalled();
+            expect(loggerMethods.info).toHaveBeenCalledWith(
+              "gpu-crash-soft-fallback-skip-x11",
+              expect.objectContaining({ sessionType: sessionType ?? null, crashCount: 1 })
+            );
+          } finally {
+            vi.doUnmock("../../utils/fs.js");
+          }
+        }
+      );
 
       it("win32: first crash does not write ANGLE flag, does not relaunch", async () => {
         await withPlatform("win32", async () => {
@@ -1218,9 +1250,22 @@ describe("GpuCrashMonitorService", () => {
       });
     });
 
-    it("skips logging while the GPU is not yet classified (no webgl2)", async () => {
-      // Chromium has not yet classified the GPU — the sample has no webgl2, so
-      // the logger must stay silent rather than emitting an empty trace.
+    it("logs from webgl alone, which is all Chromium 148 reports", async () => {
+      appMock.getGPUFeatureStatus.mockReturnValue({
+        webgl: "unavailable_off",
+        gpu_compositing: "unavailable_off",
+      });
+      await initFresh();
+      expect(loggerMethods.info).toHaveBeenCalledWith("gpu-startup-status", {
+        webgl2: undefined,
+        webgl: "unavailable_off",
+        gpu_compositing: "unavailable_off",
+      });
+    });
+
+    it("skips logging while the GPU is not yet classified (no WebGL status)", async () => {
+      // Chromium has not yet classified the GPU — the sample has no WebGL entry,
+      // so the logger must stay silent rather than emitting an empty trace.
       appMock.getGPUFeatureStatus.mockReturnValue({});
       await initFresh();
       expect(loggerMethods.info).not.toHaveBeenCalledWith("gpu-startup-status", expect.anything());

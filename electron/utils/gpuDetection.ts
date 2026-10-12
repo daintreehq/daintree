@@ -2,6 +2,20 @@
 import { app } from "electron";
 import fs from "node:fs";
 
+/**
+ * The WebGL entry of `app.getGPUFeatureStatus()`. Chromium 148 (Electron 42)
+ * reports only `webgl`; older builds also reported `webgl2`. Reading `webgl2`
+ * alone saw `undefined`, which counts as accelerated, so a machine with WebGL
+ * blocklisted (no GPU, a VM, a blocklisted driver) kept retrying WebGL for every
+ * terminal.
+ */
+export function getWebGLFeatureStatus(
+  status: { webgl?: string; webgl2?: string } | null | undefined
+): string | undefined {
+  if (!status) return undefined;
+  return status.webgl2 ?? status.webgl;
+}
+
 export function isWebGLHardwareAccelerated(webgl2: unknown): boolean {
   if (typeof webgl2 !== "string") return true;
   return webgl2.startsWith("enabled") && webgl2 !== "enabled_readback";

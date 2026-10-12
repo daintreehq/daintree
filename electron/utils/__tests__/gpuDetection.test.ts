@@ -34,6 +34,21 @@ describe("isWebGLHardwareAccelerated", () => {
   });
 });
 
+describe("getWebGLFeatureStatus", () => {
+  it("falls back to webgl, which is all Chromium 148 reports", async () => {
+    const { getWebGLFeatureStatus, isWebGLHardwareAccelerated } =
+      await import("../gpuDetection.js");
+    // Measured on Electron 42 with no GPU: no webgl2 key, before and after classification.
+    expect(getWebGLFeatureStatus({ webgl: "disabled_off" })).toBe("disabled_off");
+    expect(isWebGLHardwareAccelerated(getWebGLFeatureStatus({ webgl: "unavailable_off" }))).toBe(
+      false
+    );
+    expect(getWebGLFeatureStatus({ webgl2: "enabled", webgl: "enabled_readback" })).toBe("enabled");
+    expect(getWebGLFeatureStatus({})).toBeUndefined();
+    expect(getWebGLFeatureStatus(null)).toBeUndefined();
+  });
+});
+
 describe("detectLinuxGpus", () => {
   beforeEach(() => {
     vi.resetModules();

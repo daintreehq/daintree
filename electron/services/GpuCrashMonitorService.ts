@@ -11,6 +11,7 @@ import { getCrashRecoveryService } from "./CrashRecoveryService.js";
 import { getPanelSuspectLedger } from "./PanelSuspectLedgerService.js";
 import { GPU_DISABLED_FLAG_FILENAME, writeGpuDisabledFlagFile } from "./gpuDisabledFlag.js";
 import { withTimeout } from "../utils/withTimeout.js";
+import { getWebGLFeatureStatus } from "../utils/gpuDetection.js";
 import type { GpuDisabledReason } from "../../shared/types/ipc/app.js";
 import { relaunchApp } from "../lifecycle/appRelaunch.js";
 
@@ -186,6 +187,14 @@ class GpuCrashMonitorService {
           });
           return;
         }
+        // Same on a Linux X11 session: the switches are Wayland-only too.
+        if (process.env.XDG_SESSION_TYPE !== "wayland") {
+          logger.info("gpu-crash-soft-fallback-skip-x11", {
+            sessionType: process.env.XDG_SESSION_TYPE ?? null,
+            crashCount: effectiveCount,
+          });
+          return;
+        }
         try {
           writeGpuAngleFallbackFlag(userDataPath);
         } catch (err) {
@@ -312,7 +321,7 @@ function logStartupGpuStatus(): void {
     // value would never refresh on later gpu-info-update events. This path
     // polls, so it wants a fresh read each event.
     const status = app.getGPUFeatureStatus();
-    if (!status || !status.webgl2) return;
+    if (!getWebGLFeatureStatus(status)) return;
     startupGpuStatusLogged = true;
     logger.info("gpu-startup-status", {
       webgl2: status.webgl2,

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   getSystemMemoryThresholds,
   readAvailableSystemMemoryMb,
@@ -257,6 +257,38 @@ describe("readSystemMemorySnapshot", () => {
       expect(readSystemMemorySnapshot()).toBeNull();
       expect(readAvailableSystemMemoryMb()).toBeNull();
     }
+  });
+
+  describe("on Linux", () => {
+    const originalPlatform = process.platform;
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    });
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    });
+
+    it("reads MemAvailable, not MemFree, so a warm page cache is not read as short", () => {
+      // Measured on a 16 GB Ubuntu droplet after a build: MemFree 3.3 GB, MemAvailable 11.9 GB.
+      stub(() => ({ free: 3334060, available: 11945672, total: 16377024 }));
+      const snapshot = readSystemMemorySnapshot();
+      expect(snapshot!.availableMb).toBeCloseTo(11945672 / 1024);
+      expect(snapshot!.freeMb).toBeCloseTo(3334060 / 1024);
+      const band = getSystemMemoryThresholds(snapshot!.totalMb);
+      expect(snapshot!.availableMb).toBeGreaterThan(band.warningMb);
+    });
+
+    it("treats a malformed MemAvailable as no signal rather than as critical", () => {
+      for (const available of [0, -1, Number.NaN, "lots"]) {
+        stub(() => ({ free: 512 * 1024, available, total: 8 * 1024 * 1024 }));
+        expect(readSystemMemorySnapshot()).toBeNull();
+      }
+    });
+
+    it("falls back to free when Electron reports no MemAvailable", () => {
+      stub(() => ({ free: 512 * 1024, total: 8 * 1024 * 1024 }));
+      expect(readAvailableSystemMemoryMb()).toBe(512);
+    });
   });
 
   it("still trusts a genuinely low reading whose components are all present", () => {
