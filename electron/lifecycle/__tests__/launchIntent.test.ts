@@ -54,6 +54,15 @@ describe("resolveLaunchIntent", () => {
     );
   });
 
+  it("treats a .dntr archive handed over in argv (Windows/Linux) as targeted", () => {
+    expect(
+      resolveLaunchIntent(
+        signals({ argv: ["C:\\Daintree\\Daintree.exe", "C:\\Downloads\\acme.hello-0.1.0.DNTR"] })
+      )
+    ).toBe("targeted");
+    expect(resolveLaunchIntent(signals({ argv: ["Daintree.exe", "--flag=x.dntr"] }))).toBe("cold");
+  });
+
   it("classifies safe mode as recovery", () => {
     expect(resolveLaunchIntent(signals({ isSafeMode: true }))).toBe("recovery");
   });
