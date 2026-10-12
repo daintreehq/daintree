@@ -73,7 +73,7 @@ const fakes = vi.hoisted(() => {
     }
   }
 
-  return { store, display, FakeWindow };
+  return { store, workArea, display, FakeWindow };
 });
 
 vi.mock("../store.js", () => ({ windowStatesStore: fakes.store }));
@@ -123,6 +123,7 @@ beforeEach(async () => {
   ({ createWindowWithState } = await import("../windowState.js"));
   fakes.FakeWindow.created.length = 0;
   fakes.store.state = {};
+  Object.assign(fakes.workArea, { x: 0, y: 0, width: 1920, height: 1200 });
   setPlatform(originalPlatform);
 });
 
@@ -177,17 +178,46 @@ describe("placing restored windows", () => {
     expect(picker.getBounds().x).toBe(daintree.getBounds().x + 30);
   });
 
-  it("cascades saved bounds the display no longer fits instead of stacking them", () => {
+  it("steps up and left off a window in the corner it was clamped into", () => {
+    Object.assign(fakes.workArea, { width: 1920, height: 1080 });
+    const corner = { x: 720, y: 280, width: 1200, height: 800, isMaximized: false };
     const offScreen = { x: 2500, y: 1500, width: 1200, height: 800, isMaximized: false };
-    fakes.store.state = { [DAINTREE]: offScreen, [HELLO_WEB]: offScreen };
+    fakes.store.state = { [DAINTREE]: corner, [HELLO_WEB]: offScreen };
 
     const daintree = open(DAINTREE, occupiedBy());
     const helloWeb = open(HELLO_WEB, occupiedBy(daintree));
 
-    // Both clamp into the bottom-right corner; the second can't step further
-    // down-right there, so it stays put rather than looping.
-    expect(daintree.getBounds()).toEqual({ x: 720, y: 400, width: 1200, height: 800 });
-    expect(helloWeb.setBounds).toHaveBeenCalledTimes(1);
+    // Clamping pins hello-web to (720,280), exactly over daintree, where a
+    // down-right step has no room; the up-left one does.
+    expect(daintree.getBounds()).toEqual({ x: 720, y: 280, width: 1200, height: 800 });
+    expect(helloWeb.getBounds()).toEqual({ x: 690, y: 250, width: 1200, height: 800 });
+  });
+
+  it("keeps stepping up and left past every window already cascaded there", () => {
+    Object.assign(fakes.workArea, { width: 1920, height: 1080 });
+    const offScreen = { x: 2500, y: 1500, width: 1200, height: 800, isMaximized: false };
+    fakes.store.state = { [DAINTREE]: offScreen, [HELLO_WEB]: offScreen, "/p/third": offScreen };
+
+    const daintree = open(DAINTREE, occupiedBy());
+    const helloWeb = open(HELLO_WEB, occupiedBy(daintree));
+    const third = open("/p/third", occupiedBy(daintree, helloWeb));
+
+    expect([daintree, helloWeb, third].map((w) => [w.getBounds().x, w.getBounds().y])).toEqual([
+      [720, 280],
+      [690, 250],
+      [660, 220],
+    ]);
+  });
+
+  it("stays put when the work area leaves no room to step either way", () => {
+    Object.assign(fakes.workArea, { width: 1200, height: 800 });
+    const full = { x: 0, y: 0, width: 1200, height: 800, isMaximized: false };
+    fakes.store.state = { [DAINTREE]: full, [HELLO_WEB]: { ...full, x: 50 } };
+
+    const daintree = open(DAINTREE, occupiedBy());
+    const helloWeb = open(HELLO_WEB, occupiedBy(daintree));
+
+    expect(helloWeb.getBounds()).toEqual(daintree.getBounds());
   });
 
   it("steps clear of a clamped window when there is room to", () => {

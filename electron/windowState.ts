@@ -198,23 +198,39 @@ function coversOccupied(
 }
 
 /**
- * Step a window down and right, one cascade offset at a time, until it no
- * longer lands on another open window. Stops where the work area pins it.
+ * The nearest cascade step from `start` that lands on no open window: down and
+ * right first, then up and left. A window clamped into the work area's
+ * bottom-right corner can't step further down-right, and stopping there would
+ * leave it exactly over a window already in that corner.
  */
-function cascadeOffOccupied(win: BrowserWindow, occupied: readonly Electron.Rectangle[]): void {
-  if (occupied.length === 0) return;
-  let bounds = win.getBounds();
-  for (let step = 0; step < MAX_CASCADE_STEPS && coversOccupied(bounds, occupied); step++) {
-    const next = clampToDisplay({
-      x: bounds.x + MRU_OFFSET_PX,
-      y: bounds.y + MRU_OFFSET_PX,
-      width: bounds.width,
-      height: bounds.height,
-    });
-    if (next.x === bounds.x && next.y === bounds.y) return;
-    win.setBounds(next);
-    bounds = next;
+function findFreeCascadeSpot(
+  start: Electron.Rectangle,
+  occupied: readonly Electron.Rectangle[]
+): Electron.Rectangle | null {
+  for (const direction of [1, -1]) {
+    let candidate = start;
+    for (let step = 0; step < MAX_CASCADE_STEPS; step++) {
+      const next = clampToDisplay({
+        x: candidate.x + direction * MRU_OFFSET_PX,
+        y: candidate.y + direction * MRU_OFFSET_PX,
+        width: candidate.width,
+        height: candidate.height,
+      });
+      // Pinned against the work area's edges: this direction has no room left.
+      if (next.x === candidate.x && next.y === candidate.y) break;
+      if (!coversOccupied(next, occupied)) return next;
+      candidate = next;
+    }
   }
+  return null;
+}
+
+/** Move a window off any open window it would land on, when a cascade step has room. */
+function cascadeOffOccupied(win: BrowserWindow, occupied: readonly Electron.Rectangle[]): void {
+  const bounds = win.getBounds();
+  if (!coversOccupied(bounds, occupied)) return;
+  const spot = findFreeCascadeSpot(bounds, occupied);
+  if (spot) win.setBounds(spot);
 }
 
 // Mirror the store's own entry type (isFullScreen optional) so the map read back
