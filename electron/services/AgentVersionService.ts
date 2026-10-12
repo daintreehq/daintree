@@ -254,7 +254,7 @@ export class AgentVersionService {
           shell: target.shell,
           windowsVerbatimArguments: target.windowsVerbatimArguments,
           windowsHide: true,
-          env,
+          env: { ...env, ...target.env },
           detached: useGroup,
           stdio: ["ignore", "pipe", "pipe"],
         });

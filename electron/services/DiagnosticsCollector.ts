@@ -162,7 +162,7 @@ async function runCommand(
     const { stdout } = await execFileAsync(target.command, target.args, {
       encoding: "utf8",
       timeout: timeoutMs,
-      env: process.env,
+      env: { ...process.env, ...target.env },
       windowsHide: true,
       windowsVerbatimArguments: target.windowsVerbatimArguments,
     });

@@ -1,6 +1,10 @@
 import { WINDOWS_PS_UTF8_BOOTSTRAP } from "../services/pty/terminalShell.js";
 import { quotePowerShellArg } from "../../shared/utils/shellEscape.js";
-import { cliSpawnTarget, type WindowsCliResolveOptions } from "./windowsCliSpawn.js";
+import {
+  cliSpawnTarget,
+  type CliSpawnTarget,
+  type WindowsCliResolveOptions,
+} from "./windowsCliSpawn.js";
 
 /** Decode generated argv literals without evaluating any PowerShell source. */
 export function parseWindowsAgentCommand(command: string): string[] {
@@ -54,24 +58,59 @@ export function serializeWindowsArgv(args: readonly string[]): string {
     .join(" ");
 }
 
+/**
+ * A batch file we cannot unwrap may only reach cmd.exe with inert arguments,
+ * because cmd.exe re-parses the line; anything else is refused with a way out.
+ */
+function agentLaunchTarget(
+  file: string,
+  args: readonly string[],
+  options: WindowsCliResolveOptions
+): CliSpawnTarget {
+  try {
+    return cliSpawnTarget(file, args, "win32", options);
+  } catch (error) {
+    // Only the arguments differ between the calls, so a bare cmd.exe target
+    // means they were the reason.
+    let bare: CliSpawnTarget | undefined;
+    try {
+      bare = cliSpawnTarget(file, [], "win32", options);
+    } catch {
+      // The original failure stands.
+    }
+    if (!bare?.windowsVerbatimArguments) throw error;
+    const shim = (error as NodeJS.ErrnoException).path ?? file;
+    throw new Error(
+      `Cannot pass these launch arguments through ${shim}: Daintree cannot unwrap this batch file, and cmd.exe would rewrite them. Install the CLI with npm or as a native executable, or launch it without a prompt.`,
+      { cause: error }
+    );
+  }
+}
+
 /** Inherit the PTY handles while avoiding both cmd.exe and PowerShell's native binder. */
 export function buildWindowsAgentLaunchScript(
   command: string,
   options: WindowsCliResolveOptions = {}
 ): string {
   const [file, ...args] = parseWindowsAgentCommand(command);
-  const target = cliSpawnTarget(file, args, "win32", options);
-  if (target.windowsVerbatimArguments) {
-    throw new Error("Windows agent launches need a native executable or an npm shim");
-  }
+  const target = agentLaunchTarget(file, args, options);
+  // A cmd.exe target already holds its exact command line (`/d /s /v:off /c ""shim" args"`).
+  const commandLine = target.windowsVerbatimArguments
+    ? target.args.join(" ")
+    : serializeWindowsArgv(target.args);
   return [
     WINDOWS_PS_UTF8_BOOTSTRAP,
     "& {",
     "  $start = [System.Diagnostics.ProcessStartInfo]::new()",
     `  $start.FileName = ${quotePowerShellArg(target.command)}`,
-    `  $start.Arguments = ${quotePowerShellArg(serializeWindowsArgv(target.args))}`,
+    `  $start.Arguments = ${quotePowerShellArg(commandLine)}`,
     "  $start.UseShellExecute = $false",
     "  $start.WorkingDirectory = (Get-Location).ProviderPath",
+    // What an unwrapped shim would have set (NODE_PATH, a PATH prepend).
+    ...Object.entries(target.env ?? {}).map(
+      ([name, value]) =>
+        `  $start.Environment[${quotePowerShellArg(name)}] = ${quotePowerShellArg(value)}`
+    ),
     "  $child = [System.Diagnostics.Process]::Start($start)",
     "  try { $child.WaitForExit(); $global:LASTEXITCODE = $child.ExitCode } finally { $child.Dispose() }",
     "}",

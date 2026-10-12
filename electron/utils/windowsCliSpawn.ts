@@ -43,11 +43,15 @@ function isLaunchFile(file: string): boolean {
   }
 }
 
-function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+function envKey(env: NodeJS.ProcessEnv, name: string): string | undefined {
   // Node sorts duplicate Windows env keys and forwards the first case variant.
-  const key = Object.keys(env)
+  return Object.keys(env)
     .sort()
     .find((candidate) => candidate.toUpperCase() === name);
+}
+
+function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const key = envKey(env, name);
   return key === undefined ? undefined : env[key];
 }
 
@@ -95,6 +99,12 @@ export interface CliSpawnTarget {
   args: string[];
   shell: false;
   windowsVerbatimArguments?: boolean;
+  /**
+   * Variables an unwrapped shim would have set (pnpm's `NODE_PATH`, a `PATH`
+   * prepend), already resolved against the caller's env and keyed with its
+   * spelling, so `{ ...env, ...target.env }` replaces rather than duplicates.
+   */
+  env?: Record<string, string>;
 }
 
 /** npm shims can target Node scripts or native binaries; bypass the batch boundary. */
@@ -105,6 +115,16 @@ function unwrapNpmShim(
   const source = (options.readFile ?? ((name) => readFileSync(name, "utf8")))(file);
   if (source.length > 64 * 1024) return undefined;
   const directory = path.win32.dirname(file);
+  return (
+    unwrapModernNpmShim(source, directory, options) ?? unwrapClassicShim(source, directory, options)
+  );
+}
+
+function unwrapModernNpmShim(
+  source: string,
+  directory: string,
+  options: WindowsCliResolveOptions
+): CliSpawnTarget | undefined {
   const isFile = options.isFile ?? isLaunchFile;
   const native = source.match(
     /^"%dp0%[\\/]([^"\r\n]+\.(?:exe|com))"\s*((?:--?[A-Za-z0-9_-]+\s+)*)%\*\s*$/im
@@ -131,6 +151,212 @@ function unwrapNpmShim(
     command: node,
     args: [...call[1].trim().split(/\s+/).filter(Boolean), script],
     shell: false,
+  };
+}
+
+const SHIM_FLAG = /^--?[A-Za-z0-9_-]+$/;
+// Quoted text with `%%` as cmd's escaped percent (pnpm 11 escapes paths this
+// way); any other `%` is an expansion we will not evaluate.
+const SHIM_TEXT = String.raw`(?:[^"%\r\n]|%%)+`;
+const SHIM_PATH_TEXT = new RegExp(`^${SHIM_TEXT}$`);
+// pnpm writes `:` here, which Windows reads as part of a directory name; the
+// prepend is applied with `;`, the separator the shim means.
+const SHIM_PATH_PREPEND = new RegExp(String.raw`^@SET\s+"PATH=(${SHIM_TEXT})[:;]%PATH%"$`, "i");
+const SHIM_NODE_PATH_BLOCK = [
+  /^@IF\s+NOT\s+DEFINED\s+NODE_PATH\s+\($/i,
+  new RegExp(String.raw`^@SET\s+"NODE_PATH=(${SHIM_TEXT})"$`, "i"),
+  /^\)\s+ELSE\s+\($/i,
+  new RegExp(String.raw`^@SET\s+"NODE_PATH=(${SHIM_TEXT});%NODE_PATH%"$`, "i"),
+  /^\)$/,
+];
+const SHIM_LOCAL_NODE_IF = /^@IF\s+EXIST\s+"%~dp0\\node\.exe"\s+\($/i;
+const SHIM_ELSE = /^\)\s+ELSE\s+\($/i;
+const SHIM_PATHEXT = /^@SET\s+PATHEXT=%PATHEXT:;\.JS;=;%$/i;
+const SHIM_COMMENT = /^(?:@?REM(?:\s[^&|<>^%]*)?|::.*)$/i;
+const SHIM_PREAMBLE = [/^@?ECHO\s+OFF$/i, /^@?SETLOCAL$/i, SHIM_COMMENT];
+const SHIM_TRAILER = [/^@?ENDLOCAL$/i, /^@?EXIT\s+\/B(?:\s+%ERRORLEVEL%)?$/i, SHIM_COMMENT];
+// pnpm 11 wraps shims with non-ASCII paths in a UTF-8 code page switch.
+const PNPM_CODEPAGE_SWITCH = new Set([
+  String.raw`@SET "_PNPM_CODEPAGE="`,
+  String.raw`@FOR /F "tokens=2 delims=:" %%a IN ('"%SystemRoot%\System32\chcp.com"') DO @SET "_PNPM_CODEPAGE=%%a"`,
+  String.raw`@"%SystemRoot%\System32\chcp.com" 65001 >NUL`,
+  String.raw`@SET "ERRORLEVEL="`,
+]);
+const PNPM_CODEPAGE_RESTORE = new Set([
+  String.raw`@SET "_PNPM_EXIT_CODE=%ERRORLEVEL%"`,
+  String.raw`@IF DEFINED _PNPM_CODEPAGE @"%SystemRoot%\System32\chcp.com" %_PNPM_CODEPAGE% >NUL`,
+  String.raw`@EXIT /B %_PNPM_EXIT_CODE%`,
+]);
+
+interface ShimToken {
+  quoted: boolean;
+  value: string;
+}
+
+interface ShimCall {
+  program: ShimToken;
+  args: string[];
+  script?: string;
+  scriptArgs: string[];
+}
+
+/** `<program> <flags> ["<script>" <flags>] %*`, the one call shape the templates write. */
+function parseShimCall(line: string): ShimCall | undefined {
+  const tokens: ShimToken[] = [];
+  const pattern = /\s*(?:"([^"]*)"|([^\s"]+))(?=\s|$)/y;
+  while (pattern.lastIndex < line.length) {
+    const match = pattern.exec(line);
+    if (!match) return undefined;
+    tokens.push(
+      match[1] === undefined
+        ? { quoted: false, value: match[2] ?? "" }
+        : { quoted: true, value: match[1] }
+    );
+  }
+  const last = tokens.pop();
+  const [program, ...rest] = tokens;
+  if (!program || !last || last.quoted || last.value !== "%*") return undefined;
+  const scriptIndex = rest.findIndex((token) => token.quoted);
+  const flagsOnly = rest.every(
+    (token, index) => index === scriptIndex || (!token.quoted && SHIM_FLAG.test(token.value))
+  );
+  if (!flagsOnly) return undefined;
+  const values = rest.map((token) => token.value);
+  if (scriptIndex < 0) return { program, args: values, scriptArgs: [] };
+  return {
+    program,
+    args: values.slice(0, scriptIndex),
+    script: values[scriptIndex],
+    scriptArgs: values.slice(scriptIndex + 1),
+  };
+}
+
+/** `%~dp0` already ends in a separator; hand-written shims often add another. */
+function shimPath(value: string, directory: string): string | undefined {
+  const relative = /^%~dp0[\\/]?/i.exec(value);
+  const body = relative ? value.slice(relative[0].length) : value;
+  if (!SHIM_PATH_TEXT.test(body)) return undefined;
+  const decoded = body.replace(/%%/g, "%");
+  const valid = relative
+    ? !/^[\\/]|:/.test(decoded)
+    : /^(?:[A-Za-z]:[\\/]|\\\\[^\\/])/.test(decoded);
+  return valid ? path.win32.resolve(directory, decoded) : undefined;
+}
+
+function sameShimCall(a: ShimCall, b: ShimCall): boolean {
+  return (
+    JSON.stringify([a.args, a.script, a.scriptArgs]) ===
+    JSON.stringify([b.args, b.script, b.scriptArgs])
+  );
+}
+
+/**
+ * The older cmd-shim template (pnpm, Yarn classic, npm <= 6) and minimal
+ * hand-written wrappers. Read line by line: anything outside these shapes
+ * leaves the shim to the cmd.exe fallback rather than guessing what it runs.
+ */
+function unwrapClassicShim(
+  source: string,
+  directory: string,
+  options: WindowsCliResolveOptions
+): CliSpawnTarget | undefined {
+  const callerEnv = options.env ?? process.env;
+  const isFile = options.isFile ?? isLaunchFile;
+  const lines = source
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const env: Record<string, string> = {};
+  // Both variables follow the shim's own rule: `<dirs>;<existing>`, else `<dirs>`.
+  const prepend = (name: string, dirs: string): void => {
+    const key = envKey(callerEnv, name) ?? name;
+    const existing = Object.hasOwn(env, key) ? env[key] : callerEnv[key];
+    env[key] = existing ? `${dirs};${existing}` : dirs;
+  };
+  let call: ShimCall | undefined;
+  let localNode = false;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index] ?? "";
+    if (call) {
+      if (PNPM_CODEPAGE_RESTORE.has(line) || SHIM_TRAILER.some((re) => re.test(line))) continue;
+      return undefined;
+    }
+    if (PNPM_CODEPAGE_SWITCH.has(line) || SHIM_PREAMBLE.some((re) => re.test(line))) continue;
+    const pathPrepend = SHIM_PATH_PREPEND.exec(line);
+    if (pathPrepend) {
+      prepend("PATH", (pathPrepend[1] ?? "").replace(/%%/g, "%"));
+      continue;
+    }
+    if (SHIM_NODE_PATH_BLOCK[0].test(line)) {
+      const block = SHIM_NODE_PATH_BLOCK.map((re, offset) => re.exec(lines[index + offset] ?? ""));
+      const dirs = block[1]?.[1];
+      if (block.some((match) => !match) || !dirs || dirs !== block[3]?.[1]) return undefined;
+      prepend("NODE_PATH", dirs.replace(/%%/g, "%"));
+      index += SHIM_NODE_PATH_BLOCK.length - 1;
+      continue;
+    }
+    if (SHIM_LOCAL_NODE_IF.test(line)) {
+      // npm <= 6 and Yarn open the fallback branch with their SETLOCAL.
+      const skip = /^@SETLOCAL$/i.test(lines[index + 3] ?? "") ? 1 : 0;
+      const local = parseShimCall(lines[index + 1] ?? "");
+      const fallback = parseShimCall(lines[index + 4 + skip] ?? "");
+      if (
+        !local?.program.quoted ||
+        !/^%~dp0\\node\.exe$/i.test(local.program.value) ||
+        !fallback ||
+        fallback.program.quoted ||
+        !/^node$/i.test(fallback.program.value) ||
+        !sameShimCall(local, fallback) ||
+        !SHIM_ELSE.test(lines[index + 2] ?? "") ||
+        !SHIM_PATHEXT.test(lines[index + 3 + skip] ?? "") ||
+        lines[index + 5 + skip] !== ")"
+      ) {
+        return undefined;
+      }
+      call = fallback;
+      localNode = true;
+      index += 5 + skip;
+      continue;
+    }
+    call = parseShimCall(line.replace(/^@/, ""));
+    if (!call) return undefined;
+  }
+  if (!call) return undefined;
+  const extra = Object.keys(env).length ? { env } : {};
+
+  if (call.script === undefined) {
+    if (!call.program.quoted) return undefined;
+    const executable = shimPath(call.program.value, directory);
+    if (!executable || !/\.(?:exe|com)$/i.test(executable)) return undefined;
+    if (!isFile(executable)) throw launchError(executable, "ENOENT");
+    return { command: executable, args: call.args, shell: false, ...extra };
+  }
+
+  const script = shimPath(call.script, directory);
+  if (!script) return undefined;
+  let node: string | undefined;
+  if (call.program.quoted) {
+    node = shimPath(call.program.value, directory);
+    if (!node || path.win32.basename(node).toLowerCase() !== "node.exe") return undefined;
+  } else if (!/^node(?:\.exe)?$/i.test(call.program.value)) {
+    return undefined;
+  }
+  if (!isFile(script)) throw launchError(script, "ENOENT");
+  if (node) {
+    if (!isFile(node)) throw launchError(node, "ENOENT");
+  } else {
+    const local = path.win32.join(directory, "node.exe");
+    // A bare `node` runs after the shim's own PATH change, so look it up there.
+    node =
+      localNode && isFile(local)
+        ? local
+        : resolveWindowsCli("node.exe", { ...options, env: { ...callerEnv, ...env } });
+  }
+  return {
+    command: node,
+    args: [...call.args, script, ...call.scriptArgs],
+    shell: false,
+    ...extra,
   };
 }
 

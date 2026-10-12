@@ -463,7 +463,7 @@ export class AgentModelCatalogService {
         shell: target.shell,
         windowsVerbatimArguments: target.windowsVerbatimArguments,
         windowsHide: true,
-        env,
+        env: { ...env, ...target.env },
       });
       stdout = result.stdout || result.stderr || "";
     } catch (err: unknown) {
