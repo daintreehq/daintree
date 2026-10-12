@@ -44,9 +44,15 @@ const safeStorageMock = vi.hoisted(() => {
     state,
     isEncryptionAvailable: () => state.available,
     // Linux gates the keychain tier on the backend; name a real keychain one.
-    getSelectedStorageBackend: () => "gnome_libsecret",
-    encryptString: (plaintext: string) => Buffer.from(`enc:${plaintext}`, "utf-8"),
-    decryptString: (cipher: Buffer) => cipher.toString("utf-8").slice("enc:".length),
+    getSelectedStorageBackend: () => (state.available ? "gnome_libsecret" : "basic_text"),
+    encryptStringAsync: async (plaintext: string) => {
+      if (!state.available) throw new Error("Error while encrypting");
+      return Buffer.from(`enc:${plaintext}`, "utf-8");
+    },
+    decryptStringAsync: async (cipher: Buffer) => ({
+      result: cipher.toString("utf-8").slice("enc:".length),
+      shouldReEncrypt: false,
+    }),
   };
 });
 const storeMock = vi.hoisted(() => {

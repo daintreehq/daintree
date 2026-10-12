@@ -45,9 +45,12 @@ function manifestWith(settings: SettingDefinition[]): PluginManifest {
 function fakeCipher(available = true): SecretCipher {
   return {
     tier: () => (available ? "keychain" : "unavailable"),
-    encrypt: (plaintext) =>
+    encrypt: async (plaintext) =>
       available ? Buffer.from(`enc:${plaintext}`, "utf-8").toString("base64") : null,
-    decrypt: (c) => Buffer.from(c, "base64").toString("utf-8").slice("enc:".length),
+    decrypt: async (c) => ({
+      plaintext: Buffer.from(c, "base64").toString("utf-8").slice("enc:".length),
+      reencrypt: false,
+    }),
   };
 }
 
@@ -166,6 +169,18 @@ describe("PluginSettingsManager secret tier routing (#9167)", () => {
     expect(ui.secretsSet).toContain("token");
     expect(ui.values.endpoint).toBe("https://x");
     expect(ui.secretTier).toBe("keychain");
+    expect(ui.secretsPlaintext).toEqual([]);
+  });
+
+  // Opening the form must not wait on a keychain prompt, or fail on a locked one.
+  it("reports a stored secret set without decrypting it", async () => {
+    const cipher = fakeCipher();
+    const mgr = managerFor([{ id: "token", type: "secret", scope: "user" }], cipher);
+    await mgr.setSettingValueFromUi("acme.scope-test", "token", "sk-1", "user", null);
+    cipher.decrypt = () => Promise.reject(new Error("keychain locked"));
+
+    const ui = await mgr.getSettingValuesForUi("acme.scope-test", "user", null);
+    expect(ui.secretsSet).toEqual(["token"]);
     expect(ui.secretsPlaintext).toEqual([]);
   });
 

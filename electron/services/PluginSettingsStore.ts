@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import {
   safeStorageCipher,
+  SecretStorageTimeoutError,
   type SecretCipher,
   type SecretStorageTier,
 } from "./plugin/secretCipher.js";
@@ -22,6 +23,24 @@ interface SecretEnvelope {
   __daintreeSecret: typeof SECRET_ENVELOPE_TAG;
   /** Base64 ciphertext from {@link SecretCipher.encrypt}. */
   cipher: string;
+  /**
+   * Set when Electron's async `safeStorage` API wrote `cipher`. An envelope
+   * without it came from the sync API, under a key the async API doesn't always
+   * hold (KWallet keeps the two apart), so it is read as legacy and rewritten
+   * on its next write. The tag stays `v1`: an older build still reads the
+   * envelope, and the sync API decrypts async ciphertext everywhere but KWallet.
+   */
+  async?: true;
+}
+
+function asyncEnvelope(cipher: string): SecretEnvelope {
+  return { __daintreeSecret: SECRET_ENVELOPE_TAG, cipher, async: true };
+}
+
+/** Whether `cache` still holds `envelope` at `key`, identified by its ciphertext. */
+function storesEnvelope(cache: Map<string, unknown>, key: string, envelope: SecretEnvelope) {
+  const current = cache.get(key);
+  return isSecretEnvelope(current) && current.cipher === envelope.cipher;
 }
 
 function isSecretEnvelope(value: unknown): value is SecretEnvelope {
@@ -51,7 +70,7 @@ export type StoredSecretTier = "keychain" | "plaintext";
  * (POSIX only).
  *
  * Values for keys declared `type: "secret"` are routed through an injected
- * {@link SecretCipher} (Electron `safeStorage`) and persisted as a tagged
+ * {@link SecretCipher} (Electron's async `safeStorage`) and persisted as a tagged
  * ciphertext envelope (#9167). When no OS keychain is available the write is
  * refused — a secret is never written in plaintext (#12613). The `secret` flag
  * is supplied per call by the caller (the manager knows the declared type), so
@@ -109,7 +128,11 @@ export class PluginSettingsStore {
     if (raw === undefined) return undefined;
     if (options?.secret && isSecretEnvelope(raw)) {
       // Decrypt on read; the decrypted plaintext is the plugin-visible value.
-      return this.cipher.decrypt(raw.cipher) as T;
+      const { plaintext, reencrypt } = await this.cipher.decrypt(raw.cipher, {
+        legacy: raw.async !== true,
+      });
+      if (reencrypt) this.reencryptInBackground(key, raw, plaintext);
+      return plaintext as T;
     }
     // Return a detached copy so a caller mutating the result can't reach into
     // the in-memory cache and diverge it from disk. A legacy secret stored as
@@ -134,22 +157,24 @@ export class PluginSettingsStore {
   }
 
   private async doSet<T>(key: string, value: T, options?: SecretOptions): Promise<boolean> {
+    if (options?.secret) return this.doSetSecret(key, value);
+
     const cache = await this.load();
-    const had = cache.has(key);
-    const prev = cache.get(key);
-
-    if (options?.secret) {
-      return this.doSetSecret(cache, key, value, had, prev);
-    }
-
     // Detect a no-op before touching disk: an idempotent set should neither
     // write nor fail (e.g. on a read-only directory).
-    if (had && valuesEqual(prev, value)) return false;
+    if (cache.has(key) && valuesEqual(cache.get(key), value)) return false;
     // Store a detached, JSON-faithful copy so (a) a caller mutating the original
     // object can't diverge the cache from disk, and (b) the cache reflects what
     // actually persists (e.g. NaN/Infinity coerce to null under JSON, in memory
     // and on disk alike).
-    cache.set(key, cloneValue(value));
+    return this.commit(cache, key, cloneValue(value));
+  }
+
+  /** Set `key` in `cache` and persist it, rolling the cache back if the write fails. */
+  private async commit(cache: Map<string, unknown>, key: string, next: unknown): Promise<true> {
+    const had = cache.has(key);
+    const prev = cache.get(key);
+    cache.set(key, next);
     try {
       await this.persist(cache);
     } catch (err) {
@@ -166,60 +191,74 @@ export class PluginSettingsStore {
    * memory or on disk: a plaintext secret written here would be
    * indistinguishable from an ordinary setting, and nothing would ever tell the
    * user it was exposed (#12613). Migration is implicit: a legacy plaintext
-   * value is rewritten as an envelope on its next write, never silently dropped.
+   * value, or an envelope the sync API wrote, is rewritten on its next write,
+   * never silently dropped.
    *
    * No-op detection decrypts the stored value first so an idempotent re-set of an
    * already-encrypted secret skips the write (ciphertext is non-deterministic, so
    * comparing raw envelopes would always look "changed").
    */
-  private async doSetSecret<T>(
-    cache: Map<string, unknown>,
-    key: string,
-    value: T,
-    had: boolean,
-    prev: unknown
-  ): Promise<boolean> {
+  private async doSetSecret<T>(key: string, value: T): Promise<boolean> {
     const stored = cloneValue(value);
     // The plaintext that actually gets encrypted: strings as-is, everything else
     // JSON-encoded (mirrors how the manager stringifies non-string secrets).
     const plaintext = typeof stored === "string" ? stored : JSON.stringify(stored);
-    const ciphertext = this.cipher.encrypt(plaintext);
+    const prev = (await this.load()).get(key);
+    if (
+      isSecretEnvelope(prev) &&
+      prev.async === true &&
+      (await this.holds(prev, plaintext)) &&
+      // The decrypt can wait on a keychain prompt; the file may have moved on.
+      storesEnvelope(await this.load(), key, prev)
+    ) {
+      return false;
+    }
+    const ciphertext = await this.cipher.encrypt(plaintext);
     if (ciphertext === null) {
       throw new Error(
         `Secure storage is unavailable on this device, so the secret "${key}" wasn't saved`
       );
     }
-    const next: SecretEnvelope = { __daintreeSecret: SECRET_ENVELOPE_TAG, cipher: ciphertext };
-
-    if (had) {
-      const prevPlain = this.decodeSecretPlaintext(prev);
-      // Skip only when the plaintext is unchanged AND it is already an
-      // envelope — a legacy plaintext secret must still write so the on-disk
-      // representation is corrected.
-      if (isSecretEnvelope(prev) && prevPlain === plaintext) return false;
-    }
-
-    cache.set(key, next);
-    try {
-      await this.persist(cache);
-    } catch (err) {
-      if (had) cache.set(key, prev);
-      else cache.delete(key);
-      throw err;
-    }
-    return true;
+    // The keychain can take a while to answer, so write into the snapshot as it
+    // is now rather than the one read before it.
+    return this.commit(await this.load(), key, asyncEnvelope(ciphertext));
   }
 
   /**
-   * Reduce a stored secret to the same plaintext form {@link doSetSecret} would
-   * encrypt, for no-op comparison: an envelope decrypts; a plaintext-stored
-   * string passes through; a plaintext-stored non-string is JSON-encoded.
+   * Whether `envelope` already holds `plaintext` under a current key. One that
+   * can't be read counts as different, so a new value replaces it; a keychain
+   * that didn't answer wouldn't answer the encrypt either, so that ends the write.
    */
-  private decodeSecretPlaintext(stored: unknown): string | undefined {
-    if (isSecretEnvelope(stored)) return this.cipher.decrypt(stored.cipher);
-    if (stored === undefined) return undefined;
-    if (typeof stored === "string") return stored;
-    return JSON.stringify(stored);
+  private async holds(envelope: SecretEnvelope, plaintext: string): Promise<boolean> {
+    try {
+      const decrypted = await this.cipher.decrypt(envelope.cipher);
+      return !decrypted.reencrypt && decrypted.plaintext === plaintext;
+    } catch (error) {
+      if (error instanceof SecretStorageTimeoutError) throw error;
+      return false;
+    }
+  }
+
+  /**
+   * Rewrite a secret a read found under a superseded key, or readable only by
+   * the sync API, so it outlives that API. Queued behind the writes like any
+   * other, and dropped when the key no longer holds the envelope that was read:
+   * a write since has replaced it. Best effort: when the keychain won't encrypt
+   * now, the old ciphertext stays and still reads.
+   */
+  private reencryptInBackground(key: string, read: SecretEnvelope, plaintext: string): void {
+    const run = this.writeChain.then(async () => {
+      if (!storesEnvelope(await this.load(), key, read)) return;
+      const ciphertext = await this.cipher.encrypt(plaintext);
+      if (ciphertext === null) return;
+      // Checked against the very snapshot that is committed, with no await
+      // between, so nothing can replace the envelope after the check.
+      const cache = await this.load();
+      if (storesEnvelope(cache, key, read)) {
+        await this.commit(cache, key, asyncEnvelope(ciphertext));
+      }
+    });
+    this.writeChain = run.catch(() => undefined);
   }
 
   /**

@@ -629,19 +629,19 @@ export class PluginSettingsManager {
         const filePath = this.resolveUiSettingsFilePathForKey(pluginId, def.id, scope, projectId);
         if (!filePath) return;
         const store = this.getOrCreateSettingsStore(pluginId, filePath);
-        const secret = this.isSecretSetting(def);
-        const stored = await store.get<unknown>(def.id, { secret });
-        if (stored === undefined) return;
-        if (secret) {
+        if (this.isSecretSetting(def)) {
+          // Presence only: the form never shows a secret's value, and opening it
+          // must not wait on a keychain prompt to decrypt one.
+          const tier = await store.storedSecretTier(def.id);
+          if (tier === undefined) return;
           secretsSet.push(def.id);
           // Surface a legacy value still sitting in plaintext so the form can
           // nudge a re-save into the keychain.
-          if ((await store.storedSecretTier(def.id)) === "plaintext") {
-            secretsPlaintext.push(def.id);
-          }
-        } else {
-          values[def.id] = stored;
+          if (tier === "plaintext") secretsPlaintext.push(def.id);
+          return;
         }
+        const stored = await store.get<unknown>(def.id);
+        if (stored !== undefined) values[def.id] = stored;
       })
     );
     return { values, secretsSet, secretsPlaintext, secretTier };

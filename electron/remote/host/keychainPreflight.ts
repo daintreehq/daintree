@@ -2,11 +2,11 @@ import type { HostModeCheckState } from "../../../shared/types/ipc/hostMode.js";
 import { isLinuxKeyringBackend } from "../../services/plugin/linuxKeyringBackend.js";
 
 /**
- * Whether plugin secrets can be stored on this host. Plugin secrets use
- * `safeStorage` synchronously, and on macOS that can prompt or block depending
- * on how the app was launched, so the check is run from the GUI session at the
- * machine and uses the async API under a timeout: a keychain that doesn't
- * answer reads as "unknown", never as a hang.
+ * Whether plugin secrets can be stored on this host. Plugin secrets use the
+ * async `safeStorage` API this trial runs, and the keychain can still prompt
+ * depending on how the app was launched, so the check is run from the GUI
+ * session at the machine under a timeout: a keychain that doesn't answer reads
+ * as "unknown", never as a hang.
  */
 
 export interface KeychainCheck {
