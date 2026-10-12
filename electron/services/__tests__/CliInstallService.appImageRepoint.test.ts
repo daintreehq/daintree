@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -144,6 +145,35 @@ describe("CliInstallService — following a moved AppImage", () => {
 
     expect(fs.lstatSync(localBin).isSymbolicLink()).toBe(false);
     expect(service.appImageOfWrapper(fs.readFileSync(localBin, "utf8"))).toBe(newImage);
+  });
+
+  // `daintree --version` on an AppImage install read "--version" as a directory.
+  it("answers the CLI flags like the packaged script, with the version written in", async () => {
+    const service = await load();
+    const wrapper = path.join(root, "daintree-cli.sh");
+    fs.writeFileSync(
+      wrapper,
+      service.generateAppImageWrapper("/nonexistent/Daintree.AppImage", "1.2.3"),
+      {
+        mode: 0o755,
+      }
+    );
+    const run = (...args: string[]) => spawnSync("bash", [wrapper, ...args], { encoding: "utf8" });
+
+    expect(run("--version").stdout.trim()).toBe("daintree 1.2.3");
+    expect(run("-v").stdout.trim()).toBe("daintree 1.2.3");
+    expect(run("--help").stdout).toContain("Usage: daintree [directory]");
+    const status = run("--status");
+    expect(["Daintree is running", "Daintree is not running"]).toContain(status.stdout.trim());
+    const notDir = run(path.join(root, "missing"));
+    expect(notDir.status).toBe(1);
+    expect(notDir.stderr).toContain("is not a directory");
+  });
+
+  it("keeps its launch line readable after the flags were added", async () => {
+    const service = await load();
+    const image = path.join(root, "Daintree-1.2.0.AppImage");
+    expect(service.appImageOfWrapper(service.generateAppImageWrapper(image, "1.2.0"))).toBe(image);
   });
 
   it("reads back a path the wrapper had to shell-escape", async () => {

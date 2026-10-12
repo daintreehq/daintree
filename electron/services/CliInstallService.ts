@@ -44,12 +44,39 @@ const APPIMAGE_WRAPPER_LAUNCH_SUFFIXES = [
   ' --cli-path "$ABSOLUTE_PATH" &',
 ];
 
-export function generateAppImageWrapper(appImagePath: string): string {
+function appVersion(): string {
+  try {
+    return app.getVersion();
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * The `daintree` command for an AppImage install. It answers the same flags as
+ * the packaged CLI script (resources/daintree-cli.sh); the version is written
+ * in because the image's app.asar can't be read without mounting it, and the
+ * wrapper is rewritten whenever its content no longer matches.
+ */
+export function generateAppImageWrapper(appImagePath: string, version = appVersion()): string {
   const escaped = appImagePath.replace(/'/g, "'\\''");
+  const quotedVersion = version.replace(/[^0-9A-Za-z.+-]/g, "");
   return [
     "#!/usr/bin/env bash",
     APPIMAGE_WRAPPER_HEADER,
     "set -euo pipefail",
+    'case "${1:-}" in',
+    "  --help|-h)",
+    `    printf '%s\\n' "Usage: ${CLI_COMMAND_NAME} [directory]" "" "Open a directory as a project in Daintree." "" "Arguments:" "  directory    Path to open (defaults to current directory)" "" "Options:" "  -h, --help       Show this help message" "  -v, --version    Show the Daintree CLI version" "  -s, --status     Check if Daintree is running"`,
+    "    exit 0 ;;",
+    "  --version|-v)",
+    `    echo "${CLI_COMMAND_NAME} ${quotedVersion}"`,
+    "    exit 0 ;;",
+    "  --status|-s)",
+    // This script's own command line matches the pattern too.
+    '    if pgrep -f "(/|^)daintree([[:space:]]|$)" | grep -qvx "$$"; then echo "Daintree is running"; exit 0; fi',
+    '    echo "Daintree is not running"; exit 1 ;;',
+    "esac",
     'TARGET="${1:-.}"',
     `ABSOLUTE_PATH="$(cd -- "$TARGET" 2>/dev/null && pwd -P)" || { echo "${CLI_COMMAND_NAME}: '$TARGET' is not a directory" >&2; exit 1; }`,
     // Single-token `=` form: Chromium's `second-instance` command-line
