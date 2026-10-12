@@ -320,6 +320,15 @@ if (isE2EMode && isE2EBackgroundWindows && process.platform === "darwin") {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Windows routes toasts, taskbar grouping and pinning by AppUserModelID. The
+// NSIS installer stamps its shortcuts with the build appId, but Electron only
+// adopts one itself for Squirrel installs, so without this the process runs as
+// `electron.app.Daintree` and matches no shortcut. Set before any window or
+// notification exists. Unpackaged builds have no such shortcut to match.
+if (process.platform === "win32" && app.isPackaged) {
+  app.setAppUserModelId("org.daintree.app");
+}
+
 // Acquire single-instance lock before any file I/O or service initialization.
 // A second instance must not touch log files, telemetry, or crash reporters.
 const gotTheLock = isSmokeTest || app.requestSingleInstanceLock();
