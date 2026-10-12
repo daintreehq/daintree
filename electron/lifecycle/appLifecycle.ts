@@ -332,12 +332,22 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     // the rest of the chain cannot outrun Chromium (see groupStop.ts).
     finishIfGroupStop();
   };
-  process.on("SIGTERM", signalHandler);
-  process.on("SIGINT", signalHandler);
   process.on("SIGUSR2", signalHandler);
-  if (!app.isPackaged) {
-    process.on("SIGHUP", signalHandler);
-  }
+  // Electron installs its own SIGTERM/SIGINT/SIGHUP handlers while it starts
+  // (POSIX), replacing the one libuv set up for a listener added before then:
+  // on Electron 42/Linux a SIGTERM listener added at load never ran, and
+  // Electron's handler quit with none of the above. libuv installs its handler
+  // when a signal gets its first listener, so registered once the app is ready
+  // it lands after Electron's and wins. SIGUSR2 is Node's alone.
+  const registerTerminationSignals = () => {
+    process.on("SIGTERM", signalHandler);
+    process.on("SIGINT", signalHandler);
+    if (!app.isPackaged) {
+      process.on("SIGHUP", signalHandler);
+    }
+  };
+  if (app.isReady()) registerTerminationSignals();
+  else void app.whenReady().then(registerTerminationSignals);
 
   // A second launch that arrived before the first had anything on screen.
   // `plainRelaunch` is true if any of them was a plain relaunch.

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const appMock = vi.hoisted(() => ({
   isPackaged: false as boolean,
   isReady: vi.fn(() => true),
+  whenReady: vi.fn(() => Promise.resolve()),
   on: vi.fn(),
   quit: vi.fn(),
   exit: vi.fn(),
@@ -110,13 +111,33 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
         ["SIGTERM", "SIGINT", "SIGUSR2"].includes(sig)
       );
       expect(signalCalls).toHaveLength(3);
-      expect(signalCalls[0][0]).toBe("SIGTERM");
-      expect(signalCalls[1][0]).toBe("SIGINT");
       // SIGUSR2 is nodemon's restart signal; without this handler every dev-mode
       // rebuild exited ungracefully, never ran `markCleanExit`, and tripped the
       // CrashLoopGuard into safe mode. Keep it registered even in packaged.
-      expect(signalCalls[2][0]).toBe("SIGUSR2");
+      expect(signalCalls.map(([sig]: string[]) => sig)).toEqual(["SIGUSR2", "SIGTERM", "SIGINT"]);
     }
+  });
+
+  // Electron installs its own termination-signal handlers while it starts and
+  // replaces the one libuv set up for an earlier listener, so the handler only
+  // runs if it is registered once the app is ready.
+  it("waits for ready before taking SIGTERM and SIGINT from Electron", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    let ready!: () => void;
+    appMock.isReady.mockReturnValueOnce(false);
+    appMock.whenReady.mockReturnValueOnce(new Promise<void>((resolve) => (ready = resolve)));
+    appMock.isPackaged = true;
+    registerAppLifecycleHandlers(makeOpts());
+
+    const registered = () => processOnSpy.mock.calls.map(([sig]: string[]) => sig);
+    expect(registered()).toContain("SIGUSR2");
+    expect(registered()).not.toContain("SIGTERM");
+    expect(registered()).not.toContain("SIGINT");
+
+    ready();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(registered()).toEqual(expect.arrayContaining(["SIGTERM", "SIGINT"]));
   });
 
   it("registers SIGHUP only when !isPackaged", async () => {
