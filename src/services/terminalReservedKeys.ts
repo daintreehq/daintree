@@ -1,4 +1,4 @@
-import { isMac } from "@/lib/platform";
+import { isMac, isWindows } from "@/lib/platform";
 
 /**
  * Terminal-first key ownership policy, shared by the window capture handler
@@ -39,6 +39,31 @@ export function isTuiReservedKey(event: KeyboardEvent): boolean {
  */
 export function terminalClipboardCombos(mac: boolean): { copy: string; paste: string } {
   return mac ? { copy: "Cmd+C", paste: "Cmd+V" } : { copy: "Ctrl+Shift+C", paste: "Ctrl+Shift+V" };
+}
+
+/**
+ * Windows terminals paste on plain Ctrl+V (Windows Terminal, VS Code, the
+ * console host), so a Windows user's Ctrl+V is the terminal's paste — not the
+ * shell's "literal next", which Windows shells don't use. Ctrl+Shift+V and
+ * Shift+Insert keep working too.
+ */
+export function isWindowsTerminalPasteKey(event: KeyboardEvent): boolean {
+  return isWindows() && isCtrlVKey(event);
+}
+
+/**
+ * Plain Ctrl+C on Windows. It copies when the terminal has a selection and is
+ * the interrupt otherwise, as in Windows Terminal — the caller checks which.
+ */
+export function isWindowsTerminalCopyKey(event: KeyboardEvent): boolean {
+  return (
+    isWindows() &&
+    event.ctrlKey &&
+    !event.shiftKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    (event.key === "c" || event.key === "C" || event.code === "KeyC")
+  );
 }
 
 /**
@@ -101,6 +126,8 @@ export function isTerminalReservedKey(event: KeyboardEvent): boolean {
   return (
     isTuiReservedKey(event) ||
     isTerminalClipboardCopyKey(event) ||
-    isTerminalClipboardPasteKey(event)
+    isTerminalClipboardPasteKey(event) ||
+    isWindowsTerminalPasteKey(event) ||
+    isWindowsTerminalCopyKey(event)
   );
 }
