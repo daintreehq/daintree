@@ -91,12 +91,18 @@ USAGE
         exit 0
       fi
     else
-      # Exclude this script's own process: run as /usr/bin/daintree, its
-      # command line matches the pattern too.
-      if pgrep -f "(/|^)daintree([[:space:]]|$)|daintree-app" | grep -qvx "$$"; then
-        echo "Daintree is running"
-        exit 0
-      fi
+      # The pattern also matches this script (run as /usr/bin/daintree) and any
+      # shell whose command line names it; only the app's own binary counts.
+      for pid in $(pgrep -f "(/|^)daintree([[:space:]]|$)|daintree-app"); do
+        exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || continue
+        exe="${exe% (deleted)}"
+        case "${exe##*/}" in
+          daintree|daintree-app)
+            echo "Daintree is running"
+            exit 0
+            ;;
+        esac
+      done
     fi
     echo "Daintree is not running"
     exit 1

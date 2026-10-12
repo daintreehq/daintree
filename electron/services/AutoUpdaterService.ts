@@ -154,6 +154,7 @@ type UpdateAvailableSuppressionReason = "session-dedup" | "dismiss-cooldown";
 class AutoUpdaterService {
   // Outlives dispose(), unlike every other listener here: see initialize().
   private appImageRelocationListenerAttached = false;
+  private downloadedVersion: string | null = null;
   private checkInterval: NodeJS.Timeout | null = null;
   private startupJitterTimeout: NodeJS.Timeout | null = null;
   private retryTimeout: NodeJS.Timeout | null = null;
@@ -1074,6 +1075,7 @@ class AutoUpdaterService {
         // otherwise be read back on the next boot and blamed on this one.
         this.forgetInstallStage();
         this.setMenuState("ready");
+        this.downloadedVersion = info.version;
         broadcastToRenderer(CHANNELS.UPDATE_DOWNLOADED, { version: info.version });
       };
       autoUpdater.on("update-downloaded", this.downloadedHandler);
@@ -1087,7 +1089,8 @@ class AutoUpdaterService {
         autoUpdater.on("appimage-filename-updated", (next: string) => {
           const previous = process.env.APPIMAGE;
           if (!previous || previous === next) return;
-          notifyAppImageRelocated({ previous, next });
+          // The image now at `next` is the downloaded update, not this process.
+          notifyAppImageRelocated({ previous, next, version: this.downloadedVersion ?? undefined });
         });
       }
 

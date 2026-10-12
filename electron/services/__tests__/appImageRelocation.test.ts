@@ -36,10 +36,11 @@ describe("appImageRelocation", () => {
     const handler = vi.fn();
     onAppImageRelocated(handler);
 
-    notifyAppImageRelocated(relocation);
+    notifyAppImageRelocated({ ...relocation, version: "1.3.0" });
 
-    expect(cliMock.repointAppImageWrapper).toHaveBeenCalledWith(relocation.next);
-    expect(handler).toHaveBeenCalledWith(relocation);
+    // The update's version, not this process's: the new image hasn't run yet.
+    expect(cliMock.repointAppImageWrapper).toHaveBeenCalledWith(relocation.next, "1.3.0");
+    expect(handler).toHaveBeenCalledWith({ ...relocation, version: "1.3.0" });
   });
 
   // A restart armed before electron-updater's install-on-quit would otherwise

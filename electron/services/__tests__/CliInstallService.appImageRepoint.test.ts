@@ -170,6 +170,61 @@ describe("CliInstallService — following a moved AppImage", () => {
     expect(notDir.stderr).toContain("is not a directory");
   });
 
+  it.runIf(process.platform === "linux")(
+    "answers --status from the app's own binary, not a shell naming the wrapper",
+    async () => {
+      const service = await load();
+      const wrapper = path.join(root, "bin", "daintree");
+      fs.mkdirSync(path.dirname(wrapper), { recursive: true });
+      fs.writeFileSync(
+        wrapper,
+        service.generateAppImageWrapper("/nonexistent/x.AppImage", "1.2.3"),
+        {
+          mode: 0o755,
+        }
+      );
+      const realRunning = spawnSync(
+        "bash",
+        ["-c", 'for p in $(pgrep -x daintree); do readlink "/proc/$p/exe"; done'],
+        { encoding: "utf8" }
+      ).stdout.includes("/daintree");
+      if (!realRunning) {
+        const viaShell = spawnSync("bash", ["-c", `${wrapper} --status; :`], { encoding: "utf8" });
+        expect(viaShell.stdout.trim()).toBe("Daintree is not running");
+      }
+      const binary = path.join(root, "app", "daintree");
+      fs.mkdirSync(path.dirname(binary), { recursive: true });
+      const sleeper = spawnSync("bash", ["-c", "command -v sleep"], {
+        encoding: "utf8",
+      }).stdout.trim();
+      fs.copyFileSync(sleeper, binary);
+      fs.chmodSync(binary, 0o755);
+      const { spawn } = await import("node:child_process");
+      const app = spawn(binary, ["30"], { stdio: "ignore" });
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        expect(spawnSync("bash", [wrapper, "--status"], { encoding: "utf8" }).stdout.trim()).toBe(
+          "Daintree is running"
+        );
+      } finally {
+        app.kill("SIGKILL");
+      }
+    }
+  );
+
+  // An update installed on quit repoints the wrapper before the new version
+  // has ever run, so the version comes from the update, not this process.
+  it("writes the update's version when repointing during an install", async () => {
+    const oldImage = path.join(root, "Daintree-1.2.0.AppImage");
+    const newImage = path.join(root, "Daintree-1.3.0.AppImage");
+    const service = await installedFor(oldImage);
+    fs.rmSync(oldImage);
+    fs.writeFileSync(newImage, "new image");
+
+    expect(service.repointAppImageWrapper(newImage, "1.3.0")).toBe(true);
+    expect(fs.readFileSync(wrapperPath, "utf8")).toContain('echo "daintree 1.3.0"');
+  });
+
   it("keeps its launch line readable after the flags were added", async () => {
     const service = await load();
     const image = path.join(root, "Daintree-1.2.0.AppImage");

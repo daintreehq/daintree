@@ -73,8 +73,13 @@ export function generateAppImageWrapper(appImagePath: string, version = appVersi
     `    echo "${CLI_COMMAND_NAME} ${quotedVersion}"`,
     "    exit 0 ;;",
     "  --status|-s)",
-    // This script's own command line matches the pattern too.
-    '    if pgrep -f "(/|^)daintree([[:space:]]|$)" | grep -qvx "$$"; then echo "Daintree is running"; exit 0; fi',
+    // The pattern also matches this script and any shell whose command line
+    // names it; only the app's own binary counts.
+    '    for pid in $(pgrep -f "(/|^)daintree([[:space:]]|$)"); do',
+    '      exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || continue',
+    '      exe="${exe% (deleted)}"',
+    '      if [ "${exe##*/}" = daintree ]; then echo "Daintree is running"; exit 0; fi',
+    "    done",
     '    echo "Daintree is not running"; exit 1 ;;',
     "esac",
     'TARGET="${1:-.}"',
@@ -112,13 +117,13 @@ export function appImageOfWrapper(content: string): string | null {
  * install's. A wrapper for this image written by an older template is brought
  * up to date. Nothing is created when the CLI was never installed.
  */
-export function repointAppImageWrapper(appImage: string): boolean {
+export function repointAppImageWrapper(appImage: string, version?: string): boolean {
   const wrapperPath = getAppImageWrapperPath();
   const current = readFileIfExists(wrapperPath);
   if (current === null) return false;
   const named = appImageOfWrapper(current);
   if (named === null) return false;
-  const next = generateAppImageWrapper(appImage);
+  const next = generateAppImageWrapper(appImage, version);
   if (named === appImage && current === next) return false;
   if (named !== appImage && (!isAppImageUpdateRename(named, appImage) || fs.existsSync(named))) {
     return false;

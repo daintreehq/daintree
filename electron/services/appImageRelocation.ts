@@ -14,6 +14,8 @@ import { repointAppImageWrapper } from "./CliInstallService.js";
 export interface AppImageRelocation {
   previous: string;
   next: string;
+  /** The version now at `next`, when an update put it there; it isn't this process's. */
+  version?: string;
 }
 
 type RelocationHandler = (relocation: AppImageRelocation) => void;
@@ -42,7 +44,7 @@ export function notifyAppImageRelocated(relocation: AppImageRelocation): void {
     console.warn("[AppImage] Couldn't move the armed relaunch to the new image:", error);
   }
   try {
-    repointAppImageWrapper(relocation.next);
+    repointAppImageWrapper(relocation.next, relocation.version);
   } catch (error) {
     console.warn("[AppImage] Couldn't repoint the daintree command:", error);
   }

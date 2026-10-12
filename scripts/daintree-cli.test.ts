@@ -168,7 +168,12 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
     };
     // pgrep runs as the script's child, so its parent pid is the script's own.
     expect(status('echo "$PPID"')).toEqual({ code: 1, stdout: "Daintree is not running" });
-    expect(status('echo "$PPID"; echo 999999')).toEqual({ code: 0, stdout: "Daintree is running" });
+    // A match only counts when the process runs the app's binary; this shell
+    // and a pid that isn't there don't (the "--status" block below covers one that does).
+    expect(status('echo "$PPID"; echo $$; echo 999999')).toEqual({
+      code: 1,
+      stdout: "Daintree is not running",
+    });
   });
 
   it.skipIf(process.platform !== "linux")(
@@ -187,4 +192,63 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
       ]);
     }
   );
+});
+
+// --status looks at what each matching process actually runs: a shell whose
+// command line names the CLI (`bash -c '/usr/bin/daintree --status; …'`) used
+// to read as a running app. Linux only: it reads /proc.
+describe.runIf(process.platform === "linux")("daintree-cli.sh --status", () => {
+  let root: string;
+  let app: ReturnType<typeof import("node:child_process").spawn> | null = null;
+
+  const anotherDaintreeRuns = () =>
+    execFileSync(
+      "bash",
+      ["-c", 'for p in $(pgrep -x daintree); do readlink "/proc/$p/exe"; done'],
+      {
+        encoding: "utf8",
+      }
+    )
+      .split("\n")
+      .some((exe) => exe.replace(/ \(deleted\)$/, "").endsWith("/daintree"));
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-cli-status-"));
+    fs.mkdirSync(path.join(root, "bin"));
+    fs.copyFileSync(SCRIPT_SOURCE, path.join(root, "bin", "daintree"));
+    fs.chmodSync(path.join(root, "bin", "daintree"), 0o755);
+  });
+
+  afterEach(() => {
+    app?.kill("SIGKILL");
+    app = null;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const status = (viaShell: boolean) => {
+    const cli = path.join(root, "bin", "daintree");
+    const args = viaShell ? ["-c", `${cli} --status; :`] : [cli, "--status"];
+    try {
+      return execFileSync("bash", args, { encoding: "utf8" }).trim();
+    } catch (error) {
+      return String((error as { stdout?: string }).stdout ?? "").trim();
+    }
+  };
+
+  it("doesn't count a shell that names the CLI", () => {
+    if (anotherDaintreeRuns()) return;
+    expect(status(true)).toBe("Daintree is not running");
+  });
+
+  it("counts a process running a binary named daintree", async () => {
+    const { spawn } = await import("node:child_process");
+    const sleeper = execFileSync("bash", ["-c", "command -v sleep"], { encoding: "utf8" }).trim();
+    fs.mkdirSync(path.join(root, "app"));
+    const binary = path.join(root, "app", "daintree");
+    fs.copyFileSync(sleeper, binary);
+    fs.chmodSync(binary, 0o755);
+    app = spawn(binary, ["30"], { stdio: "ignore" });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(status(false)).toBe("Daintree is running");
+  });
 });
