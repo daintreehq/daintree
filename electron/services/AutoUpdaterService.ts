@@ -16,6 +16,7 @@ import type { PendingUpdateInstallStage } from "../utils/updateInstallStages.js"
 import { PRODUCT_NAME, PRODUCT_WEBSITE } from "../utils/productBranding.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { isWindowsStoreBuild } from "../../shared/config/distribution.js";
+import { notifyAppImageRelocated } from "./appImageRelocation.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 const DISMISS_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -120,6 +121,19 @@ const CHECKING_MENU_DELAY_MS = 400;
 // many times it retries — a fresh download is the only way out (issue #11481).
 const MANUAL_DOWNLOAD_URL = `${PRODUCT_WEBSITE}/download`;
 
+// electron-updater picks DebUpdater, RpmUpdater or PacmanUpdater from the
+// package-type file a Linux package ships, and all three install through
+// pkexec or sudo (LinuxUpdater.runCommandWithSudoIfNeeded).
+function linuxPackageInstallNeedsPassword(): boolean {
+  if (process.platform !== "linux") return false;
+  try {
+    const type = readFileSync(path.join(process.resourcesPath, "package-type"), "utf-8").trim();
+    return type === "deb" || type === "rpm" || type === "pacman";
+  } catch {
+    return false;
+  }
+}
+
 export type UpdateMenuState = "idle" | "checking" | "ready";
 
 // Renderer-facing snapshot of the update the user should currently be told
@@ -137,6 +151,8 @@ export type LatestUpdateState = { version: string; downloaded: boolean };
 type UpdateAvailableSuppressionReason = "session-dedup" | "dismiss-cooldown";
 
 class AutoUpdaterService {
+  // Outlives dispose(), unlike every other listener here: see initialize().
+  private appImageRelocationListenerAttached = false;
   private checkInterval: NodeJS.Timeout | null = null;
   private startupJitterTimeout: NodeJS.Timeout | null = null;
   private retryTimeout: NodeJS.Timeout | null = null;
@@ -419,11 +435,17 @@ class AutoUpdaterService {
 
     // Deliberately does not name a cause. The updater surfaces no way to tell a
     // Squirrel requirement mismatch from a permissions failure or a package
-    // manager refusing the install, and every platform reaches this line.
+    // manager refusing the install, and every platform reaches this line. A
+    // Linux package install states what it always needs instead: the
+    // administrator password its pkexec/sudo prompt asks for, which a cancel,
+    // a missing polkit agent or a sudo with no terminal all fail on.
+    const message = linuxPackageInstallNeedsPassword()
+      ? `${PRODUCT_NAME} ${expected} was downloaded but not installed, so you're still on ${actual}. Package updates need your administrator password; if the prompt was cancelled or didn't open, install the update from the download page.`
+      : `${PRODUCT_NAME} ${expected} was downloaded but couldn't be installed, so you're still on ${actual}. Reinstalling from a fresh download will get you onto the latest version.`;
     broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
       type: "error",
       title: "Update didn't install",
-      message: `${PRODUCT_NAME} ${expected} was downloaded but couldn't be installed, so you're still on ${actual}. Reinstalling from a fresh download will get you onto the latest version.`,
+      message,
       action: {
         label: "Download manually",
         ipcChannel: CHANNELS.SYSTEM_OPEN_EXTERNAL,
@@ -1051,6 +1073,19 @@ class AutoUpdaterService {
         broadcastToRenderer(CHANNELS.UPDATE_DOWNLOADED, { version: info.version });
       };
       autoUpdater.on("update-downloaded", this.downloadedHandler);
+
+      // AppImageUpdater installs a versioned image under the new version's
+      // name and deletes the old one, then emits this from inside the install —
+      // after the shutdown chain has disposed this service, which is why it is
+      // attached once and never detached. Whatever names the old path follows.
+      if (process.platform === "linux" && !this.appImageRelocationListenerAttached) {
+        this.appImageRelocationListenerAttached = true;
+        autoUpdater.on("appimage-filename-updated", (next: string) => {
+          const previous = process.env.APPIMAGE;
+          if (!previous || previous === next) return;
+          notifyAppImageRelocated({ previous, next });
+        });
+      }
 
       // Handle quit-and-install request from renderer. Validates the sender origin
       // synchronously (matches the UPDATE_DISMISS_TOAST pattern), then delegates to

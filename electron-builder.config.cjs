@@ -201,6 +201,17 @@ module.exports = async function () {
     },
     afterPack: "./scripts/afterPack.cjs",
     afterSign: "./scripts/notarize-macos.cjs",
+    // The AppImage ships AppImage's static type2 runtime (20251108) instead of
+    // the legacy one, which dlopens libfuse.so.2: Ubuntu 22.04+ and most
+    // current distros ship only fuse3, so the legacy image wouldn't start
+    // until the user installed libfuse2. The static runtime mounts through any
+    // setuid fusermount/fusermount3 and keeps the same APPIMAGE/APPDIR/ARGV0/
+    // OWD variables, `--appimage-extract [pattern]`, APPIMAGE_EXTRACT_AND_RUN
+    // and AppRun, so the updater, the packaged smoke and Remote Hosts behave
+    // as before. 1.0.3 is the toolset whose mksquashfs builds on newer glibc
+    // hosts (electron-builder #9598). It compresses with zstd rather than
+    // gzip, so the first update across this change downloads in full.
+    toolsets: { appimage: "1.0.3" },
     mac: {
       // No `beforePack` hook and no `singleArchFiles` allowList: both were
       // added to keep node-gyp's per-arch build metadata out of the macOS

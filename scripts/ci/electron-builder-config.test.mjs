@@ -295,3 +295,28 @@ describe("daintree CLI — macOS app lookup (#11406)", () => {
     expect(script).toContain(`kMDItemCFBundleIdentifier == "${config.appId}"`);
   });
 });
+
+describe("electron-builder config — AppImage runtime", () => {
+  it("builds the AppImage on a static-runtime toolset this electron-builder can fetch", async () => {
+    const config = await buildConfig();
+    const version = config.toolsets?.appimage;
+    // Unset and "0.0.0" select the legacy runtime, which needs libfuse2 — absent
+    // from a stock Ubuntu 22.04+ install, so the AppImage wouldn't start.
+    expect(version).toBeTruthy();
+    expect(version).not.toBe("0.0.0");
+    const scheme = JSON.parse(
+      await readFile(
+        new URL("../../node_modules/app-builder-lib/scheme.json", import.meta.url),
+        "utf8"
+      )
+    );
+    const accepted = scheme.definitions.ToolsetConfig.properties.appimage.anyOf.flatMap(
+      (option) => option.enum ?? []
+    );
+    expect(accepted).toContain(version);
+    // electron-builder verifies the toolset download against a pinned checksum;
+    // a version it has none for fails the Linux build at packaging time.
+    const { appimageChecksums } = await import("app-builder-lib/out/toolsets/linux.js");
+    expect(Object.keys(appimageChecksums[version] ?? {})).not.toHaveLength(0);
+  });
+});

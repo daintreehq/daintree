@@ -299,7 +299,9 @@ describe("Host mode setup read-back", () => {
     expect(script).toContain("/dev/fuse");
     // A crashed host leaves its socket and files behind; only a live pid is listening.
     expect(script).toContain('kill -0 "$p"');
-    expect(script).toContain("libfuse[.]so[.]2");
+    // The static AppImage runtime brings its own FUSE library; a fuse3-only
+    // host (stock Ubuntu 22.04+) mounts it, so libfuse2 must not be required.
+    expect(script).not.toContain("libfuse");
     // echo would rewrite backslashes in the JSON on some shells.
     expect(script).toMatch(/printf '%s %s\\n' "@@dt:hostmodestate"/);
   });

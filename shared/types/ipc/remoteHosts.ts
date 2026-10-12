@@ -209,8 +209,9 @@ export interface HostAdvice {
    */
   startAtLoginInstalled: boolean | null;
   /**
-   * Linux: FUSE is usable for an AppImage (`/dev/fuse`, fusermount and
-   * libfuse2). Without it an AppImage host runs extracted. Null on macOS.
+   * Linux: FUSE is usable for an AppImage (`/dev/fuse` and a setuid
+   * fusermount3 or fusermount; the static runtime needs no libfuse2).
+   * Without it an AppImage host runs extracted. Null on macOS.
    */
   fuse: boolean | null;
 }

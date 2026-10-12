@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { open, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { inflateRawSync } from "node:zlib";
 import { dump } from "js-yaml";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -25,6 +26,37 @@ async function sha512(filePath) {
   return hash.digest("base64");
 }
 
+// Larger than any real blockmap (a 400 MB AppImage's is well under 1 MB), so a
+// file whose last bytes aren't a length can't make us allocate gigabytes.
+const MAX_EMBEDDED_BLOCKMAP_BYTES = 64 * 1024 * 1024;
+
+/**
+ * electron-builder appends an AppImage's blockmap to the image itself (raw
+ * deflate JSON, then its length as a big-endian uint32) instead of writing a
+ * .blockmap beside it. electron-updater finds it from the `blockMapSize` this
+ * metadata lists; without one, every AppImage update downloads in full.
+ */
+export async function embeddedBlockMapSize(filePath) {
+  const handle = await open(filePath, "r");
+  try {
+    const { size } = await handle.stat();
+    if (size < 4) return null;
+    const tail = Buffer.alloc(4);
+    await handle.read(tail, 0, 4, size - 4);
+    const length = tail.readUInt32BE(0);
+    if (length === 0 || length > size - 4 || length > MAX_EMBEDDED_BLOCKMAP_BYTES) return null;
+    const data = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(data, 0, length, size - 4 - length);
+    if (bytesRead !== length) return null;
+    const blockMap = JSON.parse(inflateRawSync(data).toString("utf8"));
+    return Array.isArray(blockMap?.files) ? length : null;
+  } catch {
+    return null;
+  } finally {
+    await handle.close();
+  }
+}
+
 async function artifactEntry(releaseDir, fileName) {
   const filePath = path.join(releaseDir, fileName);
   const fileStat = await stat(filePath);
@@ -41,6 +73,17 @@ async function artifactEntry(releaseDir, fileName) {
   } catch (error) {
     if (error?.code !== "ENOENT") {
       throw error;
+    }
+  }
+
+  if (entry.blockMapSize === undefined && fileName.endsWith(".AppImage")) {
+    const embedded = await embeddedBlockMapSize(filePath);
+    if (embedded === null) {
+      console.warn(
+        `::warning::${fileName} has no embedded blockmap, so its updates will download in full`
+      );
+    } else {
+      entry.blockMapSize = embedded;
     }
   }
 

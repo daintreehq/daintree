@@ -98,8 +98,10 @@ export function buildHostProbeScript(): string {
     `if pgrep -u "$(id -u)" -x daintree >/dev/null 2>&1; then echo "${MARK}running yes"; fi`,
     `echo "${MARK}sleep $(systemctl is-enabled sleep.target 2>/dev/null)"`,
     `if [ -f "$HOME/.config/systemd/user/${LINUX_UNIT_NAME}" ]; then echo "${MARK}unit yes"; echo "${MARK}unitenabled $(systemctl --user is-enabled ${LINUX_UNIT_NAME} 2>/dev/null)"; else echo "${MARK}unit no"; fi`,
-    // What an AppImage needs to mount itself: the device, fusermount and libfuse2.
-    `f=no; if [ -e /dev/fuse ] && { command -v fusermount >/dev/null 2>&1 || command -v fusermount3 >/dev/null 2>&1; } && { { /sbin/ldconfig -p 2>/dev/null || ldconfig -p 2>/dev/null; } | grep -q 'libfuse[.]so[.]2' || ls /lib/*/libfuse.so.2 /usr/lib/*/libfuse.so.2 /lib64/libfuse.so.2 /usr/lib64/libfuse.so.2 /usr/lib/libfuse.so.2 >/dev/null 2>&1; }; then f=yes; fi; echo "${MARK}fuse $f"`,
+    // What an AppImage needs to mount itself: the device and a setuid
+    // fusermount. Its static runtime carries its own FUSE library, so it only
+    // looks for that helper (fuse3's fusermount3 or fuse2's fusermount).
+    `f=no; if [ -e /dev/fuse ]; then for b in fusermount3 fusermount; do p=$(command -v $b 2>/dev/null) && [ -u "$p" ] && { f=yes; break; }; done; fi; echo "${MARK}fuse $f"`,
     `echo "${MARK}linger $(loginctl show-user "$(id -un)" -p Linger 2>/dev/null)"`,
     // Only this SSH user's processes: another user's keyring is no use here.
     `k=none; for n in gnome-keyring-d kwalletd5 kwalletd6; do if pgrep -u "$(id -u)" -x $n >/dev/null 2>&1; then k=$n; break; fi; done; echo "${MARK}keyring $k"`,

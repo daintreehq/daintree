@@ -510,7 +510,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                 The package needs sudo, so the last step is one command you run on the host.{" "}
                 {probe?.advice.fuse === false
                   ? "The AppImage installs without root; with no FUSE on the host, it runs unpacked."
-                  : "The AppImage installs without root but needs FUSE (libfuse2)."}
+                  : "The AppImage installs without root but needs FUSE."}
               </p>
             )}
             {plan.packaging === "appimage" && probe?.advice.fuse === false && (

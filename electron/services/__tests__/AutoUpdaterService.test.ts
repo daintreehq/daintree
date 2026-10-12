@@ -140,6 +140,10 @@ vi.mock("../../store.js", () => ({
 
 vi.mock("../../../shared/utils/trustedRenderer.js", () => trustedRendererMock);
 
+const relocationMock = vi.hoisted(() => ({ notifyAppImageRelocated: vi.fn() }));
+
+vi.mock("../appImageRelocation.js", () => relocationMock);
+
 import { autoUpdaterService } from "../AutoUpdaterService.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { PENDING_UPDATE_INSTALL_STAGES } from "../../utils/updateInstallStages.js";
@@ -654,6 +658,73 @@ describe("AutoUpdaterService", () => {
 
       expect(autoUpdaterMock.on).toHaveBeenCalled();
       expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // AppImageUpdater installs Daintree-1.0.0.AppImage's update as
+  // Daintree-2.0.0.AppImage, deletes the old file and emits
+  // `appimage-filename-updated` from inside the install.
+  describe("AppImage relocation", () => {
+    const OLD_IMAGE = "/home/u/Applications/Daintree-1.0.0.AppImage";
+    const NEW_IMAGE = "/home/u/Applications/Daintree-2.0.0.AppImage";
+
+    // The listener is attached once per service, so each test needs its own.
+    async function freshService() {
+      vi.resetModules();
+      return (await import("../AutoUpdaterService.js")).autoUpdaterService;
+    }
+
+    function relocationListeners(): Array<(next: string) => void> {
+      return (autoUpdaterMock.on as Mock).mock.calls
+        .filter(([event]) => event === "appimage-filename-updated")
+        .map(([, listener]) => listener as (next: string) => void);
+    }
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.APPIMAGE = OLD_IMAGE;
+    });
+
+    it("hands the old and new paths on when the updater renames the image", async () => {
+      const service = await freshService();
+      service.initialize();
+
+      const [listener] = relocationListeners();
+      listener!(NEW_IMAGE);
+
+      expect(relocationMock.notifyAppImageRelocated).toHaveBeenCalledWith({
+        previous: OLD_IMAGE,
+        next: NEW_IMAGE,
+      });
+      service.dispose();
+    });
+
+    // The rename happens during the install handoff, after the shutdown chain
+    // has disposed the service, so a listener removed by dispose() would never
+    // hear it.
+    it("stays attached through dispose and is never attached twice", async () => {
+      const service = await freshService();
+      service.initialize();
+      service.dispose();
+      service.initialize();
+      service.dispose();
+
+      expect(relocationListeners()).toHaveLength(1);
+      expect(
+        (autoUpdaterMock.off as Mock).mock.calls.some(
+          ([event]) => event === "appimage-filename-updated"
+        )
+      ).toBe(false);
+    });
+
+    it("ignores an update that kept the image's path", async () => {
+      const service = await freshService();
+      service.initialize();
+
+      relocationListeners()[0]!(OLD_IMAGE);
+
+      expect(relocationMock.notifyAppImageRelocated).not.toHaveBeenCalled();
+      service.dispose();
     });
   });
 
@@ -3093,6 +3164,37 @@ describe("AutoUpdaterService", () => {
 
         // Recovery must not be hostage to an analytics outage.
         expect(bootWith({ pending: "2.0.0", stage: "attempted" })).toHaveLength(1);
+      });
+
+      // deb/rpm/pacman installs go through pkexec or sudo, and a cancelled
+      // prompt, a missing polkit agent or a sudo with no terminal all end here.
+      it("tells a Linux package install that the update needs the administrator password", () => {
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+        fsMock.existsSync.mockReturnValue(true);
+        fsMock.readFileSync.mockReturnValue("deb\n");
+
+        const toasts = bootWith({ pending: "2.0.0", stage: "handoff-timeout" });
+
+        expect(toasts).toHaveLength(1);
+        const payload = toasts[0]![1] as {
+          message: string;
+          action: { ipcChannel: string; data: string };
+        };
+        expect(payload.message).toMatch(/administrator password/);
+        expect(payload.message).toContain("2.0.0");
+        expect(payload.message).toContain("1.0.0");
+        expect(payload.action.ipcChannel).toBe(CHANNELS.SYSTEM_OPEN_EXTERNAL);
+        expect(new URL(payload.action.data).pathname).toBe("/download");
+      });
+
+      it("keeps the fresh-download advice for an AppImage, which needs no password", () => {
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+        process.env.APPIMAGE = "/home/u/Applications/Daintree.AppImage";
+
+        const toasts = bootWith({ pending: "2.0.0", stage: "attempted" });
+
+        expect(toasts).toHaveLength(1);
+        expect((toasts[0]![1] as { message: string }).message).not.toMatch(/password/);
       });
 
       it("does not send Windows Store users to a download page the Store owns", () => {

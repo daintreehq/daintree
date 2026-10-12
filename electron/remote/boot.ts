@@ -15,6 +15,7 @@ import { installViewReverseRequests } from "./client/viewRequests.js";
 import { installHostFileClient } from "./files/clientInstall.js";
 import { installHostUploadClient } from "./files/uploadClient.js";
 import { installHostMetricsClient } from "./metrics/clientInstall.js";
+import { followAppImageMoves } from "./host/appImageRelocation.js";
 import { createHostModeService } from "./host/hostModeDefaults.js";
 import {
   acceptLocalPushForRemoteView,
@@ -247,6 +248,8 @@ export async function startRemoteHosts(options: StartRemoteHostsOptions): Promis
   if (options.hostMode) await hostMode.startListening();
   // Started by its login item or unit: bring that item up to this build's text.
   if (isHostModeRequested(process.argv)) void hostMode.refreshStartAtLogin();
+  // Never torn down: the updater renames an AppImage after this has stopped.
+  followAppImageMoves();
 }
 
 export async function stopRemoteHosts(): Promise<void> {
