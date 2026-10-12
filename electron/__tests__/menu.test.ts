@@ -1151,6 +1151,25 @@ describe("update menu lifecycle", () => {
       const items = findSubmenu(capturedTemplate, "Window");
       expect(items.map((i) => i.role ?? i.type)).toEqual(["minimize", "close"]);
     });
+
+    it.each(["win32", "linux"] as const)(
+      "on %s never lets Minimize take Ctrl+M from the focused page",
+      (platform) => {
+        Object.defineProperty(process, "platform", { value: platform, configurable: true });
+        createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+
+        const minimize = findSubmenu(capturedTemplate, "Window").find((i) => i.role === "minimize");
+        expect(minimize?.registerAccelerator).toBe(false);
+      }
+    );
+
+    it("on darwin keeps Cmd+M minimizing the window", () => {
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+
+      const minimize = findSubmenu(capturedTemplate, "Window").find((i) => i.role === "minimize");
+      expect(minimize?.registerAccelerator).not.toBe(false);
+    });
   });
 
   describe("File menu Exit and Settings accelerator on non-darwin (#7939)", () => {

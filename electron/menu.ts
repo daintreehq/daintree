@@ -700,10 +700,13 @@ export function createApplicationMenu(
     },
     {
       label: "Window",
+      // Off macOS the minimize role registers a hidden Ctrl+M accelerator that
+      // fires whenever the focused page leaves the key unhandled (any text field).
+      // Ctrl+M is Enter to a terminal and means nothing like minimize there.
       submenu:
         process.platform === "darwin"
           ? [{ role: "minimize" }, { role: "zoom" }, { type: "separator" }, { role: "front" }]
-          : [{ role: "minimize" }, { role: "close" }],
+          : [{ role: "minimize", registerAccelerator: false }, { role: "close" }],
     },
     {
       role: "help",
