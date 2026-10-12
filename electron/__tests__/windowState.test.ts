@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const windowStatesStoreMock = vi.hoisted(() => ({
   get: vi.fn(),
@@ -732,6 +732,63 @@ describe("createWindowWithState", () => {
 
       // Should only call windowStatesStore.set, not any legacy store
       expect(windowStatesStoreMock.set).toHaveBeenCalled();
+    });
+  });
+
+  describe("scaling drift on Windows", () => {
+    const realPlatform = process.platform;
+    const setPlatform = (platform: NodeJS.Platform) =>
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    const saved = {
+      x: 200,
+      y: 300,
+      width: 1000,
+      height: 700,
+      isMaximized: false,
+      isFullScreen: false,
+    };
+
+    afterEach(() => setPlatform(realPlatform));
+
+    function closeWithNormalBounds(bounds: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }) {
+      windowStatesStoreMock.get.mockReturnValue({ "/home/user/project-a": saved });
+      createWindowWithState({ show: false }, "/home/user/project-a");
+      winInstance.getNormalBounds.mockReturnValue(bounds);
+      eventHandlers.get("close")!();
+      const written = windowStatesStoreMock.set.mock.calls.at(-1)![1] as Record<
+        string,
+        { width: number; height: number }
+      >;
+      return written["/home/user/project-a"];
+    }
+
+    it("keeps the restored bounds when the window only came back a few pixels larger", () => {
+      setPlatform("win32");
+      expect(closeWithNormalBounds({ x: 200, y: 300, width: 1006, height: 705 })).toMatchObject({
+        width: 1000,
+        height: 700,
+      });
+    });
+
+    it("saves a real resize", () => {
+      setPlatform("win32");
+      expect(closeWithNormalBounds({ x: 200, y: 300, width: 1240, height: 705 })).toMatchObject({
+        width: 1240,
+        height: 705,
+      });
+    });
+
+    it("saves what the window reports elsewhere", () => {
+      setPlatform("darwin");
+      expect(closeWithNormalBounds({ x: 200, y: 300, width: 1006, height: 705 })).toMatchObject({
+        width: 1006,
+        height: 705,
+      });
     });
   });
 
