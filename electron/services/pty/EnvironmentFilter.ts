@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { stripAppDirPathLists } from "../../utils/appImage.js";
 
 /**
  * Environment variable filtering for terminal spawning.
@@ -86,13 +87,12 @@ const HOST_RUNTIME_VARS = new Set(["NODE_ENV"]);
  * exports `CHROME_DESKTOP` naming Daintree's desktop entry, which another
  * Chromium or Electron app started from a terminal takes as its own (window
  * grouping, Wayland app id). Under an AppImage the runtime adds `APPDIR`,
- * `APPIMAGE`, `ARGV0` and `OWD`, and AppRun prefixes the path lists below with
- * the image's mount, which vanishes when Daintree exits; `LD_LIBRARY_PATH` would
+ * `APPIMAGE`, `ARGV0` and `OWD`, and AppRun prefixes `PATH` and the library and
+ * data path lists with the image's mount, which vanishes when Daintree exits; `LD_LIBRARY_PATH` would
  * also load the image's bundled libraries into the user's own tools.
  */
 const LINUX_LAUNCHER_VARS = ["CHROME_DESKTOP"];
 const APPIMAGE_RUNTIME_VARS = ["APPDIR", "APPIMAGE", "ARGV0", "OWD"];
-const APPIMAGE_PATH_LISTS = ["PATH", "LD_LIBRARY_PATH", "XDG_DATA_DIRS", "GSETTINGS_SCHEMA_DIR"];
 
 function stripLinuxLauncherEnv(env: Record<string, string>): void {
   for (const name of LINUX_LAUNCHER_VARS) delete env[name];
@@ -106,17 +106,7 @@ function stripLinuxLauncherEnv(env: Record<string, string>): void {
     appDir = env.APPDIR ?? extractedAppRunDir();
     delete env.APPDIR;
   }
-  if (!appDir) return;
-  for (const name of APPIMAGE_PATH_LISTS) {
-    const value = env[name];
-    if (value === undefined) continue;
-    const kept = value
-      .split(":")
-      .filter((entry) => entry !== appDir && !entry.startsWith(`${appDir}/`));
-    if (kept.join(":") === value) continue;
-    if (kept.length > 0 || name === "PATH") env[name] = kept.join(":");
-    else delete env[name];
-  }
+  if (appDir) stripAppDirPathLists(env, appDir);
 }
 
 /** The AppDir this binary runs from when it was started through an AppRun. */

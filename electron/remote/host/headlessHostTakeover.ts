@@ -12,7 +12,7 @@ import {
 import { hostLocation } from "./hostLocation.js";
 import { HOST_MODE_STATUS_NAME, parseHostModeStatus } from "./hostModeStatusFile.js";
 import { systemdUnitName } from "./startAtLogin.js";
-import { withRelaunchExecPath } from "../../lifecycle/relaunchExecPath.js";
+import { armRelaunch } from "../../lifecycle/armRelaunch.js";
 
 /**
  * A Linux desktop launch that finds Daintree already running here as a
@@ -146,7 +146,7 @@ async function waitForExit(host: HeadlessHost, timeoutMs: number): Promise<boole
 
 function relaunch(argv: readonly string[], takeover: boolean): void {
   const args = argv.slice(1).filter((arg) => arg !== HOST_TAKEOVER_FLAG);
-  app.relaunch(withRelaunchExecPath({ args: takeover ? [...args, HOST_TAKEOVER_FLAG] : args }));
+  armRelaunch({ args: takeover ? [...args, HOST_TAKEOVER_FLAG] : args });
   app.exit(0);
 }
 
