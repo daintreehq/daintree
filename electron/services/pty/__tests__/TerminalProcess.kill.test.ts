@@ -1,10 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
+import { IdentityWatcher } from "../IdentityWatcher.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import type { ProcessTreeCache } from "../../ProcessTreeCache.js";
+import type { WindowsTreeKillResult } from "../../../utils/windowsTreeKill.js";
 
 const persistSyncMock = vi.hoisted(() => vi.fn());
+const treeKillMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
+  killWindowsProcessTrees: treeKillMock,
+}));
 
 vi.mock("node-pty", () => {
   return { spawn: vi.fn() };
@@ -385,5 +393,63 @@ describe.skipIf(process.platform === "win32")("TerminalProcess.kill — process 
     expect(getDescendantPids).toHaveBeenCalledTimes(2);
     expect(getDescendantPids).toHaveBeenNthCalledWith(1, 123);
     expect(getDescendantPids).toHaveBeenNthCalledWith(2, 123);
+  });
+});
+
+describe("TerminalProcess.kill — Windows, while the tree kill is pending", () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    treeKillMock.mockReset();
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", originalPlatform);
+    vi.restoreAllMocks();
+  });
+
+  it("lets go of the mirror, its watchers and the output listener at once, and the pseudoconsole only after the kill", async () => {
+    let finishKill: (results: WindowsTreeKillResult[]) => void = () => {};
+    treeKillMock.mockImplementation(
+      () => new Promise<WindowsTreeKillResult[]>((resolve) => (finishKill = resolve))
+    );
+    const outputListener = { dispose: vi.fn() };
+    const watcherDispose = vi.spyOn(IdentityWatcher.prototype, "dispose");
+    // `_agent` marks a real ConPTY: its release belongs to the tree kill.
+    const terminal = createTerminal(undefined, undefined, {
+      onData: () => outputListener,
+      _agent: {},
+    } as Partial<IPty>);
+    const pty = terminal.getPtyProcess();
+    expect(terminal.getInfo().headlessTerminal).toBeDefined();
+
+    terminal.kill("test");
+
+    expect(treeKillMock).toHaveBeenCalledTimes(1);
+    expect(terminal.getInfo().headlessTerminal).toBeUndefined();
+    expect(terminal.getInfo().serializeAddon).toBeUndefined();
+    expect(outputListener.dispose).toHaveBeenCalled();
+    expect(watcherDispose).toHaveBeenCalled();
+    expect(terminal.getPublicState().hasPty).toBe(false);
+    expect(pty.kill).not.toHaveBeenCalled();
+
+    finishKill([
+      {
+        mode: "tree",
+        targeted: [123],
+        killed: [123],
+        alreadyGone: [],
+        timedOut: [],
+        unconfirmed: [],
+        failed: [],
+        identityMismatch: [],
+        stale: [],
+        rootEnded: true,
+      },
+    ]);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    expect(pty.kill).toHaveBeenCalledTimes(1);
   });
 });

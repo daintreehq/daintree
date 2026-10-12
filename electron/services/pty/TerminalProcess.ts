@@ -1669,6 +1669,12 @@ export class TerminalProcess {
     // `forensicsBuffer.getRecentOutput()` and emits `terminal:exited` with
     // `reason: "kill"` carried through the lifecycle state machine.
     this.disposeHeadless();
+    // Everything else the live terminal used goes before the tree kill starts,
+    // not when the exit lands: on Windows the pseudoconsole — and with it the
+    // exit — waits for that kill to settle, and neither the kill nor the exit
+    // report reads these.
+    this.identityWatcher.dispose();
+    this.semanticBufferManager.dispose();
 
     const targets = this.processTreeKiller.execute(false, escalationDelayMs);
     this.auditKill(reason ?? "kill", targets, escalationDelayMs);

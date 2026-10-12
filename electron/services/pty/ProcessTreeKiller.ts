@@ -1,6 +1,7 @@
 import { isKillableWindowsPid } from "../../utils/windowsProcessTree.js";
 import {
   describeWindowsTreeKillProblem,
+  isWindowsTreeKillHelperRunning,
   killWindowsProcessTrees,
   killWindowsProcessTreesSync,
   type WindowsTreeKillResult,
@@ -11,8 +12,9 @@ import type { KillCensus, LineageOrigin } from "../TerminalLineageLedger.js";
 
 const SIGKILL_ESCALATION_DELAY_MS = 500;
 /**
- * One Windows tree kill: PowerShell start (seconds when cold), census,
- * terminations, and the exit wait. Nothing waits on it but the pseudoconsole.
+ * One Windows tree kill on the host's persistent helper: census, terminations
+ * and the exit wait, plus a PowerShell start when the helper is cold. Nothing
+ * waits on it but the pseudoconsole.
  */
 const WINDOWS_TREE_KILL_TIMEOUT_MS = 5000;
 /** Never leave the pseudoconsole open past this, whatever the helper is doing. */
@@ -30,6 +32,14 @@ const WINDOWS_EXIT_BATCH_WAIT_MS = 500;
  */
 const CAPTURED_CENSUS_MAX_AGE_MS = 1000;
 const SHELL_GONE = Symbol("shell-gone");
+
+/** A Windows tree kill in flight, and when it has settled. */
+interface WindowsJob {
+  coversShell: boolean;
+  /** Handed to a helper process, which finishes it even if this host exits. */
+  started: boolean;
+  done: Promise<void>;
+}
 
 /** Identities recorded at SIGTERM time, re-checked before anything is SIGKILLed. */
 interface EscalationState {
@@ -82,45 +92,122 @@ export interface LineageKillSource {
 
 /**
  * Windows tree kills collected during the pty-host's exit teardown, run as one
- * helper when it is flushed. Null outside a teardown.
+ * helper request when it is flushed. Null outside a teardown.
  */
-let windowsExitBatch: { targets: WindowsTreeKillTarget[]; after: Array<() => void> } | null = null;
+let windowsExitBatch: {
+  targets: WindowsTreeKillTarget[];
+  /**
+   * Shells the batch could only name by bare PID while their first kill is
+   * still pending: see {@link ProcessTreeKiller}'s `killWindows`.
+   */
+  joined: Array<{ shellPid: number; job: WindowsJob }>;
+  after: Array<() => void>;
+} | null = null;
 
 /**
- * Open the exit batch. From here until {@link flushWindowsExitBatch}, every
- * Windows tree kill is queued instead of started: the teardown ends in
- * `process.exit()`, where an asynchronous kill would never be observed, and a
- * blocking PowerShell per terminal would put twenty terminals' quit at ten
- * seconds. No-op off Windows.
+ * Open the exit batch. From here until it is flushed, every Windows tree kill
+ * is queued instead of started: one kill per terminal would not fit Main's
+ * force-kill deadline. No-op off Windows.
  */
 export function beginWindowsExitBatch(): void {
   if (process.platform !== "win32") return;
-  windowsExitBatch ??= { targets: [], after: [] };
+  windowsExitBatch ??= { targets: [], joined: [], after: [] };
 }
 
 /**
  * Kill every queued tree with one blocking helper run, then release each
  * terminal's pseudoconsole — after the kill, as the asynchronous path does,
  * because closing it first ends the shell the walk starts from.
+ *
+ * For `process.on("exit")`, where nothing asynchronous completes. A pending
+ * first kill already handed to a helper process is not repeated: that process
+ * finishes it after this host has gone, and only it knows whether the shell's
+ * PID is still the shell's. One still waiting in this process's queue would
+ * never run, and nothing has touched its shell, so the batch kills it here. A
+ * teardown that can wait uses {@link flushWindowsExitBatchAsync}.
  */
 export function flushWindowsExitBatch(): void {
   const batch = windowsExitBatch;
   windowsExitBatch = null;
   if (!batch) return;
+  const targets = [
+    ...batch.joined.filter(({ job }) => !job.started).map(({ shellPid }) => ({ pid: shellPid })),
+    ...batch.targets,
+  ];
+  if (targets.length > 0) killExitBatchSync(targets);
+  releaseExitBatch(batch.after);
+}
+
+/**
+ * {@link flushWindowsExitBatch} for a teardown that can wait. When the host's
+ * persistent helper is running — it is held warm while any terminal is open —
+ * the batch is one request to it, awaited together with any first kill still
+ * pending, for at most the exit budget: a cold PowerShell start alone is about
+ * two seconds, which is why the blocking run missed Main's deadline at quit.
+ * Without a running helper the batch is the blocking one-shot, as before.
+ * Pseudoconsoles are released once the kills settle or the budget runs out,
+ * whichever is first.
+ */
+export async function flushWindowsExitBatchAsync(): Promise<void> {
+  const batch = windowsExitBatch;
+  windowsExitBatch = null;
+  if (!batch) return;
+  const deadlineAt = Date.now() + WINDOWS_EXIT_BATCH_TIMEOUT_MS;
+  const work: Array<Promise<unknown>> = batch.joined.map(({ job }) => job.done);
   if (batch.targets.length > 0) {
-    try {
-      const results = killWindowsProcessTreesSync(batch.targets, {
-        timeoutMs: WINDOWS_EXIT_BATCH_TIMEOUT_MS,
-        waitMs: WINDOWS_EXIT_BATCH_WAIT_MS,
-      });
-      logWindowsKillProblems(batch.targets, results);
-    } catch (error) {
-      console.warn(`[ProcessTreeKiller] exit tree kill failed: ${(error as Error).message}`);
+    if (isWindowsTreeKillHelperRunning()) {
+      work.push(killExitBatchOnHelper(batch.targets));
+    } else {
+      killExitBatchSync(batch.targets);
     }
   }
-  for (const after of batch.after) {
+  if (work.length > 0 && !(await settlesBy(Promise.all(work), deadlineAt))) {
+    console.warn(
+      `[ProcessTreeKiller] exit tree kills did not finish within ${WINDOWS_EXIT_BATCH_TIMEOUT_MS}ms; releasing ${batch.after.length} pseudoconsole(s) anyway`
+    );
+  }
+  releaseExitBatch(batch.after);
+}
+
+const EXIT_BATCH_OPTIONS = {
+  timeoutMs: WINDOWS_EXIT_BATCH_TIMEOUT_MS,
+  waitMs: WINDOWS_EXIT_BATCH_WAIT_MS,
+};
+
+function killExitBatchSync(targets: readonly WindowsTreeKillTarget[]): void {
+  try {
+    logWindowsKillProblems(targets, killWindowsProcessTreesSync(targets, EXIT_BATCH_OPTIONS));
+  } catch (error) {
+    console.warn(`[ProcessTreeKiller] exit tree kill failed: ${(error as Error).message}`);
+  }
+}
+
+function killExitBatchOnHelper(targets: readonly WindowsTreeKillTarget[]): Promise<void> {
+  return killWindowsProcessTrees(targets, EXIT_BATCH_OPTIONS).then(
+    (results) => logWindowsKillProblems(targets, results),
+    (error: unknown) => {
+      console.warn(`[ProcessTreeKiller] exit tree kill failed: ${(error as Error)?.message}`);
+    }
+  );
+}
+
+/** Whether `work` settled before `deadlineAt`; never waits past it. */
+async function settlesBy(work: Promise<unknown>, deadlineAt: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), Math.max(0, deadlineAt - Date.now()));
+  });
+  try {
+    return await Promise.race([work.then(() => true as const), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function releaseExitBatch(after: ReadonlyArray<() => void>): void {
+  for (const release of after) {
     try {
-      after();
+      release();
     } catch {
       // Already released
     }
@@ -177,7 +264,7 @@ export class ProcessTreeKiller {
    * Windows tree kills still running. A later kill joins one that covers the
    * shell rather than starting a second walk of the same tree.
    */
-  private readonly windowsJobs = new Set<{ coversShell: boolean }>();
+  private readonly windowsJobs = new Set<WindowsJob>();
   /** Set when a kill joined a pending job and so owes the pseudoconsole a release when it settles. */
   private releasePtyWhenSettled = false;
   /** A kill queued in the exit batch owes the pseudoconsole a release after the flush. */
@@ -661,10 +748,11 @@ export class ProcessTreeKiller {
    * Pending jobs. A kill that arrives while one covering the shell is still
    * running joins it — no second walk of the same tree — and only takes over
    * the pending release. Inside the host's exit teardown the kill goes to the
-   * exit batch instead, even with a job pending: that job's completion can
-   * never be observed before `process.exit()`, and the batch's own walk is as
-   * identity-checked as the first, so repeating it ends nothing that is not
-   * ours.
+   * exit batch instead, and is repeated there when the shell has an identity
+   * to pass: the batch's walk is then as identity-checked as the first. A
+   * shell whose first kill has not reported yet has none, and that kill may
+   * already have ended it and freed its PID, so the batch waits for the
+   * pending kill rather than walk the bare PID again.
    *
    * The shell is passed with the identity a previous kill's census recorded,
    * and not at all once a census showed it gone. A first kill has none to
@@ -690,7 +778,16 @@ export class ProcessTreeKiller {
     };
 
     if (windowsExitBatch) {
-      windowsExitBatch.targets.push(...targets);
+      const pendingShellKill =
+        includeShell && identity === null
+          ? [...this.windowsJobs].find((job) => job.coversShell)
+          : undefined;
+      if (pendingShellKill && shellPid !== null) {
+        windowsExitBatch.joined.push({ shellPid, job: pendingShellKill });
+        windowsExitBatch.targets.push(...orphans);
+      } else {
+        windowsExitBatch.targets.push(...targets);
+      }
       if (releasePty) {
         // Owned until the flush, so a caller releasing the root itself (a
         // plugin PTY's teardown) leaves it to the batch.
@@ -714,12 +811,17 @@ export class ProcessTreeKiller {
       return;
     }
 
-    const job = { coversShell: includeShell };
-    this.windowsJobs.add(job);
     if (releasePty) this.releasePtyWhenSettled = true;
     const backstop = setTimeout(() => this.settleRelease(), WINDOWS_PTY_RELEASE_BACKSTOP_MS);
     backstop.unref?.();
-    void killWindowsProcessTrees(targets, { timeoutMs: WINDOWS_TREE_KILL_TIMEOUT_MS })
+    const job: WindowsJob = { coversShell: includeShell, started: false, done: Promise.resolve() };
+    this.windowsJobs.add(job);
+    job.done = killWindowsProcessTrees(targets, {
+      timeoutMs: WINDOWS_TREE_KILL_TIMEOUT_MS,
+      onStart: () => {
+        job.started = true;
+      },
+    })
       .then(
         (results) => {
           if (includeShell) this.learnShellIdentity(results[0]);
@@ -730,6 +832,13 @@ export class ProcessTreeKiller {
         }
       )
       .finally(() => {
+        // Whatever the outcome, this kill may have ended the shell, and its
+        // pseudoconsole is released next: from here node-pty's handle no
+        // longer vouches for the PID. A shell no census identified is never
+        // named again.
+        if (includeShell && this.windowsShellIdentity === null) {
+          this.windowsShellIdentity = SHELL_GONE;
+        }
         clearTimeout(backstop);
         this.windowsJobs.delete(job);
         if (this.windowsJobs.size === 0) this.settleRelease();

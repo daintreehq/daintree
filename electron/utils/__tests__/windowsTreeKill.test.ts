@@ -1,31 +1,41 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
-const { spawnSyncMock, execFileMock } = vi.hoisted(() => ({
+const { spawnSyncMock, execFileMock, spawnMock } = vi.hoisted(() => ({
   spawnSyncMock: vi.fn(),
   execFileMock: vi.fn(),
+  spawnMock: vi.fn(),
 }));
 
 vi.mock("child_process", () => ({
   spawnSync: spawnSyncMock,
   execFile: execFileMock,
+  spawn: spawnMock,
 }));
 
 import {
   classifyTreeKillOutput,
   describeWindowsTreeKillProblem,
+  disposeWindowsTreeKillService,
   encodeTreeKillInput,
+  isWindowsTreeKillHelperRunning,
+  keepWindowsTreeKillHelperWarm,
   killWindowsProcessTree,
   killWindowsProcessTreeInBackground,
+  killWindowsProcessTrees,
   killWindowsProcessTreeSync,
   killWindowsProcessTreesSync,
   liveChildTreeTarget,
   normalizeTreeKillTarget,
   parseTreeKillOutput,
+  parseTreeKillPlan,
+  planTreeKillRecovery,
   TREE_KILL_SCRIPT,
+  TREE_KILL_SERVER_SCRIPT,
   treeKillInputEnv,
   type NormalizedTreeKillTarget,
 } from "../windowsTreeKill.js";
 import { creationTimeMicros, IDENTITY_TOLERANCE_MICROS } from "../windowsProcessTree.js";
+import { createFakeTreeKillHelper, settleIo } from "./helpers/fakeTreeKillHelper.js";
 
 // Far above any real PID on the test host, so nothing here can name a live process.
 const ROOT = 7_200_000;
@@ -111,7 +121,63 @@ describe("the helper script", () => {
 
   it("never names a variable after PowerShell's read-only $PID", () => {
     // PowerShell variables are case-insensitive: `$pid` IS `$PID`.
-    expect(TREE_KILL_SCRIPT.replace(/\[long\]\$PID/g, "")).not.toMatch(/\$pid\b/i);
+    for (const script of [TREE_KILL_SCRIPT, TREE_KILL_SERVER_SCRIPT]) {
+      expect(script.replace(/\[long\]\$PID/g, "")).not.toMatch(/\$pid\b/i);
+    }
+  });
+
+  it("announces every root's plan before it terminates anything", () => {
+    for (const script of [TREE_KILL_SCRIPT, TREE_KILL_SERVER_SCRIPT]) {
+      const plan = script.indexOf("Emit ('R ' + $plan[0]");
+      const announced = script.indexOf("Emit 'K'\nPublish\n");
+      const firstKill = script.indexOf("KillOne $mine[$k]");
+      expect(plan).toBeGreaterThan(0);
+      expect(announced).toBeGreaterThan(plan);
+      expect(firstKill).toBeGreaterThan(announced);
+    }
+  });
+});
+
+describe("the persistent helper script", () => {
+  it("runs the same kill as the one-shot, one stdin line at a time", () => {
+    const body = TREE_KILL_SCRIPT.slice(TREE_KILL_SCRIPT.indexOf("$self = [long]$req.self"));
+    const killRun = body.slice(0, body.indexOf("Emit 'END'"));
+    expect(TREE_KILL_SERVER_SCRIPT).toContain(killRun);
+    expect(TREE_KILL_SERVER_SCRIPT).toContain("[Console]::In.ReadLine()");
+    expect(TREE_KILL_SERVER_SCRIPT).toContain("if ($null -eq $reqLine) { break }");
+    // The request is parsed as data; nothing from it is evaluated.
+    expect(TREE_KILL_SERVER_SCRIPT).toContain("ConvertFrom-Json $reqLine.Substring($sp + 1)");
+    expect(TREE_KILL_SERVER_SCRIPT).not.toMatch(/Invoke-Expression|iex |\[ScriptBlock\]/i);
+    expect(TREE_KILL_SERVER_SCRIPT).not.toMatch(/taskkill|Stop-Process/i);
+  });
+
+  it("disposes every handle a run opened, however the run ends", () => {
+    const finallyAt = TREE_KILL_SERVER_SCRIPT.indexOf("} finally {");
+    expect(finallyAt).toBeGreaterThan(TREE_KILL_SERVER_SCRIPT.indexOf("Emit 'END'"));
+    expect(TREE_KILL_SERVER_SCRIPT.slice(finallyAt)).toMatch(
+      /foreach \(\$h in @\(\$handles\.Values\)\) \{ try \{ \$h\.Dispose\(\) \}/
+    );
+  });
+
+  it("ends each report with a sentinel line carrying the request's id", () => {
+    expect(TREE_KILL_SERVER_SCRIPT).toContain(
+      "Send ($out.ToString() + '__DAINTREE_TREE_KILL_END__:' + $rid + [Environment]::NewLine)"
+    );
+    expect(TREE_KILL_SERVER_SCRIPT).toContain("if ($rid -notmatch '^[0-9]+$') { continue }");
+  });
+
+  it("finishes a run whose host has gone instead of failing on the broken pipe", () => {
+    // Every write goes through Send, which swallows the failure.
+    expect(TREE_KILL_SERVER_SCRIPT).toContain(
+      "function Send([string]$text) { try { [Console]::Out.Write($text); [Console]::Out.Flush() } catch { } }"
+    );
+    const writes = TREE_KILL_SERVER_SCRIPT.match(/\[Console\]::Out\.Write/g) ?? [];
+    expect(writes).toHaveLength(1);
+  });
+
+  it("fits a Windows command line as -EncodedCommand", () => {
+    const encoded = Buffer.from(TREE_KILL_SERVER_SCRIPT, "utf16le").toString("base64");
+    expect(encoded.length).toBeLessThan(30_000);
   });
 });
 
@@ -215,6 +281,117 @@ describe("parseTreeKillOutput", () => {
   });
 });
 
+describe("parseTreeKillPlan", () => {
+  it("reads the announced roots once K has been written", () => {
+    const plan = parseTreeKillPlan(
+      `E slow\r\nR 0 tree ${ROOT_MICROS}\r\nR 1 gone -\r\nK\r\nP 0 ${ROOT} killed\r\n`
+    );
+    expect([...plan!.entries()]).toEqual([
+      [0, { mode: "tree", rootStart: ROOT_MICROS }],
+      [1, { mode: "gone" }],
+    ]);
+  });
+
+  it("is null for a run cut short before its kills began", () => {
+    expect(parseTreeKillPlan(`R 0 tree ${ROOT_MICROS}\r\n`)).toBeNull();
+    expect(parseTreeKillPlan("")).toBeNull();
+  });
+});
+
+describe("planTreeKillRecovery", () => {
+  const announced = (...lines: string[]) => [...lines, "K", ""].join("\r\n");
+
+  it("repeats every root as asked when the run ended before any kill", () => {
+    const targets = [target(ROOT), target(OTHER_ROOT, { own: true })];
+    const { rerun, settled } = planTreeKillRecovery(targets, `R 0 tree 1`, true, "died");
+
+    expect(rerun).toEqual([
+      { index: 0, target: targets[0] },
+      { index: 1, target: targets[1] },
+    ]);
+    expect(settled.size).toBe(0);
+  });
+
+  it("pins a root the census identified to that identity once kills may have begun", () => {
+    const { rerun } = planTreeKillRecovery(
+      [target(ROOT)],
+      announced(`R 0 tree ${ROOT_MICROS}`),
+      true,
+      "died"
+    );
+
+    expect(rerun).toEqual([{ index: 0, target: target(ROOT, { start: ROOT_MICROS }) }]);
+  });
+
+  it("settles roots the census saw gone, reused or refused, without another run", () => {
+    const { rerun, settled } = planTreeKillRecovery(
+      [target(ROOT), target(CHILD), target(OTHER_ROOT)],
+      announced(`R 0 gone -`, `R 1 mismatch 99`, `R 2 refused -`),
+      true,
+      "died"
+    );
+
+    expect(rerun).toEqual([]);
+    expect(settled.get(0)).toMatchObject({ mode: "gone", rootEnded: true });
+    expect(settled.get(1)).toMatchObject({
+      mode: "identity-mismatch",
+      rootEnded: true,
+      rootStartTime: 99,
+    });
+    expect(settled.get(2)).toMatchObject({ mode: "skipped" });
+  });
+
+  it("drops a retried root's ownership once kills may have begun", () => {
+    const { rerun } = planTreeKillRecovery(
+      [target(ROOT, { own: true }), target(OTHER_ROOT, { own: true, start: ROOT_MICROS })],
+      announced(`R 0 tree ${ROOT_MICROS}`, `R 1 root-only -`),
+      true,
+      "died"
+    );
+
+    // A failed census in the retry must not end either by bare PID.
+    expect(rerun.map((entry) => entry.target.own)).toEqual([false, false]);
+  });
+
+  it("never repeats a root without an identity once it may have been ended", () => {
+    // The census failed, so an owned root was ended by its PID: once it exited
+    // its owner's handle no longer pins that PID.
+    const { rerun, settled } = planTreeKillRecovery(
+      [target(ROOT, { own: true }), target(OTHER_ROOT, { start: ROOT_MICROS })],
+      announced(`R 0 root-only -`, `R 1 root-only -`),
+      true,
+      "died"
+    );
+
+    expect(rerun).toEqual([{ index: 1, target: target(OTHER_ROOT, { start: ROOT_MICROS }) }]);
+    expect(settled.get(0)).toMatchObject({ mode: "root-only", unconfirmed: [ROOT] });
+    expect(describeWindowsTreeKillProblem(settled.get(0)!)).toContain("died");
+  });
+
+  it("repeats a root the census left untouched", () => {
+    const { rerun } = planTreeKillRecovery(
+      [target(ROOT)],
+      announced(`R 0 untouched -`),
+      true,
+      "died"
+    );
+    expect(rerun).toEqual([{ index: 0, target: target(ROOT) }]);
+  });
+
+  it("repeats only roots with their own identity when the report may be missing its K", () => {
+    const { rerun, settled } = planTreeKillRecovery(
+      [target(ROOT), target(CHILD, { own: true }), target(OTHER_ROOT, { start: ROOT_MICROS })],
+      `R 0 tree ${ROOT_MICROS}`,
+      false,
+      "timed out"
+    );
+
+    expect(rerun).toEqual([{ index: 2, target: target(OTHER_ROOT, { start: ROOT_MICROS }) }]);
+    expect(settled.get(0)).toMatchObject({ mode: "untouched", rootEnded: false });
+    expect(settled.get(1)).toMatchObject({ mode: "untouched" });
+  });
+});
+
 describe("classifyTreeKillOutput", () => {
   function classify(targets: NormalizedTreeKillTarget[], stdout: string) {
     return classifyTreeKillOutput(targets, parseTreeKillOutput(stdout)!);
@@ -292,11 +469,13 @@ describe("Windows tree kill", () => {
     setPlatform("win32");
     spawnSyncMock.mockReset();
     execFileMock.mockReset();
+    spawnMock.mockReset();
     killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
   afterEach(() => {
+    disposeWindowsTreeKillService();
     Object.defineProperty(process, "platform", originalPlatform);
     killSpy.mockRestore();
     warnSpy.mockRestore();
@@ -476,42 +655,148 @@ describe("Windows tree kill", () => {
       return stdinEnd;
     }
 
-    it("resolves with the helper's report without blocking", async () => {
-      const stdinEnd = execFileYields(null, TREE_REPORT);
+    function helperRuns() {
+      const helper = createFakeTreeKillHelper();
+      spawnMock.mockReturnValue(helper.child);
+      return helper;
+    }
 
-      const result = await killWindowsProcessTree(ROOT, { timeoutMs: 3000 });
+    function helperWillNotStart() {
+      spawnMock.mockImplementation(() => {
+        throw new Error("spawn powershell.exe ENOENT");
+      });
+    }
 
-      expect(execFileMock).toHaveBeenCalledWith(
-        "powershell.exe",
-        expect.any(Array),
-        expect.objectContaining({ windowsHide: true, timeout: 3000 }),
-        expect.any(Function)
-      );
-      expect(stdinEnd).toHaveBeenCalled();
+    it("runs on the persistent helper, the request as one line of data", async () => {
+      const helper = helperRuns();
+
+      const pending = killWindowsProcessTree({ pid: ROOT, startTime: ROOT_START });
+      await settleIo();
+
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      const [file, args, options] = spawnMock.mock.calls[0];
+      expect(file).toBe("powershell.exe");
+      const encoded = (args as string[])[(args as string[]).indexOf("-EncodedCommand") + 1];
+      expect(Buffer.from(encoded, "base64").toString("utf16le")).toBe(TREE_KILL_SERVER_SCRIPT);
+      expect(String(args)).not.toContain(String(ROOT));
+      expect(options).toEqual(expect.objectContaining({ windowsHide: true, shell: false }));
+
+      expect(helper.requests).toHaveLength(1);
+      const [id, json] = [
+        helper.requests[0].slice(0, helper.requests[0].indexOf(" ")),
+        helper.requests[0].slice(helper.requests[0].indexOf(" ") + 1),
+      ];
+      expect(id).toMatch(/^\d+$/);
+      expect(JSON.parse(json)).toMatchObject({
+        self: process.pid,
+        roots: [{ pid: ROOT, start: String(ROOT_MICROS), tree: true, own: false }],
+      });
+
+      helper.answer([`R 0 tree ${ROOT_MICROS}`, "K", `P 0 ${ROOT} killed`, `P 0 ${CHILD} killed`]);
+      const result = await pending;
+
+      expect(result).toMatchObject({ mode: "tree", killed: [ROOT, CHILD], rootEnded: true });
+      expect(execFileMock).not.toHaveBeenCalled();
       expect(spawnSyncMock).not.toHaveBeenCalled();
-      expect(result.killed).toEqual([ROOT, CHILD]);
       expect(killSpy).not.toHaveBeenCalled();
     });
 
-    it("uses a complete report even when PowerShell exits non-zero", async () => {
-      execFileYields(new Error("Command failed"), TREE_REPORT);
+    it("shares one census between kills requested together", async () => {
+      const helper = helperRuns();
 
-      expect((await killWindowsProcessTree(ROOT)).mode).toBe("tree");
+      const first = killWindowsProcessTrees([ROOT, 4]);
+      const second = killWindowsProcessTree(OTHER_ROOT);
+      await settleIo();
+
+      expect(helper.requests).toHaveLength(1);
+      expect(helper.rootsOf(0)).toEqual([ROOT, OTHER_ROOT]);
+      helper.answer(["R 0 gone -", "R 1 tree 5", "K", `P 1 ${OTHER_ROOT} killed`]);
+
+      expect((await first).map((r) => r.mode)).toEqual(["gone", "skipped"]);
+      expect((await second).killed).toEqual([OTHER_ROOT]);
     });
 
-    it("falls back to the owned root alone when the helper fails", async () => {
-      execFileYields(new Error("Command failed"), "");
+    it("finishes a run cut short after K through the one-shot, pinned to the census identity", async () => {
+      const helper = helperRuns();
+      execFileYields(null, report(`R 0 gone -`));
 
-      const result = await killWindowsProcessTree({ pid: ROOT, ownChild: true });
+      const pending = killWindowsProcessTree(ROOT);
+      await settleIo();
+      helper.write(`R 0 tree ${ROOT_MICROS}\r\nK\r\n`);
+      helper.die();
 
-      expect(result.mode).toBe("root-only");
-      expect(killSpy.mock.calls).toEqual([[ROOT, "SIGKILL"]]);
-      expect(describeWindowsTreeKillProblem(result)).toContain("census failed");
+      // The helper may already have ended the root: the retry must not walk
+      // whatever holds its PID now unless it is the process the census saw.
+      expect((await pending).mode).toBe("gone");
+      expect(decodeInput(execFileMock.mock.calls[0][2]).roots).toEqual([
+        { pid: ROOT, start: String(ROOT_MICROS), tree: true, own: false },
+      ]);
+    });
+
+    describe("when the persistent helper cannot start", () => {
+      beforeEach(helperWillNotStart);
+
+      it("resolves with the one-shot helper's report", async () => {
+        const stdinEnd = execFileYields(null, TREE_REPORT);
+
+        const result = await killWindowsProcessTree(ROOT, { timeoutMs: 3000 });
+
+        expect(execFileMock).toHaveBeenCalledWith(
+          "powershell.exe",
+          expect.any(Array),
+          expect.objectContaining({ windowsHide: true, timeout: 3000 }),
+          expect.any(Function)
+        );
+        expect(stdinEnd).toHaveBeenCalled();
+        expect(spawnSyncMock).not.toHaveBeenCalled();
+        expect(result.killed).toEqual([ROOT, CHILD]);
+        expect(killSpy).not.toHaveBeenCalled();
+      });
+
+      it("uses a complete report even when PowerShell exits non-zero", async () => {
+        execFileYields(new Error("Command failed"), TREE_REPORT);
+
+        expect((await killWindowsProcessTree(ROOT)).mode).toBe("tree");
+      });
+
+      it("falls back to the owned root alone when the one-shot fails too", async () => {
+        execFileYields(new Error("Command failed"), "");
+
+        const result = await killWindowsProcessTree({ pid: ROOT, ownChild: true });
+
+        expect(result.mode).toBe("root-only");
+        expect(killSpy.mock.calls).toEqual([[ROOT, "SIGKILL"]]);
+        expect(describeWindowsTreeKillProblem(result)).toContain("census failed");
+      });
+    });
+  });
+
+  describe("keepWindowsTreeKillHelperWarm", () => {
+    it("starts the helper ahead of the first kill", () => {
+      const helper = createFakeTreeKillHelper();
+      spawnMock.mockReturnValue(helper.child);
+
+      keepWindowsTreeKillHelperWarm(true);
+
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      expect(isWindowsTreeKillHelperRunning()).toBe(true);
+    });
+
+    it("does nothing off Windows", () => {
+      setPlatform("linux");
+
+      keepWindowsTreeKillHelperWarm(true);
+
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(isWindowsTreeKillHelperRunning()).toBe(false);
     });
   });
 
   describe("killWindowsProcessTreeInBackground", () => {
     it("logs a problem under the caller's tag and never rejects", async () => {
+      spawnMock.mockImplementation(() => {
+        throw new Error("spawn EPERM");
+      });
       execFileMock.mockImplementation(() => {
         throw new Error("spawn EPERM");
       });

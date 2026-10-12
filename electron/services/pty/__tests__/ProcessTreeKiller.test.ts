@@ -4,11 +4,13 @@ import type { ProcessTreeCache } from "../../ProcessTreeCache.js";
 import {
   beginWindowsExitBatch,
   flushWindowsExitBatch,
+  flushWindowsExitBatchAsync,
   ProcessTreeKiller,
   type LineageKillSource,
 } from "../ProcessTreeKiller.js";
 import type { KillCensus } from "../../TerminalLineageLedger.js";
 import {
+  isWindowsTreeKillHelperRunning,
   killWindowsProcessTrees,
   killWindowsProcessTreesSync,
   type WindowsTreeKillResult,
@@ -20,11 +22,13 @@ vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
   killWindowsProcessTrees: vi.fn(),
   killWindowsProcessTreesSync: vi.fn(),
+  isWindowsTreeKillHelperRunning: vi.fn(() => false),
 }));
 vi.mock("child_process", () => ({ spawnSync: vi.fn(), spawn: vi.fn(), execFile: vi.fn() }));
 
 const treeKillMock = vi.mocked(killWindowsProcessTrees);
 const treeKillSyncMock = vi.mocked(killWindowsProcessTreesSync);
+const helperRunningMock = vi.mocked(isWindowsTreeKillHelperRunning);
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -1095,14 +1099,21 @@ describe("ProcessTreeKiller — Windows", () => {
     };
   }
 
-  /** Hold every async helper run open until the test settles it. */
-  function heldHelper() {
+  /**
+   * Hold every async helper run open until the test settles it. Each run is
+   * handed to a helper at once unless `queued`, as one stuck behind another.
+   */
+  function heldHelper(options: { queued?: boolean } = {}) {
     const runs: Array<{
       resolve: (results: WindowsTreeKillResult[]) => void;
       reject: (error: Error) => void;
     }> = [];
     treeKillMock.mockImplementation(
-      () => new Promise((resolve, reject) => runs.push({ resolve, reject }))
+      (_targets, killOptions) =>
+        new Promise((resolve, reject) => {
+          if (!options.queued) killOptions?.onStart?.();
+          runs.push({ resolve, reject });
+        })
     );
     return runs;
   }
@@ -1130,6 +1141,7 @@ describe("ProcessTreeKiller — Windows", () => {
     treeKillMock.mockReset();
     treeKillSyncMock.mockReset();
     treeKillSyncMock.mockImplementation((targets) => targets.map(() => result()));
+    helperRunningMock.mockReset().mockReturnValue(false);
     killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   });
@@ -1153,7 +1165,7 @@ describe("ProcessTreeKiller — Windows", () => {
     expect(treeKillMock).toHaveBeenCalledTimes(1);
     expect(treeKillMock).toHaveBeenCalledWith(
       [{ pid: SHELL }, { pid: ORPHAN, startTime: ORPHAN_START }],
-      { timeoutMs: expect.any(Number) }
+      { timeoutMs: expect.any(Number), onStart: expect.any(Function) }
     );
     expect(lineage.getVerifiedOrphanPids).not.toHaveBeenCalled();
     expect(lineage.markRootClosing).toHaveBeenCalledWith(SHELL);
@@ -1262,6 +1274,7 @@ describe("ProcessTreeKiller — Windows", () => {
     expect(killer.reapAfterRootExit(true)).toEqual([ORPHAN]);
     expect(treeKillMock).toHaveBeenCalledWith([{ pid: ORPHAN, startTime: ORPHAN_START }], {
       timeoutMs: expect.any(Number),
+      onStart: expect.any(Function),
     });
     // An orphan reap does not own the pty's release, so a teardown may release it.
     expect(killer.hasPendingTreeKill()).toBe(false);
@@ -1354,8 +1367,30 @@ describe("ProcessTreeKiller — Windows", () => {
       expect(pty.kill).toHaveBeenCalledTimes(1);
     });
 
-    it("re-kills a tree whose own kill is still pending, and releases its pty once", async () => {
+    it("never walks a shell's bare PID again while its first kill is pending", async () => {
+      // That kill may already have ended the shell and freed its PID; it alone
+      // knows which process the PID named. Its ledger orphans carry their own
+      // identities and are repeated.
       const runs = heldHelper();
+      const pty = makePty(SHELL);
+      const killer = new ProcessTreeKiller(pty, makeTreeCache([]), makeWindowsLineage());
+
+      killer.execute(false);
+      beginWindowsExitBatch();
+      killer.execute(true);
+      flushWindowsExitBatch();
+
+      expect(treeKillSyncMock.mock.calls[0][0]).toEqual([{ pid: ORPHAN, startTime: ORPHAN_START }]);
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+      runs[0].resolve([result()]);
+      await settled();
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+    });
+
+    it("kills a shell itself when its first kill never left this process's queue", () => {
+      // Nothing has touched that shell, and the queued kill would never run
+      // once the host exits.
+      heldHelper({ queued: true });
       const pty = makePty(SHELL);
       const killer = new ProcessTreeKiller(pty, makeTreeCache([]));
 
@@ -1366,9 +1401,60 @@ describe("ProcessTreeKiller — Windows", () => {
 
       expect(treeKillSyncMock.mock.calls[0][0]).toEqual([{ pid: SHELL }]);
       expect(pty.kill).toHaveBeenCalledTimes(1);
-      runs[0].resolve([result()]);
+    });
+
+    it("never names a shell again once a kill of it ended without an identity", async () => {
+      const runs = heldHelper();
+      const lineage = makeWindowsLineage();
+      const killer = new ProcessTreeKiller(makePty(SHELL), makeTreeCache([]), lineage);
+
+      killer.execute(false);
+      runs[0].resolve([result({ mode: "untouched", rootEnded: false }), result()]);
       await settled();
+      killer.execute(true);
+
+      // Its pseudoconsole has been released since, ending the shell: the PID
+      // may name anything now.
+      expect(treeKillMock.mock.calls[1][0]).toEqual([{ pid: ORPHAN, startTime: ORPHAN_START }]);
+    });
+
+    it("waits for a shell's pending first kill, and releases its pty after it", async () => {
+      helperRunningMock.mockReturnValue(true);
+      const runs = heldHelper();
+      const pty = makePty(SHELL);
+      const killer = new ProcessTreeKiller(pty, makeTreeCache([]));
+
+      killer.execute(false);
+      beginWindowsExitBatch();
+      killer.execute(true);
+      let flushed = false;
+      const flushing = flushWindowsExitBatchAsync().then(() => (flushed = true));
+      await settled();
+
+      expect(treeKillMock).toHaveBeenCalledTimes(1);
+      expect(treeKillSyncMock).not.toHaveBeenCalled();
+      expect(pty.kill).not.toHaveBeenCalled();
+      expect(flushed).toBe(false);
+
+      runs[0].resolve([result()]);
+      await flushing;
       expect(pty.kill).toHaveBeenCalledTimes(1);
+    });
+
+    it("repeats a pending shell's kill once its identity is known", async () => {
+      const runs = heldHelper();
+      const pty = makePty(SHELL);
+      const killer = new ProcessTreeKiller(pty, makeTreeCache([]));
+
+      killer.execute(false);
+      runs[0].resolve([result({ rootStartTime: SHELL_MICROS })]);
+      await settled();
+      killer.execute(false);
+      beginWindowsExitBatch();
+      killer.execute(true);
+      flushWindowsExitBatch();
+
+      expect(treeKillSyncMock.mock.calls[0][0]).toEqual([{ pid: SHELL, startTime: SHELL_MICROS }]);
     });
 
     it("queues a natural exit's orphan reap without releasing the pty", () => {
@@ -1396,6 +1482,66 @@ describe("ProcessTreeKiller — Windows", () => {
       expect(treeKillMock).toHaveBeenCalledTimes(1);
       flushWindowsExitBatch();
       expect(treeKillSyncMock).not.toHaveBeenCalled();
+    });
+
+    it("sends the batch to the warm helper as one request and awaits it", async () => {
+      helperRunningMock.mockReturnValue(true);
+      const runs = heldHelper();
+      const ptys = [makePty(SHELL), makePty(OTHER_SHELL)];
+
+      beginWindowsExitBatch();
+      new ProcessTreeKiller(ptys[0], makeTreeCache([]), makeWindowsLineage()).execute(true);
+      new ProcessTreeKiller(ptys[1], makeTreeCache([])).execute(true);
+      let flushed = false;
+      const flushing = flushWindowsExitBatchAsync().then(() => (flushed = true));
+      await settled();
+
+      // A cold blocking PowerShell is what missed the deadline at quit.
+      expect(treeKillSyncMock).not.toHaveBeenCalled();
+      expect(treeKillMock).toHaveBeenCalledTimes(1);
+      expect(treeKillMock.mock.calls[0][0]).toEqual([
+        { pid: SHELL },
+        { pid: ORPHAN, startTime: ORPHAN_START },
+        { pid: OTHER_SHELL },
+      ]);
+      expect(treeKillMock.mock.calls[0][1]?.timeoutMs).toBeLessThan(3000);
+      expect(ptys[0].kill).not.toHaveBeenCalled();
+      expect(flushed).toBe(false);
+
+      runs[0].resolve([result(), result(), result()]);
+      await flushing;
+      for (const pty of ptys) expect(pty.kill).toHaveBeenCalledTimes(1);
+    });
+
+    it("runs the blocking one-shot when no helper is running", async () => {
+      const pty = makePty(SHELL);
+
+      beginWindowsExitBatch();
+      new ProcessTreeKiller(pty, makeTreeCache([])).execute(true);
+      await flushWindowsExitBatchAsync();
+
+      expect(treeKillMock).not.toHaveBeenCalled();
+      expect(treeKillSyncMock).toHaveBeenCalledTimes(1);
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+    });
+
+    it("releases every pty once the exit budget runs out on a helper that never answers", async () => {
+      vi.useFakeTimers();
+      helperRunningMock.mockReturnValue(true);
+      heldHelper();
+      const pty = makePty(SHELL);
+
+      beginWindowsExitBatch();
+      new ProcessTreeKiller(pty, makeTreeCache([])).execute(true);
+      const flushing = flushWindowsExitBatchAsync();
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(pty.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1000);
+      await flushing;
+
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+      expect(treeKillSyncMock).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("did not finish within"));
     });
 
     it("releases every pty even when the blocking run throws", () => {

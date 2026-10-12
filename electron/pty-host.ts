@@ -79,6 +79,7 @@ import { PluginPtyProcessManager } from "./pty-host/services/PluginPtyProcessMan
 import {
   beginWindowsExitBatch,
   flushWindowsExitBatch,
+  flushWindowsExitBatchAsync,
   ProcessTreeKiller,
 } from "./services/pty/ProcessTreeKiller.js";
 import { GracefulCaptureTracker } from "./pty-host/GracefulCaptureTracker.js";
@@ -1840,6 +1841,9 @@ port.on("message", async (rawMsg: any) => {
       shutdownHost();
       return;
     }
+    // The teardown can wait on the tree-kill helper; nothing may start on a
+    // host that is already taking its terminals down.
+    if (cleanedUp) return;
     await dispatchMessage(msg, ports);
   } catch (error) {
     console.error("[PtyHost] Error handling message:", error);
@@ -1848,9 +1852,13 @@ port.on("message", async (rawMsg: any) => {
 
 let cleanedUp = false;
 
-function cleanup(): void {
-  if (cleanedUp) return;
-  cleanedUp = true;
+/**
+ * The teardown up to and including the terminals' disposal. On Windows their
+ * tree kills are queued in the exit batch, which is still open when this
+ * returns — whether or not disposal threw — for the caller to flush before
+ * {@link finishCleanup}.
+ */
+function beginCleanup(): { error: unknown } | null {
   console.log("[PtyHost] Disposing resources...");
 
   // One synchronous `ps` budget for the whole teardown. Every terminal's
@@ -1882,9 +1890,8 @@ function cleanup(): void {
   processTreeCache.attachLineageLedger(null);
   imagePathProbe.dispose();
 
-  // Windows: every tree kill below is queued and run as one helper when the
-  // batch is flushed — `process.exit()` follows, so an asynchronous kill would
-  // never be observed, and a blocking one per terminal would not fit Main's
+  // Windows: every tree kill below is queued and run as one helper request
+  // when the batch is flushed — one kill per terminal would not fit Main's
   // force-kill deadline. Pseudoconsoles are released after that kill. No-op
   // elsewhere.
   beginWindowsExitBatch();
@@ -1899,9 +1906,13 @@ function cleanup(): void {
     }
 
     ptyManager.dispose();
-  } finally {
-    flushWindowsExitBatch();
+    return null;
+  } catch (error) {
+    return { error };
   }
+}
+
+function finishCleanup(): void {
   lineageLedger.dispose();
 
   // Workers are persistent by design (never terminated — Electron 37+
@@ -1921,21 +1932,54 @@ function cleanup(): void {
 }
 
 /**
+ * The teardown for `process.on("exit")`, where nothing asynchronous completes:
+ * the exit batch runs on a blocking one-shot helper.
+ */
+function cleanup(): void {
+  if (cleanedUp) return;
+  cleanedUp = true;
+  const failed = beginCleanup();
+  flushWindowsExitBatch();
+  if (failed) throw failed.error;
+  finishCleanup();
+}
+
+/**
+ * The teardown Main asks for. On Windows the exit batch goes to the warm
+ * tree-kill helper when one is running and is awaited within the batch's
+ * budget: a cold PowerShell start alone took most of it, and at quit the
+ * blocking run kept missing it, leaving every tree to the census-failure path.
+ */
+async function cleanupAsync(): Promise<void> {
+  if (cleanedUp) return;
+  cleanedUp = true;
+  const failed = beginCleanup();
+  await flushWindowsExitBatchAsync();
+  if (failed) throw failed.error;
+  finishCleanup();
+}
+
+let shutdown: Promise<void> | null = null;
+
+/**
  * Finish the teardown, then exit. The explicit exit is load-bearing: the
  * message port keeps the event loop alive, so a host that only cleans up never
  * exits and Main is left waiting on its force-kill deadline. Main treats a
- * clean exit as proof every terminal was reached (#13167).
+ * clean exit as proof every terminal was reached (#13167). A second request
+ * while the first is still tearing down waits for it rather than exiting
+ * under it.
  */
 function shutdownHost(exitCode = 0): void {
-  try {
-    cleanup();
-  } catch (error) {
-    // Main reads a clean exit as "every terminal was reached"; a teardown that
-    // threw part way must not claim that.
-    console.error("[PtyHost] Teardown failed:", error);
-    exitCode = exitCode || 1;
-  }
-  process.exit(exitCode);
+  shutdown ??= cleanupAsync();
+  shutdown.then(
+    () => process.exit(exitCode),
+    (error: unknown) => {
+      // Main reads a clean exit as "every terminal was reached"; a teardown
+      // that threw part way must not claim that.
+      console.error("[PtyHost] Teardown failed:", error);
+      process.exit(exitCode || 1);
+    }
+  );
 }
 
 // Handle process exit

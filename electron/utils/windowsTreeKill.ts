@@ -5,6 +5,12 @@ import {
   isKillableWindowsPid,
   type WindowsTreeKillFailure,
 } from "./windowsProcessTree.js";
+import {
+  TREE_KILL_SENTINEL_PREFIX,
+  WindowsTreeKillService,
+  type TreeKillBudget,
+  type TreeKillEngine,
+} from "./windowsTreeKillService.js";
 
 /**
  * Process-tree kill for Windows that does not trust ParentProcessId or a bare
@@ -30,14 +36,22 @@ import {
  * 5. Reports each PID as killed (exit observed), already gone, still running
  *    when the shared wait budget ran out, failed, or reused since the census.
  *
- * The script text is constant. Every PID and identity reaches it as JSON in
- * {@link INPUT_ENV}, and it is passed with -EncodedCommand, so no caller value
+ * The script text is constant. Every PID and identity reaches it as JSON — in
+ * {@link INPUT_ENV} for the one-shot helper, as a stdin line for the
+ * persistent one — and it is passed with -EncodedCommand, so no caller value
  * is ever parsed as PowerShell.
  *
  * If the census fails, a root is ended alone: through a handle checked against
  * the caller's expected identity when there is one, by PID only when the
  * caller says the PID is its own live child (it holds the process handle, so
  * the PID cannot have been reused), and otherwise not at all.
+ *
+ * Two ways to run it. Asynchronous kills, in every process that makes them
+ * (Main, the pty-host, the workspace host), go through one persistent helper
+ * per process (`windowsTreeKillService.ts`), which queues and coalesces them
+ * and falls back to the one-shot helper when it cannot finish a run. The
+ * blocking variant is always a one-shot `spawnSync`, for exit paths where
+ * nothing asynchronous can complete.
  */
 
 const INPUT_ENV = "DAINTREE_TREE_KILL_INPUT";
@@ -45,18 +59,11 @@ const INPUT_PARTS_ENV = "DAINTREE_TREE_KILL_PARTS";
 /** Characters per input variable: Windows caps one environment variable at 32,767. */
 const INPUT_PART_CHARS = 30_000;
 
-/**
- * Keep in step with `walkVerifiedTree` and `sameProcessIdentity`
- * (windowsProcessTree.ts) and with {@link parseTreeKillOutput}. Windows
- * PowerShell 5.1. `$PID` is PowerShell's own PID, so no variable here is
- * named `$pid`. Output is buffered and written once at the end, so a
- * termination never waits on our end of the pipe.
- */
-export const TREE_KILL_SCRIPT = [
+/** Settings and pure helpers both forms of the helper share. */
+const SCRIPT_PRELUDE = [
   "$ErrorActionPreference = 'Stop'",
   "$ProgressPreference = 'SilentlyContinue'",
   "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
-  "$out = [System.Text.StringBuilder]::new()",
   "function Emit([string]$line) { [void]$out.AppendLine($line) }",
   "function Clean([string]$text) { ($text -replace '\\s+', ' ').Trim() }",
   "$epochTicks = [long]621355968000000000",
@@ -64,8 +71,20 @@ export const TREE_KILL_SCRIPT = [
   "function Same($a, $b) { ($null -ne $a) -and ($null -ne $b) -and ([Math]::Abs([long]$a - [long]$b) -le 1) }",
   "function ErrCode($err) { $e = $err.Exception; while ($e.InnerException) { $e = $e.InnerException }; if ($e -is [System.ComponentModel.Win32Exception]) { 'win32-' + $e.NativeErrorCode } else { $e.GetType().Name } }",
   "function Running([long]$id) { try { [void][System.Diagnostics.Process]::GetProcessById([int]$id); $true } catch { $false } }",
-  `$parts = [int]$env:${INPUT_PARTS_ENV}`,
-  `$req = ConvertFrom-Json (-join (0..($parts - 1) | ForEach-Object { [Environment]::GetEnvironmentVariable('${INPUT_ENV}_' + $_) }))`,
+];
+
+/**
+ * One kill run over `$req`, reported through `Emit`. Keep in step with
+ * `walkVerifiedTree` and `sameProcessIdentity` (windowsProcessTree.ts) and
+ * with {@link parseTreeKillOutput}. Windows PowerShell 5.1. `$PID` is
+ * PowerShell's own PID, so no variable here is named `$pid`.
+ *
+ * Every root's plan (`R` lines) goes out before anything is terminated,
+ * followed by `K` and a `Publish`. The persistent helper flushes it there, so
+ * a run cut short still says which roots may have been ended and under which
+ * identity; the one-shot keeps it buffered with the rest.
+ */
+const SCRIPT_BODY = [
   "$self = [long]$req.self",
   "$parent = [long]$req.parent",
   "function Killable([long]$id) { ($id -gt 4) -and ($id -ne [long]$PID) -and ($id -ne $self) -and ($id -ne $parent) }",
@@ -153,6 +172,13 @@ export const TREE_KILL_SCRIPT = [
   "  }",
   "  $plans.Add(@($i, $mode, $rootStart, $mine, $stale, $root))",
   "}",
+  "foreach ($plan in $plans) {",
+  "  $rs = '-'",
+  "  if ($null -ne $plan[2]) { $rs = [string]$plan[2] }",
+  "  Emit ('R ' + $plan[0] + ' ' + $plan[1] + ' ' + $rs)",
+  "}",
+  "Emit 'K'",
+  "Publish",
   "$terminated = [System.Collections.Generic.List[long]]::new()",
   "function KillOne([long]$id) {",
   "  if (-not $handles.ContainsKey($id)) { return }",
@@ -185,20 +211,84 @@ export const TREE_KILL_SCRIPT = [
   "foreach ($plan in $plans) { if (IsTop $plan) { KillOne $plan[5] } }",
   "WaitAll",
   "foreach ($plan in $plans) {",
-  "  $i = $plan[0]",
-  "  $rs = '-'",
-  "  if ($null -ne $plan[2]) { $rs = [string]$plan[2] }",
-  "  Emit ('R ' + $i + ' ' + $plan[1] + ' ' + $rs)",
-  "  foreach ($id in $plan[3]) { Emit ('P ' + $i + ' ' + $id + ' ' + $outcome[$id]) }",
-  "  foreach ($id in $plan[4]) { Emit ('S ' + $i + ' ' + $id) }",
+  "  foreach ($id in $plan[3]) { Emit ('P ' + $plan[0] + ' ' + $id + ' ' + $outcome[$id]) }",
+  "  foreach ($id in $plan[4]) { Emit ('S ' + $plan[0] + ' ' + $id) }",
   "}",
   "Emit 'END'",
+];
+
+/**
+ * The one-shot helper: one run, its input from {@link INPUT_ENV}. Output is
+ * buffered and written once at the end, so a termination never waits on our
+ * end of the pipe.
+ */
+export const TREE_KILL_SCRIPT = [
+  ...SCRIPT_PRELUDE,
+  "$out = [System.Text.StringBuilder]::new()",
+  "function Publish() { }",
+  `$parts = [int]$env:${INPUT_PARTS_ENV}`,
+  `$req = ConvertFrom-Json (-join (0..($parts - 1) | ForEach-Object { [Environment]::GetEnvironmentVariable('${INPUT_ENV}_' + $_) }))`,
+  ...SCRIPT_BODY,
   "[Console]::Out.Write($out.ToString())",
 ].join("\n");
 
-const ENCODED_SCRIPT = Buffer.from(TREE_KILL_SCRIPT, "utf16le").toString("base64");
-const HELPER_ARGS = ["-NoProfile", "-NonInteractive", "-NoLogo", "-EncodedCommand", ENCODED_SCRIPT];
+/**
+ * The persistent helper (`windowsTreeKillService.ts`): one run per stdin line
+ * `<id> <json>`, each answered by its report and a sentinel line carrying the
+ * id. The JSON is read as data by ConvertFrom-Json and never becomes script.
+ *
+ * `[Console]::In.ReadLine()` returns null at EOF, so closing our end of stdin
+ * — or this process dying — retires it. Each run's handles are disposed when
+ * it ends: the process lives on, and a handle left open would keep its PID
+ * from ever being reused. A run that throws ends the helper, after its `R`
+ * lines if it got that far, which is exactly what recovery needs to read.
+ * Every other output stream is silenced: stdout is the protocol.
+ *
+ * Writes never abort a run. If the host has gone — it quit or crashed with a
+ * kill in flight — a write to the broken pipe fails, and the run carries on
+ * to the end of its terminations instead of leaving the tree half killed;
+ * the next read then sees EOF and the helper exits.
+ */
+export const TREE_KILL_SERVER_SCRIPT = [
+  ...SCRIPT_PRELUDE,
+  "$WarningPreference = 'SilentlyContinue'",
+  "$InformationPreference = 'SilentlyContinue'",
+  "$VerbosePreference = 'SilentlyContinue'",
+  "$DebugPreference = 'SilentlyContinue'",
+  "function Send([string]$text) { try { [Console]::Out.Write($text); [Console]::Out.Flush() } catch { } }",
+  "function Publish() { Send ($out.ToString()); [void]$out.Clear() }",
+  // Load CIM and open its WMI connection now, while the helper is idle, rather
+  // than inside the first kill's census.
+  "try { [void](Get-CimInstance -Query ('SELECT ProcessId FROM Win32_Process WHERE ProcessId = ' + [long]$PID)) } catch { }",
+  "while ($true) {",
+  "$reqLine = [Console]::In.ReadLine()",
+  "if ($null -eq $reqLine) { break }",
+  "$reqLine = $reqLine.Trim()",
+  "$sp = $reqLine.IndexOf(' ')",
+  "if ($sp -lt 1) { continue }",
+  "$rid = $reqLine.Substring(0, $sp)",
+  "if ($rid -notmatch '^[0-9]+$') { continue }",
+  "$out = [System.Text.StringBuilder]::new()",
+  "$handles = @{}",
+  "try {",
+  "$req = ConvertFrom-Json $reqLine.Substring($sp + 1)",
+  ...SCRIPT_BODY,
+  "} finally {",
+  "foreach ($h in @($handles.Values)) { try { $h.Dispose() } catch { } }",
+  "}",
+  `Send ($out.ToString() + '${TREE_KILL_SENTINEL_PREFIX}' + $rid + [Environment]::NewLine)`,
+  "}",
+].join("\n");
+
+const POWERSHELL_FLAGS = ["-NoProfile", "-NonInteractive", "-NoLogo", "-EncodedCommand"];
+const HELPER_ARGS = [...POWERSHELL_FLAGS, encodeScript(TREE_KILL_SCRIPT)];
+const SERVER_ARGS = [...POWERSHELL_FLAGS, encodeScript(TREE_KILL_SERVER_SCRIPT)];
 const HELPER_MAX_BUFFER = 4 * 1024 * 1024;
+
+/** What -EncodedCommand takes: the script as UTF-16LE, base64. */
+function encodeScript(script: string): string {
+  return Buffer.from(script, "utf16le").toString("base64");
+}
 
 /** Budget for callers whose taskkill had no timeout of its own. */
 export const DEFAULT_WINDOWS_TREE_KILL_TIMEOUT_MS = 5000;
@@ -231,6 +321,12 @@ export interface WindowsTreeKillOptions {
   timeoutMs?: number;
   /** How long, of that, to wait for terminated processes to exit. */
   waitMs?: number;
+  /**
+   * Asynchronous kills only: called once the run carrying this request has
+   * been handed to a helper process, which finishes it even if this process
+   * exits first. Until then it waits in this process's queue.
+   */
+  onStart?: () => void;
 }
 
 export type WindowsTreeKillMode =
@@ -372,6 +468,33 @@ export function parseTreeKillOutput(stdout: string): ParsedTreeKillOutput | null
     else if (tag === "S") root.stale.push(pid);
   }
   return complete ? { roots, ...(censusError !== undefined ? { censusError } : {}) } : null;
+}
+
+/** A root's plan as announced before any termination. */
+export interface TreeKillRootPlan {
+  mode: string;
+  rootStart?: number;
+}
+
+/**
+ * The plan a report announced before its first termination, or null when the
+ * report never reached `K` — in which case the run ended nothing.
+ */
+export function parseTreeKillPlan(stdout: string): Map<number, TreeKillRootPlan> | null {
+  const roots = new Map<number, TreeKillRootPlan>();
+  for (const rawLine of stdout.replace(/^\uFEFF/, "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line === "K") return roots;
+    const [tag, first, mode, start] = line.split(" ");
+    if (tag !== "R") continue;
+    const index = Number(first);
+    if (!Number.isSafeInteger(index) || index < 0) continue;
+    roots.set(index, {
+      mode: mode ?? "",
+      ...(start !== undefined && /^\d+$/.test(start) ? { rootStart: Number(start) } : {}),
+    });
+  }
+  return null;
 }
 
 function emptyResult(mode: WindowsTreeKillMode): WindowsTreeKillResult {
@@ -588,6 +711,159 @@ function runHelper(
   });
 }
 
+export interface TreeKillRecoveryPlan {
+  /** Targets to finish through the one-shot helper, each pinned as far as the partial report allows. */
+  rerun: Array<{ index: number; target: NormalizedTreeKillTarget }>;
+  /** Results the partial report already settles. */
+  settled: Map<number, WindowsTreeKillResult>;
+}
+
+/**
+ * What may still be done about a run the persistent helper did not finish.
+ * The helper announces every root's plan, then `K`, before it terminates
+ * anything, so:
+ *
+ * - A report known to be complete that never reached `K` ended nothing: every
+ *   root goes again exactly as the caller asked, on the same premise the
+ *   first attempt had.
+ * - After `K` a root may already be dead, and with it whatever pinned its PID.
+ *   A root the census identified goes again pinned to that identity, so a
+ *   reused PID is left alone. One the census saw gone, reused or refused is
+ *   settled from the plan. One the census could not identify is retried only
+ *   if it was left untouched or carries an identity of its own.
+ * - A report that may be missing lines (the pipe never closed) may have lost
+ *   its `K`: only roots with an identity of their own go again.
+ *
+ * A root retried after kills may have begun also loses `ownChild`: if it was
+ * ended, its owner's handle no longer pins the PID, so a failed census must
+ * not end it by PID.
+ */
+export function planTreeKillRecovery(
+  targets: readonly NormalizedTreeKillTarget[],
+  partial: string,
+  complete: boolean,
+  reason: string
+): TreeKillRecoveryPlan {
+  const announced = parseTreeKillPlan(partial);
+  const rerun: TreeKillRecoveryPlan["rerun"] = [];
+  const settled = new Map<number, WindowsTreeKillResult>();
+  const notRetried = (index: number, target: NormalizedTreeKillTarget, mayHaveEnded: boolean) => {
+    const error = `${reason}; not retried: its PID may no longer be its own`;
+    settled.set(
+      index,
+      mayHaveEnded
+        ? { ...emptyResult("root-only"), targeted: [target.pid], unconfirmed: [target.pid], error }
+        : { ...emptyResult("untouched"), error }
+    );
+  };
+
+  targets.forEach((target, index) => {
+    const identified = target.start !== undefined;
+    if (!announced) {
+      if (complete) rerun.push({ index, target });
+      else if (identified) rerun.push({ index, target: { ...target, own: false } });
+      else notRetried(index, target, false);
+      return;
+    }
+    const root = announced.get(index);
+    switch (root?.mode) {
+      case "gone":
+        settled.set(index, { ...emptyResult("gone"), rootEnded: true });
+        return;
+      case "mismatch":
+        settled.set(index, {
+          ...emptyResult("identity-mismatch"),
+          rootEnded: true,
+          ...(root.rootStart !== undefined ? { rootStartTime: root.rootStart } : {}),
+        });
+        return;
+      case "refused":
+        settled.set(index, emptyResult("skipped"));
+        return;
+      case "untouched":
+        rerun.push({ index, target });
+        return;
+      case "tree":
+        if (root.rootStart !== undefined) {
+          rerun.push({ index, target: { ...target, start: root.rootStart, own: false } });
+          return;
+        }
+        break;
+    }
+    if (identified) rerun.push({ index, target: { ...target, own: false } });
+    else notRetried(index, target, root?.mode === "root-only");
+  });
+  return { rerun, settled };
+}
+
+async function recoverTreeKillRun(
+  targets: readonly NormalizedTreeKillTarget[],
+  partial: string,
+  complete: boolean,
+  budget: TreeKillBudget,
+  reason: string
+): Promise<WindowsTreeKillResult[]> {
+  const { rerun, settled } = planTreeKillRecovery(targets, partial, complete, reason);
+  const results = targets.map((_target, index) => settled.get(index));
+  if (rerun.length > 0) {
+    const again = await runHelper(
+      rerun.map((entry) => entry.target),
+      budget.timeoutMs,
+      budget.waitMs
+    );
+    rerun.forEach((entry, j) => (results[entry.index] = again[j]));
+  }
+  return results.map((result) => result ?? { ...emptyResult("untouched"), error: reason });
+}
+
+const TREE_KILL_ENGINE: TreeKillEngine = {
+  serverArgs: SERVER_ARGS,
+  encodeInput: encodeTreeKillInput,
+  readReport(targets, report) {
+    const parsed = parseTreeKillOutput(report);
+    if (!parsed) return null;
+    const results = classifyTreeKillOutput(targets, parsed);
+    warnStale(targets, results);
+    return results;
+  },
+  recover: recoverTreeKillRun,
+};
+
+/** This process's persistent helper, created by the first asynchronous kill. */
+let sharedService: WindowsTreeKillService | null = null;
+
+function treeKillService(): WindowsTreeKillService {
+  sharedService ??= new WindowsTreeKillService({ engine: TREE_KILL_ENGINE });
+  return sharedService;
+}
+
+/** Whether this process's persistent helper is running (warm, or still starting). */
+export function isWindowsTreeKillHelperRunning(): boolean {
+  return sharedService?.isRunning === true;
+}
+
+/**
+ * Keep this process's persistent helper running while `warm` is true —
+ * starting it now if it is not — instead of retiring it when idle. The
+ * pty-host holds it warm while any terminal is open, because a close or a
+ * quit is always the next request and a cold PowerShell start is most of a
+ * kill. No-op off Windows.
+ */
+export function keepWindowsTreeKillHelperWarm(warm: boolean): void {
+  if (process.platform !== "win32") return;
+  if (!warm && !sharedService) return;
+  treeKillService().setKeepWarm(warm);
+}
+
+/**
+ * Stop this process's persistent helper. A run it was serving, and any kill
+ * made afterwards, is finished by the one-shot helper.
+ */
+export function disposeWindowsTreeKillService(): void {
+  sharedService?.dispose();
+  sharedService = null;
+}
+
 interface Plan {
   normalized: NormalizedTreeKillTarget[];
   results: WindowsTreeKillResult[];
@@ -617,10 +893,10 @@ function merge(planned: Plan, helperResults: WindowsTreeKillResult[]): WindowsTr
 
 /**
  * End each target's verified tree and wait for it to exit, blocking the event
- * loop until done — a PowerShell start, so hundreds of milliseconds. Only for
- * paths where nothing can run afterwards: the host's exit teardown and
- * `process.on("exit")`. Everything else uses {@link killWindowsProcessTrees}.
- * Results are in input order.
+ * loop until done — a cold PowerShell start, so seconds. Only for paths where
+ * nothing can run afterwards and no persistent helper is warm: the host's exit
+ * teardown and `process.on("exit")`. Everything else uses
+ * {@link killWindowsProcessTrees}. Results are in input order.
  */
 export function killWindowsProcessTreesSync(
   targets: readonly (number | WindowsTreeKillTarget)[],
@@ -637,6 +913,10 @@ export function killWindowsProcessTreesSync(
  * {@link killWindowsProcessTreesSync} without blocking: resolves once every
  * terminated process has exited or the wait budget has run out, so a caller
  * that awaits it may rely on the result's `killed`/`timedOut` split.
+ *
+ * Runs on this process's persistent helper, together with every other kill
+ * requested around the same time; the budget counts from when the run
+ * starts, so a request queued behind a run in flight waits for that first.
  */
 export async function killWindowsProcessTrees(
   targets: readonly (number | WindowsTreeKillTarget)[],
@@ -644,9 +924,11 @@ export async function killWindowsProcessTrees(
 ): Promise<WindowsTreeKillResult[]> {
   const planned = plan(targets);
   if (planned.live.length === 0) return planned.results;
-  const { timeoutMs, waitMs } = budgets(options);
   const helperTargets = planned.live.map((i) => planned.normalized[i]);
-  return merge(planned, await runHelper(helperTargets, timeoutMs, waitMs));
+  return merge(
+    planned,
+    await treeKillService().kill(helperTargets, budgets(options), options.onStart)
+  );
 }
 
 /** {@link killWindowsProcessTrees} for one target. */
