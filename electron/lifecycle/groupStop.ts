@@ -98,12 +98,21 @@ function probeZygotes(): ChildProbe {
 
 let probeChildren: () => ChildProbe = probeZygotes;
 
+// Every `utilityProcess.fork` child — Daintree's watchdog, hosts and plugin
+// workers — runs as this service, and Daintree's own shutdown kills them.
+const ELECTRON_NODE_SERVICE = "node.mojom.NodeService";
+
 export function isChromiumChildSignalKill(details: ChildProcessGone): boolean {
   if (details.reason !== "killed") return false;
   if (details.type === "GPU") return true;
   // Chromium's own services carry their mojo interface as the service name
-  // (`network.mojom.NetworkService`); Daintree's utility processes never do.
-  return details.type === "Utility" && (details.serviceName ?? "").includes(".mojom.");
+  // (`network.mojom.NetworkService`).
+  const serviceName = details.serviceName ?? "";
+  return (
+    details.type === "Utility" &&
+    serviceName.includes(".mojom.") &&
+    serviceName !== ELECTRON_NODE_SERVICE
+  );
 }
 
 function isGone(err: unknown): boolean {

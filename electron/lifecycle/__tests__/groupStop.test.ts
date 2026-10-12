@@ -24,10 +24,13 @@ import {
 } from "../groupStop.js";
 
 const gpuKilled = { type: "GPU", reason: "killed", serviceName: "GPU" } as const;
+// What Electron reports for a `utilityProcess.fork` child (seen live for the
+// watchdog): the service is Node's, and the fork's name goes in `name`.
 const watchdogKilled = {
   type: "Utility",
   reason: "killed",
-  serviceName: "daintree-watchdog",
+  serviceName: "node.mojom.NodeService",
+  name: "daintree-watchdog",
 } as const;
 
 function errno(code: string): NodeJS.ErrnoException {
