@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
+import fs from "fs";
 import path from "path";
 import Module from "module";
+import { patchNodePtyConptySource } from "./patchNodePtyConpty.cjs";
 
 const mockRebuild = vi.fn();
 const mockExecSync = vi.fn();
@@ -17,6 +19,28 @@ const SWALLOW_DEFINE = "NODE_API_SWALLOW_UNTHROWABLE_EXCEPTIONS";
 const BINDING_GYP = path.resolve(__dirname, "..", "node_modules", "node-pty", "binding.gyp");
 const UNPATCHED_GYP = "{\n  'target_defaults': {\n    'dependencies': [],\n  },\n}\n";
 const PATCHED_GYP = `{\n  'target_defaults': {\n    'defines': ['${SWALLOW_DEFINE}'],\n    'dependencies': [],\n  },\n}\n`;
+const CONPTY_CC = path.resolve(
+  __dirname,
+  "..",
+  "node_modules",
+  "node-pty",
+  "src",
+  "win",
+  "conpty.cc"
+);
+const UNPATCHED_CONPTY = fs.readFileSync(
+  path.join(__dirname, "__fixtures__", "node-pty-conpty-beta14.cc"),
+  "utf8"
+);
+const PATCHED_CONPTY = patchNodePtyConptySource(UNPATCHED_CONPTY);
+
+function serveFiles({ gyp = UNPATCHED_GYP, conpty = PATCHED_CONPTY } = {}) {
+  mockReadFileSync.mockImplementation((file: string) => {
+    if (file === BINDING_GYP) return gyp;
+    if (file === CONPTY_CC) return conpty;
+    throw new Error(`ENOENT: unexpected read of ${file}`);
+  });
+}
 
 afterAll(() => {
   consoleErrorSpy.mockRestore();
@@ -60,7 +84,8 @@ describe("postinstall", () => {
     consoleLogSpy.mockImplementation(() => {});
     mockRebuild.mockReset().mockResolvedValue(undefined);
     mockExecSync.mockReturnValue(undefined);
-    mockReadFileSync.mockReset().mockReturnValue(UNPATCHED_GYP);
+    mockReadFileSync.mockReset();
+    serveFiles();
     mockWriteFileSync.mockReset();
     process.exitCode = undefined;
 
@@ -224,7 +249,7 @@ describe("postinstall", () => {
   });
 
   it("leaves an already-patched binding.gyp untouched", async () => {
-    mockReadFileSync.mockReturnValue(PATCHED_GYP);
+    serveFiles({ gyp: PATCHED_GYP });
 
     await runPostinstall();
 
@@ -234,7 +259,7 @@ describe("postinstall", () => {
   });
 
   it("fails the install but still rebuilds everything when the patch cannot apply", async () => {
-    mockReadFileSync.mockReturnValue("{\n  'targets': [],\n}\n");
+    serveFiles({ gyp: "{\n  'targets': [],\n}\n" });
 
     await runPostinstall();
 
@@ -277,7 +302,7 @@ describe("postinstall", () => {
   });
 
   it("reports a patch failure alongside a rebuild failure", async () => {
-    mockReadFileSync.mockReturnValue("{}\n");
+    serveFiles({ gyp: "{}\n" });
     mockRebuild.mockResolvedValueOnce(undefined);
     mockRebuild.mockRejectedValueOnce(new Error("win-job-object failed"));
 
@@ -288,5 +313,43 @@ describe("postinstall", () => {
     expect(errorCalls).toMatch(/Postinstall failures \(2\)/);
     expect(errorCalls).toMatch(/node-pty binding\.gyp patch/);
     expect(errorCalls).toMatch(/win-job-object/);
+  });
+
+  it("patches node-pty's conpty.cc before rebuilding node-pty", async () => {
+    serveFiles({ gyp: PATCHED_GYP, conpty: UNPATCHED_CONPTY });
+
+    await runPostinstall();
+
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
+    const [writtenPath, written] = mockWriteFileSync.mock.calls[0];
+    expect(writtenPath).toBe(CONPTY_CC);
+    expect(written).toBe(PATCHED_CONPTY);
+    expect(mockWriteFileSync.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRebuild.mock.invocationCallOrder[0]
+    );
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("leaves an already-patched conpty.cc untouched", async () => {
+    serveFiles({ gyp: PATCHED_GYP, conpty: PATCHED_CONPTY });
+
+    await runPostinstall();
+
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("fails the install but still rebuilds everything when the conpty.cc patch cannot apply", async () => {
+    serveFiles({ gyp: PATCHED_GYP, conpty: "int main() {}\n" });
+
+    await runPostinstall();
+
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+    expect(rebuiltModules()).toEqual(["node-pty", "win-job-object", "posix-pty-reaper"]);
+    expect(process.exitCode).toBe(1);
+
+    const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
+    expect(errorCalls).toMatch(/node-pty conpty\.cc patch/);
+    expect(errorCalls).toMatch(/#965/);
   });
 });

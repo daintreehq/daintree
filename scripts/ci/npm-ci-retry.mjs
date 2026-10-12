@@ -23,10 +23,11 @@ export const DETERMINISTIC_PATTERNS = [
 ];
 
 // Deterministic failures that outrank the transient overrides below: postinstall
-// keeps rebuilding after its node-pty binding.gyp patch fails
-// (scripts/patchNodePtyBinding.cjs), so a network blip in one of those
-// rebuilds must not turn a patch that can never apply into a retry.
-export const PRIORITY_DETERMINISTIC_PATTERNS = [/node-pty binding\.gyp patch/i];
+// keeps rebuilding after one of its node-pty source patches fails
+// (scripts/patchNodePtyBinding.cjs, scripts/patchNodePtyConpty.cjs), so a
+// network blip in one of those rebuilds must not turn a patch that can never
+// apply into a retry.
+export const PRIORITY_DETERMINISTIC_PATTERNS = [/node-pty (binding\.gyp|conpty\.cc) patch/i];
 
 // Transient failures: network disruptions that may resolve on retry.
 export const TRANSIENT_PATTERNS = [
