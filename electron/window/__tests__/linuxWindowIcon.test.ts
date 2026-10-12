@@ -18,6 +18,11 @@ async function loadFresh() {
   return (await import("../linuxWindowIcon.js")).getLinuxWindowIcon;
 }
 
+async function loadIconPath() {
+  vi.resetModules();
+  return (await import("../linuxWindowIcon.js")).getLinuxAppIconPath;
+}
+
 beforeEach(() => {
   electron.nativeImage.createFromPath.mockReset();
   Object.defineProperty(process, "resourcesPath", {
@@ -71,5 +76,26 @@ describe("getLinuxWindowIcon", () => {
       expect((await loadFresh())()).toBeUndefined();
     }
     expect(electron.nativeImage.createFromPath).not.toHaveBeenCalled();
+  });
+});
+
+describe("getLinuxAppIconPath", () => {
+  afterEach(() => {
+    electron.app.isPackaged = true;
+  });
+
+  it("points at the shipped resource when packaged and at the build source in dev", async () => {
+    setPlatform("linux");
+    expect((await loadIconPath())()).toBe("/opt/Daintree/resources/icon.png");
+
+    electron.app.isPackaged = false;
+    expect((await loadIconPath())()).toBe("/dev/app/build/icon.png");
+  });
+
+  it("has no path on macOS and Windows", async () => {
+    for (const platform of ["darwin", "win32"] as const) {
+      setPlatform(platform);
+      expect((await loadIconPath())()).toBeUndefined();
+    }
   });
 });

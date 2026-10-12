@@ -3,6 +3,7 @@ import type { WindowRegistry, WindowContext } from "../window/WindowRegistry.js"
 import { sendToRenderer } from "../ipc/utils.js";
 import { getAppWebContents, getWindowForWebContents } from "../window/webContentsRegistry.js";
 import { revealWindow } from "../window/projectOwnership.js";
+import { getLinuxWindowIcon } from "../window/linuxWindowIcon.js";
 import {
   FALLBACK_WINDOW_TITLE,
   composeWindowTitle,
@@ -429,7 +430,11 @@ class NotificationService {
 
     if (!Notification.isSupported()) return;
 
-    const notification = new Notification({ title, body, silent });
+    // On Linux Electron sends no app icon, only a `desktop-entry` hint that the
+    // spec leaves daemons free to ignore, and an AppImage has no installed
+    // desktop entry for it to name. The image is what every daemon draws.
+    const icon = getLinuxWindowIcon();
+    const notification = new Notification({ title, body, silent, ...(icon ? { icon } : {}) });
     this.activeNotifications.add(notification);
     if (closeWithPanels && closeWithPanels.length > 0) {
       this.pendingPanelsByNotification.set(notification, new Set(closeWithPanels));

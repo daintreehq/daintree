@@ -204,6 +204,9 @@ vi.mock("../window/fullscreen.js", () => ({
   toggleWindowFullscreen: toggleWindowFullscreenMock,
 }));
 
+const linuxIconPathMock = vi.hoisted(() => vi.fn<() => string | undefined>(() => undefined));
+vi.mock("../window/linuxWindowIcon.js", () => ({ getLinuxAppIconPath: linuxIconPathMock }));
+
 const autoUpdaterServiceMock = vi.hoisted(() => {
   let menuState: "idle" | "checking" | "ready" = "idle";
   return {
@@ -330,6 +333,14 @@ describe("About panel build channel (#11121)", () => {
         expect(options.version).toBe(getBuildChannelLabel(version));
         expect(options.version).toBeTruthy();
       }
+    });
+
+    it("gives the dialog the app icon where one is shipped as a file (Linux)", () => {
+      linuxIconPathMock.mockReturnValueOnce("/opt/Daintree/resources/icon.png");
+      expect(buildAboutPanelOptions("1.0.0").iconPath).toBe("/opt/Daintree/resources/icon.png");
+
+      linuxIconPathMock.mockReturnValueOnce(undefined);
+      expect(buildAboutPanelOptions("1.0.0")).not.toHaveProperty("iconPath");
     });
   });
 });
